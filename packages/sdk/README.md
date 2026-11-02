@@ -1,6 +1,6 @@
 # Noir Wallet SDK
 
-Typed TypeScript SDK for connecting web apps to the Noir Wallet browser extension.
+Typed TypeScript SDK for connecting web apps to Noir Wallet's Zcash and optional multichain providers.
 
 - [Integration guide](https://docs.zknoir.com/developers)
 - [Provider API reference](https://docs.zknoir.com/developers/provider-api)
@@ -13,7 +13,9 @@ Typed TypeScript SDK for connecting web apps to the Noir Wallet browser extensio
 
 ## What the SDK does
 
-`@noir-wallet/sdk` wraps the provider injected at `window.noirwallet` and gives your app a typed Zcash API. Use it to:
+`@noir-wallet/sdk` wraps the providers injected at `window.noirwallet`. The V2 SDK retains the V1 Zcash entry point and adds optional EVM, Bitcoin, Solana, NEAR, and multichain-session providers. Check for each provider before using it; availability depends on the installed extension, enabled capabilities, and selected network mode.
+
+The Zcash client lets your app:
 
 - request access to one or more wallet accounts;
 - read addresses, balances, and transaction history;
@@ -39,12 +41,44 @@ The wallet locks and reloads when its network mode changes. Older V1 downloads, 
 
 ## Install the SDK
 
+Install the V2 prerelease from the `beta` tag and save the resolved version exactly. The `latest` tag remains on the V1 SDK release line.
+
 ```bash
-pnpm add @noir-wallet/sdk
-npm install @noir-wallet/sdk
+pnpm add @noir-wallet/sdk@beta --save-exact
+npm install @noir-wallet/sdk@beta --save-exact
 ```
 
-## Quick start
+## V2 provider entry points
+
+`getNoirWallet()` returns a required `zcash` client and the optional providers below when the installed extension exposes them:
+
+| Property     | Interface                                     |
+| ------------ | --------------------------------------------- |
+| `zcash`      | Zcash client, including the V1 connection API |
+| `ethereum`   | EIP-1193 provider with EIP-6963 discovery     |
+| `bitcoin`    | Bitcoin accounts, transactions, and PSBTs     |
+| `solana`     | Solana accounts, transactions, and messages   |
+| `near`       | NEAR sign-in, transactions, and messages      |
+| `multichain` | CAIP-25 sessions and CAIP-27 scoped requests  |
+
+Solana and NEAR providers require Testnet Mode and their enabled Beta capabilities. Provider presence does not guarantee every operation is supported by the selected account or hardware wallet.
+
+For EVM integrations, discover Noir directly rather than relying on the shared `window.ethereum` slot. Request account access from your Connect button:
+
+```ts
+import { detectEvmProvider, getEvmChainId } from '@noir-wallet/sdk'
+
+async function connectEvmWallet() {
+  const ethereum = await detectEvmProvider()
+  const accounts = await ethereum.request<string[]>({ method: 'eth_requestAccounts' })
+  const chainId = await getEvmChainId(ethereum)
+  return { ethereum, accounts, chainId }
+}
+```
+
+The package also exports `getBitcoinProvider()` / `detectBitcoinProvider()`, `getSolanaProvider()` / `detectSolanaProvider()`, and `getNearProvider()` / `detectNearProvider()`. Synchronous getters return `null` when unavailable; asynchronous discovery rejects if no provider appears before its timeout. Use `addEvmNetwork()` and `switchEvmChain()` for the [EVM network requests](https://github.com/NoirWallet/noir-wallet/blob/v2/packages/docs/content/docs/developers/provider-api.mdx#evm-network-requests) supported by the installed wallet; they do not change the global Mainnet/Testnet Mode.
+
+## Zcash quick start
 
 There are two different connection calls:
 
@@ -234,9 +268,9 @@ zcash.on('accountsChanged', handleAccountsChanged)
 zcash.removeListener('accountsChanged', handleAccountsChanged)
 ```
 
-## API overview
+## Zcash API overview
 
-All wallet methods are available on `getNoirWallet().zcash`.
+The methods below are available on `getNoirWallet().zcash`.
 
 | Method                           | Approval | Purpose                                                 |
 | -------------------------------- | -------: | ------------------------------------------------------- |
