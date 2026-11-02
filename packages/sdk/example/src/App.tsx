@@ -89,9 +89,7 @@ function ResultField({
   )
 }
 
-function groupTxByDate(
-  txs: TransactionHistoryEntry[]
-): [string, TransactionHistoryEntry[]][] {
+function groupTxByDate(txs: TransactionHistoryEntry[]): [string, TransactionHistoryEntry[]][] {
   const map = new Map<string, TransactionHistoryEntry[]>()
   for (const tx of txs) {
     const date =
@@ -159,7 +157,9 @@ function TxRow({
         <div className="tx-info">
           <div className="tx-info-top">
             <span className="tx-type">{TX_LABELS[kind] ?? kind} ZEC</span>
-            <span className={`tx-status ${tx.status}`}>{STATUS_LABELS[tx.status] ?? tx.status}</span>
+            <span className={`tx-status ${tx.status}`}>
+              {STATUS_LABELS[tx.status] ?? tx.status}
+            </span>
           </div>
           {tx.timestamp > 0 && (
             <div className="tx-time">
@@ -677,8 +677,12 @@ function App() {
       <header className="header">
         <div className="header-content">
           <div className="logo">
-            <a href="/" className="logo-link">
-              <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Noir Wallet" className="logo-img" />
+            <a href={import.meta.env.BASE_URL} className="logo-link">
+              <img
+                src={`${import.meta.env.BASE_URL}logo.png`}
+                alt="Noir Wallet"
+                className="logo-img"
+              />
               <span className="logo-text">
                 <span className="logo-noir">Noir </span>
                 <span className="logo-wallet">Wallet</span>
