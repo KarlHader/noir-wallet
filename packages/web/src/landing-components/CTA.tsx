@@ -25,12 +25,10 @@ export function CTA() {
           Install Wallet
         </a>
         <a
-          href="#"
-          target="_blank"
-          rel="noopener noreferrer"
+          href="/v2/beta"
           className="group flex h-[48px] w-full items-center justify-center gap-2 rounded-lg border border-white bg-bg px-6 text-base font-medium text-white transition-opacity hover:opacity-80 md:h-[52px] md:w-auto"
         >
-          <span className="underline">Learn about the V2 Plan</span>
+          <span className="underline">Try V2 Beta</span>
           <svg
             width="22"
             height="22"

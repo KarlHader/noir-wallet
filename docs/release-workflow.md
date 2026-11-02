@@ -269,6 +269,8 @@ Develop and test the extension against that package, then submit the lock file, 
 
 No merge, version bump, or manually created tag is required for each Beta. Selecting a branch pins its HEAD for that run; later pushes do not change the built source.
 
+The website's `/v2/beta` installation guide uses the pinned version and exact ZIP and release-notes URLs in [v2-beta-release.ts](../packages/web/src/lib/v2-beta-release.ts). These links can be configured before publication; publish and verify that Beta ZIP before merging the website PR that deploys them through the existing Pages integration. Add `releaseDate` once known, or omit it to show only the version. Set the configuration to `null` to disable downloads; do not use a `latest` URL or the mixed V1/V2 Releases list as the download target.
+
 ## Production Procedure
 
 ### Release notes

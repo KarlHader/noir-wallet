@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { LandingPage } from './pages/LandingPage'
 
 const FrostVotePage = lazy(() => import('./pages/FrostVotePage'))
+const V2BetaPage = lazy(() => import('./pages/V2BetaPage'))
 
 function normalizePath(path: string): string {
   if (path.length > 1 && path.endsWith('/')) {
@@ -33,6 +34,14 @@ export default function App() {
     return (
       <Suspense fallback={<div className="min-h-screen bg-bg" />}>
         <FrostVotePage />
+      </Suspense>
+    )
+  }
+
+  if (path === '/v2/beta') {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-bg" />}>
+        <V2BetaPage />
       </Suspense>
     )
   }
