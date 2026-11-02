@@ -162,6 +162,46 @@ function preserveBackupVerification(
   }
 }
 
+function preserveRetainedNames(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  const priorDisplayNames = current.state.accountDisplayNames ?? {}
+  const accountDisplayNames = { ...incoming.state.accountDisplayNames }
+  const wallets = incoming.state.wallets.map(wallet => {
+    const saved = priorWallets.get(wallet.id)
+    if (
+      !saved ||
+      saved.createdAt !== wallet.createdAt ||
+      saved.seedPhraseKey !== wallet.seedPhraseKey
+    ) {
+      return wallet
+    }
+    const priorAccounts = new Map(saved.accounts.map(account => [account.id, account]))
+    return {
+      ...wallet,
+      name: saved.name,
+      accounts: wallet.accounts.map(account => {
+        const priorAccount = priorAccounts.get(account.id)
+        if (!priorAccount) return account
+        const key = `${wallet.id}_${account.id}`
+        if (Object.prototype.hasOwnProperty.call(priorDisplayNames, key)) {
+          accountDisplayNames[key] = priorDisplayNames[key]
+        } else {
+          delete accountDisplayNames[key]
+        }
+        return { ...account, name: priorAccount.name }
+      })
+    }
+  })
+  return {
+    ...incoming,
+    state: { ...incoming.state, wallets, accountDisplayNames }
+  }
+}
+
 async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
   return navigator.locks.request(METADATA_LOCK, operation)
@@ -197,10 +237,79 @@ export function writeWalletMetadata(value: unknown): Promise<void> {
     const current = parseSnapshot(saved[WALLET_STATE_KEY])
     await chrome.storage.local.set({
       [WALLET_STATE_KEY]: filterDeleted(
-        preserveBackupVerification(snapshot, current),
+        preserveRetainedNames(preserveBackupVerification(snapshot, current), current),
         parseDeletedIds(saved[DELETED_WALLETS_KEY]),
         parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
       )
+    })
+  })
+}
+
+export function renameRetainedWalletMetadata(
+  walletId: string,
+  expectedName: string,
+  displayName: string
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    if (!snapshot || deleted.has(walletId) || !wallet || wallet.name !== expectedName) {
+      throw new Error('Wallet changed or was removed. Please try again.')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          wallets: snapshot.state.wallets.map(item =>
+            item.id === walletId ? { ...item, name: displayName } : item
+          )
+        }
+      }
+    })
+  })
+}
+
+export function renameRetainedAccountMetadata(
+  walletId: string,
+  accountId: string,
+  expectedDisplayName: string | null,
+  displayName: string
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deletedWallets = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    const accountKey = `${walletId}_${accountId}`
+    if (
+      !snapshot ||
+      deletedWallets.has(walletId) ||
+      deletedAccounts.has(`mainnet_${accountKey}`) ||
+      deletedAccounts.has(`testnet_${accountKey}`) ||
+      !wallet?.accounts.some(account => account.id === accountId) ||
+      (snapshot.state.accountDisplayNames?.[accountKey] ?? null) !== expectedDisplayName
+    ) {
+      throw new Error('Account changed or was removed. Please try again.')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          accountDisplayNames: {
+            ...snapshot.state.accountDisplayNames,
+            [accountKey]: displayName
+          }
+        }
+      }
     })
   })
 }

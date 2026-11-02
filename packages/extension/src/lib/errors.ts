@@ -74,7 +74,7 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
     retryable: true
   },
   {
-    pattern: /rate.?limit/i,
+    pattern: /rate.?limit|\bHTTP\s+429\b/i,
     message: 'Server is busy. Please wait a moment and try again.',
     retryable: true
   },
@@ -242,6 +242,12 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
   },
 
   // --- Transaction ---
+  {
+    pattern:
+      /The EVM balance (?:is insufficient|does not cover the transfer and network fee)|(?:EVM account|Private Execution Address) needs \d+ more wei for transaction value and maximum Gas/i,
+    message: 'Insufficient native balance for the amount and network fee.',
+    retryable: false
+  },
   {
     pattern: /InsufficientFunds|insufficient.*(?:balance|fund)|not enough.*fund/i,
     message: 'Insufficient balance for this transaction.',

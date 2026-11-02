@@ -97,6 +97,8 @@ export const PAGE_IDS = {
   SETTINGS: 'noir_settings',
   /** Settings: general (auto-lock, currency…) */
   SETTINGS_GENERAL: 'noir_settings_general',
+  /** Settings: network configuration */
+  SETTINGS_NETWORKS: 'noir_settings_networks',
   /** Settings: preferred block explorer */
   SETTINGS_PREFERRED_EXPLORER: 'noir_settings_preferred_explorer',
   /** Settings: RPC endpoint selection */
@@ -168,8 +170,7 @@ const ROUTE_PAGE_IDS: Record<string, string> = {
   '/hardware/sign': PAGE_IDS.HARDWARE_SIGN,
   '/settings': PAGE_IDS.SETTINGS,
   '/general': PAGE_IDS.SETTINGS_GENERAL,
-  '/preferred-explorer': PAGE_IDS.SETTINGS_PREFERRED_EXPLORER,
-  '/rpc-endpoint': PAGE_IDS.SETTINGS_RPC_ENDPOINT,
+  '/networks': PAGE_IDS.SETTINGS_NETWORKS,
   '/zero-indexer-nodes': PAGE_IDS.SETTINGS_ZERO_INDEXER_NODES,
   '/developer-settings': PAGE_IDS.SETTINGS_DEVELOPER,
   '/manage-tokens': PAGE_IDS.MANAGE_TOKENS,

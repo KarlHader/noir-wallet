@@ -1,4 +1,5 @@
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { getEvmNetworkConfig } from '@/config/networks'
 import {
   DAppExecutionModeCoordinator,
@@ -38,7 +39,8 @@ export const dappExecutionModeCoordinator = new DAppExecutionModeCoordinator(
         getEvmNetworkConfig(DEFAULT_NETWORK).chainId
       )
       return (
-        context?.keyDomainSource.kind === 'software' &&
+        context !== null &&
+        supportsEvmPrivateExecution(context.keyDomainSource) &&
         context.chainAccount.scope.keyDomainId === scope.keyDomainId &&
         context.chainAccount.scope.accountId === scope.accountId
       )

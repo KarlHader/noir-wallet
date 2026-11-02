@@ -1,4 +1,5 @@
 import type { ChainAccount } from '@/core/accounts/domain'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { AssetRegistry, ChainRegistry } from '@/core/chains/registry'
 import type { KeyDomainSource } from '@/core/keyring/domain'
@@ -197,7 +198,8 @@ export class EvmPortfolioCoordinator {
       throw new Error('Invalid EVM Portfolio refresh timestamp')
     }
     const privateAddress =
-      context.keyDomainSource.kind === 'software' && this.options.resolvePrivateExecutionAddress
+      supportsEvmPrivateExecution(context.keyDomainSource) &&
+      this.options.resolvePrivateExecutionAddress
         ? await this.options.resolvePrivateExecutionAddress(context)
         : undefined
     const refreshedSource =
@@ -239,7 +241,7 @@ export class EvmPortfolioCoordinator {
     source: PortfolioSourceSnapshot
   ): boolean {
     return (
-      context.keyDomainSource.kind === 'software' &&
+      supportsEvmPrivateExecution(context.keyDomainSource) &&
       this.options.resolvePrivateExecutionAddress !== undefined &&
       source.balances.some(
         balance => balance.mainRaw === undefined || balance.privateRaw === undefined

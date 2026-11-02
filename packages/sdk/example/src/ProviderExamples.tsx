@@ -16,7 +16,12 @@ import {
   type NearProvider,
   type SolanaProvider
 } from '@noir-wallet/sdk'
-import { encodeFunctionData, isAddress } from 'viem'
+import {
+  encodeFunctionData,
+  formatEther as formatEtherAmount,
+  isAddress,
+  parseEther as parseEtherAmount
+} from 'viem'
 import testContractDeployments from './evm-test-contracts.json'
 import {
   getEvmNetworkExample,
@@ -349,18 +354,14 @@ function parseEther(value: string): string {
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(normalized)) {
     throw new Error('ETH amount must be a non-negative decimal with at most 18 decimal places.')
   }
-  const [whole, fraction = ''] = normalized.split('.')
-  const wei = BigInt(whole) * 10n ** 18n + BigInt(fraction.padEnd(18, '0'))
+  const wei = parseEtherAmount(normalized)
   if (wei <= 0n) throw new Error('ETH amount must be greater than zero.')
   return `0x${wei.toString(16)}`
 }
 
 function formatEther(hexWei: string): string {
   if (!/^0x[0-9a-f]+$/i.test(hexWei)) return hexWei
-  const wei = BigInt(hexWei)
-  const whole = wei / 10n ** 18n
-  const fraction = (wei % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '')
-  return fraction ? `${whole}.${fraction}` : whole.toString()
+  return formatEtherAmount(BigInt(hexWei))
 }
 
 function Result({ label, value }: { label: string; value: string }) {

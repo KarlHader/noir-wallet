@@ -1,10 +1,7 @@
-import Big from '@/lib/big'
-import { safeBig } from '@/lib/big'
+import Big, { safeBig } from '@/lib/big'
+
 import { ZEC_DECIMALS } from '@/config/wallet'
-import {
-  formatBaseUnitAmount,
-  formatBaseUnitDecimalAmount
-} from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { resolveTransferSpendableRaw } from './transfer-maximum'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import type { FundingSource, ZcashBalance } from '@/types/wallet'
@@ -73,7 +70,9 @@ export function resolveZcashTransferAvailability(input: {
 }): Readonly<{ amount: string; fallbackAmount: string }> {
   const reservedFeeZats = input.feeAlreadyReservedZats ?? input.standardFeeZats
   const feeDeltaZats = Math.max(0, input.selectedFeeZats - reservedFeeZats)
-  const fallback = safeBig(input.availableBalance || '0').minus(safeBig(feeDeltaZats).div(1e8))
+  const fallback = safeBig(input.availableBalance || '0').minus(
+    formatBaseUnitDecimalAmount(String(feeDeltaZats), ZEC_DECIMALS)
+  )
   const fallbackAmount = (fallback.gt(0) ? fallback : safeBig(0))
     .round(ZEC_DECIMALS, Big.roundDown)
     .toFixed()

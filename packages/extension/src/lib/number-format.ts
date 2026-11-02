@@ -1,4 +1,5 @@
-import Big from './big'
+import Big, { safeBig } from './big'
+import { ZEC_DECIMALS } from '@/config/wallet'
 
 export type NumericValue = string | number | null | undefined
 
@@ -12,6 +13,91 @@ export interface FormattedReviewAmount {
 const UNKNOWN = '—'
 const GROUPED_DECIMAL = /^[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$/
 const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i
+const RAW_AMOUNT = /^(0|[1-9][0-9]*)$/
+const DISPLAY_AMOUNT = /^(?:0|[1-9][0-9]*)(?:\.[0-9]*)?$/
+
+export function formatAmount(amount: string | number | undefined, decimals = ZEC_DECIMALS) {
+  if (!amount) return ''
+  try {
+    return safeBig(amount).times(`1e${-decimals}`).toFixed()
+  } catch {
+    return ''
+  }
+}
+
+export function parseAmount(amount: string | number | undefined, decimals = ZEC_DECIMALS) {
+  if (!amount) return ''
+  try {
+    return safeBig(amount).times(new Big(10).pow(decimals)).toFixed(0, Big.roundDown)
+  } catch {
+    return ''
+  }
+}
+
+function isAssetPrecision(decimals: number): boolean {
+  return Number.isSafeInteger(decimals) && decimals >= 0 && decimals <= 255
+}
+
+/** Exact base-unit conversion for calculations and transaction inputs, without rounding. */
+export function formatBaseUnitDecimalAmount(rawAmount: string | bigint, decimals: number): string {
+  const raw = typeof rawAmount === 'bigint' ? rawAmount.toString() : rawAmount
+  if (
+    typeof raw !== 'string' ||
+    raw.trim() !== raw ||
+    !RAW_AMOUNT.test(raw) ||
+    !isAssetPrecision(decimals)
+  ) {
+    throw new Error('Invalid base-unit amount')
+  }
+  if (decimals === 0) return raw
+  const padded = raw.padStart(decimals + 1, '0')
+  const whole = padded.slice(0, -decimals)
+  const fraction = padded.slice(-decimals).replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : whole
+}
+
+/** Parse an unsigned transaction input; reject excess precision instead of rounding it. */
+export function parseDisplayUnitAmount(value: string, decimals: number): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value.trim() !== value ||
+    !DISPLAY_AMOUNT.test(value) ||
+    !isAssetPrecision(decimals)
+  ) {
+    throw new Error('Invalid display-unit amount')
+  }
+  const [whole, fraction = ''] = value.split('.')
+  if (fraction.length > decimals) {
+    throw new Error('Display-unit amount exceeds asset precision')
+  }
+  return `${whole}${fraction.padEnd(decimals, '0')}`.replace(/^0+(?=\d)/, '')
+}
+
+/** Grouped base-unit display. Transaction inputs must use the exact conversion above. */
+export function formatBaseUnitAmount(
+  rawAmount: string,
+  decimals: number,
+  maximumFractionDigits?: number
+): string {
+  if (
+    maximumFractionDigits !== undefined &&
+    (!Number.isSafeInteger(maximumFractionDigits) || maximumFractionDigits < 1)
+  ) {
+    throw new Error('Invalid base-unit amount')
+  }
+  const exact = formatBaseUnitDecimalAmount(rawAmount, decimals)
+  const [whole, fraction = ''] = exact.split('.')
+  if (maximumFractionDigits === undefined || fraction.length <= maximumFractionDigits) {
+    return groupDecimal(exact)
+  }
+  const visibleFraction = fraction.slice(0, maximumFractionDigits)
+  if (whole === '0' && /^0+$/.test(visibleFraction)) {
+    return `< ${minimumAt(maximumFractionDigits)}`
+  }
+  return `${groupDecimal(whole)}.${visibleFraction}…`
+}
 
 function parseNumericValue(value: NumericValue): Big | null {
   if (value === null || value === undefined || value === '') return null

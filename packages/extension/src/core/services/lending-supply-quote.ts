@@ -1,3 +1,4 @@
+import { formatBaseUnitDecimalAmount } from '../../lib/number-format.ts'
 import { parseQuoteSuccessResponse } from './intents-api'
 
 export interface SupplyQuoteResult {
@@ -8,13 +9,6 @@ export interface SupplyQuoteResult {
   amountOutRaw: string
   minAmountOutRaw: string
   deadline: string
-}
-
-function formatRawAmount(rawAmount: string, decimals: number): string {
-  const padded = rawAmount.padStart(decimals + 1, '0')
-  const whole = padded.slice(0, -decimals)
-  const fraction = padded.slice(-decimals).replace(/0+$/, '')
-  return fraction.length === 0 ? whole : `${whole}.${fraction}`
 }
 
 export function parseSupplyQuoteResult(value: unknown, destinationDecimals = 8): SupplyQuoteResult {
@@ -40,7 +34,7 @@ export function parseSupplyQuoteResult(value: unknown, destinationDecimals = 8):
   return Object.freeze({
     depositAddress: quote.depositAddress,
     expectedReceived: quote.amountOutFormatted,
-    minAmountOut: formatRawAmount(quote.minAmountOut, destinationDecimals),
+    minAmountOut: formatBaseUnitDecimalAmount(quote.minAmountOut, destinationDecimals),
     amountInRaw: quote.amountIn,
     amountOutRaw: quote.amountOut,
     minAmountOutRaw: quote.minAmountOut,

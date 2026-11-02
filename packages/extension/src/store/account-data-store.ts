@@ -13,8 +13,7 @@ import {
   deleteTransactions,
   deleteTransparentTxCache
 } from '@/lib/indexed-db'
-import { formatNumber } from '@/lib/format'
-import Big from 'big.js'
+import { formatTokenQuantity } from '@/lib/number-format'
 import { mergeTransactionUpdate } from '@/lib/transaction-status'
 import { getTransactionStatusCopy } from '@/lib/transaction-status-copy'
 import { buildAccountKey } from '@/core/wallet/account-scope'
@@ -683,7 +682,7 @@ export function formatTransactionForDisplay(tx: Transaction) {
   return {
     id: tx.id,
     type: tx.type,
-    amount: `${isIncoming ? '+' : '-'}${formatNumber(tx.amount, { rm: Big.roundDown })} ZEC`,
+    amount: `${isIncoming ? '+' : '-'}${formatTokenQuantity(tx.amount)} ZEC`,
     status: statusCopy.label,
     statusKey: statusCopy.key,
     statusTone: statusCopy.tone,

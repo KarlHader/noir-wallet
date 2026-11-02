@@ -3,6 +3,7 @@ import {
   parseNetworkFeeTier,
   type NetworkFeeTier
 } from '@/core/transactions/domain'
+import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 
 interface FeeTierMultiplier {
   readonly baseFeeNumerator: bigint
@@ -79,27 +80,21 @@ export function parseEvmPriorityFeeGwei(value: string): EvmFeeSelection {
   if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?$/.test(normalized)) {
     throw new Error('Enter a valid priority fee with up to 9 decimal places')
   }
-  const [whole, fraction = ''] = normalized.split('.')
-  const priorityFee = BigInt(whole) * GWEI_IN_WEI + BigInt(fraction.padEnd(9, '0') || '0')
   return parseEvmFeeSelection({
     kind: 'custom',
-    maxPriorityFeePerGasWei: priorityFee.toString()
+    maxPriorityFeePerGasWei: parseDisplayUnitAmount(normalized, 9)
   })
 }
 
 export function formatEvmPriorityFeeGwei(selection: EvmFeeSelection): string | null {
   if (selection.kind !== 'custom') return null
   const wei = BigInt(selection.maxPriorityFeePerGasWei)
-  const whole = wei / GWEI_IN_WEI
-  const fraction = (wei % GWEI_IN_WEI).toString().padStart(9, '0').replace(/0+$/, '')
-  return fraction ? `${whole}.${fraction}` : whole.toString()
+  return formatBaseUnitDecimalAmount(wei, 9)
 }
 
 export function formatEvmWeiAsGwei(value: string): string {
   const wei = parseUnsignedWei(value)
-  const whole = wei / GWEI_IN_WEI
-  const fraction = (wei % GWEI_IN_WEI).toString().padStart(9, '0').replace(/0+$/, '')
-  return `${whole}${fraction ? `.${fraction}` : ''}`
+  return formatBaseUnitDecimalAmount(wei, 9)
 }
 
 export function areEvmFeeSelectionsEqual(left: EvmFeeSelection, right: EvmFeeSelection): boolean {

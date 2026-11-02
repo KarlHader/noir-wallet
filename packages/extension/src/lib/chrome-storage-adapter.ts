@@ -16,7 +16,10 @@ interface StorageAdapter {
  * Creates a chrome.storage adapter for Zustand persist middleware
  * @param area - 'local' for persistent storage, 'session' for ephemeral storage
  */
-export function createChromeStorageAdapter(area: StorageArea = 'local'): StorageAdapter {
+export function createChromeStorageAdapter(
+  area: StorageArea = 'local',
+  options: { strictRead?: boolean } = {}
+): StorageAdapter {
   const storage = area === 'local' ? chrome.storage.local : chrome.storage.session
 
   return {
@@ -29,6 +32,7 @@ export function createChromeStorageAdapter(area: StorageArea = 'local'): Storage
         return result[key] ?? null
       } catch (error) {
         console.error('[ChromeStorageAdapter] getItem error:', error)
+        if (options.strictRead) throw error
         return null
       }
     },
@@ -57,6 +61,18 @@ export function createChromeStorageAdapter(area: StorageArea = 'local'): Storage
             if (incoming.state && typeof incoming.state === 'object') {
               const state = parse(incoming.state)
               const previousState = previous.state ? parse(previous.state) : previous
+              // Network definitions are committed by Background; page stores only mirror them.
+              // Preserve absence too, so an empty partition cannot mask legacy settings.
+              for (const field of ['chainEndpointSettings', 'chainEndpointSettingsByNetwork']) {
+                if (Object.prototype.hasOwnProperty.call(previousState, field)) {
+                  state[field] = previousState[field]
+                } else {
+                  delete state[field]
+                }
+              }
+              if (Object.prototype.hasOwnProperty.call(previousState, 'networkMode')) {
+                state.networkMode = previousState.networkMode
+              }
               value = JSON.stringify({
                 ...incoming,
                 state: { ...state, zeroIndexerEnabled: previousState.zeroIndexerEnabled !== false }

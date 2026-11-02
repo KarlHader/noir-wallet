@@ -14,6 +14,7 @@ import { getEvmNetworkConfig, getEvmNetworkConfigs } from '@/config/networks'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import type { Transaction, TransactionType } from '@/types'
 import { getZcashIntentsOriginStatus } from '@/lib/cross-chain-transaction'
+import { parseDisplayUnitAmount } from '@/lib/number-format'
 
 const ZCASH_DECIMALS = 8
 const RAW_AMOUNT_PATTERN = /^(?:0|[1-9][0-9]{0,77})$/
@@ -21,11 +22,11 @@ function decimalToRaw(value: string): string {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value)) {
     throw new Error('Invalid Zcash V1 Activity amount')
   }
-  const [whole, fraction = ''] = value.split('.')
+  const fraction = value.split('.')[1] ?? ''
   if (fraction.length > ZCASH_DECIMALS) {
     throw new Error('Zcash V1 Activity amount exceeds ZEC precision')
   }
-  const raw = BigInt(`${whole}${fraction.padEnd(ZCASH_DECIMALS, '0')}`).toString()
+  const raw = parseDisplayUnitAmount(value, ZCASH_DECIMALS)
   if (raw.length > 78) throw new Error('Zcash V1 Activity amount exceeds the storage limit')
   return raw
 }

@@ -1,36 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { PortfolioShell } from './PortfolioShell'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import type { AssetPriceReadModel } from '@/core/prices'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
 import { ListSkeleton } from '../ui/skeleton'
 import type { ZcashSyncProgressState } from '../common/ZcashSyncProgress'
 import { useSettingsStore } from '@/store/settings-store'
 import { getPortfolioRecoveryDelayMs, hasPortfolioBalanceRefreshIssue } from './portfolio-recovery'
 import { hasRetryablePortfolioPriceGap, summarizePortfolioFiat } from './portfolio-prices'
-import { initializeDefaultIntentsAssets } from '@/popup/services/intents-asset-manager-client'
 import {
   isPortfolioModelForScope,
-  readCachedPortfolio,
-  refreshPortfolioFromCache,
   shouldRefreshPortfolioFromNetwork
 } from '@/popup/services/portfolio-cache'
-import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 
 const FAST_TRANSACTION_RECHECK_INTERVAL_MS = 5_000
 
 interface MultichainPortfolioPanelProps {
   walletId: string | null
   accountId: string | null
-  initialModel?: PortfolioReadModel | null
+  model: PortfolioReadModel | null
+  status: 'loading' | 'ready' | 'error'
   prices: AssetPriceReadModel | null
   priceStatus?: 'loading' | 'ready' | 'error'
   balancesHidden?: boolean
   zcashSyncState?: ZcashSyncProgressState
-  onModelChange?: (model: PortfolioReadModel | null) => void
-  onStatusChange?: (status: 'loading' | 'ready' | 'error') => void
+  onRefresh: (forceDiscovery?: boolean) => Promise<void>
   onRetryPrices?: () => Promise<void>
   onSelectAsset?: (assetId: string) => void
   onManageTokens?: () => void
@@ -59,137 +54,30 @@ function PortfolioState({
 export function MultichainPortfolioPanel({
   walletId,
   accountId,
-  initialModel = null,
+  model,
+  status,
   prices,
   priceStatus,
   balancesHidden,
   zcashSyncState,
-  onModelChange,
-  onStatusChange,
+  onRefresh: load,
   onRetryPrices,
   onSelectAsset,
   onManageTokens
 }: MultichainPortfolioPanelProps) {
-  const requestSequence = useRef(0)
   const scopeKey = JSON.stringify([walletId ?? '', accountId ?? ''])
   const persistedChainSelection = useSettingsStore(
     state => state.portfolioChainSelectionByAccount[scopeKey]
   )
   const portfolioViewMode = useSettingsStore(state => state.portfolioViewMode)
-  const chainEndpointRuntimeKey = useSettingsStore(state =>
-    getChainEndpointRuntimeKey(state.chainEndpointSettings)
-  )
   const setPortfolioViewMode = useSettingsStore(state => state.setPortfolioViewMode)
   const setPortfolioChainSelection = useSettingsStore(state => state.setPortfolioChainSelection)
-  const mountedScopeKey = useRef(scopeKey)
-  const scopedInitialModel = isPortfolioModelForScope(initialModel, walletId, accountId)
-    ? initialModel
-    : null
-  const [model, setModel] = useState<PortfolioReadModel | null>(scopedInitialModel)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(
-    scopedInitialModel ? 'ready' : 'loading'
-  )
   const [recoveryAttempt, setRecoveryAttempt] = useState(0)
-
-  useEffect(() => {
-    onStatusChange?.(status)
-  }, [onStatusChange, status])
-
-  const load = useCallback(
-    async (forceDiscovery = false) => {
-      const request = ++requestSequence.current
-      setStatus('loading')
-      let cachedModel: PortfolioReadModel | null = null
-      let nextStatus: 'ready' | 'error' = 'error'
-      try {
-        if (!walletId || !accountId) return
-        cachedModel = await readCachedPortfolio({ walletId, accountId })
-        if (request !== requestSequence.current) return
-        if (cachedModel) {
-          setModel(cachedModel)
-          onModelChange?.(cachedModel)
-          nextStatus = 'ready'
-        } else {
-          cachedModel = null
-        }
-      } catch {
-        // A refresh can still recover when the local projection is temporarily unavailable.
-      }
-
-      try {
-        const refreshed = await refreshPortfolioFromCache(
-          {
-            walletId: walletId ?? '',
-            accountId: accountId ?? '',
-            endpointRuntimeKey: chainEndpointRuntimeKey
-          },
-          cachedModel,
-          { forceDiscovery, forceRefresh: forceDiscovery }
-        )
-        if (request !== requestSequence.current) return
-        if (refreshed) {
-          setModel(refreshed)
-          onModelChange?.(refreshed)
-          nextStatus = 'ready'
-        }
-      } catch {
-        // A valid persistent cache remains usable when its background refresh fails.
-      }
-
-      if (request !== requestSequence.current) return
-      setStatus(nextStatus)
-    },
-    [accountId, chainEndpointRuntimeKey, onModelChange, walletId]
-  )
-
-  const readLatest = useCallback(async () => {
-    const request = requestSequence.current
-    try {
-      if (!walletId || !accountId) return
-      const latest = await readCachedPortfolio({ walletId, accountId })
-      if (request !== requestSequence.current) return
-      if (!isPortfolioModelForScope(latest, walletId, accountId)) return
-      setModel(latest)
-      onModelChange?.(latest)
-      setStatus('ready')
-    } catch {
-      if (request === requestSequence.current && !model) setStatus('error')
-    }
-  }, [accountId, model, onModelChange, walletId])
-  useEffect(() => {
-    const scopeChanged = mountedScopeKey.current !== scopeKey
-    mountedScopeKey.current = scopeKey
-    if (scopeChanged) {
-      setModel(null)
-      onModelChange?.(null)
-    }
-    if (!walletId || !accountId) {
-      setStatus('ready')
-      return
-    }
-    setStatus('loading')
-    let active = true
-    const initialLoad = load()
-    void initializeDefaultIntentsAssets()
-      .then(async initialized => {
-        if (!initialized || !active) return
-        await initialLoad.catch(() => {})
-        if (active) await load()
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-      requestSequence.current += 1
-    }
-  }, [walletId, accountId, load, onModelChange, scopeKey])
-
-  usePortfolioUpdates(walletId, accountId, readLatest)
 
   useEffect(() => {
     if (!walletId || !accountId) return
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
-
     const recheck = async () => {
       if (!document.hidden) {
         await chrome.runtime
@@ -198,7 +86,6 @@ export function MultichainPortfolioPanel({
       }
       if (active) timer = setTimeout(() => void recheck(), FAST_TRANSACTION_RECHECK_INTERVAL_MS)
     }
-
     timer = setTimeout(() => void recheck(), FAST_TRANSACTION_RECHECK_INTERVAL_MS)
     return () => {
       active = false

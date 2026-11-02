@@ -65,14 +65,51 @@ function rescopeItems(
   )
 }
 
+function isLegacyInferredEvmActivity(item: ActivityItem): boolean {
+  return (
+    item.source === 'rpc' &&
+    item.id.startsWith('rpc:evm:') &&
+    (item.kind === 'supply' ||
+      item.kind === 'withdraw' ||
+      item.kind === 'claim' ||
+      item.kind === 'borrow' ||
+      item.kind === 'repay') &&
+    !item.segments.some(segment => segment.evidence?.assetEffects)
+  )
+}
+
+function normalizeLegacyInferredEvmActivity(item: ActivityItem): ActivityItem {
+  if (!isLegacyInferredEvmActivity(item)) return item
+  const snapshot = item.snapshot
+  if (!snapshot) {
+    return Object.freeze({
+      ...item,
+      kind: 'contract-call' as const,
+      completeness: 'partial' as const
+    })
+  }
+  const { primaryAmount, ...rest } = snapshot
+  return Object.freeze({
+    ...item,
+    kind: 'contract-call' as const,
+    completeness: 'partial' as const,
+    snapshot: Object.freeze({
+      ...rest,
+      direction: 'contract' as const,
+      ...(primaryAmount?.assetId.includes('/slip44:') ? { primaryAmount } : {})
+    })
+  })
+}
+
 function normalizeItems(
   fresh: readonly ActivityItem[],
   scope: ActivityScope
 ): readonly ActivityItem[] {
   const byId = new Map<string, ActivityItem>()
   for (const item of fresh) {
-    if (isZeroValueEvmTokenActivity(item)) continue
-    if (!byId.has(item.id)) byId.set(item.id, item)
+    const normalized = normalizeLegacyInferredEvmActivity(item)
+    if (isZeroValueEvmTokenActivity(normalized)) continue
+    if (!byId.has(normalized.id)) byId.set(normalized.id, normalized)
   }
   return rescopeItems(
     [...byId.values()]
@@ -97,6 +134,7 @@ function itemBlockHeight(item: ActivityItem): number | null {
 
 function incrementalStartBlock(record: EvmHistoryCacheRecord | null): number | undefined {
   if (!record || record.successfulSyncAt === null) return undefined
+  if (record.items.some(isLegacyInferredEvmActivity)) return undefined
   if (record.items.some(item => item.completeness === 'partial')) return undefined
   const heights = record.items.flatMap(item => {
     const height = itemBlockHeight(item)
@@ -112,7 +150,33 @@ function mergeItems(
   scope: ActivityScope
 ): readonly ActivityItem[] {
   const byId = new Map(previous.map(item => [item.id, item] as const))
-  for (const item of fresh) byId.set(item.id, item)
+  for (const item of fresh) {
+    const segment = item.segments.find(value => value.role === 'origin')
+    if (
+      item.source === 'rpc' &&
+      segment?.target.kind === 'onchain' &&
+      segment.evidence?.transactionHash &&
+      item.id.startsWith(`rpc:evm:${segment.target.chainId}:${segment.evidence.transactionHash}:`)
+    ) {
+      const chainId = segment.target.chainId
+      const hash = segment.evidence.transactionHash.toLowerCase()
+      for (const [id, cached] of byId) {
+        if (
+          cached.source === 'rpc' &&
+          cached.id.startsWith(`rpc:evm:${chainId}:${hash}:`) &&
+          cached.segments?.some(
+            value =>
+              value.target?.kind === 'onchain' &&
+              value.target.chainId === chainId &&
+              value.evidence?.transactionHash?.toLowerCase() === hash
+          )
+        ) {
+          byId.delete(id)
+        }
+      }
+    }
+    byId.set(item.id, item)
+  }
   return normalizeItems([...byId.values()], scope)
 }
 
@@ -318,14 +382,21 @@ export function createCachedEvmActivityHistorySource(
       const currentTime = now()
       if (cached) {
         const items = normalizeItems(cached.items, input.scope)
-        if (items.length !== cached.items.length) {
+        if (
+          items.length !== cached.items.length ||
+          items.some((item, index) => item !== cached.items[index])
+        ) {
           await persist({ ...cached, scope: input.scope, items })
         }
         const retryAfter = cacheRetryAfter(cached, pendingTtlMs)
         logInfo(
           `[EVM History] cache hit chain=${options.chainId} items=${items.length} successful=${cached.successfulSyncAt !== null}`
         )
-        if (currentTime >= retryAfter || (input.historyPageCount ?? 1) > 1) {
+        if (
+          currentTime >= retryAfter ||
+          cached.items.some(isLegacyInferredEvmActivity) ||
+          (input.historyPageCount ?? 1) > 1
+        ) {
           try {
             return await refresh(address, input, cached)
           } catch (error) {
@@ -448,7 +519,11 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
         const attemptedAt = now()
         const due = targets.flatMap((target, index) => {
           const record = cached[index]
-          if (record && attemptedAt < cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS)) {
+          if (
+            record &&
+            !record.items.some(isLegacyInferredEvmActivity) &&
+            attemptedAt < cacheRetryAfter(record, DEFAULT_PENDING_TTL_MS)
+          ) {
             output.set(target.chainId, normalizeItems(record?.items ?? [], scope))
             return []
           }

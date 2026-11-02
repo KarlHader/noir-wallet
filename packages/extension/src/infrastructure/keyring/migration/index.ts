@@ -53,6 +53,7 @@ export {
 } from './retained-v1-reconciliation-coordinator'
 export {
   CredentialRemovalCoordinator,
+  CredentialRemovalUnlockRequiredError,
   type CredentialRemovalCoordinatorOptions,
   type CredentialRemovalResult
 } from './credential-removal-coordinator'

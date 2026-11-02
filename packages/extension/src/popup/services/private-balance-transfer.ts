@@ -1,4 +1,4 @@
-import { parseDisplayUnitAmount } from '@/popup/components/portfolio/portfolio-format'
+import { parseDisplayUnitAmount } from '@/lib/number-format'
 
 export type PrivateBalanceTransferDirection = 'main-to-private' | 'private-to-main'
 

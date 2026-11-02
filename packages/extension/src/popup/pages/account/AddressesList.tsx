@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { QRCodeSVG } from 'qrcode.react'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import { AddressTypeLabel } from '../../components/account/AddressType'
 import {
@@ -112,7 +113,7 @@ function AddressActions({
       <button
         type="button"
         aria-label={`Copy ${networkName} ${type} address`}
-        title="Copy address"
+        title={`Copy ${networkName} ${type} address`}
         className="flex size-8 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-foreground/10"
         onClick={() => onCopy(address.value)}
       >
@@ -355,6 +356,8 @@ export function AddressesList() {
   const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [canRetry, setCanRetry] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [qrTarget, setQrTarget] = useState<AddressQrTarget | null>(null)
   const [privateAddressAction, setPrivateAddressAction] = useState<{
     readonly address: string
@@ -367,6 +370,7 @@ export function AddressesList() {
     setQrTarget(null)
     setPrivateAddressAction(null)
     setError(null)
+    setCanRetry(false)
     setLoading(Boolean(walletId && accountId))
 
     if (!walletId || !accountId) {
@@ -388,7 +392,10 @@ export function AddressesList() {
         }
         setNetworks(entry.networks)
       } catch {
-        if (!cancelled) setError('Unable to load addresses for this account.')
+        if (!cancelled) {
+          setError('Unable to load addresses for this account.')
+          setCanRetry(true)
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -397,7 +404,7 @@ export function AddressesList() {
     return () => {
       cancelled = true
     }
-  }, [walletId, accountId, shieldedReceiveAddress])
+  }, [walletId, accountId, shieldedReceiveAddress, loadAttempt])
 
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
@@ -436,9 +443,11 @@ export function AddressesList() {
         {loading ? (
           <ListSkeleton rows={4} label="Loading addresses" className="mt-5" card />
         ) : error ? (
-          <p role="alert" className="py-10 text-center text-sm text-muted">
-            {error}
-          </p>
+          <InlineError
+            message={error}
+            onRetry={canRetry ? () => setLoadAttempt(value => value + 1) : undefined}
+            className="mt-5"
+          />
         ) : filteredNetworks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted">No matching networks</p>
         ) : (

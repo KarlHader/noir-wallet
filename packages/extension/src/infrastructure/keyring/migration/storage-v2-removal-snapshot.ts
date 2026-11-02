@@ -1,5 +1,5 @@
 import { parseAccountId } from '@/core/accounts/domain'
-import { parseKeyDomainId } from '@/core/keyring/domain'
+import { parseCredentialRef, parseKeyDomainId } from '@/core/keyring/domain'
 import { parseStorageV2Snapshot } from '@/infrastructure/persistence/schema'
 import {
   STORAGE_V2_SCHEMA_VERSION,
@@ -29,7 +29,8 @@ export function buildStorageV2RemovalSnapshot(
   target: StorageV2RemovalTarget,
   generationId: StorageV2GenerationId,
   sourceFingerprint: StorageV2SourceFingerprint,
-  timestamp: number
+  timestamp: number,
+  replacementCredentialSetRef?: string
 ): StorageV2Snapshot {
   if (!snapshotContainsRemovalTarget(source, target)) {
     throw new Error('Storage V2 removal target is missing')
@@ -48,9 +49,15 @@ export function buildStorageV2RemovalSnapshot(
       .filter(account => removedAccountIds.has(account.scope.accountId))
       .map(account => account.id)
   )
-  const keyDomains = source.keyDomains.filter(
-    keyDomain => target.kind !== 'wallet' || keyDomain.id !== target.keyDomainId
-  )
+  const keyDomains = source.keyDomains
+    .filter(keyDomain => target.kind !== 'wallet' || keyDomain.id !== target.keyDomainId)
+    .map(keyDomain =>
+      target.kind === 'account' &&
+      keyDomain.id === target.keyDomainId &&
+      replacementCredentialSetRef !== undefined
+        ? { ...keyDomain, credentialRef: parseCredentialRef(replacementCredentialSetRef) }
+        : keyDomain
+    )
   const accounts = source.accounts.filter(account => !removedAccountIds.has(account.id))
   const chainAccounts = source.chainAccounts.filter(
     account => !removedChainAccountIds.has(account.id)

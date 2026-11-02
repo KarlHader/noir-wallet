@@ -1,4 +1,5 @@
 import { transactionBroadcasted } from '@/core/transactions/transaction-analytics'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
 import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
@@ -121,6 +122,12 @@ export interface BackgroundEvmDAppHandlerOptions {
 export interface EvmDAppExecutionIdentity {
   readonly mode: DAppExecutionMode
   readonly address: string
+}
+
+export function mapEvmTransactionPreparationError(error: unknown): unknown {
+  return error instanceof EvmTransactionError && error.code === 'insufficient-funds'
+    ? new Eip1193ProviderError(-32000, 'Insufficient funds for the transaction and network fee.')
+    : error
 }
 
 export interface EvmDAppRequest {
@@ -464,7 +471,7 @@ export class BackgroundEvmDAppHandler {
   }
 
   private assertSoftwareSigningAccount(active: ActiveEvmDAppAccount): void {
-    if (active.context.keyDomainSource.kind !== 'software') {
+    if (!supportsEvmPrivateExecution(active.context.keyDomainSource)) {
       throw new Eip1193ProviderError(
         4200,
         'Keystone EVM signing is available only from the Noir Wallet transaction screen.'
@@ -732,7 +739,7 @@ export class BackgroundEvmDAppHandler {
     })
     const active = await this.requireAuthorizedAccount(origin, parsed.from)
     if (
-      active.context.keyDomainSource.kind !== 'software' &&
+      !supportsEvmPrivateExecution(active.context.keyDomainSource) &&
       !(
         active.context.keyDomainSource.kind === 'hardware' &&
         active.context.keyDomainSource.vendor === 'ledger'
@@ -800,7 +807,7 @@ export class BackgroundEvmDAppHandler {
           this.options.network.networkMode !== 'mainnet' ||
           !funding
         ) {
-          throw error
+          throw mapEvmTransactionPreparationError(error)
         }
         const decision = await this.options.approval.requestExternalApproval(
           origin,

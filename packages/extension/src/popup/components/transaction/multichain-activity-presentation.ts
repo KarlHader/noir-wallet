@@ -1,4 +1,4 @@
-import type { ActivityItem, ActivitySegment } from '@/core/activity'
+import { getActivityAssetEffects, type ActivityItem, type ActivitySegment } from '@/core/activity'
 import type {
   TransactionAssetAmount,
   TransactionFailureCode,
@@ -14,10 +14,10 @@ import type {
   ActivityChainMetadata
 } from '@/popup/services/activity-presentation-catalog'
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 import { formatActivityTokenAmount } from '../portfolio/portfolio-format'
 import { getActivityInteractionPresentation } from './activity-interaction-adapters'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
-import { identifyAaveSupplyMethod, isAaveSupplyRecipient } from '@/core/activity/aave-v3-ethereum'
 import {
   getLifecycleStatusPresentation,
   type TransactionPresentationTone
@@ -62,6 +62,12 @@ export interface ActivityDisplayAmount {
   readonly iconUrl?: string
 }
 
+export interface ActivityDisplayChange extends ActivityDisplayAmount {
+  readonly direction: 'incoming' | 'outgoing'
+  readonly value: string
+  readonly isRaw: boolean
+}
+
 export interface ActivitySwapPresentation {
   readonly source?: ActivityDisplayAmount
   readonly destination?: ActivityDisplayAmount
@@ -72,6 +78,17 @@ export interface ActivitySwapPresentation {
   readonly destinationChainIconAlias?: string
   readonly sourceAccountMode?: 'Public' | 'Confidential'
   readonly destinationAccountMode?: 'Public' | 'Confidential'
+}
+
+export function resolveActivityChainMetadata(
+  chainId: string | undefined,
+  metadata: ReadonlyMap<string, ActivityChainMetadata>
+): ActivityChainMetadata | undefined {
+  if (!chainId) return undefined
+  const registered = metadata.get(chainId)
+  if (registered) return registered
+  const rheaEvmChainId = /^rhea:([1-9]\d*)$/.exec(chainId)?.[1]
+  return rheaEvmChainId ? metadata.get(`eip155:${rheaEvmChainId}`) : undefined
 }
 
 export function isAccountModeTransfer(
@@ -160,8 +177,8 @@ export function getActivitySwapPresentation(
     : destinationSegment?.target.kind === 'onchain'
       ? destinationSegment.target.chainId
       : item.snapshot?.recipient?.chainId
-  const sourceChain = sourceChainId ? chainMetadata.get(sourceChainId) : undefined
-  const destinationChain = destinationChainId ? chainMetadata.get(destinationChainId) : undefined
+  const sourceChain = resolveActivityChainMetadata(sourceChainId, chainMetadata)
+  const destinationChain = resolveActivityChainMetadata(destinationChainId, chainMetadata)
   const recipientAddress =
     item.snapshot?.protocol?.destination.recipient ??
     (item.source === 'zcash-v1' ? item.snapshot?.recipient?.address : undefined)
@@ -216,36 +233,42 @@ export function getActivitySwapSourceMethodLabel(
   return `${sourceSymbol || 'Token'} transfer`
 }
 
-export function getAaveSupplyPresentation(item: ActivityItem): {
-  readonly protocol: 'Aave V3'
-  readonly methodLabel?: string
-} | null {
-  const recipient = item.snapshot?.recipient
+export function getActivityDisplayChanges(
+  item: ActivityItem,
+  assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>
+): readonly ActivityDisplayChange[] {
+  // Preserve the wallet's reviewed amount; observed effects only fill missing display data.
   if (
-    item.kind !== 'supply' ||
-    !recipient ||
-    !isAaveSupplyRecipient(recipient.chainId, recipient.address)
+    item.source === 'wallet-v2' &&
+    resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
   ) {
-    return null
+    return []
   }
-  const method = identifyAaveSupplyMethod(
-    recipient.chainId,
-    recipient.address,
-    item.snapshot?.evm?.methodSelector
-  )
-  return Object.freeze({
-    protocol: 'Aave V3',
-    ...(method
-      ? {
-          methodLabel:
-            method === 'depositETH'
-              ? 'Supply ETH'
-              : method === 'supplyWithPermit'
-                ? 'Supply with permit'
-                : 'Supply'
-        }
-      : {})
-  })
+  const changes = getActivityAssetEffects(item)?.changes ?? []
+  return changes
+    .map(change => {
+      const metadata = assetMetadata.get(change.assetId)?.metadata ?? change.metadata
+      const display = resolveActivityDisplayAmount(change, assetMetadata)
+      return Object.freeze({
+        ...(display ?? {
+          assetId: change.assetId,
+          symbol: formatSortAddress(parseAssetId(change.assetId).reference),
+          formatted: formatActivityTokenAmount(change.amountRaw, 0)
+        }),
+        direction: change.direction,
+        value: metadata
+          ? formatBaseUnitAmount(change.amountRaw, metadata.decimals)
+          : change.amountRaw,
+        isRaw: metadata === undefined
+      })
+    })
+    .sort((left, right) =>
+      left.direction === right.direction
+        ? left.assetId.localeCompare(right.assetId)
+        : left.direction === 'outgoing'
+          ? -1
+          : 1
+    )
 }
 
 export function resolveActivityDisplayAmount(
@@ -296,7 +319,6 @@ function isSignedOrderOrigin(segment: ActivitySegment): boolean {
 
 export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: string): string {
   if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
-  if (getAaveSupplyPresentation(item)) return 'Supply to Aave'
   if (item.failureCode === 'refunded') return 'Refund'
   if (
     item.kind === 'transfer' &&
@@ -663,14 +685,6 @@ export function getActivityRowTextPresentation(
   const recipient = getActivityTransferRecipient(item)
   const direction = item.snapshot?.direction
   const isIncoming = item.kind === 'receive' || direction === 'incoming'
-  const aaveSupply = getAaveSupplyPresentation(item)
-
-  if (aaveSupply) {
-    return {
-      title: symbol ? `Supplied ${symbol}` : 'Supplied to Aave',
-      subtitle: `${aaveSupply.protocol} · ${networkName}`
-    }
-  }
 
   if (item.kind === 'shield') {
     return {

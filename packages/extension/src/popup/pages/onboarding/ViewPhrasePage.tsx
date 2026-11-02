@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { useState, useEffect } from 'react'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -68,10 +69,7 @@ export function ViewPhrasePage() {
       <div className="page-container">
         <PageHeader showBack />
         <div className="flex-1 flex items-center justify-center px-5">
-          <div className="text-center">
-            <p className="text-danger mb-4">{error}</p>
-            <Button onClick={() => generateSeedPhrase()}>Retry</Button>
-          </div>
+          <InlineError className="w-full" message={error} onRetry={() => generateSeedPhrase()} />
         </div>
       </div>
     )

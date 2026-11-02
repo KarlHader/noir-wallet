@@ -147,12 +147,21 @@ function parseBoundedText(value: unknown, label: string, maximum: number): strin
   return value
 }
 
-function parseUrlArray(value: unknown, label: string, required: boolean): readonly string[] {
-  if (!Array.isArray(value) || (required && value.length === 0) || value.length > 8) {
+function parseUrlArray(
+  value: unknown,
+  label: string,
+  required: boolean,
+  allowSecureWebSocket = false
+): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    (required && value.length === 0) ||
+    value.length > (allowSecureWebSocket ? 128 : 8)
+  ) {
     invalidParams(`${label} is invalid.`)
   }
-  return Object.freeze(
-    value.map(candidate => {
+  const urls = value
+    .map(candidate => {
       if (typeof candidate !== 'string' || candidate.length > 2_048) {
         invalidParams(`${label} is invalid.`)
       }
@@ -165,7 +174,9 @@ function parseUrlArray(value: unknown, label: string, required: boolean): readon
       const localDevelopmentHost =
         url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
       if (
-        (url.protocol !== 'https:' && !(url.protocol === 'http:' && localDevelopmentHost)) ||
+        (url.protocol !== 'https:' &&
+          !(url.protocol === 'http:' && localDevelopmentHost) &&
+          !(allowSecureWebSocket && url.protocol === 'wss:')) ||
         url.username.length > 0 ||
         url.password.length > 0 ||
         url.search.length > 0 ||
@@ -173,17 +184,28 @@ function parseUrlArray(value: unknown, label: string, required: boolean): readon
       ) {
         invalidParams(`${label} must use HTTPS.`)
       }
-      return url.toString()
+      // The wallet uses HTTP JSON-RPC; Chainlist also includes secure WebSocket alternatives.
+      return url.protocol === 'wss:' ? null : url.toString()
     })
-  )
+    .filter((url): url is string => url !== null)
+  if (required && urls.length === 0) invalidParams(`${label} must include an HTTPS endpoint.`)
+  return Object.freeze(urls)
 }
 
 export function parseEip1193ChainRequest(
   params: readonly unknown[] | undefined,
   options: { readonly allowAddChainMetadata?: boolean } = {}
 ): ParsedEip1193ChainRequest {
-  if (!Array.isArray(params) || params.length !== 1 || !isRecord(params[0])) {
+  if (
+    !Array.isArray(params) ||
+    (params.length !== 1 && !(options.allowAddChainMetadata && params.length === 2)) ||
+    !isRecord(params[0])
+  ) {
     invalidParams('A single chain parameter is required.')
+  }
+  // Chainlist passes an optional account hint after the network. It grants no permissions.
+  if (params.length === 2 && params[1] != null) {
+    parseEvmAddress(params[1], 'Optional account')
   }
   const value = params[0]
   const allowedKeys = options.allowAddChainMetadata
@@ -222,7 +244,7 @@ export function parseEip1193ChainRequest(
         symbol: parseBoundedText(value.nativeCurrency.symbol, 'Native currency symbol', 16),
         decimals: value.nativeCurrency.decimals as number
       }),
-      rpcUrls: parseUrlArray(value.rpcUrls, 'RPC URLs', true),
+      rpcUrls: parseUrlArray(value.rpcUrls, 'RPC URLs', true, true),
       blockExplorerUrls:
         value.blockExplorerUrls === undefined
           ? Object.freeze([])

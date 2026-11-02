@@ -1,3 +1,11 @@
+import { classifyError } from '@/lib/errors'
+
+export function canRetryPendingApprovalLoad(error: string): boolean {
+  if (/not found|expired|invalid|unsupported|unauthorized|changed|no longer|locked/i.test(error))
+    return false
+  return classifyError(error).retryable
+}
+
 const SUPPORTED_APPROVAL_ACTIONS = [
   'connect',
   'multichainConnect',

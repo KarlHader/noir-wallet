@@ -1,5 +1,6 @@
 import { trackEvent } from '@/background/analytics/reporter'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { getEvmNetworkConfig, type EvmNetworkConfig } from '@/config/networks'
 import {
   createConfiguredEvmRpcClient,
@@ -98,7 +99,7 @@ export function createBackgroundEvmDAppHandler(
         accountId: reference.accountId
       })
       if (state.mode === 'main') return Object.freeze({ mode: 'main', address: mainAddress })
-      if (context.keyDomainSource.kind !== 'software') {
+      if (!supportsEvmPrivateExecution(context.keyDomainSource)) {
         throw new PrivateExecutionUnavailableError()
       }
       const pea = await signer.deriveGlobalPea(

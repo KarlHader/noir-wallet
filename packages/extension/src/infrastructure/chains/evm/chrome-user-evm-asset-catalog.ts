@@ -1,6 +1,7 @@
 import type { ChainRegistry } from '@/core/chains/registry'
 import { parseUserEvmAssetRecord, type UserEvmAssetRecord } from '@/core/chains/user-assets'
 import type { Network } from '@/types'
+import { createStoredEvmAssetValidationRegistry } from './stored-evm-asset-validation'
 
 const CATALOG_VERSION = 1
 const MAXIMUM_ASSET_COUNT = 64
@@ -45,7 +46,8 @@ export function parseUserEvmAssetCatalogSnapshot(
   ) {
     throw new Error('Invalid user EVM Token catalog')
   }
-  const assets = value.assets.map(item => parseUserEvmAssetRecord(chains, item))
+  const validationChains = createStoredEvmAssetValidationRegistry(chains, value.assets)
+  const assets = value.assets.map(item => parseUserEvmAssetRecord(validationChains, item))
   if (new Set(assets.map(asset => asset.assetId)).size !== assets.length) {
     throw new Error('Duplicate user EVM Token catalog entry')
   }
@@ -82,7 +84,10 @@ export class ChromeUserEvmAssetCatalogRepository implements UserEvmAssetCatalogR
 
   async list(): Promise<readonly UserEvmAssetRecord[]> {
     await this.mutationQueue
-    return (await this.readSnapshot()).assets
+    const activeChainIds: ReadonlySet<string> = new Set(this.chains.list().map(chain => chain.id))
+    return Object.freeze(
+      (await this.readSnapshot()).assets.filter(asset => activeChainIds.has(asset.chainId))
+    )
   }
 
   async get(assetId: string): Promise<UserEvmAssetRecord | null> {

@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
@@ -25,6 +26,7 @@ import {
   createZcashHardwareCredential
 } from '@/core/wallet/hardware-wallet-data'
 import { useWalletStore } from '@/store/wallet-store'
+import { nextHardwareWalletName } from '@/lib/hardware-connect-options'
 import { PASSWORD_POLICY } from '@/config/wallet'
 import { getNewPasswordValidationError, isNewPasswordValid } from '@/core/wallet/password-policy'
 import { formatSortAddress } from '@/lib/format'
@@ -73,7 +75,8 @@ export function KeystoneConnectPage() {
   const [connection, setConnection] = useState<KeystoneConnectionAccount | null>(null)
   const [accountIndex, setAccountIndex] = useState(0)
 
-  const [walletName, setWalletName] = useState('Keystone')
+  const [walletName, setWalletName] = useState('Keystone Wallet 1')
+  const walletNameEdited = useRef(false)
   const [birthdayHeight, setBirthdayHeight] = useState<number | undefined>(undefined)
   const [isExistingWallet, setIsExistingWallet] = useState(false)
   const [password, setPassword] = useState('')
@@ -128,6 +131,8 @@ export function KeystoneConnectPage() {
       const catalog = await accountNetworksClient.getCatalog()
       if (request !== walletInventoryRequest.current) return
       setHasStorageV2Wallet((catalog?.accounts.length ?? 0) > 0)
+      if (catalog && !walletNameEdited.current)
+        setWalletName(nextHardwareWalletName('keystone', catalog.accounts))
     } catch {
       if (request !== walletInventoryRequest.current) return
       setWalletInventoryError(true)
@@ -404,8 +409,11 @@ export function KeystoneConnectPage() {
               <label className="block text-sm text-muted mb-2">Wallet Name</label>
               <Input
                 value={walletName}
-                onChange={e => setWalletName(e.target.value)}
-                placeholder="Keystone"
+                onChange={e => {
+                  walletNameEdited.current = true
+                  setWalletName(e.target.value)
+                }}
+                placeholder="Keystone Wallet 1"
                 className="h-[45px]"
               />
             </div>
@@ -463,24 +471,11 @@ export function KeystoneConnectPage() {
             )}
 
             {walletInventoryError && (
-              <div className="mb-5 rounded-xl border border-warning/30 bg-warning/10 p-3">
-                <p className="text-sm font-medium text-warning">
-                  Unable to verify existing wallets
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Wallet connection is paused so Noir Wallet does not ask you to create another
-                  password by mistake.
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void loadWalletInventory()}
-                  className="mt-3"
-                >
-                  Retry
-                </Button>
-              </div>
+              <InlineError
+                className="mb-5"
+                message="Unable to verify existing wallets"
+                onRetry={() => void loadWalletInventory()}
+              />
             )}
 
             {createError && (

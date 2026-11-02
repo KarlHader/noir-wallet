@@ -6,6 +6,12 @@ import {
   type ChainEndpointSettings
 } from '@/core/chains/chain-endpoint-settings'
 import {
+  assertChainEndpointSettingsUnchanged,
+  assertCustomEvmNetworksHaveNoPendingTransactions,
+  removeCustomEvmNetworkSettings,
+  saveCustomEvmNetworkSettings
+} from '@/core/chains/custom-evm-network-settings'
+import {
   CUSTOM_EVM_NETWORKS_ENABLED,
   resolveActiveEvmNetworkConfig,
   resolveEvmNetworkCatalog,
@@ -27,15 +33,20 @@ import {
   SETTINGS_STORAGE_KEY,
   decodePersistedWalletSettings,
   resolvePersistedNetworkChainEndpointSettings,
-  updatePersistedWalletSettings
+  updatePersistedWalletSettings,
+  withWalletSettingsLock
 } from '@/lib/wallet-settings-storage'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { ChromeSessionEvmPendingTransferStore } from '@/infrastructure/chains/evm'
-import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
+import {
+  IndexedDbStorageV2Repository,
+  IndexedDbTransactionRepository
+} from '@/infrastructure/persistence/repositories'
 import { credentialLifecycle } from './credential-lifecycle'
 import { dappManager } from '@/core/dapp/dapp-manager'
 import {
   resolveBitcoinFeatureRuntimePolicy,
+  resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
@@ -62,20 +73,50 @@ async function mapWithConcurrency<T>(
 export class ChainEndpointSettingsCoordinator {
   private readonly pendingEvmTransfers = new ChromeSessionEvmPendingTransferStore()
   private readonly transactions = new IndexedDbTransactionRepository()
+  private readonly storage = new IndexedDbStorageV2Repository()
   private queue: Promise<void> = Promise.resolve()
 
   read(): Promise<ChainEndpointSettings> {
     return this.readPersisted()
   }
 
-  apply(value: unknown): Promise<ChainEndpointSettings> {
-    return this.enqueue(() => this.applyValidated(value))
+  apply(value: unknown, expectedSettings?: unknown): Promise<ChainEndpointSettings> {
+    return this.enqueue(async () => {
+      if (expectedSettings !== undefined) {
+        assertChainEndpointSettingsUnchanged(await this.readPersisted(), expectedSettings)
+      }
+      return this.applyValidated(value)
+    })
   }
 
-  selectActiveEvmChain(chainId: string): Promise<ChainEndpointSettings> {
+  saveCustomEvmNetwork(
+    network: unknown,
+    expectedNetwork?: unknown,
+    beforeCommit?: () => Promise<void>
+  ): Promise<ChainEndpointSettings> {
     return this.enqueue(async () => {
       const latest = await this.readPersisted()
-      return this.applyValidated(withActiveEvmChainId(latest, chainId))
+      return this.applyValidated(
+        saveCustomEvmNetworkSettings(latest, network, expectedNetwork),
+        beforeCommit
+      )
+    })
+  }
+
+  removeCustomEvmNetwork(network: unknown): Promise<ChainEndpointSettings> {
+    return this.enqueue(async () => {
+      const latest = await this.readPersisted()
+      return this.applyValidated(removeCustomEvmNetworkSettings(latest, network))
+    })
+  }
+
+  selectActiveEvmChain(
+    chainId: string,
+    beforeCommit?: () => Promise<void>
+  ): Promise<ChainEndpointSettings> {
+    return this.enqueue(async () => {
+      const latest = await this.readPersisted()
+      return this.applyValidated(withActiveEvmChainId(latest, chainId), beforeCommit)
     })
   }
 
@@ -98,12 +139,23 @@ export class ChainEndpointSettingsCoordinator {
     )
   }
 
-  private async applyValidated(value: unknown): Promise<ChainEndpointSettings> {
+  private async applyValidated(
+    value: unknown,
+    beforeCommit?: () => Promise<void>
+  ): Promise<ChainEndpointSettings> {
     const settings = parseChainEndpointSettings(value)
     if (!CUSTOM_EVM_NETWORKS_ENABLED && settings.customEvmNetworks.length > 0) {
       throw new Error('Custom EVM networks are not available in this release')
     }
     const currentSettings = await this.readPersisted()
+    if (
+      !resolveEvmFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled &&
+      (JSON.stringify(settings.customEvmNetworks) !==
+        JSON.stringify(currentSettings.customEvmNetworks) ||
+        settings.activeEvmChainId !== currentSettings.activeEvmChainId)
+    ) {
+      throw new Error('EVM networks are not available in this build')
+    }
     const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings)
     const solanaNetwork = getSolanaNetworkConfig(
       DEFAULT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet'
@@ -148,6 +200,16 @@ export class ChainEndpointSettingsCoordinator {
     const currentCatalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, currentSettings)
     const currentByChainId = new Map(currentCatalog.map(network => [network.chainId, network]))
     const attestations = new Map<string, () => Promise<void>>()
+    // A saved default must also be valid when a separate RPC override is selected.
+    for (const network of settings.customEvmNetworks) {
+      const current = currentSettings.customEvmNetworks.find(
+        item => item.chainId === network.chainId
+      )
+      if (current?.rpc.url === network.rpc.url) continue
+      attestations.set(`evm:${network.chainId}:${network.rpc.url}`, () =>
+        attestEvmRpcEndpoint({ chainId: network.chainId, rpcUrl: network.rpc.url })
+      )
+    }
     for (const network of catalog) {
       const current = currentByChainId.get(network.chainId)
       // Selecting a configured chain must still work when its RPC is temporarily unavailable.
@@ -227,25 +289,29 @@ export class ChainEndpointSettingsCoordinator {
     }
     await mapWithConcurrency([...attestations.values()], attestation => attestation())
 
+    await beforeCommit?.()
     await credentialLifecycle.synchronizeEvmNetworkMetadata(settings)
 
-    const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
-    const raw = stored[SETTINGS_STORAGE_KEY]
-    const current = decodePersistedWalletSettings(raw)
-    if (current === null && raw !== undefined) {
-      throw new Error('Persisted wallet settings are corrupted')
-    }
-    await chrome.storage.local.set({
-      [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(raw, {
-        chainEndpointSettings: settings,
-        chainEndpointSettingsByNetwork: {
-          ...(current?.chainEndpointSettingsByNetwork &&
-          typeof current.chainEndpointSettingsByNetwork === 'object' &&
-          !Array.isArray(current.chainEndpointSettingsByNetwork)
-            ? current.chainEndpointSettingsByNetwork
-            : {}),
-          [DEFAULT_NETWORK]: settings
-        }
+    await withWalletSettingsLock(async () => {
+      await beforeCommit?.()
+      const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+      const raw = stored[SETTINGS_STORAGE_KEY]
+      const current = decodePersistedWalletSettings(raw)
+      if (current === null && raw !== undefined) {
+        throw new Error('Persisted wallet settings are corrupted')
+      }
+      await chrome.storage.local.set({
+        [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(raw, {
+          chainEndpointSettings: settings,
+          chainEndpointSettingsByNetwork: {
+            ...(current?.chainEndpointSettingsByNetwork &&
+            typeof current.chainEndpointSettingsByNetwork === 'object' &&
+            !Array.isArray(current.chainEndpointSettingsByNetwork)
+              ? current.chainEndpointSettingsByNetwork
+              : {}),
+            [DEFAULT_NETWORK]: settings
+          }
+        })
       })
     })
     const nextEvmChainIds = new Set(catalog.map(network => network.chainId))
@@ -265,7 +331,34 @@ export class ChainEndpointSettingsCoordinator {
   ): Promise<void> {
     const currentChainId = resolveActiveEvmNetworkConfig(DEFAULT_NETWORK, current).chainId
     const nextChainId = resolveActiveEvmNetworkConfig(DEFAULT_NETWORK, next).chainId
-    if (currentChainId === nextChainId) return
+    const removedChainIds = new Set(
+      current.customEvmNetworks
+        .filter(network => !next.customEvmNetworks.some(item => item.chainId === network.chainId))
+        .map(network => network.chainId)
+    )
+    if (removedChainIds.size > 0) {
+      const pointer = await this.storage.getActivePointer()
+      if (pointer) {
+        const snapshot = await this.storage.getSnapshot(pointer.generationId)
+        if (
+          !snapshot ||
+          snapshot.manifest.status !== 'verified' ||
+          snapshot.manifest.generationId !== pointer.generationId ||
+          snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
+        ) {
+          throw new Error('Wallet metadata is unavailable. Reopen the wallet and try again.')
+        }
+        await assertCustomEvmNetworksHaveNoPendingTransactions(
+          [...removedChainIds],
+          snapshot.accounts.map(account => ({
+            keyDomainId: account.keyDomainId,
+            accountId: account.id
+          })),
+          this.transactions
+        )
+      }
+    }
+    if (currentChainId === nextChainId && removedChainIds.size === 0) return
     const pending = (await this.pendingEvmTransfers.list()).filter(item => item.phase === 'signed')
     for (const item of pending) {
       const graph = await this.transactions.get(item.scope, item.transactionId)
@@ -275,7 +368,10 @@ export class ChainEndpointSettingsCoordinator {
       if (!chainId || chainId.kind !== 'onchain') {
         throw new Error('A signed EVM transaction must be recovered before switching networks')
       }
-      if (nextChainId !== chainId.chainId) {
+      if (removedChainIds.has(chainId.chainId as `eip155:${string}`)) {
+        throw new Error('Broadcast the signed EVM transaction before removing its network')
+      }
+      if (currentChainId !== nextChainId && nextChainId !== chainId.chainId) {
         throw new Error('Broadcast the signed EVM transaction before switching networks')
       }
     }

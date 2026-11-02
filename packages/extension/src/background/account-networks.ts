@@ -11,6 +11,7 @@ import {
   type AddressGatedChainRegistry
 } from '@/core/chains/registry'
 import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { KeyDomainId } from '@/core/keyring/domain'
 import type { HardwareCredentialMetadata } from '@/core/keyring/domain'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -39,6 +40,7 @@ export interface AccountNetworkSummary {
 export interface AccountNetworksSummary {
   readonly walletId: KeyDomainId
   readonly walletDisplayName: string
+  readonly walletCreatedAt: number
   readonly walletSource:
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
@@ -217,7 +219,7 @@ export class AccountNetworksCoordinator {
                 const evmPeaDerivation = this.options.evmPeaDerivation
                 if (
                   chain.family === 'evm' &&
-                  keyDomain.source.kind === 'software' &&
+                  supportsEvmPrivateExecution(keyDomain.source) &&
                   evmPeaDerivation
                 ) {
                   const binding = parseEvmAccountBinding(chainAccount, chain.id)
@@ -268,6 +270,7 @@ export class AccountNetworksCoordinator {
         return Object.freeze({
           walletId: account.keyDomainId,
           walletDisplayName: keyDomain.displayName,
+          walletCreatedAt: keyDomain.createdAt,
           walletSource:
             keyDomain.source.kind === 'software'
               ? Object.freeze({ kind: 'software' as const })

@@ -22,18 +22,28 @@ function rankToken(
   return Object.freeze({ token, index, tier, amount, fiatValue })
 }
 
-/** Sorts wallet-held assets by USD value without mutating the provider token list. */
+/** Keeps held assets ahead of unowned assets and preserves prior order within balance tiers. */
 export function sortTokensByBalanceValue(
   tokens: readonly SwapToken[],
-  balances?: ReadonlyMap<string, string>
+  balances?: ReadonlyMap<string, string>,
+  previousOrder?: ReadonlyMap<string, number>
 ): readonly SwapToken[] {
-  if (!balances) return tokens
+  if (!balances && !previousOrder) return tokens
 
   return Object.freeze(
     tokens
       .map((token, index) => rankToken(token, index, balances))
       .sort((left, right) => {
         if (left.tier !== right.tier) return left.tier - right.tier
+        if (previousOrder) {
+          const leftIndex = previousOrder.get(`${left.token.blockchain}:${left.token.assetId}`)
+          const rightIndex = previousOrder.get(`${right.token.blockchain}:${right.token.assetId}`)
+          if (leftIndex !== undefined || rightIndex !== undefined) {
+            if (leftIndex === undefined) return 1
+            if (rightIndex === undefined) return -1
+            return leftIndex - rightIndex
+          }
+        }
         if (left.fiatValue && right.fiatValue && !left.fiatValue.eq(right.fiatValue)) {
           return left.fiatValue.gt(right.fiatValue) ? -1 : 1
         }

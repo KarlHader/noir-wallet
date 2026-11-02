@@ -1,6 +1,7 @@
 import {
   parseChainEndpointSettings,
-  type ChainEndpointSettings
+  type ChainEndpointSettings,
+  type CustomEvmNetwork
 } from '@/core/chains/chain-endpoint-settings'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
@@ -47,13 +48,22 @@ function parseResponse(value: unknown): ChainEndpointSettings {
 export function createChainEndpointSettingsClient(sendMessage: RuntimeMessenger) {
   return Object.freeze({
     read: async () => parseResponse(await sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })),
-    apply: async (settings: ChainEndpointSettings) =>
+    apply: async (settings: ChainEndpointSettings, expectedSettings: ChainEndpointSettings) =>
       parseResponse(
         await sendMessage({
           type: 'APPLY_CHAIN_ENDPOINT_SETTINGS',
-          settings: parseChainEndpointSettings(settings)
+          settings: parseChainEndpointSettings(settings),
+          expectedSettings: parseChainEndpointSettings(expectedSettings)
         })
-      )
+      ),
+    saveCustomEvmNetwork: async (network: CustomEvmNetwork, expectedNetwork?: CustomEvmNetwork) =>
+      parseResponse(
+        await sendMessage({ type: 'SAVE_CUSTOM_EVM_NETWORK', network, expectedNetwork })
+      ),
+    removeCustomEvmNetwork: async (network: CustomEvmNetwork) =>
+      parseResponse(await sendMessage({ type: 'REMOVE_CUSTOM_EVM_NETWORK', network })),
+    selectActiveEvmChain: async (chainId: string) =>
+      parseResponse(await sendMessage({ type: 'SELECT_ACTIVE_EVM_CHAIN', chainId }))
   })
 }
 

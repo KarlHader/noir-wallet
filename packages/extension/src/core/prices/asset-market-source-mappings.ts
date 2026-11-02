@@ -8,7 +8,7 @@ import {
   type TrustedDexScreenerPool
 } from '@/config/asset-market-sources'
 import { getAssetMarketMappings } from './asset-market-mappings'
-import type { MarketAssetId } from './market-asset'
+import { createMarketAssetId, type MarketAssetId } from './market-asset'
 
 export interface AssetMarketChangeSourceMapping {
   readonly assetId: string
@@ -27,7 +27,16 @@ export interface CoinGeckoTokenSource {
   readonly coinId: MarketAssetId
 }
 
-export type AssetMarketHistoryFallbackSource = CoinMarketCapTokenSource | CoinGeckoTokenSource
+export interface CoinGeckoContractTokenSource {
+  readonly source: 'coingecko-contract'
+  readonly chainId: string
+  readonly contractAddress: string
+}
+
+export type AssetMarketHistoryFallbackSource =
+  | CoinMarketCapTokenSource
+  | CoinGeckoTokenSource
+  | CoinGeckoContractTokenSource
 
 export interface GeckoTerminalPoolSource {
   readonly network: string
@@ -130,6 +139,33 @@ export function getAssetMarketHistorySourceMappings(
     })
     mappingByAssetId.set(mapping.assetId, historyMapping)
     mappingByMarketAssetId.set(mapping.marketAssetId, historyMapping)
+  }
+  if (network === 'mainnet') {
+    for (const { asset } of assets.list()) {
+      if (
+        mappingByAssetId.has(asset.id) ||
+        !asset.chainId.startsWith('eip155:') ||
+        asset.namespace !== 'erc20'
+      ) {
+        continue
+      }
+      const contractAddress = asset.reference.toLowerCase()
+      mappingByAssetId.set(
+        asset.id,
+        Object.freeze({
+          assetId: asset.id,
+          marketAssetId: createMarketAssetId(
+            `ua-${asset.chainId.slice('eip155:'.length)}-${contractAddress.slice(2)}`
+          ),
+          primary: null,
+          fallback: Object.freeze({
+            source: 'coingecko-contract' as const,
+            chainId: asset.chainId,
+            contractAddress
+          })
+        })
+      )
+    }
   }
   return Object.freeze([...mappingByAssetId.values()])
 }

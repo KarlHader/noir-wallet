@@ -496,7 +496,7 @@ export class ZcashWorkerClient {
   }
 
   recreateWorker(): void {
-    this.handleWorkerCrash('forced worker recreate')
+    this.handleWorkerCrash('forced worker recreate', true)
     if (this.environment === 'offscreen') {
       this.initWorker()
     }
@@ -533,13 +533,22 @@ export class ZcashWorkerClient {
     this.initDedup.reset()
   }
 
-  private handleWorkerCrash(reason: string): void {
-    console.warn(
-      `%c[ZcashWorker] Worker crashed: ${reason} — rejecting ${pendingRequests.size} pending request(s), will auto-recover on next call`,
-      'background: #FF4444; color: #FFF; font-weight: bold; padding: 2px 6px; border-radius: 4px;'
-    )
+  private handleWorkerCrash(reason: string, intentional = false): void {
+    const message = intentional
+      ? `Worker request cancelled: ${reason}`
+      : `Worker crashed: ${reason}`
+    if (intentional) {
+      console.info(
+        `[ZcashWorker] ${message}; cancelling ${pendingRequests.size} pending request(s)`
+      )
+    } else {
+      console.warn(
+        `%c[ZcashWorker] ${message} — rejecting ${pendingRequests.size} pending request(s), will auto-recover on next call`,
+        'background: #FF4444; color: #FFF; font-weight: bold; padding: 2px 6px; border-radius: 4px;'
+      )
+    }
     for (const [id, pending] of pendingRequests) {
-      pending.reject(new Error(`Worker crashed: ${reason}`))
+      pending.reject(new Error(message))
       pendingRequests.delete(id)
     }
     if (worker) {

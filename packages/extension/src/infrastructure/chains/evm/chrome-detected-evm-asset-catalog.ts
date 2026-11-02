@@ -1,6 +1,7 @@
 import type { ChainRegistry } from '@/core/chains/registry'
 import { parseDetectedEvmAssetRecord, type DetectedEvmAssetRecord } from '@/core/chains/user-assets'
 import type { Network } from '@/types'
+import { createStoredEvmAssetValidationRegistry } from './stored-evm-asset-validation'
 
 const CATALOG_VERSION = 1
 const MAXIMUM_ASSET_COUNT = 512
@@ -37,7 +38,8 @@ export function parseDetectedEvmAssetCatalogSnapshot(
   ) {
     throw new Error('Invalid detected EVM Token catalog')
   }
-  const assets = value.assets.map(item => parseDetectedEvmAssetRecord(chains, item))
+  const validationChains = createStoredEvmAssetValidationRegistry(chains, value.assets)
+  const assets = value.assets.map(item => parseDetectedEvmAssetRecord(validationChains, item))
   if (new Set(assets.map(asset => asset.assetId)).size !== assets.length) {
     throw new Error('Duplicate detected EVM Token catalog entry')
   }
@@ -74,7 +76,10 @@ export class ChromeDetectedEvmAssetCatalogRepository {
 
   async list(): Promise<readonly DetectedEvmAssetRecord[]> {
     await this.mutationQueue
-    return (await this.readSnapshot()).assets
+    const activeChainIds: ReadonlySet<string> = new Set(this.chains.list().map(chain => chain.id))
+    return Object.freeze(
+      (await this.readSnapshot()).assets.filter(asset => activeChainIds.has(asset.chainId))
+    )
   }
 
   upsert(records: readonly DetectedEvmAssetRecord[]): Promise<boolean> {

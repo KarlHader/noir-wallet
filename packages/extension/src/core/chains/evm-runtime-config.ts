@@ -1,5 +1,6 @@
 import type { Network } from '@/types'
 import { getEvmNetworkConfigs, type EvmNetworkConfig } from '@/config/networks'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import {
   findChainEndpointOverride,
   parseChainEndpointSettings,
@@ -8,7 +9,7 @@ import {
 } from './chain-endpoint-settings'
 import { resolvePersistedNetworkChainEndpointSettings } from '@/lib/wallet-settings-storage'
 
-export const CUSTOM_EVM_NETWORKS_ENABLED = false
+export const CUSTOM_EVM_NETWORKS_ENABLED = true
 
 export interface EvmRuntimeNetworkConfig extends EvmNetworkConfig {
   readonly source: 'builtin' | 'custom'
@@ -36,7 +37,7 @@ function customNetworkConfig(
     numericChainId: network.numericChainId,
     networkName: network.displayName,
     displayName: network.displayName,
-    iconChain: 'eth',
+    iconChain: resolveEvmChainIconAlias(network.chainId),
     nativeCurrency: Object.freeze({
       ...network.nativeCurrency,
       slip44Reference: '60'
@@ -55,7 +56,11 @@ export function resolveConfiguredEvmNetworkCatalog(
   const builtin = getEvmNetworkConfigs(networkMode).map(config =>
     applyOverride(Object.freeze({ ...config, source: 'builtin' as const }), settings)
   )
-  const builtinIds = new Set(builtin.map(config => config.chainId))
+  const builtinIds = new Set(
+    [...getEvmNetworkConfigs('mainnet'), ...getEvmNetworkConfigs('testnet')].map(
+      config => config.chainId
+    )
+  )
   const custom = settings.customEvmNetworks.map(network => {
     if (builtinIds.has(network.chainId)) {
       throw new Error('A custom EVM network cannot replace a built-in chain definition')

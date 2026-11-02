@@ -116,6 +116,13 @@ export interface EvmTransactionReceipt {
   readonly blockHash: string
   readonly blockNumber: string
   readonly status: 'success' | 'failed'
+  readonly logs?: readonly EvmReceiptLog[]
+}
+
+export interface EvmReceiptLog {
+  readonly address: string
+  readonly topics: readonly string[]
+  readonly data: string
 }
 
 export type EvmTransactionLocation =
@@ -561,11 +568,39 @@ export function createEvmRpcClient(
       if (status !== 0n && status !== 1n) {
         throw new EvmRpcError('invalid-response', 'Invalid EVM transaction receipt status')
       }
+      const receiptHash = parseHash(result.transactionHash, 'receipt transaction hash')
+      if (!Array.isArray(result.logs) || result.logs.length > 4_096) {
+        throw new EvmRpcError('invalid-response', 'Invalid EVM receipt logs')
+      }
+      const logs = result.logs.map((value: unknown): EvmReceiptLog => {
+        if (
+          !isRecord(value) ||
+          typeof value.address !== 'string' ||
+          !/^0x[0-9a-fA-F]{40}$/.test(value.address) ||
+          !Array.isArray(value.topics) ||
+          value.topics.length > 4 ||
+          typeof value.data !== 'string' ||
+          !/^0x(?:[0-9a-fA-F]{2})*$/.test(value.data) ||
+          value.data.length > 2 + 128 * 1024 * 2 ||
+          (value.transactionHash !== undefined &&
+            parseHash(value.transactionHash, 'receipt log transaction hash') !== receiptHash)
+        ) {
+          throw new EvmRpcError('invalid-response', 'Invalid EVM receipt log')
+        }
+        return Object.freeze({
+          address: value.address.toLowerCase(),
+          topics: Object.freeze(
+            value.topics.map((topic: unknown) => parseHash(topic, 'receipt log topic'))
+          ),
+          data: value.data.toLowerCase()
+        })
+      })
       return Object.freeze({
-        transactionHash: parseHash(result.transactionHash, 'receipt transaction hash'),
+        transactionHash: receiptHash,
         blockHash: parseHash(result.blockHash, 'receipt block hash'),
         blockNumber: parseQuantity(result.blockNumber, 'receipt block number').toString(),
-        status: status === 1n ? 'success' : 'failed'
+        status: status === 1n ? 'success' : 'failed',
+        logs: Object.freeze(logs)
       })
     },
     getTransactionLocation,

@@ -1,11 +1,11 @@
 ---
 title: Provider API
-description: Typed reference for the Zcash API exposed by the Noir Wallet SDK.
+description: Typed reference for Noir Wallet's Zcash API and EVM network requests.
 icon: Braces
 ---
 
-All methods are available on `wallet.zcash`. Detecting the provider does not connect an account or
-open the wallet.
+The Zcash methods below are available on `wallet.zcash`. Detecting the provider does not connect an
+account or open the wallet. EVM network requests are covered at the end of this guide.
 
 ```ts
 import { getNoirWallet } from '@noir-wallet/sdk'
@@ -391,3 +391,48 @@ The typed SDK is recommended. These are the raw method names used internally:
 
   </Accordion>
 </Accordions>
+
+## EVM network requests
+
+When multiple EVM wallets are installed, users can select **Ask every time**, **Use Noir Wallet**,
+or **Use another wallet** under **Settings > Default EVM Wallet**. The initial preference is
+**Ask every time**. This preference controls Noir's legacy `window.ethereum` routing after the
+site reloads. Explicit EIP-6963 selections and `window.noirwallet.ethereum` always refer directly
+to Noir. Wallet choices use EIP-6963 metadata and wallet-specific namespaces; `isMetaMask` alone
+is a compatibility flag, not a wallet identity. An unidentified legacy provider is offered only
+when no named alternative is discoverable. If another extension has locked the legacy entry, use EIP-6963 or a separate browser
+profile. A wallet choice does not connect an account or approve a request; the selected wallet
+still handles its own permissions.
+
+The EVM provider supports `wallet_addEthereumChain` and `wallet_switchEthereumChain` in the
+wallet's active Mainnet/Testnet Mode. The SDK exposes `addEvmNetwork(provider, network)` and
+`switchEvmChain(provider, chainId)` for these requests.
+
+```ts
+import { addEvmNetwork, detectEvmProvider, switchEvmChain } from '@noir-wallet/sdk'
+
+const provider = await detectEvmProvider()
+await addEvmNetwork(provider, {
+  chainId: '0x7a69',
+  chainName: 'My EVM Chain',
+  nativeCurrency: { name: 'My Ether', symbol: 'METH', decimals: 18 },
+  rpcUrls: ['https://rpc.my-chain.example']
+})
+await switchEvmChain(provider, '0x7a69')
+```
+
+Adding an unknown chain opens a wallet approval with its chain ID, name, native currency, selected
+RPC URL, and optional explorer URL. The wallet verifies that the RPC reports the requested chain ID
+before saving it. The first supported HTTP endpoint in `rpcUrls` is selected; secure WebSocket
+alternatives are skipped. HTTPS is required except for local development endpoints. Adding an already configured
+chain leaves its settings unchanged. Adding a network does not make it active; request a separate
+switch when needed. A switch to an unconfigured chain rejects with code `4902`, and a rejected
+approval returns `4001`. Built-in chains in the other global network mode cannot be added.
+
+For `eth_requestAccounts`, closing the wallet's unlock window cancels the request with `4001`.
+An `eth_sendTransaction` request with insufficient funds returns `-32000` before opening
+transaction approval; the error identifies insufficient funds for the transaction and network fee.
+
+For Chainlist compatibility, `wallet_addEthereumChain` also accepts an optional account address
+as the second positional parameter. This hint is ignored and never grants account permissions.
+`wallet_switchEthereumChain` still accepts exactly one chain parameter.

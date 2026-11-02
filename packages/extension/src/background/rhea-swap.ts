@@ -1,5 +1,4 @@
 import {
-  SwapClient,
   normalizeBuild,
   normalizeQuote,
   type QuoteRequest,
@@ -8,6 +7,7 @@ import {
   type SwapReportRequestRaw,
   type SwapQuoteDataRaw
 } from '@rhea-finance/cross-chain-aggregation-dex'
+import { RheaSwapCatalogClient } from '@/core/services/rhea-swap/rhea-swap-catalog-client'
 import {
   RheaSwapService,
   RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
@@ -119,6 +119,13 @@ function parseStoredReportRequest(value: unknown): SwapReportRequestRaw {
   })
 }
 
+function readStoredQuoteTiming(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Stored RHEA Swap quote timing is invalid')
+  }
+  return value
+}
+
 function parseStoredRequest(value: unknown): QuoteRequest {
   if (!isRecord(value)) throw new Error('Stored RHEA Swap quote request is invalid')
   const parsed = parseRheaSwapQuoteRequest({
@@ -132,13 +139,14 @@ function parseStoredRequest(value: unknown): QuoteRequest {
     recipient: value.recipient,
     confidentiality: value.confidentiality
   })
-  const normalized = toSdkQuoteRequest(parsed)
-  if (
-    Object.keys(value).length !== Object.keys(normalized).length ||
-    value.quoteWaitingTimeMs !== normalized.quoteWaitingTimeMs ||
-    value.sameChainTimeoutMs !== normalized.sameChainTimeoutMs ||
-    value.crossChainTimeoutMs !== normalized.crossChainTimeoutMs
-  ) {
+  // Existing quotes retain their timing budgets when defaults change.
+  const normalized = Object.freeze({
+    ...toSdkQuoteRequest(parsed),
+    quoteWaitingTimeMs: readStoredQuoteTiming(value.quoteWaitingTimeMs),
+    sameChainTimeoutMs: readStoredQuoteTiming(value.sameChainTimeoutMs),
+    crossChainTimeoutMs: readStoredQuoteTiming(value.crossChainTimeoutMs)
+  })
+  if (Object.keys(value).length !== Object.keys(normalized).length) {
     throw new Error('Stored RHEA Swap quote request fields are invalid')
   }
   return normalized
@@ -343,7 +351,7 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
     service = null
     return service
   }
-  const client = new SwapClient({
+  const client = new RheaSwapCatalogClient({
     baseUrl: 'https://api.rhea.finance',
     apiKey: accessToken,
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,

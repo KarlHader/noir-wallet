@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { getZnsClient, isZnsName, normalizeZnsName } from '@/lib/zns'
 import { useWalletStore } from '@/store/wallet-store'
 
@@ -9,6 +9,8 @@ interface ZnsResolveResult {
   name: string | null
   loading: boolean
   error: string | null
+  retryable: boolean
+  retry: () => void
 }
 
 const DEBOUNCE_MS = 500
@@ -18,11 +20,17 @@ export function useZnsResolve(input: string): ZnsResolveResult {
   const [name, setName] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryable, setRetryable] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const retry = useCallback(() => setAttempt(value => value + 1), [])
   const network = useWalletStore(s => s.currentNetwork)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     abortRef.current?.abort()
+    setRetryable(false)
+    setAddress(null)
+    setName(null)
 
     if (!isZnsName(input)) {
       setAddress(null)
@@ -57,6 +65,7 @@ export function useZnsResolve(input: string): ZnsResolveResult {
           setAddress(null)
           setName(null)
           setError('Resolution failed')
+          setRetryable(true)
         }
       } finally {
         if (!ctrl.signal.aborted) setLoading(false)
@@ -67,7 +76,7 @@ export function useZnsResolve(input: string): ZnsResolveResult {
       ctrl.abort()
       clearTimeout(timer)
     }
-  }, [input, network])
+  }, [input, network, attempt])
 
-  return { address, name, loading, error }
+  return { address, name, loading, error, retryable, retry }
 }

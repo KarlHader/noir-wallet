@@ -1,10 +1,13 @@
 import { getAddress, isAddress } from 'viem'
+import { getEvmNetworkConfigs } from './networks'
 
 const CHAIN_ICON_BASE_URL = 'https://assets.zknoir.com/chain'
 const TRUST_WALLET_CHAIN_ASSET_BASE = 'https://assets-cdn.trustwallet.com/blockchains'
+export const GENERIC_CHAIN_ICON_URL = '/icons/chains/network.svg'
 
 interface ChainIconConfig {
   readonly file?: string
+  readonly url?: string
   readonly native?: string
   readonly token?: string
   readonly evmAddress?: boolean
@@ -25,9 +28,12 @@ const CHAIN_ICONS: Readonly<Record<string, ChainIconConfig>> = Object.freeze({
   bsc: { file: 'bsc.svg', native: 'smartchain', token: 'smartchain', evmAddress: true },
   btc: { file: 'bitcoin.svg', native: 'bitcoin' },
   cardano: { native: 'cardano' },
+  'custom-evm': { url: GENERIC_CHAIN_ICON_URL },
   dash: { native: 'dash' },
   doge: { native: 'doge' },
   eth: { file: 'ethereum.svg', native: 'ethereum', token: 'ethereum', evmAddress: true },
+  'eip155:57073': { native: 'ethereum' },
+  'eip155:763373': { native: 'ethereum' },
   ethereum: { file: 'ethereum.svg' },
   evm: { file: 'ethereum.svg' },
   gnosis: { file: 'gnosis.svg', native: 'xdai', token: 'xdai', evmAddress: true },
@@ -55,8 +61,23 @@ const CHAIN_ICONS: Readonly<Record<string, ChainIconConfig>> = Object.freeze({
 
 export function formatConfiguredChainIconUrl(chain: string): string {
   const normalized = chain.trim().toLowerCase()
-  const file = CHAIN_ICONS[normalized]?.file ?? `${encodeURIComponent(normalized)}.svg`
+  if (isDynamicEvmChainIcon(normalized)) return GENERIC_CHAIN_ICON_URL
+  const config = CHAIN_ICONS[normalized]
+  if (config?.url) return config.url
+  const file = config?.file ?? `${encodeURIComponent(normalized)}.svg`
   return `${CHAIN_ICON_BASE_URL}/${file}`
+}
+
+export function isDynamicEvmChainIcon(chain: string): boolean {
+  return /^eip155:[1-9][0-9]*$/.test(chain) && Number.isSafeInteger(Number(chain.slice(7)))
+}
+
+export function resolveEvmChainIconAlias(chainId: string): string {
+  for (const mode of ['mainnet', 'testnet'] as const) {
+    const builtin = getEvmNetworkConfigs(mode).find(network => network.chainId === chainId)
+    if (builtin) return builtin.iconChain
+  }
+  return isDynamicEvmChainIcon(chainId) ? chainId : 'custom-evm'
 }
 
 function formatTrustWalletNativeIconUrl(chain: string): string | undefined {
@@ -76,6 +97,10 @@ export function formatTrustWalletTokenIconUrl(
   return `${TRUST_WALLET_CHAIN_ASSET_BASE}/${config.token}/assets/${encodeURIComponent(pathAddress)}/logo.png`
 }
 
-export function formatNativeTokenIconUrl(chain: string): string {
-  return formatTrustWalletNativeIconUrl(chain) ?? formatConfiguredChainIconUrl(chain)
+export function formatNativeTokenIconUrl(chain: string): string | undefined {
+  const nativeIcon = formatTrustWalletNativeIconUrl(chain)
+  if (nativeIcon) return nativeIcon
+  const chainIcon = formatConfiguredChainIconUrl(chain)
+  // Packaged network artwork is not native asset metadata.
+  return chainIcon.startsWith('https://') ? chainIcon : undefined
 }

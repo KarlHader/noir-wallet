@@ -1,4 +1,5 @@
 import type { ChainId } from '@/core/chains/domain'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ConfidentialSignedPayload } from '@/core/services/confidential-funding'
 import { parseEvmAccountBinding, type ActiveEvmPortfolioContext } from '@/infrastructure/chains/evm'
 import {
@@ -61,7 +62,7 @@ export class ConfidentialFundingSigner {
 
   async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
     const context = await this.loadContext(chainId)
-    if (!context || context.keyDomainSource.kind !== 'software') {
+    if (!context || !supportsEvmPrivateExecution(context.keyDomainSource)) {
       throw new Error('Confidential funding requires an active software EVM Account')
     }
     const binding = parseEvmAccountBinding(context.chainAccount, chainId)

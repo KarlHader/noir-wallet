@@ -14,3 +14,4 @@ export {
   type ActivitySegment,
   type ActivitySource
 } from './activity-types'
+export { getActivityAssetEffects } from './activity-asset-effects'

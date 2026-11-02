@@ -61,7 +61,8 @@ export function createRheaSwapSignedOrderGraph(input: {
         },
         counterAmount: {
           assetId: binding.destination.assetId,
-          amountRaw: binding.destination.expectedAmountRaw
+          amountRaw: binding.destination.expectedAmountRaw,
+          ...(binding.destination.metadata ? { metadata: binding.destination.metadata } : {})
         },
         sender: { chainId: binding.origin.chainId, address: binding.sender },
         recipient: {
@@ -163,7 +164,8 @@ export function createRheaSwapSignedSourceGraph(input: {
         },
         counterAmount: {
           assetId: binding.destination.assetId,
-          amountRaw: binding.destination.expectedAmountRaw
+          amountRaw: binding.destination.expectedAmountRaw,
+          ...(binding.destination.metadata ? { metadata: binding.destination.metadata } : {})
         },
         sender: { chainId: binding.origin.chainId, address: binding.sender },
         recipient: {
@@ -277,7 +279,8 @@ export function createRheaSwapSignedBatchGraph(input: {
         },
         counterAmount: {
           assetId: binding.destination.assetId,
-          amountRaw: binding.destination.expectedAmountRaw
+          amountRaw: binding.destination.expectedAmountRaw,
+          ...(binding.destination.metadata ? { metadata: binding.destination.metadata } : {})
         },
         sender: { chainId: binding.origin.chainId, address: binding.sender },
         recipient: {
@@ -518,7 +521,8 @@ export function bindRheaSwapTransactionGraph(input: {
         },
         counterAmount: {
           assetId: binding.destination.assetId,
-          amountRaw: binding.destination.expectedAmountRaw
+          amountRaw: binding.destination.expectedAmountRaw,
+          ...(binding.destination.metadata ? { metadata: binding.destination.metadata } : {})
         },
         protocol: binding
       }

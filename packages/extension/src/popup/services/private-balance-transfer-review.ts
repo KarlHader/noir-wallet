@@ -1,6 +1,6 @@
 import type { RheaSwapReviewView } from '@/core/services/rhea-swap'
 import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
-import { formatBaseUnitAmount } from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 
 export interface PrivateBalanceTransferReview {
   readonly quoteHandle: string

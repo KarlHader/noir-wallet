@@ -19,6 +19,11 @@ export interface MyAccountRecipientGroup {
   readonly addresses: readonly MyAccountRecipientAddress[]
 }
 
+export interface MyAccountRecipientGroupOptions {
+  readonly includeUnavailableAccounts?: boolean
+  readonly includeCurrentAccount?: boolean
+}
+
 function normalizedAddress(chainId: string, address: string): string {
   return chainId.startsWith('eip155:') ? address.toLowerCase() : address
 }
@@ -26,7 +31,8 @@ function normalizedAddress(chainId: string, address: string): string {
 export function buildMyAccountRecipientGroups(
   catalog: AccountNetworksCatalogView | null,
   chainId: string,
-  excludeAddresses: readonly string[] = []
+  excludeAddresses: readonly string[] = [],
+  options: MyAccountRecipientGroupOptions = {}
 ): readonly MyAccountRecipientGroup[] {
   if (!catalog) return Object.freeze([])
 
@@ -36,40 +42,46 @@ export function buildMyAccountRecipientGroups(
 
   for (const account of catalog.accounts) {
     const network = account.networks.find(candidate => candidate.chain.id === chainId)
-    if (!network) continue
+    if (!network && !options.includeUnavailableAccounts) continue
 
-    const isZcash = network.chain.family === 'zcash'
-    const isEvm = network.chain.family === 'evm'
-    if (account.active && !isZcash && !isEvm) continue
+    const isZcash = network?.chain.family === 'zcash'
+    const isEvm = network?.chain.family === 'evm'
+    if (account.active && network && !isZcash && !isEvm && !options.includeCurrentAccount) {
+      continue
+    }
 
-    const receiveAddresses = isZcash
-      ? network.addresses
-      : [
-          network.addresses.find(address => address.preferredForReceive) ?? network.addresses[0]
-        ].filter((address): address is AccountNetworkAddressView => address !== undefined)
-    const candidates: readonly MyAccountRecipientAddress[] = isEvm
-      ? [
-          ...receiveAddresses.map(address => ({ ...address, executionMode: 'main' as const })),
-          ...(network.privateExecutionAddress
-            ? [
-                {
-                  value: network.privateExecutionAddress,
-                  scheme: 'evm',
-                  privacy: 'transparent' as const,
-                  preferredForReceive: false,
-                  executionMode: 'private' as const
-                }
-              ]
-            : [])
-        ]
-      : receiveAddresses
+    let receiveAddresses: readonly AccountNetworkAddressView[] = []
+    if (network) {
+      receiveAddresses = isZcash
+        ? network.addresses
+        : [
+            network.addresses.find(address => address.preferredForReceive) ?? network.addresses[0]
+          ].filter((address): address is AccountNetworkAddressView => address !== undefined)
+    }
+    const candidates: readonly MyAccountRecipientAddress[] =
+      isEvm && network
+        ? [
+            ...receiveAddresses.map(address => ({ ...address, executionMode: 'main' as const })),
+            ...(network.privateExecutionAddress
+              ? [
+                  {
+                    value: network.privateExecutionAddress,
+                    scheme: 'evm',
+                    privacy: 'transparent' as const,
+                    preferredForReceive: false,
+                    executionMode: 'private' as const
+                  }
+                ]
+              : [])
+          ]
+        : receiveAddresses
     const addresses = candidates.filter(address => {
       const normalized = normalizedAddress(chainId, address.value)
       if (excluded.has(normalized) || seen.has(normalized)) return false
       seen.add(normalized)
       return true
     })
-    if (addresses.length === 0) continue
+    if (addresses.length === 0 && network) continue
 
     groups.push(
       Object.freeze({

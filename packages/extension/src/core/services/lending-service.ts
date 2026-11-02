@@ -12,7 +12,8 @@ import {
 import { clearLendingMcaCache, getMcaCacheKey, runMcaCheckDeduped } from './lending-mca-cache'
 import { safeBig } from '@/lib/big'
 import { ZEC_NEAR_TOKEN_ID } from '@/config/intents'
-import { formatAmount } from '@/lib/format'
+import { formatAmount } from '@/lib/number-format'
+import { parseEvmAddress } from '@/core/dapp/eip1193'
 
 export const REWARD_TOKEN_ID = 'lst.rhealab.near'
 export const REWARD_TOKEN_ID_DECIMALS = 24
@@ -81,6 +82,19 @@ export async function checkLendingMcaAccount(
       signingMode: 'derived'
     }
   })
+}
+
+export async function checkEvmLendingMcaAccount(
+  address: string,
+  lookupMcaByWallet: typeof getMcaByWallet = getMcaByWallet
+): Promise<string | null> {
+  const identityKey = parseEvmAddress(address)
+  const mcaId: unknown = await lookupMcaByWallet({ chain: 'evm', identityKey })
+  if (mcaId === null) return null
+  if (typeof mcaId !== 'string' || mcaId.length === 0) {
+    throw new Error('Invalid EVM lending account response')
+  }
+  return mcaId
 }
 
 export { clearLendingMcaCache }

@@ -15,7 +15,11 @@ import {
   createBitcoinActivityHistorySource,
   createConfiguredBitcoinEsploraClient
 } from '../chains/bitcoin'
-import { createEvmActivityHistoryBatchReader, createEvmActivityHistoryReader } from '../chains/evm'
+import {
+  buildTrackedErc20Assets,
+  createEvmActivityHistoryBatchReader,
+  createEvmActivityHistoryReader
+} from '../chains/evm'
 import { createNearActivityHistorySource } from '../chains/near'
 import {
   createConfiguredSolanaRpcClient,
@@ -48,6 +52,7 @@ export function createConfiguredActivityHistorySources(input: {
       evmNetworks.map(network =>
         Object.freeze({
           chainId: network.chainId,
+          trackedErc20AssetIds: buildTrackedErc20Assets(network).map(asset => asset.assetId),
           source: createEvmActivityHistoryReader(input.network, network)
         })
       )

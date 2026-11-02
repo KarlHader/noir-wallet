@@ -12,6 +12,7 @@ import {
   EndpointSelectionIndicator
 } from '../../components/common/EndpointStatus'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { ListSkeleton } from '../../components/ui/skeleton'
@@ -227,16 +228,14 @@ export function ZeroIndexerNodes() {
         }}
       />
       <div className="page-content space-y-5 pb-5">
-        {error && (
+        {error && status && (
           <p role="alert" className="text-xs text-danger">
             {error}
           </p>
         )}
         {!status ? (
           error ? (
-            <Button variant="outline" onClick={() => void loadStatus()}>
-              Retry
-            </Button>
+            <InlineError message={error} onRetry={() => void loadStatus()} retrying={refreshing} />
           ) : (
             <ListSkeleton rows={4} label="Loading broadcast nodes" card />
           )

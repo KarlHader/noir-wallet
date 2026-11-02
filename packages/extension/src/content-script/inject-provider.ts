@@ -870,7 +870,11 @@ if (nearProvider) {
   })
 }
 
-if (ethereumProvider && (!('ethereum' in window) || window.ethereum === undefined)) {
+if (
+  ethereumProvider &&
+  !earlyEthereumProvider &&
+  (!('ethereum' in window) || window.ethereum === undefined)
+) {
   Object.defineProperty(window, 'ethereum', {
     value: ethereumProvider,
     writable: true,
@@ -887,6 +891,12 @@ if (ethereumProvider && !earlyEthereumProvider) {
     rdns: import.meta.env.NOIR_WALLET_RDNS
   })
   const providerDetail = Object.freeze({ info: providerInfo, provider: ethereumProvider })
+  // MAIN-world script ordering can vary between extensions. Let a later bootstrap
+  // reuse this provider and UUID rather than announcing a second Noir instance.
+  Object.defineProperty(window, '__noirFallbackEvmProvider', {
+    value: providerDetail,
+    configurable: false
+  })
   const announceProvider = () => {
     window.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: providerDetail }))
   }

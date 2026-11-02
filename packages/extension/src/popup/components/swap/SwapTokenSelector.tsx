@@ -128,6 +128,7 @@ export function SwapTokenSelector({
   return (
     <TokenSelector
       {...props}
+      stableCatalogOrder
       tokens={tokens}
       balances={balances}
       catalogLoading={loading}

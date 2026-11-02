@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import {
-  findChainEndpointOverride,
   type ChainEndpointSettings,
   type CustomChainExplorer
 } from '@/core/chains/chain-endpoint-settings'
 import { useSettingsStore } from '@/store/settings-store'
 import { toast } from '@/store/toast-store'
-import { ChainIcon } from '../../components/common/ChainIcon'
 import { EndpointOption } from '../../components/common/EndpointOption'
-import { PageHeader } from '../../components/common/PageHeader'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
@@ -26,8 +23,9 @@ import {
   isSameExplorer
 } from '@/popup/services/explorer-settings-model'
 
-export function PreferredExplorer() {
+export function PreferredExplorer({ chainId }: { readonly chainId: string }) {
   const persistedSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const isLoaded = useSettingsStore(state => state.isLoaded)
   const setSettings = useSettingsStore(state => state.setChainEndpointSettings)
   const loadSettings = useSettingsStore(state => state.loadSettings)
   const [currentSettings, setCurrentSettings] = useState<ChainEndpointSettings | null>(null)
@@ -42,6 +40,11 @@ export function PreferredExplorer() {
   const operation = useRef(0)
   const busy = useRef(false)
   const options = useMemo(() => buildExplorerChainOptions(settings), [settings])
+  const option = options.find(item => item.chainId === chainId)
+  const effective = option && getExplorerSelection(settings, option)
+  const effectiveExplorer = option
+    ? (effective?.selected ?? effective?.presets.find(preset => isDefaultExplorer(option, preset)))
+    : undefined
   const { presets, selected, custom } = editing
     ? getExplorerSelection(settings, editing)
     : { presets: [], selected: undefined, custom: undefined }
@@ -53,7 +56,17 @@ export function PreferredExplorer() {
     }
   }, [loadSettings])
 
-  const openEditor = async (option: ExplorerChainOption) => {
+  useEffect(() => {
+    operation.current += 1
+    busy.current = false
+    setCurrentSettings(null)
+    setEditing(null)
+    setCustomEditing(false)
+    setOpening(false)
+    setSaving(false)
+  }, [chainId])
+
+  const openEditor = async () => {
     if (busy.current) return
     busy.current = true
     const request = ++operation.current
@@ -62,9 +75,7 @@ export function PreferredExplorer() {
       const current = await chainEndpointSettingsClient.read()
       if (request !== operation.current) return
       setCurrentSettings(current)
-      const refreshed = buildExplorerChainOptions(current).find(
-        item => item.chainId === option.chainId
-      )
+      const refreshed = buildExplorerChainOptions(current).find(item => item.chainId === chainId)
       if (refreshed) {
         setEditing(refreshed)
         setCustomEditing(false)
@@ -101,7 +112,7 @@ export function PreferredExplorer() {
       const current = await chainEndpointSettingsClient.read()
       if (request !== operation.current) return
       const next = buildExplorerSelectionSettings(current, editing, explorer)
-      const saved = await chainEndpointSettingsClient.apply(next)
+      const saved = await chainEndpointSettingsClient.apply(next, current)
       if (request !== operation.current) return
       setCurrentSettings(saved)
       setSettings(saved)
@@ -123,46 +134,27 @@ export function PreferredExplorer() {
   }
 
   return (
-    <div className="page-container">
-      <PageHeader title="Block Explorers" showBack />
-      <div className="page-content space-y-3 pb-5">
-        {options.map(option => {
-          const override = findChainEndpointOverride(settings, option.chainId)?.explorer
-          return (
-            <button
-              key={option.chainId}
-              type="button"
-              aria-label={`Configure ${option.label} explorer`}
-              disabled={opening}
-              onClick={() => void openEditor(option)}
-              className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 text-left transition-colors hover:border-primary/30"
-            >
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white">
-                <ChainIcon
-                  chain={option.iconChain}
-                  className="size-8 rounded-full"
-                  showTooltip={false}
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{option.label}</span>
-                  {override && (
-                    <span className="max-w-24 truncate rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                      {override.label}
-                    </span>
-                  )}
-                </div>
-                <p className="truncate text-xs text-muted">
-                  {(override?.baseUrl || option.defaultUrl).replace(/^https?:\/\//, '') ||
-                    'Not configured'}
-                </p>
-              </div>
-              <Icon icon="lucide:chevron-right" className="size-4 shrink-0 text-muted" />
-            </button>
-          )
-        })}
-      </div>
+    <>
+      {option && (
+        <button
+          type="button"
+          aria-label="Block Explorer"
+          disabled={!isLoaded || opening || saving}
+          onClick={() => void openEditor()}
+          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-3 text-left transition-colors hover:border-primary/30 disabled:opacity-50"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">Block Explorer</span>
+            <span className="block truncate text-xs text-muted">
+              {!isLoaded ? 'Loading...' : (effectiveExplorer?.label ?? 'Not configured')}
+              {isLoaded &&
+                effectiveExplorer?.baseUrl &&
+                ` · ${effectiveExplorer.baseUrl.replace(/^https?:\/\//, '')}`}
+            </span>
+          </span>
+          <Icon icon="lucide:chevron-right" className="size-4 shrink-0 text-muted" />
+        </button>
+      )}
 
       <Dialog open={editing !== null} onOpenChange={open => !open && !saving && setEditing(null)}>
         <DialogContent
@@ -278,6 +270,6 @@ export function PreferredExplorer() {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const extensionDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const sourceDirectory = path.join(extensionDirectory, 'tests/e2e')
+const sourceDirectories = ['tests/extension', 'tests/live'].map(directory =>
+  path.join(extensionDirectory, directory)
+)
 const screenshotDirectory = path.resolve(extensionDirectory, '../../e2e-output/screenshots')
 const prune = process.argv.includes('--prune')
 const unknownArguments = process.argv.slice(2).filter(argument => argument !== '--prune')
@@ -32,6 +34,18 @@ function collectCaptureNames(source, fileName) {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind)
   const captures = []
 
+  function literalNames(expression) {
+    if (ts.isStringLiteralLike(expression)) return [expression.text]
+    if (ts.isParenthesizedExpression(expression)) return literalNames(expression.expression)
+    if (ts.isConditionalExpression(expression)) {
+      return [...literalNames(expression.whenTrue), ...literalNames(expression.whenFalse)]
+    }
+    const position = sourceFile.getLineAndCharacterOfPosition(expression.getStart(sourceFile))
+    throw new Error(
+      `${path.relative(extensionDirectory, fileName)}:${position.line + 1} must use literal screenshot filenames`
+    )
+  }
+
   function visit(node) {
     if (
       ts.isCallExpression(node) &&
@@ -39,16 +53,18 @@ function collectCaptureNames(source, fileName) {
       node.expression.text === 'captureScreenshot'
     ) {
       const filename = node.arguments[1]
-      if (!filename || !ts.isStringLiteralLike(filename)) {
+      if (!filename) {
         const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
         throw new Error(
           `${path.relative(extensionDirectory, fileName)}:${position.line + 1} must use a literal screenshot filename`
         )
       }
-      if (!/^[a-z0-9][a-z0-9.-]*\.png$/.test(filename.text)) {
-        throw new Error(`Unsafe screenshot filename: ${filename.text}`)
+      for (const name of literalNames(filename)) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/.test(name)) {
+          throw new Error(`Unsafe screenshot filename: ${name}`)
+        }
+        captures.push(name)
       }
-      captures.push(filename.text)
     }
     node.forEachChild(visit)
   }
@@ -57,7 +73,7 @@ function collectCaptureNames(source, fileName) {
   return captures
 }
 
-const sourceFiles = await collectSourceFiles(sourceDirectory)
+const sourceFiles = (await Promise.all(sourceDirectories.map(collectSourceFiles))).flat()
 const catalog = new Map()
 for (const fileName of sourceFiles) {
   const source = await readFile(fileName, 'utf8')

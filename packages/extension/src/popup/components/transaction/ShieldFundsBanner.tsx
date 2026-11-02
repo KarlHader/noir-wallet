@@ -1,8 +1,7 @@
 import { Icon } from '@iconify/react'
 import { Button } from '../ui/button'
 import { openModal } from '../../provider/ModalManager'
-import { formatNumber } from '@/lib/format'
-import Big from 'big.js'
+import { formatTokenQuantity } from '@/lib/number-format'
 import { hasEnoughTransparentBalanceToShield } from '@/core/zcash/shielding'
 
 function WhyMigrateContent() {
@@ -72,8 +71,8 @@ export function ShieldFundsBanner({
     <div className="flex items-center gap-2 px-3 py-2 bg-warning/10 rounded-lg border border-warning/20 mb-4">
       <Icon icon="lucide:alert-triangle" width={14} height={14} className="text-warning shrink-0" />
       <p className="flex-1 min-w-0 text-xs text-warning leading-snug">
-        <strong>{formatNumber(transparentBalance, { rm: Big.roundDown })} ZEC</strong> in
-        transparent — shield to {actionVerb}.
+        <strong>{formatTokenQuantity(transparentBalance)} ZEC</strong> in transparent — shield to{' '}
+        {actionVerb}.
         <button
           type="button"
           onClick={handleWhyMigrate}

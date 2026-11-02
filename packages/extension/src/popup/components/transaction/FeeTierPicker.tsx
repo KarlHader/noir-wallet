@@ -4,8 +4,10 @@ import { FeeTierSelector } from './FeeTierSelector'
 import { getFeeTierLabel, type FeeTier } from '@/config/fee'
 import { staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import { openModal } from '../../provider/ModalManager'
-import { safeBig } from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { ZEC_DECIMALS } from '@/config/wallet'
 import { AmountDisplay } from '../common/AmountDisplay'
+import { Skeleton } from '../ui/skeleton'
 
 interface FeeTierPickerProps {
   tier: FeeTier
@@ -13,6 +15,8 @@ interface FeeTierPickerProps {
   /** Estimated fee per tier (zatoshis); null while pending. */
   feeByTier: Record<FeeTier, number | null>
   loading?: boolean
+  /** Show coarse fees only before a reviewable transfer intent exists. */
+  allowFallback?: boolean
   /**
    * `inline` (default): DetailRow shape (label left, value right). Pair with an
    * existing card wrapper or other inline rows (Swap, Supply, Shield).
@@ -34,36 +38,38 @@ interface FeeTierPickerProps {
  * pattern: shows the current tier + live fee, and opens a bottom sheet for
  * tier switching so the input view stays uncluttered.
  *
- * When no estimate is in flight (e.g. amount not yet entered) both trigger and
- * sheet substitute the ZIP-317 static fallback so nothing renders as "—".
- * While a live estimate is loading we keep the nulls intact in the sheet so
- * the cards show the "…" spinner instead of stale fallback figures; the
- * trigger keeps the last known fallback to avoid layout flicker.
+ * Callers can suppress coarse fees while estimating a reviewable transfer.
  */
 export function FeeTierPicker({
   tier,
   onTierChange,
   feeByTier,
   loading,
+  allowFallback = true,
   variant = 'inline',
   hideLabel
 }: FeeTierPickerProps) {
-  const selectedFeeZats = feeByTier[tier] ?? staticFeeFallbackZats(tier)
-  const selectedFeeZec = safeBig(selectedFeeZats).div(1e8).toFixed()
+  const selectedFeeZats = feeByTier[tier] ?? (allowFallback ? staticFeeFallbackZats(tier) : null)
+  const selectedFeeZec =
+    selectedFeeZats === null
+      ? null
+      : formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
 
   // Estimate is "approximate" when no live value is in flight or resolved —
   // i.e. the upstream feeEstimate hasn't been enabled yet (e.g. swap before a
   // quote, send before a recipient). In that case the trigger and sheet show
   // ZIP-317 static fallbacks; surface a hint in the sheet so users don't
   // mistake the static number for the live network estimate.
-  const isApproximate = !loading && feeByTier.standard === null && feeByTier.fast === null
+  const isApproximate =
+    allowFallback && !loading && feeByTier.standard === null && feeByTier.fast === null
 
-  const sheetFeeByTier: Record<FeeTier, number | null> = loading
-    ? feeByTier
-    : {
-        standard: feeByTier.standard ?? staticFeeFallbackZats('standard'),
-        fast: feeByTier.fast ?? staticFeeFallbackZats('fast')
-      }
+  const sheetFeeByTier: Record<FeeTier, number | null> =
+    loading || !allowFallback
+      ? feeByTier
+      : {
+          standard: feeByTier.standard ?? staticFeeFallbackZats('standard'),
+          fast: feeByTier.fast ?? staticFeeFallbackZats('fast')
+        }
 
   const handleEdit = () => {
     void openModal({
@@ -84,10 +90,18 @@ export function FeeTierPicker({
     })
   }
 
-  const trailingIcon = loading ? (
-    <Icon icon="lucide:loader-2" className="text-muted animate-spin" />
+  const trailingIcon = <Icon icon="lucide:pencil" className="text-muted" />
+  const feeAmount = loading ? (
+    <div role="status" aria-label="Estimating network fee" className="inline-flex items-center">
+      <Skeleton className="h-4 w-24" />
+    </div>
+  ) : selectedFeeZec === null ? (
+    <span className="text-sm">Unavailable</span>
   ) : (
-    <Icon icon="lucide:pencil" className="text-muted" />
+    <>
+      <span className="text-sm">≈</span>
+      <AmountDisplay value={selectedFeeZec} symbol="ZEC" profile="fee" className="text-sm" />
+    </>
   )
 
   if (variant === 'stacked') {
@@ -95,9 +109,7 @@ export function FeeTierPicker({
       <div>
         <label className="block text-sm text-muted mb-2">Network Fee</label>
         <div className="flex h-[54px] w-full items-center justify-between rounded-xl bg-card px-4">
-          <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
-            ≈ <AmountDisplay value={selectedFeeZec} symbol="ZEC" profile="fee" />
-          </span>
+          <div className="flex min-w-0 items-center gap-1.5 text-sm">{feeAmount}</div>
           <button
             type="button"
             onClick={handleEdit}
@@ -115,9 +127,8 @@ export function FeeTierPicker({
   }
 
   const inlineTrigger = (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="text-sm">≈</span>
-      <AmountDisplay value={selectedFeeZec} symbol="ZEC" profile="fee" className="text-sm" />
+    <div className="inline-flex min-w-0 items-center gap-1.5">
+      {feeAmount}
       <button
         type="button"
         onClick={handleEdit}
@@ -129,7 +140,7 @@ export function FeeTierPicker({
           {trailingIcon}
         </span>
       </button>
-    </span>
+    </div>
   )
 
   if (hideLabel) return inlineTrigger
@@ -161,7 +172,7 @@ function FeeTierEditContent({
       />
       {isApproximate && (
         <p className="text-xs text-muted leading-relaxed">
-          Approximate ZIP-317 estimate. Live fee resolves once the recipient is set.
+          Approximate ZIP-317 estimate. Live fee appears once transfer details are complete.
         </p>
       )}
     </div>

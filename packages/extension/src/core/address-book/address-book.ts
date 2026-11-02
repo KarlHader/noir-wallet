@@ -84,7 +84,7 @@ function parseZnsName(value: unknown): string | undefined {
   return name
 }
 
-function parseZcashAddress(
+export function parseZcashAddress(
   value: unknown,
   network: Network
 ): Readonly<{ address: string; scheme: string }> {

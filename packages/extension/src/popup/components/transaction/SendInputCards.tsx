@@ -13,6 +13,9 @@ export function SendRecipientInputCard({
   value,
   onChange,
   placeholder,
+  label = 'Send to',
+  variant = 'outline',
+  invalid = false,
   autoFocus = false,
   onSelectRecipient
 }: {
@@ -20,23 +23,32 @@ export function SendRecipientInputCard({
   readonly value: string
   readonly onChange: (value: string) => void
   readonly placeholder: string
+  readonly label?: string
+  readonly variant?: 'outline' | 'filled'
+  readonly invalid?: boolean
   readonly autoFocus?: boolean
   readonly onSelectRecipient?: () => void
 }) {
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="block px-1 text-xs font-medium text-foreground/80">
-        Send to
+        {label}
       </label>
       <Input
         id={id}
-        aria-label="Send To"
+        aria-label={label}
+        aria-invalid={invalid || undefined}
         value={value}
         onChange={event => onChange(event.target.value)}
         placeholder={placeholder}
         autoFocus={autoFocus}
         spellCheck={false}
-        className="h-14 rounded-2xl border-white/35 bg-transparent px-4 pr-16 font-mono text-sm shadow-none focus-visible:border-white/60 focus-visible:ring-0"
+        className={cn(
+          'pr-16 font-mono text-sm shadow-none focus-visible:ring-0',
+          variant === 'filled'
+            ? 'h-[46px] rounded-xl border-0 bg-card pl-3 pr-12'
+            : 'h-14 rounded-2xl border-white/35 bg-transparent pl-4 focus-visible:border-white/60'
+        )}
         endContent={
           onSelectRecipient ? (
             <button
@@ -44,13 +56,18 @@ export function SendRecipientInputCard({
               aria-label="Select Recipient"
               title="Select Recipient"
               onClick={onSelectRecipient}
-              className="flex size-10 items-center justify-center rounded-xl bg-white/10 text-foreground transition-colors hover:bg-white/15"
+              className={cn(
+                'flex size-10 items-center justify-center rounded-xl text-foreground transition-colors',
+                variant === 'filled'
+                  ? 'bg-transparent hover:text-primary'
+                  : 'bg-white/10 hover:bg-white/15'
+              )}
             >
               <Icon icon="lucide:book-user" width={22} height={22} />
             </button>
           ) : undefined
         }
-        classNames={{ endContent: 'right-3' }}
+        classNames={{ endContent: variant === 'filled' ? 'right-[3px]' : 'right-3' }}
       />
     </div>
   )

@@ -14,6 +14,7 @@ import {
 
 export const ADDRESS_BOOK_STORAGE_KEY = 'address_book_v2'
 export const LEGACY_CONTACTS_STORAGE_KEY = 'wallet_contacts'
+let hydrationFailure: unknown = null
 
 interface LegacyMigrationState {
   readonly completedAt: number
@@ -139,7 +140,10 @@ export const useAddressBookStore = create<AddressBookStore>()(
     {
       name: ADDRESS_BOOK_STORAGE_KEY,
       version: 2,
-      storage: createJSONStorage(() => createChromeStorageAdapter('local')),
+      storage: createJSONStorage(() => createChromeStorageAdapter('local', { strictRead: true })),
+      onRehydrateStorage: () => (_state, error) => {
+        hydrationFailure = error ?? null
+      },
       partialize: state => ({
         contacts: state.contacts,
         legacyMigration: state.legacyMigration
@@ -170,7 +174,9 @@ let initialization: Promise<void> | null = null
 export function initializeAddressBook(): Promise<void> {
   if (initialization) return initialization
   initialization = (async () => {
+    hydrationFailure = null
     await useAddressBookStore.persist.rehydrate()
+    if (hydrationFailure) throw hydrationFailure
     if (useAddressBookStore.getState().legacyMigration) return
     const stored = await chrome.storage.local.get(LEGACY_CONTACTS_STORAGE_KEY)
     const legacyContacts = readLegacyContactsStorage(stored[LEGACY_CONTACTS_STORAGE_KEY])

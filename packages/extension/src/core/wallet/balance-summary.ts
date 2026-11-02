@@ -1,4 +1,5 @@
 import { WALLET_CONFIG, ZEC_DECIMALS } from '../../config/wallet.ts'
+import { formatBaseUnitDecimalAmount } from '../../lib/number-format.ts'
 import type { ZcashBalance } from '../../types/wallet.ts'
 
 export type WasmAccountBalanceSummary = {
@@ -26,15 +27,7 @@ function zatoshiValue(value: bigint | number | string | undefined): bigint {
 }
 
 function formatZatoshis(value: bigint): string {
-  const divisor = 10n ** BigInt(ZEC_DECIMALS)
-  const whole = value / divisor
-  const remainder = value % divisor
-
-  if (remainder === 0n) return whole.toString()
-
-  const decimals = remainder.toString().padStart(ZEC_DECIMALS, '0').replace(/0+$/, '')
-
-  return `${whole}.${decimals}`
+  return formatBaseUnitDecimalAmount(value, ZEC_DECIMALS)
 }
 
 function formatZatoshisFixed(value: bigint): string {

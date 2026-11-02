@@ -28,9 +28,9 @@ import {
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatPortfolioNetworkName,
   parseDisplayUnitAmount
-} from '@/popup/components/portfolio/portfolio-format'
+} from '@/lib/number-format'
+import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {

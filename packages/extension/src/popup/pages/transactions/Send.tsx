@@ -7,6 +7,7 @@ import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanne
 import { FundingSourceSelector } from '../../components/transaction/FundingSourceSelector'
 import { openModal } from '../../provider/ModalManager'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
+import { InlineError } from '@/popup/components/common/InlineError'
 import {
   SendAssetHeader,
   SendAmountInputCard,
@@ -17,8 +18,8 @@ import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
 import { toast } from '@/store/toast-store'
 import { classifyError } from '@/lib/errors'
-import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
-import type { TrackOptions } from '@/lib/analytics'
+import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent, type TrackOptions } from '@/lib/analytics'
+
 import {
   Dialog,
   DialogContent,
@@ -30,7 +31,8 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useLocation, useNavigate } from '../../provider/Router'
-import { formatPrice, formatSortAddress } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
+import { formatFiatAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { DetailRow } from '../../components/common/DetailRow'
 import { AddressTypeLabel, AddressTypeSwitch } from '../../components/account/AddressType'
@@ -59,6 +61,8 @@ import {
 } from '@/core/wallet/funding-source'
 import type { FundingSource } from '@/types'
 import { safeBig } from '@/lib/big'
+
+import { ZEC_DECIMALS } from '@/config/wallet'
 import { useZnsResolve } from '../../hooks/useZnsResolve'
 import { isTransparentZcashAddress, sanitizeMemoForRecipient } from '@/lib/zcash-memo'
 import { getShieldableTransparentBalance } from '@/core/zcash/shielding'
@@ -140,23 +144,42 @@ export function Send() {
     amount,
     memo: effectiveMemo,
     fundingSource,
+    scopeKey: JSON.stringify([
+      currentNetwork,
+      currentWalletId,
+      currentAccountId,
+      sourceBalance.available,
+      sourceBalance.pending
+    ]),
     enabled:
       safeBig(amount || '0').gt(0) && !!effectiveToAddress && !maxSelected && !isMaxTransferAmount
   })
 
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
+  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, false)
   const maxFeeByTier = deriveFeeByTierFromEstimate(
     maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
     feeTier,
-    maxTransfer.error
+    false
   )
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
   const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
-  const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
+  const feeRequired = !!effectiveToAddress && safeBig(amount || '0').gt(0)
+  const feeError = feeRequired && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
+  const feeReady =
+    feeRequired &&
+    !feeError &&
+    (isMaxFeeMode
+      ? !maxTransfer.loading && !!maxTransfer.fee && safeBig(maxTransfer.fee).gt(0)
+      : !feeEstimate.loading && feeEstimate.feeZats !== null)
+  const displayedFeeLoading = feeRequired && !feeReady && !feeError
+  const retryFeeEstimate = () => {
+    if (isMaxFeeMode) void maxTransfer.request()
+    else feeEstimate.retry()
+  }
 
   const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
   const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
-  const estimatedFeeZec = safeBig(selectedFeeZats).div(1e8).toFixed()
+  const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   const { amount: effectiveMaxStr } = resolveZcashFundingAvailability({
     balance,
     fundingSource,
@@ -243,7 +266,7 @@ export function Send() {
   }
 
   const handleContinue = () => {
-    if (toAddress && isValidAmount) {
+    if (toAddress && isValidAmount && !reviewInsufficient && feeReady && !zns.loading) {
       setShowReview(true)
     }
   }
@@ -256,7 +279,7 @@ export function Send() {
 
   const handleConfirm = async () => {
     if (isHardwareSigning) return
-    if (!isValidAmount || !fromAddress || !currentAccount) return
+    if (!isValidAmount || reviewInsufficient || !feeReady || !fromAddress || !currentAccount) return
     const activeScope = getActiveAccountScopeKey()
     if (!activeScope) return
     assertActiveAccountScope(activeScope)
@@ -436,7 +459,14 @@ export function Send() {
                 {formatSortAddress(zns.address)}
               </p>
             )}
-            {zns.error && <p className="text-danger text-xs mt-1.5 px-1">{zns.error}</p>}
+            {zns.error && (
+              <InlineError
+                className="mt-1.5 px-1"
+                message={zns.error}
+                onRetry={zns.retryable ? zns.retry : undefined}
+                retrying={zns.loading}
+              />
+            )}
           </div>
 
           <SendAmountInputCard
@@ -479,9 +509,17 @@ export function Send() {
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
               loading={displayedFeeLoading}
+              allowFallback={!feeRequired}
               hideLabel
             />
           </SendNetworkFeeCard>
+          {feeError && (
+            <InlineError
+              className="px-1"
+              message="Could not estimate network fee"
+              onRetry={retryFeeEstimate}
+            />
+          )}
 
           {showMemo ? (
             <div>
@@ -535,7 +573,12 @@ export function Send() {
       <div className="page-footer">
         <Button
           disabled={
-            !effectiveToAddress || !amount || !isValidAmount || reviewInsufficient || zns.loading
+            !effectiveToAddress ||
+            !amount ||
+            !isValidAmount ||
+            reviewInsufficient ||
+            !feeReady ||
+            zns.loading
           }
           onClick={handleContinue}
           className="w-full h-[45px]"
@@ -562,7 +605,7 @@ export function Send() {
             </div>
             <p className="text-sm text-muted mt-0.5">
               ≈{' '}
-              {formatPrice(
+              {formatFiatAmount(
                 safeBig(amount || '0')
                   .times(zecPrice || 0)
                   .toFixed(),
@@ -601,8 +644,16 @@ export function Send() {
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
               loading={displayedFeeLoading}
+              allowFallback={false}
             />
           </div>
+          {feeError && (
+            <InlineError
+              className="mx-5 mt-3"
+              message="Could not estimate network fee"
+              onRetry={retryFeeEstimate}
+            />
+          )}
 
           <div className="p-5 flex gap-3">
             <Button
@@ -614,7 +665,7 @@ export function Send() {
             </Button>
             <Button
               onClick={handleConfirm}
-              disabled={reviewInsufficient || isHardwareSigning}
+              disabled={reviewInsufficient || !feeReady || isHardwareSigning}
               className="flex-1 h-[45px]"
             >
               {isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}

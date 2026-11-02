@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { MARGINAL_FEE_ZATS } from '@/config/fee'
 import type { FundingSource } from '@/types'
@@ -7,8 +7,9 @@ export interface FeeEstimateState {
   /** Standard-tier fee in zatoshis (null while pending/failed); other tiers derive from it. */
   feeZats: number | null
   loading: boolean
-  /** True when live estimation failed and callers should fall back to static values. */
+  /** True when live estimation failed. */
   error: boolean
+  retry: () => void
 }
 
 interface UseFeeEstimateArgs {
@@ -21,6 +22,8 @@ interface UseFeeEstimateArgs {
   enabled?: boolean
   debounceMs?: number
   estimate?: () => Promise<string>
+  /** Additional account or balance identity that invalidates an old proposal. */
+  scopeKey?: string
 }
 
 /**
@@ -28,8 +31,7 @@ interface UseFeeEstimateArgs {
  *
  * Always estimates the Standard tier (one proposal build); other tiers scale
  * linearly with the marginal fee and are derived by callers, so switching tier
- * never re-runs WASM. Debounced and guarded against stale responses; failures
- * surface via `error` so the UI can fall back to static figures.
+ * never re-runs WASM. Debounced and guarded against stale responses.
  */
 export function useFeeEstimate({
   type,
@@ -39,26 +41,40 @@ export function useFeeEstimate({
   fundingSource = 'shielded',
   enabled = true,
   debounceMs = 500,
-  estimate
+  estimate,
+  scopeKey
 }: UseFeeEstimateArgs): FeeEstimateState {
-  const [state, setState] = useState<FeeEstimateState>({
+  const [state, setState] = useState<Omit<FeeEstimateState, 'retry'> & { key: string }>({
+    key: '',
     feeZats: null,
     loading: false,
     error: false
   })
   const requestSeq = useRef(0)
+  const [retryCount, setRetryCount] = useState(0)
+  const retry = useCallback(() => setRetryCount(value => value + 1), [])
 
   const hasAmount = type === 'shield' || (!!to && !!amount && Number(amount) > 0)
   const active = enabled && hasAmount
+  const requestKey = JSON.stringify([
+    type,
+    to,
+    amount,
+    memo,
+    fundingSource,
+    active,
+    scopeKey,
+    retryCount
+  ])
 
   useEffect(() => {
     const seq = ++requestSeq.current
     if (!active) {
-      setState({ feeZats: null, loading: false, error: false })
+      setState({ key: requestKey, feeZats: null, loading: false, error: false })
       return
     }
 
-    setState({ feeZats: null, loading: true, error: false })
+    setState({ key: requestKey, feeZats: null, loading: true, error: false })
 
     const timer = setTimeout(async () => {
       try {
@@ -75,10 +91,12 @@ export function useFeeEstimate({
               })
 
         if (seq !== requestSeq.current) return
-        setState({ feeZats: Number(feeStr), loading: false, error: false })
+        const feeZats = Number(feeStr)
+        if (!Number.isSafeInteger(feeZats) || feeZats <= 0) throw new Error('Invalid fee estimate')
+        setState({ key: requestKey, feeZats, loading: false, error: false })
       } catch {
         if (seq !== requestSeq.current) return
-        setState({ feeZats: null, loading: false, error: true })
+        setState({ key: requestKey, feeZats: null, loading: false, error: true })
       }
     }, debounceMs)
 
@@ -86,7 +104,9 @@ export function useFeeEstimate({
       clearTimeout(timer)
       requestSeq.current += 1
     }
-  }, [type, to, amount, memo, fundingSource, active, debounceMs, estimate])
+  }, [requestKey, active, debounceMs, estimate])
 
-  return state
+  return state.key === requestKey
+    ? { feeZats: state.feeZats, loading: state.loading, error: state.error, retry }
+    : { feeZats: null, loading: active, error: false, retry }
 }

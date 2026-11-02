@@ -12,63 +12,6 @@ import {
   type BirthdayHeightSource
 } from '@/lib/zcash-birthday'
 import { classifyError } from '@/lib/errors'
-import { toast } from '@/store/toast-store'
-
-interface RenameAccountContentProps {
-  walletId: string
-  accountId: string
-  currentName: string
-  close: () => void
-}
-
-export function RenameAccountContent({
-  walletId,
-  accountId,
-  currentName,
-  close
-}: RenameAccountContentProps) {
-  const [name, setName] = useState(currentName)
-  const [isSaving, setIsSaving] = useState(false)
-
-  const handleSave = async () => {
-    const trimmedName = name.trim()
-    if (trimmedName && trimmedName !== currentName) {
-      setIsSaving(true)
-      try {
-        await zcashWalletRuntimeClient.renameAccount(walletId, accountId, trimmedName)
-        close()
-      } catch (e) {
-        console.error('Failed to rename account:', e)
-        toast.error(e instanceof Error ? e.message : 'Account rename failed')
-        setIsSaving(false)
-      }
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm text-muted mb-2">Account name</label>
-        <Input
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="Enter account name"
-          className="h-[46px] rounded-xl"
-          autoFocus
-        />
-      </div>
-
-      <Button
-        disabled={!name.trim() || name.trim() === currentName || isSaving}
-        onClick={handleSave}
-        isLoading={isSaving}
-        className="w-full h-[45px]"
-      >
-        Confirm
-      </Button>
-    </div>
-  )
-}
 
 type ResyncEditMode = 'height' | 'date'
 

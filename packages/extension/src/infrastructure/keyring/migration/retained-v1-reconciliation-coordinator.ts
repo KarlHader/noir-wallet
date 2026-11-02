@@ -91,12 +91,21 @@ export class RetainedV1ReconciliationCoordinator {
     const pendingRemoval = await this.credentialRepository.findIncompleteJournal('remove')
     if (pendingRemoval) {
       const transition = pendingRemoval.transitions[0]
-      if (pendingRemoval.transitions.length !== 1 || transition.kind !== 'retire') {
-        throw new Error('Incomplete removal journal is not a Wallet retirement')
+      if (pendingRemoval.transitions.length !== 1) {
+        throw new Error('Incomplete removal journal has invalid transitions')
       }
-      await this.removal.removeWallet(transition.keyDomainId)
-      if (!desiredAccountsByWallet.has(transition.keyDomainId)) {
-        removedKeyDomainIds.push(transition.keyDomainId)
+      if (transition.kind === 'replace') {
+        await this.removal.resumePendingAccountReplacement(
+          input.password,
+          input.chains.zcashNetwork
+        )
+      } else if (transition.kind === 'retire') {
+        await this.removal.removeWallet(transition.keyDomainId)
+        if (!desiredAccountsByWallet.has(transition.keyDomainId)) {
+          removedKeyDomainIds.push(transition.keyDomainId)
+        }
+      } else {
+        throw new Error('Incomplete removal journal has invalid transitions')
       }
       pointer = (await this.storageRepository.getActivePointer()) ?? pointer
       source = (await this.storageRepository.getSnapshot(pointer.generationId)) ?? source
@@ -115,7 +124,12 @@ export class RetainedV1ReconciliationCoordinator {
     for (const account of source.accounts) {
       const desiredAccounts = desiredAccountsByWallet.get(account.keyDomainId)
       if (!desiredAccounts || desiredAccounts.has(account.id)) continue
-      await this.removal.removeAccount(account.keyDomainId, account.id)
+      await this.removal.removeAccount(
+        account.keyDomainId,
+        account.id,
+        input.password,
+        input.chains.zcashNetwork
+      )
       removedAccountIds.push(account.id)
     }
 

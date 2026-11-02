@@ -1,4 +1,4 @@
-import { EvmRpcError, type EvmBroadcastRpc } from './evm-rpc-client'
+import { EvmRpcError, type EvmBroadcastRpc, type EvmReceiptLog } from './evm-rpc-client'
 
 export type EvmTransactionObservation =
   | {
@@ -18,6 +18,7 @@ export type EvmTransactionObservation =
       readonly blockHash: string
       readonly blockNumber: string
       readonly receiptStatus: 'success'
+      readonly logs?: readonly EvmReceiptLog[]
     }
   | {
       readonly status: 'failed'
@@ -87,6 +88,7 @@ export async function observeEvmTransaction(
     transactionHash: expected,
     blockHash: receipt.blockHash,
     blockNumber: receipt.blockNumber,
-    receiptStatus: 'success'
+    receiptStatus: 'success',
+    ...(receipt.logs === undefined ? {} : { logs: receipt.logs })
   })
 }

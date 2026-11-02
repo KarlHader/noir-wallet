@@ -119,13 +119,12 @@ pnpm test
 pnpm --filter @noir-wallet/sdk test
 pnpm --filter @noir-wallet/example type-check
 pnpm --filter @noir-wallet/example build
-pnpm --filter @noir-wallet/extension test:logic
-pnpm --filter @noir-wallet/extension test:extension
+pnpm test e2e extension
 ```
 
 Extension type checking covers both application code and the Vite/manifest configuration; extension builds run the same checks.
 
-`pnpm test` runs the deterministic wallet core suite used by CI. The SDK's native tests run separately with `pnpm --filter @noir-wallet/sdk test`. Existing Playwright commands remain available for local logic and real MV3 checks. See [contributor verification](./CONTRIBUTING.md#verification) for test scope and output boundaries.
+`pnpm test` runs the wallet's offline behavior tests; `pnpm test --help` lists the browser, live, and RC subcommands. The SDK's native tests run separately with `pnpm --filter @noir-wallet/sdk test`. See [contributor verification](./CONTRIBUTING.md#verification) for suite organization, commands, and output boundaries.
 
 ### Load Extension in Chrome
 

@@ -4,6 +4,7 @@ import { readBoundedResponseText } from '@/lib/fetch-utils'
 import type { AssetMarketHistorySourceMapping } from '@/core/prices/asset-market-source-mappings'
 import { parseAssetId } from '@/core/chains/registry'
 import {
+  ASSET_MARKET_HISTORY_RANGES,
   MAXIMUM_ASSET_PRICE_ITEMS,
   createMarketAssetId,
   type AssetMarketHistoryPoint,
@@ -18,17 +19,41 @@ export const COINMARKETCAP_KEYLESS_KLINE_URL =
   'https://pro-api.coinmarketcap.com/public-api/v1/k-line/points'
 export const GECKO_TERMINAL_POOL_OHLCV_URL = 'https://api.geckoterminal.com/api/v2/networks'
 export const COIN_GECKO_MARKET_CHART_URL = 'https://api.coingecko.com/api/v3/coins'
+export const COIN_GECKO_ASSET_PLATFORMS_URL = 'https://api.coingecko.com/api/v3/asset_platforms'
 export const MARKET_HISTORY_FRESH_MS = 15 * 60 * 1000
 export const MARKET_HISTORY_EXPIRES_MS = 6 * 60 * 60 * 1000
 const CACHE_VERSION = 2
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = 256 * 1024
 const MAXIMUM_RESPONSE_BYTES = 1024 * 1024
+const MAXIMUM_PLATFORM_RESPONSE_BYTES = 1024 * 1024
+const MAXIMUM_ASSET_PLATFORMS = 2_048
+const PLATFORM_CATALOG_FRESH_MS = 24 * 60 * 60 * 1000
+const MISSING_PLATFORM_RECHECK_MS = 5 * 60 * 1000
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
 const MAXIMUM_RAW_HISTORY_POINTS = 20_000
 const MAXIMUM_HISTORY_POINTS = 100
 const MAXIMUM_CACHE_ENTRIES = 100
 const REMOTE_ID_PATTERN = /^[-._:a-zA-Z0-9]{1,256}$/
+const ASSET_PLATFORM_ID_PATTERN = /^[-._:a-zA-Z0-9 ]{1,256}$/
+const EVM_CONTRACT_PATTERN = /^0x[0-9a-fA-F]{40}$/
+const EVM_CHAIN_ID_PATTERN = /^eip155:([1-9][0-9]*)$/
 const DECIMAL_PATTERN = /^(?:0|[1-9][0-9]{0,63})(?:\.[0-9]{1,18})?$/
+const CONTRACT_HISTORY_RANGES: readonly AssetMarketHistoryRange[] = Object.freeze(
+  ASSET_MARKET_HISTORY_RANGES.filter(range => range !== 'all')
+)
+const EMPTY_HISTORY_RANGES: readonly AssetMarketHistoryRange[] = Object.freeze([])
+
+export class UnsupportedAssetMarketHistoryError extends Error {
+  constructor() {
+    super('Market history is unavailable for this asset')
+    this.name = 'UnsupportedAssetMarketHistoryError'
+  }
+}
+
+interface AssetPlatformCatalog {
+  readonly fetchedAt: number
+  readonly platformByChainId: ReadonlyMap<string, string | null>
+}
 
 const RANGE_QUERY: Readonly<
   Record<AssetMarketHistoryRange, Readonly<{ interval: string; limit: number }>>
@@ -252,6 +277,36 @@ function parseCoinGeckoMarketChartResponse(value: unknown): readonly AssetMarket
   return limitHistoryPoints(points)
 }
 
+function parseAssetPlatformCatalog(value: unknown, fetchedAt: number): AssetPlatformCatalog {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAXIMUM_ASSET_PLATFORMS) {
+    throw new Error('Invalid CoinGecko asset platform catalog')
+  }
+  const platformByChainId = new Map<string, string | null>()
+  for (const platform of value) {
+    if (
+      !isRecord(platform) ||
+      (platform.chain_identifier !== null &&
+        (typeof platform.chain_identifier !== 'number' ||
+          !Number.isSafeInteger(platform.chain_identifier) ||
+          platform.chain_identifier <= 0))
+    ) {
+      throw new Error('Invalid CoinGecko asset platform catalog')
+    }
+    if (platform.chain_identifier === null) continue
+    if (
+      typeof platform.id !== 'string' ||
+      !ASSET_PLATFORM_ID_PATTERN.test(platform.id) ||
+      platform.id.trim() !== platform.id ||
+      platform.id.length === 0
+    ) {
+      throw new Error('Invalid CoinGecko asset platform catalog')
+    }
+    const chainId = String(platform.chain_identifier)
+    platformByChainId.set(chainId, platformByChainId.has(chainId) ? null : platform.id)
+  }
+  return Object.freeze({ fetchedAt, platformByChainId })
+}
+
 async function readBoundedResponse(response: Response, maximumBytes: number): Promise<string> {
   return readBoundedResponseText(
     response,
@@ -265,10 +320,21 @@ function cacheKey(marketAssetId: MarketAssetId, range: AssetMarketHistoryRange):
 }
 
 function isValidFallback(mapping: AssetMarketHistorySourceMapping): boolean {
-  return mapping.fallback.source === 'coinmarketcap'
-    ? REMOTE_ID_PATTERN.test(mapping.fallback.platform) &&
-        REMOTE_ID_PATTERN.test(mapping.fallback.address)
-    : REMOTE_ID_PATTERN.test(mapping.fallback.coinId)
+  const fallback = mapping.fallback
+  if (fallback.source === 'coinmarketcap') {
+    return REMOTE_ID_PATTERN.test(fallback.platform) && REMOTE_ID_PATTERN.test(fallback.address)
+  }
+  if (fallback.source === 'coingecko') return REMOTE_ID_PATTERN.test(fallback.coinId)
+  const asset = parseAssetId(mapping.assetId)
+  const chainMatch = EVM_CHAIN_ID_PATTERN.exec(fallback.chainId)
+  return (
+    asset.namespace === 'erc20' &&
+    chainMatch !== null &&
+    Number.isSafeInteger(Number(chainMatch[1])) &&
+    asset.chainId === fallback.chainId &&
+    EVM_CONTRACT_PATTERN.test(fallback.contractAddress) &&
+    asset.reference.toLowerCase() === fallback.contractAddress.toLowerCase()
+  )
 }
 
 function hasSameFallback(
@@ -276,12 +342,21 @@ function hasSameFallback(
   right: AssetMarketHistorySourceMapping
 ): boolean {
   if (left.fallback.source !== right.fallback.source) return false
-  return left.fallback.source === 'coinmarketcap' && right.fallback.source === 'coinmarketcap'
-    ? left.fallback.platform === right.fallback.platform &&
-        left.fallback.address === right.fallback.address
-    : left.fallback.source === 'coingecko' &&
-        right.fallback.source === 'coingecko' &&
-        left.fallback.coinId === right.fallback.coinId
+  if (left.fallback.source === 'coinmarketcap' && right.fallback.source === 'coinmarketcap') {
+    return (
+      left.fallback.platform === right.fallback.platform &&
+      left.fallback.address === right.fallback.address
+    )
+  }
+  if (left.fallback.source === 'coingecko' && right.fallback.source === 'coingecko') {
+    return left.fallback.coinId === right.fallback.coinId
+  }
+  return (
+    left.fallback.source === 'coingecko-contract' &&
+    right.fallback.source === 'coingecko-contract' &&
+    left.fallback.chainId === right.fallback.chainId &&
+    left.fallback.contractAddress.toLowerCase() === right.fallback.contractAddress.toLowerCase()
+  )
 }
 
 export class AssetMarketHistoryService {
@@ -294,6 +369,8 @@ export class AssetMarketHistoryService {
     string,
     DedupPromise<AssetMarketHistoryReadModel | null>
   >()
+  private platformCatalog: AssetPlatformCatalog | null = null
+  private platformCatalogRequest: Promise<AssetPlatformCatalog> | null = null
   private cacheWriteQueue: Promise<void> = Promise.resolve()
 
   constructor(options: AssetMarketHistoryServiceOptions) {
@@ -359,6 +436,18 @@ export class AssetMarketHistoryService {
       maximumResponseBytes
     }
     this.mappingByAssetId = new Map(mappings.map(mapping => [mapping.assetId, mapping]))
+  }
+
+  supportsAsset(assetId: string): boolean {
+    return this.mappingByAssetId.has(parseAssetId(assetId).id)
+  }
+
+  getAvailableRanges(assetId: string): readonly AssetMarketHistoryRange[] {
+    const mapping = this.mappingByAssetId.get(parseAssetId(assetId).id)
+    if (!mapping) return EMPTY_HISTORY_RANGES
+    return mapping.fallback.source === 'coingecko-contract'
+      ? CONTRACT_HISTORY_RANGES
+      : ASSET_MARKET_HISTORY_RANGES
   }
 
   async readCached(
@@ -447,10 +536,20 @@ export class AssetMarketHistoryService {
         points: result.points
       })
     } catch (error) {
-      console.warn(
-        `[Asset Prices] Market history refresh failed for ${mapping.marketAssetId}:`,
-        error instanceof Error ? error.message : 'Unknown error'
-      )
+      if (mapping.fallback.source === 'coingecko-contract') {
+        console.warn(
+          '[Asset Prices] Contract market history refresh failed:',
+          error instanceof UnsupportedAssetMarketHistoryError
+            ? 'unsupported'
+            : 'request-or-response'
+        )
+        if (!cached && error instanceof UnsupportedAssetMarketHistoryError) throw error
+      } else {
+        console.warn(
+          `[Asset Prices] Market history refresh failed for ${mapping.marketAssetId}:`,
+          error instanceof Error ? error.message : 'Unknown error'
+        )
+      }
       return cached
     }
   }
@@ -469,21 +568,29 @@ export class AssetMarketHistoryService {
           points: await this.fetchGeckoTerminal(mapping, geckoQuery)
         })
       } catch (error) {
-        console.warn(
-          `[Asset Prices] GeckoTerminal history failed for ${mapping.marketAssetId}; using fallback:`,
-          error instanceof Error ? error.message : 'Unknown error'
-        )
+        if (mapping.fallback.source === 'coingecko-contract') {
+          console.warn('[Asset Prices] GeckoTerminal history failed; using contract fallback')
+        } else {
+          console.warn(
+            `[Asset Prices] GeckoTerminal history failed for ${mapping.marketAssetId}; using fallback:`,
+            error instanceof Error ? error.message : 'Unknown error'
+          )
+        }
       }
     }
-    return mapping.fallback.source === 'coinmarketcap'
-      ? Object.freeze({
-          source: 'coinmarketcap-keyless' as const,
-          points: await this.fetchCoinMarketCap(mapping, range)
-        })
-      : Object.freeze({
-          source: 'coingecko-keyless' as const,
-          points: await this.fetchCoinGecko(mapping, range)
-        })
+    if (mapping.fallback.source === 'coinmarketcap') {
+      return Object.freeze({
+        source: 'coinmarketcap-keyless' as const,
+        points: await this.fetchCoinMarketCap(mapping, range)
+      })
+    }
+    return Object.freeze({
+      source: 'coingecko-keyless' as const,
+      points:
+        mapping.fallback.source === 'coingecko-contract'
+          ? await this.fetchCoinGeckoContract(mapping, range)
+          : await this.fetchCoinGecko(mapping, range)
+    })
   }
 
   private async fetchGeckoTerminal(
@@ -537,7 +644,74 @@ export class AssetMarketHistoryService {
     return parseCoinGeckoMarketChartResponse(await this.fetchJson(url))
   }
 
-  private async fetchJson(url: URL): Promise<unknown> {
+  private async fetchCoinGeckoContract(
+    mapping: AssetMarketHistorySourceMapping,
+    range: AssetMarketHistoryRange
+  ): Promise<readonly AssetMarketHistoryPoint[]> {
+    if (mapping.fallback.source !== 'coingecko-contract') {
+      throw new Error('Missing CoinGecko contract market history source')
+    }
+    const platformId = await this.resolveCoinGeckoPlatform(mapping.fallback.chainId)
+    const url = new URL(
+      `${COIN_GECKO_MARKET_CHART_URL}/${encodeURIComponent(platformId)}/contract/${encodeURIComponent(mapping.fallback.contractAddress)}/market_chart`
+    )
+    url.searchParams.set('vs_currency', 'usd')
+    url.searchParams.set('days', range === 'all' ? '365' : COIN_GECKO_RANGE_QUERY[range].days)
+    url.searchParams.set('precision', 'full')
+    return parseCoinGeckoMarketChartResponse(
+      await this.fetchJson(url, this.options.maximumResponseBytes, true)
+    )
+  }
+
+  private async resolveCoinGeckoPlatform(chainId: string): Promise<string> {
+    const match = EVM_CHAIN_ID_PATTERN.exec(chainId)
+    if (!match || !Number.isSafeInteger(Number(match[1]))) {
+      throw new Error('Invalid CoinGecko contract chain')
+    }
+    const numericChainId = String(Number(match[1]))
+    const now = this.readNow()
+    const catalog = this.platformCatalog
+    const cachedPlatform = catalog?.platformByChainId.get(numericChainId)
+    const age = catalog ? now - catalog.fetchedAt : Infinity
+    const fresh = age >= 0 && age <= PLATFORM_CATALOG_FRESH_MS
+    const missingRecentlyChecked = age >= 0 && age <= MISSING_PLATFORM_RECHECK_MS
+    const current =
+      catalog && fresh && (cachedPlatform !== undefined || missingRecentlyChecked)
+        ? catalog
+        : await this.loadCoinGeckoPlatforms()
+    const platform = current.platformByChainId.get(numericChainId)
+    if (platform === null) throw new Error('Ambiguous CoinGecko asset platform')
+    if (platform === undefined) throw new UnsupportedAssetMarketHistoryError()
+    return platform
+  }
+
+  private loadCoinGeckoPlatforms(): Promise<AssetPlatformCatalog> {
+    if (this.platformCatalogRequest) return this.platformCatalogRequest
+    const request = (async () => {
+      const catalog = parseAssetPlatformCatalog(
+        await this.fetchJson(
+          new URL(COIN_GECKO_ASSET_PLATFORMS_URL),
+          MAXIMUM_PLATFORM_RESPONSE_BYTES
+        ),
+        this.readNow()
+      )
+      this.platformCatalog = catalog
+      return catalog
+    })()
+    this.platformCatalogRequest = request
+    void request
+      .finally(() => {
+        if (this.platformCatalogRequest === request) this.platformCatalogRequest = null
+      })
+      .catch(() => {})
+    return request
+  }
+
+  private async fetchJson(
+    url: URL,
+    maximumBytes = this.options.maximumResponseBytes,
+    unsupportedOn404 = false
+  ): Promise<unknown> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs)
     try {
@@ -549,10 +723,11 @@ export class AssetMarketHistoryService {
         referrerPolicy: 'no-referrer',
         signal: controller.signal
       })
+      if (unsupportedOn404 && response.status === 404) {
+        throw new UnsupportedAssetMarketHistoryError()
+      }
       if (!response.ok) throw new Error(`Market history endpoint returned ${response.status}`)
-      return JSON.parse(
-        await readBoundedResponse(response, this.options.maximumResponseBytes)
-      ) as unknown
+      return JSON.parse(await readBoundedResponse(response, maximumBytes)) as unknown
     } finally {
       clearTimeout(timeout)
     }

@@ -17,6 +17,8 @@ import { AmountDisplay } from '../common/AmountDisplay'
 import type { Transaction } from '@/types/wallet'
 import { resolveSpeedUpAmount } from '@/lib/transaction-replacement'
 import { safeBig } from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { ZEC_DECIMALS } from '@/config/wallet'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { resolveZcashTransferAvailability } from '@/popup/services/transfer-availability'
@@ -85,7 +87,7 @@ export function SpeedUpConfirmSheet({
       )
     : deriveFeeByTier(estimate.feeZats, estimate.error)
   const selectedFeeZats = feeByTier[tier] ?? staticFeeFallbackZats(tier)
-  const selectedFee = safeBig(selectedFeeZats).div(1e8).toFixed()
+  const selectedFee = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   const loading = maxTransfer.loading || (!usesMaxTransfer && estimate.loading)
   const unavailable = safeBig(spendable).lte(0)
 

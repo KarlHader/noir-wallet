@@ -1,27 +1,35 @@
 import {
   initializeAnalyticsReporting,
   handleAnalyticsAlarm,
-  ANALYTICS_OUTBOX_ALARM
+  ANALYTICS_OUTBOX_ALARM,
+  ANALYTICS_EVENTS,
+  handleAnalyticsMessage,
+  trackEvent
 } from '@/background/analytics/reporter'
 import '@/lib/buffer-polyfill'
 import { betaInviteActivation } from './beta-invite'
 import { getBetaInviteErrorMessage } from '@/core/wallet/beta-invite'
 import { promptBetaInviteActivation } from './beta-invite-window'
+import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
 import {
   BETA_INVITE_REQUIRED_MESSAGE,
   resolveUnactivatedBetaDAppRequest
 } from '@/core/dapp/beta-invite-policy'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import {
+  saveSwapApprovalContinuation,
+  readSwapApprovalContinuation,
+  continueSwapAfterApproval,
+  clearSwapApprovalContinuation,
+  clearAllSwapApprovalContinuations
+} from './swap-approval-continuation'
 import { resolveWalletUnlockPath } from '@/core/wallet/wallet-unlock-path'
 import { parseLedgerPcztSignatures } from '@/lib/ledger/signature'
 import { safeBig } from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { LedgerSigningPayload } from '@/core/worker/types'
 import '@/core/services/lending-sdk-init'
-import {
-  ANALYTICS_EVENTS,
-  handleAnalyticsMessage,
-  trackEvent
-} from '@/background/analytics/reporter'
+
 import {
   projectZcashOperationEvent,
   type ZcashOperationAnalyticsContext
@@ -30,7 +38,7 @@ import { dappHandler } from './dapp-handler'
 import { evmDAppOperationStore } from './evm-dapp-operation-store'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { UI_CONFIG } from '@/config/extension'
-import { WALLET_CONFIG, type MnemonicWordCount } from '@/config/wallet'
+import { WALLET_CONFIG, ZEC_DECIMALS, type MnemonicWordCount } from '@/config/wallet'
 import {
   DEFAULT_NETWORK,
   getNetworkConfig,
@@ -57,12 +65,17 @@ import {
   useWalletStore,
   prepareWalletStoreForUse,
   rehydrateWalletStore,
-  waitForHydration
+  waitForHydration,
+  flushWalletStore
 } from '@/store/wallet-store'
 import { transactionRecorder } from './transaction-recorder'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { syncScheduler, SYNC_KEEPALIVE_ALARM } from './sync-scheduler'
-import { refreshAfterOnChainBroadcast } from './tx-sync'
+import {
+  catchUpAfterOnChainTx,
+  markWalletNeedsCatchUp,
+  refreshAfterOnChainBroadcast
+} from './tx-sync'
 import { getRetryableWalletRpcUserMessage } from '@/core/zcash/wallet-rpc-errors'
 import {
   clearPreparedHardwareSignRequest,
@@ -81,7 +94,7 @@ import {
 } from '@/core/zcash/shielding'
 import type { TransactionStatusUpdatedMessage } from '@/types/transaction-messages'
 import { initializeExtensionUpdates } from './extension-update'
-import type { SendTransactionParams, TransactionType } from '@/types'
+import type { SendTransactionParams, TransactionType, Network } from '@/types'
 import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { buildAccountKey, type AccountScope } from '@/core/wallet/account-scope'
 import {
@@ -108,7 +121,8 @@ import { CredentialAuthenticationError } from '@/infrastructure/keyring/credenti
 import {
   SETTINGS_STORAGE_KEY,
   resolvePersistedAutoLockMs,
-  updatePersistedWalletSettings
+  updatePersistedWalletSettings,
+  withWalletSettingsLock
 } from '@/lib/wallet-settings-storage'
 import {
   getChainEndpointRuntimeKey,
@@ -147,6 +161,7 @@ import {
   createBackgroundAssetPriceService
 } from './asset-prices'
 import { createBackgroundRheaSwapService, readRheaZcashTransferDeadline } from './rhea-swap'
+import { getSafeRheaSwapRuntimeErrorMessage } from '@/core/services/rhea-swap/rhea-swap-error'
 import {
   RHEA_SWAP_TRANSACTION_MONITOR_ALARM,
   RheaSwapTransactionMonitor,
@@ -154,6 +169,7 @@ import {
   recoverSignedRheaSwapsAndPoll,
   scheduleRheaSwapTransactionMonitorRetry
 } from './rhea-swap-transaction-monitor'
+import { prepareRheaSwapZcashDestinationCatchUp } from './rhea-swap-zcash-sync'
 import { createBackgroundRheaSwapEvmSignatureCoordinator } from './rhea-swap-evm-signature'
 import {
   createBackgroundRheaSwapSolanaCoordinator,
@@ -166,25 +182,31 @@ import {
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { isAssetMarketHistoryRange } from '@/core/prices'
+import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
   getBitcoinChainId,
   getZcashChainId,
   parseAssetId,
-  parseChainId
+  parseChainId,
+  type AssetDefinitionInput
 } from '@/core/chains/registry'
-import type { ParsedEip1193ChainRequest } from '@/core/dapp/eip1193'
+
 import {
   computeEvmSigningPayloadFingerprint,
   EvmRpcError,
   EvmTransactionError,
-  type EvmSigningPreparePayload
+  type EvmSigningPreparePayload,
+  ChromeSessionEvmPendingTransferStore,
+  type DetectedEvmAssetCoordinator,
+  type UserEvmAssetCoordinator
 } from '@/infrastructure/chains/evm'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import {
   createBackgroundEvmTransferRuntime,
-  hasBackgroundEvmTransferCapability
+  hasBackgroundEvmTransferCapability,
+  type BackgroundEvmTransferRouter
 } from './evm-transfer'
-import type { BackgroundEvmTransferRouter } from './evm-transfer'
+
 import {
   CONFIDENTIAL_FUNDING_MONITOR_ALARM,
   createBackgroundConfidentialFundingCoordinator
@@ -209,6 +231,7 @@ import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-add
 import { createBackgroundEvmDAppHandler } from './evm-dapp'
 import { handleEvmDAppNetworkSwitch } from './evm-dapp-network-switch'
 import {
+  type ParsedEip1193ChainRequest,
   Eip1193ProviderError,
   toEip1193ErrorShape,
   type EvmDAppRuntimeMethod
@@ -270,19 +293,19 @@ import { mapBitcoinWalletRuntimeError } from './bitcoin-wallet-runtime-error'
 import { PortfolioCoordinatorError } from '@/infrastructure/portfolio'
 import {
   BitcoinDiscoveryReadError,
-  BitcoinPortfolioCoordinatorError
+  BitcoinPortfolioCoordinatorError,
+  ChromeSessionBitcoinPendingTransferStore
 } from '@/infrastructure/chains/bitcoin'
 import {
   ChainEndpointSettingsCoordinator,
   resolveConfiguredBitcoinRpcUrl
 } from './chain-endpoint-settings'
-import { ChromeSessionEvmPendingTransferStore } from '@/infrastructure/chains/evm'
-import { ChromeSessionBitcoinPendingTransferStore } from '@/infrastructure/chains/bitcoin'
+
 import { ChromeSessionSolanaPendingTransferStore } from '@/infrastructure/chains/solana'
 import { ChromeSessionNearPendingTransferStore } from '@/infrastructure/chains/near'
-import { flushWalletStore } from '@/store/wallet-store'
+
 import { validateVotingDecisions } from '@/lib/voting'
-import type { Network } from '@/types'
+
 import { BitcoinMultichainDerivationClient } from '@/infrastructure/keyring/multichain/bitcoin-derivation-client'
 import type { NetworkAccountMetadataInput } from '@/infrastructure/keyring/network-account-metadata-coordinator'
 import {
@@ -322,10 +345,7 @@ import {
   cancelAllLedgerSigning
 } from './ledger-signing-coordinator'
 import { readLedgerProvisioningCredential } from './ledger-signing-bridge'
-import type {
-  DetectedEvmAssetCoordinator,
-  UserEvmAssetCoordinator
-} from '@/infrastructure/chains/evm'
+
 import type { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
 import type { DetectedEvmAssetRecord, UserEvmAssetRecord } from '@/core/chains/user-assets'
 import { createBackgroundUserEvmAssetRuntime } from './user-evm-assets'
@@ -339,9 +359,12 @@ import {
   resolveIntentsWalletAsset,
   type IntentsProtocolAssetPriceMapping
 } from '@/core/services/intents-wallet-assets'
-import type { AssetDefinitionInput } from '@/core/chains/registry'
+
 import { ChromeSwapTokenCatalogCacheRepository } from '@/infrastructure/persistence/chrome-swap-token-catalog-cache'
-import { getActionFailureNotificationCopy } from '@/lib/transaction-status-copy'
+import {
+  getActionFailureNotificationCopy,
+  TRANSACTION_PENDING_MESSAGE
+} from '@/lib/transaction-status-copy'
 import {
   applyExtensionDisplayMode,
   enqueueExtensionDisplayModeUpdate,
@@ -352,7 +375,7 @@ import {
 import { computePassiveSyncDelayMinutes, shouldRequestPeriodicSync } from './passive-sync-policy'
 import { fetchLatestBlockHeight } from '@/infrastructure/chains/rpc-registry-client'
 import { SerialTaskQueue, TimeoutError, withTimeout } from '@/lib/async-utils'
-import { TRANSACTION_PENDING_MESSAGE } from '@/lib/transaction-status-copy'
+
 import {
   getPreferredRpcEndpointOption,
   refreshRpcEndpointRegistry
@@ -420,6 +443,27 @@ const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwap
 const rheaSwapTransactionMonitor = rheaSwapService
   ? new RheaSwapTransactionMonitor(rheaSwapService, {
       loadZcashAccountScopes: getZcashAccountScopes,
+      prepareZcashDestinationCatchUp: scope =>
+        prepareRheaSwapZcashDestinationCatchUp(scope, {
+          getNetwork: () => backgroundZcashWalletRuntime.getNetwork(),
+          accountExists: (walletId, accountId) =>
+            Boolean(useWalletStore.getState().getAccount(walletId, accountId)),
+          getActiveScope: () => {
+            const state = useWalletStore.getState()
+            return {
+              network: state.currentNetwork,
+              walletId: state.currentWalletId,
+              accountId: state.currentAccountId
+            }
+          },
+          markNeedsCatchUp: markWalletNeedsCatchUp,
+          catchUp: catchUpAfterOnChainTx,
+          onCatchUpError: error => {
+            console.warn('[RHEA Swap Monitor] Zcash destination catch-up failed', {
+              errorName: error instanceof Error ? error.name : 'UnknownError'
+            })
+          }
+        }),
       refreshPortfolio: async ({ scope, chainIds }) => {
         const model = await portfolioCoordinator?.refreshActive(chainIds)
         if (
@@ -533,13 +577,13 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
   }
 })
 
-function requireActiveDAppExecutionModeScope(): DAppExecutionModeScope {
-  const { currentWalletId, currentAccountId } = useWalletStore.getState()
-  if (!currentWalletId || !currentAccountId) throw new Error('No active wallet account')
+async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeScope> {
+  const account = await accountNetworksCoordinator.readActiveAccount()
+  if (!account) throw new Error('No active wallet account')
   return Object.freeze({
     network: DEFAULT_NETWORK,
-    keyDomainId: currentWalletId,
-    accountId: currentAccountId
+    keyDomainId: account.reference.walletId,
+    accountId: account.reference.accountId
   })
 }
 
@@ -689,10 +733,59 @@ async function handleEvmDAppNetworkRequest(
   action: 'switch' | 'add',
   tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
 ): Promise<void> {
+  const runtime = evmDAppHandler
+  const account = useWalletStore.getState()
+  const accountIdentity = [
+    account.currentWalletId,
+    account.currentAccountId,
+    account.currentNetwork
+  ]
+  const sourceChainId = runtime.getCaip2ChainId()
+  const authorization = JSON.stringify(
+    await dappManager.getChainAuthorization(origin, sourceChainId)
+  )
+  const readUnlockEpoch = async () =>
+    account.currentWalletId
+      ? (await credentialSession.getCredentialBinding(account.currentWalletId).catch(() => null))
+          ?.globalUnlockEpoch
+      : undefined
+  const unlockEpoch = await readUnlockEpoch()
+  const validateRequest = async (): Promise<void> => {
+    const current = useWalletStore.getState()
+    if (
+      runtime !== evmDAppHandler ||
+      JSON.stringify(accountIdentity) !==
+        JSON.stringify([
+          current.currentWalletId,
+          current.currentAccountId,
+          current.currentNetwork
+        ]) ||
+      authorization !==
+        JSON.stringify(await dappManager.getChainAuthorization(origin, sourceChainId)) ||
+      unlockEpoch !== (await readUnlockEpoch())
+    ) {
+      throw new Eip1193ProviderError(
+        4001,
+        'Wallet context changed. Review the network request again.'
+      )
+    }
+  }
+  await validateRequest()
   await handleEvmDAppNetworkSwitch(requested, origin, action, {
     readSettings: () => chainEndpointSettingsCoordinator.read(),
+    validateRequest,
+    commitCustomNetwork: async network => {
+      await updateChainEndpointSettings(async () => {
+        await validateRequest()
+        return chainEndpointSettingsCoordinator.saveCustomEvmNetwork(
+          network,
+          undefined,
+          validateRequest
+        )
+      })
+    },
     commitActiveChain: (chainId, approvalOrigin) =>
-      commitEvmDAppActiveChain(chainId, approvalOrigin),
+      commitEvmDAppActiveChain(chainId, approvalOrigin, validateRequest),
     requestApproval: (approvalOrigin, approvalAction, data) =>
       dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
         ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
@@ -702,28 +795,57 @@ async function handleEvmDAppNetworkRequest(
   })
 }
 
-function commitEvmDAppActiveChain(chainId: string, origin: string): Promise<void> {
-  const operation = multichainRuntimeReady
+function commitEvmDAppActiveChain(
+  chainId: string,
+  origin: string,
+  validateRequest: () => Promise<void>
+): Promise<void> {
+  const previousReadiness = multichainRuntimeReady
+  let reconfiguring = false
+  const operation = previousReadiness
     .catch(() => {})
     .then(() =>
       accountContextTransition.runActiveOperation(async () => {
+        await validateRequest()
         const sourceChainId = evmDAppHandler.getCaip2ChainId()
-        const saved = await chainEndpointSettingsCoordinator.selectActiveEvmChain(chainId)
+        const saved = await chainEndpointSettingsCoordinator.selectActiveEvmChain(
+          chainId,
+          validateRequest
+        )
+        reconfiguring = true
         await dappManager.carryEvmAuthorizationToChain(origin, sourceChainId, chainId)
         await reloadMultichainRuntime(saved)
       })
     )
-  multichainRuntimeReady = operation
+  multichainRuntimeReady = operation.catch(error => {
+    if (reconfiguring) throw error
+    return previousReadiness
+  })
+  void multichainRuntimeReady.catch(() => {})
   return operation
 }
 
-function applyChainEndpointSettings(settings: unknown): Promise<ChainEndpointSettings> {
-  const operation = multichainRuntimeReady
+function applyChainEndpointSettings(
+  settings: unknown,
+  expectedSettings?: unknown
+): Promise<ChainEndpointSettings> {
+  return updateChainEndpointSettings(() =>
+    chainEndpointSettingsCoordinator.apply(settings, expectedSettings)
+  )
+}
+
+function updateChainEndpointSettings(
+  update: () => Promise<ChainEndpointSettings>
+): Promise<ChainEndpointSettings> {
+  const previousReadiness = multichainRuntimeReady
+  let reconfiguring = false
+  const operation = previousReadiness
     .catch(() => {})
     .then(() =>
       accountContextTransition.runActiveOperation(async () => {
         const previous = await chainEndpointSettingsCoordinator.read()
-        const result = await chainEndpointSettingsCoordinator.apply(settings)
+        const result = await update()
+        reconfiguring = true
         await reloadMultichainRuntime(result)
         const previousZcashRpc = previous.overrides.find(
           override => override.chainId === getZcashChainId(DEFAULT_NETWORK)
@@ -739,7 +861,14 @@ function applyChainEndpointSettings(settings: unknown): Promise<ChainEndpointSet
         return result
       })
     )
-  multichainRuntimeReady = operation.then(() => undefined)
+  // Validation and concurrent-edit rejections leave the existing runtime ready.
+  multichainRuntimeReady = operation.then(
+    () => undefined,
+    error => {
+      if (reconfiguring) throw error
+      return previousReadiness
+    }
+  )
   void multichainRuntimeReady.catch(() => {})
   return operation
 }
@@ -941,8 +1070,10 @@ async function reloadMultichainRuntime(
     intentsProtocolPriceMappings
   )
   assetMarketHistoryService = createBackgroundAssetMarketHistoryService(
+    userAssets.definitions,
     intentsProtocolAssets,
-    intentsProtocolPriceMappings
+    intentsProtocolPriceMappings,
+    customEvmNetworks
   )
   if (DEFAULT_NETWORK === 'mainnet') {
     nearIntentsTransactionMonitor ??= new BackgroundNearIntentsTransactionMonitor()
@@ -1154,10 +1285,12 @@ async function synchronizeCurrentSoftwareWalletNetworkMetadata(): Promise<void> 
 }
 
 async function persistNetworkMode(target: Network): Promise<void> {
-  const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
-  const raw = stored[SETTINGS_STORAGE_KEY]
-  await chrome.storage.local.set({
-    [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(raw, { networkMode: target })
+  await withWalletSettingsLock(async () => {
+    const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+    const raw = stored[SETTINGS_STORAGE_KEY]
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(raw, { networkMode: target })
+    })
   })
 }
 
@@ -1218,6 +1351,7 @@ async function switchGlobalNetworkMode(target: Network): Promise<{ restartRequir
       networkRestartRequired = true
       await persistNetworkMode(target)
       targetModePersisted = true
+      await clearAllSwapApprovalContinuations()
       await chrome.alarms.create(NETWORK_MODE_RESTART_ALARM, { when: Date.now() + 500 })
       return { restartRequired: true as const }
     } catch (error) {
@@ -2172,6 +2306,55 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (
+    runtimeMessage.type === 'SAVE_SWAP_APPROVAL_CONTINUATION' ||
+    runtimeMessage.type === 'GET_SWAP_APPROVAL_CONTINUATION' ||
+    runtimeMessage.type === 'CONTINUE_SWAP_AFTER_APPROVAL' ||
+    runtimeMessage.type === 'CLEAR_SWAP_APPROVAL_CONTINUATION'
+  ) {
+    const type = runtimeMessage.type
+    const canRead = getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'extension-page'
+    if (!canRead) {
+      sendResponse({ error: 'Unauthorized Swap continuation sender' })
+      return true
+    }
+    void (async () => {
+      const readActive = async () => {
+        await rehydrateWalletStore()
+        const state = useWalletStore.getState()
+        const catalog = await accountNetworksCoordinator.readCatalog()
+        const account = catalog?.accounts.find(candidate => candidate.active)
+        return {
+          network: state.currentNetwork,
+          walletId: account?.walletId ?? null,
+          accountId: account?.accountId ?? null
+        }
+      }
+      if (type === 'SAVE_SWAP_APPROVAL_CONTINUATION') {
+        if (!evmTransferRouter) throw new Error('EVM transfer is unavailable')
+        return saveSwapApprovalContinuation(runtimeMessage.input, evmTransferRouter, readActive)
+      }
+      if (typeof runtimeMessage.transactionId !== 'string')
+        throw new Error('Invalid transaction ID')
+      if (type === 'GET_SWAP_APPROVAL_CONTINUATION')
+        return readSwapApprovalContinuation(runtimeMessage.transactionId, readActive)
+      if (type === 'CONTINUE_SWAP_AFTER_APPROVAL') {
+        if (!evmTransferRouter) throw new Error('EVM transfer is unavailable')
+        return continueSwapAfterApproval(
+          runtimeMessage.transactionId,
+          evmTransferRouter,
+          readActive
+        )
+      }
+      await clearSwapApprovalContinuation(runtimeMessage.transactionId)
+      return true
+    })()
+      .then(result => sendResponse({ result }))
+      .catch(error =>
+        sendResponse({ error: error instanceof Error ? error.message : 'Swap continuation failed' })
+      )
+    return true
+  }
+  if (
     [
       'GET_LEDGER_SIGNING_REQUEST',
       'SUBMIT_LEDGER_SIGNING_RESPONSE',
@@ -2786,7 +2969,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (message.type === 'APPLY_CHAIN_ENDPOINT_SETTINGS') {
-    void applyChainEndpointSettings(message.settings)
+    void applyChainEndpointSettings(message.settings, message.expectedSettings)
       .then(result => {
         sendResponse({ result })
       })
@@ -2798,6 +2981,35 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               : 'Chain endpoint settings could not be applied'
         })
       })
+    return true
+  }
+
+  if (
+    message.type === 'SAVE_CUSTOM_EVM_NETWORK' ||
+    message.type === 'REMOVE_CUSTOM_EVM_NETWORK' ||
+    message.type === 'SELECT_ACTIVE_EVM_CHAIN'
+  ) {
+    void updateChainEndpointSettings(() => {
+      if (message.type === 'SAVE_CUSTOM_EVM_NETWORK') {
+        return chainEndpointSettingsCoordinator.saveCustomEvmNetwork(
+          message.network,
+          message.expectedNetwork
+        )
+      }
+      if (message.type === 'REMOVE_CUSTOM_EVM_NETWORK') {
+        return chainEndpointSettingsCoordinator.removeCustomEvmNetwork(message.network)
+      }
+      return chainEndpointSettingsCoordinator.selectActiveEvmChain(message.chainId as string)
+    })
+      .then(result => sendResponse({ result }))
+      .catch(error =>
+        sendResponse({
+          error:
+            error instanceof Error && error.message.length <= 256
+              ? error.message
+              : 'Network settings could not be saved'
+        })
+      )
     return true
   }
 
@@ -2866,6 +3078,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         const result = await coordinator.add(message.candidate)
         await tokenVisibility?.setHidden(result.assetId, false)
         await refreshMultichainRuntimeForUserAssets(true, [result.chainId])
+        void refreshAssetPrices(result.assetId).catch(() => {})
         return result
       })
       .then(result => sendResponse({ result }))
@@ -3379,15 +3592,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         )
       })
       .catch(error => {
-        const rawMessage = error instanceof Error ? error.message.trim() : ''
-        const safeMessage =
-          rawMessage &&
-          rawMessage.length <= 500 &&
-          !/(?:bearer|access[_ -]?token|refresh[_ -]?token|private[_ -]?key|mnemonic|signature)\s*[:=]/i.test(
-            rawMessage
-          )
-            ? rawMessage.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
-            : 'RHEA Swap request failed'
+        const safeMessage = getSafeRheaSwapRuntimeErrorMessage(error)
         console.error('[RHEA Swap] Request failed', {
           operation: message.type,
           errorName: error instanceof Error ? error.name : 'UnknownError',
@@ -3404,16 +3609,39 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       !isAssetMarketHistoryRange(message.range) ||
       (message.action !== 'read' && message.action !== 'refresh')
     ) {
-      sendResponse({ result: null })
+      sendResponse({ error: 'Invalid asset market history request' })
+      return true
+    }
+    let supported: boolean
+    const historyService = assetMarketHistoryService
+    try {
+      supported = historyService.supportsAsset(message.assetId)
+    } catch {
+      sendResponse({ error: 'Invalid asset market history request' })
+      return true
+    }
+    if (!supported) {
+      sendResponse({ status: 'unsupported' })
       return true
     }
     const operation =
       message.action === 'read'
-        ? assetMarketHistoryService.readCached(message.assetId, message.range)
-        : assetMarketHistoryService.refresh(message.assetId, message.range)
+        ? historyService.readCached(message.assetId, message.range)
+        : historyService.refresh(message.assetId, message.range)
     void operation
-      .then(result => sendResponse({ result }))
-      .catch(() => sendResponse({ result: null }))
+      .then(result =>
+        sendResponse({
+          result,
+          availableRanges: historyService.getAvailableRanges(message.assetId)
+        })
+      )
+      .catch(error =>
+        sendResponse(
+          error instanceof UnsupportedAssetMarketHistoryError
+            ? { status: 'unsupported' }
+            : { error: 'Asset market history unavailable' }
+        )
+      )
     return true
   }
 
@@ -3859,7 +4087,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     accountContextTransition
       .runActiveOperation(async () => {
         await rehydrateWalletStore()
-        return dappExecutionModeCoordinator.read(requireActiveDAppExecutionModeScope())
+        return dappExecutionModeCoordinator.read(await requireActiveDAppExecutionModeScope())
       })
       .then(state => sendResponse({ success: true, state }))
       .catch(error =>
@@ -3874,7 +4102,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     accountContextTransition
       .runActiveOperation(async () => {
         await rehydrateWalletStore()
-        const scope = requireActiveDAppExecutionModeScope()
+        const scope = await requireActiveDAppExecutionModeScope()
         return dappExecutionModeTransitionCoordinator.set(
           scope,
           message.mode as DAppExecutionMode,
@@ -3989,16 +4217,18 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'ADD_SOFTWARE_WALLET') {
     enqueueWalletSessionTransition(() =>
-      addSoftwareWallet(
-        {
-          mode: message.mode as SoftwareWalletProvisioningMode,
-          mnemonic: message.mnemonic as string,
-          accountName: message.accountName as string,
-          ...(message.birthdayHeight === undefined
-            ? {}
-            : { birthdayHeight: message.birthdayHeight as number })
-        },
-        synchronizeCurrentSoftwareWalletNetworkMetadata
+      accountContextTransition.runActiveOperation(() =>
+        addSoftwareWallet(
+          {
+            mode: message.mode as SoftwareWalletProvisioningMode,
+            mnemonic: message.mnemonic as string,
+            accountName: message.accountName as string,
+            ...(message.birthdayHeight === undefined
+              ? {}
+              : { birthdayHeight: message.birthdayHeight as number })
+          },
+          synchronizeCurrentSoftwareWalletNetworkMetadata
+        )
       )
     )
       .then(result => sendResponse({ success: true, ...result }))
@@ -4115,12 +4345,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (message.type === 'GET_ZCASH_SEED_PHRASE') {
-    accountContextTransition
-      .runActiveOperation(async () => {
-        await rehydrateWalletStore()
-        await backgroundZcashWalletRuntime.initialize()
-        return backgroundZcashWalletRuntime.getSeedPhrase(message.password, message.walletId)
-      })
+    void rehydrateWalletStore()
+      .then(() => backgroundZcashWalletRuntime.getSeedPhrase(message.password, message.walletId))
       .then(seedPhrase => sendResponse({ success: true, seedPhrase }))
       .catch(error =>
         sendResponse({
@@ -4313,12 +4539,16 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'PROVISION_KEYSTONE_HARDWARE') {
     enqueueWalletSessionTransition(() =>
-      provisionKeystoneHardware({
-        credential: message.credential,
-        displayName: message.displayName,
-        ...(message.password === undefined ? {} : { password: message.password }),
-        ...(message.birthdayHeight === undefined ? {} : { birthdayHeight: message.birthdayHeight })
-      })
+      accountContextTransition.runActiveOperation(() =>
+        provisionKeystoneHardware({
+          credential: message.credential,
+          displayName: message.displayName,
+          ...(message.password === undefined ? {} : { password: message.password }),
+          ...(message.birthdayHeight === undefined
+            ? {}
+            : { birthdayHeight: message.birthdayHeight })
+        })
+      )
     )
       .then(result => sendResponse({ success: true, result }))
       .catch(error =>
@@ -4335,16 +4565,20 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       return true
     }
     enqueueWalletSessionTransition(() =>
-      provisionLedgerHardware({
-        credential: message.credential,
-        displayName: message.displayName,
-        ...(message.password === undefined ? {} : { password: message.password }),
-        ...(message.existingKeyDomainId === undefined
-          ? {}
-          : { existingKeyDomainId: message.existingKeyDomainId }),
-        ...(message.anchorProof === undefined ? {} : { anchorProof: message.anchorProof }),
-        ...(message.birthdayHeight === undefined ? {} : { birthdayHeight: message.birthdayHeight })
-      })
+      accountContextTransition.runActiveOperation(() =>
+        provisionLedgerHardware({
+          credential: message.credential,
+          displayName: message.displayName,
+          ...(message.password === undefined ? {} : { password: message.password }),
+          ...(message.existingKeyDomainId === undefined
+            ? {}
+            : { existingKeyDomainId: message.existingKeyDomainId }),
+          ...(message.anchorProof === undefined ? {} : { anchorProof: message.anchorProof }),
+          ...(message.birthdayHeight === undefined
+            ? {}
+            : { birthdayHeight: message.birthdayHeight })
+        })
+      )
     )
       .then(result => sendResponse({ success: true, result }))
       .catch(error =>
@@ -4367,12 +4601,17 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (message.type === 'ADD_ACCOUNT') {
-    handleAddWalletAccount(message.walletId, message.accountName, {
-      ...(message.birthdayHeight === undefined ? {} : { birthdayHeight: message.birthdayHeight }),
-      ...(message.expectedDerivationIndex === undefined
-        ? {}
-        : { expectedDerivationIndex: message.expectedDerivationIndex })
-    })
+    accountContextTransition
+      .runActiveOperation(() =>
+        handleAddWalletAccount(message.walletId, message.accountName, {
+          ...(message.birthdayHeight === undefined
+            ? {}
+            : { birthdayHeight: message.birthdayHeight }),
+          ...(message.expectedDerivationIndex === undefined
+            ? {}
+            : { expectedDerivationIndex: message.expectedDerivationIndex })
+        })
+      )
       .then(result => sendResponse({ success: true, ...result }))
       .catch(error =>
         sendResponse({
@@ -5019,6 +5258,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Selecting another wallet must not wait for Noir's wallet or WASM initialization.
+  if (isRuntimeRecord(message) && handleEvmWalletChoiceMessage(message, sender, sendResponse)) {
+    return true
+  }
   if (isRuntimeRecord(message) && message.type === 'GET_WALLET_SESSION_STATE') {
     return handleRuntimeMessage(message, sender, sendResponse)
   }
@@ -5201,14 +5444,22 @@ async function promptUnlock(
 
   const unlockPromise = new Promise<void>((resolve, reject) => {
     let settled = false
+    let unlockReceived = false
     let timeoutId: ReturnType<typeof setTimeout>
     const finish = (error?: unknown) => {
       if (settled) return
       settled = true
       clearTimeout(timeoutId)
       chrome.runtime.onMessage.removeListener(listener)
+      chrome.windows.onRemoved.removeListener(onWindowRemoved)
       if (error) reject(error)
       else resolve()
+    }
+
+    const onWindowRemoved = (removedId: number) => {
+      if (removedId === unlockWindowId && !unlockReceived) {
+        finish(new Eip1193ProviderError(4001, 'User cancelled the unlock request.'))
+      }
     }
 
     const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
@@ -5223,6 +5474,7 @@ async function promptUnlock(
         return
       }
 
+      unlockReceived = true
       void (async () => {
         try {
           if (options.restoreZcashRuntime === false) {
@@ -5242,6 +5494,7 @@ async function promptUnlock(
       })()
     }
     chrome.runtime.onMessage.addListener(listener)
+    chrome.windows.onRemoved.addListener(onWindowRemoved)
 
     timeoutId = setTimeout(() => {
       finish(new Error('Unlock timeout'))
@@ -5264,9 +5517,13 @@ function enqueueWalletSessionTransition<T>(operation: () => Promise<T>): Promise
 }
 
 function handleWalletUnlock(password: string): Promise<any> {
-  return enqueueWalletSessionTransition(() =>
-    accountContextTransition.runActiveOperation(() => performWalletUnlock(password))
-  )
+  return enqueueWalletSessionTransition(async () => {
+    const result = await accountContextTransition.runActiveOperation(() =>
+      performWalletUnlock(password)
+    )
+    if (result?.success) await walletCleanupCoordinator.resumePendingCleanup()
+    return result
+  })
 }
 
 function restoreZcashDAppPermissionsAfterUnlock(): void {
@@ -5768,10 +6025,12 @@ async function handleSwitchWalletAccount(walletId: string, accountId: string) {
 
     const wallet = useWalletStore.getState().getWallet(walletId)
     if (!wallet) {
-      const selection = await credentialLifecycle.selectActiveAccount(walletId, accountId)
-      if (selection.status === 'storage-v2-inactive') throw new Error('Wallet not found')
-      await synchronizeNativeActiveAccount(walletId, accountId)
-      return { selectionStatus: selection.status, generationId: selection.generationId }
+      return accountContextTransition.runActiveOperation(async () => {
+        const selection = await credentialLifecycle.selectActiveAccount(walletId, accountId)
+        if (selection.status === 'storage-v2-inactive') throw new Error('Wallet not found')
+        await synchronizeNativeActiveAccount(walletId, accountId)
+        return { selectionStatus: selection.status, generationId: selection.generationId }
+      })
     }
     const restoreFromSession =
       !isZcashHardwareKeySource(wallet.keySource) &&
@@ -6060,7 +6319,7 @@ async function handleHardwarePcztBuild(params: {
           sanitizeMarginalFeeZats(marginalFeeZats),
           fundingSource
         )
-        effectiveAmount = safeBig(estimate.maxAmountZats).div(1e8).toFixed()
+        effectiveAmount = formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS)
         if (!safeBig(effectiveAmount).gt(0)) {
           throw new Error('No spendable balance is available for this transaction')
         }

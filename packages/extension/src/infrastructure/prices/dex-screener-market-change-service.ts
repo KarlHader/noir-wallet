@@ -352,8 +352,8 @@ export class DexScreenerMarketChangeService {
     }
   }
 
-  refresh(): Promise<MarketChangeReadModel> {
-    return this.refreshGate.run(() => this.refreshOnce())
+  refresh(targeted = false): Promise<MarketChangeReadModel> {
+    return this.refreshGate.run(() => this.refreshOnce(targeted))
   }
 
   private readNow(): number {
@@ -389,7 +389,7 @@ export class DexScreenerMarketChangeService {
     }
   }
 
-  private async refreshOnce(): Promise<MarketChangeReadModel> {
+  private async refreshOnce(targeted: boolean): Promise<MarketChangeReadModel> {
     const now = this.readNow()
     let cached: MarketChangeCacheSnapshot | null = null
     try {
@@ -400,7 +400,11 @@ export class DexScreenerMarketChangeService {
     if (
       cached &&
       now - cached.fetchedAt >= 0 &&
-      now - cached.fetchedAt < NETWORK_REFRESH_INTERVAL_MS
+      now - cached.fetchedAt < NETWORK_REFRESH_INTERVAL_MS &&
+      (!targeted ||
+        this.options.mappings.every(mapping =>
+          cached.quotes.some(quote => quote.marketAssetId === mapping.marketAssetId)
+        ))
     ) {
       return materialize(cached, this.options.mappings, now)
     }
@@ -435,7 +439,7 @@ export class DexScreenerMarketChangeService {
     }
     const snapshot = Object.freeze({
       version: CACHE_VERSION,
-      fetchedAt: now,
+      fetchedAt: targeted ? (cached?.fetchedAt ?? 0) : now,
       quotes: Object.freeze(
         [...next.values()].filter(quote => now - quote.fetchedAt <= MARKET_CHANGE_EXPIRES_MS)
       )

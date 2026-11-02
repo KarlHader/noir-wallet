@@ -94,10 +94,10 @@ Retain an event only when it supports a defined metric or operational decision. 
 
 Core tests cover catalog filtering, canonical metadata, bounded delivery, operation mapping and dApp outcomes. Reporting tests exercise the UI/runtime boundary, independent channel dispatch and non-blocking failure behavior. Transaction tests cover broadcast evidence and exclude signed-only transactions, user cancellation and approval-only stages from send success.
 
-The local [analytics tests](../packages/extension/tests/analytics.test.mjs) cover encryption compatibility, field filtering, payload construction, preferences, batching, and retries without contacting the collector:
+The local [analytics tests](../packages/extension/tests/core/platform/analytics.test.mjs) cover encryption compatibility, field filtering, payload construction, preferences, batching, and retries without contacting the collector:
 
 ```bash
-pnpm --filter @noir-wallet/extension test:logic
+pnpm test
 ```
 
-`ANALYTICS_E2E=1` enables an opt-in collector request when `CUSTOM_ANALYTICS_PASSWORD` is supplied. It sends a test event to the live service; a passing local test alone does not establish collector availability.
+`ANALYTICS_E2E=1` enables the separate `pnpm test live` collector check when `CUSTOM_ANALYTICS_PASSWORD` is supplied. It sends a test event to the live service; a passing local test alone does not establish collector availability.

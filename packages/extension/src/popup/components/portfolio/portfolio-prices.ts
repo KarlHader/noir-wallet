@@ -1,4 +1,5 @@
 import Big from 'big.js'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { PortfolioAssetView, PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { isBundledWalletAsset } from '@/popup/components/tokens/token-display-policy'
@@ -22,8 +23,7 @@ export function getPortfolioAssetUsdValue(
 ): string | null {
   const quote = findAssetPrice(prices, asset.asset.id)
   if (!quote) return null
-  return new Big(asset.balance.totalRaw)
-    .div(new Big(10).pow(asset.metadata.decimals))
+  return new Big(formatBaseUnitDecimalAmount(asset.balance.totalRaw, asset.metadata.decimals))
     .times(quote.priceUsd)
     .toFixed()
 }
@@ -67,13 +67,19 @@ export function summarizePortfolioFiat(
       missingAssetCount += 1
       continue
     }
-    const divisor = new Big(10).pow(asset.metadata.decimals)
-    const totalValue = new Big(asset.balance.totalRaw).div(divisor).times(quote.priceUsd)
+    const decimals = asset.metadata.decimals
+    const totalValue = new Big(formatBaseUnitDecimalAmount(asset.balance.totalRaw, decimals)).times(
+      quote.priceUsd
+    )
     total = total.plus(totalValue)
     if (asset.balance.mainRaw !== undefined && asset.balance.privateRaw !== undefined) {
-      main = main.plus(new Big(asset.balance.mainRaw).div(divisor).times(quote.priceUsd))
+      main = main.plus(
+        new Big(formatBaseUnitDecimalAmount(asset.balance.mainRaw, decimals)).times(quote.priceUsd)
+      )
       privateBalance = privateBalance.plus(
-        new Big(asset.balance.privateRaw).div(divisor).times(quote.priceUsd)
+        new Big(formatBaseUnitDecimalAmount(asset.balance.privateRaw, decimals)).times(
+          quote.priceUsd
+        )
       )
     } else {
       main = main.plus(totalValue)

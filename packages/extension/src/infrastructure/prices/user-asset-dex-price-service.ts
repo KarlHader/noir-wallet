@@ -174,10 +174,11 @@ export class UserAssetDexPriceService {
   }
 
   private async readCachedMappings(
-    now: number
+    now: number,
+    assetIds: readonly string[] = this.assetIds
   ): Promise<readonly AssetMarketChangeSourceMapping[]> {
     const mappings = await Promise.all(
-      this.assetIds.map(async assetId => {
+      assetIds.map(async assetId => {
         try {
           const mapping = await this.options.poolCache.get(assetId)
           if (!mapping) return null
@@ -196,14 +197,17 @@ export class UserAssetDexPriceService {
     )
   }
 
-  private async discoverMappings(now: number): Promise<readonly AssetMarketChangeSourceMapping[]> {
-    const mappings: Array<AssetMarketChangeSourceMapping | null> = new Array(this.assetIds.length)
+  private async discoverMappings(
+    now: number,
+    assetIds: readonly string[] = this.assetIds
+  ): Promise<readonly AssetMarketChangeSourceMapping[]> {
+    const mappings: Array<AssetMarketChangeSourceMapping | null> = new Array(assetIds.length)
     let nextIndex = 0
     const worker = async () => {
-      while (nextIndex < this.assetIds.length) {
+      while (nextIndex < assetIds.length) {
         const index = nextIndex
         nextIndex += 1
-        const assetId = this.assetIds[index]
+        const assetId = assetIds[index]
         const policy = this.options.resolvePolicy(parseAssetId(assetId).chainId)
         if (!policy) {
           mappings[index] = null
@@ -217,7 +221,7 @@ export class UserAssetDexPriceService {
       }
     }
     await Promise.all(
-      Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, this.assetIds.length) }, () => worker())
+      Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, assetIds.length) }, () => worker())
     )
     return Object.freeze(
       mappings.filter((mapping): mapping is AssetMarketChangeSourceMapping => mapping !== null)
@@ -227,16 +231,18 @@ export class UserAssetDexPriceService {
   private async materialize(
     mappings: readonly AssetMarketChangeSourceMapping[],
     action: 'read' | 'refresh',
-    now: number
+    now: number,
+    assetIds: readonly string[] = this.assetIds,
+    targeted = false
   ): Promise<AssetPriceReadModel> {
-    if (mappings.length === 0) return emptyModel(this.assetIds, now)
+    if (mappings.length === 0) return emptyModel(assetIds, now)
     const market = new DexScreenerMarketChangeService({
       mappings,
       cache: this.options.marketCache,
       fetch: this.options.fetch,
       now: this.now
     })
-    const model = action === 'read' ? await market.readCached() : await market.refresh()
+    const model = action === 'read' ? await market.readCached() : await market.refresh(targeted)
     const quotes = Object.freeze(
       model.quotes.map(quote =>
         Object.freeze({
@@ -256,7 +262,7 @@ export class UserAssetDexPriceService {
       )
     )
     const quoted = new Set(quotes.map(quote => quote.assetId))
-    const missingAssetIds = Object.freeze(this.assetIds.filter(assetId => !quoted.has(assetId)))
+    const missingAssetIds = Object.freeze(assetIds.filter(assetId => !quoted.has(assetId)))
     return Object.freeze({
       source: ASSET_PRICE_SOURCE,
       status:
@@ -280,8 +286,22 @@ export class UserAssetDexPriceService {
     return fallback ? preferUserAssetDexPrices(this.assetIds, dex, fallback) : dex
   }
 
-  async refresh(): Promise<AssetPriceReadModel> {
+  async refresh(assetId?: string): Promise<AssetPriceReadModel> {
+    const target = assetId === undefined ? null : canonicalUserAssetId(assetId)
+    if (target && !this.assetIdSet.has(target)) {
+      throw new Error('User asset is not in the price inventory')
+    }
     const now = this.readNow()
+    if (target) {
+      const targetIds = [target]
+      await Promise.all([
+        this.discoverMappings(now, targetIds).then(mappings =>
+          this.materialize(mappings, 'refresh', now, targetIds, true)
+        ),
+        this.options.fallback?.refresh(target)
+      ])
+      return this.readCached()
+    }
     const [dex, fallback] = await Promise.all([
       this.discoverMappings(now).then(mappings => this.materialize(mappings, 'refresh', now)),
       this.options.fallback?.refresh()

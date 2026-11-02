@@ -1,7 +1,7 @@
-import Big from 'big.js'
 import type { FundingSource } from '@/types'
 import type { FundingSourceOption } from '@/core/wallet/funding-source'
-import { formatNumber, formatPrice, formatSortAddress } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
+import { formatTokenQuantity, formatFiatAmount } from '@/lib/number-format'
 import { safeBig } from '@/lib/big'
 import { cn } from '@/lib/utils'
 import { AddressTypeLabel } from '../account/AddressType'
@@ -54,16 +54,16 @@ export function FundingSourceSelector({
             <span className="shrink-0 text-right">
               <span className="block text-[10px] text-muted">Available</span>
               <span className="block text-sm font-medium">
-                {formatNumber(option.available, { rm: Big.roundDown })} ZEC
+                {formatTokenQuantity(option.available)} ZEC
               </span>
               <span className="mt-0.5 block text-xs text-muted">
-                {formatPrice(safeBig(option.available).times(zecPrice).toFixed(), {
+                {formatFiatAmount(safeBig(option.available).times(zecPrice).toFixed(), {
                   showSign: true
                 })}
               </span>
               {safeBig(option.pending).gt(0) && (
                 <span className="mt-0.5 block text-[11px] text-muted">
-                  {formatNumber(option.pending, { rm: Big.roundDown })} ZEC pending
+                  {formatTokenQuantity(option.pending)} ZEC pending
                 </span>
               )}
             </span>

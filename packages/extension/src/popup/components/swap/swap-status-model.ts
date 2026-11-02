@@ -34,11 +34,20 @@ export function getSwapTransactionReference(
     ? getEvmNetworkConfigs(network).find(chain => chain.chainId === chainId)
     : undefined
   const legacyChain = getChainFromAssetId(assetId ?? '') || fallbackChain || ''
+  const chainUrl = chainId ? formatChainTransactionExplorerUrl(chainId, hash, network) : ''
+  const legacyUrl = formatExplorerUrl(legacyChain, hash)
+  const fallbackUrl = fallbackChain ? formatExplorerUrl(fallbackChain, hash) : ''
+  const useFallback =
+    network === 'mainnet' &&
+    chainId?.startsWith('rhea:') &&
+    !chainUrl &&
+    !legacyUrl &&
+    Boolean(fallbackUrl)
   return {
-    label: configuredChain?.displayName ?? formatChainName(legacyChain),
-    url: chainId
-      ? formatChainTransactionExplorerUrl(chainId, hash, network)
-      : formatExplorerUrl(legacyChain, hash)
+    label: useFallback
+      ? formatChainName(fallbackChain ?? legacyChain)
+      : (configuredChain?.displayName ?? formatChainName(legacyChain)),
+    url: chainUrl || legacyUrl || (useFallback ? fallbackUrl : '')
   }
 }
 

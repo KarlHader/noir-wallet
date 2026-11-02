@@ -262,7 +262,7 @@ function parseEvmChainId(value: unknown): {
   })
 }
 
-function parseCustomEvmNetwork(value: unknown): CustomEvmNetwork {
+export function parseCustomEvmNetwork(value: unknown): CustomEvmNetwork {
   if (!isRecord(value)) throw new Error('Invalid custom EVM network')
   assertKeys(
     value,

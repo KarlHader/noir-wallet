@@ -18,12 +18,11 @@ import {
   type ChainEndpointSettings,
   type CustomChainRpcEndpoint
 } from '@/core/chains/chain-endpoint-settings'
+import { getZcashChainId } from '@/core/chains/registry'
 import { useSettingsStore } from '@/store/settings-store'
 import { toast } from '@/store/toast-store'
-import { ChainIcon } from '../../components/common/ChainIcon'
 import { EndpointOption } from '../../components/common/EndpointOption'
 import { EndpointLatencyBadge as PingBadge } from '../../components/common/EndpointStatus'
-import { PageHeader } from '../../components/common/PageHeader'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import {
@@ -143,8 +142,9 @@ function CustomRpcSection({
   )
 }
 
-export function RpcEndpoint() {
+export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
   const persistedSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const isLoaded = useSettingsStore(state => state.isLoaded)
   const setSettings = useSettingsStore(state => state.setChainEndpointSettings)
   const rpcEndpointPreferences = useSettingsStore(state => state.rpcEndpointPreferences)
   const loadSettings = useSettingsStore(state => state.loadSettings)
@@ -169,6 +169,7 @@ export function RpcEndpoint() {
   const [openingChainId, setOpeningChainId] = useState<string | null>(null)
   const [registryVersion, setRegistryVersion] = useState(0)
   const settingsOperation = useRef(0)
+  const isZcash = chainId === getZcashChainId(DEFAULT_NETWORK)
 
   useEffect(() => {
     loadSettings().catch(() => {})
@@ -200,6 +201,18 @@ export function RpcEndpoint() {
     []
   )
 
+  useEffect(() => {
+    settingsOperation.current += 1
+    setCurrentSettings(null)
+    setEditing(null)
+    setEditingRegistryChain(null)
+    setDeleteTarget(null)
+    setOpeningChainId(null)
+    setApplyingKey(null)
+    setSaving(false)
+    setPings({})
+  }, [chainId])
+
   const editingRegistryGroup = useMemo(
     () => displayedRpcEndpointGroups.find(group => group.chain === editingRegistryChain) ?? null,
     [displayedRpcEndpointGroups, editingRegistryChain]
@@ -211,11 +224,21 @@ export function RpcEndpoint() {
     [displayedRpcEndpointGroups]
   )
   const zcashCustom = findChainEndpointOverride(settings, zcashOption.chainId)?.rpc
+  const option = isZcash ? zcashOption : options.find(item => item.chainId === chainId)
+  const selectedRpc =
+    option && !(isZcash && isFixedTestnetEndpoint)
+      ? findChainEndpointOverride(settings, option.chainId)?.rpc
+      : undefined
+  const selectedAutoEndpoint = option && getRpcAutoFirstEndpoint(option)
   const editingRpc = editing ? findChainEndpointOverride(settings, editing.chainId)?.rpc : undefined
   const editingAutoEndpoint = editing ? getRpcAutoFirstEndpoint(editing) : null
   const zcashAutoEndpoint =
     editingRegistryGroup?.options.find(option => option.id === rpcEndpointPreferences.zcash) ??
     editingRegistryGroup?.options[0]
+  const zcashGroup = displayedRpcEndpointGroups.find(group => group.chain === 'zcash')
+  const zcashSelectedEndpoint =
+    zcashGroup?.options.find(endpoint => endpoint.id === rpcEndpointPreferences.zcash) ??
+    zcashGroup?.options[0]
 
   useEffect(() => {
     const targets = buildRpcProbeTargets({
@@ -242,44 +265,50 @@ export function RpcEndpoint() {
 
   const handleZcashSelect = async (chain: RpcEndpointChain, option: RpcEndpointOption) => {
     if (isFixedTestnetEndpoint || applyingKey || saving) return
-    settingsOperation.current += 1
+    const operation = ++settingsOperation.current
     const key = pingKey(chain, option.id)
     setApplyingKey(key)
     try {
       const saved = await chainEndpointSettingsClient.apply(
-        buildRpcSelectionSettings(settings, zcashOption, option.url)
+        buildRpcSelectionSettings(settings, zcashOption, option.url),
+        settings
       )
+      if (operation !== settingsOperation.current) return
       setCurrentSettings(saved)
       setSettings(saved)
       toast.success('RPC Saved', `${option.label} is now selected`)
     } catch (error) {
+      if (operation !== settingsOperation.current) return
       toast.error(
         'RPC Validation Failed',
         error instanceof Error ? error.message : 'RPC unavailable'
       )
     } finally {
-      setApplyingKey(null)
+      if (operation === settingsOperation.current) setApplyingKey(null)
     }
   }
 
   const selectZcashAuto = async () => {
     if (isFixedTestnetEndpoint || applyingKey || saving) return
-    settingsOperation.current += 1
+    const operation = ++settingsOperation.current
     setApplyingKey('zcash:auto')
     try {
       const saved = await chainEndpointSettingsClient.apply(
-        buildRpcSelectionSettings(settings, zcashOption)
+        buildRpcSelectionSettings(settings, zcashOption),
+        settings
       )
+      if (operation !== settingsOperation.current) return
       setCurrentSettings(saved)
       setSettings(saved)
       toast.success('Auto RPC Enabled')
     } catch (error) {
+      if (operation !== settingsOperation.current) return
       toast.error(
         'RPC Update Failed',
         error instanceof Error ? error.message : 'Could not enable Auto'
       )
     } finally {
-      setApplyingKey(null)
+      if (operation === settingsOperation.current) setApplyingKey(null)
     }
   }
 
@@ -307,7 +336,7 @@ export function RpcEndpoint() {
   }
 
   const openRegistryEditor = (chain: RpcEndpointChain) =>
-    openWithCurrentSettings(chain, () => setEditingRegistryChain(chain))
+    openWithCurrentSettings(chainId, () => setEditingRegistryChain(chain))
 
   const openChainEditor = (option: RpcChainOption) =>
     openWithCurrentSettings(option.chainId, current => {
@@ -324,24 +353,29 @@ export function RpcEndpoint() {
     setEditing(option)
   }
 
-  const saveSettings = async (next: ChainEndpointSettings): Promise<boolean> => {
+  const saveSettings = async (
+    next: ChainEndpointSettings,
+    expectedSettings: ChainEndpointSettings
+  ): Promise<boolean> => {
     if (saving) return false
-    settingsOperation.current += 1
+    const operation = ++settingsOperation.current
     setOpeningChainId(null)
     setSaving(true)
     try {
-      const saved = await chainEndpointSettingsClient.apply(next)
+      const saved = await chainEndpointSettingsClient.apply(next, expectedSettings)
+      if (operation !== settingsOperation.current) return false
       setCurrentSettings(saved)
       setSettings(saved)
       return true
     } catch (error) {
+      if (operation !== settingsOperation.current) return false
       toast.error(
         'RPC Validation Failed',
         error instanceof Error ? error.message : 'The endpoint could not be verified.'
       )
       return false
     } finally {
-      setSaving(false)
+      if (operation === settingsOperation.current) setSaving(false)
     }
   }
 
@@ -349,7 +383,7 @@ export function RpcEndpoint() {
     if (!editing || saving) return
     try {
       const next = buildRpcSelectionSettings(settings, editing, customUrl, customName, adding)
-      if (!(await saveSettings(next))) return
+      if (!(await saveSettings(next, settings))) return
       toast.success(
         customUrl === undefined ? 'Auto RPC Enabled' : 'RPC Saved',
         customUrl === undefined
@@ -368,7 +402,7 @@ export function RpcEndpoint() {
   const remove = async () => {
     if (!deleteTarget || saving) return
     const next = withoutSavedChainRpcEndpoint(settings, deleteTarget.chainId, deleteTarget.rpc.url)
-    if (await saveSettings(next)) {
+    if (await saveSettings(next, settings)) {
       toast.success('Custom RPC Removed')
       setDeleteTarget(null)
     }
@@ -377,88 +411,47 @@ export function RpcEndpoint() {
   const selectZcashCustom = async (rpc: CustomChainRpcEndpoint) => {
     if (saving || applyingKey) return
     if (
-      await saveSettings(buildRpcSelectionSettings(settings, zcashOption, rpc.url, rpc.label, true))
+      await saveSettings(
+        buildRpcSelectionSettings(settings, zcashOption, rpc.url, rpc.label, true),
+        settings
+      )
     ) {
       toast.success('RPC Saved', `${rpc.label} is now in use`)
     }
   }
 
   return (
-    <div className="page-container">
-      <PageHeader title="RPC Endpoints" showBack />
-      <div className="page-content space-y-3 pb-5">
-        {displayedRpcEndpointGroups.map(group => {
-          const selected =
-            group.options.find(option => rpcEndpointPreferences[group.chain] === option.id) ??
-            group.options[0]
-          return (
-            <button
-              key={group.chain}
-              type="button"
-              aria-label={`Configure ${group.label} RPC`}
-              disabled={openingChainId !== null}
-              onClick={() => void openRegistryEditor(group.chain)}
-              className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 text-left transition-colors hover:border-primary/30"
-            >
-              <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white">
-                <ChainIcon
-                  chain={group.iconChain}
-                  className="size-8 rounded-full"
-                  showTooltip={false}
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{group.label}</span>
-                <p className="truncate text-xs text-muted">
-                  {(zcashCustom?.url ?? selected?.url)?.replace(/^https?:\/\//, '') ??
-                    'No endpoint available'}
-                </p>
-              </div>
-              <Icon icon="lucide:chevron-right" className="size-4 shrink-0 text-muted" />
-            </button>
-          )
-        })}
-
-        {options.length > 0 && (
-          <section className="space-y-3">
-            {options.map(option => {
-              const custom = findChainEndpointOverride(settings, option.chainId)?.rpc
-              return (
-                <button
-                  key={option.chainId}
-                  type="button"
-                  aria-label={`Configure ${option.label} RPC`}
-                  disabled={openingChainId !== null}
-                  onClick={() => void openChainEditor(option)}
-                  className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 text-left transition-colors hover:border-primary/30"
-                >
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white">
-                    <ChainIcon
-                      chain={option.iconChain}
-                      className="size-8 rounded-full"
-                      showTooltip={false}
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{option.label}</span>
-                      {custom && (
-                        <span className="max-w-24 truncate rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                          {custom.label}
-                        </span>
-                      )}
-                    </div>
-                    <p className="truncate text-xs text-muted">
-                      {(custom?.url ?? option.defaultUrl).replace(/^https?:\/\//, '')}
-                    </p>
-                  </div>
-                  <Icon icon="lucide:chevron-right" className="size-4 shrink-0 text-muted" />
-                </button>
-              )
-            })}
-          </section>
-        )}
-      </div>
+    <>
+      {option && (
+        <button
+          type="button"
+          aria-label="RPC Endpoint"
+          disabled={!isLoaded || openingChainId !== null || saving || applyingKey !== null}
+          onClick={() => void (isZcash ? openRegistryEditor('zcash') : openChainEditor(option))}
+          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-3 text-left transition-colors hover:border-primary/30 disabled:opacity-50"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">RPC Endpoint</span>
+            <span className="block truncate text-xs text-muted">
+              {!isLoaded
+                ? 'Loading...'
+                : (selectedRpc?.label ??
+                  (isZcash
+                    ? isFixedTestnetEndpoint
+                      ? (zcashSelectedEndpoint?.label ?? 'Default')
+                      : 'Auto'
+                    : `Auto · ${selectedAutoEndpoint?.label ?? 'Default'}`))}
+              {isLoaded &&
+                ` · ${(
+                  selectedRpc?.url ??
+                  (isZcash ? zcashSelectedEndpoint?.url : selectedAutoEndpoint?.url) ??
+                  option.defaultUrl
+                ).replace(/^https?:\/\//, '')}`}
+            </span>
+          </span>
+          <Icon icon="lucide:chevron-right" className="size-4 shrink-0 text-muted" />
+        </button>
+      )}
 
       <Dialog
         open={editingRegistryGroup !== null}
@@ -470,10 +463,13 @@ export function RpcEndpoint() {
           }
         }}
       >
-        <DialogContent position="bottom" className="max-h-[88vh] overflow-y-auto">
+        <DialogContent
+          position="bottom"
+          className="max-h-[88vh] overflow-y-auto"
+          aria-describedby={undefined}
+        >
           <DialogHeader>
             <DialogTitle>{editingRegistryGroup?.label} RPC</DialogTitle>
-            <DialogDescription>Auto switches between available RPC endpoints.</DialogDescription>
           </DialogHeader>
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
             {!isFixedTestnetEndpoint && (
@@ -548,26 +544,23 @@ export function RpcEndpoint() {
               )
             })}
           </div>
-          <CustomRpcSection
-            endpoints={getSavedRpcEndpoints(settings, zcashOption)}
-            selectedUrl={zcashCustom?.url}
-            option={zcashOption}
-            pings={pings}
-            disabled={saving || applyingKey !== null}
-            onAdd={() => {
-              setEditingRegistryChain(null)
-              openEditor(zcashOption, true)
-            }}
-            onSelect={rpc => void selectZcashCustom(rpc)}
-            onRemove={rpc => {
-              setEditingRegistryChain(null)
-              setDeleteTarget({ chainId: zcashOption.chainId, rpc })
-            }}
-          />
-          {isFixedTestnetEndpoint && (
-            <p className="text-xs leading-5 text-muted">
-              Testnet uses a fixed Zcash endpoint to keep network data isolated from Mainnet.
-            </p>
+          {!isFixedTestnetEndpoint && (
+            <CustomRpcSection
+              endpoints={getSavedRpcEndpoints(settings, zcashOption)}
+              selectedUrl={zcashCustom?.url}
+              option={zcashOption}
+              pings={pings}
+              disabled={saving || applyingKey !== null}
+              onAdd={() => {
+                setEditingRegistryChain(null)
+                openEditor(zcashOption, true)
+              }}
+              onSelect={rpc => void selectZcashCustom(rpc)}
+              onRemove={rpc => {
+                setEditingRegistryChain(null)
+                setDeleteTarget({ chainId: zcashOption.chainId, rpc })
+              }}
+            />
           )}
         </DialogContent>
       </Dialog>
@@ -720,6 +713,6 @@ export function RpcEndpoint() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

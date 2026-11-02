@@ -3,6 +3,7 @@ import { Button } from '../ui/button'
 import { PageHeader } from '../common/PageHeader'
 import { ListSkeleton } from '../ui/skeleton'
 import { useBetaInviteBinding } from '../../hooks/useBetaInviteBinding'
+import { InlineError } from '../common/InlineError'
 
 export function BetaInviteBindingView({
   error,
@@ -27,12 +28,7 @@ export function BetaInviteBindingView({
         )}
         {error && (
           <div className="space-y-3">
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-            <Button onClick={onRetry} isLoading={busy} className="h-[45px] w-full">
-              Retry
-            </Button>
+            <InlineError message={error} onRetry={onRetry} retrying={busy} />
             <button
               type="button"
               onClick={onChangeCode}
@@ -75,19 +71,18 @@ export function BetaInviteHardwareDoneButton() {
 
   return (
     <div className="w-full">
-      {error && (
-        <p role="alert" className="mb-3 text-sm text-danger">
-          {error}
-        </p>
+      {error ? (
+        <InlineError className="mb-3" message={error} onRetry={done} retrying={busy} />
+      ) : (
+        <Button
+          className="h-[45px] w-full"
+          isLoading={busy}
+          disabled={status.required && status.state.phase !== 'activated' && !error}
+          onClick={done}
+        >
+          {busy ? 'Activating...' : 'Done'}
+        </Button>
       )}
-      <Button
-        className="h-[45px] w-full"
-        isLoading={busy}
-        disabled={status.required && status.state.phase !== 'activated' && !error}
-        onClick={done}
-      >
-        {busy ? 'Activating...' : error ? 'Retry' : 'Done'}
-      </Button>
       {error && (
         <Button className="mt-2 h-10 w-full" variant="ghost" onClick={changeCode} disabled={busy}>
           Use another code

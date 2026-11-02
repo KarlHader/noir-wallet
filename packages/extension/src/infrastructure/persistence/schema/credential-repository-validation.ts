@@ -206,7 +206,7 @@ function assertOperationTransitions(
     operation === 'change-password'
       ? new Set(['replace'])
       : operation === 'remove'
-        ? new Set(['retire'])
+        ? new Set(['retire', 'replace'])
         : operation === 'migrate'
           ? new Set(['provision', 'replace'])
           : new Set(['provision'])

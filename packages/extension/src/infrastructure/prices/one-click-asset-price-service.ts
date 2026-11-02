@@ -184,7 +184,7 @@ export class OneClickAssetPriceService {
     Pick<OneClickAssetPriceServiceOptions, 'fetch' | 'now' | 'timeoutMs' | 'maximumResponseBytes'>
   > &
     Pick<OneClickAssetPriceServiceOptions, 'mappings' | 'cache'>
-  private readonly refreshGate = new DedupPromise<AssetPriceReadModel>()
+  private readonly refreshGates = new Map<string, DedupPromise<AssetPriceReadModel>>()
 
   constructor(options: OneClickAssetPriceServiceOptions) {
     if (
@@ -260,8 +260,14 @@ export class OneClickAssetPriceService {
     }
   }
 
-  refresh(): Promise<AssetPriceReadModel> {
-    return this.refreshGate.run(() => this.refreshOnce())
+  refresh(assetId?: string): Promise<AssetPriceReadModel> {
+    const key = assetId ?? '*'
+    let gate = this.refreshGates.get(key)
+    if (!gate) {
+      gate = new DedupPromise<AssetPriceReadModel>()
+      this.refreshGates.set(key, gate)
+    }
+    return gate.run(() => this.refreshOnce(assetId))
   }
 
   private readNow(): number {
@@ -270,8 +276,12 @@ export class OneClickAssetPriceService {
     return now
   }
 
-  private async refreshOnce(): Promise<AssetPriceReadModel> {
+  private async refreshOnce(assetId?: string): Promise<AssetPriceReadModel> {
     const now = this.readNow()
+    const mappings = assetId
+      ? this.options.mappings.filter(mapping => mapping.assetId === assetId)
+      : this.options.mappings
+    if (mappings.length === 0) return this.readCached()
     let cached: AssetPriceCacheSnapshot | null = null
     try {
       cached = parseCacheSnapshot(await this.options.cache.get())
@@ -281,7 +291,8 @@ export class OneClickAssetPriceService {
     if (
       cached &&
       now - cached.fetchedAt >= 0 &&
-      now - cached.fetchedAt < NETWORK_REFRESH_INTERVAL_MS
+      now - cached.fetchedAt < NETWORK_REFRESH_INTERVAL_MS &&
+      (!assetId || cached.quotes.some(quote => quote.assetId === assetId))
     ) {
       return materialize(cached, this.options.mappings, now)
     }
@@ -305,7 +316,7 @@ export class OneClickAssetPriceService {
       }
       const wanted = new Map<string, (typeof this.options.mappings)[number][]>()
       const wantedContracts = new Map<string, (typeof this.options.mappings)[number][]>()
-      for (const mapping of this.options.mappings) {
+      for (const mapping of mappings) {
         if ('sourceAssetId' in mapping) {
           const mappings = wanted.get(mapping.sourceAssetId) ?? []
           mappings.push(mapping)
@@ -369,8 +380,11 @@ export class OneClickAssetPriceService {
       }
       const snapshot = Object.freeze({
         version: PRICE_CACHE_VERSION,
-        fetchedAt: now,
-        quotes: Object.freeze([...resolved.values()])
+        fetchedAt: assetId ? (cached?.fetchedAt ?? 0) : now,
+        quotes: Object.freeze([
+          ...(assetId ? (cached?.quotes.filter(quote => quote.assetId !== assetId) ?? []) : []),
+          ...resolved.values()
+        ])
       })
       await this.options.cache.put(snapshot)
       return materialize(snapshot, this.options.mappings, now)

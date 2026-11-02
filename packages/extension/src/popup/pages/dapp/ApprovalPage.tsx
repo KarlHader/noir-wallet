@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/button'
@@ -7,7 +8,7 @@ import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { Icon } from '@iconify/react'
 import { AddressTypeLabel } from '@/popup/components/account/AddressType'
-import { formatAccountName, getAccountDisplayName } from '@/lib/format'
+import { formatAccountName, getAccountDisplayName, formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { StandardTransactionResult } from '../../components/transaction/StandardTransactionResult'
 import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
@@ -15,16 +16,17 @@ import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useSettingsStore } from '@/store/settings-store'
 import { deriveFeeByTier, marginalFeeForTier } from '@/core/zcash/fee-policy'
 import type { AddressType } from '@/types/wallet'
-import { formatSortAddress } from '@/lib/format'
+
 import { cn } from '@/lib/utils'
 import { classifyError, getResponseErrorMessage } from '@/lib/errors'
-import Big from 'big.js'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import {
   hasEnoughTransparentBalanceToShield,
   MIN_SHIELDING_BALANCE_MESSAGE
 } from '@/core/zcash/shielding'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { ApprovalWindowLayout } from '@/popup/components/dapp/ApprovalWindowLayout'
+import { EvmAddNetworkDetails } from '@/popup/components/dapp/EvmAddNetworkDetails'
 import {
   ApprovalDetailCard,
   DAppConnectionHeader,
@@ -33,20 +35,24 @@ import {
 } from '@/popup/components/dapp/ApprovalRequestPresentation'
 import { SigningSummaryReview } from '@/popup/components/signing/SigningSummaryReview'
 import { Skeleton } from '@/popup/components/ui/skeleton'
-import { parsePendingApprovalResponse } from '@/popup/services/dapp-approval-request'
+import {
+  canRetryPendingApprovalLoad,
+  parsePendingApprovalResponse
+} from '@/popup/services/dapp-approval-request'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
-import { buildPrivateGasFundingPath } from '@/popup/pages/transactions/evm-send-validation'
+import { EvmGasFundingApproval } from '@/popup/components/dapp/EvmGasFundingApproval'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
 import { parseNetworkFeeTier, type NetworkFeeTier } from '@/core/transactions/domain'
 import { parseEvmFeeSelection, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { NETWORKS } from '@/config/networks'
+import { getBundledEvmAssetDefinitions } from '@/core/chains/registry/product-chain-definitions'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { useNavigate } from '@/popup/provider/Router'
-import { calculateSuggestedPrivateGasFundingRaw } from '@/core/transactions/private-funding'
 import {
   formatDAppHost,
   parseBitcoinSigningSummary,
+  parseEvmAddNetworkApproval,
   parseEvmMessageSummary,
   parseEvmPrivateTransferApproval,
   parseEvmTransactionSummary,
@@ -147,7 +153,11 @@ export function ApprovalPage() {
     accountId: string
   } | null>(null)
   const currentWalletId = approvalBinding?.walletId ?? activeWalletId
-  const { activeAccount: storageV2Account } = useActiveAccountNetworks()
+  const {
+    activeAccount: storageV2Account,
+    loading: accountNetworksLoading,
+    refresh: refreshAccountNetworks
+  } = useActiveAccountNetworks()
   const currentAccount = approvalBinding
     ? getAccount(approvalBinding.walletId, approvalBinding.accountId)
     : getCurrentAccount()
@@ -170,6 +180,8 @@ export function ApprovalPage() {
   const [action, setAction] = useState('unknown')
   const [data, setData] = useState<any>({})
   const [error, setError] = useState(requestId ? '' : 'Invalid request')
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [canRetryLoad, setCanRetryLoad] = useState(false)
   const [requestLoaded, setRequestLoaded] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [showResult, setShowResult] = useState(false)
@@ -200,6 +212,8 @@ export function ApprovalPage() {
   const isShield = action === 'shieldFunds'
   const isEvmConnect = action === 'evmConnect'
   const isEvmNetwork = action === 'evmNetwork'
+  const evmAddNetwork =
+    isEvmNetwork && data.action === 'add' ? parseEvmAddNetworkApproval(data) : null
   const isEvmTransaction = action === 'evmTransaction'
   const isEvmPrivateTransfer = action === 'evmPrivateTransfer'
   const isEvmGasFunding = action === 'evmGasFunding'
@@ -336,18 +350,21 @@ export function ApprovalPage() {
     fetchedRequestId.current = requestId
     setRequestLoaded(false)
     setError('')
+    setCanRetryLoad(false)
     let cancelled = false
 
     chrome.runtime.sendMessage({ type: 'GET_PENDING_REQUEST', requestId }, (response: unknown) => {
       if (cancelled) return
       const runtimeError = chrome.runtime.lastError
       if (runtimeError) {
+        setCanRetryLoad(true)
         setError('Unable to load this approval request.')
         return
       }
 
       const parsed = parsePendingApprovalResponse(response, requestId)
       if (parsed.status === 'error') {
+        setCanRetryLoad(canRetryPendingApprovalLoad(parsed.error))
         setError(parsed.error)
         return
       }
@@ -397,7 +414,7 @@ export function ApprovalPage() {
       cancelled = true
       if (fetchedRequestId.current === requestId) fetchedRequestId.current = null
     }
-  }, [requestId])
+  }, [requestId, loadAttempt])
 
   useEffect(() => {
     if ((!isSend && !isShield) || walletReady || approvalBinding) return
@@ -435,6 +452,7 @@ export function ApprovalPage() {
   }
 
   const handleDecision = async (approved: boolean) => {
+    setCanRetryLoad(false)
     if (approved && !requestLoaded) return
 
     if (!approved) {
@@ -536,13 +554,18 @@ export function ApprovalPage() {
     return (
       <div className="page-container h-full flex flex-col">
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-center space-y-4">
+          <div className="w-full px-5 text-center space-y-4">
             <Icon icon="lucide:alert-circle" className="w-16 h-16 text-destructive mx-auto" />
             <h2 className="text-xl font-semibold">Request Error</h2>
-            <p className="text-sm text-muted-foreground">{error}</p>
-            <Button onClick={() => window.close()} variant="outline">
-              Close
-            </Button>
+            <InlineError
+              message={error}
+              onRetry={canRetryLoad ? () => setLoadAttempt(value => value + 1) : undefined}
+            />
+            <div className="flex justify-center gap-3">
+              <Button onClick={() => window.close()} variant="outline">
+                Close
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -612,139 +635,21 @@ export function ApprovalPage() {
   }
 
   if (isEvmGasFunding) {
-    const chainId = Number(data.chainId)
-    const symbol = typeof data.nativeCurrency?.symbol === 'string' ? data.nativeCurrency.symbol : ''
-    const decimals = Number(data.nativeCurrency?.decimals)
-    const slip44Reference =
-      typeof data.nativeCurrency?.slip44Reference === 'string'
-        ? data.nativeCurrency.slip44Reference
-        : ''
-    const shortfallRaw = typeof data.shortfallRaw === 'string' ? data.shortfallRaw : ''
-    const requiredRaw =
-      typeof data.requiredNativeBalanceRaw === 'string' ? data.requiredNativeBalanceRaw : ''
-    const availableRaw =
-      typeof data.availableNativeBalanceRaw === 'string' ? data.availableNativeBalanceRaw : ''
-    const maximumGasCostRaw =
-      typeof data.maximumGasCostRaw === 'string' ? data.maximumGasCostRaw : ''
-    const privateAddress = typeof data.privateAddress === 'string' ? data.privateAddress : ''
-    const valid =
-      Number.isSafeInteger(chainId) &&
-      chainId > 0 &&
-      symbol.length > 0 &&
-      /^[0-9]+$/.test(slip44Reference) &&
-      Number.isSafeInteger(decimals) &&
-      decimals >= 0 &&
-      decimals <= 255 &&
-      /^\d+$/.test(shortfallRaw) &&
-      BigInt(shortfallRaw) > 0n &&
-      /^\d+$/.test(requiredRaw) &&
-      /^\d+$/.test(availableRaw) &&
-      /^\d+$/.test(maximumGasCostRaw) &&
-      /^0x[0-9a-fA-F]{40}$/.test(privateAddress)
-    const formatGas = (raw: string) => new Big(raw).div(new Big(10).pow(decimals)).toFixed()
-    const suggestedOutputRaw = valid
-      ? calculateSuggestedPrivateGasFundingRaw(shortfallRaw, maximumGasCostRaw)
-      : null
-
     return (
-      <ApprovalWindowLayout
-        footer={
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => void handleDecision(false)}
-              disabled={isLoading}
-              size="lg"
-            >
-              Reject
-            </Button>
-            <Button
-              className="flex-1 bg-primary hover:bg-primary/90"
-              onClick={() => {
-                if (!requestId || !valid || !suggestedOutputRaw) return
-                if (fundingComplete) {
-                  void handleDecision(true)
-                  return
-                }
-                navigate(
-                  buildPrivateGasFundingPath({
-                    chainId: `eip155:${chainId}`,
-                    nativeAssetId: `eip155:${chainId}/slip44:${slip44Reference}`,
-                    requestId,
-                    minimumOutputRaw: shortfallRaw,
-                    suggestedOutputRaw
-                  })
-                )
-              }}
-              disabled={!valid || !suggestedOutputRaw || isLoading}
-              size="lg"
-            >
-              {fundingComplete ? 'Continue' : 'Fund gas'}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-5">
-          <DAppRequestHeader
-            domain={dappDomain}
-            pageUrl={dappPageUrl}
-            action={fundingComplete ? 'Confidential Gas added' : 'Fund Confidential Gas'}
-          />
-          {valid ? (
-            <section className="overflow-hidden rounded-2xl border border-border bg-card/35">
-              <div className="flex items-center gap-3 border-b border-border px-4 py-3.5">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Icon icon="solar:incognito-outline" width={20} height={20} />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Confidential account</p>
-                  <p className="truncate font-mono text-xs text-muted" title={privateAddress}>
-                    {formatSortAddress(privateAddress)}
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-3 px-4 py-3.5 text-sm">
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Current Gas</span>
-                  <span className="font-mono">
-                    <AmountDisplay value={formatGas(availableRaw)} symbol={symbol} />
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Maximum Gas</span>
-                  <span className="font-mono">
-                    <AmountDisplay
-                      value={formatGas(maximumGasCostRaw)}
-                      symbol={symbol}
-                      profile="fee"
-                    />
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3 font-medium">
-                  <span>Minimum</span>
-                  <span className="font-mono text-primary">
-                    <AmountDisplay value={formatGas(shortfallRaw)} symbol={symbol} />
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3 font-medium">
-                  <span>Suggested</span>
-                  <span className="font-mono text-primary">
-                    <AmountDisplay
-                      value={suggestedOutputRaw ? formatGas(suggestedOutputRaw) : null}
-                      symbol={symbol}
-                    />
-                  </span>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <div className="rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
-              Gas funding details are unavailable. Reject this request and try again.
-            </div>
-          )}
-        </div>
-      </ApprovalWindowLayout>
+      <EvmGasFundingApproval
+        data={data}
+        requestId={requestId}
+        walletId={storageV2Account?.walletId ?? currentWalletId}
+        accountId={storageV2Account?.accountId ?? currentAccount?.id ?? null}
+        accountLoading={accountNetworksLoading}
+        onRefreshAccount={() => void refreshAccountNetworks()}
+        domain={dappDomain}
+        pageUrl={dappPageUrl}
+        fundingComplete={fundingComplete}
+        isLoading={isLoading}
+        onDecision={approved => void handleDecision(approved)}
+        onFund={navigate}
+      />
     )
   }
 
@@ -1064,6 +969,9 @@ export function ApprovalPage() {
       }
 
       case 'evmNetwork':
+        if (data.action === 'add' && evmAddNetwork === null) {
+          return renderInvalidSigningRequest('The network details are invalid.', false)
+        }
         return (
           <div className="space-y-5">
             <DAppRequestHeader
@@ -1071,36 +979,14 @@ export function ApprovalPage() {
               pageUrl={dappPageUrl}
               action={data.action === 'add' ? 'Add network' : 'Switch network'}
             />
-            <DAppNetworkCard
-              chain={typeof data.iconChain === 'string' ? data.iconChain : 'evm'}
-              network={data.chainName}
-              chainId={data.chainId}
-            />
-            {data.action === 'switch' && (
-              <p className="px-1 text-sm leading-5 text-muted">
-                If this site is connected, it will use its approved accounts on this network.
-              </p>
-            )}
-            {data.rpcUrl && (
-              <details className="group">
-                <summary className="flex cursor-pointer list-none items-center gap-1 px-1 text-sm text-muted transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-                  <Icon
-                    icon="lucide:chevron-right"
-                    className="size-4 transition-transform group-open:rotate-90"
-                  />
-                  Advanced
-                </summary>
-                <ApprovalDetailCard title="RPC endpoint" className="mt-2">
-                  <p className="break-all font-mono text-xs leading-5 text-foreground/90">
-                    {data.rpcUrl}
-                  </p>
-                </ApprovalDetailCard>
-              </details>
-            )}
-            {data.action === 'add' && data.rpcUrl && (
-              <WarningBox>
-                The selected RPC can observe your IP address, wallet address, and request timing.
-              </WarningBox>
+            {evmAddNetwork ? (
+              <EvmAddNetworkDetails network={evmAddNetwork} />
+            ) : (
+              <DAppNetworkCard
+                chain={typeof data.iconChain === 'string' ? data.iconChain : 'custom-evm'}
+                network={data.chainName}
+                chainId={data.chainId}
+              />
             )}
           </div>
         )
@@ -1457,14 +1343,18 @@ export function ApprovalPage() {
   }
 
   if (isEvmTransaction && evmTransactionSummary) {
-    const nativeDecimals = Number.isSafeInteger(data.nativeCurrency?.decimals)
-      ? data.nativeCurrency.decimals
-      : 18
+    const nativeDecimals =
+      Number.isSafeInteger(data.nativeCurrency?.decimals) &&
+      data.nativeCurrency.decimals >= 0 &&
+      data.nativeCurrency.decimals <= 255
+        ? data.nativeCurrency.decimals
+        : 18
     const nativeSymbol =
       typeof data.nativeCurrency?.symbol === 'string' ? data.nativeCurrency.symbol : 'Native'
-    const feeAmount = new Big(evmTransactionSummary.fields.maximumFeeWei)
-      .div(new Big(10).pow(nativeDecimals))
-      .toFixed()
+    const feeAmount = formatBaseUnitDecimalAmount(
+      evmTransactionSummary.fields.maximumFeeWei,
+      nativeDecimals
+    )
     return (
       <SigningSummaryReview
         summary={evmTransactionSummary}
@@ -1478,7 +1368,19 @@ export function ApprovalPage() {
         isSubmitting={isLoading}
         evmPresentation={{
           nativeCurrency: { symbol: nativeSymbol, decimals: nativeDecimals },
-          directContract: data.privacyRoute === 'direct-contract'
+          directContract: data.privacyRoute === 'direct-contract',
+          tokenMetadata: getBundledEvmAssetDefinitions(currentNetwork)
+            .filter(
+              asset =>
+                asset.chainId === evmTransactionSummary.chainId &&
+                asset.namespace === 'erc20' &&
+                asset.verification === 'trusted'
+            )
+            .map(asset => ({
+              contractAddress: asset.reference,
+              symbol: asset.metadata.symbol,
+              decimals: asset.metadata.decimals
+            }))
         }}
         feeControl={
           data.feeEditingAvailable ? (
@@ -1503,9 +1405,7 @@ export function ApprovalPage() {
   if (isEvmPrivateTransfer) {
     const valid = evmPrivateTransfer !== null && evmPrivateTransfer.expiresAt > Date.now()
     const formatAsset = (raw: string) =>
-      evmPrivateTransfer
-        ? new Big(raw).div(new Big(10).pow(evmPrivateTransfer.asset.decimals)).toFixed()
-        : '—'
+      evmPrivateTransfer ? formatBaseUnitDecimalAmount(raw, evmPrivateTransfer.asset.decimals) : '—'
     return (
       <ApprovalWindowLayout
         footer={
@@ -1615,7 +1515,7 @@ export function ApprovalPage() {
             <NetworkFeeTierPicker
               chainFamily="bitcoin"
               tier={dappNetworkFeeTier}
-              amount={new Big(bitcoinSigningSummary.fields.feeSats).div(1e8).toFixed()}
+              amount={formatBaseUnitDecimalAmount(bitcoinSigningSummary.fields.feeSats, 8)}
               symbol="BTC"
               onTierChange={handleNetworkFeeTierChange}
               disabled={isLoading}
@@ -1672,6 +1572,7 @@ export function ApprovalPage() {
               isLoading ||
               !hasEnoughShieldingBalance ||
               (isEvmTransaction && evmTransactionSummary === null) ||
+              (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&

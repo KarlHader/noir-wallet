@@ -32,6 +32,10 @@ Noir Wallet can hold multiple wallets and accounts. A connected dApp may request
 
 Open the wallet selector and choose **Add Wallet**. Choose **Import Wallet** for a **Secret Recovery Phrase** or **Private Key**, **Create New Wallet** for a new recovery phrase, or **Connect Hardware Wallet** to select **Ledger** or **Keystone**. Selecting a hardware wallet opens its connection flow in a browser tab.
 
+Recovery-phrase wallets and hardware wallets each have their own group. Accounts imported from individual private keys appear together under **Imported Private Key** and have no **Add Account** action. Each imported account keeps its own credentials and removal action.
+
+Hover over a wallet or account name and select the edit icon to rename it in place. Use **Add Account** on a recovery-phrase wallet to derive another account.
+
 ## Synchronization
 
 Zcash wallet history is discovered by scanning the chain. After an import or a long period offline, balances and activity can take time to catch up.
@@ -41,9 +45,29 @@ Zcash wallet history is discovered by scanning the chain. After an import or a l
 - Keep the browser open if the wallet indicates that an initial scan is still running.
 - If sync pauses, check the connection. **Resync Zcash** is available under **Actions** in the current account's details and in its Zcash settings.
 
-## Block explorers
+## Networks
 
-Open **Settings > Preferred Explorer** to choose a block explorer for each enabled chain. Select a preset, or use **Custom Explorer > Add** to enter a name, HTTPS URL, and transaction path. Explorer choices are saved separately for Mainnet and Testnet. Selecting the chain's original preset restores its default explorer.
+Open **Settings > Networks** and select a network to configure its **RPC Endpoint** and **Block Explorer**. The list includes the chains available in the installed build. Opening a network's settings does not switch the network used by connected dApps.
+
+### Custom EVM networks
+
+Choose **Add Network** to enter the network name, decimal Chain ID, native currency, RPC URL, and optional block explorer. The wallet checks that the RPC reports the entered Chain ID before saving. Adding a network does not switch networks automatically; connected dApps can request a network switch for approval.
+
+For a listed network, visit [Chainlist](https://chainlist.org/), connect Noir Wallet, and use the network's add button. Review and confirm the network in the wallet. If its default RPC is unavailable, expand the network's RPC list and use an individual endpoint's add button. Custom network icons load from a remote catalog by chain ID; networks without an available icon use a generic network icon.
+
+Open a custom network, then use **Network options > Edit Network** to update its name and native currency or **Remove Network** to delete it. Their settings are saved separately for Mainnet and Testnet. Removing the active custom network restores the default EVM network and removes that chain's site permissions. Tokens saved for a removed network are hidden until the same Chain ID is added again. Pending transactions must be completed before their network can be removed.
+
+### RPC endpoints
+
+Open a network's **RPC Endpoint** to choose an available preset or manage custom endpoints. An active RPC override takes precedence over the default RPC in the network definition. Custom networks support the account's available EVM operations; adding a chain does not enable unsupported Swap, price, or remote history services.
+
+### Block explorers
+
+Open a network's **Block Explorer** to select a preset, or use **Custom Explorer > Add** to enter a name, HTTPS URL, and transaction path. Explorer choices are saved separately for Mainnet and Testnet. Selecting the chain's original preset restores its default explorer.
+
+## Default EVM wallet
+
+Open **Settings > Default EVM Wallet** to choose **Ask every time**, **Use Noir Wallet**, or **Use another wallet** when multiple EVM wallets are installed. **Ask every time** is the initial choice. Reload open websites after changing this preference. Choosing a default does not connect an account or grant a website permission to use it.
 
 ## Transaction broadcasting
 

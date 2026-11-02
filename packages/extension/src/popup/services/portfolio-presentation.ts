@@ -1,7 +1,8 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
-import type { AssetPriceReadModel } from '@/core/prices'
-import { findAssetPrice } from '@/core/prices'
+
+import { type AssetPriceReadModel, findAssetPrice } from '@/core/prices'
 import Big from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
 
@@ -291,9 +292,9 @@ export function calculatePortfolioAccountBalanceBreakdown(
   for (const entry of entries) {
     const { mainRaw, privateRaw } = entry.asset.balance
     if (mainRaw === undefined || privateRaw === undefined) return null
-    const divisor = new Big(10).pow(entry.asset.metadata.decimals)
-    main = main.plus(new Big(mainRaw).div(divisor))
-    privateBalance = privateBalance.plus(new Big(privateRaw).div(divisor))
+    const decimals = entry.asset.metadata.decimals
+    main = main.plus(formatBaseUnitDecimalAmount(mainRaw, decimals))
+    privateBalance = privateBalance.plus(formatBaseUnitDecimalAmount(privateRaw, decimals))
   }
   return Object.freeze({ main, privateBalance })
 }

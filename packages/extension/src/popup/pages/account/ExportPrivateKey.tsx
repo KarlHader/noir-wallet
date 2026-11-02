@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { getResponseErrorMessage } from '@/lib/errors'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { WarningBox } from '../../components/ui/WarningBox'
@@ -82,12 +83,18 @@ export function ExportPrivateKey() {
   const [format, setFormat] = useState<PrivateKeyExportFormat | null>(null)
   const [visible, setVisible] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [catalogLoadFailed, setCatalogLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { copyToClipboard, showToast } = useCopyToClipboard()
 
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
+    setCatalogLoadFailed(false)
+    setError(null)
+    setNetworks([])
     void accountNetworksClient
       .getCatalog()
       .then(catalog => {
@@ -104,10 +111,17 @@ export function ExportPrivateKey() {
               network.chain.family === 'near'
           ) ?? []
         setNetworks(supported)
-        setChainId(supported[0]?.chain.id ?? '')
+        setChainId(current =>
+          supported.some(network => network.chain.id === current)
+            ? current
+            : (supported[0]?.chain.id ?? '')
+        )
       })
       .catch(reason => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Account unavailable')
+        if (!cancelled) {
+          setCatalogLoadFailed(true)
+          setError(reason instanceof Error ? reason.message : 'Account unavailable')
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -115,7 +129,7 @@ export function ExportPrivateKey() {
     return () => {
       cancelled = true
     }
-  }, [accountId, walletId])
+  }, [accountId, walletId, loadAttempt])
 
   const networkGroups = useMemo(() => groupAccountNetworksForDisplay(networks), [networks])
   const selectedGroup = useMemo(
@@ -293,7 +307,14 @@ export function ExportPrivateKey() {
         {networks.length === 0 && !loading && !error && (
           <p className="text-sm text-muted">No exportable account is available.</p>
         )}
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {error && (
+          <InlineError
+            message={error}
+            onRetry={
+              catalogLoadFailed && !loading ? () => setLoadAttempt(value => value + 1) : undefined
+            }
+          />
+        )}
       </div>
       <div className="page-footer">
         <Button

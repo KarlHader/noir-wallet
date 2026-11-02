@@ -1,4 +1,4 @@
-import { Button } from '../ui/button'
+import { InlineError } from './InlineError'
 
 interface BlockingWalletFailureProps {
   title: string
@@ -36,7 +36,12 @@ export function BlockingWalletFailure({
           </svg>
         </div>
         <h1 className="mb-3 text-xl font-semibold text-foreground">{title}</h1>
-        <p className="max-w-[315px] text-sm leading-relaxed text-muted">{description}</p>
+        <InlineError
+          className="w-full max-w-sm text-left"
+          message={description}
+          onRetry={onRetry}
+          retrying={isRetrying}
+        />
         <div className="mt-6 flex w-full max-w-sm gap-3 rounded-2xl border border-border bg-card p-4 text-left">
           <svg
             aria-hidden="true"
@@ -55,12 +60,6 @@ export function BlockingWalletFailure({
           </svg>
           <p className="text-sm leading-relaxed text-muted">{assurance}</p>
         </div>
-      </div>
-
-      <div className="px-5 pb-5">
-        <Button onClick={onRetry} isLoading={isRetrying} className="h-[45px] w-full">
-          Retry
-        </Button>
       </div>
     </div>
   )

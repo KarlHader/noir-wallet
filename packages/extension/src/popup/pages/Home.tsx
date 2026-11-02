@@ -27,7 +27,11 @@ import { AddressTypeLabel } from '../components/account/AddressType'
 import { useShieldFunds } from '../hooks/useShieldFunds'
 import { useSpeedUp } from '../hooks/useSpeedUp'
 import { Tooltip } from '../components/ui/tooltip'
-import { useLendingStore } from '@/store/lending-store'
+import {
+  getLendingAccountScope,
+  useLendingStore,
+  type LendingAccountContext
+} from '@/store/lending-store'
 import { BalanceWithPending } from '../components/balance/BalanceWithPending'
 import { ExtensionUpdateBanner } from '../components/common/ExtensionUpdateBanner'
 import { LegacyPoolPrivacyNotice } from '../components/common/LegacyPoolPrivacyNotice'
@@ -36,6 +40,7 @@ import { hasLegacyOrchardBalance } from '@/lib/legacy-pool-privacy-notice'
 import { canShieldTransparentFunds } from '@/core/zcash/shielding'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { WalletActionButton } from '@/popup/components/common/WalletActionButton'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { MultichainPortfolioPanel } from '../components/portfolio/MultichainPortfolioPanel'
 import { formatDisplayAmount } from '../components/portfolio/portfolio-format'
 import { MultichainActivityPanel } from '../components/transaction/MultichainActivityPanel'
@@ -46,14 +51,19 @@ import {
   resolveBitcoinFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
-import { clearHomeTransactionFocus, resolveHomeDefaultTab } from '../services/home-navigation'
+import {
+  clearHomeTransactionFocus,
+  homeTabPath,
+  resolveHomeDefaultTab
+} from '../services/home-navigation'
 import { assetPriceClient } from '../services/asset-price-client'
 import { parseAssetId } from '@/core/chains/registry'
 import type { AssetPriceReadModel } from '@/core/prices'
-import type { PortfolioReadModel } from '@/core/portfolio'
 import { summarizePortfolioFiat } from '../components/portfolio/portfolio-prices'
 import { useActiveAccountNetworks } from '../hooks/useActiveAccountNetworks'
+import { useHomePortfolio } from '../hooks/useHomePortfolio'
 import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { hasAttestedCredentialSession } from '@/core/wallet/credential-session-client'
 import { ZcashSyncProgress } from '../components/common/ZcashSyncProgress'
 import { automaticRefreshSession } from '../services/automatic-refresh-session'
@@ -110,24 +120,23 @@ export function Home() {
   const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const assetPricesRef = useRef<AssetPriceReadModel | null>(null)
   const [assetPriceStatus, setAssetPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [multichainPortfolio, setMultichainPortfolio] = useState<PortfolioReadModel | null>(null)
-  const [portfolioLoadStatus, setPortfolioLoadStatus] = useState<'loading' | 'ready' | 'error'>(
-    'loading'
-  )
-  const [activeTab, setActiveTab] = useState<'assets' | 'lending' | 'activity'>(() =>
-    resolveHomeDefaultTab(location.search)
-  )
   const [focusTransactionId, setFocusTransactionId] = useState<string | null>(() =>
     new URLSearchParams(location.search).get('transactionId')
   )
   useEffect(() => {
+    const transactionId = new URLSearchParams(location.search).get('transactionId')
+    if (transactionId) setFocusTransactionId(transactionId)
     const cleanPath = clearHomeTransactionFocus(location.search)
     if (cleanPath !== null) navigate.replace(cleanPath)
   }, [location.search, navigate])
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const setBalancesHidden = useSettingsStore(state => state.setBalancesHidden)
-  const { activeAccount: storageV2Account, loading: accountNetworksLoading } =
-    useActiveAccountNetworks()
+  const {
+    activeAccount: storageV2Account,
+    loading: accountNetworksLoading,
+    error: accountNetworksError,
+    refresh: refreshAccountNetworks
+  } = useActiveAccountNetworks()
   const [addressMenuOpen, setAddressMenuOpen] = useState(false)
 
   const openLendingApp = () => {
@@ -145,6 +154,27 @@ export function Home() {
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const {
+    model: multichainPortfolio,
+    status: portfolioLoadStatus,
+    refresh: refreshPortfolio
+  } = useHomePortfolio(
+    multichainPortfolioEnabled ? effectiveWalletId : null,
+    multichainPortfolioEnabled ? effectiveAccountId : null
+  )
+  const openSend = () =>
+    navigate.navigate('/send', {
+      state: {
+        initialPortfolio: multichainPortfolio,
+        initialPrices: assetPrices,
+        walletId: effectiveWalletId,
+        accountId: effectiveAccountId,
+        network: currentNetwork,
+        endpointRuntimeKey: getChainEndpointRuntimeKey(
+          useSettingsStore.getState().chainEndpointSettings
+        )
+      }
+    })
   const dappExecutionSupport = useMemo(() => {
     if (!effectiveWalletId || !effectiveAccountId) {
       return Object.freeze({ connected: 0, privateCapable: 0, mainOnly: 0 })
@@ -184,7 +214,37 @@ export function Home() {
     storageV2Account?.networks.some(network =>
       ['zcash', 'evm', 'bitcoin'].includes(network.chain.family)
     ) ?? Boolean(currentAccount)
-  const supportsLending = !isHardwareWallet && supportsSwap
+  const supportsLending = currentNetwork === 'mainnet' && !isHardwareWallet && supportsSwap
+  const [activeTab, setActiveTab] = useState<'assets' | 'lending' | 'activity'>(() =>
+    resolveHomeDefaultTab(location.search, supportsLending)
+  )
+  useEffect(() => {
+    const tab = resolveHomeDefaultTab(location.search, supportsLending)
+    setActiveTab(tab)
+  }, [location.search, supportsLending])
+  const lendingContext = useMemo<LendingAccountContext | null>(() => {
+    if (!supportsLending || !effectiveWalletId || !effectiveAccountId) return null
+    const identity: LendingAccountContext['identity'] | null = supportsZcash
+      ? { kind: 'zcash' }
+      : dappAddresses.mainAddress
+        ? { kind: 'evm', address: dappAddresses.mainAddress }
+        : null
+    return identity
+      ? {
+          walletId: effectiveWalletId,
+          accountId: effectiveAccountId,
+          network: currentNetwork,
+          identity
+        }
+      : null
+  }, [
+    supportsLending,
+    supportsZcash,
+    effectiveWalletId,
+    effectiveAccountId,
+    currentNetwork,
+    dappAddresses.mainAddress
+  ])
   const storeBalance = getCurrentBalance()
   const { isSyncing, syncProgress, currentHeight, latestHeight, etaMs, syncReason } =
     getCurrentSyncState()
@@ -345,44 +405,54 @@ export function Home() {
     accountScope: lendingAccountScope,
     dataLoaded: lendingLoaded,
     isLoadingData: lendingLoading,
-    error: lendingError
+    error: lendingError,
+    mcaError: lendingMcaError,
+    isCheckingMca: lendingCheckingMca
   } = useLendingStore()
+  const [lendingSessionError, setLendingSessionError] = useState(false)
+  const [lendingSessionLoading, setLendingSessionLoading] = useState(false)
+  const [lendingSessionRetry, setLendingSessionRetry] = useState(0)
+  const lendingScopeMatches =
+    lendingContext !== null && lendingAccountScope === getLendingAccountScope(lendingContext)
 
   useEffect(() => {
-    if (!supportsLending) {
+    if (!lendingContext) {
       resetLending()
-      return
-    }
-    const activeLendingScope = `${currentWalletId || 'none'}:${currentAccountId || 'none'}`
-    if (lendingAccountScope !== null && lendingAccountScope !== activeLendingScope) {
-      resetLending()
+      setLendingSessionError(supportsLending && !accountNetworksLoading)
+      setLendingSessionLoading(accountNetworksLoading)
       return
     }
     let cancelled = false
-    void hydrateLendingCache().catch(() => {})
+    setLendingSessionError(false)
+    setLendingSessionLoading(true)
+    void hydrateLendingCache(lendingContext).catch(() => {})
     void hasAttestedCredentialSession()
       .then(active => {
-        if (active && !cancelled) return refreshLending()
+        if (active && !cancelled) return refreshLending(lendingContext)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setLendingSessionError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLendingSessionLoading(false)
+      })
     return () => {
       cancelled = true
     }
   }, [
-    currentAccountId,
-    currentWalletId,
-    effectiveWalletId,
-    effectiveAccountId,
-    lendingAccountScope,
+    lendingContext,
+    accountNetworksLoading,
+    lendingSessionRetry,
     hydrateLendingCache,
     refreshLending,
     resetLending,
     supportsLending
   ])
 
-  const lendingPositions = supportsLending
-    ? getMarketAssets().filter(market => safeBig(market.supplied).gt(0))
-    : []
+  const lendingPositions =
+    supportsLending && lendingScopeMatches
+      ? getMarketAssets().filter(market => safeBig(market.supplied).gt(0))
+      : []
   const lendingSuppliedUsd = lendingPositions
     .reduce((total, market) => total.plus(market.suppliedUsd), safeBig(0))
     .toNumber()
@@ -441,7 +511,8 @@ export function Home() {
           assetPriceStatus === 'ready' &&
           multichainFiat.missingAssetCount === 0 &&
           multichainFiat.staleAssetCount === 0 &&
-          (!supportsLending || (lendingLoaded && !lendingError))
+          (!supportsLending ||
+            (lendingLoaded && !lendingError && !lendingMcaError && !lendingSessionError))
       })
       return
     }
@@ -450,7 +521,9 @@ export function Home() {
     setPortfolioValueFor(network, effectiveWalletId, effectiveAccountId, {
       totalUsd: safeBig(storeBalance.total).times(zecPrice).plus(lendingSuppliedUsd).toFixed(),
       updatedAt: Date.now(),
-      complete: !supportsLending || (lendingLoaded && !lendingError)
+      complete:
+        !supportsLending ||
+        (lendingLoaded && !lendingError && !lendingMcaError && !lendingSessionError)
     })
   }, [
     assetPriceStatus,
@@ -458,6 +531,8 @@ export function Home() {
     effectiveAccountId,
     effectiveWalletId,
     lendingError,
+    lendingMcaError,
+    lendingSessionError,
     lendingLoaded,
     lendingSuppliedUsd,
     multichainFiat.missingAssetCount,
@@ -534,6 +609,9 @@ export function Home() {
             close()
             resolve(undefined)
           }}
+          onContinueSwap={transactionId =>
+            navigate.navigate(`/swap?resumeApproval=${encodeURIComponent(transactionId)}`)
+          }
         />
       )
     })
@@ -816,6 +894,15 @@ export function Home() {
           </div>
         </div>
 
+        {accountNetworksError && (
+          <InlineError
+            className="mb-4 px-5"
+            message="Unable to load account addresses"
+            retrying={accountNetworksLoading}
+            onRetry={() => void refreshAccountNetworks()}
+          />
+        )}
+
         {/* Action Buttons */}
         <div
           data-testid="home-actions"
@@ -827,12 +914,13 @@ export function Home() {
           <WalletActionButton
             icon={<Icon icon="lucide:send" width={20} height={20} />}
             label="Send"
-            onClick={() => navigate.navigate('/send')}
+            onClick={openSend}
           />
           <WalletActionButton
             icon={<Icon icon="lucide:arrow-down" width={20} height={20} />}
             label="Receive"
             onClick={openAddressesList}
+            disabled={!effectiveWalletId || !effectiveAccountId}
           />
           {!isTestnet && supportsLending && (
             <WalletActionButton
@@ -856,6 +944,9 @@ export function Home() {
           onValueChange={value => {
             if (value === 'assets' || value === 'lending' || value === 'activity') {
               setActiveTab(value)
+              if (value !== 'activity') setFocusTransactionId(null)
+              const path = homeTabPath(location.search, value)
+              if (path !== `${location.pathname}${location.search}`) navigate.replace(path)
             }
           }}
           className="relative w-full gap-0"
@@ -919,7 +1010,8 @@ export function Home() {
               <MultichainPortfolioPanel
                 walletId={effectiveWalletId}
                 accountId={effectiveAccountId}
-                initialModel={multichainPortfolio}
+                model={multichainPortfolio}
+                status={portfolioLoadStatus}
                 prices={assetPrices}
                 priceStatus={assetPriceStatus}
                 balancesHidden={balancesHidden}
@@ -928,8 +1020,7 @@ export function Home() {
                     ? { syncProgress, currentHeight, latestHeight, etaMs }
                     : undefined
                 }
-                onModelChange={setMultichainPortfolio}
-                onStatusChange={setPortfolioLoadStatus}
+                onRefresh={refreshPortfolio}
                 onRetryPrices={refreshAssetPrices}
                 onSelectAsset={assetId =>
                   navigate.navigate(`/asset-detail?assetId=${encodeURIComponent(assetId)}`)
@@ -971,9 +1062,9 @@ export function Home() {
                       key={addr.type}
                       role="button"
                       tabIndex={0}
-                      onClick={() => navigate.navigate('/send')}
+                      onClick={openSend}
                       onKeyDown={e => {
-                        if (e.key === 'Enter') navigate.navigate('/send')
+                        if (e.key === 'Enter') openSend()
                       }}
                       className="flex items-center justify-between rounded-lg px-2 py-2 -mx-2 cursor-pointer transition-colors hover:bg-white/5"
                     >
@@ -1025,6 +1116,26 @@ export function Home() {
           </TabsContent>
 
           <TabsContent value="lending" className="px-5 py-4 mt-0">
+            {(lendingSessionError ||
+              (lendingScopeMatches && (lendingMcaError || lendingError))) && (
+              <InlineError
+                className="mb-3"
+                message={
+                  lendingSessionError || lendingMcaError
+                    ? 'Unable to check lending account'
+                    : 'Unable to load lending data'
+                }
+                retrying={lendingLoading || lendingCheckingMca || lendingSessionLoading}
+                onRetry={() => {
+                  if (!lendingContext) void refreshAccountNetworks()
+                  else if (lendingSessionError) setLendingSessionRetry(value => value + 1)
+                  else
+                    void refreshLending(lendingContext, {
+                      forceMcaCheck: Boolean(lendingMcaError)
+                    })
+                }}
+              />
+            )}
             {lendingPositions.length > 0 ? (
               <div className="space-y-1">
                 {lendingPositions.map(market => (
@@ -1074,23 +1185,12 @@ export function Home() {
                   </div>
                 ))}
               </div>
-            ) : lendingLoading ? (
+            ) : (lendingContext !== null && !lendingScopeMatches) ||
+              lendingLoading ||
+              lendingCheckingMca ||
+              lendingSessionLoading ? (
               <ListSkeleton rows={2} label="Loading lending positions" card />
-            ) : lendingError && !lendingLoaded ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="size-12 rounded-full bg-foreground/5 flex items-center justify-center mb-3">
-                  <Icon icon="lucide:wifi-off" width={24} height={24} className="text-muted" />
-                </div>
-                <p className="text-sm text-muted mb-1">Unable to load lending data</p>
-                <p className="text-xs text-muted/60 mb-4">Network issue, tap to retry</p>
-                <button
-                  onClick={() => refreshLending()}
-                  className="px-4 py-2 bg-primary/10 text-primary rounded-lg text-sm font-medium hover:bg-primary/20 transition-colors"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
+            ) : lendingSessionError || lendingMcaError || lendingError ? null : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="size-12 rounded-full bg-foreground/5 flex items-center justify-center mb-3">
                   <Icon icon="lucide:landmark" width={24} height={24} className="text-muted" />

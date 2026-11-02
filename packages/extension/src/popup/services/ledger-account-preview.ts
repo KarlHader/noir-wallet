@@ -1,4 +1,4 @@
-import { formatUnits } from 'viem'
+import { formatBaseUnitDecimalAmount, formatDecimalAmount } from '@/lib/number-format'
 import type { LedgerPublicAccount } from '@/core/wallet/hardware-wallet-data'
 import {
   setActiveChainEndpointSettings,
@@ -34,12 +34,8 @@ export function ledgerAccountPreviewLabel(preview?: LedgerAccountPreview): strin
   if (!preview) return 'Loading'
   if (preview.status === 'unavailable') return 'Unavailable'
   if (preview.balanceRaw !== undefined && preview.decimals !== undefined) {
-    const amount = formatUnits(BigInt(preview.balanceRaw), preview.decimals)
-    const [whole, fraction] = amount.split('.')
-    const short = fraction
-      ? `${whole}.${fraction.slice(0, 6).replace(/0+$/, '')}`.replace(/\.$/, '')
-      : whole
-    const display = BigInt(preview.balanceRaw) > 0n && Number(short) === 0 ? '<0.000001' : short
+    const amount = formatBaseUnitDecimalAmount(BigInt(preview.balanceRaw), preview.decimals)
+    const display = formatDecimalAmount(amount, { maximumFractionDigits: 6 })
     return `${display} ${preview.symbol ?? ''}`.trim()
   }
   return preview.used ? 'Activity found' : '—'

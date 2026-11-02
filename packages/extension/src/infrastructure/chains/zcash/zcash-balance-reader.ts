@@ -7,6 +7,7 @@ import {
   type PortfolioSourceStatus
 } from '@/core/portfolio'
 import type { ZcashBalance } from '@/types'
+import { parseDisplayUnitAmount } from '@/lib/number-format'
 
 const ZCASH_DECIMALS = 8
 const ZEC_ASSET_REFERENCE = 'slip44:133'
@@ -29,8 +30,7 @@ function toZatoshis(value: string, label: string): string {
   }
   const match = ZEC_AMOUNT_PATTERN.exec(value)
   if (!match) throw new Error(`${label} must be a canonical ZEC amount`)
-  const raw = `${match[1]}${(match[2] ?? '').padEnd(ZCASH_DECIMALS, '0')}`.replace(/^0+(?=\d)/, '')
-  return raw.length === 0 ? '0' : raw
+  return parseDisplayUnitAmount(value, ZCASH_DECIMALS)
 }
 
 export function readZcashPortfolioSource(input: ReadZcashPortfolioInput): PortfolioSourceSnapshot {

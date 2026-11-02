@@ -27,6 +27,7 @@ import {
   type RheaSwapSubmissionView
 } from '@/core/services/rhea-swap'
 import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
+import { getRheaSwapMinimumAmountMessage } from '@/core/services/rhea-swap/rhea-swap-error'
 import { classifyError } from '@/lib/errors'
 
 export class RheaSwapClientError extends Error {
@@ -36,14 +37,75 @@ export class RheaSwapClientError extends Error {
   }
 }
 
+function readSwapErrorReason(message: string, depth = 0): string {
+  if (depth >= 4) return ''
+  const start = message.indexOf('{')
+  const end = message.lastIndexOf('}')
+  if (start !== -1) {
+    try {
+      const payload: unknown = JSON.parse(message.slice(start, end + 1))
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>
+        for (const key of ['message', 'msg', 'reason', 'error']) {
+          if (typeof record[key] === 'string') return readSwapErrorReason(record[key], depth + 1)
+        }
+      }
+    } catch {
+      // An invalid upstream response must not become product copy.
+    }
+    return ''
+  }
+  return message.trim().replace(/^HTTP \d{3}:\s*/i, '')
+}
+
+function hasSwapTimeoutReason(value: unknown, depth = 0): boolean {
+  if (depth >= 6) return false
+  if (typeof value === 'string') {
+    const start = value.indexOf('{')
+    const reason = start === -1 ? value : value.slice(0, start)
+    if (
+      /\b(?:quote_timeout|request timed? out|transport (?:timed? out|timeout)|quote (?:timed? out|timeout)|deadline exceeded)\b/i.test(
+        reason
+      )
+    ) {
+      return true
+    }
+    if (start === -1) return false
+    try {
+      return hasSwapTimeoutReason(
+        JSON.parse(value.slice(start, value.lastIndexOf('}') + 1)),
+        depth + 1
+      )
+    } catch {
+      return false
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return ['message', 'msg', 'reason', 'error', 'code', 'apiCode'].some(key =>
+    hasSwapTimeoutReason(record[key], depth + 1)
+  )
+}
+
 export function getRheaSwapErrorMessage(error: unknown): string {
-  if (
-    error instanceof RheaSwapClientError &&
-    /unsupported destination token|destinationtoken.*not supported/i.test(error.message)
-  ) {
+  if (!(error instanceof RheaSwapClientError)) return classifyError(error).userMessage
+  const minimum = getRheaSwapMinimumAmountMessage(error.message)
+  if (minimum) return minimum
+  const reason = readSwapErrorReason(error.message)
+  if (/unsupported destination token|destinationtoken.*not supported/i.test(reason)) {
     return 'This destination is unavailable for this swap. Choose another asset.'
   }
-  return error instanceof RheaSwapClientError ? error.message : classifyError(error).userMessage
+  if (hasSwapTimeoutReason(error.message)) {
+    return 'No route found for this swap.'
+  }
+  if (
+    /\b(?:confidential_route_unavailable|route_unavailable|no (?:confidential |supported |swap )?route|route not found|no liquidity|quote response does not contain a valid best route)\b/i.test(
+      reason
+    )
+  ) {
+    return 'no route'
+  }
+  return classifyError(new Error(reason)).userMessage
 }
 
 interface RuntimeMessenger {

@@ -32,7 +32,7 @@ export async function getEvmChainId(provider: EvmProvider): Promise<EvmChainId> 
   return parseChainId(chainId)
 }
 
-/** Requests a switch among EVM chains released in the wallet's active global network mode. */
+/** Requests approval to switch to a configured EVM chain in the active global network mode. */
 export async function switchEvmChain(provider: EvmProvider, chainId: string): Promise<void> {
   await provider.request<null>({
     method: 'wallet_switchEthereumChain',
@@ -41,8 +41,8 @@ export async function switchEvmChain(provider: EvmProvider, chainId: string): Pr
 }
 
 /**
- * Sends the standard add-network request. Noir Wallet currently accepts released built-in chains
- * and rejects custom EVM networks.
+ * Requests approval to save an EVM network. Saving does not switch the active chain; call
+ * switchEvmChain separately when the site needs that network. Existing chains are unchanged.
  */
 export async function addEvmNetwork(
   provider: EvmProvider,

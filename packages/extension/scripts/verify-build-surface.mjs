@@ -33,9 +33,9 @@ const outputDirectory = path.resolve(outputDirectoryName)
 const textExtensions = new Set(['.html', '.js', '.json'])
 const conformanceMarker = '.conformance-'
 const testHarnessFiles = [
-  'tests/e2e/credential-repository-integration.html',
-  'tests/e2e/transaction-repository-integration.html',
-  'tests/e2e/bitcoin-discovery-repository-integration.html'
+  'tests/extension/credential-repository-integration.html',
+  'tests/extension/transaction-repository-integration.html',
+  'tests/extension/bitcoin-discovery-repository-integration.html'
 ]
 const extensionDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 

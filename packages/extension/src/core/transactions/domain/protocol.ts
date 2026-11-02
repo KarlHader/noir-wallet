@@ -1,5 +1,5 @@
-import { parseAssetId, parseChainId } from '@/core/chains/registry'
-import type { AssetId, ChainId } from '@/core/chains/domain'
+import { parseAssetDisplayMetadata, parseAssetId, parseChainId } from '@/core/chains/registry'
+import type { AssetDisplayMetadata, AssetId, ChainId } from '@/core/chains/domain'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
@@ -39,6 +39,7 @@ export interface RheaSwapDestinationBinding extends RheaSwapAssetBinding {
   readonly recipient: string
   readonly expectedAmountRaw: string
   readonly minimumAmountRaw: string
+  readonly metadata?: AssetDisplayMetadata
 }
 
 export interface RheaSwapTransactionBinding {
@@ -213,7 +214,8 @@ function parseRheaDestinationBinding(value: unknown): RheaSwapDestinationBinding
       'protocolAssetId',
       'recipient',
       'expectedAmountRaw',
-      'minimumAmountRaw'
+      'minimumAmountRaw',
+      ...(value.metadata === undefined ? [] : ['metadata'])
     ],
     'RHEA Swap destination'
   )
@@ -235,7 +237,8 @@ function parseRheaDestinationBinding(value: unknown): RheaSwapDestinationBinding
     ...asset,
     recipient: parseString(value.recipient, 'RHEA Swap recipient'),
     expectedAmountRaw,
-    minimumAmountRaw
+    minimumAmountRaw,
+    ...(value.metadata === undefined ? {} : { metadata: parseAssetDisplayMetadata(value.metadata) })
   })
 }
 

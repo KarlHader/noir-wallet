@@ -1,7 +1,7 @@
 /**
  * Token selector component for Swap and other scenarios
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Icon } from '@iconify/react'
 import { Input } from '../ui/input'
 import type { SwapToken } from '@/core/services/intents-api'
@@ -38,6 +38,7 @@ export interface TokenSelectorProps {
   tokens?: readonly SwapToken[]
   balances?: ReadonlyMap<string, string>
   catalogLoading?: boolean
+  stableCatalogOrder?: boolean
   excludeAssetId?: string
   emptyMessage?: string
 }
@@ -48,6 +49,7 @@ export function TokenSelector({
   tokens: providedTokens,
   balances,
   catalogLoading = false,
+  stableCatalogOrder = false,
   excludeAssetId,
   emptyMessage = 'No tokens found'
 }: TokenSelectorProps) {
@@ -56,6 +58,8 @@ export function TokenSelector({
   const [fetchedTokens, setFetchedTokens] = useState<readonly SwapToken[]>([])
   const [fetchedLoading, setFetchedLoading] = useState(providedTokens === undefined)
   const [selectionTraceId] = useState(() => createDebugRequestId('token-selector'))
+  const previousRows = useRef<{ filter: string; keys: readonly string[] } | null>(null)
+  const [renderWindow, setRenderWindow] = useState({ filter: 'all:', count: MAX_RENDERED_TOKENS })
   const hasProvidedTokens = providedTokens !== undefined
   const tokens = useMemo(
     () =>
@@ -107,9 +111,14 @@ export function TokenSelector({
       : 'all'
   const selectedNetwork = networkOptions.find(option => option.id === effectiveBlockchain)
   const selectedNetworkLabel = selectedNetwork?.label ?? 'All Networks'
+  const filterKey = `${effectiveBlockchain}:${search}`
   const filteredTokens = useMemo(() => {
     const startedAt = performance.now()
-    const filtered = [
+    const previous =
+      stableCatalogOrder && !search && previousRows.current?.filter === filterKey
+        ? new Map(previousRows.current.keys.map((key, index) => [key, index]))
+        : undefined
+    const ranked = [
       ...sortTokensByBalanceValue(
         tokens.filter(token => {
           if (token.assetId === excludeAssetId) return false
@@ -117,17 +126,34 @@ export function TokenSelector({
             return false
           return matchesSwapTokenSearch(token, search)
         }),
-        balances
+        balances,
+        previous
       )
     ].sort((left, right) => compareSwapTokenSearchRelevance(left, right, search))
     logDebugTiming(
       selectionTraceId,
-      `filter-sort input=${tokens.length} output=${filtered.length} queryLength=${search.length}`,
+      `filter-sort input=${tokens.length} output=${ranked.length} queryLength=${search.length}`,
       startedAt
     )
-    return filtered
-  }, [tokens, excludeAssetId, effectiveBlockchain, search, balances, selectionTraceId])
-  const visibleTokens = filteredTokens.slice(0, MAX_RENDERED_TOKENS)
+    return ranked
+  }, [
+    tokens,
+    excludeAssetId,
+    effectiveBlockchain,
+    search,
+    balances,
+    selectionTraceId,
+    stableCatalogOrder,
+    filterKey
+  ])
+  useEffect(() => {
+    previousRows.current = {
+      filter: filterKey,
+      keys: filteredTokens.map(token => `${token.blockchain}:${token.assetId}`)
+    }
+  }, [filterKey, filteredTokens])
+  const visibleLimit = renderWindow.filter === filterKey ? renderWindow.count : MAX_RENDERED_TOKENS
+  const visibleTokens = filteredTokens.slice(0, visibleLimit)
 
   return (
     <div className="h-[60vh] flex flex-col">
@@ -217,7 +243,18 @@ export function TokenSelector({
           </p>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className="flex-1 overflow-y-auto"
+        onScroll={event => {
+          const list = event.currentTarget
+          if (
+            visibleLimit < filteredTokens.length &&
+            list.scrollHeight - list.scrollTop - list.clientHeight < 200
+          ) {
+            setRenderWindow({ filter: filterKey, count: visibleLimit + MAX_RENDERED_TOKENS })
+          }
+        }}
+      >
         {loading ? (
           <ListSkeleton rows={5} label="Loading tokens" className="px-1" />
         ) : filteredTokens.length === 0 ? (

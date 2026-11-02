@@ -13,7 +13,10 @@ import {
   deleteIndexedDbBitcoinInputReservations,
   IndexedDbBitcoinInputReservationRepository
 } from '@/infrastructure/chains/bitcoin/bitcoin-input-reservation-repository'
-import { CredentialRemovalCoordinator } from '@/infrastructure/keyring/migration'
+import {
+  CredentialRemovalCoordinator,
+  CredentialRemovalUnlockRequiredError
+} from '@/infrastructure/keyring/migration'
 import {
   deleteStorageV2Persistence,
   deleteIndexedDbPortfolioCache,
@@ -42,6 +45,8 @@ import {
   getPendingWalletCleanups,
   getWalletDeletionRecord,
   readWalletMetadata,
+  renameRetainedAccountMetadata,
+  renameRetainedWalletMetadata,
   resetWalletMetadata
 } from '@/lib/wallet-metadata-storage'
 import { blockWalletRecords, getBlockedWalletIds, unblockWalletRecords } from '@/lib/indexed-db'
@@ -50,7 +55,12 @@ import { syncScheduler } from './sync-scheduler'
 import { transactionMonitor } from './transaction-monitor'
 import { zcashTxMonitor } from './zcash-tx-monitor'
 import { credentialSession } from './credential-session'
+import { OffscreenCompatibilityWorkerPort } from './offscreen-compatibility-worker'
 import { accountContextTransition } from './account-context-transition'
+import {
+  clearAllSwapApprovalContinuations,
+  clearSwapApprovalContinuationsForAccount
+} from './swap-approval-continuation'
 import { WalletMetadataCoordinator } from '@/infrastructure/keyring/wallet-metadata-coordinator'
 import { pendingRequestsManager } from './pending-requests'
 import {
@@ -75,19 +85,12 @@ import { SWAP_TOKEN_CATALOG_CACHE_STORAGE_KEY } from '@/infrastructure/persisten
 import { ActivityHistoryCache } from './activity-history-cache'
 import { dappExecutionModeCoordinator } from './dapp-execution-mode'
 import type { WalletBackupVerification } from '@/core/wallet/secret-phrase-backup'
+import { isNativeV2CredentialKeyDomain } from '@/core/wallet/native-hardware-identity'
+import type { StorageV2Snapshot } from '@/ports/repositories'
 
 type ActiveAccount = {
   walletId: string | null
   accountId: string | null
-}
-
-function isNativeStorageV2Wallet(
-  keyDomain: Readonly<{ readonly id: string; readonly source: { readonly kind: string } }>
-): boolean {
-  return (
-    (keyDomain.source.kind === 'hardware' && keyDomain.id.startsWith('wallet:keystone-v2:')) ||
-    (keyDomain.source.kind === 'private-key' && keyDomain.id.startsWith('wallet:private-key-v2:'))
-  )
 }
 
 async function blockWalletWrites(walletId: string): Promise<void> {
@@ -104,9 +107,11 @@ export class WalletCleanupCoordinator {
   private queue: Promise<void> = Promise.resolve()
   private readonly credentialRepository = new IndexedDbCredentialRepository()
   private readonly storageRepository = new IndexedDbStorageV2Repository()
+  private readonly compatibilityWorker = new OffscreenCompatibilityWorkerPort()
   private readonly credentialRemoval = new CredentialRemovalCoordinator({
     credentialRepository: this.credentialRepository,
-    storageRepository: this.storageRepository
+    storageRepository: this.storageRepository,
+    compatibilityWorker: this.compatibilityWorker
   })
   private readonly walletMetadata = new WalletMetadataCoordinator({
     credentialRepository: this.credentialRepository,
@@ -158,6 +163,33 @@ export class WalletCleanupCoordinator {
 
   private async hydrateStores(): Promise<void> {
     await Promise.all([rehydrateWalletStore(), rehydrateAccountDataStore()])
+  }
+
+  private async assertAnotherWalletRemains(
+    walletId: string,
+    existingSnapshot?: StorageV2Snapshot
+  ): Promise<void> {
+    const pointer = await this.storageRepository.getActivePointer()
+    if (!pointer) throw new Error('Wallet inventory is unavailable')
+    const snapshot =
+      existingSnapshot ?? (await this.storageRepository.getSnapshot(pointer.generationId))
+    if (!snapshot) throw new Error('Active Storage V2 generation is missing')
+    if (
+      snapshot.manifest.status !== 'verified' ||
+      snapshot.manifest.generationId !== pointer.generationId ||
+      snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint
+    ) {
+      throw new Error('Active Storage V2 generation does not match its pointer')
+    }
+    if (!snapshot.keyDomains.some(keyDomain => keyDomain.id === walletId)) {
+      throw new Error('Wallet not found')
+    }
+    if (!snapshot.accounts.some(account => account.keyDomainId === walletId)) {
+      throw new Error('Wallet has no Accounts')
+    }
+    if (!snapshot.accounts.some(account => account.keyDomainId !== walletId)) {
+      throw new Error('Cannot remove the last wallet. Use Reset Wallet instead.')
+    }
   }
 
   private async resumeAfterMutation(
@@ -223,12 +255,43 @@ export class WalletCleanupCoordinator {
     }
     for (const pending of pendingAccounts) {
       if (pending.network !== network) continue
+      if (!backgroundZcashWalletRuntime.getSessionPassword()) {
+        try {
+          await this.credentialRemoval.preflightAccountRemoval(
+            pending.walletId,
+            pending.accountId,
+            null,
+            network
+          )
+        } catch (error) {
+          if (error instanceof CredentialRemovalUnlockRequiredError) continue
+          throw error
+        }
+      }
       await this.removeAccount(pending.walletId, pending.accountId)
     }
     for (const pending of legacyPending) {
       if (pending.walletDeleted) {
         await this.resumeLegacyWalletRemoval(pending.walletId)
       } else if (pending.accounts.length > 0) {
+        if (!backgroundZcashWalletRuntime.getSessionPassword()) {
+          let requiresUnlock = false
+          for (const account of pending.accounts) {
+            try {
+              await this.credentialRemoval.preflightAccountRemoval(
+                pending.walletId,
+                account.accountId,
+                null,
+                account.network
+              )
+            } catch (error) {
+              if (!(error instanceof CredentialRemovalUnlockRequiredError)) throw error
+              requiresUnlock = true
+              break
+            }
+          }
+          if (requiresUnlock) continue
+        }
         await this.resumeLegacyAccountRemoval(pending.walletId, pending.accounts)
       } else if (pending.walletPresent) {
         await this.resumeLegacyUncommittedRemoval(pending.walletId)
@@ -300,7 +363,17 @@ export class WalletCleanupCoordinator {
           account.accountId,
           account.derivationIndex
         )
-        await this.credentialRemoval.removeAccount(walletId, account.accountId)
+        const credentialRemoval = await this.credentialRemoval.removeAccount(
+          walletId,
+          account.accountId,
+          backgroundZcashWalletRuntime.getSessionPassword(),
+          account.network
+        )
+        if (credentialRemoval.transactionId) {
+          await this.refreshCredentialSessionAfterWalletRemoval(
+            backgroundZcashWalletRuntime.getSessionPassword()
+          )
+        }
         await dappHandler.removeAccountReferences(walletId, account.accountId)
       }
       await finalizeLegacyAccountMetadataDeletion(walletId, accounts)
@@ -341,7 +414,17 @@ export class WalletCleanupCoordinator {
                   accountId,
                   derivationIndex
                 )
-                await this.credentialRemoval.removeAccount(walletId, accountId)
+                const credentialRemoval = await this.credentialRemoval.removeAccount(
+                  walletId,
+                  accountId,
+                  backgroundZcashWalletRuntime.getSessionPassword(),
+                  backgroundZcashWalletRuntime.getNetwork()
+                )
+                if (credentialRemoval.transactionId) {
+                  await this.refreshCredentialSessionAfterWalletRemoval(
+                    backgroundZcashWalletRuntime.getSessionPassword()
+                  )
+                }
                 await unblockWalletWrites(walletId)
                 await this.resumeAfterMutation(previous, true)
                 await completeAccountMetadataDeletion(
@@ -356,20 +439,12 @@ export class WalletCleanupCoordinator {
         return
       }
 
-      const totalAccounts = useWalletStore
-        .getState()
-        .wallets.reduce((sum, item) => sum + item.accounts.length, 0)
-      if (totalAccounts <= 1) {
-        throw new Error('Cannot remove the last account')
-      }
-
       await accountContextTransition.runScopedMutation([{ walletId, accountId }], async () => {
         const removesWallet = wallet.accounts.length === 1
-        const sessionPassword = removesWallet
-          ? backgroundZcashWalletRuntime.getSessionPassword()
-          : null
+        const sessionPassword = backgroundZcashWalletRuntime.getSessionPassword()
         if (removesWallet) {
           await backgroundZcashWalletRuntime.verifyWalletBackupForRemoval(walletId, verification)
+          await this.assertAnotherWalletRemains(walletId)
           await syncScheduler.prepareWalletRemoval(walletId)
           await blockWalletWrites(walletId)
           try {
@@ -386,6 +461,12 @@ export class WalletCleanupCoordinator {
           await syncScheduler.prepareAccountRemoval(walletId)
           await blockWalletWrites(walletId)
           try {
+            await this.credentialRemoval.preflightAccountRemoval(
+              walletId,
+              accountId,
+              sessionPassword,
+              backgroundZcashWalletRuntime.getNetwork()
+            )
             await commitAccountMetadataDeletion(
               walletId,
               accountId,
@@ -436,7 +517,15 @@ export class WalletCleanupCoordinator {
               account.derivationIndex
             )
           }
-          await this.credentialRemoval.removeAccount(walletId, accountId)
+          const credentialRemoval = await this.credentialRemoval.removeAccount(
+            walletId,
+            accountId,
+            sessionPassword,
+            backgroundZcashWalletRuntime.getNetwork()
+          )
+          if (credentialRemoval.transactionId) {
+            await this.refreshCredentialSessionAfterWalletRemoval(sessionPassword)
+          }
           await unblockWalletWrites(walletId)
         }
         if (removesWallet) {
@@ -469,6 +558,7 @@ export class WalletCleanupCoordinator {
         async () => {
           const sessionPassword = backgroundZcashWalletRuntime.getSessionPassword()
           await backgroundZcashWalletRuntime.verifyWalletBackupForRemoval(walletId, verification)
+          await this.assertAnotherWalletRemains(walletId)
           await syncScheduler.prepareWalletRemoval(walletId)
           await blockWalletWrites(walletId)
           try {
@@ -508,35 +598,59 @@ export class WalletCleanupCoordinator {
       accountContextTransition.runActiveOperation(async () => {
         if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
         await this.hydrateStores()
+        const pointer = await this.storageRepository.getActivePointer()
+        if (!pointer) throw new Error('Account not found')
+        const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
+        if (!snapshot) throw new Error('Active Storage V2 generation is missing')
+        const keyDomain = snapshot.keyDomains.find(item => item.id === walletId)
+        const catalogAccount = snapshot.accounts.find(
+          item => item.id === accountId && item.keyDomainId === walletId
+        )
+        if (!keyDomain || !catalogAccount) throw new Error('Account not found')
         const wallet = useWalletStore.getState().getWallet(walletId)
         const account = wallet?.accounts.find(candidate => candidate.id === accountId)
-        if (!wallet || !account) throw new Error('Account not found')
+        if (
+          !account &&
+          !isNativeV2CredentialKeyDomain(keyDomain) &&
+          !(wallet && keyDomain.source.kind === 'hardware')
+        ) {
+          throw new Error('Account not found')
+        }
 
-        const previousName = useWalletStore.getState().getAccountDisplayName(walletId, accountId)
-        const previousDisplayName = previousName ?? account.name
+        const previousName = account
+          ? useWalletStore.getState().getAccountDisplayName(walletId, accountId)
+          : null
         const result = await this.walletMetadata.renameAccount({
           keyDomainId: walletId,
           accountId,
           displayName
         })
         if (result.status === 'storage-v2-inactive') throw new Error('Account not found')
-
-        useWalletStore.getState().setAccountDisplayName(walletId, accountId, displayName)
-        try {
-          await flushWalletStore()
-        } catch (error) {
-          useWalletStore.getState().setAccountDisplayName(walletId, accountId, previousName)
+        if (account) {
           try {
-            await this.walletMetadata.renameAccount({
-              keyDomainId: walletId,
+            await renameRetainedAccountMetadata(
+              walletId,
               accountId,
-              displayName: previousDisplayName
-            })
-          } catch {
-            throw new Error('Account rename failed and its metadata rollback could not be verified')
+              previousName,
+              displayName.normalize('NFC')
+            )
+          } catch (error) {
+            try {
+              await this.walletMetadata.renameAccount({
+                keyDomainId: walletId,
+                accountId,
+                displayName: catalogAccount.displayName
+              })
+            } catch {
+              throw new Error(
+                'Account rename failed and its metadata rollback could not be verified'
+              )
+            }
+            throw error
           }
-          throw error
+          await rehydrateWalletStore()
         }
+        await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
       })
     )
   }
@@ -576,24 +690,47 @@ export class WalletCleanupCoordinator {
   }
 
   renameNativeWallet(walletId: string, displayName: string) {
-    return this.enqueue(async () => {
-      if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
-      const pointer = await this.storageRepository.getActivePointer()
-      if (!pointer) throw new Error('Wallet not found')
-      const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
-      if (!snapshot) throw new Error('Active Storage V2 generation is missing')
-      const keyDomain = snapshot.keyDomains.find(item => item.id === walletId)
-      if (!keyDomain || !isNativeStorageV2Wallet(keyDomain)) {
-        throw new Error('Wallet metadata is not managed by the native Wallet inventory')
-      }
-      const result = await this.walletMetadata.renameWallet({
-        keyDomainId: walletId,
-        displayName
+    return this.enqueue(() =>
+      accountContextTransition.runActiveOperation(async () => {
+        if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
+        await this.hydrateStores()
+        const pointer = await this.storageRepository.getActivePointer()
+        if (!pointer) throw new Error('Wallet not found')
+        const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
+        if (!snapshot) throw new Error('Active Storage V2 generation is missing')
+        const keyDomain = snapshot.keyDomains.find(item => item.id === walletId)
+        if (!keyDomain) throw new Error('Wallet not found')
+        const wallet = useWalletStore.getState().getWallet(walletId)
+        if (!wallet && !isNativeV2CredentialKeyDomain(keyDomain)) {
+          throw new Error('Wallet not found')
+        }
+        const result = await this.walletMetadata.renameWallet({
+          keyDomainId: walletId,
+          displayName
+        })
+        if (result.status === 'storage-v2-inactive') throw new Error('Wallet not found')
+        if (wallet) {
+          try {
+            await renameRetainedWalletMetadata(walletId, wallet.name, displayName.normalize('NFC'))
+          } catch (error) {
+            try {
+              await this.walletMetadata.renameWallet({
+                keyDomainId: walletId,
+                displayName: keyDomain.displayName
+              })
+            } catch {
+              throw new Error(
+                'Wallet rename failed and its metadata rollback could not be verified'
+              )
+            }
+            throw error
+          }
+          await rehydrateWalletStore()
+        }
+        await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+        return result
       })
-      if (result.status === 'storage-v2-inactive') throw new Error('Wallet not found')
-      await this.notifyAccountSwitched()
-      return result
-    })
+    )
   }
 
   reset(): Promise<void> {
@@ -622,6 +759,7 @@ export class WalletCleanupCoordinator {
           deleteHistoryCache(),
           this.activityHistoryCache.clear(),
           dappExecutionModeCoordinator.clear(),
+          clearAllSwapApprovalContinuations(),
           chrome.storage.local.remove([
             getUserEvmAssetCatalogStorageKey('mainnet'),
             getUserEvmAssetCatalogStorageKey('testnet'),
@@ -663,7 +801,8 @@ export class WalletCleanupCoordinator {
       this.portfolioCache.deleteByAccountScope(scope),
       deleteLendingMarketCache(walletId, accountId),
       this.activityHistoryCache.deleteByScope(scope),
-      dappExecutionModeCoordinator.removeAccount(walletId, accountId)
+      dappExecutionModeCoordinator.removeAccount(walletId, accountId),
+      clearSwapApprovalContinuationsForAccount(walletId, accountId)
     ])
   }
 
@@ -678,12 +817,10 @@ export class WalletCleanupCoordinator {
     if (pointer && !snapshot) throw new Error('Active Storage V2 generation is missing')
     const keyDomain = snapshot?.keyDomains.find(item => item.id === walletId)
     if (!keyDomain && !deletedAccountIds) throw new Error('Wallet not found')
-    if (keyDomain && !isNativeStorageV2Wallet(keyDomain) && !deletedAccountIds) {
+    if (keyDomain && !isNativeV2CredentialKeyDomain(keyDomain) && !deletedAccountIds) {
       throw new Error('Wallet metadata is not managed by the native Wallet inventory')
     }
-    if (!deletedAccountIds && (snapshot?.keyDomains.length ?? 0) <= 1) {
-      throw new Error('Cannot remove the last wallet. Use Reset Wallet instead.')
-    }
+    if (!deletedAccountIds) await this.assertAnotherWalletRemains(walletId, snapshot ?? undefined)
     const accountIds =
       deletedAccountIds ??
       snapshot?.accounts

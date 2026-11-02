@@ -15,6 +15,7 @@ import {
   type VerificationWordOption
 } from '@/popup/utils/recovery-phrase-confirmation'
 import { DEFAULT_ACCOUNT_NAME, normalizeAccountName } from '@/core/wallet/account-name'
+import type { ImportZcashHistorySelection } from '@/popup/services/import-zcash-history-selection'
 
 export type FlowMode = 'onboarding' | 'addWallet'
 
@@ -28,6 +29,7 @@ export interface OnboardingState {
   seedPhrase: string[]
   importedSeedPhrase: string
   birthdayHeight?: number
+  importZcashHistorySelection: ImportZcashHistorySelection | null
   agreedToTerms: boolean
   acknowledgedWarning: boolean
   selectedVerificationWords: VerificationWordOption[]
@@ -47,6 +49,7 @@ export interface OnboardingState {
   setSeedPhrase: (phrase: string[]) => void
   setImportedSeedPhrase: (phrase: string) => void
   setBirthdayHeight: (height?: number) => void
+  setImportZcashHistorySelection: (selection: ImportZcashHistorySelection | null) => void
   setAgreedToTerms: (agreed: boolean) => void
   setAcknowledgedWarning: (acknowledged: boolean) => void
   setDappRequestId: (requestId: string | null) => void
@@ -72,6 +75,7 @@ function clearedSensitiveOnboardingState(): Pick<
   | 'seedPhrase'
   | 'importedSeedPhrase'
   | 'birthdayHeight'
+  | 'importZcashHistorySelection'
   | 'acknowledgedWarning'
   | 'selectedVerificationWords'
   | 'verificationIndices'
@@ -85,6 +89,7 @@ function clearedSensitiveOnboardingState(): Pick<
     seedPhrase: [],
     importedSeedPhrase: '',
     birthdayHeight: undefined,
+    importZcashHistorySelection: null,
     acknowledgedWarning: false,
     selectedVerificationWords: [],
     verificationIndices: [],
@@ -104,6 +109,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   seedPhrase: [],
   importedSeedPhrase: '',
   birthdayHeight: undefined,
+  importZcashHistorySelection: null,
   agreedToTerms: false,
   acknowledgedWarning: false,
   selectedVerificationWords: [],
@@ -115,7 +121,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
 
   setFlowMode: flowMode => {
     generationAttempts.invalidate()
-    set({ flowMode, seedPhrase: [], verificationPassed: false })
+    set({ flowMode, seedPhrase: [], verificationPassed: false, importZcashHistorySelection: null })
   },
   setMode: mode => {
     generationAttempts.invalidate()
@@ -132,6 +138,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       verificationIndices: [],
       verificationPassed: false,
       birthdayHeight: undefined,
+      importZcashHistorySelection: null,
       isLoading: false,
       error: null
     })
@@ -149,6 +156,8 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     })
   },
   setBirthdayHeight: birthdayHeight => set({ birthdayHeight }),
+  setImportZcashHistorySelection: importZcashHistorySelection =>
+    set({ importZcashHistorySelection }),
   setAgreedToTerms: agreedToTerms => set({ agreedToTerms, error: null }),
   setAcknowledgedWarning: acknowledgedWarning => set({ acknowledgedWarning }),
   setDappRequestId: dappRequestId => set({ dappRequestId }),
@@ -323,6 +332,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       seedPhrase: [],
       importedSeedPhrase: '',
       birthdayHeight: undefined,
+      importZcashHistorySelection: null,
       agreedToTerms: false,
       acknowledgedWarning: false,
       selectedVerificationWords: [],

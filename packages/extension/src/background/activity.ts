@@ -1,4 +1,5 @@
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import {
@@ -21,6 +22,7 @@ import {
 } from '@/infrastructure/chains/bitcoin'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import { listEvmHistoryCacheByScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
+import { filterTrackedEvmTokenActivity } from '@/infrastructure/chains/evm/evm-indexed-activity'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import type { StorageV2ReadRepository } from '@/ports/repositories'
 import {
@@ -74,16 +76,16 @@ interface EvmExecutionAddresses {
 async function resolveEvmMainAddress(
   storageRepository: ActivityStorageRepository,
   scope: ActivityScope
-): Promise<{ main: string; software: boolean; addressIndex: number } | null> {
+): Promise<{ main: string; privateAvailable: boolean; addressIndex: number } | null> {
   const pointer = await storageRepository.getActivePointer()
   if (!pointer) return null
   const snapshot = await storageRepository.getSnapshot(pointer.generationId)
   if (!snapshot) return null
-  let software = false
+  let privateAvailable = false
   try {
     const resolved = resolveKeyDomain(snapshot.keyDomains, scope.keyDomainId)
     if (!keySourceSupportsChainFamily(resolved.source, 'evm')) return null
-    software = resolved.source.kind === 'software'
+    privateAvailable = supportsEvmPrivateExecution(resolved.source)
   } catch {
     return null
   }
@@ -97,10 +99,10 @@ async function resolveEvmMainAddress(
   )
   if (!evmChainAccount) return null
   const main = evmChainAccount.identity.value.toLowerCase()
-  const addressIndex = software
+  const addressIndex = privateAvailable
     ? parseEvmAccountBinding(evmChainAccount, evmChainAccount.scope.chainId).addressIndex
     : 0
-  return Object.freeze({ main, software, addressIndex })
+  return Object.freeze({ main, privateAvailable, addressIndex })
 }
 
 async function resolveEvmExecutionAddresses(
@@ -111,7 +113,11 @@ async function resolveEvmExecutionAddresses(
 ): Promise<EvmExecutionAddresses | null> {
   const account = await resolveEvmMainAddress(storageRepository, scope)
   if (!account) return null
-  if (!includePrivate || !account.software || !(await credentialSession.hasUnlockSession())) {
+  if (
+    !includePrivate ||
+    !account.privateAvailable ||
+    !(await credentialSession.hasUnlockSession())
+  ) {
     return Object.freeze({ main: account.main, privateAddress: null })
   }
   const privateAddress = (
@@ -236,6 +242,9 @@ export function createBackgroundActivityCoordinator(
     bitcoinCustomRpcUrl,
     endpointSettings
   })
+  const trackedEvmTokenAssetIds = new Set(
+    evmHistorySources.flatMap(source => source.trackedErc20AssetIds)
+  )
   const bitcoinDiscovery = bitcoinHistory ? new IndexedDbBitcoinDiscoveryRepository() : undefined
 
   const loadBitcoinItems = async (
@@ -432,9 +441,13 @@ export function createBackgroundActivityCoordinator(
         )
       )
     }
+    const supportedItems = items.flatMap(item => {
+      const supported = filterTrackedEvmTokenActivity(item, trackedEvmTokenAssetIds)
+      return supported ? [supported] : []
+    })
     return historyPageCount > 1
-      ? mergeBoundedActivityItems([], items, 10_000)
-      : Object.freeze(items)
+      ? mergeBoundedActivityItems([], supportedItems, 10_000)
+      : Object.freeze(supportedItems)
   }
 
   const loadCachedEvmItems = async (
@@ -464,7 +477,7 @@ export function createBackgroundActivityCoordinator(
     for (const record of records) {
       if (!supportedChains.has(record.chainId)) continue
       const mode = record.address === account.main ? 'main' : 'private'
-      if (mode === 'private' && !account.software) continue
+      if (mode === 'private' && !account.privateAvailable) continue
       if (accountMode !== 'all' && mode !== accountMode) continue
       if (record.hasMore) {
         hasMoreByChainId.add(record.chainId)
@@ -475,7 +488,11 @@ export function createBackgroundActivityCoordinator(
         record.retryAfter
       )
       for (const item of record.items) {
-        items.push(mode === 'private' ? Object.freeze({ ...item, accountMode: 'private' }) : item)
+        const supported = filterTrackedEvmTokenActivity(item, trackedEvmTokenAssetIds)
+        if (!supported) continue
+        items.push(
+          mode === 'private' ? Object.freeze({ ...supported, accountMode: 'private' }) : supported
+        )
       }
     }
     return Object.freeze({
@@ -770,7 +787,7 @@ export function createBackgroundActivityCoordinator(
             localGraphs: readonly TransactionGraph[]
           ) => {
             const account = await resolveEvmMainAddress(storageRepository, scope)
-            if (!account?.software) return Object.freeze([])
+            if (!account?.privateAvailable) return Object.freeze([])
             if (await credentialSession.hasUnlockSession()) {
               try {
                 const derived = await peaSigner.deriveGlobalPea(

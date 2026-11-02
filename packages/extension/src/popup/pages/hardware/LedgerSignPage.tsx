@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
+import { useNavigate } from '../../provider/Router'
 import { Button } from '../../components/ui/button'
 import { SigningSummaryReview } from '../../components/signing/SigningSummaryReview'
 import { Skeleton } from '../../components/ui/skeleton'
@@ -14,14 +15,17 @@ import {
   type LedgerSigningView
 } from '../../services/ledger-signing-client'
 import type { LedgerTransport } from '@/lib/ledger/device'
+import { swapApprovalContinuationClient } from '../../services/swap-approval-continuation-client'
 
 export function LedgerSignPage() {
+  const { navigate } = useNavigate()
   const [view, setView] = useState<LedgerSigningView | null>(null)
   const [step, setStep] = useState<
     'loading' | 'review' | 'device' | 'signing' | 'success' | 'error'
   >('loading')
   const [error, setError] = useState('')
   const [interaction, setInteraction] = useState('')
+  const [swapApprovalId, setSwapApprovalId] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
   const terminal = useRef(false)
   const signing = useRef(false)
@@ -54,7 +58,11 @@ export function LedgerSignPage() {
     if (!view) return
     const cancel = () => {
       abort.current?.abort()
-      if (!terminal.current) void cancelLedgerSigningView(view).catch(() => {})
+      if (!terminal.current) {
+        void cancelLedgerSigningView(view).catch(() => {})
+        if (view.family === 'evm' && view.transactionId)
+          void swapApprovalContinuationClient.clear(view.transactionId).catch(() => {})
+      }
     }
     const timer = setTimeout(
       () => {
@@ -87,6 +95,8 @@ export function LedgerSignPage() {
   const close = async () => {
     abort.current?.abort()
     if (view && !terminal.current) await cancelLedgerSigningView(view).catch(() => {})
+    if (view?.family === 'evm' && view.transactionId && !terminal.current)
+      await swapApprovalContinuationClient.clear(view.transactionId).catch(() => {})
     terminal.current = true
     window.close()
   }
@@ -105,6 +115,12 @@ export function LedgerSignPage() {
       abort.current.signal.throwIfAborted()
       await submitLedgerSigningView(view, response)
       terminal.current = true
+      if (view.family === 'evm' && view.transactionId) {
+        const continuation = await swapApprovalContinuationClient
+          .get(view.transactionId)
+          .catch(() => null)
+        if (continuation) setSwapApprovalId(view.transactionId)
+      }
       setStep('success')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Ledger signing failed')
@@ -186,6 +202,14 @@ export function LedgerSignPage() {
         </div>
       )}
       <div className="page-footer space-y-2">
+        {step === 'success' && swapApprovalId && (
+          <Button
+            className="w-full"
+            onClick={() => navigate(`/swap?resumeApproval=${encodeURIComponent(swapApprovalId)}`)}
+          >
+            Continue Swap
+          </Button>
+        )}
         {step === 'device' && (
           <>
             <Button className="w-full" onClick={() => void sign('usb')}>

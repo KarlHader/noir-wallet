@@ -1,4 +1,4 @@
-import { formatBaseUnitAmount } from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 
 const MINIMUM_BRIDGE_AMOUNT_PATTERN = /amount is too low for bridge, try at least ([0-9]+)/i
 

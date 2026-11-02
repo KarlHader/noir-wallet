@@ -1,8 +1,13 @@
 import { Icon } from '@iconify/react'
 import type { ReactNode } from 'react'
 import Big from '@/lib/big'
-import { formatPercent } from '@/lib/format'
-import { formatFiatAmount, formatTokenPrice } from '@/lib/number-format'
+import {
+  formatPercentage,
+  formatBaseUnitDecimalAmount,
+  formatFiatAmount,
+  formatTokenPrice
+} from '@/lib/number-format'
+
 import { cn } from '@/lib/utils'
 import type { PortfolioAssetView } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
@@ -45,11 +50,11 @@ interface PortfolioAssetBalanceRowProps {
 }
 
 function assetAmount(asset: PortfolioAssetView): Big {
-  return new Big(asset.balance.totalRaw).div(new Big(10).pow(asset.metadata.decimals))
+  return new Big(formatBaseUnitDecimalAmount(asset.balance.totalRaw, asset.metadata.decimals))
 }
 
 function assetPendingAmount(asset: PortfolioAssetView): Big {
-  return new Big(asset.balance.pendingRaw).div(new Big(10).pow(asset.metadata.decimals))
+  return new Big(formatBaseUnitDecimalAmount(asset.balance.pendingRaw, asset.metadata.decimals))
 }
 
 function PendingAssetAmount({ amount, symbol }: { readonly amount: Big; readonly symbol: string }) {
@@ -120,7 +125,9 @@ function UnitPrice({
   const changePercent = percent24h ?? null
   const change = changePercent === null ? null : new Big(changePercent)
   const formattedChange =
-    changePercent === null ? null : formatPercent(changePercent, { maxDigits: 2, showPlus: true })
+    changePercent === null
+      ? null
+      : formatPercentage(changePercent, { maxDigits: 2, showPlus: true })
   if (price === null && loading) {
     return <Skeleton className="mt-1 h-3 w-20" />
   }

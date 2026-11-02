@@ -11,10 +11,11 @@ import type {
   ZcashBalance
 } from '@/types'
 import { UI_CONFIG } from '@/config/extension'
-import { SIGNING_ACCOUNT_INDEX, WALLET_CONFIG } from '@/config/wallet'
+import { SIGNING_ACCOUNT_INDEX, WALLET_CONFIG, ZEC_DECIMALS } from '@/config/wallet'
 import { MARGINAL_FEE_ZATS } from '@/config/fee'
 import { sanitizeMarginalFeeZats } from '@/core/zcash/fee-policy'
 import { safeBig } from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { prepareTransparentSpend } from '@/core/wallet/transparent-spend-preflight'
 import { closeAllPopupWindows } from './window-manager'
 import { useWalletStore, rehydrateWalletStore } from '@/store/wallet-store'
@@ -538,8 +539,8 @@ export class DAppHandler {
       fundingSource
     )
     return {
-      maxAmount: safeBig(estimate.maxAmountZats).div(1e8).toFixed(),
-      fee: safeBig(estimate.feeZats).div(1e8).toFixed()
+      maxAmount: formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS),
+      fee: formatBaseUnitDecimalAmount(estimate.feeZats, ZEC_DECIMALS)
     }
   }
 
@@ -1141,7 +1142,7 @@ export class DAppHandler {
             : null
         const feeZec =
           approvedFeeZats !== null
-            ? safeBig(approvedFeeZats).div(1e8).toFixed()
+            ? formatBaseUnitDecimalAmount(String(approvedFeeZats), ZEC_DECIMALS)
             : fallbackFeeZec.toFixed()
 
         const tx = await transactionRecorder.addTransaction({

@@ -446,9 +446,9 @@ export function toSdkQuoteRequest(value: RheaSwapQuoteRequest): QuoteRequest {
     tokenIn: toSdkQuoteAsset(value.tokenIn),
     tokenOut: toSdkQuoteAsset(value.tokenOut),
     extensions: Object.freeze({ referral: NOIR_SWAP_REFERRAL }),
-    quoteWaitingTimeMs: 3_000,
-    sameChainTimeoutMs: 500,
-    crossChainTimeoutMs: 3_000
+    quoteWaitingTimeMs: 6_000,
+    sameChainTimeoutMs: 1_500,
+    crossChainTimeoutMs: 6_000
   })
 }
 

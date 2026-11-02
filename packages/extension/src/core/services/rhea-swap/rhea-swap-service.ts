@@ -166,6 +166,8 @@ export class RheaSwapService {
               tokens.push(toRheaSwapToken(item))
             } catch {
               // A malformed catalog entry must not take every asset on its chain offline.
+              // Retain usable rows, but do not treat an omitted asset as unsupported.
+              if (!failedChainIds.includes(chainId)) failedChainIds.push(chainId)
             }
           }
         } catch {
@@ -861,6 +863,9 @@ export class RheaSwapService {
   }
 
   private assertQuoteMatchesRequest(quote: Quote, request: QuoteRequest): void {
+    if (BigInt(quote.estimatedOut) <= 0n || BigInt(quote.minAmountOut) <= 0n) {
+      throw new Error('Amount is below the minimum for this Swap route')
+    }
     if (
       quote.fromChain !== request.fromChain ||
       quote.toChain !== request.toChain ||

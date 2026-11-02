@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { ANALYTICS_EVENTS, sendAnalyticsEvent } from '@/lib/analytics'
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
@@ -47,6 +48,7 @@ import {
 import { cn } from '@/lib/utils'
 import { getNewPasswordValidationError, isNewPasswordValid } from '@/core/wallet/password-policy'
 import { useWalletStore } from '@/store/wallet-store'
+import { nextHardwareWalletName } from '@/lib/hardware-connect-options'
 import {
   MAX_LEDGER_ACCOUNT_INDEX,
   parseLedgerAccountIndex,
@@ -72,7 +74,13 @@ export function LedgerConnectPage() {
   const network = useWalletStore(state => state.currentNetwork)
   const retainedWalletCount = useWalletStore(state => state.wallets.length)
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [credentialLoading, setCredentialLoading] = useState(false)
+  const [catalogReadError, setCatalogReadError] = useState('')
+  const [credentialReadError, setCredentialReadError] = useState('')
+  const [catalogLoadAttempt, setCatalogLoadAttempt] = useState(0)
+  const [credentialLoadAttempt, setCredentialLoadAttempt] = useState(0)
+  const loading = catalogLoading || credentialLoading
   const [catalogAvailable, setCatalogAvailable] = useState(false)
   const [step, setStep] = useState<'connect' | 'waiting' | 'accounts' | 'configure' | 'success'>(
     'connect'
@@ -88,7 +96,9 @@ export function LedgerConnectPage() {
     credential: LedgerHardwareCredential
     anchorProof?: LedgerPublicAccount
   } | null>(null)
-  const [walletName, setWalletName] = useState('Ledger')
+  const [walletName, setWalletName] = useState('Ledger Wallet 1')
+  const walletNameEdited = useRef(false)
+  const newWalletName = useRef('Ledger Wallet 1')
   const [birthdayHeight, setBirthdayHeight] = useState<number | undefined>()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -129,7 +139,17 @@ export function LedgerConnectPage() {
   const firstWallet = !loading && !catalog?.accounts.length && retainedWalletCount === 0
   const familyChoices = ledgerFamilyChoices(availableFamilies)
   useEffect(() => {
+    if (catalog && !targetWalletId && !walletNameEdited.current) {
+      const suggested = nextHardwareWalletName('ledger', catalog.accounts)
+      newWalletName.current = suggested
+      setWalletName(suggested)
+    }
+  }, [catalog, targetWalletId])
+  useEffect(() => {
     let disposed = false
+    setCatalogLoading(true)
+    setCatalogAvailable(false)
+    setCatalogReadError('')
     void accountNetworksClient
       .getCatalog()
       .then(result => {
@@ -139,22 +159,27 @@ export function LedgerConnectPage() {
         }
       })
       .catch(cause => {
-        if (!disposed) setError(cause instanceof Error ? cause.message : 'Wallet check failed')
+        if (!disposed)
+          setCatalogReadError(cause instanceof Error ? cause.message : 'Wallet check failed')
       })
       .finally(() => {
-        if (!disposed) setLoading(false)
+        if (!disposed) setCatalogLoading(false)
       })
     return () => {
       disposed = true
       abort.current?.abort()
       previewAbort.current?.abort()
     }
-  }, [])
+  }, [catalogLoadAttempt])
   useEffect(() => {
     let disposed = false
     setExistingCredential(undefined)
-    if (!targetWalletId) return
-    setLoading(true)
+    setCredentialReadError('')
+    if (!targetWalletId) {
+      setCredentialLoading(false)
+      return
+    }
+    setCredentialLoading(true)
     void ledgerHardwareProvisioningClient
       .getCredential(targetWalletId)
       .then(credential => {
@@ -162,15 +187,17 @@ export function LedgerConnectPage() {
       })
       .catch(cause => {
         if (!disposed)
-          setError(cause instanceof Error ? cause.message : 'Ledger Wallet unavailable')
+          setCredentialReadError(
+            cause instanceof Error ? cause.message : 'Ledger Wallet unavailable'
+          )
       })
       .finally(() => {
-        if (!disposed) setLoading(false)
+        if (!disposed) setCredentialLoading(false)
       })
     return () => {
       disposed = true
     }
-  }, [targetWalletId])
+  }, [targetWalletId, credentialLoadAttempt])
   const cancelConnection = () => {
     if (provisioning.current) return
     abort.current?.abort()
@@ -312,7 +339,6 @@ export function LedgerConnectPage() {
       })
       controller.signal.throwIfAborted()
       setExported(result)
-      if (!targetWalletId) setWalletName(result.credential.deviceName)
       setStep('configure')
     } catch (cause) {
       if (!controller.signal.aborted) {
@@ -468,6 +494,7 @@ export function LedgerConnectPage() {
                       setFamilies([])
                       setError('')
                       if (wallet) setWalletName(wallet.name)
+                      else setWalletName(newWalletName.current)
                     }}
                   >
                     <option value="">New Ledger Wallet</option>
@@ -581,6 +608,20 @@ export function LedgerConnectPage() {
                 <p className="mt-2 text-xs text-danger">Enter a valid account index.</p>
               )}
             </details>
+            {catalogReadError && (
+              <InlineError
+                message={`Wallet check: ${catalogReadError}`}
+                retrying={loading}
+                onRetry={() => setCatalogLoadAttempt(value => value + 1)}
+              />
+            )}
+            {credentialReadError && (
+              <InlineError
+                message={`Ledger wallet: ${credentialReadError}`}
+                retrying={loading}
+                onRetry={() => setCredentialLoadAttempt(value => value + 1)}
+              />
+            )}
             {error && <p className="text-sm text-danger">{error}</p>}
           </div>
           <div className="page-footer space-y-2">
@@ -683,7 +724,11 @@ export function LedgerConnectPage() {
                 <Input
                   id="ledger-wallet-name"
                   value={walletName}
-                  onChange={event => setWalletName(event.target.value)}
+                  onChange={event => {
+                    walletNameEdited.current = true
+                    newWalletName.current = event.target.value
+                    setWalletName(event.target.value)
+                  }}
                 />
               </div>
             )}

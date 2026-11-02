@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
 import { formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { Button } from '@/popup/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
@@ -14,9 +15,9 @@ import {
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatPortfolioNetworkName,
   parseDisplayUnitAmount
-} from '@/popup/components/portfolio/portfolio-format'
+} from '@/lib/number-format'
+import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
@@ -69,6 +70,20 @@ import {
   recordSendResult,
   recordSendSubmission
 } from '@/popup/services/send-transaction-analytics'
+import { useEvmSendSupport } from '@/popup/hooks/useEvmSendSupport'
+import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
+import {
+  createEvmSendIntentKey,
+  getEvmSendPrivacyWarning,
+  resolveEvmSendAvailableRaw,
+  resolveEvmSendRoute
+} from '@/popup/services/evm-send-routing'
+import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
+import { LatestAttempt } from '@/lib/async-utils'
+import { getRheaSwapErrorMessage } from '@/popup/services/rhea-swap-client'
+import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 
 export interface EvmSendAsset {
   readonly asset: PortfolioAssetView
@@ -76,6 +91,10 @@ export interface EvmSendAsset {
 }
 
 interface PreparedReview {
+  readonly intentKey: string
+  readonly sourceMode: EvmSendSourceMode
+  readonly sourceAddress: string
+  readonly privacyWarning: string | null
   readonly amount: string
   readonly amountRaw: string
   readonly recipient: string
@@ -124,10 +143,28 @@ export function EvmSendForm({
   const [updatingFee, setUpdatingFee] = useState(false)
   const [review, setReview] = useState<PreparedReview | null>(null)
   const pendingReview = useRef<EvmTransferReview | null>(null)
+  const reviewAttempt = useRef(new LatestAttempt())
   const { navigate } = useNavigate()
   const asset = selection.asset
   const chain = selection.chain
-  const { activeAccount } = useActiveAccountNetworks()
+  const { activeAccount: catalogAccount, catalog } = useActiveAccountNetworks()
+  const currentWalletId = useWalletStore(state => state.currentWalletId)
+  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const networkMode = useWalletStore(state => state.currentNetwork)
+  const endpoints = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
+  )
+  const effectiveAccount = resolveEffectiveActiveAccountIdentity({
+    currentWalletId,
+    currentAccountId,
+    nativeAccount: catalogAccount
+  })
+  const walletId = effectiveAccount?.walletId ?? null
+  const accountId = effectiveAccount?.accountId ?? null
+  const activeAccount =
+    catalogAccount?.walletId === walletId && catalogAccount.accountId === accountId
+      ? catalogAccount
+      : null
   const accountNetwork = activeAccount?.networks.find(
     network => network.chain.id === chain.chain.id
   )
@@ -136,7 +173,7 @@ export function EvmSendForm({
   )?.value
   const privateSourceAddress = accountNetwork?.privateExecutionAddress
   const bundledAsset = asset.source !== 'user-added'
-  const availableRaw = resolveAccountAvailableRaw(asset.balance, sourceMode)
+  const availableRaw = resolveEvmSendAvailableRaw(asset.balance, sourceMode)
   const {
     privateSourceAvailable,
     mainDisplay: mainSourceBalance,
@@ -149,13 +186,29 @@ export function EvmSendForm({
   )
   const nativeSymbol = evmNative?.metadata.symbol ?? 'Native asset'
   const nativeDecimals = evmNative?.metadata.decimals ?? 18
-  const nativeAvailableRaw = resolveAccountAvailableRaw(evmNative?.balance, sourceMode)
+  const nativeAvailableRaw = resolveEvmSendAvailableRaw(evmNative?.balance, sourceMode)
   const tokenFeeBalanceError = getEvmTokenFeeBalanceError(
     asset.asset.kind,
     nativeAvailableRaw,
     nativeSymbol
   )
   const sourceAddress = sourceMode === 'private' ? privateSourceAddress : mainSourceAddress
+  const accountContextKey = JSON.stringify([
+    walletId,
+    accountId,
+    networkMode,
+    endpoints,
+    chain.chain.id,
+    sourceMode,
+    sourceAddress
+  ])
+  const support = useEvmSendSupport(chain.chain, asset.asset, accountContextKey)
+  const route = resolveEvmSendRoute(sourceMode, support.support)
+  const recipientRole = resolveEvmAddressRole(
+    recipient,
+    chain.chain.id,
+    activeAccount ? catalog?.accounts : []
+  )
 
   useEffect(() => {
     if (initialRecipient && /^0x[0-9a-fA-F]{40}$/.test(initialRecipient)) {
@@ -165,6 +218,8 @@ export function EvmSendForm({
 
   useEffect(
     () => () => {
+      reviewAttempt.current.invalidate()
+      currentIntent.current = null
       const pending = pendingReview.current
       if (pending) void evmWalletClient.rejectTransfer(pending.graph.root.id).catch(() => {})
     },
@@ -179,24 +234,54 @@ export function EvmSendForm({
     }
   }, [amount, asset.metadata.decimals])
   const validRecipient = /^0x[0-9a-fA-F]{40}$/.test(recipient) && !/^0x0{40}$/i.test(recipient)
+  const reviewContext = {
+    contextKey: accountContextKey,
+    assetId: asset.asset.id,
+    assetReference: asset.asset.reference,
+    decimals: asset.metadata.decimals,
+    route,
+    recipientRole
+  }
+  const intentKey = createEvmSendIntentKey({ ...reviewContext, recipient, amountRaw })
+  const currentIntent = useRef<string | null>(intentKey)
+  currentIntent.current = intentKey
+  useEffect(() => {
+    reviewAttempt.current.invalidate()
+    setPreparing(false)
+    setUpdatingFee(false)
+    setError(null)
+  }, [accountContextKey, asset.asset.id, route])
+  useEffect(() => {
+    if (review && review.intentKey !== intentKey) {
+      reviewAttempt.current.invalidate()
+      const pending = pendingReview.current
+      pendingReview.current = null
+      setReview(null)
+      if (pending) void evmWalletClient.rejectTransfer(pending.graph.root.id).catch(() => {})
+    }
+  }, [intentKey, review])
   const maximum = useTransferMaximum({
     enabled:
+      route !== 'pending' &&
       asset.asset.kind === 'native' &&
       validRecipient &&
       Boolean(sourceAddress) &&
       BigInt(availableRaw) > 0n,
-    requestKey: `${activeAccount?.walletId}:${activeAccount?.accountId}:${asset.asset.id}:${sourceAddress}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${sourceMode}`,
-    fallback: () =>
-      fallbackTransferMaximum(
-        createNativeTransferSource({
-          asset,
-          chain,
-          availableRaw,
-          sender: sourceAddress ?? ''
-        })
-      ),
+    requestKey: `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`,
+    fallback:
+      route === 'confidential'
+        ? undefined
+        : () =>
+            fallbackTransferMaximum(
+              createNativeTransferSource({
+                asset,
+                chain,
+                availableRaw,
+                sender: sourceAddress ?? ''
+              })
+            ),
     estimate: () =>
-      sourceMode === 'private'
+      route === 'confidential'
         ? estimateConfidentialTransferMaximum({
             asset,
             chain,
@@ -213,7 +298,8 @@ export function EvmSendForm({
               sender: sourceAddress ?? ''
             }),
             recipient,
-            feeSelection
+            feeSelection,
+            executionMode: sourceMode
           })
   })
   const transferAvailability = resolvePortfolioTransferAvailability({
@@ -230,7 +316,7 @@ export function EvmSendForm({
   }, [maxSelected, maximum.value, asset.metadata.decimals])
 
   const rejectPrepared = async (value: EvmTransferReview) => {
-    pendingReview.current = null
+    if (pendingReview.current?.graph.root.id === value.graph.root.id) pendingReview.current = null
     await evmWalletClient.rejectTransfer(value.graph.root.id).catch(() => {})
   }
 
@@ -258,14 +344,14 @@ export function EvmSendForm({
   }
 
   const handleMaximum = () => {
-    if (!validRecipient) return
+    if (!validRecipient || route === 'pending' || !sourceAddress) return
     setError(null)
     setMaxSelected(true)
     void maximum.request()
   }
 
   const estimateFee = useCallback(async () => {
-    if (!amountRaw || !validAmount || !validRecipient) {
+    if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
       throw new Error('Incomplete EVM transfer')
     }
     let value: EvmTransferReview | null = null
@@ -282,23 +368,35 @@ export function EvmSendForm({
     } finally {
       if (value) await evmWalletClient.rejectTransfer(value.graph.root.id).catch(() => {})
     }
-  }, [amountRaw, asset.asset.id, feeSelection, recipient, sourceMode, validAmount, validRecipient])
+  }, [
+    amountRaw,
+    asset.asset.id,
+    feeSelection,
+    recipient,
+    sourceMode,
+    route,
+    validAmount,
+    validRecipient
+  ])
   const feePreview = useTransferFeePreview({
     enabled:
-      sourceMode !== 'private' &&
+      route === 'onchain' &&
+      Boolean(sourceAddress) &&
       validAmount &&
       validRecipient &&
       tokenFeeBalanceError === null &&
       !preparing &&
       !maximum.loading &&
       review === null,
-    requestKey: `${asset.asset.id}:${recipient}:${amountRaw ?? ''}:${JSON.stringify(feeSelection)}:${sourceMode}`,
+    requestKey: `${intentKey}:${JSON.stringify(feeSelection)}`,
     estimate: estimateFee
   })
   const previewFee = feePreview.amountRaw
     ? formatBaseUnitAmount(feePreview.amountRaw, nativeDecimals)
     : '—'
-  const displayedError = error ?? tokenFeeBalanceError
+  const maximumError =
+    route === 'confidential' && maximum.error ? getRheaSwapErrorMessage(maximum.error) : null
+  const displayedError = error ?? tokenFeeBalanceError ?? maximumError
 
   const handleFormFeeSelectionChange = async (nextFeeSelection: EvmFeeSelection) => {
     if (areEvmFeeSelectionsEqual(nextFeeSelection, feeSelection)) return
@@ -310,12 +408,20 @@ export function EvmSendForm({
   }
 
   const handleContinue = async () => {
-    if (!amountRaw || !validAmount || !validRecipient) return
+    if (
+      route === 'pending' ||
+      !sourceAddress ||
+      !amountRaw ||
+      !validAmount ||
+      !validRecipient ||
+      preparing
+    )
+      return
     if (tokenFeeBalanceError) {
       setError(tokenFeeBalanceError)
       return
     }
-    if (sourceMode === 'private') {
+    if (route === 'confidential') {
       navigate(
         buildPrivateEvmTransferPath({
           assetId: asset.asset.id,
@@ -328,6 +434,7 @@ export function EvmSendForm({
     }
     setPreparing(true)
     setError(null)
+    const attempt = reviewAttempt.current.begin()
     try {
       const value = await evmWalletClient.prepareTransfer(
         {
@@ -337,8 +444,15 @@ export function EvmSendForm({
         },
         { feeSelection, executionMode: sourceMode }
       )
+      if (!reviewAttempt.current.isCurrent(attempt) || currentIntent.current !== intentKey) {
+        await rejectPrepared(value)
+        return
+      }
       const summary = value.review.summary
-      if (summary.schema !== 'evm.transaction.v1') {
+      if (
+        summary.schema !== 'evm.transaction.v1' ||
+        summary.fields.from.toLowerCase() !== sourceAddress.toLowerCase()
+      ) {
         await rejectPrepared(value)
         setError('The wallet returned an invalid EVM review.')
         return
@@ -358,15 +472,28 @@ export function EvmSendForm({
         return
       }
       pendingReview.current = value
-      setReview({ amount, amountRaw, recipient, feeSelection, value })
+      setReview({
+        intentKey,
+        sourceMode,
+        sourceAddress,
+        privacyWarning: getEvmSendPrivacyWarning(sourceMode, recipientRole),
+        amount,
+        amountRaw,
+        recipient,
+        feeSelection,
+        value
+      })
     } catch (prepareError) {
-      setError(getEvmSendPrepareError(prepareError, sourceMode))
+      if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === intentKey)
+        setError(getEvmSendPrepareError(prepareError, sourceMode))
     } finally {
-      setPreparing(false)
+      if (reviewAttempt.current.isCurrent(attempt)) setPreparing(false)
     }
   }
 
   const handleCloseReview = async () => {
+    reviewAttempt.current.invalidate()
+    setUpdatingFee(false)
     const current = review
     setReview(null)
     if (current) await rejectPrepared(current.value)
@@ -374,10 +501,16 @@ export function EvmSendForm({
 
   const handleReviewFeeSelectionChange = async (nextFeeSelection: EvmFeeSelection) => {
     const current = review
-    if (!current || areEvmFeeSelectionsEqual(nextFeeSelection, current.feeSelection)) return
+    if (
+      !current ||
+      current.intentKey !== currentIntent.current ||
+      areEvmFeeSelectionsEqual(nextFeeSelection, current.feeSelection)
+    )
+      return
 
     setUpdatingFee(true)
     setError(null)
+    const attempt = reviewAttempt.current.begin()
     let probe: EvmTransferReview | null = null
     let replacement: EvmTransferReview | null = null
     try {
@@ -392,7 +525,7 @@ export function EvmSendForm({
             recipient: current.recipient,
             amountRaw: probeAmountRaw.toString()
           },
-          { feeSelection: nextFeeSelection, executionMode: sourceMode }
+          { feeSelection: nextFeeSelection, executionMode: current.sourceMode }
         )
         if (probe.review.summary.schema !== 'evm.transaction.v1') {
           throw new Error('The wallet returned an invalid EVM review.')
@@ -405,10 +538,13 @@ export function EvmSendForm({
 
       replacement = await evmWalletClient.prepareTransfer(
         { assetId: asset.asset.id, recipient: current.recipient, amountRaw: nextAmountRaw },
-        { feeSelection: nextFeeSelection, executionMode: sourceMode }
+        { feeSelection: nextFeeSelection, executionMode: current.sourceMode }
       )
       const nextSummary = replacement.review.summary
-      if (nextSummary.schema !== 'evm.transaction.v1') {
+      if (
+        nextSummary.schema !== 'evm.transaction.v1' ||
+        nextSummary.fields.from.toLowerCase() !== current.sourceAddress.toLowerCase()
+      ) {
         throw new Error('The wallet returned an invalid EVM review.')
       }
       const balanceError = getEvmTransferBalanceError({
@@ -426,11 +562,25 @@ export function EvmSendForm({
         probe = null
       }
       await rejectPrepared(current.value)
+      if (
+        !reviewAttempt.current.isCurrent(attempt) ||
+        currentIntent.current !== current.intentKey
+      ) {
+        await rejectPrepared(replacement)
+        replacement = null
+        return
+      }
       pendingReview.current = replacement
       const nextAmount = formatBaseUnitDecimalAmount(nextAmountRaw, asset.metadata.decimals)
       setAmount(nextAmount)
       setFeeSelection(nextFeeSelection)
       setReview({
+        ...current,
+        intentKey: createEvmSendIntentKey({
+          ...reviewContext,
+          recipient: current.recipient,
+          amountRaw: nextAmountRaw
+        }),
         amount: nextAmount,
         amountRaw: nextAmountRaw,
         recipient: current.recipient,
@@ -445,18 +595,20 @@ export function EvmSendForm({
       }
       const message =
         cause instanceof Error ? cause.message : getEvmSendPrepareError(cause, sourceMode)
-      setError(message)
-      throw new Error(message)
+      if (reviewAttempt.current.isCurrent(attempt) && currentIntent.current === current.intentKey) {
+        setError(message)
+        throw new Error(message)
+      }
     } finally {
-      setUpdatingFee(false)
+      if (reviewAttempt.current.isCurrent(attempt)) setUpdatingFee(false)
     }
   }
 
   const handleApprove = async () => {
-    if (!review) return
+    if (!review || review.intentKey !== currentIntent.current || updatingFee || approving) return
     setApproving(true)
     setError(null)
-    recordSendSubmission(review.value.graph, selection.asset.metadata.symbol, sourceMode)
+    recordSendSubmission(review.value.graph, selection.asset.metadata.symbol, review.sourceMode)
     try {
       const submission = await evmWalletClient.approveTransfer(
         review.value.graph.root.id,
@@ -474,11 +626,15 @@ export function EvmSendForm({
         window.close()
         return
       }
-      recordSendResult(submission.graph, selection.asset.metadata.symbol, sourceMode)
+      recordSendResult(submission.graph, selection.asset.metadata.symbol, review.sourceMode)
       onSubmitted(submission)
     } catch (approveError) {
-      recordSendApprovalFailure(review.value.graph, selection.asset.metadata.symbol, sourceMode)
-      setError(getEvmSendPrepareError(approveError, sourceMode))
+      recordSendApprovalFailure(
+        review.value.graph,
+        selection.asset.metadata.symbol,
+        review.sourceMode
+      )
+      setError(getEvmSendPrepareError(approveError, review.sourceMode))
     } finally {
       setApproving(false)
     }
@@ -550,7 +706,9 @@ export function EvmSendForm({
           priceUsd={priceUsd}
           maxSelected={maxSelected}
           maxDisabled={
-            asset.asset.kind === 'native' && (!validRecipient || BigInt(availableRaw) <= 0n)
+            route === 'pending' ||
+            !sourceAddress ||
+            (asset.asset.kind === 'native' && (!validRecipient || BigInt(availableRaw) <= 0n))
           }
           maxLoading={maximum.loading}
           onMax={
@@ -560,7 +718,7 @@ export function EvmSendForm({
           }
         />
 
-        {sourceMode !== 'private' && (
+        {route === 'onchain' && (
           <SendNetworkFeeCard label="Network fee" loading={feePreview.loading}>
             <NetworkFeeTierPicker
               chainFamily="evm"
@@ -580,10 +738,24 @@ export function EvmSendForm({
           </p>
         )}
         {displayedError && (
-          <p role="alert" className="mt-3 px-1 text-xs text-danger">
-            {displayedError}
-          </p>
+          <InlineError
+            message={displayedError}
+            onRetry={maximumError ? handleMaximum : undefined}
+            className="mt-3 px-1"
+          />
         )}
+        {route === 'pending' &&
+          (support.loading ? (
+            <p role="status" className="px-1 text-xs text-muted">
+              Checking Confidential availability…
+            </p>
+          ) : (
+            <InlineError
+              message="Unable to check Confidential availability."
+              onRetry={support.retry}
+              className="px-1"
+            />
+          ))}
       </div>
 
       <div className="page-footer">
@@ -592,10 +764,12 @@ export function EvmSendForm({
           disabled={
             !validAmount ||
             !validRecipient ||
+            !sourceAddress ||
+            route === 'pending' ||
             tokenFeeBalanceError !== null ||
-            (sourceMode !== 'private' && feePreview.loading)
+            (route === 'onchain' && feePreview.loading)
           }
-          isLoading={preparing || (sourceMode !== 'private' && feePreview.loading)}
+          isLoading={preparing || (route === 'onchain' && feePreview.loading)}
           onClick={handleContinue}
         >
           Continue
@@ -610,7 +784,7 @@ export function EvmSendForm({
       >
         <DialogContent
           position="bottom"
-          className="max-h-[calc(100dvh-12px)] gap-0 overflow-y-auto p-0"
+          className="flex max-h-[calc(100dvh-12px)] flex-col gap-0 overflow-hidden p-0"
           showCloseButton={!approving}
           aria-labelledby="evm-send-review-title"
         >
@@ -633,7 +807,7 @@ export function EvmSendForm({
               amount={review.amount}
               network={evmSendNetworkLabel(chain)}
               notice={
-                summary.review.level === 'caution' && !bundledAsset ? (
+                review.privacyWarning || (summary.review.level === 'caution' && !bundledAsset) ? (
                   <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-xs leading-5 text-warning">
                     <Icon
                       icon="lucide:triangle-alert"
@@ -642,8 +816,13 @@ export function EvmSendForm({
                       className="mt-0.5 shrink-0"
                     />
                     <span>
-                      This transfer calls a custom Token contract you added. Verify the network,
-                      Token, and recipient.
+                      {review.privacyWarning}
+                      {summary.review.level === 'caution' && !bundledAsset && (
+                        <>
+                          {review.privacyWarning ? ' ' : ''}This transfer calls a custom Token
+                          contract you added. Verify the network, Token, and recipient.
+                        </>
+                      )}
                     </span>
                   </div>
                 ) : undefined
@@ -665,10 +844,11 @@ export function EvmSendForm({
                       <span className="truncate font-mono text-muted" title={summary.fields.from}>
                         {formatSortAddress(summary.fields.from)}
                       </span>
-                      <ExecutionAccountBadge mode={sourceMode} />
+                      <ExecutionAccountBadge mode={review.sourceMode} />
                     </span>
                   )
                 },
+                { label: 'Send method', content: 'On-chain transfer' },
                 {
                   label: 'Network fee',
                   content: (
@@ -723,8 +903,11 @@ export function EvmSendForm({
                   content: asset.asset.kind === 'native' ? 'Native transfer' : 'Token transfer'
                 }
               ]}
-              confirmLabel="Send"
+              confirmLabel={review.privacyWarning ? 'Send anyway' : 'Send'}
               confirming={approving}
+              preparing={updatingFee}
+              confirmDisabled={review.intentKey !== intentKey}
+              error={error ? <InlineError message={error} className="mt-3" /> : undefined}
               cancelDisabled={approving}
               onCancel={() => void handleCloseReview()}
               onConfirm={handleApprove}

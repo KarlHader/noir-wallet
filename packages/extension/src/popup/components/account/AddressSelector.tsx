@@ -1,12 +1,13 @@
 import { Icon } from '@iconify/react'
 import { useCopyToClipboard } from '../common/CopyToast'
-import { formatSortAddress, formatNumber, formatPrice } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
+import { formatTokenQuantity, formatFiatAmount } from '@/lib/number-format'
 import { AddressTypeLabel } from './AddressType'
 import { type AddressType } from '@/types/wallet'
 
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
-import Big, { safeBig } from '@/lib/big'
+import { safeBig } from '@/lib/big'
 
 export interface AddressOption {
   type: AddressType
@@ -78,10 +79,10 @@ export function AddressSelectorModal({
               </div>
               <div className="flex flex-col items-end gap-0.5">
                 <span className="text-sm font-medium">
-                  {formatNumber(address.balance, { rm: Big.roundDown })} ZEC
+                  {formatTokenQuantity(address.balance)} ZEC
                 </span>
                 <span className="text-xs text-muted">
-                  {formatPrice(
+                  {formatFiatAmount(
                     safeBig(address.balance || '0')
                       .times(zecPrice)
                       .toNumber(),

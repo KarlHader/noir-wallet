@@ -39,6 +39,7 @@ export interface AccountNetworkView {
 export interface AccountNetworksView {
   readonly walletId: KeyDomainId
   readonly walletDisplayName: string
+  readonly walletCreatedAt?: number
   readonly walletSource:
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
@@ -264,6 +265,9 @@ function parseCatalog(
         [
           'walletId',
           'walletDisplayName',
+          ...(Object.prototype.hasOwnProperty.call(account, 'walletCreatedAt')
+            ? ['walletCreatedAt']
+            : []),
           'walletSource',
           'accountId',
           'accountDisplayName',
@@ -283,6 +287,9 @@ function parseCatalog(
         account.walletDisplayName.length === 0 ||
         account.walletDisplayName.length > 128 ||
         account.walletDisplayName.trim() !== account.walletDisplayName ||
+        (account.walletCreatedAt !== undefined &&
+          (!Number.isSafeInteger(account.walletCreatedAt) ||
+            (account.walletCreatedAt as number) < 0)) ||
         typeof account.accountDisplayName !== 'string' ||
         account.accountDisplayName.length === 0 ||
         account.accountDisplayName.length > 128 ||
@@ -346,6 +353,9 @@ function parseCatalog(
       return Object.freeze({
         walletId,
         walletDisplayName: account.walletDisplayName,
+        ...(account.walletCreatedAt === undefined
+          ? {}
+          : { walletCreatedAt: account.walletCreatedAt as number }),
         walletSource,
         accountId,
         accountDisplayName: account.accountDisplayName,

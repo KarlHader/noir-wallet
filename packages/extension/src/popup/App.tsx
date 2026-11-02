@@ -63,12 +63,13 @@ import { KeystoneEvmSignPage } from './pages/hardware/KeystoneEvmSignPage'
 
 // DApp Pages
 import { ApprovalPage } from './pages/dapp/ApprovalPage'
+import { EvmWalletChoice } from './pages/dapp/EvmWalletChoice'
 
 // Settings Pages
 import { Settings } from './pages/settings/Settings'
 import { General } from './pages/settings/General'
-import { PreferredExplorer } from './pages/settings/PreferredExplorer'
-import { RpcEndpoint } from './pages/settings/RpcEndpoint'
+import { Networks } from './pages/settings/Networks'
+import { DefaultEvmWallet } from './pages/settings/DefaultEvmWallet'
 import { ManageTokens } from './pages/settings/ManageTokens'
 import { SecurityPrivacy } from './pages/settings/SecurityPrivacy'
 import { ZeroIndexerNodes } from './pages/settings/ZeroIndexerNodes'
@@ -284,9 +285,9 @@ function AppRoutes() {
       <Route path="/hardware/evm-sign" element={<KeystoneEvmSignPage />} />
 
       <Route path="/settings" element={<Settings />} />
+      <Route path="/default-evm-wallet" element={<DefaultEvmWallet />} />
       <Route path="/general" element={<General />} />
-      <Route path="/preferred-explorer" element={<PreferredExplorer />} />
-      <Route path="/rpc-endpoint" element={<RpcEndpoint />} />
+      <Route path="/networks" element={<Networks />} />
       <Route
         path="/manage-tokens"
         element={evmNetworkSettingsEnabled ? <ManageTokens /> : <Settings />}
@@ -435,14 +436,27 @@ function App() {
     return '/onboarding'
   }
 
+  const initialPath = getInitialPath()
+  const isEvmWalletChoice = initialPath.split('?')[0] === '/evm-wallet-choice'
+
   return (
     <ModalProvider>
-      <RouterProvider initialPath={getInitialPath()}>
+      <RouterProvider initialPath={initialPath}>
         <DialogProvider>
-          <BetaInviteActivationGate>
-            <AppContent />
-          </BetaInviteActivationGate>
-          <ToastContainer />
+          {isEvmWalletChoice ? (
+            <div className="h-full w-full bg-background">
+              <Routes>
+                <Route path="/evm-wallet-choice" element={<EvmWalletChoice />} />
+              </Routes>
+            </div>
+          ) : (
+            <>
+              <BetaInviteActivationGate>
+                <AppContent />
+              </BetaInviteActivationGate>
+              <ToastContainer />
+            </>
+          )}
         </DialogProvider>
       </RouterProvider>
     </ModalProvider>

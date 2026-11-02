@@ -1,23 +1,70 @@
 import type { PortfolioReadModel } from '@/core/portfolio'
+import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isZecToken } from '@/core/services/intents-api'
-import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import { safeBig } from '@/lib/big'
-import { parseAmount } from '@/lib/format'
 import {
+  RHEA_SWAP_CHAIN_CATALOG,
+  type RheaSwapQuoteRequest,
+  type RheaSwapToken
+} from '@/core/services/rhea-swap'
+import { createInitialProductChainRegistry } from '@/core/chains/registry'
+import { safeBig } from '@/lib/big'
+import {
+  parseAmount,
   formatBaseUnitAmount,
-  formatBaseUnitDecimalAmount
-} from '@/popup/components/portfolio/portfolio-format'
+  formatBaseUnitDecimalAmount,
+  parseDisplayUnitAmount
+} from '@/lib/number-format'
+
 import {
   resolveWalletOwnedQuoteAsset,
   type PreparedQuoteDepositTransfer,
   type WalletOwnedQuoteAsset
 } from '@/popup/services/quote-deposit-transfer-client'
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
+import type { Network } from '@/types'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import {
   filterCrossChainSendDestinations,
   type CrossChainSendCapabilities
 } from '@/popup/services/cross-chain-send-assets'
+
+export function resolveSwapRecipientChainId(
+  token: RheaSwapToken | null,
+  network: Network
+): string | null {
+  if (!token) return null
+  const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === token.rheaChainId)
+  if (!descriptor) return null
+  if (/^\d+$/.test(descriptor.apiChainId)) return `eip155:${descriptor.apiChainId}`
+  return (
+    createInitialProductChainRegistry(network)
+      .list()
+      .find(chain => chain.family === descriptor.walletFamily)?.id ?? null
+  )
+}
+
+export function resolveManagedSwapRecipient(input: {
+  readonly address: string
+  readonly zcashAddresses?: Readonly<{ shielded: string; transparent: string }>
+  readonly walletAddress?: string
+  readonly privateAddress?: string
+  readonly isEvm: boolean
+}): 'shielded' | 'transparent' | 'main' | 'private' | null {
+  if (!input.address) return null
+  if (input.zcashAddresses) {
+    if (input.address === input.zcashAddresses.shielded) return 'shielded'
+    if (input.address === input.zcashAddresses.transparent) return 'transparent'
+    return null
+  }
+  const matches = (candidate: string | undefined) =>
+    candidate &&
+    (input.isEvm
+      ? candidate.toLowerCase() === input.address.toLowerCase()
+      : candidate === input.address)
+  if (matches(input.walletAddress)) return 'main'
+  if (input.isEvm && matches(input.privateAddress)) return 'private'
+  return null
+}
 
 export function resolveSwapRefreshChainId(
   token: RheaSwapToken | null,
@@ -223,6 +270,30 @@ export function filterSelectableSwapDestinationTokens(input: {
     : available
 }
 
+export function isValidSwapZcashRecipient(address: string, network: Network): boolean {
+  try {
+    parseZcashAddress(address, network)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function resolveScopedSwapZcashRecipient(
+  selection: Readonly<{ scope: string | null; address: string }>,
+  activeScope: string | null,
+  network: Network
+): Readonly<{ address: string; error: string | null }> {
+  const address = activeScope && selection.scope === activeScope ? selection.address : ''
+  return Object.freeze({
+    address,
+    error:
+      address && !isValidSwapZcashRecipient(address, network)
+        ? 'Enter a valid Zcash address.'
+        : null
+  })
+}
+
 export function resolveLockedWalletSwapSourceToken(input: {
   readonly requestedToken: RheaSwapToken | null
   readonly sourceTokens: readonly RheaSwapToken[]
@@ -300,6 +371,7 @@ export function buildLiveSwapQuoteRequest(input: {
   amount: string
   slippageTolerance: number
   confidentiality?: 'basic'
+  request: RheaSwapQuoteRequest
 }> | null {
   if (
     !input.tokenIn ||
@@ -313,7 +385,8 @@ export function buildLiveSwapQuoteRequest(input: {
     return null
   }
   try {
-    const amount = parseAmount(input.amountIn, input.tokenIn.decimals)
+    const amount = parseDisplayUnitAmount(input.amountIn, input.tokenIn.decimals)
+    if (BigInt(amount) <= 0n) return null
     const slippageTolerance = Math.round(input.slippage * 100)
     return Object.freeze({
       scopeKey: JSON.stringify([
@@ -335,6 +408,29 @@ export function buildLiveSwapQuoteRequest(input: {
       ]),
       amount,
       slippageTolerance,
+      request: {
+        fromChain: input.tokenIn.rheaChainId,
+        toChain: input.tokenOut.rheaChainId,
+        tokenIn: {
+          chain: input.tokenIn.rheaChainId,
+          address: input.tokenIn.rheaAddress,
+          symbol: input.tokenIn.symbol,
+          decimals: input.tokenIn.decimals,
+          isNative: input.tokenIn.isNative
+        },
+        tokenOut: {
+          chain: input.tokenOut.rheaChainId,
+          address: input.tokenOut.rheaAddress,
+          symbol: input.tokenOut.symbol,
+          decimals: input.tokenOut.decimals,
+          isNative: input.tokenOut.isNative
+        },
+        amountIn: amount,
+        slippageBps: slippageTolerance,
+        sender: input.refundAddress,
+        recipient: input.recipientAddress,
+        ...(input.confidentiality === undefined ? {} : { confidentiality: input.confidentiality })
+      },
       ...(input.confidentiality === undefined ? {} : { confidentiality: input.confidentiality })
     })
   } catch {

@@ -128,23 +128,20 @@ const indexedDbActivityHistoryStore: ActivityHistoryStore = {
     try {
       const transaction = database.transaction(STORE_NAME, 'readwrite')
       const completion = transactionDone(transaction)
-      const request = transaction.objectStore(STORE_NAME).openKeyCursor()
-      await new Promise<void>((resolve, reject) => {
-        request.onsuccess = () => {
-          const cursor = request.result
-          if (!cursor) return resolve()
-          const cursorKey = cursor.key
-          if (
-            typeof cursorKey === 'string' &&
-            prefixes.some(prefix => cursorKey.startsWith(prefix))
-          ) {
-            cursor.delete()
-          }
-          cursor.continue()
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.openKeyCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        const cursorKey = cursor.key
+        if (
+          typeof cursorKey === 'string' &&
+          prefixes.some(prefix => cursorKey.startsWith(prefix))
+        ) {
+          store.delete(cursor.primaryKey)
         }
-        request.onerror = () =>
-          reject(request.error ?? new Error('Failed to scan Activity history cache'))
-      })
+        cursor.continue()
+      }
       await completion
     } finally {
       database.close()

@@ -15,10 +15,10 @@ export function getSwapAmountValues(input: SwapAmountValuesInput) {
         : '...',
     fromFiat: safeBig(input.amountIn || '0')
       .times(input.tokenInPrice || 0)
-      .toFixed(2),
+      .toFixed(),
     toFiat: safeBig(input.amountOut || '0')
       .times(input.tokenOutPrice || 0)
-      .toFixed(2)
+      .toFixed()
   }
 }
 

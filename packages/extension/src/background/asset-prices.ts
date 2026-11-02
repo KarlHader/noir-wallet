@@ -5,6 +5,7 @@ import {
 } from '@/core/prices/asset-market-source-mappings'
 import { getAssetPriceSourceMappings } from '@/core/prices/asset-market-mappings'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import type { EvmNetworkConfig } from '@/config/networks'
 import { getUserAssetDexPoolDiscoveryPolicy } from '@/config/user-asset-market-policy'
 import { getUserAssetOneClickPriceMappings } from '@/core/prices/user-asset-price-mappings'
 import {
@@ -197,15 +198,16 @@ export class BackgroundAssetPriceService {
   }
 
   async refresh(assetId?: string): Promise<AssetPriceReadModel> {
+    const targetedUserAsset = assetId !== undefined && this.userAssets?.hasAsset(assetId)
     const userPriceOperation = this.userAssets
-      ? assetId && !this.userAssets.hasAsset(assetId)
+      ? assetId && !targetedUserAsset
         ? this.userAssets.readCached()
-        : this.userAssets.refresh()
+        : this.userAssets.refresh(targetedUserAsset ? assetId : undefined)
       : undefined
     const [prices, market, defiLlamaMarket, userAssets] = await Promise.all([
-      this.prices.refresh(),
-      this.market.refresh(),
-      this.defiLlamaMarket?.refresh(),
+      targetedUserAsset ? this.prices.readCached() : this.prices.refresh(),
+      targetedUserAsset ? this.market.readCached() : this.market.refresh(),
+      targetedUserAsset ? this.defiLlamaMarket?.readCached() : this.defiLlamaMarket?.refresh(),
       userPriceOperation
     ])
     const bundled = defiLlamaMarket
@@ -293,16 +295,22 @@ export function createBackgroundAssetPriceService(
 }
 
 export function createBackgroundAssetMarketHistoryService(
+  userEvmAssets: readonly AssetDefinitionInput[] = [],
   protocolAssets: readonly AssetDefinitionInput[] = [],
-  protocolPriceMappings: readonly IntentsProtocolAssetPriceMapping[] = []
+  protocolPriceMappings: readonly IntentsProtocolAssetPriceMapping[] = [],
+  customEvmNetworks: readonly EvmNetworkConfig[] = []
 ): AssetMarketHistoryService {
   const chains = createBuildFeatureGatedChainRegistry(
-    createInitialProductChainRegistry(DEFAULT_NETWORK)
+    createInitialProductChainRegistry(DEFAULT_NETWORK, customEvmNetworks)
   )
   const assets = createAssetRegistry(
     chains,
     filterAssetDefinitionsForChains(
-      [...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK), ...protocolAssets],
+      [
+        ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, customEvmNetworks),
+        ...protocolAssets,
+        ...userEvmAssets
+      ],
       chains
     )
   )

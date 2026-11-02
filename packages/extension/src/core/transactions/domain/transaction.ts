@@ -78,6 +78,16 @@ export interface TransactionAssetAmount {
   readonly metadata?: AssetDisplayMetadata
 }
 
+export interface TransactionAssetChange extends TransactionAssetAmount {
+  readonly direction: 'incoming' | 'outgoing'
+}
+
+export interface TransactionAssetEffects {
+  readonly source: 'receipt' | 'indexer'
+  readonly completeness: 'partial' | 'complete'
+  readonly changes: readonly TransactionAssetChange[]
+}
+
 export interface TransactionParty {
   readonly chainId: ChainId
   readonly address: string
@@ -125,6 +135,7 @@ export interface TransactionFailure {
 
 export interface TransactionSegmentEvidence {
   readonly transactionHash?: string
+  readonly assetEffects?: TransactionAssetEffects
   readonly replacementTransactionHash?: string
   readonly externalReference?: string
   readonly blockHash?: string

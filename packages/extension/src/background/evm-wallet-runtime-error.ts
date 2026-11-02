@@ -9,6 +9,9 @@ export function mapEvmWalletRuntimeError(error: unknown): EvmWalletRuntimeError 
       : canonical
   }
   if (error instanceof EvmTransactionError && error.code === 'invalid-intent') {
+    if (error.message === 'EVM transfer asset is not listed') {
+      return createEvmWalletRuntimeError('asset-unavailable')
+    }
     return createEvmWalletRuntimeError('invalid-request')
   }
   if (error instanceof EvmTransactionError && error.code === 'simulation-failed') {

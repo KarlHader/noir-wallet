@@ -1,7 +1,8 @@
-import { formatChainIconUrl } from '@/lib/chain-icon'
+import { GENERIC_CHAIN_ICON_URL, isDynamicEvmChainIcon } from '@/config/icons'
+import { formatChainIconUrl, resolveRemoteEvmChainIconUrl } from '@/lib/chain-icon'
 import { formatChainName } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 interface ChainIconProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   chain: string
@@ -19,26 +20,34 @@ export function ChainIcon({
   ...props
 }: ChainIconProps) {
   const chainName = formatChainName(chain)
-  const iconUrl = formatChainIconUrl(chain)
+  const [remoteIcon, setRemoteIcon] = useState<{ chain: string; url: string } | null>(null)
+  const iconUrl = remoteIcon?.chain === chain ? remoteIcon.url : formatChainIconUrl(chain)
   const [loadedIconUrl, setLoadedIconUrl] = useState<string | null>(null)
   const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null)
-  const isLoaded = loadedIconUrl === iconUrl
   const hasFailed = failedIconUrl === iconUrl
+  const displayedIconUrl = hasFailed ? GENERIC_CHAIN_ICON_URL : iconUrl
+  const isLoaded = loadedIconUrl === displayedIconUrl
+
+  useEffect(() => {
+    if (!isDynamicEvmChainIcon(chain)) return
+    let cancelled = false
+    void resolveRemoteEvmChainIconUrl(chain).then(url => {
+      if (!cancelled && url) setRemoteIcon({ chain, url })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [chain])
 
   return (
     <img
-      src={hasFailed ? undefined : iconUrl}
+      src={displayedIconUrl}
       alt={alt || chainName}
       crossOrigin={crossOrigin}
-      className={cn(
-        'bg-card object-cover',
-        !isLoaded && !hasFailed && 'animate-pulse',
-        hasFailed && 'text-transparent opacity-60',
-        className
-      )}
+      className={cn('bg-card object-cover', !isLoaded && 'animate-pulse', className)}
       title={showTooltip ? chainName : undefined}
       onLoad={event => {
-        setLoadedIconUrl(iconUrl)
+        setLoadedIconUrl(displayedIconUrl)
         onLoad?.(event)
       }}
       onError={event => {

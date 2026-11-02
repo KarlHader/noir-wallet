@@ -25,9 +25,9 @@ import type { BitcoinTransferAmount } from '@/infrastructure/chains/bitcoin'
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatPortfolioNetworkName,
   parseDisplayUnitAmount
-} from '@/popup/components/portfolio/portfolio-format'
+} from '@/lib/number-format'
+import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import { openHardwareBitcoinSignTab } from '@/lib/hardware-tab'
 import {
   recordSendApprovalFailure,

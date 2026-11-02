@@ -1,4 +1,4 @@
-import type { ActivityItem, ActivityReadModel } from '@/core/activity'
+import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { resolveActivityChainId } from '@/popup/components/transaction/activity-chain'
 
 export function isActivityModelForScope(
@@ -37,7 +37,8 @@ export function filterActivityItems(input: {
       selectedChainIdSet.has(chainId) &&
       (!input.assetId ||
         item.snapshot?.primaryAmount?.assetId === input.assetId ||
-        item.snapshot?.counterAmount?.assetId === input.assetId)
+        item.snapshot?.counterAmount?.assetId === input.assetId ||
+        getActivityAssetEffects(item)?.changes.some(change => change.assetId === input.assetId))
     )
   })
 }

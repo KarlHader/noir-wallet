@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { useState } from 'react'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import { Button } from '../../components/ui/button'
@@ -155,27 +156,18 @@ export function LedgerAccountPicker(props: {
         </>
       )}
       {Object.values(props.previews).some(preview => preview.status === 'unavailable') && (
-        <button
-          type="button"
-          className="text-xs text-primary"
-          disabled={props.busy}
-          onClick={props.onRetryPreview}
-        >
-          Retry balances
-        </button>
+        <InlineError
+          message="Some balances are unavailable"
+          retrying={props.busy}
+          onRetry={props.onRetryPreview}
+        />
       )}
       {props.error && (
-        <div className="space-y-2">
-          <p className="text-sm text-danger">{props.error}</p>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={props.busy}
-            onClick={() => props.onPage(props.start)}
-          >
-            Retry
-          </Button>
-        </div>
+        <InlineError
+          message={props.error}
+          retrying={props.busy}
+          onRetry={() => props.onPage(props.start)}
+        />
       )}
     </div>
   )

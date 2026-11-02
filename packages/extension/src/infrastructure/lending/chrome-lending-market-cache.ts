@@ -214,7 +214,9 @@ export async function deleteLendingMarketCache(
   const target = accountId ? `${walletId}:${accountId}` : null
   const entries = Object.fromEntries(
     Object.entries(state.entries).filter(([scope]) =>
-      target === null ? !scope.startsWith(prefix) : scope !== target
+      target === null
+        ? !scope.startsWith(prefix)
+        : scope !== target && !scope.startsWith(`${target}:`)
     )
   )
   await writeState(parseLendingMarketCacheState({ version: CACHE_VERSION, entries }))

@@ -368,9 +368,15 @@ function assertGraphTransactionId(graph: TransactionGraph, expected: Transaction
 
 function assertGraphTransferIntent(graph: TransactionGraph, expected: EvmTransferIntent): void {
   const intent = graph.root.intent
+  const selfTransfer =
+    intent?.direction === 'self' &&
+    intent.sender !== undefined &&
+    intent.recipient !== undefined &&
+    intent.sender.chainId === intent.recipient.chainId &&
+    intent.sender.address.toLowerCase() === intent.recipient.address.toLowerCase()
   if (
-    intent?.direction !== 'outgoing' ||
-    intent.primaryAmount === undefined ||
+    (intent?.direction !== 'outgoing' && !selfTransfer) ||
+    intent?.primaryAmount === undefined ||
     intent.primaryAmount.assetId !== expected.assetId ||
     intent.primaryAmount.amountRaw !== expected.amountRaw ||
     intent.recipient?.address.toLowerCase() !== expected.recipient.toLowerCase()

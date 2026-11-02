@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
@@ -11,13 +12,12 @@ import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TransactionResult } from '@/popup/components/transaction/TransactionResult'
 import type { EvmTransferActivity } from '@/popup/services/evm-transfer-activity'
 import { shouldApplyOnchainTransactionStatus } from '@/popup/services/evm-transaction-result-status'
-import {
-  formatBaseUnitAmount,
-  formatPortfolioNetworkName
-} from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitAmount } from '@/lib/number-format'
+import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import {
   getOnchainTransactionFailureLabel,
   getOnchainResultAction,
+  getOnchainResultExitOutcome,
   getOnchainResultTotal,
   getOnchainTransactionStatusPresentation,
   resolveVisibleTransactionStatus
@@ -176,32 +176,30 @@ export function OnchainTransactionResult({
       <TransactionResult
         status={presentation.resultStatus}
         title={presentation.title}
-        description={presentation.description}
+        description={resultAction === 'retry' ? undefined : presentation.description}
         className={compactDetails ? 'pb-0 pt-4' : 'py-3'}
         bodyClassName={compactDetails ? 'my-0' : 'my-2'}
         footer={
-          resultAction === 'retry' ? (
-            <Button className="h-[45px] w-full" isLoading={resuming} onClick={handleResume}>
-              Retry broadcast
-            </Button>
-          ) : resultAction === 'explorer' && explorerUrl ? (
-            <Button asChild className="h-[45px] w-full">
-              <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
-                View on Explorer
-              </a>
-            </Button>
-          ) : (
+          <div className="flex w-full flex-col gap-2">
+            {resultAction === 'explorer' && explorerUrl ? (
+              <Button asChild className="h-[45px] w-full">
+                <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
+                  View on Explorer
+                </a>
+              </Button>
+            ) : resultAction === 'activity' ? (
+              <Button className="h-[45px] w-full" onClick={() => onViewActivity(graph.root.id)}>
+                View Activity
+              </Button>
+            ) : null}
             <Button
+              variant={resultAction === 'done' ? 'default' : 'outline'}
               className="h-[45px] w-full"
-              onClick={() =>
-                status === 'final' || status === 'failed'
-                  ? onDone(status)
-                  : onViewActivity(graph.root.id)
-              }
+              onClick={() => onDone(getOnchainResultExitOutcome(status))}
             >
-              {status === 'final' || status === 'failed' ? 'Done' : 'View Activity'}
+              Done
             </Button>
-          )
+          </div>
         }
       >
         <div className="w-full">
@@ -279,10 +277,25 @@ export function OnchainTransactionResult({
               Status update delayed.
             </p>
           )}
-          {resumeError && (
-            <p role="alert" className="mt-3 text-center text-xs text-danger">
-              Broadcast retry failed. Check the network and try again.
-            </p>
+          {resultAction === 'retry' ? (
+            <InlineError
+              className="mt-3"
+              message={
+                resumeError
+                  ? 'Broadcast retry failed. Check the network and try again.'
+                  : presentation.description || presentation.title
+              }
+              onRetry={handleResume}
+              retrying={resuming}
+              retryLabel="Retry broadcast"
+              tone={resumeError || presentation.tone === 'error' ? 'error' : 'warning'}
+            />
+          ) : (
+            resumeError && (
+              <p role="alert" className="mt-3 text-center text-xs text-danger">
+                Broadcast retry failed. Check the network and try again.
+              </p>
+            )
           )}
         </div>
       </TransactionResult>

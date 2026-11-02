@@ -1,5 +1,6 @@
-import { WALLET_CONFIG } from '@/config/wallet'
+import { WALLET_CONFIG, ZEC_DECIMALS } from '@/config/wallet'
 import { safeBig } from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { ZcashBalance } from '@/types'
 import type { WasmTransactionEntry } from '@/core/worker/types'
 
@@ -43,5 +44,7 @@ export function getShieldInputAmountFromHistory(
   if (!entry) return null
 
   const inputZatoshis = safeBig(entry.amount_zatoshis).plus(entry.fee_zatoshis ?? 0)
-  return inputZatoshis.gt(0) ? inputZatoshis.div(1e8).toFixed() : null
+  return inputZatoshis.gt(0)
+    ? formatBaseUnitDecimalAmount(inputZatoshis.toFixed(), ZEC_DECIMALS)
+    : null
 }

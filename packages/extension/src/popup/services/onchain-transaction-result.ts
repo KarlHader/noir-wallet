@@ -7,7 +7,7 @@ import {
   getLifecycleStatusPresentation,
   type TransactionPresentationTone
 } from '@/lib/transaction-status-presentation'
-import { formatBaseUnitAmount } from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 
 export function getOnchainResultAction(
   status: TransactionLifecycleStatus,
@@ -16,6 +16,12 @@ export function getOnchainResultAction(
   if (status === 'signed') return 'retry'
   if (status === 'final' || status === 'failed') return 'done'
   return explorerUrl ? 'explorer' : 'activity'
+}
+
+export function getOnchainResultExitOutcome(
+  status: TransactionLifecycleStatus
+): 'pending' | 'final' | 'failed' {
+  return status === 'final' || status === 'failed' ? status : 'pending'
 }
 
 export function getOnchainResultTotal(

@@ -11,8 +11,9 @@ import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { openModal } from '@/popup/provider/ModalManager'
 import { toast } from '@/store/toast-store'
-import { formatBaseUnitAmount } from '../portfolio/portfolio-format'
+import { formatBaseUnitAmount } from '@/lib/number-format'
 import { AmountDisplay } from '../common/AmountDisplay'
+import { InlineError } from '../common/InlineError'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import {
@@ -251,6 +252,20 @@ export function EvmNonceRecoveryBanner({
   }
 
   if (!state) return null
+
+  if (state.action === 'retry-broadcast') {
+    return (
+      <div className="border-b border-border/60 px-5 py-3" aria-label="EVM nonce recovery">
+        <p className="mb-1 text-xs text-muted">{networkName}</p>
+        <InlineError
+          message={error || presentation?.title || 'Broadcast interrupted'}
+          onRetry={() => void handleRecovery()}
+          retrying={busy}
+          tone={error ? 'error' : 'warning'}
+        />
+      </div>
+    )
+  }
 
   const canReview = state.action === 'fill-gap' || state.action === 'replace'
 

@@ -7,7 +7,7 @@ import {
 } from '@/popup/services/account-networks-client'
 import { useAddressBookStore } from '@/store/address-book-store'
 import { useWalletStore } from '@/store/wallet-store'
-import { Button } from '../ui/button'
+import { InlineError } from '../common/InlineError'
 import { ListSkeleton } from '../ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
@@ -52,10 +52,14 @@ function EmptyState({
 export function RecipientSelector({
   chainId,
   excludeAddresses = EMPTY_ADDRESSES,
+  includeUnavailableAccounts = false,
+  includeCurrentAccount = false,
   onSelect
 }: {
   readonly chainId: string
   readonly excludeAddresses?: readonly string[]
+  readonly includeUnavailableAccounts?: boolean
+  readonly includeCurrentAccount?: boolean
   readonly onSelect: (address: string) => void
 }) {
   const contacts = useAddressBookStore(state => state.contacts)
@@ -101,8 +105,12 @@ export function RecipientSelector({
   }, [chainId])
 
   const accountGroups = useMemo(
-    () => buildMyAccountRecipientGroups(catalog, chainId, excludeAddresses),
-    [catalog, chainId, excludeAddresses]
+    () =>
+      buildMyAccountRecipientGroups(catalog, chainId, excludeAddresses, {
+        includeUnavailableAccounts,
+        includeCurrentAccount
+      }),
+    [catalog, chainId, excludeAddresses, includeUnavailableAccounts, includeCurrentAccount]
   )
   const savedRecipients = useMemo(
     () => buildSavedRecipientList(contacts, chainId, excludeAddresses),
@@ -124,12 +132,11 @@ export function RecipientSelector({
         {loading ? (
           <ListSkeleton rows={3} label="Loading wallet accounts" className="px-1 py-1" card />
         ) : error ? (
-          <div className="flex flex-col items-center py-7 text-center">
-            <p className="text-sm font-medium">Unable to load accounts</p>
-            <Button variant="secondary" size="sm" className="mt-3" onClick={loadAccounts}>
-              Retry
-            </Button>
-          </div>
+          <InlineError
+            className="px-1 py-7"
+            message="Unable to load accounts"
+            onRetry={loadAccounts}
+          />
         ) : accountGroups.length === 0 ? (
           <EmptyState
             icon="lucide:wallet"
@@ -145,6 +152,27 @@ export function RecipientSelector({
                 group.accountDisplayName,
                 accountDisplayNames
               )
+              if (group.addresses.length === 0) {
+                return (
+                  <button
+                    key={group.key}
+                    type="button"
+                    disabled
+                    className="flex w-full min-w-0 flex-col items-start gap-1 rounded-lg bg-card px-3 py-2.5 text-left opacity-60"
+                  >
+                    <span className="flex w-full min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate text-sm font-medium">{displayName}</span>
+                      {group.active && <span className="shrink-0 text-xs text-muted">Current</span>}
+                      {group.walletDisplayName && (
+                        <span className="ml-auto max-w-[42%] truncate text-xs text-muted">
+                          {group.walletDisplayName}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-xs text-muted">Unavailable on this network</span>
+                  </button>
+                )
+              }
               return (
                 <section key={group.key}>
                   <div className="mb-2 flex min-w-0 items-center gap-2 px-1">
@@ -180,7 +208,7 @@ export function RecipientSelector({
                             <ExecutionAccountBadge mode="private" iconOnly />
                           )}
                           <p
-                            className="min-w-0 flex-1 truncate font-mono text-xs text-muted"
+                            className="min-w-0 flex-1 truncate font-mono text-xs text-foreground"
                             title={address.value}
                           >
                             {formatSortAddress(address.value)}
@@ -225,7 +253,7 @@ export function RecipientSelector({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{contact.name}</p>
                   <p
-                    className="mt-0.5 truncate font-mono text-xs text-muted"
+                    className="mt-0.5 truncate font-mono text-xs text-foreground"
                     title={contact.address}
                   >
                     {formatSortAddress(contact.address)}

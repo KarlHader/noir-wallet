@@ -1,4 +1,5 @@
 import type { ChainId } from '@/core/chains/domain'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { SigningSummary } from '@/core/keyring/domain'
 import {
   parseTransactionId,
@@ -490,7 +491,10 @@ export class BackgroundEvmTransferController {
   private async requirePrivateExecutionAccount(
     context: ActiveEvmPortfolioContext
   ): Promise<PeaEvmExecutionAccount> {
-    if (context.keyDomainSource.kind !== 'software' || !this.resolvePrivateExecutionAccount) {
+    if (
+      !supportsEvmPrivateExecution(context.keyDomainSource) ||
+      !this.resolvePrivateExecutionAccount
+    ) {
       throw new Error('Confidential address is unavailable for this wallet')
     }
     return this.resolvePrivateExecutionAccount(context)

@@ -152,6 +152,37 @@ function setupMessageBridge() {
   window.addEventListener('message', async event => {
     if (event.source !== window) return
     if (event.data?.target !== 'noir-content-script') return
+    if (
+      EVM_PROVIDER_ENABLED &&
+      (event.data.type === 'NOIR_EVM_WALLET_CONFIG' || event.data.type === 'NOIR_EVM_WALLET_CHOICE')
+    ) {
+      const { requestId, type, wallets } = event.data
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 128) return
+      if (!consumeToken('evm', 'wallet_choice')) return
+      try {
+        const response: unknown = await chrome.runtime.sendMessage(
+          type === 'NOIR_EVM_WALLET_CONFIG'
+            ? { type: 'GET_EVM_WALLET_PREFERENCE' }
+            : { type: 'REQUEST_EVM_WALLET_CHOICE', wallets }
+        )
+        window.postMessage(
+          { target: 'noir-evm-wallet-router', requestId, response },
+          window.location.origin
+        )
+      } catch {
+        window.postMessage(
+          {
+            target: 'noir-evm-wallet-router',
+            requestId,
+            response: {
+              error: 'Wallet selection is unavailable. Reload the website and try again.'
+            }
+          },
+          window.location.origin
+        )
+      }
+      return
+    }
     if (event.data?.type !== 'NOIR_REQUEST') return
 
     const { requestId, chainId, payload } = event.data

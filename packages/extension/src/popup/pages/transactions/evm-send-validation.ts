@@ -170,6 +170,7 @@ export function getEvmSendPrepareError(error: unknown, sourceMode: EvmSendSource
   }
   if (error.code === 'account-unavailable') return 'This wallet does not have an EVM account.'
   if (error.code === 'expired') return 'The review expired. Prepare the transfer again.'
+  if (error.code === 'asset-unavailable') return 'This asset is unavailable for sending.'
   if (error.code === 'invalid-request') return 'Check the amount and recipient address.'
   if (error.code === 'insufficient-funds') {
     return sourceMode === 'private'

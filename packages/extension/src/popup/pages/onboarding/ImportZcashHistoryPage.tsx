@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { DatePicker } from '../../components/ui/date-picker'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
@@ -13,6 +14,7 @@ import { classifyError } from '@/lib/errors'
 import { cn } from '@/lib/utils'
 import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import dayjs from '@/lib/dayjs'
+import { getImportZcashHistoryDefaults } from '@/popup/services/import-zcash-history-selection'
 
 type HistoryMode = 'new' | 'restore'
 type RestoreMethod = 'date' | 'height'
@@ -25,21 +27,25 @@ export function ImportZcashHistoryPage() {
     flowMode,
     importedSeedPhrase,
     birthdayHeight,
+    importZcashHistorySelection,
     setBirthdayHeight,
+    setImportZcashHistorySelection,
     addImportedWallet,
     error: storeError
   } = useOnboardingStore()
   const fullRecoveryHeight = getFullZcashRecoveryBirthdayHeight(DEFAULT_NETWORK)
-  const [historyMode, setHistoryMode] = useState<HistoryMode>(
-    birthdayHeight === undefined ? 'new' : 'restore'
+  const [initialSelection] = useState(() =>
+    getImportZcashHistoryDefaults(birthdayHeight, importZcashHistorySelection)
   )
-  const [restoreMethod, setRestoreMethod] = useState<RestoreMethod>(
-    birthdayHeight === undefined ? 'date' : 'height'
+  const [historyMode, setHistoryMode] = useState<HistoryMode>(initialSelection.historyMode)
+  const [restoreMethod, setRestoreMethod] = useState<RestoreMethod>(initialSelection.restoreMethod)
+  const [syncDate, setSyncDate] = useState<dayjs.Dayjs | null>(
+    initialSelection.syncDate ? dayjs(initialSelection.syncDate) : null
   )
-  const [syncDate, setSyncDate] = useState<dayjs.Dayjs | null>(null)
-  const [syncHeight, setSyncHeight] = useState(birthdayHeight ? String(birthdayHeight) : '')
+  const [syncHeight, setSyncHeight] = useState(initialSelection.syncHeight)
   const [isImporting, setIsImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryable, setRetryable] = useState(false)
 
   useEffect(() => {
     if (!importedSeedPhrase) replace('/onboarding/import')
@@ -87,10 +93,18 @@ export function ImportZcashHistoryPage() {
 
   const handleContinue = async () => {
     setError(null)
+    setRetryable(false)
     setIsImporting(true)
     try {
       const height = await resolveBirthdayHeight()
       setBirthdayHeight(height)
+      setImportZcashHistorySelection(
+        historyMode === 'new'
+          ? { mode: 'new' }
+          : restoreMethod === 'date'
+            ? { mode: 'restore', method: 'date', date: syncDate!.format('YYYY-MM-DD') }
+            : { mode: 'restore', method: 'height' }
+      )
 
       if (flowMode === 'addWallet') {
         const success = await addImportedWallet()
@@ -99,11 +113,10 @@ export function ImportZcashHistoryPage() {
       }
       navigate('/onboarding/import-password')
     } catch (cause) {
-      setError(
-        cause instanceof ZcashHistoryValidationError
-          ? cause.message
-          : classifyError(cause).userMessage
-      )
+      const classified = classifyError(cause)
+      const validationError = cause instanceof ZcashHistoryValidationError
+      setError(validationError ? cause.message : classified.userMessage)
+      setRetryable(!validationError && classified.retryable)
     } finally {
       setIsImporting(false)
     }
@@ -187,15 +200,17 @@ export function ImportZcashHistoryPage() {
             )}
           </div>
         )}
-
-        {(error || storeError) && (
-          <p role="alert" className="mt-4 text-sm text-destructive">
-            {error || storeError}
-          </p>
-        )}
       </div>
 
       <div className="page-footer">
+        {(error || storeError) && (
+          <InlineError
+            message={error || storeError}
+            onRetry={error && retryable ? () => void handleContinue() : undefined}
+            retrying={isImporting}
+            className="mb-3"
+          />
+        )}
         <Button
           onClick={handleContinue}
           disabled={isImporting}

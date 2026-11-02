@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSortAddress } from '@/lib/format'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { Button } from '@/popup/components/ui/button'
+import { ListSkeleton } from '@/popup/components/ui/skeleton'
 import { Input } from '@/popup/components/ui/input'
 import {
   Dialog,
@@ -23,10 +25,29 @@ export function AddressBook() {
   const [editing, setEditing] = useState<AddressBookContact | null>(null)
   const [deleting, setDeleting] = useState<AddressBookContact | null>(null)
   const [name, setName] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const loadRevision = useRef(0)
+
+  const loadContacts = useCallback(async () => {
+    const revision = ++loadRevision.current
+    setLoading(true)
+    setLoadError(false)
+    try {
+      await initializeAddressBook()
+    } catch {
+      if (revision === loadRevision.current) setLoadError(true)
+    } finally {
+      if (revision === loadRevision.current) setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    void initializeAddressBook().catch(() => {})
-  }, [])
+    void loadContacts()
+    return () => {
+      loadRevision.current += 1
+    }
+  }, [loadContacts])
 
   const groups = useMemo(() => {
     const grouped = new Map<string, AddressBookContact[]>()
@@ -56,7 +77,23 @@ export function AddressBook() {
     <div className="page-container">
       <PageHeader title="Address Book" showBack />
       <div className="page-content !px-4">
-        {groups.length === 0 ? (
+        {loadError && groups.length > 0 && (
+          <InlineError
+            message="Could not refresh saved recipients"
+            onRetry={() => void loadContacts()}
+            retrying={loading}
+            className="mb-4"
+          />
+        )}
+        {groups.length === 0 && loading ? (
+          <ListSkeleton rows={4} label="Loading saved recipients" />
+        ) : groups.length === 0 && loadError ? (
+          <InlineError
+            message="Could not load saved recipients"
+            onRetry={() => void loadContacts()}
+            className="mt-4"
+          />
+        ) : groups.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-5 pb-12 text-center">
             <div className="flex size-14 items-center justify-center rounded-full bg-card text-muted">
               <Icon icon="lucide:book-user" width={25} height={25} />

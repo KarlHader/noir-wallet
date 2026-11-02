@@ -1,6 +1,7 @@
 import {
   TRANSACTION_FAILURE_CODES,
   TRANSACTION_LIFECYCLE_STATUSES,
+  parseTransactionAssetEffects,
   type TransactionFailureCode,
   type TransactionGraph,
   type TransactionLifecycleStatus
@@ -95,10 +96,21 @@ function parseEvidence(
     'blockHash',
     'blockHeight',
     'confirmations',
-    'requiredConfirmations'
+    'requiredConfirmations',
+    'assetEffects'
   ])
   if (Object.keys(evidence).some(key => !allowedEvidence.has(key))) {
     throw new Error('Invalid EVM Activity evidence fields')
+  }
+  if (evidence.assetEffects !== undefined) {
+    const effects = parseTransactionAssetEffects(evidence.assetEffects)
+    if (
+      !evidence.transactionHash ||
+      !chainId.startsWith('eip155:') ||
+      effects.changes.some(change => !change.assetId.startsWith(`${chainId}/`))
+    ) {
+      throw new Error('Invalid EVM Activity asset effects')
+    }
   }
   const hashPattern = chainId.startsWith('eip155:')
     ? /^0x[0-9a-fA-F]{64}$/

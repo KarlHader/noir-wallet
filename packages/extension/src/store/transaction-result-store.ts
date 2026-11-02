@@ -76,8 +76,9 @@ interface TransactionResultStore {
   updateSwapStatus: (status: SwapStatus) => void
   updateSwapOriginTransaction: (
     chain: string,
-    txHash: string,
-    transaction?: { accountKey: string; transactionId: string }
+    txHash: string | undefined,
+    transaction?: { accountKey: string; transactionId: string },
+    quoteHandle?: string
   ) => void
   updateConfidentialFunding: (input: {
     phase: ConfidentialFundingPhase
@@ -119,14 +120,15 @@ export const useTransactionResultStore = create<TransactionResultStore>()((set, 
     if (merged !== current.status) set({ data: { ...current, status: merged } })
   },
 
-  updateSwapOriginTransaction: (chain, txHash, transaction) => {
+  updateSwapOriginTransaction: (chain, txHash, transaction, quoteHandle) => {
     const current = get().data
     if (!current || current.type !== 'swap') return
+    if (quoteHandle && current.rheaQuoteHandle !== quoteHandle) return
     set({
       data: {
         ...current,
         originChain: chain,
-        originTxHash: txHash,
+        ...(txHash ? { originTxHash: txHash } : {}),
         ...(transaction
           ? {
               zcashAccountKey: transaction.accountKey,

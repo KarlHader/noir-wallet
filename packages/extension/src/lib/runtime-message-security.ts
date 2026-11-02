@@ -611,7 +611,16 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   GET_CHAIN_ENDPOINT_SETTINGS: {},
-  APPLY_CHAIN_ENDPOINT_SETTINGS: { required: { settings: isRecord } },
+  APPLY_CHAIN_ENDPOINT_SETTINGS: {
+    required: { settings: isRecord },
+    optional: { expectedSettings: isRecord }
+  },
+  SAVE_CUSTOM_EVM_NETWORK: {
+    required: { network: isRecord },
+    optional: { expectedNetwork: isRecord }
+  },
+  REMOVE_CUSTOM_EVM_NETWORK: { required: { network: isRecord } },
+  SELECT_ACTIVE_EVM_CHAIN: { required: { chainId: isShortString } },
   GET_USER_EVM_ASSETS: {},
   GET_MANAGED_TOKEN_ASSETS: {},
   INSPECT_USER_EVM_ASSET: {
@@ -944,6 +953,9 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     SET_ACTIVE_BITCOIN_ADDRESS_TYPE: ['extension-page'],
     GET_CHAIN_ENDPOINT_SETTINGS: ['extension-page'],
     APPLY_CHAIN_ENDPOINT_SETTINGS: ['extension-page'],
+    SAVE_CUSTOM_EVM_NETWORK: ['extension-page'],
+    REMOVE_CUSTOM_EVM_NETWORK: ['extension-page'],
+    SELECT_ACTIVE_EVM_CHAIN: ['extension-page'],
     GET_USER_EVM_ASSETS: ['extension-page'],
     GET_MANAGED_TOKEN_ASSETS: ['extension-page'],
     INSPECT_USER_EVM_ASSET: ['extension-page'],

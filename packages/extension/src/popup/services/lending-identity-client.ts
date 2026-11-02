@@ -1,5 +1,4 @@
 import type { LendingSigningMode } from '@/core/services/lending-service'
-import { useWalletStore } from '@/store/wallet-store'
 
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -22,16 +21,16 @@ function parsePublicKeyResponse(value: unknown): string {
   return result.publicKey
 }
 
-async function getZcashPublicKey(signingMode: LendingSigningMode): Promise<string> {
-  const { currentWalletId, currentAccountId } = useWalletStore.getState()
-  if (!currentWalletId || !currentAccountId) {
-    throw new Error('Active Zcash account is unavailable')
-  }
+async function getZcashPublicKey(
+  walletId: string,
+  accountId: string,
+  signingMode: LendingSigningMode
+): Promise<string> {
   return parsePublicKeyResponse(
     await chrome.runtime.sendMessage({
       type: 'GET_ZCASH_LENDING_PUBLIC_KEY',
-      walletId: currentWalletId,
-      accountId: currentAccountId,
+      walletId,
+      accountId,
       signingMode
     })
   )

@@ -1,19 +1,11 @@
 import dayjs from './dayjs'
-import Big, { safeBig } from './big'
 import type { AddressType, WalletItem } from '@/types/wallet'
-import { ZEC_DECIMALS } from '@/config/wallet'
 import {
   getBlockExplorerBaseUrl,
   getBlockExplorerTransactionPath
 } from './block-explorer-preferences'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { detectZcashAddressType } from './zcash-memo'
-import {
-  formatDecimalAmount,
-  formatFiatAmount,
-  formatPercentage,
-  formatTokenQuantity
-} from './number-format'
 
 export function formatTimestamp(timestamp: string | number | Date, template?: string) {
   if (!dayjs(timestamp).isValid()) return ''
@@ -53,68 +45,6 @@ export function getAccountDisplayName(
   }
 
   return wasmName
-}
-
-export function formatAmount(amount: string | number | undefined, decimals = ZEC_DECIMALS) {
-  if (!amount) return ''
-  try {
-    const n = safeBig(amount).div(safeBig(10).pow(decimals)).toFixed()
-    return n
-  } catch (error) {
-    return ''
-  }
-}
-
-export function parseAmount(amount: string | number | undefined, decimals = ZEC_DECIMALS) {
-  if (!amount) return ''
-  try {
-    return safeBig(amount).times(safeBig(10).pow(decimals)).toFixed(0, Big.roundDown)
-  } catch (error) {
-    return ''
-  }
-}
-
-interface FormatNumberOptions {
-  rm?: Big.RoundingMode
-  displayMinimum?: boolean
-  maxDigits?: number
-  fallback?: string
-}
-
-export function formatNumber(
-  val: string | number | null | undefined,
-  options?: FormatNumberOptions
-) {
-  if (options?.maxDigits !== undefined) {
-    return formatDecimalAmount(val, {
-      maximumFractionDigits: options.maxDigits,
-      roundingMode: options.rm,
-      displayMinimum: options.displayMinimum,
-      fallback: options.fallback
-    })
-  }
-  const display = formatTokenQuantity(val)
-  return display === '—' ? (options?.fallback ?? display) : display
-}
-
-export function formatPrice(
-  price: string | number | undefined,
-  options?: FormatNumberOptions & { showSign?: boolean }
-) {
-  return formatFiatAmount(price, options)
-}
-
-export function formatPercent(
-  val: string | number | undefined,
-  options?: {
-    maxDigits?: number
-    showPlus?: boolean
-    decimals?: number
-    rm?: Big.RoundingMode
-    displayMinimum?: boolean
-  }
-) {
-  return formatPercentage(val, options)
 }
 
 export function formatChainName(blockchain: string): string {

@@ -2,6 +2,8 @@
 
 The shared classifier and exact user-facing messages are defined in [errors.ts](../packages/extension/src/lib/errors.ts). It uses the first matching rule in source order. Pages also perform field validation and operation-specific error handling, so check the call site before assuming that a message below is always displayed.
 
+RHEA Swap uses [rhea-swap-client.ts](../packages/extension/src/popup/services/rhea-swap-client.ts) to show a provider minimum as `Minimum swap amount is $1,000.` (using the amount returned by the provider) and an explicit unavailable route as `No swap route is available for this transfer.` Unknown or invalid quote responses retain the shared generic error.
+
 `classifyError()` returns a safe `userMessage`, the original raw `technicalMessage`, and a `retryable` flag. The raw cause is retained for internal diagnosis; it must not be copied into user-facing text or analytics. The retryable flag does not itself start a retry.
 
 ## Shared Classifier
@@ -45,6 +47,7 @@ The shared classifier and exact user-facing messages are defined in [errors.ts](
 | Cannot remove the last account. Each wallet needs at least one account.         | Attempt to remove the only account                                                                                                                    | No        |
 | Too many failed attempts. Account temporarily locked.                           | Temporary lock after repeated password failures                                                                                                       | No        |
 | Insufficient balance for this transaction.                                      | Insufficient funds                                                                                                                                    | No        |
+| Insufficient native balance for the amount and network fee.                     | EVM native balance cannot cover the amount and maximum gas                                                                                            | No        |
 | Amount is too small to send.                                                    | Dust threshold                                                                                                                                        | No        |
 | Invalid recipient address. Please check and try again.                          | Invalid address                                                                                                                                       | No        |
 | No transparent funds available to shield.                                       | No eligible transparent funds                                                                                                                         | No        |

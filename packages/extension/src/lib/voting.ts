@@ -1,4 +1,6 @@
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { ZEC_DECIMALS } from '@/config/wallet'
+import { formatBaseUnitAmount } from './number-format'
 import type { KeySource } from '@/types'
 import type {
   BallotDecision,
@@ -124,10 +126,7 @@ export function formatVotingPower(value: string | undefined): string {
 
 export function formatVotingZec(valueZats: string | undefined): string {
   if (!valueZats || !/^\d+$/.test(valueZats)) return '-'
-  const zats = BigInt(valueZats)
-  const whole = zats / 100_000_000n
-  const fraction = (zats % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '')
-  return fraction ? `${whole.toLocaleString('en-US')}.${fraction}` : whole.toLocaleString('en-US')
+  return formatBaseUnitAmount(BigInt(valueZats).toString(), ZEC_DECIMALS)
 }
 
 export function votingProgress(result: VotingActionResult): number {

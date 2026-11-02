@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { IAssetsView, Portfolio, IConfig, Asset } from '@rhea-finance/cross-chain-sdk'
 import {
+  checkEvmLendingMcaAccount,
   checkLendingMcaAccount,
   fetchLendingData,
   getUnclaimedAmount,
@@ -15,9 +16,10 @@ import { lendingIdentityClient } from '@/popup/services/lending-identity-client'
 import { clearLendingMcaCache } from '@/core/services/lending-mca-cache'
 import { useWalletStore } from './wallet-store'
 import { safeBig } from '@/lib/big'
-import { formatAmount } from '@/lib/format'
+import { formatAmount } from '@/lib/number-format'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import Big from 'big.js'
+import type { Network } from '@/types'
 import { DedupPromise } from '@/lib/async-utils'
 import {
   getLendingBalanceDecimals,
@@ -31,6 +33,20 @@ import {
 
 const LIVE_DATA_REUSE_MS = 60_000
 const refreshDedups = new Map<string, DedupPromise<void>>()
+
+export type LendingAccountContext = Readonly<{
+  walletId: string
+  accountId: string
+  network: Network
+  identity: Readonly<{ kind: 'zcash' }> | Readonly<{ kind: 'evm'; address: string }>
+}>
+
+export function getLendingAccountScope(context: LendingAccountContext): string {
+  if (!context.walletId || !context.accountId) {
+    throw new Error('Lending account identity is unavailable')
+  }
+  return `${context.walletId}:${context.accountId}:${context.network}`
+}
 
 interface LendingStore {
   accountScope: string | null
@@ -56,12 +72,16 @@ interface LendingStore {
   }
 
   error: string | null
+  mcaError: string | null
 
-  checkMcaStatus: () => Promise<void>
+  checkMcaStatus: (context: LendingAccountContext) => Promise<void>
   fetchLendingData: () => Promise<void>
-  refreshAll: (options?: { forceMcaCheck?: boolean }) => Promise<void>
-  hydrateMarketCache: () => Promise<void>
-  invalidateMcaStatus: () => void
+  refreshAll: (
+    context: LendingAccountContext,
+    options?: { forceMcaCheck?: boolean }
+  ) => Promise<void>
+  hydrateMarketCache: (context: LendingAccountContext) => Promise<void>
+  invalidateMcaStatus: (context: LendingAccountContext) => void
   reset: () => void
 
   getZecAsset: () => Asset | null
@@ -118,28 +138,26 @@ export const useLendingStore = create<LendingStore>()((set, get) => ({
   },
 
   error: null,
+  mcaError: null,
 
-  checkMcaStatus: async () => {
-    const { currentWalletId, currentAccountId } = useWalletStore.getState()
-    const accountScope = `${currentWalletId || 'none'}:${currentAccountId || 'none'}`
+  checkMcaStatus: async context => {
+    const accountScope = getLendingAccountScope(context)
     const refreshGeneration = get().refreshGeneration
-    set({ isCheckingMca: true, error: null })
+    set({ isCheckingMca: true, mcaError: null })
 
     try {
-      const result = await withRetry(async () => {
-        return checkLendingMcaAccount(
-          currentWalletId || undefined,
-          currentAccountId || undefined,
-          lendingIdentityClient.getZcashPublicKey
-        )
-      })
-      const active = useWalletStore.getState()
-      if (
-        get().accountScope !== accountScope ||
-        get().refreshGeneration !== refreshGeneration ||
-        active.currentWalletId !== currentWalletId ||
-        active.currentAccountId !== currentAccountId
-      ) {
+      const result = await withRetry(() =>
+        context.identity.kind === 'evm'
+          ? checkEvmLendingMcaAccount(context.identity.address).then(mcaId => ({
+              mcaId,
+              publicKey: null,
+              signingMode: 'derived' as const
+            }))
+          : checkLendingMcaAccount(context.walletId, context.accountId, mode =>
+              lendingIdentityClient.getZcashPublicKey(context.walletId, context.accountId, mode)
+            )
+      )
+      if (get().accountScope !== accountScope || get().refreshGeneration !== refreshGeneration) {
         return
       }
 
@@ -148,23 +166,18 @@ export const useLendingStore = create<LendingStore>()((set, get) => ({
         publicKey: result.publicKey,
         signingMode: result.signingMode,
         isCheckingMca: false,
-        mcaChecked: true
+        mcaChecked: true,
+        mcaError: null
       })
     } catch (err) {
-      const active = useWalletStore.getState()
-      if (
-        get().accountScope !== accountScope ||
-        get().refreshGeneration !== refreshGeneration ||
-        active.currentWalletId !== currentWalletId ||
-        active.currentAccountId !== currentAccountId
-      ) {
+      if (get().accountScope !== accountScope || get().refreshGeneration !== refreshGeneration) {
         return
       }
       console.error('[LendingStore] checkMcaStatus failed:', err)
       set({
         isCheckingMca: false,
-        mcaChecked: true,
-        error: err instanceof Error ? err.message : 'Failed to check lending account status'
+        mcaChecked: false,
+        mcaError: err instanceof Error ? err.message : 'Failed to check lending account status'
       })
     }
   },
@@ -209,24 +222,26 @@ export const useLendingStore = create<LendingStore>()((set, get) => ({
     }
   },
 
-  refreshAll: async (options?: { forceMcaCheck?: boolean }) => {
-    const { currentWalletId, currentAccountId } = useWalletStore.getState()
-    const refreshKey = `${currentWalletId || 'none'}:${currentAccountId || 'none'}`
+  refreshAll: async (context, options) => {
+    const refreshKey = getLendingAccountScope(context)
     if (get().accountScope !== refreshKey) {
       get().reset()
       set({ accountScope: refreshKey, isCheckingMca: true })
     }
+    const refreshGeneration = get().refreshGeneration
+    const dedupKey = `${refreshKey}:${refreshGeneration}`
 
-    let refreshDedup = refreshDedups.get(refreshKey)
+    let refreshDedup = refreshDedups.get(dedupKey)
     if (!refreshDedup) {
       refreshDedup = new DedupPromise<void>()
-      refreshDedups.set(refreshKey, refreshDedup)
+      refreshDedups.set(dedupKey, refreshDedup)
     }
 
     await refreshDedup.run(async () => {
       if (!get().dataLoaded) {
         const cachedMarkets = await readLendingMarketCache(refreshKey)
-        if (get().accountScope !== refreshKey) return
+        if (get().accountScope !== refreshKey || get().refreshGeneration !== refreshGeneration)
+          return
         if (cachedMarkets.length > 0) {
           set({ cachedMarketAssets: cachedMarkets, dataLoaded: true })
         }
@@ -234,59 +249,54 @@ export const useLendingStore = create<LendingStore>()((set, get) => ({
       const lastRefreshedAt = get().lastRefreshedAt
       const canReuseLiveData =
         !options?.forceMcaCheck &&
+        get().mcaChecked &&
         lastRefreshedAt !== null &&
         Date.now() - lastRefreshedAt < LIVE_DATA_REUSE_MS
       if (canReuseLiveData) return
       const shouldCheckMca = !get().mcaChecked || options?.forceMcaCheck
       let loadedMarketPreview = false
       if (shouldCheckMca) {
-        if (options?.forceMcaCheck && currentWalletId && currentAccountId) {
-          clearLendingMcaCache(currentWalletId, currentAccountId)
+        if (options?.forceMcaCheck && context.identity.kind === 'zcash') {
+          clearLendingMcaCache(context.walletId, context.accountId)
         }
-        const mcaCheck = get().checkMcaStatus()
+        const mcaCheck = get().checkMcaStatus(context)
         if (!get().dataLoaded) {
           loadedMarketPreview = true
           await get().fetchLendingData()
         }
         await mcaCheck
       }
-      if (get().accountScope !== refreshKey) return
+      if (get().accountScope !== refreshKey || get().refreshGeneration !== refreshGeneration) return
       if (!loadedMarketPreview || get().mcaId) {
         await get().fetchLendingData()
       }
     })
 
     if (!refreshDedup.isPending) {
-      refreshDedups.delete(refreshKey)
+      refreshDedups.delete(dedupKey)
     }
   },
 
-  hydrateMarketCache: async () => {
-    const { currentWalletId, currentAccountId } = useWalletStore.getState()
-    if (!currentWalletId || !currentAccountId) return
-    const scope = `${currentWalletId}:${currentAccountId}`
-    if (get().accountScope !== null && get().accountScope !== scope) return
+  hydrateMarketCache: async context => {
+    const scope = getLendingAccountScope(context)
+    if (get().accountScope !== null && get().accountScope !== scope) get().reset()
     if (get().accountScope === null) set({ accountScope: scope })
     const generation = get().refreshGeneration
     const markets = await readLendingMarketCache(scope)
-    const active = useWalletStore.getState()
     if (
       markets.length === 0 ||
       get().accountScope !== scope ||
       get().refreshGeneration !== generation ||
-      get().lastRefreshedAt !== null ||
-      active.currentWalletId !== currentWalletId ||
-      active.currentAccountId !== currentAccountId
+      get().lastRefreshedAt !== null
     ) {
       return
     }
     set({ cachedMarketAssets: markets, dataLoaded: true })
   },
 
-  invalidateMcaStatus: () => {
-    const { currentWalletId, currentAccountId } = useWalletStore.getState()
-    if (currentWalletId && currentAccountId) {
-      clearLendingMcaCache(currentWalletId, currentAccountId)
+  invalidateMcaStatus: context => {
+    if (context.identity.kind === 'zcash') {
+      clearLendingMcaCache(context.walletId, context.accountId)
     }
     set({ mcaChecked: false })
   },
@@ -312,7 +322,8 @@ export const useLendingStore = create<LendingStore>()((set, get) => ({
         amountUsd: '0',
         rawAmount: '0'
       },
-      error: null
+      error: null,
+      mcaError: null
     }),
 
   getZecAsset: () => getZecAssetData(get().assetsView),

@@ -59,10 +59,17 @@ export function AmountDisplay({
           className="w-72 max-w-[calc(100vw-2rem)] rounded-lg p-3"
         >
           <div className="flex min-w-0 items-start gap-2">
-            <span className="min-w-0 flex-1 break-all font-mono text-sm tabular-nums">
-              {prefix}
-              {review.full}
-              {symbol ? ` ${symbol}` : ''}
+            <span className="min-w-0 flex-1 font-mono text-sm tabular-nums">
+              <span className="break-all">
+                {prefix}
+                {review.full}
+              </span>
+              {symbol && (
+                <>
+                  {' '}
+                  <span className="whitespace-nowrap">{symbol}</span>
+                </>
+              )}
             </span>
             <button
               type="button"

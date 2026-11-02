@@ -34,6 +34,8 @@ interface MarketPriceChartProps {
   readonly changeLabel: string | null
   readonly changeDirection: 'positive' | 'negative' | 'neutral'
   readonly delayed: boolean
+  readonly showRanges?: boolean
+  readonly availableRanges: readonly AssetMarketHistoryRange[]
   readonly onRangeChange: (range: AssetMarketHistoryRange) => void
 }
 
@@ -46,6 +48,8 @@ export function MarketPriceChart({
   changeLabel,
   changeDirection,
   delayed,
+  showRanges = true,
+  availableRanges,
   onRangeChange
 }: MarketPriceChartProps) {
   const gradientId = useId().replace(/:/g, '')
@@ -84,10 +88,7 @@ export function MarketPriceChart({
     <div>
       <div
         ref={surfaceRef}
-        className={cn(
-          'relative touch-none overflow-hidden',
-          !loading && !chart ? 'h-14' : 'h-[148px]'
-        )}
+        className="relative h-[148px] touch-none overflow-hidden"
         aria-live="polite"
         onPointerMove={event => {
           if (chart) updateActiveFromPointer(event.clientX)
@@ -198,24 +199,26 @@ export function MarketPriceChart({
         ) : null}
       </div>
 
-      <div className="mt-2 grid grid-cols-6 gap-1" aria-label="Price history range">
-        {(Object.keys(RANGE_LABELS) as AssetMarketHistoryRange[]).map(item => (
-          <button
-            key={item}
-            type="button"
-            aria-pressed={range === item}
-            onClick={() => onRangeChange(item)}
-            className={cn(
-              'h-7 rounded-md text-[11px] font-medium transition-colors',
-              range === item
-                ? 'bg-white/10 text-foreground'
-                : 'text-muted hover:bg-white/5 hover:text-foreground'
-            )}
-          >
-            {RANGE_LABELS[item]}
-          </button>
-        ))}
-      </div>
+      {showRanges && (
+        <div className="mt-2 flex gap-1" aria-label="Price history range">
+          {availableRanges.map(item => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={range === item}
+              onClick={() => onRangeChange(item)}
+              className={cn(
+                'h-7 flex-1 rounded-md text-[11px] font-medium transition-colors',
+                range === item
+                  ? 'bg-white/10 text-foreground'
+                  : 'text-muted hover:bg-white/5 hover:text-foreground'
+              )}
+            >
+              {RANGE_LABELS[item]}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

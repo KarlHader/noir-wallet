@@ -8,6 +8,7 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { useAddressBookStore } from '@/store/address-book-store'
 import type { TransactionStep } from '@/popup/hooks/useTransaction'
 import { getStandardTransactionResultCopy } from '@/lib/transaction-status-copy'
+import { InlineError } from '@/popup/components/common/InlineError'
 
 export interface StandardTransactionResultProps {
   step: TransactionStep
@@ -32,6 +33,7 @@ export interface StandardTransactionResultProps {
   failureAction?: {
     label: string
     onClick: () => void
+    retry?: boolean
   }
   onDone: () => void
   onCancel?: () => void
@@ -75,7 +77,7 @@ export function StandardTransactionResult({
       </Button>
     ) : step === 'failed' ? (
       <div className="space-y-3">
-        {failureAction && (
+        {failureAction && !failureAction.retry && (
           <Button onClick={failureAction.onClick} className="w-full h-[45px]">
             {failureAction.label}
           </Button>
@@ -92,9 +94,12 @@ export function StandardTransactionResult({
     <TransactionResult
       status={baseConfig.resultStatus}
       title={title}
-      description={description}
+      description={step === 'failed' && failureAction?.retry ? undefined : description}
       footer={footer}
     >
+      {step === 'failed' && failureAction?.retry && (
+        <InlineError message={description || error || title} onRetry={failureAction.onClick} />
+      )}
       {step !== 'failed' && (
         <div className="w-full space-y-3">
           <div className="flex justify-between items-center py-3 border-b border-white/10">

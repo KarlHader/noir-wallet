@@ -6,9 +6,9 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatPortfolioNetworkName,
   parseDisplayUnitAmount
-} from '@/popup/components/portfolio/portfolio-format'
+} from '@/lib/number-format'
+import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import {

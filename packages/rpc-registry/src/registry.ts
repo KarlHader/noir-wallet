@@ -62,7 +62,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-09-30T10:47:10.000Z',
+  updatedAt: '2026-10-27T08:30:27.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -72,6 +72,11 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       iconChain: 'zec',
       probe: 'zcash-lightwalletd-grpc-web',
       endpoints: [
+        {
+          id: 'zec-rocks',
+          label: 'zec.rocks',
+          url: 'https://zjs.zec.rocks'
+        },
         {
           id: 'deltarpc',
           label: 'DeltaRPC',
@@ -127,7 +132,8 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
     chain('eip155:1', MAINNET, 'Ethereum', 'eth', EVM, [
       ['deltarpc', 'DeltaRPC', 'https://eth.deltarpc.com'],
       ['publicnode', 'PublicNode', 'https://ethereum-rpc.publicnode.com'],
-      ['drpc', 'dRPC', 'https://eth.drpc.org']
+      ['drpc', 'dRPC', 'https://eth.drpc.org'],
+      ['blockpi', 'BlockPI', 'https://ethereum.public.blockpi.network/v1/rpc/public']
     ]),
     chain('eip155:56', MAINNET, 'BNB Chain', 'bnb', EVM, [
       ['official', 'BNB Chain', 'https://bsc-dataseed.bnbchain.org'],
@@ -137,7 +143,8 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
     chain('eip155:42161', MAINNET, 'Arbitrum', 'arb', EVM, [
       ['drpc', 'dRPC', 'https://arbitrum.drpc.org'],
       ['publicnode', 'PublicNode', 'https://arbitrum-one-rpc.publicnode.com'],
-      ['zan', 'ZAN', 'https://api.zan.top/arb-one']
+      ['zan', 'ZAN', 'https://api.zan.top/arb-one'],
+      ['official', 'Arbitrum', 'https://arb1.arbitrum.io/rpc']
     ]),
     chain('eip155:8453', MAINNET, 'Base', 'base', EVM, [
       ['official', 'Base', 'https://mainnet.base.org'],
@@ -259,7 +266,7 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
 
 export const ZCASH_RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-09-17T07:57:09.000Z',
+  updatedAt: '2026-10-09T02:55:00.000Z',
   chains: RPC_REGISTRY.chains.filter(chain => chain.id === 'zcash-mainnet')
 }
 

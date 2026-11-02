@@ -20,7 +20,8 @@ On mainnet, Noir Wallet can route supported swaps through external liquidity and
   <Step>
     ### Review the quote
 
-    Check the selected destination or refund address before requesting a quote. On **Review Quote**,
+    For ZEC, choose an address from a Zcash wallet or enter a destination address if the current
+    account has none. Check the destination or refund address before requesting a quote. On **Review Quote**,
     check the recipient, estimated output, minimum received, price impact, slippage, and any ZEC network fee.
     A quote can change before submission.
 
@@ -33,6 +34,9 @@ On mainnet, Noir Wallet can route supported swaps through external liquidity and
     Depending on the chain and account, this may require a hardware-signing step. Check the source
     network and token before approval; sending another token or using another network can prevent
     a refund. The wallet then monitors the deposit or relay.
+
+    If an EVM token needs a separate approval, submit it first. Once it is confirmed, select
+    **Continue Swap** to refresh the quote and review the swap before confirming it.
 
   </Step>
   <Step>

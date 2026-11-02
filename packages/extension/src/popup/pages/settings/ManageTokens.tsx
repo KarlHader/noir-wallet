@@ -14,6 +14,7 @@ import { toast } from '@/store/toast-store'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import { NetworkFilter } from '../../components/common/NetworkFilter'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { TokenIcon } from '../../components/tokens/TokenIcon'
 import { Button } from '../../components/ui/button'
 import { Switch } from '../../components/ui/switch'
@@ -380,12 +381,7 @@ export function ManageTokens() {
         )}
 
         {!loading && loadError && (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm">
-            <p>Custom Tokens could not be loaded.</p>
-            <Button variant="ghost" size="sm" className="mt-2 px-0 text-primary" onClick={load}>
-              Try Again
-            </Button>
-          </div>
+          <InlineError message="Custom Tokens could not be loaded." onRetry={load} />
         )}
 
         {!loading && !loadError && availableManagedAssets.length === 0 && (

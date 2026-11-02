@@ -40,6 +40,7 @@ interface SwapStatusDisplayProps {
   resumingConfidentialFunding?: boolean
   onClose: () => void
   onViewActivity: () => void
+  viewActivityDisabled?: boolean
 }
 
 function TxHashLink({
@@ -104,7 +105,8 @@ export function SwapStatusDisplay({
   onResumeConfidentialFunding,
   resumingConfidentialFunding,
   onClose,
-  onViewActivity
+  onViewActivity,
+  viewActivityDisabled
 }: SwapStatusDisplayProps) {
   const currentStatus = status?.status || 'PENDING_DEPOSIT'
   const destinationTxHash = status?.swapDetails?.destinationChainTxHashes?.[0]?.hash
@@ -169,6 +171,7 @@ export function SwapStatusDisplay({
         ) : (
           <Button
             onClick={resultAction === 'done' ? onClose : onViewActivity}
+            disabled={resultAction !== 'done' && viewActivityDisabled}
             className="h-[45px] w-full"
           >
             {resultAction === 'done' ? 'Done' : 'View Activity'}

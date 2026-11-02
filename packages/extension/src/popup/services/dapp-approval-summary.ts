@@ -1,4 +1,6 @@
 import { parseChainId } from '@/core/chains/registry'
+import { resolveEvmChainIconAlias } from '@/config/icons'
+import { parseCustomServiceUrl } from '@/core/chains/chain-endpoint-settings'
 import {
   parseSigningSummary,
   type BitcoinBip322MessageSummary,
@@ -25,6 +27,62 @@ export interface EvmPrivateTransferApprovalSummary {
   readonly router: string
   readonly expiresAt: number
   readonly approvalRequired: boolean
+}
+
+export interface EvmAddNetworkApprovalSummary {
+  readonly chainId: `eip155:${number}`
+  readonly numericChainId: number
+  readonly chainName: string
+  readonly iconChain: string
+  readonly nativeCurrency: Readonly<{ name: string; symbol: string; decimals: number }>
+  readonly rpcUrl: string
+  readonly explorerUrl?: string
+}
+
+export function parseEvmAddNetworkApproval(value: unknown): EvmAddNetworkApprovalSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const data = value as Record<string, unknown>
+  const currency = data.nativeCurrency
+  if (!currency || typeof currency !== 'object' || Array.isArray(currency)) return null
+  const nativeCurrency = currency as Record<string, unknown>
+  if (
+    data.action !== 'add' ||
+    typeof data.chainId !== 'string' ||
+    !/^eip155:[1-9][0-9]*$/.test(data.chainId) ||
+    !Number.isSafeInteger(Number(data.chainId.slice(7))) ||
+    typeof data.chainName !== 'string' ||
+    data.chainName.length === 0 ||
+    typeof nativeCurrency.name !== 'string' ||
+    nativeCurrency.name.length === 0 ||
+    typeof nativeCurrency.symbol !== 'string' ||
+    nativeCurrency.symbol.length === 0 ||
+    !Number.isSafeInteger(nativeCurrency.decimals) ||
+    (nativeCurrency.decimals as number) < 0 ||
+    (nativeCurrency.decimals as number) > 255
+  )
+    return null
+  try {
+    const rpcUrl = parseCustomServiceUrl(data.rpcUrl, 'custom RPC URL')
+    const explorerUrl =
+      data.explorerUrl === undefined
+        ? undefined
+        : parseCustomServiceUrl(data.explorerUrl, 'custom block explorer URL')
+    return Object.freeze({
+      chainId: data.chainId as `eip155:${number}`,
+      numericChainId: Number(data.chainId.slice(7)),
+      chainName: data.chainName,
+      iconChain: resolveEvmChainIconAlias(data.chainId),
+      nativeCurrency: Object.freeze({
+        name: nativeCurrency.name,
+        symbol: nativeCurrency.symbol,
+        decimals: nativeCurrency.decimals as number
+      }),
+      rpcUrl,
+      ...(explorerUrl === undefined ? {} : { explorerUrl })
+    })
+  } catch {
+    return null
+  }
 }
 
 export function parseEvmPrivateTransferApproval(

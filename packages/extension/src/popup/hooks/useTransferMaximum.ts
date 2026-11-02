@@ -8,7 +8,7 @@ export function useTransferMaximum(options: {
   readonly enabled: boolean
   readonly requestKey: string
   readonly estimate: () => Promise<QuoteDepositMaximum>
-  readonly fallback: () => QuoteDepositMaximum
+  readonly fallback?: () => QuoteDepositMaximum
 }) {
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
@@ -25,7 +25,8 @@ export function useTransferMaximum(options: {
     value: QuoteDepositMaximum | null
     loading: boolean
     fallbackUsed: boolean
-  }>({ key: '', value: null, loading: false, fallbackUsed: false })
+    error: unknown
+  }>({ key: '', value: null, loading: false, fallbackUsed: false, error: null })
   useEffect(() => {
     sequence.current += 1
     return () => {
@@ -36,18 +37,19 @@ export function useTransferMaximum(options: {
   const request = async () => {
     if (!latest.current.enabled) return
     const current = ++sequence.current
-    setState({ key: requestKey, value: null, loading: true, fallbackUsed: false })
+    setState({ key: requestKey, value: null, loading: true, fallbackUsed: false, error: null })
     try {
       const value = await latest.current.estimate()
       if (current === sequence.current)
-        setState({ key: requestKey, value, loading: false, fallbackUsed: false })
-    } catch {
+        setState({ key: requestKey, value, loading: false, fallbackUsed: false, error: null })
+    } catch (error) {
       if (current === sequence.current)
         setState({
           key: requestKey,
-          value: latest.current.fallback(),
+          value: latest.current.fallback?.() ?? null,
           loading: false,
-          fallbackUsed: true
+          fallbackUsed: Boolean(latest.current.fallback),
+          error
         })
     }
   }
@@ -56,6 +58,11 @@ export function useTransferMaximum(options: {
     value: current ? state.value : null,
     loading: current && state.loading,
     fallbackUsed: current && state.fallbackUsed,
+    error: current ? state.error : null,
+    update: (value: QuoteDepositMaximum) => {
+      sequence.current += 1
+      setState({ key: requestKey, value, loading: false, fallbackUsed: false, error: null })
+    },
     request
   }
 }

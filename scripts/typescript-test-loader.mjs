@@ -1,11 +1,12 @@
 import { readFile, stat } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const require = createRequire(path.resolve('package.json'))
+const extensionDirectory = fileURLToPath(new URL('../packages/extension/', import.meta.url))
+const require = createRequire(new URL('../packages/extension/package.json', import.meta.url))
 const ts = require('typescript')
-const sourceDirectory = pathToFileURL(path.resolve('src') + path.sep)
+const sourceDirectory = pathToFileURL(`${extensionDirectory}/src/`)
+const sdkPackageJsonUrl = new URL('../packages/sdk/package.json', import.meta.url).href
 
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === 'typescript') {
@@ -31,6 +32,20 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
+  if (url === sdkPackageJsonUrl) {
+    const data = JSON.parse(await readFile(new URL(url), 'utf8'))
+    const namedExports = Object.keys(data)
+      .filter(name => /^[A-Za-z_$][\w$]*$/.test(name) && name !== 'default')
+      .map(
+        (name, index) =>
+          `const value${index} = data[${JSON.stringify(name)}]; export { value${index} as ${name} };`
+      )
+    return {
+      format: 'module',
+      source: `const data = ${JSON.stringify(data)};\nexport default data;\n${namedExports.join('\n')}`,
+      shortCircuit: true
+    }
+  }
   if (url.startsWith('file:') && /\.tsx?$/.test(new URL(url).pathname)) {
     const source = await readFile(new URL(url), 'utf8')
     const result = ts.transpileModule(source, {

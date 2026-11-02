@@ -165,6 +165,19 @@ function validateInput(input: PrivateKeyProvisioningInput): void {
   }
 }
 
+function privateKeyScopeMatches(
+  candidate: {
+    readonly chainFamily: PrivateKeyCredentialScope['chainFamily']
+    readonly bitcoinNetwork?: Network
+  },
+  scope: PrivateKeyCredentialScope
+): boolean {
+  return (
+    candidate.chainFamily === scope.chainFamily &&
+    candidate.bitcoinNetwork === (scope.chainFamily === 'bip122' ? scope.bitcoinNetwork : undefined)
+  )
+}
+
 function nextJournal(
   journal: CredentialTransactionJournal,
   phase: CredentialTransactionPhase,
@@ -630,45 +643,58 @@ export class PrivateKeyProvisioningCoordinator {
         derived.map(item => [item.chainId, item.address, item.publicKey])
       ])
     )
-    const identity: ProvisioningIdentity = Object.freeze({
-      suffix: identityHash.slice(0, 32),
-      keyDomainId: parseKeyDomainId(`wallet:private-key-v2:${identityHash}`),
-      credentialGenerationId: parseCredentialGenerationId(
-        `credential-generation:private-key-v2:${identityHash}`
-      ),
-      credentialSetRef: parseCredentialRef(`credential-set:private-key-v2:${identityHash}`),
-      engineCredentialRef: parseEngineCredentialRef(
-        `credential:private-key-v2:${identityHash}:multichain`
-      )
-    })
+    const keyDomainId = parseKeyDomainId(`wallet:private-key-v2:${identityHash}`)
     const activePointer = await this.options.storageRepository.getActivePointer()
     const source = activePointer
       ? await this.options.storageRepository.getSnapshot(activePointer.generationId)
       : null
     if (activePointer && !source) throw new Error('Active Storage V2 generation is missing')
-    const existing = source?.keyDomains.find(item => item.id === identity.keyDomainId)
+    const existing = source?.keyDomains.find(item => item.id === keyDomainId)
     if (source && existing) {
-      if (existing.credentialRef !== identity.credentialSetRef)
+      if (
+        existing.source.kind !== 'private-key' ||
+        !privateKeyScopeMatches(existing.source, scope)
+      ) {
         throw new Error('Existing imported Wallet identity is inconsistent')
+      }
       const existingSet = await this.options.credentialRepository.validateForActivation(
-        identity.credentialSetRef,
-        identity.keyDomainId
+        existing.credentialRef,
+        keyDomainId
       )
       if (existingSet.status !== 'active')
         throw new Error('Existing imported Wallet credential is not active')
-      return this.result('already-committed', source, identity, existingSet.record!.transactionId)
+      if (
+        existingSet.record?.manifest.source !== 'private-key' ||
+        !privateKeyScopeMatches(existingSet.record.manifest.privateKey, scope)
+      ) {
+        throw new Error('Existing imported Wallet credential source is inconsistent')
+      }
+      return this.result('already-committed', source, keyDomainId, existingSet.record.transactionId)
     }
     const transactionFingerprint = await sha256(
       JSON.stringify([
         'private-key-provision-v2',
         activePointer?.generationId ?? null,
-        identity.keyDomainId,
+        keyDomainId,
         input.displayName
       ])
     )
     const transactionId = parseCredentialTransactionId(
       `credential:private-key-v2:${transactionFingerprint}`
     )
+    const identity: ProvisioningIdentity = Object.freeze({
+      suffix: identityHash.slice(0, 32),
+      keyDomainId,
+      credentialGenerationId: parseCredentialGenerationId(
+        `credential-generation:private-key-v2:${transactionFingerprint}`
+      ),
+      credentialSetRef: parseCredentialRef(
+        `credential-set:private-key-v2:${transactionFingerprint}`
+      ),
+      engineCredentialRef: parseEngineCredentialRef(
+        `credential:private-key-v2:${transactionFingerprint}:multichain`
+      )
+    })
     const sourceFingerprint = parseStorageV2SourceFingerprint(
       await sha256(`storage-v2:private-key-v2:${transactionFingerprint}`)
     )
@@ -804,16 +830,16 @@ export class PrivateKeyProvisioningCoordinator {
   private result(
     status: PrivateKeyProvisioningResult['status'],
     snapshot: StorageV2Snapshot,
-    identity: ProvisioningIdentity,
+    keyDomainId: ProvisioningIdentity['keyDomainId'],
     transactionId: string
   ): PrivateKeyProvisioningResult {
-    const account = snapshot.accounts.find(item => item.keyDomainId === identity.keyDomainId)
+    const account = snapshot.accounts.find(item => item.keyDomainId === keyDomainId)
     if (!account) throw new Error('Imported private-key Account is missing')
     return Object.freeze({
       status,
       generationId: snapshot.manifest.generationId,
       transactionId,
-      keyDomainId: identity.keyDomainId,
+      keyDomainId,
       accountId: account.id
     })
   }

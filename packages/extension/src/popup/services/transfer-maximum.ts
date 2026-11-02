@@ -84,17 +84,22 @@ export function isTransferAmountSpendable(
   )
 }
 
-export async function estimateNativeTransferMaximum(input: {
-  readonly source: WalletOwnedQuoteAsset
-  readonly recipient: string
-  readonly feeSelection?: EvmFeeSelection
-  readonly feeTier?: 'low' | 'standard' | 'fast'
-}) {
-  return quoteDepositTransferClient.estimateMaximum({
+export async function estimateNativeTransferMaximum(
+  input: {
+    readonly source: WalletOwnedQuoteAsset
+    readonly recipient: string
+    readonly feeSelection?: EvmFeeSelection
+    readonly feeTier?: 'low' | 'standard' | 'fast'
+    readonly executionMode?: 'main' | 'private'
+  },
+  client: Pick<typeof quoteDepositTransferClient, 'estimateMaximum'> = quoteDepositTransferClient
+) {
+  return client.estimateMaximum({
     source: input.source,
     depositAddress: input.recipient,
     feeSelection: input.feeSelection,
-    feeTier: input.feeTier
+    feeTier: input.feeTier,
+    executionMode: input.executionMode
   })
 }
 

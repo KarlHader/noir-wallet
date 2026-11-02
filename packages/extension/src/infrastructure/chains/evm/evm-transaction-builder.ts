@@ -686,7 +686,17 @@ function createTransferCall(
 } {
   let asset: AssetRegistryEntry
   try {
-    asset = input.assets.resolve(input.intent.assetId)
+    const listed = input.assets.get(input.intent.assetId)
+    const inspected = listed ?? input.assets.inspect(input.intent.assetId)
+    if (
+      !inspected ||
+      (inspected.verification === 'unverified' &&
+        (inspected.asset.kind !== 'token' || inspected.asset.namespace !== 'erc20')) ||
+      inspected.verification === 'blocked'
+    ) {
+      invalidIntent('EVM transfer asset is not listed')
+    }
+    asset = inspected
   } catch {
     invalidIntent('EVM transfer asset is not listed')
   }

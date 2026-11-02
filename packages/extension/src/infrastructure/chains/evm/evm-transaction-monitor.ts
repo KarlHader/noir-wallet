@@ -1,11 +1,13 @@
 import { parseAccountId } from '@/core/accounts/domain'
-import { parseChainId } from '@/core/chains/registry'
+import type { AssetId } from '@/core/chains/domain'
+import { createAssetId, parseAssetId, parseChainId } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   parseTransactionEventId,
   type TransactionAccountScope,
   type TransactionGraph,
-  type TransactionSegment
+  type TransactionSegment,
+  type TransactionAssetEffects
 } from '@/core/transactions/domain'
 import { DedupPromise } from '@/lib/async-utils'
 import type { TransactionRepository } from '@/ports/repositories'
@@ -38,6 +40,75 @@ const EVM_NONCE_REFERENCE_PATTERN = /^evm-nonce:(0|[1-9][0-9]{0,77})$/
 const EVM_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
 const EVM_HASH_PATTERN = /^0x[0-9a-f]{64}$/
 const MAXIMUM_UINT256 = 1n << 256n
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+const MAXIMUM_RECEIPT_ASSETS = 128
+
+function receiptAssetEffects(
+  graph: TransactionGraph,
+  observation: EvmTransactionObservation,
+  chainId: string
+): TransactionAssetEffects | undefined {
+  if (observation.status !== 'final') return undefined
+  const sender = graph.root.intent?.sender
+  if (!sender || sender.chainId !== chainId || !EVM_ADDRESS_PATTERN.test(sender.address))
+    return undefined
+  const account = sender.address.toLowerCase()
+  const changes = new Map<AssetId, bigint>()
+  const primary = graph.root.intent?.primaryAmount
+  const recipient = graph.root.intent?.recipient
+  if (
+    primary &&
+    recipient?.chainId === chainId &&
+    EVM_ADDRESS_PATTERN.test(recipient.address) &&
+    recipient.address.toLowerCase() !== account &&
+    /^(0|[1-9][0-9]{0,77})$/.test(primary.amountRaw)
+  ) {
+    const parsed = parseAssetId(primary.assetId)
+    if (parsed.chainId === sender.chainId && parsed.namespace === 'slip44') {
+      const value = BigInt(primary.amountRaw)
+      if (value >= MAXIMUM_UINT256) return undefined
+      if (value > 0n) changes.set(primary.assetId, -value)
+    }
+  }
+  for (const log of observation.logs ?? []) {
+    if (
+      log.topics.length !== 3 ||
+      log.topics[0] !== TRANSFER_TOPIC ||
+      !/^0x[0-9a-f]{40}$/.test(log.address) ||
+      !/^0x[0-9a-f]{64}$/.test(log.data)
+    )
+      continue
+    const fromTopic = log.topics[1]
+    const toTopic = log.topics[2]
+    if (!/^0x0{24}[0-9a-f]{40}$/.test(fromTopic) || !/^0x0{24}[0-9a-f]{40}$/.test(toTopic)) continue
+    const from = `0x${fromTopic.slice(-40)}`
+    const to = `0x${toTopic.slice(-40)}`
+    if (from === to || (from !== account && to !== account)) continue
+    const amount = BigInt(log.data)
+    if (amount === 0n) continue
+    const assetId = createAssetId(sender.chainId, 'erc20', log.address)
+    changes.set(assetId, (changes.get(assetId) ?? 0n) + (to === account ? amount : -amount))
+    if (changes.size > MAXIMUM_RECEIPT_ASSETS) return undefined
+  }
+  if (observation.logs === undefined && changes.size === 0) return undefined
+  if ([...changes.values()].some(amount => (amount < 0n ? -amount : amount) >= MAXIMUM_UINT256))
+    return undefined
+  return Object.freeze({
+    source: 'receipt' as const,
+    completeness: 'partial' as const,
+    changes: Object.freeze(
+      [...changes.entries()]
+        .filter(([, amount]) => amount !== 0n)
+        .map(([assetId, amount]) =>
+          Object.freeze({
+            assetId,
+            direction: amount > 0n ? ('incoming' as const) : ('outgoing' as const),
+            amountRaw: (amount > 0n ? amount : -amount).toString()
+          })
+        )
+    )
+  })
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -362,11 +433,18 @@ export class EvmTransactionMonitor {
       observedAt
     })
     if (!event) return 'unchanged'
+    const assetEffects = receiptAssetEffects(graph, observation, this.chainId)
     const result = await this.repository.applySegmentEvent({
       scope: graph.root.scope,
       transactionId: graph.root.id,
       segmentId: segment.id,
-      event,
+      event:
+        assetEffects === undefined
+          ? event
+          : Object.freeze({
+              ...event,
+              evidence: Object.freeze({ ...event.evidence, assetEffects })
+            }),
       expectedRootRevision: graph.root.revision,
       expectedSegmentRevision: segment.revision
     })

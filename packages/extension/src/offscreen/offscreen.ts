@@ -717,7 +717,8 @@ async function ensureWalletInitialized(walletId?: string): Promise<void> {
   offscreenLog('Auto-reinitializing wallet from IndexedDB...', payload.walletId)
 
   const generationBefore = getWalletGeneration(walletId)
-  const reinitializing = (async () => {
+  let reinitializing: Promise<void> | undefined
+  reinitializing = (async () => {
     try {
       await waitForSyncOperationsWithGeneration(walletId, generationBefore)
       let dbBytes: Uint8Array | undefined
@@ -728,6 +729,7 @@ async function ensureWalletInitialized(walletId?: string): Promise<void> {
           dbBytes = loaded
         }
       }
+      assertWalletGeneration(walletId, generationBefore)
       await zcashWorkerClient.requestToWorker('init', {
         walletId: payload.walletId,
         network: payload.network,
@@ -738,9 +740,13 @@ async function ensureWalletInitialized(walletId?: string): Promise<void> {
       trySetupLogForwarding()
       offscreenLog('Wallet reinitialized successfully', payload.walletId)
     } catch (e) {
-      offscreenError('Wallet reinit failed', e, payload.walletId)
+      if (getWalletGeneration(walletId) === generationBefore) {
+        offscreenError('Wallet reinit failed', e, payload.walletId)
+      }
     } finally {
-      reinitializingByWallet.delete(walletId)
+      if (reinitializingByWallet.get(walletId) === reinitializing) {
+        reinitializingByWallet.delete(walletId)
+      }
     }
   })()
 
@@ -773,6 +779,12 @@ function trySetupLogForwarding() {
 
 function isWalletNotInitializedError(msg: string): boolean {
   return msg.includes('not initialized') || msg.includes('Worker crashed')
+}
+
+function isCancelledWorkerRequest(walletId: string, generation: number, message: string): boolean {
+  return (
+    getWalletGeneration(walletId) !== generation || message.startsWith('Worker request cancelled:')
+  )
 }
 
 function isTransactionMutation(method: string): boolean {
@@ -1424,11 +1436,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ error: 'syncSessionSetup: missing walletId' })
       return true
     }
+    const generation = getWalletGeneration(walletId)
     zcashWorkerClient
       .requestToWorker('wallet.syncSessionSetup', { walletId })
       .then(() => sendResponse({ result: true }))
       .catch(async error => {
         const msg = error?.message || String(error)
+        if (isCancelledWorkerRequest(walletId, generation, msg)) {
+          sendResponse({ error: 'Wallet sync session cancelled' })
+          return
+        }
         offscreenError('syncSessionSetup failed', error, walletId)
         if (isWalletNotInitializedError(msg)) {
           await ensureWalletInitialized(walletId)
@@ -1446,6 +1463,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       journalWalletId?: string
       refresh?: boolean
     }
+    const generation = getWalletGeneration(walletId)
     const batchPromise = zcashWorkerClient.requestToWorker('wallet.prepareSyncBatch', {
       walletId,
       batchSize,
@@ -1473,6 +1491,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .catch(async error => {
         const msg = error?.message || String(error)
+        if (isCancelledWorkerRequest(walletId, generation, msg)) {
+          sendResponse({ error: 'Wallet sync batch cancelled' })
+          return
+        }
         offscreenError('prepareSyncBatchWithJournal failed', error, walletId)
         if (isWalletNotInitializedError(msg)) {
           await ensureWalletInitialized(walletId)

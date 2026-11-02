@@ -1,3 +1,4 @@
+import { InlineError } from './InlineError'
 import { useState, useEffect } from 'react'
 import { Button } from '../ui/button'
 import WalletIcon from '@/images/wallet-icon.svg'
@@ -223,9 +224,11 @@ export function UnlockForm({
           />
 
           {activation?.error && (
-            <p role="alert" className="text-sm text-danger">
-              {activation.error}
-            </p>
+            <InlineError
+              message={activation.error}
+              onRetry={activation.onRetry}
+              retrying={isLoading}
+            />
           )}
 
           {isAccountLocked && lockRemainingSeconds > 0 && (
@@ -250,20 +253,20 @@ export function UnlockForm({
               Cancel
             </Button>
           )}
-          <Button
-            onClick={activation?.error ? activation.onRetry : handleUnlock}
-            disabled={activation?.pending ? !activation.error : !password || isAccountLocked}
-            isLoading={isLoading || (activation?.pending && !activation.error)}
-            className={`h-[45px] ${showCancelButton ? 'flex-1' : 'w-full'}`}
-          >
-            {activation?.error
-              ? 'Retry'
-              : activation?.pending
+          {!activation?.error && (
+            <Button
+              onClick={handleUnlock}
+              disabled={activation?.pending ? !activation.error : !password || isAccountLocked}
+              isLoading={isLoading || (activation?.pending && !activation.error)}
+              className={`h-[45px] ${showCancelButton ? 'flex-1' : 'w-full'}`}
+            >
+              {activation?.pending
                 ? 'Activating wallet'
                 : isAccountLocked
                   ? `Locked (${lockRemainingSeconds}s)`
                   : 'Unlock'}
-          </Button>
+            </Button>
+          )}
         </div>
 
         {activation?.error && (

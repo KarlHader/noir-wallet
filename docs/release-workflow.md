@@ -22,7 +22,7 @@ pnpm test
 pnpm build:extension
 ```
 
-`pnpm test` runs `packages/extension/tests/*.core.test.mjs` through Node.js's native test runner and the extension package's TypeScript loader. The extension build verifies both packaged Zcash and Multichain WASM integrity manifests and excludes E2E-only files. Existing `test:logic` Playwright logic tests and the `test:extension`, `test:release:default`, and `test:production-dist` browser tools remain available for local verification; they are not CI or release gates. `test:production-dist` uses test analytics/RHEA values and produces a local `dist/` that must not be published. For browser, MV3, storage, hardware, or network changes, maintainers should run the relevant local tools according to risk.
+`pnpm test` runs the wallet's offline suite; see [contributor verification](../CONTRIBUTING.md#verification) for suite organization and commands. Browser projects run through `pnpm test e2e <project>` for local verification; they are not CI or release gates. The extension build verifies both packaged Zcash and Multichain WASM integrity manifests and excludes E2E-only files. The `production-dist` project uses test analytics/RHEA values and produces a local `dist/` that must not be published. For browser, MV3, storage, hardware, or network changes, maintainers should run the relevant local tools according to risk.
 
 Default extension builds write `packages/extension/dist/`; the HMR development server writes `dist-dev/`; isolated browser and Testnet verification builds write `e2e-dist/<profile>/`. Keep these outputs separate. Do not delete an active HMR or browser-test directory, and never submit a test-only build as a release package.
 

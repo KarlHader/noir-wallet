@@ -37,6 +37,7 @@ Pages use a header, a scrollable content region with `min-h-0` where needed, and
 ## Components And Content
 
 - Use one filled primary action for the current task. Secondary actions use the existing outline, ghost, or link variants. Loading and disabled states keep control dimensions stable.
+- Use [InlineError](../../../packages/extension/src/popup/components/common/InlineError.tsx) for recoverable failures: danger-colored error text and a primary-colored Retry text action on the same row. Retry has no background, border, or icon; retain keyboard focus and disable it while retrying. Do not render a separate Retry button or repeat the error beside it.
 - Use existing input and password components for default, focus, error, and disabled states. Recovery-phrase input must show word position and invalid words without logging or transmitting the phrase.
 - Use compact segmented selections for two or three short mutually exclusive options; use a vertical list when labels or supporting details need more room. Show the selected state directly.
 - Use the existing Dialog for high-impact confirmation. Show actionable consequences for deletion, reset, permission expansion, and high-risk signing. Never display raw RPC/WASM errors, secrets, or full sensitive values as explanatory copy.

@@ -5,9 +5,7 @@ import {
   type EvmNetworkConfig
 } from '@/config/networks'
 import {
-  createAssetRegistry,
   createInitialProductChainRegistry,
-  getBundledInitialProductAssetDefinitions,
   parseChainId,
   type AssetDefinitionInput
 } from '@/core/chains/registry'
@@ -33,6 +31,7 @@ import { BackgroundEvmTransferRouter } from './evm-transfer-router'
 import { recordRheaSwapGraphBroadcast } from './rhea-swap'
 import { reportBackgroundSendBroadcast } from './analytics/send-broadcast'
 import { readEvmTokenAllowance } from '@/infrastructure/chains/evm/evm-token-allowance'
+import { createBackgroundEvmTransferAssetRegistry } from './evm-transfer-assets'
 
 export { BackgroundEvmTransferController } from './evm-transfer-controller'
 export { BackgroundEvmTransferRouter } from './evm-transfer-router'
@@ -55,12 +54,7 @@ export function createBackgroundEvmTransferOrchestrator(
   network: EvmNetworkConfig = getEvmNetworkConfig(DEFAULT_NETWORK),
   userEvmAssets: readonly AssetDefinitionInput[] = []
 ): EvmTransferOrchestrator {
-  const additional = findBuiltinEvmNetworkConfig(DEFAULT_NETWORK, network.chainId) ? [] : [network]
-  const chains = createInitialProductChainRegistry(DEFAULT_NETWORK, additional)
-  const assets = createAssetRegistry(chains, [
-    ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, additional),
-    ...userEvmAssets
-  ])
+  const assets = createBackgroundEvmTransferAssetRegistry(network, userEvmAssets)
   const scheduleMonitor = async () => {
     const existing = await chrome.alarms.get(EVM_TRANSACTION_MONITOR_ALARM)
     await Promise.all([

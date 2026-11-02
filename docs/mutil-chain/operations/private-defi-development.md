@@ -1,6 +1,6 @@
 # Confidential DeFi Development and Troubleshooting
 
-This guide covers local setup, data sources, recovery, and diagnosis for software EVM accounts using a Global PEA, Confidential balances, internal transfers, Confidential Send/Swap, and dApp Confidential asset transfers. Product and security boundaries are enforced in the implementation; see `packages/extension/src/core/services/confidential-funding/` and the routes named below when changing behavior.
+This guide covers local setup, data sources, recovery, and diagnosis for mnemonic and imported EVM private-key accounts using a Global PEA, Confidential balances, internal transfers, Confidential Send/Swap, and dApp Confidential asset transfers. Hardware accounts and private keys imported for other chain families do not support Confidential execution. The shared account capability is defined in `packages/extension/src/core/chains/evm/execution-capability.ts`; funding boundaries are enforced in `packages/extension/src/core/services/confidential-funding/` and the routes named below.
 
 ## 1. Account and Balance Model
 
@@ -30,7 +30,7 @@ Main
 
 The entry point is the asset-detail Transfer dialog or PEA Gas top-up. Confirmation starts the background plan directly, without another Add to Private confirmation page. Implementation entry points are `src/background/confidential-funding-{api,coordinator,signer,store}.ts`, `src/core/services/confidential-funding/`, `src/popup/services/confidential-funding-client.ts`, and the Swap and transaction-result pages.
 
-### Move to Main and Confidential Send
+### Move to Main
 
 ```text
 Global PEA
@@ -38,7 +38,17 @@ Global PEA
   -> Main address or an external destination
 ```
 
-The reverse Transfer from asset details fills the current Main address. Send with a Confidential source accepts an external destination. Both spend only PEA on-chain assets, never balances that exist solely in the Confidential abstract account. The relevant code is `src/popup/pages/transactions/evm-send-validation.ts`, `MultichainSend.tsx`, `src/core/services/rhea-swap/rhea-private-transfer.ts`, and `src/background/rhea-swap.ts`.
+The reverse Transfer from asset details fills the current Main address and uses this route. It spends only PEA on-chain assets, never balances that exist solely in the Confidential abstract account. The relevant code is `src/popup/pages/transactions/evm-send-validation.ts`, `src/core/services/rhea-swap/rhea-private-transfer.ts`, and `src/background/rhea-swap.ts`.
+
+### Wallet EVM Same-chain Send
+
+Send always retains the selected source address. Public sends use direct on-chain native or ERC-20 transfers. A Confidential source uses `confidentiality: basic` when the asset declares Near Intents support. If a complete catalog explicitly excludes the asset or its Confidential capability, or RHEA does not support the network, Send prepares a direct on-chain transfer from the PEA with `executionMode: private`. Fees, Gas, and Max use that source's chain balance; Confidential abstract balances are not spendable.
+
+Send prefetches selectable EVM catalogs with at most two requests in flight, sharing the existing ten-minute cache and request deduplication. In SDK 2.0.6, same-chain source and destination assets use the `from` catalog. The source-catalog adapter detects rows the SDK would silently discard and avoids retaining empty or capability-incomplete results, so Retry can reach the service. Match the network and native identity or contract, then require `nearintents` or `preswap-nearintents` in the matching asset's sources. A failed, partial, empty, or capability-incomplete result leaves support unknown: Continue waits and offers Retry. A failed supported-asset quote or Max estimate never falls back to a direct transfer.
+
+The direct-send review identifies the send method and requires **Send anyway** for a PEA source or a Public source whose recipient is Confidential or unknown. Only the local account directory on the selected network establishes a Public or PEA role; external addresses and address-book labels do not. Source, recipient, asset, amount, and method changes invalidate the review. Entry points are `src/popup/pages/transactions/EvmSendForm.tsx`, `src/popup/services/evm-send-{catalog,routing}.ts`, `src/core/services/rhea-swap/rhea-confidential-support.ts`, and `src/core/accounts/evm-address-role.ts`.
+
+These rules apply only to wallet same-chain Send. Swap, cross-chain Send, account-to-account Transfer, and dApp routing retain their existing behavior.
 
 ### dApp Confidential Asset Transfer
 
@@ -123,35 +133,26 @@ Logs must not include access or refresh tokens, complete signed payloads, mnemon
 
 ## 7. Verification
 
-Run focused logic tests for changed behavior:
+Run the offline behavior tests:
 
 ```bash
-pnpm --filter @noir-wallet/extension exec playwright test \
-  --project=logic \
-  tests/confidential-funding.test.mjs \
-  tests/confidential-funding-recovery.test.mjs \
-  tests/confidential-funding-store.test.mjs \
-  tests/confidential-funding-portfolio.test.mjs \
-  tests/private-balance-transfer.test.mjs \
-  tests/evm-dapp-private-transfer.test.mjs \
-  tests/dapp-private-transfer-approval.test.mjs
+pnpm test
 ```
 
 The protocol test uses deterministic responses in a real MV3 extension and does not broadcast Mainnet funds:
 
 ```bash
-RHEA_SWAP_ACCESS_TOKEN=test-rhea-access-token \
-pnpm --filter @noir-wallet/extension test:protocol:mainnet
+pnpm test e2e protocol-mainnet
 ```
 
 Run extension type checking and the build for affected extension code:
 
 ```bash
 pnpm --filter @noir-wallet/extension type-check
-pnpm --filter @noir-wallet/extension test:logic
+pnpm test
 pnpm --filter @noir-wallet/extension build
 ```
 
 A funded Mainnet test is outside routine regression. Before broadcasting, register its wallet under the [test-wallet rules](test-wallet-registry.md), verify asset and amount, and obtain explicit authorization. Keep transaction evidence outside the repository.
 
-When changing this flow, verify Main/abstract/PEA balances remain distinct, asset transfers retain `confidentiality: basic`, quote and signer data stay bound through approval and recovery, a restart or lost response cannot double-spend, and stale polling cannot downgrade a terminal Activity state. Check the affected UI at 375×600 or 375×632 and run focused logic and MV3 checks according to the changed boundary.
+When changing this flow, verify Main/abstract/PEA balances remain distinct, Confidential routes retain `confidentiality: basic`, wallet Send handles unknown support without a fallback, quote and signer data stay bound through approval and recovery, a restart or lost response cannot double-spend, and stale polling cannot downgrade a terminal Activity state. Check the affected UI at 375×600 or 375×632 and run focused logic and MV3 checks according to the changed boundary.

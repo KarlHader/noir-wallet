@@ -22,12 +22,71 @@ import {
   type SigningSummaryReviewRow
 } from './signing-summary-review-model-types'
 import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
-import { formatAmount, formatSortAddress } from '@/lib/format'
-import { formatFeeAmount, formatReviewAmount } from '@/lib/number-format'
+import { decodeErc20CalldataRequest } from '@/infrastructure/chains/evm/evm-contract-call-classification'
+import { formatSortAddress } from '@/lib/format'
+import { formatAmount, formatFeeAmount, formatReviewAmount } from '@/lib/number-format'
 
 export interface EvmReviewPresentationOptions {
   readonly nativeCurrency?: { readonly symbol: string; readonly decimals: number }
   readonly directContract?: boolean
+  readonly tokenMetadata?: readonly {
+    readonly contractAddress: string
+    readonly symbol: string
+    readonly decimals: number
+  }[]
+}
+
+const MAX_UINT256 = ((1n << 256n) - 1n).toString()
+
+function evmRequestedTokenCallRows(
+  summary: EvmTransactionSummary,
+  options: EvmReviewPresentationOptions
+): readonly SigningSummaryReviewRow[] {
+  const contract = summary.fields.to
+  if (contract === null || summary.fields.calldata.encoding !== 'hex') return []
+  const request = decodeErc20CalldataRequest(summary.fields.calldata.value)
+  if (!request) return []
+  const knownToken = options.tokenMetadata?.find(
+    token => token.contractAddress.toLowerCase() === contract.toLowerCase()
+  )
+  // ERC-721 shares approve/transferFrom selectors; the selector alone cannot establish ERC-20 semantics.
+  if (
+    !knownToken ||
+    !Number.isInteger(knownToken.decimals) ||
+    knownToken.decimals < 0 ||
+    knownToken.decimals > 255
+  ) {
+    return []
+  }
+  const amount = (raw: string) => {
+    if (request.kind === 'approve' && raw === MAX_UINT256) {
+      return 'Unlimited'
+    }
+    return `${formatAmount(raw, knownToken.decimals)} ${knownToken.symbol}`
+  }
+  const addressRow = (label: string, value: string) =>
+    reviewRow(label, formatSortAddress(value), { code: true, title: value })
+  return [
+    reviewRow('Requested method', request.kind, { code: true }),
+    ...(request.kind === 'approve'
+      ? [
+          addressRow('Requested spender', request.spender),
+          reviewRow('Requested allowance', amount(request.amountRaw), {
+            code: true,
+            breakAll: true
+          })
+        ]
+      : request.kind === 'transfer'
+        ? [
+            addressRow('Requested recipient', request.recipient),
+            reviewRow('Requested amount', amount(request.amountRaw), { code: true, breakAll: true })
+          ]
+        : [
+            addressRow('Requested sender', request.sender),
+            addressRow('Requested recipient', request.recipient),
+            reviewRow('Requested amount', amount(request.amountRaw), { code: true, breakAll: true })
+          ])
+  ]
 }
 
 function assertNever(value: never): never {
@@ -206,6 +265,7 @@ export function evmTransactionReview(
   options: EvmReviewPresentationOptions = {}
 ): SigningSummaryReviewModel {
   const currency = options.nativeCurrency
+  const requestedTokenCallRows = evmRequestedTokenCallRows(summary, options)
   const amountRow = (label: string, raw: string) => {
     if (!currency) return reviewRow(label, `${raw} wei`, { code: true })
     const value = formatAmount(raw, currency.decimals)
@@ -231,14 +291,21 @@ export function evmTransactionReview(
             title: summary.fields.from
           }),
           reviewRow(
-            'To',
+            summary.fields.to !== null && summary.fields.calldata.value !== '0x'
+              ? 'Contract'
+              : 'To',
             summary.fields.to === null ? null : formatSortAddress(summary.fields.to),
             {
               code: true,
               title: summary.fields.to ?? undefined
             }
           ),
-          amountRow('Value', summary.fields.valueWei),
+          amountRow(
+            summary.fields.to === null || summary.fields.calldata.value !== '0x'
+              ? 'Native value'
+              : 'Value',
+            summary.fields.valueWei
+          ),
           amountRow('Maximum fee', summary.fields.maximumFeeWei),
           ...(options.directContract ? [reviewRow('Execution', 'Public on-chain')] : []),
           reviewRow('Gas limit', summary.fields.gasLimit, { code: true }),
@@ -256,6 +323,9 @@ export function evmTransactionReview(
           )
         ]
       },
+      ...(requestedTokenCallRows.length > 0
+        ? [{ title: 'Calldata request', rows: requestedTokenCallRows }]
+        : []),
       {
         title: 'Contract data',
         rows: [

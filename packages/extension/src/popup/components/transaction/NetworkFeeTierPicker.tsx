@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { getNetworkFeeTierLabel, type NetworkFeeTier } from '@/core/transactions/domain'
 import {
@@ -11,6 +11,8 @@ import { Button } from '@/popup/components/ui/button'
 import { Input } from '@/popup/components/ui/input'
 import { NetworkFeeTierSelector } from './NetworkFeeTierSelector'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { classifyError } from '@/lib/errors'
+import { InlineError } from '@/popup/components/common/InlineError'
 
 interface NetworkFeeTierPickerProps {
   readonly chainFamily: 'bitcoin' | 'evm'
@@ -90,28 +92,38 @@ function NetworkFeeTierEditContent({
 }) {
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retrySelection, setRetrySelection] = useState<EvmFeeSelection | null>(null)
+  const [selected, setSelected] = useState(selection)
+  const pending = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [customPriorityFeeGwei, setCustomPriorityFeeGwei] = useState(
     formatEvmPriorityFeeGwei(selection) ?? ''
   )
 
   const handleSelect = async (nextSelection: EvmFeeSelection) => {
-    if (updating) return
-    if (
-      nextSelection.kind === 'tier' &&
-      selection.kind === 'tier' &&
-      nextSelection.tier === selection.tier
-    ) {
-      close()
-      return
-    }
+    if (pending.current) return
+    setSelected(nextSelection)
+    pending.current = true
     setUpdating(true)
     setError(null)
+    setRetrySelection(null)
     try {
       await onSelect(nextSelection)
-      close()
+      if (mounted.current) close()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The network fee could not be updated.')
-      setUpdating(false)
+      if (mounted.current) {
+        setError(cause instanceof Error ? cause.message : 'The network fee could not be updated.')
+        if (classifyError(cause).retryable) setRetrySelection(nextSelection)
+      }
+    } finally {
+      pending.current = false
+      if (mounted.current) setUpdating(false)
     }
   }
 
@@ -119,7 +131,7 @@ function NetworkFeeTierEditContent({
     <div className="space-y-3 pb-4 pt-1">
       <NetworkFeeTierSelector
         chainFamily={chainFamily}
-        value={selection.kind === 'tier' ? selection.tier : 'standard'}
+        value={selected.kind === 'tier' ? selected.tier : 'standard'}
         onChange={tier => void handleSelect({ kind: 'tier', tier })}
         hideLabel
         disabled={updating}
@@ -137,6 +149,7 @@ function NetworkFeeTierEditContent({
               onChange={event => {
                 setCustomPriorityFeeGwei(event.target.value)
                 setError(null)
+                setRetrySelection(null)
               }}
               placeholder="1.5"
               endContent={<span className="text-xs text-muted">GWEI</span>}
@@ -151,6 +164,7 @@ function NetworkFeeTierEditContent({
                 try {
                   void handleSelect(parseEvmPriorityFeeGwei(customPriorityFeeGwei))
                 } catch (cause) {
+                  setRetrySelection(null)
                   setError(cause instanceof Error ? cause.message : 'Invalid priority fee')
                 }
               }}
@@ -160,7 +174,11 @@ function NetworkFeeTierEditContent({
           </div>
         </div>
       )}
-      {error && <p className="text-xs text-danger">{error}</p>}
+      <InlineError
+        message={error}
+        retrying={updating}
+        onRetry={retrySelection ? () => void handleSelect(retrySelection) : undefined}
+      />
     </div>
   )
 }

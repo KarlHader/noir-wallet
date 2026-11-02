@@ -125,8 +125,8 @@ export function resolveSwapTokenSelection(input: {
   )
   if (!requestedSource && !selectedSource && walletSourceTokens.length === 0) return null
   const tokenIn =
-    requestedSource ??
     selectedSource ??
+    requestedSource ??
     walletSourceTokens.find(token => token.assetId === input.savedSelection?.tokenInId) ??
     walletSourceTokens.find(token => token.assetId === input.preferredSourceAssetId) ??
     walletSourceTokens[0]

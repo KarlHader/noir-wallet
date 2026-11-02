@@ -14,7 +14,19 @@ import {
 import { logger } from '@/lib/logger'
 import { traceDebugStage } from '@/lib/debug-performance'
 import { MnemonicGenerator } from '@/core/wallet/mnemonic'
-import type { Network, SyncReason } from '@/types'
+import type {
+  Network,
+  SyncReason,
+  AccountData,
+  AccountAddresses,
+  WalletItem,
+  ZcashBalance,
+  AddressType,
+  FundingSource,
+  HardwareWalletData,
+  Transaction,
+  TransactionType
+} from '@/types'
 import {
   loadWalletDb,
   hasWalletDb,
@@ -66,17 +78,7 @@ import {
   ensureRpcFailoverStateLoaded,
   resetRpcFailoverState
 } from '@/infrastructure/chains/rpc-failover'
-import type {
-  AccountData,
-  AccountAddresses,
-  WalletItem,
-  ZcashBalance,
-  AddressType,
-  FundingSource,
-  HardwareWalletData,
-  Transaction,
-  TransactionType
-} from '@/types'
+
 import { safeBig } from '@/lib/big'
 import { normalizeTxHash } from '@/lib/tx-history-dedup'
 import {
@@ -87,7 +89,7 @@ import {
 } from '@/config/wallet'
 import { assertNewPassword } from '@/core/wallet/password-policy'
 import { resolveMinedTransactionStatus } from '@/lib/transaction-status'
-import { formatAmount } from '@/lib/format'
+import { formatAmount } from '@/lib/number-format'
 import type { WasmTransactionEntry } from '@/core/worker/types'
 import {
   mapWasmAccountBalanceToZcashBalance,
@@ -133,6 +135,7 @@ import {
   replaceV1CredentialPassword,
   type V1PlaintextCredential
 } from '@/core/wallet/v1-password-change'
+import { credentialSession } from './credential-session'
 import { generateCanonicalMnemonic } from '@/infrastructure/keyring/multichain/canonical-mnemonic-generator'
 import {
   getFullZcashRecoveryBirthdayHeight,
@@ -1542,71 +1545,86 @@ export class BackgroundZcashWalletRuntime {
     await this.setPrimaryWalletState(wallet, password)
   }
 
-  async getSeedPhrase(password: string, walletId?: string): Promise<string | null> {
-    const targetWalletId = walletId || this.store.currentWalletId
-    if (!targetWalletId) {
-      return null
+  private async readAuthorizedSeedPhrase(
+    walletId: string,
+    suppliedPassword?: string
+  ): Promise<{ phrase: string; isCurrent: () => boolean }> {
+    const wallet = this.store.getWallet(walletId)
+    if (!wallet || isZcashHardwareKeySource(wallet.keySource)) {
+      throw new Error('Wallet is locked or unavailable')
     }
-
-    const wallet = this.store.getWallet(targetWalletId)
-    if (!wallet) {
-      return null
+    const passwordGeneration = this.passwordGeneration
+    const selectedWalletId = this.store.currentWalletId
+    const selectedAccountId = this.store.currentAccountId
+    const binding = await credentialSession.getCredentialBinding(walletId)
+    const isCurrent = () => {
+      const current = this.store.getWallet(walletId)
+      return (
+        !this.purgingWalletIds.has(walletId) &&
+        this.passwordGeneration === passwordGeneration &&
+        this.store.currentWalletId === selectedWalletId &&
+        this.store.currentAccountId === selectedAccountId &&
+        current?.createdAt === wallet.createdAt &&
+        current?.seedPhraseKey === wallet.seedPhraseKey &&
+        current?.keySource === wallet.keySource
+      )
     }
-
-    // Hardware wallets have no seed phrase on this device
-    if (isZcashHardwareKeySource(wallet.keySource)) {
-      return null
+    if (!isCurrent()) throw new Error('Wallet changed or locked. Please try again.')
+    const password = suppliedPassword ?? (await credentialSession.getProvisioningPassword())
+    if (typeof password !== 'string' || !password) throw new Error('Incorrect password')
+    const inspected = await this.inspectWalletCredential(wallet, password)
+    if (inspected.status === 'wrong_password') throw new Error('Incorrect password')
+    if (inspected.status === 'missing') {
+      throw new Error('Could not load seed phrase: credential missing')
     }
-
-    const sessionPassword = this.password
-    const generation = this.passwordGeneration
-    if (!sessionPassword) return null
-    try {
-      const seedPhrase = await SecureStorage.loadWalletSeedPhrase(targetWalletId, password)
-      const current = this.store.getWallet(targetWalletId)
-      if (
-        this.password !== sessionPassword ||
-        this.passwordGeneration !== generation ||
-        !current ||
-        current.seedPhraseKey !== wallet.seedPhraseKey ||
-        current.createdAt !== wallet.createdAt ||
-        current.keySource !== wallet.keySource
-      ) {
-        return null
-      }
-      return seedPhrase
-    } catch (error) {
-      throw new Error('Incorrect password')
+    if (inspected.status === 'invalid' || inspected.credential.kind !== 'seed') {
+      throw new Error('Failed to load wallet credential: credential invalid')
+    }
+    const currentBinding = await credentialSession.getCredentialBinding(walletId)
+    if (
+      !isCurrent() ||
+      currentBinding.globalUnlockEpoch !== binding.globalUnlockEpoch ||
+      currentBinding.credentialGenerationId !== binding.credentialGenerationId
+    ) {
+      throw new Error('Wallet changed or locked. Please try again.')
+    }
+    return {
+      phrase: inspected.credential.seedPhrase,
+      isCurrent
     }
   }
 
-  private async loadWalletBackupSeedWords(walletId: string): Promise<string[]> {
-    const password = this.password
-    const generation = this.passwordGeneration
-    const wallet = this.store.getWallet(walletId)
-    if (!password || !wallet || isZcashHardwareKeySource(wallet.keySource)) {
-      throw new Error('Unable to verify this wallet backup. Unlock and view your secret phrase.')
+  async getSeedPhrase(password: string, walletId?: string): Promise<string | null> {
+    const targetWalletId = walletId || this.store.currentWalletId
+    const wallet = targetWalletId ? this.store.getWallet(targetWalletId) : null
+    if (!targetWalletId || !wallet || isZcashHardwareKeySource(wallet.keySource)) {
+      return null
     }
-    const phrase = await SecureStorage.loadWalletSeedPhrase(walletId, password)
-    if (
-      this.password !== password ||
-      this.passwordGeneration !== generation ||
-      !phrase ||
-      this.store.getWallet(walletId)?.createdAt !== wallet.createdAt
-    ) {
+    const { phrase } = await this.readAuthorizedSeedPhrase(targetWalletId, password)
+    return phrase
+  }
+
+  private async loadWalletBackupSeedWords(
+    walletId: string
+  ): Promise<{ words: string[]; isCurrent: () => boolean }> {
+    const { phrase, isCurrent } = await this.readAuthorizedSeedPhrase(walletId).catch(() => {
+      throw new Error('Unable to verify this wallet backup. Unlock and view your secret phrase.')
+    })
+    if (!isCurrent()) {
       throw new Error('Unable to verify this wallet backup. Unlock and view your secret phrase.')
     }
     const words = phrase.trim().split(/\s+/)
     if (words.length < 2) throw new Error('Unable to verify this wallet backup.')
-    return words
+    return { words, isCurrent }
   }
 
   async getWalletBackupWordIndices(walletId: string): Promise<[number, number]> {
-    const words = await this.loadWalletBackupSeedWords(walletId)
+    const { words, isCurrent } = await this.loadWalletBackupSeedWords(walletId)
     const random = new Uint32Array(2)
     crypto.getRandomValues(random)
     const first = random[0] % words.length
     const other = random[1] % (words.length - 1)
+    if (!isCurrent()) throw new Error('Wallet changed or locked. Please try again.')
     return [first, other >= first ? other + 1 : other]
   }
 
@@ -1617,12 +1635,13 @@ export class BackgroundZcashWalletRuntime {
     const wallet = this.store.getWallet(walletId)
     if (!wallet) throw new Error('Wallet not found')
     if (isZcashHardwareKeySource(wallet.keySource)) return
-    const words = await this.loadWalletBackupSeedWords(walletId)
+    const { words, isCurrent } = await this.loadWalletBackupSeedWords(walletId)
     if (!matchesWalletBackupWords(words, verification)) {
       throw new Error(
         'Backup words do not match this wallet. View your secret phrase and try again.'
       )
     }
+    if (!isCurrent()) throw new Error('Wallet changed or locked. Please try again.')
   }
 
   async confirmWalletBackup(
@@ -1636,16 +1655,12 @@ export class BackgroundZcashWalletRuntime {
     if (getWalletsNeedingSecretPhraseBackup([wallet]).length === 0) {
       throw new Error('This wallet does not need backup verification')
     }
-    const password = this.password
-    const generation = this.passwordGeneration
-    await this.verifyWalletBackupForRemoval(walletId, verification)
-    const isCurrent = () =>
-      !!password &&
-      this.password === password &&
-      this.passwordGeneration === generation &&
-      !this.purgingWalletIds.has(walletId) &&
-      this.store.getWallet(walletId)?.createdAt === wallet.createdAt &&
-      this.store.getWallet(walletId)?.seedPhraseKey === wallet.seedPhraseKey
+    const { words, isCurrent } = await this.loadWalletBackupSeedWords(walletId)
+    if (!matchesWalletBackupWords(words, verification)) {
+      throw new Error(
+        'Backup words do not match this wallet. View your secret phrase and try again.'
+      )
+    }
     await markWalletBackupVerified(
       walletId,
       wallet.createdAt,
@@ -4348,14 +4363,16 @@ export class BackgroundZcashWalletRuntime {
         await core.syncSessionSetup()
         sessionSetupDone = true
       } catch (e) {
-        logger.warn(
-          `syncSessionSetup failed, falling back to per-batch refresh: ${
-            (e as Error)?.message || e
-          }`,
-          syncWalletId,
-          syncAccountId,
-          e
-        )
+        if (!isAborted?.()) {
+          logger.warn(
+            `syncSessionSetup failed, falling back to per-batch refresh: ${
+              (e as Error)?.message || e
+            }`,
+            syncWalletId,
+            syncAccountId,
+            e
+          )
+        }
       }
       let batchesSinceRefresh = 0
       const REFRESH_EVERY_N = WALLET_CONFIG.SYNC.SESSION_SETUP_REFRESH_EVERY_N_BATCHES
@@ -5544,14 +5561,6 @@ export class BackgroundZcashWalletRuntime {
         `Plugin accounts: ${wallet.accounts.map(a => `${a.id.slice(0, 6)}:idx${a.derivationIndex}`).join(', ')}`,
         walletId
       )
-
-      logger.log(`[refreshBalances] Parsed ${accountBalances.length} WASM account(s):`, walletId)
-      for (const [accId, bal] of accountBalances) {
-        logger.log(
-          `  WASM AccountId ${accId}: sapling=${bal.sapling_balance}, orchard=${bal.orchard_balance}, ironwood=${bal.ironwood_balance ?? 0}, unshielded=${bal.unshielded_balance}`,
-          walletId
-        )
-      }
 
       await this.assertWasmAccountInvariant(walletId)
       if (options && !options.canApply()) return

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
 import type { PortfolioReadModel } from '@/core/portfolio'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActivityItem } from '@/core/activity'
 import {
   findAssetPrice,
@@ -11,8 +12,13 @@ import {
   type AssetMarketHistoryReadModel,
   type AssetPriceReadModel
 } from '@/core/prices'
-import { formatPercent } from '@/lib/format'
-import { formatFiatAmount, formatTokenPrice } from '@/lib/number-format'
+import {
+  formatPercentage,
+  formatFiatAmount,
+  formatTokenPrice,
+  formatBaseUnitAmount
+} from '@/lib/number-format'
+
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { getZcashPrivacyBalanceDisplay } from './asset-detail-balance'
@@ -20,13 +26,12 @@ import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-setting
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Button } from '@/popup/components/ui/button'
-import {
-  formatBaseUnitAmount,
-  formatDisplayTokenAmount
-} from '@/popup/components/portfolio/portfolio-format'
+
+import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import {
   isPortfolioModelForScope,
@@ -90,7 +95,13 @@ export function AssetDetail() {
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [history, setHistory] = useState<AssetMarketHistoryReadModel | null>(null)
   const [historyRange, setHistoryRange] = useState<AssetMarketHistoryRange>('1d')
-  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [historyRanges, setHistoryRanges] = useState<{
+    assetId: string
+    ranges: readonly AssetMarketHistoryRange[]
+  } | null>(null)
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'unsupported' | 'error'>(
+    'loading'
+  )
   const [historyRetry, setHistoryRetry] = useState(0)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [bitcoinCatalog, setBitcoinCatalog] = useState<BitcoinAddressBalanceCatalogView | null>(
@@ -102,6 +113,7 @@ export function AssetDetail() {
     'idle' | 'loading' | 'supported' | 'unsupported' | 'error'
   >('idle')
   const [privateTransferDialogOpen, setPrivateTransferDialogOpen] = useState(false)
+  const [privateRouteRetry, setPrivateRouteRetry] = useState(0)
   const { copyToClipboard, showToast } = useCopyToClipboard()
   const { isShielding, handleShieldFunds, shieldSheet } = useShieldFunds()
 
@@ -219,7 +231,7 @@ export function AssetDetail() {
   )?.value
   const privateTransferEligible = Boolean(
     currentNetwork === 'mainnet' &&
-    storageV2Account?.walletSource.kind === 'software' &&
+    supportsEvmPrivateExecution(storageV2Account?.walletSource) &&
     evmAccountNetwork?.privateExecutionAddress &&
     evmMainAddress
   )
@@ -236,12 +248,21 @@ export function AssetDetail() {
     }
     setPrivateRouteSupport('loading')
     rheaSwapClient
-      .listTokens({ direction: 'from', tokenListChainIds: [Number(numericChainId)] })
+      .listTokens(
+        { direction: 'from', tokenListChainIds: [Number(numericChainId)] },
+        { bypassCache: privateRouteRetry > 0 }
+      )
       .then(catalog => {
         if (cancelled) return
         const contract = asset.asset.kind === 'token' ? asset.asset.reference.toLowerCase() : null
         const supported = resolveRheaPrivateTransferToken(catalog.tokens, contract)
-        setPrivateRouteSupport(supported === null ? 'unsupported' : 'supported')
+        setPrivateRouteSupport(
+          supported !== null
+            ? 'supported'
+            : catalog.failedChainIds.includes(Number(numericChainId))
+              ? 'error'
+              : 'unsupported'
+        )
       })
       .catch(() => {
         if (!cancelled) setPrivateRouteSupport('error')
@@ -249,7 +270,14 @@ export function AssetDetail() {
     return () => {
       cancelled = true
     }
-  }, [asset, chain?.chain.id, privateTransferEligible])
+  }, [
+    asset,
+    chain?.chain.id,
+    privateTransferEligible,
+    privateRouteRetry,
+    effectiveWalletId,
+    effectiveAccountId
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -322,7 +350,9 @@ export function AssetDetail() {
     if (!assetId) return
     const request = ++historyRequestSequence.current
     let usableHistory = false
-    setHistory(null)
+    setHistory(current =>
+      current?.assetId === assetId && current.range === historyRange ? current : null
+    )
     setHistoryStatus('loading')
     const apply = (value: AssetMarketHistoryReadModel | null) => {
       if (request !== historyRequestSequence.current || !value) return
@@ -332,10 +362,38 @@ export function AssetDetail() {
     }
     const loadHistory = async () => {
       try {
-        apply(await assetMarketHistoryClient.getHistory(assetId, historyRange, 'read'))
+        const cached = await assetMarketHistoryClient.getHistory(assetId, historyRange, 'read')
+        if (request !== historyRequestSequence.current) return
+        if (cached.status === 'unsupported') {
+          setHistory(null)
+          setHistoryStatus('unsupported')
+          return
+        }
+        setHistoryRanges({ assetId, ranges: cached.availableRanges })
+        if (!cached.availableRanges.includes(historyRange)) {
+          setHistoryRange(cached.availableRanges[0])
+          return
+        }
+        apply(cached.history)
       } catch {}
       try {
-        apply(await assetMarketHistoryClient.getHistory(assetId, historyRange, 'refresh'))
+        const refreshed = await assetMarketHistoryClient.getHistory(
+          assetId,
+          historyRange,
+          'refresh'
+        )
+        if (request !== historyRequestSequence.current) return
+        if (refreshed.status === 'unsupported') {
+          setHistory(null)
+          setHistoryStatus('unsupported')
+          return
+        }
+        setHistoryRanges({ assetId, ranges: refreshed.availableRanges })
+        if (!refreshed.availableRanges.includes(historyRange)) {
+          setHistoryRange(refreshed.availableRanges[0])
+          return
+        }
+        apply(refreshed.history)
       } catch {}
       if (request === historyRequestSequence.current && !usableHistory) setHistoryStatus('error')
     }
@@ -418,17 +476,24 @@ export function AssetDetail() {
       await openModal({
         showCloseButton: true,
         className: 'max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain',
-        body: () => (
+        body: (resolve: (value: unknown) => void, close: () => void) => (
           <MultichainActivityDetail
             item={item}
             network={currentNetwork}
             portfolio={visibleModel}
             accountNetworks={storageV2Account?.networks}
+            onClose={() => {
+              close()
+              resolve(undefined)
+            }}
+            onContinueSwap={transactionId =>
+              navigate(`/swap?resumeApproval=${encodeURIComponent(transactionId)}`)
+            }
           />
         )
       })
     },
-    [currentNetwork, visibleModel]
+    [currentNetwork, visibleModel, navigate, storageV2Account?.networks]
   )
 
   if (status === 'loading' && !visibleModel) {
@@ -466,15 +531,16 @@ export function AssetDetail() {
         <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
           <Icon icon="lucide:circle-alert" width={40} height={40} className="text-muted" />
           <p className="mt-4 text-base font-medium">Asset unavailable</p>
-          <p className="mt-1 text-sm leading-5 text-muted">
-            {status === 'error'
-              ? 'This asset could not be refreshed. Check your connection and try again.'
-              : 'This asset is not available for the active Wallet and Account.'}
-          </p>
-          {status === 'error' && (
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => void load(true)}>
-              Retry
-            </Button>
+          {status === 'error' ? (
+            <InlineError
+              message="This asset could not be refreshed. Check your connection."
+              onRetry={() => void load(true)}
+              className="mt-4 w-full text-left"
+            />
+          ) : (
+            <p className="mt-1 text-sm leading-5 text-muted">
+              This asset is not available for the active Wallet and Account.
+            </p>
           )}
         </div>
       </div>
@@ -487,8 +553,10 @@ export function AssetDetail() {
   const hasPendingBalance = asset.balance.pendingRaw !== '0'
   const change = quote?.marketChange ? new Big(quote.marketChange.percent24h) : null
   const formattedChange = quote?.marketChange
-    ? formatPercent(quote.marketChange.percent24h, { maxDigits: 2, showPlus: true })
+    ? formatPercentage(quote.marketChange.percent24h, { maxDigits: 2, showPlus: true })
     : null
+  const visibleHistory =
+    history?.assetId === asset.asset.id && history.range === historyRange ? history : null
   const preferredBitcoinAddress = bitcoinCatalog?.addresses.find(
     address => !address.change && address.addressIndex === 0
   )
@@ -715,32 +783,36 @@ export function AssetDetail() {
           </section>
         )}
 
-        <section className="border-t border-border py-4">
-          <MarketPriceChart
-            points={history?.points ?? null}
-            range={historyRange}
-            loading={historyStatus === 'loading'}
-            priceLoading={priceStatus === 'loading'}
-            priceLabel={quote ? formatTokenPrice(quote.priceUsd, { showSign: true }) : null}
-            changeLabel={formattedChange}
-            changeDirection={change?.gt(0) ? 'positive' : change?.lt(0) ? 'negative' : 'neutral'}
-            delayed={
-              quote?.freshness === 'stale' ||
-              quote?.marketChange?.freshness === 'stale' ||
-              history?.freshness === 'stale'
-            }
-            onRangeChange={setHistoryRange}
+        {(historyStatus === 'loading' || visibleHistory) && (
+          <section className="border-t border-border py-4">
+            <MarketPriceChart
+              points={visibleHistory?.points ?? null}
+              range={historyRange}
+              loading={historyStatus === 'loading'}
+              priceLoading={priceStatus === 'loading'}
+              priceLabel={quote ? formatTokenPrice(quote.priceUsd, { showSign: true }) : null}
+              changeLabel={formattedChange}
+              changeDirection={change?.gt(0) ? 'positive' : change?.lt(0) ? 'negative' : 'neutral'}
+              delayed={
+                quote?.freshness === 'stale' ||
+                quote?.marketChange?.freshness === 'stale' ||
+                visibleHistory?.freshness === 'stale'
+              }
+              showRanges={historyStatus !== 'unsupported'}
+              availableRanges={
+                historyRanges?.assetId === asset.asset.id ? historyRanges.ranges : []
+              }
+              onRangeChange={setHistoryRange}
+            />
+          </section>
+        )}
+        {historyStatus === 'error' && (
+          <InlineError
+            message="Unable to load chart."
+            onRetry={() => setHistoryRetry(value => value + 1)}
+            className="pb-4"
           />
-          {historyStatus === 'error' && (
-            <button
-              type="button"
-              onClick={() => setHistoryRetry(value => value + 1)}
-              className="mt-1 text-[11px] font-medium text-primary hover:underline"
-            >
-              Retry chart
-            </button>
-          )}
-        </section>
+        )}
 
         {hasPendingBalance && !isZcashAsset && (
           <section className="space-y-3 border-t border-border py-4" aria-label="Balance breakdown">
@@ -885,6 +957,11 @@ export function AssetDetail() {
               : (privateTransferDisabledReason ?? 'Confidential transfer is unavailable')
           }
           onContinue={handlePrivateBalanceTransfer}
+          onRetryAvailability={
+            privateRouteSupport === 'error'
+              ? () => setPrivateRouteRetry(value => value + 1)
+              : undefined
+          }
         />
       )}
       {shieldSheet}

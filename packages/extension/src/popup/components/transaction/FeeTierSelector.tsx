@@ -1,9 +1,9 @@
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
-import { safeBig } from '@/lib/big'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { FEE_TIERS, type FeeTier } from '@/config/fee'
-import { formatFeeAmount } from '@/lib/number-format'
+import { formatBaseUnitDecimalAmount, formatFeeAmount } from '@/lib/number-format'
+import { Skeleton } from '../ui/skeleton'
 
 interface FeeTierSelectorProps {
   value: FeeTier
@@ -21,10 +21,7 @@ interface FeeTierSelectorProps {
 
 function formatZec(zats: number | null): string | null {
   if (zats == null) return null
-  return safeBig(zats)
-    .div(1e8)
-    .toFixed(ZEC_DECIMALS)
-    .replace(/\.?0+$/, '')
+  return formatBaseUnitDecimalAmount(String(zats), ZEC_DECIMALS)
 }
 
 /**
@@ -85,8 +82,18 @@ export function FeeTierSelector({
                 )}
               </div>
               <div className="mt-2 text-sm font-semibold tabular-nums text-white">
-                {zec ? formatFeeAmount(zec) : loading ? '…' : '—'}
-                {zec && <span className="ml-1 text-[10px] font-normal text-muted">ZEC</span>}
+                {loading ? (
+                  <div role="status" aria-label={`Estimating ${tier.label} network fee`}>
+                    <Skeleton className="h-5 w-20" />
+                  </div>
+                ) : zec ? (
+                  <>
+                    {formatFeeAmount(zec)}
+                    <span className="ml-1 text-[10px] font-normal text-muted">ZEC</span>
+                  </>
+                ) : (
+                  '—'
+                )}
               </div>
               <div className="mt-0.5 text-[11px] text-muted">{tier.etaHint}</div>
             </button>

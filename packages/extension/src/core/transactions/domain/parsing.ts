@@ -12,6 +12,7 @@ import {
   TRANSACTION_SEGMENT_ROLES,
   TRANSACTION_TRANSITION_CAUSES,
   type TransactionFailure,
+  type TransactionAssetEffects,
   type TransactionGraph,
   type TransactionIntentSnapshot,
   type TransactionRoot,
@@ -28,7 +29,8 @@ export const TRANSACTION_GRAPH_LIMITS = Object.freeze({
   segments: 32,
   dependenciesPerSegment: 32,
   evidenceStringLength: 512,
-  rawAmountDigits: 78
+  rawAmountDigits: 78,
+  assetChanges: 128
 })
 
 const RAW_AMOUNT_PATTERN = new RegExp(
@@ -106,6 +108,46 @@ function parseAssetAmount(value: unknown, label: string) {
       : {
           metadata: parseAssetDisplayMetadata(value.metadata)
         })
+  })
+}
+
+export function parseTransactionAssetEffects(value: unknown): TransactionAssetEffects {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['source', 'completeness', 'changes']) ||
+    (value.source !== 'receipt' && value.source !== 'indexer') ||
+    (value.completeness !== 'partial' && value.completeness !== 'complete') ||
+    !Array.isArray(value.changes) ||
+    value.changes.length > TRANSACTION_GRAPH_LIMITS.assetChanges
+  ) {
+    throw new Error('Invalid transaction asset effects')
+  }
+  const changes = value.changes.map((change: unknown) => {
+    if (
+      !isRecord(change) ||
+      !hasExactKeys(change, ['assetId', 'amountRaw', 'direction'], ['metadata']) ||
+      (change.direction !== 'incoming' && change.direction !== 'outgoing')
+    ) {
+      throw new Error('Invalid transaction asset change')
+    }
+    const amount = parseAssetAmount(
+      {
+        assetId: change.assetId,
+        amountRaw: change.amountRaw,
+        ...(change.metadata === undefined ? {} : { metadata: change.metadata })
+      },
+      'transaction asset change'
+    )
+    if (amount.amountRaw === '0') throw new Error('Transaction asset change must be positive')
+    return Object.freeze({ ...amount, direction: change.direction as 'incoming' | 'outgoing' })
+  })
+  if (new Set(changes.map(change => change.assetId)).size !== changes.length) {
+    throw new Error('Duplicate transaction asset change')
+  }
+  return Object.freeze({
+    source: value.source,
+    completeness: value.completeness,
+    changes: Object.freeze(changes)
   })
 }
 
@@ -224,6 +266,7 @@ export function parseTransactionSegmentEvidence(value: unknown): TransactionSegm
       [],
       [
         'transactionHash',
+        'assetEffects',
         'replacementTransactionHash',
         'externalReference',
         'blockHash',
@@ -235,12 +278,18 @@ export function parseTransactionSegmentEvidence(value: unknown): TransactionSegm
   ) {
     throw new Error('Invalid transaction evidence')
   }
+  if (value.assetEffects !== undefined && value.transactionHash === undefined) {
+    throw new Error('Transaction asset effects require a transaction hash')
+  }
   return Object.freeze({
     ...(value.transactionHash === undefined
       ? {}
       : {
           transactionHash: parseString(value.transactionHash, 'transactionHash')
         }),
+    ...(value.assetEffects === undefined
+      ? {}
+      : { assetEffects: parseTransactionAssetEffects(value.assetEffects) }),
     ...(value.replacementTransactionHash === undefined
       ? {}
       : {
@@ -430,6 +479,16 @@ export function parseTransactionSegment(value: unknown): TransactionSegment {
     ...(value.failure === undefined ? {} : { failure: parseFailure(value.failure) }),
     ...(value.reconfirming === true ? { reconfirming: true as const } : {})
   })
+  if (segment.evidence?.assetEffects) {
+    if (segment.target.kind !== 'onchain') {
+      throw new Error('Transaction asset effects require an onchain segment')
+    }
+    for (const change of segment.evidence.assetEffects.changes) {
+      if (parseAssetId(change.assetId).chainId !== segment.target.chainId) {
+        throw new Error('Transaction asset effect chain does not match segment')
+      }
+    }
+  }
   assertTransactionSegmentState(segment)
   return segment
 }

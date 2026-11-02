@@ -8,8 +8,14 @@ import { validateEnglishMnemonicWords } from '@/core/wallet/mnemonic-validation'
 
 export function ImportWalletPage() {
   const { navigate } = useNavigate()
-  const { mnemonicWordCount, importedSeedPhrase, setImportedSeedPhrase, setBirthdayHeight, error } =
-    useOnboardingStore()
+  const {
+    mnemonicWordCount,
+    importedSeedPhrase,
+    setImportedSeedPhrase,
+    setBirthdayHeight,
+    setImportZcashHistorySelection,
+    error
+  } = useOnboardingStore()
 
   const [words, setWords] = useState<string[]>(() => {
     const importedWords = importedSeedPhrase.trim().split(/\s+/).filter(Boolean)
@@ -78,6 +84,7 @@ export function ImportWalletPage() {
     if (seedPhrase) {
       setImportedSeedPhrase(seedPhrase)
       setBirthdayHeight(undefined)
+      setImportZcashHistorySelection(null)
       navigate('/onboarding/import-zcash-history')
     }
   }

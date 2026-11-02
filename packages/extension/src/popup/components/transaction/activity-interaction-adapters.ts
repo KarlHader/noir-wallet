@@ -1,5 +1,6 @@
 import type { ActivityItem } from '@/core/activity'
 import { parseChainId } from '@/core/chains/registry'
+import type { ActivityAssetMetadata } from '@/popup/services/activity-presentation-catalog'
 import { resolveActivityChainId } from './activity-chain'
 
 type ActivityInteractionFamily = 'evm' | 'solana' | 'near' | 'tron' | 'generic'
@@ -93,5 +94,27 @@ export function getActivityInteractionPresentation(
     targetAddress: item.snapshot?.recipient?.address,
     fallbackNetworkName: adapter.fallbackNetworkName,
     fallbackChainIconAlias: adapter.fallbackChainIconAlias
+  }
+}
+
+export function getActivityApprovalDetails(
+  item: ActivityItem,
+  assets: ReadonlyMap<string, ActivityAssetMetadata>
+): Readonly<{ tokenSymbol?: string; methodLabel?: string }> | null {
+  if (item.kind !== 'approve') return null
+  const recipient = item.snapshot?.recipient
+  const token =
+    recipient?.chainId.startsWith('eip155:') && /^0x[0-9a-fA-F]{40}$/.test(recipient.address)
+      ? [...assets.values()].find(
+          entry =>
+            entry.asset.kind === 'token' &&
+            entry.asset.chainId === recipient.chainId &&
+            entry.asset.namespace === 'erc20' &&
+            entry.asset.reference.toLowerCase() === recipient.address.toLowerCase()
+        )
+      : undefined
+  return {
+    ...(token ? { tokenSymbol: token.metadata.symbol } : {}),
+    ...(item.snapshot?.evm?.methodSelector === '0x095ea7b3' ? { methodLabel: 'Approve' } : {})
   }
 }

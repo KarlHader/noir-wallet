@@ -1,3 +1,4 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
 import WalletIcon from '@/images/wallet-icon.svg'
@@ -51,12 +52,7 @@ export function CongratulationsPage() {
       <div className="px-5 pb-5">
         {error && (
           <div className="mb-3 space-y-2">
-            <p role="alert" className="text-sm text-danger">
-              {error}
-            </p>
-            <Button onClick={() => void activate()} isLoading={busy} className="w-full h-[45px]">
-              Retry
-            </Button>
+            <InlineError message={error} onRetry={() => void activate()} retrying={busy} />
             <Button variant="ghost" onClick={changeCode} disabled={busy} className="w-full h-10">
               Use another code
             </Button>

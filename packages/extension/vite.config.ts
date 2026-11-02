@@ -393,10 +393,12 @@ export default defineConfig({
         offscreen: 'src/offscreen/index.html',
         ...(isPlaywrightBuild
           ? {
-              credentialRepositoryIntegration: 'tests/e2e/credential-repository-integration.html',
-              transactionRepositoryIntegration: 'tests/e2e/transaction-repository-integration.html',
+              credentialRepositoryIntegration:
+                'tests/extension/credential-repository-integration.html',
+              transactionRepositoryIntegration:
+                'tests/extension/transaction-repository-integration.html',
               bitcoinDiscoveryRepositoryIntegration:
-                'tests/e2e/bitcoin-discovery-repository-integration.html'
+                'tests/extension/bitcoin-discovery-repository-integration.html'
             }
           : {})
       },

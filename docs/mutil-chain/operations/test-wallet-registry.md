@@ -38,7 +38,7 @@ The slot name records purpose, not availability. Revalidate the referenced file,
 1. Copy `packages/extension/.env.test-wallets.example` to `packages/extension/.env.test-wallets.local`.
 2. Apply mode `0600` to the registry and each secret file. Secret file paths must be absolute and must not be symbolic links.
 3. Put only file paths, birthday heights, account slots, and test amounts in the local registry. Never put mnemonics, passwords, private keys, `NOIR_TESTNET_BROADCAST=1`, `NOIR_TESTNET_PROVISION_TARGET`, or any other broadcast-enabling setting there.
-4. Run `pnpm --filter @noir-wallet/extension test:wallets:check`. It reports `ready`, `not configured`, or a redacted error for each slot without printing paths, addresses, or secrets.
+4. Run `pnpm --filter @noir-wallet/extension wallets:check`. It reports `ready`, `not configured`, or a redacted error for each slot without printing paths, addresses, or secrets.
 
 Playwright reads `.env.test-wallets.local` automatically; explicit command-line variables take precedence. Ordinary tests work when that file is absent. An existing file with invalid permissions, variables, or format fails validation.
 
@@ -48,7 +48,7 @@ The EVM fixture is a `0600` JSON file with `schemaVersion: 1`, `network: "sepoli
 
 ## Live-Test Boundaries
 
-- `test:evm:testnet:live` performs a real EVM broadcast when its fixture is configured. Inspect the test and authorize the transaction before running it.
+- `pnpm test live evm-testnet-live` performs a real EVM broadcast when its fixture is configured. Inspect the test and authorize the transaction before running it.
 - Bitcoin live tests require `NOIR_BITCOIN_TESTNET_BROADCAST=1` on that command line. The default funded flow sends Max back to the same controlled BIP-84 address and spends the Testnet fee. The BIP-44/49/84 sequence additionally requires `NOIR_BITCOIN_LEGACY_INTEROP=1` on the same command line; it broadcasts multiple transactions and waits for intermediate confirmations.
 - Solana/NEAR live tests require `NOIR_SOLANA_NEAR_TESTNET_BROADCAST=1` on that command line. `NOIR_SOLANA_NEAR_LIVE_CHAIN=solana|near` limits a run to one chain. Solana sends a small amount from Account 0 to the fixture's controlled Account 1; NEAR sends to itself.
 - Zcash funded flows require `NOIR_TESTNET_FUNDING_SOURCE=1` on the command line. Broadcasting additionally requires `NOIR_TESTNET_BROADCAST=1`.

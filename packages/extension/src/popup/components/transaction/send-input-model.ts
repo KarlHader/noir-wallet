@@ -1,5 +1,5 @@
 import { safeBig } from '@/lib/big'
-import { formatPrice } from '@/lib/format'
+import { formatFiatAmount } from '@/lib/number-format'
 
 export function formatSendFiatValue(
   amount: string,
@@ -15,5 +15,7 @@ export function formatSendFiatValue(
   ) {
     return null
   }
-  return formatPrice(safeBig(normalizedAmount).times(normalizedPrice).toFixed(), { showSign: true })
+  return formatFiatAmount(safeBig(normalizedAmount).times(normalizedPrice).toFixed(), {
+    showSign: true
+  })
 }

@@ -1,6 +1,7 @@
 import { Icon } from '@iconify/react'
-import type { ActivityItem } from '@/core/activity'
+import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
 import { cn } from '@/lib/utils'
+import { formatSortAddress } from '@/lib/format'
 import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
@@ -9,6 +10,7 @@ import {
   getActivityRouteTitle,
   getActivityStatusPresentation,
   getActivitySwapPresentation,
+  getActivityDisplayChanges,
   isOwnedAccountTransfer,
   resolveActivityDisplayAmount,
   type ActivityDisplayAmount,
@@ -176,7 +178,14 @@ export function MultichainActivityRow({
   executionAddressModes,
   onClick
 }: MultichainActivityRowProps) {
-  const primary = resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
+  const changes = getActivityDisplayChanges(item, assetMetadata)
+  const observed =
+    getActivityAssetEffects(item) !== undefined &&
+    !(item.kind === 'transfer' && item.snapshot?.direction === 'self')
+  const summaryChange = changes.find(change => !change.isRaw)
+  const primary =
+    (observed ? summaryChange : undefined) ??
+    resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
   const counter = resolveActivityDisplayAmount(item.snapshot?.counterAmount, assetMetadata)
   const swap = getActivitySwapPresentation(
     item,
@@ -199,7 +208,13 @@ export function MultichainActivityRow({
   const showStatus = item.status !== 'final'
   const isCancelled = item.status === 'failed' && item.failureCode === 'user-rejected'
   const isIncoming = item.kind === 'receive' || item.snapshot?.direction === 'incoming'
-  const accessibleTitle = text.title
+  const accessibleTitle =
+    item.kind === 'contract-call' && interaction?.family === 'evm' ? 'Contract call' : text.title
+  const showChanges = observed && summaryChange !== undefined
+  const subtitle =
+    interaction?.family === 'evm' && interaction.targetAddress
+      ? `${resolvedNetworkName} · ${formatSortAddress(interaction.targetAddress)}`
+      : text.subtitle
 
   return (
     <button
@@ -225,22 +240,42 @@ export function MultichainActivityRow({
               status.tone === 'error' && !isCancelled && 'text-danger'
             )}
           >
-            {text.title}
+            {accessibleTitle}
           </p>
           {item.accountMode === 'private' && <ExecutionAccountBadge mode="private" iconOnly />}
         </div>
-        <p className="truncate text-xs text-muted">{text.subtitle}</p>
+        <p className="truncate text-xs text-muted" title={subtitle}>
+          {subtitle}
+        </p>
       </div>
 
-      <div className="justify-self-end text-right">
-        <p
-          className={cn(
-            'whitespace-nowrap font-mono text-sm font-medium',
-            isIncoming && 'text-primary'
-          )}
-        >
-          {primary ? signedAmount(item, primary) : '—'}
-        </p>
+      <div className={cn('min-w-0 justify-self-end text-right', showChanges && 'max-w-[145px]')}>
+        {showChanges && summaryChange ? (
+          <div data-activity-asset-changes>
+            <p
+              title={`${summaryChange.direction === 'incoming' ? '+' : '−'}${summaryChange.value} ${summaryChange.symbol}`}
+              className={cn(
+                'flex min-w-0 items-baseline justify-end gap-1 font-mono text-sm font-medium tabular-nums',
+                summaryChange.direction === 'incoming' && 'text-primary'
+              )}
+            >
+              <span className="min-w-0 truncate">
+                {summaryChange.direction === 'incoming' ? '+' : '−'}
+                {summaryChange.formatted}
+              </span>
+              <span className="max-w-16 shrink-0 truncate">{summaryChange.symbol}</span>
+            </p>
+          </div>
+        ) : primary || !observed ? (
+          <p
+            className={cn(
+              'whitespace-nowrap font-mono text-sm font-medium',
+              isIncoming && 'text-primary'
+            )}
+          >
+            {primary ? signedAmount(item, primary) : '—'}
+          </p>
+        ) : null}
         {showStatus ? (
           <p
             className={cn(

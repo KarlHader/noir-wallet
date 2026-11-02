@@ -3,6 +3,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { BetaInviteLayout } from '../../components/onboarding/BetaInviteLayout'
 import { inviteCheckErrorMessage } from '../../services/beta-invite-error'
+import { InlineError } from '@/popup/components/common/InlineError'
 
 interface Props {
   mode: 'code' | 'service-error'
@@ -87,13 +88,8 @@ export function BetaInvitePage({ mode, onCheck, onRetry }: Props) {
   }
 
   return (
-    <BetaInviteLayout
-      title="Invite check unavailable"
-      footer={
-        <Button onClick={() => void onRetry?.()} className="h-[45px] w-full">
-          Retry
-        </Button>
-      }
-    />
+    <BetaInviteLayout title="Invite check unavailable">
+      <InlineError message="Unable to check invite status" onRetry={() => void onRetry?.()} />
+    </BetaInviteLayout>
   )
 }

@@ -30,6 +30,7 @@ import {
   createAssetRegistry,
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions,
+  parseAssetDisplayMetadata,
   parseAssetId,
   parseChainId
 } from '@/core/chains/registry'
@@ -165,6 +166,16 @@ export function createRheaSwapBinding(input: {
   if (!sourceTarget) {
     throw new Error('RHEA Swap did not provide a source-chain transaction target')
   }
+  let destinationMetadata
+  try {
+    destinationMetadata = parseAssetDisplayMetadata({
+      name: input.tokenOut.symbol,
+      symbol: input.tokenOut.symbol,
+      decimals: input.tokenOut.decimals
+    })
+  } catch {
+    // Catalog labels outside wallet display limits must not block a valid quote.
+  }
   return parseRheaSwapTransactionBinding({
     schemaVersion: 1,
     provider: 'rhea-cross-chain-dex',
@@ -193,7 +204,8 @@ export function createRheaSwapBinding(input: {
       protocolAssetId: input.tokenOut.assetId,
       recipient: input.quote.recipient,
       expectedAmountRaw: input.quote.estimatedOut,
-      minimumAmountRaw: input.quote.minAmountOut
+      minimumAmountRaw: input.quote.minAmountOut,
+      ...(destinationMetadata ? { metadata: destinationMetadata } : {})
     }
   })
 }
@@ -355,12 +367,13 @@ export function resolveWalletOwnedQuoteAsset(
 
 function selectEvmBalance(
   asset: PortfolioAssetView,
-  mode: QuoteDepositExecutionMode
+  mode: QuoteDepositExecutionMode,
+  publicOnly: boolean
 ): PortfolioAssetView | null {
   const selectedRaw =
     mode === 'private'
       ? (asset.balance.privateOnchainRaw ?? asset.balance.privateRaw)
-      : asset.balance.mainRaw
+      : (asset.balance.mainRaw ?? (publicOnly ? asset.balance.availableRaw : undefined))
   if (selectedRaw === undefined) return null
   return Object.freeze({
     ...asset,
@@ -376,11 +389,12 @@ function selectEvmBalance(
 export function selectWalletOwnedQuoteAssetExecution(
   source: WalletOwnedQuoteAsset,
   mode: QuoteDepositExecutionMode,
-  privateExecutionAddress?: string
+  privateExecutionAddress?: string,
+  publicOnly = false
 ): WalletOwnedQuoteAsset | null {
   if (source.family !== 'evm') return mode === 'main' ? source : null
-  const asset = selectEvmBalance(source.asset, mode)
-  const networkFeeAsset = selectEvmBalance(source.networkFeeAsset, mode)
+  const asset = selectEvmBalance(source.asset, mode, publicOnly)
+  const networkFeeAsset = selectEvmBalance(source.networkFeeAsset, mode, publicOnly)
   if (!asset || !networkFeeAsset) return null
   let refundAddress = source.refundAddress
   if (mode === 'private') {

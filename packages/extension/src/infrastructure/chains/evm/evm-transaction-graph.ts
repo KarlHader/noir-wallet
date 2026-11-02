@@ -1,5 +1,4 @@
 import type { ChainAccountId } from '@/core/accounts/domain'
-import { decodeAaveSupplyCall } from '@/core/activity/aave-v3-ethereum'
 import { parseAssetId, parseChainId, type AssetRegistry } from '@/core/chains/registry'
 import {
   parseTransactionGraph,
@@ -51,24 +50,12 @@ function resolveFeeAssetId(input: CreateEvmTransferGraphInput) {
   return feeAsset.asset.id
 }
 
-export function classifyEvmContractCall(prepared: PreparedEvmTransfer, assets: AssetRegistry) {
+export function classifyEvmContractCall(prepared: PreparedEvmTransfer) {
   if (prepared.kind !== 'contract-call') return null
   if (isErc20ApproveCalldata(prepared.transaction.input)) {
-    return Object.freeze({ kind: 'approve' as const, supply: null })
+    return Object.freeze({ kind: 'approve' as const })
   }
-  const decoded = decodeAaveSupplyCall({
-    chainId: prepared.chainId,
-    recipient: prepared.recipient,
-    calldata: prepared.transaction.input,
-    valueRaw: prepared.amountRaw
-  })
-  const asset = decoded ? assets.get(decoded.assetId) : undefined
-  return asset && decoded
-    ? Object.freeze({
-        kind: 'supply' as const,
-        supply: Object.freeze({ asset, amountRaw: decoded.amountRaw })
-      })
-    : Object.freeze({ kind: 'contract-call' as const, supply: null })
+  return Object.freeze({ kind: 'contract-call' as const })
 }
 
 export function createEvmTransferGraph(input: CreateEvmTransferGraphInput): TransactionGraph {
@@ -77,14 +64,22 @@ export function createEvmTransferGraph(input: CreateEvmTransferGraphInput): Tran
     throw new Error('EVM transfer graph requires an EVM chain')
   }
   const assetId = parseAssetId(input.prepared.assetId)
-  const asset = input.assets.get(assetId.id)
+  const listed = input.assets.get(assetId.id)
+  const inspected =
+    input.prepared.kind === 'erc20-transfer' ? input.assets.inspect(assetId.id) : undefined
+  const asset =
+    listed ??
+    (inspected?.verification === 'unverified' &&
+    inspected.asset.kind === 'token' &&
+    inspected.asset.namespace === 'erc20'
+      ? inspected
+      : undefined)
   if (assetId.chainId !== chainId.id || !asset) {
     throw new Error('EVM transfer graph asset does not match its chain')
   }
   const isContractCall = input.prepared.kind === 'contract-call'
   const isCancel = input.prepared.kind === 'cancel' || input.prepared.kind === 'nonce-recovery'
-  const contractCall = classifyEvmContractCall(input.prepared, input.assets)
-  const aaveSupply = contractCall?.supply ?? null
+  const contractCall = classifyEvmContractCall(input.prepared)
   if ((isContractCall || isCancel) && asset.asset.namespace !== 'slip44') {
     throw new Error('EVM contract call value must use the native asset')
   }
@@ -96,13 +91,11 @@ export function createEvmTransferGraph(input: CreateEvmTransferGraphInput): Tran
   }
   const direction = isCancel
     ? ('self' as const)
-    : contractCall?.kind === 'supply'
-      ? ('outgoing' as const)
-      : isContractCall
-        ? ('contract' as const)
-        : input.prepared.from.toLowerCase() === input.prepared.recipient.toLowerCase()
-          ? ('self' as const)
-          : ('outgoing' as const)
+    : isContractCall
+      ? ('contract' as const)
+      : input.prepared.from.toLowerCase() === input.prepared.recipient.toLowerCase()
+        ? ('self' as const)
+        : ('outgoing' as const)
   const feeAssetId = resolveFeeAssetId(input)
   const createdAt = input.prepared.createdAt
 
@@ -122,15 +115,13 @@ export function createEvmTransferGraph(input: CreateEvmTransferGraphInput): Tran
       intent: {
         schemaVersion: 1,
         direction,
-        ...((isContractCall || isCancel) && input.prepared.amountRaw === '0' && !aaveSupply
+        ...((isContractCall || isCancel) && input.prepared.amountRaw === '0'
           ? {}
           : {
               primaryAmount: {
-                assetId: aaveSupply ? aaveSupply.asset.asset.id : assetId.id,
-                amountRaw: aaveSupply ? aaveSupply.amountRaw : input.prepared.amountRaw,
-                ...((aaveSupply?.asset ?? asset).source === 'user-added'
-                  ? { metadata: (aaveSupply?.asset ?? asset).metadata }
-                  : {})
+                assetId: assetId.id,
+                amountRaw: input.prepared.amountRaw,
+                ...(asset.source === 'user-added' ? { metadata: asset.metadata } : {})
               }
             }),
         feeLimit: {

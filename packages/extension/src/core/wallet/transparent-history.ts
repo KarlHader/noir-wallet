@@ -1,5 +1,6 @@
 import { ZEC_DECIMALS } from '../../config/wallet.ts'
 import { safeBig } from '../../lib/big.ts'
+import { formatBaseUnitDecimalAmount } from '../../lib/number-format.ts'
 import { isTransparentZcashAddress } from '../../lib/zcash-memo.ts'
 import {
   getAddressTxids,
@@ -60,16 +61,6 @@ async function fetchVerboseTransactions(
   return failed
 }
 
-function zatoshisToZec(value: bigint): string {
-  const whole = value / ZATOSHIS_PER_ZEC
-  const remainder = value % ZATOSHIS_PER_ZEC
-  if (remainder === 0n) return whole.toString()
-
-  const decimals = remainder.toString().padStart(ZEC_DECIMALS, '0').replace(/0+$/, '')
-
-  return `${whole}.${decimals}`
-}
-
 function outputValueToAddress(output: VerboseTxOutput | undefined, address: string): bigint {
   if (!output?.scriptPubKey?.addresses?.includes(address)) return 0n
   return BigInt(output.valueZat ?? 0)
@@ -128,7 +119,7 @@ export function mapVerboseTransactionToReceive(
     confirmations,
     requiredConfirmations,
     type: 'receive',
-    amount: zatoshisToZec(amount),
+    amount: formatBaseUnitDecimalAmount(amount, ZEC_DECIMALS),
     to: address,
     from: '',
     fromType: 'transparent',

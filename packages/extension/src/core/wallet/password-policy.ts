@@ -12,6 +12,9 @@ export function getNewPasswordValidationError(password: string): string | null {
   if (length > PASSWORD_POLICY.MAX_LENGTH) {
     return `Password must be no more than ${PASSWORD_POLICY.MAX_LENGTH} characters`
   }
+  if (/^\s+$/u.test(password)) {
+    return 'Password cannot contain only whitespace'
+  }
   return null
 }
 

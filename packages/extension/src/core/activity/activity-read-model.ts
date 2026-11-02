@@ -23,7 +23,6 @@ import type {
   ActivitySource
 } from './activity-types'
 import { ACTIVITY_SOURCES } from './activity-types'
-import { identifyAaveSupplyMethod, isAaveSupplyRecipient } from './aave-v3-ethereum'
 
 export const ACTIVITY_READ_LIMITS = Object.freeze({
   sourceItems: 10_200,
@@ -159,27 +158,17 @@ export function mapTransactionGraphToActivityItem(
       ? privateExecutionAddresses.has(senderAddress)
       : (senderAddress !== undefined && privateExecutionAddresses.has(senderAddress)) ||
         (recipientAddress !== undefined && privateExecutionAddresses.has(recipientAddress))
-  const legacyAaveSupply =
-    graph.root.kind === 'contract-call' &&
-    graph.root.intent?.recipient &&
-    identifyAaveSupplyMethod(
-      graph.root.intent.recipient.chainId,
-      graph.root.intent.recipient.address,
-      graph.root.intent.evm?.methodSelector
-    )
   return Object.freeze({
     id: graph.root.id,
     source: 'wallet-v2',
     ...(privateExecution ? { accountMode: 'private' as const } : {}),
     scope: graph.root.scope,
-    kind: legacyAaveSupply ? 'supply' : graph.root.kind,
+    kind: graph.root.kind,
     status: graph.root.status,
     ...(graph.root.intent === undefined
       ? {}
       : {
-          snapshot: legacyAaveSupply
-            ? Object.freeze({ ...graph.root.intent, direction: 'outgoing' as const })
-            : graph.root.intent
+          snapshot: graph.root.intent
         }),
     segments: Object.freeze(
       graph.segments.map(segment =>
@@ -188,7 +177,17 @@ export function mapTransactionGraphToActivityItem(
           role: segment.role,
           target: segment.target,
           status: segment.status,
-          ...(segment.evidence === undefined ? {} : { evidence: segment.evidence }),
+          ...(segment.evidence === undefined
+            ? {}
+            : {
+                evidence:
+                  graph.root.status === 'failed' ||
+                  graph.root.reconfirming === true ||
+                  segment.evidence.replacementTransactionHash !== undefined ||
+                  segment.reconfirming === true
+                    ? withoutAssetEffects(segment.evidence)
+                    : segment.evidence
+              }),
           ...(segment.failure === undefined ? {} : { failureCode: segment.failure.code }),
           ...(segment.reconfirming === true ? { reconfirming: true as const } : {})
         })
@@ -200,6 +199,21 @@ export function mapTransactionGraphToActivityItem(
     ...(graph.root.failure === undefined ? {} : { failureCode: graph.root.failure.code }),
     ...(graph.root.reconfirming === true ? { reconfirming: true as const } : {})
   })
+}
+
+function withoutAssetEffects(evidence: NonNullable<ActivityItem['segments'][number]['evidence']>) {
+  const { assetEffects: _assetEffects, ...rest } = evidence
+  return Object.freeze(rest)
+}
+
+function preferredAssetEffects(
+  primary: NonNullable<ActivityItem['segments'][number]['evidence']>['assetEffects'],
+  rpc: NonNullable<ActivityItem['segments'][number]['evidence']>['assetEffects']
+) {
+  if (!primary) return rpc
+  if (!rpc) return primary
+  if (primary.source !== rpc.source) return primary.source === 'receipt' ? primary : rpc
+  return primary.completeness === 'complete' ? primary : rpc
 }
 
 function normalizeHexHash(chainId: string, hash: string): string {
@@ -230,13 +244,21 @@ function reconcileRpcDuplicate(primary: ActivityItem, rpc: ActivityItem): Activi
   if (primary.source !== 'wallet-v2' || rpc.source !== 'rpc') return primary
   const kind = primary.kind === 'contract-call' && rpc.kind === 'approve' ? 'approve' : primary.kind
   const rpcTerminal = rpc.status === 'final' || rpc.status === 'failed'
-  if (!rpcTerminal || primary.segments.length !== 1 || rpc.segments.length !== 1) {
+  if (
+    !rpcTerminal ||
+    primary.status === 'failed' ||
+    (primary.status === 'final' && rpc.status === 'failed') ||
+    primary.reconfirming === true ||
+    primary.segments.some(segment => segment.evidence?.replacementTransactionHash !== undefined) ||
+    primary.segments.length !== 1 ||
+    rpc.segments.length !== 1
+  ) {
     return kind === primary.kind ? primary : Object.freeze({ ...primary, kind })
   }
-
   const primarySegment = primary.segments[0]
   const rpcSegment = rpc.segments[0]
   if (
+    primarySegment.reconfirming === true ||
     primarySegment.target.kind !== 'onchain' ||
     rpcSegment.target.kind !== 'onchain' ||
     primarySegment.target.chainId !== rpcSegment.target.chainId ||
@@ -247,6 +269,18 @@ function reconcileRpcDuplicate(primary: ActivityItem, rpc: ActivityItem): Activi
   ) {
     return kind === primary.kind ? primary : Object.freeze({ ...primary, kind })
   }
+  if (
+    primarySegment.evidence.assetEffects?.source === 'receipt' &&
+    ((primarySegment.evidence.blockHash !== undefined &&
+      rpcSegment.evidence.blockHash !== undefined &&
+      primarySegment.evidence.blockHash.toLowerCase() !==
+        rpcSegment.evidence.blockHash.toLowerCase()) ||
+      (primarySegment.evidence.blockHeight !== undefined &&
+        rpcSegment.evidence.blockHeight !== undefined &&
+        primarySegment.evidence.blockHeight !== rpcSegment.evidence.blockHeight))
+  ) {
+    return primary
+  }
 
   const {
     failureCode: _segmentFailure,
@@ -255,46 +289,27 @@ function reconcileRpcDuplicate(primary: ActivityItem, rpc: ActivityItem): Activi
   } = primarySegment
   const { failureCode: _itemFailure, reconfirming: _itemReconfirming, ...item } = primary
   const failureCode = rpc.status === 'failed' ? (rpc.failureCode ?? 'unknown') : undefined
-  const aaveMethod = primary.snapshot?.recipient
-    ? identifyAaveSupplyMethod(
-        primary.snapshot.recipient.chainId,
-        primary.snapshot.recipient.address,
-        primary.snapshot.evm?.methodSelector
-      )
-    : null
-  const matchingSupply =
-    rpc.kind === 'supply' &&
-    rpc.snapshot?.recipient?.address.toLowerCase() ===
-      primary.snapshot?.recipient?.address.toLowerCase()
-  const legacyCachedTransfer =
-    rpc.kind === 'transfer' &&
-    (aaveMethod === 'supply' || aaveMethod === 'supplyWithPermit') &&
-    rpc.snapshot?.primaryAmount?.assetId.startsWith(`${primarySegment.target.chainId}/erc20:`)
-  const aaveSupplyAmount =
-    kind === 'supply' &&
-    primary.snapshot?.recipient &&
-    isAaveSupplyRecipient(primary.snapshot.recipient.chainId, primary.snapshot.recipient.address) &&
-    primary.snapshot?.primaryAmount === undefined &&
-    (matchingSupply || legacyCachedTransfer) &&
-    rpc.snapshot?.direction === 'outgoing' &&
-    rpc.snapshot.primaryAmount &&
-    rpc.snapshot.sender?.address.toLowerCase() === primary.snapshot?.sender?.address.toLowerCase()
-      ? rpc.snapshot.primaryAmount
+  const effects =
+    rpc.status === 'final' && primary.reconfirming !== true && primarySegment.reconfirming !== true
+      ? preferredAssetEffects(
+          primarySegment.evidence.assetEffects,
+          rpcSegment.evidence.assetEffects
+        )
       : undefined
+  const { assetEffects: _primaryEffects, ...primaryEvidence } = primarySegment.evidence
+  const { assetEffects: _rpcEffects, ...rpcEvidence } = rpcSegment.evidence
   return Object.freeze({
     ...item,
     kind,
     status: rpc.status,
-    ...(aaveSupplyAmount && primary.snapshot
-      ? { snapshot: Object.freeze({ ...primary.snapshot, primaryAmount: aaveSupplyAmount }) }
-      : {}),
     segments: Object.freeze([
       Object.freeze({
         ...segment,
         status: rpc.status,
         evidence: Object.freeze({
-          ...primarySegment.evidence,
-          ...rpcSegment.evidence
+          ...primaryEvidence,
+          ...rpcEvidence,
+          ...(effects === undefined ? {} : { assetEffects: effects })
         }),
         ...(failureCode === undefined ? {} : { failureCode })
       })
@@ -325,6 +340,16 @@ function assertItem(item: ActivityItem, scope: ActivityScope): void {
   assertReconfirming(item.status, item.reconfirming, 'Activity item')
   for (const segment of item.segments) {
     assertReconfirming(segment.status, segment.reconfirming, 'Activity segment')
+    if (segment.evidence?.assetEffects) {
+      if (!segment.evidence.transactionHash || segment.target.kind !== 'onchain') {
+        throw new Error('Activity asset effects require an onchain transaction hash')
+      }
+      for (const change of segment.evidence.assetEffects.changes) {
+        if (!change.assetId.startsWith(`${segment.target.chainId}/`)) {
+          throw new Error('Activity asset effect chain does not match segment')
+        }
+      }
+    }
   }
 }
 
@@ -362,14 +387,23 @@ function parseActivitySegment(value: unknown): ActivityItem['segments'][number] 
   if ((status === 'failed') !== (failureCode !== undefined)) {
     throw new Error('Activity segment failure does not match its status')
   }
+  const target = parseTransactionSegmentTarget(value.target)
+  const evidence =
+    value.evidence === undefined ? undefined : parseTransactionSegmentEvidence(value.evidence)
+  if (evidence?.assetEffects) {
+    if (
+      target.kind !== 'onchain' ||
+      evidence.assetEffects.changes.some(change => !change.assetId.startsWith(`${target.chainId}/`))
+    ) {
+      throw new Error('Activity asset effect chain does not match segment')
+    }
+  }
   return Object.freeze({
     id: parseBoundedString(value.id, 'Activity segment ID'),
     role: value.role as TransactionSegmentRole,
-    target: parseTransactionSegmentTarget(value.target),
+    target,
     status,
-    ...(value.evidence === undefined
-      ? {}
-      : { evidence: parseTransactionSegmentEvidence(value.evidence) }),
+    ...(evidence === undefined ? {} : { evidence }),
     ...(failureCode === undefined ? {} : { failureCode }),
     ...(value.reconfirming === true ? { reconfirming: true as const } : {})
   })

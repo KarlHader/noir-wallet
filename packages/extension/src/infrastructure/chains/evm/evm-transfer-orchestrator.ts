@@ -1469,22 +1469,18 @@ export class EvmTransferOrchestrator {
       BigInt(pending.prepared.transaction.gasLimit) *
       BigInt(pending.prepared.transaction.maxFeePerGas)
     ).toString()
-    const contractCall = classifyEvmContractCall(pending.prepared, this.assets)
+    const contractCall = classifyEvmContractCall(pending.prepared)
     const isContractCall = contractCall !== null
-    const aaveSupply = contractCall?.supply
     const isCancel =
       graph.root.kind === 'cancel' &&
       (pending.prepared.kind === 'cancel' || pending.prepared.kind === 'nonce-recovery')
     const primaryAmountMatches = rheaBinding
       ? intent?.primaryAmount?.assetId === rheaBinding.origin.assetId &&
         intent.primaryAmount.amountRaw === rheaBinding.originAmountRaw
-      : aaveSupply
-        ? intent?.primaryAmount?.assetId === aaveSupply.asset.asset.id &&
-          intent.primaryAmount.amountRaw === aaveSupply.amountRaw
-        : (isContractCall || isCancel) && pending.prepared.amountRaw === '0'
-          ? intent?.primaryAmount === undefined
-          : intent?.primaryAmount?.assetId === pending.prepared.assetId &&
-            intent.primaryAmount.amountRaw === pending.prepared.amountRaw
+      : (isContractCall || isCancel) && pending.prepared.amountRaw === '0'
+        ? intent?.primaryAmount === undefined
+        : intent?.primaryAmount?.assetId === pending.prepared.assetId &&
+          intent.primaryAmount.amountRaw === pending.prepared.amountRaw
     const protocolMatchesPrepared =
       rheaBinding === undefined ||
       (rheaBinding.origin.chainId === pending.prepared.chainId &&
@@ -1506,13 +1502,11 @@ export class EvmTransferOrchestrator {
       intent.direction ===
         (isCancel
           ? 'self'
-          : contractCall?.kind === 'supply'
-            ? 'outgoing'
-            : isContractCall
-              ? 'contract'
-              : pending.prepared.from.toLowerCase() === pending.prepared.recipient.toLowerCase()
-                ? 'self'
-                : 'outgoing') &&
+          : isContractCall
+            ? 'contract'
+            : pending.prepared.from.toLowerCase() === pending.prepared.recipient.toLowerCase()
+              ? 'self'
+              : 'outgoing') &&
       primaryAmountMatches &&
       protocolMatchesPrepared &&
       intent.feeLimit?.amountRaw === maximumFee &&

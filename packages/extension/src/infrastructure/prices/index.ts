@@ -11,11 +11,13 @@ export { ChromeMarketChangeCacheRepository } from './chrome-market-change-cache'
 export { ChromeMarketHistoryCacheRepository } from './chrome-market-history-cache'
 export {
   COIN_GECKO_MARKET_CHART_URL,
+  COIN_GECKO_ASSET_PLATFORMS_URL,
   COINMARKETCAP_KEYLESS_KLINE_URL,
   GECKO_TERMINAL_POOL_OHLCV_URL,
   MARKET_HISTORY_EXPIRES_MS,
   MARKET_HISTORY_FRESH_MS,
   AssetMarketHistoryService,
+  UnsupportedAssetMarketHistoryError,
   parseMarketHistoryCacheSnapshot,
   type AssetMarketHistoryServiceOptions,
   type MarketHistoryCacheEntry,

@@ -11,6 +11,7 @@ import type { AccountNetworkView } from '@/popup/services/account-networks-clien
 import { formatChainAddressExplorerUrl } from '@/popup/services/chain-explorer'
 import { ListSkeleton } from '../ui/skeleton'
 import { NetworkFilter } from '../common/NetworkFilter'
+import { InlineError } from '../common/InlineError'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import { MultichainActivityRow } from './MultichainActivityRow'
 import { EvmNonceRecoveryBanner } from './EvmNonceRecoveryBanner'
@@ -52,12 +53,10 @@ const EMPTY_ACCOUNT_NETWORKS: readonly AccountNetworkView[] = []
 function EmptyState({
   icon,
   title,
-  onRetry,
   compact = false
 }: {
   readonly icon: string
   readonly title: string
-  readonly onRetry?: () => void
   readonly compact?: boolean
 }) {
   return (
@@ -81,11 +80,6 @@ function EmptyState({
         />
       </div>
       <p className="text-sm font-medium">{title}</p>
-      {onRetry && (
-        <Button variant="outline" size="sm" className="mt-4" onClick={onRetry}>
-          Retry
-        </Button>
-      )}
     </div>
   )
 }
@@ -442,19 +436,18 @@ export function MultichainActivityPanel({
 
   const olderControl = canLoadOlder ? (
     <div className="px-5 pb-4 text-center">
-      {olderStatus === 'error' && (
-        <p role="alert" className="mb-2 text-xs text-destructive">
-          Could not load older activity. Try again.
-        </p>
+      {olderStatus === 'error' ? (
+        <InlineError message="Could not load older activity." onRetry={() => void loadOlder()} />
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={olderStatus === 'loading'}
+          onClick={() => void loadOlder()}
+        >
+          {olderStatus === 'loading' ? 'Loading…' : 'Load more'}
+        </Button>
       )}
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={olderStatus === 'loading'}
-        onClick={() => void loadOlder()}
-      >
-        {olderStatus === 'loading' ? 'Loading…' : 'Load more'}
-      </Button>
     </div>
   ) : null
 
@@ -473,12 +466,13 @@ export function MultichainActivityPanel({
       <section aria-label="Multichain activity" className="min-h-0">
         {toolbar}
         {recoveryBanners}
-        <EmptyState
-          icon="lucide:wifi-off"
-          title="Unable to load activity"
-          onRetry={() => void load()}
-          compact={compact}
-        />
+        <div className={cn('flex items-center px-6', compact ? 'min-h-28 py-4' : 'min-h-48 py-8')}>
+          <InlineError
+            message="Unable to load activity"
+            onRetry={() => void load()}
+            className="w-full"
+          />
+        </div>
         {fullHistoryLink}
       </section>
     )

@@ -14,7 +14,7 @@ import {
 } from '@/infrastructure/persistence/repositories'
 import { loadTransactions } from '@/lib/indexed-db'
 import { transactionRecorder } from './transaction-recorder'
-import { parseAssetId } from '@/core/chains/registry'
+import { getZcashChainId, parseAssetId } from '@/core/chains/registry'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap'
 import { isAccountScopeForNetwork, type AccountScope } from '@/core/wallet/account-scope'
 import type { Transaction } from '@/types'
@@ -49,6 +49,7 @@ export interface RheaSwapPortfolioRefreshRequest {
 
 export interface RheaSwapTransactionMonitorOptions {
   readonly refreshPortfolio?: (request: RheaSwapPortfolioRefreshRequest) => Promise<void>
+  readonly prepareZcashDestinationCatchUp?: (scope: TransactionAccountScope) => Promise<void>
   readonly notifyStatus?: (quoteHandle: string, status: SwapStatus) => void
   readonly loadZcashAccountScopes?: () => readonly AccountScope[]
   readonly loadZcashTransactions?: (accountKey: string) => Promise<readonly Transaction[]>
@@ -422,6 +423,15 @@ export class RheaSwapTransactionMonitor {
     }
     if (!this.pending.has(value.quoteHandle)) return
     if (status === 'completed') {
+      if (
+        value.destinationAsset &&
+        parseAssetId(value.destinationAsset).chainId === getZcashChainId('mainnet')
+      ) {
+        await this.options.prepareZcashDestinationCatchUp?.({
+          keyDomainId: value.walletId,
+          accountId: value.accountId
+        })
+      }
       await this.updateZcashTransaction(value.accountKey, value.transactionId, {
         status: 'success',
         ...(destinationHash ? { destinationTxHash: destinationHash } : {}),
@@ -646,6 +656,9 @@ export class RheaSwapTransactionMonitor {
       return false
     }
     if (status === 'completed') {
+      if (binding.destination.chainId === getZcashChainId('mainnet')) {
+        await this.options.prepareZcashDestinationCatchUp?.(graph.root.scope)
+      }
       await this.applyGraphSegment(graph.root.scope, graph.root.id, 'relay', 'final', {
         externalReference: binding.quoteHandle
       })

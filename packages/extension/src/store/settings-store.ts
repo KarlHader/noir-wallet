@@ -101,6 +101,9 @@ function ensureSettingsStoreHydrated(): Promise<void> {
   return settingsHydrationPromise
 }
 
+let sidePanelModeRevision = 0
+let sidePanelModeLoadSequence = 0
+
 interface SettingsStore {
   networkMode: 'mainnet' | 'testnet'
   chainEndpointSettingsByNetwork: Partial<Record<Network, ChainEndpointSettings>>
@@ -196,6 +199,7 @@ export const useSettingsStore = create<SettingsStore>()(
       },
 
       setSidePanelMode: async enabled => {
+        const revision = ++sidePanelModeRevision
         const response = await chrome.runtime.sendMessage({
           type: 'SET_EXTENSION_DISPLAY_MODE',
           sidePanelMode: enabled
@@ -208,21 +212,26 @@ export const useSettingsStore = create<SettingsStore>()(
         if (typeof response.sidePanelMode !== 'boolean') {
           throw new Error('Background returned an invalid wallet display mode')
         }
-        set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
+        if (revision === sidePanelModeRevision)
+          set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
       },
 
       syncSidePanelMode: enabled => {
+        sidePanelModeRevision += 1
         set({ sidePanelMode: enabled, isSidePanelModeLoaded: true })
       },
 
       loadSidePanelMode: async () => {
+        const revision = sidePanelModeRevision
+        const sequence = ++sidePanelModeLoadSequence
         const response = await chrome.runtime.sendMessage({
           type: 'GET_EXTENSION_DISPLAY_MODE'
         })
         if (!response?.success || typeof response.sidePanelMode !== 'boolean') {
           throw new Error(getResponseErrorMessage(response) || 'Failed to read wallet display mode')
         }
-        set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
+        if (revision === sidePanelModeRevision && sequence === sidePanelModeLoadSequence)
+          set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
       },
 
       setBlockExplorerPreference: (chain, explorerId) => {

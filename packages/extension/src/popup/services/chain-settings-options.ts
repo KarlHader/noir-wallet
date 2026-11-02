@@ -58,6 +58,44 @@ export interface ExplorerChainOption {
   }[]
 }
 
+export interface NetworkSettingsOption {
+  readonly chainId: string
+  readonly label: string
+  readonly iconChain: string
+  readonly source: 'builtin' | 'custom'
+  readonly numericChainId?: number
+  readonly currencySymbol: string
+}
+
+export function buildNetworkSettingsOptions(
+  settings: ChainEndpointSettings
+): readonly NetworkSettingsOption[] {
+  const evmNetworks = resolveEvmFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__)
+    .newOperationsEnabled
+    ? resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings)
+    : []
+  const evmById = new Map(evmNetworks.map(network => [network.chainId, network]))
+  const nativeSymbols: Readonly<Record<string, string>> = {
+    zec: 'ZEC',
+    btc: 'BTC',
+    sol: 'SOL',
+    near: 'NEAR'
+  }
+  return Object.freeze(
+    buildExplorerChainOptions(settings).map(option => {
+      const evm = evmById.get(option.chainId as `eip155:${string}`)
+      return Object.freeze({
+        chainId: option.chainId,
+        label: option.label,
+        iconChain: option.iconChain,
+        source: evm?.source ?? 'builtin',
+        ...(evm ? { numericChainId: evm.numericChainId } : {}),
+        currencySymbol: evm?.nativeCurrency.symbol ?? nativeSymbols[option.iconChain] ?? ''
+      })
+    })
+  )
+}
+
 export function buildZcashRpcChainOption(groups: readonly RpcEndpointGroup[]): RpcChainOption {
   return {
     chainId: getZcashChainId(DEFAULT_NETWORK),
@@ -108,18 +146,27 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
     ...(evmEnabled
       ? resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings).map(network => {
           const builtin = findBuiltinEvmNetworkConfig(DEFAULT_NETWORK, network.chainId)
+          const custom = settings.customEvmNetworks.find(item => item.chainId === network.chainId)
+          const defaultUrl = builtin
+            ? getEvmRpcEndpointOptions(DEFAULT_NETWORK, network.chainId)[0].url
+            : (custom?.rpc.url ?? network.rpcUrl)
           return Object.freeze({
             chainId: network.chainId,
             label: network.displayName,
             iconChain: network.iconChain,
             protocol: 'evm-json-rpc' as const,
-            defaultUrl: builtin
-              ? getEvmRpcEndpointOptions(DEFAULT_NETWORK, network.chainId)[0].url
-              : (settings.customEvmNetworks.find(custom => custom.chainId === network.chainId)?.rpc
-                  .url ?? network.rpcUrl),
+            defaultUrl,
             ...(builtin
               ? { presets: getEvmRpcEndpointOptions(DEFAULT_NETWORK, network.chainId) }
-              : {})
+              : {
+                  presets: [
+                    Object.freeze({
+                      id: 'default',
+                      label: custom?.rpc.label ?? 'Default',
+                      url: defaultUrl
+                    })
+                  ]
+                })
           })
         })
       : []),

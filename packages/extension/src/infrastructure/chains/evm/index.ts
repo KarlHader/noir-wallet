@@ -60,7 +60,7 @@ export function createConfiguredEvmRpcClient(
 
 export { attestEvmRpcEndpoint, type AttestEvmRpcEndpointInput } from './evm-network-attestation'
 
-function buildTrackedErc20Assets(config: EvmNetworkConfig) {
+export function buildTrackedErc20Assets(config: EvmNetworkConfig) {
   return config.usdcContract
     ? Object.freeze([
         Object.freeze({

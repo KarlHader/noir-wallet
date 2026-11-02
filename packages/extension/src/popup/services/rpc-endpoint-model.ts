@@ -30,6 +30,7 @@ export function getSavedRpcEndpoints(
   const saved = (settings.savedRpcEndpoints ?? [])
     .filter(endpoint => endpoint.chainId === option.chainId)
     .map(endpoint => endpoint.rpc)
+    .filter(endpoint => !option.presets?.some(preset => isSameRpcUrl(preset.url, endpoint.url)))
   const selected = findChainEndpointOverride(settings, option.chainId)?.rpc
   if (
     selected &&

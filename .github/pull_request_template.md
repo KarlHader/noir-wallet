@@ -9,6 +9,6 @@
 ## Multichain checklist
 
 - [ ] This change does not affect the multichain work.
-- [ ] I reviewed the maintained references under `docs/mutil-chain/` and updated affected usage, architecture, security, migration, or UI guidance in its authoritative location.
+- [ ] Any documentation edits meet the scope in `AGENTS.md`; routine fixes and internal implementation changes do not require documentation updates when usage and public contracts remain unchanged.
 - [ ] Runtime, Storage, Service Worker, Offscreen, Worker/WASM, or UI changes include the affected real MV3 Playwright verification.
 - [ ] New capability remains hidden or fail-closed until all required dependencies and release gates are complete.

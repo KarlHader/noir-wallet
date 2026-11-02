@@ -2,7 +2,7 @@ import {
   calculateTokenFiatValue,
   parseTokenBalanceDecimal
 } from '@/popup/components/tokens/token-balance-format'
-import { formatBaseUnitDecimalAmount } from '@/popup/components/portfolio/portfolio-format'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { resolveChainIconAlias } from '@/lib/chain-icon'

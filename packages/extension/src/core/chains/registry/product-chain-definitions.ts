@@ -246,6 +246,7 @@ export function getBitcoinChainId(network: Network): string {
 }
 
 export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly AssetDefinitionInput[] {
+  const nativeIconUrl = formatNativeTokenIconUrl(config.iconChain)
   return Object.freeze([
     Object.freeze({
       chainId: config.chainId,
@@ -256,7 +257,7 @@ export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly Asset
         name: config.nativeCurrency.name,
         symbol: config.nativeCurrency.symbol,
         decimals: config.nativeCurrency.decimals,
-        iconUrl: formatNativeTokenIconUrl(config.iconChain)
+        ...(nativeIconUrl ? { iconUrl: nativeIconUrl } : {})
       },
       source: 'bundled',
       verification: 'trusted'
