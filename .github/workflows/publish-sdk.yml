@@ -1,0 +1,278 @@
+name: Stage SDK on npm
+run-name: SDK ${{ inputs.release_line || 'stable' }} ${{ inputs.operation }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Stage an unpublished version or verify a staged package
+        required: true
+        type: choice
+        options: [stage, verify]
+      release_line:
+        description: SDK release line (stage only; verify uses the original artifact)
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta]
+      confirm_version:
+        description: SDK version to stage (required for stage)
+        required: false
+        type: string
+      confirm_sha:
+        description: Full selected branch HEAD SHA to stage (required for stage)
+        required: false
+        type: string
+      candidate_run_id:
+        description: Original staging workflow run ID (required for verify)
+        required: false
+        type: string
+      candidate_run_attempt:
+        description: Original build attempt (required for verify)
+        required: false
+        default: '1'
+        type: string
+
+concurrency:
+  group: publish-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  HUSKY: 0
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'NoirWallet/noir-wallet' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.repository.private == false &&
+      github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    outputs:
+      should_stage: ${{ steps.source.outputs.should_stage }}
+      operation: ${{ steps.source.outputs.operation }}
+      version: ${{ steps.source.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_branch: ${{ steps.source.outputs.source_branch }}
+      release_line: ${{ steps.source.outputs.release_line }}
+      dist_tag: ${{ steps.source.outputs.dist_tag }}
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Resolve canonical SDK source and operation
+        id: source
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_LINE: ${{ inputs.release_line }}
+          CONFIRM_VERSION: ${{ inputs.confirm_version }}
+          CONFIRM_SHA: ${{ inputs.confirm_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/sdk-release.mjs resolve
+
+  build:
+    name: Build SDK package
+    needs: prepare
+    if: needs.prepare.outputs.should_stage == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      build_attempt: ${{ steps.pack.outputs.build_attempt }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: NoirWallet/noir-wallet
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Check pinned source
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA" && test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+      - run: pnpm install --frozen-lockfile
+        working-directory: source
+      - run: pnpm --filter @noir-wallet/sdk type-check
+        working-directory: source
+      - run: pnpm --filter @noir-wallet/sdk build
+        working-directory: source
+      - run: pnpm --filter @noir-wallet/sdk test
+        working-directory: source
+      - run: pnpm --filter @noir-wallet/example type-check
+        working-directory: source
+      - run: pnpm --filter @noir-wallet/example build
+        working-directory: source
+      - name: Pack the tested SDK
+        id: pack
+        env:
+          SDK_SOURCE_ROOT: source
+          SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+        run: node scripts/sdk-release.mjs pack sdk-artifact
+      - name: Check the exact packed SDK
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SDK_SOURCE_ROOT: source
+        run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: artifact
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}
+          path: sdk-artifact/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Stage SDK on npm
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_stage == 'true'
+    runs-on: ubuntu-latest
+    environment: sdk-npm
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Install pinned npm CLI
+        run: |
+          npm install --global npm@11.21.1 --ignore-scripts
+          test "$(npm --version)" = 11.21.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: sdk-artifact
+      - name: Validate exact build artifact
+        env:
+          SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+          SDK_WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
+          SDK_RUN_ID: ${{ github.run_id }}
+          SDK_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}
+          SDK_VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/sdk-release.mjs validate sdk-artifact
+      - name: Stage the same tarball on npm
+        env:
+          SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+          SDK_WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
+          SDK_RUN_ID: ${{ github.run_id }}
+          SDK_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}
+          SDK_VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/sdk-release.mjs stage sdk-artifact
+
+  verify:
+    name: Verify staged SDK
+    needs: prepare
+    if: needs.prepare.outputs.operation == 'verify'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Locate original build artifact
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+        run: node scripts/sdk-release.mjs locate
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
+          path: sdk-artifact
+      - name: Validate original package
+        id: candidate_metadata
+        env:
+          SDK_WORKFLOW_SHA: ${{ steps.candidate.outputs.workflow_sha }}
+          SDK_RUN_ID: ${{ inputs.candidate_run_id }}
+          SDK_RUN_ATTEMPT: ${{ steps.candidate.outputs.build_attempt }}
+          SDK_ARTIFACT_MODE: release
+        run: node scripts/sdk-release.mjs validate sdk-artifact
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: NoirWallet/noir-wallet
+          ref: ${{ steps.candidate_metadata.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Check candidate source
+        env:
+          SOURCE_SHA: ${{ steps.candidate_metadata.outputs.source_sha }}
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        working-directory: source
+      - name: Install pinned npm CLI
+        run: |
+          npm install --global npm@11.21.1 --ignore-scripts
+          test "$(npm --version)" = 11.21.1
+      - name: Verify registry package and provenance
+        id: published
+        env:
+          SDK_WORKFLOW_SHA: ${{ steps.candidate.outputs.workflow_sha }}
+          SDK_RUN_ID: ${{ inputs.candidate_run_id }}
+          SDK_RUN_ATTEMPT: ${{ steps.candidate.outputs.build_attempt }}
+          SDK_ARTIFACT_MODE: release
+        run: node scripts/sdk-release.mjs verify-published sdk-artifact
+      - name: Verify installed consumer and npm signatures
+        env:
+          TARBALL: ${{ steps.published.outputs.tarball }}
+          SDK_SOURCE_ROOT: source
+        run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL" --published
+      - name: Record completed verification
+        env:
+          VERSION: ${{ steps.published.outputs.version }}
+        run: printf '## SDK verification passed\n\nPublished `@noir-wallet/sdk@%s` matches the accepted tarball and provenance; installed consumer and npm signatures passed.\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record incomplete verification
+        if: failure()
+        env:
+          PUBLICATION_STATE: ${{ steps.published.outputs.publication_state || 'unknown' }}
+        run: |
+          case "$PUBLICATION_STATE" in
+            published)
+              printf '## Published; verification incomplete\n\nThe version exists on npm. Inspect the failed step and complete verification of the original candidate before announcing the release.\n' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            not-published)
+              printf '## Not published; verification incomplete\n\nThe registry does not contain this version. Check npm Staged Packages, compare the candidate before approving it, then run verification again using the original run ID and build attempt.\n' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              printf '## Publication state not confirmed\n\nInspect the failed candidate lookup, artifact, setup, or registry step. Resolve the error before verifying the original candidate again; this failure does not establish whether an upload succeeded. An expired original artifact cannot be recovered by repacking.\n' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac

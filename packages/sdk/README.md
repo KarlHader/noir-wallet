@@ -40,8 +40,8 @@ The wallet locks and reloads when its network mode changes. Older V1 downloads, 
 ## Install the SDK
 
 ```bash
-pnpm add @noir-wallet/sdk
-npm install @noir-wallet/sdk
+pnpm add @noir-wallet/sdk@beta --save-exact
+npm install @noir-wallet/sdk@beta --save-exact
 ```
 
 ## Quick start

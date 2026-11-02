@@ -80,6 +80,8 @@ Retain the candidate metadata, ZIP checksum, and store submission confirmation a
 
 ## SDK Example V1/V2 Coexistence
 
+The V2 SDK uses `2.x.y-beta.N` versions on the npm `beta` dist-tag, starting at `2.0.0-beta.1`; V1 stable releases remain on `latest`. SDK publication runs through the trusted workflow on `main` and accepts only the current merged `v2` commit for the Beta line. Follow the shared [SDK npm staging procedure](https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md#sdk-npm-staging) for candidate construction, npm approval, and verification. SDK Beta publication is independent of extension releases.
+
 The existing public SDK repository continues to host the Example page: `main` serves V1 at the root path and the `/v1/` alias; `v2` serves `/v2/`. Both paths share the same web origin. The example source in this wallet repository is now maintained at `packages/sdk/example/`; its workspace CI builds it but does not deploy it. Before first-connection checks across versions, disconnect the wallet authorization and clear the Example's local state. The wallet extension release Workflow does not deploy or modify the SDK Example.
 
 ## History Proxy Deployment
