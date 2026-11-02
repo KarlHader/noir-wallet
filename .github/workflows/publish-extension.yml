@@ -1,21 +1,26 @@
 name: Publish Accepted Extension
-run-name: Publish accepted build ${{ inputs.candidate_run_id }} attempt ${{ inputs.candidate_run_attempt }}
+run-name: ${{ inputs.operation }} accepted build ${{ inputs.candidate_run_id }} attempt ${{ inputs.candidate_run_attempt }} source ${{ inputs.confirm_sha }}
 
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Publish the accepted candidate, or check CWS authorization without any writes
+        type: choice
+        default: publish
+        options: [publish, check-auth]
       candidate_run_id:
-        description: Successful Prepare Extension Release candidate run ID
-        required: true
+        description: Successful candidate run ID (required for publish)
+        required: false
         type: string
       candidate_run_attempt:
         description: Candidate run attempt that passed acceptance
-        required: true
+        required: false
         type: string
         default: '1'
       confirm_sha:
         description: Full wallet source SHA that passed acceptance
-        required: true
+        required: false
         type: string
 
 concurrency:
@@ -29,12 +34,17 @@ permissions:
 jobs:
   publish:
     if: >-
+      inputs.operation != 'check-auth' &&
+      github.ref == 'refs/heads/main' &&
       github.event.repository.fork == false &&
-      (github.repository == 'NoirWallet/noir-wallet' || github.event.repository.private == false)
+      github.repository == 'NoirWallet/noir-wallet'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
+    outputs:
+      artifact_id: ${{ steps.candidate.outputs.artifact_id }}
+      workflow_sha: ${{ steps.candidate.outputs.workflow_sha }}
     concurrency:
       group: extension-release-publication
       cancel-in-progress: false
@@ -81,3 +91,286 @@ jobs:
           gh release create "$TAG" --repo "$GH_REPO" --title "Noir Wallet $TAG" \
             --latest --target "$SOURCE_SHA" --notes-file release-assets/release-body.md \
             release-assets/*.zip release-assets/SHA256SUMS
+      - name: Explain store activation
+        if: vars.CWS_AUTOMATION_ENABLED != 'true'
+        run: echo 'Chrome Web Store automation is disabled. This run published the GitHub Release only.' >> "$GITHUB_STEP_SUMMARY"
+
+  sign:
+    needs: publish
+    if: >-
+      github.repository == 'NoirWallet/noir-wallet' &&
+      github.ref == 'refs/heads/main' && vars.CWS_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: cws-production
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.signed.outputs.artifact-id }}
+      metadata_sha256: ${{ steps.sign.outputs.metadata_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          artifact-ids: ${{ needs.publish.outputs.artifact_id }}
+          path: release-assets
+      - name: Sign the accepted production ZIP without rebuilding
+        id: sign
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
+          CONFIRM_SHA: ${{ inputs.confirm_sha }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+          CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
+          CWS_SIGNING_PRIVATE_KEY: ${{ secrets.CWS_SIGNING_PRIVATE_KEY }}
+        run: node scripts/extension-store-release.mjs sign release-assets store-package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: signed
+        with:
+          name: ${{ steps.sign.outputs.artifact_name }}
+          path: store-package/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+
+  upload:
+    needs: [publish, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: cws-production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+      CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
+      CONFIRM_SHA: ${{ inputs.confirm_sha }}
+      SIGNED_METADATA_SHA256: ${{ needs.sign.outputs.metadata_sha256 }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+      CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          artifact-ids: ${{ needs.sign.outputs.artifact_id }}
+          path: store-package
+      - name: Verify package and restore upload receipts
+        id: prepare
+        run: node scripts/extension-store-release.mjs prepare upload store-package store-state
+      - name: Authenticate to Chrome Web Store through WIF
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          create_credentials_file: false
+      - name: Persist intent before any external write
+        if: steps.prepare.outputs.needs_intent == 'true'
+        id: intent
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.intent_artifact_name }}
+          path: store-state/intent/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Execute or reconcile upload
+        env:
+          STORE_PLAN_SHA256: ${{ steps.prepare.outputs.plan_sha256 }}
+          INTENT_ARTIFACT_ID: ${{ steps.intent.outputs.artifact-id }}
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: node scripts/extension-store-release.mjs execute upload store-package store-state
+      - name: Preserve stage result, including failures
+        if: ${{ always() && steps.prepare.outcome == 'success' && hashFiles('store-state/result/receipt.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.result_artifact_name }}
+          path: store-state/result/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+
+  submit:
+    needs: [publish, sign, upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: cws-production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+      CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
+      CONFIRM_SHA: ${{ inputs.confirm_sha }}
+      SIGNED_METADATA_SHA256: ${{ needs.sign.outputs.metadata_sha256 }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+      CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          artifact-ids: ${{ needs.sign.outputs.artifact_id }}
+          path: store-package
+      - name: Verify package and restore submit receipts
+        id: prepare
+        run: node scripts/extension-store-release.mjs prepare submit store-package store-state
+      - name: Authenticate to Chrome Web Store through WIF
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          create_credentials_file: false
+      - name: Persist intent before any external write
+        if: steps.prepare.outputs.needs_intent == 'true'
+        id: intent
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.intent_artifact_name }}
+          path: store-state/intent/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Execute or reconcile submit
+        env:
+          STORE_PLAN_SHA256: ${{ steps.prepare.outputs.plan_sha256 }}
+          INTENT_ARTIFACT_ID: ${{ steps.intent.outputs.artifact-id }}
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: node scripts/extension-store-release.mjs execute submit store-package store-state
+      - name: Preserve stage result, including failures
+        if: ${{ always() && steps.prepare.outcome == 'success' && hashFiles('store-state/result/receipt.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.result_artifact_name }}
+          path: store-state/result/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+
+  notify:
+    needs: [publish, sign, submit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: cws-production
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+      CANDIDATE_WORKFLOW_SHA: ${{ needs.publish.outputs.workflow_sha }}
+      CONFIRM_SHA: ${{ inputs.confirm_sha }}
+      SIGNED_METADATA_SHA256: ${{ needs.sign.outputs.metadata_sha256 }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+      CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          artifact-ids: ${{ needs.sign.outputs.artifact_id }}
+          path: store-package
+      - name: Verify package and restore notify receipts
+        id: prepare
+        run: node scripts/extension-store-release.mjs prepare notify store-package store-state
+      - name: Persist intent before any external write
+        if: steps.prepare.outputs.needs_intent == 'true'
+        id: intent
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.intent_artifact_name }}
+          path: store-state/intent/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Execute or reconcile notify
+        env:
+          STORE_PLAN_SHA256: ${{ steps.prepare.outputs.plan_sha256 }}
+          INTENT_ARTIFACT_ID: ${{ steps.intent.outputs.artifact-id }}
+          CWS_SLACK_WEBHOOK_URL: ${{ secrets.CWS_SLACK_WEBHOOK_URL }}
+        run: node scripts/extension-store-release.mjs execute notify store-package store-state
+      - name: Preserve stage result, including failures
+        if: ${{ always() && steps.prepare.outcome == 'success' && hashFiles('store-state/result/receipt.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.prepare.outputs.result_artifact_name }}
+          path: store-state/result/receipt.json
+          retention-days: 30
+          if-no-files-found: error
+
+  check-auth:
+    if: >-
+      inputs.operation == 'check-auth' && github.repository == 'NoirWallet/noir-wallet' &&
+      github.ref == 'refs/heads/main' && github.event.repository.fork == false
+    runs-on: ubuntu-24.04
+    environment: cws-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Authenticate to Chrome Web Store through WIF
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          create_credentials_file: false
+      - name: Check identity and status without uploading or notifying
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+          CWS_SIGNING_PUBLIC_KEY_SHA256: ${{ vars.CWS_SIGNING_PUBLIC_KEY_SHA256 }}
+        run: node scripts/extension-store-release.mjs check-auth

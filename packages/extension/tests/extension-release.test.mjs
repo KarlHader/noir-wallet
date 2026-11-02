@@ -1,7 +1,7 @@
 import { test as it, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -19,6 +19,14 @@ import {
   validateCurrentCandidate,
   validatePublicationTarget
 } from '../../../scripts/extension-release-gates.mjs'
+import {
+  needsWriteIntent,
+  selectStoreAsset,
+  sendStoreNotification,
+  signCandidate,
+  verifyStoreBundle
+} from '../../../scripts/extension-store-release.mjs'
+import { createTestZip } from './fixtures/store-zip.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../../../scripts/extension-release.mjs', import.meta.url))
 const GATE_SCRIPT = fileURLToPath(
@@ -28,6 +36,21 @@ const SOURCE_SHA = 'a'.repeat(40)
 const WORKFLOW_SHA = 'b'.repeat(40)
 const PR_HEAD_SHA = 'c'.repeat(40)
 const PR_BASE_SHA = 'd'.repeat(40)
+const STORE_EXTENSION_ID = 'mfoghjbpfanobmnoemoepenjjcmfpmdn'
+const STORE_PUBLISHER_ID = 'publisher_1'
+const STORE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
+const STORE_PRIVATE_KEY = STORE_KEY.export({ format: 'pem', type: 'pkcs8' })
+const STORE_PUBLIC_KEY_SHA = createHash('sha256')
+  .update(createPublicKey(STORE_KEY).export({ format: 'der', type: 'spki' }))
+  .digest('hex')
+const STORE_EXPECTED = {
+  mode: 'candidate',
+  repository: 'NoirWallet/noir-wallet',
+  runId: '12345',
+  runAttempt: '2',
+  workflowSha: WORKFLOW_SHA,
+  sourceSha: SOURCE_SHA
+}
 
 function fixture(t, options = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'noir-extension-release-'))
@@ -68,6 +91,40 @@ function readMetadata(output) {
 
 function writeMetadata(output, value) {
   writeFileSync(path.join(output, 'release-metadata.json'), `${JSON.stringify(value)}\n`)
+}
+
+async function storeCandidate(t, version = '1.0.39', envOverrides = {}) {
+  const setup = fixture(t, { mode: 'candidate', ref: `release/${version}`, env: envOverrides })
+  const { source, output, env } = setup
+  if (version !== '1.0.39') {
+    writeFileSync(
+      path.join(source, 'packages', 'extension', 'package.json'),
+      JSON.stringify({ version })
+    )
+    writeFileSync(path.join(source, 'CHANGELOG.md'), `## [${version}]\n\n- Current fix\n`)
+    writeFileSync(
+      path.join(source, 'packages', 'web', 'public', 'changelog.json'),
+      JSON.stringify({ schemaVersion: 1, releases: { [version]: { changes: ['Current fix'] } } })
+    )
+    rmSync(path.join(source, 'packages', 'extension', 'dist-testnet'), { recursive: true })
+  }
+  const zip = createTestZip({
+    'manifest.json': JSON.stringify({ manifest_version: 3, name: 'Noir Wallet', version }),
+    'assets/example.txt': 'signed candidate bytes'
+  })
+  writeFileSync(path.join(source, 'packages', 'extension', 'dist', 'main.zip'), zip)
+  const metadata = await packageReleaseArtifact(source, output, env)
+  return { ...setup, zip, metadata }
+}
+
+function signStoreCandidate(candidate, output, expected = STORE_EXPECTED) {
+  return signCandidate(candidate.output, output, {
+    expected,
+    privateKey: STORE_PRIVATE_KEY,
+    publicKeySha256: STORE_PUBLIC_KEY_SHA,
+    publisherId: STORE_PUBLISHER_ID,
+    extensionId: STORE_EXTENSION_ID
+  })
 }
 
 describe('Extension release artifacts', () => {
@@ -413,6 +470,250 @@ describe('Extension release artifacts', () => {
       }
     )
     assert.equal(imported.status, 0, imported.stderr)
+  })
+})
+
+describe('Store signing handoff', () => {
+  it('signs exactly the selected V1 mainnet and V2 multichain candidate ZIP', async t => {
+    for (const [version, network] of [
+      ['1.0.39', 'mainnet'],
+      ['2.0.0', 'multichain']
+    ]) {
+      await t.test(version, async child => {
+        const candidate = await storeCandidate(child, version)
+        assert.equal(selectStoreAsset(candidate.metadata).network, network)
+        const signedDirectory = path.join(candidate.root, 'signed')
+        const signed = signStoreCandidate(candidate, signedDirectory)
+        const verified = verifyStoreBundle(signedDirectory, {
+          metadataSha256: signed.metadataSha256,
+          publicKeySha256: STORE_PUBLIC_KEY_SHA,
+          expected: STORE_EXPECTED
+        })
+        assert.equal(verified.binding.network, network)
+        assert.equal(verified.binding.candidateRunId, STORE_EXPECTED.runId)
+        assert.equal(verified.binding.sourceSha, SOURCE_SHA)
+        assert.equal(verified.binding.candidateWorkflowSha, WORKFLOW_SHA)
+        assert.equal(verified.binding.zipSha256, candidate.metadata.assets[0].sha256)
+        const zipOffset = 12 + verified.crx.readUInt32LE(8)
+        assert.deepEqual(verified.crx.subarray(zipOffset), candidate.zip)
+      })
+    }
+  })
+
+  it('rejects beta or testnet selection and a substituted candidate ZIP', async t => {
+    const candidate = await storeCandidate(t)
+    assert.throws(
+      () => selectStoreAsset({ ...candidate.metadata, mode: 'beta' }),
+      /accepted production candidate/
+    )
+    assert.throws(
+      () =>
+        selectStoreAsset({
+          ...candidate.metadata,
+          assets: [candidate.metadata.assets[1]]
+        }),
+      /Exactly one production store ZIP/
+    )
+    writeFileSync(
+      path.join(candidate.output, candidate.metadata.assets[0].name),
+      readFileSync(path.join(candidate.output, candidate.metadata.assets[1].name))
+    )
+    assert.throws(
+      () => signStoreCandidate(candidate, path.join(candidate.root, 'signed')),
+      /checksum or size mismatch/
+    )
+  })
+
+  it('rejects a same-version signed bundle substituted across jobs or candidate identities', async t => {
+    const first = await storeCandidate(t)
+    const firstDirectory = path.join(first.root, 'signed')
+    const firstSigned = signStoreCandidate(first, firstDirectory)
+    const otherExpected = {
+      ...STORE_EXPECTED,
+      sourceSha: PR_HEAD_SHA,
+      workflowSha: PR_BASE_SHA
+    }
+    const second = await storeCandidate(t, '1.0.39', {
+      SOURCE_SHA: otherExpected.sourceSha,
+      WORKFLOW_SHA: otherExpected.workflowSha
+    })
+    const secondDirectory = path.join(second.root, 'signed')
+    const secondSigned = signStoreCandidate(second, secondDirectory, otherExpected)
+    assert.notEqual(firstSigned.metadataSha256, secondSigned.metadataSha256)
+    assert.throws(
+      () =>
+        verifyStoreBundle(secondDirectory, {
+          metadataSha256: firstSigned.metadataSha256,
+          publicKeySha256: STORE_PUBLIC_KEY_SHA,
+          expected: STORE_EXPECTED
+        }),
+      /Signed metadata digest mismatch/
+    )
+    assert.throws(
+      () =>
+        verifyStoreBundle(secondDirectory, {
+          metadataSha256: secondSigned.metadataSha256,
+          publicKeySha256: STORE_PUBLIC_KEY_SHA,
+          expected: STORE_EXPECTED
+        }),
+      /candidate binding mismatch/
+    )
+  })
+})
+
+describe('Store review notification', () => {
+  const binding = {
+    version: '1.0.39',
+    sourceSha: SOURCE_SHA,
+    repository: 'NoirWallet/noir-wallet',
+    publisherId: STORE_PUBLISHER_ID,
+    extensionId: STORE_EXTENSION_ID
+  }
+  const run = { id: '98765' }
+  const webhookUrl = 'https://hooks.slack.com/services/T123/B456/secret'
+  const submission = state => ({ status: 'succeeded', version: binding.version, state })
+  const journal = (submit, notify) => ({ upload: { status: 'succeeded' }, submit, notify })
+
+  it('sends one safe message with release, workflow, and store links after confirmed review submission', async () => {
+    for (const state of ['PENDING_REVIEW', 'STAGED']) {
+      const requests = []
+      const submit = submission(state)
+      assert.equal(needsWriteIntent('notify', journal(submit)), true)
+      const result = await sendStoreNotification({
+        binding,
+        submission: submit,
+        run,
+        webhookUrl,
+        fetchImpl: async (url, options) => {
+          requests.push({ url, options })
+          return { status: 200, text: async () => 'ok' }
+        }
+      })
+      assert.equal(requests.length, 1)
+      assert.equal(requests[0].url, webhookUrl)
+      assert.equal(requests[0].options.method, 'POST')
+      const payload = JSON.parse(requests[0].options.body)
+      assert.deepEqual(Object.keys(payload).sort(), ['text', 'unfurl_links', 'unfurl_media'])
+      assert.equal(payload.unfurl_links, false)
+      assert.equal(payload.unfurl_media, false)
+      assert.ok(payload.text.includes(`Noir Wallet v${binding.version}`))
+      assert.match(payload.text, new RegExp(state))
+      assert.match(payload.text, /Submission receipt:/)
+      assert.match(payload.text, /Publish manually after approval/)
+      assert.match(payload.text, /github\.com\/NoirWallet\/noir-wallet\/releases\/tag\/v1\.0\.39/)
+      assert.match(payload.text, /github\.com\/NoirWallet\/noir-wallet\/actions\/runs\/98765/)
+      assert.match(
+        payload.text,
+        /chrome\.google\.com\/webstore\/devconsole\/publisher_1\/mfoghjbpfanobmnoemoepenjjcmfpmdn\/edit/
+      )
+      assert.doesNotMatch(payload.text, /<!|<@|@here|@channel/)
+      assert.deepEqual(result, {
+        status: 'succeeded',
+        retryable: false,
+        version: binding.version,
+        state,
+        httpStatus: 200
+      })
+    }
+  })
+
+  it('never repeats a succeeded or ambiguous Slack delivery', async () => {
+    const submit = submission('PENDING_REVIEW')
+    for (const previous of [
+      { status: 'succeeded', retryable: false },
+      { status: 'unknown', retryable: false, reason: 'delivery_unconfirmed' }
+    ]) {
+      assert.equal(needsWriteIntent('notify', journal(submit, previous)), false)
+      let posts = 0
+      const result = await sendStoreNotification({
+        binding,
+        submission: submit,
+        previous,
+        run,
+        webhookUrl,
+        fetchImpl: () => {
+          posts++
+          throw new Error('Slack must not be called again')
+        }
+      })
+      assert.equal(posts, 0)
+      assert.equal(result.status, previous.status)
+      assert.equal(result.retryable, false)
+    }
+  })
+
+  it('retries notification only after an explicit HTTP rejection with successful upload and submit receipts', async () => {
+    const submit = submission('PENDING_REVIEW')
+    const rejected = await sendStoreNotification({
+      binding,
+      submission: submit,
+      run,
+      webhookUrl,
+      fetchImpl: async () => ({ status: 403, text: async () => 'rejected' })
+    })
+    assert.deepEqual(rejected, {
+      status: 'failed',
+      retryable: true,
+      reason: 'slack_delivery_failed',
+      httpStatus: 403
+    })
+    assert.equal(needsWriteIntent('notify', journal(submit, rejected)), true)
+    let posts = 0
+    const retry = await sendStoreNotification({
+      binding,
+      submission: submit,
+      previous: rejected,
+      run,
+      webhookUrl,
+      fetchImpl: async () => {
+        posts++
+        return { status: 200, text: async () => 'ok' }
+      }
+    })
+    assert.equal(posts, 1)
+    assert.equal(retry.status, 'succeeded')
+  })
+
+  it('treats timeout and server errors as unknown and forbids automatic retry', async () => {
+    const submit = submission('PENDING_REVIEW')
+    for (const fetchImpl of [
+      async () => {
+        throw new Error('timeout')
+      },
+      async () => ({ status: 503, text: async () => 'error' })
+    ]) {
+      const result = await sendStoreNotification({
+        binding,
+        submission: submit,
+        run,
+        webhookUrl,
+        fetchImpl
+      })
+      assert.equal(result.status, 'unknown')
+      assert.equal(result.retryable, false)
+      assert.equal(needsWriteIntent('notify', journal(submit, result)), false)
+    }
+  })
+
+  it('blocks notification before submission is confirmed', async () => {
+    for (const submit of [undefined, { status: 'unknown' }, submission('DRAFT')]) {
+      if (submit?.status !== 'succeeded')
+        assert.equal(needsWriteIntent('notify', journal(submit)), false)
+      const result = await sendStoreNotification({
+        binding,
+        submission: submit,
+        run,
+        webhookUrl,
+        fetchImpl: () => {
+          throw new Error('Slack must not be called before confirmation')
+        }
+      })
+      assert.deepEqual(result, {
+        status: 'blocked',
+        retryable: false,
+        reason: 'submission_unconfirmed'
+      })
+    }
   })
 })
 

@@ -1,6 +1,6 @@
 # Noir Wallet CI/CD and Release Workflow
 
-This runbook describes automatic PR checks and preview packages in [extension-ci.yml](../.github/workflows/extension-ci.yml), manual Beta and production candidate builds in [extension-release.yml](../.github/workflows/extension-release.yml), and promotion in [publish-extension.yml](../.github/workflows/publish-extension.yml). The [documentation workflow](../.github/workflows/docs.yml) verifies the documentation site on relevant pull requests but does not deploy it. The [SDK workflow](../.github/workflows/sdk.yml) checks the SDK package and example; [SDK npm staging](#sdk-npm-staging) is a separate workflow. Website and signup Worker deployment are described in [Website and Signup Worker](#website-and-signup-worker). Chrome Web Store submission remains manual.
+This runbook describes automatic PR checks and preview packages in [extension-ci.yml](../.github/workflows/extension-ci.yml), manual Beta and production candidate builds in [extension-release.yml](../.github/workflows/extension-release.yml), and promotion and optional Chrome Web Store submission in [publish-extension.yml](../.github/workflows/publish-extension.yml). The [documentation workflow](../.github/workflows/docs.yml) verifies the documentation site on relevant pull requests but does not deploy it. The [SDK workflow](../.github/workflows/sdk.yml) checks the SDK package and example; [SDK npm staging](#sdk-npm-staging) is a separate workflow. Website and signup Worker deployment are described in [Website and Signup Worker](#website-and-signup-worker). SDK npm staging approval and final Chrome Web Store go-live remain manual operations.
 
 On repeated PR pushes, SDK and documentation verification reuse a prior successful run only when the target branch commit and relevant inputs are unchanged. A failed, cancelled, or incomparable run performs the checks again.
 
@@ -124,7 +124,8 @@ flowchart LR
   G --> H["Accept production ZIPs"]
   H --> I["Manual promotion of same ZIPs"]
   I --> J["GitHub Release + vX.Y.Z tag"]
-  J --> K["Manual Chrome Web Store submission"]
+  J --> K["Optional signed CRX upload and staged review submission"]
+  K --> L["Manual store go-live after approval"]
 ```
 
 ### PR previews and Beta builds
@@ -146,7 +147,24 @@ Multiple Betas can use the same extension version. Manual runs are queued rather
 
 ### Manual confirmation and production validation
 
-Both manual workflows require repository write access and must be dispatched from `main`. Candidate construction requires confirmation of the full reviewed source SHA. Publication requires a separate dispatch with the accepted candidate run ID, attempt, and full source SHA. These are maintainer confirmations; the workflows do not enforce a second independent reviewer. GitHub environment required reviewers are not a prerequisite because that feature is unavailable on non-Enterprise private repositories. See [manual workflow permissions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) and [environment review availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments).
+Both manual workflows require repository write access and must be dispatched from `main`. Candidate construction requires confirmation of the full reviewed source SHA. `operation=publish` requires a separate dispatch with the accepted candidate run ID, attempt, and full source SHA; `operation=check-auth` needs no candidate and only checks read-only store authorization. These are maintainer confirmations; the workflows do not enforce a second independent reviewer. Configure `cws-production` for `main` only, without a required reviewer. See [manual workflow permissions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) and [environment review availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments).
+
+### Chrome Web Store setup
+
+Store automation runs only for `NoirWallet/noir-wallet` and only when the repository variable `CWS_AUTOMATION_ENABLED` is `true`; unset or `false` keeps promotion limited to the GitHub Release. Set these values in `cws-production`:
+
+| Type     | Name                             | Value                                                      |
+| -------- | -------------------------------- | ---------------------------------------------------------- |
+| Variable | `CWS_PUBLISHER_ID`               | Publisher ID of the production store account               |
+| Variable | `CWS_EXTENSION_ID`               | `mfoghjbpfanobmnoemoepenjjcmfpmdn`                         |
+| Variable | `CWS_SIGNING_PUBLIC_KEY_SHA256`  | Lowercase SHA-256 of the RSA public key in DER SPKI format |
+| Variable | `GCP_PROJECT_ID`                 | Google Cloud project with Chrome Web Store API enabled     |
+| Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity provider resource name              |
+| Variable | `GCP_SERVICE_ACCOUNT`            | Service account authorized for this store item             |
+| Secret   | `CWS_SIGNING_PRIVATE_KEY`        | Existing PEM RSA CRX signing private key                   |
+| Secret   | `CWS_SLACK_WEBHOOK_URL`          | Incoming Webhook bound to the intended Slack channel       |
+
+Do not replace the existing signing key during setup. If store signing protection is enabled, retain its enrolled key; otherwise register the corresponding public key in Chrome Web Store before enabling automation. Verify its public key fingerprint against `CWS_SIGNING_PUBLIC_KEY_SHA256`; the CRX signing identity does not have to equal the store listing ID. Restrict the Workload Identity provider to this repository's numeric owner and repository IDs, `main`, the `publish-extension.yml` workflow, and `cws-production`. The workflow requests the `chromewebstore.readonly` scope for `check-auth` and the `chromewebstore` scope for upload and submission. Run [Extension Store Rehearsal](../.github/workflows/extension-store-ci.yml) on the PR and `operation=check-auth` successfully before setting `CWS_AUTOMATION_ENABLED=true`. The rehearsal runs release/store tests and transfers a synthetic CRX signed with a temporary key between runners; it uses no production credentials or package. Neither check proves a real upload, review submission, or Slack delivery.
 
 Candidate packaging and promotion enforce:
 
@@ -283,9 +301,9 @@ After all jobs succeed, download the final `noir-wallet-v1.0.40-rc.…` artifact
 
 ### 3. Promote the accepted artifact
 
-After acceptance, open **Actions → Publish Accepted Extension → Run workflow** from `main`. Enter the accepted `candidate_run_id`, `candidate_run_attempt`, and `confirm_sha`. This separate action is the production publication confirmation.
+After acceptance, open **Actions → Publish Accepted Extension → Run workflow** from `main`. Leave `operation=publish` selected and enter the accepted `candidate_run_id`, `candidate_run_attempt`, and `confirm_sha`. This separate action is the production publication confirmation.
 
-The workflow verifies the candidate's origin and current release branch before creating the GitHub Release and `v1.0.40` tag. It downloads and publishes the accepted ZIPs without rebuilding. Keep the source branch unchanged and present until publication completes.
+The workflow verifies the candidate's origin and current release branch before creating the GitHub Release and `v1.0.40` tag. It downloads and publishes the accepted ZIPs without rebuilding. With store automation enabled, separate `sign`, `upload`, `submit`, and `notify` jobs then process the production ZIP. Keep the source branch unchanged and present until publication completes.
 
 ### 4. Check publication
 
@@ -293,9 +311,9 @@ Confirm **Publish Accepted Extension** succeeded. In the wallet repository's Rel
 
 ### 5. Submit to Chrome Web Store
 
-Store submission is manual. Verify the production ZIP, `noir-wallet-v{version}.zip` (V1 mainnet or V2 multichain), from the GitHub Release matches the accepted candidate. Upload that same ZIP in Chrome Web Store Developer Dashboard, review the version, changed permissions, and release notes, then submit for review or staged rollout under the store configuration. Never upload the V1 `-testnet.zip` asset to the production store listing.
+When `CWS_AUTOMATION_ENABLED=true`, the promotion signs the accepted production ZIP (`noir-wallet-v{version}.zip`, V1 mainnet or V2 multichain) into a CRX3 package without rebuilding it, uploads the CRX, submits it with `STAGED_PUBLISH`, `skipReview=false`, and `blockOnWarnings=true`, then sends the result to the configured Slack channel. The V1 testnet ZIP is excluded. The signed CRX and stage intent/result receipts are separate 30-day Actions artifacts, not GitHub Release assets. Each external write has a persisted intent first; an unconfirmed result is not blindly retried.
 
-Record the accepted ZIP checksum, store extension ID, submitted version, and publication time. Where possible, compare the store-served package contents with the accepted ZIP, allowing for Chrome-added metadata. Otherwise retain the Developer Dashboard submission record identifying the uploaded ZIP. A matching version number alone does not establish package correspondence. Historical migration tags remain subject to the [source limitations above](#historical-releases).
+Check the workflow's `sign`, `upload`, `submit`, and `notify` results, ZIP and CRX checksums, and the Developer Dashboard status. A successful submission means the item is awaiting review or staged; it is not live. After approval, verify the version, permissions, and release notes in the Dashboard and publish it manually. [Chrome's deferred publication guidance](https://developer.chrome.com/docs/webstore/update#deferred_publishing_option) gives up to 30 days after approval before the staged submission returns to draft. Record the store publication time and retain the submission evidence; a matching version alone does not prove package correspondence. Historical migration tags remain subject to the [source limitations above](#historical-releases).
 
 ## Open-Source Publication
 
@@ -312,6 +330,7 @@ Protect `main` and `v2` against direct updates, force pushes, and deletion, with
 - **Release branch advanced or was removed:** restore the accepted branch HEAD only if it is still the intended source, or build and accept a new candidate. Promotion rejects a candidate whose branch no longer matches.
 - **Candidate artifact expired:** build and accept a new candidate. Promotion never reconstructs the old package from source.
 - **Publication failure:** retry promotion with the same accepted run, attempt, and SHA while its artifact remains available. A completely published Release with identical asset digests is left unchanged. If a partial or conflicting Release exists, inspect it before recovery; the workflow will not overwrite it automatically.
+- **Store stage failure or uncertain result:** inspect the matching Actions intent/result receipts and Developer Dashboard before retrying with the same candidate. The workflow blocks a different candidate for the same version, conflicting review or staged states, and unconfirmed external writes. A confirmed successful notification is not sent again; if only Slack definitely failed, select **Re-run failed jobs** on the original Actions run to retry `notify` only. Missing or expired receipts require manual investigation in the Dashboard and must not be reconstructed from a new package or retried automatically. Do not move the tag or cancel review to recover an ambiguous result.
 - **Incorrect published Release:** stop promoting it and release a new patch version. Do not reuse or move the old tag.
 
 For an urgent fix, start a new `release/{patch-version}` branch from the verified stable wallet source, apply the fix and regression test, update the version and both release notes, then review, build, accept, and promote it independently of unfinished integration changes. Merge the applicable fix back to `main` and `v2` afterward. An extension already published in the browser store cannot be rolled back in place; publish a new patch version.
@@ -330,6 +349,7 @@ For an urgent fix, start a new `release/{patch-version}` branch from the verifie
 - [ ] Production tag points to the accepted release source commit.
 - [ ] Wallet source tag/commit, all expected GitHub Release ZIPs, checksums, and release notes were checked.
 - [ ] Final acceptance used the production ZIP intended for Chrome Web Store.
-- [ ] The production ZIP for the selected profile (V1 mainnet or V2 multichain) was submitted to Chrome Web Store.
+- [ ] When enabled, the signed production package was submitted for staged review and the store status and Slack result were checked.
+- [ ] After approval, the production version was published manually in the Developer Dashboard.
 
-Chrome Web Store upload and approval, SDK npm staging approval, candidate construction confirmation, and production promotion remain manual. Website and signup Worker operations follow [Website and Signup Worker](#website-and-signup-worker). Do not add unverified secret names or third-party publication actions to the workflow.
+Final Chrome Web Store go-live, SDK npm staging approval, candidate construction confirmation, and production promotion remain manual. Website and signup Worker operations follow [Website and Signup Worker](#website-and-signup-worker). Do not add unverified secret names or third-party publication actions to the workflow.
