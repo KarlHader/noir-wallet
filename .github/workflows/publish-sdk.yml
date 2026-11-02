@@ -1,4 +1,4 @@
-name: Stage SDK on npm
+name: '[Manual] Stage SDK on npm'
 run-name: SDK ${{ inputs.release_line || 'stable' }} ${{ inputs.operation }} by @${{ github.actor }}
 
 on:

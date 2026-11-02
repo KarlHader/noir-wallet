@@ -1,4 +1,4 @@
-name: Publish Accepted Extension
+name: '[Manual] Publish Accepted Extension'
 run-name: ${{ inputs.operation }} accepted build ${{ inputs.candidate_run_id }} attempt ${{ inputs.candidate_run_attempt }} source ${{ inputs.confirm_sha }}
 
 on:

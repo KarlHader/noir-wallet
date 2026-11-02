@@ -1,4 +1,4 @@
-name: Prepare Extension Release
+name: '[Manual] Prepare Extension Release'
 run-name: ${{ inputs.mode }} from ${{ inputs.source_ref }} by @${{ github.actor }}
 
 on:
