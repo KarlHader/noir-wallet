@@ -15,8 +15,9 @@ import { createRequire } from 'node:module'
 import { validatePublishedProvenance, validateSdkArtifact } from './sdk-release.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const sdk = path.join(root, 'packages/sdk')
-const fixtures = path.join(sdk, 'tests/fixtures')
+const sourceRoot = path.resolve(process.env.SDK_SOURCE_ROOT ?? root)
+const sdk = path.join(sourceRoot, 'packages/sdk')
+const fixtures = path.join(root, 'packages/sdk/tests/fixtures')
 const registry = 'https://registry.npmjs.org/'
 
 function run(command, args, cwd, env, options = {}) {

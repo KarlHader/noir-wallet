@@ -1,5 +1,5 @@
 name: Stage SDK on npm
-run-name: SDK ${{ inputs.operation }} by @${{ github.actor }}
+run-name: SDK ${{ inputs.release_line || 'stable' }} ${{ inputs.operation }} by @${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -9,12 +9,18 @@ on:
         required: true
         type: choice
         options: [stage, verify]
+      release_line:
+        description: SDK release line (stage only; verify uses the original artifact)
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta]
       confirm_version:
         description: SDK version to stage (required for stage)
         required: false
         type: string
       confirm_sha:
-        description: Full main source SHA to stage (required for stage)
+        description: Full selected branch HEAD SHA to stage (required for stage)
         required: false
         type: string
       candidate_run_id:
@@ -51,6 +57,10 @@ jobs:
       operation: ${{ steps.source.outputs.operation }}
       version: ${{ steps.source.outputs.version }}
       source_sha: ${{ steps.source.outputs.source_sha }}
+      source_branch: ${{ steps.source.outputs.source_branch }}
+      release_line: ${{ steps.source.outputs.release_line }}
+      dist_tag: ${{ steps.source.outputs.dist_tag }}
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -64,8 +74,10 @@ jobs:
         id: source
         env:
           OPERATION: ${{ inputs.operation }}
+          RELEASE_LINE: ${{ inputs.release_line }}
           CONFIRM_VERSION: ${{ inputs.confirm_version }}
           CONFIRM_SHA: ${{ inputs.confirm_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/sdk-release.mjs resolve
 
   build:
@@ -79,7 +91,12 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: NoirWallet/noir-wallet
           ref: ${{ needs.prepare.outputs.source_sha }}
+          path: source
           persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -89,19 +106,33 @@ jobs:
       - name: Check pinned source
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA" && test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
       - run: pnpm install --frozen-lockfile
+        working-directory: source
       - run: pnpm --filter @noir-wallet/sdk type-check
+        working-directory: source
       - run: pnpm --filter @noir-wallet/sdk build
+        working-directory: source
       - run: pnpm --filter @noir-wallet/sdk test
+        working-directory: source
       - run: pnpm --filter @noir-wallet/example type-check
+        working-directory: source
       - run: pnpm --filter @noir-wallet/example build
+        working-directory: source
       - name: Pack the tested SDK
         id: pack
+        env:
+          SDK_SOURCE_ROOT: source
+          SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
         run: node scripts/sdk-release.mjs pack sdk-artifact
       - name: Check the exact packed SDK
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
+          SDK_SOURCE_ROOT: source
         run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: artifact
@@ -125,7 +156,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -142,6 +172,10 @@ jobs:
       - name: Validate exact build artifact
         env:
           SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+          SDK_WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
           SDK_RUN_ID: ${{ github.run_id }}
           SDK_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}
           SDK_VERSION: ${{ needs.prepare.outputs.version }}
@@ -149,6 +183,10 @@ jobs:
       - name: Stage the same tarball on npm
         env:
           SDK_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          SDK_SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+          SDK_RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SDK_DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+          SDK_WORKFLOW_SHA: ${{ needs.prepare.outputs.workflow_sha }}
           SDK_RUN_ID: ${{ github.run_id }}
           SDK_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}
           SDK_VERSION: ${{ needs.prepare.outputs.version }}
@@ -181,14 +219,26 @@ jobs:
           artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
           path: sdk-artifact
       - name: Validate original package
+        id: candidate_metadata
         env:
-          SDK_SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+          SDK_WORKFLOW_SHA: ${{ steps.candidate.outputs.workflow_sha }}
           SDK_RUN_ID: ${{ inputs.candidate_run_id }}
           SDK_RUN_ATTEMPT: ${{ steps.candidate.outputs.build_attempt }}
-          SDK_VERSION: ${{ steps.candidate.outputs.version }}
+          SDK_ARTIFACT_MODE: release
         run: node scripts/sdk-release.mjs validate sdk-artifact
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: NoirWallet/noir-wallet
+          ref: ${{ steps.candidate_metadata.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Check candidate source
+        env:
+          SOURCE_SHA: ${{ steps.candidate_metadata.outputs.source_sha }}
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
       - run: pnpm install --frozen-lockfile --ignore-scripts
+        working-directory: source
       - name: Install pinned npm CLI
         run: |
           npm install --global npm@11.21.1 --ignore-scripts
@@ -196,14 +246,15 @@ jobs:
       - name: Verify registry package and provenance
         id: published
         env:
-          SDK_SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+          SDK_WORKFLOW_SHA: ${{ steps.candidate.outputs.workflow_sha }}
           SDK_RUN_ID: ${{ inputs.candidate_run_id }}
           SDK_RUN_ATTEMPT: ${{ steps.candidate.outputs.build_attempt }}
-          SDK_VERSION: ${{ steps.candidate.outputs.version }}
+          SDK_ARTIFACT_MODE: release
         run: node scripts/sdk-release.mjs verify-published sdk-artifact
       - name: Verify installed consumer and npm signatures
         env:
           TARBALL: ${{ steps.published.outputs.tarball }}
+          SDK_SOURCE_ROOT: source
         run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL" --published
       - name: Record completed verification
         env:

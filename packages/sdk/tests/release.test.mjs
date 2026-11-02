@@ -25,6 +25,7 @@ import {
 } from '../../../scripts/sdk-release.mjs'
 
 const sourceSha = 'a'.repeat(40)
+const workflowSha = sourceSha
 const env = {
   GITHUB_REPOSITORY: SDK_REPOSITORY,
   GITHUB_REF: 'refs/heads/main',
@@ -34,8 +35,13 @@ const env = {
   GITHUB_RUN_ID: '123',
   GITHUB_RUN_ATTEMPT: '1',
   OPERATION: 'stage',
+  RELEASE_LINE: 'stable',
   CONFIRM_VERSION: '0.2.0',
   CONFIRM_SHA: sourceSha,
+  SDK_SOURCE_SHA: sourceSha,
+  SDK_SOURCE_BRANCH: 'main',
+  SDK_RELEASE_LINE: 'stable',
+  SDK_DIST_TAG: 'latest',
   ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-test-token'
 }
@@ -61,9 +67,18 @@ const registry = {
   versions: { '0.1.9': {} },
   'dist-tags': { latest: '0.1.9' }
 }
-const expected = { sourceSha, runId: '123', runAttempt: '1', version: '0.2.0' }
+const expected = {
+  sourceSha,
+  workflowSha,
+  sourceBranch: 'main',
+  releaseLine: 'stable',
+  distTag: 'latest',
+  runId: '123',
+  runAttempt: '1',
+  version: '0.2.0'
+}
 
-function fixture(t, packageManifest = manifest) {
+function fixture(t, packageManifest = manifest, metadataOverrides = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'noir-sdk-release-test-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const source = path.join(directory, 'source')
@@ -73,43 +88,40 @@ function fixture(t, packageManifest = manifest) {
   mkdirSync(artifact)
   writeFileSync(path.join(source, 'package/package.json'), JSON.stringify(packageManifest))
   writeFileSync(path.join(source, 'packages/sdk/package.json'), JSON.stringify(packageManifest))
-  const filename = 'noir-wallet-sdk-0.2.0.tgz'
+  const filename = `noir-wallet-sdk-${metadataOverrides.version ?? '0.2.0'}.tgz`
   execFileSync('tar', ['-czf', path.join(artifact, filename), '-C', source, 'package'])
   const bytes = readFileSync(path.join(artifact, filename))
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: 'release',
     packageName: SDK_PACKAGE,
     version: '0.2.0',
     repository: SDK_REPOSITORY,
     sourceSha,
     workflowSha: sourceSha,
+    sourceBranch: 'main',
+    releaseLine: 'stable',
+    distTag: 'latest',
     runId: '123',
     runAttempt: '1',
     tarball: filename,
     size: bytes.length,
     sha256: createHash('sha256').update(bytes).digest('hex'),
-    integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+    integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+    ...metadataOverrides
   }
   writeFileSync(path.join(artifact, SDK_METADATA), JSON.stringify(metadata))
   return { directory, source, artifact, filename, bytes, metadata }
 }
 
-test('stages only an increased stable version on trusted main or a confirmed manual release', () => {
-  const resolve = (changes = {}) => resolveSdkRelease({ env, event: {}, manifest, ...changes })
+test('resolves only a confirmed current branch head from the trusted main workflow', () => {
+  const resolve = (changes = {}) =>
+    resolveSdkRelease({ env, manifest, branchHeadSha: sourceSha, ...changes })
   assert.equal(resolve().should_stage, 'true')
-  const push = { ...env, GITHUB_EVENT_NAME: 'push' }
-  const event = { before: 'b'.repeat(40) }
-  assert.equal(
-    resolve({ env: push, event, previousManifest: { version: '0.1.9' } }).should_stage,
-    'true'
-  )
-  assert.equal(resolve({ env: push, event, previousManifest: manifest }).should_stage, 'false')
-  assert.throws(() => resolve({ env: push, event: { before: '0'.repeat(40) } }), /previous commit/)
-  assert.throws(
-    () => resolve({ env: push, event, previousManifest: { version: '0.3.0' } }),
-    /increase/
-  )
+  assert.equal(resolve().source_branch, 'main')
+  assert.equal(resolve().workflow_sha, workflowSha)
+  assert.throws(() => resolve({ env: { ...env, GITHUB_EVENT_NAME: 'push' } }), /event/)
+  assert.throws(() => resolve({ branchHeadSha: 'b'.repeat(40) }), /branch head/)
   assert.throws(() => resolve({ env: { ...env, CONFIRM_SHA: 'b'.repeat(40) } }), /Confirmed source/)
   assert.throws(
     () => resolve({ env: { ...env, CONFIRM_VERSION: '0.3.0' } }),
@@ -123,7 +135,7 @@ test('stages only an increased stable version on trusted main or a confirmed man
         manifest: { ...manifest, version: '0.2.0-beta.1' },
         env: { ...env, CONFIRM_VERSION: '0.2.0-beta.1' }
       }),
-    /stable/
+    /0.x.y and 2.x.y-beta.N/
   )
   assert.throws(
     () => resolve({ env: { ...env, GITHUB_WORKFLOW_REF: 'another/workflow' } }),
@@ -131,6 +143,12 @@ test('stages only an increased stable version on trusted main or a confirmed man
   )
   assert.equal(resolve({ env: { ...env, OPERATION: 'verify' } }).operation, 'verify')
   assert.equal(compareVersions('0.10.0', '0.9.99'), 1)
+  assert.equal(compareVersions('2.0.0-beta.10', '2.0.0-beta.9'), 1)
+  assert.throws(() => compareVersions('2.0.0-beta.1', '0.2.0'), /release line/)
+  const betaEnv = { ...env, RELEASE_LINE: 'beta', CONFIRM_VERSION: '2.0.0-beta.10' }
+  const beta = resolve({ env: betaEnv, manifest: { ...manifest, version: '2.0.0-beta.10' } })
+  assert.deepEqual([beta.source_branch, beta.dist_tag], ['v2', 'beta'])
+  assert.throws(() => resolve({ env: betaEnv }), /Confirmed SDK version/)
 })
 
 test('binds packed bytes to the source, run, attempt, manifest and exact file inventory', t => {
@@ -200,9 +218,17 @@ test('PR rehearsal packages are bound to their checkout and cannot enter the npm
   }
   const checked = packageSdkCheck(destination, checkEnv, packOptions)
   assert.equal(checked.mode, 'check')
-  assert.deepEqual(validateSdkArtifact(destination, { ...expected, mode: 'check' }), checked)
+  const checkExpected = {
+    sourceSha,
+    workflowSha,
+    runId: '123',
+    runAttempt: '1',
+    version: '0.2.0',
+    mode: 'check'
+  }
+  assert.deepEqual(validateSdkArtifact(destination, checkExpected), checked)
   await assert.rejects(
-    stageSdkRelease(destination, expected, env, {
+    stageSdkRelease(destination, checkExpected, env, {
       run: () => assert.fail('A check artifact must never reach npm'),
       fetchImpl: () => assert.fail('A check artifact must fail before registry access')
     }),
@@ -218,8 +244,22 @@ test('rehearsal always uses credential-free npm dry-run and checks the same tarb
   const f = fixture(t)
   writeFileSync(
     path.join(f.artifact, SDK_METADATA),
-    JSON.stringify({ ...f.metadata, mode: 'check' })
+    JSON.stringify({
+      ...f.metadata,
+      mode: 'check',
+      sourceBranch: null,
+      releaseLine: null,
+      distTag: null
+    })
   )
+  const checkExpected = {
+    sourceSha,
+    workflowSha,
+    runId: '123',
+    runAttempt: '1',
+    version: '0.2.0',
+    mode: 'check'
+  }
   const calls = []
   const options = {
     run(command, args, options) {
@@ -252,7 +292,7 @@ test('rehearsal always uses credential-free npm dry-run and checks the same tarb
   assert.equal(
     dryRunSdkRelease(
       f.artifact,
-      expected,
+      checkExpected,
       {
         ...env,
         NPM_ID_TOKEN: 'synthetic-ignored',
@@ -267,7 +307,7 @@ test('rehearsal always uses credential-free npm dry-run and checks the same tarb
   assert.deepEqual(readFileSync(path.join(f.artifact, f.filename)), f.bytes)
   assert.throws(
     () =>
-      dryRunSdkRelease(f.artifact, expected, env, {
+      dryRunSdkRelease(f.artifact, checkExpected, env, {
         run(command, args) {
           if (args[0] === '--version') return `${SDK_NPM_VERSION}\n`
           return JSON.stringify({
@@ -327,6 +367,136 @@ test('refuses existing versions, a latest downgrade, registry errors and missing
   assert.equal(existsSync(summaryPath), false)
 })
 
+test('beta staging binds a pinned v2 source to trusted main and advances only the beta tag', async t => {
+  const betaSourceSha = 'b'.repeat(40)
+  const betaVersion = '2.0.0-beta.10'
+  const betaManifest = { ...manifest, version: betaVersion }
+  const betaEnv = {
+    ...env,
+    SDK_SOURCE_SHA: betaSourceSha,
+    SDK_SOURCE_BRANCH: 'v2',
+    SDK_RELEASE_LINE: 'beta',
+    SDK_DIST_TAG: 'beta'
+  }
+  const betaExpected = {
+    sourceSha: betaSourceSha,
+    workflowSha,
+    sourceBranch: 'v2',
+    releaseLine: 'beta',
+    distTag: 'beta',
+    runId: '123',
+    runAttempt: '1',
+    version: betaVersion
+  }
+  const f = fixture(t, betaManifest, betaExpected)
+  const packedDir = path.join(f.directory, 'packed-beta')
+  const packed = packageSdkRelease(packedDir, betaEnv, {
+    sourceRoot: f.source,
+    run(command) {
+      if (command === 'git') return `${betaSourceSha}\n`
+      writeFileSync(path.join(packedDir, f.filename), f.bytes)
+      return JSON.stringify([{ filename: f.filename, integrity: f.metadata.integrity }])
+    }
+  })
+  assert.deepEqual(packed, f.metadata)
+  assert.deepEqual(validateSdkArtifact(packedDir, betaExpected), packed)
+  assert.throws(
+    () => validateSdkArtifact(packedDir, { ...betaExpected, workflowSha: betaSourceSha }),
+    /workflowSha.*expected build/
+  )
+  const firstBetaRegistry = { ...registry, 'dist-tags': { latest: '0.1.9' } }
+  validateRegistryTarget(firstBetaRegistry, betaVersion)
+  validateRegistryTarget(
+    { ...firstBetaRegistry, 'dist-tags': { latest: '0.2.0', beta: '2.0.0-beta.9' } },
+    betaVersion
+  )
+  assert.throws(
+    () =>
+      validateRegistryTarget(
+        { ...firstBetaRegistry, 'dist-tags': { latest: '0.1.9', beta: '2.0.0-beta.11' } },
+        betaVersion
+      ),
+    /advance beta/
+  )
+  assert.throws(
+    () =>
+      validateRegistryTarget(
+        { ...firstBetaRegistry, 'dist-tags': { latest: '2.0.0-beta.9' } },
+        betaVersion
+      ),
+    /V1 stable/
+  )
+  assert.throws(
+    () =>
+      validateRegistryTarget(
+        { ...firstBetaRegistry, versions: { [betaVersion]: {} } },
+        betaVersion
+      ),
+    /already published/
+  )
+
+  const calls = []
+  const betaSummary = path.join(f.directory, 'beta-summary.md')
+  await stageSdkRelease(
+    packedDir,
+    betaExpected,
+    { ...betaEnv, GITHUB_STEP_SUMMARY: betaSummary },
+    {
+      fetchImpl: async () => ({ ok: true, json: async () => firstBetaRegistry }),
+      run(_command, args) {
+        if (args[0] === '--version') return `${SDK_NPM_VERSION}\n`
+        calls.push(args)
+        return JSON.stringify({
+          name: SDK_PACKAGE,
+          version: betaVersion,
+          integrity: packed.integrity,
+          stageId: 'beta-stage'
+        })
+      }
+    }
+  )
+  assert.ok(calls[0].includes('--tag=beta'))
+  assert.ok(!calls[0].includes('--tag=latest'))
+  assert.match(readFileSync(betaSummary, 'utf8'), /Release line: `beta`/)
+  assert.match(readFileSync(betaSummary, 'utf8'), /npm tag: `beta`/)
+})
+
+test('beta verification accepts a later V1 stable release but requires the accepted beta bytes', async t => {
+  const version = '2.0.0-beta.10'
+  const betaManifest = { ...manifest, version }
+  const f = fixture(t, betaManifest, {
+    version,
+    sourceSha: 'b'.repeat(40),
+    workflowSha,
+    sourceBranch: 'v2',
+    releaseLine: 'beta',
+    distTag: 'beta'
+  })
+  const published = {
+    ...betaManifest,
+    dist: {
+      integrity: f.metadata.integrity,
+      tarball: 'https://registry.npmjs.org/@noir-wallet/sdk/-/sdk-2.0.0-beta.10.tgz',
+      attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/sdk' }
+    }
+  }
+  const packument = {
+    ...registry,
+    versions: { '0.1.9': {}, '0.2.0': {}, [version]: published },
+    'dist-tags': { latest: '0.2.0', beta: version }
+  }
+  const fetchImpl = async url =>
+    url === 'https://registry.npmjs.org/@noir-wallet%2Fsdk'
+      ? { ok: true, json: async () => packument }
+      : { ok: true, arrayBuffer: async () => f.bytes }
+  assert.deepEqual(await verifyPublishedSdk(f.artifact, {}, { fetchImpl }), f.metadata)
+  packument['dist-tags'].beta = '2.0.0-beta.11'
+  await assert.rejects(verifyPublishedSdk(f.artifact, {}, { fetchImpl }), /npm beta/)
+  packument['dist-tags'].beta = version
+  packument['dist-tags'].latest = version
+  await assert.rejects(verifyPublishedSdk(f.artifact, {}, { fetchImpl }), /V1 stable/)
+})
+
 test('retries upload with the original bytes and build attempt, without npm credentials or package lifecycle scripts', async t => {
   const f = fixture(t)
   const summaryPath = path.join(f.directory, 'stage-summary.md')
@@ -380,6 +550,8 @@ test('retries upload with the original bytes and build attempt, without npm cred
     '-f operation=verify -f candidate_run_id=123 -f candidate_run_attempt=1'
   assert.equal(stageSummary.split(verifyCommand).length, 3)
   assert.doesNotMatch(stageSummary, /candidate_run_attempt=2/)
+  assert.match(stageSummary, /Release line: `stable`/)
+  assert.match(stageSummary, /npm tag: `latest`/)
 })
 
 test('does not retry after an ambiguous upload or receipt', async t => {
@@ -525,7 +697,7 @@ test('locates only a successful build attempt of the trusted workflow and its ex
     path: SDK_WORKFLOW,
     head_branch: 'main',
     head_repository: { full_name: SDK_REPOSITORY, fork: false },
-    event: 'push',
+    event: 'workflow_dispatch',
     head_sha: sourceSha,
     conclusion: 'failure'
   }
@@ -536,14 +708,13 @@ test('locates only a successful build attempt of the trusted workflow and its ex
       return { jobs: [{ name: 'Build SDK package', conclusion: 'success' }] }
     if (route.includes('/artifacts?')) return { artifacts: [artifact], total_count: 1 }
     if (route.startsWith('contents/'))
-      return { content: Buffer.from(JSON.stringify(manifest)).toString('base64') }
+      assert.fail('Verification must use the original artifact, not a branch manifest')
     return run
   }
   const input = { ...env, CANDIDATE_RUN_ID: '123', CANDIDATE_RUN_ATTEMPT: '1' }
   assert.deepEqual(await locateSdkArtifact(input, { request }), {
     artifact_id: '456',
-    source_sha: sourceSha,
-    version: '0.2.0',
+    workflow_sha: sourceSha,
     build_attempt: '1'
   })
   artifact = { ...artifact, expired: true }

@@ -94,6 +94,7 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
   const metadata = {
     version: '0.1.9',
     sourceSha: 'a'.repeat(40),
+    workflowSha: 'b'.repeat(40),
     runId: 123,
     runAttempt: 2,
     integrity: `sha512-${Buffer.alloc(64, 7).toString('base64')}`
@@ -118,7 +119,7 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
         resolvedDependencies: [
           {
             uri: 'git+https://github.com/NoirWallet/noir-wallet@refs/heads/main',
-            digest: { gitCommit: metadata.sourceSha }
+            digest: { gitCommit: metadata.workflowSha }
           }
         ]
       },
@@ -176,7 +177,8 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
     /certificate identity mismatch/
   )
   const wrongSource = structuredClone(statement)
-  wrongSource.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = 'b'.repeat(40)
+  wrongSource.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit =
+    metadata.sourceSha
   await assert.rejects(
     validateVerifiedPublishedProvenance(
       auditFor(wrongSource),
@@ -184,7 +186,7 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
       async () => {},
       tufCachePath
     ),
-    /source commit/
+    /workflow commit/
   )
 
   const wrongRun = structuredClone(statement)

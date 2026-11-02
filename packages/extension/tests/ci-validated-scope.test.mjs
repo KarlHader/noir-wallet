@@ -141,6 +141,10 @@ test('SDK gate accepts a completed artifact rehearsal or explicit reuse', () => 
     buildAttempt: '1'
   }
   assert.equal(isSdkGateSuccessful(built), true)
+  assert.equal(isSdkGateSuccessful({ ...built, version: '2.0.0-beta.10' }), true)
+  for (const version of ['1.0.0', '2.0.0', '2.0.0-beta.0', '2.0.0-beta.01']) {
+    assert.equal(isSdkGateSuccessful({ ...built, version }), false)
+  }
   const reused = {
     verifyResult: 'success',
     dryRunResult: 'skipped',

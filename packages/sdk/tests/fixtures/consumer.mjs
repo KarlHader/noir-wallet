@@ -33,7 +33,6 @@ for (const name of [
   'sendTransaction',
   'signMessage',
   'shieldFunds',
-  'getTransactionHistory',
   'switchNetwork',
   'checkLendingMcaAccount',
   'disconnect',

@@ -24,4 +24,3 @@ const api = new root.ZcashAPI({
   async disconnect() {}
 })
 assert.equal(typeof api.connect, 'function')
-assert.equal(typeof api.getTransactionHistory, 'function')

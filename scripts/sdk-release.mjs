@@ -23,19 +23,29 @@ export const SDK_NPM_VERSION = '11.21.1'
 const REGISTRY = 'https://registry.npmjs.org'
 const PACKAGE_URL = `${REGISTRY}/@noir-wallet%2Fsdk`
 const SHA = /^[a-f0-9]{40}$/
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const STABLE_VERSION = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const BETA_VERSION = /^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.([1-9]\d*)$/
 const root = fileURLToPath(new URL('../', import.meta.url))
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
 
-function stableVersion(value) {
+function supportedVersion(value) {
   assert(
-    typeof value === 'string' && VERSION.test(value) && value.length < 64,
-    'Only stable MAJOR.MINOR.PATCH SDK versions are supported'
+    typeof value === 'string' &&
+      (STABLE_VERSION.test(value) || BETA_VERSION.test(value)) &&
+      value.length < 64,
+    'Only stable 0.x.y and 2.x.y-beta.N SDK versions are supported'
   )
   return value
+}
+
+function releaseIdentity(version) {
+  supportedVersion(version)
+  return STABLE_VERSION.test(version)
+    ? { releaseLine: 'stable', sourceBranch: 'main', distTag: 'latest' }
+    : { releaseLine: 'beta', sourceBranch: 'v2', distTag: 'beta' }
 }
 
 function positiveInteger(value, label) {
@@ -47,15 +57,18 @@ function positiveInteger(value, label) {
 }
 
 export function compareVersions(left, right) {
-  const a = stableVersion(left).split('.').map(BigInt)
-  const b = stableVersion(right).split('.').map(BigInt)
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1
+  const line = releaseIdentity(left).releaseLine
+  assert(releaseIdentity(right).releaseLine === line, 'SDK versions must share a release line')
+  const parts = value => value.replace('-beta.', '.').split('.').map(BigInt)
+  const a = parts(left)
+  const b = parts(right)
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1
   return 0
 }
 
 export function validateSdkManifest(manifest) {
   assert(manifest?.name === SDK_PACKAGE, 'Unexpected SDK package name')
-  stableVersion(manifest.version)
+  supportedVersion(manifest.version)
   assert(
     manifest.private === false && manifest.publishConfig?.access === 'public',
     'SDK must explicitly allow public publication'
@@ -71,7 +84,8 @@ export function validateSdkManifest(manifest) {
       `Unsupported SDK publishConfig setting: ${key}`
     )
     if (key === 'registry') assert(value.replace(/\/$/, '') === REGISTRY, 'Unexpected npm registry')
-    if (key === 'tag') assert(value === 'latest', 'Only the latest dist-tag is supported')
+    if (key === 'tag')
+      assert(value === releaseIdentity(manifest.version).distTag, 'Unexpected SDK dist-tag')
     if (key === 'provenance') assert(value === true, 'SDK provenance cannot be disabled')
   }
   for (const entry of ['.', './chains/zcash']) {
@@ -94,10 +108,7 @@ function trustedInvocation(env) {
     env.GITHUB_REPOSITORY === SDK_REPOSITORY && env.GITHUB_REF === 'refs/heads/main',
     'SDK publication is restricted to the canonical repository main branch'
   )
-  assert(
-    ['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME),
-    'Unsupported SDK release event'
-  )
+  assert(env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'Unsupported SDK release event')
   assert(SHA.test(env.GITHUB_SHA ?? ''), 'A full source SHA is required')
   assert(
     env.GITHUB_WORKFLOW_REF === `${SDK_REPOSITORY}/${SDK_WORKFLOW}@refs/heads/main`,
@@ -105,34 +116,38 @@ function trustedInvocation(env) {
   )
 }
 
-export function resolveSdkRelease({ env, event, manifest, previousManifest }) {
+export function resolveSdkRelease({ env, manifest, branchHeadSha }) {
   trustedInvocation(env)
-  const operation = env.GITHUB_EVENT_NAME === 'push' ? 'stage' : env.OPERATION
+  const operation = env.OPERATION
   assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
   if (operation === 'verify') return { operation, should_stage: 'false' }
-  if (env.GITHUB_EVENT_NAME === 'push') {
-    assert(
-      SHA.test(event?.before ?? '') && !/^0+$/.test(event.before),
-      'Push has no valid previous commit; use the confirmed manual stage operation'
-    )
-    assert(typeof previousManifest?.version === 'string', 'Previous SDK manifest is unavailable')
-    if (manifest.version === previousManifest.version) return { operation, should_stage: 'false' }
-    assert(
-      compareVersions(manifest.version, previousManifest.version) > 0,
-      'SDK version must increase relative to the previous main commit'
-    )
-  } else {
-    assert(
-      env.CONFIRM_SHA === env.GITHUB_SHA,
-      'Confirmed source SHA must match the selected main commit'
-    )
-    assert(
-      env.CONFIRM_VERSION === manifest.version,
-      'Confirmed SDK version does not match the source'
-    )
-  }
+  const releaseLine = env.RELEASE_LINE || 'stable'
+  assert(['stable', 'beta'].includes(releaseLine), 'Choose stable or beta release line')
+  const sourceBranch = releaseLine === 'stable' ? 'main' : 'v2'
+  assert(SHA.test(branchHeadSha ?? ''), 'Selected branch has no valid head commit')
+  assert(
+    env.CONFIRM_SHA === branchHeadSha,
+    'Confirmed source SHA must match the selected branch head'
+  )
   validateSdkManifest(manifest)
-  return { operation, should_stage: 'true', version: manifest.version, source_sha: env.GITHUB_SHA }
+  assert(
+    env.CONFIRM_VERSION === manifest.version,
+    'Confirmed SDK version does not match the source'
+  )
+  assert(
+    releaseIdentity(manifest.version).releaseLine === releaseLine,
+    'SDK version does not match release line'
+  )
+  return {
+    operation,
+    should_stage: 'true',
+    version: manifest.version,
+    source_sha: branchHeadSha,
+    source_branch: sourceBranch,
+    release_line: releaseLine,
+    dist_tag: releaseIdentity(manifest.version).distTag,
+    workflow_sha: env.GITHUB_SHA
+  }
 }
 
 function readJson(filename) {
@@ -160,6 +175,7 @@ function artifactName(metadata) {
 
 export function packageSdkRelease(directory, env, { sourceRoot = root, run = execFileSync } = {}) {
   trustedInvocation(env)
+  assert(SHA.test(env.SDK_SOURCE_SHA ?? ''), 'A pinned SDK source SHA is required')
   return packageSdkArtifact(directory, env, 'release', { sourceRoot, run })
 }
 
@@ -170,9 +186,18 @@ export function packageSdkCheck(directory, env, { sourceRoot = root, run = execF
 
 function packageSdkArtifact(directory, env, mode, { sourceRoot, run }) {
   const manifest = validateSdkManifest(readJson(path.join(sourceRoot, 'packages/sdk/package.json')))
+  const sourceSha = mode === 'release' ? env.SDK_SOURCE_SHA : env.GITHUB_SHA
+  const identity = releaseIdentity(manifest.version)
+  if (mode === 'release') {
+    assert(
+      env.SDK_SOURCE_BRANCH === identity.sourceBranch &&
+        env.SDK_RELEASE_LINE === identity.releaseLine &&
+        env.SDK_DIST_TAG === identity.distTag,
+      'Pinned SDK source identity does not match its version'
+    )
+  }
   assert(
-    run('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim() ===
-      env.GITHUB_SHA,
+    run('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim() === sourceSha,
     'SDK checkout does not match the release commit'
   )
   const output = path.resolve(directory)
@@ -191,13 +216,16 @@ function packageSdkArtifact(directory, env, mode, { sourceRoot, run }) {
   const integrity = `sha512-${hash(bytes, 'sha512', 'base64')}`
   assert(result[0].integrity === integrity, 'npm pack integrity mismatch')
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode,
     packageName: SDK_PACKAGE,
     version: manifest.version,
     repository: SDK_REPOSITORY,
-    sourceSha: env.GITHUB_SHA,
+    sourceSha,
     workflowSha: env.GITHUB_SHA,
+    sourceBranch: mode === 'release' ? identity.sourceBranch : null,
+    releaseLine: mode === 'release' ? identity.releaseLine : null,
+    distTag: mode === 'release' ? identity.distTag : null,
     runId: positiveInteger(env.GITHUB_RUN_ID, 'Run ID'),
     runAttempt: positiveInteger(env.GITHUB_RUN_ATTEMPT, 'Run attempt'),
     tarball: filename,
@@ -207,7 +235,8 @@ function packageSdkArtifact(directory, env, mode, { sourceRoot, run }) {
   }
   writeFileSync(path.join(output, SDK_METADATA), `${JSON.stringify(metadata, null, 2)}\n`)
   validateSdkArtifact(output, {
-    sourceSha: env.GITHUB_SHA,
+    sourceSha,
+    workflowSha: env.GITHUB_SHA,
     runId: env.GITHUB_RUN_ID,
     runAttempt: env.GITHUB_RUN_ATTEMPT,
     version: manifest.version
@@ -224,16 +253,28 @@ export function validateSdkArtifact(directory, expected = {}) {
   )
   const metadata = readJson(metadataPath)
   assert(
-    metadata.schemaVersion === 1 &&
+    metadata.schemaVersion === 2 &&
       ['check', 'release'].includes(metadata.mode) &&
       metadata.packageName === SDK_PACKAGE &&
       metadata.repository === SDK_REPOSITORY,
     'Unexpected SDK release metadata identity'
   )
-  stableVersion(metadata.version)
+  supportedVersion(metadata.version)
   assert(
-    SHA.test(metadata.sourceSha) && metadata.workflowSha === metadata.sourceSha,
+    SHA.test(metadata.sourceSha) && SHA.test(metadata.workflowSha),
     'Invalid SDK source or workflow SHA'
+  )
+  const identity = releaseIdentity(metadata.version)
+  assert(
+    metadata.mode === 'release'
+      ? metadata.sourceBranch === identity.sourceBranch &&
+          metadata.releaseLine === identity.releaseLine &&
+          metadata.distTag === identity.distTag
+      : metadata.sourceBranch === null &&
+          metadata.releaseLine === null &&
+          metadata.distTag === null &&
+          metadata.sourceSha === metadata.workflowSha,
+    'SDK artifact release identity does not match its version'
   )
   positiveInteger(metadata.runId, 'Artifact run ID')
   positiveInteger(metadata.runAttempt, 'Artifact run attempt')
@@ -288,7 +329,7 @@ async function requestJson(url, { token, fetchImpl = fetch } = {}) {
 }
 
 export function validateRegistryTarget(packument, version) {
-  stableVersion(version)
+  const { distTag } = releaseIdentity(version)
   assert(
     packument?.name === SDK_PACKAGE && packument.versions && packument['dist-tags'],
     'Invalid SDK registry response'
@@ -297,10 +338,17 @@ export function validateRegistryTarget(packument, version) {
     !Object.hasOwn(packument.versions, version),
     'SDK version is already published; it cannot be overwritten'
   )
-  const latest = packument['dist-tags'].latest
+  if (distTag === 'beta') {
+    assert(
+      STABLE_VERSION.test(packument['dist-tags'].latest ?? ''),
+      'npm latest must remain on the V1 stable line'
+    )
+  }
+  const latest = packument['dist-tags'][distTag]
   assert(
-    typeof latest === 'string' && compareVersions(version, latest) > 0,
-    'SDK publication would not advance latest'
+    (latest === undefined && distTag === 'beta') ||
+      (typeof latest === 'string' && compareVersions(version, latest) > 0),
+    `SDK publication would not advance ${distTag}`
   )
 }
 
@@ -321,7 +369,7 @@ function unconfirmedStageSummary(metadata) {
     `## SDK staging result unconfirmed\n\n${describe(metadata)}\n${verificationInstruction(metadata)}\n` +
     'Check npm Staged Packages and the public package version before another upload:\n\n' +
     '- No staged version and no public version: rerun the failed upload job with the original artifact.\n' +
-    '- Staged version exists: confirm package, version, and latest tag; compare its downloaded tarball SHA-256 with the artifact above, complete real-extension acceptance, then approve with 2FA and verify.\n' +
+    `- Staged version exists: confirm package, version, and ${metadata.distTag} tag; compare its downloaded tarball SHA-256 with the artifact above, complete real-extension acceptance, then approve with 2FA and verify.\n` +
     '- Public version exists: run the verification command above.\n' +
     '- Status unknown or contents conflict: stop and investigate.\n'
   )
@@ -340,8 +388,8 @@ export async function stageSdkRelease(
   )
   const metadata = validateSdkArtifact(directory, { ...expected, mode: 'release' })
   assert(
-    metadata.sourceSha === env.GITHUB_SHA && metadata.runId === env.GITHUB_RUN_ID,
-    'SDK upload must use a build from this workflow run and source commit'
+    metadata.workflowSha === env.GITHUB_SHA && metadata.runId === env.GITHUB_RUN_ID,
+    'SDK upload must use a build from this trusted workflow run'
   )
   const registry = await requestJson(PACKAGE_URL, { fetchImpl })
   validateRegistryTarget(registry, metadata.version)
@@ -368,7 +416,7 @@ export async function stageSdkRelease(
           'publish',
           path.resolve(directory, metadata.tarball),
           '--access=public',
-          '--tag=latest',
+          `--tag=${metadata.distTag}`,
           `--registry=${REGISTRY}`,
           '--ignore-scripts',
           '--provenance',
@@ -454,7 +502,7 @@ export function dryRunSdkRelease(directory, expected, env, { run = execFileSync 
           // This local rehearsal also accepts already-published versions; registry policy is tested separately.
           '--force',
           '--access=public',
-          '--tag=latest',
+          `--tag=${releaseIdentity(metadata.version).distTag}`,
           `--registry=${REGISTRY}`,
           '--ignore-scripts',
           '--provenance',
@@ -529,9 +577,9 @@ export function validatePublishedProvenance(attestations, metadata) {
     definition.resolvedDependencies?.some(
       dependency =>
         dependency.uri === `git+https://github.com/${SDK_REPOSITORY}@refs/heads/main` &&
-        dependency.digest?.gitCommit === metadata.sourceSha
+        dependency.digest?.gitCommit === metadata.workflowSha
     ),
-    'npm provenance source commit mismatch'
+    'npm provenance workflow commit mismatch'
   )
   const invocation = statement.predicate?.runDetails?.metadata?.invocationId
   const match = new RegExp(
@@ -569,9 +617,15 @@ export async function verifyPublishedSdk(
   )
   onPublicationState('published')
   assert(
-    packument['dist-tags']?.latest === metadata.version,
-    'npm latest does not match the accepted SDK version'
+    packument['dist-tags']?.[metadata.distTag] === metadata.version,
+    `npm ${metadata.distTag} does not match the accepted SDK version`
   )
+  if (metadata.releaseLine === 'beta') {
+    assert(
+      STABLE_VERSION.test(packument['dist-tags']?.latest ?? ''),
+      'npm latest must remain on the V1 stable line'
+    )
+  }
   assert(
     published.dist?.integrity === metadata.integrity,
     'Published npm integrity differs from the accepted SDK artifact'
@@ -623,7 +677,7 @@ export async function locateSdkArtifact(env, { request } = {}) {
       run.head_branch === 'main' &&
       run.head_repository?.full_name === SDK_REPOSITORY &&
       run.head_repository?.fork === false &&
-      ['push', 'workflow_dispatch'].includes(run.event) &&
+      run.event === 'workflow_dispatch' &&
       SHA.test(run.head_sha),
     'Candidate was not built by the trusted main SDK workflow'
   )
@@ -632,11 +686,9 @@ export async function locateSdkArtifact(env, { request } = {}) {
     jobs.jobs?.some(job => job.name === 'Build SDK package' && job.conclusion === 'success'),
     'The selected attempt has no successful SDK build job'
   )
-  const packageData = await get(`contents/packages/sdk/package.json?ref=${run.head_sha}`)
-  const manifest = validateSdkManifest(
-    JSON.parse(Buffer.from(packageData.content, 'base64').toString('utf8'))
+  const name = new RegExp(
+    `^noir-sdk-(0\\.[0-9]+\\.[0-9]+|2\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+)-${runId}-${runAttempt}$`
   )
-  const name = artifactName({ version: manifest.version, runId, runAttempt })
   const matches = []
   for (let page = 1; page <= 20; page++) {
     const result = await get(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`)
@@ -644,7 +696,7 @@ export async function locateSdkArtifact(env, { request } = {}) {
       Array.isArray(result.artifacts) && Number.isSafeInteger(result.total_count),
       'Invalid SDK artifact inventory'
     )
-    matches.push(...result.artifacts.filter(artifact => artifact.name === name))
+    matches.push(...result.artifacts.filter(artifact => name.test(artifact.name)))
     if (page * 100 >= result.total_count) break
     assert(page < 20, 'SDK artifact inventory is too large')
   }
@@ -657,20 +709,22 @@ export async function locateSdkArtifact(env, { request } = {}) {
   )
   return {
     artifact_id: String(matches[0].id),
-    source_sha: run.head_sha,
-    version: manifest.version,
+    workflow_sha: run.head_sha,
     build_attempt: runAttempt
   }
 }
 
 function expectedFromEnv(env) {
-  assert(SHA.test(env.SDK_SOURCE_SHA ?? ''), 'Expected SDK source SHA is required')
   return {
     sourceSha: env.SDK_SOURCE_SHA,
+    workflowSha: env.SDK_WORKFLOW_SHA,
     runId: positiveInteger(env.SDK_RUN_ID, 'Expected run ID'),
     runAttempt: positiveInteger(env.SDK_RUN_ATTEMPT, 'Expected run attempt'),
     version: env.SDK_VERSION,
-    mode: env.SDK_ARTIFACT_MODE
+    mode: env.SDK_ARTIFACT_MODE,
+    sourceBranch: env.SDK_SOURCE_BRANCH,
+    releaseLine: env.SDK_RELEASE_LINE,
+    distTag: env.SDK_DIST_TAG
   }
 }
 
@@ -687,14 +741,22 @@ function metadataOutputs(metadata) {
     tarball: metadata.tarball,
     version: metadata.version,
     source_sha: metadata.sourceSha,
+    source_branch: metadata.sourceBranch ?? '',
+    release_line: metadata.releaseLine ?? '',
+    dist_tag: metadata.distTag ?? '',
+    workflow_sha: metadata.workflowSha,
     build_attempt: metadata.runAttempt,
     artifact_name: artifactName(metadata)
   }
 }
 
 function describe(metadata) {
+  const release =
+    metadata.mode === 'release'
+      ? `Release line: \`${metadata.releaseLine}\`\n\nnpm tag: \`${metadata.distTag}\`\n\n`
+      : ''
   return (
-    `Package: \`${SDK_PACKAGE}@${metadata.version}\`\n\nSource: \`${metadata.sourceSha}\`\n\n` +
+    `Package: \`${SDK_PACKAGE}@${metadata.version}\`\n\n${release}Source (${metadata.sourceBranch ?? 'check'}): \`${metadata.sourceSha}\`\n\nWorkflow: \`${metadata.workflowSha}\`\n\n` +
     `Build: [${metadata.runId}, attempt ${metadata.runAttempt}](https://github.com/${SDK_REPOSITORY}/actions/runs/${metadata.runId}/attempts/${metadata.runAttempt})\n\n` +
     `SHA-256: \`${metadata.sha256}\`\n\nIntegrity: \`${metadata.integrity}\`\n`
   )
@@ -708,30 +770,34 @@ async function main() {
   const env = process.env
   const [command, directory] = process.argv.slice(2)
   if (command === 'resolve') {
-    const event = readJson(env.GITHUB_EVENT_PATH)
-    let previousManifest
-    if (
-      env.GITHUB_EVENT_NAME === 'push' &&
-      SHA.test(event.before ?? '') &&
-      !/^0+$/.test(event.before)
-    ) {
-      previousManifest = JSON.parse(
-        execFileSync('git', ['show', `${event.before}:packages/sdk/package.json`], {
-          cwd: root,
-          encoding: 'utf8',
-          maxBuffer: 1024 * 1024
+    trustedInvocation(env)
+    const operation = env.OPERATION
+    const releaseLine = env.RELEASE_LINE || 'stable'
+    assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
+    assert(['stable', 'beta'].includes(releaseLine), 'Choose stable or beta release line')
+    let branchHeadSha
+    let manifest
+    if (operation === 'stage') {
+      assert(env.GH_TOKEN, 'GH_TOKEN is required to resolve SDK source')
+      const sourceBranch = releaseLine === 'stable' ? 'main' : 'v2'
+      const get = route =>
+        requestJson(`https://api.github.com/repos/${SDK_REPOSITORY}/${route}`, {
+          token: env.GH_TOKEN
         })
+      const branch = await get(`branches/${sourceBranch}`)
+      branchHeadSha = branch.commit?.sha
+      assert(
+        SHA.test(branchHeadSha ?? '') && branch.name === sourceBranch,
+        'Selected SDK source branch is not trusted'
       )
+      assert(
+        env.CONFIRM_SHA === branchHeadSha,
+        'Confirmed source SHA must match the selected branch head'
+      )
+      const packageData = await get(`contents/packages/sdk/package.json?ref=${branchHeadSha}`)
+      manifest = JSON.parse(Buffer.from(packageData.content, 'base64').toString('utf8'))
     }
-    outputs(
-      env,
-      resolveSdkRelease({
-        env,
-        event,
-        manifest: readJson(path.join(root, 'packages/sdk/package.json')),
-        previousManifest
-      })
-    )
+    outputs(env, resolveSdkRelease({ env, manifest, branchHeadSha }))
   } else if (command === 'locate') {
     outputs(env, await locateSdkArtifact(env))
   } else if (
@@ -742,7 +808,11 @@ async function main() {
     let metadata
     if (command === 'pack' || command === 'pack-check') {
       metadata =
-        command === 'pack' ? packageSdkRelease(directory, env) : packageSdkCheck(directory, env)
+        command === 'pack'
+          ? packageSdkRelease(directory, env, {
+              sourceRoot: path.resolve(env.SDK_SOURCE_ROOT ?? root)
+            })
+          : packageSdkCheck(directory, env)
       summary(
         env,
         `## SDK ${metadata.mode === 'check' ? 'rehearsal' : 'acceptance'} artifact\n\n${describe(metadata)}\nDownload this run's \`${artifactName(metadata)}\` artifact.\n` +

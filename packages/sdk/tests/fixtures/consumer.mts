@@ -32,7 +32,6 @@ type RootContracts = [
   RootTypes.SigningMode,
   RootTypes.LendingMcaStatus,
   RootTypes.LendingSigningMode,
-  RootTypes.TransactionHistoryEntry,
   RootTypes.Network,
   RootTypes.VerifyMessageParams,
   RootTypes.VerifyMessageResult
@@ -58,7 +57,6 @@ type ZcashContracts = [
   ZcashTypes.SigningMode,
   ZcashTypes.LendingMcaStatus,
   ZcashTypes.LendingSigningMode,
-  ZcashTypes.TransactionHistoryEntry,
   ZcashTypes.Network,
   ZcashTypes.VerifyMessageParams,
   ZcashTypes.VerifyMessageResult
@@ -68,7 +66,6 @@ declare const provider: ZcashTypes.ZcashProvider
 const api: ZcashAPI = new ZcashAPI(provider)
 const connect: Promise<RootTypes.ZcashConnectResult> = api.connect()
 const balance: Promise<ZcashTypes.ZcashBalanceResult> = api.getBalance()
-const history: Promise<RootTypes.TransactionHistoryEntry[]> = api.getTransactionHistory()
 const send: Promise<string> = api.sendTransaction({
   to: 't-address',
   amount: '1'
@@ -80,5 +77,5 @@ const detected: Promise<ZcashTypes.ZcashProvider> = detectProvider()
 const address: string = publicKeyToAddress('02' + '00'.repeat(32))
 const valid: boolean = verifyMessageSignature({ message: 'x', signature: 'y' }).valid
 declare const publicTypes: [RootContracts, ZcashContracts]
-void [connect, balance, history, send, wallet, installed, rawProvider, detected, address, valid]
+void [connect, balance, send, wallet, installed, rawProvider, detected, address, valid]
 void publicTypes
