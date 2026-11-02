@@ -1,0 +1,148 @@
+name: '[Manual] Prepare V2 Extension Beta'
+run-name: V2 Beta by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: V2 Beta build
+        type: choice
+        default: beta
+        options: [beta]
+      source_ref:
+        description: v2 (builds the dispatched commit)
+        type: string
+        default: v2
+      publish_beta:
+        description: Publish to GitHub Releases
+        type: boolean
+        default: true
+      confirm_sha:
+        description: Optional reviewed V2 commit SHA
+        type: string
+
+concurrency:
+  group: extension-v2-beta
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: 0
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/v2' && inputs.mode == 'beta'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      zip_sha: ${{ steps.package.outputs.zip_sha }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Check Beta version and source
+        id: version
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          CONFIRM_SHA: ${{ inputs.confirm_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          const { version } = JSON.parse(readFileSync('packages/extension/package.json', 'utf8'))
+          const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.([1-9]\d*)$/.exec(version)
+          if (!match || Number(match[1]) < 2 || !match.slice(1).every(part => Number.isSafeInteger(Number(part)))) {
+            throw new Error('Expected a V2 package version such as 2.0.0-beta.1')
+          }
+          const { SOURCE_REF, CONFIRM_SHA, GITHUB_SHA } = process.env
+          if ((SOURCE_REF !== 'v2' && SOURCE_REF !== GITHUB_SHA) || (CONFIRM_SHA && CONFIRM_SHA !== GITHUB_SHA)) {
+            throw new Error('The selected source must match the dispatched v2 commit')
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
+          NODE
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @noir-wallet/evm-history-worker type-check
+      - run: pnpm test
+      - name: Build V2 Beta
+        env:
+          BUILD_CHANNEL: beta
+          BETA_INVITE_REQUIRED: '1'
+          EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
+          RHEA_SWAP_ACCESS_TOKEN: ${{ secrets.RHEA_SWAP_ACCESS_TOKEN }}
+        run: pnpm build:extension
+      - name: Package Beta ZIP and release notes
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          zips=(packages/extension/dist/*.zip)
+          test "${#zips[@]}" -eq 1 && test -f "${zips[0]}"
+          mkdir release-assets
+          zip_name="noir-wallet-v${VERSION}.zip"
+          cp "${zips[0]}" "release-assets/${zip_name}"
+          node scripts/extract-changelog.mjs "$VERSION" CHANGELOG.md > release-assets/release-body.md
+          printf '\nSource commit: [%s](https://github.com/%s/commit/%s)\n' "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> release-assets/release-body.md
+          cd release-assets
+          sha256sum "$zip_name" > SHA256SUMS
+          echo "zip_sha=$(sha256sum "$zip_name" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: artifact
+        with:
+          name: noir-wallet-v${{ steps.version.outputs.version }}
+          path: release-assets/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    if: inputs.publish_beta && github.repository == 'NoirWallet/noir-wallet'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: extension-release-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: release-assets
+      - name: Verify published ZIP
+        working-directory: release-assets
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          ZIP_SHA: ${{ needs.build.outputs.zip_sha }}
+        run: |
+          set -euo pipefail
+          files=(*)
+          test "${#files[@]}" -eq 3
+          test -f release-body.md
+          printf '%s  noir-wallet-v%s.zip\n' "$ZIP_SHA" "$VERSION" | cmp - SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish Beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          gh api --method POST "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/${tag}" -f "sha=${GITHUB_SHA}" >/dev/null
+          gh release create "$tag" --repo "$GH_REPO" --verify-tag \
+            --title "Noir Wallet $tag" --prerelease --latest=false \
+            --notes-file release-assets/release-body.md \
+            "release-assets/noir-wallet-v${VERSION}.zip" release-assets/SHA256SUMS

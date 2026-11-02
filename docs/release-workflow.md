@@ -1,14 +1,14 @@
 # Noir Wallet CI/CD and Release Workflow
 
-This runbook covers V2 extension previews and the V2 inputs to the shared release process. [Extension CI](../.github/workflows/extension-ci.yml) checks V2 pull requests and creates development inspection artifacts. Beta and production candidates are prepared by the trusted [manual release workflow on `main`](https://github.com/NoirWallet/noir-wallet/blob/main/.github/workflows/extension-release.yml). The [SDK workflow](../.github/workflows/sdk.yml) validates the SDK and example separately; the [documentation workflow](../.github/workflows/docs.yml) validates documentation without deploying it. Maintainers submit to the Chrome Web Store manually.
+This runbook covers V2 extension previews and Beta releases. [Extension CI](../.github/workflows/extension-ci.yml) checks V2 pull requests and creates development inspection artifacts. Betas are prepared by the [manual release workflow on `v2`](../.github/workflows/extension-release.yml); production candidates use the separate [workflow on `main`](https://github.com/NoirWallet/noir-wallet/blob/main/.github/workflows/extension-release.yml). The [SDK workflow](../.github/workflows/sdk.yml) validates the SDK and example separately; the [documentation workflow](../.github/workflows/docs.yml) validates documentation without deploying it. Maintainers submit to the Chrome Web Store manually.
 
 On repeated PR pushes, SDK and documentation verification reuse a prior successful run only when the target branch commit and relevant inputs are unchanged. A failed, cancelled, or incomparable run performs the checks again.
 
 ## Branches and Versions
 
 - Feature and fix PRs merge into `v2`. PRs that change extension code, tests, WASM, the EVM history Worker, or related build and test inputs automatically run Extension CI and build a development extension. New commits cancel older runs for the same PR; no preview label is needed. Changes limited to Markdown documentation, SDK source, or unrelated tooling do not start Extension CI.
-- To prepare a V2 Beta, run **Prepare Extension Release** from the `main` workflow branch with mode `beta` and `source_ref=v2` (or a specific V2 source branch or full commit SHA). The workflow pins the selected source commit, builds it, and packages a Beta artifact. Publishing is controlled by that manual run's `publish_beta` input.
-- The V2 workflow does not publish on `v2` pushes, tags, or workflow dispatch. Production candidates and publication use the separate trusted workflows on `main`; see the [shared release runbook](https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md).
+- To prepare a V2 Beta, dispatch `extension-release.yml` from the `v2` workflow branch with mode `beta` and `source_ref=v2`. The workflow builds that dispatched commit; optional `confirm_sha` checks it against the reviewed full SHA. Publishing is controlled by that manual run's `publish_beta` input; see [Routine Previews](#routine-previews).
+- V2 pushes and tags do not publish releases. The V2 manual workflow accepts only Betas. Production candidates and publication use the separate trusted workflows on `main`; see the [shared release runbook](https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md).
 - The production extension has one ZIP with runtime Mainnet/Testnet Mode. `NETWORK_MODE=testnet` is reserved for isolated local test builds, not a second release package.
 
 ## Verification and Build
@@ -38,7 +38,7 @@ The public History proxy serves only the existing Ankr History, EVM token discov
 
 Private broadcast uses the separate `/v1/zero-indexer-endpoints` endpoint on `https://rpc.zknoir.com`, maintained in `packages/rpc-registry/src/zero-indexer-registry.ts`. Broadcast nodes are excluded from the scheduled synchronization-RPC monitor. Deploying that registry is separate from publishing the extension; check its response when updating managed nodes. If the registry is unavailable, the extension uses its cache or bundled broadcast nodes. Wallet settings and recovery behavior are documented in the [broadcasting guide](../packages/docs/content/docs/wallet-guide/install-and-setup.mdx#transaction-broadcasting).
 
-The V2 package contains one ZIP for both runtime network modes, `SHA256SUMS`, release metadata, and a Release body. Extension CI has read-only permissions and only uploads an Actions artifact with three-day retention. The [trusted preview reporter on `main`](https://github.com/NoirWallet/noir-wallet/blob/main/.github/workflows/extension-preview-comment.yml) supplies the PR download comment, marks builds as in progress or ready against the current PR head, and retains only the two newest verified preview artifacts per PR. Package metadata records both the tested PR merge commit and the release-tools commit used for packaging. The trusted manual workflow packages Beta from the selected source commit and uses a separate write-scoped job when `publish_beta` is selected. Checkout steps use pinned Action SHAs with credential persistence disabled.
+The V2 Beta contains one ZIP for both runtime network modes, `SHA256SUMS`, and Release notes with its source commit. The manual workflow builds the dispatched `v2` commit and publishes the verified artifact in a separate write-scoped job. CI previews retain numeric base-version labels for the existing [preview reporter on `main`](https://github.com/NoirWallet/noir-wallet/blob/main/.github/workflows/extension-preview-comment.yml); their metadata retains the full Beta version and tested merge commit.
 
 ## WASM Package Updates
 
@@ -58,10 +58,10 @@ Develop and test the extension against the generated package, then submit its co
 ## Routine Previews
 
 1. Open a PR against `v2` and check **Extension CI**. Download the development package from its PR comment or **Actions → Extension CI** after the run succeeds. Downloads require GitHub sign-in and repository access and expire after three days. Rerun Extension CI for the current PR commit if the package expires. Fork PRs receive no repository secrets.
-2. After source review, select `main` when opening **Prepare Extension Release** in Actions. Choose `beta` and set `source_ref` to `v2`, a reviewed but unmerged V2 branch, or its full commit SHA. Decide whether `publish_beta` should publish a GitHub prerelease; merging into `v2` is not required for Beta.
+2. After the Beta workflow is merged into `v2`, run `gh workflow run extension-release.yml --ref v2 -f mode=beta -f source_ref=v2 -F publish_beta=false` to build the dispatched V2 commit without publishing. Set `publish_beta=true` to create its public GitHub prerelease. Optionally pass `confirm_sha` with the reviewed full SHA; a mismatch stops the build. The workflow uses the filename already registered on `main`, so no `main` change is needed.
 3. Check Mainnet and Testnet Mode separately in a real isolated MV3 extension. Verify invite activation, unavailable chain selectors, and V1 Golden Profile upgrade compatibility using the same default flags as the Beta. Run browser and external-service checks locally; the workflow does not run them.
 
-There is no need to bump the version for each Beta. The manual run identity and source commit distinguish artifacts of the same version.
+Set the extension package version to `2.0.0-beta.N` and add its matching `CHANGELOG.md` section. The workflow publishes `v2.0.0-beta.N` with ZIP `noir-wallet-v2.0.0-beta.N.zip` and notes from that section. Increment `N` for each public Beta.
 
 ## Production Release
 
@@ -75,7 +75,8 @@ Retain the candidate metadata, ZIP checksum, and store submission confirmation a
 
 - PR check/build failure: fix the source and update the PR; Extension CI builds the new commit automatically. An existing development artifact is not a release candidate.
 - Missing Beta build input: configure `RHEA_SWAP_ACCESS_TOKEN` in the trusted release repository and rerun the manual workflow. Do not publish the PR development ZIP as Beta.
-- Incorrect selected source: start a new manual run against the intended V2 branch or full SHA; verify its source commit and checksums before publication.
+- Incorrect selected source: review the current `v2` commit and dispatch again with its full SHA in `confirm_sha`; verify the source commit and checksums before publication.
+- Beta publication failure: inspect the original run and any tag or Release it created before retrying. The workflow never reuses an existing tag; a failure after tag creation requires manual review and recovery rather than moving the tag or replacing its assets.
 - Production candidate or publication failure: follow the recovery procedure in the shared release runbook. Do not move an existing published tag or replace its package.
 
 ## SDK Example V1/V2 Coexistence
