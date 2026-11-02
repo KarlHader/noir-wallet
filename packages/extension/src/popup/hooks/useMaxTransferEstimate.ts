@@ -13,9 +13,15 @@ export interface MaxTransferEstimateState {
   feeQuote: FeeQuote | null
   loading: boolean
   error: boolean
+  feeByTier: Record<FeeTier, number | null>
+  loadingByTier: Record<FeeTier, boolean>
   refresh: () => void
 }
-type InternalState = Omit<MaxTransferEstimateState, 'refresh'> & { requestKey: string }
+type TierEstimateState = Pick<
+  MaxTransferEstimateState,
+  'maxAmount' | 'fee' | 'feeQuote' | 'loading' | 'error' | 'refresh'
+>
+type InternalState = Omit<TierEstimateState, 'refresh'> & { requestKey: string }
 
 interface UseMaxTransferEstimateArgs {
   to?: string
@@ -27,14 +33,14 @@ interface UseMaxTransferEstimateArgs {
 }
 
 /** Builds the same send-max proposal that will be used by the transaction. */
-export function useMaxTransferEstimate({
+function useMaxTransferEstimateForTier({
   to,
   memo,
   feeTier,
   fundingSource = 'shielded',
   enabled = true,
   debounceMs = 300
-}: UseMaxTransferEstimateArgs): MaxTransferEstimateState {
+}: UseMaxTransferEstimateArgs): TierEstimateState {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
@@ -196,6 +202,30 @@ export function useMaxTransferEstimate({
     feeQuote: state.feeQuote,
     loading: state.loading,
     error: state.error,
+    refresh
+  }
+}
+
+export function useMaxTransferEstimate(args: UseMaxTransferEstimateArgs): MaxTransferEstimateState {
+  const standard = useMaxTransferEstimateForTier({ ...args, feeTier: 'standard' })
+  const fast = useMaxTransferEstimateForTier({ ...args, feeTier: 'fast' })
+  const selected = args.feeTier === 'fast' ? fast : standard
+  const refresh = useCallback(() => {
+    standard.refresh()
+    fast.refresh()
+  }, [standard.refresh, fast.refresh])
+
+  return {
+    maxAmount: selected.maxAmount,
+    fee: selected.fee,
+    feeQuote: selected.feeQuote,
+    loading: selected.loading,
+    error: selected.error,
+    feeByTier: {
+      standard: standard.fee === null ? null : safeBig(standard.fee).mul(1e8).toNumber(),
+      fast: fast.fee === null ? null : safeBig(fast.fee).mul(1e8).toNumber()
+    },
+    loadingByTier: { standard: standard.loading, fast: fast.loading },
     refresh
   }
 }

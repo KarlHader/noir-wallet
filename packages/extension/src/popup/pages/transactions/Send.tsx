@@ -151,17 +151,11 @@ export function Send() {
       safeBig(amount || '0').gt(0) && !!effectiveToAddress && !maxSelected && !isMaxTransferAmount
   })
 
-  const feeByTier = {
-    standard: feeTier === 'standard' ? feeEstimate.feeZats : null,
-    fast: feeTier === 'fast' ? feeEstimate.feeZats : null
-  }
-  const maxFeeZats = maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null
-  const maxFeeByTier = {
-    standard: feeTier === 'standard' ? maxFeeZats : null,
-    fast: feeTier === 'fast' ? maxFeeZats : null
-  }
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
 
   const selectedFeeZats = isMaxFeeMode
@@ -591,6 +585,7 @@ export function Send() {
               tier={feeTier}
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
+              loadingByTier={displayedFeeLoadingByTier}
               loading={displayedFeeLoading}
               hideLabel
             />

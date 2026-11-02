@@ -63,14 +63,11 @@ export function SpeedUpConfirmSheet({
     feeTier: tier,
     enabled: open && !!tx && !maxTransfer.loading && !maxTransfer.error && !usesMaxTransfer
   })
-  const feeZats = usesMaxTransfer
-    ? maxTransfer.fee
-      ? safeBig(maxTransfer.fee).mul(1e8).toNumber()
-      : null
-    : estimate.feeZats
-  const feeByTier = {
-    standard: tier === 'standard' ? feeZats : null,
-    fast: tier === 'fast' ? feeZats : null
+  const feeByTier = usesMaxTransfer ? maxTransfer.feeByTier : estimate.feeByTier
+  const loadingByTier = {
+    standard:
+      maxTransfer.loadingByTier.standard || (!usesMaxTransfer && estimate.loadingByTier.standard),
+    fast: maxTransfer.loadingByTier.fast || (!usesMaxTransfer && estimate.loadingByTier.fast)
   }
   const selectedFeeZats = feeByTier[tier] ?? 0
   const selectedFee = safeBig(selectedFeeZats).div(1e8).toFixed()
@@ -114,6 +111,7 @@ export function SpeedUpConfirmSheet({
             tier={tier}
             onTierChange={setTier}
             feeByTier={feeByTier}
+            loadingByTier={loadingByTier}
             loading={loading}
           />
           {maxTransfer.error && (

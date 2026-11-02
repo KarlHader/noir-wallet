@@ -49,10 +49,6 @@ export function ShieldConfirmSheet({
     enabled: open && hasEnoughBalance,
     refreshKey: feeRefreshRevision
   })
-  const feeByTier = {
-    standard: feeTier === 'standard' ? estimate.feeZats : null,
-    fast: feeTier === 'fast' ? estimate.feeZats : null
-  }
   const feeReady =
     !!estimate.feeQuote &&
     estimate.feeQuote.expiresAt > Date.now() &&
@@ -91,7 +87,8 @@ export function ShieldConfirmSheet({
             <FeeTierPicker
               tier={feeTier}
               onTierChange={setFeeTier}
-              feeByTier={feeByTier}
+              feeByTier={estimate.feeByTier}
+              loadingByTier={estimate.loadingByTier}
               loading={estimate.loading}
             />
             {estimate.error && (

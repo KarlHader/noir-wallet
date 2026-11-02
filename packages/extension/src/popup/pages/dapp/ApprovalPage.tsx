@@ -100,10 +100,7 @@ export function ApprovalPage() {
     estimate,
     enabled: (isSend || isShield) && walletReady && hasEnoughShieldingBalance
   })
-  const feeByTier = {
-    standard: feeTier === 'standard' ? feeEstimate.feeZats : null,
-    fast: feeTier === 'fast' ? feeEstimate.feeZats : null
-  }
+  const feeByTier = feeEstimate.feeByTier
   const feeReady =
     !!feeEstimate.feeQuote &&
     feeEstimate.feeQuote.expiresAt > Date.now() &&
@@ -581,6 +578,7 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
                   hideLabel
                 />
@@ -681,6 +679,7 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
                   hideLabel
                 />

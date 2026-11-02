@@ -131,17 +131,12 @@ export function Swap() {
     feeTier,
     enabled: swap.isZecToOther && !!swap.depositAddress && !maxSelected && !isMaxTransferAmount
   })
-  const feeByTier = {
-    standard: feeTier === 'standard' ? feeEstimate.feeZats : null,
-    fast: feeTier === 'fast' ? feeEstimate.feeZats : null
-  }
-  const maxFeeZats = maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null
-  const maxFeeByTier = {
-    standard: feeTier === 'standard' ? maxFeeZats : null,
-    fast: feeTier === 'fast' ? maxFeeZats : null
-  }
+  const feeByTier = feeEstimate.feeByTier
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
   const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
   const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
@@ -857,6 +852,7 @@ export function Swap() {
         feeTier={feeTier}
         onFeeTierChange={setFeeTier}
         feeByTier={displayedFeeByTier}
+        feeLoadingByTier={displayedFeeLoadingByTier}
         feeLoading={displayedFeeLoading}
         onAmountInChange={value => {
           setMaxSelected(false)

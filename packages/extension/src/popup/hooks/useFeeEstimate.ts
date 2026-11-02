@@ -16,6 +16,8 @@ export interface FeeEstimateState {
   loading: boolean
   error: boolean
   refresh: () => void
+  feeByTier: Record<FeeTier, number | null>
+  loadingByTier: Record<FeeTier, boolean>
 }
 
 interface UseFeeEstimateArgs {
@@ -34,13 +36,31 @@ interface UseFeeEstimateArgs {
 
 const emptyEstimate = { feeZats: null, feeQuote: null, loading: false, error: false }
 type EstimateCallback = UseFeeEstimateArgs['estimate']
-type InternalState = Omit<FeeEstimateState, 'refresh'> & {
+type SingleTierState = Omit<FeeEstimateState, 'feeByTier' | 'loadingByTier'>
+type InternalState = Omit<SingleTierState, 'refresh'> & {
   requestKey: string
   estimateCallback?: EstimateCallback
 }
 
-/** Estimate the selected tier and retain the quote used to build its proposal. */
-export function useFeeEstimate({
+/** Keep both proposal estimates available when the user switches fee tiers. */
+export function useFeeEstimate(args: UseFeeEstimateArgs): FeeEstimateState {
+  const standard = useFeeEstimateForTier({ ...args, feeTier: 'standard' })
+  const fast = useFeeEstimateForTier({ ...args, feeTier: 'fast' })
+  const refresh = useCallback(() => {
+    standard.refresh()
+    fast.refresh()
+  }, [standard.refresh, fast.refresh])
+
+  return {
+    ...(args.feeTier === 'fast' ? fast : standard),
+    refresh,
+    feeByTier: { standard: standard.feeZats, fast: fast.feeZats },
+    loadingByTier: { standard: standard.loading, fast: fast.loading }
+  }
+}
+
+/** Retain the quote used to build this tier's proposal. */
+function useFeeEstimateForTier({
   type,
   to,
   amount,
@@ -51,7 +71,7 @@ export function useFeeEstimate({
   debounceMs = 500,
   refreshKey = 0,
   estimate
-}: UseFeeEstimateArgs): FeeEstimateState {
+}: UseFeeEstimateArgs): SingleTierState {
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)

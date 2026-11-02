@@ -11,6 +11,7 @@ interface FeeTierSelectorProps {
   /** Estimated fee per tier, in zatoshis (null while pending). */
   feeByTier: Record<FeeTier, number | null>
   loading?: boolean
+  loadingByTier?: Record<FeeTier, boolean>
   /**
    * Hide the internal "Network Fee" caption. Use when the surrounding container
    * already labels the section (e.g. inside the FeeTierPicker bottom sheet,
@@ -37,6 +38,7 @@ export function FeeTierSelector({
   onChange,
   feeByTier,
   loading,
+  loadingByTier,
   hideLabel
 }: FeeTierSelectorProps) {
   return (
@@ -46,6 +48,7 @@ export function FeeTierSelector({
         {FEE_TIERS.map(tier => {
           const selected = tier.id === value
           const zec = formatZec(feeByTier[tier.id])
+          const pending = loadingByTier?.[tier.id] ?? (loading && selected)
           return (
             <button
               key={tier.id}
@@ -85,8 +88,8 @@ export function FeeTierSelector({
                 )}
               </div>
               <div className="mt-2 text-sm font-semibold tabular-nums text-white">
-                {loading && selected ? <FeeSkeleton /> : (zec ?? '—')}
-                {zec && !(loading && selected) && (
+                {pending ? <FeeSkeleton /> : (zec ?? '—')}
+                {zec && !pending && (
                   <span className="ml-1 text-[10px] font-normal text-muted">ZEC</span>
                 )}
               </div>
