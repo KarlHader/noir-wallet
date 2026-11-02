@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { needsScopeValidation } from '../../../scripts/ci-validated-scope.mjs'
+import { isSdkGateSuccessful, needsScopeValidation } from '../../../scripts/ci-validated-scope.mjs'
 
 const repository = 'NoirWallet/noir-wallet'
 const oldSha = 'a'.repeat(40)
@@ -62,6 +62,25 @@ test('reruns when relevant files changed, including a renamed input', async () =
   assert.equal(await renamed.check(), true)
   const gate = fixture({ files: [{ filename: 'scripts/ci-validated-scope.mjs' }] })
   assert.equal(await gate.check(), true)
+  for (const filename of [
+    'scripts/sdk-release.mjs',
+    'scripts/sdk-package-check.mjs',
+    'scripts/run-core-tests.mjs',
+    'scripts/register-test-loader.mjs',
+    'scripts/typescript-test-loader.mjs',
+    '.github/workflows/publish-sdk.yml'
+  ]) {
+    assert.equal(await fixture({ files: [{ filename }] }).check(), true)
+  }
+  for (const filename of [
+    'scripts/sdk-release.mjs',
+    'scripts/sdk-package-check.mjs',
+    'scripts/run-core-tests.mjs',
+    'scripts/register-test-loader.mjs',
+    'scripts/typescript-test-loader.mjs'
+  ]) {
+    assert.equal(await fixture({ scope: 'docs', files: [{ filename }] }).check(), false)
+  }
 })
 
 test('failure, cancellation, or no completed prior run retries validation', async () => {
@@ -109,4 +128,47 @@ test('a changed target branch or diverged head requires fresh validation', async
     }),
     true
   )
+})
+
+test('SDK gate accepts a completed artifact rehearsal or explicit reuse', () => {
+  const built = {
+    verifyResult: 'success',
+    dryRunResult: 'success',
+    reused: 'false',
+    artifactId: '123',
+    version: '0.2.0',
+    sourceSha: newSha,
+    buildAttempt: '1'
+  }
+  assert.equal(isSdkGateSuccessful(built), true)
+  assert.equal(isSdkGateSuccessful({ ...built, version: '2.0.0-beta.10' }), true)
+  for (const version of ['1.0.0', '2.0.0', '2.0.0-beta.0', '2.0.0-beta.01']) {
+    assert.equal(isSdkGateSuccessful({ ...built, version }), false)
+  }
+  const reused = {
+    verifyResult: 'success',
+    dryRunResult: 'skipped',
+    reused: 'true',
+    artifactId: '',
+    version: '',
+    sourceSha: '',
+    buildAttempt: ''
+  }
+  assert.equal(isSdkGateSuccessful(reused), true)
+  for (const changed of [
+    { verifyResult: 'failure' },
+    { verifyResult: 'cancelled' },
+    { dryRunResult: 'failure' },
+    { dryRunResult: 'cancelled' },
+    { dryRunResult: 'skipped' },
+    { artifactId: '' },
+    { version: '' },
+    { sourceSha: '' },
+    { buildAttempt: '' },
+    { reused: 'true' }
+  ]) {
+    assert.equal(isSdkGateSuccessful({ ...built, ...changed }), false)
+  }
+  assert.equal(isSdkGateSuccessful({ ...reused, reused: 'false' }), false)
+  assert.equal(isSdkGateSuccessful({ ...reused, artifactId: '123' }), false)
 })

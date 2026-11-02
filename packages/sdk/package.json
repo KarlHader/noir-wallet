@@ -24,6 +24,7 @@
     "build": "tsup src/index.ts src/chains/zcash/index.ts --format cjs,esm --dts --out-dir dist --clean",
     "dev": "tsup src/index.ts src/chains/zcash/index.ts --format cjs,esm --dts --out-dir dist --watch",
     "type-check": "tsc --noEmit",
+    "test": "node ../../scripts/run-core-tests.mjs",
     "pack:dry": "npm pack --dry-run",
     "example:dev": "pnpm --filter @noir-wallet/example dev",
     "example:build": "pnpm --filter @noir-wallet/example build"

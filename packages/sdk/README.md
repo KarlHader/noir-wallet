@@ -4,7 +4,7 @@ Typed TypeScript SDK for connecting web apps to the Noir Wallet browser extensio
 
 - [Integration guide](https://docs.zknoir.com/developers)
 - [Provider API reference](https://docs.zknoir.com/developers/provider-api)
-- [Example dApp](https://github.com/NoirWallet/noir-wallet/tree/main/packages/sdk/example)
+- [Live example dApp](https://noirwallet.github.io/noir-wallet/) · [Source](https://github.com/NoirWallet/noir-wallet/tree/main/packages/sdk/example)
 - [Install Noir Wallet for mainnet](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn)
 - [Download the testnet build](https://zknoir.com/beta/versions)
 - [Report a non-security issue](https://github.com/NoirWallet/noir-wallet/issues)
