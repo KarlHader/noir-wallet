@@ -58,7 +58,7 @@ test('offline upgrade removes a selected custom Zero alias and keeps the privacy
     const rpc = await import('../src/config/rpc-endpoints.ts')
     await rpc.ensureRpcEndpointPreferencesLoaded()
     const state = values.get('wallet_settings').state
-    assert.deepEqual(state.rpcEndpointPreferences, { zcash: 'deltarpc' })
+    assert.deepEqual(state.rpcEndpointPreferences, { zcash: rpc.AUTOMATIC_RPC_ENDPOINT_ID })
     assert.deepEqual(state.rpcEndpointModes, { zcash: 'auto' })
     assert.deepEqual(state.customRpcEndpoints, { zcash: [] })
     assert.equal(state.zeroIndexerEnabled, false)

@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import { test, describe } from 'node:test'
 import { findExactBlockHeightByTime } from '../src/core/zcash/block-time.ts'
 import { lookupBlockHeightByTime } from '../src/core/zcash/date-block-lookup.ts'
-import { setActiveRpcEndpointPreferences } from '../src/config/rpc-endpoints.ts'
+import {
+  setActiveCustomRpcEndpoints,
+  setActiveRpcEndpointPreferences
+} from '../src/config/rpc-endpoints.ts'
+import { NETWORKS } from '../src/config/networks.ts'
 
 const getBlockTime = async height => height * 10
 
@@ -165,11 +169,17 @@ describe('worker-free birthday lookup', () => {
   })
 
   test('uses the selected mainnet RPC and the fixed testnet RPC', async () => {
-    setActiveRpcEndpointPreferences({ zcash: 'chainsafe' })
+    const endpoint = {
+      id: 'custom:birthday-lookup',
+      label: 'Birthday lookup',
+      url: 'https://birthday.example.com'
+    }
+    setActiveCustomRpcEndpoints({ zcash: [endpoint] })
+    setActiveRpcEndpointPreferences({ zcash: endpoint.id })
     try {
       for (const [network, activationHeight, expectedUrl] of [
-        ['mainnet', 419_200, 'https://zcash-mainnet.chainsafe.dev'],
-        ['testnet', 280_000, 'https://zcash-wallet-grpc-testnet.deltarpc.com']
+        ['mainnet', 419_200, endpoint.url],
+        ['testnet', 280_000, NETWORKS.testnet.rpcUrl]
       ]) {
         const rpc = blockRpc(activationHeight + 2)
         const urls = []
@@ -185,6 +195,7 @@ describe('worker-free birthday lookup', () => {
         )
       }
     } finally {
+      setActiveCustomRpcEndpoints()
       setActiveRpcEndpointPreferences()
     }
   })
