@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "source": {
     "repository": "https://github.com/NoirWallet/zcash-wallet-wasm",
-    "commit": "19ee34b815676aa4dce37d570416d12488572405",
-    "ref": "19ee34b815676aa4dce37d570416d12488572405"
+    "commit": "cb8da9dc60d51dbf3958657be35427210d544541",
+    "ref": "cb8da9dc60d51dbf3958657be35427210d544541"
   },
   "artifact": null,
   "build": {
@@ -31,20 +31,20 @@
         "sha256": "6982a7a006a69849d666aaf4ac7ea07a42931f850c31006782b1937fd5704f96"
       },
       "zcash_wallet_wasm_bg.wasm": {
-        "size": 66435209,
-        "sha256": "ace38008c16c24f7e4ffd784b29c2a2a433043d01e1383ee0da344dd1d050efa"
+        "size": 66497071,
+        "sha256": "dc68249e793ab10a19b7777c66e21278f3abcc86fcebea22e428e6883dfc509a"
       },
       "zcash_wallet_wasm_bg.wasm.d.ts": {
         "size": 15749,
-        "sha256": "d737111df24d542604d4c81294b09f583292a97648868ff20605712f947967d2"
+        "sha256": "558354ae321bc29a725954fe10f6f5af55f3eebdd4a8f210dabefa895d3c9aa1"
       },
       "zcash_wallet_wasm.d.ts": {
         "size": 50132,
-        "sha256": "4fc9c1c706c04e1e8cb6322cf28f6b6a8a2a9fb2cc553d392ac04049bea90954"
+        "sha256": "1cc038b6c77dc357816feac0f7ac6566e66a241d5da57843c8bd467fde37f886"
       },
       "zcash_wallet_wasm.js": {
         "size": 153361,
-        "sha256": "a0488cc14192b6cb15f574aaa62ce9dcbb501adf3e8c8bcd294e63dafa23c1fb"
+        "sha256": "2c48b6b1b4fb190357b13ecab0559ec38bbe686224a7adaa15ab96690f5dde47"
       }
     }
   }

@@ -42,7 +42,7 @@ import type { ZeroIndexerOptions } from '../../config/zero-indexer'
 import { parseZeroIndexerRuntimeOptions } from '../../config/zero-indexer-runtime'
 import { runWithCommitmentTreeRecovery } from './commitment-tree-recovery'
 import { parseTransferEstimate, parseTransferResult } from '../zcash/transfer-result'
-import { findWasmAccountIdByHdIndex } from './account-resolution'
+import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './account-resolution'
 import { loadVotingState, saveVotingState } from '../../lib/indexed-db'
 import { getDiagnosticLogSalt } from '../../lib/diagnostic-log-store'
 import {
@@ -141,9 +141,11 @@ async function findAccountIdByHdIndex(
   accountIndex: number
 ): Promise<number | null> {
   const summary = await getSummaryOrCached(walletId, w)
-  return findWasmAccountIdByHdIndex(summary?.account_balances, accountIndex, id =>
+  const accountId = await findWasmAccountIdByHdIndex(summary?.account_balances, accountIndex, id =>
     w.get_account_hd_index(id)
   )
+  if (accountId !== null) accountIdsByHdIndex.get(walletId)?.set(accountIndex, accountId)
+  return accountId
 }
 
 async function resolveRequestedAccountId(
@@ -192,6 +194,7 @@ interface WalletEntry {
 }
 
 const wallets = new Map<string, WalletEntry>()
+const accountIdsByHdIndex = new Map<string, Map<number, number>>()
 const feeQuotes = new FeeQuoteRegistry()
 
 function feeQuoteContext(walletId: string, accountId: number): FeeQuoteContext {
@@ -536,6 +539,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           let dbData = dbBytes ? new Uint8Array(dbBytes) : null
           let wallet: WebWallet
           let restoredFromDb = false
+          let accountIndices = new Map<number, number>()
 
           try {
             wallet = new WebWallet(
@@ -571,6 +575,10 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 }
                 if (healthSummary) {
                   lastSummaryCache.set(walletId, healthSummary)
+                  accountIndices = await mapWasmAccountIdsByHdIndex(
+                    healthSummary.account_balances,
+                    id => wallet.get_account_hd_index(id)
+                  )
                 }
                 restoredFromDb = true
               } catch (healthErr) {
@@ -630,6 +638,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             lightwalletdUrl,
             zeroIndexerOptions: broadcastOptions
           })
+          accountIdsByHdIndex.set(walletId, accountIndices)
           // Fresh instance from a consistent snapshot: summary is safe again,
           // but its subtree roots are cold until the first sync op completes
           subtreeRootsFresh.delete(walletId)
@@ -722,6 +731,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 console.warn('[Worker] Failed to free wallet instance', error)
               }
               wallets.delete(resetId)
+              accountIdsByHdIndex.delete(resetId)
               summaryGateClosed.delete(resetId)
               subtreeRootsFresh.delete(resetId)
               lastSummaryCache.delete(resetId)
@@ -741,6 +751,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             }
           }
           wallets.clear()
+          accountIdsByHdIndex.clear()
           walletOperationChains.clear()
           summaryGateClosed.clear()
           subtreeRootsFresh.clear()
@@ -780,6 +791,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             effectiveBirthdayHeight
           )
           blankInstances.delete(walletId)
+          accountIdsByHdIndex.get(walletId)?.set(accountIndex, newAccountId)
           return newAccountId
         })
         break
@@ -805,7 +817,16 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         const { walletId, accountId } = payload as RPCSchema['wallet.getAccountHdIndex']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
-          return (await w.get_account_hd_index(accountId)) ?? null
+          const index = (await w.get_account_hd_index(accountId)) ?? null
+          if (
+            typeof index === 'number' &&
+            Number.isSafeInteger(index) &&
+            index >= 0 &&
+            !accountIdsByHdIndex.get(walletId)?.has(index)
+          ) {
+            accountIdsByHdIndex.get(walletId)?.set(index, accountId)
+          }
+          return index
         })
         break
       }
@@ -1085,6 +1106,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             keySource
           )
           blankInstances.delete(walletId)
+          accountIdsByHdIndex.get(walletId)?.set(accountHdIndex, newAccountId)
           return newAccountId
         })
         break
@@ -1301,12 +1323,18 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'transaction.getFeeQuote': {
         const { walletId, accountId, accountIndex } =
           payload as RPCSchema['transaction.getFeeQuote']['request']
-        result = await runForWallet(walletId, async () => {
-          const w = getWallet(walletId)
-          const targetId = await resolveRequestedAccountId(walletId, w, accountId, accountIndex)
-          const context = feeQuoteContext(walletId, targetId)
-          return feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
-        })
+        const cachedId =
+          accountIndex === undefined
+            ? accountId
+            : accountIdsByHdIndex.get(walletId)?.get(accountIndex)
+        const targetId =
+          typeof cachedId === 'number' && Number.isSafeInteger(cachedId) && cachedId >= 0
+            ? cachedId
+            : await runForWallet(walletId, () =>
+                resolveRequestedAccountId(walletId, getWallet(walletId), accountId, accountIndex)
+              )
+        const context = feeQuoteContext(walletId, targetId)
+        result = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
         break
       }
       case 'transaction.send': {

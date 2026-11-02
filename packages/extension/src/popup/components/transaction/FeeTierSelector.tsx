@@ -1,3 +1,4 @@
+import { FeeSkeleton } from './FeeSkeleton'
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { safeBig } from '@/lib/big'
@@ -84,8 +85,10 @@ export function FeeTierSelector({
                 )}
               </div>
               <div className="mt-2 text-sm font-semibold tabular-nums text-white">
-                {zec ?? (loading ? '…' : '—')}
-                {zec && <span className="ml-1 text-[10px] font-normal text-muted">ZEC</span>}
+                {loading && selected ? <FeeSkeleton /> : (zec ?? '—')}
+                {zec && !(loading && selected) && (
+                  <span className="ml-1 text-[10px] font-normal text-muted">ZEC</span>
+                )}
               </div>
               <div className="mt-0.5 text-[11px] text-muted">{tier.etaHint}</div>
             </button>

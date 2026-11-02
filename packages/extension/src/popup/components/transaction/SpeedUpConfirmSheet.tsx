@@ -15,6 +15,7 @@ interface SpeedUpConfirmSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   tx: Transaction | null
+  isConfirming?: boolean
   onConfirm: (params: {
     amount: string
     fee: string
@@ -33,6 +34,7 @@ export function SpeedUpConfirmSheet({
   open,
   onOpenChange,
   tx,
+  isConfirming,
   onConfirm
 }: SpeedUpConfirmSheetProps) {
   const [tier, setTier] = useState<FeeTier>('fast')
@@ -139,7 +141,8 @@ export function SpeedUpConfirmSheet({
             Cancel
           </Button>
           <Button
-            disabled={loading || unavailable || !feeReady}
+            disabled={isConfirming || loading || unavailable || !feeReady}
+            isLoading={isConfirming}
             onClick={() =>
               selectedQuote &&
               feeReady &&

@@ -53,6 +53,7 @@ export function ApprovalPage() {
   const [error, setError] = useState('')
   const [decisionError, setDecisionError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const decisionInFlight = useRef(false)
   const [showResult, setShowResult] = useState(false)
   const [walletReady, setWalletReady] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -149,6 +150,8 @@ export function ApprovalPage() {
   }
 
   const handleDecision = async (approved: boolean) => {
+    if (decisionInFlight.current) return
+    decisionInFlight.current = true
     if (!approved) {
       setIsLoading(true)
       try {
@@ -190,7 +193,9 @@ export function ApprovalPage() {
           approvalFee?.fee !== String(feeEstimate.feeZats)
         ) {
           feeEstimate.refresh()
-          throw new Error('Network fee changed. Review the updated fee before confirming.')
+          setIsLoading(false)
+          decisionInFlight.current = false
+          return
         }
         setResult(
           {
@@ -249,6 +254,7 @@ export function ApprovalPage() {
       clear()
       setDecisionError(classifyError(err).userMessage)
       setIsLoading(false)
+      decisionInFlight.current = false
     }
   }
 

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useWalletStore } from '@/store/wallet-store'
@@ -22,9 +22,23 @@ import { isHardwareKeySource } from '@/lib/hardware-capabilities'
 import { getStandardTransactionResultCopy } from '@/lib/transaction-status-copy'
 import { isSidePanelSurface } from '@/config/extension-display'
 import { toast } from '@/store/toast-store'
+import { useSettingsStore } from '@/store/settings-store'
 
 const SHIELD_FAILED_COPY = getStandardTransactionResultCopy('failed', { shield: true })
 const SHIELD_SUCCESS_COPY = getStandardTransactionResultCopy('submitted', { shield: true })
+
+function feeContextKey() {
+  const wallet = useWalletStore.getState()
+  const settings = useSettingsStore.getState()
+  return JSON.stringify([
+    wallet.currentWalletId,
+    wallet.currentAccountId,
+    wallet.currentNetwork,
+    settings.rpcEndpointModes.zcash,
+    settings.rpcEndpointPreferences.zcash,
+    settings.customRpcEndpoints.zcash
+  ])
+}
 
 interface UseShieldFundsResult {
   isShielding: boolean
@@ -45,15 +59,30 @@ export function useShieldFunds(): UseShieldFundsResult {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [sheetBalance, setSheetBalance] = useState(0)
   const [feeRefreshRevision, setFeeRefreshRevision] = useState(0)
+  const confirmationInFlight = useRef(false)
+  const sheetRevision = useRef(0)
+
+  useEffect(
+    () => () => {
+      sheetRevision.current += 1
+    },
+    []
+  )
   const { navigate } = useNavigate()
   const { setResult } = useTransactionResultStore()
 
   const handleShieldFunds = useCallback(() => {
     if (isShielding) return
+    sheetRevision.current += 1
     const balance = useAccountDataStore.getState().getCurrentBalance()
     setSheetBalance(safeBig(getShieldableTransparentBalance(balance)).toNumber())
     setSheetOpen(true)
   }, [isShielding])
+
+  const handleSheetOpenChange = useCallback((open: boolean) => {
+    if (!open) sheetRevision.current += 1
+    setSheetOpen(open)
+  }, [])
 
   const executeShield = useCallback(
     async ({
@@ -67,15 +96,25 @@ export function useShieldFunds(): UseShieldFundsResult {
       feeTier: FeeTier
       feeZats: number
     }) => {
+      if (confirmationInFlight.current) return
+      confirmationInFlight.current = true
+      const revision = sheetRevision.current
+      const contextKey = feeContextKey()
+      setIsShielding(true)
+      let quoteAccepted = false
       try {
         const currentQuote = await accountManager.getFeeQuote()
+        if (revision !== sheetRevision.current || contextKey !== feeContextKey()) return
         if (currentQuote.id !== feeQuoteId || currentQuote.expiresAt <= Date.now()) {
           throw new Error('Fee estimate changed')
         }
+        quoteAccepted = true
       } catch {
-        setFeeRefreshRevision(value => value + 1)
-        toast.error('Network fee changed', 'Review the updated fee before confirming.')
+        if (revision === sheetRevision.current) setFeeRefreshRevision(value => value + 1)
         return
+      } finally {
+        if (!quoteAccepted) setIsShielding(false)
+        confirmationInFlight.current = false
       }
       setSheetOpen(false)
 
@@ -101,13 +140,17 @@ export function useShieldFunds(): UseShieldFundsResult {
           '/'
         )
         navigate('/transaction-result')
+        setIsShielding(false)
         return
       }
 
       // Hardware wallets sign in a dedicated tab.
       const currentWallet = walletStore.getCurrentWallet()
       if (isHardwareKeySource(currentWallet?.keySource)) {
-        if (!currentWalletId || !currentAccountId) return
+        if (!currentWalletId || !currentAccountId) {
+          setIsShielding(false)
+          return
+        }
         const request = {
           kind: 'shield' as const,
           walletId: currentWalletId,
@@ -120,12 +163,17 @@ export function useShieldFunds(): UseShieldFundsResult {
         const isSidePanel = isSidePanelSurface(window.location.search)
 
         if (!isSidePanel) {
-          await openHardwareSignTab(request)
-          window.close()
+          try {
+            await openHardwareSignTab(request)
+            window.close()
+          } catch (cause) {
+            toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+          } finally {
+            setIsShielding(false)
+          }
           return
         }
 
-        setIsShielding(true)
         try {
           const result = await openHardwareSignAndWait(request)
           if (result.status === 'success') {
@@ -158,8 +206,6 @@ export function useShieldFunds(): UseShieldFundsResult {
         }
         return
       }
-
-      setIsShielding(true)
 
       let pendingTx: Transaction | null = null
 
@@ -318,7 +364,7 @@ export function useShieldFunds(): UseShieldFundsResult {
   const shieldSheet = (
     <ShieldConfirmSheet
       open={sheetOpen}
-      onOpenChange={setSheetOpen}
+      onOpenChange={handleSheetOpenChange}
       transparentBalance={sheetBalance}
       feeRefreshRevision={feeRefreshRevision}
       isShielding={isShielding}

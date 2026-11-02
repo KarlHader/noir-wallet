@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -67,6 +67,20 @@ export function Send() {
   const [maxSelected, setMaxSelected] = useState(false)
   const [memo, setMemo] = useState('')
   const [showReview, setShowReview] = useState(false)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const confirmation = useRef({ revision: 0, pending: false })
+  const changeReviewOpen = (open: boolean) => {
+    confirmation.current.revision++
+    confirmation.current.pending = false
+    setIsConfirming(false)
+    setShowReview(open)
+  }
+  useEffect(
+    () => () => {
+      confirmation.current.revision++
+    },
+    []
+  )
   const [fundingSource, setFundingSource] = useState<FundingSource>(
     initialFrom === 'transparent' ? 'transparent' : 'shielded'
   )
@@ -181,6 +195,22 @@ export function Send() {
     !displayedFeeLoading &&
     !(isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
 
+  const confirmationContext = JSON.stringify([
+    currentWalletId,
+    currentAccount?.id,
+    currentNetwork,
+    effectiveToAddress,
+    amount,
+    effectiveMemo,
+    fundingSource,
+    feeTier,
+    maxSelected,
+    selectedFeeQuote?.id,
+    showReview
+  ])
+  const latestConfirmationContext = useRef(confirmationContext)
+  latestConfirmationContext.current = confirmationContext
+
   useEffect(() => {
     if (maxSelected && maxTransfer.maxAmount) {
       setAmount(effectiveMaxStr)
@@ -252,7 +282,7 @@ export function Send() {
     if (toAddress && isValidAmount) {
       setSaveContact(false)
       setContactName('')
-      setShowReview(true)
+      changeReviewOpen(true)
     }
   }
 
@@ -271,6 +301,8 @@ export function Send() {
 
   const handleConfirm = async () => {
     if (
+      confirmation.current.pending ||
+      !showReview ||
       !isValidAmount ||
       !fromAddress ||
       fundingSourceUnavailableReason ||
@@ -279,146 +311,182 @@ export function Send() {
     ) {
       return
     }
+    const revision = ++confirmation.current.revision
+    confirmation.current.pending = true
+    setIsConfirming(true)
+    const settings = useSettingsStore.getState()
+    const rpcContext = JSON.stringify([
+      settings.rpcEndpointModes.zcash,
+      settings.rpcEndpointPreferences.zcash,
+      settings.customRpcEndpoints.zcash
+    ])
+    const isCurrent = () => {
+      const wallet = useWalletStore.getState()
+      const settings = useSettingsStore.getState()
+      return (
+        confirmation.current.revision === revision &&
+        latestConfirmationContext.current === confirmationContext &&
+        wallet.currentWalletId === currentWalletId &&
+        wallet.currentAccountId === currentAccount?.id &&
+        wallet.currentNetwork === currentNetwork &&
+        rpcContext ===
+          JSON.stringify([
+            settings.rpcEndpointModes.zcash,
+            settings.rpcEndpointPreferences.zcash,
+            settings.customRpcEndpoints.zcash
+          ])
+      )
+    }
     try {
-      const currentQuote = await accountManager.getFeeQuote()
-      if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
-        throw new Error('Fee estimate changed')
+      try {
+        const currentQuote = await accountManager.getFeeQuote()
+        if (!isCurrent()) return
+        if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
+          if (isMaxFeeMode) maxTransfer.refresh()
+          else feeEstimate.refresh()
+          return
+        }
+      } catch {
+        if (!isCurrent()) return
+        if (isMaxFeeMode) maxTransfer.refresh()
+        else feeEstimate.refresh()
+        return
       }
-    } catch {
-      if (isMaxFeeMode) maxTransfer.refresh()
-      else feeEstimate.refresh()
-      toast.error('Network fee changed', 'Review the updated fee before confirming.')
-      return
-    }
-    const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
+      const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
 
-    if (saveContact && contactName.trim() && !isExistingContact) {
-      addContact(effectiveToAddress, contactName.trim(), zns.name || undefined)
-    }
-
-    sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
-      ...sendEventBase,
-      extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
-    })
-
-    // Hardware wallets sign in a dedicated tab because device permission
-    // prompts and the multi-step flow do not survive reliably in a popup.
-    if (isHardwareWallet) {
-      if (!currentWallet || !currentAccount) return
-      setShowReview(false)
-      const request = {
-        kind: 'send' as const,
-        walletId: currentWallet.id,
-        accountId: currentAccount.id,
-        to: effectiveToAddress,
-        amount,
-        // Only an explicit Max action may authorize the hardware flow to
-        // recalculate and replace the entered amount after refreshing UTXOs.
-        maxTransfer: maxSelected,
-        memo: effectiveMemo,
-        fundingSource,
-        marginalFeeZats,
-        feeQuoteId: selectedFeeQuote.id,
-        feeTier
+      if (saveContact && contactName.trim() && !isExistingContact) {
+        addContact(effectiveToAddress, contactName.trim(), zns.name || undefined)
       }
-      const isSidePanel = isSidePanelSurface(window.location.search)
 
-      if (!isSidePanel) {
-        await openHardwareSignTab(request)
-        window.close()
+      sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
+        ...sendEventBase,
+        extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
+      })
+
+      // Hardware wallets sign in a dedicated tab because device permission
+      // prompts and the multi-step flow do not survive reliably in a popup.
+      if (isHardwareWallet) {
+        if (!currentWallet || !currentAccount) return
+        setShowReview(false)
+        const request = {
+          kind: 'send' as const,
+          walletId: currentWallet.id,
+          accountId: currentAccount.id,
+          to: effectiveToAddress,
+          amount,
+          // Only an explicit Max action may authorize the hardware flow to
+          // recalculate and replace the entered amount after refreshing UTXOs.
+          maxTransfer: maxSelected,
+          memo: effectiveMemo,
+          fundingSource,
+          marginalFeeZats,
+          feeQuoteId: selectedFeeQuote.id,
+          feeTier
+        }
+        const isSidePanel = isSidePanelSurface(window.location.search)
+
+        if (!isSidePanel) {
+          await openHardwareSignTab(request)
+          window.close()
+          return
+        }
+
+        setIsHardwareSigning(true)
+        try {
+          const result = await openHardwareSignAndWait(request)
+          if (result.status === 'success') {
+            setResult(
+              {
+                type: 'zcash',
+                step: 'submitted',
+                amount: result.amount ?? amount,
+                toAddress: effectiveToAddress,
+                txHash: result.txHash,
+                accountKey: result.accountKey,
+                transactionId: result.transactionId,
+                showTo: true
+              },
+              '/'
+            )
+            navigate('/transaction-result')
+          } else if (result.status === 'timeout') {
+            toast.error('Ledger signing timed out', 'The transaction form has been restored.')
+          } else {
+            toast.info('Ledger signing cancelled')
+          }
+        } catch (cause) {
+          toast.error('Could not open Ledger signing', classifyError(cause).userMessage)
+        } finally {
+          setIsHardwareSigning(false)
+        }
         return
       }
 
-      setIsHardwareSigning(true)
-      try {
-        const result = await openHardwareSignAndWait(request)
-        if (result.status === 'success') {
-          setResult(
-            {
-              type: 'zcash',
-              step: 'submitted',
-              amount: result.amount ?? amount,
-              toAddress: effectiveToAddress,
-              txHash: result.txHash,
-              accountKey: result.accountKey,
-              transactionId: result.transactionId,
-              showTo: true
-            },
-            '/'
-          )
-          navigate('/transaction-result')
-        } else if (result.status === 'timeout') {
-          toast.error('Ledger signing timed out', 'The transaction form has been restored.')
-        } else {
-          toast.info('Ledger signing cancelled')
-        }
-      } catch (cause) {
-        toast.error('Could not open Ledger signing', classifyError(cause).userMessage)
-      } finally {
-        setIsHardwareSigning(false)
+      setShowReview(false)
+
+      const pendingResult = {
+        type: 'zcash' as const,
+        step: 'pending' as const,
+        amount,
+        toAddress: effectiveToAddress,
+        showTo: true
       }
-      return
-    }
+      setResult(pendingResult, '/')
+      navigate('/transaction-result')
 
-    setShowReview(false)
-
-    const pendingResult = {
-      type: 'zcash' as const,
-      step: 'pending' as const,
-      amount,
-      toAddress: effectiveToAddress,
-      showTo: true
-    }
-    setResult(pendingResult, '/')
-    navigate('/transaction-result')
-
-    const result = await sendTransaction({
-      to: effectiveToAddress,
-      amount,
-      from: fromAddress,
-      fromType: fundingSource,
-      memo: effectiveMemo,
-      fee: selectedFeeZec,
-      marginalFeeZats,
-      feeQuoteId: selectedFeeQuote.id,
-      feeTier,
-      onCreated: (transaction, accountKey) => {
-        if (useTransactionResultStore.getState().data !== pendingResult) return
-        updateStep('pending', {
-          accountKey,
-          transactionId: transaction.id,
-          timestamp: transaction.timestamp
-        })
-      },
-      analytics: {
-        onSuccess: {
-          name: ANALYTICS_EVENTS.SEND_SUCCEEDED,
-          options: {
-            ...sendEventBase,
-            extra: { fee: selectedFeeZec, funding_source: fundingSource }
-          }
+      const result = await sendTransaction({
+        to: effectiveToAddress,
+        amount,
+        from: fromAddress,
+        fromType: fundingSource,
+        memo: effectiveMemo,
+        fee: selectedFeeZec,
+        marginalFeeZats,
+        feeQuoteId: selectedFeeQuote.id,
+        feeTier,
+        onCreated: (transaction, accountKey) => {
+          if (useTransactionResultStore.getState().data !== pendingResult) return
+          updateStep('pending', {
+            accountKey,
+            transactionId: transaction.id,
+            timestamp: transaction.timestamp
+          })
         },
-        onFail: {
-          name: ANALYTICS_EVENTS.SEND_FAILED,
-          options: { ...sendEventBase, extra: { funding_source: fundingSource } }
+        analytics: {
+          onSuccess: {
+            name: ANALYTICS_EVENTS.SEND_SUCCEEDED,
+            options: {
+              ...sendEventBase,
+              extra: { fee: selectedFeeZec, funding_source: fundingSource }
+            }
+          },
+          onFail: {
+            name: ANALYTICS_EVENTS.SEND_FAILED,
+            options: { ...sendEventBase, extra: { funding_source: fundingSource } }
+          }
+        }
+      })
+
+      if (result.step === 'success') {
+        updateStep(
+          'submitted',
+          { txHash: result.txHash, timestamp: result.timestamp },
+          result.accountKey,
+          result.transactionId
+        )
+      } else if (result.step === 'pending') {
+        updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
+      } else {
+        if (result.transactionId) {
+          updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
+        } else if (useTransactionResultStore.getState().data === pendingResult) {
+          updateStep('failed', { error: result.error })
         }
       }
-    })
-
-    if (result.step === 'success') {
-      updateStep(
-        'submitted',
-        { txHash: result.txHash, timestamp: result.timestamp },
-        result.accountKey,
-        result.transactionId
-      )
-    } else if (result.step === 'pending') {
-      updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
-    } else {
-      if (result.transactionId) {
-        updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
-      } else if (useTransactionResultStore.getState().data === pendingResult) {
-        updateStep('failed', { error: result.error })
+    } finally {
+      if (confirmation.current.revision === revision) {
+        confirmation.current.pending = false
+        setIsConfirming(false)
       }
     }
   }
@@ -589,7 +657,7 @@ export function Send() {
         </Button>
       </div>
 
-      <Dialog open={showReview} onOpenChange={setShowReview}>
+      <Dialog open={showReview} onOpenChange={changeReviewOpen}>
         <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
           <DialogHeader className="px-5 pt-5 pb-4">
             <DialogTitle className="text-center">Review Send</DialogTitle>
@@ -639,7 +707,12 @@ export function Send() {
               </DetailRow>
             )}
 
-            <NetworkFeeRow tier={feeTier} feeZec={selectedFeeZec} />
+            <NetworkFeeRow
+              tier={feeTier}
+              feeZec={selectedFeeZec}
+              loading={displayedFeeLoading || isConfirming}
+              unavailable={!feeReady}
+            />
             {(isMaxFeeMode ? maxTransfer.error : feeEstimate.error) && (
               <button
                 type="button"
@@ -680,12 +753,17 @@ export function Send() {
           <div className="p-5 flex gap-3">
             <Button
               variant="outline"
-              onClick={() => setShowReview(false)}
+              onClick={() => changeReviewOpen(false)}
               className="flex-1 h-[45px]"
             >
               Cancel
             </Button>
-            <Button onClick={handleConfirm} disabled={!feeReady} className="flex-1 h-[45px]">
+            <Button
+              onClick={handleConfirm}
+              disabled={!feeReady}
+              isLoading={isConfirming}
+              className="flex-1 h-[45px]"
+            >
               Confirm
             </Button>
           </div>

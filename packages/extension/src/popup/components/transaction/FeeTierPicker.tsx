@@ -1,3 +1,4 @@
+import { FeeSkeleton } from './FeeSkeleton'
 import { Icon } from '@iconify/react'
 import { DetailRow } from '../common/DetailRow'
 import { FeeTierSelector } from './FeeTierSelector'
@@ -44,11 +45,13 @@ export function FeeTierPicker({
 }: FeeTierPickerProps) {
   const selectedFeeZec =
     feeByTier[tier] == null ? null : safeBig(feeByTier[tier]).div(1e8).toFixed()
-  const selectedFeeLabel = selectedFeeZec
-    ? `≈ ${selectedFeeZec} ZEC`
-    : loading
-      ? 'Estimating…'
-      : '—'
+  const selectedFeeLabel = loading ? (
+    <FeeSkeleton />
+  ) : selectedFeeZec ? (
+    `≈ ${selectedFeeZec} ZEC`
+  ) : (
+    '—'
+  )
 
   const handleEdit = () => {
     void openModal({
@@ -68,11 +71,7 @@ export function FeeTierPicker({
     })
   }
 
-  const trailingIcon = loading ? (
-    <Icon icon="lucide:loader-2" className="text-muted animate-spin" />
-  ) : (
-    <Icon icon="lucide:pencil" className="text-muted" />
-  )
+  const trailingIcon = <Icon icon="lucide:pencil" className="text-muted" />
 
   if (variant === 'stacked') {
     return (

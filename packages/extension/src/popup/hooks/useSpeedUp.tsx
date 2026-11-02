@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTransaction } from './useTransaction'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useNavigate } from '../provider/Router'
@@ -7,7 +7,21 @@ import { SpeedUpConfirmSheet } from '../components/transaction/SpeedUpConfirmShe
 import type { Transaction } from '@/types/wallet'
 import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
 import type { FeeTier } from '@/config/fee'
-import { toast } from '@/store/toast-store'
+import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
+
+function feeContextKey() {
+  const wallet = useWalletStore.getState()
+  const settings = useSettingsStore.getState()
+  return JSON.stringify([
+    wallet.currentWalletId,
+    wallet.currentAccountId,
+    wallet.currentNetwork,
+    settings.rpcEndpointModes.zcash,
+    settings.rpcEndpointPreferences.zcash,
+    settings.customRpcEndpoints.zcash
+  ])
+}
 
 /**
  * Drives the Speed Up flow: a confirm sheet (default Fast tier) plus the resend.
@@ -26,9 +40,29 @@ export function useSpeedUp() {
   const { navigate } = useNavigate()
   const [sheetTx, setSheetTx] = useState<Transaction | null>(null)
   const [sheetRevision, setSheetRevision] = useState(0)
+  const confirmationInFlight = useRef(false)
+  const openRevision = useRef(0)
+  const [isConfirming, setIsConfirming] = useState(false)
+
+  useEffect(
+    () => () => {
+      openRevision.current += 1
+    },
+    []
+  )
 
   const requestSpeedUp = useCallback((tx: Transaction) => {
-    if (getTransactionRecoveryAction(tx) === 'speed_up') setSheetTx(tx)
+    if (getTransactionRecoveryAction(tx) === 'speed_up') {
+      openRevision.current += 1
+      setSheetTx(tx)
+    }
+  }, [])
+
+  const handleOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      openRevision.current += 1
+      setSheetTx(null)
+    }
   }, [])
 
   const executeSpeedUp = useCallback(
@@ -46,16 +80,23 @@ export function useSpeedUp() {
       feeTier: FeeTier
     }) => {
       const tx = sheetTx
-      if (!tx) return
+      if (!tx || confirmationInFlight.current) return
+      confirmationInFlight.current = true
+      const revision = openRevision.current
+      const contextKey = feeContextKey()
+      setIsConfirming(true)
       try {
         const currentQuote = await accountManager.getFeeQuote()
+        if (revision !== openRevision.current || contextKey !== feeContextKey()) return
         if (currentQuote.id !== feeQuoteId || currentQuote.expiresAt <= Date.now()) {
           throw new Error('Fee estimate changed')
         }
       } catch {
-        setSheetRevision(value => value + 1)
-        toast.error('Network fee changed', 'Review the updated fee before confirming.')
+        if (revision === openRevision.current) setSheetRevision(value => value + 1)
         return
+      } finally {
+        confirmationInFlight.current = false
+        setIsConfirming(false)
       }
       setSheetTx(null)
 
@@ -116,8 +157,9 @@ export function useSpeedUp() {
     <SpeedUpConfirmSheet
       key={sheetRevision}
       open={!!sheetTx}
-      onOpenChange={open => !open && setSheetTx(null)}
+      onOpenChange={handleOpenChange}
       tx={sheetTx}
+      isConfirming={isConfirming}
       onConfirm={executeSpeedUp}
     />
   )
