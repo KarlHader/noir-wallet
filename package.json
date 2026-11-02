@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.33.4",
   "scripts": {
-    "test": "pnpm --filter @noir-wallet/extension --filter @noir-wallet/rpc-registry --filter @noir-wallet/web --filter @noir-wallet/web-vote -r test",
+    "test": "pnpm --filter @noir-wallet/extension --filter @noir-wallet/rpc-registry --filter @noir-wallet/sdk --filter @noir-wallet/web --filter @noir-wallet/web-vote -r test",
     "dev": "pnpm dev:extension & pnpm dev:web & pnpm dev:example",
     "dev:extension": "pnpm --filter @noir-wallet/extension dev",
     "dev:web": "pnpm --filter @noir-wallet/web dev",

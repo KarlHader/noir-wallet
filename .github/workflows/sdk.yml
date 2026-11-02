@@ -3,16 +3,6 @@ name: SDK
 on:
   pull_request:
     branches: [main, v2]
-    paths:
-      - 'packages/sdk/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - 'tsconfig.base.json'
-      - '.node-version'
-      - '.npmrc'
-      - '.github/workflows/sdk.yml'
-      - 'scripts/ci-validated-scope.mjs'
   push:
     branches: [main, v2]
     paths:
@@ -25,6 +15,12 @@ on:
       - '.npmrc'
       - '.github/workflows/sdk.yml'
       - 'scripts/ci-validated-scope.mjs'
+      - 'scripts/sdk-release.mjs'
+      - 'scripts/sdk-package-check.mjs'
+      - 'scripts/run-core-tests.mjs'
+      - 'scripts/register-test-loader.mjs'
+      - 'scripts/typescript-test-loader.mjs'
+      - '.github/workflows/publish-sdk.yml'
 
 concurrency:
   group: sdk-${{ github.ref }}
@@ -40,6 +36,12 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    outputs:
+      reused: ${{ steps.scope.outputs.run == 'false' }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      version: ${{ steps.pack.outputs.version }}
+      source_sha: ${{ steps.pack.outputs.source_sha }}
+      build_attempt: ${{ steps.pack.outputs.build_attempt }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -67,11 +69,97 @@ jobs:
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
       - run: pnpm --filter @noir-wallet/sdk build
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
-      - run: pnpm --filter @noir-wallet/sdk --if-present test
+      - run: pnpm --filter @noir-wallet/sdk test
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
       - run: pnpm --filter @noir-wallet/example type-check
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
       - run: pnpm --filter @noir-wallet/example build
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
-      - run: pnpm --filter @noir-wallet/sdk pack:dry
+      - name: Pack checked SDK
+        id: pack
+        run: node scripts/sdk-release.mjs pack-check sdk-artifact
         if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
+      - name: Check exact packed SDK
+        if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: artifact
+        if: github.event_name == 'push' || steps.scope.outputs.run == 'true'
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}
+          path: sdk-artifact/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+
+  dry-run:
+    name: Exercise npm staging without publishing
+    needs: verify
+    if: needs.verify.outputs.artifact_id != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact_id }}
+          path: sdk-artifact
+      - name: Validate exact checked artifact
+        env:
+          SDK_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          SDK_RUN_ID: ${{ github.run_id }}
+          SDK_RUN_ATTEMPT: ${{ needs.verify.outputs.build_attempt }}
+          SDK_VERSION: ${{ needs.verify.outputs.version }}
+          SDK_ARTIFACT_MODE: check
+        run: node scripts/sdk-release.mjs validate sdk-artifact
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install pinned npm CLI
+        run: |
+          npm install --global npm@11.21.1 --ignore-scripts
+          test "$(npm --version)" = 11.21.1
+      - name: Exercise npm staging locally
+        id: rehearsal
+        env:
+          SDK_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          SDK_RUN_ID: ${{ github.run_id }}
+          SDK_RUN_ATTEMPT: ${{ needs.verify.outputs.build_attempt }}
+          SDK_VERSION: ${{ needs.verify.outputs.version }}
+          SDK_ARTIFACT_MODE: check
+        run: node scripts/sdk-release.mjs dry-run sdk-artifact
+      - name: Check the same tarball as an installed consumer
+        env:
+          TARBALL: ${{ steps.rehearsal.outputs.tarball }}
+        run: node scripts/sdk-package-check.mjs "sdk-artifact/$TARBALL"
+      - name: Record completed rehearsal
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: printf '## SDK staging rehearsal passed\n\nChecked `@noir-wallet/sdk@%s` artifact, npm CLI dry-run, and installed consumer. OIDC and npm server staging remain unverified.\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+  gate:
+    name: SDK Gate
+    needs: [verify, dry-run]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check SDK validation result
+        env:
+          SDK_VERIFY_RESULT: ${{ needs.verify.result }}
+          SDK_DRY_RUN_RESULT: ${{ needs.dry-run.result }}
+          SDK_REUSED: ${{ needs.verify.outputs.reused }}
+          SDK_ARTIFACT_ID: ${{ needs.verify.outputs.artifact_id }}
+          SDK_VERSION: ${{ needs.verify.outputs.version }}
+          SDK_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          SDK_BUILD_ATTEMPT: ${{ needs.verify.outputs.build_attempt }}
+        run: node scripts/ci-validated-scope.mjs sdk-gate
