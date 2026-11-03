@@ -150,6 +150,12 @@ export function mapTransactionGraphToActivityItem(
   privateExecutionAddresses: ReadonlySet<string> = new Set()
 ): ActivityItem {
   const graph = parseTransactionGraph(value)
+  const intent = graph.root.intent
+  const activityIntent = (() => {
+    if (intent?.protocol?.provider !== 'noir-public') return intent
+    const { protocol: _sensitiveProtocol, ...publicIntent } = intent
+    return Object.freeze(publicIntent)
+  })()
   const senderAddress = graph.root.intent?.sender?.address.toLowerCase()
   const recipientAddress = graph.root.intent?.recipient?.address.toLowerCase()
   // Wallet-originated activity belongs to the signer, even when the recipient is another owned account.
@@ -165,10 +171,10 @@ export function mapTransactionGraphToActivityItem(
     scope: graph.root.scope,
     kind: graph.root.kind,
     status: graph.root.status,
-    ...(graph.root.intent === undefined
+    ...(activityIntent === undefined
       ? {}
       : {
-          snapshot: graph.root.intent
+          snapshot: activityIntent
         }),
     segments: Object.freeze(
       graph.segments.map(segment =>

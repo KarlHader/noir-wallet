@@ -522,6 +522,16 @@ test.describe('dApp account reference cleanup', () => {
     ).toEqual([zcashOnly])
     expect(parseStoredDAppConnections({})).toEqual([])
     expect(parseStoredDAppConnections(Array.from({ length: 257 }, () => valid))).toEqual([])
+    expect(
+      parseStoredDAppConnections([
+        { ...valid, favicon: `data:image/png;base64,${'A'.repeat(128 * 1024)}` }
+      ])
+    ).toEqual([])
+    expect(
+      parseStoredDAppConnections([
+        { ...valid, favicon: `https://valid.example/${'a'.repeat(4_096)}` }
+      ])
+    ).toEqual([])
   })
 
   test('detects only validated EVM chain authorizations', () => {

@@ -179,9 +179,11 @@ export function getActivitySwapPresentation(
       : item.snapshot?.recipient?.chainId
   const sourceChain = resolveActivityChainMetadata(sourceChainId, chainMetadata)
   const destinationChain = resolveActivityChainMetadata(destinationChainId, chainMetadata)
+  const protocol = item.snapshot?.protocol
   const recipientAddress =
-    item.snapshot?.protocol?.destination.recipient ??
-    (item.source === 'zcash-v1' ? item.snapshot?.recipient?.address : undefined)
+    (protocol && protocol.provider !== 'noir-public'
+      ? protocol.destination.recipient
+      : undefined) ?? (item.source === 'zcash-v1' ? item.snapshot?.recipient?.address : undefined)
   const senderAddress = item.snapshot?.sender?.address
   const sourceAccountMode = senderAddress
     ? executionAddressModes.get(senderAddress.toLowerCase())
@@ -601,6 +603,11 @@ export function getActivityProgressSteps(
   chainName: (chainId: string) => string
 ): readonly TransactionProgressStep[] {
   const origin = item.segments.find(segment => segment.role === 'origin')
+  const isPublicExecution =
+    item.kind === 'contract-call' &&
+    origin?.target.kind === 'protocol' &&
+    origin.target.provider === 'noir-public' &&
+    item.segments.some(segment => segment.role === 'destination')
   return item.segments
     .filter(
       segment =>
@@ -636,7 +643,12 @@ export function getActivityProgressSteps(
               : 'pending'
       return {
         id: segment.id,
-        label: getActivitySegmentLabel(segment),
+        label:
+          isPublicExecution && segment.role === 'origin'
+            ? 'Public execution'
+            : isPublicExecution && segment.role === 'destination'
+              ? 'Rollup anchoring'
+              : getActivitySegmentLabel(segment),
         detail:
           segment.target.kind === 'onchain'
             ? chainName(segment.target.chainId)

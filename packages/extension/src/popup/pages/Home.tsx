@@ -62,6 +62,13 @@ import type { AssetPriceReadModel } from '@/core/prices'
 import { summarizePortfolioFiat } from '../components/portfolio/portfolio-prices'
 import { useActiveAccountNetworks } from '../hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '../hooks/useHomePortfolio'
+import { useNoirPublicAssets } from '../hooks/useNoirPublicAssets'
+import { NoirPublicActivationCard } from '../components/portfolio/NoirPublicActivationCard'
+import { PortfolioAssetGroupCard } from '../components/portfolio/PortfolioAssetGroupCard'
+import { buildPortfolioAssetGroups } from '../services/portfolio-presentation'
+import { appendPublicPortfolio } from '../services/noir-public-portfolio-presentation'
+import { parseAccountId } from '@/core/accounts/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
 import { useSettingsStore } from '@/store/settings-store'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { hasAttestedCredentialSession } from '@/core/wallet/credential-session-client'
@@ -215,6 +222,39 @@ export function Home() {
       ['zcash', 'evm', 'bitcoin'].includes(network.chain.family)
     ) ?? Boolean(currentAccount)
   const supportsLending = currentNetwork === 'mainnet' && !isHardwareWallet && supportsSwap
+  const publicEligible =
+    currentNetwork === 'mainnet' &&
+    storageV2Account?.walletSource.kind === 'software' &&
+    Boolean(effectiveWalletId && effectiveAccountId)
+  const publicAssets = useNoirPublicAssets(
+    publicEligible,
+    `${currentNetwork}:${effectiveWalletId ?? ''}:${effectiveAccountId ?? ''}`,
+    effectiveWalletId,
+    effectiveAccountId
+  )
+  const displayedPortfolio = useMemo(
+    () =>
+      appendPublicPortfolio(
+        multichainPortfolio,
+        publicAssets.assets,
+        effectiveWalletId && effectiveAccountId
+          ? {
+              keyDomainId: parseKeyDomainId(effectiveWalletId),
+              accountId: parseAccountId(effectiveAccountId)
+            }
+          : null
+      ),
+    [multichainPortfolio, publicAssets.assets, effectiveWalletId, effectiveAccountId]
+  )
+  const refreshDisplayedPortfolio = useCallback(
+    async (forceDiscovery?: boolean) => {
+      await Promise.all([
+        refreshPortfolio(forceDiscovery),
+        ...(publicEligible ? [publicAssets.refresh()] : [])
+      ])
+    },
+    [refreshPortfolio, publicEligible, publicAssets.refresh]
+  )
   const [activeTab, setActiveTab] = useState<'assets' | 'lending' | 'activity'>(() =>
     resolveHomeDefaultTab(location.search, supportsLending)
   )
@@ -1010,7 +1050,7 @@ export function Home() {
               <MultichainPortfolioPanel
                 walletId={effectiveWalletId}
                 accountId={effectiveAccountId}
-                model={multichainPortfolio}
+                model={displayedPortfolio}
                 status={portfolioLoadStatus}
                 prices={assetPrices}
                 priceStatus={assetPriceStatus}
@@ -1020,11 +1060,16 @@ export function Home() {
                     ? { syncProgress, currentHeight, latestHeight, etaMs }
                     : undefined
                 }
-                onRefresh={refreshPortfolio}
+                onRefresh={refreshDisplayedPortfolio}
                 onRetryPrices={refreshAssetPrices}
-                onSelectAsset={assetId =>
-                  navigate.navigate(`/asset-detail?assetId=${encodeURIComponent(assetId)}`)
-                }
+                onSelectAsset={assetId => {
+                  const asset = parseAssetId(assetId)
+                  navigate.navigate(
+                    asset.chainId === `noir:${currentNetwork}`
+                      ? `/public-asset-detail?tokenId=${encodeURIComponent(asset.reference)}`
+                      : `/asset-detail?assetId=${encodeURIComponent(assetId)}`
+                  )
+                }}
                 onManageTokens={() => navigate.navigate('/manage-tokens')}
               />
             ) : (
@@ -1112,6 +1157,33 @@ export function Home() {
                   ))}
                 </div>
               </>
+            )}
+            {!multichainPortfolioEnabled && publicAssets.account?.status === 'active' && (
+              <div className="space-y-2 py-2">
+                {buildPortfolioAssetGroups(displayedPortfolio?.chains ?? [], null).map(group => (
+                  <PortfolioAssetGroupCard
+                    key={group.key}
+                    group={group}
+                    prices={null}
+                    balancesHidden={balancesHidden}
+                    expanded={false}
+                    directAsset
+                    onSelectAsset={assetId =>
+                      navigate.navigate(
+                        `/public-asset-detail?tokenId=${encodeURIComponent(parseAssetId(assetId).reference)}`
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            )}
+            {publicEligible && (
+              <NoirPublicActivationCard
+                account={publicAssets.account}
+                status={publicAssets.status}
+                error={publicAssets.error}
+                onRefresh={publicAssets.refresh}
+              />
             )}
           </TabsContent>
 

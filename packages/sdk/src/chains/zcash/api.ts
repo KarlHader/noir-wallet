@@ -14,7 +14,11 @@ import type {
   SigningMode,
   LendingMcaStatus,
   Network,
-  TransactionHistoryEntry
+  TransactionHistoryEntry,
+  PublicAccount,
+  PublicAssets,
+  PublicTransaction,
+  SendPublicTransactionParams
 } from './types'
 
 /** High-level Zcash SDK client built on top of the injected request provider. */
@@ -143,6 +147,36 @@ export class ZcashClient {
     return this.provider.request({ method: 'zcash_getTransactionHistory' })
   }
 
+  async getPublicAccount(): Promise<PublicAccount> {
+    return this.provider.request({ method: 'zcash_getPublicAccount' })
+  }
+
+  /** Authorize Public access independently of the native Zcash connection. */
+  async connectPublic(): Promise<PublicAccount> {
+    return this.provider.request({ method: 'zcash_requestPublicAccount' })
+  }
+
+  /** Revoke only this site's Public authorization. */
+  async disconnectPublic(): Promise<void> {
+    await this.provider.request({ method: 'zcash_disconnectPublic' })
+  }
+
+  async activatePublicAccount(): Promise<PublicAccount> {
+    return this.provider.request({ method: 'zcash_activatePublicAccount' })
+  }
+
+  async getPublicAssets(): Promise<PublicAssets> {
+    return this.provider.request({ method: 'zcash_getPublicAssets' })
+  }
+
+  async sendPublicTransaction(params: SendPublicTransactionParams): Promise<PublicTransaction> {
+    return this.provider.request({ method: 'zcash_sendPublicTransaction', params: [params] })
+  }
+
+  async getPublicTransaction(operationId: string): Promise<PublicTransaction | null> {
+    return this.provider.request({ method: 'zcash_getPublicTransaction', params: [operationId] })
+  }
+
   /** @deprecated Global network mode is controlled in Noir Wallet settings. */
   async switchNetwork(_network: Network): Promise<never> {
     throw new Error(
@@ -158,10 +192,17 @@ export class ZcashClient {
     await this.provider.request({ method: 'zcash_disconnect' })
   }
 
+  on(event: 'publicAccountChanged', handler: (account: PublicAccount | null) => void): void
+  on(event: string, handler: (...args: any[]) => void): void
   on(event: string, handler: (...args: any[]) => void): void {
     this.provider.on(event, handler)
   }
 
+  removeListener(
+    event: 'publicAccountChanged',
+    handler: (account: PublicAccount | null) => void
+  ): void
+  removeListener(event: string, handler: (...args: any[]) => void): void
   removeListener(event: string, handler: (...args: any[]) => void): void {
     this.provider.removeListener?.(event, handler)
   }

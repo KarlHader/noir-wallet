@@ -30,8 +30,9 @@ import {
   getExampleChainIconUrl
 } from './evm-network-catalog'
 import './App.css'
+import { PublicDemo } from './noir-protocol/public/PublicDemo'
 
-type TabId = 'overview' | 'send' | 'signing' | 'tools' | 'batch' | 'history'
+type TabId = 'overview' | 'send' | 'public' | 'signing' | 'tools' | 'batch' | 'history'
 
 const SIGNING_MODES: { id: SigningMode; label: string }[] = [
   { id: 'current', label: 'Current' },
@@ -733,6 +734,7 @@ function App() {
   const tabs: { id: TabId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'send', label: 'Send' },
+    { id: 'public', label: 'Public' },
     { id: 'signing', label: 'Sign & Verify' },
     { id: 'tools', label: 'Tools' },
     { id: 'batch', label: 'Batch' },
@@ -760,7 +762,7 @@ function App() {
       <header className="header">
         <div className="header-content">
           <div className="logo">
-            <a href="/" className="logo-link">
+            <a href={import.meta.env.BASE_URL} className="logo-link">
               <img
                 src={`${import.meta.env.BASE_URL}logo.png`}
                 alt="Noir Wallet"
@@ -789,6 +791,9 @@ function App() {
             <p className="eyebrow">Noir Wallet developer tools</p>
             <h1>Multichain SDK Playground</h1>
           </div>
+          <a className="btn btn-secondary btn-xs" href="#noir-public">
+            Noir Protocol demo
+          </a>
         </section>
         <ProviderSwitcher {...exampleNavigation} />
         {error && <div className="message error">{error}</div>}
@@ -801,7 +806,28 @@ function App() {
           </div>
         )}
 
-        {isInstalled && !connected && (
+        {isInstalled && (
+          <nav className="tab-nav">
+            {tabs
+              .filter(tab => connected || tab.id === 'overview' || tab.id === 'public')
+              .map(tab => (
+                <button
+                  key={tab.id}
+                  className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            {connected && (
+              <button className="btn btn-danger btn-xs tab-disconnect" onClick={disconnect}>
+                Disconnect
+              </button>
+            )}
+          </nav>
+        )}
+
+        {isInstalled && !connected && activeTab !== 'public' && (
           <div className="card connect-section">
             <ExampleChainIcon
               className="empty-state-icon"
@@ -823,23 +849,12 @@ function App() {
           </div>
         )}
 
+        {isInstalled && activeTab === 'public' && noirWallet && (
+          <PublicDemo client={noirWallet.zcash} walletVersion={noirWallet.version} />
+        )}
+
         {connected && (
           <>
-            <nav className="tab-nav">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-              <button className="btn btn-danger btn-xs tab-disconnect" onClick={disconnect}>
-                Disconnect
-              </button>
-            </nav>
-
             {activeTab === 'overview' && (
               <div className="tab-panel grid-2">
                 <div className="card card-compact">

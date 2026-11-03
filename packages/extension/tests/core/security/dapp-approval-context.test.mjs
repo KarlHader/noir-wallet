@@ -46,6 +46,20 @@ test('approval context expires on account, network, authorization, lock or reque
     ),
     false
   )
+  assert.equal(
+    approvalContextMatches(approval({ action: 'publicConnect', accountAuthorized: false })),
+    true
+  )
+  assert.equal(
+    approvalContextMatches(
+      approval({
+        action: 'publicConnect',
+        accountAuthorized: false,
+        currentAuthorizationRevision: 5
+      })
+    ),
+    false
+  )
 })
 
 test('all message signing modes bind their primary signature to the reviewed HD account', async () => {

@@ -7,8 +7,17 @@ import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { pendingRequestsManager, type PendingRequest } from './pending-requests'
 import { approvalContextMatches } from './approval-context-policy'
+import { credentialSession } from './credential-session'
 
-const ZCASH_ACTIONS = new Set(['connect', 'sendTransaction', 'signMessage', 'shieldFunds'])
+const ZCASH_ACTIONS = new Set([
+  'connect',
+  'sendTransaction',
+  'signMessage',
+  'shieldFunds',
+  'publicConnect',
+  'publicActivate',
+  'publicTransaction'
+])
 
 export async function getApprovalContext(requestId: string): Promise<PendingRequest> {
   const request = pendingRequestsManager.get(requestId)
@@ -17,11 +26,23 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
 
   await rehydrateWalletStore()
   const authorization = await dappManager.getAuthorization(request.origin)
+  const publicAuthorization = await dappManager.getPublicAuthorization(request.origin)
+  const isPublic = ['publicConnect', 'publicActivate', 'publicTransaction'].includes(request.action)
+  const publicLocked = isPublic && !(await credentialSession.hasUnlockSession())
   const state = useWalletStore.getState()
   const wallet = state.getWallet(request.walletId)
-  const accountAuthorized = authorization.accounts.some(
-    account => account.walletId === request.walletId && account.accountId === request.accountId
-  )
+  const internalPublicActivation =
+    request.action === 'publicActivate' &&
+    request.origin === `chrome-extension://${chrome.runtime.id}`
+  const accountAuthorized =
+    internalPublicActivation ||
+    (isPublic
+      ? publicAuthorization.binding?.walletId === request.walletId &&
+        publicAuthorization.binding.accountId === request.accountId
+      : authorization.accounts.some(
+          account =>
+            account.walletId === request.walletId && account.accountId === request.accountId
+        ))
   if (
     !approvalContextMatches({
       action: request.action,
@@ -32,10 +53,13 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
       currentWalletId: state.currentWalletId,
       currentAccountId: state.currentAccountId,
       accountExists: !!state.getAccount(request.walletId, request.accountId),
-      locked:
-        !isZcashHardwareKeySource(wallet?.keySource) && backgroundZcashWalletRuntime.isLocked(),
+      locked: isPublic
+        ? publicLocked
+        : !isZcashHardwareKeySource(wallet?.keySource) && backgroundZcashWalletRuntime.isLocked(),
       authorizationRevision: request.authorizationRevision,
-      currentAuthorizationRevision: authorization.revision,
+      currentAuthorizationRevision: isPublic
+        ? publicAuthorization.revision
+        : authorization.revision,
       accountAuthorized,
       requestStillPending: pendingRequestsManager.get(requestId) === request
     })

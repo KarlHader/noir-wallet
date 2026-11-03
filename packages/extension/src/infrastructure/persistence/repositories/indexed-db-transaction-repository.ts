@@ -213,6 +213,9 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
                 throw new Error('Persisted transaction Account index mismatch')
               }
               if (query.statuses && !query.statuses.has(graph.root.status)) return false
+              if (query.provider && graph.root.intent?.protocol?.provider !== query.provider) {
+                return false
+              }
               return (
                 query.chainId === undefined ||
                 graph.segments.some(

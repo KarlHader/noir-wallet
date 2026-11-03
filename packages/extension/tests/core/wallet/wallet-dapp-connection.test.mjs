@@ -5,10 +5,17 @@ import { AccountContextTransitionCoordinator } from '../../../src/background/acc
 
 const evmChainId = 'eip155:1'
 const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+const publicChainId = 'noir:mainnet'
 const previous = { walletId: 'wallet:previous', accountId: 'account:previous' }
 const current = { walletId: 'wallet:current', accountId: 'account:current' }
 
-function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = false } = {}) {
+function fixture({
+  chains = [evmChainId],
+  evm = true,
+  zcash = false,
+  publicGrant = false,
+  caip25 = false
+} = {}) {
   const transition = new AccountContextTransitionCoordinator()
   let active = { reference: current, chainIds: chains }
   let failZcash = false
@@ -21,9 +28,10 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
     favicon: '',
     connectedAt: 1,
     lastActiveAt: 1,
-    ...(evm
-      ? { chainAuthorizations: [{ chainId: evmChainId, accounts: [previous], binding: previous }] }
-      : {}),
+    chainAuthorizations: [
+      ...(evm ? [{ chainId: evmChainId, accounts: [previous], binding: previous }] : []),
+      ...(publicGrant ? [{ chainId: publicChainId, accounts: [previous], binding: previous }] : [])
+    ],
     ...(zcash
       ? {
           authorizedAccounts: [previous],
@@ -41,8 +49,9 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
     getZcashChainId: () => zcashChainId,
     connectEvm: async () => {
       calls.push('evm')
-      dapp.chainAuthorizations[0].accounts = [previous, active.reference]
-      dapp.chainAuthorizations[0].binding = active.reference
+      const authorization = dapp.chainAuthorizations.find(item => item.chainId === evmChainId)
+      authorization.accounts = [previous, active.reference]
+      authorization.binding = active.reference
     },
     connectZcash: async () => {
       calls.push('zcash')
@@ -50,6 +59,12 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
       dapp.authorizedAccounts = [previous, active.reference]
       dapp.boundWalletId = active.reference.walletId
       dapp.boundAccountId = active.reference.accountId
+    },
+    connectPublic: async () => {
+      calls.push('public')
+      const authorization = dapp.chainAuthorizations.find(item => item.chainId === publicChainId)
+      authorization.accounts = [active.reference]
+      authorization.binding = active.reference
     },
     runActiveOperation: operation => transition.runActiveOperation(operation)
   })
@@ -94,6 +109,58 @@ test('a Zcash-only account is not routed into a sites existing EVM grant', async
   assert.deepEqual(state.calls, ['zcash'])
   assert.deepEqual(state.dapp.chainAuthorizations[0].accounts, [previous])
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+})
+
+test('Public-only Connect updates the Public grant without creating Native Zcash permission', async () => {
+  const state = fixture({ chains: [zcashChainId], evm: false, publicGrant: true })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, ['public'])
+  assert.equal(state.dapp.authorizedAccounts, undefined)
+  assert.equal(state.dapp.boundWalletId, undefined)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+})
+
+test('Native and Public grants both follow their own account scope', async () => {
+  const state = fixture({ chains: [zcashChainId], evm: false, zcash: true, publicGrant: true })
+  state.dapp.authorizedAccounts = [current]
+  state.dapp.boundWalletId = current.walletId
+  state.dapp.boundAccountId = current.accountId
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, ['zcash', 'public'])
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+})
+
+test('wallet connection callbacks can acquire the account-transition lock after approval', async () => {
+  const transition = new AccountContextTransitionCoordinator()
+  const dapp = {
+    origin: 'https://public.example',
+    chainAuthorizations: [{ chainId: publicChainId, accounts: [previous], binding: previous }]
+  }
+  let committed = false
+  const coordinator = new WalletDAppConnectionCoordinator({
+    getCurrentTabDApp: async () => dapp,
+    getConnection: async () => dapp,
+    loadActiveAccount: async () => ({ reference: current, chainIds: [zcashChainId] }),
+    getEvmChainId: () => evmChainId,
+    getZcashChainId: () => zcashChainId,
+    connectEvm: async () => {},
+    connectZcash: async () => {},
+    connectPublic: async () => {
+      await transition.runActiveOperation(async () => {
+        committed = true
+      })
+    },
+    runActiveOperation: operation => transition.runActiveOperation(operation)
+  })
+  await Promise.race([
+    coordinator.connectCurrentAccount(dapp.origin),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Connection lock deadlocked')), 1000)
+    )
+  ])
+  assert.equal(committed, true)
 })
 
 test('a native EVM account does not acquire a sites legacy Zcash grant', async () => {

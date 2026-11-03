@@ -37,6 +37,7 @@ export interface DAppChainAuthorization {
 
 const STORAGE_KEY = 'connectedDApps'
 const AUTHORIZATION_KEY = 'dapp_authorization_state'
+const PUBLIC_CHAIN_ID = 'noir:mainnet'
 const MAX_CONNECTED_DAPPS = 256
 const MAX_AUTHORIZED_ACCOUNTS = 100
 const MAX_ACCOUNT_REF_LENGTH = 256
@@ -44,7 +45,8 @@ const MAX_CONNECTION_TEXT_LENGTH = 2_048
 
 interface AuthorizationState {
   readonly revision: number
-  readonly mode: 'approved' | 'revoked'
+  readonly mode?: 'approved' | 'revoked'
+  readonly publicExplicit?: true
 }
 
 function parseAuthorizationState(value: unknown): Record<string, AuthorizationState> {
@@ -57,14 +59,21 @@ function parseAuthorizationState(value: unknown): Record<string, AuthorizationSt
     parseHttpOrigin(origin)
     if (
       !isRecord(state) ||
-      Object.keys(state).some(key => key !== 'revision' && key !== 'mode') ||
+      Object.keys(state).some(
+        key => key !== 'revision' && key !== 'mode' && key !== 'publicExplicit'
+      ) ||
       !Number.isSafeInteger(state.revision) ||
       (state.revision as number) < 0 ||
-      (state.mode !== 'approved' && state.mode !== 'revoked')
+      (state.mode !== undefined && state.mode !== 'approved' && state.mode !== 'revoked') ||
+      (state.publicExplicit !== undefined && state.publicExplicit !== true)
     ) {
       throw new Error('Invalid stored dApp authorization state')
     }
-    states[origin] = { revision: state.revision as number, mode: state.mode }
+    states[origin] = {
+      revision: state.revision as number,
+      ...(state.mode === undefined ? {} : { mode: state.mode }),
+      ...(state.publicExplicit === true ? { publicExplicit: true } : {})
+    }
   }
   return states
 }
@@ -134,7 +143,8 @@ function normalizeDAppChainId(value: string): string {
     chain.namespace !== 'eip155' &&
     !BITCOIN_DAPP_CHAIN_IDS.has(chain.id) &&
     !ZCASH_DAPP_CHAIN_IDS.has(chain.id) &&
-    !RELEASED_NATIVE_DAPP_CHAIN_IDS.has(chain.id)
+    !RELEASED_NATIVE_DAPP_CHAIN_IDS.has(chain.id) &&
+    chain.id !== PUBLIC_CHAIN_ID
   ) {
     throw new Error('dApp chain authorization requires a released provider chain')
   }
@@ -309,7 +319,11 @@ export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
     origin,
     favicon: parseStoredText(value.favicon, 'favicon', {
       allowEmpty: true,
-      maximumLength: 4_096
+      // Match the bounded image metadata accepted by the provider bridge.
+      maximumLength:
+        typeof value.favicon === 'string' && value.favicon.startsWith('data:image/')
+          ? 128 * 1024
+          : 4_096
     }),
     connectedAt,
     lastActiveAt,
@@ -792,12 +806,13 @@ export class DAppManager {
     accounts: AccountRef[],
     binding: AccountRef,
     authorization?: { readonly automatic?: boolean; readonly expectedRevision?: number }
-  ): Promise<void> {
+  ): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()
       const state = this.authorizationState[origin]
       if (
-        (authorization?.automatic && state !== undefined) ||
+        (authorization?.automatic &&
+          (state?.mode !== undefined || state?.publicExplicit === true)) ||
         (authorization?.expectedRevision !== undefined &&
           authorization.expectedRevision !== (state?.revision ?? 0))
       ) {
@@ -818,9 +833,14 @@ export class DAppManager {
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
       if (!authorization?.automatic) {
-        states[origin] = { revision: state?.revision ?? 0, mode: 'approved' }
+        states[origin] = {
+          ...state,
+          revision: this.nextRevision(origin),
+          mode: 'approved'
+        }
       }
       await this.commitConnections(next, states)
+      return states[origin]?.revision ?? 0
     })
   }
 
@@ -838,9 +858,87 @@ export class DAppManager {
     return (await this.getAuthorization(origin)).revision
   }
 
+  async getPublicAuthorization(
+    origin: string
+  ): Promise<{ revision: number; binding: AccountRef | null }> {
+    await this.waitForStableState()
+    const connection = this.connectedDApps.get(origin)
+    const authorization = connection && getConnectionChainAuthorization(connection, PUBLIC_CHAIN_ID)
+    return {
+      revision: this.authorizationState[origin]?.revision ?? 0,
+      binding: authorization?.binding ?? null
+    }
+  }
+
+  async setPublicAuthorizedAccount(
+    origin: string,
+    tabInfo: { title?: string; favIconUrl?: string },
+    binding: AccountRef,
+    expectedRevision: number
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const current = this.authorizationState[origin]
+      if (
+        !Number.isSafeInteger(expectedRevision) ||
+        expectedRevision < 0 ||
+        expectedRevision !== (current?.revision ?? 0)
+      ) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      const existing = this.connectedDApps.get(origin)
+      this.assertConnectionCapacity(existing)
+      const replacement = replaceDAppChainAuthorization(existing, {
+        origin,
+        id: this.generateId(),
+        title: tabInfo.title,
+        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
+        chainId: PUBLIC_CHAIN_ID,
+        accounts: [binding],
+        binding,
+        now: Date.now()
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, replacement)
+      const states = this.advancePublicRevisions([origin])
+      await this.commitConnections(next, states)
+      return states[origin].revision
+    })
+  }
+
+  async removePublicAuthorization(origin: string): Promise<number> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      const next = new Map(this.connectedDApps)
+      if (existing) {
+        const remaining = normalizeChainAuthorizations(existing.chainAuthorizations).filter(
+          item => item.chainId !== PUBLIC_CHAIN_ID
+        )
+        if (remaining.length === 0 && getConnectionAccountRefs(existing).length === 0) {
+          next.delete(origin)
+        } else {
+          next.set(origin, {
+            ...existing,
+            chainAuthorizations: remaining.length === 0 ? undefined : remaining,
+            caip25Session: retainSessionScopes(
+              existing.caip25Session,
+              new Set(remaining.map(item => item.chainId))
+            ),
+            lastActiveAt: nextActivityTime(existing)
+          })
+        }
+      }
+      const states = this.advancePublicRevisions([origin])
+      await this.commitConnections(next, states)
+      return states[origin].revision
+    })
+  }
+
   async canAutoConnect(origin: string): Promise<boolean> {
     await this.waitForStableState()
-    return this.authorizationState[origin] === undefined
+    const state = this.authorizationState[origin]
+    return state?.mode === undefined && state?.publicExplicit !== true
   }
 
   async isRevoked(origin: string): Promise<boolean> {
@@ -860,6 +958,9 @@ export class DAppManager {
     accounts: AccountRef[],
     binding: AccountRef
   ): Promise<void> {
+    if (normalizeDAppChainId(chainId) === PUBLIC_CHAIN_ID) {
+      throw new Error('Public authorization requires a reviewed revision')
+    }
     return this.enqueueMutation(async () => {
       await this.initialize()
       const existing = this.connectedDApps.get(origin)
@@ -877,8 +978,12 @@ export class DAppManager {
       const next = new Map(this.connectedDApps)
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
-      if (ZCASH_DAPP_CHAIN_IDS.has(normalizeDAppChainId(chainId))) {
-        states[origin] = { revision: states[origin]?.revision ?? 0, mode: 'approved' }
+      states[origin] = {
+        ...states[origin],
+        revision: this.nextRevision(origin),
+        ...(ZCASH_DAPP_CHAIN_IDS.has(normalizeDAppChainId(chainId))
+          ? { mode: 'approved' as const }
+          : {})
       }
       await this.commitConnections(next, states)
     })
@@ -911,6 +1016,11 @@ export class DAppManager {
       const accounts = authorization.accounts.some(ref => accountRefsEqual(ref, account))
         ? authorization.accounts
         : [...authorization.accounts, account]
+      if (
+        accounts.length === authorization.accounts.length &&
+        accountRefsEqual(authorization.binding, account)
+      )
+        return
       const next = new Map(this.connectedDApps)
       next.set(
         origin,
@@ -923,7 +1033,7 @@ export class DAppManager {
           now: Date.now()
         })
       )
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -956,7 +1066,7 @@ export class DAppManager {
           now: Date.now()
         })
       )
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -968,10 +1078,25 @@ export class DAppManager {
     zcashAuthorization?: {
       readonly accounts: readonly AccountRef[]
       readonly binding: AccountRef
-    }
-  ): Promise<void> {
+    },
+    expectedRevision?: number
+  ): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()
+      if (
+        expectedRevision !== undefined &&
+        (!Number.isSafeInteger(expectedRevision) ||
+          expectedRevision < 0 ||
+          expectedRevision !== (this.authorizationState[origin]?.revision ?? 0))
+      ) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      if (
+        authorizations.some(item => item.chainId === PUBLIC_CHAIN_ID) ||
+        session.scopes.some(scope => scope.chainId === PUBLIC_CHAIN_ID)
+      ) {
+        throw new Error('Public authorization requires a reviewed revision')
+      }
       const existing = this.connectedDApps.get(origin)
       this.assertConnectionCapacity(existing)
       const replacement = replaceDAppCaip25Session(existing, {
@@ -987,10 +1112,13 @@ export class DAppManager {
       const next = new Map(this.connectedDApps)
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
-      if (zcashAuthorization !== undefined) {
-        states[origin] = { revision: states[origin]?.revision ?? 0, mode: 'approved' }
+      states[origin] = {
+        ...states[origin],
+        revision: this.nextRevision(origin),
+        ...(zcashAuthorization === undefined ? {} : { mode: 'approved' as const })
       }
       await this.commitConnections(next, states)
+      return states[origin].revision
     })
   }
 
@@ -1005,9 +1133,9 @@ export class DAppManager {
       const dapp = this.connectedDApps.get(origin)
       if (!dapp) return
       const chainId = normalizeDAppChainId(chainIdValue)
-      const remaining = normalizeChainAuthorizations(dapp.chainAuthorizations).filter(
-        item => item.chainId !== chainId
-      )
+      const authorizations = normalizeChainAuthorizations(dapp.chainAuthorizations)
+      const remaining = authorizations.filter(item => item.chainId !== chainId)
+      if (remaining.length === authorizations.length) return
       const next = new Map(this.connectedDApps)
       if (remaining.length === 0 && getConnectionAccountRefs(dapp).length === 0) {
         next.delete(origin)
@@ -1022,7 +1150,12 @@ export class DAppManager {
           lastActiveAt: nextActivityTime(dapp)
         })
       }
-      await this.commitConnections(next)
+      await this.commitConnections(
+        next,
+        chainId === PUBLIC_CHAIN_ID
+          ? this.advancePublicRevisions([origin])
+          : this.advanceRevisions([origin])
+      )
     })
   }
 
@@ -1038,16 +1171,15 @@ export class DAppManager {
       if (!dapp) return
 
       const refs = getConnectionAccountRefs(dapp)
-      if (!refs.some(a => a.walletId === account.walletId && a.accountId === account.accountId)) {
-        refs.push(account)
-      }
+      if (refs.some(a => accountRefsEqual(a, account))) return
+      refs.push(account)
       const next = new Map(this.connectedDApps)
       next.set(origin, {
         ...dapp,
         authorizedAccounts: refs,
         lastActiveAt: nextActivityTime(dapp)
       })
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -1062,6 +1194,9 @@ export class DAppManager {
       if (!connectionAuthorizesAccount(dapp, binding)) {
         throw new Error('Cannot bind a dApp connection to an unauthorized Account')
       }
+      if (dapp.boundWalletId === binding.walletId && dapp.boundAccountId === binding.accountId) {
+        return
+      }
       const next = new Map(this.connectedDApps)
       next.set(origin, {
         ...dapp,
@@ -1069,7 +1204,7 @@ export class DAppManager {
         boundAccountId: binding.accountId,
         lastActiveAt: nextActivityTime(dapp)
       })
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -1122,7 +1257,8 @@ export class DAppManager {
         ...(accountId === undefined ? {} : { accountId })
       })
       await this.commitConnections(
-        new Map(result.connections.map(connection => [connection.origin, connection]))
+        new Map(result.connections.map(connection => [connection.origin, connection])),
+        this.advanceRevisions(result.affectedOrigins)
       )
       return result
     })
@@ -1143,7 +1279,8 @@ export class DAppManager {
         chainIds
       )
       await this.commitConnections(
-        new Map(result.connections.map(connection => [connection.origin, connection]))
+        new Map(result.connections.map(connection => [connection.origin, connection])),
+        this.advanceRevisions(result.affectedOrigins)
       )
       return result
     })
@@ -1252,10 +1389,31 @@ export class DAppManager {
   private revokeOrigins(origins: readonly string[]): Record<string, AuthorizationState> {
     const states = { ...this.authorizationState }
     for (const origin of origins) {
-      const revision = states[origin]?.revision ?? 0
-      if (revision >= Number.MAX_SAFE_INTEGER)
-        throw new Error('Site authorization revision exhausted')
-      states[origin] = { revision: revision + 1, mode: 'revoked' }
+      states[origin] = { ...states[origin], revision: this.nextRevision(origin), mode: 'revoked' }
+    }
+    return states
+  }
+
+  private nextRevision(origin: string): number {
+    const revision = this.authorizationState[origin]?.revision ?? 0
+    if (revision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Site authorization revision exhausted')
+    }
+    return revision + 1
+  }
+
+  private advanceRevisions(origins: readonly string[]): Record<string, AuthorizationState> {
+    const states = { ...this.authorizationState }
+    for (const origin of origins) {
+      states[origin] = { ...states[origin], revision: this.nextRevision(origin) }
+    }
+    return states
+  }
+
+  private advancePublicRevisions(origins: readonly string[]): Record<string, AuthorizationState> {
+    const states = this.advanceRevisions(origins)
+    for (const origin of origins) {
+      states[origin] = { ...states[origin], publicExplicit: true }
     }
     return states
   }

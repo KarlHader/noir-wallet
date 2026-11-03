@@ -90,6 +90,103 @@ test('disconnection and request rejection reach callers unchanged', async () => 
   await assert.rejects(api.getBalance(), error => error === rejected)
 })
 
+test('Public Zcash methods preserve request IDs and positional wire parameters', async () => {
+  const requests = []
+  const listeners = new Map()
+  const account = {
+    chain: 'zcash-l2',
+    network: 'testnet',
+    publicKey: 'public-key',
+    address: 'public-address',
+    mcaId: null,
+    parentContractId: 'parent',
+    status: 'inactive'
+  }
+  const assets = { account, assets: [] }
+  const transaction = { operationId: 'operation-1', requestId: 'request-1', status: 'signed' }
+  const api = new ZcashAPI({
+    async request(args) {
+      requests.push(args)
+      switch (args.method) {
+        case 'zcash_requestPublicAccount':
+        case 'zcash_getPublicAccount':
+        case 'zcash_activatePublicAccount':
+          return account
+        case 'zcash_disconnectPublic':
+          return undefined
+        case 'zcash_getPublicAssets':
+          return assets
+        case 'zcash_sendPublicTransaction':
+        case 'zcash_getPublicTransaction':
+          return transaction
+        default:
+          throw new Error(`Unexpected method: ${args.method}`)
+      }
+    },
+    on(event, handler) {
+      listeners.set(event, handler)
+    },
+    removeListener(event, handler) {
+      if (listeners.get(event) === handler) listeners.delete(event)
+    },
+    async disconnect() {}
+  })
+  const params = {
+    requestId: 'request-1',
+    txRequests: [
+      {
+        FunctionCall: {
+          receiver_id: 'contract',
+          function_calls: [{ method_name: 'call', args: '{}', gas: '30000000000000', deposit: '0' }]
+        }
+      }
+    ]
+  }
+
+  assert.deepEqual(await api.connectPublic(), account)
+  assert.deepEqual(await api.getPublicAccount(), account)
+  assert.deepEqual(await api.activatePublicAccount(), account)
+  assert.deepEqual(await api.getPublicAssets(), assets)
+  assert.deepEqual(await api.sendPublicTransaction(params), transaction)
+  assert.deepEqual(await api.getPublicTransaction('operation-1'), transaction)
+  let changedAccount = undefined
+  const onChanged = value => {
+    changedAccount = value
+  }
+  api.on('publicAccountChanged', onChanged)
+  listeners.get('publicAccountChanged')(null)
+  assert.equal(changedAccount, null)
+  api.removeListener('publicAccountChanged', onChanged)
+  assert.equal(listeners.has('publicAccountChanged'), false)
+  await api.disconnectPublic()
+  assert.deepEqual(requests, [
+    { method: 'zcash_requestPublicAccount' },
+    { method: 'zcash_getPublicAccount' },
+    { method: 'zcash_activatePublicAccount' },
+    { method: 'zcash_getPublicAssets' },
+    { method: 'zcash_sendPublicTransaction', params: [params] },
+    { method: 'zcash_getPublicTransaction', params: ['operation-1'] },
+    { method: 'zcash_disconnectPublic' }
+  ])
+
+  const unsupported = new Error('Unsupported Public method')
+  const unsupportedRequests = []
+  const oldProvider = new ZcashAPI({
+    async request(args) {
+      unsupportedRequests.push(args)
+      throw unsupported
+    },
+    on() {},
+    async disconnect() {}
+  })
+  await assert.rejects(oldProvider.connectPublic(), error => error === unsupported)
+  await assert.rejects(oldProvider.disconnectPublic(), error => error === unsupported)
+  assert.deepEqual(unsupportedRequests, [
+    { method: 'zcash_requestPublicAccount' },
+    { method: 'zcash_disconnectPublic' }
+  ])
+})
+
 test('npm-verified provenance must bind the signer and accepted build', async () => {
   const metadata = {
     version: '0.1.9',

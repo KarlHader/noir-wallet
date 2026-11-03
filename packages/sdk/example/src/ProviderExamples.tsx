@@ -295,7 +295,7 @@ function ExampleLayout({
       <header className="header">
         <div className="header-content">
           <div className="logo">
-            <a href="/" className="logo-link">
+            <a href={import.meta.env.BASE_URL} className="logo-link">
               <img
                 src={`${import.meta.env.BASE_URL}logo.png`}
                 alt="Noir Wallet"

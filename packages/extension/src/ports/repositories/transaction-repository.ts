@@ -4,6 +4,7 @@ import type {
   TransactionGraph,
   TransactionId,
   TransactionLifecycleStatus,
+  TransactionProtocolBinding,
   TransactionSegmentEvent,
   TransactionSegmentId
 } from '@/core/transactions/domain'
@@ -12,6 +13,7 @@ import type { ChainId } from '@/core/chains/domain'
 export interface TransactionListQuery {
   readonly scope: TransactionAccountScope
   readonly chainId?: ChainId
+  readonly provider?: TransactionProtocolBinding['provider']
   readonly statuses?: readonly TransactionLifecycleStatus[]
   readonly limit?: number
 }

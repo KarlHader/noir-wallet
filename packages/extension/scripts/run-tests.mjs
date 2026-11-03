@@ -47,6 +47,7 @@ const projects = {
     env: { APPROVAL_WINDOW_E2E: '1' }
   }),
   'protocol-mainnet': isolated('mainnet-protocol', 'chain.evm,chain.bitcoin', {
+    prepareExample: true,
     env: {
       RHEA_SWAP_ACCESS_TOKEN: 'test-rhea-access-token',
       APPROVAL_WINDOW_E2E: '1',
