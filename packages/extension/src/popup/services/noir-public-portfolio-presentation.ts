@@ -25,7 +25,7 @@ export function appendPublicPortfolio(
     id: chainId,
     family: 'zcash',
     network: { kind: result.account.network, name: result.account.network },
-    displayName: 'Zcash L2',
+    displayName: 'Zcash',
     featureFlag: ZCASH_CHAIN_FEATURE_FLAG,
     capabilities: {
       address: {

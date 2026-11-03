@@ -26,6 +26,8 @@ import {
 } from '@/core/zcash/shielding'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { ApprovalWindowLayout } from '@/popup/components/dapp/ApprovalWindowLayout'
+import { NoirPublicActivationReview } from '@/popup/components/dapp/NoirPublicActivationReview'
+import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { EvmAddNetworkDetails } from '@/popup/components/dapp/EvmAddNetworkDetails'
 import {
   ApprovalDetailCard,
@@ -710,7 +712,7 @@ export function ApprovalPage() {
         return publicConnectReview ? (
           <div className="space-y-4">
             <DAppConnectionHeader domain={dappDomain} pageUrl={dappPageUrl} />
-            <DAppNetworkCard chain="zcash" network="Zcash L2" />
+            <DAppNetworkCard chain="zcash" network="Zcash" />
             <ApprovalDetailCard title="Public account">
               <div className="space-y-2 text-xs">
                 <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
@@ -745,12 +747,10 @@ export function ApprovalPage() {
           <div className="space-y-4">
             {origin === `chrome-extension://${chrome.runtime.id}` ? (
               <div className="flex items-center gap-3">
-                <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Icon icon="lucide:layers-2" className="size-6" />
-                </span>
+                <TokenIcon symbol="ZEC" nativeChain="zcash" size={36} />
                 <div>
                   <h1 className="text-lg font-semibold">Activate Public</h1>
-                  <p className="text-xs text-muted">Zcash L2</p>
+                  <p className="text-xs text-muted">Zcash</p>
                 </div>
               </div>
             ) : (
@@ -760,41 +760,10 @@ export function ApprovalPage() {
                   pageUrl={dappPageUrl}
                   action="Activate Public"
                 />
-                <DAppNetworkCard chain="zcash" network="Zcash L2" />
+                <DAppNetworkCard chain="zcash" network="Zcash" />
               </>
             )}
-            <ApprovalDetailCard title="Activation">
-              <div className="space-y-3 text-xs">
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Account</span>
-                  <span className="max-w-[190px] break-all text-right font-mono">
-                    {publicActivationReview.account.address}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">ZEC payment</span>
-                  <span className="font-mono">{publicActivationReview.amount} ZEC</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Creation fee</span>
-                  <span className="font-mono">{publicActivationReview.creationFee} ZEC</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Public ZEC credit</span>
-                  <span className="font-mono">{publicActivationReview.expectedCredit} ZEC</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">Zcash network fee</span>
-                  <span className="font-mono">{publicActivationReview.fee} ZEC</span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-muted">To</span>
-                  <span className="max-w-[190px] break-all text-right font-mono">
-                    {publicActivationReview.depositAddress}
-                  </span>
-                </div>
-              </div>
-            </ApprovalDetailCard>
+            <NoirPublicActivationReview review={publicActivationReview} />
           </div>
         ) : (
           renderInvalidSigningRequest('The activation review is invalid or expired.', false)
@@ -808,7 +777,7 @@ export function ApprovalPage() {
               pageUrl={dappPageUrl}
               action="Review Public transaction"
             />
-            <DAppNetworkCard chain="zcash" network="Zcash L2" />
+            <DAppNetworkCard chain="zcash" network="Zcash" />
             <ApprovalDetailCard title="Public account">
               <div className="space-y-3 text-xs">
                 <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
@@ -1778,7 +1747,10 @@ export function ApprovalPage() {
             disabled={isLoading}
             size="lg"
           >
-            {isMultichainConnect || isPublicConnect || MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
+            {isMultichainConnect ||
+            isPublicConnect ||
+            isPublicActivate ||
+            MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
               ? 'Cancel'
               : 'Reject'}
           </Button>
@@ -1826,7 +1798,7 @@ export function ApprovalPage() {
                       : isBitcoinConnect
                         ? 'Connect'
                         : isPublicActivate
-                          ? 'Activate'
+                          ? 'Pay & activate'
                           : isPublicTransaction
                             ? 'Confirm'
                             : isSolanaConnect || isNearConnect

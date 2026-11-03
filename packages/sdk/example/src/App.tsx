@@ -31,6 +31,7 @@ import {
 } from './evm-network-catalog'
 import './App.css'
 import { PublicDemo } from './noir-protocol/public/PublicDemo'
+import { DemoHeader } from './DemoHeader'
 
 type TabId = 'overview' | 'send' | 'public' | 'signing' | 'tools' | 'batch' | 'history'
 
@@ -759,31 +760,18 @@ function App() {
 
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <div className="logo">
-            <a href={import.meta.env.BASE_URL} className="logo-link">
-              <img
-                src={`${import.meta.env.BASE_URL}logo.png`}
-                alt="Noir Wallet"
-                className="logo-img"
-              />
-              <span className="logo-text">
-                <span className="logo-noir">Noir </span>
-                <span className="logo-wallet">Wallet</span>
-              </span>
-            </a>
-            <span className="logo-badge">SDK Example V2</span>
-          </div>
-          <div className="header-status">
+      <DemoHeader
+        active="examples"
+        status={
+          <>
             {!isInstalled && <span className="status-badge unavailable">Not detected</span>}
             {isInstalled && !connected && (
               <span className="status-badge ready">Provider ready</span>
             )}
             {connected && <span className="status-badge connected">Connected</span>}
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="main">
         <section className="page-intro">
@@ -791,9 +779,6 @@ function App() {
             <p className="eyebrow">Noir Wallet developer tools</p>
             <h1>Multichain SDK Playground</h1>
           </div>
-          <a className="btn btn-secondary btn-xs" href="#noir-public">
-            Noir Protocol demo
-          </a>
         </section>
         <ProviderSwitcher {...exampleNavigation} />
         {error && <div className="message error">{error}</div>}

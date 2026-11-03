@@ -89,7 +89,7 @@ export function NoirPublicAssetDetail() {
             />
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold">{asset.name}</h1>
-              <p className="text-sm text-muted">{symbol} · Zcash L2 · Public</p>
+              <p className="text-sm text-muted">{symbol} · Zcash · Public</p>
             </div>
           </div>
           <p className="mt-7 break-all font-mono text-2xl font-semibold">

@@ -423,7 +423,7 @@ export function MultichainActivityPanel({
           options={[
             ...selectableAccountNetworks.map(entry => entry.chain),
             ...(hasPublicActivity
-              ? [{ id: publicChainId, family: 'zcash', displayName: 'Zcash L2' }]
+              ? [{ id: publicChainId, family: 'zcash', displayName: 'Zcash' }]
               : [])
           ]}
           selectedIds={selectedChainIds}

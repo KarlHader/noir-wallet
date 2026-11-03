@@ -3,6 +3,7 @@ import type {
   NoirPublicFunctionCallRequest
 } from '@/core/services/noir-protocol/public/types'
 import type { PublicConnectApprovalData } from '@/background/pending-requests'
+import Big from '@/lib/big'
 import {
   parsePublicFunctionCallRequests,
   readPublicAccountId,
@@ -31,6 +32,7 @@ export interface NoirPublicActivationReview {
   readonly expectedCredit: string
   readonly depositAddress: string
   readonly expiresAt: number
+  readonly totalPayment: string
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -130,5 +132,14 @@ export function parsePublicActivationReview(value: unknown): NoirPublicActivatio
     value.expiresAt <= Date.now()
   )
     return null
-  return value as unknown as NoirPublicActivationReview
+  return {
+    account: value.account,
+    amount: value.amount,
+    fee: value.fee,
+    creationFee: value.creationFee,
+    expectedCredit: value.expectedCredit,
+    depositAddress: value.depositAddress,
+    expiresAt: value.expiresAt,
+    totalPayment: new Big(value.amount).plus(value.fee).toFixed()
+  }
 }

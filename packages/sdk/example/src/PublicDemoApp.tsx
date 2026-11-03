@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getNoirWallet } from '@noir-wallet/sdk'
 import { PublicDemo } from './noir-protocol/public/PublicDemo'
+import { DemoHeader } from './DemoHeader'
 import './App.css'
 
 export function PublicDemoApp() {
@@ -14,23 +15,13 @@ export function PublicDemoApp() {
 
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <a className="logo-link" href="#">
-            Noir Wallet SDK
-          </a>
-          <span className="logo-badge">Developer demo</span>
-        </div>
-      </header>
+      <DemoHeader active="public" />
       <main className="main">
         <section className="page-intro">
           <div>
-            <p className="eyebrow">Zcash L2 / Public</p>
+            <p className="eyebrow">Zcash / Public</p>
             <h1>Noir Protocol</h1>
           </div>
-          <a className="btn btn-secondary btn-xs" href="#">
-            All examples
-          </a>
         </section>
         {wallet ? (
           <PublicDemo client={wallet.zcash} walletVersion={wallet.version} />

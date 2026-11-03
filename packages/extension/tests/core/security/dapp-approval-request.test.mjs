@@ -205,7 +205,7 @@ test.describe('dApp approval request boundary', () => {
         depositAddress: 't1address',
         expiresAt: Date.now() + 60000
       })
-    ).not.toBeNull()
+    ).toMatchObject({ totalPayment: '0.011' })
     expect(
       parsePublicActivationReview({
         account: { ...account, status: 'inactive' },

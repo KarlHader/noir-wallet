@@ -5,6 +5,8 @@ import Big from '@/lib/big'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
+import { parseChainId } from '@/core/chains/registry'
+import { networkDisplayId } from './chain-selection-availability'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
 
@@ -26,6 +28,51 @@ export interface PortfolioAssetGroup {
 export interface PortfolioAccountBalanceBreakdown {
   readonly main: Big
   readonly privateBalance: Big
+}
+
+export function isPublicPortfolioAsset(asset: PortfolioAssetView): boolean {
+  return asset.source === 'protocol' && /^noir:(mainnet|testnet)$/.test(asset.asset.chainId)
+}
+
+export function getPortfolioAssetNetworkLabel(entry: PortfolioAssetGroupEntry): string {
+  return isPublicPortfolioAsset(entry.asset)
+    ? `${entry.chain.chain.displayName} · Public`
+    : entry.chain.chain.displayName
+}
+
+export function groupPortfolioDisplayChains(
+  chains: readonly PortfolioChainView[]
+): readonly PortfolioChainView[] {
+  const groups = new Map<string, PortfolioChainView>()
+  for (const entry of chains) {
+    const id = networkDisplayId(entry.chain.id)
+    const existing = groups.get(id)
+    if (!existing) {
+      groups.set(
+        id,
+        id === entry.chain.id
+          ? entry
+          : { ...entry, chain: { ...entry.chain, id: parseChainId(id).id } }
+      )
+      continue
+    }
+    const base = entry.chain.id === id ? entry : existing
+    const assets = [...existing.assets, ...entry.assets]
+    groups.set(id, {
+      ...base,
+      chain: { ...base.chain, id: parseChainId(id).id },
+      // Group only for display; asset IDs and their execution sources stay intact.
+      assets,
+      status:
+        entry.status === 'ready' && existing.status === 'ready'
+          ? 'ready'
+          : assets.length
+            ? 'partial'
+            : 'error',
+      errorCodes: [...new Set([...existing.errorCodes, ...entry.errorCodes])]
+    })
+  }
+  return [...groups.values()]
 }
 
 export function getPortfolioChainBalanceStatus(

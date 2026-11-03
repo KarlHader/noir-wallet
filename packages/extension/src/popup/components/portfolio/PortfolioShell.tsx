@@ -23,6 +23,7 @@ import {
   buildPortfolioAssetGroups,
   getPortfolioChainUsdValue,
   getPortfolioChainBalanceStatus,
+  groupPortfolioDisplayChains,
   partitionPortfolioAssetGroups,
   partitionPortfolioAssets,
   sortPortfolioAssets,
@@ -214,7 +215,7 @@ export function PortfolioShell({
     [assetGroups, lowValueUsdThreshold, prices]
   )
   const sortedChains = useMemo(
-    () => sortPortfolioChains(visibleChains, prices),
+    () => sortPortfolioChains(groupPortfolioDisplayChains(visibleChains), prices),
     [prices, visibleChains]
   )
   const sortedNetworkOptions = useMemo(

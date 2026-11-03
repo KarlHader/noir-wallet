@@ -286,7 +286,7 @@ test('reads an inactive Public account without paying for activation in real MV3
   await expect(dapp.getByTestId('public-status')).toHaveText('inactive')
   await expect(dapp.getByRole('button', { name: 'Activate public account' })).toBeEnabled()
   await popup.getByRole('tab', { name: 'Assets' }).click()
-  const publicAssets = popup.getByRole('region', { name: 'Zcash L2 activation' })
+  const publicAssets = popup.getByRole('region', { name: 'Zcash activation' })
   await expect(publicAssets.getByRole('button', { name: 'Activate Public' })).toBeVisible()
   await publicAssets.scrollIntoViewIfNeeded()
   await capturePublicScreenshot(popup, 'public-02-inactive-account.png')
@@ -707,21 +707,30 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
   const publicAssets = popup.getByRole('region', { name: 'Portfolio', exact: true })
   await expect(publicAssets).toBeVisible()
   await publicAssets
-    .getByRole('button', { name: 'View NEAR details on Zcash L2', exact: true })
+    .getByRole('button', { name: 'View NEAR details on Zcash · Public', exact: true })
     .scrollIntoViewIfNeeded()
   await capturePublicScreenshot(popup, 'public-05-active-assets.png')
   await publicAssets.getByRole('button', { name: /^Filter portfolio by network:/ }).click()
-  await popup.getByRole('menuitemradio', { name: 'Zcash L2', exact: true }).click()
+  await expect(popup.getByRole('menuitemradio', { name: 'Zcash', exact: true })).toHaveCount(1)
+  await capturePublicScreenshot(popup, 'public-05d-network-menu.png')
+  await popup.getByRole('menuitemradio', { name: 'Zcash', exact: true }).click()
   await capturePublicScreenshot(popup, 'public-05b-network-filter.png')
+  await publicAssets.getByRole('button', { name: 'Show chain view', exact: true }).click()
+  await expect(
+    publicAssets.getByRole('button', { name: 'Expand Zcash tokens', exact: true })
+  ).toHaveCount(1)
+  await publicAssets.getByRole('button', { name: 'Expand Zcash tokens', exact: true }).click()
+  await capturePublicScreenshot(popup, 'public-05e-zcash-chain-assets.png')
+  await publicAssets.getByRole('button', { name: 'Show token view', exact: true }).click()
   await publicAssets
-    .getByRole('button', { name: 'View ZEC details on Zcash L2', exact: true })
+    .getByRole('button', { name: 'View ZEC details on Zcash · Public', exact: true })
     .click()
   await expect(popup.getByRole('heading', { name: 'Asset' })).toBeVisible()
   await expect(popup.getByText('zec.omft.near')).toBeVisible()
   await capturePublicScreenshot(popup, 'public-05a-asset-detail.png')
   await popup.getByRole('button', { name: 'Back' }).click()
   await publicAssets
-    .getByRole('button', { name: 'View NEAR details on Zcash L2', exact: true })
+    .getByRole('button', { name: 'View NEAR details on Zcash · Public', exact: true })
     .click()
   await expect(popup.getByText('wrap.near', { exact: true })).toBeVisible()
   await capturePublicScreenshot(popup, 'public-05c-near-detail.png')
@@ -883,7 +892,7 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
   const updatedPublicAssets = popup.getByRole('region', { name: 'Portfolio', exact: true })
   await updatedPublicAssets.getByRole('button', { name: 'Refresh portfolio', exact: true }).click()
   const zecAsset = updatedPublicAssets.getByRole('button', {
-    name: 'View ZEC details on Zcash L2',
+    name: 'View ZEC details on Zcash · Public',
     exact: true
   })
   await expect(zecAsset).toContainText('1 ZEC')
@@ -1020,13 +1029,13 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
     const freshAssets = freshPopup.getByRole('region', { name: 'Portfolio', exact: true })
     await expect(freshAssets).toBeVisible()
     await freshAssets
-      .getByRole('button', { name: 'View NEAR details on Zcash L2', exact: true })
+      .getByRole('button', { name: 'View NEAR details on Zcash · Public', exact: true })
       .scrollIntoViewIfNeeded()
     await expect(
-      freshAssets.getByRole('button', { name: 'View ZEC details on Zcash L2', exact: true })
+      freshAssets.getByRole('button', { name: 'View ZEC details on Zcash · Public', exact: true })
     ).toContainText('1 ZEC')
     await freshAssets.getByRole('button', { name: /^Filter portfolio by network:/ }).click()
-    await freshPopup.getByRole('menuitemradio', { name: 'Zcash L2', exact: true }).click()
+    await freshPopup.getByRole('menuitemradio', { name: 'Zcash', exact: true }).click()
     await capturePublicScreenshot(freshPopup, 'public-13-fresh-profile-import.png')
   } finally {
     await freshContext.close()

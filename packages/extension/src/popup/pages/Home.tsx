@@ -1179,10 +1179,12 @@ export function Home() {
             )}
             {publicEligible && (
               <NoirPublicActivationCard
+                key={`${currentNetwork}:${effectiveWalletId}:${effectiveAccountId}`}
                 account={publicAssets.account}
                 status={publicAssets.status}
                 error={publicAssets.error}
                 onRefresh={publicAssets.refresh}
+                onViewActivity={() => setActiveTab('activity')}
               />
             )}
           </TabsContent>
