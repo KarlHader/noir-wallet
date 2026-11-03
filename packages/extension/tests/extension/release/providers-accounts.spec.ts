@@ -486,7 +486,7 @@ test('adds a Zcash account after the service worker restores an unlocked session
   }
 })
 
-test('wallet-side Connect restores an existing EVM site for the active account', async ({
+test('wallet connection coordinator restores an existing EVM site for the active account', async ({
   context,
   popup
 }) => {
@@ -593,9 +593,13 @@ test('wallet-side Connect restores an existing EVM site for the active account',
   })
   await expect(popup.getByText('Account 2', { exact: true })).toBeVisible()
   await expect.poll(readAccounts).toEqual([previousAddress])
-  await expect(popup.getByTestId('dapp-connect-prompt')).toBeVisible()
-  await popup.getByTestId('dapp-connect-prompt').getByRole('button', { name: 'Connect' }).click()
   await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
+  await captureScreenshot(popup, 'wallet-site-without-connect-footer.png')
+  const connected = await popup.evaluate(
+    site => chrome.runtime.sendMessage({ type: 'CONNECT_CURRENT_ACCOUNT_TO_DAPP', origin: site }),
+    origin
+  )
+  expect(connected).toMatchObject({ success: true })
   await expect
     .poll(readAccounts)
     .toEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/), previousAddress])

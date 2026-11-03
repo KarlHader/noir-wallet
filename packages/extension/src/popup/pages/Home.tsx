@@ -7,7 +7,6 @@ import { Button } from '../components/ui/button'
 import { CopyToast, useCopyToClipboard } from '../components/common/CopyToast'
 import { DAppChainIndicator } from '../components/dapp/DAppChainIndicator'
 import { DAppConnectionModal } from '../components/dapp/DAppConnectionModal'
-import { DAppConnectPrompt } from '../components/dapp/DAppConnectPrompt'
 import {
   DAppExecutionModeButton,
   DAppExecutionModeCard
@@ -107,8 +106,7 @@ export function Home() {
     currentDApp,
     currentAccountAuthorized,
     connectedDApps,
-    loading: connectedDAppsLoading,
-    connectCurrentAccount
+    loading: connectedDAppsLoading
   } = useDAppConnection()
   const { isShielding, handleShieldFunds, shieldSheet } = useShieldFunds()
   const { requestSpeedUp, speedUpSheet } = useSpeedUp()
@@ -1301,15 +1299,6 @@ export function Home() {
           </TabsContent>
         </Tabs>
       </div>
-
-      {currentDApp && !currentAccountAuthorized && (
-        <DAppConnectPrompt
-          host={currentDApp.host}
-          favicon={currentDApp.favicon}
-          accountName={accountDisplayName}
-          onConnect={() => connectCurrentAccount(currentDApp.origin)}
-        />
-      )}
 
       {shieldSheet}
       {speedUpSheet}
