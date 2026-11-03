@@ -523,7 +523,8 @@ export function ensureRpcEndpointPreferencesLoaded(): Promise<RpcEndpointPrefere
       return { ...preferences }
     })().catch(() => syncActiveRpcEndpointPreferencesFromStorage())
   }
-  return loadPromise
+  // Reuse initialization, but return the selection in effect when it completes.
+  return loadPromise.then(() => ({ ...activeRpcEndpointPreferences }))
 }
 
 // Kick off the initial read in any chrome context (popup/background/offscreen).

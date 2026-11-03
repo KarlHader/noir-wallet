@@ -122,6 +122,14 @@ test('cold startup migrates beta Zero RPC while preserving privacy preference an
     assert.equal(rpc.getNextRpcEndpointOption('zcash', 'primary', 'backup'), undefined)
 
     await rpc.writePersistedRpcEndpointSettings({
+      preferences: { zcash: 'backup' },
+      modes: { zcash: 'fixed' },
+      customRpcEndpoints: { zcash: [] }
+    })
+    assert.deepEqual(await rpc.ensureRpcEndpointPreferencesLoaded(), { zcash: 'backup' })
+    assert.equal(rpc.getActiveRpcEndpointMode('zcash'), 'fixed')
+
+    await rpc.writePersistedRpcEndpointSettings({
       preferences: { zcash: 'primary' },
       modes: { zcash: 'auto' },
       customRpcEndpoints: { zcash: [] }
