@@ -104,6 +104,7 @@ import {
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { calculatePrivateFundingSourceAmount } from '@/core/transactions/private-funding'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { getUnavailableSwapNetworks } from '@/popup/services/swap-catalog-loading'
 import { classifyError } from '@/lib/errors'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
 import { logger } from '@/lib/logger'
@@ -3235,6 +3236,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         showCloseButton: true,
         body: (_resolve, close) => (
           <SwapTokenSelector
+            unavailableNetworks={getUnavailableSwapNetworks(enabledSwapChains)}
             initialTokens={
               type === 'in' ? swap.sourceTokens : filterDestinations(swap.destinationTokens)
             }

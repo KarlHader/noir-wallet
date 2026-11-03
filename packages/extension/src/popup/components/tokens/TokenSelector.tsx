@@ -41,6 +41,7 @@ export interface TokenSelectorProps {
   stableCatalogOrder?: boolean
   excludeAssetId?: string
   emptyMessage?: string
+  unavailableNetworks?: readonly Readonly<{ id: string; label: string; iconChain: string }>[]
 }
 
 export function TokenSelector({
@@ -51,7 +52,8 @@ export function TokenSelector({
   catalogLoading = false,
   stableCatalogOrder = false,
   excludeAssetId,
-  emptyMessage = 'No tokens found'
+  emptyMessage = 'No tokens found',
+  unavailableNetworks = []
 }: TokenSelectorProps) {
   const [search, setSearch] = useState('')
   const [selectedBlockchain, setSelectedBlockchain] = useState('all')
@@ -111,6 +113,9 @@ export function TokenSelector({
       : 'all'
   const selectedNetwork = networkOptions.find(option => option.id === effectiveBlockchain)
   const selectedNetworkLabel = selectedNetwork?.label ?? 'All Networks'
+  const unavailableNetworkOptions = unavailableNetworks.filter(
+    option => !networkOptions.some(available => available.id === option.id)
+  )
   const filterKey = `${effectiveBlockchain}:${search}`
   const filteredTokens = useMemo(() => {
     const startedAt = performance.now()
@@ -212,6 +217,26 @@ export function TokenSelector({
                     aria-hidden="true"
                   />
                   <span>{option.label}</span>
+                </DropdownMenuRadioItem>
+              ))}
+              {unavailableNetworkOptions.map(option => (
+                <DropdownMenuRadioItem
+                  key={option.id}
+                  value={option.id}
+                  disabled
+                  className="text-muted data-[disabled]:opacity-100"
+                >
+                  <ChainIcon
+                    chain={option.iconChain}
+                    width={16}
+                    height={16}
+                    className="rounded-[4px]"
+                    showTooltip={false}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1">{option.label}</span>
+                  <span className="text-[10px]">Unavailable</span>
                 </DropdownMenuRadioItem>
               ))}
               {deferredChainChoices(__ENABLED_CHAIN_FEATURE_FLAGS__).map(option => (
