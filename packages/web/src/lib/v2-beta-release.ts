@@ -5,7 +5,7 @@ export interface V2BetaRelease {
   releaseNotesUrl: string
 }
 
-const version = '2.0.0-beta.1'
+const version = '2.0.0-beta.2'
 const releasesUrl = 'https://github.com/NoirWallet/noir-wallet/releases'
 
 export const v2BetaRelease: V2BetaRelease | null = {
