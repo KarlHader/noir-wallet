@@ -112,6 +112,7 @@ import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wall
 import {
   resolveSwapMaximumAdjustment,
   resolveEvmSwapMaximumInsufficientFundsAdjustment,
+  isSwapMaximumQuotePending,
   resolveSelectedSwapMaximum,
   resolveZcashSwapMaximumAdjustment
 } from '@/popup/services/swap-maximum'
@@ -1649,7 +1650,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           ? 'basic'
           : undefined,
       blocked:
-        (maxSelected && routeMaximum.loading) ||
+        isSwapMaximumQuotePending({
+          selected: maxSelected && viewStep === 'input',
+          nativeSource: !swap.isZecSource && walletOwnedSource?.asset.asset.kind === 'native',
+          loading: routeMaximum.loading,
+          maximum: routeMaximum.value
+        }) ||
         walletActionMode.loading ||
         destinationWalletActionMode.loading ||
         (crossChainSendRequested &&
@@ -1681,7 +1687,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     destinationWalletActionMode.loading,
     hasInvalidWalletAmount,
     maxSelected,
+    viewStep,
     routeMaximum.loading,
+    routeMaximum.value,
     zcashAmountError,
     walletSourcesLoading,
     isPrivateFunding,

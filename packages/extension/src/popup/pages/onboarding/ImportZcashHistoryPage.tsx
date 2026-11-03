@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -11,6 +11,7 @@ import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-
 import { getFullZcashRecoveryBirthdayHeight } from '@/core/wallet/birthday-height'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { classifyError } from '@/lib/errors'
+import { LatestAttempt } from '@/lib/async-utils'
 import { cn } from '@/lib/utils'
 import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import dayjs from '@/lib/dayjs'
@@ -30,8 +31,7 @@ export function ImportZcashHistoryPage() {
     importZcashHistorySelection,
     setBirthdayHeight,
     setImportZcashHistorySelection,
-    addImportedWallet,
-    error: storeError
+    addImportedWallet
   } = useOnboardingStore()
   const fullRecoveryHeight = getFullZcashRecoveryBirthdayHeight(DEFAULT_NETWORK)
   const [initialSelection] = useState(() =>
@@ -46,19 +46,32 @@ export function ImportZcashHistoryPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [retryable, setRetryable] = useState(false)
+  const continueAttempts = useRef(new LatestAttempt())
+
+  useEffect(() => {
+    const attempts = continueAttempts.current
+    return () => attempts.invalidate()
+  }, [])
 
   useEffect(() => {
     if (!importedSeedPhrase) replace('/onboarding/import')
   }, [importedSeedPhrase, replace])
 
-  const selectHistoryMode = (mode: HistoryMode) => {
-    setHistoryMode(mode)
+  const resetPendingContinue = () => {
+    continueAttempts.current.invalidate()
+    setIsImporting(false)
     setError(null)
+    setRetryable(false)
+  }
+
+  const selectHistoryMode = (mode: HistoryMode) => {
+    resetPendingContinue()
+    setHistoryMode(mode)
   }
 
   const selectRestoreMethod = (method: RestoreMethod) => {
+    resetPendingContinue()
     setRestoreMethod(method)
-    setError(null)
   }
 
   const resolveBirthdayHeight = async (): Promise<number | undefined> => {
@@ -92,11 +105,13 @@ export function ImportZcashHistoryPage() {
   }
 
   const handleContinue = async () => {
+    const attempt = continueAttempts.current.begin()
     setError(null)
     setRetryable(false)
     setIsImporting(true)
     try {
       const height = await resolveBirthdayHeight()
+      if (!continueAttempts.current.isCurrent(attempt)) return
       setBirthdayHeight(height)
       setImportZcashHistorySelection(
         historyMode === 'new'
@@ -108,17 +123,20 @@ export function ImportZcashHistoryPage() {
 
       if (flowMode === 'addWallet') {
         const success = await addImportedWallet()
+        if (!continueAttempts.current.isCurrent(attempt)) return
         if (success) replace('/onboarding/congratulations')
+        else setError(useOnboardingStore.getState().error)
         return
       }
       navigate('/onboarding/import-password')
     } catch (cause) {
+      if (!continueAttempts.current.isCurrent(attempt)) return
       const classified = classifyError(cause)
       const validationError = cause instanceof ZcashHistoryValidationError
       setError(validationError ? cause.message : classified.userMessage)
       setRetryable(!validationError && classified.retryable)
     } finally {
-      setIsImporting(false)
+      if (continueAttempts.current.isCurrent(attempt)) setIsImporting(false)
     }
   }
 
@@ -126,7 +144,10 @@ export function ImportZcashHistoryPage() {
     <div className="page-container">
       <PageHeader title="Zcash history" showBack backDisabled={isImporting} />
 
-      <div className="page-content py-5">
+      <fieldset
+        disabled={flowMode === 'addWallet' && isImporting}
+        className="page-content min-w-0 py-5"
+      >
         <h1 className="text-lg font-semibold">Has this recovery phrase ever received ZEC?</h1>
         <p className="mt-1.5 text-sm leading-relaxed text-muted">
           This only changes where Zcash begins looking for older transactions. Other networks are
@@ -175,7 +196,10 @@ export function ImportZcashHistoryPage() {
                   type="text"
                   inputMode="numeric"
                   value={syncHeight}
-                  onChange={event => setSyncHeight(event.target.value)}
+                  onChange={event => {
+                    resetPendingContinue()
+                    setSyncHeight(event.target.value)
+                  }}
                   placeholder={`At least ${fullRecoveryHeight.toLocaleString()}`}
                   aria-label="Zcash birthday height"
                   className="h-[45px] rounded-xl font-mono"
@@ -200,12 +224,12 @@ export function ImportZcashHistoryPage() {
             )}
           </div>
         )}
-      </div>
+      </fieldset>
 
       <div className="page-footer">
-        {(error || storeError) && (
+        {error && (
           <InlineError
-            message={error || storeError}
+            message={error}
             onRetry={error && retryable ? () => void handleContinue() : undefined}
             retrying={isImporting}
             className="mb-3"

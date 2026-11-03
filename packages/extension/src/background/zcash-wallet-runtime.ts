@@ -1765,7 +1765,7 @@ export class BackgroundZcashWalletRuntime {
       if (!this.walletCore) {
         await this.initialize()
       } else {
-        this.walletCore.ensureInitialized().catch(error => {
+        this.walletCore.ensureInitialized(`${this.network}_${storeWalletId}`).catch(error => {
           logger.error(
             `Background WASM initialization failed: ${error instanceof Error ? error.message : String(error)}`,
             this.currentWalletId || undefined,

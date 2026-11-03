@@ -2,6 +2,17 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.0.0-beta.2] - 2026-11-03
+
+### Fixed
+
+- Fixed Swap asset selection and address lists when custom EVM networks are configured.
+- Fixed network labels and duplicate Zcash account counts in connected dApp permissions.
+- Fixed stale recovery-date requests and import errors appearing after changing Zcash history options.
+- Fixed Public-to-Confidential Max transfers opening confirmation before the current route's gas estimate was ready.
+- Fixed wallet snapshot recovery after locking and unlocking when the Zcash Worker had restarted.
+- Fixed Swap rates displaying both equality and approximation symbols at the same time.
+
 ## [2.0.0-beta.1] - 2026-11-02
 
 ### Added

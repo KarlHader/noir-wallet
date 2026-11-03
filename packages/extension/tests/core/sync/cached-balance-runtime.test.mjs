@@ -53,7 +53,17 @@ function createRuntime() {
   const dependencies = {
     '@/store/wallet-store': {
       useWalletStore: { getState: () => walletState },
-      async prepareWalletStoreForUse() {}
+      async prepareWalletStoreForUse() {},
+      async flushWalletStore() {}
+    },
+    '@/core/wallet/secure-storage': {
+      SecureStorage: {
+        async getLoginAttempts() {
+          return { isLocked: false }
+        },
+        async resetLoginAttempts() {},
+        async saveLastActivityTime() {}
+      }
     },
     '@/store/account-data-store': {
       useAccountDataStore: {
@@ -196,6 +206,38 @@ test('startup init completion after a lock does not start a cached refresh', asy
   await new Promise(resolve => setImmediate(resolve))
 
   assert.deepEqual(fixture.events, ['rehydrate'])
+})
+
+test('unlock reloads a retained wallet core using its persisted snapshot key', async () => {
+  const fixture = createRuntime()
+  let initializedKey
+  const core = {
+    accountIndex: 0,
+    hasAccount: () => false,
+    async ensureInitialized(dbKey) {
+      initializedKey = dbKey
+    },
+    async restoreFromDB() {
+      assert.equal(initializedKey, 'mainnet_wallet')
+      return true
+    },
+    async getAddresses() {
+      return {}
+    }
+  }
+  fixture.runtime.walletCores.set('wallet', core)
+  fixture.runtime.inspectWalletCredential = async () => ({
+    status: 'valid',
+    credential: { kind: 'seed', seedPhrase: 'synthetic test phrase' }
+  })
+  fixture.runtime.cancelActiveRestore = () => {}
+  fixture.runtime.bindCredentialToCore = () => {}
+  fixture.runtime.refreshCachedBalancesAfterReady = async () => {}
+  fixture.runtime.requestSync = () => {}
+
+  assert.equal((await fixture.runtime.unlock('test password')).success, true)
+  await fixture.runtime.activeRestorePromise
+  assert.equal(initializedKey, 'mainnet_wallet')
 })
 
 test('local persisted summary refreshes a cached balance without a network summary read', async () => {
