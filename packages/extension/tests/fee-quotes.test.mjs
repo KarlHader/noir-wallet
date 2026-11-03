@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { selectSwapFeeEstimate } from '../src/lib/swap-fee.ts'
 import { FeeQuoteRegistry } from '../src/core/zcash/fee-quotes.ts'
 import { fetchStandardMarginalFee } from '../src/config/rpc-registry-client.ts'
 import { marginalFeeForTier, FEE_QUOTE_TTL_MS } from '../src/config/fee.ts'
@@ -176,4 +177,42 @@ test('recommendation timeout aborts the request and releases its timer', async t
   t.mock.timers.tick(5_000)
   await rejected
   assert.equal(aborted, true)
+})
+
+test('swap confirmation requires a fee quote for the actual amount after Max changes', () => {
+  const maxQuote = {
+    id: 'max-quote',
+    standardMarginalFeeZats: 50_000,
+    expiresAt: Date.now() + 60_000
+  }
+  const amountQuote = { ...maxQuote, id: 'amount-quote' }
+  const max = { feeZats: 150_000, feeQuote: maxQuote, loading: false, error: false }
+  const amount = { ...max, feeZats: 200_000, feeQuote: amountQuote }
+
+  const reviewed = selectSwapFeeEstimate('0.9985', true, '0.9985', max, amount)
+  assert.equal(reviewed.ready, true)
+  assert.equal(reviewed.feeZats, 150_000)
+  assert.equal(reviewed.feeQuote.id, maxQuote.id)
+
+  // A balance increase leaves the approved amount affordable, but it is no longer Max.
+  const stale = selectSwapFeeEstimate('0.9985', true, '1.9985', max, amount)
+  assert.equal(stale.staleMax, true)
+  assert.equal(stale.ready, false)
+  assert.equal(stale.feeZats, null)
+  assert.equal(stale.feeQuote, null)
+
+  const reestimated = selectSwapFeeEstimate('0.9985', false, '1.9985', max, amount)
+  assert.equal(reestimated.ready, true)
+  assert.equal(reestimated.feeZats, 200_000)
+  assert.equal(reestimated.feeQuote.id, amountQuote.id)
+
+  for (const unavailable of [
+    { ...amount, feeZats: null },
+    { ...amount, feeQuote: null },
+    { ...amount, loading: true },
+    { ...amount, error: true }
+  ]) {
+    assert.equal(selectSwapFeeEstimate('0.9985', false, '1.9985', max, unavailable).ready, false)
+  }
+  assert.equal(selectSwapFeeEstimate('0.9985', true, null, max, amount).ready, false)
 })

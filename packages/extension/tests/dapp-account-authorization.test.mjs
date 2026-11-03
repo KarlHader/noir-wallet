@@ -119,7 +119,12 @@ function createHarness(t, connection, extraDependencies = {}) {
       rehydrateWalletStore: async () => {}
     },
     '@/store/account-data-store': {
-      useAccountDataStore: { getState: () => ({ getBalance: () => balance }) }
+      useAccountDataStore: {
+        getState: () => ({
+          getBalance: (_network, _walletId, accountId) =>
+            accountId === 'account-b' ? { ...balance, total: '99' } : balance
+        })
+      }
     },
     '@/lib/hardware-capabilities': {
       getHardwareDAppMethodUnavailableReason: () => null
@@ -231,6 +236,16 @@ test('a bound single-account connection survives restore but denies another acti
     (await handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN })).total,
     balance.total
   )
+  assert.equal(
+    (
+      await handler.handleRequest({
+        method: 'zcash_getBalance',
+        origin: ORIGIN,
+        params: [{ accountId: 'wallet-a:missing' }]
+      })
+    ).total,
+    '0'
+  )
 
   walletState.currentAccountId = 'account-b'
   assert.equal(await handler.handleRequest({ method: 'zcash_getAccounts', origin: ORIGIN }), null)
@@ -238,6 +253,38 @@ test('a bound single-account connection survives restore but denies another acti
     handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN }),
     /zcash_requestAccounts/
   )
+})
+
+test('balance reads stay bound to the authorized account across an async state change', async t => {
+  for (const transition of ['switch', 'revoke', 'lock']) {
+    await t.test(transition, async t => {
+      const { handler, accountManager, dappManager, walletState, balance } = createHarness(
+        t,
+        connection({ boundWalletId: 'wallet-a', boundAccountId: 'account-a' })
+      )
+      await handler.initialize()
+      const resolveBalances = handler.resolveAccountBalances.bind(handler)
+      handler.resolveAccountBalances = async origin => {
+        const accounts = await resolveBalances(origin)
+        if (transition === 'switch') walletState.currentAccountId = 'account-b'
+        if (transition === 'revoke') await dappManager.removeConnection(ORIGIN)
+        if (transition === 'lock') accountManager.isLocked = () => true
+        return accounts
+      }
+
+      const reading = handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN })
+      if (transition === 'switch') {
+        const result = await reading
+        assert.equal(result.total, balance.total)
+        assert.deepEqual(
+          result.accounts.map(account => account.accountId),
+          ['account-a']
+        )
+      } else {
+        await assert.rejects(reading, /Reconnect and try again/)
+      }
+    })
+  }
 })
 
 test('multi-account authorization accepts only selected accounts', async t => {

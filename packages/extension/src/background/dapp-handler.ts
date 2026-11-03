@@ -408,6 +408,20 @@ export class DAppHandler {
   private async getBalance(origin: string, accountId?: string): Promise<any> {
     await this.ensurePermission(origin)
 
+    const { currentWalletId: walletId } = useWalletStore.getState()
+    const currentAccountId = accountManager.getCurrentAccount()?.id
+    const authorization = await dappManager.getAuthorization(origin)
+    if (
+      accountManager.isLocked() ||
+      !walletId ||
+      !currentAccountId ||
+      !authorization.accounts.some(
+        account => account.walletId === walletId && account.accountId === currentAccountId
+      )
+    ) {
+      throw new Error('Wallet account or site connection changed. Reconnect and try again.')
+    }
+
     syncScheduler.requestPassiveSync(WALLET_CONFIG.SYNC.DAPP_BALANCE_SYNC_STALE_MS)
 
     const zero: ZcashBalance = {
@@ -420,22 +434,35 @@ export class DAppHandler {
       pending: { transparent: '0', shielded: '0', total: '0' }
     }
     const accounts = await this.resolveAccountBalances(origin)
+    const latestAuthorization = await dappManager.getAuthorization(origin)
+    if (
+      accountManager.isLocked() ||
+      !useWalletStore.getState().getAccount(walletId, currentAccountId) ||
+      latestAuthorization.revision !== authorization.revision ||
+      !latestAuthorization.accounts.some(
+        account => account.walletId === walletId && account.accountId === currentAccountId
+      )
+    ) {
+      throw new Error('Wallet account or site connection changed. Reconnect and try again.')
+    }
+    const authorizedAccounts = accounts.filter(
+      account =>
+        !!useWalletStore.getState().getAccount(account.walletId, account.accountId) &&
+        latestAuthorization.accounts.some(
+          ref => ref.walletId === account.walletId && ref.accountId === account.accountId
+        )
+    )
 
     // `accountId` is the `${walletId}:${accountId}` key from `accounts`. When the
     // dApp targets a specific authorized account, surface that as the primary;
-    // otherwise default to the connected (current) account for legacy callers.
-    let primary: ZcashBalance = zero
-    if (accountId) {
-      primary = accounts.find(a => a.id === accountId)?.balance ?? zero
-    } else if (!accountManager.isLocked()) {
-      const account = accountManager.getCurrentAccount()
-      const { currentWalletId: walletId, currentNetwork: network } = useWalletStore.getState()
-      if (account && walletId) {
-        primary = useAccountDataStore.getState().getBalance(network, walletId, account.id) ?? zero
-      }
-    }
+    // otherwise use the account connected when this request started.
+    const primary = accountId
+      ? (authorizedAccounts.find(account => account.id === accountId)?.balance ?? zero)
+      : (authorizedAccounts.find(
+          account => account.walletId === walletId && account.accountId === currentAccountId
+        )?.balance ?? zero)
 
-    return { ...primary, accounts }
+    return { ...primary, accounts: authorizedAccounts }
   }
 
   private async getMaxTransfer(

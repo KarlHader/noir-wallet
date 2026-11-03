@@ -248,7 +248,7 @@ export function RpcEndpoint() {
       if (result.warning) {
         toast.warning('Endpoint Saved', 'Wallet will reconnect with the new endpoint shortly')
       } else {
-        toast.success('Fixed RPC Enabled', `${option.label} will be used without fallback`)
+        toast.success('Fixed RPC Enabled', option.label)
       }
     } catch (error) {
       toast.error(
@@ -522,12 +522,6 @@ export function RpcEndpoint() {
             )}
           </section>
         )}
-
-        <p className="text-xs leading-5 text-muted">
-          {isFixedTestnetEndpoint
-            ? 'Testnet builds use a fixed RPC endpoint to keep network data isolated from Mainnet.'
-            : 'Auto switches between managed endpoints when needed. Fixed endpoints never fall back.'}
-        </p>
       </div>
 
       <Dialog open={addOpen} onOpenChange={open => !saving && setAddOpen(open)}>
