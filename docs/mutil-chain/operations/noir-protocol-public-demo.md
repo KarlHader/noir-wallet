@@ -1,6 +1,6 @@
 # Noir Protocol Public DeFi Demo Integration
 
-This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and workspace SDK from the same checkout. Public uses a Zcash signing identity and a NEAR MCA for assets and execution. It is separate from the wallet's native Zcash balance and Lending identity.
+This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and SDK from the same tested commit. Public uses a Zcash signing identity and a NEAR MCA for assets and execution. It is separate from the wallet's native Zcash balance and Lending identity.
 
 ## Local Setup
 
@@ -15,7 +15,9 @@ In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-
 
 Use a mnemonic software account in Mainnet mode. The current [Public configuration](../../../packages/extension/src/core/services/noir-protocol/public/config.ts) defines the deployment and supported tokens; Testnet and hardware accounts are unavailable. Mainnet development services are not a testnet. Use an isolated test wallet and an explicit spending limit for funded integration. Use the controlled verification below when real funds are unnecessary.
 
-For a hosted PR preview, open **Public demo → Details** in the PR checks and install the paired extension linked in that check's summary. Preview publishing needs the one-time [maintainer setup](../../release-workflow.md#pr-demo-previews). GitHub Pages previews share the site's wallet authorization origin; disconnect its authorization before testing a different PR or version.
+For a hosted PR preview, open **Public demo → Details** in the PR checks and install the paired extension linked in that check's summary. To integrate your own dApp, copy the summary's `pnpm add https://…/sdk/noir-wallet-sdk-…tgz` command. This installs the paired PR SDK without publishing to npm or requiring GitHub login. Keep the generated lockfile; the URL identifies an immutable tested merge and build attempt. Use that SDK with the paired extension rather than assuming the npm `beta` includes the PR changes.
+
+Preview publishing needs the one-time [maintainer setup](../../release-workflow.md#pr-demo-previews); install links are available only after that setup and a successful deployment. GitHub Pages previews share the site's wallet authorization origin; disconnect its authorization before testing a different PR or version.
 
 ## Integration Flow
 

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   existsSync,
   mkdtempSync,
@@ -13,6 +15,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   deploymentDemoUrl,
+  deploymentSdkUrl,
   resolveDemoPreview,
   seedExistingPages,
   stageDemoSite,
@@ -109,7 +112,40 @@ function staticDemo(t) {
   const save = () =>
     writeFileSync(path.join(directory, 'extension-preview.json'), JSON.stringify(metadata))
   save()
-  return { directory, source, metadata, save }
+  const manifest = JSON.parse(
+    readFileSync(new URL('../../../../../packages/sdk/package.json', import.meta.url), 'utf8')
+  )
+  const input = path.join(directory, 'input')
+  mkdirSync(path.join(input, 'package'), { recursive: true })
+  writeFileSync(path.join(input, 'package/package.json'), JSON.stringify(manifest))
+  const sdkDirectory = path.join(directory, 'sdk')
+  mkdirSync(sdkDirectory)
+  const tarball = `noir-wallet-sdk-${manifest.version}.tgz`
+  execFileSync('tar', ['-czf', path.join(sdkDirectory, tarball), '-C', input, 'package'])
+  rmSync(input, { recursive: true })
+  const bytes = readFileSync(path.join(sdkDirectory, tarball))
+  const sdk = {
+    schemaVersion: 2,
+    mode: 'check',
+    packageName: manifest.name,
+    version: manifest.version,
+    repository: source.repository,
+    sourceSha: source.sourceSha,
+    workflowSha: source.sourceSha,
+    sourceBranch: null,
+    releaseLine: null,
+    distTag: null,
+    runId: source.runId,
+    runAttempt: source.runAttempt,
+    tarball,
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+  }
+  const saveSdk = () =>
+    writeFileSync(path.join(sdkDirectory, 'sdk-release-metadata.json'), JSON.stringify(sdk))
+  saveSdk()
+  return { directory, source, metadata, save, sdk, saveSdk }
 }
 
 test('publishes only a current same-repository PR with paired artifacts from one run', async () => {
@@ -183,6 +219,29 @@ test('static upload is bound to the exact tested merge, PR, and run attempt', t 
   }
 })
 
+test('paired SDK must match the tested merge and build attempt with unchanged package bytes', t => {
+  const f = staticDemo(t)
+  assert.deepEqual(validateStaticDemo(f.directory, f.source), f.sdk)
+  for (const [key, value] of [
+    ['sourceSha', 'd'.repeat(40)],
+    ['runId', 13],
+    ['runAttempt', 3],
+    ['sha256', '0'.repeat(64)]
+  ]) {
+    const original = f.sdk[key]
+    f.sdk[key] = value
+    f.saveSdk()
+    assert.throws(() => validateStaticDemo(f.directory, f.source), /SDK/)
+    f.sdk[key] = original
+  }
+  f.saveSdk()
+  writeFileSync(path.join(f.directory, 'unverified.tgz'), 'unexpected archive')
+  assert.throws(() => validateStaticDemo(f.directory, f.source), /Unexpected static demo file/)
+  rmSync(path.join(f.directory, 'unverified.tgz'))
+  writeFileSync(path.join(f.directory, 'sdk', f.sdk.tarball), 'replaced package')
+  assert.throws(() => validateStaticDemo(f.directory, f.source), /checksum mismatch/)
+})
+
 test('Pages worker, functions, deployment directives, and symlinks cannot enter the publisher', t => {
   const f = staticDemo(t)
   for (const name of ['_worker.js', '_headers', '_redirects', '.env', 'functions']) {
@@ -205,6 +264,11 @@ test('reported links bind the PR, merge commit, and exact build attempt', () => 
     deploymentDemoUrl(source.repository, source),
     deploymentDemoUrl(source.repository, { ...source, runAttempt: 3 })
   )
+  assert.equal(
+    deploymentSdkUrl(source.repository, source, 'noir-wallet-sdk-2.0.0-beta.1.tgz'),
+    `https://noirwallet.github.io/noir-wallet/pr/7/${source.sourceSha}/12-2/sdk/noir-wallet-sdk-2.0.0-beta.1.tgz`
+  )
+  assert.throws(() => deploymentSdkUrl(source.repository, source, '../other.tgz'))
   assert.throws(() => deploymentDemoUrl(source.repository, { ...source, sourceSha: '../other' }))
   assert.throws(() => deploymentDemoUrl(source.repository, { ...source, prNumber: '../other' }))
 })
@@ -226,6 +290,11 @@ test('adding a preview preserves the root and other PRs, excludes git metadata, 
   assert.equal(existsSync(path.join(output, '.git')), false)
   const preview = path.join(output, 'pr/7', f.source.sourceSha, '12-2', 'index.html')
   assert.equal(readFileSync(preview, 'utf8'), '<div id="root"></div>')
+  const sdkPackage = path.join(output, 'pr/7', f.source.sourceSha, '12-2/sdk', f.sdk.tarball)
+  assert.deepEqual(
+    readFileSync(sdkPackage),
+    readFileSync(path.join(f.directory, 'sdk', f.sdk.tarball))
+  )
   assert.doesNotThrow(() => stageDemoSite(archive, f.directory, output, f.source))
   writeFileSync(path.join(f.directory, 'index.html'), 'changed')
   assert.throws(() => stageDemoSite(archive, f.directory, output, f.source), /immutable preview/)
