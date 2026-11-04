@@ -1,48 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
-import { fetchHomeAd, type HomeAd } from '@/core/services/ad-api'
-import { fetchBlobWithTimeout } from '@/lib/fetch-utils'
-
-interface LoadedHomeAd extends HomeAd {
-  imageSrc: string
-}
+import { readCachedHomeAd, loadHomeAd, type LoadedHomeAd } from '@/core/services/ad-api'
 
 export function HomeAdBanner() {
-  const [ad, setAd] = useState<LoadedHomeAd | null>(null)
+  const [ad, setAd] = useState<LoadedHomeAd | null>(readCachedHomeAd)
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
     let active = true
-    let imageSrc: string | null = null
-
-    const loadAd = async () => {
-      try {
-        const nextAd = await fetchHomeAd()
-        if (!nextAd) return
-
-        const image = await fetchBlobWithTimeout(nextAd.imageUrl, {
-          timeoutMs: 10_000,
-          maxBytes: 5 * 1024 * 1024
-        })
-        if (!image.type.startsWith('image/')) return
-
-        imageSrc = URL.createObjectURL(image)
-        if (active) {
-          setAd({ ...nextAd, imageSrc })
-        } else {
-          URL.revokeObjectURL(imageSrc)
-          imageSrc = null
-        }
-      } catch (error) {
-        console.warn('[HomeAd] Failed to load advertisement:', error)
-      }
-    }
-
-    void loadAd()
+    void loadHomeAd(nextAd => {
+      if (active) setAd(nextAd)
+    }).catch(error => {
+      console.warn('[HomeAd] Failed to load advertisement:', error)
+    })
 
     return () => {
       active = false
-      if (imageSrc) URL.revokeObjectURL(imageSrc)
     }
   }, [])
 
