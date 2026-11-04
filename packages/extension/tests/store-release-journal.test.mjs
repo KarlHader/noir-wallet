@@ -232,13 +232,20 @@ describe('Store release journal', () => {
   })
 
   it('recovers latest exact receipts from a failed workflow and drops authorization on redirect', async () => {
+    const uploaded = fixtureReceipt('upload', 'result', 51)
+    uploaded.result = {
+      ...result(),
+      version: binding.version,
+      uploadState: 'SUCCEEDED',
+      priorAsyncUploadState: 'SUCCEEDED'
+    }
     const artifacts = [
       fixtureArtifact(fixtureReceipt('upload', 'intent', 51), 1),
-      fixtureArtifact(fixtureReceipt('upload', 'result', 51), 2, '2026-11-01T00:01:00Z'),
+      fixtureArtifact(uploaded, 2, '2026-11-01T00:01:00Z'),
       fixtureArtifact(fixtureReceipt('submit', 'result', 51), 3, '2026-11-01T00:02:00Z')
     ]
     const { value, calls } = await restore(artifacts)
-    assert.deepEqual(value, { upload: result(), submit: result(), notify: null })
+    assert.deepEqual(value, { upload: uploaded.result, submit: result(), notify: null })
     assert.equal(calls.filter(call => call.url.startsWith('https://download.example/')).length, 3)
   })
 

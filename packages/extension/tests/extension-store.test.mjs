@@ -1,5 +1,6 @@
 import { describe, test as it } from 'node:test'
 import assert from 'node:assert/strict'
+import { needsWriteIntent } from '../../../scripts/extension-store-release.mjs'
 
 import {
   createChromeWebStoreClient,
@@ -60,9 +61,9 @@ function fixture(replies, options = {}) {
 describe('Chrome Web Store v2 release operations', () => {
   it('uses official endpoints and raw CRX headers without retrying POST', async () => {
     const { client, calls } = fixture([
-      { body: status() },
+      { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },
       { body: upload() },
-      { body: status() },
+      { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },
       { body: publish() },
       { body: status({ submittedItemRevisionStatus: submission() }) }
     ])
@@ -74,6 +75,7 @@ describe('Chrome Web Store v2 release operations', () => {
     })
     assert.equal(receipt.status, 'succeeded')
     assert.equal(receipt.uploadState, 'SUCCEEDED')
+    assert.equal(receipt.priorAsyncUploadState, 'SUCCEEDED')
     const submitted = await submitPackage({ client, version: VERSION, uploadReceipt: receipt })
     assert.deepEqual(submitted, {
       status: 'succeeded',
@@ -246,6 +248,7 @@ describe('Chrome Web Store v2 release operations', () => {
     })
     assert.equal(uploadResult.status, 'unknown')
     assert.equal(uploadResult.retryable, false)
+    assert.equal(needsWriteIntent('upload', { upload: uploadResult }), false)
     assert.equal(uploaded.calls.filter(call => call.method === 'POST').length, 1)
     assert.deepEqual(
       uploaded.calls.map(call => call.method),
@@ -369,7 +372,7 @@ describe('Chrome Web Store v2 release operations', () => {
   })
 
   it('does not mistake an unrelated 24-hour upload result for the current upload', async () => {
-    const prior = fixture([{ body: status({ lastAsyncUploadState: 'SUCCEEDED' }) }])
+    const prior = fixture([{ body: status({ lastAsyncUploadState: 'IN_PROGRESS' }) }])
     const blocked = await uploadPackage({
       client: prior.client,
       version: VERSION,
@@ -377,27 +380,37 @@ describe('Chrome Web Store v2 release operations', () => {
       filename: 'noir.crx'
     })
     assert.equal(blocked.status, 'blocked')
+    assert.equal(blocked.state, 'UNATTRIBUTED_UPLOAD')
     assert.deepEqual(
       prior.calls.map(call => call.method),
       ['GET']
     )
 
     const immediate = fixture([
-      { body: status() },
+      { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },
       { body: upload({ uploadState: 'IN_PROGRESS', crxVersion: null }) },
       { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) }
     ])
+    // The saved preflight block proves no POST occurred, so recovery must
+    // persist a fresh intent before sending the candidate's actual bytes.
+    assert.equal(needsWriteIntent('upload', { upload: blocked }), true)
     assert.equal(
       (
         await uploadPackage({
           client: immediate.client,
           version: VERSION,
           crxBytes: Buffer.from('CRX'),
-          filename: 'noir.crx'
+          filename: 'noir.crx',
+          previousUpload: blocked
         })
       ).status,
       'succeeded'
     )
+    assert.deepEqual(
+      immediate.calls.map(call => call.method),
+      ['GET', 'POST', 'GET']
+    )
+    assert.deepEqual(immediate.calls[1].body, Buffer.from('CRX'))
 
     const current = fixture([
       { body: status() },
@@ -506,18 +519,20 @@ describe('Chrome Web Store v2 release operations', () => {
   })
 
   it('blocks a later asynchronous upload that could replace the verified draft', async () => {
-    const { client, calls } = fixture([{ body: status({ lastAsyncUploadState: 'IN_PROGRESS' }) }])
-    const outcome = await submitPackage({
-      client,
-      version: VERSION,
-      uploadReceipt: { status: 'succeeded', version: VERSION, uploadState: 'SUCCEEDED' }
-    })
-    assert.equal(outcome.status, 'blocked')
-    assert.equal(outcome.state, 'UNATTRIBUTED_UPLOAD')
-    assert.deepEqual(
-      calls.map(call => call.method),
-      ['GET']
-    )
+    for (const asyncState of ['IN_PROGRESS', 'SUCCEEDED']) {
+      const { client, calls } = fixture([{ body: status({ lastAsyncUploadState: asyncState }) }])
+      const outcome = await submitPackage({
+        client,
+        version: VERSION,
+        uploadReceipt: { status: 'succeeded', version: VERSION, uploadState: 'SUCCEEDED' }
+      })
+      assert.equal(outcome.status, 'blocked')
+      assert.equal(outcome.state, 'UNATTRIBUTED_UPLOAD')
+      assert.deepEqual(
+        calls.map(call => call.method),
+        ['GET']
+      )
+    }
 
     const current = fixture([
       { body: status({ lastAsyncUploadState: 'SUCCEEDED' }) },

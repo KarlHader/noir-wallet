@@ -257,8 +257,7 @@ export async function uploadPackage({
   previousSubmission
 }) {
   validString(version, VERSION, 'version')
-  const mayStartAttempt =
-    !previousUpload || (previousUpload.status === 'failed' && previousUpload.retryable === true)
+  const mayStartAttempt = canStartUploadAttempt(previousUpload)
   const preflight = await client.fetchStatus()
   if (!preflight.ok) {
     return result(mayStartAttempt ? 'failed' : 'unknown', version, {
@@ -275,7 +274,10 @@ export async function uploadPackage({
       return result('succeeded', version, {
         retryable: false,
         state: 'SUCCEEDED',
-        ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {})
+        ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {}),
+        ...(previousUpload.priorAsyncUploadState
+          ? { priorAsyncUploadState: previousUpload.priorAsyncUploadState }
+          : {})
       })
     }
     return existingSubmission
@@ -287,16 +289,18 @@ export async function uploadPackage({
     return result('succeeded', version, {
       retryable: false,
       state: 'SUCCEEDED',
-      ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {})
+      ...(previousUpload.uploadState ? { uploadState: previousUpload.uploadState } : {}),
+      ...(previousUpload.priorAsyncUploadState
+        ? { priorAsyncUploadState: previousUpload.priorAsyncUploadState }
+        : {})
     })
   }
   if (!mayStartAttempt) {
     return result('unknown', version, { retryable: false, state: 'UNCONFIRMED' })
   }
-  if (
-    preflight.lastAsyncUploadState &&
-    !['NOT_FOUND', 'FAILED'].includes(preflight.lastAsyncUploadState)
-  ) {
+  // A completed async result can remain visible for 24 hours. It is neither
+  // an in-flight upload nor evidence that this candidate has been uploaded.
+  if (preflight.lastAsyncUploadState === 'IN_PROGRESS') {
     return result('blocked', version, { retryable: false, state: 'UNATTRIBUTED_UPLOAD' })
   }
 
@@ -316,6 +320,7 @@ export async function uploadPackage({
           retryable: false,
           state: 'SUCCEEDED',
           uploadState: 'SUCCEEDED',
+          priorAsyncUploadState: preflight.lastAsyncUploadState ?? undefined,
           httpStatus: response.httpStatus
         })
       : result('failed', version, {
@@ -372,6 +377,16 @@ export async function uploadPackage({
   return result('unknown', version, { retryable: false, state: 'IN_PROGRESS' })
 }
 
+export function canStartUploadAttempt(previousUpload) {
+  return (
+    !previousUpload ||
+    (previousUpload.status === 'failed' && previousUpload.retryable === true) ||
+    // This block is recorded before sending any upload POST, including by
+    // earlier workflow versions that also blocked completed async uploads.
+    (previousUpload.status === 'blocked' && previousUpload.state === 'UNATTRIBUTED_UPLOAD')
+  )
+}
+
 export async function submitPackage({ client, version, uploadReceipt, previousSubmission }) {
   validString(version, VERSION, 'version')
   if (uploadReceipt?.status !== 'succeeded' || uploadReceipt.version !== version) {
@@ -395,7 +410,11 @@ export async function submitPackage({ client, version, uploadReceipt, previousSu
   if (
     preflight.lastAsyncUploadState &&
     !['NOT_FOUND', 'FAILED'].includes(preflight.lastAsyncUploadState) &&
-    !(preflight.lastAsyncUploadState === 'SUCCEEDED' && uploadReceipt.uploadState === 'IN_PROGRESS')
+    !(
+      preflight.lastAsyncUploadState === 'SUCCEEDED' &&
+      (uploadReceipt.uploadState === 'IN_PROGRESS' ||
+        uploadReceipt.priorAsyncUploadState === 'SUCCEEDED')
+    )
   ) {
     return result('blocked', version, { retryable: false, state: 'UNATTRIBUTED_UPLOAD' })
   }

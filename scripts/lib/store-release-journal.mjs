@@ -29,7 +29,8 @@ const RESULT_FIELDS = [
   'httpStatus',
   'reason',
   'itemId',
-  'uploadState'
+  'uploadState',
+  'priorAsyncUploadState'
 ]
 const SHA256 = /^[0-9a-f]{64}$/
 const SHA = /^[0-9a-f]{40}$/

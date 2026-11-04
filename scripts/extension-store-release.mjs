@@ -15,6 +15,7 @@ import { validatePublicationTarget } from './extension-release-gates.mjs'
 import { signCrx3, verifyCrx3 } from './lib/crx3.mjs'
 import { readZipManifest } from './lib/release-zip.mjs'
 import {
+  canStartUploadAttempt,
   createChromeWebStoreClient,
   uploadPackage,
   submitPackage
@@ -244,6 +245,7 @@ function writeReceipt(directory, receipt) {
 
 export function needsWriteIntent(stage, journal) {
   const previous = journal[stage]
+  if (stage === 'upload') return canStartUploadAttempt(previous)
   if (previous && !(previous.status === 'failed' && previous.retryable === true)) return false
   if (stage === 'submit' && journal.upload?.status !== 'succeeded') return false
   if (stage === 'notify' && journal.submit?.status !== 'succeeded') return false
