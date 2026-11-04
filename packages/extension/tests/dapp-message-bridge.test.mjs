@@ -85,6 +85,21 @@ function plain(value) {
 }
 
 describe('dApp message bridge', () => {
+  it('rejects transaction history requests without forwarding them to the background', async () => {
+    const harness = createBridgeHarness([])
+
+    await harness.request('zcash_getTransactionHistory')
+
+    assert.equal(harness.sentMessages.length, 0)
+    assert.deepEqual(plain(harness.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-1',
+        error: 'Invalid or unsupported method'
+      }
+    ])
+  })
+
   it('returns a stable error when Chrome returns an empty response', async () => {
     const harness = createBridgeHarness([null])
 

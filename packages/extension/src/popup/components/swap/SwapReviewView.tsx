@@ -27,6 +27,9 @@ interface SwapReviewViewProps {
   selectedFeeZec?: string
   /** Selected amount exceeds the source's available funds or destination-specific Max. */
   insufficient?: boolean
+  feeUnavailable?: boolean
+  feeError?: boolean
+  onRetryFee?: () => void
   fundingSource?: FundingSource
 }
 
@@ -46,6 +49,9 @@ export function SwapReviewView({
   feeTier,
   selectedFeeZec,
   insufficient,
+  feeUnavailable,
+  feeError,
+  onRetryFee,
   fundingSource
 }: SwapReviewViewProps) {
   return (
@@ -117,12 +123,17 @@ export function SwapReviewView({
             Amount exceeds balance at this fee. Go back to lower the amount or switch fee tier.
           </p>
         )}
+        {feeError && onRetryFee && (
+          <button type="button" className="text-xs text-destructive mt-3 px-1" onClick={onRetryFee}>
+            Fee estimate unavailable. Retry
+          </button>
+        )}
       </div>
 
       <div className="page-footer">
         <Button
           onClick={onConfirm}
-          disabled={isLoading || insufficient}
+          disabled={isLoading || insufficient || feeUnavailable}
           isLoading={isLoading}
           className="w-full h-[50px] bg-primary hover:bg-primary/90 text-black font-semibold rounded-xl"
         >

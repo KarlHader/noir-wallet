@@ -23,6 +23,8 @@ import type {
   BallotDecision
 } from '../worker/types'
 import type { TransferResult } from './transfer-result'
+import type { FeeQuote, QuotedFeeEstimate } from '@/config/fee'
+import type { MaxTransferEstimate } from '../worker/types'
 import type {
   Network,
   ZcashBalance,
@@ -399,18 +401,19 @@ export class ZcashWalletCore {
       amount: amountZatoshis,
       memo: params.memo,
       fundingSource: params.fundingSource,
-      marginalFeeZats: params.marginalFeeZats
+      marginalFeeZats: params.marginalFeeZats,
+      feeQuoteId: params.feeQuoteId
     })
   }
 
   /**
    * Build an unsigned shielding PCZT (transparent -> Orchard, hardware wallet flow).
    */
-  async pcztShieldCreate(marginalFeeZats?: number): Promise<HardwarePcztPair> {
+  async pcztShieldCreate(marginalFeeZats?: number, feeQuoteId?: string): Promise<HardwarePcztPair> {
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
-    return this.client.pcztShieldCreate(this.accountId, marginalFeeZats)
+    return this.client.pcztShieldCreate(this.accountId, marginalFeeZats, feeQuoteId)
   }
 
   /**
@@ -601,18 +604,25 @@ export class ZcashWalletCore {
       amount: amountZatoshis,
       memo: params.memo,
       fundingSource: params.fundingSource,
-      marginalFeeZats: params.marginalFeeZats
+      marginalFeeZats: params.marginalFeeZats,
+      feeQuoteId: params.feeQuoteId
     })
   }
 
-  /** Estimate the network fee (zatoshis) for a transfer at the given marginal fee. */
+  async getFeeQuote(): Promise<FeeQuote> {
+    if (this.accountId === null) throw new Error('Account not initialized')
+    return this.client.getFeeQuote(this.accountId)
+  }
+
+  /** Preserve the worker's quoted rate alongside the total fee. */
   async estimateTransferFee(
     to: string,
     amount: string,
     memo: string | undefined,
-    marginalFeeZats: number,
-    fundingSource: FundingSource = 'shielded'
-  ): Promise<string> {
+    marginalFeeZats: number | undefined,
+    fundingSource: FundingSource = 'shielded',
+    feeQuoteId?: string
+  ): Promise<QuotedFeeEstimate> {
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
@@ -623,18 +633,24 @@ export class ZcashWalletCore {
       value: amountZatoshis,
       memo,
       fundingSource,
-      marginalFeeZats
+      marginalFeeZats,
+      feeQuoteId
     })
-    return estimate.feeZats
+    return {
+      feeZats: estimate.feeZats,
+      marginalFeeZats: estimate.marginalFeeZats,
+      feeQuote: estimate.feeQuote
+    }
   }
 
   /** Estimate the exact maximum payment and fee for a transfer proposal. */
   async estimateMaxTransfer(
     to: string,
     memo: string | undefined,
-    marginalFeeZats: number,
-    fundingSource: FundingSource = 'shielded'
-  ): Promise<{ maxAmountZats: string; feeZats: string }> {
+    marginalFeeZats: number | undefined,
+    fundingSource: FundingSource = 'shielded',
+    feeQuoteId?: string
+  ): Promise<MaxTransferEstimate> {
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
@@ -643,21 +659,26 @@ export class ZcashWalletCore {
       to,
       memo,
       fundingSource,
-      marginalFeeZats
+      marginalFeeZats,
+      feeQuoteId
     })
   }
 
   /** Estimate the network fee (zatoshis) for shielding transparent funds. */
-  async estimateShieldFee(marginalFeeZats: number): Promise<string> {
+  async estimateShieldFee(
+    marginalFeeZats?: number,
+    feeQuoteId?: string
+  ): Promise<QuotedFeeEstimate> {
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
-    return this.client.estimateShieldFee({ accountId: this.accountId, marginalFeeZats })
+    return this.client.estimateShieldFee({ accountId: this.accountId, marginalFeeZats, feeQuoteId })
   }
 
   async shieldFunds(
     marginalFeeZats?: number,
-    approvedAccountIndex?: number
+    approvedAccountIndex?: number,
+    feeQuoteId?: string
   ): Promise<{ txid: string; amount: string | null }> {
     if (this.watchOnly) {
       throw new Error('Watch-only wallet: use the hardware signing flow (pcztShieldCreate)')
@@ -688,7 +709,8 @@ export class ZcashWalletCore {
     const txid = await this.client.oneClickShield({
       accountIndex,
       seedPhrase,
-      marginalFeeZats
+      marginalFeeZats,
+      feeQuoteId
     })
 
     let actualAmount: string | null = null

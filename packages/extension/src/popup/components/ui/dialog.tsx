@@ -43,10 +43,12 @@ function DialogContent({
   children,
   showCloseButton = true,
   position = 'center',
+  portalContainer,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   position?: 'center' | 'bottom'
+  portalContainer?: HTMLElement
 }) {
   const positionClasses = {
     center:
@@ -56,7 +58,7 @@ function DialogContent({
   }
 
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal data-slot="dialog-portal" container={portalContainer}>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"

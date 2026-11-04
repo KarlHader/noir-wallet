@@ -14,7 +14,7 @@ Typed TypeScript SDK for connecting web apps to the Noir Wallet browser extensio
 `@noir-wallet/sdk` wraps the provider injected at `window.noirwallet` and gives your app a typed Zcash API. Use it to:
 
 - request access to one or more wallet accounts;
-- read addresses, balances, and transaction history;
+- read addresses and balances;
 - estimate the exact maximum transfer and send ZEC;
 - shield transparent funds;
 - sign and verify messages;
@@ -256,7 +256,6 @@ All wallet methods are available on `getNoirWallet().zcash`.
 | `getMaxTransfer(params)`         |       No | Calculate the exact Max amount and fee                  |
 | `sendTransaction(params)`        |      Yes | Approve and broadcast a Zcash transaction               |
 | `shieldFunds()`                  |      Yes | Move transparent funds into the shielded balance        |
-| `getTransactionHistory()`        |       No | Read on-chain and locally pending transactions          |
 | `getPublicKey(options?)`         |       No | Read the public identity key for a signing mode         |
 | `signMessage(message, options?)` |      Yes | Approve and sign a message                              |
 | `checkLendingMcaAccount()`       |       No | Read lending MCA and signing-mode status                |

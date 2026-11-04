@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Icon } from '@iconify/react'
 import { useNavigate } from '../../provider/Router'
 import { openModal } from '../../provider/ModalManager'
@@ -6,12 +6,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { buildAccountKey, useAccountDataStore } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useSettingsStore } from '@/store/settings-store'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats
-} from '@/config/fee'
+import { marginalFeeForTier, staticFeeFallbackZats } from '@/config/fee'
 import { fetchQuote, type QuoteResult } from '@/core/services/intents-api'
 import { parseAmount } from '@/lib/format'
 import { useSwapPreferences } from '@/store/swap-store'
@@ -42,6 +37,7 @@ import { getFundingSourceUnavailableReason } from '@/lib/funding-source'
 import { getFundingAmountError, getFundingBalance } from '@/lib/funding-balance'
 import { getMaxSpendableZec } from '@/config/wallet'
 import { sanitizeMemoForRecipient } from '@/lib/zcash-memo'
+import { selectSwapFeeEstimate } from '@/lib/swap-fee'
 import { FundingSourceSelector } from '../../components/transaction/FundingSourceSelector'
 import { HardwareSigningPending } from '../../components/hardware/HardwareSigningPending'
 import { getNoirSwapReferral } from '@/config/near'
@@ -49,6 +45,19 @@ import { getNoirSwapReferral } from '@/config/near'
 const SWAP_FAILED_COPY = getIntentsStatusCopy('FAILED', { actionName: 'Swap' })
 
 type SwapViewStep = 'input' | 'review' | 'deposit'
+
+function feeContextKey() {
+  const wallet = useWalletStore.getState()
+  const settings = useSettingsStore.getState()
+  return JSON.stringify([
+    wallet.currentWalletId,
+    wallet.currentAccountId,
+    wallet.currentNetwork,
+    settings.rpcEndpointModes.zcash,
+    settings.rpcEndpointPreferences.zcash,
+    settings.customRpcEndpoints.zcash
+  ])
+}
 
 export function Swap() {
   const { navigate } = useNavigate()
@@ -80,6 +89,15 @@ export function Swap() {
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
   const [maxSelected, setMaxSelected] = useState(false)
   const [fundingSource, setFundingSource] = useState<FundingSource>('shielded')
+  const confirmationInFlight = useRef(false)
+  const reviewRevision = useRef(0)
+
+  useEffect(
+    () => () => {
+      reviewRevision.current += 1
+    },
+    []
+  )
 
   const sourceBalance = getFundingBalance(storeBalance, fundingSource)
   const rawSpendable = swap.isZecToOther ? sourceBalance.spendable : '0'
@@ -109,21 +127,20 @@ export function Swap() {
     type: 'send',
     to: swap.depositAddress,
     amount: swap.amountIn,
+    memo: onChainSwapMemo,
     fundingSource,
+    feeTier,
     enabled: swap.isZecToOther && !!swap.depositAddress && !maxSelected && !isMaxTransferAmount
   })
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
-  const maxFeeByTier = deriveFeeByTierFromEstimate(
-    maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-    feeTier,
-    maxTransfer.error
-  )
+  const feeByTier = feeEstimate.feeByTier
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
   const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
   const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
-  const estimatedFeeZec = safeBig(selectedFeeZats).div(1e8).toFixed()
   const extraFeeZec = safeBig(Math.max(0, selectedFeeZats - standardFeeZats))
     .div(1e8)
     .toNumber()
@@ -137,7 +154,27 @@ export function Swap() {
     ? safeBig(maxTransfer.maxAmount)
     : fallbackSpendable
   const spendableBalance = swap.isZecToOther ? effectiveSpendable.toFixed() : '0'
-  const networkFee = maxTransfer.fee && isMaxTransferAmount ? maxTransfer.fee : estimatedFeeZec
+  const selectedFee = selectSwapFeeEstimate(
+    swap.amountIn,
+    maxSelected,
+    maxTransfer.maxAmount,
+    { ...maxTransfer, feeZats: maxTransfer.feeByTier[feeTier] },
+    feeEstimate
+  )
+  const networkFee =
+    selectedFee.feeZats === null ? undefined : safeBig(selectedFee.feeZats).div(1e8).toFixed()
+  const selectedFeeQuote = selectedFee.feeQuote
+  const feeReady = selectedFee.ready
+  const latestFee = useRef(selectedFee)
+  latestFee.current = selectedFee
+
+  useEffect(() => {
+    if (!swap.isZecToOther || !selectedFee.staleMax || isSending) return
+    reviewRevision.current += 1
+    setMaxSelected(false)
+    setViewStep('input')
+    toast.info('Maximum amount changed', 'Review the quote again before sending.')
+  }, [swap.isZecToOther, selectedFee.staleMax, isSending])
 
   const amountError = swap.isZecToOther
     ? getFundingAmountError(swap.amountIn, sourceBalance, maxTransfer.maxAmount)
@@ -237,14 +274,16 @@ export function Swap() {
 
         if (!isZecToOther || !maxSelected) break
 
+        const feeQuote = await accountManager.getFeeQuote()
         const estimate = await accountManager.estimateMaxTransfer(
           quote.depositAddress,
           sanitizeMemoForRecipient(
             quote.depositAddress,
             `Swap ${tokenIn.symbol} → ${tokenOut.symbol}`
           ),
-          marginalFeeForTier(feeTier),
-          fundingSource
+          marginalFeeForTier(feeTier, feeQuote.standardMarginalFeeZats),
+          fundingSource,
+          feeQuote.id
         )
         const exactMax = safeBig(estimate.maxAmountZats).div(1e8).toFixed()
         if (safeBig(quotedAmount).eq(exactMax)) break
@@ -325,260 +364,281 @@ export function Swap() {
   )
 
   const handleConfirmSwap = useCallback(async () => {
-    if (!swap.depositAddress) return
-    if (swap.isZecToOther) {
-      if (amountError) {
-        toast.error(amountErrorCopy || 'Amount exceeds available balance.')
-        return
-      }
-
-      let exactMax = maxTransfer.maxAmount
-      if (!exactMax) {
+    if (confirmationInFlight.current) return
+    confirmationInFlight.current = true
+    const revision = reviewRevision.current
+    const contextKey = feeContextKey()
+    setIsSending(true)
+    try {
+      if (!swap.depositAddress) return
+      if (swap.isZecToOther) {
+        if (!feeReady || !selectedFeeQuote || networkFee === undefined) {
+          toast.error('Network fee estimate is unavailable. Please try again.')
+          return
+        }
         try {
-          const estimate = await accountManager.estimateMaxTransfer(
-            swap.depositAddress,
-            onChainSwapMemo,
-            marginalFeeForTier(feeTier),
-            fundingSource
-          )
-          exactMax = safeBig(estimate.maxAmountZats).div(1e8).toFixed()
-        } catch {
-          // The transaction builder remains the source of truth if live estimation is unavailable.
-        }
-      }
-      if (exactMax && safeBig(swap.amountIn || '0').gt(exactMax)) {
-        toast.error(
-          'Amount exceeds spendable balance',
-          'Lower the amount or select Max to include the network fee.'
-        )
-        return
-      }
-
-      const quote = quoteResult?.quoteSuccessResult?.quote
-      const quoteBinding = quote
-        ? {
-            depositAddress: quote.depositAddress,
-            originAsset: swap.tokenIn?.assetId,
-            destinationAsset: swap.tokenOut?.assetId,
-            minAmountOut: quote.minAmountOut,
-            recipient: quotedRecipient,
-            deadline:
-              quote.deadline && Number.isFinite(Date.parse(quote.deadline))
-                ? Date.parse(quote.deadline)
-                : undefined
+          const currentQuote = await accountManager.getFeeQuote()
+          if (revision !== reviewRevision.current || contextKey !== feeContextKey()) return
+          if (
+            currentQuote.id !== selectedFeeQuote.id ||
+            selectedFeeQuote.expiresAt <= Date.now() ||
+            !latestFee.current.ready ||
+            latestFee.current.feeQuote?.id !== selectedFeeQuote.id ||
+            latestFee.current.feeZats !== selectedFee.feeZats
+          ) {
+            throw new Error('Fee estimate changed')
           }
-        : undefined
-      const monitorParams =
-        swap.tokenIn && swap.tokenOut
-          ? {
-              kind: 'swap' as const,
-              direction: 'from_zcash' as const,
-              depositAddress: swap.depositAddress,
-              tokenInSymbol: swap.tokenIn.symbol,
-              tokenOutSymbol: swap.tokenOut.symbol,
-              amountOut: swap.amountOut,
-              usdAmount: calculateSwapUsdAmount({
-                amountIn: swap.amountIn,
-                inputPrice: swap.tokenIn.price,
-                amountOut: swap.amountOut,
-                outputPrice: swap.tokenOut.price
-              }),
-              actionName: 'Swap',
-              originChain: swap.tokenIn.blockchain,
-              destinationChain: swap.tokenOut.blockchain,
-              originAsset: swap.tokenIn.assetId,
-              destinationAsset: swap.tokenOut.assetId,
-              quoteExpiresAt: quoteBinding?.deadline
-            }
-          : undefined
-
-      const marginalFeeZats = marginalFeeForTier(feeTier)
-
-      const submitBase = swapEventBase()
-      sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_SUBMITTED, {
-        ...submitBase,
-        hasTransaction: 1,
-        extra: { ...submitBase.extra, hardware: isHardwareWallet, funding_source: fundingSource }
-      })
-
-      // Hardware wallets sign the deposit transfer in a dedicated tab.
-      if (isHardwareWallet) {
-        const { currentWalletId } = useWalletStore.getState()
-        if (!currentWalletId || !currentAccount) return
-        const request = {
-          kind: 'swap' as const,
-          walletId: currentWalletId,
-          accountId: currentAccount.id,
-          to: swap.depositAddress,
-          amount: swap.amountIn,
-          displayTo: quotedRecipient,
-          quoteBinding,
-          monitorParams,
-          fundingSource,
-          marginalFeeZats
+        } catch {
+          if (isMaxFeeMode) maxTransfer.refresh()
+          else feeEstimate.refresh()
+          return
         }
-        const isSidePanel = isSidePanelSurface(window.location.search)
-
-        if (!isSidePanel) {
-          await openHardwareSignTab(request)
-          window.close()
+        if (amountError) {
+          toast.error(amountErrorCopy || 'Amount exceeds available balance.')
           return
         }
 
-        setIsHardwareSigning(true)
-        try {
-          const result = await openHardwareSignAndWait(request)
-          if (result.status === 'success') {
-            navigateToSwapResult(result.txHash)
-          } else if (result.status === 'timeout') {
-            toast.error('Hardware signing timed out', 'The swap review has been restored.')
-          } else {
-            toast.info('Hardware signing cancelled')
-          }
-        } catch (cause) {
-          toast.error('Could not open hardware signing', classifyError(cause).userMessage)
-        } finally {
-          setIsHardwareSigning(false)
+        const exactMax = maxTransfer.maxAmount
+        if (exactMax && safeBig(swap.amountIn || '0').gt(exactMax)) {
+          toast.error(
+            'Amount exceeds spendable balance',
+            'Lower the amount or select Max to include the network fee.'
+          )
+          return
         }
-        return
-      }
 
-      navigateToSwapResult()
-      setIsSending(true)
-
-      let result: Awaited<ReturnType<typeof sendTransaction>>
-      try {
-        const fromAddress = currentAccount?.addresses[fundingSource] || ''
-        const sentBase = swapEventBase()
-        const failedBase = swapEventBase()
-        result = await sendTransaction({
-          to: swap.depositAddress,
-          amount: swap.amountIn,
-          from: fromAddress,
-          fromType: fundingSource,
-          txType: 'swap',
-          displayTo: quotedRecipient,
-          memo: onChainSwapMemo,
-          quoteBinding,
-          monitorParams,
-          marginalFeeZats,
-          analytics: {
-            onSuccess: {
-              name: ANALYTICS_EVENTS.SWAP_DEPOSIT_SENT,
-              options: {
-                ...sentBase,
-                hasTransaction: 1,
-                params: { from_token: swap.tokenIn?.symbol, to_token: swap.tokenOut?.symbol }
-              }
-            },
-            onFail: {
-              name: ANALYTICS_EVENTS.SWAP_FAILED,
-              options: failedBase
+        const quote = quoteResult?.quoteSuccessResult?.quote
+        const quoteBinding = quote
+          ? {
+              depositAddress: quote.depositAddress,
+              originAsset: swap.tokenIn?.assetId,
+              destinationAsset: swap.tokenOut?.assetId,
+              minAmountOut: quote.minAmountOut,
+              recipient: quotedRecipient,
+              deadline:
+                quote.deadline && Number.isFinite(Date.parse(quote.deadline))
+                  ? Date.parse(quote.deadline)
+                  : undefined
             }
-          }
-        })
-      } catch (cause) {
-        result = { step: 'failed', error: classifyError(cause).userMessage }
-      } finally {
-        setIsSending(false)
-      }
+          : undefined
+        const monitorParams =
+          swap.tokenIn && swap.tokenOut
+            ? {
+                kind: 'swap' as const,
+                direction: 'from_zcash' as const,
+                depositAddress: swap.depositAddress,
+                tokenInSymbol: swap.tokenIn.symbol,
+                tokenOutSymbol: swap.tokenOut.symbol,
+                amountOut: swap.amountOut,
+                usdAmount: calculateSwapUsdAmount({
+                  amountIn: swap.amountIn,
+                  inputPrice: swap.tokenIn.price,
+                  amountOut: swap.amountOut,
+                  outputPrice: swap.tokenOut.price
+                }),
+                actionName: 'Swap',
+                originChain: swap.tokenIn.blockchain,
+                destinationChain: swap.tokenOut.blockchain,
+                originAsset: swap.tokenIn.assetId,
+                destinationAsset: swap.tokenOut.assetId,
+                quoteExpiresAt: quoteBinding?.deadline
+              }
+            : undefined
 
-      if (result.step === 'success') {
-        if (result.txHash) updateSwapTxHash(result.txHash)
-      } else if (result.step === 'pending') {
-        const currentResult = useTransactionResultStore.getState().data
-        if (
-          currentResult?.type === 'swap' &&
-          currentResult.depositAddress === swap.depositAddress
-        ) {
+        const marginalFeeZats = marginalFeeForTier(
+          feeTier,
+          selectedFeeQuote.standardMarginalFeeZats
+        )
+
+        const submitBase = swapEventBase()
+        sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_SUBMITTED, {
+          ...submitBase,
+          hasTransaction: 1,
+          extra: { ...submitBase.extra, hardware: isHardwareWallet, funding_source: fundingSource }
+        })
+
+        // Hardware wallets sign the deposit transfer in a dedicated tab.
+        if (isHardwareWallet) {
+          const { currentWalletId } = useWalletStore.getState()
+          if (!currentWalletId || !currentAccount) return
+          const request = {
+            kind: 'swap' as const,
+            walletId: currentWalletId,
+            accountId: currentAccount.id,
+            to: swap.depositAddress,
+            amount: swap.amountIn,
+            displayTo: quotedRecipient,
+            quoteBinding,
+            monitorParams,
+            fundingSource,
+            marginalFeeZats,
+            feeQuoteId: selectedFeeQuote.id,
+            feeTier
+          }
+          const isSidePanel = isSidePanelSurface(window.location.search)
+
+          if (!isSidePanel) {
+            await openHardwareSignTab(request)
+            window.close()
+            return
+          }
+
+          setIsHardwareSigning(true)
+          try {
+            const result = await openHardwareSignAndWait(request)
+            if (result.status === 'success') {
+              navigateToSwapResult(result.txHash)
+            } else if (result.status === 'timeout') {
+              toast.error('Hardware signing timed out', 'The swap review has been restored.')
+            } else {
+              toast.info('Hardware signing cancelled')
+            }
+          } catch (cause) {
+            toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+          } finally {
+            setIsHardwareSigning(false)
+          }
+          return
+        }
+
+        navigateToSwapResult()
+
+        let result: Awaited<ReturnType<typeof sendTransaction>>
+        try {
+          const fromAddress = currentAccount?.addresses[fundingSource] || ''
+          const sentBase = swapEventBase()
+          const failedBase = swapEventBase()
+          result = await sendTransaction({
+            to: swap.depositAddress,
+            amount: swap.amountIn,
+            from: fromAddress,
+            fromType: fundingSource,
+            txType: 'swap',
+            displayTo: quotedRecipient,
+            memo: onChainSwapMemo,
+            quoteBinding,
+            monitorParams,
+            marginalFeeZats,
+            feeQuoteId: selectedFeeQuote.id,
+            feeTier,
+            fee: networkFee,
+            analytics: {
+              onSuccess: {
+                name: ANALYTICS_EVENTS.SWAP_DEPOSIT_SENT,
+                options: {
+                  ...sentBase,
+                  hasTransaction: 1,
+                  params: { from_token: swap.tokenIn?.symbol, to_token: swap.tokenOut?.symbol }
+                }
+              },
+              onFail: {
+                name: ANALYTICS_EVENTS.SWAP_FAILED,
+                options: failedBase
+              }
+            }
+          })
+        } catch (cause) {
+          result = { step: 'failed', error: classifyError(cause).userMessage }
+        }
+
+        if (result.step === 'success') {
+          if (result.txHash) updateSwapTxHash(result.txHash)
+        } else if (result.step === 'pending') {
+          const currentResult = useTransactionResultStore.getState().data
+          if (
+            currentResult?.type === 'swap' &&
+            currentResult.depositAddress === swap.depositAddress
+          ) {
+            setResult(
+              {
+                type: 'zcash',
+                step: 'pending',
+                amount: swap.amountIn,
+                error: result.error,
+                accountKey: result.accountKey,
+                transactionId: result.transactionId,
+                timestamp: result.timestamp
+              },
+              '/'
+            )
+          }
+        } else if (result.step === 'failed') {
           setResult(
             {
               type: 'zcash',
-              step: 'pending',
+              step: 'failed',
               amount: swap.amountIn,
-              error: result.error,
-              accountKey: result.accountKey,
-              transactionId: result.transactionId,
-              timestamp: result.timestamp
+              customTitle: SWAP_FAILED_COPY.title,
+              customDescription: result.error || SWAP_FAILED_COPY.description || '',
+              error: result.error
             },
             '/'
           )
         }
-      } else if (result.step === 'failed') {
-        setResult(
-          {
-            type: 'zcash',
-            step: 'failed',
-            amount: swap.amountIn,
-            customTitle: SWAP_FAILED_COPY.title,
-            customDescription: result.error || SWAP_FAILED_COPY.description || '',
-            error: result.error
-          },
-          '/'
-        )
-      }
-    } else {
-      const quote = quoteResult?.quoteSuccessResult?.quote
-      const walletState = useWalletStore.getState()
-      if (
-        !quote ||
-        !swap.tokenIn ||
-        !swap.tokenOut ||
-        !currentAccount ||
-        !walletState.currentWalletId
-      ) {
-        toast.error('Swap quote is no longer available')
-        return
-      }
-
-      setIsSending(true)
-      try {
-        const accountKey = buildAccountKey(
-          walletState.currentNetwork,
-          walletState.currentWalletId,
-          currentAccount.id
-        )
-        const progressResponse = await chrome.runtime.sendMessage({
-          type: 'REGISTER_INTENTS_PROGRESS',
-          progress: {
-            kind: 'swap',
-            direction: 'to_zcash',
-            depositAddress: quote.depositAddress,
-            tokenInSymbol: swap.tokenIn.symbol,
-            tokenOutSymbol: swap.tokenOut.symbol,
-            tokenInIcon: swap.tokenIn.icon || undefined,
-            tokenOutIcon: swap.tokenOut.icon || undefined,
-            amountIn: swap.amountIn,
-            amountOut: quote.amountOutFormatted,
-            usdAmount: calculateSwapUsdAmount({
-              amountIn: swap.amountIn,
-              inputPrice: swap.tokenIn.price,
-              amountOut: quote.amountOutFormatted,
-              outputPrice: swap.tokenOut.price
-            }),
-            actionName: 'Swap',
-            accountKey,
-            originChain: swap.tokenIn.blockchain,
-            destinationChain: swap.tokenOut.blockchain,
-            originAsset: swap.tokenIn.assetId,
-            destinationAsset: swap.tokenOut.assetId,
-            quoteExpiresAt:
-              quote.deadline && Number.isFinite(Date.parse(quote.deadline))
-                ? Date.parse(quote.deadline)
-                : undefined
-          }
-        })
-        if (!progressResponse?.success) {
-          throw new Error(progressResponse?.error || 'Failed to save swap progress')
+      } else {
+        const quote = quoteResult?.quoteSuccessResult?.quote
+        const walletState = useWalletStore.getState()
+        if (
+          !quote ||
+          !swap.tokenIn ||
+          !swap.tokenOut ||
+          !currentAccount ||
+          !walletState.currentWalletId
+        ) {
+          toast.error('Swap quote is no longer available')
+          return
         }
 
-        sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_DEPOSIT_SHOWN, swapEventBase())
-        setViewStep('deposit')
-      } catch (error) {
-        toast.error('Could not prepare deposit', classifyError(error).userMessage)
-      } finally {
-        setIsSending(false)
+        try {
+          const accountKey = buildAccountKey(
+            walletState.currentNetwork,
+            walletState.currentWalletId,
+            currentAccount.id
+          )
+          const progressResponse = await chrome.runtime.sendMessage({
+            type: 'REGISTER_INTENTS_PROGRESS',
+            progress: {
+              kind: 'swap',
+              direction: 'to_zcash',
+              depositAddress: quote.depositAddress,
+              tokenInSymbol: swap.tokenIn.symbol,
+              tokenOutSymbol: swap.tokenOut.symbol,
+              tokenInIcon: swap.tokenIn.icon || undefined,
+              tokenOutIcon: swap.tokenOut.icon || undefined,
+              amountIn: swap.amountIn,
+              amountOut: quote.amountOutFormatted,
+              usdAmount: calculateSwapUsdAmount({
+                amountIn: swap.amountIn,
+                inputPrice: swap.tokenIn.price,
+                amountOut: quote.amountOutFormatted,
+                outputPrice: swap.tokenOut.price
+              }),
+              actionName: 'Swap',
+              accountKey,
+              originChain: swap.tokenIn.blockchain,
+              destinationChain: swap.tokenOut.blockchain,
+              originAsset: swap.tokenIn.assetId,
+              destinationAsset: swap.tokenOut.assetId,
+              quoteExpiresAt:
+                quote.deadline && Number.isFinite(Date.parse(quote.deadline))
+                  ? Date.parse(quote.deadline)
+                  : undefined
+            }
+          })
+          if (!progressResponse?.success) {
+            throw new Error(progressResponse?.error || 'Failed to save swap progress')
+          }
+          if (revision !== reviewRevision.current) return
+
+          sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_DEPOSIT_SHOWN, swapEventBase())
+          setViewStep('deposit')
+        } catch (error) {
+          toast.error('Could not prepare deposit', classifyError(error).userMessage)
+        }
       }
+    } finally {
+      confirmationInFlight.current = false
+      setIsSending(false)
     }
   }, [
     swap.depositAddress,
@@ -595,6 +655,10 @@ export function Swap() {
     amountError,
     amountErrorCopy,
     maxTransfer.maxAmount,
+    selectedFeeQuote,
+    selectedFee.feeZats,
+    feeReady,
+    networkFee,
     quoteResult,
     quotedRecipient,
     navigateToSwapResult,
@@ -705,7 +769,13 @@ export function Swap() {
   const getHeaderProps = () => {
     switch (viewStep) {
       case 'review':
-        return { showBack: true, onBack: () => setViewStep('input') }
+        return {
+          showBack: true,
+          onBack: () => {
+            reviewRevision.current += 1
+            setViewStep('input')
+          }
+        }
       case 'deposit':
         return { showBack: true, onBack: () => setViewStep('input') }
       default:
@@ -751,6 +821,9 @@ export function Swap() {
           feeTier={swap.isZecToOther ? feeTier : undefined}
           selectedFeeZec={swap.isZecToOther ? networkFee : undefined}
           insufficient={hasInsufficientFunds}
+          feeUnavailable={swap.isZecToOther && !feeReady}
+          feeError={swap.isZecToOther && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)}
+          onRetryFee={isMaxFeeMode ? maxTransfer.refresh : feeEstimate.refresh}
           fundingSource={swap.isZecToOther ? fundingSource : undefined}
         />
       )
@@ -800,6 +873,7 @@ export function Swap() {
         feeTier={feeTier}
         onFeeTierChange={setFeeTier}
         feeByTier={displayedFeeByTier}
+        feeLoadingByTier={displayedFeeLoadingByTier}
         feeLoading={displayedFeeLoading}
         onAmountInChange={value => {
           setMaxSelected(false)

@@ -19,7 +19,7 @@ if (!wallet) throw new Error('Noir Wallet is not installed')
     Connect, read addresses, balances, and send limits.
   </Card>
   <Card title="Transactions" href="#transactions" icon="Send">
-    Send ZEC, shield funds, and read transaction history.
+    Send ZEC and shield funds.
   </Card>
   <Card title="Identity" href="#identity-methods" icon="ShieldCheck">
     Read public identities and request message signatures.
@@ -177,6 +177,12 @@ Use the same destination, memo, and funding source with `sendTransaction()`. Cho
 fee tier during approval can change the final maximum. A Max estimate does not establish hardware
 signing support: Keystone cannot complete a send from transparent funds.
 
+Standard uses the connected wallet RPC's recommended marginal fee; Fast uses four times that rate.
+If the RPC does not support recommendations, times out after five seconds, or returns an invalid
+rate, the wallet uses 5,000 or 20,000 zat/action, respectively. Approval keeps the estimated rate
+for up to five minutes. An expired estimate or a change of account, network, or RPC requires a
+new estimate before confirmation. These internal fee snapshots do not change the SDK response.
+
   </Accordion>
 </Accordions>
 
@@ -223,27 +229,6 @@ transparent funds, opens approval, and returns the transaction ID after broadcas
 Confirmed funds must meet the wallet's minimum shielding threshold. Pending transparent funds are
 excluded. Ledger completes hardware signing in a separate tab. Keystone cannot sign the transparent
 inputs required to complete a shield transaction.
-
-  </Accordion>
-
-  <Accordion title="getTransactionHistory() — Read local and on-chain history" id="gettransactionhistory">
-
-```ts
-getTransactionHistory(): Promise<Array<{
-  txid: string
-  type: string
-  amount: string
-  status: string
-  timestamp: number
-  memo?: string
-}>>
-```
-
-Returns the active account's newest entries first. `timestamp` is Unix time in milliseconds.
-Lending entries use a `lending_` type prefix, and locally confirming states may be normalized to
-`mined`. A locally pending entry may have an empty `txid`. A locked wallet returns an empty array.
-
-Treat `type` and `status` as display values rather than exhaustive protocol enums.
 
   </Accordion>
 </Accordions>
@@ -387,7 +372,6 @@ The typed SDK is recommended. These are the raw method names used internally:
 | `getMaxTransfer()`         | `zcash_getMaxTransfer`         |
 | `sendTransaction()`        | `zcash_sendTransaction`        |
 | `shieldFunds()`            | `zcash_shieldFunds`            |
-| `getTransactionHistory()`  | `zcash_getTransactionHistory`  |
 | `getPublicKey()`           | `zcash_getPublicKey`           |
 | `signMessage()`            | `zcash_signMessage`            |
 | `checkLendingMcaAccount()` | `zcash_checkLendingMcaAccount` |

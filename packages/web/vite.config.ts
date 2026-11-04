@@ -13,6 +13,7 @@ const repositoryUrl = `https://github.com/${repository}`
 const releasesUrl = `${repositoryUrl}/releases`
 
 export default defineConfig({
+  cacheDir: resolve(__dirname, '../../output/node_modules/.vite/web'),
   plugins: [
     react(),
     tailwindcss(),
@@ -47,7 +48,7 @@ export default defineConfig({
   },
   server: {
     port: 5001,
-    strictPort: true,
+    strictPort: false,
     proxy: {
       '/api/frost-signups': 'http://127.0.0.1:8788'
     }

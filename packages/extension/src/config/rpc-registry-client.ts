@@ -1,5 +1,6 @@
 import type { RpcEndpointOption } from './rpc-endpoints'
 import { isCustomRpcEndpointId } from './custom-rpc'
+import { isValidMarginalFeeZats } from './fee'
 
 export const RPC_REGISTRY_URL = 'https://rpc.zknoir.com/v1/rpc-endpoints'
 export const RPC_PROBE_TIMEOUT_MS = 5_000
@@ -178,6 +179,64 @@ export async function fetchLatestBlockHeight(
   )
   if (dataFrames.length !== 1) throw new Error('RPC latest block returned multiple data frames')
   return readLatestBlockHeight(dataFrames[0])
+}
+
+export async function fetchStandardMarginalFee(
+  rpcUrl: string,
+  fetchFunction: typeof fetch = fetch,
+  timeoutMs = RPC_PROBE_TIMEOUT_MS,
+  signal?: AbortSignal
+): Promise<number> {
+  const frames = await fetchGrpcWebData(
+    rpcUrl,
+    'GetStandardFee',
+    new Uint8Array(5),
+    fetchFunction,
+    timeoutMs,
+    signal
+  )
+  if (frames.length !== 1) throw new Error('RPC standard fee returned multiple data frames')
+  const message = frames[0]
+  let offset = 0
+  let fee: number | undefined
+  while (offset < message.length) {
+    const tag = readVarint(message, offset)
+    offset = tag.next
+    if (tag.value > 0xffffffff) throw new Error('RPC standard fee returned an invalid field')
+    const field = Math.floor(tag.value / 8)
+    const wireType = tag.value % 8
+    if (field === 0) throw new Error('RPC standard fee returned an invalid field')
+    if (wireType === 0) {
+      let value = 0n
+      let count = 0
+      while (true) {
+        if (offset >= message.length || count >= 10) throw new Error('Invalid standard fee varint')
+        const byte = message[offset++]
+        if (count === 9 && byte > 1) throw new Error('Invalid standard fee varint')
+        value |= BigInt(byte & 0x7f) << BigInt(count++ * 7)
+        if ((byte & 0x80) === 0) break
+      }
+      if (field === 1) {
+        if (fee !== undefined) throw new Error('RPC standard fee returned duplicate fees')
+        fee = Number(value)
+        if (!isValidMarginalFeeZats(fee)) throw new Error('RPC returned an invalid standard fee')
+      }
+    } else if (field === 1) {
+      throw new Error('RPC returned an invalid standard fee field')
+    } else if (wireType === 1) {
+      offset += 8
+    } else if (wireType === 5) {
+      offset += 4
+    } else if (wireType === 2) {
+      const length = readVarint(message, offset)
+      offset = length.next + length.value
+    } else {
+      throw new Error('RPC standard fee returned an unsupported field')
+    }
+    if (offset > message.length) throw new Error('RPC standard fee returned a truncated response')
+  }
+  if (fee === undefined) throw new Error('RPC returned no standard fee')
+  return fee
 }
 
 export async function fetchBlockTime(

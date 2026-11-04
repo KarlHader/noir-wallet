@@ -59,6 +59,8 @@ export interface HardwareSignRequest {
   origin?: string
   /** ZIP-317 marginal fee (zatoshis) for the selected fee tier; defaults to Standard. */
   marginalFeeZats?: number
+  feeQuoteId?: string
+  feeTier?: import('@/config/fee').FeeTier
   createdAt: number
 }
 

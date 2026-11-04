@@ -115,6 +115,7 @@ interface SwapInputViewProps {
   /** Estimated fee per tier in zats; null while pending. */
   feeByTier?: Record<FeeTier, number | null>
   feeLoading?: boolean
+  feeLoadingByTier?: Record<FeeTier, boolean>
   onAmountInChange: (value: string) => void
   onMaxClick?: () => void
   onRecipientAddressChange: (value: string) => void
@@ -242,6 +243,7 @@ export function SwapInputView({
   onFeeTierChange,
   feeByTier,
   feeLoading,
+  feeLoadingByTier,
   onAmountInChange,
   onMaxClick,
   onRecipientAddressChange,
@@ -385,6 +387,7 @@ export function SwapInputView({
               onTierChange={onFeeTierChange!}
               feeByTier={feeByTier!}
               loading={feeLoading}
+              loadingByTier={feeLoadingByTier}
             />
           )}
         </div>

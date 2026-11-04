@@ -119,7 +119,12 @@ function createHarness(t, connection, extraDependencies = {}) {
       rehydrateWalletStore: async () => {}
     },
     '@/store/account-data-store': {
-      useAccountDataStore: { getState: () => ({ getBalance: () => balance }) }
+      useAccountDataStore: {
+        getState: () => ({
+          getBalance: (_network, _walletId, accountId) =>
+            accountId === 'account-b' ? { ...balance, total: '99' } : balance
+        })
+      }
     },
     '@/lib/hardware-capabilities': {
       getHardwareDAppMethodUnavailableReason: () => null
@@ -159,6 +164,34 @@ function connection(overrides = {}) {
     ...overrides
   }
 }
+
+test('transaction history is unavailable even to authorized third-party and first-party sites', async t => {
+  for (const origin of [ORIGIN, 'https://app.zknoir.com']) {
+    await t.test(origin, async t => {
+      let historyReads = 0
+      const { handler } = createHarness(
+        t,
+        connection({ origin, boundWalletId: 'wallet-a', boundAccountId: 'account-a' }),
+        {
+          '@/lib/indexed-db': {
+            async loadTransactions() {
+              historyReads++
+              return []
+            }
+          }
+        }
+      )
+      await handler.initialize()
+      await handler.restorePermissionsFromStorage()
+
+      await assert.rejects(
+        handler.handleRequest({ method: 'zcash_getTransactionHistory', origin }),
+        /Unknown method: zcash_getTransactionHistory/
+      )
+      assert.equal(historyReads, 0)
+    })
+  }
+})
 
 test('an accountless legacy connection cannot silently read or restore the current account', async t => {
   const { handler, dappManager, walletState } = createHarness(t, connection())
@@ -203,6 +236,16 @@ test('a bound single-account connection survives restore but denies another acti
     (await handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN })).total,
     balance.total
   )
+  assert.equal(
+    (
+      await handler.handleRequest({
+        method: 'zcash_getBalance',
+        origin: ORIGIN,
+        params: [{ accountId: 'wallet-a:missing' }]
+      })
+    ).total,
+    '0'
+  )
 
   walletState.currentAccountId = 'account-b'
   assert.equal(await handler.handleRequest({ method: 'zcash_getAccounts', origin: ORIGIN }), null)
@@ -210,6 +253,38 @@ test('a bound single-account connection survives restore but denies another acti
     handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN }),
     /zcash_requestAccounts/
   )
+})
+
+test('balance reads stay bound to the authorized account across an async state change', async t => {
+  for (const transition of ['switch', 'revoke', 'lock']) {
+    await t.test(transition, async t => {
+      const { handler, accountManager, dappManager, walletState, balance } = createHarness(
+        t,
+        connection({ boundWalletId: 'wallet-a', boundAccountId: 'account-a' })
+      )
+      await handler.initialize()
+      const resolveBalances = handler.resolveAccountBalances.bind(handler)
+      handler.resolveAccountBalances = async origin => {
+        const accounts = await resolveBalances(origin)
+        if (transition === 'switch') walletState.currentAccountId = 'account-b'
+        if (transition === 'revoke') await dappManager.removeConnection(ORIGIN)
+        if (transition === 'lock') accountManager.isLocked = () => true
+        return accounts
+      }
+
+      const reading = handler.handleRequest({ method: 'zcash_getBalance', origin: ORIGIN })
+      if (transition === 'switch') {
+        const result = await reading
+        assert.equal(result.total, balance.total)
+        assert.deepEqual(
+          result.accounts.map(account => account.accountId),
+          ['account-a']
+        )
+      } else {
+        await assert.rejects(reading, /Reconnect and try again/)
+      }
+    })
+  }
 })
 
 test('multi-account authorization accepts only selected accounts', async t => {

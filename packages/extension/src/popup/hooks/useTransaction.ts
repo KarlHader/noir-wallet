@@ -5,8 +5,7 @@ import { accountManager } from '@/core/wallet/account-manager'
 import type { AddressType, TransactionType, Transaction, QuoteBinding } from '@/types/wallet'
 import type { TrackOptions } from '@/lib/analytics/types'
 import { WALLET_CONFIG } from '@/config/wallet'
-import { MARGINAL_FEE_ZATS, sanitizeMarginalFeeZats } from '@/config/fee'
-import { safeBig } from '@/lib/big'
+import type { FeeTier } from '@/config/fee'
 import { classifyError } from '@/lib/errors'
 import { isValidAddTransactionResponse } from '@/lib/transaction-record-response'
 import { sanitizeMemoForRecipient } from '@/lib/zcash-memo'
@@ -28,9 +27,11 @@ export interface SendTransactionParams {
   fromType: AddressType
   txType?: TransactionType
   memo?: string
-  fee?: string
-  /** ZIP-317 marginal fee per action (zatoshis); omitted = standard tier. */
+  fee: string
+  /** Confirmed ZIP-317 rate paired with the worker-issued quote ID. */
   marginalFeeZats?: number
+  feeQuoteId?: string
+  feeTier?: FeeTier
   /** Expired transaction being retried by this send. */
   replacesTransactionId?: string
   displayTo?: string
@@ -162,8 +163,10 @@ export function useTransaction(): UseTransactionReturn {
         fromType: _fromType,
         txType = 'send',
         memo: _memo,
-        fee: explicitFee,
+        fee,
         marginalFeeZats,
+        feeQuoteId,
+        feeTier,
         replacesTransactionId,
         displayTo,
         quoteBinding,
@@ -192,15 +195,6 @@ export function useTransaction(): UseTransactionReturn {
       let hash: string | undefined
       try {
         const onChainMemo = sanitizeMemoForRecipient(to, _memo)
-        // Pending record fee: prefer caller-supplied value; otherwise derive a
-        // tier-aware approximation from marginalFeeZats so Fast tier doesn't
-        // surface as Standard. The on-chain fee will be reconciled when the
-        // tx is mined.
-        const fee =
-          explicitFee ??
-          safeBig(WALLET_CONFIG.NETWORK_FEE)
-            .times(sanitizeMarginalFeeZats(marginalFeeZats) / MARGINAL_FEE_ZATS.standard)
-            .toFixed()
         const response = await chrome.runtime.sendMessage({
           type: 'ADD_TRANSACTION',
           accountKey,
@@ -249,6 +243,8 @@ export function useTransaction(): UseTransactionReturn {
               txType,
               sendParams: { to, amount, memo: onChainMemo, fundingSource: fromType },
               marginalFeeZats,
+              feeQuoteId,
+              feeTier,
               monitorParams: monitorParams
                 ? {
                     kind: monitorParams.kind,

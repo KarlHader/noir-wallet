@@ -89,6 +89,8 @@ import { lookupBlockHeightByTime } from '../zcash/date-block-lookup'
 import { fetchBlockTime } from '@/config/rpc-registry-client'
 import { isSyncOccupyingWallet, shouldShowSyncPreflight } from '@/background/sync-status-policy'
 import { setWalletCleanupPending, setAccountDeleted } from '@/lib/wallet-metadata-storage'
+import type { FeeQuote, QuotedFeeEstimate } from '@/config/fee'
+import type { MaxTransferEstimate } from '../worker/types'
 
 export type ResolvedBirthdayHeight = {
   height: number
@@ -2360,20 +2362,29 @@ export class AccountManager {
     return fetchBlockTime(getNetworkConfig(this.network).rpcUrl, height)
   }
 
-  /** Estimate transfer fee (zatoshis) for the current account at a marginal-fee tier. */
+  async getFeeQuote(): Promise<FeeQuote> {
+    const walletId = this.store.currentWalletId
+    const account = this.getCurrentAccount()
+    if (!walletId || !account) throw new Error('No active wallet or account')
+    const core = await this.getWalletCore(walletId, account.id)
+    return core.getFeeQuote()
+  }
+
+  /** Estimate transfer fee for the current account without losing the quoted rate. */
   async estimateTransferFee(
     to: string,
     amount: string,
     memo: string | undefined,
-    marginalFeeZats: number,
-    fundingSource: FundingSource = 'shielded'
-  ): Promise<string> {
+    marginalFeeZats: number | undefined,
+    fundingSource: FundingSource = 'shielded',
+    feeQuoteId?: string
+  ): Promise<QuotedFeeEstimate> {
     const walletId = this.store.currentWalletId
     const account = this.getCurrentAccount()
     if (!walletId || !account) throw new Error('No active wallet or account')
     return this.runSpendabilityEstimate(walletId, account.id, async () => {
       const core = await this.getWalletCore(walletId, account.id)
-      return core.estimateTransferFee(to, amount, memo, marginalFeeZats, fundingSource)
+      return core.estimateTransferFee(to, amount, memo, marginalFeeZats, fundingSource, feeQuoteId)
     })
   }
 
@@ -2381,9 +2392,10 @@ export class AccountManager {
   async estimateMaxTransfer(
     to: string,
     memo: string | undefined,
-    marginalFeeZats: number,
-    fundingSource: FundingSource = 'shielded'
-  ): Promise<{ maxAmountZats: string; feeZats: string }> {
+    marginalFeeZats: number | undefined,
+    fundingSource: FundingSource = 'shielded',
+    feeQuoteId?: string
+  ): Promise<MaxTransferEstimate> {
     const walletId = this.store.currentWalletId
     const account = this.getCurrentAccount()
     if (!walletId || !account) throw new Error('No active wallet or account')
@@ -2393,7 +2405,8 @@ export class AccountManager {
       to,
       memo,
       marginalFeeZats,
-      fundingSource
+      fundingSource,
+      feeQuoteId
     )
   }
 
@@ -2402,12 +2415,13 @@ export class AccountManager {
     accountId: string,
     to: string,
     memo: string | undefined,
-    marginalFeeZats: number,
-    fundingSource: FundingSource = 'shielded'
-  ): Promise<{ maxAmountZats: string; feeZats: string }> {
+    marginalFeeZats: number | undefined,
+    fundingSource: FundingSource = 'shielded',
+    feeQuoteId?: string
+  ): Promise<MaxTransferEstimate> {
     return this.runSpendabilityEstimate(walletId, accountId, async () => {
       const core = await this.getWalletCore(walletId, accountId)
-      return core.estimateMaxTransfer(to, memo, marginalFeeZats, fundingSource)
+      return core.estimateMaxTransfer(to, memo, marginalFeeZats, fundingSource, feeQuoteId)
     })
   }
 
@@ -2481,9 +2495,12 @@ export class AccountManager {
   }
 
   /** Estimate shielding fee (zatoshis) for the current account at a marginal-fee tier. */
-  async estimateShieldFee(marginalFeeZats: number): Promise<string> {
+  async estimateShieldFee(
+    marginalFeeZats?: number,
+    feeQuoteId?: string
+  ): Promise<QuotedFeeEstimate> {
     const core = await this.getWalletCore()
-    return core.estimateShieldFee(marginalFeeZats)
+    return core.estimateShieldFee(marginalFeeZats, feeQuoteId)
   }
 
   /**
@@ -4597,6 +4614,7 @@ export class AccountManager {
       }
       const REFRESH_EVERY_N = WALLET_CONFIG.SYNC.SESSION_SETUP_REFRESH_EVERY_N_BATCHES
 
+      const syncTargetHeight = latestHeight
       const initialHeight = fullyScannedHeight || birthdayHeight
       const syncBase = fullyScannedHeight > birthdayHeight ? fullyScannedHeight : birthdayHeight
       const totalRange = latestHeight - syncBase
@@ -4688,19 +4706,9 @@ export class AccountManager {
       let lastDisplayHeight = Math.min(syncBase + displayedScannedBlocks, latestHeight)
       let lastStallKey = ''
       let stallCount = 0
-      // Chain tip observed at the moment the scan loop caught up (fullyScanned >=
-      // chainTip). Finalization (journal replay + persist) can take minutes on a
-      // large wallet, during which the live tip advances by a few blocks. The
-      // completion check must compare against this converged tip, not the freshly
-      // re-read live tip, otherwise a fully-scanned wallet is perpetually demoted
-      // to "partial" and never reports completed (tip-advance livelock).
-      let convergedTipHeight = 0
       const REORG_STALL_MAX = WALLET_CONFIG.SYNC.REORG_STALL_MAX_ATTEMPTS
-      // Tail convergence: a refresh=false batch only drains ranges queued at the
-      // last session setup, so it returns null even when the live tip advanced
-      // during a long historical scan. forceRefreshNext re-runs session setup on
-      // the next batch to re-queue that tail via the proven journal path, instead
-      // of misrouting a "null while behind tip" to the SDK single-batch fallback.
+      // A refresh=false batch only drains ranges queued at the last setup. If
+      // those ranges end before the captured target, refresh to queue the gap.
       let forceRefreshNext = false
       let lastPrepareWasRefresh = false
 
@@ -5020,7 +5028,7 @@ export class AccountManager {
             break
           }
 
-          if (wasmProgress.fullyScanned >= wasmProgress.chainTip) {
+          if (!wasmProgress.dirty && wasmProgress.fullyScanned >= syncTargetHeight) {
             const atTipWithPending =
               syncNeedsSettlement || this.summaryHasPendingBalance(noRangeSummary)
             if (atTipWithPending) {
@@ -5031,7 +5039,7 @@ export class AccountManager {
 
               if (pendingRemaining) {
                 logger.log(
-                  `At chain tip with pending balance; running settlement via syncNextBatch (up to ${settlementMaxAttempts} attempts)`,
+                  `Reached sync target with pending balance; running settlement via syncNextBatch (up to ${settlementMaxAttempts} attempts)`,
                   syncWalletId,
                   syncAccountId
                 )
@@ -5079,13 +5087,16 @@ export class AccountManager {
                   )
                 } else {
                   syncNeedsSettlement = false
-                  logger.log('Pending balance settled at chain tip', syncWalletId, syncAccountId)
+                  logger.log(
+                    'Pending balance settled after sync target',
+                    syncWalletId,
+                    syncAccountId
+                  )
                 }
               }
             }
 
             if (aborted) break
-            convergedTipHeight = Math.max(convergedTipHeight, latestHeight)
             if (totalRange > batchSize) {
               setSyncState({ syncProgress: 99, currentHeight: lastDisplayHeight })
               this.updateSyncProgressForWallet(syncWalletId, {
@@ -5116,13 +5127,8 @@ export class AccountManager {
           }
 
           if (wasmProgress.fullyScanned < wasmProgress.chainTip) {
-            // A refresh=false batch only drains ranges queued at the last session
-            // setup, so a null here means the live tip advanced mid-scan, not that
-            // we synced. Re-run session setup once to re-queue the tail and scan it
-            // through the proven journal path; this converges long historical syncs
-            // to the tip in-session. Only when a refreshing batch itself returns
-            // null-while-behind (or repeated no-progress trips the stall guard) do
-            // we fall through to the SDK single-batch safety net below.
+            // No queued range remains, but the captured target is still ahead.
+            // Refresh once to re-queue it; a second null uses the SDK fallback.
             if (!lastPrepareWasRefresh) {
               forceRefreshNext = true
               hasMore = true
@@ -5180,8 +5186,7 @@ export class AccountManager {
               Math.min(lastSummaryHeight, latestHeight, lastDisplayHeight)
             )
 
-            if (afterFallback.fullyScanned >= afterFallback.chainTip) {
-              convergedTipHeight = Math.max(convergedTipHeight, afterFallback.chainTip)
+            if (!afterFallback.dirty && afterFallback.fullyScanned >= syncTargetHeight) {
               break
             }
             if (fallbackProcessed && afterFallback.fullyScanned < afterFallback.chainTip) {
@@ -5434,15 +5439,16 @@ export class AccountManager {
 
       const finalHeight = finalWasmProgress?.fullyScanned ?? lastSummaryHeight
       const finalTargetHeight = finalWasmProgress?.chainTip ?? latestHeight
-      // A large-wallet finalization (journal replay + persist) can run for minutes,
-      // during which the live chain tip advances by a few blocks. Treat the sync as
-      // complete when the scan loop already caught up to the tip it observed at
-      // convergence, even if newer blocks arrived during finalization (the next
-      // incremental sync scans those). This breaks the tip-advance livelock where a
-      // fully-scanned wallet was perpetually reported as partial and never completed.
-      const reachedTipInLoop = convergedTipHeight > 0 && finalHeight >= convergedTipHeight
-      const isActuallyComplete = finalHeight >= finalTargetHeight || reachedTipInLoop
       const dirtyAtEnd = finalWasmProgress?.dirty === true
+      // The catch-up target is captured before scanning. Fresh blocks observed during
+      // this session belong to the next incremental sync, while a rewind or failed
+      // journal flush must still leave this job partial.
+      const isActuallyComplete =
+        finalWasmProgress !== null &&
+        !dirtyAtEnd &&
+        !snapshotFailed &&
+        !flushFailed &&
+        finalHeight >= syncTargetHeight
 
       if (!isActuallyComplete) {
         const partialHeight = Math.max(finalHeight, syncBase)
@@ -5611,16 +5617,15 @@ export class AccountManager {
         }
       } else {
         await syncJobStore
-          .markCompleted(syncWalletId, syncNetwork, finalHeight, finalTargetHeight)
+          .markCompleted(syncWalletId, syncNetwork, finalHeight, syncTargetHeight)
           .catch(() => {})
       }
 
-      const outcomeStatus =
-        skipFinalPersist && smallSyncPendingJournal
+      const outcomeStatus = shouldKeepJobInterrupted
+        ? 'partial'
+        : summaryPendingAtEnd || pendingSettlementUnresolved
           ? 'partial'
-          : summaryPendingAtEnd || pendingSettlementUnresolved
-            ? 'partial'
-            : 'completed'
+          : 'completed'
 
       logSyncDone(
         syncLogPrefix,

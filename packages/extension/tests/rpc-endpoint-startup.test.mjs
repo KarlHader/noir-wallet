@@ -52,7 +52,8 @@ test('cold startup migrates beta Zero RPC while preserving privacy preference an
   const waitingForFetch = new Promise(resolve => {
     fetchStarted = resolve
   })
-  globalThis.fetch = async () => {
+  globalThis.fetch = async url => {
+    if (String(url).endsWith('/GetLatestBlock')) throw new Error('synthetic probe unavailable')
     fetchStarted()
     await new Promise(resolve => {
       releaseFetch = resolve
@@ -69,7 +70,8 @@ test('cold startup migrates beta Zero RPC while preserving privacy preference an
             label: 'Zcash',
             iconChain: 'zec',
             endpoints: [
-              { id: 'deltarpc', label: 'DeltaRPC', url: 'https://rpc.example.com' },
+              { id: 'primary', label: 'Primary', url: 'https://rpc.example.com' },
+              { id: 'backup', label: 'Backup', url: 'https://backup.example.com' },
               {
                 id: 'zero-alias',
                 label: 'Zero alias',
@@ -98,11 +100,11 @@ test('cold startup migrates beta Zero RPC while preserving privacy preference an
     releaseFetch()
     await loading
 
-    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'deltarpc')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
     assert.equal(rpc.getActiveRpcEndpointMode('zcash'), 'auto')
     assert.equal(rpc.getRpcEndpointOptions('zcash')[0].url, 'https://rpc.example.com')
     assert.deepEqual(values.get('wallet_settings').state.rpcEndpointPreferences, {
-      zcash: 'deltarpc'
+      zcash: 'primary'
     })
     assert.equal(values.get('wallet_settings').state.zeroIndexerEnabled, false)
     assert.equal('zeroIndexerDefaultApplied' in values.get('wallet_settings').state, false)
@@ -114,28 +116,50 @@ test('cold startup migrates beta Zero RPC while preserving privacy preference an
       probedIds.push(endpoint.id)
       return endpoint.id === 'zero-alias' ? 1 : 2
     })
-    assert.equal(startupChoice.id, 'deltarpc')
-    assert.deepEqual(probedIds, ['deltarpc'])
-    assert.equal(rpc.getNextRpcEndpointOption('zcash', 'deltarpc', 'deltarpc'), undefined)
+    assert.equal(startupChoice.id, 'primary')
+    assert.deepEqual(probedIds, ['primary', 'backup'])
+    assert.equal(rpc.getNextRpcEndpointOption('zcash', 'primary', 'primary').id, 'backup')
+    assert.equal(rpc.getNextRpcEndpointOption('zcash', 'primary', 'backup'), undefined)
 
     await rpc.writePersistedRpcEndpointSettings({
-      preferences: { zcash: 'deltarpc' },
+      preferences: { zcash: 'backup' },
+      modes: { zcash: 'fixed' },
+      customRpcEndpoints: { zcash: [] }
+    })
+    assert.deepEqual(await rpc.ensureRpcEndpointPreferencesLoaded(), { zcash: 'backup' })
+    assert.equal(rpc.getActiveRpcEndpointMode('zcash'), 'fixed')
+
+    await rpc.writePersistedRpcEndpointSettings({
+      preferences: { zcash: 'primary' },
       modes: { zcash: 'auto' },
       customRpcEndpoints: { zcash: [] }
     })
     await rpc.syncActiveRpcEndpointPreferencesFromStorage()
-    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'deltarpc')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
     assert.equal(rpc.getActiveRpcEndpointMode('zcash'), 'auto')
     assert.equal(values.get('wallet_settings').state.zeroIndexerEnabled, false)
 
+    rpc.setActiveRpcEndpointOverride('zcash', 'backup')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'backup')
+    rpc.setActiveRpcEndpointOverride('zcash')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
+
+    rpc.setActiveRpcEndpointModes({ zcash: 'fixed' })
+    rpc.setActiveRpcEndpointOverride('zcash', 'backup')
+    const { recordRpcFailure } = await import('../src/config/rpc-failover.ts')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
+    assert.equal(await recordRpcFailure(), null)
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
+    rpc.setActiveRpcEndpointModes({ zcash: 'auto' })
+
     rpc.setActiveRpcEndpointOverride('zcash', 'zero-alias')
-    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'deltarpc')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
 
     rpc.setActiveRpcEndpointPreferences({ zcash: 'zero-alias' })
     rpc.setActiveRpcEndpointModes({ zcash: 'auto' })
-    rpc.setActiveRpcEndpointOverride('zcash', 'deltarpc')
+    rpc.setActiveRpcEndpointOverride('zcash', 'primary')
     assert.equal(rpc.getActiveRpcEndpointMode('zcash'), 'auto')
-    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'deltarpc')
+    assert.equal(rpc.getActiveRpcEndpointOption('zcash').id, 'primary')
     assert.equal(rpc.getNextRpcEndpointOption('zcash', 'zero-alias', 'zero-alias'), undefined)
   } finally {
     globalThis.chrome = previousChrome

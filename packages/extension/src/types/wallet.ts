@@ -193,8 +193,10 @@ export interface SendTransactionParams {
   amount: string
   memo?: string
   fundingSource?: FundingSource
-  /** ZIP-317 marginal fee per action (zatoshis); omitted = standard tier. */
+  /** Confirmed ZIP-317 rate; submission also requires its worker-issued quote ID. */
   marginalFeeZats?: number
+  feeQuoteId?: string
+  feeTier?: import('@/config/fee').FeeTier
 }
 
 /**

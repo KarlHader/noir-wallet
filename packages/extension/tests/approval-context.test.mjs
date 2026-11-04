@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
+const feeQuote = { id: 'bound-quote', standardMarginalFeeZats: 1000, expiresAt: 300000 }
 const ts = require('typescript')
 function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
@@ -59,17 +60,30 @@ function harness(t) {
       rehydrateWalletStore: async () => {},
       useWalletStore: { getState: () => state }
     },
-    '@/config/fee': { MARGINAL_FEE_ZATS: { standard: 5000 } },
+    '@/config/fee': { marginalFeeForTier: (tier, rate) => rate * (tier === 'fast' ? 4 : 1) },
     '@/lib/big': { safeBig: value => new (require('big.js'))(value) },
     '@/core/worker/client': {
       getWorkerClient: walletId => ({
+        async getFeeQuote(_accountId, accountIndex) {
+          estimates.push({ walletId, quoteAccountIndex: accountIndex })
+          return feeQuote
+        },
         async estimateTransferFee(params) {
-          estimates.push({ walletId, accountIndex: params.accountIndex })
-          return { feeZats: '10000' }
+          estimates.push({
+            walletId,
+            accountIndex: params.accountIndex,
+            rate: params.marginalFeeZats,
+            quoteId: params.feeQuoteId
+          })
+          return {
+            feeZats: String(params.marginalFeeZats * 2),
+            marginalFeeZats: String(params.marginalFeeZats),
+            feeQuote
+          }
         },
         async estimateShieldFee(params) {
           estimates.push({ walletId, accountIndex: params.accountIndex })
-          return '15000'
+          return { feeZats: '15000', marginalFeeZats: String(params.marginalFeeZats), feeQuote }
         }
       })
     }
@@ -106,11 +120,36 @@ test('approval lookup and fee estimation keep the captured account through switc
   assert.equal((await h.getApprovalContext(h.id)).accountId, 'a')
   // A refreshed approval page reads the same backend-owned context again.
   assert.equal((await h.getApprovalContext(h.id)).accountId, 'a')
-  assert.equal(await h.estimateApprovalFee(h.id), '10000')
+  assert.deepEqual(await h.estimateApprovalFee(h.id), {
+    fee: '2000',
+    marginalFeeZats: '1000',
+    feeQuote
+  })
   assert.deepEqual(h.estimates, [
     { walletId: 'w', accountId: 'a' },
-    { walletId: 'w', accountIndex: 3 }
+    { walletId: 'w', quoteAccountIndex: 3 },
+    { walletId: 'w', accountIndex: 3, rate: 1000, quoteId: 'bound-quote' }
   ])
+})
+
+test('Fast approval estimation uses the bound account recommendation', async t => {
+  const h = harness(t)
+  h.state.currentAccountId = 'b'
+  assert.deepEqual(await h.estimateApprovalFee(h.id, { feeTier: 'fast' }), {
+    fee: '8000',
+    marginalFeeZats: '4000',
+    feeQuote
+  })
+  assert.deepEqual(h.estimates.at(-1), {
+    walletId: 'w',
+    accountIndex: 3,
+    rate: 4000,
+    quoteId: 'bound-quote'
+  })
+  await assert.rejects(
+    h.estimateApprovalFee(h.id, { feeTier: 'arbitrary' }),
+    /Invalid network fee tier/
+  )
 })
 
 for (const change of ['revoke', 'lock', 'delete', 'network', 'cancel']) {

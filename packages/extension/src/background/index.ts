@@ -6,7 +6,6 @@ import { accountManager } from '../core/wallet/account-manager'
 import { UI_CONFIG } from '@/config/ui'
 import { WALLET_CONFIG } from '@/config/wallet'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/config/networks'
-import { sanitizeMarginalFeeZats } from '@/config/fee'
 import { safeBig } from '@/lib/big'
 import { closeAllPopupWindows } from './window-manager'
 import { getApprovalContext, estimateApprovalFee } from './approval-context'
@@ -960,8 +959,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ESTIMATE_APPROVAL_FEE') {
-    estimateApprovalFee(message.requestId)
-      .then(fee => sendResponse({ fee }))
+    estimateApprovalFee(message.requestId, message)
+      .then(estimate => sendResponse(estimate))
       .catch(error => sendResponse({ error: error.message }))
     return true
   }
@@ -1488,6 +1487,7 @@ async function handleHardwarePcztBuild(params: {
   memo?: string
   fundingSource?: FundingSource
   marginalFeeZats?: number
+  feeQuoteId?: string
 }): Promise<
   | {
       success: true
@@ -1499,7 +1499,8 @@ async function handleHardwarePcztBuild(params: {
     }
   | { success: false; error: string }
 > {
-  const { walletId, accountId, kind, to, amount, maxTransfer, memo, marginalFeeZats } = params
+  const { walletId, accountId, kind, to, amount, maxTransfer, memo, marginalFeeZats, feeQuoteId } =
+    params
   const fundingSource = params.fundingSource ?? 'shielded'
   try {
     if (fundingSource !== 'shielded' && fundingSource !== 'transparent') {
@@ -1534,8 +1535,9 @@ async function handleHardwarePcztBuild(params: {
             const estimate = await walletCore.estimateMaxTransfer(
               to,
               memo,
-              sanitizeMarginalFeeZats(marginalFeeZats),
-              fundingSource
+              marginalFeeZats,
+              fundingSource,
+              feeQuoteId
             )
             effectiveAmount = safeBig(estimate.maxAmountZats).div(1e8).toFixed()
             if (!safeBig(effectiveAmount).gt(0)) {
@@ -1544,28 +1546,26 @@ async function handleHardwarePcztBuild(params: {
           }
           const pair =
             kind === 'shield'
-              ? await walletCore.pcztShieldCreate(marginalFeeZats)
+              ? await walletCore.pcztShieldCreate(marginalFeeZats, feeQuoteId)
               : await walletCore.pcztCreate({
                   to: to!,
                   amount: effectiveAmount!,
                   memo,
                   fundingSource,
-                  marginalFeeZats
+                  marginalFeeZats,
+                  feeQuoteId
                 })
-          // Surface the real ZIP-317 fee for the chosen tier so the signing page can
-          // display and record it. Best-effort: a failed estimate must not block signing.
-          const feeZats = await (
-            kind === 'shield'
-              ? walletCore.estimateShieldFee(sanitizeMarginalFeeZats(marginalFeeZats))
-              : walletCore.estimateTransferFee(
-                  to!,
-                  effectiveAmount!,
-                  memo,
-                  sanitizeMarginalFeeZats(marginalFeeZats),
-                  fundingSource
-                )
-          ).catch(() => undefined)
-          return { ...pair, feeZats, amount: effectiveAmount }
+          const feeEstimate = await (kind === 'shield'
+            ? walletCore.estimateShieldFee(marginalFeeZats, feeQuoteId)
+            : walletCore.estimateTransferFee(
+                to!,
+                effectiveAmount!,
+                memo,
+                marginalFeeZats,
+                fundingSource,
+                feeQuoteId
+              ))
+          return { ...pair, feeZats: feeEstimate.feeZats, amount: effectiveAmount }
         } catch (error) {
           const switched = await syncScheduler.failoverRpcEndpoint(error)
           if (!switched) throw error
@@ -1693,6 +1693,7 @@ async function handleBackgroundZcashTx(params: {
   txType?: TransactionType
   sendParams?: { to: string; amount: string; memo?: string; fundingSource?: FundingSource }
   marginalFeeZats?: number
+  feeQuoteId?: string
   monitorParams?: {
     kind: 'swap'
     direction: 'from_zcash'
@@ -1723,6 +1724,7 @@ async function handleBackgroundZcashTx(params: {
     txType,
     sendParams,
     marginalFeeZats,
+    feeQuoteId,
     monitorParams,
     analytics
   } = params
@@ -1769,7 +1771,7 @@ async function handleBackgroundZcashTx(params: {
       let txid: string
       let txHashes: string[]
       if (action === 'shield') {
-        const shieldResult = await walletCore.shieldFunds(marginalFeeZats)
+        const shieldResult = await walletCore.shieldFunds(marginalFeeZats, undefined, feeQuoteId)
         txid = shieldResult.txid
         txHashes = [txid]
         broadcastTxHash = txid
@@ -1780,7 +1782,8 @@ async function handleBackgroundZcashTx(params: {
         const transferResult = await walletCore.sendTransaction({
           ...sendParams!,
           fundingSource,
-          marginalFeeZats
+          marginalFeeZats,
+          feeQuoteId
         })
         const successfulTransfer = requireSuccessfulTransfer(transferResult)
         txid = successfulTransfer.txHash

@@ -14,6 +14,7 @@ import type { Network } from '@/types'
 import { TimeoutError } from '@/lib/async-utils'
 import { getDiagnosticErrorDetails, getDiagnosticRpcMethod } from '@/lib/diagnostic-log'
 import { isTransactionSubmissionUnknown } from '@/core/zcash/transfer-result'
+import { replayJournalPages } from '@/lib/sync-journal'
 
 registerOffscreenSyncAbortListener()
 
@@ -998,34 +999,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       network: string
       journalWalletId: string
     }
-    const JOURNAL_REPLAY_CHUNK_SIZE = 5
     ;(async () => {
       try {
-        const { getJournalManifest, loadJournalEntries } = await import('@/lib/indexed-db')
+        const { getJournalManifest, loadJournalPage } = await import('@/lib/indexed-db')
         const manifest = await getJournalManifest(network, journalWalletId)
         if (!manifest || manifest.nextSeq <= (manifest.baseSnapshotSeq ?? 0)) {
           sendResponse({ result: 0 })
           return
         }
-        const fromSeq = manifest.baseSnapshotSeq ?? 0
-        const entries = await loadJournalEntries(network, journalWalletId, fromSeq)
-        if (entries.length === 0) {
-          sendResponse({ result: 0 })
-          return
-        }
-        const entryData = entries.map(e => e.data)
-        let replayed = 0
-        for (let i = 0; i < entryData.length; i += JOURNAL_REPLAY_CHUNK_SIZE) {
-          if (isSyncAbortRequested(walletId)) {
-            throw new SyncAbortedError(walletId)
+        const replayed = await replayJournalPages({
+          fromSeq: manifest.baseSnapshotSeq ?? 0,
+          toSeq: manifest.nextSeq,
+          readPage: (fromSeq, toSeq) => loadJournalPage(network, journalWalletId, fromSeq, toSeq),
+          applyPage: entries =>
+            zcashWorkerClient.requestToWorker('wallet.replayJournalEntries', {
+              walletId,
+              entries
+            }),
+          ensureActive: () => {
+            if (isSyncAbortRequested(walletId)) throw new SyncAbortedError(walletId)
           }
-          const chunk = entryData.slice(i, i + JOURNAL_REPLAY_CHUNK_SIZE)
-          await zcashWorkerClient.requestToWorker('wallet.replayJournalEntries' as any, {
-            walletId,
-            entries: chunk
-          })
-          replayed += chunk.length
-        }
+        })
         trySetupLogForwarding()
         sendResponse({ result: replayed })
       } catch (error: any) {

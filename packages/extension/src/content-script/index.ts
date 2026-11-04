@@ -27,7 +27,6 @@ const ALLOWED_METHODS = new Set([
   'zcash_sendTransaction',
   'zcash_signMessage',
   'zcash_shieldFunds',
-  'zcash_getTransactionHistory',
   'zcash_switchNetwork',
   'zcash_checkLendingMcaAccount',
   'zcash_disconnect'

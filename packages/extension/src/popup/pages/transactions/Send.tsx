@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -34,19 +34,15 @@ import { DetailRow } from '../../components/common/DetailRow'
 import { AddressTypeLabel, AddressTypeSwitch } from '../../components/account/AddressType'
 import { TokenIcon } from '../../components/tokens/TokenIcon'
 import { useTransaction } from '../../hooks/useTransaction'
+import { accountManager } from '@/core/wallet/account-manager'
 import { useShieldFunds } from '../../hooks/useShieldFunds'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
 import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
 import { NetworkFeeRow } from '../../components/transaction/NetworkFeeRow'
 import { useSettingsStore } from '@/store/settings-store'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats
-} from '@/config/fee'
-import { ZEC_DECIMALS, getMaxSpendableZec } from '@/config/wallet'
+import { marginalFeeForTier } from '@/config/fee'
+import { ZEC_DECIMALS } from '@/config/wallet'
 import { safeBig } from '@/lib/big'
 import Big from 'big.js'
 import { useZnsResolve } from '../../hooks/useZnsResolve'
@@ -71,6 +67,20 @@ export function Send() {
   const [maxSelected, setMaxSelected] = useState(false)
   const [memo, setMemo] = useState('')
   const [showReview, setShowReview] = useState(false)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const confirmation = useRef({ revision: 0, pending: false })
+  const changeReviewOpen = (open: boolean) => {
+    confirmation.current.revision++
+    confirmation.current.pending = false
+    setIsConfirming(false)
+    setShowReview(open)
+  }
+  useEffect(
+    () => () => {
+      confirmation.current.revision++
+    },
+    []
+  )
   const [fundingSource, setFundingSource] = useState<FundingSource>(
     initialFrom === 'transparent' ? 'transparent' : 'shielded'
   )
@@ -136,37 +146,30 @@ export function Send() {
     amount,
     memo: effectiveMemo,
     fundingSource,
+    feeTier,
     enabled:
       safeBig(amount || '0').gt(0) && !!effectiveToAddress && !maxSelected && !isMaxTransferAmount
   })
 
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
-  const maxFeeByTier = deriveFeeByTierFromEstimate(
-    maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-    feeTier,
-    maxTransfer.error
-  )
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
 
-  const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
-  const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
-  const estimatedFeeZec = safeBig(selectedFeeZats).div(1e8).toFixed()
-  const extraFeeZec = safeBig(Math.max(0, selectedFeeZats - standardFeeZats))
-    .div(1e8)
-    .toNumber()
-  const fallbackMax = safeBig(getMaxSpendableZec(sourceBalance.spendable)).minus(extraFeeZec)
-  const effectiveMaxStr = (
-    maxTransfer.maxAmount
-      ? safeBig(maxTransfer.maxAmount)
-      : fallbackMax.lt(0)
-        ? safeBig(0)
-        : fallbackMax
-  )
+  const selectedFeeZats = isMaxFeeMode
+    ? maxTransfer.fee
+      ? safeBig(maxTransfer.fee).mul(1e8).toNumber()
+      : null
+    : feeEstimate.feeZats
+  const estimatedFeeZec =
+    selectedFeeZats == null ? '0' : safeBig(selectedFeeZats).div(1e8).toFixed()
+  const effectiveMaxStr = safeBig(maxTransfer.maxAmount ?? '0')
     .round(ZEC_DECIMALS, Big.roundDown)
     .toFixed()
-  const canSelectMax = !!effectiveToAddress && safeBig(effectiveMaxStr).gt(0)
+  const canSelectMax =
+    !!effectiveToAddress && !!maxTransfer.feeQuote && safeBig(effectiveMaxStr).gt(0)
   const amountBig = safeBig(amount || '0')
   const amountError = getFundingAmountError(amount, sourceBalance, maxTransfer.maxAmount)
   const amountErrorCopy =
@@ -178,7 +181,29 @@ export function Send() {
           ? 'Amount exceeds available balance.'
           : undefined
   const isValidAmount = amountBig.gt(0) && !amountError && !fundingSourceUnavailableReason
-  const selectedFeeZec = maxTransfer.fee && isMaxTransferAmount ? maxTransfer.fee : estimatedFeeZec
+  const selectedFeeZec = isMaxFeeMode ? (maxTransfer.fee ?? estimatedFeeZec) : estimatedFeeZec
+  const selectedFeeQuote = isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote
+  const feeReady =
+    !!selectedFeeQuote &&
+    selectedFeeQuote.expiresAt > Date.now() &&
+    !displayedFeeLoading &&
+    !(isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
+
+  const confirmationContext = JSON.stringify([
+    currentWalletId,
+    currentAccount?.id,
+    currentNetwork,
+    effectiveToAddress,
+    amount,
+    effectiveMemo,
+    fundingSource,
+    feeTier,
+    maxSelected,
+    selectedFeeQuote?.id,
+    showReview
+  ])
+  const latestConfirmationContext = useRef(confirmationContext)
+  latestConfirmationContext.current = confirmationContext
 
   useEffect(() => {
     if (maxSelected && maxTransfer.maxAmount) {
@@ -251,7 +276,7 @@ export function Send() {
     if (toAddress && isValidAmount) {
       setSaveContact(false)
       setContactName('')
-      setShowReview(true)
+      changeReviewOpen(true)
     }
   }
 
@@ -269,133 +294,193 @@ export function Send() {
   }
 
   const handleConfirm = async () => {
-    if (!isValidAmount || !fromAddress || fundingSourceUnavailableReason) {
+    if (
+      confirmation.current.pending ||
+      !showReview ||
+      !isValidAmount ||
+      !fromAddress ||
+      fundingSourceUnavailableReason ||
+      !feeReady ||
+      !selectedFeeQuote
+    ) {
       return
     }
-
-    if (saveContact && contactName.trim() && !isExistingContact) {
-      addContact(effectiveToAddress, contactName.trim(), zns.name || undefined)
+    const revision = ++confirmation.current.revision
+    confirmation.current.pending = true
+    setIsConfirming(true)
+    const settings = useSettingsStore.getState()
+    const rpcContext = JSON.stringify([
+      settings.rpcEndpointModes.zcash,
+      settings.rpcEndpointPreferences.zcash,
+      settings.customRpcEndpoints.zcash
+    ])
+    const isCurrent = () => {
+      const wallet = useWalletStore.getState()
+      const settings = useSettingsStore.getState()
+      return (
+        confirmation.current.revision === revision &&
+        latestConfirmationContext.current === confirmationContext &&
+        wallet.currentWalletId === currentWalletId &&
+        wallet.currentAccountId === currentAccount?.id &&
+        wallet.currentNetwork === currentNetwork &&
+        rpcContext ===
+          JSON.stringify([
+            settings.rpcEndpointModes.zcash,
+            settings.rpcEndpointPreferences.zcash,
+            settings.customRpcEndpoints.zcash
+          ])
+      )
     }
-
-    sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
-      ...sendEventBase,
-      extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
-    })
-
-    // Hardware wallets sign in a dedicated tab because device permission
-    // prompts and the multi-step flow do not survive reliably in a popup.
-    if (isHardwareWallet) {
-      if (!currentWallet || !currentAccount) return
-      setShowReview(false)
-      const request = {
-        kind: 'send' as const,
-        walletId: currentWallet.id,
-        accountId: currentAccount.id,
-        to: effectiveToAddress,
-        amount,
-        // Only an explicit Max action may authorize the hardware flow to
-        // recalculate and replace the entered amount after refreshing UTXOs.
-        maxTransfer: maxSelected,
-        memo: effectiveMemo,
-        fundingSource,
-        marginalFeeZats: marginalFeeForTier(feeTier)
+    try {
+      try {
+        const currentQuote = await accountManager.getFeeQuote()
+        if (!isCurrent()) return
+        if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
+          if (isMaxFeeMode) maxTransfer.refresh()
+          else feeEstimate.refresh()
+          return
+        }
+      } catch {
+        if (!isCurrent()) return
+        if (isMaxFeeMode) maxTransfer.refresh()
+        else feeEstimate.refresh()
+        return
       }
-      const isSidePanel = isSidePanelSurface(window.location.search)
+      const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
 
-      if (!isSidePanel) {
-        await openHardwareSignTab(request)
-        window.close()
+      if (saveContact && contactName.trim() && !isExistingContact) {
+        addContact(effectiveToAddress, contactName.trim(), zns.name || undefined)
+      }
+
+      sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
+        ...sendEventBase,
+        extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
+      })
+
+      // Hardware wallets sign in a dedicated tab because device permission
+      // prompts and the multi-step flow do not survive reliably in a popup.
+      if (isHardwareWallet) {
+        if (!currentWallet || !currentAccount) return
+        setShowReview(false)
+        const request = {
+          kind: 'send' as const,
+          walletId: currentWallet.id,
+          accountId: currentAccount.id,
+          to: effectiveToAddress,
+          amount,
+          // Only an explicit Max action may authorize the hardware flow to
+          // recalculate and replace the entered amount after refreshing UTXOs.
+          maxTransfer: maxSelected,
+          memo: effectiveMemo,
+          fundingSource,
+          marginalFeeZats,
+          feeQuoteId: selectedFeeQuote.id,
+          feeTier
+        }
+        const isSidePanel = isSidePanelSurface(window.location.search)
+
+        if (!isSidePanel) {
+          await openHardwareSignTab(request)
+          window.close()
+          return
+        }
+
+        setIsHardwareSigning(true)
+        try {
+          const result = await openHardwareSignAndWait(request)
+          if (result.status === 'success') {
+            setResult(
+              {
+                type: 'zcash',
+                step: 'submitted',
+                amount: result.amount ?? amount,
+                toAddress: effectiveToAddress,
+                txHash: result.txHash,
+                accountKey: result.accountKey,
+                transactionId: result.transactionId,
+                showTo: true
+              },
+              '/'
+            )
+            navigate('/transaction-result')
+          } else if (result.status === 'timeout') {
+            toast.error('Ledger signing timed out', 'The transaction form has been restored.')
+          } else {
+            toast.info('Ledger signing cancelled')
+          }
+        } catch (cause) {
+          toast.error('Could not open Ledger signing', classifyError(cause).userMessage)
+        } finally {
+          setIsHardwareSigning(false)
+        }
         return
       }
 
-      setIsHardwareSigning(true)
-      try {
-        const result = await openHardwareSignAndWait(request)
-        if (result.status === 'success') {
-          setResult(
-            {
-              type: 'zcash',
-              step: 'submitted',
-              amount: result.amount ?? amount,
-              toAddress: effectiveToAddress,
-              txHash: result.txHash,
-              accountKey: result.accountKey,
-              transactionId: result.transactionId,
-              showTo: true
-            },
-            '/'
-          )
-          navigate('/transaction-result')
-        } else if (result.status === 'timeout') {
-          toast.error('Ledger signing timed out', 'The transaction form has been restored.')
-        } else {
-          toast.info('Ledger signing cancelled')
-        }
-      } catch (cause) {
-        toast.error('Could not open Ledger signing', classifyError(cause).userMessage)
-      } finally {
-        setIsHardwareSigning(false)
+      setShowReview(false)
+
+      const pendingResult = {
+        type: 'zcash' as const,
+        step: 'pending' as const,
+        amount,
+        toAddress: effectiveToAddress,
+        showTo: true
       }
-      return
-    }
+      setResult(pendingResult, '/')
+      navigate('/transaction-result')
 
-    setShowReview(false)
-
-    const pendingResult = {
-      type: 'zcash' as const,
-      step: 'pending' as const,
-      amount,
-      toAddress: effectiveToAddress,
-      showTo: true
-    }
-    setResult(pendingResult, '/')
-    navigate('/transaction-result')
-
-    const result = await sendTransaction({
-      to: effectiveToAddress,
-      amount,
-      from: fromAddress,
-      fromType: fundingSource,
-      memo: effectiveMemo,
-      fee: selectedFeeZec,
-      marginalFeeZats: marginalFeeForTier(feeTier),
-      onCreated: (transaction, accountKey) => {
-        if (useTransactionResultStore.getState().data !== pendingResult) return
-        updateStep('pending', {
-          accountKey,
-          transactionId: transaction.id,
-          timestamp: transaction.timestamp
-        })
-      },
-      analytics: {
-        onSuccess: {
-          name: ANALYTICS_EVENTS.SEND_SUCCEEDED,
-          options: {
-            ...sendEventBase,
-            extra: { fee: selectedFeeZec, funding_source: fundingSource }
-          }
+      const result = await sendTransaction({
+        to: effectiveToAddress,
+        amount,
+        from: fromAddress,
+        fromType: fundingSource,
+        memo: effectiveMemo,
+        fee: selectedFeeZec,
+        marginalFeeZats,
+        feeQuoteId: selectedFeeQuote.id,
+        feeTier,
+        onCreated: (transaction, accountKey) => {
+          if (useTransactionResultStore.getState().data !== pendingResult) return
+          updateStep('pending', {
+            accountKey,
+            transactionId: transaction.id,
+            timestamp: transaction.timestamp
+          })
         },
-        onFail: {
-          name: ANALYTICS_EVENTS.SEND_FAILED,
-          options: { ...sendEventBase, extra: { funding_source: fundingSource } }
+        analytics: {
+          onSuccess: {
+            name: ANALYTICS_EVENTS.SEND_SUCCEEDED,
+            options: {
+              ...sendEventBase,
+              extra: { fee: selectedFeeZec, funding_source: fundingSource }
+            }
+          },
+          onFail: {
+            name: ANALYTICS_EVENTS.SEND_FAILED,
+            options: { ...sendEventBase, extra: { funding_source: fundingSource } }
+          }
+        }
+      })
+
+      if (result.step === 'success') {
+        updateStep(
+          'submitted',
+          { txHash: result.txHash, timestamp: result.timestamp },
+          result.accountKey,
+          result.transactionId
+        )
+      } else if (result.step === 'pending') {
+        updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
+      } else {
+        if (result.transactionId) {
+          updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
+        } else if (useTransactionResultStore.getState().data === pendingResult) {
+          updateStep('failed', { error: result.error })
         }
       }
-    })
-
-    if (result.step === 'success') {
-      updateStep(
-        'submitted',
-        { txHash: result.txHash, timestamp: result.timestamp },
-        result.accountKey,
-        result.transactionId
-      )
-    } else if (result.step === 'pending') {
-      updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
-    } else {
-      if (result.transactionId) {
-        updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
-      } else if (useTransactionResultStore.getState().data === pendingResult) {
-        updateStep('failed', { error: result.error })
+    } finally {
+      if (confirmation.current.revision === revision) {
+        confirmation.current.pending = false
+        setIsConfirming(false)
       }
     }
   }
@@ -500,9 +585,19 @@ export function Send() {
               tier={feeTier}
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
+              loadingByTier={displayedFeeLoadingByTier}
               loading={displayedFeeLoading}
               hideLabel
             />
+            {(isMaxFeeMode ? maxTransfer.error : feeEstimate.error) && (
+              <button
+                type="button"
+                className="mt-2 text-xs text-destructive"
+                onClick={isMaxFeeMode ? maxTransfer.refresh : feeEstimate.refresh}
+              >
+                Fee estimate unavailable. Retry
+              </button>
+            )}
           </SendNetworkFeeCard>
 
           <div>
@@ -557,7 +652,7 @@ export function Send() {
         </Button>
       </div>
 
-      <Dialog open={showReview} onOpenChange={setShowReview}>
+      <Dialog open={showReview} onOpenChange={changeReviewOpen}>
         <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
           <DialogHeader className="px-5 pt-5 pb-4">
             <DialogTitle className="text-center">Review Send</DialogTitle>
@@ -607,7 +702,21 @@ export function Send() {
               </DetailRow>
             )}
 
-            <NetworkFeeRow tier={feeTier} feeZec={selectedFeeZec} />
+            <NetworkFeeRow
+              tier={feeTier}
+              feeZec={selectedFeeZec}
+              loading={displayedFeeLoading || isConfirming}
+              unavailable={!feeReady}
+            />
+            {(isMaxFeeMode ? maxTransfer.error : feeEstimate.error) && (
+              <button
+                type="button"
+                className="text-xs text-destructive"
+                onClick={isMaxFeeMode ? maxTransfer.refresh : feeEstimate.refresh}
+              >
+                Fee estimate unavailable. Retry
+              </button>
+            )}
           </div>
 
           {!isExistingContact && (
@@ -639,12 +748,17 @@ export function Send() {
           <div className="p-5 flex gap-3">
             <Button
               variant="outline"
-              onClick={() => setShowReview(false)}
+              onClick={() => changeReviewOpen(false)}
               className="flex-1 h-[45px]"
             >
               Cancel
             </Button>
-            <Button onClick={handleConfirm} className="flex-1 h-[45px]">
+            <Button
+              onClick={handleConfirm}
+              disabled={!feeReady}
+              isLoading={isConfirming}
+              className="flex-1 h-[45px]"
+            >
               Confirm
             </Button>
           </div>

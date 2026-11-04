@@ -18,7 +18,7 @@ export const NETWORKS: Record<Network, NetworkConfig> = {
     id: 'mainnet',
     name: 'Zcash Mainnet',
     chainId: 1,
-    rpcUrl: 'https://zcash-wallet-grpc-self.deltarpc.com',
+    rpcUrl: 'https://zcashwebrpcsg.deltarpc.com',
     nodeRpcUrl: 'https://zcash-wallet-history.deltarpc.com',
     compactBlockCdn: { baseUrl: 'https://zcashblocks.deltarpc.com/compact-blocks/v1' },
     explorerUrl: 'https://blockchair.com/zcash',

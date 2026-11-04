@@ -35,13 +35,15 @@ Copy the full address or let the sender scan the QR code. Verify the beginning a
 
     Available shows funds you can use from the selected source before this transaction's network fee. Pending funds cannot be used yet. Enter a destination before selecting **Max**; its estimate accounts for transaction selection, fees, and dust constraints.
 
+    **Standard** uses the current recommended network fee. **Fast** uses four times that rate. Switching tiers updates the estimated transaction fee and Max amount.
+
     Received funds meet the wallet's confirmation requirement after 3 confirmations. They appear as available once synchronized and eligible for selection. In **Activity**, an external incoming transaction can still show **Confirming** until it reaches 10 confirmations, even when its funds are available. If you do not trust the sender, wait for more confirmations before spending them.
 
   </Step>
   <Step>
     ### Review and approve
 
-    Check the destination, amount, funding source, memo, and fee before broadcasting.
+    Check the destination, amount, funding source, memo, and fee before broadcasting. If the fee estimate expires or cannot be refreshed, wait for a new estimate before confirming. Sends use a 40-block expiry window from construction; if a transaction expires before confirmation, review and send it again.
 
   </Step>
 </Steps>

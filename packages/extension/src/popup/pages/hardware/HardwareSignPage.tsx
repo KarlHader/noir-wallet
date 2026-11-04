@@ -21,7 +21,7 @@ import { buildAccountKey, useAccountDataStore } from '@/store/account-data-store
 import { resolveZcashResultView } from '@/store/transaction-result-store'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
 import { safeBig } from '@/lib/big'
-import { MARGINAL_FEE_ZATS, staticFeeFallbackZats } from '@/config/fee'
+import { staticFeeFallbackZats } from '@/config/fee'
 import { classifyError } from '@/lib/errors'
 import { isValidAddTransactionResponse } from '@/lib/transaction-record-response'
 import { TimeoutError } from '@/lib/async-utils'
@@ -84,7 +84,8 @@ async function requestHardwarePcztBuild(req: HardwareSignRequest): Promise<Built
     maxTransfer: req.maxTransfer,
     memo: req.memo,
     fundingSource: req.fundingSource,
-    marginalFeeZats: req.marginalFeeZats
+    marginalFeeZats: req.marginalFeeZats,
+    feeQuoteId: req.feeQuoteId
   })
   if (!res?.success) {
     throw new Error(res?.error || 'Failed to build transaction')
@@ -171,7 +172,7 @@ export function HardwareSignPage({ signer = 'keystone' }: { signer?: 'keystone' 
 
   // Real ZIP-317 fee returned by the build; fall back to the chosen tier's
   // static estimate if the live estimate was unavailable.
-  const feeTier = (request?.marginalFeeZats ?? 0) >= MARGINAL_FEE_ZATS.fast ? 'fast' : 'standard'
+  const feeTier = request?.feeTier ?? 'standard'
   const feeZec = safeBig(feeZats ?? staticFeeFallbackZats(feeTier))
     .div(1e8)
     .toFixed()

@@ -113,6 +113,7 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'voting.resumeRound': WASM_HEAVY,
   'voting.clearRound': MEDIUM,
   'transaction.estimateFee': LIGHT,
+  'transaction.getFeeQuote': LIGHT,
   'transaction.estimateMaxTransfer': LIGHT,
   'transaction.estimateShieldFee': LIGHT,
   default: MEDIUM
@@ -892,10 +893,16 @@ export class ZcashWorkerClient {
 
   async pcztShieldCreate(
     accountId: number,
-    marginalFeeZats?: number
+    marginalFeeZats?: number,
+    feeQuoteId?: string
   ): Promise<RPCSchema['pczt.shieldCreate']['response']> {
     await this.ensureInitialized()
-    return this.request('pczt.shieldCreate', { accountId, marginalFeeZats, walletId: this.wid() })
+    return this.request('pczt.shieldCreate', {
+      accountId,
+      marginalFeeZats,
+      feeQuoteId,
+      walletId: this.wid()
+    })
   }
 
   async pcztProveSend(fullBase64: string, signedBase64: string): Promise<string> {
@@ -989,6 +996,19 @@ export class ZcashWorkerClient {
     return this.request('voting.clearRound', { walletId: this.wid(), accountId, roundId })
   }
 
+  async getFeeQuote(
+    accountId?: number,
+    accountIndex?: number
+  ): Promise<RPCSchema['transaction.getFeeQuote']['response']> {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('transaction.getFeeQuote', {
+      accountId,
+      accountIndex,
+      walletId: this.wid()
+    })
+  }
+
   async estimateTransferFee(
     params: Omit<RPCSchema['transaction.estimateFee']['request'], 'walletId'>
   ): Promise<RPCSchema['transaction.estimateFee']['response']> {
@@ -1007,7 +1027,7 @@ export class ZcashWorkerClient {
 
   async estimateShieldFee(
     params: Omit<RPCSchema['transaction.estimateShieldFee']['request'], 'walletId'>
-  ): Promise<string> {
+  ): Promise<RPCSchema['transaction.estimateShieldFee']['response']> {
     await this.ensureInitialized()
     await this.ensureAccountReady()
     return this.request('transaction.estimateShieldFee', { ...params, walletId: this.wid() })

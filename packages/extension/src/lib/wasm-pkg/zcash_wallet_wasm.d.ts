@@ -31,11 +31,11 @@ export interface CompactBlockCdnOptions {
     maxConcurrentChunkRequests?: number;
 }
 
-/** Runtime broadcast endpoints; supply again when restoring wallet bytes. */
+/** Runtime Orchard broadcast and transaction lookup endpoints; supply again when restoring wallet bytes. */
 export interface ZeroIndexerOptions {
-    /** Ordered endpoints used only for transactions containing an Orchard bundle. */
+    /** Ordered endpoints for Orchard transaction broadcast and status lookup. */
     urls: string[];
-    /** Positive per-endpoint timeout in milliseconds. Defaults to 30000. */
+    /** Positive per-endpoint timeout for send and GetTransaction, in milliseconds. Defaults to 30000. */
     sendTimeoutMs?: number;
 }
 
@@ -65,6 +65,7 @@ export interface TransferResult {
 export interface TransferEstimate {
     amountZats: string;
     feeZats: string;
+    marginalFeeZats: string;
     transactionCount: number;
     stepFeesZats: string[];
 }
@@ -330,6 +331,10 @@ export class WebWallet {
      */
     create_account_ufvk(account_name: string, ufvk: string, seed_fingerprint: Uint8Array, account_hd_index: number, birthday_height?: number | null, key_source?: string | null): Promise<number>;
     db_to_bytes(): Promise<Uint8Array>;
+    /**
+     * The callback must complete synchronously; returned Promises are not awaited.
+     * A thrown value rejects this call unchanged.
+     */
     db_to_bytes_chunked(callback: Function): Promise<void>;
     estimate_orchard_migration_fee(account_id: number, to_address: string, memo: Uint8Array | null | undefined, marginal_fee_zats: bigint): Promise<bigint>;
     estimate_pczt_max_transfer(account_id: number, to_address: string, memo: Uint8Array | null | undefined, marginal_fee_zats: bigint): Promise<any>;
@@ -499,9 +504,7 @@ export class WebWallet {
      *
      * ```javascript
      * const addresses = await wallet.get_unified_addresses(accountId);
-     * console.log("Unified Address:", addresses.unified);
-     * console.log("Sapling (zs):", addresses.sapling_zs);
-     * console.log("Transparent:", addresses.transparent);
+     * // Display the selected address in the wallet UI; avoid logging account addresses.
      * ```
      */
     get_unified_addresses(account_id: number): Promise<any>;
@@ -617,7 +620,7 @@ export class WebWallet {
  *
  * ```javascript
  * const mnemonic = generate_mnemonic(24);
- * console.log(mnemonic); // "abandon abandon abandon ... art"
+ * // Show the phrase only in the wallet's protected backup flow; never log it.
  * ```
  */
 export function generate_mnemonic(word_count: number): string;
@@ -648,10 +651,7 @@ export function initThreadPool(num_threads: number): Promise<any>;
  *     "",  // no passphrase
  *     0    // first account
  * );
- * console.log("Unified:", addresses.unified);
- * console.log("Orchard:", addresses.orchard);
- * console.log("Sapling:", addresses.sapling);
- * console.log("Transparent:", addresses.transparent);
+ * // Display the selected receiver in the wallet UI; avoid logging account addresses.
  * ```
  */
 export function mnemonic_to_addresses(network: string, phrase: string, passphrase: string, account_index: number): any;
@@ -672,7 +672,7 @@ export function mnemonic_to_addresses(network: string, phrase: string, passphras
  *
  * ```javascript
  * const seed = mnemonic_to_seed("abandon abandon abandon ... art", "");
- * console.log(seed); // Uint8Array of 64 bytes
+ * // Use the seed for local key derivation; never log or persist it as plaintext.
  * ```
  */
 export function mnemonic_to_seed(phrase: string, passphrase: string): Uint8Array;
@@ -761,9 +761,7 @@ export function mnemonic_to_transparent_address(network: string, phrase: string,
  *     "main",
  *     "u1..." // unified address string
  * );
- * console.log("Orchard:", addresses.orchard);
- * console.log("Sapling:", addresses.sapling);
- * console.log("Transparent:", addresses.transparent);
+ * // Select the receiver needed by the payment flow; avoid logging addresses.
  * ```
  */
 export function parse_unified_address(network: string, unified_address: string): any;
@@ -792,9 +790,7 @@ export function parse_unified_address(network: string, unified_address: string):
  *
  * ```javascript
  * const result = await sign_message_with_transparent("main", usk, "Hello Zcash!", undefined);
- * console.log("Signature:", result.signature);  // hex format
- * console.log("Public Key:", result.pubkey);     // uncompressed hex (65 bytes)
- * console.log("Address:", result.address);       // t-address
+ * // Return the signature to the requesting flow; avoid logging account identifiers.
  * ```
  */
 export function sign_message_with_transparent(network: string, usk: UnifiedSpendingKey, message: string, address_index?: number | null): any;
@@ -1003,15 +999,15 @@ export interface InitOutput {
     readonly intounderlyingsink_write: (a: number, b: number) => number;
     readonly intounderlyingsource_cancel: (a: number) => void;
     readonly intounderlyingsource_pull: (a: number, b: number) => number;
-    readonly rustsecp256k1_v0_10_0_context_create: (a: number) => number;
-    readonly rustsecp256k1_v0_10_0_context_destroy: (a: number) => void;
-    readonly rustsecp256k1_v0_10_0_default_error_callback_fn: (a: number, b: number) => void;
-    readonly rustsecp256k1_v0_10_0_default_illegal_callback_fn: (a: number, b: number) => void;
-    readonly __wasm_bindgen_func_elem_16233: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_16261: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_11483: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_16231: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_11412: (a: number, b: number) => void;
+    readonly rustsecp256k1_v0_14_default_error_callback_fn: (a: number, b: number) => void;
+    readonly rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void;
+    readonly rustsecp256k1_v0_14_context_create: (a: number) => number;
+    readonly rustsecp256k1_v0_14_context_destroy: (a: number) => void;
+    readonly __wasm_bindgen_func_elem_16560: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_16577: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_12472: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_16562: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12395: (a: number, b: number) => void;
     readonly memory: WebAssembly.Memory;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;

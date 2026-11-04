@@ -4,7 +4,6 @@ import {
   RPC_RECOVERY_COOLDOWN_MS,
   RPC_RECOVERY_PROBE_INTERVAL_MS,
   createRpcFailoverState,
-  recordRpcFailure,
   registerPreferredRpcProbe,
   registerRpcFailure,
   registerRpcSuccess
@@ -15,8 +14,7 @@ import {
   getRetryableWalletRpcUserMessage
 } from '../src/core/zcash/wallet-rpc-errors'
 import {
-  getActiveRpcEndpointOption,
-  getActiveRpcEndpointMode,
+  AUTOMATIC_RPC_ENDPOINT_ID,
   getNextRpcEndpointOption,
   getRpcEndpointOptions,
   isRpcEndpointUrlConfigured,
@@ -24,9 +22,6 @@ import {
   parseRpcEndpointModes,
   selectStartupRpcEndpoint,
   setActiveCustomRpcEndpoints,
-  setActiveRpcEndpointOverride,
-  setActiveRpcEndpointModes,
-  setActiveRpcEndpointPreferences,
   withoutZeroIndexerEndpoints
 } from '../src/config/rpc-endpoints'
 import {
@@ -73,7 +68,11 @@ function encodeVarint(value: number): number[] {
 }
 
 test('uses the fastest RPC only when no valid persisted preference exists', async () => {
-  const endpoints = getRpcEndpointOptions('zcash').slice(0, 3)
+  const endpoints = [
+    { id: 'primary', label: 'Primary', url: 'https://primary.example.com' },
+    { id: 'backup', label: 'Backup', url: 'https://backup.example.com' },
+    { id: 'alternative', label: 'Alternative', url: 'https://alternative.example.com' }
+  ]
   const latencies = new Map([
     [endpoints[0].id, 300],
     [endpoints[1].id, 80],
@@ -308,16 +307,14 @@ test('excludes custom endpoints from automatic fallback', () => {
   setActiveCustomRpcEndpoints({ zcash: [customA, customB] })
 
   assert.equal(isRpcEndpointUrlConfigured('zcash', customA.url), true)
-  assert.equal(isRpcEndpointUrlConfigured('zcash', 'https://zcash-mainnet.chainsafe.dev'), true)
   assert.equal(getNextRpcEndpointOption('zcash', customA.id, customA.id), undefined)
-  assert.equal(getNextRpcEndpointOption('zcash', 'deltarpc', 'chainsafe'), undefined)
 
   setActiveCustomRpcEndpoints()
 })
 
 test('migrates the old Zero RPC choice and preserves ordinary fixed choices', () => {
   const upgraded = migrateRpcEndpointDefaults({ zcash: 'zero-indexer' }, { zcash: 'fixed' })
-  assert.deepEqual(upgraded.preferences, { zcash: 'deltarpc' })
+  assert.deepEqual(upgraded.preferences, { zcash: AUTOMATIC_RPC_ENDPOINT_ID })
   assert.deepEqual(upgraded.modes, { zcash: 'auto' })
 
   const explicitFixed = migrateRpcEndpointDefaults({ zcash: 'custom:private' }, { zcash: 'fixed' })
@@ -343,12 +340,6 @@ test('filters Zero aliases from managed RPC choices', () => {
   assert.equal(stale[0].options[1].url, 'https://old.example.com')
 })
 
-test('ordinary automatic fallback uses only ordinary RPCs', () => {
-  const next = getNextRpcEndpointOption('zcash', 'deltarpc', 'deltarpc')
-  assert.ok(next)
-  assert.notEqual(next.id, 'zero-indexer')
-})
-
 test('defaults invalid or missing RPC modes to auto', () => {
   assert.deepEqual(parseRpcEndpointModes(undefined), { zcash: 'auto' })
   assert.deepEqual(parseRpcEndpointModes({ zcash: 'unknown' }), { zcash: 'auto' })
@@ -356,6 +347,7 @@ test('defaults invalid or missing RPC modes to auto', () => {
 })
 
 test('does not probe Zero or unselected custom endpoints during automatic startup fallback', async () => {
+  const [managedEndpoint] = getRpcEndpointOptions('zcash')
   const customA = createCustomRpcEndpoint('Custom A', 'https://a.example.com', 'custom:a')
   const customB = createCustomRpcEndpoint('Custom B', 'https://b.example.com', 'custom:b')
   setActiveCustomRpcEndpoints({ zcash: [customA, customB] })
@@ -363,40 +355,15 @@ test('does not probe Zero or unselected custom endpoints during automatic startu
 
   const selected = await selectStartupRpcEndpoint('zcash', 'custom:removed', async endpoint => {
     probedIds.push(endpoint.id)
-    return endpoint.id === 'deltarpc' ? 1 : 2
+    return endpoint.id === managedEndpoint.id ? 1 : 2
   })
 
-  assert.equal(selected.id, 'deltarpc')
+  assert.equal(selected.id, managedEndpoint.id)
   assert.ok(!probedIds.includes(customA.id))
   assert.ok(!probedIds.includes(customB.id))
   assert.ok(!probedIds.includes('zero-indexer'))
 
   setActiveCustomRpcEndpoints()
-})
-
-test('resolves a session fallback without changing the preferred endpoint', () => {
-  setActiveRpcEndpointModes({ zcash: 'auto' })
-  setActiveRpcEndpointPreferences({ zcash: 'deltarpc' })
-  setActiveRpcEndpointOverride('zcash', 'chainsafe')
-  assert.equal(getActiveRpcEndpointOption('zcash').id, 'chainsafe')
-
-  setActiveRpcEndpointOverride('zcash')
-  assert.equal(getActiveRpcEndpointOption('zcash').id, 'deltarpc')
-})
-
-test('fixed mode ignores stale overrides and does not fail over', async () => {
-  setActiveRpcEndpointPreferences({ zcash: 'deltarpc' })
-  setActiveRpcEndpointModes({ zcash: 'fixed' })
-  setActiveRpcEndpointOverride('zcash', 'chainsafe')
-
-  try {
-    assert.equal(getActiveRpcEndpointOption('zcash').id, 'deltarpc')
-    assert.equal(await recordRpcFailure(), null)
-    assert.equal(getActiveRpcEndpointOption('zcash').id, 'deltarpc')
-  } finally {
-    setActiveRpcEndpointOverride('zcash')
-    setActiveRpcEndpointModes({ zcash: 'auto' })
-  }
 })
 
 test('counts endpoint connectivity errors but ignores local worker timeouts', () => {

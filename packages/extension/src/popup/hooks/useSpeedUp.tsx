@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTransaction } from './useTransaction'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useNavigate } from '../provider/Router'
@@ -6,6 +6,22 @@ import { accountManager } from '@/core/wallet/account-manager'
 import { SpeedUpConfirmSheet } from '../components/transaction/SpeedUpConfirmSheet'
 import type { Transaction } from '@/types/wallet'
 import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
+import type { FeeTier } from '@/config/fee'
+import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
+
+function feeContextKey() {
+  const wallet = useWalletStore.getState()
+  const settings = useSettingsStore.getState()
+  return JSON.stringify([
+    wallet.currentWalletId,
+    wallet.currentAccountId,
+    wallet.currentNetwork,
+    settings.rpcEndpointModes.zcash,
+    settings.rpcEndpointPreferences.zcash,
+    settings.customRpcEndpoints.zcash
+  ])
+}
 
 /**
  * Drives the Speed Up flow: a confirm sheet (default Fast tier) plus the resend.
@@ -23,24 +39,66 @@ export function useSpeedUp() {
   const { setResult, updateStep } = useTransactionResultStore()
   const { navigate } = useNavigate()
   const [sheetTx, setSheetTx] = useState<Transaction | null>(null)
+  const [sheetRevision, setSheetRevision] = useState(0)
+  const confirmationInFlight = useRef(false)
+  const openRevision = useRef(0)
+  const [isConfirming, setIsConfirming] = useState(false)
+
+  useEffect(
+    () => () => {
+      openRevision.current += 1
+    },
+    []
+  )
 
   const requestSpeedUp = useCallback((tx: Transaction) => {
-    if (getTransactionRecoveryAction(tx) === 'speed_up') setSheetTx(tx)
+    if (getTransactionRecoveryAction(tx) === 'speed_up') {
+      openRevision.current += 1
+      setSheetTx(tx)
+    }
+  }, [])
+
+  const handleOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      openRevision.current += 1
+      setSheetTx(null)
+    }
   }, [])
 
   const executeSpeedUp = useCallback(
     async ({
       amount,
       fee,
-      marginalFeeZats
+      marginalFeeZats,
+      feeQuoteId,
+      feeTier
     }: {
       amount: string
       fee: string
       marginalFeeZats: number
+      feeQuoteId: string
+      feeTier: FeeTier
     }) => {
       const tx = sheetTx
+      if (!tx || confirmationInFlight.current) return
+      confirmationInFlight.current = true
+      const revision = openRevision.current
+      const contextKey = feeContextKey()
+      setIsConfirming(true)
+      try {
+        const currentQuote = await accountManager.getFeeQuote()
+        if (revision !== openRevision.current || contextKey !== feeContextKey()) return
+        if (currentQuote.id !== feeQuoteId || currentQuote.expiresAt <= Date.now()) {
+          throw new Error('Fee estimate changed')
+        }
+      } catch {
+        if (revision === openRevision.current) setSheetRevision(value => value + 1)
+        return
+      } finally {
+        confirmationInFlight.current = false
+        setIsConfirming(false)
+      }
       setSheetTx(null)
-      if (!tx) return
 
       accountManager.requestSync('transaction')
 
@@ -62,6 +120,8 @@ export function useSpeedUp() {
         memo: tx.memo,
         fee,
         marginalFeeZats,
+        feeQuoteId,
+        feeTier,
         replacesTransactionId: tx.id,
         onCreated: (transaction, accountKey) => {
           if (useTransactionResultStore.getState().data !== pendingResult) return
@@ -95,9 +155,11 @@ export function useSpeedUp() {
 
   const speedUpSheet = (
     <SpeedUpConfirmSheet
+      key={sheetRevision}
       open={!!sheetTx}
-      onOpenChange={open => !open && setSheetTx(null)}
+      onOpenChange={handleOpenChange}
       tx={sheetTx}
+      isConfirming={isConfirming}
       onConfirm={executeSpeedUp}
     />
   )

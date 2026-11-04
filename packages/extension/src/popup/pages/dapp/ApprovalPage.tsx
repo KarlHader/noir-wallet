@@ -11,7 +11,7 @@ import { StandardTransactionResult } from '../../components/transaction/Standard
 import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useSettingsStore } from '@/store/settings-store'
-import { deriveFeeByTier, marginalFeeForTier } from '@/config/fee'
+import { marginalFeeForTier } from '@/config/fee'
 import type { AddressType } from '@/types/wallet'
 import { formatSortAddress } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -51,7 +51,9 @@ export function ApprovalPage() {
   const [action, setAction] = useState('unknown')
   const [data, setData] = useState<any>({})
   const [error, setError] = useState('')
+  const [decisionError, setDecisionError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const decisionInFlight = useRef(false)
   const [showResult, setShowResult] = useState(false)
   const [walletReady, setWalletReady] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -65,23 +67,46 @@ export function ApprovalPage() {
   const fundingSource: AddressType =
     data.fundingSource === 'transparent' ? 'transparent' : 'shielded'
   const hasEnoughShieldingBalance = !isShield || hasEnoughTransparentBalanceToShield(data.amount)
-  const estimate = useCallback(async () => {
-    const response = await chrome.runtime.sendMessage({ type: 'ESTIMATE_APPROVAL_FEE', requestId })
-    if (response?.error || typeof response?.fee !== 'string') {
-      throw new Error(response?.error || 'Fee estimation failed')
-    }
-    return response.fee
-  }, [requestId])
+  const estimate = useCallback(
+    async (tier: 'standard' | 'fast') => {
+      const response = await chrome.runtime.sendMessage({
+        type: 'ESTIMATE_APPROVAL_FEE',
+        requestId,
+        feeTier: tier
+      })
+      if (
+        response?.error ||
+        typeof response?.fee !== 'string' ||
+        typeof response?.marginalFeeZats !== 'string' ||
+        !response.feeQuote
+      ) {
+        throw new Error(response?.error || 'Fee estimation failed')
+      }
+      return {
+        feeZats: response.fee,
+        marginalFeeZats: response.marginalFeeZats,
+        feeQuote: response.feeQuote
+      }
+    },
+    [requestId, binding?.walletId, binding?.accountId]
+  )
   const feeEstimate = useFeeEstimate({
     type: isShield ? 'shield' : 'send',
     to: data.to,
     amount: data.amount,
     memo: data.memo,
     fundingSource,
+    feeTier,
     estimate,
     enabled: (isSend || isShield) && walletReady && hasEnoughShieldingBalance
   })
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
+  const feeByTier = feeEstimate.feeByTier
+  const feeReady =
+    !!feeEstimate.feeQuote &&
+    feeEstimate.feeQuote.expiresAt > Date.now() &&
+    feeEstimate.feeZats != null &&
+    !feeEstimate.loading &&
+    !feeEstimate.error
 
   const hasFetched = useRef(false)
 
@@ -122,6 +147,8 @@ export function ApprovalPage() {
   }
 
   const handleDecision = async (approved: boolean) => {
+    if (decisionInFlight.current) return
+    decisionInFlight.current = true
     if (!approved) {
       setIsLoading(true)
       try {
@@ -137,6 +164,7 @@ export function ApprovalPage() {
       return
     }
 
+    setDecisionError('')
     setIsLoading(true)
     let resultListener: Parameters<typeof chrome.runtime.onMessage.addListener>[0] | null = null
     try {
@@ -144,6 +172,28 @@ export function ApprovalPage() {
       if (context?.error || !context?.request) throw new Error(context?.error || 'Request expired')
 
       if (action === 'sendTransaction' || action === 'shieldFunds') {
+        if (!feeReady || !feeEstimate.feeQuote || feeEstimate.feeZats == null) {
+          throw new Error('Network fee estimate is unavailable. Please try again.')
+        }
+        const approvalFee = await chrome.runtime.sendMessage({
+          type: 'ESTIMATE_APPROVAL_FEE',
+          requestId,
+          marginalFeeZats: marginalFeeForTier(
+            feeTier,
+            feeEstimate.feeQuote.standardMarginalFeeZats
+          ),
+          feeQuoteId: feeEstimate.feeQuote.id
+        })
+        if (
+          approvalFee?.error ||
+          approvalFee?.feeQuote?.id !== feeEstimate.feeQuote.id ||
+          approvalFee?.fee !== String(feeEstimate.feeZats)
+        ) {
+          feeEstimate.refresh()
+          setIsLoading(false)
+          decisionInFlight.current = false
+          return
+        }
         setResult(
           {
             type: 'zcash',
@@ -170,13 +220,21 @@ export function ApprovalPage() {
         }
         resultListener = listener
         chrome.runtime.onMessage.addListener(listener)
-        await chrome.runtime.sendMessage({
+        const approvalResponse = await chrome.runtime.sendMessage({
           type: 'DAPP_APPROVAL_RESULT',
           requestId,
           success: true,
-          marginalFeeZats: marginalFeeForTier(feeTier),
-          feeZats: feeByTier[feeTier] ?? undefined
+          marginalFeeZats: marginalFeeForTier(
+            feeTier,
+            feeEstimate.feeQuote.standardMarginalFeeZats
+          ),
+          feeQuoteId: feeEstimate.feeQuote.id,
+          feeTier,
+          feeZats: feeEstimate.feeZats
         })
+        if (approvalResponse?.success === false || approvalResponse?.error) {
+          throw new Error(approvalResponse.error || 'Approval failed')
+        }
       } else {
         await chrome.runtime.sendMessage({
           type: 'DAPP_APPROVAL_RESULT',
@@ -189,8 +247,11 @@ export function ApprovalPage() {
     } catch (err) {
       if (resultListener) chrome.runtime.onMessage.removeListener(resultListener)
       console.error('Failed to send decision:', err)
-      setError(classifyError(err).userMessage)
+      setShowResult(false)
+      clear()
+      setDecisionError(classifyError(err).userMessage)
       setIsLoading(false)
+      decisionInFlight.current = false
     }
   }
 
@@ -297,7 +358,7 @@ export function ApprovalPage() {
                 <li className="flex items-center gap-3">
                   <Icon icon="lucide:eye" className="w-3 h-3 text-muted-foreground/80" />
                   <span className="text-sm text-muted-foreground">
-                    View your wallet balance and activity
+                    View your wallet addresses and balances
                   </span>
                 </li>
                 <li className="flex items-center gap-3">
@@ -517,9 +578,19 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
                   hideLabel
                 />
+                {feeEstimate.error && (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-destructive"
+                    onClick={feeEstimate.refresh}
+                  >
+                    Fee estimate unavailable. Retry
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -608,9 +679,19 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
                   hideLabel
                 />
+                {feeEstimate.error && (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-destructive"
+                    onClick={feeEstimate.refresh}
+                  >
+                    Fee estimate unavailable. Retry
+                  </button>
+                )}
               </div>
             </div>
 
@@ -649,6 +730,11 @@ export function ApprovalPage() {
       <div className="flex-1 px-5 pt-6 pb-30 overflow-y-auto">{renderContent()}</div>
 
       <div className="fixed bottom-0 left-0 right-0 p-5 bg-background/95 backdrop-blur-md shadow-lg">
+        {decisionError && (
+          <p className="mb-2 text-xs text-destructive" role="alert">
+            {decisionError}
+          </p>
+        )}
         <div className="flex gap-3">
           <Button
             variant="outline"
@@ -666,6 +752,7 @@ export function ApprovalPage() {
             disabled={
               isLoading ||
               !hasEnoughShieldingBalance ||
+              ((isSend || isShield) && !feeReady) ||
               (action === 'connect' && (data.accounts?.length ?? 0) > 0 && selectedIds.length === 0)
             }
             size="lg"

@@ -35,13 +35,13 @@ Zcash wallet history is discovered by scanning the chain. After an import or a l
 - Keep the browser open if the wallet indicates that an initial scan is still running.
 - If sync pauses, check the network connection and restart the extension if it remains paused.
 
-On Mainnet, open **Settings > RPC Endpoint** to choose a provider or enable **Auto**. Auto switches among managed providers when needed. If a fixed provider is unavailable, retry later or select another provider explicitly. Testnet uses its fixed synchronization endpoint.
+On Mainnet, open **Settings > RPC Endpoint** to choose a provider or enable **Auto**. Auto switches among managed providers when needed. If a fixed provider is temporarily unavailable, retry later or select another provider. If it is removed from the available providers, the wallet switches to Auto. Testnet uses its fixed synchronization endpoint.
 
 ## Transaction broadcasting
 
 ZeroIndexer broadcasting is enabled by default under **Settings > Security & Privacy**. Open **Nodes** in the **ZeroIndexer** card to use **Auto**, choose an official node, or add and select a custom node. Auto orders official nodes by reachability and probe latency; custom nodes are used only when explicitly selected. Adding a custom node saves it without changing the selection. Deleting a selected custom node restores Auto. Choices are saved separately for Mainnet and Testnet and retained when ZeroIndexer is turned off. The preferred-node indicator and latency describe probe results, not the node that accepted a transaction.
 
-Transactions containing Orchard try the selected ZeroIndexer node, or the ordered official nodes in Auto. If every attempt fails, the wallet broadcasts the same transaction through its ordinary RPC, including when a node was manually selected. Other transactions use the ordinary RPC directly. Turning off ZeroIndexer uses the ordinary RPC for all broadcasts. These settings do not change the synchronization provider or compact-block CDN.
+Transactions containing Orchard try the selected ZeroIndexer node, or the ordered official nodes in Auto. If every attempt fails, the wallet broadcasts the same transaction through its ordinary RPC, including when a node was manually selected. During synchronization, status lookups for locally created Orchard transactions also try these nodes before falling back to the ordinary RPC. Other transactions use the ordinary RPC directly. Turning off ZeroIndexer uses the ordinary RPC for all broadcasts and these status lookups. These settings do not change the synchronization provider or compact-block CDN.
 
 <Callout type="info">
   Locking Noir Wallet protects local access. It does not remove an existing dApp authorization;

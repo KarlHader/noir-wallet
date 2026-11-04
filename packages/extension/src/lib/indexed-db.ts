@@ -9,6 +9,7 @@
 import type { Transaction } from '@/types'
 import type { VerboseTransaction } from './zcash-node-rpc.ts'
 import { isWalletSnapshotIntegrityError } from './wallet-snapshot-errors'
+import type { JournalReplayEntry } from './sync-journal'
 
 const DB_NAME = 'zcash-wallet-db'
 // Schema versions must remain monotonic across builds that share an extension ID.
@@ -1056,46 +1057,69 @@ export async function appendJournalEntry(
   })
 }
 
-export async function loadJournalEntries(
+/** Read a bounded page without retaining the rest of the recovery journal. */
+export async function loadJournalPage(
   network: string,
   walletId: string,
-  fromSeq: number
-): Promise<{ seq: number; rangeStart: number; rangeEnd: number; data: Uint8Array }[]> {
-  try {
-    const db = await getConnection()
-    const walletKey = journalWalletKey(network, walletId)
+  fromSeq: number,
+  toSeq: number
+): Promise<JournalReplayEntry[]> {
+  if (
+    !Number.isSafeInteger(fromSeq) ||
+    !Number.isSafeInteger(toSeq) ||
+    fromSeq < 0 ||
+    toSeq < fromSeq
+  ) {
+    throw new Error('Invalid sync journal sequence range')
+  }
+  if (fromSeq === toSeq) return []
 
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(JOURNAL_STORE_NAME, 'readonly')
-      const store = tx.objectStore(JOURNAL_STORE_NAME)
-      const index = store.index('byWallet')
-      const results: { seq: number; rangeStart: number; rangeEnd: number; data: Uint8Array }[] = []
+  const db = await getConnection()
+  const walletKey = journalWalletKey(network, walletId)
+  const maxEntries = 5
+  const maxBytes = 8 * 1024 * 1024
 
-      const req = index.openCursor(IDBKeyRange.only(walletKey))
-      req.onsuccess = () => {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(JOURNAL_STORE_NAME, 'readonly')
+    const results: JournalReplayEntry[] = []
+    let totalBytes = 0
+    let readError: unknown
+    const fail = (error: unknown) => {
+      readError = error
+      reject(error)
+      try {
+        tx.abort()
+      } catch {
+        /* The transaction may already have aborted. */
+      }
+    }
+    // The compound primary key supplies sequence ordering and excludes other wallets.
+    const range = IDBKeyRange.bound([walletKey, fromSeq], [walletKey, toSeq], false, true)
+    const req = tx.objectStore(JOURNAL_STORE_NAME).openCursor(range)
+    req.onsuccess = () => {
+      try {
         const cursor = req.result
         if (cursor) {
           const entry = cursor.value as JournalEntry
-          if (entry.seq >= fromSeq) {
-            results.push({
-              seq: entry.seq,
-              rangeStart: entry.rangeStart,
-              rangeEnd: entry.rangeEnd,
-              data: new Uint8Array(entry.data)
-            })
+          if (!(entry.data instanceof Uint8Array)) {
+            throw new Error(`Invalid sync journal data at sequence ${entry.seq}`)
           }
+          // A single oversized entry must still make progress; never combine it.
+          if (results.length > 0 && totalBytes + entry.data.byteLength > maxBytes) return
+          results.push({ seq: entry.seq, data: entry.data })
+          totalBytes += entry.data.byteLength
+          if (results.length >= maxEntries || totalBytes >= maxBytes) return
           cursor.continue()
-        } else {
-          results.sort((a, b) => a.seq - b.seq)
-          resolve(results)
         }
+      } catch (error) {
+        fail(error)
       }
-      req.onerror = () => reject(req.error)
-    })
-  } catch (e) {
-    console.warn('[IndexedDB] Failed to load journal entries:', e)
-    return []
-  }
+    }
+    req.onerror = () => fail(req.error || new Error('Sync journal read failed'))
+    tx.oncomplete = () => resolve(results)
+    tx.onabort = () => reject(readError ?? tx.error ?? new Error('Sync journal read aborted'))
+    tx.onerror = () => fail(tx.error || new Error('Sync journal read failed'))
+  })
 }
 
 export async function clearJournalEntries(

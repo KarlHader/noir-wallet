@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { entropyToMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
+import {
+  entropyToMnemonic,
+  mnemonicToEntropy,
+  mnemonicToSeedSync,
+  validateMnemonic
+} from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
 
 function isAccepted(wasm, phrase) {
@@ -101,4 +106,76 @@ test('vendored WASM mnemonic contracts', async t => {
     assert.equal(validateMnemonic(phrase, wordlist), true)
     assert.equal(isAccepted(wasm, phrase), true)
   })
+})
+
+test('vendored WASM mnemonic generation uses Web Crypto and fails closed', async t => {
+  const originalSelf = Object.getOwnPropertyDescriptor(globalThis, 'self')
+  const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const originalRandom = Math.random
+  const bytes = readFileSync(
+    new URL('../src/lib/wasm-pkg/zcash_wallet_wasm_bg.wasm', import.meta.url)
+  )
+  let instance = 0
+
+  t.after(() => {
+    for (const [name, descriptor] of [
+      ['self', originalSelf],
+      ['crypto', originalCrypto]
+    ]) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+    Math.random = originalRandom
+  })
+
+  globalThis.self = globalThis
+  const loadFreshWasm = async () => {
+    const wasm = await import(`../src/lib/wasm-pkg/zcash_wallet_wasm.js?mnemonic-rng=${instance++}`)
+    wasm.initSync({ module: bytes })
+    return wasm
+  }
+  let seed = Uint8Array.from({ length: 32 }, (_, index) => index)
+  const cryptoCalls = []
+  Object.defineProperty(globalThis, 'crypto', {
+    configurable: true,
+    value: {
+      getRandomValues(array) {
+        cryptoCalls.push(array.byteLength)
+        assert.equal(array.byteLength, seed.length)
+        array.set(seed)
+        return array
+      }
+    }
+  })
+  Math.random = () => {
+    throw new Error('Math.random must not generate mnemonic entropy')
+  }
+
+  const first = (await loadFreshWasm()).generate_mnemonic(24)
+  const second = (await loadFreshWasm()).generate_mnemonic(24)
+  seed = Uint8Array.from({ length: 32 }, (_, index) => 255 - index)
+  const third = (await loadFreshWasm()).generate_mnemonic(24)
+  assert.deepEqual(cryptoCalls, [32, 32, 32])
+  assert.equal(first === second, true)
+  assert.equal(first !== third, true)
+  assert.equal(mnemonicToEntropy(first, wordlist).length, 32)
+  assert.equal(entropyToMnemonic(mnemonicToEntropy(first, wordlist), wordlist) === first, true)
+
+  Object.defineProperty(globalThis, 'crypto', {
+    configurable: true,
+    value: {
+      getRandomValues() {
+        throw new Error('Web Crypto unavailable')
+      }
+    }
+  })
+  Math.random = () => 0.5
+  const withoutCrypto = await loadFreshWasm()
+  const originalError = console.error
+  try {
+    console.error = () => {}
+    assert.throws(() => withoutCrypto.generate_mnemonic(24))
+  } finally {
+    console.error = originalError
+  }
 })

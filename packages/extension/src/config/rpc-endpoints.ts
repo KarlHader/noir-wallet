@@ -36,10 +36,10 @@ export type RpcEndpointMode = 'auto' | 'fixed'
 export type RpcEndpointModes = Record<RpcEndpointChain, RpcEndpointMode>
 
 export const DEFAULT_RPC_ENDPOINT_PREFERENCES: RpcEndpointPreferences = {
-  zcash: 'deltarpc'
+  zcash: 'deltarpc-web-sg'
 }
 
-export const AUTOMATIC_RPC_ENDPOINT_ID = 'deltarpc'
+export const AUTOMATIC_RPC_ENDPOINT_ID = 'deltarpc-web-sg'
 
 export const DEFAULT_RPC_ENDPOINT_MODES: RpcEndpointModes = {
   zcash: 'auto'
@@ -52,11 +52,6 @@ export const RPC_ENDPOINT_GROUPS: RpcEndpointGroup[] = [
     label: 'Zcash',
     iconChain: 'zec',
     options: [
-      {
-        id: 'deltarpc',
-        label: 'DeltaRPC',
-        url: 'https://zcash-wallet-grpc-self.deltarpc.com'
-      },
       {
         id: 'deltarpc-web',
         label: 'DeltaRPC Singapore Proxy',
@@ -76,11 +71,6 @@ export const RPC_ENDPOINT_GROUPS: RpcEndpointGroup[] = [
         id: 'deltarpc-web-us',
         label: 'DeltaRPC United States',
         url: 'https://zcashwebrpcus.deltarpc.com'
-      },
-      {
-        id: 'chainsafe',
-        label: 'ChainSafe',
-        url: 'https://zcash-mainnet.chainsafe.dev'
       }
     ]
   }
@@ -533,7 +523,8 @@ export function ensureRpcEndpointPreferencesLoaded(): Promise<RpcEndpointPrefere
       return { ...preferences }
     })().catch(() => syncActiveRpcEndpointPreferencesFromStorage())
   }
-  return loadPromise
+  // Reuse initialization, but return the selection in effect when it completes.
+  return loadPromise.then(() => ({ ...activeRpcEndpointPreferences }))
 }
 
 // Kick off the initial read in any chrome context (popup/background/offscreen).

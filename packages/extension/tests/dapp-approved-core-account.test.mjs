@@ -2,7 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { findWasmAccountIdByHdIndex } from '../src/core/worker/account-resolution.ts'
+import {
+  findWasmAccountIdByHdIndex,
+  mapWasmAccountIdsByHdIndex
+} from '../src/core/worker/account-resolution.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript')
@@ -63,6 +66,29 @@ test('worker resolves the approved HD index even when the active WASM account is
   assert.equal(accountId, 11)
   assert.deepEqual(queried, [11])
   assert.equal(await findWasmAccountIdByHdIndex([[22, {}]], 0, async () => 1), null)
+})
+
+test('restored account mapping uses verified WASM indices and retains the first matching account', async () => {
+  const mapped = await mapWasmAccountIdsByHdIndex(
+    [
+      [11, {}],
+      [22, {}],
+      [33, {}],
+      ['34', {}],
+      [44, {}]
+    ],
+    async id => {
+      if (id === 44) throw new Error('unavailable')
+      return id === 11 || id === 22 ? 0 : 1
+    }
+  )
+  assert.deepEqual(
+    [...mapped],
+    [
+      [0, 11],
+      [1, 33]
+    ]
+  )
 })
 
 test('shared wallet core sends the approved account after its active account changes', async () => {

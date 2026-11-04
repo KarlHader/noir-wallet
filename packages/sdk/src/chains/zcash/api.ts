@@ -13,8 +13,7 @@ import type {
   SignMessageResult,
   SigningMode,
   LendingMcaStatus,
-  Network,
-  TransactionHistoryEntry
+  Network
 } from './types'
 
 export class ZcashAPI {
@@ -135,11 +134,6 @@ export class ZcashAPI {
   /** Shield transparent funds to the private (shielded) balance. Requires user approval. */
   async shieldFunds(): Promise<string> {
     return this.provider.request({ method: 'zcash_shieldFunds' })
-  }
-
-  /** Fetch transaction history (on-chain + local pending). */
-  async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {
-    return this.provider.request({ method: 'zcash_getTransactionHistory' })
   }
 
   /** @deprecated Network is determined at build time. Install the testnet extension instead. */

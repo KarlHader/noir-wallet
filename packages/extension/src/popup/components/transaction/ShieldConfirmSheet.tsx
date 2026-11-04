@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { FeeTierPicker } from './FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useSettingsStore } from '@/store/settings-store'
-import { deriveFeeByTier, marginalFeeForTier } from '@/config/fee'
+import { marginalFeeForTier, type FeeTier } from '@/config/fee'
 import { formatNumber } from '@/lib/format'
 import {
   hasEnoughTransparentBalanceToShield,
@@ -15,9 +16,14 @@ interface ShieldConfirmSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   transparentBalance: number
+  feeRefreshRevision: number
   isShielding?: boolean
-  /** Invoked with the selected tier's marginal fee (zatoshis). */
-  onConfirm: (marginalFeeZats: number) => void
+  onConfirm: (params: {
+    marginalFeeZats: number
+    feeQuoteId: string
+    feeTier: FeeTier
+    feeZats: number
+  }) => void
 }
 
 /**
@@ -28,65 +34,110 @@ export function ShieldConfirmSheet({
   open,
   onOpenChange,
   transparentBalance,
+  feeRefreshRevision,
   isShielding,
   onConfirm
 }: ShieldConfirmSheetProps) {
   const feeTier = useSettingsStore(state => state.feeTier)
   const setFeeTier = useSettingsStore(state => state.setFeeTier)
   const hasEnoughBalance = hasEnoughTransparentBalanceToShield(transparentBalance)
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null)
 
-  const estimate = useFeeEstimate({ type: 'shield', enabled: open && hasEnoughBalance })
-  const feeByTier = deriveFeeByTier(estimate.feeZats, estimate.error)
+  const estimate = useFeeEstimate({
+    type: 'shield',
+    feeTier,
+    enabled: open && hasEnoughBalance,
+    refreshKey: feeRefreshRevision
+  })
+  const feeReady =
+    !!estimate.feeQuote &&
+    estimate.feeQuote.expiresAt > Date.now() &&
+    estimate.feeZats != null &&
+    !estimate.loading &&
+    !estimate.error
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
-        <DialogHeader className="px-5 pt-5 pb-4">
-          <DialogTitle className="text-center">Shield Funds</DialogTitle>
-          <DialogDescription className="sr-only">
-            Move transparent funds into the private pool
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <div ref={setPortalContainer} className="contents" />
+      <Dialog open={open && !!portalContainer} onOpenChange={onOpenChange}>
+        <DialogContent
+          position="bottom"
+          showCloseButton={false}
+          portalContainer={portalContainer ?? undefined}
+          className="p-0 gap-0"
+        >
+          <DialogHeader className="px-5 pt-5 pb-4">
+            <DialogTitle className="text-center">Shield Funds</DialogTitle>
+            <DialogDescription className="sr-only">
+              Move transparent funds into the private pool
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="flex flex-col items-center pb-4">
-          <div className="mb-3">
-            <TokenIcon symbol="ZEC" size="xl" />
+          <div className="flex flex-col items-center pb-4">
+            <div className="mb-3">
+              <TokenIcon symbol="ZEC" size="xl" />
+            </div>
+            <p className="text-2xl font-bold">{formatNumber(transparentBalance)} ZEC</p>
+            <p className="text-sm text-muted mt-0.5 px-8 text-center">
+              Move transparent funds into the private pool for enhanced privacy.
+            </p>
           </div>
-          <p className="text-2xl font-bold">{formatNumber(transparentBalance)} ZEC</p>
-          <p className="text-sm text-muted mt-0.5 px-8 text-center">
-            Move transparent funds into the private pool for enhanced privacy.
-          </p>
-        </div>
 
-        <div className="mx-5 bg-card rounded-xl p-4">
-          <FeeTierPicker
-            tier={feeTier}
-            onTierChange={setFeeTier}
-            feeByTier={feeByTier}
-            loading={estimate.loading}
-          />
-        </div>
+          <div className="mx-5 bg-card rounded-xl p-4">
+            <FeeTierPicker
+              tier={feeTier}
+              onTierChange={setFeeTier}
+              feeByTier={estimate.feeByTier}
+              loadingByTier={estimate.loadingByTier}
+              loading={estimate.loading}
+            />
+            {estimate.error && (
+              <button
+                type="button"
+                className="mt-2 text-xs text-destructive"
+                onClick={estimate.refresh}
+              >
+                Fee estimate unavailable. Retry
+              </button>
+            )}
+          </div>
 
-        {!hasEnoughBalance && (
-          <p className="mx-5 mt-3 text-xs text-destructive text-center">
-            {MIN_SHIELDING_BALANCE_MESSAGE}
-          </p>
-        )}
+          {!hasEnoughBalance && (
+            <p className="mx-5 mt-3 text-xs text-destructive text-center">
+              {MIN_SHIELDING_BALANCE_MESSAGE}
+            </p>
+          )}
 
-        <div className="p-5 flex gap-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1 h-[45px]">
-            Cancel
-          </Button>
-          <Button
-            onClick={() => onConfirm(marginalFeeForTier(feeTier))}
-            isLoading={isShielding}
-            disabled={!hasEnoughBalance}
-            className="flex-1 h-[45px]"
-          >
-            Shield Now
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+          <div className="p-5 flex gap-3">
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              className="flex-1 h-[45px]"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!feeReady || !estimate.feeQuote || estimate.feeZats == null) return
+                onConfirm({
+                  marginalFeeZats: marginalFeeForTier(
+                    feeTier,
+                    estimate.feeQuote.standardMarginalFeeZats
+                  ),
+                  feeQuoteId: estimate.feeQuote.id,
+                  feeTier,
+                  feeZats: estimate.feeZats
+                })
+              }}
+              isLoading={isShielding}
+              disabled={!hasEnoughBalance || !feeReady}
+              className="flex-1 h-[45px]"
+            >
+              Shield Now
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

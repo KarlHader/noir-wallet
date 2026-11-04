@@ -5,13 +5,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { FeeTierPicker } from './FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats,
-  type FeeTier
-} from '@/config/fee'
+import { marginalFeeForTier, type FeeTier } from '@/config/fee'
 import { formatNumber, formatSortAddress } from '@/lib/format'
 import type { Transaction } from '@/types/wallet'
 import { resolveSpeedUpAmount } from '@/lib/transaction-replacement'
@@ -21,7 +15,14 @@ interface SpeedUpConfirmSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   tx: Transaction | null
-  onConfirm: (params: { amount: string; fee: string; marginalFeeZats: number }) => void
+  isConfirming?: boolean
+  onConfirm: (params: {
+    amount: string
+    fee: string
+    marginalFeeZats: number
+    feeQuoteId: string
+    feeTier: FeeTier
+  }) => void
 }
 
 /**
@@ -33,6 +34,7 @@ export function SpeedUpConfirmSheet({
   open,
   onOpenChange,
   tx,
+  isConfirming,
   onConfirm
 }: SpeedUpConfirmSheetProps) {
   const [tier, setTier] = useState<FeeTier>('fast')
@@ -58,19 +60,25 @@ export function SpeedUpConfirmSheet({
     amount: retryAmount,
     memo: tx?.memo,
     fundingSource: tx?.fromType,
+    feeTier: tier,
     enabled: open && !!tx && !maxTransfer.loading && !maxTransfer.error && !usesMaxTransfer
   })
-  const feeByTier = usesMaxTransfer
-    ? deriveFeeByTierFromEstimate(
-        maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-        tier,
-        maxTransfer.error
-      )
-    : deriveFeeByTier(estimate.feeZats, estimate.error)
-  const selectedFeeZats = feeByTier[tier] ?? staticFeeFallbackZats(tier)
+  const feeByTier = usesMaxTransfer ? maxTransfer.feeByTier : estimate.feeByTier
+  const loadingByTier = {
+    standard:
+      maxTransfer.loadingByTier.standard || (!usesMaxTransfer && estimate.loadingByTier.standard),
+    fast: maxTransfer.loadingByTier.fast || (!usesMaxTransfer && estimate.loadingByTier.fast)
+  }
+  const selectedFeeZats = feeByTier[tier] ?? 0
   const selectedFee = safeBig(selectedFeeZats).div(1e8).toFixed()
   const loading = maxTransfer.loading || (!usesMaxTransfer && estimate.loading)
   const unavailable = maxTransfer.error || !maxTransfer.maxAmount
+  const selectedQuote = usesMaxTransfer ? maxTransfer.feeQuote : estimate.feeQuote
+  const feeReady =
+    !!selectedQuote &&
+    selectedQuote.expiresAt > Date.now() &&
+    !loading &&
+    !(usesMaxTransfer ? maxTransfer.error : estimate.error)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -103,12 +111,26 @@ export function SpeedUpConfirmSheet({
             tier={tier}
             onTierChange={setTier}
             feeByTier={feeByTier}
+            loadingByTier={loadingByTier}
             loading={loading}
           />
           {maxTransfer.error && (
-            <p className="text-xs text-destructive mt-3 text-center">
-              Unable to estimate the spendable amount. Please wait for sync and try again.
-            </p>
+            <button
+              type="button"
+              className="text-xs text-destructive mt-3"
+              onClick={maxTransfer.refresh}
+            >
+              Spendable amount unavailable. Retry
+            </button>
+          )}
+          {!usesMaxTransfer && estimate.error && (
+            <button
+              type="button"
+              className="text-xs text-destructive mt-3"
+              onClick={estimate.refresh}
+            >
+              Fee estimate unavailable. Retry
+            </button>
           )}
         </div>
 
@@ -117,12 +139,17 @@ export function SpeedUpConfirmSheet({
             Cancel
           </Button>
           <Button
-            disabled={loading || unavailable}
+            disabled={isConfirming || loading || unavailable || !feeReady}
+            isLoading={isConfirming}
             onClick={() =>
+              selectedQuote &&
+              feeReady &&
               onConfirm({
                 amount: retryAmount,
                 fee: usesMaxTransfer && maxTransfer.fee ? maxTransfer.fee : selectedFee,
-                marginalFeeZats: marginalFeeForTier(tier)
+                marginalFeeZats: marginalFeeForTier(tier, selectedQuote.standardMarginalFeeZats),
+                feeQuoteId: selectedQuote.id,
+                feeTier: tier
               })
             }
             className="flex-1 h-[45px]"

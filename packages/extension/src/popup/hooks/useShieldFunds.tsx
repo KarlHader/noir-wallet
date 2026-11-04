@@ -1,13 +1,13 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { useNavigate } from '../provider/Router'
 import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab'
 import { ShieldConfirmSheet } from '../components/transaction/ShieldConfirmSheet'
-import { WALLET_CONFIG } from '@/config/wallet'
+import { accountManager } from '@/core/wallet/account-manager'
 import { ANALYTICS_EVENTS, PAGE_IDS } from '@/lib/analytics'
-import { MARGINAL_FEE_ZATS, sanitizeMarginalFeeZats } from '@/config/fee'
+import type { FeeTier } from '@/config/fee'
 import type { Transaction } from '@/types/wallet'
 import { safeBig } from '@/lib/big'
 import { classifyError } from '@/lib/errors'
@@ -22,9 +22,23 @@ import { isHardwareKeySource } from '@/lib/hardware-capabilities'
 import { getStandardTransactionResultCopy } from '@/lib/transaction-status-copy'
 import { isSidePanelSurface } from '@/config/extension-display'
 import { toast } from '@/store/toast-store'
+import { useSettingsStore } from '@/store/settings-store'
 
 const SHIELD_FAILED_COPY = getStandardTransactionResultCopy('failed', { shield: true })
 const SHIELD_SUCCESS_COPY = getStandardTransactionResultCopy('submitted', { shield: true })
+
+function feeContextKey() {
+  const wallet = useWalletStore.getState()
+  const settings = useSettingsStore.getState()
+  return JSON.stringify([
+    wallet.currentWalletId,
+    wallet.currentAccountId,
+    wallet.currentNetwork,
+    settings.rpcEndpointModes.zcash,
+    settings.rpcEndpointPreferences.zcash,
+    settings.customRpcEndpoints.zcash
+  ])
+}
 
 interface UseShieldFundsResult {
   isShielding: boolean
@@ -44,18 +58,64 @@ export function useShieldFunds(): UseShieldFundsResult {
   const [isShielding, setIsShielding] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [sheetBalance, setSheetBalance] = useState(0)
+  const [feeRefreshRevision, setFeeRefreshRevision] = useState(0)
+  const confirmationInFlight = useRef(false)
+  const sheetRevision = useRef(0)
+
+  useEffect(
+    () => () => {
+      sheetRevision.current += 1
+    },
+    []
+  )
   const { navigate } = useNavigate()
   const { setResult } = useTransactionResultStore()
 
   const handleShieldFunds = useCallback(() => {
     if (isShielding) return
+    sheetRevision.current += 1
     const balance = useAccountDataStore.getState().getCurrentBalance()
     setSheetBalance(safeBig(getShieldableTransparentBalance(balance)).toNumber())
     setSheetOpen(true)
   }, [isShielding])
 
+  const handleSheetOpenChange = useCallback((open: boolean) => {
+    if (!open) sheetRevision.current += 1
+    setSheetOpen(open)
+  }, [])
+
   const executeShield = useCallback(
-    async (marginalFeeZats: number) => {
+    async ({
+      marginalFeeZats,
+      feeQuoteId,
+      feeTier,
+      feeZats
+    }: {
+      marginalFeeZats: number
+      feeQuoteId: string
+      feeTier: FeeTier
+      feeZats: number
+    }) => {
+      if (confirmationInFlight.current) return
+      confirmationInFlight.current = true
+      const revision = sheetRevision.current
+      const contextKey = feeContextKey()
+      setIsShielding(true)
+      let quoteAccepted = false
+      try {
+        const currentQuote = await accountManager.getFeeQuote()
+        if (revision !== sheetRevision.current || contextKey !== feeContextKey()) return
+        if (currentQuote.id !== feeQuoteId || currentQuote.expiresAt <= Date.now()) {
+          throw new Error('Fee estimate changed')
+        }
+        quoteAccepted = true
+      } catch {
+        if (revision === sheetRevision.current) setFeeRefreshRevision(value => value + 1)
+        return
+      } finally {
+        if (!quoteAccepted) setIsShielding(false)
+        confirmationInFlight.current = false
+      }
       setSheetOpen(false)
 
       const accountDataStore = useAccountDataStore.getState()
@@ -80,29 +140,40 @@ export function useShieldFunds(): UseShieldFundsResult {
           '/'
         )
         navigate('/transaction-result')
+        setIsShielding(false)
         return
       }
 
       // Hardware wallets sign in a dedicated tab.
       const currentWallet = walletStore.getCurrentWallet()
       if (isHardwareKeySource(currentWallet?.keySource)) {
-        if (!currentWalletId || !currentAccountId) return
+        if (!currentWalletId || !currentAccountId) {
+          setIsShielding(false)
+          return
+        }
         const request = {
           kind: 'shield' as const,
           walletId: currentWalletId,
           accountId: currentAccountId,
           amount: transparentBalance,
-          marginalFeeZats
+          marginalFeeZats,
+          feeQuoteId,
+          feeTier
         }
         const isSidePanel = isSidePanelSurface(window.location.search)
 
         if (!isSidePanel) {
-          await openHardwareSignTab(request)
-          window.close()
+          try {
+            await openHardwareSignTab(request)
+            window.close()
+          } catch (cause) {
+            toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+          } finally {
+            setIsShielding(false)
+          }
           return
         }
 
-        setIsShielding(true)
         try {
           const result = await openHardwareSignAndWait(request)
           if (result.status === 'success') {
@@ -136,8 +207,6 @@ export function useShieldFunds(): UseShieldFundsResult {
         return
       }
 
-      setIsShielding(true)
-
       let pendingTx: Transaction | null = null
 
       try {
@@ -150,9 +219,7 @@ export function useShieldFunds(): UseShieldFundsResult {
             : ''
 
         // Cosmetic fee for the pending record; the chain reports the real fee later.
-        const feeZec = safeBig(WALLET_CONFIG.NETWORK_FEE)
-          .times(sanitizeMarginalFeeZats(marginalFeeZats) / MARGINAL_FEE_ZATS.standard)
-          .toFixed()
+        const feeZec = safeBig(feeZats).div(1e8).toFixed()
 
         const response = await chrome.runtime.sendMessage({
           type: 'ADD_TRANSACTION',
@@ -214,6 +281,8 @@ export function useShieldFunds(): UseShieldFundsResult {
           accountKey,
           transactionId: pendingTx.id,
           marginalFeeZats,
+          feeQuoteId,
+          feeTier,
           analytics: {
             onSuccess: {
               name: ANALYTICS_EVENTS.SHIELD_SUCCEEDED,
@@ -295,8 +364,9 @@ export function useShieldFunds(): UseShieldFundsResult {
   const shieldSheet = (
     <ShieldConfirmSheet
       open={sheetOpen}
-      onOpenChange={setSheetOpen}
+      onOpenChange={handleSheetOpenChange}
       transparentBalance={sheetBalance}
+      feeRefreshRevision={feeRefreshRevision}
       isShielding={isShielding}
       onConfirm={executeShield}
     />

@@ -12,6 +12,7 @@ describe('unified transfer results', () => {
     const estimate = parseTransferEstimate({
       amountZats: '50000',
       feeZats: '25000',
+      marginalFeeZats: '5000',
       transactionCount: 2,
       stepFeesZats: ['15000', '10000']
     })
@@ -22,6 +23,7 @@ describe('unified transfer results', () => {
         parseTransferEstimate({
           amountZats: '50000',
           feeZats: '15000',
+          marginalFeeZats: '5000',
           transactionCount: 2,
           stepFeesZats: ['15000', '10000']
         }),
@@ -43,6 +45,25 @@ describe('unified transfer results', () => {
     const successful = requireSuccessfulTransfer(result)
     assert.equal(successful.txHash, 'payment-tx')
     assert.deepEqual(Array.from(successful.txHashes), ['shield-tx', 'payment-tx'])
+  })
+
+  it('rejects missing or invalid WASM marginal fee values', () => {
+    const estimate = {
+      amountZats: '10000',
+      feeZats: '2000',
+      marginalFeeZats: '1000',
+      transactionCount: 1,
+      stepFeesZats: ['2000']
+    }
+    assert.equal(parseTransferEstimate(estimate).marginalFeeZats, '1000')
+    assert.equal(parseTransferEstimate(estimate, 1000).marginalFeeZats, '1000')
+    assert.throws(() => parseTransferEstimate(estimate, 4000), /confirmed network fee/)
+    for (const marginalFeeZats of [undefined, 1000, '0', '-1', '1.5', '9007199254740992']) {
+      assert.throws(
+        () => parseTransferEstimate({ ...estimate, marginalFeeZats }),
+        /Invalid transfer estimate/
+      )
+    }
   })
 
   it('rejects partial submission without inviting an immediate retry', () => {
