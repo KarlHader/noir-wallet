@@ -19,6 +19,7 @@ interface WalletDAppConnectionOptions {
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
   readonly connectPublic?: (origin: string) => Promise<void>
+  readonly connectSession: (origin: string) => Promise<void>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
@@ -31,6 +32,15 @@ export class WalletDAppConnectionCoordinator {
   private targets(dapp: ConnectedDApp, active: WalletDAppActiveAccount) {
     const evmChainId = this.options.getEvmChainId()
     const hasZcash = active.chainIds.includes(this.options.getZcashChainId())
+    const sessionAuthorized = dapp.caip25Session?.scopes.every(scope =>
+      dapp.chainAuthorizations
+        ?.find(authorization => authorization.chainId === scope.chainId)
+        ?.accounts.some(
+          account =>
+            account.walletId === active.reference.walletId &&
+            account.accountId === active.reference.accountId
+        )
+    )
     return {
       evm: active.chainIds.includes(evmChainId)
         ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === evmChainId)
@@ -39,7 +49,9 @@ export class WalletDAppConnectionCoordinator {
         hasZcash && (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined),
       public: hasZcash
         ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === PUBLIC_CHAIN_ID)
-        : undefined
+        : undefined,
+      session: dapp.caip25Session,
+      sessionAuthorized
     }
   }
 
@@ -53,12 +65,14 @@ export class WalletDAppConnectionCoordinator {
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const currentAccountAuthorized =
-        !dapp.caip25Session && (targets.evm || targets.zcash || targets.public)
+      const nativeAuthorized =
+        targets.evm || targets.zcash || targets.public
           ? (!targets.evm || targets.evm.accounts.some(matches)) &&
             (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference)) &&
             (!targets.public || targets.public.accounts.some(matches))
           : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
+      const currentAccountAuthorized =
+        nativeAuthorized && (!targets.session || targets.sessionAuthorized === true)
       return { dapp, currentAccountAuthorized }
     })
   }
@@ -68,13 +82,10 @@ export class WalletDAppConnectionCoordinator {
       .runActiveOperation(async () => {
         const dapp = await this.options.getConnection(origin)
         if (!dapp) throw new Error('No connection found for this site')
-        if (dapp.caip25Session) {
-          throw new Error('Reconnect from the site to update this multichain session')
-        }
         const active = await this.options.loadActiveAccount()
         if (!active) throw new Error('No active account')
         const targets = this.targets(dapp, active)
-        if (!targets.evm && !targets.zcash && !targets.public) {
+        if (!targets.evm && !targets.zcash && !targets.public && !targets.session) {
           throw new Error('Reconnect from the site to update this network permission')
         }
         return targets
@@ -82,8 +93,12 @@ export class WalletDAppConnectionCoordinator {
       .then(async targets => {
         // Connection callbacks may open approval and must acquire their own account
         // transition lock when committing after the approval returns.
-        if (targets.evm) await this.options.connectEvm(origin)
-        if (targets.zcash) await this.options.connectZcash(origin)
+        if (targets.session) {
+          if (!targets.sessionAuthorized) await this.options.connectSession(origin)
+        } else {
+          if (targets.evm) await this.options.connectEvm(origin)
+          if (targets.zcash) await this.options.connectZcash(origin)
+        }
         if (targets.public) {
           if (!this.options.connectPublic) {
             throw new Error('Public connection is unavailable')

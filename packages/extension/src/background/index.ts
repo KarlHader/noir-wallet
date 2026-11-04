@@ -595,7 +595,14 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
       evmDAppHandler.connectCurrentAccountToDApp(origin)
     ),
   connectZcash: origin => dappHandler.connectCurrentAccountToDApp(origin),
-  connectPublic: origin => dappHandler.connectPublic(origin).then(() => undefined),
+  connectPublic: async origin => {
+    await dappHandler.connectPublic(origin)
+    await dappHandler.notifyPublicAccountsChanged()
+  },
+  connectSession: async origin => {
+    if (!multichainSessionDAppHandler) throw new Error('Multichain connection is unavailable')
+    await multichainSessionDAppHandler.reconnect(origin)
+  },
   runActiveOperation: async operation => {
     await rehydrateWalletStore()
     await multichainRuntimeReady

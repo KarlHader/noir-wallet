@@ -486,149 +486,185 @@ test('adds a Zcash account after the service worker restores an unlocked session
   }
 })
 
-test('wallet connection coordinator restores an existing EVM site for the active account', async ({
-  context,
-  popup
-}) => {
-  test.setTimeout(120_000)
-  const origin = 'https://wallet-connect.noir.test'
-  await context.route(`${origin}/**`, route =>
-    route.fulfill({ contentType: 'text/html', body: '<title>Wallet Connect</title>' })
-  )
-  await mockReleasedEvmRpc(context)
-  await waitForBackgroundWalletInitialization(popup)
-  await importTestWallet(popup)
-
-  const previous = await popup.evaluate(async () => {
-    const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
-      state: { currentWalletId: string; currentAccountId: string }
-    }
-    return {
-      walletId: walletState.state.currentWalletId,
-      accountId: walletState.state.currentAccountId
-    }
-  })
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
-  await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
-  await selectNewZcashAccountHistory(popup)
-  await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
-  await removeZcashHistoryMock()
-  await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
-    position: { x: 4, y: 4 }
-  })
-  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible()
-  await expect
-    .poll(() =>
-      popup.evaluate(async () => {
-        const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
-          state: { currentAccountId: string }
-        }
-        return walletState.state.currentAccountId
-      })
+for (const sessionConnection of [false, true]) {
+  test(`wallet-side Connect restores an existing ${sessionConnection ? 'CAIP-25' : 'EVM'} site for the active account`, async ({
+    context,
+    popup
+  }) => {
+    test.setTimeout(120_000)
+    test.skip(
+      sessionConnection && process.env.APPROVAL_WINDOW_E2E !== '1',
+      'Requires real approval windows'
     )
-    .not.toBe(previous.accountId)
-  const active = await popup.evaluate(async () => {
-    const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
-      state: { currentWalletId: string; currentAccountId: string }
-    }
-    return {
-      walletId: walletState.state.currentWalletId,
-      accountId: walletState.state.currentAccountId
-    }
-  })
-  expect(active.accountId).not.toBe(previous.accountId)
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
-    position: { x: 4, y: 4 }
-  })
-  await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
-  await popup.evaluate(
-    ({ site, account }) =>
-      chrome.storage.local.set({
-        connectedDApps: [
-          {
-            id: 'wallet-connect-existing-evm',
-            name: 'Wallet Connect',
-            host: 'wallet-connect.noir.test',
-            origin: site,
-            favicon: '',
-            connectedAt: Date.now(),
-            lastActiveAt: Date.now(),
-            chainAuthorizations: [{ chainId: 'eip155:1', accounts: [account], binding: account }]
-          }
-        ]
-      }),
-    { site: origin, account: previous }
-  )
-  await terminateExtensionServiceWorker(context, popup)
-  await popup.reload()
+    const origin = 'https://wallet-connect.noir.test'
+    await context.route(`${origin}/**`, route =>
+      route.fulfill({ contentType: 'text/html', body: '<title>Wallet Connect</title>' })
+    )
+    await mockReleasedEvmRpc(context)
+    await waitForBackgroundWalletInitialization(popup)
+    await importTestWallet(popup)
 
-  const page = await context.newPage()
-  await page.goto(`${origin}/`)
-  await page.waitForFunction(() => Boolean(Reflect.get(window, 'noirwallet')))
-  await page.evaluate(() => {
-    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
-      on(eventName: string, listener: (accounts: string[]) => void): void
-    }
-    ;(window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents = []
-    provider.on('accountsChanged', accounts => {
-      ;(window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents.push(
-        accounts
-      )
-    })
-  })
-  const readAccounts = () =>
-    page.evaluate(async () => {
-      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
-        request(input: { method: string }): Promise<string[]>
+    const previous = await popup.evaluate(async () => {
+      const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
+        state: { currentWalletId: string; currentAccountId: string }
       }
-      return provider.request({ method: 'eth_accounts' })
+      return {
+        walletId: walletState.state.currentWalletId,
+        accountId: walletState.state.currentAccountId
+      }
     })
-  const [previousAddress] = await readAccounts()
-  expect(previousAddress).toMatch(/^0x[0-9a-f]{40}$/)
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
-    position: { x: 4, y: 4 }
-  })
-  await expect(popup.getByText('Account 2', { exact: true })).toBeVisible()
-  await expect.poll(readAccounts).toEqual([previousAddress])
-  await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
-  await captureScreenshot(popup, 'wallet-site-without-connect-footer.png')
-  const connected = await popup.evaluate(
-    site => chrome.runtime.sendMessage({ type: 'CONNECT_CURRENT_ACCOUNT_TO_DAPP', origin: site }),
-    origin
-  )
-  expect(connected).toMatchObject({ success: true })
-  await expect
-    .poll(readAccounts)
-    .toEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/), previousAddress])
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents
+    await popup.getByRole('button', { name: 'Choose wallet' }).click()
+    const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
+    await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+    await selectNewZcashAccountHistory(popup)
+    await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await removeZcashHistoryMock()
+    await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
+      position: { x: 4, y: 4 }
+    })
+    await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible()
+    await expect
+      .poll(() =>
+        popup.evaluate(async () => {
+          const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
+            state: { currentAccountId: string }
+          }
+          return walletState.state.currentAccountId
+        })
       )
+      .not.toBe(previous.accountId)
+    const active = await popup.evaluate(async () => {
+      const walletState = (await chrome.storage.local.get('wallet_state')).wallet_state as {
+        state: { currentWalletId: string; currentAccountId: string }
+      }
+      return {
+        walletId: walletState.state.currentWalletId,
+        accountId: walletState.state.currentAccountId
+      }
+    })
+    expect(active.accountId).not.toBe(previous.accountId)
+    await popup.getByRole('button', { name: 'Choose wallet' }).click()
+    await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
+      position: { x: 4, y: 4 }
+    })
+    await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
+    await popup.evaluate(
+      ({ site, account, sessionConnection }) =>
+        chrome.storage.local.set({
+          connectedDApps: [
+            {
+              id: 'wallet-connect-existing-evm',
+              name: 'Wallet Connect',
+              host: 'wallet-connect.noir.test',
+              origin: site,
+              favicon: '',
+              connectedAt: Date.now(),
+              lastActiveAt: Date.now(),
+              chainAuthorizations: [{ chainId: 'eip155:1', accounts: [account], binding: account }],
+              ...(sessionConnection
+                ? {
+                    caip25Session: {
+                      scopes: [
+                        {
+                          chainId: 'eip155:1',
+                          methods: ['eth_accounts'],
+                          notifications: ['wallet_sessionChanged', 'accountsChanged']
+                        }
+                      ]
+                    }
+                  }
+                : {})
+            }
+          ]
+        }),
+      { site: origin, account: previous, sessionConnection }
     )
-    .toContainEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/), previousAddress])
+    await terminateExtensionServiceWorker(context, popup)
+    await popup.reload()
 
-  const connection = await popup.evaluate(async site => {
-    const stored = (await chrome.storage.local.get('connectedDApps')).connectedDApps as Array<{
-      origin: string
-      chainAuthorizations: Array<{
-        chainId: string
-        accounts: Array<{ walletId: string; accountId: string }>
-        binding: { walletId: string; accountId: string }
+    const page = await context.newPage()
+    await page.goto(`${origin}/`)
+    await page.waitForFunction(() => Boolean(Reflect.get(window, 'noirwallet')))
+    await page.evaluate(() => {
+      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+        on(eventName: string, listener: (accounts: string[]) => void): void
+      }
+      ;(window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents = []
+      provider.on('accountsChanged', accounts => {
+        ;(window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents.push(
+          accounts
+        )
+      })
+    })
+    const readAccounts = () =>
+      page.evaluate(async () => {
+        const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+          request(input: { method: string }): Promise<string[]>
+        }
+        return provider.request({ method: 'eth_accounts' })
+      })
+    const [previousAddress] = await readAccounts()
+    expect(previousAddress).toMatch(/^0x[0-9a-f]{40}$/)
+    await popup.getByRole('button', { name: 'Choose wallet' }).click()
+    await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
+      position: { x: 4, y: 4 }
+    })
+    await expect(popup.getByText('Account 2', { exact: true })).toBeVisible()
+    await expect.poll(readAccounts).toEqual([previousAddress])
+    await expect(popup.getByTestId('dapp-connect-prompt')).toBeVisible()
+    await captureScreenshot(
+      popup,
+      `wallet-side-${sessionConnection ? 'session' : 'evm'}-connect-entry.png`
+    )
+    const approvalPromise = sessionConnection ? context.waitForEvent('page') : null
+    await popup.getByTestId('dapp-connect-prompt').getByRole('button', { name: 'Connect' }).click()
+    if (approvalPromise) {
+      const approval = await approvalPromise
+      await approval.waitForURL(/#approval\?requestId=/)
+      await approval.setViewportSize({ width: 375, height: 632 })
+      await expect(approval.locator('[data-caip25-scope]')).toHaveCount(1)
+      await captureScreenshot(approval, 'wallet-side-session-reconnect-review.png')
+      await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+    }
+    await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
+    await expect
+      .poll(readAccounts)
+      .toEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/), previousAddress])
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as typeof window & { walletConnectEvents: string[][] }).walletConnectEvents
+        )
+      )
+      .toContainEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/), previousAddress])
+
+    const connection = await popup.evaluate(async site => {
+      const stored = (await chrome.storage.local.get('connectedDApps')).connectedDApps as Array<{
+        origin: string
+        chainAuthorizations: Array<{
+          chainId: string
+          accounts: Array<{ walletId: string; accountId: string }>
+          binding: { walletId: string; accountId: string }
+        }>
+        authorizedAccounts?: unknown
       }>
-      authorizedAccounts?: unknown
-    }>
-    return stored.find(item => item.origin === site)
-  }, origin)
-  expect(connection?.chainAuthorizations).toEqual([
-    { chainId: 'eip155:1', accounts: [previous, active], binding: active }
-  ])
-  expect(connection?.authorizedAccounts).toBeUndefined()
-  await captureScreenshot(popup, 'wallet-side-evm-connect-success.png')
-})
+      return stored.find(item => item.origin === site)
+    }, origin)
+    expect(connection?.chainAuthorizations).toEqual([
+      { chainId: 'eip155:1', accounts: expect.arrayContaining([previous, active]), binding: active }
+    ])
+    expect(connection?.chainAuthorizations[0].accounts).toHaveLength(2)
+    expect(connection?.authorizedAccounts).toBeUndefined()
+    await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
+    await expect(
+      popup.getByText('Reconnect from the site to update this multichain session')
+    ).toHaveCount(0)
+    await captureScreenshot(
+      popup,
+      `wallet-side-${sessionConnection ? 'session' : 'evm'}-connect-success.png`
+    )
+  })
+}
 
 test('connects the SDK example with multi-wallet Zcash, EVM, Bitcoin, Solana, and named NEAR accounts', async ({
   context,

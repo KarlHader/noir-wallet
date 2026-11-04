@@ -344,6 +344,27 @@ export class BackgroundMultichainSessionDAppHandler {
     )
   }
 
+  /** Reuse the site's approved capabilities, with a fresh account-selection approval. */
+  async reconnect(origin: string): Promise<void> {
+    const revision = await this.options.manager.getAuthorizationRevision(origin)
+    const session = await this.options.manager.getCaip25Session(origin)
+    if (!session) throw new Caip25ProviderError(4100, 'The site session is no longer available.')
+    await this.createSession(
+      {
+        scopes: Object.fromEntries(
+          session.scopes.map(scope => [
+            scope.chainId,
+            { methods: scope.methods, notifications: scope.notifications }
+          ])
+        ),
+        ...(session.properties === undefined ? {} : { properties: session.properties })
+      },
+      origin,
+      {},
+      revision
+    )
+  }
+
   async notifySessionChanged(origin: string, expectedRevision?: number): Promise<void> {
     const revision =
       expectedRevision ?? (await this.options.manager.getAuthorizationRevision(origin))
@@ -436,13 +457,15 @@ export class BackgroundMultichainSessionDAppHandler {
   private async createSession(
     params: unknown,
     origin: string,
-    tabInfo: MultichainSessionTabInfo
+    tabInfo: MultichainSessionTabInfo,
+    reconnectRevision?: number
   ): Promise<Caip25Session> {
     const parsed = parseCaip25CreateSessionRequest(params)
     for (const [chainId, scope] of Object.entries(parsed.scopes)) {
       assertScopeCapabilities(this.getSupportedScope(chainId), scope)
     }
-    const expectedRevision = await this.options.manager.getAuthorizationRevision(origin)
+    const expectedRevision =
+      reconnectRevision ?? (await this.options.manager.getAuthorizationRevision(origin))
     const requestsNativeZcash = Object.keys(parsed.scopes).includes(
       getZcashChainId(this.options.network)
     )

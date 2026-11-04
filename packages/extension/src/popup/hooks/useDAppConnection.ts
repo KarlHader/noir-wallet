@@ -69,7 +69,19 @@ export function useDAppConnection() {
     }
   }
 
-  // Re-resolve connection status after account switches.
+  /** Authorize the active account for the current tab's connected dApp. */
+  const connectCurrentAccount = async (origin: string) => {
+    const response = await chrome.runtime.sendMessage({
+      type: 'CONNECT_CURRENT_ACCOUNT_TO_DAPP',
+      origin
+    })
+    if (response?.error) {
+      throw new Error(response.error)
+    }
+    await loadCurrentTabDApp()
+  }
+
+  // Re-resolve on account switches so the connect prompt tracks the active account
   useEffect(() => {
     void loadCurrentTabDApp()
     void loadConnectedDApps()
@@ -103,6 +115,7 @@ export function useDAppConnection() {
     loading,
     refreshCurrentDApp: loadCurrentTabDApp,
     refreshConnectedDApps: loadConnectedDApps,
-    disconnectDApp
+    disconnectDApp,
+    connectCurrentAccount
   }
 }

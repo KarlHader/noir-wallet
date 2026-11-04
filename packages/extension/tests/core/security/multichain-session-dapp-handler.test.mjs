@@ -147,6 +147,13 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
     'wallet_sessionChanged'
   ])
 
+  const previousSession = stored
+  await handler.reconnect('https://dapp.example')
+  expect(approvals).toHaveLength(2)
+  expect(stored).toEqual(previousSession)
+  expect(revision).toBe(2)
+  expect(approvals[1].data.scopes[0].methods).toEqual(['eth_accounts'])
+
   await expect(
     handler.request(
       {
@@ -227,6 +234,7 @@ test('Native Zcash sessions reject Public methods, including methods retained in
       )
     ).rejects.toMatchObject({ code: 5101 })
     stored = { scopes: [{ chainId: zcash, methods: [method], notifications: [] }] }
+    await expect(handler.reconnect(origin)).rejects.toMatchObject({ code: 5101 })
     const legacySession = await handler.request({ method: 'wallet_getSession' }, origin, {})
     expect(legacySession.scopes[zcash].methods).toEqual([])
     await expect(
@@ -307,7 +315,7 @@ test('Native Zcash approval links an existing Public grant and aborts on interve
   expect(committedRevisions).toEqual([3])
   expect(broadcasts).toBe(1)
   changeDuringApproval = true
-  await expect(request()).rejects.toMatchObject({ code: 4100 })
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 4100 })
   expect(committedRevisions).toEqual([3])
   changeDuringApproval = false
   changeDuringSessionNotification = true
