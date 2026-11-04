@@ -2,6 +2,26 @@
 
 Developer-oriented release history for Noir Wallet. Concise in-wallet update notes are maintained separately in [packages/web/public/changelog.json](./packages/web/public/changelog.json).
 
+## [1.0.41] - 2026-11-04
+
+### Changed
+
+- Update the packaged Zcash wallet for NU7 mainnet activation at height 3,543,405.
+- Use RPC-recommended network fees for Standard and Fast, retaining default rates when recommendations are unavailable. Keep fee estimates and transaction approval bound to the reviewed quote.
+- Reduce wallet snapshot copies and replay synchronization journals in pages to lower memory use during wallet loading.
+
+### Fixed
+
+- Resolve wallet accounts before synchronization and recover transaction status updates with the NU7 wallet package.
+- Keep Swap Max review fees tied to the actual payment amount and require another review when the previous Max no longer matches the current estimate.
+- Retire outdated RPC nodes, move their saved selections to Auto, and preserve other manual endpoint selections when reopening RPC settings.
+- Keep dApp balance responses bound to the authorized account captured when the request starts, and recheck authorization and lock state before returning data.
+- Cache Home banners locally and refresh them in the background to avoid flashing on repeated opens.
+
+### Removed
+
+- Remove dApp transaction-history access from the extension provider and SDK to protect wallet privacy.
+
 ## [1.0.40] - 2026-10-25
 
 ### Fixed

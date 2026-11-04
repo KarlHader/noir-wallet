@@ -1,6 +1,18 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "1.0.41": {
+      "changes": [
+        "Updated the wallet for the Zcash NU7 network upgrade.",
+        "Network fees follow RPC recommendations, with default rates when recommendations are unavailable.",
+        "Swap Max asks for another review when its amount changes, keeping the displayed fee tied to your payment.",
+        "Improved wallet synchronization and transaction status recovery.",
+        "Reduced memory use when loading saved wallet data.",
+        "Removed outdated RPC nodes and fixed manual node selections changing when reopening RPC settings.",
+        "Connected sites can no longer request transaction history; balance responses stay within authorized accounts.",
+        "Home banners load from saved content and update in the background to avoid flashing."
+      ]
+    },
     "1.0.40": {
       "changes": [
         "Review Quote now shows the full recipient address before you confirm a swap.",
