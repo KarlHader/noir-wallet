@@ -92,7 +92,6 @@ test('disconnection and request rejection reach callers unchanged', async () => 
 
 test('Public Zcash methods preserve request IDs and positional wire parameters', async () => {
   const requests = []
-  const listeners = new Map()
   const account = {
     chain: 'zcash-l2',
     network: 'testnet',
@@ -108,12 +107,8 @@ test('Public Zcash methods preserve request IDs and positional wire parameters',
     async request(args) {
       requests.push(args)
       switch (args.method) {
-        case 'zcash_requestPublicAccount':
-        case 'zcash_getPublicAccount':
         case 'zcash_activatePublicAccount':
           return account
-        case 'zcash_disconnectPublic':
-          return undefined
         case 'zcash_getPublicAssets':
           return assets
         case 'zcash_sendPublicTransaction':
@@ -123,12 +118,7 @@ test('Public Zcash methods preserve request IDs and positional wire parameters',
           throw new Error(`Unexpected method: ${args.method}`)
       }
     },
-    on(event, handler) {
-      listeners.set(event, handler)
-    },
-    removeListener(event, handler) {
-      if (listeners.get(event) === handler) listeners.delete(event)
-    },
+    on() {},
     async disconnect() {}
   })
   const params = {
@@ -143,47 +133,15 @@ test('Public Zcash methods preserve request IDs and positional wire parameters',
     ]
   }
 
-  assert.deepEqual(await api.connectPublic(), account)
-  assert.deepEqual(await api.getPublicAccount(), account)
   assert.deepEqual(await api.activatePublicAccount(), account)
   assert.deepEqual(await api.getPublicAssets(), assets)
   assert.deepEqual(await api.sendPublicTransaction(params), transaction)
   assert.deepEqual(await api.getPublicTransaction('operation-1'), transaction)
-  let changedAccount = undefined
-  const onChanged = value => {
-    changedAccount = value
-  }
-  api.on('publicAccountChanged', onChanged)
-  listeners.get('publicAccountChanged')(null)
-  assert.equal(changedAccount, null)
-  api.removeListener('publicAccountChanged', onChanged)
-  assert.equal(listeners.has('publicAccountChanged'), false)
-  await api.disconnectPublic()
   assert.deepEqual(requests, [
-    { method: 'zcash_requestPublicAccount' },
-    { method: 'zcash_getPublicAccount' },
     { method: 'zcash_activatePublicAccount' },
     { method: 'zcash_getPublicAssets' },
     { method: 'zcash_sendPublicTransaction', params: [params] },
-    { method: 'zcash_getPublicTransaction', params: ['operation-1'] },
-    { method: 'zcash_disconnectPublic' }
-  ])
-
-  const unsupported = new Error('Unsupported Public method')
-  const unsupportedRequests = []
-  const oldProvider = new ZcashAPI({
-    async request(args) {
-      unsupportedRequests.push(args)
-      throw unsupported
-    },
-    on() {},
-    async disconnect() {}
-  })
-  await assert.rejects(oldProvider.connectPublic(), error => error === unsupported)
-  await assert.rejects(oldProvider.disconnectPublic(), error => error === unsupported)
-  assert.deepEqual(unsupportedRequests, [
-    { method: 'zcash_requestPublicAccount' },
-    { method: 'zcash_disconnectPublic' }
+    { method: 'zcash_getPublicTransaction', params: ['operation-1'] }
   ])
 })
 
@@ -350,7 +308,7 @@ test('combined connection rejects incomplete identity responses', async () => {
   }
 })
 
-test('scoped account listeners map to Public events without changing legacy listeners', () => {
+test('scoped account listeners isolate Public and Native event channels', () => {
   const listeners = new Map()
   const api = new ZcashAPI({
     async request() {},
@@ -364,10 +322,14 @@ test('scoped account listeners map to Public events without changing legacy list
   })
   const native = () => {}
   const publicHandler = () => {}
+  assert.throws(() => api.on('publicAccountChanged', publicHandler), TypeError)
+  assert.equal(listeners.size, 0)
   api.on('accountsChanged', native)
   api.on('accountsChanged', native, { signingMode: 'current' })
   api.on('accountsChanged', publicHandler, { signingMode: 'noir_protocol_public' })
   assert.equal(listeners.get('accountsChanged'), native)
+  assert.equal(listeners.get('publicAccountChanged'), publicHandler)
+  assert.throws(() => api.removeListener('publicAccountChanged', publicHandler), TypeError)
   assert.equal(listeners.get('publicAccountChanged'), publicHandler)
   assert.throws(
     () => api.on('accountsChanged', publicHandler, { signingMode: 'unknown' }),

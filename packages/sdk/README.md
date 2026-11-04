@@ -354,7 +354,7 @@ Public account initialization and wallet-managed transactions use these addition
 
 `signMessage()` only signs; it does not submit or monitor a transaction. A Public business message must use canonical JSON with exactly `{ nonce, deadline, tx_requests }`. Use the current MCA nonce and a deadline within five minutes; both are decimal strings, and the deadline is Unix time in milliseconds. The wallet reviews the actual calls and signs the original bytes. The dApp owns external submission and status tracking; use `sendPublicTransaction()` for wallet-managed execution. Its `final` status means verified execution, `failed` means failure, and `signed`, `broadcast`, and `confirming` remain pending. Anchoring is tracked separately.
 
-The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes. `connectPublic()`, `getPublicAccount()`, `disconnectPublic()`, and `publicAccountChanged` remain compatibility entry points; new integrations should use the scoped methods above. The older `getPublicAccount()` rejects without authorization, while `getAccounts(publicMode)` returns `null`.
+The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes.
 
 ## Handle errors
 

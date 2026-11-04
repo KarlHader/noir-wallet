@@ -1,12 +1,7 @@
 export interface ZcashProvider {
   readonly supportedSigningModes?: readonly SigningMode[]
   request(args: RequestArguments): Promise<any>
-  on(event: 'publicAccountChanged', handler: (account: PublicAccount | null) => void): void
   on(event: string, handler: (...args: any[]) => void): void
-  removeListener?(
-    event: 'publicAccountChanged',
-    handler: (account: PublicAccount | null) => void
-  ): void
   removeListener?(event: string, handler: (...args: any[]) => void): void
   disconnect(): Promise<void>
 }

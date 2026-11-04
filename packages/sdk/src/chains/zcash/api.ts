@@ -28,6 +28,9 @@ import type {
 type AccountEventOptions = { readonly signingMode: ConnectionSigningMode }
 
 function accountEventName(event: string, options?: AccountEventOptions): string {
+  if (event === 'publicAccountChanged') {
+    throw new TypeError('Use accountsChanged with signingMode: noir_protocol_public.')
+  }
   if (options === undefined) return event
   if (
     !options ||
@@ -354,20 +357,6 @@ export class ZcashClient {
     return this.provider.request({ method: 'zcash_getTransactionHistory' })
   }
 
-  async getPublicAccount(): Promise<PublicAccount> {
-    return this.provider.request({ method: 'zcash_getPublicAccount' })
-  }
-
-  /** Authorize Public access independently of the native Zcash connection. */
-  async connectPublic(): Promise<PublicAccount> {
-    return this.requestPublicAccount()
-  }
-
-  /** Revoke only this site's Public authorization. */
-  async disconnectPublic(): Promise<void> {
-    await this.provider.request({ method: 'zcash_disconnectPublic' })
-  }
-
   async activatePublicAccount(): Promise<PublicAccount> {
     return this.provider.request({ method: 'zcash_activatePublicAccount' })
   }
@@ -410,7 +399,6 @@ export class ZcashClient {
     await this.provider.request({ method: 'zcash_disconnect' })
   }
 
-  on(event: 'publicAccountChanged', handler: (account: PublicAccount | null) => void): void
   on(
     event: 'accountsChanged',
     handler: (account: ZcashAddress | null) => void,
@@ -426,10 +414,6 @@ export class ZcashClient {
     this.provider.on(accountEventName(event, options), handler)
   }
 
-  removeListener(
-    event: 'publicAccountChanged',
-    handler: (account: PublicAccount | null) => void
-  ): void
   removeListener(
     event: 'accountsChanged',
     handler: (account: ZcashAddress | null) => void,
