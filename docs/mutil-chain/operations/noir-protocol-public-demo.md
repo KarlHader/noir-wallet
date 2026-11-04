@@ -19,17 +19,7 @@ For a hosted PR preview, open **Public demo → Details** in the PR checks and i
 
 ## Integration Flow
 
-Obtain the SDK with `getNoirWallet()` and call `wallet.zcash.connect({ signingMode: 'noir_protocol_public' })` from the dApp's Public connect button. Read the authorized Public identity with `getAccounts({ signingMode: 'noir_protocol_public' })`, which returns a `PublicAccount` or `null`. Revoke only Public access with `disconnect({ signingMode: 'noir_protocol_public' })`. Native Zcash authorization remains independent. To request both identities in one approval, call `connect({ signingModes: ['current', 'noir_protocol_public'] })` and read its `identities` result. Subscribe to `accountsChanged` with `{ signingMode: 'noir_protocol_public' }` for Public identity changes. `getPublicKey` and `signMessage` also accept this signing mode; verify the returned key, address, and signature against the connected Public identity. The complete response and request types are in [the SDK types](../../../packages/sdk/src/chains/zcash/types.ts). Public methods are available on `wallet.zcash` directly; `CAIP wallet_invoke` does not support them and must not fall back to a native session.
-
-For a transaction intent passed to Public `signMessage`, serialize exactly `{ nonce, deadline, tx_requests }` as canonical JSON. Use the current MCA nonce and a deadline within five minutes. The wallet reviews the actual FunctionCalls and signs those original bytes; signing does not submit or monitor the intent. The integrating DeFi application owns submission and status tracking. Use `sendPublicTransaction` when wallet-managed submission and monitoring are needed.
-
-| Method                                                 | Purpose                                                                                                                                                                      |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getAccounts({ signingMode: 'noir_protocol_public' })` | Read identity, nullable `mcaId`, and `inactive`, `activating`, or `active` status without creating or paying for an account.                                                 |
-| `activatePublicAccount()`                              | Request activation approval. Returns the current account state, which may still be `activating`; poll `getAccounts({ signingMode: 'noir_protocol_public' })` for completion. |
-| `getPublicAssets()`                                    | Read `{ account, assets }`, including raw balances and freshness.                                                                                                            |
-| `sendPublicTransaction({ requestId, txRequests })`     | Request approval for an active MCA, then sign and submit its FunctionCalls. Returns an operation to track.                                                                   |
-| `getPublicTransaction(operationId)`                    | Read the authorized operation's status, execution hash, and optional anchoring progress.                                                                                     |
+Follow the [SDK Public integration reference](../../../packages/sdk/README.md#noir-protocol-public-experimental) for identity selection, authorization, account events, message signing, and wallet-managed transaction APIs. The steps below cover the demo's activation and transaction workflow.
 
 Activation needs an acceptable bridge quote, the creation payment, and the Zcash network fee. An unavailable or unverified quote blocks activation. Account and asset reads never initiate that payment. The activation refund currently uses a wallet Zcash address and may link the Public identity to that address.
 
@@ -49,7 +39,7 @@ Each `txRequests` entry has this shape; replace the placeholder contract and met
 }
 ```
 
-`args` is a JSON string, not an object or Base64 string. `gas` and `deposit` are decimal strings in gas units and yoctoNEAR. The wallet selects the signing identity, MCA, network, and nonce; the dApp supplies the calls to review. The wallet adds a ZEC execution-fee transfer to the approval and signed calls, so reserve Public ZEC for that fee instead of transferring the entire balance.
+`args` is a JSON string, not an object or Base64 string. `gas` and `deposit` are decimal strings in gas units and yoctoNEAR. With `sendPublicTransaction`, the wallet selects the signing identity, MCA, network, and nonce; the dApp supplies the calls to review. The wallet adds a ZEC execution-fee transfer to the approval and signed calls, so reserve Public ZEC for that fee instead of transferring the entire balance.
 
 Before an NEP-141 transfer, check the receiver's `storage_balance_of`. If it is `null`, include `storage_deposit({ account_id: receiver, registration_only: true })` before `ft_transfer` in the same token contract's `function_calls`. Read the deposit from `storage_balance_bounds`; the MCA needs native NEAR for this deposit. The demo's FunctionCall editor can submit this sequence; its token-transfer form only builds `ft_transfer`.
 

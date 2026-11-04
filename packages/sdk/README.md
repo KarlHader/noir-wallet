@@ -239,7 +239,7 @@ if (!verification.valid) {
 }
 ```
 
-Available signing modes are `current`, `derived`, and `legacy_index0`. See the [Provider API reference](https://docs.zknoir.com/developers/provider-api) before choosing a compatibility mode.
+Native signing modes are `current`, `derived`, and `legacy_index0`. The experimental [Noir Protocol Public](#noir-protocol-public-experimental) identity uses `noir_protocol_public`. See the [Provider API reference](https://docs.zknoir.com/developers/provider-api) before choosing a native compatibility mode.
 
 ## Listen for account changes
 
@@ -272,26 +272,89 @@ zcash.removeListener('accountsChanged', handleAccountsChanged)
 
 The methods below are available on `getNoirWallet().zcash`.
 
-| Method                           | Approval | Purpose                                                 |
-| -------------------------------- | -------: | ------------------------------------------------------- |
-| `connect()`                      |      Yes | Request access to one or more accounts                  |
-| `getAccounts()`                  |       No | Read the current authorization, or `null`               |
-| `disconnect()`                   |       No | Remove this site's wallet authorization                 |
-| `getAddresses()`                 |       No | Read the primary transparent and shielded addresses     |
-| `getBalance(accountId?)`         |       No | Read primary, selected, and authorized-account balances |
-| `getMaxTransfer(params)`         |       No | Calculate the exact Max amount and fee                  |
-| `sendTransaction(params)`        |      Yes | Approve and broadcast a Zcash transaction               |
-| `shieldFunds()`                  |      Yes | Move transparent funds into the shielded balance        |
-| `getTransactionHistory()`        |       No | Read on-chain and locally pending transactions          |
-| `getPublicKey(options?)`         |       No | Read the public identity key for a signing mode         |
-| `signMessage(message, options?)` |      Yes | Approve and sign a message                              |
-| `checkLendingMcaAccount()`       |       No | Read lending MCA and signing-mode status                |
-| `on(event, handler)`             |       No | Subscribe to provider events                            |
-| `removeListener(event, handler)` |       No | Unsubscribe from provider events                        |
+| Method                                     | Approval | Purpose                                                  |
+| ------------------------------------------ | -------: | -------------------------------------------------------- |
+| `connect(options?)`                        |      Yes | Request access to Native accounts or selected identities |
+| `getAccounts(options?)`                    |       No | Read authorization for the selected identity             |
+| `disconnect(options?)`                     |       No | Remove authorization for the selected identity           |
+| `getAddresses()`                           |       No | Read the primary transparent and shielded addresses      |
+| `getBalance(accountId?)`                   |       No | Read primary, selected, and authorized-account balances  |
+| `getMaxTransfer(params)`                   |       No | Calculate the exact Max amount and fee                   |
+| `sendTransaction(params)`                  |      Yes | Approve and broadcast a Zcash transaction                |
+| `shieldFunds()`                            |      Yes | Move transparent funds into the shielded balance         |
+| `getTransactionHistory()`                  |       No | Read on-chain and locally pending transactions           |
+| `getPublicKey(options?)`                   |       No | Read the public identity key for a signing mode          |
+| `signMessage(message, options?)`           |      Yes | Approve and sign a message                               |
+| `checkLendingMcaAccount()`                 |       No | Read lending MCA and signing-mode status                 |
+| `on(event, handler, options?)`             |       No | Subscribe to identity-scoped provider events             |
+| `removeListener(event, handler, options?)` |       No | Unsubscribe from identity-scoped provider events         |
 
 `switchNetwork()` is deprecated and always throws. Select the wallet's global network mode in Developer Settings.
 
 The package also exports lower-level helpers such as `detectProvider()`, `getZcashProvider()`, `publicKeyToAddress()`, and `verifyMessageSignature()`. Most applications should start with `getNoirWallet()`.
+
+## Noir Protocol Public (experimental)
+
+Use the extension and workspace SDK from the same checkout for this demo capability; do not assume an installed npm `beta` package or released extension includes it. Public currently requires Mainnet mode and a mnemonic software account. See the [Public demo guide](../../docs/mutil-chain/operations/noir-protocol-public-demo.md) for local setup, deployment configuration, and controlled testing.
+
+Public reuses the Zcash client with an explicit identity selector:
+
+```ts
+import type { PublicAccount } from '@noir-wallet/sdk'
+
+const publicMode = { signingMode: 'noir_protocol_public' } as const
+
+// Silent query: PublicAccount | null. No authorization or payment is requested.
+const existingPublic = await zcash.getAccounts(publicMode)
+
+// Call from a Connect button. Connecting does not activate or pay for an MCA.
+const publicAccount = await zcash.connect(publicMode)
+const publicKey = await zcash.getPublicKey(publicMode)
+
+// Call from a signing action; the wallet requests approval.
+const signedPublic = await zcash.signMessage('Sign in to Example', publicMode)
+
+function handlePublicAccountChanged(account: PublicAccount | null) {
+  // Refresh this identity's state, or clear it when account is null.
+}
+
+zcash.on('accountsChanged', handlePublicAccountChanged, publicMode)
+
+// During cleanup:
+zcash.removeListener('accountsChanged', handlePublicAccountChanged, publicMode)
+
+// Call from a Disconnect action; Native authorization is retained.
+await zcash.disconnect(publicMode)
+```
+
+`PublicAccount` contains `publicKey`, `address`, `mcaId`, `parentContractId`, `network`, and `status` (`inactive`, `activating`, or `active`). `mcaId` is `null` before initialization. `getPublicKey()` and `signMessage()` return the key as `pubkey`; compare it with `publicAccount.publicKey` and verify signatures with `verifyMessageSignature()` as shown above. Public assets and balances belong to the MCA and remain separate from native Zcash assets.
+
+Native calls without options keep their existing behavior. To request both identities in one approval:
+
+```ts
+const identities = { signingModes: ['current', 'noir_protocol_public'] } as const
+const connected = await zcash.connect(identities)
+// connected.identities.current: native Zcash connection
+// connected.identities.noir_protocol_public: PublicAccount
+
+const authorized = await zcash.getAccounts(identities)
+await zcash.disconnect(identities)
+```
+
+Public and Native permissions are checked separately. Unknown modes or an extension without Public signing-mode support fail explicitly; the SDK does not fall back to Native. Public calls through `multichain` / `wallet_invokeMethod` are unsupported. Private mode is not available.
+
+Public account initialization and wallet-managed transactions use these additional methods:
+
+| Method                                             | Purpose / result                                                                                                                                                     |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `activatePublicAccount()`                          | Request paid activation approval; return the current `PublicAccount`, which may still be `activating`. Poll `getAccounts(publicMode)` for completion.                |
+| `getPublicAssets()`                                | Return `{ account, assets }`; each token includes `tokenId`, `decimals`, `balanceRaw`, and freshness `status`. An unavailable balance is not zero.                   |
+| `sendPublicTransaction({ requestId, txRequests })` | Approve, sign, submit, and monitor FunctionCalls; return a `PublicTransaction` with `operationId`. Reuse the same ID and unchanged calls when retrying an operation. |
+| `getPublicTransaction(operationId)`                | Return the authorized operation or `null`, including execution status, transaction hash, and optional anchoring progress.                                            |
+
+`signMessage()` only signs; it does not submit or monitor a transaction. A Public business message must use canonical JSON with exactly `{ nonce, deadline, tx_requests }`. Use the current MCA nonce and a deadline within five minutes; both are decimal strings, and the deadline is Unix time in milliseconds. The wallet reviews the actual calls and signs the original bytes. The dApp owns external submission and status tracking; use `sendPublicTransaction()` for wallet-managed execution. Its `final` status means verified execution, `failed` means failure, and `signed`, `broadcast`, and `confirming` remain pending. Anchoring is tracked separately.
+
+The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes. `connectPublic()`, `getPublicAccount()`, `disconnectPublic()`, and `publicAccountChanged` remain compatibility entry points; new integrations should use the scoped methods above. The older `getPublicAccount()` rejects without authorization, while `getAccounts(publicMode)` returns `null`.
 
 ## Handle errors
 
