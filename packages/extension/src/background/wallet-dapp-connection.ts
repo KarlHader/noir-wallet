@@ -1,6 +1,7 @@
 import {
   connectionAuthorizesAccount,
   connectionAuthorizesAccountForWalletStatus,
+  getConnectionChainAuthorization,
   type AccountRef,
   type ConnectedDApp
 } from '@/core/dapp/dapp-manager'
@@ -29,8 +30,8 @@ export class WalletDAppConnectionCoordinator {
     const evmChainId = this.options.getEvmChainId()
     return {
       evm: active.chainIds.includes(evmChainId)
-        ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === evmChainId)
-        : undefined,
+        ? getConnectionChainAuthorization(dapp, evmChainId)
+        : null,
       zcash:
         active.chainIds.includes(this.options.getZcashChainId()) &&
         (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined)

@@ -4,7 +4,8 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { FeeTierPicker } from './FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useSettingsStore } from '@/store/settings-store'
-import { deriveFeeByTier, marginalFeeForTier } from '@/core/zcash/fee-policy'
+import { marginalFeeForTier } from '@/core/zcash/fee-policy'
+import type { FeeTier } from '@/config/fee'
 import { AmountDisplay } from '../common/AmountDisplay'
 import {
   hasEnoughTransparentBalanceToShield,
@@ -16,8 +17,13 @@ interface ShieldConfirmSheetProps {
   onOpenChange: (open: boolean) => void
   transparentBalance: number
   isShielding?: boolean
-  /** Invoked with the selected tier's marginal fee (zatoshis). */
-  onConfirm: (marginalFeeZats: number) => void
+  feeRefreshRevision?: number
+  onConfirm: (params: {
+    marginalFeeZats: number
+    feeQuoteId: string
+    feeTier: FeeTier
+    feeZats: number
+  }) => void
 }
 
 /**
@@ -29,14 +35,25 @@ export function ShieldConfirmSheet({
   onOpenChange,
   transparentBalance,
   isShielding,
+  feeRefreshRevision,
   onConfirm
 }: ShieldConfirmSheetProps) {
   const feeTier = useSettingsStore(state => state.feeTier)
   const setFeeTier = useSettingsStore(state => state.setFeeTier)
   const hasEnoughBalance = hasEnoughTransparentBalanceToShield(transparentBalance)
 
-  const estimate = useFeeEstimate({ type: 'shield', enabled: open && hasEnoughBalance })
-  const feeByTier = deriveFeeByTier(estimate.feeZats, estimate.error)
+  const estimate = useFeeEstimate({
+    type: 'shield',
+    feeTier,
+    enabled: open && hasEnoughBalance,
+    scopeKey: String(feeRefreshRevision ?? 0)
+  })
+  const feeReady =
+    !!estimate.feeQuote &&
+    estimate.feeQuote.expiresAt > Date.now() &&
+    estimate.feeZats !== null &&
+    !estimate.loading &&
+    !estimate.error
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -63,10 +80,23 @@ export function ShieldConfirmSheet({
         <div className="mx-5 bg-card rounded-xl p-4">
           <FeeTierPicker
             tier={feeTier}
-            onTierChange={setFeeTier}
-            feeByTier={feeByTier}
+            onTierChange={next => {
+              if (!isShielding) setFeeTier(next)
+            }}
+            feeByTier={estimate.feeByTier}
+            loadingByTier={estimate.loadingByTier}
             loading={estimate.loading}
+            allowFallback={false}
           />
+          {estimate.error && (
+            <button
+              type="button"
+              className="mt-2 text-xs text-destructive"
+              onClick={estimate.retry}
+            >
+              Fee estimate unavailable. Retry
+            </button>
+          )}
         </div>
 
         {!hasEnoughBalance && (
@@ -80,9 +110,20 @@ export function ShieldConfirmSheet({
             Cancel
           </Button>
           <Button
-            onClick={() => onConfirm(marginalFeeForTier(feeTier))}
+            onClick={() => {
+              if (!feeReady || !estimate.feeQuote || estimate.feeZats === null) return
+              onConfirm({
+                marginalFeeZats: marginalFeeForTier(
+                  feeTier,
+                  estimate.feeQuote.standardMarginalFeeZats
+                ),
+                feeQuoteId: estimate.feeQuote.id,
+                feeTier,
+                feeZats: estimate.feeZats
+              })
+            }}
             isLoading={isShielding}
-            disabled={!hasEnoughBalance}
+            disabled={!hasEnoughBalance || !feeReady}
             className="flex-1 h-[45px]"
           >
             Shield Now

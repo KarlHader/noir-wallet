@@ -78,6 +78,21 @@ test.describe('Runtime message security', () => {
     expect(() =>
       parseTrustedExtensionRuntimeMessage({ ...feeRequest, debugRequestId: 'x'.repeat(10_000) })
     ).toThrow()
+    const quotedRequest = { ...feeRequest, feeQuoteId: 'quote-1' }
+    expect(parseTrustedExtensionRuntimeMessage(quotedRequest)).toEqual(quotedRequest)
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...quotedRequest, feeQuoteId: 'x'.repeat(10_000) })
+    ).toThrow()
+    expect(parseTrustedExtensionRuntimeMessage({ type: 'GET_ZCASH_FEE_QUOTE' })).toEqual({
+      type: 'GET_ZCASH_FEE_QUOTE'
+    })
+    expect(
+      isTrustedRuntimeMessageSender(
+        'GET_ZCASH_FEE_QUOTE',
+        { id: extensionId, url: 'https://dapp.example/' },
+        extensionId
+      )
+    ).toBe(false)
     expect(
       parseTrustedExtensionRuntimeMessage({
         type: 'PREPARE_EVM_TRANSFER',
@@ -1537,6 +1552,20 @@ test.describe('Runtime message security', () => {
           type: 'DAPP_APPROVAL_RESULT',
           requestId: 'request-1',
           success: true,
+          marginalFeeZats: 5000,
+          feeQuoteId: 'quote-1',
+          feeTier: 'standard',
+          feeZats: 10000
+        },
+        'request-1'
+      )
+    ).toMatchObject({ feeQuoteId: 'quote-1', feeTier: 'standard', marginalFeeZats: 5000 })
+    expect(
+      parseDAppApprovalResultMessage(
+        {
+          type: 'DAPP_APPROVAL_RESULT',
+          requestId: 'request-1',
+          success: true,
           selectedIds: ['account-1']
         },
         'request-1'
@@ -1549,6 +1578,17 @@ test.describe('Runtime message security', () => {
           requestId: 'request-1',
           success: false,
           selectedIds: ['account-1']
+        },
+        'request-1'
+      )
+    ).toThrow(/rejected/i)
+    expect(() =>
+      parseDAppApprovalResultMessage(
+        {
+          type: 'DAPP_APPROVAL_RESULT',
+          requestId: 'request-1',
+          success: false,
+          feeQuoteId: 'quote-1'
         },
         'request-1'
       )

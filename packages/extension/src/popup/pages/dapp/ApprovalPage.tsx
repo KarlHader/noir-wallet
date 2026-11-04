@@ -14,7 +14,8 @@ import { StandardTransactionResult } from '../../components/transaction/Standard
 import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useSettingsStore } from '@/store/settings-store'
-import { deriveFeeByTier, marginalFeeForTier } from '@/core/zcash/fee-policy'
+import { marginalFeeForTier } from '@/core/zcash/fee-policy'
+import type { FeeTier, QuotedFeeEstimate } from '@/config/fee'
 import type { AddressType } from '@/types/wallet'
 
 import { cn } from '@/lib/utils'
@@ -77,8 +78,6 @@ interface MultichainScopeOption {
   chainId: string
   chainName: string
   iconChain: string
-  methods: string[]
-  notifications: string[]
   accounts: ChainAccountOption[]
   preselectedIds: string[]
 }
@@ -184,6 +183,7 @@ export function ApprovalPage() {
   const [canRetryLoad, setCanRetryLoad] = useState(false)
   const [requestLoaded, setRequestLoaded] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const decisionInFlight = useRef(false)
   const [showResult, setShowResult] = useState(false)
   const [walletReady, setWalletReady] = useState(false)
   const resultListenerRef = useRef<
@@ -264,24 +264,53 @@ export function ApprovalPage() {
   const fundingSource: AddressType =
     data.fundingSource === 'transparent' ? 'transparent' : 'shielded'
   const hasEnoughShieldingBalance = !isShield || hasEnoughTransparentBalanceToShield(data.amount)
-  const estimateApprovalFee = useCallback(async (): Promise<string> => {
-    if (!requestId) throw new Error('Approval request is unavailable')
-    const response = await chrome.runtime.sendMessage({ type: 'ESTIMATE_APPROVAL_FEE', requestId })
-    if (response?.error || typeof response?.fee !== 'string') {
-      throw new Error(getResponseErrorMessage(response) || 'Fee estimation failed')
-    }
-    return response.fee
-  }, [requestId])
+  const estimateApprovalFee = useCallback(
+    async (tier: FeeTier): Promise<QuotedFeeEstimate> => {
+      if (!requestId) throw new Error('Approval request is unavailable')
+      const response = await chrome.runtime.sendMessage({
+        type: 'ESTIMATE_APPROVAL_FEE',
+        requestId,
+        feeTier: tier
+      })
+      if (
+        response?.error ||
+        typeof response?.fee !== 'string' ||
+        typeof response?.marginalFeeZats !== 'string' ||
+        !response.feeQuote
+      ) {
+        throw new Error(getResponseErrorMessage(response) || 'Fee estimation failed')
+      }
+      return {
+        feeZats: response.fee,
+        marginalFeeZats: response.marginalFeeZats,
+        feeQuote: response.feeQuote
+      }
+    },
+    [requestId]
+  )
   const feeEstimate = useFeeEstimate({
     type: isShield ? 'shield' : 'send',
     to: data.to,
     amount: data.amount,
     memo: data.memo,
     fundingSource,
+    feeTier,
     estimate: isSend || isShield ? estimateApprovalFee : undefined,
     enabled: (isSend || isShield) && walletReady && hasEnoughShieldingBalance
   })
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
+  const feeByTier = feeEstimate.feeByTier
+  const feeReady =
+    !!feeEstimate.feeQuote &&
+    feeEstimate.feeQuote.expiresAt > Date.now() &&
+    feeEstimate.feeZats !== null &&
+    !feeEstimate.loading &&
+    !feeEstimate.error
+  const latestFee = useRef({
+    feeQuote: feeEstimate.feeQuote,
+    feeZats: feeEstimate.feeZats,
+    feeTier
+  })
+  latestFee.current = { feeQuote: feeEstimate.feeQuote, feeZats: feeEstimate.feeZats, feeTier }
 
   const handleNetworkFeeTierChange = async (nextTier: NetworkFeeTier) => {
     if (!requestId) throw new Error('Approval request is unavailable')
@@ -454,6 +483,8 @@ export function ApprovalPage() {
   const handleDecision = async (approved: boolean) => {
     setCanRetryLoad(false)
     if (approved && !requestLoaded) return
+    if (decisionInFlight.current) return
+    decisionInFlight.current = true
 
     if (!approved) {
       setIsLoading(true)
@@ -483,6 +514,32 @@ export function ApprovalPage() {
       }
 
       if (action === 'sendTransaction' || action === 'shieldFunds') {
+        if (!feeReady || !feeEstimate.feeQuote || feeEstimate.feeZats === null) {
+          throw new Error('Network fee estimate is unavailable. Please try again.')
+        }
+        const marginalFeeZats = marginalFeeForTier(
+          feeTier,
+          feeEstimate.feeQuote.standardMarginalFeeZats
+        )
+        const approvalFee = await chrome.runtime.sendMessage({
+          type: 'ESTIMATE_APPROVAL_FEE',
+          requestId,
+          marginalFeeZats,
+          feeQuoteId: feeEstimate.feeQuote.id
+        })
+        if (
+          latestFee.current.feeQuote?.id !== feeEstimate.feeQuote.id ||
+          latestFee.current.feeZats !== feeEstimate.feeZats ||
+          latestFee.current.feeTier !== feeTier ||
+          approvalFee?.error ||
+          approvalFee?.feeQuote?.id !== feeEstimate.feeQuote.id ||
+          approvalFee?.fee !== String(feeEstimate.feeZats)
+        ) {
+          feeEstimate.retry()
+          setIsLoading(false)
+          decisionInFlight.current = false
+          return
+        }
         setResult(
           {
             type: 'zcash',
@@ -515,8 +572,10 @@ export function ApprovalPage() {
           type: 'DAPP_APPROVAL_RESULT',
           requestId,
           success: true,
-          marginalFeeZats: marginalFeeForTier(feeTier),
-          feeZats: feeByTier[feeTier] ?? undefined
+          marginalFeeZats,
+          feeQuoteId: feeEstimate.feeQuote.id,
+          feeTier,
+          feeZats: feeEstimate.feeZats
         })
         if (response?.success !== true)
           throw new Error(
@@ -547,6 +606,7 @@ export function ApprovalPage() {
       console.error('Failed to send decision:', err)
       setError(classifyError(err).userMessage)
       setIsLoading(false)
+      decisionInFlight.current = false
     }
   }
 
@@ -680,8 +740,6 @@ export function ApprovalPage() {
                 typeof Reflect.get(scope, 'chainId') === 'string' &&
                 typeof Reflect.get(scope, 'chainName') === 'string' &&
                 typeof Reflect.get(scope, 'iconChain') === 'string' &&
-                Array.isArray(Reflect.get(scope, 'methods')) &&
-                Array.isArray(Reflect.get(scope, 'notifications')) &&
                 Array.isArray(Reflect.get(scope, 'accounts')) &&
                 Array.isArray(Reflect.get(scope, 'preselectedIds'))
             )
@@ -695,17 +753,15 @@ export function ApprovalPage() {
             <DAppConnectionHeader domain={dappDomain} pageUrl={dappPageUrl} />
 
             <section
-              aria-label="Accounts and networks"
+              aria-label="Accounts"
               className="overflow-hidden rounded-2xl border border-border bg-card/35"
             >
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
                 <div>
-                  <h2 className="text-sm font-medium">Accounts and networks</h2>
-                  <p className="mt-0.5 text-[11px] text-muted">
-                    {scopes.length} networks · {selectedAccountCount} selected
-                  </p>
+                  <h2 className="text-sm font-medium">Accounts</h2>
+                  <p className="mt-0.5 text-[11px] text-muted">{selectedAccountCount} selected</p>
                 </div>
-                <div className="flex -space-x-2" aria-hidden="true">
+                <div className="flex items-center gap-1" aria-hidden="true">
                   {scopes.slice(0, 5).map(scope => (
                     <ChainIcon
                       key={scope.chainId}
@@ -934,7 +990,7 @@ export function ApprovalPage() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">
-                      {selectedAccounts.length} selected{' '}
+                      {selectedAccounts.length} selected{isEvmConnect ? ' EVM' : ''}{' '}
                       {selectedAccounts.length === 1 ? 'account' : 'accounts'}
                     </span>
                     {canEdit && (
@@ -1162,7 +1218,7 @@ export function ApprovalPage() {
               </WarningBox>
             )}
 
-            {!editingAccounts && <ConnectionPermissionSummary includesActivity />}
+            {!editingAccounts && <ConnectionPermissionSummary />}
           </div>
         )
       }
@@ -1219,11 +1275,16 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
+                  allowFallback={false}
                   hideLabel
                 />
               }
             />
+            {feeEstimate.error && (
+              <InlineError message="Could not estimate network fee" onRetry={feeEstimate.retry} />
+            )}
           </div>
         )
 
@@ -1283,11 +1344,16 @@ export function ApprovalPage() {
                   tier={feeTier}
                   onTierChange={setFeeTier}
                   feeByTier={feeByTier}
+                  loadingByTier={feeEstimate.loadingByTier}
                   loading={feeEstimate.loading}
+                  allowFallback={false}
                   hideLabel
                 />
               }
             />
+            {feeEstimate.error && (
+              <InlineError message="Could not estimate network fee" onRetry={feeEstimate.retry} />
+            )}
 
             {!hasEnoughShieldingBalance && (
               <p className="text-xs text-destructive text-center">
@@ -1571,6 +1637,7 @@ export function ApprovalPage() {
             disabled={
               isLoading ||
               !hasEnoughShieldingBalance ||
+              ((isSend || isShield) && !feeReady) ||
               (isEvmTransaction && evmTransactionSummary === null) ||
               (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||

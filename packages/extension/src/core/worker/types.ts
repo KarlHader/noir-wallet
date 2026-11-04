@@ -4,6 +4,7 @@
 
 import type { FundingSource, Network, ZcashBalance } from '@/types'
 import type { TransferEstimate, TransferResult } from '@/core/zcash/transfer-result'
+import type { FeeQuote, QuotedFeeEstimate } from '@/config/fee'
 import type { ZeroIndexerOptions } from '@/core/zcash/zero-indexer'
 import type {
   BallotDecision,
@@ -71,6 +72,8 @@ export interface LedgerPcztSignatures {
 export interface MaxTransferEstimate {
   maxAmountZats: string
   feeZats: string
+  marginalFeeZats: string
+  feeQuote: FeeQuote
 }
 
 export interface ZcashCredentialCapsule {
@@ -243,8 +246,7 @@ export interface RPCSchema {
   }
   'wallet.dbToBytes': {
     request: WalletRouted
-    // Streamed as chunks to avoid a single 100MB+ reallocation and to feed
-    // IndexedDB chunked storage directly (per-value size limit is ~127 MiB).
+    // Owned buffers are transferred to the host for IndexedDB chunked storage.
     response: Uint8Array[]
   }
   'wallet.persistDb': {
@@ -258,6 +260,8 @@ export interface RPCSchema {
   }
   'wallet.prepareSyncBatchWithJournal': {
     request: WalletRouted & {
+      ownerId: string
+      ownerStartedAt: number
       batchSize?: number
       network?: string
       journalWalletId?: string
@@ -270,15 +274,19 @@ export interface RPCSchema {
     response: boolean
   }
   'wallet.replayJournalEntries': {
-    request: WalletRouted & JournalReplayOptions & { network: string; journalWalletId: string }
+    request: WalletRouted &
+      (
+        | (JournalReplayOptions & { network: string; journalWalletId: string })
+        | { entries: Uint8Array[] }
+      )
     response: number
   }
   'wallet.beginSyncSession': {
-    request: WalletRouted
+    request: WalletRouted & { ownerId: string; ownerStartedAt: number }
     response: boolean
   }
   'wallet.endSyncSession': {
-    request: WalletRouted
+    request: WalletRouted & { ownerId: string; ownerStartedAt: number }
     response: boolean
   }
   'wallet.markDirty': {
@@ -301,7 +309,7 @@ export interface RPCSchema {
     response: { generation: number }
   }
   'wallet.reconcile': {
-    request: WalletRouted & { all?: boolean }
+    request: WalletRouted & { ownerId: string; ownerStartedAt: number; force?: boolean }
     response: boolean
   }
 
@@ -326,13 +334,14 @@ export interface RPCSchema {
       amount: string // zatoshis
       memo?: string
       marginalFeeZats?: number
+      feeQuoteId?: string
       signer?: 'keystone' | 'ledger'
       fundingSource?: 'shielded' | 'transparent'
     }
     response: HardwarePcztPair
   }
   'pczt.shieldCreate': {
-    request: WalletRouted & { accountId: number; marginalFeeZats?: number }
+    request: WalletRouted & { accountId: number; marginalFeeZats?: number; feeQuoteId?: string }
     response: HardwarePcztPair
   }
   'pczt.proveSend': {
@@ -368,6 +377,7 @@ export interface RPCSchema {
       submissionDeadline?: number
       /** ZIP-317 marginal fee per action (zatoshis); defaults to standard. */
       marginalFeeZats?: number
+      feeQuoteId?: string
     }
     response: TransferResult
   }
@@ -377,11 +387,16 @@ export interface RPCSchema {
       accountIndex: number
       seedPhrase?: string
       marginalFeeZats?: number
+      feeQuoteId?: string
     }
     response: string // txid
   }
 
   // Fee estimation (read-only PCZT simulation, no signing key required)
+  'transaction.getFeeQuote': {
+    request: WalletRouted & { accountId?: number; accountIndex?: number }
+    response: FeeQuote
+  }
   'transaction.estimateFee': {
     request: WalletRouted & {
       accountId?: number
@@ -391,10 +406,11 @@ export interface RPCSchema {
       value: string // zatoshis
       memo?: string
       fundingSource?: FundingSource
-      marginalFeeZats: number
+      marginalFeeZats?: number
+      feeQuoteId?: string
       debugRequestId?: string
     }
-    response: TransferEstimate
+    response: TransferEstimate & { feeQuote: FeeQuote }
   }
 
   'transaction.estimateMaxTransfer': {
@@ -403,7 +419,8 @@ export interface RPCSchema {
       to: string
       memo?: string
       fundingSource?: FundingSource
-      marginalFeeZats: number
+      marginalFeeZats?: number
+      feeQuoteId?: string
       debugRequestId?: string
     }
     response: MaxTransferEstimate
@@ -414,9 +431,10 @@ export interface RPCSchema {
       accountId?: number
       /** Explicit HD account binding for approval requests. */
       accountIndex?: number
-      marginalFeeZats: number
+      marginalFeeZats?: number
+      feeQuoteId?: string
     }
-    response: string // fee in zatoshis
+    response: QuotedFeeEstimate
   }
 
   'voting.discoverRounds': {

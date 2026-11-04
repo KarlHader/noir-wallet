@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
-import { MARGINAL_FEE_ZATS } from '@/config/fee'
+import { marginalFeeForTier } from '@/core/zcash/fee-policy'
+import type { FeeQuote, FeeTier, QuotedFeeEstimate } from '@/config/fee'
+import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
+import { useWalletStore } from '@/store/wallet-store'
 import type { FundingSource } from '@/types'
 
-export interface FeeEstimateState {
-  /** Standard-tier fee in zatoshis (null while pending/failed); other tiers derive from it. */
+interface TierEstimate {
   feeZats: number | null
+  feeQuote: FeeQuote | null
   loading: boolean
-  /** True when live estimation failed. */
   error: boolean
   retry: () => void
+}
+
+export interface FeeEstimateState extends TierEstimate {
+  feeByTier: Record<FeeTier, number | null>
+  loadingByTier: Record<FeeTier, boolean>
 }
 
 interface UseFeeEstimateArgs {
@@ -18,95 +26,133 @@ interface UseFeeEstimateArgs {
   amount?: string
   memo?: string
   fundingSource?: FundingSource
-  /** Gate estimation until inputs are valid (e.g. review screen open). */
+  feeTier?: FeeTier
   enabled?: boolean
   debounceMs?: number
-  estimate?: () => Promise<string>
-  /** Additional account or balance identity that invalidates an old proposal. */
+  estimate?: (tier: FeeTier) => Promise<QuotedFeeEstimate>
   scopeKey?: string
 }
 
-/**
- * Live network-fee estimation via a WASM transfer proposal.
- *
- * Always estimates the Standard tier (one proposal build); other tiers scale
- * linearly with the marginal fee and are derived by callers, so switching tier
- * never re-runs WASM. Debounced and guarded against stale responses.
- */
-export function useFeeEstimate({
+type EstimateState = Omit<TierEstimate, 'retry'> & { key: string }
+const emptyEstimate = { feeZats: null, feeQuote: null, loading: false, error: false }
+
+function useEstimateForTier({
   type,
   to,
   amount,
   memo,
   fundingSource = 'shielded',
+  feeTier = 'standard',
   enabled = true,
   debounceMs = 500,
   estimate,
   scopeKey
-}: UseFeeEstimateArgs): FeeEstimateState {
-  const [state, setState] = useState<Omit<FeeEstimateState, 'retry'> & { key: string }>({
-    key: '',
-    feeZats: null,
-    loading: false,
-    error: false
-  })
-  const requestSeq = useRef(0)
-  const [retryCount, setRetryCount] = useState(0)
-  const retry = useCallback(() => setRetryCount(value => value + 1), [])
-
-  const hasAmount = type === 'shield' || (!!to && !!amount && Number(amount) > 0)
-  const active = enabled && hasAmount
-  const requestKey = JSON.stringify([
+}: UseFeeEstimateArgs): TierEstimate {
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
+  const rpcPreference = useSettingsStore(state => state.rpcEndpointPreferences.zcash)
+  const rpcScope = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
+  )
+  const [generation, setGeneration] = useState(0)
+  const [state, setState] = useState<EstimateState>({ ...emptyEstimate, key: '' })
+  const sequence = useRef(0)
+  const retry = useCallback(() => setGeneration(value => value + 1), [])
+  const active = enabled && (type === 'shield' || (!!to && !!amount && Number(amount) > 0))
+  const key = JSON.stringify([
     type,
     to,
     amount,
     memo,
     fundingSource,
+    feeTier,
     active,
+    walletId,
+    accountId,
+    network,
+    rpcPreference,
+    rpcScope,
     scopeKey,
-    retryCount
+    generation
   ])
 
   useEffect(() => {
-    const seq = ++requestSeq.current
+    const current = ++sequence.current
     if (!active) {
-      setState({ key: requestKey, feeZats: null, loading: false, error: false })
+      setState({ ...emptyEstimate, key })
       return
     }
-
-    setState({ key: requestKey, feeZats: null, loading: true, error: false })
-
+    setState({ ...emptyEstimate, loading: true, key })
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined
     const timer = setTimeout(async () => {
       try {
-        const feeStr = estimate
-          ? await estimate()
-          : type === 'shield'
-            ? await zcashWalletRuntimeClient.estimateShieldFee(MARGINAL_FEE_ZATS.standard)
-            : await zcashWalletRuntimeClient.estimateTransferFee({
-                to: to!,
-                amount: amount!,
-                memo,
-                marginalFeeZats: MARGINAL_FEE_ZATS.standard,
-                fundingSource
-              })
-
-        if (seq !== requestSeq.current) return
-        const feeZats = Number(feeStr)
-        if (!Number.isSafeInteger(feeZats) || feeZats <= 0) throw new Error('Invalid fee estimate')
-        setState({ key: requestKey, feeZats, loading: false, error: false })
+        let expectedQuoteId: string | undefined
+        const result = estimate
+          ? await estimate(feeTier)
+          : await (async () => {
+              const quote = await zcashWalletRuntimeClient.getFeeQuote()
+              expectedQuoteId = quote.id
+              const marginalFeeZats = marginalFeeForTier(feeTier, quote.standardMarginalFeeZats)
+              return type === 'shield'
+                ? zcashWalletRuntimeClient.estimateShieldFee(marginalFeeZats, quote.id)
+                : zcashWalletRuntimeClient.estimateTransferFee({
+                    to: to!,
+                    amount: amount!,
+                    memo,
+                    fundingSource,
+                    marginalFeeZats,
+                    feeQuoteId: quote.id
+                  })
+            })()
+        if (current !== sequence.current) return
+        const feeZats = Number(result.feeZats)
+        if (
+          !Number.isSafeInteger(feeZats) ||
+          feeZats <= 0 ||
+          (expectedQuoteId !== undefined && result.feeQuote.id !== expectedQuoteId) ||
+          result.feeQuote.expiresAt <= Date.now() ||
+          Number(result.marginalFeeZats) !==
+            marginalFeeForTier(feeTier, result.feeQuote.standardMarginalFeeZats)
+        )
+          throw new Error('Invalid network fee estimate')
+        setState({ feeZats, feeQuote: result.feeQuote, loading: false, error: false, key })
+        expiryTimer = setTimeout(retry, Math.max(0, result.feeQuote.expiresAt - Date.now()))
       } catch {
-        if (seq !== requestSeq.current) return
-        setState({ key: requestKey, feeZats: null, loading: false, error: true })
+        if (current === sequence.current) setState({ ...emptyEstimate, error: true, key })
       }
     }, debounceMs)
-
     return () => {
       clearTimeout(timer)
-      requestSeq.current += 1
+      clearTimeout(expiryTimer)
+      sequence.current += 1
     }
-  }, [requestKey, active, debounceMs, estimate])
+  }, [active, debounceMs, estimate, feeTier, key, retry, to, amount, memo, fundingSource, type])
 
-  return state.key === requestKey
-    ? { feeZats: state.feeZats, loading: state.loading, error: state.error, retry }
-    : { feeZats: null, loading: active, error: false, retry }
+  return state.key === key
+    ? {
+        feeZats: state.feeZats,
+        feeQuote: state.feeQuote,
+        loading: state.loading,
+        error: state.error,
+        retry
+      }
+    : { ...emptyEstimate, loading: active, retry }
+}
+
+/** Each tier keeps the fee produced by its own WASM proposal. */
+export function useFeeEstimate(args: UseFeeEstimateArgs): FeeEstimateState {
+  const standard = useEstimateForTier({ ...args, feeTier: 'standard' })
+  const fast = useEstimateForTier({ ...args, feeTier: 'fast' })
+  const selected = args.feeTier === 'fast' ? fast : standard
+  const retry = useCallback(() => {
+    standard.retry()
+    fast.retry()
+  }, [standard.retry, fast.retry])
+  return {
+    ...selected,
+    retry,
+    feeByTier: { standard: standard.feeZats, fast: fast.feeZats },
+    loadingByTier: { standard: standard.loading, fast: fast.loading }
+  }
 }

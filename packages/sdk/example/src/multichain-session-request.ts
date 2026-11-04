@@ -35,7 +35,9 @@ export function buildExampleMultichainSessionRequest(
         ? {
             [evmChainId]: {
               methods: [
+                'eth_chainId',
                 'eth_accounts',
+                'eth_getBalance',
                 'eth_sendTransaction',
                 'personal_sign',
                 'eth_signTypedData_v4'

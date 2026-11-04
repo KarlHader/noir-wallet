@@ -15,6 +15,21 @@ import {
   getSafeRheaSwapRuntimeErrorMessage
 } from '../../../src/core/services/rhea-swap/rhea-swap-error.ts'
 import { classifyError } from '../../../src/lib/errors.ts'
+import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
+
+it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
+  const feeQuote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: 2000 }
+  const max = { feeZats: 15000, feeQuote, loading: false, error: false }
+  const amount = { feeZats: 10000, feeQuote, loading: false, error: false }
+  assert.deepEqual(selectSwapFeeEstimate('0.9', true, '0.8', max, amount, 1000), {
+    feeZats: null,
+    feeQuote: null,
+    ready: false,
+    staleMax: true
+  })
+  assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 1000).ready, true)
+  assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 2000).ready, false)
+})
 
 function source(balance = '1000000') {
   return {

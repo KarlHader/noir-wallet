@@ -35,7 +35,7 @@ const CHAIN_ICONS: Readonly<Record<string, ChainIconConfig>> = Object.freeze({
   'eip155:57073': { native: 'ethereum' },
   'eip155:763373': { native: 'ethereum' },
   ethereum: { file: 'ethereum.svg' },
-  evm: { file: 'ethereum.svg' },
+  evm: { url: '/icons/chains/evm.svg' },
   gnosis: { file: 'gnosis.svg', native: 'xdai', token: 'xdai', evmAddress: true },
   ltc: { native: 'litecoin' },
   monad: { file: 'monad.svg', native: 'monad', token: 'monad', evmAddress: true },

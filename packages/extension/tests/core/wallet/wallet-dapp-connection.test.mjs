@@ -8,7 +8,14 @@ const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
 const previous = { walletId: 'wallet:previous', accountId: 'account:previous' }
 const current = { walletId: 'wallet:current', accountId: 'account:current' }
 
-function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = false } = {}) {
+function fixture({
+  chains = [evmChainId],
+  currentEvmChainId = evmChainId,
+  evm = true,
+  sharedEvm = false,
+  zcash = false,
+  caip25 = false
+} = {}) {
   const transition = new AccountContextTransitionCoordinator()
   let active = { reference: current, chainIds: chains }
   let failZcash = false
@@ -21,7 +28,8 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
     favicon: '',
     connectedAt: 1,
     lastActiveAt: 1,
-    ...(evm
+    ...(evm && sharedEvm ? { evmAuthorization: { accounts: [previous], binding: previous } } : {}),
+    ...(evm && !sharedEvm
       ? { chainAuthorizations: [{ chainId: evmChainId, accounts: [previous], binding: previous }] }
       : {}),
     ...(zcash
@@ -37,12 +45,13 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
     getCurrentTabDApp: async () => dapp,
     getConnection: async origin => (origin === dapp.origin ? dapp : null),
     loadActiveAccount: async () => active,
-    getEvmChainId: () => evmChainId,
+    getEvmChainId: () => currentEvmChainId,
     getZcashChainId: () => zcashChainId,
     connectEvm: async () => {
       calls.push('evm')
-      dapp.chainAuthorizations[0].accounts = [previous, active.reference]
-      dapp.chainAuthorizations[0].binding = active.reference
+      const grant = sharedEvm ? dapp.evmAuthorization : dapp.chainAuthorizations[0]
+      grant.accounts = [previous, active.reference]
+      grant.binding = active.reference
     },
     connectZcash: async () => {
       calls.push('zcash')
@@ -75,6 +84,15 @@ test('native EVM connection status uses the authoritative account without legacy
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   state.select({ reference: { ...current, accountId: 'account:another' }, chainIds: [evmChainId] })
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+})
+
+test('shared EVM grant remains connectable after the active EVM chain changes', async () => {
+  const state = fixture({ chains: ['eip155:56'], currentEvmChainId: 'eip155:56', sharedEvm: true })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, ['evm'])
+  assert.deepEqual(state.dapp.evmAuthorization.binding, current)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
 test('mixed EVM and Zcash Connect updates both grants and requires both for connected status', async () => {

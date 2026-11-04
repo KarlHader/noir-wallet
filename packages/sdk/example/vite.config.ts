@@ -6,6 +6,7 @@ const base =
   process.env.GITHUB_PAGES_BASE ?? (process.env.GITHUB_PAGES ? '/noir-wallet-sdk/' : '/example/')
 
 export default defineConfig({
+  cacheDir: fileURLToPath(new URL('../../../output/node_modules/.vite/example', import.meta.url)),
   base,
   plugins: [react()],
   resolve: {
@@ -16,7 +17,7 @@ export default defineConfig({
   server: {
     host: 'localhost',
     port: 5002,
-    strictPort: true,
+    strictPort: false,
     headers: {
       'Content-Security-Policy':
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:* http://127.0.0.1:*; object-src 'self'; connect-src 'self' http://localhost:* ws://localhost:*;"

@@ -215,8 +215,8 @@ test.describe('WASM package integrity', () => {
       {
         schemaVersion: 3,
         engine: 'zcash',
-        abiVersion: 'zcash-wallet-7d6921d-v1',
-        sourceCommit: '7d6921d51b9fe4f4a13b8886481a9a098d6f1e7f',
+        abiVersion: 'zcash-wallet-cb8da9d-v1',
+        sourceCommit: 'cb8da9dc60d51dbf3958657be35427210d544541',
         build: { wasmOpt: '117', prettier: '3.8.0' }
       }
     )
@@ -250,8 +250,8 @@ test.describe('WASM package integrity', () => {
     const source = await readFile(zcashSyncScript, 'utf8')
     const ignoredPaths = await readFile(prettierIgnore, 'utf8')
 
-    expect(source).toContain("const SOURCE_COMMIT = '7d6921d51b9fe4f4a13b8886481a9a098d6f1e7f'")
-    expect(source).toContain("const RUST_TOOLCHAIN = 'nightly-2025-11-15'")
+    expect(source).toContain("const SOURCE_COMMIT = 'cb8da9dc60d51dbf3958657be35427210d544541'")
+    expect(source).toContain("const RUST_TOOLCHAIN = 'nightly-2026-10-20'")
     expect(source).toContain("const WASM_OPT_VERSION = '117'")
     expect(source).toContain('assertFreshBuildMatchesPinnedSource(buildDir)')
     expect(source).toContain('await verifyGeneratedPackage(stageDir, manifest)')

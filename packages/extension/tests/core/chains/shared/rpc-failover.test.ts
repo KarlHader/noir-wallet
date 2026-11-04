@@ -11,6 +11,7 @@ import {
 import { isRpcEndpointError } from '../../../../src/lib/errors'
 import {
   getActiveRpcEndpointOption,
+  ensureRpcEndpointPreferencesLoaded,
   getNextRpcEndpointOption,
   getPreferredRpcEndpointOption,
   getRpcEndpointOptions,
@@ -20,6 +21,7 @@ import {
   syncActiveRpcEndpointPreferencesFromStorage
 } from '../../../../src/infrastructure/chains/rpc-endpoints'
 import {
+  fetchStandardMarginalFee,
   getManagedRpcEndpointOptions,
   parseRpcRegistryDocument,
   probeRpcEndpoint,
@@ -36,8 +38,8 @@ import { getBitcoinChainId } from '../../../../src/core/chains/registry'
 import { SOLANA_NETWORKS } from '../../../../src/config/networks'
 
 test('bundles one local Zcash endpoint before the registry is loaded', () => {
-  expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual(['deltarpc'])
-  expect(getNextRpcEndpointOption('zcash', 'deltarpc', 'deltarpc')).toBeUndefined()
+  expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual(['deltarpc-web-sg'])
+  expect(getNextRpcEndpointOption('zcash', 'deltarpc-web-sg', 'deltarpc-web-sg')).toBeUndefined()
 })
 
 test('uses the fastest RPC only when no valid persisted preference exists', async () => {
@@ -238,6 +240,31 @@ test('measures only a functional gRPC-Web endpoint', async () => {
   ).rejects.toThrow('RPC probe returned text/html')
 })
 
+test('reads a bounded standard marginal fee from the selected gRPC-Web endpoint', async () => {
+  const trailers = new TextEncoder().encode('grpc-status: 0\r\n')
+  const data = Uint8Array.from([0, 0, 0, 0, 3, 0x08, 0xd8, 0x36])
+  const body = new Uint8Array(data.length + 5 + trailers.length)
+  body.set(data)
+  body[data.length] = 0x80
+  new DataView(body.buffer).setUint32(data.length + 1, trailers.length)
+  body.set(trailers, data.length + 5)
+  const requests: string[] = []
+  const fetchResponse = async (url: string | URL | Request) => {
+    requests.push(String(url))
+    return new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'application/grpc-web+proto' }
+    })
+  }
+
+  await expect(fetchStandardMarginalFee('https://rpc.example.com', fetchResponse)).resolves.toBe(
+    7_000
+  )
+  expect(requests).toEqual([
+    'https://rpc.example.com/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetStandardFee'
+  ])
+})
+
 test('counts endpoint connectivity errors but ignores local worker timeouts', () => {
   expect(isRpcEndpointError('gRPC transport error: UNAVAILABLE')).toBe(true)
   expect(isRpcEndpointError('NetworkError when attempting to fetch resource.')).toBe(true)
@@ -353,7 +380,7 @@ test('changing the preferred endpoint discards stale failover state', () => {
   expect(registerRpcSuccess(stale, 'chainsafe')).toEqual(createRpcFailoverState('chainsafe'))
 })
 
-test('restores a legacy Zcash selection from cache without rewriting it on registry failure', async () => {
+test('restores a Zcash selection from cache without rewriting it on registry failure', async () => {
   const originalEndpoints = getRpcEndpointOptions('zcash')
   const cachedRegistry = parseRpcRegistryDocument({
     version: 1,
@@ -367,8 +394,9 @@ test('restores a legacy Zcash selection from cache without rewriting it on regis
         iconChain: 'zec',
         probe: 'zcash-lightwalletd-grpc-web',
         endpoints: [
-          { id: 'chainsafe', label: 'ChainSafe', url: 'https://zcash-mainnet.chainsafe.dev' },
-          { id: 'deltarpc', label: 'DeltaRPC', url: 'https://zcash-wallet-grpc-self.deltarpc.com' }
+          { id: 'preferred', label: 'Preferred', url: 'https://preferred.example.com' },
+          { id: 'fallback', label: 'Fallback', url: 'https://fallback.example.com' },
+          { id: 'retired', label: 'Retired', url: 'https://zcash-mainnet.chainsafe.dev' }
         ]
       }
     ]
@@ -376,7 +404,7 @@ test('restores a legacy Zcash selection from cache without rewriting it on regis
   expect(cachedRegistry).not.toBeNull()
   if (!cachedRegistry) return
   const storedSettings = {
-    state: { rpcEndpointPreferences: { zcash: 'chainsafe' } },
+    state: { rpcEndpointPreferences: { zcash: 'preferred' } },
     version: 0
   }
   const writes: unknown[] = []
@@ -405,40 +433,45 @@ test('restores a legacy Zcash selection from cache without rewriting it on regis
       ...cachedRegistry,
       chains: cachedRegistry.chains.map(chain => ({
         ...chain,
-        endpoints: chain.endpoints.filter(endpoint => endpoint.id !== 'chainsafe')
+        endpoints: chain.endpoints.filter(endpoint => endpoint.id !== 'preferred')
       }))
     })
     await expect(syncActiveRpcEndpointPreferencesFromStorage()).resolves.toEqual({
-      zcash: 'chainsafe'
+      zcash: 'preferred'
     })
-    expect(getPreferredRpcEndpointOption('zcash').id).toBe('deltarpc')
+    expect(getPreferredRpcEndpointOption('zcash').id).toBe('fallback')
+    expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual(['fallback'])
     expect(writes).toEqual([])
 
     cachedValue = cachedRegistry
     await expect(syncActiveRpcEndpointPreferencesFromStorage()).resolves.toEqual({
-      zcash: 'chainsafe'
+      zcash: 'preferred'
     })
-    expect(getPreferredRpcEndpointOption('zcash').id).toBe('chainsafe')
+    expect(getPreferredRpcEndpointOption('zcash').id).toBe('preferred')
     expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual([
-      'chainsafe',
-      'deltarpc'
+      'preferred',
+      'fallback'
     ])
-    setActiveRpcEndpointOverride('zcash', 'deltarpc')
-    expect(getActiveRpcEndpointOption('zcash').id).toBe('deltarpc')
+    setActiveRpcEndpointOverride('zcash', 'fallback')
+    expect(getActiveRpcEndpointOption('zcash').id).toBe('fallback')
     setActiveRpcEndpointOverride('zcash')
-    expect(getActiveRpcEndpointOption('zcash').id).toBe('chainsafe')
-    await expect(refreshRpcEndpointRegistry()).resolves.toEqual({ zcash: 'chainsafe' })
+    expect(getActiveRpcEndpointOption('zcash').id).toBe('preferred')
+    await expect(refreshRpcEndpointRegistry()).resolves.toEqual({ zcash: 'preferred' })
     expect(writes).toEqual([])
+
+    setActiveRpcEndpointPreferences({ zcash: 'fallback' })
+    await expect(ensureRpcEndpointPreferencesLoaded()).resolves.toEqual({ zcash: 'fallback' })
+    setActiveRpcEndpointPreferences({ zcash: 'preferred' })
 
     cachedValue = parseRpcRegistryDocument({
       ...cachedRegistry,
       chains: cachedRegistry.chains.map(chain => ({
         ...chain,
-        endpoints: chain.endpoints.filter(endpoint => endpoint.id === 'chainsafe')
+        endpoints: chain.endpoints.filter(endpoint => endpoint.id === 'preferred')
       }))
     })
     await syncActiveRpcEndpointPreferencesFromStorage()
-    expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual(['chainsafe'])
+    expect(getRpcEndpointOptions('zcash').map(option => option.id)).toEqual(['preferred'])
   } finally {
     // The Zcash runtime pool is separate from the shared managed registry.
     cachedValue = {

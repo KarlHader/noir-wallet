@@ -1,9 +1,12 @@
 import {
   BITCOIN_MAINNET_CHAIN_ID,
   EVM_NETWORK_CONFIGS,
+  NEAR_NETWORKS,
   PROVIDER_ICON_DATA_URL,
+  SOLANA_NETWORKS,
   TEST_ICON_SVG,
   TEST_PASSWORD,
+  ZCASH_MAINNET_CHAIN_ID,
   bitcoinEnabled,
   captureScreenshot,
   expect,
@@ -282,50 +285,132 @@ test('exposes the released multichain provider surface by default', async ({ con
   await page.close()
 })
 
-test('creates one CAIP-25 session for every released provider', async ({ context, popup }) => {
-  test.skip(
-    !bitcoinEnabled || !solanaEnabled || !nearEnabled,
-    'Requires an explicit five-chain verification profile'
-  )
+test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM revoke', async ({
+  context,
+  popup
+}) => {
   test.skip(
     process.env.APPROVAL_WINDOW_E2E !== '1',
     'Chrome popup windows require an explicit real-browser approval run'
   )
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
   const origin = 'https://provider-release.noir.test'
   await context.route(`${origin}/**`, serveSdkExample)
   await mockExternalAssetIcons(context)
   await mockReleasedEvmRpc(context)
-  await mockReleasedBitcoinEsplora(context)
+  if (bitcoinEnabled) await mockReleasedBitcoinEsplora(context)
 
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
+  try {
+    await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+    await selectNewZcashAccountHistory(popup)
+    await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
+  } finally {
+    await removeZcashHistoryMock()
+  }
+
+  await popup.evaluate(async site => {
+    const key = 'dapp_authorization_state'
+    const previous = (await chrome.storage.local.get(key))[key]
+    if (previous !== undefined && (typeof previous !== 'object' || previous === null)) {
+      throw new Error('Stored dApp authorization state is invalid')
+    }
+    await chrome.storage.local.set({
+      [key]: {
+        ...(previous ?? {}),
+        [site]: { revision: 3 },
+        'https://legacy-approved.noir.test': { revision: 1, mode: 'approved' },
+        'https://legacy-explicit.noir.test': {
+          revision: 2,
+          mode: 'revoked',
+          publicExplicit: true
+        }
+      }
+    })
+  }, origin)
 
   const page = await context.newPage()
   await page.goto(`${origin}/example/`)
   await page.waitForFunction(() => 'noirwallet' in window)
   await expectDAppTabFavicon(page, popup)
 
+  const evmChainIds = EVM_NETWORK_CONFIGS.mainnet.map(network => network.chainId)
+  expect(evmChainIds).toHaveLength(12)
+  const scopes: Record<string, { methods: string[]; notifications: string[] }> = {
+    [ZCASH_MAINNET_CHAIN_ID]: {
+      methods: ['zcash_getAccounts'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged']
+    }
+  }
+  for (const chainId of evmChainIds) {
+    scopes[chainId] = {
+      methods: ['eth_accounts'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
+    }
+  }
+  if (bitcoinEnabled) {
+    scopes[BITCOIN_MAINNET_CHAIN_ID] = {
+      methods: ['getAccounts'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged', 'networkChanged']
+    }
+  }
+  if (solanaEnabled) {
+    scopes[SOLANA_NETWORKS.mainnet.chainId] = {
+      methods: ['getAccounts'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged']
+    }
+  }
+  if (nearEnabled) {
+    scopes[NEAR_NETWORKS.mainnet.chainId] = {
+      methods: ['getAccounts'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged']
+    }
+  }
+  const expectedScopeCount = Object.keys(scopes).length
+  const expectedGroupCount =
+    2 + Number(bitcoinEnabled) + Number(solanaEnabled) + Number(nearEnabled)
   const approvalPromise = context.waitForEvent('page')
-  await page.getByRole('button', { name: 'Connect all networks' }).click()
+  const sessionPromise = page.evaluate(async requestedScopes => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: {
+        createSession(request: { scopes: typeof requestedScopes }): Promise<{
+          scopes: Record<string, { accounts: string[] }>
+        }>
+      }
+    }
+    return wallet.multichain.createSession({ scopes: requestedScopes })
+  }, scopes)
   const approval = await approvalPromise
   await approval.waitForURL(/#approval\?requestId=/)
-  await approval.setViewportSize({ width: 375, height: 632 })
+  await approval.setViewportSize({ width: 375, height: 600 })
   await expectDAppConnectionHeader(approval, {
     domain: 'provider-release.noir.test',
     pageUrl: `${origin}/example/`
   })
-  await expect(approval.locator('[data-caip25-scope]')).toHaveCount(5)
-  await expect(approval.getByText('5 networks · 5 selected', { exact: true })).toBeVisible()
+  await expect(approval.locator('[data-caip25-scope]')).toHaveCount(expectedGroupCount)
+  await expect(approval.locator('[data-caip25-scope="evm"]')).toHaveCount(1)
+  await expect(approval.locator(`[data-caip25-scope="${ZCASH_MAINNET_CHAIN_ID}"]`)).toHaveCount(1)
+  await expect(approval.getByText(`${expectedGroupCount} selected`, { exact: true })).toBeVisible()
   await expect(approval.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
-  await captureScreenshot(approval, 'caip25-multichain-session-approval.png')
-  const firstScope = approval.locator('[data-caip25-scope]').first()
-  await firstScope.locator(':scope > button').click()
-  await expect(firstScope.locator('[data-caip25-account]')).toHaveCount(1)
+  await captureScreenshot(approval, 'caip25-evm-group-collapsed-375x600.png')
+  const evmGroup = approval.locator('[data-caip25-scope="evm"]')
+  await evmGroup.locator(':scope > button').click()
+  await approval.setViewportSize({ width: 420, height: 700 })
+  await expect(evmGroup.locator('[data-caip25-account]')).toHaveCount(2)
+  await evmGroup.locator('[data-caip25-account]').last().click()
+  await expect(
+    approval.getByText(`${expectedGroupCount + 1} selected`, { exact: true })
+  ).toBeVisible()
+  await expect(approval.getByRole('button', { name: 'Connect', exact: true })).toBeVisible()
+  await captureScreenshot(approval, 'caip25-evm-accounts-expanded-420x700.png')
   await approval.getByRole('button', { name: 'Connect', exact: true }).click()
 
-  await expect(page.getByText('5 networks authorized', { exact: true })).toBeVisible()
-  const storedSession = await popup.evaluate(async expectedOrigin => {
+  const createdSession = await sessionPromise
+  expect(Object.keys(createdSession.scopes)).toHaveLength(expectedScopeCount)
+  const storedConnection = await popup.evaluate(async expectedOrigin => {
     const stored = await chrome.storage.local.get('connectedDApps')
     const connections = Array.isArray(stored.connectedDApps) ? stored.connectedDApps : []
     const connection = connections.find(
@@ -334,11 +419,20 @@ test('creates one CAIP-25 session for every released provider', async ({ context
         candidate !== null &&
         Reflect.get(candidate, 'origin') === expectedOrigin
     )
-    return connection ? Reflect.get(connection, 'caip25Session') : null
+    return connection
+      ? {
+          session: Reflect.get(connection, 'caip25Session'),
+          evmAuthorization: Reflect.get(connection, 'evmAuthorization')
+        }
+      : null
   }, origin)
-  expect(storedSession).toEqual(expect.objectContaining({ scopes: expect.any(Array) }))
-  await page.reload()
-  await page.waitForFunction(() => 'noirwallet' in window)
+  expect(storedConnection?.session).toEqual(expect.objectContaining({ scopes: expect.any(Array) }))
+  expect(storedConnection?.evmAuthorization).toEqual(
+    expect.objectContaining({ accounts: expect.any(Array), binding: expect.any(Object) })
+  )
+  expect(storedConnection?.evmAuthorization.accounts).toHaveLength(2)
+
+  await terminateExtensionServiceWorker(context, popup)
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -357,8 +451,7 @@ test('creates one CAIP-25 session for every released provider', async ({ context
         }
       })
     )
-    .toEqual({ scopeCount: 5, error: null })
-  await expect(page.getByText('5 networks authorized', { exact: true })).toBeVisible()
+    .toEqual({ scopeCount: expectedScopeCount, error: null })
   const providerState = await page.evaluate(async () => {
     type Session = {
       scopes: Record<string, { accounts: readonly string[] }>
@@ -379,9 +472,9 @@ test('creates one CAIP-25 session for every released provider', async ({ context
             }): Promise<unknown>
           }
           ethereum: RequestProvider
-          bitcoin: AccountsProvider
-          solana: AccountsProvider
-          near: AccountsProvider
+          bitcoin?: AccountsProvider
+          solana?: AccountsProvider
+          near?: AccountsProvider
         }
       | undefined
     if (!wallet?.multichain) throw new Error('Multichain provider is unavailable.')
@@ -406,21 +499,163 @@ test('creates one CAIP-25 session for every released provider', async ({ context
       scopeAccountCounts: session
         ? Object.values(session.scopes).map(scope => scope.accounts.length)
         : [],
+      evmScopeAccounts: session
+        ? Object.entries(session.scopes)
+            .filter(([chainId]) => chainId.startsWith('eip155:'))
+            .map(([, scope]) => scope.accounts.map(account => account.split(':').at(-1)))
+        : [],
       invokedAccounts,
       evmAccounts: await wallet.ethereum.request({ method: 'eth_accounts' }),
-      bitcoinAccounts: await wallet.bitcoin.getAccounts(),
-      solanaAccounts: await wallet.solana.getAccounts(),
-      nearAccounts: await wallet.near.getAccounts(),
+      bitcoinAccounts: await wallet.bitcoin?.getAccounts(),
+      solanaAccounts: await wallet.solana?.getAccounts(),
+      nearAccounts: await wallet.near?.getAccounts(),
       deniedCode
     }
   })
-  expect(providerState.scopeCount).toBe(5)
-  expect(providerState.scopeAccountCounts).toEqual([1, 1, 1, 1, 1])
+  expect(providerState.scopeCount).toBe(expectedScopeCount)
+  expect(providerState.scopeAccountCounts).toEqual([
+    1,
+    ...evmChainIds.map(() => 2),
+    ...(bitcoinEnabled ? [1] : []),
+    ...(solanaEnabled ? [1] : []),
+    ...(nearEnabled ? [1] : [])
+  ])
+  expect(providerState.evmAccounts).toHaveLength(2)
+  expect(providerState.evmScopeAccounts).toEqual(evmChainIds.map(() => providerState.evmAccounts))
   expect(providerState.invokedAccounts).toEqual(providerState.evmAccounts)
-  expect(providerState.bitcoinAccounts).toHaveLength(1)
-  expect(providerState.solanaAccounts).toHaveLength(1)
-  expect(providerState.nearAccounts).toHaveLength(1)
+  if (bitcoinEnabled) expect(providerState.bitcoinAccounts).toHaveLength(1)
+  if (solanaEnabled) expect(providerState.solanaAccounts).toHaveLength(1)
+  if (nearEnabled) expect(providerState.nearAccounts).toHaveLength(1)
   expect(providerState.deniedCode).toBe(4100)
+
+  const customChainId = '0x7a69'
+  const customRpcUrl = 'https://custom-evm.noir.test/rpc'
+  await context.route(customRpcUrl, route => {
+    const request = route.request().postDataJSON() as { id?: unknown; method?: unknown }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        result: request.method === 'eth_chainId' ? customChainId : '0x0'
+      })
+    })
+  })
+  const addApprovalPromise = context.waitForEvent('page')
+  const addNetworkPromise = page.evaluate(
+    async ({ chainId, rpcUrl }) => {
+      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+        request(input: { method: string; params: unknown[] }): Promise<unknown>
+      }
+      return provider.request({
+        method: 'wallet_addEthereumChain',
+        params: [
+          {
+            chainId,
+            chainName: 'QA Local EVM',
+            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+            rpcUrls: [rpcUrl]
+          }
+        ]
+      })
+    },
+    { chainId: customChainId, rpcUrl: customRpcUrl }
+  )
+  const addApproval = await addApprovalPromise
+  await addApproval.waitForURL(/#approval\?requestId=/)
+  await expect(addApproval.getByText('Add network', { exact: true })).toBeVisible()
+  await addApproval.getByRole('button', { name: 'Add Network' }).click()
+  await expect(addNetworkPromise).resolves.toBeNull()
+  const unrequestedScopeCode = await page.evaluate(async () => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: {
+        invokeMethod(input: { scope: string; request: { method: string } }): Promise<unknown>
+      }
+    }
+    try {
+      await wallet.multichain.invokeMethod({
+        scope: 'eip155:31337',
+        request: { method: 'eth_accounts' }
+      })
+      return null
+    } catch (error) {
+      return typeof error === 'object' && error !== null ? Reflect.get(error, 'code') : null
+    }
+  })
+  expect(unrequestedScopeCode).toBe(4100)
+
+  const switchApprovalPromise = context.waitForEvent('page')
+  const switchNetworkPromise = page.evaluate(async chainId => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string; params: unknown[] }): Promise<unknown>
+    }
+    return provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] })
+  }, customChainId)
+  const switchApproval = await switchApprovalPromise
+  await switchApproval.waitForURL(/#approval\?requestId=/)
+  await expect(switchApproval.getByText('Switch network', { exact: true })).toBeVisible()
+  await switchApproval.getByRole('button', { name: 'Switch Network' }).click()
+  await expect(switchNetworkPromise).resolves.toBeNull()
+  await expect
+    .poll(() => readEvmProviderChainIds(page))
+    .toEqual({
+      property: customChainId,
+      request: customChainId
+    })
+  const customAccounts = await page.evaluate(async () => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string }): Promise<unknown>
+    }
+    return provider.request({ method: 'eth_accounts' })
+  })
+  expect(customAccounts).toEqual(providerState.evmAccounts)
+
+  const restoreApprovalPromise = context.waitForEvent('page')
+  const restoreNetworkPromise = page.evaluate(async () => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string; params: unknown[] }): Promise<unknown>
+    }
+    return provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x1' }]
+    })
+  })
+  const restoreApproval = await restoreApprovalPromise
+  await restoreApproval.waitForURL(/#approval\?requestId=/)
+  await restoreApproval.getByRole('button', { name: 'Switch Network' }).click()
+  await expect(restoreNetworkPromise).resolves.toBeNull()
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Reflect.get(Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum'), 'chainId')
+      )
+    )
+    .toBe('0x1')
+
+  await page.evaluate(async () => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string; params: unknown[] }): Promise<unknown>
+    }
+    await provider.request({
+      method: 'wallet_revokePermissions',
+      params: [{ eth_accounts: {} }]
+    })
+  })
+  const afterEvmRevoke = await page.evaluate(async () => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: { getSession(): Promise<{ scopes: Record<string, { accounts: string[] }> }> }
+      ethereum: { request(input: { method: string }): Promise<unknown> }
+    }
+    return {
+      session: await wallet.multichain.getSession(),
+      evmAccounts: await wallet.ethereum.request({ method: 'eth_accounts' })
+    }
+  })
+  expect(afterEvmRevoke.evmAccounts).toEqual([])
+  expect(afterEvmRevoke.session.scopes[ZCASH_MAINNET_CHAIN_ID]?.accounts).toHaveLength(1)
+  for (const chainId of evmChainIds) {
+    expect(afterEvmRevoke.session.scopes[chainId]).toBeUndefined()
+  }
 
   await page.evaluate(async () => {
     const wallet = Reflect.get(window, 'noirwallet') as
@@ -435,27 +670,49 @@ test('creates one CAIP-25 session for every released provider', async ({ context
       | {
           multichain: { getSession(): Promise<unknown> }
           ethereum: { request(args: { method: string }): Promise<unknown> }
-          bitcoin: { getAccounts(): Promise<readonly string[]> }
-          solana: { getAccounts(): Promise<readonly string[]> }
-          near: { getAccounts(): Promise<readonly string[]> }
+          bitcoin?: { getAccounts(): Promise<readonly string[]> }
+          solana?: { getAccounts(): Promise<readonly string[]> }
+          near?: { getAccounts(): Promise<readonly string[]> }
         }
       | undefined
     if (!wallet) throw new Error('Noir Wallet provider is unavailable.')
     return {
       session: await wallet.multichain.getSession(),
       evmAccounts: await wallet.ethereum.request({ method: 'eth_accounts' }),
-      bitcoinAccounts: await wallet.bitcoin.getAccounts(),
-      solanaAccounts: await wallet.solana.getAccounts(),
-      nearAccounts: await wallet.near.getAccounts()
+      bitcoinAccounts: await wallet.bitcoin?.getAccounts(),
+      solanaAccounts: await wallet.solana?.getAccounts(),
+      nearAccounts: await wallet.near?.getAccounts()
     }
   })
-  expect(revokedState).toEqual({
-    session: null,
-    evmAccounts: [],
-    bitcoinAccounts: [],
-    solanaAccounts: [],
-    nearAccounts: []
-  })
+  expect(revokedState.session).toBeNull()
+  expect(revokedState.evmAccounts).toEqual([])
+  if (bitcoinEnabled) expect(revokedState.bitcoinAccounts).toEqual([])
+  if (solanaEnabled) expect(revokedState.solanaAccounts).toEqual([])
+  if (nearEnabled) expect(revokedState.nearAccounts).toEqual([])
+
+  await page.getByRole('button', { name: 'Ethereum', exact: true }).click()
+  const sdkApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Connect all networks' }).click()
+  const sdkApproval = await sdkApprovalPromise
+  await sdkApproval.waitForURL(/#approval\?requestId=/)
+  await expect(sdkApproval.getByRole('button', { name: 'Connect', exact: true })).toBeVisible()
+  await sdkApproval.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Connect all networks' })).toBeEnabled()
+
+  await terminateExtensionServiceWorker(context, popup)
+  const retryApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Connect all networks' }).click()
+  const retryApproval = await retryApprovalPromise
+  await retryApproval.waitForURL(/#approval\?requestId=/)
+  await retryApproval.setViewportSize({ width: 375, height: 600 })
+  await expect(retryApproval.getByRole('button', { name: 'Connect', exact: true })).toBeVisible()
+  await captureScreenshot(retryApproval, 'caip25-sdk-button-after-worker-restart.png')
+  await retryApproval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.locator('.multichain-session-bar')).toContainText('networks authorized')
+  await expect(page.getByRole('button', { name: 'Reconnect EVM' })).toBeVisible()
+  await expect(page.getByText('0x1', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Zcash', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible()
 })
 
 test('adds a Zcash account after the service worker restores an unlocked session', async ({

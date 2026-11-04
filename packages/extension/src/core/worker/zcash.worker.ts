@@ -1,4 +1,4 @@
-import { findWasmAccountIdByHdIndex } from './account-resolution'
+import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './account-resolution'
 /**
  * Zcash Web Worker
  *
@@ -39,8 +39,9 @@ import type { Network } from '../../types'
 import { bytesToBase64, base64ToBytes, hexToBytes } from '../../lib/bytes'
 import { mapWasmAccountBalanceToZcashBalance, zeroZcashBalance } from '../wallet/balance-summary'
 import { DEFAULT_EXPIRY_DELTA_BLOCKS } from '../../config/fee'
+import { fetchStandardMarginalFee } from '../../infrastructure/chains/rpc-registry-client'
+import { FeeQuoteRegistry, type FeeQuoteContext } from '../zcash/fee-quotes'
 import { resolveOneClickExpiryDeltaBlocks } from '../zcash/transaction-expiry'
-import { sanitizeMarginalFeeZats } from '../zcash/fee-policy'
 import { WALLET_CONFIG } from '../../config/wallet'
 import { runWithCommitmentTreeRecovery } from './commitment-tree-recovery'
 import { getSafeNewWalletBirthdayHeight } from '../wallet/birthday-height'
@@ -132,9 +133,11 @@ async function findAccountIdByHdIndex(
   accountIndex: number
 ): Promise<number | null> {
   const summary = await getSummaryOrCached(walletId, w)
-  return findWasmAccountIdByHdIndex(summary?.account_balances, accountIndex, id =>
+  const accountId = await findWasmAccountIdByHdIndex(summary?.account_balances, accountIndex, id =>
     w.get_account_hd_index(id)
   )
+  if (accountId !== null) accountIdsByHdIndex.get(walletId)?.set(accountIndex, accountId)
+  return accountId
 }
 
 async function resolveRequestedAccountId(
@@ -184,6 +187,37 @@ interface WalletEntry {
 }
 
 const wallets = new Map<string, WalletEntry>()
+const accountIdsByHdIndex = new Map<string, Map<number, number>>()
+const feeQuotes = new FeeQuoteRegistry()
+
+function feeQuoteContext(walletId: string, accountId: number): FeeQuoteContext {
+  const entry = wallets.get(walletId)
+  if (!entry) throw new Error('Wallet is not initialized')
+  return { walletId, accountId, network: entry.network, rpcUrl: entry.lightwalletdUrl }
+}
+
+function approvedFee(walletId: string, accountId: number, rate?: number, id?: string) {
+  const feeQuote = feeQuotes.validate(feeQuoteContext(walletId, accountId), id, rate)
+  return {
+    feeQuote,
+    marginalFeeZats:
+      rate === feeQuote.standardMarginalFeeZats
+        ? feeQuote.standardMarginalFeeZats
+        : feeQuote.standardMarginalFeeZats * 4
+  }
+}
+
+async function estimateFeeSelection(
+  walletId: string,
+  accountId: number,
+  rate?: number,
+  id?: string
+) {
+  if (id !== undefined || rate !== undefined) return approvedFee(walletId, accountId, rate, id)
+  const context = feeQuoteContext(walletId, accountId)
+  const feeQuote = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+  return { feeQuote, marginalFeeZats: feeQuote.standardMarginalFeeZats }
+}
 const latestZeroIndexerOptions = new Map<string, ZeroIndexerOptions | null>()
 const walletOperationChains = new Map<string, Promise<void>>()
 const votingSessions = new Map<string, WebVotingSession>()
@@ -257,10 +291,9 @@ async function runWithFreshCommitmentTrees<T>(
   operation: () => Promise<T>
 ): Promise<T> {
   return runWithCommitmentTreeRecovery({
-    isFresh: () => subtreeRootsFresh.has(walletId),
     refresh: async () => {
-      console.log(`[Worker] Refreshing commitment tree state for ${walletId}`)
-      await wallet.sync_session_setup()
+      console.log(`[Worker] Syncing chain state before transaction build for ${walletId}`)
+      await wallet.sync()
       subtreeRootsFresh.add(walletId)
       summaryGateClosed.delete(walletId)
     },
@@ -514,6 +547,7 @@ async function createWalletAccount(
       effectiveBirthdayHeight
     )
     blankInstances.delete(walletId)
+    accountIdsByHdIndex.get(walletId)?.set(accountIndex, accountId)
     return accountId
   })
 }
@@ -746,6 +780,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           let dbData = dbBytes ? new Uint8Array(dbBytes) : null
           let wallet: WebWallet
           let restoredFromDb = false
+          let accountIndices = new Map<number, number>()
 
           try {
             wallet = new WebWallet(
@@ -781,6 +816,10 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 }
                 if (healthSummary) {
                   lastSummaryCache.set(walletId, healthSummary)
+                  accountIndices = await mapWasmAccountIdsByHdIndex(
+                    healthSummary.account_balances,
+                    id => wallet.get_account_hd_index(id)
+                  )
                 }
                 restoredFromDb = true
               } catch (healthErr) {
@@ -842,6 +881,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             }
           }
 
+          feeQuotes.invalidateWallet(walletId)
           wallets.set(walletId, {
             instance: wallet,
             network,
@@ -849,6 +889,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             compactBlockCdnUrl: compactBlockCdn?.baseUrl ?? null,
             zeroIndexerOptions: broadcastOptions
           })
+          accountIdsByHdIndex.set(walletId, accountIndices)
           // Fresh instance from a consistent snapshot: summary is safe again,
           // but its subtree roots are cold until the first sync op completes
           subtreeRootsFresh.delete(walletId)
@@ -930,6 +971,8 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 console.warn(`[Worker] Failed to free wallet ${resetId}:`, e)
               }
               wallets.delete(resetId)
+              accountIdsByHdIndex.delete(resetId)
+              feeQuotes.invalidateWallet(resetId)
               summaryGateClosed.delete(resetId)
               subtreeRootsFresh.delete(resetId)
               lastSummaryCache.delete(resetId)
@@ -942,6 +985,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           console.warn('[Worker] Global reset: clearing ALL wallets')
           disposeVotingSessions()
           for (const [id, entry] of wallets) {
+            feeQuotes.invalidateWallet(id)
             try {
               entry.instance.free()
             } catch (e) {
@@ -949,6 +993,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             }
           }
           wallets.clear()
+          accountIdsByHdIndex.clear()
           walletOperationChains.clear()
           summaryGateClosed.clear()
           subtreeRootsFresh.clear()
@@ -1004,7 +1049,16 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         const { walletId, accountId } = payload as RPCSchema['wallet.getAccountHdIndex']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
-          return (await w.get_account_hd_index(accountId)) ?? null
+          const index = (await w.get_account_hd_index(accountId)) ?? null
+          if (
+            typeof index === 'number' &&
+            Number.isSafeInteger(index) &&
+            index >= 0 &&
+            !accountIdsByHdIndex.get(walletId)?.has(index)
+          ) {
+            accountIdsByHdIndex.get(walletId)?.set(index, accountId)
+          }
+          return index
         })
         break
       }
@@ -1091,11 +1145,9 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             const chunks: Uint8Array[] = []
             let totalLen = 0
             await w.db_to_bytes_chunked((chunk: Uint8Array) => {
-              // Copy out of WASM linear memory into a standalone buffer so it
-              // survives the postMessage clone and IndexedDB put unchanged.
-              const copy = new Uint8Array(chunk)
-              chunks.push(copy)
-              totalLen += copy.length
+              // The WASM binding already creates an owned JS buffer for each chunk.
+              chunks.push(chunk)
+              totalLen += chunk.length
             })
             console.log(
               `[Worker] dbToBytes streamed ${totalLen} bytes in ${chunks.length} chunk(s) for ${walletId}`
@@ -1281,33 +1333,44 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             keySource
           )
           blankInstances.delete(walletId)
+          accountIdsByHdIndex.get(walletId)?.set(accountHdIndex, newAccountId)
           return newAccountId
         })
         break
       }
       case 'pczt.create': {
-        const { walletId, accountId, to, amount, memo, marginalFeeZats, signer, fundingSource } =
-          payload as RPCSchema['pczt.create']['request']
+        const {
+          walletId,
+          accountId,
+          to,
+          amount,
+          memo,
+          marginalFeeZats,
+          feeQuoteId,
+          signer,
+          fundingSource
+        } = payload as RPCSchema['pczt.create']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
           const memoBytes = memo ? new TextEncoder().encode(memo) : undefined
-          const pczt = await runWithFreshCommitmentTrees(walletId, w, () =>
-            fundingSource === 'transparent'
+          const pczt = await runWithFreshCommitmentTrees(walletId, w, () => {
+            const selectedFee = approvedFee(walletId, accountId, marginalFeeZats, feeQuoteId)
+            return fundingSource === 'transparent'
               ? w.pczt_create_transparent(
                   accountId,
                   to,
                   BigInt(amount),
                   memoBytes,
-                  BigInt(sanitizeMarginalFeeZats(marginalFeeZats))
+                  BigInt(selectedFee.marginalFeeZats)
                 )
               : w.pczt_create(
                   accountId,
                   to,
                   BigInt(amount),
                   memoBytes,
-                  BigInt(sanitizeMarginalFeeZats(marginalFeeZats))
+                  BigInt(selectedFee.marginalFeeZats)
                 )
-          )
+          })
           try {
             let inspected: PcztJson | null = null
             try {
@@ -1337,13 +1400,14 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         break
       }
       case 'pczt.shieldCreate': {
-        const { walletId, accountId, marginalFeeZats } =
+        const { walletId, accountId, marginalFeeZats, feeQuoteId } =
           payload as RPCSchema['pczt.shieldCreate']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
-          const pczt = await runWithFreshCommitmentTrees(walletId, w, () =>
-            w.pczt_shield_create(accountId, BigInt(sanitizeMarginalFeeZats(marginalFeeZats)))
-          )
+          const pczt = await runWithFreshCommitmentTrees(walletId, w, () => {
+            const selectedFee = approvedFee(walletId, accountId, marginalFeeZats, feeQuoteId)
+            return w.pczt_shield_create(accountId, BigInt(selectedFee.marginalFeeZats))
+          })
           try {
             return serializeForSigner(pczt)
           } finally {
@@ -1410,6 +1474,23 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       }
 
       // --- Transactions ---
+      case 'transaction.getFeeQuote': {
+        const { walletId, accountId, accountIndex } =
+          payload as RPCSchema['transaction.getFeeQuote']['request']
+        const cachedId =
+          accountIndex === undefined
+            ? accountId
+            : accountIdsByHdIndex.get(walletId)?.get(accountIndex)
+        const targetId =
+          typeof cachedId === 'number' && Number.isSafeInteger(cachedId) && cachedId >= 0
+            ? cachedId
+            : await runForWallet(walletId, () =>
+                resolveRequestedAccountId(walletId, getWallet(walletId), accountId, accountIndex)
+              )
+        const context = feeQuoteContext(walletId, targetId)
+        result = await feeQuotes.get(context, () => fetchStandardMarginalFee(context.rpcUrl))
+        break
+      }
       case 'transaction.send': {
         const {
           walletId,
@@ -1420,6 +1501,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           memo,
           fundingSource = 'shielded',
           marginalFeeZats,
+          feeQuoteId,
           submissionDeadline
         } = payload as RPCSchema['transaction.send']['request']
         result = await runForWallet(walletId, async () => {
@@ -1440,6 +1522,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             )
 
             try {
+              const selectedFee = approvedFee(walletId, accountId, marginalFeeZats, feeQuoteId)
               const transfer = await w.oneclick_transfer(
                 accountId,
                 to,
@@ -1447,7 +1530,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
                 usk,
                 fundingSource,
                 memoBytes,
-                BigInt(sanitizeMarginalFeeZats(marginalFeeZats)),
+                BigInt(selectedFee.marginalFeeZats),
                 expiryDeltaBlocks
               )
               return parseTransferResult(transfer)
@@ -1464,7 +1547,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       }
 
       case 'transaction.oneclick_shield': {
-        const { walletId, accountIndex, seedPhrase, marginalFeeZats } =
+        const { walletId, accountIndex, seedPhrase, marginalFeeZats, feeQuoteId } =
           payload as RPCSchema['transaction.oneclick_shield']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
@@ -1484,12 +1567,13 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             const saplingKey = usk.to_sapling_proof_generation_key()
 
             try {
+              const selectedFee = approvedFee(walletId, accountId, marginalFeeZats, feeQuoteId)
               const txid = await w.oneclick_pczt_shield_dynamic_fee(
                 accountId,
                 usk,
                 seedFp,
                 saplingKey,
-                BigInt(sanitizeMarginalFeeZats(marginalFeeZats)),
+                BigInt(selectedFee.marginalFeeZats),
                 expiryDeltaBlocks
               )
 
@@ -1519,6 +1603,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           memo,
           fundingSource = 'shielded',
           marginalFeeZats,
+          feeQuoteId,
           debugRequestId
         } = payload as RPCSchema['transaction.estimateFee']['request']
         const estimateFee = () =>
@@ -1531,16 +1616,25 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
               accountIndex
             )
             const memoBytes = memo ? new TextEncoder().encode(memo) : undefined
+            const selectedFee = await estimateFeeSelection(
+              walletId,
+              targetAccountId,
+              marginalFeeZats,
+              feeQuoteId
+            )
             const estimate = await w.estimate_transfer(
               targetAccountId,
               to,
               BigInt(value),
               fundingSource,
               memoBytes,
-              BigInt(sanitizeMarginalFeeZats(marginalFeeZats)),
+              BigInt(selectedFee.marginalFeeZats),
               DEFAULT_EXPIRY_DELTA_BLOCKS
             )
-            return parseTransferEstimate(estimate)
+            return {
+              ...parseTransferEstimate(estimate, selectedFee.marginalFeeZats),
+              feeQuote: selectedFee.feeQuote
+            }
           })
         result = debugRequestId
           ? await traceDebugStage(debugRequestId, 'worker-wasm-estimate-fee', estimateFee)
@@ -1556,18 +1650,20 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           memo,
           fundingSource = 'shielded',
           marginalFeeZats,
+          feeQuoteId,
           debugRequestId
         } = payload as RPCSchema['transaction.estimateMaxTransfer']['request']
         const estimateMaximum = () =>
           runForWallet(walletId, async () => {
             const w = getWallet(walletId)
             const memoBytes = memo ? new TextEncoder().encode(memo) : undefined
-            const args = [
+            const selectedFee = await estimateFeeSelection(
+              walletId,
               accountId,
-              to,
-              memoBytes,
-              BigInt(sanitizeMarginalFeeZats(marginalFeeZats))
-            ] as const
+              marginalFeeZats,
+              feeQuoteId
+            )
+            const args = [accountId, to, memoBytes, BigInt(selectedFee.marginalFeeZats)] as const
             const estimate =
               fundingSource === 'transparent'
                 ? await w.estimate_pczt_max_transparent_transfer(...args)
@@ -1576,11 +1672,17 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
               typeof estimate !== 'object' ||
               estimate === null ||
               typeof estimate.maxAmountZats !== 'string' ||
-              typeof estimate.feeZats !== 'string'
+              typeof estimate.feeZats !== 'string' ||
+              !/^\d+$/.test(estimate.maxAmountZats) ||
+              !/^\d+$/.test(estimate.feeZats)
             ) {
               throw new Error('Invalid max-transfer estimate returned by WASM')
             }
-            return estimate
+            return {
+              ...estimate,
+              marginalFeeZats: String(selectedFee.marginalFeeZats),
+              feeQuote: selectedFee.feeQuote
+            }
           })
         result = debugRequestId
           ? await traceDebugStage(debugRequestId, 'worker-wasm-estimate-maximum', estimateMaximum)
@@ -1589,7 +1691,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       }
 
       case 'transaction.estimateShieldFee': {
-        const { walletId, accountId, accountIndex, marginalFeeZats } =
+        const { walletId, accountId, accountIndex, marginalFeeZats, feeQuoteId } =
           payload as RPCSchema['transaction.estimateShieldFee']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
@@ -1599,11 +1701,21 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             accountId,
             accountIndex
           )
+          const selectedFee = await estimateFeeSelection(
+            walletId,
+            targetAccountId,
+            marginalFeeZats,
+            feeQuoteId
+          )
           const fee = await w.estimate_pczt_shield_fee(
             targetAccountId,
-            BigInt(sanitizeMarginalFeeZats(marginalFeeZats))
+            BigInt(selectedFee.marginalFeeZats)
           )
-          return fee.toString()
+          return {
+            feeZats: fee.toString(),
+            marginalFeeZats: String(selectedFee.marginalFeeZats),
+            feeQuote: selectedFee.feeQuote
+          }
         })
         break
       }
@@ -1759,7 +1871,18 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
     }
 
     const response: RPCResponse<any> = { id, method, result }
-    self.postMessage(response)
+    if (method === 'wallet.dbToBytes') {
+      const chunks = result as RPCSchema['wallet.dbToBytes']['response']
+      const buffers = chunks.map(chunk => {
+        if (!(chunk.buffer instanceof ArrayBuffer)) {
+          throw new Error('Wallet snapshot must use transferable ArrayBuffers')
+        }
+        return chunk.buffer
+      })
+      self.postMessage(response, { transfer: [...new Set(buffers)] })
+    } else {
+      self.postMessage(response)
+    }
   } catch (error) {
     console.error(`[Worker] Error handling ${method}:`, error)
     let errorMessage = 'Unknown worker error'

@@ -45,7 +45,6 @@ export const ZCASH_DAPP_RUNTIME_METHODS = Object.freeze([
   'zcash_sendTransaction',
   'zcash_signMessage',
   'zcash_shieldFunds',
-  'zcash_getTransactionHistory',
   'zcash_switchNetwork',
   'zcash_checkLendingMcaAccount',
   'zcash_disconnect'
@@ -115,6 +114,8 @@ export interface DAppApprovalResultMessage {
   readonly requestId: string
   readonly success: boolean
   readonly marginalFeeZats?: number
+  readonly feeQuoteId?: string
+  readonly feeTier?: 'standard' | 'fast'
   readonly feeZats?: number
   readonly selectedIds?: readonly string[]
   readonly selectedScopes?: Readonly<Record<string, readonly string[]>>
@@ -461,6 +462,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   RESOLVE_ZCASH_BIRTHDAY_HEIGHT: {
     required: { walletId: isShortString, accountId: isShortString }
   },
+  GET_ZCASH_FEE_QUOTE: {},
   ESTIMATE_ZCASH_TRANSFER_FEE: {
     required: {
       to: isShortString,
@@ -468,7 +470,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       marginalFeeZats: isPositiveSafeInteger,
       fundingSource: isFundingSource
     },
-    optional: { memo: isBoundedString, debugRequestId: isShortString }
+    optional: { memo: isBoundedString, debugRequestId: isShortString, feeQuoteId: isShortString }
   },
   ESTIMATE_ZCASH_MAX_TRANSFER: {
     required: {
@@ -476,9 +478,12 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       marginalFeeZats: isPositiveSafeInteger,
       fundingSource: isFundingSource
     },
-    optional: { memo: isBoundedString, debugRequestId: isShortString }
+    optional: { memo: isBoundedString, debugRequestId: isShortString, feeQuoteId: isShortString }
   },
-  ESTIMATE_ZCASH_SHIELD_FEE: { required: { marginalFeeZats: isPositiveSafeInteger } },
+  ESTIMATE_ZCASH_SHIELD_FEE: {
+    required: { marginalFeeZats: isPositiveSafeInteger },
+    optional: { feeQuoteId: isShortString }
+  },
   WAIT_FOR_ZCASH_ACCOUNT_READY: { required: { timeoutMs: isAccountReadyTimeout } },
   ROTATE_ZCASH_SHIELDED_ADDRESS: {
     required: { walletId: isShortString, accountId: isShortString }
@@ -789,7 +794,14 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   RPC_ENDPOINT_CHANGED: { required: { preferences: isRecord } },
   GET_PENDING_REQUEST: { required: { requestId: isShortString } },
-  ESTIMATE_APPROVAL_FEE: { required: { requestId: isShortString } },
+  ESTIMATE_APPROVAL_FEE: {
+    required: { requestId: isShortString },
+    optional: {
+      feeTier: value => value === 'standard' || value === 'fast',
+      marginalFeeZats: isPositiveSafeInteger,
+      feeQuoteId: isShortString
+    }
+  },
   GET_SYNC_STATE: {
     optional: { walletId: isShortString, accountId: isShortString }
   },
@@ -807,6 +819,8 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       txType: isShortString,
       sendParams: isRecord,
       marginalFeeZats: isFiniteNumber,
+      feeQuoteId: isShortString,
+      feeTier: value => value === 'standard' || value === 'fast',
       monitorParams: isRecord,
       analytics: isZcashOperationAnalyticsContext
     }
@@ -824,7 +838,8 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       memo: value => typeof value === 'string' && value.length <= 4_096,
       fundingSource: isFundingSource,
       maxTransfer: value => typeof value === 'boolean',
-      marginalFeeZats: isFiniteNumber
+      marginalFeeZats: isFiniteNumber,
+      feeQuoteId: isShortString
     }
   },
   SUBMIT_HARDWARE_PCZT: {
@@ -890,6 +905,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_ZCASH_BLOCK_BY_TIME: ['extension-page'],
     GET_ZCASH_BLOCK_TIME: ['extension-page'],
     RESOLVE_ZCASH_BIRTHDAY_HEIGHT: ['extension-page'],
+    GET_ZCASH_FEE_QUOTE: ['extension-page'],
     ESTIMATE_ZCASH_TRANSFER_FEE: ['extension-page'],
     ESTIMATE_ZCASH_MAX_TRANSFER: ['extension-page'],
     ESTIMATE_ZCASH_SHIELD_FEE: ['extension-page'],
@@ -1503,6 +1519,8 @@ export function parseDAppApprovalResultMessage(
     'requestId',
     'success',
     'marginalFeeZats',
+    'feeQuoteId',
+    'feeTier',
     'feeZats',
     'selectedIds',
     'selectedScopes'
@@ -1517,9 +1535,18 @@ export function parseDAppApprovalResultMessage(
   }
   if (
     value.marginalFeeZats !== undefined &&
-    (!Number.isSafeInteger(value.marginalFeeZats) || (value.marginalFeeZats as number) < 0)
+    (!Number.isSafeInteger(value.marginalFeeZats) || (value.marginalFeeZats as number) <= 0)
   ) {
     throw new Error('Invalid approval fee')
+  }
+  if (
+    (value.feeQuoteId !== undefined &&
+      (typeof value.feeQuoteId !== 'string' ||
+        value.feeQuoteId.length === 0 ||
+        value.feeQuoteId.length > 256)) ||
+    (value.feeTier !== undefined && value.feeTier !== 'standard' && value.feeTier !== 'fast')
+  ) {
+    throw new Error('Invalid approval fee quote')
   }
   if (
     value.feeZats !== undefined &&
@@ -1560,6 +1587,8 @@ export function parseDAppApprovalResultMessage(
   if (
     value.success === false &&
     (value.marginalFeeZats !== undefined ||
+      value.feeQuoteId !== undefined ||
+      value.feeTier !== undefined ||
       value.feeZats !== undefined ||
       value.selectedIds !== undefined ||
       value.selectedScopes !== undefined)
@@ -1574,6 +1603,8 @@ export function parseDAppApprovalResultMessage(
     ...(value.marginalFeeZats === undefined
       ? {}
       : { marginalFeeZats: value.marginalFeeZats as number }),
+    ...(value.feeQuoteId === undefined ? {} : { feeQuoteId: value.feeQuoteId as string }),
+    ...(value.feeTier === undefined ? {} : { feeTier: value.feeTier as 'standard' | 'fast' }),
     ...(value.feeZats === undefined ? {} : { feeZats: value.feeZats as number }),
     ...(value.selectedIds === undefined
       ? {}

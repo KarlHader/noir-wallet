@@ -43,12 +43,8 @@ import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
 import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
 import { useSettingsStore } from '@/store/settings-store'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats
-} from '@/core/zcash/fee-policy'
+import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { resolveZcashFundingAvailability } from '@/popup/services/transfer-availability'
 import {
   getFundingBalance,
@@ -85,6 +81,8 @@ export function Send() {
   const [showMemo, setShowMemo] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const confirmationInFlight = useRef(false)
   const {
     isShielding: isMigrating,
     handleShieldFunds: handleMigrateNow,
@@ -138,12 +136,14 @@ export function Send() {
   })
   const isMaxTransferAmount =
     !!maxTransfer.maxAmount && safeBig(amount || '0').eq(maxTransfer.maxAmount)
+  const staleSelectedMax = maxSelected && !!maxTransfer.maxAmount && !isMaxTransferAmount
   const feeEstimate = useFeeEstimate({
     type: 'send',
     to: effectiveToAddress,
     amount,
     memo: effectiveMemo,
     fundingSource,
+    feeTier,
     scopeKey: JSON.stringify([
       currentNetwork,
       currentWalletId,
@@ -155,30 +155,34 @@ export function Send() {
       safeBig(amount || '0').gt(0) && !!effectiveToAddress && !maxSelected && !isMaxTransferAmount
   })
 
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, false)
-  const maxFeeByTier = deriveFeeByTierFromEstimate(
-    maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-    feeTier,
-    false
-  )
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const feeRequired = !!effectiveToAddress && safeBig(amount || '0').gt(0)
   const feeError = feeRequired && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
   const feeReady =
     feeRequired &&
     !feeError &&
+    !staleSelectedMax &&
+    !!(isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote) &&
+    (isMaxFeeMode ? maxTransfer.feeQuote!.expiresAt : feeEstimate.feeQuote!.expiresAt) >
+      Date.now() &&
     (isMaxFeeMode
-      ? !maxTransfer.loading && !!maxTransfer.fee && safeBig(maxTransfer.fee).gt(0)
-      : !feeEstimate.loading && feeEstimate.feeZats !== null)
+      ? !maxTransfer.loading &&
+        !!maxTransfer.feeQuote &&
+        !!maxTransfer.fee &&
+        safeBig(maxTransfer.fee).gt(0)
+      : !feeEstimate.loading && !!feeEstimate.feeQuote && feeEstimate.feeZats !== null)
   const displayedFeeLoading = feeRequired && !feeReady && !feeError
   const retryFeeEstimate = () => {
     if (isMaxFeeMode) void maxTransfer.request()
     else feeEstimate.retry()
   }
 
-  const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
-  const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
+  const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
+  const standardFeeZats = feeEstimate.feeByTier.standard ?? staticFeeFallbackZats('standard')
   const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   const { amount: effectiveMaxStr } = resolveZcashFundingAvailability({
     balance,
@@ -191,7 +195,32 @@ export function Send() {
   const amountErrorCopy = getFundingAmountErrorCopy(amountError)
   const reviewInsufficient = amountError !== null
   const isValidAmount = !!fromAddress && safeBig(amount || '0').gt(0) && !reviewInsufficient
-  const selectedFeeZec = maxTransfer.fee && isMaxTransferAmount ? maxTransfer.fee : estimatedFeeZec
+  const selectedFeeZec = isMaxFeeMode ? (maxTransfer.fee ?? estimatedFeeZec) : estimatedFeeZec
+  const selectedFeeQuote = isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote
+  const latestFee = useRef({
+    selectedFeeQuote,
+    selectedFeeZec,
+    amount,
+    effectiveToAddress,
+    feeTier,
+    fundingSource,
+    effectiveMemo,
+    maxSelected
+  })
+  latestFee.current = {
+    selectedFeeQuote,
+    selectedFeeZec,
+    amount,
+    effectiveToAddress,
+    feeTier,
+    fundingSource,
+    effectiveMemo,
+    maxSelected
+  }
+
+  useEffect(() => {
+    if (showReview && staleSelectedMax) setShowReview(false)
+  }, [showReview, staleSelectedMax])
 
   useEffect(() => {
     if (maxSelected) {
@@ -278,132 +307,177 @@ export function Send() {
   }
 
   const handleConfirm = async () => {
-    if (isHardwareSigning) return
-    if (!isValidAmount || reviewInsufficient || !feeReady || !fromAddress || !currentAccount) return
+    if (isHardwareSigning || confirmationInFlight.current) return
+    if (
+      !isValidAmount ||
+      reviewInsufficient ||
+      !feeReady ||
+      !selectedFeeQuote ||
+      !fromAddress ||
+      !currentAccount
+    )
+      return
     const activeScope = getActiveAccountScopeKey()
     if (!activeScope) return
-    assertActiveAccountScope(activeScope)
-
-    sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
-      ...sendEventBase,
-      extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
-    })
-
-    // Hardware wallets sign via QR codes in a dedicated tab (camera access
-    // and the multi-step flow don't survive in a popup)
-    if (isHardwareWallet) {
-      assertActiveAccountScope(activeScope)
-      if (!currentWallet || !currentAccount) return
-      setShowReview(false)
-      const request = {
-        kind: 'send' as const,
-        walletId: currentWallet.id,
-        accountId: currentAccount.id,
-        to: effectiveToAddress,
-        amount,
-        fundingSource,
-        maxTransfer: maxSelected || isMaxTransferAmount,
-        memo: effectiveMemo,
-        marginalFeeZats: marginalFeeForTier(feeTier)
+    confirmationInFlight.current = true
+    setIsConfirming(true)
+    try {
+      try {
+        const currentQuote = await zcashWalletRuntimeClient.getFeeQuote()
+        const latest = latestFee.current
+        if (
+          getActiveAccountScopeKey() !== activeScope ||
+          latest.selectedFeeQuote?.id !== selectedFeeQuote.id ||
+          latest.selectedFeeZec !== selectedFeeZec ||
+          latest.amount !== amount ||
+          latest.effectiveToAddress !== effectiveToAddress ||
+          latest.feeTier !== feeTier ||
+          latest.fundingSource !== fundingSource ||
+          latest.effectiveMemo !== effectiveMemo ||
+          latest.maxSelected !== maxSelected
+        )
+          return
+        if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
+          if (isMaxFeeMode) void maxTransfer.request()
+          else feeEstimate.retry()
+          return
+        }
+      } catch {
+        if (isMaxFeeMode) void maxTransfer.request()
+        else feeEstimate.retry()
+        return
       }
-      if (!isSidePanelSurface(window.location.search)) {
-        await openHardwareSignTab(request)
-        window.close()
+      assertActiveAccountScope(activeScope)
+      const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
+
+      sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
+        ...sendEventBase,
+        extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
+      })
+
+      // Hardware wallets sign via QR codes in a dedicated tab (camera access
+      // and the multi-step flow don't survive in a popup)
+      if (isHardwareWallet) {
+        assertActiveAccountScope(activeScope)
+        if (!currentWallet || !currentAccount) return
+        setShowReview(false)
+        const request = {
+          kind: 'send' as const,
+          walletId: currentWallet.id,
+          accountId: currentAccount.id,
+          to: effectiveToAddress,
+          amount,
+          fundingSource,
+          maxTransfer: maxSelected,
+          memo: effectiveMemo,
+          marginalFeeZats,
+          feeQuoteId: selectedFeeQuote.id,
+          feeTier
+        }
+        if (!isSidePanelSurface(window.location.search)) {
+          await openHardwareSignTab(request)
+          window.close()
+          return
+        }
+
+        setIsHardwareSigning(true)
+        try {
+          const result = await openHardwareSignAndWait(request, { presentation: 'window' })
+          if (result.status === 'success') {
+            setResult(
+              {
+                type: 'zcash',
+                step: 'submitted',
+                amount: result.amount,
+                toAddress: effectiveToAddress,
+                txHash: result.txHash,
+                accountKey: result.accountKey,
+                transactionId: result.transactionId,
+                showTo: true
+              },
+              '/'
+            )
+            navigate('/transaction-result')
+          } else if (result.status === 'timeout') {
+            toast.error('Hardware signing timed out', 'The transaction form has been restored.')
+          } else {
+            toast.info('Hardware signing cancelled')
+          }
+        } catch (cause) {
+          toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+        } finally {
+          setIsHardwareSigning(false)
+        }
         return
       }
 
-      setIsHardwareSigning(true)
-      try {
-        const result = await openHardwareSignAndWait(request, { presentation: 'window' })
-        if (result.status === 'success') {
-          setResult(
-            {
-              type: 'zcash',
-              step: 'submitted',
-              amount: result.amount,
-              toAddress: effectiveToAddress,
-              txHash: result.txHash,
-              accountKey: result.accountKey,
-              transactionId: result.transactionId,
-              showTo: true
-            },
-            '/'
-          )
-          navigate('/transaction-result')
-        } else if (result.status === 'timeout') {
-          toast.error('Hardware signing timed out', 'The transaction form has been restored.')
-        } else {
-          toast.info('Hardware signing cancelled')
+      setShowReview(false)
+
+      assertActiveAccountScope(activeScope)
+
+      const pendingResult = {
+        type: 'zcash',
+        step: 'pending',
+        amount,
+        toAddress: effectiveToAddress,
+        showTo: true,
+        saveRecipient: {
+          chainId: getZcashChainId(currentNetwork),
+          chainFamily: 'zcash',
+          network: currentNetwork,
+          networkName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+          address: effectiveToAddress,
+          name: zns.name ?? 'Recipient',
+          znsName: zns.name || undefined,
+          selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
         }
-      } catch (cause) {
-        toast.error('Could not open hardware signing', classifyError(cause).userMessage)
-      } finally {
-        setIsHardwareSigning(false)
+      } as const
+      setResult(pendingResult, '/')
+      navigate('/transaction-result')
+
+      const result = await sendTransaction({
+        to: effectiveToAddress,
+        amount,
+        from: fromAddress,
+        fromType: fundingSource,
+        memo: effectiveMemo,
+        fee: selectedFeeZec,
+        marginalFeeZats,
+        feeQuoteId: selectedFeeQuote.id,
+        feeTier,
+        onCreated: (transaction, accountKey) => {
+          if (useTransactionResultStore.getState().data !== pendingResult) return
+          updateStep('pending', {
+            accountKey,
+            transactionId: transaction.id,
+            timestamp: transaction.timestamp
+          })
+        },
+        analytics: {
+          pageId: PAGE_IDS.SEND,
+          fundingSource
+        }
+      })
+
+      if (result.step === 'success') {
+        updateStep(
+          'submitted',
+          { txHash: result.txHash, timestamp: result.timestamp },
+          result.accountKey,
+          result.transactionId
+        )
+      } else if (result.step === 'pending') {
+        updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
+      } else {
+        if (result.transactionId) {
+          updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
+        } else if (useTransactionResultStore.getState().data === pendingResult) {
+          updateStep('failed', { error: result.error })
+        }
       }
-      return
-    }
-
-    setShowReview(false)
-
-    assertActiveAccountScope(activeScope)
-
-    const pendingResult = {
-      type: 'zcash',
-      step: 'pending',
-      amount,
-      toAddress: effectiveToAddress,
-      showTo: true,
-      saveRecipient: {
-        chainId: getZcashChainId(currentNetwork),
-        chainFamily: 'zcash',
-        network: currentNetwork,
-        networkName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-        address: effectiveToAddress,
-        name: zns.name ?? 'Recipient',
-        znsName: zns.name || undefined,
-        selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
-      }
-    } as const
-    setResult(pendingResult, '/')
-    navigate('/transaction-result')
-
-    const result = await sendTransaction({
-      to: effectiveToAddress,
-      amount,
-      from: fromAddress,
-      fromType: fundingSource,
-      memo: effectiveMemo,
-      fee: selectedFeeZec,
-      marginalFeeZats: marginalFeeForTier(feeTier),
-      onCreated: (transaction, accountKey) => {
-        if (useTransactionResultStore.getState().data !== pendingResult) return
-        updateStep('pending', {
-          accountKey,
-          transactionId: transaction.id,
-          timestamp: transaction.timestamp
-        })
-      },
-      analytics: {
-        pageId: PAGE_IDS.SEND,
-        fundingSource
-      }
-    })
-
-    if (result.step === 'success') {
-      updateStep(
-        'submitted',
-        { txHash: result.txHash, timestamp: result.timestamp },
-        result.accountKey,
-        result.transactionId
-      )
-    } else if (result.step === 'pending') {
-      updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
-    } else {
-      if (result.transactionId) {
-        updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
-      } else if (useTransactionResultStore.getState().data === pendingResult) {
-        updateStep('failed', { error: result.error })
-      }
+    } finally {
+      confirmationInFlight.current = false
+      setIsConfirming(false)
     }
   }
 
@@ -508,6 +582,7 @@ export function Send() {
               tier={feeTier}
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
+              loadingByTier={displayedFeeLoadingByTier}
               loading={displayedFeeLoading}
               allowFallback={!feeRequired}
               hideLabel
@@ -643,6 +718,7 @@ export function Send() {
               tier={feeTier}
               onTierChange={setFeeTier}
               feeByTier={displayedFeeByTier}
+              loadingByTier={displayedFeeLoadingByTier}
               loading={displayedFeeLoading}
               allowFallback={false}
             />
@@ -665,7 +741,7 @@ export function Send() {
             </Button>
             <Button
               onClick={handleConfirm}
-              disabled={reviewInsufficient || !feeReady || isHardwareSigning}
+              disabled={reviewInsufficient || !feeReady || isHardwareSigning || isConfirming}
               className="flex-1 h-[45px]"
             >
               {isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}

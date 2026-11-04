@@ -16,7 +16,6 @@ describe('commitment tree recovery', () => {
     let operations = 0
 
     const result = await runWithCommitmentTreeRecovery({
-      isFresh: () => fresh,
       refresh: async () => {
         refreshes += 1
         fresh = true
@@ -38,7 +37,6 @@ describe('commitment tree recovery', () => {
     let operations = 0
 
     const result = await runWithCommitmentTreeRecovery({
-      isFresh: () => true,
       refresh: async () => {
         refreshes += 1
       },
@@ -54,7 +52,7 @@ describe('commitment tree recovery', () => {
     })
 
     assert.equal(result, 'txid')
-    assert.equal(refreshes, 1)
+    assert.equal(refreshes, 2)
     assert.equal(operations, 2)
   })
 
@@ -65,7 +63,6 @@ describe('commitment tree recovery', () => {
 
     await assert.rejects(
       runWithCommitmentTreeRecovery({
-        isFresh: () => true,
         refresh: async () => {
           refreshes += 1
         },
@@ -77,7 +74,7 @@ describe('commitment tree recovery', () => {
       error => error === expected
     )
 
-    assert.equal(refreshes, 0)
+    assert.equal(refreshes, 1)
     assert.equal(operations, 1)
   })
 

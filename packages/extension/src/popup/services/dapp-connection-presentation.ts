@@ -49,10 +49,19 @@ export function presentDAppPermissions(
   }
 
   for (const authorization of dapp.chainAuthorizations ?? []) {
+    if (dapp.evmAuthorization && parseChainId(authorization.chainId).namespace === 'eip155') {
+      continue
+    }
     addAccounts(authorization.chainId, authorization.accounts)
+  }
+  if (dapp.evmAuthorization) {
+    addAccounts('evm', dapp.evmAuthorization.accounts)
   }
 
   return [...accountsByChain].map(([chainId, accounts]) => {
+    if (chainId === 'evm') {
+      return { chainId, label: 'EVM', iconChain: 'evm', accountCount: accounts.size }
+    }
     const parsed = parseChainId(chainId)
     const chain = chains.get(parsed.id)
     return {

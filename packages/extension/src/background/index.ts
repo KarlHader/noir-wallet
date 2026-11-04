@@ -47,7 +47,6 @@ import {
 } from '@/lib/runtime-network'
 import { inspectZcashTransparentAccountHistory } from '@/core/wallet/zcash-account-history'
 import { prepareTransparentSpend } from '@/core/wallet/transparent-spend-preflight'
-import { sanitizeMarginalFeeZats } from '@/core/zcash/fee-policy'
 import { closeAllPopupWindows } from './window-manager'
 import { pendingRequestsManager } from './pending-requests'
 import { getApprovalContext, estimateApprovalFee } from './approval-context'
@@ -99,7 +98,8 @@ import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { buildAccountKey, type AccountScope } from '@/core/wallet/account-scope'
 import {
   applyZeroIndexerOptionsToActiveWorker,
-  forwardKeyringRpcToOffscreen
+  forwardKeyringRpcToOffscreen,
+  getWorkerClient
 } from '@/core/worker/client'
 import {
   addCustomZeroIndexerNode,
@@ -637,7 +637,7 @@ async function dispatchDAppChainRequest(
 ): Promise<unknown> {
   await assertCaip25MethodPermission(chainId, request.method, origin)
   if (chainId === 'evm') {
-    return evmDAppHandler.request(
+    const result = await evmDAppHandler.request(
       {
         method: request.method as EvmDAppRuntimeMethod,
         ...(request.params === undefined ? {} : { params: request.params })
@@ -645,6 +645,14 @@ async function dispatchDAppChainRequest(
       origin,
       tabInfo
     )
+    if (
+      request.method === 'eth_requestAccounts' ||
+      request.method === 'wallet_requestPermissions' ||
+      request.method === 'wallet_revokePermissions'
+    ) {
+      await multichainSessionDAppHandler?.notifySessionChanged(origin)
+    }
+    return result
   }
   const params = Array.isArray(request.params) ? request.params : undefined
   if (chainId === 'bitcoin') {
@@ -784,8 +792,7 @@ async function handleEvmDAppNetworkRequest(
         )
       })
     },
-    commitActiveChain: (chainId, approvalOrigin) =>
-      commitEvmDAppActiveChain(chainId, approvalOrigin, validateRequest),
+    commitActiveChain: chainId => commitEvmDAppActiveChain(chainId, validateRequest),
     requestApproval: (approvalOrigin, approvalAction, data) =>
       dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
         ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
@@ -797,7 +804,6 @@ async function handleEvmDAppNetworkRequest(
 
 function commitEvmDAppActiveChain(
   chainId: string,
-  origin: string,
   validateRequest: () => Promise<void>
 ): Promise<void> {
   const previousReadiness = multichainRuntimeReady
@@ -807,13 +813,11 @@ function commitEvmDAppActiveChain(
     .then(() =>
       accountContextTransition.runActiveOperation(async () => {
         await validateRequest()
-        const sourceChainId = evmDAppHandler.getCaip2ChainId()
         const saved = await chainEndpointSettingsCoordinator.selectActiveEvmChain(
           chainId,
           validateRequest
         )
         reconfiguring = true
-        await dappManager.carryEvmAuthorizationToChain(origin, sourceChainId, chainId)
         await reloadMultichainRuntime(saved)
       })
     )
@@ -4416,10 +4420,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         withTxSyncPause(activeWalletId, async () => {
           await measure('background-prepare-wallet-core', prepareWalletCoreForTx)
           if (message.type === 'ESTIMATE_ZCASH_SHIELD_FEE') {
-            const feeZats = await measure('background-estimate-shield-fee', () =>
-              backgroundZcashWalletRuntime.estimateShieldFee(message.marginalFeeZats)
+            return measure('background-estimate-shield-fee', () =>
+              backgroundZcashWalletRuntime.estimateShieldFee(
+                message.marginalFeeZats,
+                message.feeQuoteId
+              )
             )
-            return { feeZats }
           }
           if (message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER') {
             return measure('background-estimate-maximum', () =>
@@ -4428,21 +4434,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 message.memo,
                 message.marginalFeeZats,
                 message.fundingSource,
-                debugRequestId
+                debugRequestId,
+                message.feeQuoteId
               )
             )
           }
-          const feeZats = await measure('background-estimate-fee', () =>
+          return measure('background-estimate-fee', () =>
             backgroundZcashWalletRuntime.estimateTransferFee(
               message.to,
               message.amount,
               message.memo,
               message.marginalFeeZats,
               message.fundingSource,
-              debugRequestId
+              debugRequestId,
+              message.feeQuoteId
             )
           )
-          return { feeZats }
         })
       )
     )
@@ -4451,6 +4458,16 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         sendResponse({
           error: error instanceof Error ? error.message : 'Unable to estimate Zcash transfer'
         })
+      )
+    return true
+  }
+
+  if (message.type === 'GET_ZCASH_FEE_QUOTE') {
+    accountContextTransition
+      .runActiveOperation(() => backgroundZcashWalletRuntime.getFeeQuote())
+      .then(feeQuote => sendResponse({ success: true, feeQuote }))
+      .catch(error =>
+        sendResponse({ error: error instanceof Error ? error.message : String(error) })
       )
     return true
   }
@@ -4798,8 +4815,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: 'Unauthorized approval fee request' })
       return true
     }
-    estimateApprovalFee(message.requestId)
-      .then(fee => sendResponse({ fee }))
+    estimateApprovalFee(message.requestId, {
+      marginalFeeZats: message.marginalFeeZats,
+      feeQuoteId: message.feeQuoteId,
+      feeTier: message.feeTier
+    })
+      .then(result => sendResponse(result))
       .catch(error => sendResponse({ error: error.message }))
     return true
   }
@@ -4857,7 +4878,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           request.maxTransfer !== message.maxTransfer ||
           request.memo !== message.memo ||
           request.fundingSource !== message.fundingSource ||
-          request.marginalFeeZats !== message.marginalFeeZats
+          request.marginalFeeZats !== message.marginalFeeZats ||
+          request.feeQuoteId !== message.feeQuoteId
         ) {
           throw new Error('Hardware signing request expired or does not match this transaction.')
         }
@@ -5740,9 +5762,20 @@ function handleWalletCreated(
  * Preserves dApp connections (EIP-1193 standard: lock ≠ disconnect)
  */
 function handleWalletLock(): Promise<void> {
+  syncScheduler.pauseForTx()
+  syncScheduler.abortSync()
+  const walletId = useWalletStore.getState().currentWalletId
+  const syncQuiesced = (
+    walletId ? getWorkerClient(walletId).reconcileWallet(true) : Promise.resolve(true)
+  ).then(
+    () => ({ success: true as const }),
+    (error: unknown) => ({ success: false as const, error })
+  )
   return enqueueWalletSessionTransition(async () => {
+    const result = await syncQuiesced
+    if (!result.success) throw result.error
     await accountContextTransition.runActiveOperation(performWalletLockState)
-  })
+  }).finally(() => syncScheduler.resumeAfterTx())
 }
 
 async function performWalletLockState(): Promise<void> {
@@ -5754,7 +5787,7 @@ async function performWalletLockState(): Promise<void> {
 
     // Account restoration can still be in scheduler preflight after the scan
     // itself stops. Drain it before recreating workers, even if Zcash cleanup fails.
-    const [zcashResult] = await Promise.allSettled([
+    const [zcashResult, syncIdleResult] = await Promise.allSettled([
       backgroundZcashWalletRuntime.lock(),
       syncScheduler.waitForActiveSyncIdle(30_000)
     ])
@@ -5772,6 +5805,8 @@ async function performWalletLockState(): Promise<void> {
       }
     }
     if (zcashResult.status === 'rejected') throw zcashResult.reason
+    if (syncIdleResult.status === 'rejected') throw syncIdleResult.reason
+    if (!syncIdleResult.value) throw new Error('Wallet sync did not stop before lock')
 
     dappHandler.clearPermissions()
     await dappHandler.notifyAccountsChanged([])
@@ -6263,12 +6298,13 @@ async function handleHardwarePcztBuild(params: {
   memo?: string
   fundingSource?: 'shielded' | 'transparent'
   marginalFeeZats?: number
+  feeQuoteId?: string
 }): Promise<
   | {
       success: true
       full: string
       redacted: string
-      feeZats?: string
+      feeZats: string
       amount?: string
       vendor: 'keystone' | 'ledger'
       ledgerPayload?: LedgerSigningPayload
@@ -6287,7 +6323,8 @@ async function handleHardwarePcztBuild(params: {
     maxTransfer,
     memo,
     fundingSource,
-    marginalFeeZats
+    marginalFeeZats,
+    feeQuoteId
   } = params
   try {
     await assertActiveBackgroundAccountScope(walletId, accountId)
@@ -6316,8 +6353,10 @@ async function handleHardwarePcztBuild(params: {
         const estimate = await walletCore.estimateMaxTransfer(
           to,
           memo,
-          sanitizeMarginalFeeZats(marginalFeeZats),
-          fundingSource
+          marginalFeeZats,
+          fundingSource,
+          undefined,
+          feeQuoteId
         )
         effectiveAmount = formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS)
         if (!safeBig(effectiveAmount).gt(0)) {
@@ -6326,33 +6365,36 @@ async function handleHardwarePcztBuild(params: {
       }
       const pair =
         kind === 'shield'
-          ? await walletCore.pcztShieldCreate(marginalFeeZats)
+          ? await walletCore.pcztShieldCreate(marginalFeeZats, feeQuoteId)
           : await walletCore.pcztCreate({
               to: to!,
               amount: effectiveAmount!,
               memo,
               fundingSource,
               marginalFeeZats,
+              feeQuoteId,
               signer: vendor
             })
       const ledgerPayload =
         vendor === 'ledger'
           ? await walletCore.pcztLedgerPayload(pair.redacted, account.derivationIndex)
           : undefined
-      // Surface the real ZIP-317 fee for the chosen tier so the signing page can
-      // display and record it. Best-effort: a failed estimate must not block signing.
-      const feeZats = await (
-        kind === 'shield'
-          ? walletCore.estimateShieldFee(sanitizeMarginalFeeZats(marginalFeeZats))
-          : walletCore.estimateTransferFee(
-              to!,
-              effectiveAmount!,
-              memo,
-              sanitizeMarginalFeeZats(marginalFeeZats),
-              fundingSource
-            )
-      ).catch(() => undefined)
-      return { ...pair, feeZats, ledgerPayload, amount: effectiveAmount }
+      // The signing review and transaction record require the quoted proposal fee.
+      const feeEstimate = await (kind === 'shield'
+        ? walletCore.estimateShieldFee(marginalFeeZats, feeQuoteId)
+        : walletCore.estimateTransferFee(
+            to!,
+            effectiveAmount!,
+            memo,
+            marginalFeeZats,
+            fundingSource,
+            undefined,
+            feeQuoteId
+          ))
+      if (!/^[1-9]\d*$/.test(feeEstimate.feeZats)) {
+        throw new Error('Network fee estimate is unavailable. Review the transaction again.')
+      }
+      return { ...pair, feeZats: feeEstimate.feeZats, ledgerPayload, amount: effectiveAmount }
     })
     return {
       success: true,
@@ -6400,6 +6442,7 @@ async function handleBackgroundZcashTx(params: {
   txType?: TransactionType
   sendParams?: SendTransactionParams
   marginalFeeZats?: number
+  feeQuoteId?: string
   monitorParams?: {
     depositAddress: string
     tokenInSymbol: string
@@ -6421,6 +6464,7 @@ async function handleBackgroundZcashTx(params: {
     txType,
     sendParams,
     marginalFeeZats,
+    feeQuoteId,
     monitorParams,
     analytics
   } = params
@@ -6464,7 +6508,8 @@ async function handleBackgroundZcashTx(params: {
         const shieldResult = await walletCore.shieldFunds(
           marginalFeeZats,
           undefined,
-          transactionContext
+          transactionContext,
+          feeQuoteId
         )
         txid = shieldResult.txid
         txHashes = [txid]
@@ -6479,7 +6524,7 @@ async function handleBackgroundZcashTx(params: {
           sendParams!.amount
         )
         const transferResult = await walletCore.sendTransaction(
-          { ...sendParams!, marginalFeeZats },
+          { ...sendParams!, marginalFeeZats, feeQuoteId },
           submissionDeadline,
           undefined,
           transactionContext

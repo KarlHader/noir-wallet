@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 
 import {
   consumePreparedHardwareSignRequest,
@@ -10,6 +12,103 @@ import {
   readHardwareSignRequest,
   writePreparedHardwareSignRequest
 } from '../../../src/lib/hardware-tab.ts'
+
+const require = createRequire(import.meta.url)
+const ts = require('typescript')
+
+function loadHardwarePcztBuild(walletCore, keySource = 'ledger') {
+  const source = readFileSync(new URL('../../../src/background/index.ts', import.meta.url), 'utf8')
+  const file = ts.createSourceFile('background.ts', source, ts.ScriptTarget.Latest, true)
+  const handler = file.statements.find(
+    statement =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === 'handleHardwarePcztBuild'
+  )
+  if (!handler) throw new Error('Hardware PCZT handler is unavailable')
+  const { outputText } = ts.transpileModule(handler.getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  })
+  const account = { id: 'account-1', derivationIndex: 0 }
+  return new Function(
+    'assertActiveBackgroundAccountScope',
+    'useWalletStore',
+    'isZcashHardwareKeySource',
+    'readLedgerProvisioningCredential',
+    'withTxSyncPause',
+    'prepareWalletCoreForTx',
+    'prepareTransparentSpend',
+    'formatBaseUnitDecimalAmount',
+    'ZEC_DECIMALS',
+    'safeBig',
+    'getRetryableWalletRpcUserMessage',
+    `${outputText}\nreturn handleHardwarePcztBuild;`
+  )(
+    async () => {},
+    { getState: () => ({ getWallet: () => ({ keySource, accounts: [account] }) }) },
+    source => source === 'ledger' || source === 'keystone',
+    async () => ({}),
+    async (_, task) => task(),
+    async () => walletCore,
+    async () => {},
+    value => String(Number(value) / 1e8),
+    8,
+    value => ({ gt: other => Number(value) > other }),
+    message => message
+  )
+}
+
+test('hardware PCZT build requires a real fee before opening signing', async () => {
+  const pair = { full: 'full-pczt', redacted: 'redacted-pczt' }
+  const base = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    to: 'u1recipient',
+    amount: '1',
+    marginalFeeZats: 20_000,
+    feeQuoteId: 'quote-1'
+  }
+  for (const scenario of [
+    { keySource: 'keystone', kind: 'send', maxTransfer: false },
+    { keySource: 'ledger', kind: 'send', maxTransfer: true },
+    { keySource: 'ledger', kind: 'shield', maxTransfer: false }
+  ]) {
+    const walletCore = {
+      pcztCreate: async () => pair,
+      pcztShieldCreate: async () => pair,
+      pcztLedgerPayload: async () => ({ signingPayload: 'test' }),
+      estimateMaxTransfer: async () => ({ maxAmountZats: '100000000', feeZats: '25000' }),
+      estimateTransferFee: async () => {
+        throw new Error('fee estimate unavailable')
+      },
+      estimateShieldFee: async () => {
+        throw new Error('fee estimate unavailable')
+      }
+    }
+    const build = loadHardwarePcztBuild(walletCore, scenario.keySource)
+    const result = await build({
+      ...base,
+      kind: scenario.kind,
+      fundingSource: scenario.kind === 'shield' ? 'transparent' : 'shielded',
+      maxTransfer: scenario.maxTransfer
+    })
+    expect(result).toEqual({ success: false, error: 'fee estimate unavailable' })
+  }
+
+  const successfulBuild = loadHardwarePcztBuild(
+    {
+      pcztCreate: async () => pair,
+      estimateTransferFee: async () => ({ feeZats: '37500' })
+    },
+    'keystone'
+  )
+  await expect(
+    successfulBuild({ ...base, kind: 'send', fundingSource: 'shielded' })
+  ).resolves.toMatchObject({
+    success: true,
+    feeZats: '37500',
+    full: pair.full,
+    redacted: pair.redacted
+  })
+})
 
 test.describe('Hardware sign request handoff', () => {
   test('binds Ledger signatures to a redacted PCZT and a transparent funding request', () => {
@@ -22,11 +121,16 @@ test.describe('Hardware sign request handoff', () => {
       memo: 'Private memo',
       fundingSource: 'transparent',
       maxTransfer: true,
+      marginalFeeZats: 20_000,
+      feeQuoteId: 'quote-1',
+      feeTier: 'fast',
       createdAt: 1_000
     })
     expect(request.fundingSource).toBe('transparent')
     expect(request.maxTransfer).toBe(true)
     expect(request.memo).toBe('Private memo')
+    expect(request.feeQuoteId).toBe('quote-1')
+    expect(request.feeTier).toBe('fast')
     expect(
       parsePreparedHardwareSignRequest({
         request,
@@ -48,6 +152,7 @@ test.describe('Hardware sign request handoff', () => {
     expect(() => parseHardwareSignRequest({ ...request, maxTransfer: 'true' })).toThrow(
       'Invalid hardware maximum transfer'
     )
+    expect(() => parseHardwareSignRequest({ ...request, feeQuoteId: '' })).toThrow()
   })
   test('consumes one prepared session request and full PCZT exactly once', async () => {
     const originalChrome = globalThis.chrome

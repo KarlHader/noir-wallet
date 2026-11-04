@@ -37,9 +37,8 @@ export interface ZcashAccount {
 }
 
 /**
- * Balance for one authorized account. `synced` is `false` when the value is a
- * cached/zero fallback (e.g. the wallet is locked or that account has not been
- * synced yet), so dApps can choose whether to trust it.
+ * Balance for one authorized account. `synced` is `false` for a zero fallback
+ * when current balance data is unavailable. `getBalance()` rejects while locked.
  */
 export interface ZcashAccountBalance {
   id: string
@@ -143,15 +142,6 @@ export interface LendingMcaStatus {
   mcaId: string | null
   publicKey: string | null
   signingMode: LendingSigningMode
-}
-
-export interface TransactionHistoryEntry {
-  txid: string
-  type: string
-  amount: string
-  status: string
-  timestamp: number
-  memo?: string
 }
 
 export type Network = 'mainnet' | 'testnet'

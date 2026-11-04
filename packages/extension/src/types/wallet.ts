@@ -204,6 +204,7 @@ export interface SendTransactionParams {
   fundingSource?: FundingSource
   /** ZIP-317 marginal fee per action (zatoshis); omitted = standard tier. */
   marginalFeeZats?: number
+  feeQuoteId?: string
 }
 
 /**

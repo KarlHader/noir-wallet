@@ -13,8 +13,7 @@ import type {
   SignMessageResult,
   SigningMode,
   LendingMcaStatus,
-  Network,
-  TransactionHistoryEntry
+  Network
 } from './types'
 
 /** High-level Zcash SDK client built on top of the injected request provider. */
@@ -136,11 +135,6 @@ export class ZcashClient {
   /** Shield transparent funds to the private (shielded) balance. Requires user approval. */
   async shieldFunds(): Promise<string> {
     return this.provider.request({ method: 'zcash_shieldFunds' })
-  }
-
-  /** Fetch transaction history (on-chain + local pending). */
-  async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {
-    return this.provider.request({ method: 'zcash_getTransactionHistory' })
   }
 
   /** @deprecated Global network mode is controlled in Noir Wallet settings. */

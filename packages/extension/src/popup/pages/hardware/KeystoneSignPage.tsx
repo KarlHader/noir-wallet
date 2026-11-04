@@ -33,8 +33,6 @@ import {
 } from '@/popup/services/hardware-transaction-analytics'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { ZEC_DECIMALS } from '@/config/wallet'
-import { MARGINAL_FEE_ZATS } from '@/config/fee'
-import { staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import { classifyError, getResponseErrorMessage } from '@/lib/errors'
 import { TimeoutError } from '@/lib/async-utils'
 import { isValidAddTransactionResponse } from '@/lib/transaction-record-response'
@@ -124,13 +122,7 @@ export function KeystoneSignPage() {
             error
           })
   const startedRef = useRef(false)
-  // Real ZIP-317 fee returned by the build; fall back to the chosen tier's
-  // static estimate if the live estimate was unavailable.
-  const feeTier = (request?.marginalFeeZats ?? 0) >= MARGINAL_FEE_ZATS.fast ? 'fast' : 'standard'
-  const feeZec = formatBaseUnitDecimalAmount(
-    String(feeZats ?? staticFeeFallbackZats(feeTier)),
-    ZEC_DECIMALS
-  )
+  const feeZec = feeZats === null ? undefined : formatBaseUnitDecimalAmount(feeZats, ZEC_DECIMALS)
   const failedCopy = getStandardTransactionResultCopy('failed', { error })
 
   useEffect(() => {
@@ -176,10 +168,14 @@ export function KeystoneSignPage() {
           ...(req.to === undefined ? {} : { to: req.to }),
           ...(req.memo === undefined ? {} : { memo: req.memo }),
           ...(req.fundingSource === undefined ? {} : { fundingSource: req.fundingSource }),
-          ...(req.marginalFeeZats === undefined ? {} : { marginalFeeZats: req.marginalFeeZats })
+          ...(req.marginalFeeZats === undefined ? {} : { marginalFeeZats: req.marginalFeeZats }),
+          ...(req.feeQuoteId === undefined ? {} : { feeQuoteId: req.feeQuoteId })
         })
         if (!res?.success) {
           throw new Error(getResponseErrorMessage(res) || 'Failed to build transaction')
+        }
+        if (typeof res.feeZats !== 'string' || !/^[1-9]\d*$/.test(res.feeZats)) {
+          throw new Error('Network fee estimate is unavailable. Review the transaction again.')
         }
         if (res.vendor === 'ledger') {
           setLedgerPayload(parseLedgerSigningPayload(res.ledgerPayload))
@@ -204,7 +200,7 @@ export function KeystoneSignPage() {
         } else {
           throw new Error('Unknown hardware signing device')
         }
-        setFeeZats(res.feeZats ?? null)
+        setFeeZats(res.feeZats)
         setBuiltAmount(res.amount ?? req.amount)
         setStep(res.vendor === 'ledger' ? 'ledger-review' : 'show-qr')
       } catch (e) {
@@ -269,6 +265,9 @@ export function KeystoneSignPage() {
     let transactionId: string | null = null
     let broadcastHash: string | null = null
     try {
+      if (!feeZec) {
+        throw new Error('Network fee estimate is unavailable. Review the transaction again.')
+      }
       const addResponse = await chrome.runtime.sendMessage({
         type: 'ADD_TRANSACTION',
         accountKey,

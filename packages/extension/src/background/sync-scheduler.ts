@@ -6,6 +6,7 @@ import { syncJobStore } from '@/lib/sync-job-store'
 import { getWalletPersistenceQuarantine, hasWalletDb } from '@/lib/indexed-db'
 import { clearSyncAbort, signalSyncAbort } from '@/lib/sync-abort'
 import { isRetryableWalletRpcError } from '@/core/zcash/wallet-core'
+import { getWorkerClient } from '@/core/worker/client'
 import { WALLET_CONFIG } from '@/config/wallet'
 import { prepareWalletStoreForUse, useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
@@ -316,10 +317,8 @@ export class SyncScheduler {
 
   async resumeInterrupted(): Promise<void> {
     const network = backgroundZcashWalletRuntime.getNetwork()
-
-    await chrome.runtime
-      .sendMessage({ type: 'RECONCILE_WALLET_STATE', walletId: '*', all: true })
-      .catch(() => {})
+    const { wallets } = useWalletStore.getState()
+    await Promise.all(wallets.map(wallet => getWorkerClient(wallet.id).reconcileWallet()))
 
     const allJobs = await chrome.storage.local.get('sync_jobs')
     const jobs: Record<string, any> = allJobs['sync_jobs'] || {}
@@ -335,7 +334,6 @@ export class SyncScheduler {
     const interruptedJobs = await syncJobStore.getInterrupted(network)
     if (interruptedJobs.length === 0) return
 
-    const { wallets } = useWalletStore.getState()
     const activeWalletIds = new Set(wallets.map(w => w.id))
     for (const job of interruptedJobs) {
       if (!activeWalletIds.has(job.walletId)) {

@@ -34,7 +34,7 @@ function connection(overrides = {}) {
 }
 
 test.describe('connected dApp permission presentation', () => {
-  test('merges legacy and chain-scoped Zcash accounts and keeps EVM/Bitcoin independent', () => {
+  test('merges Zcash accounts and shows one shared EVM permission', () => {
     expect(
       presentDAppPermissions(
         connection({
@@ -42,6 +42,10 @@ test.describe('connected dApp permission presentation', () => {
             { walletId: 'wallet-1', accountId: 'account-1' },
             { walletId: 'wallet-1', accountId: 'account-2' }
           ],
+          evmAuthorization: {
+            accounts: [{ walletId: 'wallet-1', accountId: 'account-1' }],
+            binding: { walletId: 'wallet-1', accountId: 'account-1' }
+          },
           chainAuthorizations: [
             {
               chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
@@ -72,13 +76,13 @@ test.describe('connected dApp permission presentation', () => {
         iconChain: 'zcash',
         accountCount: 3
       },
-      { chainId: 'eip155:1', label: 'Ethereum', iconChain: 'eth', accountCount: 1 },
       {
         chainId: 'bip122:000000000019d6689c085ae165831e93',
         label: 'Bitcoin',
         iconChain: 'bitcoin',
         accountCount: 1
-      }
+      },
+      { chainId: 'evm', label: 'EVM', iconChain: 'evm', accountCount: 1 }
     ])
   })
 

@@ -1,32 +1,17 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import vm from 'node:vm'
-import ts from 'typescript'
-
-const source = readFileSync(
-  new URL('../../../src/core/zcash/transfer-result.ts', import.meta.url),
-  'utf-8'
-)
-const transferModule = { exports: {} }
-vm.runInNewContext(
-  ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022
-    }
-  }).outputText,
-  { module: transferModule, exports: transferModule.exports, Set, BigInt, Error }
-)
-
-const { parseTransferEstimate, parseTransferResult, requireSuccessfulTransfer } =
-  transferModule.exports
+import {
+  parseTransferEstimate,
+  parseTransferResult,
+  requireSuccessfulTransfer
+} from '../../../src/core/zcash/transfer-result.ts'
 
 describe('unified transfer results', () => {
   it('accepts a multi-step estimate and returns its total fee', () => {
     const estimate = parseTransferEstimate({
       amountZats: '50000',
       feeZats: '25000',
+      marginalFeeZats: '5000',
       transactionCount: 2,
       stepFeesZats: ['15000', '10000']
     })
@@ -37,10 +22,27 @@ describe('unified transfer results', () => {
         parseTransferEstimate({
           amountZats: '50000',
           feeZats: '15000',
+          marginalFeeZats: '5000',
           transactionCount: 2,
           stepFeesZats: ['15000', '10000']
         }),
       /fee total/
+    )
+  })
+
+  it('rejects a WASM estimate that changes the confirmed marginal fee', () => {
+    const estimate = {
+      amountZats: '10000',
+      feeZats: '2000',
+      marginalFeeZats: '1000',
+      transactionCount: 1,
+      stepFeesZats: ['2000']
+    }
+    assert.equal(parseTransferEstimate(estimate, 1000).marginalFeeZats, '1000')
+    assert.throws(() => parseTransferEstimate(estimate, 4000), /confirmed network fee/)
+    assert.throws(
+      () => parseTransferEstimate({ ...estimate, marginalFeeZats: '0' }),
+      /Invalid transfer estimate/
     )
   })
 

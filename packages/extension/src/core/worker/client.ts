@@ -34,6 +34,7 @@ import { readZeroIndexerOptionsForWorker } from '@/infrastructure/chains/zero-in
 import type { ZeroIndexerOptions } from '@/core/zcash/zero-indexer'
 
 const { LIGHT, MEDIUM, WASM_HEAVY, TRANSACTION } = WALLET_CONFIG.SYNC.RPC_TIMEOUT_MS
+const syncOwner = { ownerId: crypto.randomUUID(), ownerStartedAt: performance.timeOrigin }
 
 // Worker instance singleton
 let worker: Worker | null = null
@@ -132,7 +133,7 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'wallet.endSyncSession': LIGHT,
   'wallet.markDirty': LIGHT,
   'wallet.reload': WALLET_CONFIG.SYNC.RELOAD_TIMEOUT_MS,
-  'wallet.reconcile': LIGHT,
+  'wallet.reconcile': WASM_HEAVY,
   'worker.recreate': WASM_HEAVY,
   'compatibility.migrate': MEDIUM,
   'wallet.getBalance': LIGHT,
@@ -149,6 +150,7 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'transaction.oneclick_shield': TRANSACTION,
   'pczt.proveSend': TRANSACTION,
   'transaction.estimateFee': LIGHT,
+  'transaction.getFeeQuote': LIGHT,
   'transaction.estimateMaxTransfer': LIGHT,
   'transaction.estimateShieldFee': LIGHT,
   default: MEDIUM
@@ -609,7 +611,10 @@ export class ZcashWorkerClient {
     this.lightwalletdUrl = getNetworkConfig(this.network).rpcUrl
 
     await this.initDedup.run(
-      () => {
+      async () => {
+        if (this.environment === 'extension') {
+          await this.reconcileWallet()
+        }
         if (this.environment === 'extension' && this.dbKey && !this.dbBytes) {
           return this.request('init', {
             walletId: this.walletId,
@@ -758,6 +763,9 @@ export class ZcashWorkerClient {
   async reset(options?: { force?: boolean; strict?: boolean }): Promise<void> {
     if (this.isInitialized || options?.force) {
       try {
+        if (options?.force && this.environment === 'extension') {
+          await this.reconcileWallet(true)
+        }
         await this.request('wallet.reset', { walletId: this.walletId })
       } catch (e) {
         if (options?.strict) throw e
@@ -959,8 +967,8 @@ export class ZcashWorkerClient {
     return result
   }
 
-  async reconcileWallet(): Promise<boolean> {
-    return this.request('wallet.reconcile', { walletId: this.wid() })
+  async reconcileWallet(force = false): Promise<boolean> {
+    return this.request('wallet.reconcile', { walletId: this.wid(), ...syncOwner, force })
   }
 
   async sync(): Promise<void> {
@@ -993,6 +1001,7 @@ export class ZcashWorkerClient {
     await this.ensureInitialized()
     return this.request('wallet.prepareSyncBatchWithJournal', {
       walletId: this.wid(),
+      ...syncOwner,
       batchSize,
       network,
       journalWalletId,
@@ -1083,10 +1092,16 @@ export class ZcashWorkerClient {
 
   async pcztShieldCreate(
     accountId: number,
-    marginalFeeZats?: number
+    marginalFeeZats?: number,
+    feeQuoteId?: string
   ): Promise<RPCSchema['pczt.shieldCreate']['response']> {
     await this.ensureInitialized()
-    return this.request('pczt.shieldCreate', { accountId, marginalFeeZats, walletId: this.wid() })
+    return this.request('pczt.shieldCreate', {
+      accountId,
+      marginalFeeZats,
+      feeQuoteId,
+      walletId: this.wid()
+    })
   }
 
   async pcztProveSend(
@@ -1134,6 +1149,19 @@ export class ZcashWorkerClient {
     return this.request('transaction.estimateFee', { ...params, walletId: this.wid() })
   }
 
+  async getFeeQuote(
+    accountId?: number,
+    accountIndex?: number
+  ): Promise<RPCSchema['transaction.getFeeQuote']['response']> {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('transaction.getFeeQuote', {
+      accountId,
+      accountIndex,
+      walletId: this.wid()
+    })
+  }
+
   async estimateMaxTransfer(
     params: Omit<RPCSchema['transaction.estimateMaxTransfer']['request'], 'walletId'>
   ): Promise<RPCSchema['transaction.estimateMaxTransfer']['response']> {
@@ -1144,7 +1172,7 @@ export class ZcashWorkerClient {
 
   async estimateShieldFee(
     params: Omit<RPCSchema['transaction.estimateShieldFee']['request'], 'walletId'>
-  ): Promise<string> {
+  ): Promise<RPCSchema['transaction.estimateShieldFee']['response']> {
     await this.ensureInitialized()
     await this.ensureAccountReady()
     return this.request('transaction.estimateShieldFee', { ...params, walletId: this.wid() })
@@ -1179,11 +1207,11 @@ export class ZcashWorkerClient {
   }
 
   async beginSyncSession(): Promise<void> {
-    await this.request('wallet.beginSyncSession', { walletId: this.wid() })
+    await this.request('wallet.beginSyncSession', { walletId: this.wid(), ...syncOwner })
   }
 
   async endSyncSession(): Promise<void> {
-    await this.request('wallet.endSyncSession', { walletId: this.wid() })
+    await this.request('wallet.endSyncSession', { walletId: this.wid(), ...syncOwner })
   }
 
   async markDirty(): Promise<void> {
