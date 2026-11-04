@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "mode": "check",
+  "packageName": "@noir-wallet/sdk",
+  "version": "2.0.0-beta.1",
+  "repository": "NoirWallet/noir-wallet",
+  "sourceSha": "4dffbee77df2ed62bc3b0135382f16260fa871a6",
+  "workflowSha": "4dffbee77df2ed62bc3b0135382f16260fa871a6",
+  "sourceBranch": null,
+  "releaseLine": null,
+  "distTag": null,
+  "runId": "41804499604",
+  "runAttempt": "1",
+  "tarball": "noir-wallet-sdk-2.0.0-beta.1.tgz",
+  "size": 39135,
+  "sha256": "0382a44bd8efb39106964dbbb3f76e7d8b4405f20fd5dfce10beac0002ec7bc9",
+  "integrity": "sha512-BkIA4G45eFe//nlOqjw/vIlFsUrN7q71ImuACf7PU9x+GCYyOJZsyOWOuVEYEJNLdgS60CWcmHU++UKoCltDLQ=="
+}
