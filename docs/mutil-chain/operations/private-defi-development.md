@@ -6,29 +6,26 @@ This guide covers local setup, data sources, recovery, and diagnosis for mnemoni
 
 | Concept                                 | Meaning                                                                                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Main                                    | Public EVM account. It funds source-chain deposits and signs Confidential login and Intents requests.                                            |
+| Main                                    | Public EVM account. It signs Confidential login and Intents requests. Deposits can be funded by Main or Global PEA.                              |
 | Confidential                            | NEAR Intents abstract balance associated with the Main signer. It is not an on-chain address and cannot directly sign an EVM transaction.        |
 | Global PEA                              | EVM execution address controlled by an independent WASM child key. It holds on-chain assets and Gas and executes dApp and protocol transactions. |
-| Displayed Confidential balance          | Product aggregate of the Global PEA on-chain balance and the Confidential abstract balance.                                                      |
+| Displayed Private and Shield balances   | Private shows Global PEA on-chain assets; Shield shows the Confidential abstract balance separately.                                             |
 | Directly spendable Confidential balance | Only the Global PEA's `privateOnchainRaw`.                                                                                                       |
 
-The UI uses `Confidential`. Internal names such as `private`, `PrivateExecution`, and `privateOnchainRaw` do not make abstract balances spendable from the PEA.
+The UI separates Public / Private usage modes from Public / Shield / Private asset categories. Internal names such as `private`, `PrivateExecution`, and `privateOnchainRaw` do not make abstract balances spendable from the PEA.
 
-The current flow does not depend on a Private Indexer. It does not request `privateindexer.refburrow.top`, read its balances, Activity, orders, or finality, or silently fall back to it when 1Click or RHEA fails. If such a request appears in the browser Network panel, inspect the loaded extension version for an outdated build or reintroduced dependency.
+Directly and Shield balances use the RHEA/1Click services below. Cluster additionally uses the configured RHEA `/v3/private` service to schedule signed withdrawals and reconcile orders. Its history queries require a separate wallet JWT obtained through a strictly validated read-only sign-in challenge; a scheduler acknowledgement does not establish destination settlement.
 
 ## 2. Funds Flows
 
-### Add to Confidential
+### Shield Deposit and Withdraw
 
 ```text
-Main
-  -> 1Click deposit address
-  -> Confidential abstract balance
-  -> 2-5 frozen Withdraw Intents
-  -> Global PEA
+Public or Private -> 1Click deposit address -> Shield balance
+Shield balance -> one Withdraw Intent -> Public or Private
 ```
 
-The entry point is the asset-detail Transfer dialog or PEA Gas top-up. Confirmation starts the background plan directly, without another Add to Private confirmation page. Implementation entry points are `src/background/confidential-funding-{api,coordinator,signer,store}.ts`, `src/core/services/confidential-funding/`, `src/popup/services/confidential-funding-client.ts`, and the Swap and transaction-result pages.
+Use the NEAR Confidential Shield view or Transfer page. Connect Shield to authenticate its balance, then review and confirm Deposit or Withdraw. Both ends belong to the same Wallet Account. A deposit stays in Shield; a withdrawal spends the selected portion of its existing balance. Private deposits refund to the originating PEA. Cluster signs multiple withdrawals to one selected destination and submits them as one scheduled batch. If submission has an ambiguous result, recovery queries order history without resubmitting the batch. Existing batch plans retain their original recovery behavior.
 
 ### Move to Main
 
@@ -59,10 +56,10 @@ In Private/Confidential mode, native-asset sends, ERC-20 `transfer`, and support
 | Purpose                                            | Service                  | Request                                                                           |
 | -------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------- |
 | ERC-191 login nonce                                | Configured NEAR RPC      | `intents.near/current_salt`                                                       |
-| Login and session refresh                          | Official 1Click          | `/auth/authenticate`, `/auth/refresh`                                             |
-| Confidential abstract balance                      | Official 1Click          | `/account/balances`                                                               |
-| Deposit/Withdraw quote                             | Official 1Click          | `/quote` with `confidentiality: basic`                                            |
-| Withdraw Intent                                    | Official 1Click          | `/generate-intent`, `/submit-intent`                                              |
+| Login and session refresh                          | RHEA 1Click proxy        | `/auth/authenticate`, `/auth/refresh`                                             |
+| Confidential abstract balance                      | 1Click direct API        | `/account/balances`                                                               |
+| Deposit/Withdraw quote                             | RHEA 1Click proxy        | `/quote` with `confidentiality: basic`                                            |
+| Withdraw Intent                                    | RHEA 1Click proxy        | `/generate-intent`, `/submit-intent`                                              |
 | Deposit and Withdraw order status                  | RHEA Cross-chain DEX     | `/api/swap/order-status?orderId=<depositAddress>&router=nearintents&chainId=<id>` |
 | Main/PEA on-chain balance, nonce, and confirmation | Current EVM RPC registry | Standard EVM JSON-RPC                                                             |
 | PEA Swap and dApp Confidential transfer            | RHEA Cross-chain SDK/API | Quote, prepare, submit, and order status                                          |
@@ -83,18 +80,18 @@ Load `packages/extension/dist-dev/` as the unpacked extension in Chrome. The pro
 An optional 1Click override:
 
 ```bash
-CONFIDENTIAL_ONE_CLICK_API_URL=https://1click.chaindefuser.com/v0 \
+CONFIDENTIAL_ONE_CLICK_API_URL=https://api.rhea.finance/proxy/1click/v0 \
 RHEA_SWAP_ACCESS_TOKEN=replace-with-development-token \
 pnpm dev:extension
 ```
 
-`CONFIDENTIAL_ONE_CLICK_API_URL` must be an HTTPS URL without credentials, query, or fragment. Without an override, the official 1Click URL is used. Do not commit the access token. For local files, use a Git-ignored `*.local` environment file and check `git status` before committing.
+`CONFIDENTIAL_ONE_CLICK_API_URL` must be an HTTPS URL without credentials, query, or fragment. Without an override, authentication and quotes use the RHEA 1Click proxy; abstract balances use the official 1Click direct API. The direct official endpoint requires partner authentication for Confidential quotes. Do not commit the access token. For local files, use a Git-ignored `*.local` environment file and check `git status` before committing.
 
 Confidential Funding creates a coordinator only on Mainnet; Testnet returns unavailable. Release builds require `RHEA_SWAP_ACCESS_TOKEN`. EVM History uses the bundled proxy by default; `EVM_HISTORY_API_ORIGIN` only overrides it. Its [release configuration](../../release-workflow.md#verification-and-build) is separate from Confidential order status.
 
 ## 5. State, Storage, and Recovery
 
-The plan stages in `src/core/services/confidential-funding/confidential-funding-model.ts` are:
+Legacy batch plans in `src/core/services/confidential-funding/confidential-funding-model.ts` follow these stages. Independent deposits finish after deposit confirmation; independent withdrawals skip the deposit stages:
 
 ```text
 prepared -> authorized -> deposit-signed -> deposit-confirming
@@ -111,7 +108,7 @@ recoverable stage requiring renewed login -> needs-auth -> original resumePhase
 | `confidential_funding_balance:` | `chrome.storage.local`   | Confidential balance snapshot with a five-minute TTL                |
 | `rhea_swap_quote:`              | `chrome.storage.local`   | Frozen quote session for PEA Swap or Confidential transfer          |
 
-Only one nonterminal Confidential Funding plan may use a given source asset. A `prepared` plan can be canceled; deleting a signed or broadcast plan is not recovery. A 401/403 response clears the session and moves the plan to `needs-auth`; authorization resumes its prior stage. Timeout and 5xx responses have uncertain outcomes: query status first, then replay the exact frozen payload. Do not requote or sign again. Service Worker startup and alarms resume nonterminal plans.
+Pending Shield withdrawals reserve their source amount within the Wallet Account; expired preparations stop reserving funds. A `prepared` plan can be canceled; deleting a signed or broadcast plan is not recovery. A 401/403 response clears the session and moves the plan to `needs-auth`; authorization resumes its prior stage. Direct withdrawals query status before retrying the exact frozen payload. Once a Cluster submission has been attempted, recovery only queries order history and never resubmits the batch; an empty history does not release its reservation. Do not requote or sign again to recover an uncertain submission. Service Worker startup and alarms resume nonterminal plans.
 
 RHEA transfer and swap results include origin and destination transaction links from persisted graph evidence. The result page recovers these hashes from Activity when a status notification is missed, retains them across partial updates, and does not regress a terminal result on a late processing update.
 

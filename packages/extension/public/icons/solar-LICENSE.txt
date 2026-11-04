@@ -1,0 +1,8 @@
+Solar incognito-outline icon by 480 Design
+
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+License: https://creativecommons.org/licenses/by/4.0/
+Original collection: https://www.figma.com/community/file/1166831539721848736
+Source: https://github.com/iconify/icon-sets/blob/master/json/solar.json
+
+The icon is included without modification.

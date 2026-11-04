@@ -102,6 +102,12 @@ export interface TransactionIntentSnapshot {
   readonly sender?: TransactionParty
   readonly recipient?: TransactionParty
   readonly protocol?: TransactionProtocolBinding
+  readonly shield?: Readonly<{
+    readonly schemaVersion: 1
+    readonly operation: 'deposit' | 'withdraw' | 'cluster'
+    readonly sourceDomain: 'public' | 'private' | 'shield'
+    readonly destinationDomain: 'public' | 'private' | 'shield'
+  }>
   readonly evm?: Readonly<{
     readonly schemaVersion: 1
     readonly nonce: string

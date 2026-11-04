@@ -24,14 +24,12 @@ import {
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import type { AddressType } from '@/types/wallet'
-import { useNavigate } from '../../provider/Router'
 import {
   accountNetworksClient,
   type AccountNetworkAddressView,
   type AccountNetworkView
 } from '../../services/account-networks-client'
 import { cn } from '@/lib/utils'
-import { formatSortAddress } from '@/lib/format'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { useWalletStore } from '@/store/wallet-store'
 
@@ -42,7 +40,7 @@ interface AddressQrTarget {
   readonly confidential?: boolean
 }
 
-function MiddleTruncatedAddress({
+function AddressValue({
   value,
   className
 }: {
@@ -50,8 +48,12 @@ function MiddleTruncatedAddress({
   readonly className?: string
 }) {
   return (
-    <span className={cn('min-w-0 truncate font-mono', className)} title={value} aria-label={value}>
-      {formatSortAddress(value)}
+    <span
+      className={cn('min-w-0 break-all line-clamp-2', className)}
+      title={value}
+      aria-label={value}
+    >
+      {value}
     </span>
   )
 }
@@ -109,12 +111,12 @@ function AddressActions({
   const type = accountNetworkAddressLabel(network, address)
   const networkName = displayName ?? network.chain.displayName
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="ml-auto flex shrink-0 items-center">
       <button
         type="button"
         aria-label={`Copy ${networkName} ${type} address`}
         title={`Copy ${networkName} ${type} address`}
-        className="flex size-8 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-foreground/10"
+        className="flex size-[26px] items-center justify-center rounded-lg text-foreground transition-colors hover:bg-foreground/10"
         onClick={() => onCopy(address.value)}
       >
         <CopyIcon />
@@ -123,7 +125,7 @@ function AddressActions({
         type="button"
         aria-label={`Show ${networkName} ${type} address QR code`}
         title="Show QR code"
-        className="flex size-8 items-center justify-center rounded-lg text-foreground transition-colors hover:bg-foreground/10"
+        className="flex size-[26px] items-center justify-center rounded-lg text-foreground transition-colors hover:bg-foreground/10"
         onClick={() => onShowQr({ network, address, displayName })}
       >
         <QrIcon />
@@ -163,7 +165,7 @@ function AddressRow({
           {bitcoinType}
         </span>
       )}
-      <MiddleTruncatedAddress value={address.value} className="text-sm text-muted" />
+      <AddressValue value={address.value} className="text-xs leading-4 text-muted" />
       <AddressActions
         network={network}
         address={address}
@@ -175,62 +177,27 @@ function AddressRow({
   )
 }
 
-function ConfidentialAddressRow({
-  address,
-  onCopy,
-  onShowQr
-}: {
-  readonly address: string
-  readonly onCopy: (address: string) => void
-  readonly onShowQr: () => void
-}) {
-  return (
-    <div className="flex min-h-8 min-w-0 items-center gap-2">
-      <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-        Confidential
-      </span>
-      <MiddleTruncatedAddress value={address} className="text-sm text-primary" />
-      <div className="ml-auto flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          aria-label="Copy Confidential address"
-          title="Copy Confidential address"
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-primary transition-colors hover:bg-primary/10"
-          onClick={() => onCopy(address)}
-        >
-          <CopyIcon />
-        </button>
-        <button
-          type="button"
-          aria-label="Show Confidential address QR code"
-          title="Show QR code"
-          className="flex size-8 items-center justify-center rounded-lg text-primary transition-colors hover:bg-primary/10"
-          onClick={onShowQr}
-        >
-          <QrIcon />
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function AddressNetworkGroup({
   network,
+  mode,
   onCopy,
   onCopyPrivateExecution,
-  onShowQr,
-  onOpenZcashSettings
+  onShowQr
 }: {
   readonly network: AccountNetworkView
+  readonly mode: 'public' | 'private'
   readonly onCopy: (address: string) => void
   readonly onCopyPrivateExecution: (address: string) => void
   readonly onShowQr: (target: AddressQrTarget) => void
-  readonly onOpenZcashSettings?: () => void
 }) {
-  const addresses = network.addresses
+  const addresses =
+    network.chain.family === 'zcash'
+      ? network.addresses.filter(address =>
+          mode === 'private' ? address.privacy === 'shielded' : address.privacy !== 'shielded'
+        )
+      : network.addresses
   const privateExecutionAddress =
     network.chain.family === 'evm' ? network.privateExecutionAddress : undefined
-  const showPrivateExecutionAddress = privateExecutionAddress !== undefined
   const displayName = accountNetworkLabel(network)
   const singleAddress = addresses.length === 1 ? addresses[0] : null
   const singleBitcoinType =
@@ -247,23 +214,89 @@ function AddressNetworkGroup({
     />
   )
 
-  if (singleAddress && !onOpenZcashSettings && !showPrivateExecutionAddress) {
+  if (mode === 'private' && privateExecutionAddress) {
     return (
       <section
-        className="min-w-0 rounded-xl border border-border bg-card p-3"
-        aria-label={displayName}
+        className="flex min-h-[72px] min-w-0 items-center gap-[13px] border-b border-border/40 py-2"
+        aria-label={`${displayName} private execution address`}
       >
-        <div className="flex min-w-0 items-center gap-3">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <h2 className="flex items-center gap-1.5 text-base font-medium leading-[21px] text-foreground">
+            <span className="truncate">{displayName}</span>
+            <span className="shrink-0 rounded bg-private/15 px-1.5 py-0.5 text-xs text-private">
+              Private
+            </span>
+          </h2>
+          <AddressValue
+            value={privateExecutionAddress}
+            className="mt-0.5 block text-xs leading-4 text-muted"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            title="Copy private execution address"
+            aria-label={`Copy ${displayName} private execution address`}
+            className="flex size-[26px] items-center justify-center text-muted hover:text-foreground"
+            onClick={() => onCopyPrivateExecution(privateExecutionAddress)}
+          >
+            <Icon icon="lucide:copy" width={17} height={17} />
+          </button>
+          <button
+            type="button"
+            title="Show QR code"
+            aria-label={`Show ${displayName} private execution address QR code`}
+            className="flex size-[26px] items-center justify-center text-muted hover:text-foreground"
+            onClick={() =>
+              onShowQr({
+                network,
+                displayName,
+                confidential: true,
+                address: {
+                  value: privateExecutionAddress,
+                  scheme: 'eip55',
+                  privacy: 'transparent',
+                  preferredForReceive: false
+                }
+              })
+            }
+          >
+            <Icon icon="lucide:qr-code" width={17} height={17} />
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  if (singleAddress) {
+    return (
+      <section className="min-w-0 py-3" aria-label={displayName}>
+        <div className="flex min-w-0 items-center gap-[13px]">
           {icon}
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-medium text-foreground">{displayName}</h2>
+            <h2 className="flex min-w-0 items-center gap-1.5 text-base font-medium leading-[21px] text-foreground">
+              <span className="truncate">{displayName}</span>
+              {network.chain.family === 'zcash' && (
+                <span
+                  className={cn(
+                    'shrink-0 rounded px-1.5 py-0.5 text-xs font-normal',
+                    mode === 'private'
+                      ? 'bg-primary/15 text-primary'
+                      : 'border border-white/10 text-muted'
+                  )}
+                >
+                  {mode === 'private' ? 'Shield' : 'Transparent'}
+                </span>
+              )}
+            </h2>
             <div className="mt-0.5 flex min-w-0 items-center gap-2">
               {singleBitcoinType && (
                 <span className="shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-[10px] text-muted">
                   {singleBitcoinType}
                 </span>
               )}
-              <MiddleTruncatedAddress value={singleAddress.value} className="text-sm text-muted" />
+              <AddressValue value={singleAddress.value} className="text-xs leading-4 text-muted" />
             </div>
           </div>
           <AddressActions
@@ -279,31 +312,13 @@ function AddressNetworkGroup({
   }
 
   return (
-    <section
-      className="min-w-0 rounded-xl border border-border bg-card p-3"
-      aria-label={displayName}
-    >
-      <div className="flex min-w-0 items-center gap-3">
+    <section className="min-w-0 py-3" aria-label={displayName}>
+      <div className="flex min-w-0 items-center gap-[13px]">
         {icon}
         <div className="min-w-0 flex-1">
-          {onOpenZcashSettings ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                {displayName}
-              </h2>
-              <button
-                type="button"
-                aria-label="Open Zcash settings"
-                className="flex shrink-0 items-center gap-0.5 rounded text-xs text-muted transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-                onClick={onOpenZcashSettings}
-              >
-                <span>Settings</span>
-                <Icon icon="lucide:chevron-right" width={14} height={14} />
-              </button>
-            </div>
-          ) : (
-            <h2 className="truncate text-sm font-medium text-foreground">{displayName}</h2>
-          )}
+          <h2 className="truncate text-base font-medium leading-[21px] text-foreground">
+            {displayName}
+          </h2>
         </div>
       </div>
       <div className="mt-2 space-y-0.5">
@@ -317,32 +332,12 @@ function AddressNetworkGroup({
             onShowQr={onShowQr}
           />
         ))}
-        {privateExecutionAddress && (
-          <ConfidentialAddressRow
-            address={privateExecutionAddress}
-            onCopy={onCopyPrivateExecution}
-            onShowQr={() =>
-              onShowQr({
-                network,
-                displayName,
-                confidential: true,
-                address: {
-                  value: privateExecutionAddress,
-                  scheme: 'eip55',
-                  privacy: 'transparent',
-                  preferredForReceive: false
-                }
-              })
-            }
-          />
-        )}
       </div>
     </section>
   )
 }
 
 export function AddressesList() {
-  const { navigate } = useNavigate()
   const { copyToClipboard, showToast } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
   const walletId = searchParams.get('walletId')
@@ -353,6 +348,8 @@ export function AddressesList() {
       : undefined
   )
   const [networkQuery, setNetworkQuery] = useState('')
+  const [mode, setMode] = useState<'public' | 'private'>('public')
+  const [evmExpanded, setEvmExpanded] = useState(false)
   const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -408,16 +405,50 @@ export function AddressesList() {
 
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
-    if (!query) return networks
-    return networks.filter(network =>
-      `${accountNetworkLabel(network)} ${network.chain.displayName}`.toLowerCase().includes(query)
+    return networks.filter(
+      network =>
+        (mode === 'public' ||
+          (network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)) ||
+          (network.chain.family === 'zcash' &&
+            network.addresses.some(address => address.privacy === 'shielded'))) &&
+        (!query ||
+          `${accountNetworkLabel(network)} ${network.chain.displayName}`
+            .toLowerCase()
+            .includes(query))
     )
-  }, [networkQuery, networks])
+  }, [networkQuery, networks, mode])
+  const hasPrivateAddresses = networks.some(
+    network =>
+      (network.chain.family === 'evm' && network.privateExecutionAddress) ||
+      (network.chain.family === 'zcash' &&
+        network.addresses.some(address => address.privacy === 'shielded'))
+  )
+  const evmNetworks = filteredNetworks.filter(network => network.chain.family === 'evm')
+  const otherNetworks = filteredNetworks.filter(network => network.chain.family !== 'evm')
+  const firstEvm = evmNetworks[0]
+  const evmAddress =
+    firstEvm &&
+    (mode === 'private' ? firstEvm.privateExecutionAddress : firstEvm.addresses[0]?.value)
+
+  const renderNetwork = (network: AccountNetworkView) => (
+    <AddressNetworkGroup
+      key={network.chain.id}
+      network={network}
+      mode={mode}
+      onCopy={value => void copyToClipboard(value)}
+      onCopyPrivateExecution={address => setPrivateAddressAction({ address })}
+      onShowQr={target =>
+        target.confidential
+          ? setPrivateAddressAction({ address: target.address.value, qrTarget: target })
+          : setQrTarget(target)
+      }
+    />
+  )
 
   if (!walletId || !accountId) {
     return (
       <div className="page-container">
-        <PageHeader title="Addresses" showBack />
+        <PageHeader title="Address" showBack />
         <div className="flex flex-1 items-center justify-center px-5">
           <p className="text-center text-muted">No account available</p>
         </div>
@@ -428,17 +459,49 @@ export function AddressesList() {
   return (
     <div className="page-container">
       <CopyToast show={showToast} message="Address copied" />
-      <PageHeader title="Addresses" showBack />
+      <PageHeader title="Address" showBack />
 
-      <div className="page-content pt-5">
+      <div className="page-content min-h-0 !px-4 !pt-2">
         <Input
           value={networkQuery}
           onChange={event => setNetworkQuery(event.target.value)}
-          placeholder="Search Networks"
-          aria-label="Search Networks"
-          className="h-[46px] rounded-xl"
+          placeholder="Search Network"
+          aria-label="Search Network"
+          className="h-[46px] rounded-lg text-sm font-normal leading-[18px]"
           startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
         />
+
+        <div
+          role="group"
+          aria-label="Address mode"
+          className="mt-3 flex h-11 gap-1 rounded-lg bg-card p-1"
+        >
+          <button
+            type="button"
+            aria-pressed={mode === 'public'}
+            onClick={() => setMode('public')}
+            className={cn(
+              'flex flex-1 items-center justify-center gap-1.5 rounded-md text-sm font-medium leading-[18px]',
+              mode === 'public' ? 'bg-foreground/15 text-foreground' : 'text-muted'
+            )}
+          >
+            <Icon icon="lucide:eye" width={15} height={15} />
+            Public
+          </button>
+          <button
+            type="button"
+            aria-pressed={mode === 'private'}
+            disabled={!hasPrivateAddresses}
+            onClick={() => setMode('private')}
+            className={cn(
+              'flex flex-1 items-center justify-center gap-1.5 rounded-md text-sm font-medium leading-[18px] disabled:opacity-40',
+              mode === 'private' ? 'bg-private text-background' : 'text-muted'
+            )}
+          >
+            <Icon icon="lucide:shield" width={15} height={15} />
+            Private
+          </button>
+        </div>
 
         {loading ? (
           <ListSkeleton rows={4} label="Loading addresses" className="mt-5" card />
@@ -451,31 +514,102 @@ export function AddressesList() {
         ) : filteredNetworks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted">No matching networks</p>
         ) : (
-          <div role="region" className="mt-4 space-y-3" aria-label="Account network addresses">
-            {filteredNetworks.map(network => (
-              <AddressNetworkGroup
-                key={network.chain.id}
-                network={network}
-                onCopy={value => void copyToClipboard(value)}
-                onCopyPrivateExecution={address => setPrivateAddressAction({ address })}
-                onShowQr={target =>
-                  target.confidential
-                    ? setPrivateAddressAction({
-                        address: target.address.value,
-                        qrTarget: target
-                      })
-                    : setQrTarget(target)
-                }
-                onOpenZcashSettings={
-                  network.chain.family === 'zcash'
-                    ? () =>
-                        navigate(
-                          `/zcash-settings?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
-                        )
-                    : undefined
-                }
-              />
-            ))}
+          <div role="region" className="mt-3 pb-4" aria-label="Account network addresses">
+            {otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
+            {firstEvm && (
+              <div className="mt-2">
+                {evmExpanded ? (
+                  <button
+                    type="button"
+                    aria-expanded="true"
+                    onClick={() => setEvmExpanded(false)}
+                    className="flex h-12 w-full items-center justify-between text-left text-base font-medium text-muted"
+                  >
+                    <span>Ethereum &amp; EVM</span>
+                    <Icon icon="lucide:chevron-up" width={16} height={16} />
+                  </button>
+                ) : (
+                  <div className="flex min-h-[68px] items-center gap-[13px]">
+                    <span className="flex size-8 shrink-0 flex-wrap gap-0.5">
+                      {evmNetworks.slice(0, 4).map(network => (
+                        <ChainIcon
+                          key={network.chain.id}
+                          chain={accountNetworkIconChain(network)}
+                          width={15}
+                          height={15}
+                          className="rounded-[3px]"
+                        />
+                      ))}
+                    </span>
+                    <button
+                      type="button"
+                      aria-expanded="false"
+                      onClick={() => setEvmExpanded(true)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <span className="flex items-center gap-1.5 text-base font-medium leading-[21px]">
+                        Ethereum &amp; EVM{' '}
+                        <Icon
+                          icon="lucide:chevron-down"
+                          width={14}
+                          height={14}
+                          className="text-muted"
+                        />
+                      </span>
+                      {evmAddress ? (
+                        <AddressValue
+                          value={evmAddress}
+                          className="mt-0.5 block text-xs leading-4 text-muted"
+                        />
+                      ) : (
+                        <span className="mt-0.5 block text-xs text-muted">—</span>
+                      )}
+                    </button>
+                    {evmAddress && (
+                      <div className="flex shrink-0">
+                        <button
+                          type="button"
+                          title="Copy address"
+                          aria-label={`Copy EVM ${mode} address`}
+                          onClick={() =>
+                            mode === 'private'
+                              ? setPrivateAddressAction({ address: evmAddress })
+                              : void copyToClipboard(evmAddress)
+                          }
+                          className="flex size-[26px] items-center justify-center text-muted hover:text-foreground"
+                        >
+                          <Icon icon="lucide:copy" width={17} height={17} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Show QR code"
+                          aria-label={`Show EVM ${mode} address QR code`}
+                          onClick={() => {
+                            const target = firstEvm.addresses[0]
+                            if (!target) return
+                            const qr = {
+                              network: firstEvm,
+                              address:
+                                mode === 'private' ? { ...target, value: evmAddress } : target,
+                              displayName: 'Ethereum & EVM',
+                              confidential: mode === 'private'
+                            }
+                            if (mode === 'private')
+                              setPrivateAddressAction({ address: evmAddress, qrTarget: qr })
+                            else setQrTarget(qr)
+                          }}
+                          className="flex size-[26px] items-center justify-center text-muted hover:text-foreground"
+                        >
+                          <Icon icon="lucide:qr-code" width={17} height={17} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {evmExpanded && evmNetworks.map(renderNetwork)}
+              </div>
+            )}
+            {otherNetworks.filter(network => network.chain.family !== 'zcash').map(renderNetwork)}
           </div>
         )}
       </div>
@@ -493,7 +627,7 @@ export function AddressesList() {
                 <DialogTitle>
                   {qrTarget.displayName ?? accountNetworkLabel(qrTarget.network)}{' '}
                   {qrTarget.confidential
-                    ? 'Confidential'
+                    ? 'Private execution'
                     : accountNetworkAddressLabel(qrTarget.network, qrTarget.address)}{' '}
                   address
                 </DialogTitle>
@@ -539,15 +673,15 @@ export function AddressesList() {
       >
         <DialogContent position="center" className="max-w-[343px] rounded-2xl p-5">
           <DialogHeader>
-            <div className="mb-1 flex size-10 items-center justify-center rounded-full bg-warning/12 text-warning">
+            <div className="mb-1 flex size-10 items-center justify-center rounded-full bg-private/12 text-private">
               <Icon icon="lucide:shield-alert" width={21} height={21} />
             </div>
             <DialogTitle>
-              {privateAddressAction?.qrTarget ? 'Show' : 'Copy'} Confidential address?
+              {privateAddressAction?.qrTarget ? 'Show' : 'Copy'} private execution address?
             </DialogTitle>
             <DialogDescription className="leading-relaxed">
               Direct transfers are not recommended. An on-chain transfer can publicly link the
-              funding address to this Confidential address and reduce your privacy.
+              funding address to this private execution address and reduce your privacy.
             </DialogDescription>
           </DialogHeader>
           {privateAddressAction && (

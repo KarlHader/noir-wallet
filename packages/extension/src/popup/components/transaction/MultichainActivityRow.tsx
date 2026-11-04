@@ -7,6 +7,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
 import {
   getActivityRowTextPresentation,
+  getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getActivityStatusPresentation,
   getActivitySwapPresentation,
@@ -114,7 +115,7 @@ function SwapActivityRow({
   const action = getActivityRouteTitle(item, presentation)
   const route = `${presentation.sourceNetwork} → ${presentation.destinationNetwork}`
   const accountRoute = isOwnedAccountTransfer(presentation)
-    ? `${presentation.sourceAccountMode} → ${presentation.destinationAccountMode}`
+    ? getActivityAccountRouteLabel(presentation)
     : null
   const showStatus = item.status !== 'final'
 
@@ -127,7 +128,7 @@ function SwapActivityRow({
       data-activity-kind={item.kind}
       aria-label={`View ${action} ${sourceSymbol} to ${destinationSymbol} details from ${presentation.sourceNetwork} to ${presentation.destinationNetwork}`}
       onClick={() => onClick?.(item)}
-      className="grid min-h-[62px] w-full min-w-0 grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-2.5 text-left transition-colors hover:bg-foreground/3 focus-visible:bg-foreground/3 focus-visible:outline-none disabled:pointer-events-none"
+      className="grid min-h-[72px] w-full min-w-0 grid-cols-[36px_minmax(0,1fr)_minmax(0,45%)] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:outline-none disabled:pointer-events-none"
       disabled={!onClick}
     >
       <ActivityRouteTokenIcons route={presentation} />
@@ -149,12 +150,12 @@ function SwapActivityRow({
           </p>
         )}
       </div>
-      <div className="justify-self-end text-right">
-        <p className="whitespace-nowrap font-mono text-sm font-medium">
+      <div className="min-w-0 justify-self-end text-right">
+        <p className="break-all font-mono text-sm font-medium">
           {presentation.source ? `−${presentation.source.formatted} ${sourceSymbol}` : '—'}
         </p>
         {presentation.destination && (
-          <p className="whitespace-nowrap font-mono text-[11px] text-muted">
+          <p className="break-all font-mono text-[11px] text-muted">
             Expected +{presentation.destination.formatted} {destinationSymbol}
           </p>
         )}
@@ -225,7 +226,7 @@ export function MultichainActivityRow({
       aria-label={`View ${accessibleTitle} details on ${resolvedNetworkName}`}
       onClick={() => onClick?.(item)}
       className={cn(
-        'grid min-h-[62px] w-full min-w-0 grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-2.5 text-left transition-colors hover:bg-foreground/3 focus-visible:bg-foreground/3 focus-visible:outline-none disabled:pointer-events-none',
+        'grid min-h-[72px] w-full min-w-0 grid-cols-[36px_minmax(0,1fr)_minmax(0,45%)] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:outline-none disabled:pointer-events-none',
         isCancelled && 'opacity-60'
       )}
       disabled={!onClick}
@@ -255,11 +256,11 @@ export function MultichainActivityRow({
             <p
               title={`${summaryChange.direction === 'incoming' ? '+' : '−'}${summaryChange.value} ${summaryChange.symbol}`}
               className={cn(
-                'flex min-w-0 items-baseline justify-end gap-1 font-mono text-sm font-medium tabular-nums',
+                'flex min-w-0 flex-wrap items-baseline justify-end gap-1 font-mono text-sm font-medium tabular-nums',
                 summaryChange.direction === 'incoming' && 'text-primary'
               )}
             >
-              <span className="min-w-0 truncate">
+              <span className="min-w-0 break-all">
                 {summaryChange.direction === 'incoming' ? '+' : '−'}
                 {summaryChange.formatted}
               </span>
@@ -268,10 +269,7 @@ export function MultichainActivityRow({
           </div>
         ) : primary || !observed ? (
           <p
-            className={cn(
-              'whitespace-nowrap font-mono text-sm font-medium',
-              isIncoming && 'text-primary'
-            )}
+            className={cn('break-all font-mono text-sm font-medium', isIncoming && 'text-primary')}
           >
             {primary ? signedAmount(item, primary) : '—'}
           </p>

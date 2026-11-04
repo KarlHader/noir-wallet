@@ -571,10 +571,16 @@ test('shows exact multichain permissions in the connected dApps manager', async 
   await terminateServiceWorker(context, popup)
   await popup.reload()
 
-  await popup.getByRole('button', { name: 'Manage connected dApps' }).click()
-  await expect(popup.getByRole('heading', { name: 'Connected dApps' })).toBeVisible()
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Settings' })
+    .click()
+  await popup.getByRole('button', { name: 'DApps Connection' }).click()
+  await expect(popup.getByRole('heading', { name: 'DApps Connection' })).toBeVisible()
   await expect(popup.getByText('Mainnet Mode', { exact: true })).toHaveCount(0)
   await expect(popup.getByText('Environment', { exact: true })).toHaveCount(0)
+  await popup.getByRole('button', { name: 'View Multichain fixture permissions' }).click()
   const authorizedNetworks = popup.getByLabel('Authorized networks')
   await expect(authorizedNetworks.getByText('Zcash', { exact: true })).toBeVisible()
   await expect(authorizedNetworks.getByText('Ethereum', { exact: true })).toBeVisible()

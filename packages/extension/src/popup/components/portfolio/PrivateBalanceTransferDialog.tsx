@@ -58,10 +58,7 @@ function TransferAccountRow({
           {formatSortAddress(address)}
         </p>
       </div>
-      <p
-        className="ml-auto max-w-full break-all text-right font-mono text-sm"
-        title={`${balance} ${symbol}`}
-      >
+      <p className="ml-auto max-w-full break-all text-right text-sm" title={`${balance} ${symbol}`}>
         {formatTokenQuantity(balance)} {symbol}
       </p>
     </div>

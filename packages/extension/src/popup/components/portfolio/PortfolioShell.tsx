@@ -11,14 +11,22 @@ import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { Tooltip } from '@/popup/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/popup/components/ui/dropdown-menu'
 import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
+import type { AssetDomain } from '@/popup/services/asset-domains'
 import {
   ZcashSyncProgress,
   type ZcashSyncProgressState
 } from '@/popup/components/common/ZcashSyncProgress'
 import { resolveLowValueUsdThreshold } from './portfolio-prices'
 import { PortfolioAssetGroupCard, PortfolioChainAssetRow } from './PortfolioAssetGroupCard'
+import { ShieldPortfolioView } from './ShieldPortfolioView'
 import {
   buildPortfolioAssetGroups,
   getPortfolioChainUsdValue,
@@ -33,7 +41,11 @@ import {
 export type PortfolioViewMode = 'assets' | 'chains'
 
 interface PortfolioShellProps {
+  readonly domain?: AssetDomain
+  readonly mode?: 'public' | 'private'
+  readonly hideToolbar?: boolean
   readonly model: PortfolioReadModel
+  readonly sourceModel?: PortfolioReadModel
   readonly prices: AssetPriceReadModel | null
   readonly priceStatus?: 'loading' | 'ready' | 'error'
   readonly balancesHidden?: boolean
@@ -131,8 +143,8 @@ function PortfolioViewIcon({
     <span
       aria-hidden="true"
       className={cn(
-        'flex size-5 items-center justify-center rounded text-[#7e8a93] opacity-50 transition-colors',
-        active && 'bg-white/10 text-white opacity-100'
+        'flex size-5 items-center justify-center text-[var(--color-wallet-secondary)] opacity-50 transition-colors',
+        active && 'text-white opacity-100'
       )}
     >
       <span
@@ -148,6 +160,10 @@ function PortfolioViewIcon({
 
 export function PortfolioShell({
   model,
+  sourceModel,
+  domain = 'all',
+  mode = 'public',
+  hideToolbar = false,
   prices,
   priceStatus = 'ready',
   balancesHidden = false,
@@ -197,7 +213,12 @@ export function PortfolioShell({
     () => selectableChains.filter(chain => selectedChainIds.includes(chain.chain.id)),
     [selectableChains, selectedChainIds]
   )
-  const visibleChains = filteredChains
+  const visibleChains =
+    domain === 'all'
+      ? filteredChains
+      : filteredChains.filter(
+          chain => chain.assets.length > 0 || getPortfolioChainBalanceStatus(chain) !== 'ready'
+        )
   const assetGroups = useMemo(
     () =>
       buildPortfolioAssetGroups(visibleChains, prices, {
@@ -236,6 +257,7 @@ export function PortfolioShell({
     return (
       <PortfolioAssetGroupCard
         key={key}
+        domain={domain}
         group={group}
         prices={prices}
         balancesHidden={balancesHidden}
@@ -247,99 +269,115 @@ export function PortfolioShell({
     )
   }
 
+  if (domain === 'shield') {
+    return (
+      <section aria-label="Shield assets" className="min-h-0 flex-1 overflow-y-auto">
+        <ShieldPortfolioView
+          model={sourceModel ?? model}
+          mode={mode}
+          prices={prices}
+          balancesHidden={balancesHidden}
+          pricesLoading={pricesLoading}
+          onSelectAsset={onSelectAsset}
+        />
+      </section>
+    )
+  }
+
   return (
     <section aria-label="Portfolio" className="flex min-h-0 flex-1 flex-col">
       <h2 className="sr-only">Portfolio</h2>
-      <div className="flex shrink-0 items-center justify-between px-4 pb-3 pt-3">
-        <NetworkFilter
-          ariaLabelPrefix="Filter portfolio by network"
-          options={sortedNetworkOptions.map(chain => chain.chain)}
-          selectedIds={selectedChainIds}
-          onSelectionChange={setSelectedChainIds}
-        />
+      {!hideToolbar && (
+        <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
+          <NetworkFilter
+            ariaLabelPrefix="Filter portfolio by network"
+            options={sortedNetworkOptions.map(chain => chain.chain)}
+            selectedIds={selectedChainIds}
+            onSelectionChange={setSelectedChainIds}
+          />
 
-        <div role="group" aria-label="Portfolio view" className="flex items-center gap-1.5">
-          {zcashSyncState && <ZcashSyncProgress {...zcashSyncState} />}
-          {!zcashSyncState && zcashBalanceStatus !== 'ready' && (
-            <span
-              role="status"
-              aria-label={`Zcash balance ${zcashBalanceStatus}`}
-              className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white/5 px-2 text-[10px] text-muted"
-            >
-              <Icon
-                icon={
-                  zcashBalanceStatus === 'unavailable' ? 'lucide:wifi-off' : 'lucide:refresh-cw'
-                }
-                width={10}
-                height={10}
-                className={zcashBalanceStatus === 'unavailable' ? undefined : 'animate-spin'}
-              />
-              {zcashBalanceStatus === 'unavailable'
-                ? 'ZEC unavailable'
-                : zcashBalanceStatus === 'loading'
-                  ? 'Loading ZEC'
-                  : 'Updating ZEC'}
-            </span>
-          )}
-          {refreshing && (
-            <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
-              Syncing portfolio
-            </span>
-          )}
-          {onRefresh && (
-            <Tooltip content="Refresh portfolio balances and prices." side="bottom">
-              <button
-                type="button"
-                aria-label="Refresh portfolio"
-                onClick={onRefresh}
-                disabled={refreshDisabled}
-                className="flex size-5 items-center justify-center text-muted transition-colors hover:text-foreground disabled:cursor-wait disabled:text-primary"
+          <div className="flex shrink-0 items-center gap-2">
+            {zcashSyncState && <ZcashSyncProgress {...zcashSyncState} />}
+            {!zcashSyncState && zcashBalanceStatus !== 'ready' && (
+              <span
+                role="status"
+                aria-label={`Zcash balance ${zcashBalanceStatus}`}
+                className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-white/5 px-2 text-[10px] text-muted"
               >
                 <Icon
-                  icon="lucide:refresh-cw"
-                  width={15}
-                  height={15}
-                  className={cn(refreshDisabled && 'animate-spin')}
+                  icon={
+                    zcashBalanceStatus === 'unavailable' ? 'lucide:wifi-off' : 'lucide:refresh-cw'
+                  }
+                  width={10}
+                  height={10}
+                  className={zcashBalanceStatus === 'unavailable' ? undefined : 'animate-spin'}
                 />
-              </button>
-            </Tooltip>
-          )}
-          {onManageTokens && (
-            <Tooltip content="Manage portfolio tokens." side="bottom">
-              <button
-                type="button"
-                aria-label="Manage Tokens"
-                onClick={onManageTokens}
-                className="flex size-5 items-center justify-center text-muted transition-colors hover:text-foreground"
-              >
-                <Icon icon="lucide:plus" width={16} height={16} />
-              </button>
-            </Tooltip>
-          )}
-          <Tooltip content="Group the portfolio by asset." side="bottom">
-            <button
-              type="button"
-              aria-label="Show token view"
-              aria-pressed={view === 'assets'}
-              onClick={() => setView('assets')}
-              className="flex size-5 items-center justify-center"
+                {zcashBalanceStatus === 'unavailable'
+                  ? 'ZEC unavailable'
+                  : zcashBalanceStatus === 'loading'
+                    ? 'Loading ZEC'
+                    : 'Updating ZEC'}
+              </span>
+            )}
+            {refreshing && (
+              <span role="status" aria-label="Portfolio data is syncing" className="sr-only">
+                Syncing portfolio
+              </span>
+            )}
+            <div
+              role="group"
+              aria-label="Portfolio view"
+              className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
             >
-              <PortfolioViewIcon view="assets" active={view === 'assets'} />
-            </button>
-          </Tooltip>
-          <Tooltip content="Group the portfolio by network." side="bottom">
-            <button
-              type="button"
-              aria-label="Show chain view"
-              aria-pressed={view === 'chains'}
-              onClick={() => setView('chains')}
-              className="flex size-5 items-center justify-center"
-            >
-              <PortfolioViewIcon view="chains" active={view === 'chains'} />
-            </button>
-          </Tooltip>
+              <Tooltip content="Group the portfolio by asset." side="bottom">
+                <button
+                  type="button"
+                  aria-label="Show token view"
+                  aria-pressed={view === 'assets'}
+                  onClick={() => setView('assets')}
+                  className="flex size-6 items-center justify-center rounded-lg aria-pressed:bg-[var(--color-wallet-selected)]"
+                >
+                  <PortfolioViewIcon view="assets" active={view === 'assets'} />
+                </button>
+              </Tooltip>
+              <Tooltip content="Group the portfolio by network." side="bottom">
+                <button
+                  type="button"
+                  aria-label="Show chain view"
+                  aria-pressed={view === 'chains'}
+                  onClick={() => setView('chains')}
+                  className="flex size-6 items-center justify-center rounded-lg aria-pressed:bg-[var(--color-wallet-selected)]"
+                >
+                  <PortfolioViewIcon view="chains" active={view === 'chains'} />
+                </button>
+              </Tooltip>
+            </div>
+            {(onRefresh || onManageTokens) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Portfolio options"
+                    className="flex size-8 items-center justify-center text-[var(--color-wallet-secondary)]"
+                  >
+                    <Icon icon="lucide:ellipsis" width={21} height={21} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="bg-[var(--color-wallet-surface)]">
+                  {onManageTokens && (
+                    <DropdownMenuItem onSelect={onManageTokens}>Manage tokens</DropdownMenuItem>
+                  )}
+                  {onRefresh && (
+                    <DropdownMenuItem disabled={refreshDisabled} onSelect={onRefresh}>
+                      Refresh list
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="min-h-0 flex-1 pb-4">
         {model.status === 'loading' ? (
@@ -363,7 +401,7 @@ export function PortfolioShell({
             title={selectedChainIds.length === 1 ? 'No assets on this network' : 'No assets found'}
           />
         ) : view === 'assets' ? (
-          <div className="space-y-2 px-4 pb-2">
+          <div className="pb-2">
             {primaryAssetGroups.map(group => renderAssetGroup(group, 'assets:all'))}
             {unloadedChains.map(chain => (
               <UnloadedChainBalance key={chain.chain.id} chain={chain} />
@@ -447,7 +485,7 @@ export function PortfolioShell({
                     ) : !balancesHidden && chainFiat === null && pricesLoading ? (
                       <Skeleton className="h-3 w-14" />
                     ) : (
-                      <span className="font-mono text-xs text-muted">
+                      <span className="text-xs text-muted">
                         {balancesHidden
                           ? '••••'
                           : chainFiat === null
@@ -477,6 +515,7 @@ export function PortfolioShell({
                         <PortfolioChainAssetRow
                           key={asset.asset.id}
                           entry={{ asset, chain }}
+                          domain={domain}
                           prices={prices}
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
@@ -515,6 +554,7 @@ export function PortfolioShell({
                               <PortfolioChainAssetRow
                                 key={asset.asset.id}
                                 entry={{ asset, chain }}
+                                domain={domain}
                                 prices={prices}
                                 balancesHidden={balancesHidden}
                                 pricesLoading={pricesLoading}

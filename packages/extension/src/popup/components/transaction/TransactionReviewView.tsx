@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { Icon } from '@iconify/react'
 
 import { Button } from '@/popup/components/ui/button'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -22,6 +23,7 @@ interface TransactionReviewViewProps {
   readonly title: string
   readonly titleId?: string
   readonly showTitle?: boolean
+  readonly variant?: 'default' | 'figma'
   readonly asset: TransactionReviewAsset | null
   readonly amount: string
   readonly network: string
@@ -41,6 +43,7 @@ export function TransactionReviewView({
   title,
   titleId,
   showTitle = true,
+  variant = 'default',
   asset,
   amount,
   network,
@@ -55,52 +58,123 @@ export function TransactionReviewView({
   onCancel,
   onConfirm
 }: TransactionReviewViewProps) {
+  const figma = variant === 'figma'
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-busy={preparing || confirming}>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5">
+      <div
+        className={
+          figma
+            ? 'min-h-0 flex-1 overflow-y-auto px-4 pb-4'
+            : 'min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-5'
+        }
+      >
         {showTitle && (
-          <h2 id={titleId} className="text-center text-base font-semibold">
-            {title}
-          </h2>
+          <div className={figma ? 'relative' : undefined}>
+            <h2
+              id={titleId}
+              className={
+                figma
+                  ? 'flex h-14 items-center justify-center text-lg font-medium leading-[23px]'
+                  : 'text-center text-base font-semibold'
+              }
+            >
+              {title}
+            </h2>
+            {figma && (
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={onCancel}
+                disabled={cancelDisabled || confirming}
+                className="absolute left-0 top-4 flex size-6 items-center justify-center disabled:opacity-50"
+              >
+                <Icon icon="lucide:chevron-left" width={20} height={20} />
+              </button>
+            )}
+          </div>
         )}
 
-        <div className="flex flex-col items-center pb-4 pt-4">
-          {asset ? (
-            <TokenIcon
-              assetId={asset.assetId}
-              symbol={asset.symbol}
-              icon={asset.icon}
-              blockchain={asset.blockchain}
-              nativeChain={asset.nativeChain}
-              size="xl"
-            />
-          ) : (
-            <Skeleton className="size-16 rounded-full" />
-          )}
-          <div className="mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight">
+        <div
+          className={
+            figma
+              ? 'flex flex-col items-center pb-5 pt-[18px]'
+              : 'flex flex-col items-center pb-4 pt-4'
+          }
+        >
+          {!figma &&
+            (asset ? (
+              <TokenIcon
+                assetId={asset.assetId}
+                symbol={asset.symbol}
+                icon={asset.icon}
+                blockchain={asset.blockchain}
+                nativeChain={asset.nativeChain}
+                size="xl"
+              />
+            ) : (
+              <Skeleton className="size-16 rounded-full" />
+            ))}
+          <div
+            className={
+              figma
+                ? 'max-w-full min-w-0 break-all text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
+                : 'mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight'
+            }
+          >
             {amount && asset ? (
-              <AmountDisplay value={amount} symbol={asset.symbol} />
+              <AmountDisplay
+                value={amount}
+                symbol={asset.symbol}
+                className={figma ? 'gap-[0.25em] font-sans normal-nums' : undefined}
+              />
             ) : (
               <Skeleton className="h-7 w-36" />
             )}
           </div>
-          {network ? (
-            <p className="mt-1 text-xs text-muted">{network}</p>
-          ) : (
-            <Skeleton className="mt-2 h-3 w-20" />
-          )}
+          {!figma &&
+            (network ? (
+              <p className="mt-1 text-xs text-muted">{network}</p>
+            ) : (
+              <Skeleton className="mt-2 h-3 w-20" />
+            ))}
         </div>
 
         {notice}
 
-        <div className="rounded-xl border border-border/60 bg-card/60 px-4">
+        <div
+          className={
+            figma
+              ? 'border-t border-border/60'
+              : 'rounded-xl border border-border/60 bg-card/60 px-4'
+          }
+        >
           {rows.map((row, index) => (
             <div
               key={`${row.label}-${index}`}
-              className="flex min-w-0 items-start justify-between gap-4 py-2.5"
+              className={
+                figma
+                  ? 'flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-4 [&_.font-mono]:font-sans'
+                  : 'flex min-w-0 items-start justify-between gap-4 py-2.5'
+              }
             >
-              <span className="shrink-0 text-xs text-muted">{row.label}</span>
-              <div className="min-w-0 text-right text-xs font-medium">{row.content}</div>
+              <span
+                className={
+                  figma
+                    ? 'shrink-0 text-sm font-medium leading-[18px] text-muted'
+                    : 'shrink-0 text-xs text-muted'
+                }
+              >
+                {row.label}
+              </span>
+              <div
+                className={
+                  figma
+                    ? 'min-w-0 break-all text-right text-sm font-medium leading-[18px]'
+                    : 'min-w-0 text-right text-xs font-medium'
+                }
+              >
+                {row.content}
+              </div>
             </div>
           ))}
         </div>
@@ -108,9 +182,10 @@ export function TransactionReviewView({
         {error}
       </div>
 
-      <div className="flex gap-3 p-5 pt-3">
+      <div className={figma ? 'page-footer flex gap-2.5' : 'flex gap-3 p-5 pt-3'}>
         <Button
           variant="outline"
+          size={figma ? 'wallet' : 'default'}
           className="h-[45px] flex-1"
           disabled={cancelDisabled || confirming}
           onClick={onCancel}
@@ -118,6 +193,7 @@ export function TransactionReviewView({
           Cancel
         </Button>
         <Button
+          size={figma ? 'wallet' : 'default'}
           className="h-[45px] flex-1"
           disabled={confirmDisabled || preparing}
           isLoading={confirming}

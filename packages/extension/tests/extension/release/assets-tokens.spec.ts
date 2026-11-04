@@ -969,7 +969,7 @@ test('automatically manages Intents Tokens on newly released chains', async ({
   await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
   await popup
     .getByRole('dialog', { name: 'Choose source account' })
-    .getByRole('radio', { name: /Confidential account/ })
+    .getByRole('radio', { name: /Private account/ })
     .click()
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current private' })

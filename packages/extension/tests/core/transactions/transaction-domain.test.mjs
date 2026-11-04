@@ -156,6 +156,47 @@ test.describe('Unified transaction lifecycle', () => {
     ).toThrow(/intent snapshot/)
   })
 
+  test('restores independent Shield routes without accepting a contradictory operation', () => {
+    const originId = segmentId('shield-route')
+    for (const domain of ['public', 'private']) {
+      for (const operation of ['deposit', 'withdraw']) {
+        const shield = {
+          schemaVersion: 1,
+          operation,
+          sourceDomain: operation === 'deposit' ? domain : 'shield',
+          destinationDomain: operation === 'deposit' ? 'shield' : domain
+        }
+        const graph = {
+          root: createRoot([originId], {
+            kind: operation === 'deposit' ? 'shield' : 'withdraw',
+            intent: {
+              schemaVersion: 1,
+              direction: 'self',
+              primaryAmount: { assetId: ethAssetId, amountRaw: '100' },
+              shield
+            }
+          }),
+          segments: [createSegment(originId, 'origin', { kind: 'onchain', chainId: evmChainId })]
+        }
+        const restored = parseTransactionGraph(JSON.parse(JSON.stringify(graph)))
+        expect(restored.root.intent.shield).toEqual(shield)
+        expect(Object.isFrozen(restored.root.intent.shield)).toBe(true)
+        expect(() =>
+          parseTransactionGraph({
+            ...graph,
+            root: {
+              ...graph.root,
+              intent: {
+                ...graph.root.intent,
+                shield: { ...shield, operation: operation === 'deposit' ? 'withdraw' : 'deposit' }
+              }
+            }
+          })
+        ).toThrow(/Shield transfer intent/)
+      }
+    }
+  })
+
   test('strictly validates persisted observed asset effects and their segment chain', () => {
     const effects = {
       source: 'receipt',

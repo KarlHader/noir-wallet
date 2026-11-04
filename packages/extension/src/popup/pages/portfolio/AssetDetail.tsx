@@ -16,7 +16,8 @@ import {
   formatPercentage,
   formatFiatAmount,
   formatTokenPrice,
-  formatBaseUnitAmount
+  formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount
 } from '@/lib/number-format'
 
 import { resolveChainIconAlias } from '@/lib/chain-icon'
@@ -32,7 +33,6 @@ import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Button } from '@/popup/components/ui/button'
 
 import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
-import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import {
   isPortfolioModelForScope,
   readCachedPortfolio,
@@ -68,6 +68,7 @@ import {
   buildAddToPrivateEvmPath,
   buildMoveToMainEvmPath
 } from '@/popup/pages/transactions/evm-send-validation'
+import { getAssetDomainRaw } from '@/popup/services/asset-domains'
 
 export function AssetDetail() {
   const [searchParams] = useSearchParams()
@@ -300,7 +301,6 @@ export function AssetDetail() {
     }
   }, [chain?.chain.family, effectiveWalletId, effectiveAccountId])
   const quote = asset ? findAssetPrice(prices, asset.asset.id) : undefined
-  const fiatValue = asset ? getPortfolioAssetUsdValue(asset, prices) : null
   const explorerUrl =
     asset && chain ? formatChainAssetExplorerUrl(chain.chain.id, asset.asset, currentNetwork) : ''
   const canSend = Boolean(
@@ -331,17 +331,17 @@ export function AssetDetail() {
     if (!asset || asset.balance.mainRaw === undefined || asset.balance.privateRaw === undefined) {
       return null
     }
+    const publicRaw = getAssetDomainRaw(asset, 'public')
+    const shieldRaw = getAssetDomainRaw(asset, 'shield')
+    const privateRaw = getAssetDomainRaw(asset, 'private')
     return {
-      total: formatDisplayTokenAmount(asset.balance.totalRaw, asset.metadata.decimals),
-      main: formatDisplayTokenAmount(asset.balance.mainRaw, asset.metadata.decimals),
-      privateOnchain: formatDisplayTokenAmount(
-        asset.balance.privateOnchainRaw ?? asset.balance.privateRaw,
-        asset.metadata.decimals
-      ),
-      confidential: formatDisplayTokenAmount(
-        asset.balance.confidentialRaw ?? '0',
-        asset.metadata.decimals
-      )
+      raw: { public: publicRaw, shield: shieldRaw, private: privateRaw },
+      main:
+        publicRaw === null ? null : formatDisplayTokenAmount(publicRaw, asset.metadata.decimals),
+      privateOnchain:
+        privateRaw === null ? null : formatDisplayTokenAmount(privateRaw, asset.metadata.decimals),
+      shield:
+        shieldRaw === null ? null : formatDisplayTokenAmount(shieldRaw, asset.metadata.decimals)
     }
   }, [asset])
 
@@ -410,6 +410,7 @@ export function AssetDetail() {
       return
     }
     const query = new URLSearchParams({ assetId: asset.asset.id })
+    if (searchParams.get('mode') === 'private') query.set('mode', 'private')
     navigate(`/send?${query.toString()}`)
   }
 
@@ -548,6 +549,19 @@ export function AssetDetail() {
   }
 
   const chainAlias = resolveChainIconAlias(chain.chain.family, chain.chain.displayName)
+  const detailDomain = searchParams.get('domain')
+  const displayRaw =
+    detailDomain === 'public' || detailDomain === 'shield' || detailDomain === 'private'
+      ? getAssetDomainRaw(asset, detailDomain)
+      : asset.balance.totalRaw
+  const detailAmount =
+    displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
+  const detailFiat =
+    displayRaw === null || !quote
+      ? null
+      : new Big(formatBaseUnitDecimalAmount(displayRaw, asset.metadata.decimals))
+          .times(quote.priceUsd)
+          .toFixed()
   const contractAddress = asset.asset.kind === 'token' ? asset.asset.reference : null
   const isZcashAsset = chain.chain.family === 'zcash'
   const hasPendingBalance = asset.balance.pendingRaw !== '0'
@@ -576,6 +590,13 @@ export function AssetDetail() {
               ? 'Could not check transfer availability'
               : null
 
+  const openShieldTransfer = (from: 'public' | 'shield', to: 'shield' | 'private') => {
+    const query = new URLSearchParams({ assetId: asset.asset.id, from, to })
+    const mode = searchParams.get('mode')
+    if (mode === 'public' || mode === 'private') query.set('mode', mode)
+    navigate(`/transfer?${query.toString()}`)
+  }
+
   return (
     <div className="page-container">
       <CopyToast show={showToast} />
@@ -593,16 +614,20 @@ export function AssetDetail() {
             />
           </div>
           <p
-            className="mt-4 max-w-full break-all font-mono text-[28px] font-medium leading-tight"
-            title={`${formatBaseUnitAmount(asset.balance.totalRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`}
+            className="mt-4 max-w-full break-all text-[28px] font-medium leading-tight"
+            title={
+              displayRaw === null
+                ? undefined
+                : `${formatBaseUnitAmount(displayRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`
+            }
           >
-            {display.total} {asset.metadata.symbol}
+            {detailAmount} {asset.metadata.symbol}
           </p>
-          {priceStatus === 'loading' && fiatValue === null ? (
+          {priceStatus === 'loading' && detailFiat === null ? (
             <Skeleton className="mt-2 h-4 w-20" />
           ) : (
             <p className="mt-1.5 text-sm text-muted">
-              {fiatValue === null ? '—' : formatFiatAmount(fiatValue, { showSign: true })}
+              {detailFiat === null ? '—' : formatFiatAmount(detailFiat, { showSign: true })}
             </p>
           )}
           {isZcashAsset && BigInt(asset.balance.shieldableRaw ?? '0') > 0n && (
@@ -678,7 +703,7 @@ export function AssetDetail() {
         {accountDisplay && (
           <section
             className="space-y-3 border-t border-border py-4"
-            aria-label="Public and Confidential balance breakdown"
+            aria-label="Public, Shield and Private balance breakdown"
           >
             <div className="flex min-h-8 items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">Account balances</h2>
@@ -688,7 +713,7 @@ export function AssetDetail() {
                   variant="outline"
                   className="h-8 gap-1.5 px-3"
                   onClick={() => setPrivateTransferDialogOpen(true)}
-                  aria-label={`Transfer ${asset.metadata.symbol} between Public and Confidential`}
+                  aria-label={`Transfer ${asset.metadata.symbol} between Public and Private`}
                 >
                   <Icon icon="lucide:arrow-left-right" width={15} height={15} />
                   Transfer
@@ -696,45 +721,76 @@ export function AssetDetail() {
               )}
             </div>
             <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="text-muted">Total</span>
-              <span
-                className="min-w-0 break-all text-right font-mono text-sm"
-                title={`${formatBaseUnitAmount(asset.balance.totalRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`}
-              >
-                {accountDisplay.total} {asset.metadata.symbol}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4 text-sm">
               <span>Public</span>
               <span
-                className="min-w-0 break-all text-right font-mono text-sm"
-                title={`${formatBaseUnitAmount(asset.balance.mainRaw ?? '0', asset.metadata.decimals)} ${asset.metadata.symbol}`}
+                className="min-w-0 break-all text-right text-sm"
+                title={
+                  accountDisplay.raw.public === null
+                    ? undefined
+                    : `${formatBaseUnitAmount(accountDisplay.raw.public, asset.metadata.decimals)} ${asset.metadata.symbol}`
+                }
               >
-                {accountDisplay.main} {asset.metadata.symbol}
+                {accountDisplay.main === null
+                  ? '—'
+                  : `${accountDisplay.main} ${asset.metadata.symbol}`}
               </span>
             </div>
-            <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="flex items-baseline gap-2">
-                <span>Confidential</span>
-              </span>
-              <span
-                className="min-w-0 break-all text-right font-mono text-sm"
-                title={`${formatBaseUnitAmount(asset.balance.privateOnchainRaw ?? asset.balance.privateRaw ?? '0', asset.metadata.decimals)} ${asset.metadata.symbol}`}
-              >
-                {accountDisplay.privateOnchain} {asset.metadata.symbol}
-              </span>
-            </div>
-            {BigInt(asset.balance.confidentialRaw ?? '0') > 0n && (
-              <div className="flex items-center justify-between gap-4 text-sm text-muted">
-                <span>Confidential (unavailable on-chain)</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span>Shield</span>
                 <span
-                  className="min-w-0 break-all text-right font-mono text-sm"
-                  title={`${formatBaseUnitAmount(asset.balance.confidentialRaw ?? '0', asset.metadata.decimals)} ${asset.metadata.symbol}`}
+                  className="min-w-0 break-all text-right text-sm"
+                  title={
+                    accountDisplay.raw.shield === null
+                      ? undefined
+                      : `${formatBaseUnitAmount(accountDisplay.raw.shield, asset.metadata.decimals)} ${asset.metadata.symbol}`
+                  }
                 >
-                  {accountDisplay.confidential} {asset.metadata.symbol}
+                  {accountDisplay.shield === null
+                    ? '—'
+                    : `${accountDisplay.shield} ${asset.metadata.symbol}`}
                 </span>
               </div>
-            )}
+              {searchParams.get('domain') === 'shield' && chain.chain.family === 'evm' && (
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2.5 text-xs"
+                    onClick={() => openShieldTransfer('public', 'shield')}
+                    aria-label={`Deposit ${asset.metadata.symbol} to Shield`}
+                  >
+                    <Icon icon="lucide:arrow-down-left" width={13} height={13} />
+                    Deposit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2.5 text-xs"
+                    onClick={() => openShieldTransfer('shield', 'private')}
+                    aria-label={`Withdraw ${asset.metadata.symbol} from Shield to Private`}
+                  >
+                    <Icon icon="lucide:arrow-up-right" width={13} height={13} />
+                    Withdraw
+                  </Button>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-4 text-sm">
+              <span>Private</span>
+              <span
+                className="min-w-0 break-all text-right text-sm"
+                title={
+                  accountDisplay.raw.private === null
+                    ? undefined
+                    : `${formatBaseUnitAmount(accountDisplay.raw.private, asset.metadata.decimals)} ${asset.metadata.symbol}`
+                }
+              >
+                {accountDisplay.privateOnchain === null
+                  ? '—'
+                  : `${accountDisplay.privateOnchain} ${asset.metadata.symbol}`}
+              </span>
+            </div>
           </section>
         )}
 
@@ -743,12 +799,12 @@ export function AssetDetail() {
             className="space-y-3 border-t border-border py-4"
             aria-label="Zcash balance breakdown"
           >
-            <h2 className="text-sm font-semibold">Privacy balance</h2>
+            <h2 className="text-sm font-semibold">Account balances</h2>
             <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="text-muted">Shielded</span>
+              <span>Shield</span>
               {zcashDisplay ? (
                 <span
-                  className="min-w-0 break-all text-right font-mono text-sm"
+                  className="min-w-0 break-all text-right text-sm"
                   title={`${formatBaseUnitAmount(asset.balance.shieldedRaw ?? '0', asset.metadata.decimals)} ZEC`}
                 >
                   <span className="block">{zcashDisplay.shielded} ZEC</span>
@@ -763,10 +819,10 @@ export function AssetDetail() {
               )}
             </div>
             <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="text-muted">Transparent</span>
+              <span>Public</span>
               {zcashDisplay ? (
                 <span
-                  className="min-w-0 break-all text-right font-mono text-sm"
+                  className="min-w-0 break-all text-right text-sm"
                   title={`${formatBaseUnitAmount(asset.balance.transparentRaw ?? '0', asset.metadata.decimals)} ZEC`}
                 >
                   <span className="block">{zcashDisplay.transparent} ZEC</span>
@@ -820,7 +876,7 @@ export function AssetDetail() {
             <div className="flex items-center justify-between gap-4 text-sm">
               <span className="text-muted">Pending</span>
               <span
-                className="min-w-0 break-all text-right font-mono text-sm"
+                className="min-w-0 break-all text-right text-sm"
                 title={`${formatBaseUnitAmount(asset.balance.pendingRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`}
               >
                 {display.pending} {asset.metadata.symbol}

@@ -2,6 +2,7 @@ import type { Network } from '@/types'
 
 export interface ConfidentialFundingNetworkConfig {
   readonly oneClickApiUrl: string
+  readonly oneClickDirectApiUrl: string
   readonly rheaSwapApiUrl: string
 }
 
@@ -25,9 +26,10 @@ export function getConfidentialFundingNetworkConfig(
   if (network !== 'mainnet') return null
   return Object.freeze({
     oneClickApiUrl: parseServiceUrl(
-      __CONFIDENTIAL_ONE_CLICK_API_URL__ || 'https://1click.chaindefuser.com/v0',
+      __CONFIDENTIAL_ONE_CLICK_API_URL__ || 'https://api.rhea.finance/proxy/1click/v0',
       'Confidential Mainnet 1Click URL'
     ),
+    oneClickDirectApiUrl: 'https://1click.chaindefuser.com/v0',
     rheaSwapApiUrl: 'https://api.rhea.finance'
   })
 }

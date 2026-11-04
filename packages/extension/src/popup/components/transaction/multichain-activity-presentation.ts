@@ -16,6 +16,10 @@ import type {
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { formatActivityTokenAmount } from '../portfolio/portfolio-format'
+import type {
+  ConfidentialFundingPlan,
+  ConfidentialWithdrawRow
+} from '@/core/services/confidential-funding'
 import { getActivityInteractionPresentation } from './activity-interaction-adapters'
 import type { TransactionProgressStep } from '@/popup/services/transaction-progress'
 import {
@@ -76,8 +80,8 @@ export interface ActivitySwapPresentation {
   readonly destinationNetwork: string
   readonly sourceChainIconAlias?: string
   readonly destinationChainIconAlias?: string
-  readonly sourceAccountMode?: 'Public' | 'Confidential'
-  readonly destinationAccountMode?: 'Public' | 'Confidential'
+  readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield'
+  readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
 }
 
 export function resolveActivityChainMetadata(
@@ -96,6 +100,7 @@ export function isAccountModeTransfer(
   route: ActivitySwapPresentation
 ): boolean {
   return (
+    item.snapshot?.shield !== undefined ||
     item.kind === 'transfer' ||
     (item.kind === 'swap' &&
       route.source?.assetId === route.destination?.assetId &&
@@ -113,11 +118,63 @@ export function isOwnedAccountTransfer(route: ActivitySwapPresentation): boolean
   )
 }
 
+export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): string {
+  const label = (mode: ActivitySwapPresentation['sourceAccountMode']) =>
+    mode === 'Confidential' ? 'Private' : (mode ?? '')
+  return `${label(route.sourceAccountMode)} → ${label(route.destinationAccountMode)}`
+}
+
 export function getActivityRouteTitle(item: ActivityItem, route: ActivitySwapPresentation): string {
+  if (item.snapshot?.shield) {
+    return item.snapshot.shield.operation === 'cluster'
+      ? 'Cluster transfer'
+      : item.snapshot.shield.operation === 'deposit'
+        ? 'Deposit'
+        : 'Withdraw'
+  }
   if (isAccountModeTransfer(item, route)) {
     return isOwnedAccountTransfer(route) ? 'Account Transfer' : 'Transfer'
   }
   return 'Swap'
+}
+
+export function getClusterChildStatusLabel(row: ConfidentialWithdrawRow): string {
+  switch (row.status.trim().toUpperCase()) {
+    case 'SUCCESS':
+    case 'COMPLETED':
+      return 'Received'
+    case 'REFUNDED':
+      return 'Refunded'
+    case 'FAILED':
+      return 'Failed'
+    case 'EXPIRED':
+      return 'Expired'
+    case 'CANCELLED':
+      return 'Cancelled'
+    default:
+      return row.scheduledAt ? 'Scheduled' : 'Processing'
+  }
+}
+
+export function getClusterBatchStatusLabel(plan: ConfidentialFundingPlan): string {
+  switch (plan.phase) {
+    case 'ready':
+      return 'Received'
+    case 'partial':
+      return 'Partially received'
+    case 'refunded':
+      return 'Refunded'
+    case 'failed':
+      return 'Failed'
+    case 'expired':
+      return 'Expired'
+    case 'cancelled':
+      return 'Cancelled'
+    case 'needs-auth':
+      return 'Action required'
+    default:
+      return 'Processing'
+  }
 }
 
 export function hasMatchingActivityTokenIcons(route: ActivitySwapPresentation): boolean {
@@ -149,6 +206,7 @@ export function getActivitySwapPresentation(
   executionAddressModes: ReadonlyMap<string, 'Public' | 'Confidential'> = new Map()
 ): ActivitySwapPresentation | null {
   if (
+    item.snapshot?.shield === undefined &&
     item.kind !== 'swap' &&
     !(
       item.kind === 'transfer' &&
@@ -179,27 +237,48 @@ export function getActivitySwapPresentation(
       : item.snapshot?.recipient?.chainId
   const sourceChain = resolveActivityChainMetadata(sourceChainId, chainMetadata)
   const destinationChain = resolveActivityChainMetadata(destinationChainId, chainMetadata)
+  const shield = item.snapshot?.shield
   const recipientAddress =
-    item.snapshot?.protocol?.destination.recipient ??
-    (item.source === 'zcash-v1' ? item.snapshot?.recipient?.address : undefined)
+    shield?.destinationDomain === 'shield'
+      ? undefined
+      : (item.snapshot?.protocol?.destination.recipient ??
+        (item.source === 'zcash-v1' || shield ? item.snapshot?.recipient?.address : undefined))
   const senderAddress = item.snapshot?.sender?.address
-  const sourceAccountMode = senderAddress
-    ? executionAddressModes.get(senderAddress.toLowerCase())
-    : undefined
-  const destinationAccountMode = recipientAddress
-    ? executionAddressModes.get(recipientAddress.toLowerCase())
-    : undefined
+  const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
+    domain === 'shield' ? 'Shield' : domain === 'private' ? 'Confidential' : 'Public'
+  const sourceAccountMode = shield
+    ? shieldDomainLabel(shield.sourceDomain)
+    : senderAddress
+      ? executionAddressModes.get(senderAddress.toLowerCase())
+      : undefined
+  const destinationAccountMode = shield
+    ? shieldDomainLabel(shield.destinationDomain)
+    : recipientAddress
+      ? executionAddressModes.get(recipientAddress.toLowerCase())
+      : undefined
 
   return Object.freeze({
     ...(source ? { source } : {}),
     ...(destination ? { destination } : {}),
     ...(recipientAddress ? { recipientAddress } : {}),
-    sourceNetwork: sourceChain?.displayName ?? 'Unknown network',
-    destinationNetwork: destinationChain?.displayName ?? 'Unknown network',
-    ...(sourceChain?.iconAlias ? { sourceChainIconAlias: sourceChain.iconAlias } : {}),
-    ...(destinationChain?.iconAlias
-      ? { destinationChainIconAlias: destinationChain.iconAlias }
-      : {}),
+    sourceNetwork:
+      shield?.sourceDomain === 'shield'
+        ? 'NEAR Confidential'
+        : (sourceChain?.displayName ?? 'Unknown network'),
+    destinationNetwork:
+      shield?.destinationDomain === 'shield'
+        ? 'NEAR Confidential'
+        : (destinationChain?.displayName ?? 'Unknown network'),
+    ...(shield?.sourceDomain === 'shield'
+      ? { sourceChainIconAlias: 'near' }
+      : sourceChain?.iconAlias
+        ? { sourceChainIconAlias: sourceChain.iconAlias }
+        : {}),
+    ...(shield?.destinationDomain === 'shield'
+      ? { destinationChainIconAlias: 'near' }
+      : destinationChain?.iconAlias
+        ? { destinationChainIconAlias: destinationChain.iconAlias }
+        : {}),
     ...(sourceAccountMode ? { sourceAccountMode } : {}),
     ...(destinationAccountMode ? { destinationAccountMode } : {})
   })
@@ -287,6 +366,10 @@ export function resolveActivityDisplayAmount(
 }
 
 export function getActivitySegmentLabel(segment: ActivitySegment): string {
+  if (segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents') {
+    if (segment.role === 'origin') return 'Shield authorization'
+    if (segment.role === 'relay') return 'Shield processing'
+  }
   switch (segment.role) {
     case 'origin':
       return isSignedOrderOrigin(segment) ? 'Order submitted' : 'Origin transaction'
@@ -303,7 +386,8 @@ export function getActivitySegmentLabel(segment: ActivitySegment): string {
 function isIntentsRelaySegment(segment: ActivitySegment): boolean {
   return (
     segment.role === 'relay' &&
-    segment.target.kind === 'relay' &&
+    (segment.target.kind === 'relay' ||
+      (segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents')) &&
     (segment.target.provider.toLowerCase().includes('intents') ||
       segment.target.provider === 'RHEA CrossChainDex')
   )
@@ -318,6 +402,12 @@ function isSignedOrderOrigin(segment: ActivitySegment): boolean {
 }
 
 export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: string): string {
+  if (item.snapshot?.shield)
+    return item.snapshot.shield.operation === 'cluster'
+      ? 'Cluster transfer'
+      : item.snapshot.shield.operation === 'deposit'
+        ? 'Deposit to Shield'
+        : 'Withdraw from Shield'
   if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
   if (item.failureCode === 'refunded') return 'Refund'
   if (
@@ -357,9 +447,12 @@ export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: st
 }
 
 function isConfidentialFundingActivity(item: ActivityItem): boolean {
-  return item.segments.some(
-    segment =>
-      segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
+  return (
+    !item.snapshot?.shield &&
+    item.segments.some(
+      segment =>
+        segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
+    )
   )
 }
 
@@ -420,6 +513,9 @@ function hasSameIntentSnapshot(
       right !== undefined &&
       left.schemaVersion === right.schemaVersion &&
       left.direction === right.direction &&
+      left.shield?.operation === right.shield?.operation &&
+      left.shield?.sourceDomain === right.shield?.sourceDomain &&
+      left.shield?.destinationDomain === right.shield?.destinationDomain &&
       hasSameAssetAmount(left.primaryAmount, right.primaryAmount) &&
       hasSameAssetAmount(left.counterAmount, right.counterAmount) &&
       hasSameAssetAmount(left.feeLimit, right.feeLimit) &&
@@ -662,6 +758,12 @@ export function getActivityProgressSteps(
 }
 
 function getActivityTitle(item: ActivityItem, chainId?: string): string {
+  if (item.snapshot?.shield)
+    return item.snapshot.shield.operation === 'cluster'
+      ? 'Cluster transfer'
+      : item.snapshot.shield.operation === 'deposit'
+        ? 'Deposit to Shield'
+        : 'Withdraw from Shield'
   if (isConfidentialFundingActivity(item)) return 'Added to Confidential'
   if (item.failureCode === 'refunded') return 'Refunded'
   const interaction = getActivityInteractionPresentation(item, chainId)

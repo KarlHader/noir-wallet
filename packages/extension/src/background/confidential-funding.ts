@@ -3,6 +3,7 @@ import { getAssetProtocolSourceMappings } from '@/core/prices/asset-market-mappi
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import type { EvmNetworkConfig } from '@/config/networks'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { buildAccountKey } from '@/core/wallet/account-scope'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import {
   createAssetRegistry,
@@ -19,6 +20,7 @@ import {
   IndexedDbTransactionRepository
 } from '@/infrastructure/persistence/repositories'
 import { credentialSession } from './credential-session'
+import { accountContextTransition } from './account-context-transition'
 import { ConfidentialFundingApi } from './confidential-funding-api'
 import {
   CONFIDENTIAL_FUNDING_MONITOR_ALARM,
@@ -61,8 +63,10 @@ export function createBackgroundConfidentialFundingCoordinator(
     network: DEFAULT_NETWORK,
     api: new ConfidentialFundingApi(config, near.rpcUrl, __RHEA_SWAP_ACCESS_TOKEN__),
     store,
-    signer: new ConfidentialFundingSigner(signerClient, chainId =>
-      loadActiveEvmPortfolioContext(storage, chainId)
+    signer: new ConfidentialFundingSigner(
+      signerClient,
+      chainId => loadActiveEvmPortfolioContext(storage, chainId),
+      operation => accountContextTransition.runActiveOperation(operation)
     ),
     repository: new IndexedDbTransactionRepository(),
     assets,
@@ -70,6 +74,12 @@ export function createBackgroundConfidentialFundingCoordinator(
     assetMappings: Object.freeze([...mappings.values()]),
     scheduleMonitoring: () =>
       chrome.alarms.create(CONFIDENTIAL_FUNDING_MONITOR_ALARM, { delayInMinutes: 0.1 }),
+    onActivityChanged: async scope => {
+      await chrome.runtime.sendMessage({
+        type: 'TRANSACTION_UPDATED',
+        accountKey: buildAccountKey(scope.network, scope.keyDomainId, scope.accountId)
+      })
+    },
     refreshPortfolio
   })
 }

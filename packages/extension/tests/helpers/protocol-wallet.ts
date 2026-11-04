@@ -2,7 +2,7 @@ import * as secp256k1 from '@bitcoinerlab/secp256k1'
 import type { BrowserContext, Page, Route } from '@playwright/test'
 import { networks, payments } from 'bitcoinjs-lib'
 import { Buffer } from 'buffer'
-import { keccak256, parseTransaction, type Hex } from 'viem'
+import { keccak256, parseTransaction, recoverMessageAddress, type Hex } from 'viem'
 import { DEFAULT_HISTORY_API_ORIGIN } from '../../scripts/lib/extension-build-config'
 import { NEAR_NETWORKS } from '../../src/config/networks'
 import {
@@ -18,6 +18,7 @@ const TEST_MNEMONIC_24 = `${'abandon '.repeat(23)}art`
 const TEST_PASSWORD = 'protocol-wallet-source-password'
 const TEST_BETA_INVITE_CODE = 'PROTOCOL-WALLET-SOURCE-INVITE'
 const ETH_ASSET = 'nep141:eth.omft.near'
+const CONFIDENTIAL_ETH_ASSET = `imt:51e8f94d77b5e90dc9852ca6113771e11e8382ce69473a75e313e41665de7cbe:${ETH_ASSET}`
 const USDC_ASSET = 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near'
 const POL_ASSET = 'nep245:v2_1.omni.hot.tg:137_11111111111111111111'
 const BNB_ASSET = 'nep245:v2_1.omni.hot.tg:56_11111111111111111111'
@@ -65,8 +66,12 @@ const BUILD_SWAP_URL = 'https://api.rhea.finance/api/swap/swap'
 const REPORT_SWAP_URL = 'https://api.rhea.finance/api/swap/report'
 const ORDER_STATUS_URL = 'https://api.rhea.finance/api/swap/order-status'
 const LENDING_QUOTE_URL = 'https://api.rhea.finance/api/1click/quote'
-const CONFIDENTIAL_API_URL = 'https://1click.chaindefuser.com/v0'
-const CONFIDENTIAL_BALANCES_URL = 'https://1click.chaindefuser.com/v0/account/balances'
+const CONFIDENTIAL_API_URLS = [
+  'https://1click.chaindefuser.com/v0',
+  'https://api.rhea.finance/proxy/1click/v0'
+] as const
+const confidentialApiPath = (path: string) => (url: URL) =>
+  CONFIDENTIAL_API_URLS.some(origin => url.href === `${origin}${path}`)
 const LENDING_METADATA_URL = 'https://api.rhea.finance/list-burrow-asset-token'
 const NEAR_RPC_URLS = [
   'https://free.rpc.fastnear.com/**',
@@ -382,7 +387,8 @@ async function mockEvmNetwork(
                                 transactionHash: request.params[0],
                                 blockHash: `0x${'2'.repeat(64)}`,
                                 blockNumber: '0x100',
-                                status: '0x1'
+                                status: '0x1',
+                                logs: []
                               }
                             : null
                           : request.method === 'eth_getTransactionByHash'
@@ -509,6 +515,28 @@ async function mockBitcoinNetwork(context: BrowserContext): Promise<{
   })
 }
 
+interface ProtocolConfidentialBatchRequest {
+  readonly signer_id: string
+  readonly signer_chain_family: string
+  readonly from_amount: string
+  readonly from_chain: string
+  readonly from_token: string
+  readonly mode: string
+  readonly withdraws: readonly {
+    readonly sequence: number
+    readonly amount: string
+    readonly token: string
+    readonly destination_address: string
+    readonly destination_chain: string
+    readonly deposit_address: string
+    readonly signed_payload: {
+      readonly standard: string
+      readonly payload: string
+      readonly signature: string
+    }
+  }[]
+}
+
 async function mockProtocolApis(
   context: BrowserContext,
   options: {
@@ -521,11 +549,18 @@ async function mockProtocolApis(
     readonly mockRheaQuote?: boolean
     readonly evmApproval?: boolean
     readonly orderStatus?: 'pending' | 'completed'
+    readonly confidentialBalanceRaw?: string
   } = {}
 ): Promise<{
   readonly setTokenOnline: (online: boolean) => void
   readonly setNearOnline: (online: boolean) => void
   readonly setOrderStatus: (status: 'pending' | 'completed') => void
+  readonly setConfidentialBalanceRaw: (amountRaw: string) => void
+  readonly getConfidentialAuthSignerIds: () => readonly string[]
+  readonly getConfidentialIntentSubmitCount: () => number
+  readonly getConfidentialBalanceReadCount: () => number
+  readonly getConfidentialBatchRequests: () => readonly ProtocolConfidentialBatchRequest[]
+  readonly setConfidentialBatchCompleted: () => void
   readonly getQuoteRequests: () => readonly {
     originAsset: string
     destinationAsset: string
@@ -1038,13 +1073,167 @@ async function mockProtocolApis(
   for (const url of NEAR_RPC_URLS) await context.route(url, nearRpcHandler)
   let confidentialBalanceReads = 0
   let confidentialDepositAmount = '0'
+  let confidentialBalanceRaw = options.confidentialBalanceRaw
   let formalWithdrawQuoteCount = 0
+  const confidentialAuthSignerIds: string[] = []
   const submittedConfidentialAddresses = new Set<string>()
+  const confidentialBatchRequests: ProtocolConfidentialBatchRequest[] = []
+  let confidentialBatchCompleted = false
+  const historyChallenges = new Map<string, { address: string; message: string }>()
+  await context.route('https://api.rhea.finance/api/swap/history/auth/challenge', async route => {
+    const request = route.request().postDataJSON() as {
+      walletAddress: string
+      chainId: string
+      chainFamily: string
+    }
+    const challengeId = (historyChallenges.size + 1).toString(16).padStart(32, '0')
+    const expiresAt = new Date(Date.now() + 300_000).toISOString()
+    const requestOrigin = (await route.request().allHeaders()).origin
+    if (!/^chrome-extension:\/\/[a-p]{32}$/.test(requestOrigin ?? '')) {
+      throw new Error('History challenge requires the extension request origin')
+    }
+    const message = `${new URL(requestOrigin).host} wants you to sign in with your Ethereum account:\n${request.walletAddress}\n\nAuthorize read-only access to confidential Unified Swap history.\n\nURI: ${requestOrigin}\nVersion: 1\nChain ID: ${request.chainId}\nNonce: ${challengeId}\nIssued At: ${new Date().toISOString()}\nExpiration Time: ${expiresAt}\nRequest ID: ${challengeId}\nResources:\n- urn:rhea:swap:history:confidential:read\n- urn:rhea:wallet:evm:${request.walletAddress}\n- urn:rhea:app:ak_00000000000000000000000000000000`
+    historyChallenges.set(challengeId, { address: request.walletAddress, message })
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          challengeId,
+          expiresAt,
+          chainFamily: request.chainFamily,
+          chainId: request.chainId,
+          address: request.walletAddress,
+          walletAddress: request.walletAddress,
+          identityKey: request.walletAddress,
+          principalType: 'wallet',
+          queryAddress: request.walletAddress,
+          mcaAccountId: null,
+          signingMethod: 'personal_sign',
+          signingInput: { message }
+        }
+      })
+    })
+  })
+  await context.route('https://api.rhea.finance/api/swap/history/auth/verify', async route => {
+    const request = route.request().postDataJSON() as {
+      challengeId: string
+      proof: { signature: Hex }
+    }
+    const challenge = historyChallenges.get(request.challengeId)
+    if (!challenge) throw new Error('Unknown mock history challenge')
+    const signer = await recoverMessageAddress({
+      message: challenge.message,
+      signature: request.proof.signature
+    })
+    expect(signer.toLowerCase()).toBe(challenge.address.toLowerCase())
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          token: 'protocol-wallet-history-access',
+          tokenType: 'Bearer',
+          expiresIn: 3600,
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+          principalType: 'wallet',
+          queryAddress: challenge.address,
+          mcaAccountId: null,
+          scope: 'swap:history:confidential:read'
+        }
+      })
+    })
+  })
+  const batchOrders = () =>
+    confidentialBatchRequests.map((request, index) => ({
+      order: {
+        order_id: `protocol-cluster-${index + 1}`,
+        signer_id: request.signer_id,
+        signer_chain_family: request.signer_chain_family,
+        from_amount: request.from_amount,
+        from_chain: request.from_chain,
+        from_token: request.from_token,
+        mode: request.mode,
+        status: confidentialBatchCompleted ? 'SUCCESS' : 'PENDING',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      },
+      transactions: request.withdraws.map(row => ({
+        order_id: `protocol-cluster-${index + 1}`,
+        sequence: row.sequence,
+        amount: row.amount,
+        token: row.token,
+        destination_address: row.destination_address,
+        destination_chain: row.destination_chain,
+        deposit_address: row.deposit_address,
+        transaction_type: 'WITHDRAW',
+        execution_type: 'CONFIDENTIAL_1CLICK',
+        status: confidentialBatchCompleted ? 'SUCCESS' : 'SCHEDULED',
+        scheduled_at: Date.now() + row.sequence * 30_000,
+        payload_deadline: Date.now() + 3_600_000,
+        ...(confidentialBatchCompleted ? { intent_hash: `mock-intent-${row.sequence}` } : {})
+      }))
+    }))
+  await context.route('https://api.rhea.finance/v3/private/withdraws', async route => {
+    expect(route.request().headers().authorization).toBe('Bearer test-rhea-access-token')
+    const request = route.request().postDataJSON() as ProtocolConfidentialBatchRequest
+    expect(request.signer_chain_family).toBe('evm')
+    expect(request.withdraws.length).toBeGreaterThanOrEqual(2)
+    expect(request.withdraws.length).toBeLessThanOrEqual(5)
+    confidentialBatchRequests.push(request)
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: { order_id: `protocol-cluster-${confidentialBatchRequests.length}` }
+      })
+    })
+  })
+  await context.route('https://api.rhea.finance/v3/private/orders**', async route => {
+    expect(route.request().headers().authentication).toBe('protocol-wallet-history-access')
+    const details = new URL(route.request().url()).pathname.endsWith('/details')
+    const orders = batchOrders()
+    const ids = details
+      ? (route.request().postDataJSON() as { order_ids: string[] }).order_ids
+      : null
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          list: ids ? orders.filter(item => ids.includes(item.order.order_id)) : orders,
+          has_next_page: false
+        }
+      })
+    })
+  })
   const confidentialFormalQuotes = new Map<
     string,
-    { readonly correlationId: string; readonly deadline: string; readonly signerId: string }
+    {
+      readonly correlationId: string
+      readonly deadline: string
+      readonly signerId: string
+      readonly originAsset: string
+      readonly amountRaw: string
+    }
   >()
-  await context.route(`${CONFIDENTIAL_API_URL}/quote`, async route => {
+  await context.route('https://api.rhea.finance/api/swap/confidential-app-fee', async route => {
+    expect(route.request().headers().authorization).toBe('Bearer test-rhea-access-token')
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        data: {
+          appId: 'ak_protocol_wallet',
+          confidentialAppFeeBps: 0,
+          confidentialAppFeeRecipient: '',
+          confidentialPlatformFeeBps: 50,
+          confidentialPlatformFeeRecipient: 'platform.near'
+        }
+      })
+    })
+  })
+  await context.route(confidentialApiPath('/quote'), async route => {
     const request = route.request().postDataJSON() as {
       originAsset: string
       destinationAsset: string
@@ -1056,7 +1245,13 @@ async function mockProtocolApis(
       depositType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
       refundType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
       recipientType: 'CONFIDENTIAL_INTENTS' | 'DESTINATION_CHAIN'
+      appFees?: { recipient: string; fee: number }[]
       deadline: string
+    }
+    if (request.depositType === 'CONFIDENTIAL_INTENTS') {
+      expect(request.appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
+    } else {
+      expect(request.appFees).toBeUndefined()
     }
     quoteRequests.push({
       originAsset: request.originAsset,
@@ -1083,7 +1278,9 @@ async function mockProtocolApis(
       confidentialFormalQuotes.set(depositAddress, {
         correlationId,
         deadline: request.deadline,
-        signerId: request.refundTo
+        signerId: request.refundTo,
+        originAsset: request.originAsset,
+        amountRaw: request.amount
       })
     }
     await route.fulfill({
@@ -1101,8 +1298,11 @@ async function mockProtocolApis(
       })
     })
   })
-  await context.route(`${CONFIDENTIAL_API_URL}/auth/authenticate`, route =>
-    route.fulfill({
+  await context.route(confidentialApiPath('/auth/authenticate'), route => {
+    const request = route.request().postDataJSON() as { signedData: { payload: string } }
+    const payload = JSON.parse(request.signedData.payload) as { signer_id: string }
+    confidentialAuthSignerIds.push(payload.signer_id)
+    return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         accessToken: 'protocol-confidential-access',
@@ -1111,18 +1311,26 @@ async function mockProtocolApis(
         refreshExpiresIn: 7200
       })
     })
-  )
-  await context.route(CONFIDENTIAL_BALANCES_URL, route => {
+  })
+  await context.route(confidentialApiPath('/account/balances'), route => {
     confidentialBalanceReads += 1
-    const available = confidentialBalanceReads > 1 ? confidentialDepositAmount : '0'
+    const available =
+      confidentialBalanceRaw ?? (confidentialBalanceReads > 1 ? confidentialDepositAmount : '0')
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        balances: [{ tokenId: ETH_ASSET, available, source: 'confidential' }]
+        balances: [
+          {
+            tokenId:
+              options.confidentialBalanceRaw === undefined ? ETH_ASSET : CONFIDENTIAL_ETH_ASSET,
+            available,
+            source: 'confidential'
+          }
+        ]
       })
     })
   })
-  await context.route(`${CONFIDENTIAL_API_URL}/generate-intent`, route => {
+  await context.route(confidentialApiPath('/generate-intent'), route => {
     const request = route.request().postDataJSON() as { depositAddress: string }
     const quote = confidentialFormalQuotes.get(request.depositAddress)
     if (!quote) throw new Error('Intent requested outside the formal confidential quotes')
@@ -1132,20 +1340,46 @@ async function mockProtocolApis(
         correlationId: `generated-${request.depositAddress}`,
         intent: {
           standard: 'erc191',
-          payload: JSON.stringify({
-            signer_id: quote.signerId,
-            verifying_contract: 'intents.near',
-            deadline: quote.deadline,
-            receiver_id: request.depositAddress
-          })
+          payload: JSON.stringify(
+            quote.originAsset === ETH_ASSET
+              ? {
+                  signer_id: quote.signerId,
+                  verifying_contract: 'intents.far',
+                  deadline: quote.deadline,
+                  nonce: Buffer.from(
+                    keccak256(new TextEncoder().encode(request.depositAddress)).slice(2),
+                    'hex'
+                  ).toString('base64'),
+                  intents: [
+                    {
+                      intent: 'transfer',
+                      receiver_id: request.depositAddress,
+                      tokens: {
+                        [CONFIDENTIAL_ETH_ASSET]: quote.amountRaw
+                      }
+                    }
+                  ]
+                }
+              : {
+                  signer_id: quote.signerId,
+                  verifying_contract: 'intents.near',
+                  deadline: quote.deadline,
+                  receiver_id: request.depositAddress
+                }
+          )
         }
       })
     })
   })
-  await context.route(`${CONFIDENTIAL_API_URL}/submit-intent`, route => {
+  await context.route(confidentialApiPath('/submit-intent'), route => {
     const request = route.request().postDataJSON() as { signedData: { payload: string } }
-    const payload = JSON.parse(request.signedData.payload) as { receiver_id: string }
-    submittedConfidentialAddresses.add(payload.receiver_id)
+    const payload = JSON.parse(request.signedData.payload) as {
+      receiver_id?: string
+      intents?: readonly { receiver_id?: string }[]
+    }
+    const receiverId = payload.intents?.[0]?.receiver_id ?? payload.receiver_id
+    if (!receiverId) throw new Error('Submitted intent has no receiver')
+    submittedConfidentialAddresses.add(receiverId)
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -1154,21 +1388,24 @@ async function mockProtocolApis(
       })
     })
   })
-  await context.route(`${CONFIDENTIAL_API_URL}/status**`, route => {
-    const address = new URL(route.request().url()).searchParams.get('depositAddress')
-    const successful =
-      address === '0x2222222222222222222222222222222222222222' ||
-      (address !== null && submittedConfidentialAddresses.has(address))
-    return route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        status: successful ? 'SUCCESS' : 'PENDING_DEPOSIT',
-        swapDetails: successful
-          ? { destinationChainTxHashes: [{ hash: `0x${'a'.repeat(64)}` }] }
-          : {}
+  await context.route(
+    url => CONFIDENTIAL_API_URLS.some(origin => url.href.startsWith(`${origin}/status`)),
+    route => {
+      const address = new URL(route.request().url()).searchParams.get('depositAddress')
+      const successful =
+        address === '0x2222222222222222222222222222222222222222' ||
+        (address !== null && submittedConfidentialAddresses.has(address))
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: successful ? 'SUCCESS' : 'PENDING_DEPOSIT',
+          swapDetails: successful
+            ? { destinationChainTxHashes: [{ hash: `0x${'a'.repeat(64)}` }] }
+            : {}
+        })
       })
-    })
-  })
+    }
+  )
   await context.route(LENDING_QUOTE_URL, async route => {
     const request = route.request().postDataJSON() as {
       originAsset: string
@@ -1343,8 +1580,32 @@ async function mockProtocolApis(
       body: JSON.stringify({ code: 0, msg: 'success', data: {} })
     })
   )
-  await context.route(`${ORDER_STATUS_URL}**`, route =>
-    route.fulfill({
+  await context.route(`${ORDER_STATUS_URL}**`, route => {
+    const orderId = new URL(route.request().url()).searchParams.get('orderId')
+    const confidential =
+      orderId === '0x2222222222222222222222222222222222222222' ||
+      (orderId !== null && confidentialFormalQuotes.has(orderId))
+    if (confidential) {
+      const amountOut =
+        orderId === '0x2222222222222222222222222222222222222222'
+          ? confidentialDepositAmount
+          : confidentialFormalQuotes.get(orderId!)?.amountRaw
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status:
+            orderId === '0x2222222222222222222222222222222222222222' ||
+            submittedConfidentialAddresses.has(orderId!)
+              ? 'SUCCESS'
+              : 'PENDING_DEPOSIT',
+          swapDetails: {
+            amountOut,
+            destinationChainTxHashes: [{ hash: `0x${'a'.repeat(64)}` }]
+          }
+        })
+      })
+    }
+    return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         code: 0,
@@ -1355,7 +1616,7 @@ async function mockProtocolApis(
             : { status: 'completed', to_hash: `0x${'f'.repeat(64)}` }
       })
     })
-  )
+  })
   return Object.freeze({
     setTokenOnline: (online: boolean) => {
       tokenOnline = online
@@ -1365,6 +1626,19 @@ async function mockProtocolApis(
     },
     setOrderStatus: (status: 'pending' | 'completed') => {
       orderStatus = status
+    },
+    setConfidentialBalanceRaw: (amountRaw: string) => {
+      if (!/^(0|[1-9][0-9]*)$/.test(amountRaw)) throw new Error('Invalid mock balance')
+      confidentialBalanceRaw = amountRaw
+    },
+    getConfidentialAuthSignerIds: () => [...confidentialAuthSignerIds],
+    getConfidentialIntentSubmitCount: () => submittedConfidentialAddresses.size,
+    getConfidentialBalanceReadCount: () => confidentialBalanceReads,
+    getConfidentialBatchRequests: () => structuredClone(confidentialBatchRequests),
+    setConfidentialBatchCompleted: () => {
+      confidentialBatchCompleted = true
+      for (const request of confidentialBatchRequests)
+        for (const row of request.withdraws) submittedConfidentialAddresses.add(row.deposit_address)
     },
     getQuoteRequests: () => [...quoteRequests]
   })

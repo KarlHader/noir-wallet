@@ -3732,28 +3732,29 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'PREPARE_CONFIDENTIAL_FUNDING' ||
     message.type === 'CONFIRM_CONFIDENTIAL_FUNDING' ||
     message.type === 'GET_CONFIDENTIAL_FUNDING' ||
-    message.type === 'CANCEL_CONFIDENTIAL_FUNDING'
+    message.type === 'CANCEL_CONFIDENTIAL_FUNDING' ||
+    message.type === 'REFRESH_CONFIDENTIAL_BALANCES'
   ) {
     if (!confidentialFundingCoordinator) {
       sendResponse({ error: 'Confidential funding is unavailable in this network' })
       return true
     }
     const operation =
-      message.type === 'PREPARE_CONFIDENTIAL_FUNDING'
-        ? confidentialFundingCoordinator.prepare(message.request)
-        : message.type === 'CONFIRM_CONFIDENTIAL_FUNDING'
-          ? confidentialFundingCoordinator.confirm(message.planId, message.payloadFingerprint)
-          : message.type === 'GET_CONFIDENTIAL_FUNDING'
-            ? confidentialFundingCoordinator.getPlan(message.planId)
-            : confidentialFundingCoordinator.cancel(message.planId)
+      message.type === 'REFRESH_CONFIDENTIAL_BALANCES'
+        ? confidentialFundingCoordinator.refreshBalances(message.scope, message.authorize)
+        : message.type === 'PREPARE_CONFIDENTIAL_FUNDING'
+          ? confidentialFundingCoordinator.prepare(message.request)
+          : message.type === 'CONFIRM_CONFIDENTIAL_FUNDING'
+            ? confidentialFundingCoordinator.confirm(message.planId, message.payloadFingerprint)
+            : message.type === 'GET_CONFIDENTIAL_FUNDING'
+              ? confidentialFundingCoordinator.getPlan(message.planId)
+              : confidentialFundingCoordinator.cancel(message.planId)
     void operation
       .then(result => sendResponse({ result }))
       .catch(error => {
         console.error('[Confidential Funding] Request failed', {
           operation: message.type,
-          errorName: error instanceof Error ? error.name : 'UnknownError',
-          errorMessage:
-            error instanceof Error ? error.message : 'Confidential funding request failed'
+          errorName: error instanceof Error ? error.name : 'UnknownError'
         })
         sendResponse({
           error: error instanceof Error ? error.message : 'Confidential funding request failed'
@@ -4612,7 +4613,30 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             : { expectedDerivationIndex: message.expectedDerivationIndex })
         })
       )
-      .then(result => sendResponse({ success: true, ...result }))
+      .then(result => {
+        sendResponse({ success: true, ...result })
+        // Inventory reconciliation advances the generation and invalidates active portfolio caches.
+        const coordinator = portfolioCoordinator
+        if (!coordinator) return
+        void coordinator
+          .refreshActive()
+          .then(async model => {
+            if (!model) return
+            await chrome.runtime
+              .sendMessage({
+                type: 'PORTFOLIO_UPDATED',
+                walletId: model.scope.keyDomainId,
+                accountId: model.scope.accountId
+              })
+              .catch(() => {})
+          })
+          .catch(error => {
+            console.warn(
+              '[Portfolio] Account inventory refresh failed:',
+              error instanceof Error ? error.name : 'UnknownError'
+            )
+          })
+      })
       .catch(error =>
         sendResponse({
           error: error instanceof Error ? error.message : 'Account setup failed'

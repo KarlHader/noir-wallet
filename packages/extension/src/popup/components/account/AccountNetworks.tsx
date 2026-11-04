@@ -42,7 +42,7 @@ function ConfidentialAddressButton({
     <button
       type="button"
       title={address}
-      aria-label="Copy EVM Confidential address"
+      aria-label="Copy EVM Private address"
       className="flex w-full min-w-0 items-center gap-1.5 font-mono text-xs text-primary transition-colors hover:text-primary/80"
       onClick={event => {
         event.stopPropagation()
@@ -50,7 +50,7 @@ function ConfidentialAddressButton({
       }}
     >
       <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-primary">
-        Confidential
+        Private
       </span>
       <span className="min-w-0 truncate">{formatSortAddress(address)}</span>
       <span className="ml-auto shrink-0">

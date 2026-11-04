@@ -373,8 +373,12 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await importTestWallet(popup)
   await seedFreshAssetPrices(popup)
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
-  await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+  await popup.getByRole('button', { name: 'Add account', exact: true }).click()
   await selectNewZcashAccountHistory(popup)
   await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
   await removeZcashHistoryMock()
@@ -479,23 +483,23 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
 
   const walletChooser = popup.getByRole('button', { name: 'Choose wallet' })
   await expect(walletChooser).toBeVisible()
-  await expect(walletChooser).toHaveText('')
-  const accountAddresses = popup.getByRole('button', { name: 'Show account addresses' })
-  await expect(accountAddresses).toBeVisible()
-  await expect(accountAddresses).toContainText('Account 1')
+  await expect(popup.getByRole('button', { name: 'Show account addresses' })).toContainText(
+    'Account 1'
+  )
   await expect(popup.getByRole('button', { name: 'Choose account' })).toHaveCount(0)
   await expect(popup.getByRole('button', { name: /Copy .* account address/ })).toHaveCount(0)
 
-  await accountAddresses.click()
-  const accountAddressMenu = popup.getByLabel('Account address menu')
+  await popup.getByRole('button', { name: 'Show account addresses' }).click()
+  const accountAddressMenu = popup.getByRole('dialog', { name: 'Account 1 addresses' })
   await expect(accountAddressMenu).toBeVisible()
-  await expect(accountAddressMenu.getByText('Zcash', { exact: true })).toBeVisible()
-  await expect(accountAddressMenu.getByText('EVM', { exact: true })).toBeVisible()
-  await expect(accountAddressMenu.getByText('Bitcoin', { exact: true })).toBeVisible()
+  await expect(accountAddressMenu.getByRole('button', { name: /Copy Zcash/ }).first()).toBeVisible()
+  await expect(accountAddressMenu.getByText(/Ethereum.*EVM/)).toBeVisible()
   await captureScreenshot(popup, 'release-default-home-account-address-menu.png')
   await accountAddressMenu.getByRole('button', { name: 'View all' }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
-  await expect(popup.getByRole('region', { name: 'Account network addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  const allAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await expect(allAddresses).toBeVisible()
+  await expect(allAddresses.getByRole('heading', { name: 'Bitcoin' })).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
 
@@ -540,7 +544,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('button', { name: 'Send NEAR on NEAR' })).toBeVisible()
   await popup.getByRole('button', { name: 'Send ETH on Ethereum' }).click()
-  await expect(popup.getByLabel('Send To')).toBeFocused()
+  await expect(popup.getByLabel('ETH amount')).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Change asset' })).toHaveCount(0)
   await expect
     .poll(() =>
@@ -569,7 +573,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await recipientDialog.getByRole('button', { name: 'Close' }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
   await popup.getByRole('button', { name: 'Send ZEC on Zcash' }).click()
-  await expect(popup.getByLabel('Send To')).toBeFocused()
+  await expect(popup.getByLabel('ZEC amount')).toBeVisible()
   await expect
     .poll(() =>
       popup
@@ -578,8 +582,8 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
           elements.map(element => element.id || element.getAttribute('aria-label'))
         )
     )
-    .toEqual(['zcash-send-recipient', 'ZEC amount'])
-  await expect(popup.getByTestId('zcash-amount-card')).toHaveCSS('min-height', '92px')
+    .toEqual(['ZEC amount', 'zcash-send-recipient'])
+  await expect(popup.getByTestId('zcash-amount-card')).toHaveCSS('min-height', '40px')
   await expect(popup.getByText('Memo (optional)', { exact: true })).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeVisible()
   await captureScreenshot(popup, 'release-default-zcash-send-form.png')
@@ -601,8 +605,8 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
 
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
-  await expect(popup.getByLabel('Search Networks')).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  await expect(popup.getByLabel('Search network')).toBeVisible()
   const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
   await expect(receiveAddresses.getByRole('heading', { name: 'Zcash' })).toBeVisible()
   await expect(receiveAddresses.getByRole('heading', { name: 'Bitcoin' })).toBeVisible()
@@ -788,7 +792,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
     ).toBe(true)
   }
   await captureScreenshot(popup, 'release-default-asset-detail.png')
-  await popup.getByRole('button', { name: 'Transfer ETH between Public and Confidential' }).click()
+  await popup.getByRole('button', { name: 'Transfer ETH between Public and Private' }).click()
   const transferDialog = popup.getByRole('dialog', { name: 'Transfer ETH' })
   await expect(transferDialog).toBeVisible()
   await expect(transferDialog.getByText('Public', { exact: true })).toBeVisible()
@@ -852,7 +856,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await expect(popup.getByRole('button', { name: 'Receive Bitcoin' })).toBeInViewport()
   await captureScreenshot(popup, 'release-default-bitcoin-asset-details.png')
   await popup.getByRole('button', { name: 'Receive Bitcoin' }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   await expect(
     popup
       .getByRole('region', { name: 'Account network addresses' })
@@ -861,7 +865,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'BTC', exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Addresses', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   await expect(popup.getByRole('region', { name: 'Account network addresses' })).toBeVisible()
   await expect(popup.getByRole('heading', { name: 'Bitcoin' })).toBeVisible()
   const bitcoinAddress = popup.getByRole('region', { name: 'Bitcoin' })
@@ -874,7 +878,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await expect(popup.getByRole('heading', { name: 'BTC', exact: true })).toBeVisible()
 
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   await expect(popup.getByText('Taproot', { exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'BTC', exact: true })).toBeVisible()

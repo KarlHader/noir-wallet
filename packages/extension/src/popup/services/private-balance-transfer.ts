@@ -1,6 +1,102 @@
 import { parseDisplayUnitAmount } from '@/lib/number-format'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
+import type { AccountNetworksView } from './account-networks-client'
+import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
 
 export type PrivateBalanceTransferDirection = 'main-to-private' | 'private-to-main'
+
+export type TransferDomain = Exclude<AssetDomain, 'all'>
+
+export function getTransferDomainBalanceRaw(
+  asset: PortfolioAssetView,
+  domain: TransferDomain
+): string | null {
+  if (
+    domain === 'shield' &&
+    asset.asset.chainId.startsWith('eip155:') &&
+    asset.balance.confidentialRaw === undefined
+  ) {
+    return null
+  }
+  return getAssetDomainRaw(asset, domain)
+}
+
+function parseTransferDomain(value: string | null | undefined): TransferDomain | null {
+  return value === 'public' || value === 'private' || value === 'shield' ? value : null
+}
+
+export function resolveTransferDomains(input: {
+  readonly mode: 'public' | 'private'
+  readonly from?: string | null
+  readonly to?: string | null
+  readonly family?: 'evm' | 'zcash' | null
+}): Readonly<{ from: TransferDomain; to: TransferDomain }> {
+  const zcash = input.family === 'zcash'
+  const defaultFrom = input.mode === 'public' ? (zcash ? 'shield' : 'private') : 'public'
+  const defaultTo = input.mode === 'private' ? (zcash ? 'shield' : 'private') : 'public'
+  const requestedFrom = parseTransferDomain(input.from)
+  const requestedTo = parseTransferDomain(input.to)
+  let from = requestedFrom ?? defaultFrom
+  let to = requestedTo ?? defaultTo
+  if (zcash) {
+    if (from === 'private') from = 'shield'
+    if (to === 'private') to = 'shield'
+  }
+  if (from === to && !(requestedFrom && requestedTo)) {
+    if (!requestedFrom) from = to === 'public' ? (zcash ? 'shield' : 'private') : 'public'
+    else to = from === 'public' ? (zcash ? 'shield' : 'private') : 'public'
+  }
+  return Object.freeze({ from, to })
+}
+
+export function getPrivateTransferChainIds(
+  account: AccountNetworksView | null,
+  mainnet: boolean
+): readonly string[] {
+  if (!mainnet || !supportsEvmPrivateExecution(account?.walletSource)) return []
+  return (
+    account?.networks.flatMap(network =>
+      network.chain.family === 'evm' &&
+      network.privateExecutionAddress &&
+      network.addresses.some(address => address.preferredForReceive)
+        ? [network.chain.id]
+        : []
+    ) ?? []
+  )
+}
+
+export function selectDefaultTransferAssetId(input: {
+  readonly assets: readonly {
+    readonly asset: PortfolioAssetView
+    readonly chain: PortfolioChainView
+  }[]
+  readonly from: TransferDomain
+  readonly to: TransferDomain
+  readonly eligibleChainIds: readonly string[]
+}): string | null {
+  const funded = (item: (typeof input.assets)[number]) => {
+    const raw = getTransferDomainBalanceRaw(item.asset, input.from)
+    return raw !== null && BigInt(raw) > 0n
+  }
+  const privatePair =
+    (input.from === 'public' && input.to === 'private') ||
+    (input.from === 'private' && input.to === 'public')
+  const eligible = privatePair
+    ? input.assets.filter(item => input.eligibleChainIds.includes(item.chain.chain.id))
+    : []
+  const evm = input.assets.filter(item => item.chain.chain.family === 'evm')
+  return (
+    (
+      eligible.find(funded) ??
+      eligible[0] ??
+      (privatePair ? (evm.find(funded) ?? evm[0]) : undefined) ??
+      input.assets.find(funded) ??
+      input.assets[0] ??
+      null
+    )?.asset.asset.id ?? null
+  )
+}
 
 export function resolvePrivateBalanceTransferSource(input: {
   readonly direction: PrivateBalanceTransferDirection
@@ -35,7 +131,7 @@ export function resolvePrivateBalanceTransferAmount(input: {
   readonly amount: string
   readonly decimals: number
   readonly availableRaw: string
-  readonly sourceLabel: 'Public' | 'Confidential'
+  readonly sourceLabel: 'Public' | 'Private' | 'Shield' | 'Confidential'
 }): PrivateBalanceTransferAmountState {
   if (input.amount.length === 0 || input.amount === '.')
     return Object.freeze({ amountRaw: null, error: null })

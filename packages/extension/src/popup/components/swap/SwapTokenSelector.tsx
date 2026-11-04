@@ -128,6 +128,7 @@ export function SwapTokenSelector({
   return (
     <TokenSelector
       {...props}
+      networkFilterStyle="icons"
       stableCatalogOrder
       tokens={tokens}
       balances={balances}

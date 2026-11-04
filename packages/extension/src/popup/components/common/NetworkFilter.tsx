@@ -60,9 +60,8 @@ export function NetworkFilter({
         <button
           type="button"
           aria-label={`${ariaLabelPrefix}: ${label}`}
-          className="flex h-[30px] max-w-[190px] items-center gap-1.5 rounded-[10px] border border-border bg-transparent px-2.5 text-sm transition-colors hover:bg-white/[0.03]"
+          className="flex h-8 min-w-[117px] max-w-[190px] items-center justify-between gap-3 rounded-full bg-accent px-3.5 text-[13px] text-muted transition-colors hover:bg-white/10"
         >
-          <Icon icon="lucide:network" width={16} height={16} className="text-muted" />
           <span className="truncate">{label}</span>
           <Icon icon="lucide:chevron-down" width={13} height={13} className="text-muted" />
         </button>

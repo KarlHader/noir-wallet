@@ -167,7 +167,16 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
     !hasExactKeys(
       value,
       ['schemaVersion', 'direction'],
-      ['primaryAmount', 'counterAmount', 'feeLimit', 'sender', 'recipient', 'protocol', 'evm']
+      [
+        'primaryAmount',
+        'counterAmount',
+        'feeLimit',
+        'sender',
+        'recipient',
+        'protocol',
+        'shield',
+        'evm'
+      ]
     ) ||
     value.schemaVersion !== 1 ||
     typeof value.direction !== 'string' ||
@@ -194,6 +203,47 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
     ...(value.protocol === undefined
       ? {}
       : { protocol: parseTransactionProtocolBinding(value.protocol) }),
+    ...(value.shield === undefined
+      ? {}
+      : {
+          shield: (() => {
+            const shield = value.shield
+            if (
+              !isRecord(shield) ||
+              !hasExactKeys(shield, [
+                'schemaVersion',
+                'operation',
+                'sourceDomain',
+                'destinationDomain'
+              ]) ||
+              shield.schemaVersion !== 1 ||
+              !(
+                (shield.operation === 'deposit' &&
+                  (shield.sourceDomain === 'public' || shield.sourceDomain === 'private') &&
+                  shield.destinationDomain === 'shield') ||
+                (shield.operation === 'withdraw' &&
+                  shield.sourceDomain === 'shield' &&
+                  (shield.destinationDomain === 'public' ||
+                    shield.destinationDomain === 'private')) ||
+                (shield.operation === 'cluster' &&
+                  (shield.sourceDomain === 'public' ||
+                    shield.sourceDomain === 'private' ||
+                    shield.sourceDomain === 'shield') &&
+                  (shield.destinationDomain === 'public' ||
+                    shield.destinationDomain === 'private') &&
+                  shield.sourceDomain !== shield.destinationDomain)
+              )
+            ) {
+              throw new Error('Invalid Shield transfer intent')
+            }
+            return Object.freeze({
+              schemaVersion: 1 as const,
+              operation: shield.operation as 'deposit' | 'withdraw' | 'cluster',
+              sourceDomain: shield.sourceDomain as 'public' | 'private' | 'shield',
+              destinationDomain: shield.destinationDomain as 'public' | 'private' | 'shield'
+            })
+          })()
+        }),
     ...(value.evm === undefined
       ? {}
       : {

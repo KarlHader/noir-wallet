@@ -57,8 +57,28 @@ export interface ConfidentialSigningIdentity {
 export class ConfidentialFundingSigner {
   constructor(
     private readonly signer: EvmMultichainSigningClient,
-    private readonly loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>
+    private readonly loadContext: (chainId: ChainId) => Promise<ActiveEvmPortfolioContext | null>,
+    private readonly runActiveOperation: <T>(
+      operation: () => Promise<T>
+    ) => Promise<T> = operation => operation()
   ) {}
+
+  private async assertCurrentIdentity(
+    identity: ConfidentialSigningIdentity,
+    chainId: ChainId
+  ): Promise<void> {
+    const current = await this.resolveIdentity(chainId)
+    if (
+      current.context.chainAccount.scope.keyDomainId !==
+        identity.context.chainAccount.scope.keyDomainId ||
+      current.context.chainAccount.scope.accountId !==
+        identity.context.chainAccount.scope.accountId ||
+      current.address !== identity.address ||
+      current.peaAddress.toLowerCase() !== identity.peaAddress.toLowerCase() ||
+      current.addressIndex !== identity.addressIndex
+    )
+      throw new Error('Active Wallet Account changed before confidential signing')
+  }
 
   async resolveIdentity(chainId: ChainId): Promise<ConfidentialSigningIdentity> {
     const context = await this.loadContext(chainId)
@@ -86,54 +106,58 @@ export class ConfidentialFundingSigner {
     readonly chainId: ChainId
     readonly payload: string
   }): Promise<ConfidentialSignedPayload> {
-    const prepared = await this.signer.prepare(
-      input.identity.context.chainAccount.scope.keyDomainId,
-      {
-        kind: 'evm-personal-message',
-        chainId: input.chainId,
-        addressIndex: input.identity.addressIndex,
-        message: new TextEncoder().encode(input.payload)
-      }
-    )
-    let consumed = false
-    try {
-      if (
-        prepared.execution.kind !== 'internal' ||
-        prepared.operation !== 'message' ||
-        prepared.expiresAt <= Date.now() ||
-        prepared.summary.review.level === 'blocked'
-      ) {
-        throw new Error('Confidential signing request cannot be approved')
-      }
-      const result = await this.signer.confirm(
+    return this.runActiveOperation(async () => {
+      await this.assertCurrentIdentity(input.identity, input.chainId)
+      const prepared = await this.signer.prepare(
         input.identity.context.chainAccount.scope.keyDomainId,
-        prepared.commandId
+        {
+          kind: 'evm-personal-message',
+          chainId: input.chainId,
+          addressIndex: input.identity.addressIndex,
+          message: new TextEncoder().encode(input.payload)
+        }
       )
-      consumed = true
-      if (
-        result.kind !== 'signature' ||
-        result.signature.encoding !== 'hex' ||
-        result.address?.toLowerCase() !== input.identity.address
-      ) {
-        throw new Error('Confidential signature does not match the Main account')
+      let consumed = false
+      try {
+        if (
+          prepared.execution.kind !== 'internal' ||
+          prepared.operation !== 'message' ||
+          prepared.expiresAt <= Date.now() ||
+          prepared.summary.review.level === 'blocked'
+        ) {
+          throw new Error('Confidential signing request cannot be approved')
+        }
+        const result = await this.signer.confirm(
+          input.identity.context.chainAccount.scope.keyDomainId,
+          prepared.commandId
+        )
+        consumed = true
+        if (
+          result.kind !== 'signature' ||
+          result.signature.encoding !== 'hex' ||
+          result.address?.toLowerCase() !== input.identity.address
+        ) {
+          throw new Error('Confidential signature does not match the Main account')
+        }
+        return Object.freeze({
+          standard: 'erc191' as const,
+          payload: input.payload,
+          signature: normalizeSignature(result.signature.value)
+        })
+      } finally {
+        if (!consumed) {
+          await this.signer
+            .cancel(input.identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
+            .catch(() => {})
+        }
       }
-      return Object.freeze({
-        standard: 'erc191' as const,
-        payload: input.payload,
-        signature: normalizeSignature(result.signature.value)
-      })
-    } finally {
-      if (!consumed) {
-        await this.signer
-          .cancel(input.identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
-          .catch(() => {})
-      }
-    }
+    })
   }
 
   async prepareTransaction(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly prepared: PreparedEvmTransfer
+    readonly sourceDomain?: 'public' | 'private'
   }): Promise<
     Readonly<{
       commandId: string
@@ -141,43 +165,52 @@ export class ConfidentialFundingSigner {
       expiresAt: number
     }>
   > {
-    if (
-      input.prepared.from.toLowerCase() !== input.identity.address ||
-      input.prepared.addressIndex !== input.identity.addressIndex
-    ) {
-      throw new Error('Confidential funding deposit does not match the active Main account')
-    }
-    const prepared = await this.signer.prepare(
-      input.identity.context.chainAccount.scope.keyDomainId,
-      createEvmSigningPreparePayload(input.prepared, 'main')
-    )
-    try {
-      await assertEvmSigningSummaryMatchesPrepared(input.prepared, prepared.summary)
+    return this.runActiveOperation(async () => {
+      await this.assertCurrentIdentity(input.identity, input.prepared.chainId)
+      const expectedAddress =
+        input.sourceDomain === 'private' ? input.identity.peaAddress : input.identity.address
       if (
-        prepared.execution.kind !== 'internal' ||
-        prepared.operation !== 'transaction' ||
-        prepared.summary.review.level === 'blocked' ||
-        prepared.expiresAt <= Date.now()
+        input.prepared.from.toLowerCase() !== expectedAddress.toLowerCase() ||
+        input.prepared.addressIndex !== input.identity.addressIndex
       ) {
-        throw new Error('Confidential funding deposit cannot be approved')
+        throw new Error('Confidential funding deposit does not match the active Main account')
       }
-      return Object.freeze({
-        commandId: prepared.commandId,
-        payloadFingerprint: prepared.payloadFingerprint.digestHex,
-        expiresAt: prepared.expiresAt
-      })
-    } catch (error) {
-      await this.signer
-        .cancel(input.identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
-        .catch(() => {})
-      throw error
-    }
+      const prepared = await this.signer.prepare(
+        input.identity.context.chainAccount.scope.keyDomainId,
+        createEvmSigningPreparePayload(
+          input.prepared,
+          input.sourceDomain === 'private' ? 'private' : 'main'
+        )
+      )
+      try {
+        await assertEvmSigningSummaryMatchesPrepared(input.prepared, prepared.summary)
+        if (
+          prepared.execution.kind !== 'internal' ||
+          prepared.operation !== 'transaction' ||
+          prepared.summary.review.level === 'blocked' ||
+          prepared.expiresAt <= Date.now()
+        ) {
+          throw new Error('Confidential funding deposit cannot be approved')
+        }
+        return Object.freeze({
+          commandId: prepared.commandId,
+          payloadFingerprint: prepared.payloadFingerprint.digestHex,
+          expiresAt: prepared.expiresAt
+        })
+      } catch (error) {
+        await this.signer
+          .cancel(input.identity.context.chainAccount.scope.keyDomainId, prepared.commandId)
+          .catch(() => {})
+        throw error
+      }
+    })
   }
 
   async confirmTransaction(input: {
     readonly identity: ConfidentialSigningIdentity
     readonly commandId: string
     readonly preparedTransfer: unknown
+    readonly sourceDomain?: 'public' | 'private'
   }): Promise<
     Readonly<{
       prepared: PreparedEvmTransfer
@@ -185,32 +218,37 @@ export class ConfidentialFundingSigner {
       transactionHash: string
     }>
   > {
-    const prepared = parsePreparedEvmTransfer(input.preparedTransfer)
-    if (
-      prepared.from.toLowerCase() !== input.identity.address ||
-      prepared.addressIndex !== input.identity.addressIndex
-    ) {
-      throw new Error('Confidential funding deposit does not match the active Main account')
-    }
-    const result = await this.signer.confirm(
-      input.identity.context.chainAccount.scope.keyDomainId,
-      parseSigningCommandId(input.commandId)
-    )
-    if (
-      result.kind !== 'signed-payload' ||
-      result.payload.encoding !== 'hex' ||
-      !result.transactionId
-    ) {
-      throw new Error('Confidential funding deposit signature is invalid')
-    }
-    await assertSignedEvmTransactionMatchesPrepared(prepared, {
-      rawTransaction: result.payload.value,
-      transactionHash: result.transactionId
-    })
-    return Object.freeze({
-      prepared,
-      rawTransaction: result.payload.value,
-      transactionHash: result.transactionId
+    return this.runActiveOperation(async () => {
+      const prepared = parsePreparedEvmTransfer(input.preparedTransfer)
+      await this.assertCurrentIdentity(input.identity, prepared.chainId)
+      const expectedAddress =
+        input.sourceDomain === 'private' ? input.identity.peaAddress : input.identity.address
+      if (
+        prepared.from.toLowerCase() !== expectedAddress.toLowerCase() ||
+        prepared.addressIndex !== input.identity.addressIndex
+      ) {
+        throw new Error('Confidential funding deposit does not match the active Main account')
+      }
+      const result = await this.signer.confirm(
+        input.identity.context.chainAccount.scope.keyDomainId,
+        parseSigningCommandId(input.commandId)
+      )
+      if (
+        result.kind !== 'signed-payload' ||
+        result.payload.encoding !== 'hex' ||
+        !result.transactionId
+      ) {
+        throw new Error('Confidential funding deposit signature is invalid')
+      }
+      await assertSignedEvmTransactionMatchesPrepared(prepared, {
+        rawTransaction: result.payload.value,
+        transactionHash: result.transactionId
+      })
+      return Object.freeze({
+        prepared,
+        rawTransaction: result.payload.value,
+        transactionHash: result.transactionId
+      })
     })
   }
 
@@ -218,9 +256,15 @@ export class ConfidentialFundingSigner {
     readonly identity: ConfidentialSigningIdentity
     readonly commandId: string
   }): Promise<void> {
-    await this.signer.cancel(
-      input.identity.context.chainAccount.scope.keyDomainId,
-      parseSigningCommandId(input.commandId)
-    )
+    await this.runActiveOperation(async () => {
+      await this.assertCurrentIdentity(
+        input.identity,
+        input.identity.context.chainAccount.scope.chainId
+      )
+      await this.signer.cancel(
+        input.identity.context.chainAccount.scope.keyDomainId,
+        parseSigningCommandId(input.commandId)
+      )
+    })
   }
 }

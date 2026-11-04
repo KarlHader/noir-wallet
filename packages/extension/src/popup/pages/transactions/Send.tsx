@@ -4,14 +4,11 @@ import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
 import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanner'
-import { FundingSourceSelector } from '../../components/transaction/FundingSourceSelector'
 import { openModal } from '../../provider/ModalManager'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
 import { InlineError } from '@/popup/components/common/InlineError'
 import {
-  SendAssetHeader,
   SendAmountInputCard,
-  SendNetworkFeeCard,
   SendRecipientInputCard
 } from '../../components/transaction/SendInputCards'
 import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab'
@@ -20,23 +17,23 @@ import { toast } from '@/store/toast-store'
 import { classifyError } from '@/lib/errors'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent, type TrackOptions } from '@/lib/analytics'
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription
-} from '../../components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../../components/ui/dialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useLocation, useNavigate } from '../../provider/Router'
-import { formatSortAddress } from '@/lib/format'
-import { formatFiatAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
+import {
+  formatFiatAmount,
+  formatBaseUnitDecimalAmount,
+  formatTokenQuantity
+} from '@/lib/number-format'
+import { cn } from '@/lib/utils'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { DetailRow } from '../../components/common/DetailRow'
-import { AddressTypeLabel, AddressTypeSwitch } from '../../components/account/AddressType'
 import { TokenIcon } from '../../components/tokens/TokenIcon'
+import { Switch } from '../../components/ui/switch'
+import nearLogo from '@/images/figma-near-confidential.svg'
+import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
 import { useTransaction } from '../../hooks/useTransaction'
 import { useShieldFunds } from '../../hooks/useShieldFunds'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
@@ -75,9 +72,15 @@ import { getZcashChainId } from '@/core/chains/registry'
 export function Send() {
   const { goBack, navigate } = useNavigate()
   const location = useLocation()
-  const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() =>
-    new URLSearchParams(location.search).get('from') === 'transparent' ? 'transparent' : 'shielded'
-  )
+  const walletMode =
+    new URLSearchParams(location.search).get('mode') === 'private' ? 'private' : 'public'
+  const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() => {
+    const source = new URLSearchParams(location.search).get('from')
+    return source === 'shielded' || (source !== 'transparent' && walletMode === 'private')
+      ? 'shielded'
+      : 'transparent'
+  })
+  const [sourcePickerKind, setSourcePickerKind] = useState<'source' | 'privacy' | null>(null)
   const [toAddress, setToAddress] = useState('')
   const [amount, setAmount] = useState('')
   const [maxSelected, setMaxSelected] = useState(false)
@@ -95,6 +98,7 @@ export function Send() {
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const activeScopeRef = useRef<string | null | undefined>(undefined)
   const balance = useAccountDataStore(state => state.getCurrentBalance())
   const syncState = useAccountDataStore(state =>
@@ -106,6 +110,12 @@ export function Send() {
   const { setResult, updateStep } = useTransactionResultStore()
 
   const currentWallet = useWalletStore(state => state.getCurrentWallet())
+  const accountDisplayName = getAccountDisplayName(
+    currentWalletId ?? currentWallet?.id ?? '',
+    currentAccountId ?? currentAccount?.id ?? '',
+    currentAccount?.name ?? 'Account',
+    accountDisplayNames
+  )
   const isHardwareWallet = isZcashHardwareKeySource(currentWallet?.keySource)
   const fundingSource = getFundingSourceUnavailableReason(
     currentWallet?.keySource,
@@ -124,6 +134,11 @@ export function Send() {
 
   const fromAddress = currentAccount?.addresses[fundingSource] || ''
   const sourceBalance = getFundingBalance(balance, fundingSource)
+  const fundingOptions = getFundingSourceOptions(
+    balance,
+    currentAccount?.addresses ?? {},
+    currentWallet?.keySource
+  )
   const transparentBalance = safeBig(getShieldableTransparentBalance(balance)).toNumber()
 
   const isTransparentRecipient = isTransparentZcashAddress(effectiveToAddress)
@@ -206,6 +221,7 @@ export function Send() {
     if (previousScope === undefined || previousScope === activeScope) return
 
     setShowReview(false)
+    setSourcePickerKind(null)
     setToAddress('')
     setAmount('')
     setMaxSelected(false)
@@ -213,38 +229,19 @@ export function Send() {
     setFundingSource('shielded')
   }, [currentWalletId, currentAccountId])
 
-  const handleSelectFundingSource = () => {
-    if (!currentAccount) return
-    const scope = getActiveAccountScopeKey()
-    void openModal<FundingSource>({
-      title: 'Funding source',
-      body: resolve => (
-        <FundingSourceSelector
-          options={getFundingSourceOptions(
-            balance,
-            currentAccount.addresses,
-            currentWallet?.keySource
-          )}
-          selectedType={fundingSource}
-          zecPrice={zecPrice}
-          onSelect={source => {
-            if (scope !== getActiveAccountScopeKey()) return
-            if (
-              getFundingSourceUnavailableReason(
-                useWalletStore.getState().getCurrentWallet()?.keySource,
-                source
-              )
-            )
-              return
-            setFundingSource(source)
-            setAmount('')
-            setMaxSelected(false)
-            setShowReview(false)
-            resolve(source)
-          }}
-        />
+  const handleSelectFundingSource = (source: FundingSource) => {
+    if (
+      getFundingSourceUnavailableReason(
+        useWalletStore.getState().getCurrentWallet()?.keySource,
+        source
       )
-    })
+    )
+      return
+    setFundingSource(source)
+    setSourcePickerKind(null)
+    setAmount('')
+    setMaxSelected(false)
+    setShowReview(false)
   }
 
   const handleSelectMyAddress = async () => {
@@ -419,32 +416,142 @@ export function Send() {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container" data-wallet-mode={walletMode}>
       <PageHeader title="Send" showBack onBack={goBack} />
-      <div className="page-content">
-        {fundingSource === 'shielded' && currentWallet?.keySource !== 'keystone' && (
-          <ShieldFundsBanner
-            transparentBalance={transparentBalance}
-            action="send"
-            isShielding={isMigrating}
-            onShield={handleMigrateNow}
-          />
-        )}
+      <div className="page-content min-h-0 !px-4 pt-4">
+        <div className="space-y-2">
+          <div className="pb-1 pt-1 text-center">
+            <SendAmountInputCard
+              hero
+              testId="zcash-amount-card"
+              ariaLabel="ZEC amount"
+              value={amount}
+              onChange={nextAmount => {
+                if (!/^\d*\.?\d*$/.test(nextAmount)) return
+                setMaxSelected(false)
+                setAmount(nextAmount)
+              }}
+              available={sourceBalance.available}
+              pending={sourceBalance.pending}
+              symbol="ZEC"
+              priceUsd={zecPrice}
+              maxSelected={maxSelected}
+              invalid={reviewInsufficient}
+              error={amountErrorCopy}
+            />
+            <span className="mt-2 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2 text-base font-medium leading-[21px]">
+              <TokenIcon symbol="ZEC" nativeChain="zcash" size={26} />
+              ZEC
+            </span>
+            {currentNetwork === 'testnet' && (
+              <p className="mt-1 text-xs text-muted">Zcash Testnet</p>
+            )}
+          </div>
 
-        <div className="space-y-3">
-          <SendAssetHeader
-            symbol="ZEC"
-            networkName={currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-            nativeChain="zcash"
-          />
+          <div className="space-y-2.5 pt-[21px]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium leading-[18px] text-muted">Send from</p>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Send privately"
+                aria-checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
+                disabled={
+                  fundingSource === 'shielded' &&
+                  Boolean(
+                    fundingOptions.find(option => option.type === 'transparent')?.disabledReason
+                  )
+                }
+                onClick={() => {
+                  if (fundingSource === 'shielded') handleSelectFundingSource('transparent')
+                  else setSourcePickerKind('privacy')
+                }}
+                className="flex items-center gap-1 text-sm font-normal leading-[18px] text-muted disabled:opacity-40"
+              >
+                <Icon icon="lucide:shield-check" width={15} height={15} className="text-primary" />
+                Send privately
+                <Switch
+                  checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
+                  size="sm"
+                />
+              </button>
+            </div>
+            <div className="flex min-h-[72px] items-start gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-[11px] pb-2 pt-[14px]">
+              <button
+                type="button"
+                aria-label="Choose send source"
+                aria-haspopup="dialog"
+                onClick={() => setSourcePickerKind('source')}
+                className="min-w-0 flex-1 text-left"
+              >
+                <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium leading-[18px]">
+                  <span className="truncate">{accountDisplayName}</span>
+                  <span
+                    className={cn(
+                      'shrink-0 rounded px-1.5 py-px text-[11px] leading-4',
+                      fundingSource === 'shielded'
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-white/10 text-muted'
+                    )}
+                  >
+                    {fundingSource === 'shielded' ? 'Shield' : 'Public'}
+                  </span>
+                  <Icon icon="lucide:chevron-down" width={14} height={14} className="shrink-0" />
+                </span>
+                <span className="mt-[11px] flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
+                  {fundingSource === 'shielded' && (
+                    <img src={zcashShieldLogo} alt="" className="size-4 shrink-0 rounded" />
+                  )}
+                  <span className="truncate" title={fromAddress}>
+                    {fundingSource === 'shielded' ? 'Zcash shield' : formatSortAddress(fromAddress)}
+                  </span>
+                </span>
+              </button>
+              <span className="flex max-w-[38%] shrink-0 flex-col items-end gap-2">
+                <span
+                  className="max-w-full break-all text-right text-sm font-medium leading-[18px]"
+                  title={sourceBalance.available}
+                >
+                  {formatTokenQuantity(sourceBalance.available)}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Max"
+                  onClick={() => {
+                    setMaxSelected(true)
+                    setAmount(effectiveMaxStr)
+                    void maxTransfer.request()
+                  }}
+                  disabled={
+                    !effectiveToAddress ||
+                    !fromAddress ||
+                    safeBig(effectiveMaxStr).lte(0) ||
+                    maxTransfer.loading
+                  }
+                  className="rounded bg-white/10 px-2 py-0.5 text-[11px] leading-4 text-muted disabled:opacity-40"
+                >
+                  Max
+                </button>
+              </span>
+            </div>
+          </div>
 
-          <div>
+          {fundingSource === 'shielded' && currentWallet?.keySource !== 'keystone' && (
+            <ShieldFundsBanner
+              transparentBalance={transparentBalance}
+              action="send"
+              isShielding={isMigrating}
+              onShield={handleMigrateNow}
+            />
+          )}
+
+          <div className="!mt-[30px]">
             <SendRecipientInputCard
               id="zcash-send-recipient"
               value={toAddress}
               onChange={setToAddress}
               placeholder="Enter address"
-              autoFocus
+              variant="filled"
               onSelectRecipient={handleSelectMyAddress}
             />
             {zns.loading && (
@@ -469,41 +576,8 @@ export function Send() {
             )}
           </div>
 
-          <SendAmountInputCard
-            testId="zcash-amount-card"
-            ariaLabel="ZEC amount"
-            value={amount}
-            onChange={nextAmount => {
-              if (!/^\d*\.?\d*$/.test(nextAmount)) return
-              setMaxSelected(false)
-              setAmount(nextAmount)
-            }}
-            available={sourceBalance.available}
-            pending={sourceBalance.pending}
-            showBalanceHelp
-            symbol="ZEC"
-            priceUsd={zecPrice}
-            maxSelected={maxSelected}
-            maxLoading={maxTransfer.loading}
-            maxDisabled={!effectiveToAddress || !fromAddress || safeBig(effectiveMaxStr).lte(0)}
-            onMax={() => {
-              setMaxSelected(true)
-              setAmount(effectiveMaxStr)
-              void maxTransfer.request()
-            }}
-            invalid={reviewInsufficient}
-            error={amountErrorCopy}
-            headerAction={
-              <AddressTypeSwitch
-                type={fundingSource}
-                onClick={handleSelectFundingSource}
-                size="md"
-                ariaLabel="Select funding source"
-              />
-            }
-          />
-
-          <SendNetworkFeeCard>
+          <div className="flex min-h-5 items-center justify-between gap-2 text-xs">
+            <span className="text-muted">Fee</span>
             <FeeTierPicker
               tier={feeTier}
               onTierChange={setFeeTier}
@@ -512,7 +586,11 @@ export function Send() {
               allowFallback={!feeRequired}
               hideLabel
             />
-          </SendNetworkFeeCard>
+          </div>
+          <div className="flex min-h-5 items-center justify-between text-xs">
+            <span className="text-muted">Est. time</span>
+            <span>—</span>
+          </div>
           {feeError && (
             <InlineError
               className="px-1"
@@ -572,6 +650,7 @@ export function Send() {
 
       <div className="page-footer">
         <Button
+          size="wallet"
           disabled={
             !effectiveToAddress ||
             !amount ||
@@ -587,86 +666,222 @@ export function Send() {
         </Button>
       </div>
 
+      <Dialog
+        open={sourcePickerKind !== null}
+        onOpenChange={open => {
+          if (!open) setSourcePickerKind(null)
+        }}
+      >
+        <DialogContent
+          position="bottom"
+          aria-label="Choose send source"
+          showCloseButton={false}
+          className="gap-0 rounded-t-2xl border-0 bg-wallet-surface p-0"
+        >
+          <DialogTitle className="sr-only">Choose send source</DialogTitle>
+          <DialogDescription className="sr-only">
+            Select the balance to send from.
+          </DialogDescription>
+          <div className="relative flex h-11 items-center justify-end px-4">
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => setSourcePickerKind(null)}
+              className="flex size-8 items-center justify-center"
+            >
+              <Icon icon="lucide:x" width={18} height={18} />
+            </button>
+          </div>
+          <div className="flex flex-col items-center pb-5 pt-1">
+            <TokenIcon symbol="ZEC" nativeChain="zcash" size={40} />
+            <span className="mt-1 text-base font-medium">ZEC</span>
+          </div>
+          <div className="space-y-2 px-4 pb-8">
+            {sourcePickerKind === 'source' &&
+              fundingOptions
+                .filter(option => option.type === 'transparent')
+                .map(option => (
+                  <button
+                    key={option.type}
+                    type="button"
+                    disabled={Boolean(option.disabledReason)}
+                    onClick={() => handleSelectFundingSource('transparent')}
+                    className={cn(
+                      'flex min-h-[60px] w-full items-center gap-3 rounded-lg border px-3 text-left text-sm disabled:opacity-40',
+                      fundingSource === 'transparent'
+                        ? 'border-primary bg-[var(--color-wallet-selected)]'
+                        : 'border-white/10 bg-[var(--color-wallet-selected)]'
+                    )}
+                  >
+                    <Icon icon="lucide:eye" width={18} height={18} />
+                    <span className="flex-1">Public</span>
+                    <span className="max-w-[35%] break-all text-right">
+                      {formatTokenQuantity(option.available)}
+                    </span>
+                  </button>
+                ))}
+            <button
+              type="button"
+              disabled
+              aria-label="NEAR Confidential Intents unavailable"
+              className="flex min-h-[60px] w-full items-center gap-3 rounded-lg border border-white/10 bg-[var(--color-wallet-selected)] px-3 text-left text-sm opacity-40"
+            >
+              <img src={nearLogo} alt="" className="size-6 shrink-0 rounded" />
+              <span className="min-w-0 flex-1 truncate">NEAR Confidential Intents</span>
+              <span>—</span>
+            </button>
+            {fundingOptions
+              .filter(option => option.type === 'shielded')
+              .map(option => (
+                <button
+                  key={option.type}
+                  type="button"
+                  disabled={Boolean(option.disabledReason)}
+                  onClick={() => handleSelectFundingSource('shielded')}
+                  className={cn(
+                    'flex min-h-[60px] w-full items-center gap-3 rounded-lg border px-3 text-left text-sm disabled:opacity-40',
+                    fundingSource === 'shielded'
+                      ? 'border-primary bg-[var(--color-wallet-selected)]'
+                      : 'border-white/10 bg-[var(--color-wallet-selected)]'
+                  )}
+                >
+                  <img src={zcashShieldLogo} alt="" className="size-6 shrink-0 rounded" />
+                  <span className="min-w-0 flex-1 truncate">Zcash shield</span>
+                  <span className="max-w-[35%] break-all text-right">
+                    {formatTokenQuantity(option.available)}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showReview} onOpenChange={setShowReview}>
-        <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
-          <DialogHeader className="px-5 pt-5 pb-4">
-            <DialogTitle className="text-center">Review Send</DialogTitle>
-            <DialogDescription className="sr-only">
-              Review your transaction details before confirming
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col items-center pb-4">
-            <div className="relative mb-3">
-              <TokenIcon symbol="ZEC" nativeChain="zcash" size="xl" />
+        <DialogContent
+          position="bottom"
+          showCloseButton={false}
+          aria-label="Review Send"
+          data-wallet-mode={walletMode}
+          className="flex h-dvh max-h-dvh flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
+        >
+          <DialogTitle className="sr-only">Review Send</DialogTitle>
+          <DialogDescription className="sr-only">
+            Review the amount, destination, and fee before sending.
+          </DialogDescription>
+          <div className="relative flex h-14 shrink-0 items-center justify-center">
+            <button
+              type="button"
+              aria-label="Back to Send"
+              onClick={() => setShowReview(false)}
+              className="absolute left-4 flex size-7 items-center justify-center"
+            >
+              <Icon icon="lucide:chevron-left" width={22} height={22} />
+            </button>
+            <span className="text-lg font-medium leading-[23px]">Sending</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4">
+            <div className="flex h-32 flex-col items-center justify-center">
+              <div className="max-w-full text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]">
+                <AmountDisplay
+                  value={amount}
+                  symbol="ZEC"
+                  className="gap-[0.25em] font-sans normal-nums"
+                />
+              </div>
+              <p className="mt-3 text-base leading-[21px] text-muted">
+                {formatFiatAmount(
+                  safeBig(amount || '0')
+                    .times(zecPrice || 0)
+                    .toFixed(),
+                  { showSign: true }
+                )}
+              </p>
             </div>
-            <div className="max-w-full text-center text-2xl font-bold">
-              <AmountDisplay value={amount} symbol="ZEC" />
-            </div>
-            <p className="text-sm text-muted mt-0.5">
-              ≈{' '}
-              {formatFiatAmount(
-                safeBig(amount || '0')
-                  .times(zecPrice || 0)
-                  .toFixed(),
-                { showSign: true }
+            <div className="mt-1 divide-y divide-white/10 text-sm font-medium leading-[18px]">
+              <div className="flex min-h-16 items-center justify-between gap-3">
+                <span className="text-muted">Send from</span>
+                <span className="min-w-0 text-right">
+                  <span className="flex items-center justify-end gap-1.5">
+                    {accountDisplayName}
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-xs',
+                        fundingSource === 'shielded'
+                          ? 'bg-primary/10 text-primary'
+                          : 'bg-white/10 text-muted'
+                      )}
+                    >
+                      {fundingSource === 'shielded' ? 'Shield' : 'Public'}
+                    </span>
+                  </span>
+                  <span
+                    className="block truncate text-xs font-normal leading-4 text-muted"
+                    title={fromAddress}
+                  >
+                    {formatSortAddress(fromAddress)}
+                  </span>
+                </span>
+              </div>
+              <div className="flex min-h-16 items-center justify-between gap-3">
+                <span className="text-muted">To</span>
+                <span className="min-w-0 max-w-[70%] text-right">
+                  {zns.name && <span className="block text-sm">{zns.name}</span>}
+                  <span
+                    className="block truncate text-xs font-normal leading-4 text-muted"
+                    title={effectiveToAddress}
+                  >
+                    {formatSortAddress(effectiveToAddress)}
+                  </span>
+                </span>
+              </div>
+              <div className="flex min-h-12 items-center justify-between">
+                <span className="text-muted">Network</span>
+                <span>{currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}</span>
+              </div>
+              {effectiveMemo && (
+                <div className="flex min-h-12 items-center justify-between gap-3">
+                  <span className="text-muted">Memo</span>
+                  <span className="max-w-[65%] break-all text-right text-xs">{effectiveMemo}</span>
+                </div>
               )}
-            </p>
-          </div>
-
-          <div className="mx-5 bg-card rounded-xl p-4 space-y-3">
-            <DetailRow label="From">
-              <div className="flex items-center gap-2">
-                <AddressTypeLabel type={fundingSource} />
-                <span className="font-mono text-xs text-muted">
-                  {formatSortAddress(fromAddress)}
-                </span>
+              <div className="flex min-h-12 items-center justify-between gap-2">
+                <span className="text-muted">Network fee</span>
+                <FeeTierPicker
+                  tier={feeTier}
+                  onTierChange={setFeeTier}
+                  feeByTier={displayedFeeByTier}
+                  loading={displayedFeeLoading}
+                  allowFallback={false}
+                  hideLabel
+                />
               </div>
-            </DetailRow>
-
-            <DetailRow label="To">
-              <div className="text-right">
-                {zns.name && <span className="text-xs text-primary block">{zns.name}</span>}
-                <span className="font-mono text-xs text-muted">
-                  {formatSortAddress(effectiveToAddress)}
-                </span>
+              <div className="flex min-h-12 items-center justify-between">
+                <span className="text-muted">Est. time</span>
+                <span>—</span>
               </div>
-            </DetailRow>
-
-            {effectiveMemo && (
-              <DetailRow label="Memo">
-                <span className="text-xs text-right break-all max-w-[180px]">{effectiveMemo}</span>
-              </DetailRow>
+            </div>
+            {feeError && (
+              <InlineError
+                className="mt-3"
+                message="Could not estimate network fee"
+                onRetry={retryFeeEstimate}
+              />
             )}
-
-            <FeeTierPicker
-              tier={feeTier}
-              onTierChange={setFeeTier}
-              feeByTier={displayedFeeByTier}
-              loading={displayedFeeLoading}
-              allowFallback={false}
-            />
           </div>
-          {feeError && (
-            <InlineError
-              className="mx-5 mt-3"
-              message="Could not estimate network fee"
-              onRetry={retryFeeEstimate}
-            />
-          )}
-
-          <div className="p-5 flex gap-3">
+          <div className="flex shrink-0 gap-2.5 px-4 pb-5 pt-2">
             <Button
               variant="outline"
+              size="wallet"
               onClick={() => setShowReview(false)}
-              className="flex-1 h-[45px]"
+              className="h-[45px] flex-1"
             >
               Cancel
             </Button>
             <Button
+              size="wallet"
               onClick={handleConfirm}
               disabled={reviewInsufficient || !feeReady || isHardwareSigning}
-              className="flex-1 h-[45px]"
+              className="h-[45px] flex-1"
             >
               {isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}
             </Button>

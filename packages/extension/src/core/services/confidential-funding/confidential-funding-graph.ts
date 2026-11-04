@@ -8,6 +8,9 @@ import {
 
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly sourceDomain?: 'public' | 'private' | 'shield'
+  readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly scope: TransactionAccountScope
   readonly source: Readonly<{
     chainId: string
@@ -29,6 +32,20 @@ export function createConfidentialFundingGraph(input: {
   readonly signedWithdrawFingerprint?: string
   readonly now: number
 }): TransactionGraph {
+  if (
+    input.operation &&
+    ((input.operation === 'deposit' &&
+      (!['public', 'private'].includes(input.sourceDomain ?? '') ||
+        input.destinationDomain !== 'shield')) ||
+      (input.operation === 'withdraw' &&
+        (input.sourceDomain !== 'shield' ||
+          !['public', 'private'].includes(input.destinationDomain ?? ''))) ||
+      (input.operation === 'cluster' &&
+        (!['public', 'private', 'shield'].includes(input.sourceDomain ?? '') ||
+          !['public', 'private'].includes(input.destinationDomain ?? '') ||
+          input.sourceDomain === input.destinationDomain)))
+  )
+    throw new Error('Confidential funding graph route is invalid')
   if (!input.requiresDeposit && !/^[0-9a-f]{64}$/.test(input.signedWithdrawFingerprint ?? '')) {
     throw new Error('Confidential funding graph requires a frozen signed withdraw batch')
   }
@@ -44,7 +61,12 @@ export function createConfidentialFundingGraph(input: {
     root: {
       id: transactionId,
       scope: input.scope,
-      kind: 'swap',
+      kind:
+        input.operation === 'deposit'
+          ? 'shield'
+          : input.operation === 'withdraw' || input.operation === 'cluster'
+            ? 'withdraw'
+            : 'swap',
       status: input.requiresDeposit ? 'signed' : 'confirming',
       segmentIds,
       createdAt: input.now,
@@ -52,7 +74,17 @@ export function createConfidentialFundingGraph(input: {
       revision: 0,
       intent: {
         schemaVersion: 1,
-        direction: 'outgoing',
+        direction: input.operation ? 'self' : 'outgoing',
+        ...(input.operation
+          ? {
+              shield: {
+                schemaVersion: 1 as const,
+                operation: input.operation,
+                sourceDomain: input.sourceDomain!,
+                destinationDomain: input.destinationDomain!
+              }
+            }
+          : {}),
         primaryAmount: { assetId: input.source.assetId, amountRaw: input.source.amountRaw },
         counterAmount: {
           assetId: input.destination.assetId,
@@ -130,11 +162,14 @@ export function createConfidentialFundingGraph(input: {
         id: refundId,
         transactionId,
         role: 'refund',
-        target: {
-          kind: 'protocol',
-          provider: 'Confidential Intents',
-          account: input.source.address
-        },
+        target:
+          input.operation === 'deposit'
+            ? { kind: 'onchain', chainId: input.source.chainId }
+            : {
+                kind: 'protocol',
+                provider: 'Confidential Intents',
+                account: input.source.address
+              },
         status: 'created',
         requiredForFinality: false,
         dependsOn: [relayId],

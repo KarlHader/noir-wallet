@@ -30,8 +30,14 @@ export function SendRecipientInputCard({
   readonly onSelectRecipient?: () => void
 }) {
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="block px-1 text-xs font-medium text-foreground/80">
+    <div className={cn('space-y-1.5', variant === 'filled' && 'space-y-3')}>
+      <label
+        htmlFor={id}
+        className={cn(
+          'block px-1 text-xs font-medium text-foreground/80',
+          variant === 'filled' && 'px-0 text-sm leading-[18px]'
+        )}
+      >
         {label}
       </label>
       <Input
@@ -46,7 +52,7 @@ export function SendRecipientInputCard({
         className={cn(
           'pr-16 font-mono text-sm shadow-none focus-visible:ring-0',
           variant === 'filled'
-            ? 'h-[46px] rounded-xl border-0 bg-card pl-3 pr-12'
+            ? 'h-[54px] rounded-[10px] border border-white/10 bg-wallet-surface pl-[15px] pr-12 font-sans font-medium leading-[18px]'
             : 'h-14 rounded-2xl border-white/35 bg-transparent pl-4 focus-visible:border-white/60'
         )}
         endContent={
@@ -90,6 +96,7 @@ export function SendAmountInputCard({
   pending,
   showBalanceHelp = false,
   headerAction,
+  hero = false,
   title,
   testId
 }: {
@@ -109,6 +116,7 @@ export function SendAmountInputCard({
   readonly pending?: string
   readonly showBalanceHelp?: boolean
   readonly headerAction?: ReactNode
+  readonly hero?: boolean
   readonly title?: string
   readonly testId?: string
 }) {
@@ -116,8 +124,8 @@ export function SendAmountInputCard({
   const availableFiat = formatSendFiatValue(available, priceUsd)
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2 px-1">
+    <div className={cn('space-y-1.5', hero && 'space-y-0')}>
+      <div className={cn('flex items-center justify-between gap-2 px-1', hero && 'sr-only')}>
         <span className="text-xs font-medium text-foreground/80">Amount</span>
         {headerAction}
       </div>
@@ -126,19 +134,35 @@ export function SendAmountInputCard({
         title={title}
         className={cn(
           'min-h-[92px] rounded-2xl border px-4 py-3 transition-colors focus-within:border-white/60',
-          invalid ? 'border-warning' : 'border-white/35'
+          hero
+            ? 'min-h-10 rounded-none border-transparent px-0 py-0 focus-within:border-transparent'
+            : invalid
+              ? 'border-warning'
+              : 'border-white/35'
         )}
       >
-        <div className="flex min-h-8 items-center justify-between gap-3">
+        <div className={cn('flex min-h-8 items-center justify-between gap-3', hero && 'relative')}>
           <input
             aria-label={ariaLabel}
             inputMode="decimal"
             value={value}
+            title={hero && value ? value : undefined}
+            style={
+              hero
+                ? {
+                    fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, value.length))))}px`
+                  }
+                : undefined
+            }
             aria-invalid={invalid || undefined}
             aria-describedby={error ? `${testId ?? 'send-amount-card'}-error` : undefined}
             onChange={event => onChange(event.target.value)}
             placeholder="0"
-            className="min-w-0 flex-1 bg-transparent font-mono text-2xl text-foreground outline-none placeholder:text-muted/45"
+            className={cn(
+              'min-w-0 flex-1 bg-transparent font-mono text-2xl text-foreground outline-none placeholder:text-muted/45',
+              hero &&
+                'h-10 px-2 text-center font-sans text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
+            )}
           />
           {onMax && (
             <button
@@ -149,6 +173,7 @@ export function SendAmountInputCard({
               disabled={maxDisabled || maxLoading}
               className={cn(
                 'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
+                hero && 'absolute right-0 top-1/2 -translate-y-1/2',
                 maxSelected && 'bg-primary/15 text-primary'
               )}
             >
@@ -160,9 +185,14 @@ export function SendAmountInputCard({
             </button>
           )}
         </div>
-        <div className="mt-3 flex min-w-0 items-center justify-between gap-3 text-xs leading-4">
+        <div
+          className={cn(
+            'mt-3 flex min-w-0 items-center justify-between gap-3 text-xs leading-4',
+            hero && 'hidden'
+          )}
+        >
           <span className="shrink-0 text-muted">{amountFiat ? `~${amountFiat}` : '—'}</span>
-          <div className="min-w-0 text-right text-muted">
+          <div className={cn('min-w-0 text-right text-muted', hero && 'hidden')}>
             <div className="flex min-w-0 items-center justify-end gap-1">
               <span className="min-w-0 break-all" title={available}>
                 {availableLabel}{' '}

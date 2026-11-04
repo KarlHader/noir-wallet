@@ -13,6 +13,7 @@ import { BalanceHelp } from '../transaction/BalanceHelp'
 import { SendRecipientInputCard } from '../transaction/SendInputCards'
 import { safeBig } from '@/lib/big'
 import { InlineError } from '../common/InlineError'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 
 interface SwapInputViewProps {
   tokenIn: SwapToken | null
@@ -28,6 +29,7 @@ interface SwapInputViewProps {
   fromFiat: string
   toFiat: string
   rate: string
+  providerName?: string
   addressType: AddressType
   destinationAddress?: string
   spendableBalance: string
@@ -100,7 +102,7 @@ interface SwapAssetCardProps {
 function SwapAssetCardSkeleton({ direction }: { readonly direction: 'From' | 'To' }) {
   return (
     <section
-      className="min-h-[124px] rounded-xl bg-card/60 px-4 py-3.5"
+      className="min-h-[126px] py-3"
       role="status"
       aria-label={`Loading ${direction.toLowerCase()} assets`}
     >
@@ -129,7 +131,7 @@ function ReceiveAddressSkeleton() {
   return (
     <div role="status" aria-label="Loading receive address">
       <Skeleton className="mb-2 h-3.5 w-24" />
-      <div className="flex h-[46px] items-center gap-3 rounded-xl bg-card px-3">
+      <div className="flex h-[46px] items-center gap-3 rounded-lg bg-card px-3">
         <Skeleton className="size-6 shrink-0 rounded-lg" />
         <Skeleton className="h-3.5 w-36" />
         <Skeleton className="ml-auto h-3 w-12 bg-white/[0.05]" />
@@ -148,8 +150,8 @@ function SwapInputSkeleton() {
       >
         <div className="relative">
           <SwapAssetCardSkeleton direction="From" />
-          <Skeleton className="absolute left-1/2 top-[108px] z-10 size-9 -translate-x-1/2 rounded-full border-[3px] border-background bg-card" />
-          <div className="mt-2">
+          <Skeleton className="absolute left-1/2 top-[109px] z-10 size-7 -translate-x-1/2 rounded-md bg-card" />
+          <div className="border-t border-white/10 pt-3">
             <SwapAssetCardSkeleton direction="To" />
           </div>
         </div>
@@ -199,15 +201,15 @@ function SwapAssetCard({
   const longAmount = amount.length > 12
 
   return (
-    <section className="min-h-[124px] rounded-xl bg-card/60 px-4 py-3.5">
-      <div className="flex h-5 min-w-0 items-center justify-between gap-2 text-sm">
+    <section className="min-h-[126px] py-3">
+      <div className="flex h-5 min-w-0 items-center justify-between gap-2 text-[11px]">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="shrink-0 text-muted">{direction}</span>
           {accountAction}
           {!accountAction && hasAccountDetails && (
             <>
               {accountAddress ? (
-                <span className="truncate font-mono text-[13px]" title={accountAddress}>
+                <span className="truncate font-mono text-[10px] text-muted" title={accountAddress}>
                   {formatSortAddress(accountAddress)}
                 </span>
               ) : accountFallbackLabel ? (
@@ -215,13 +217,22 @@ function SwapAssetCard({
               ) : null}
               {!accountAction &&
                 accountBadge &&
-                (accountBadge === 'Confidential' || accountBadge === 'Public' ? (
+                (accountBadge === 'Confidential' ||
+                accountBadge === 'Private' ||
+                accountBadge === 'Public' ? (
                   <ExecutionAccountBadge
-                    mode={accountBadge === 'Confidential' ? 'private' : 'main'}
-                    iconOnly
+                    mode={accountBadge === 'Public' ? 'main' : 'private'}
+                    className="h-[17px] px-1.5"
                   />
                 ) : (
-                  <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                  <span
+                    className={cn(
+                      'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
+                      accountBadge === 'Shielded' || accountBadge === 'Shield'
+                        ? 'bg-success/10 text-success'
+                        : 'bg-white/7 text-muted'
+                    )}
+                  >
                     {accountBadge}
                   </span>
                 ))}
@@ -244,18 +255,32 @@ function SwapAssetCard({
               title={
                 maxDisabled ? maxDisabledReason : onMaxClick ? 'Use maximum balance' : 'Balance'
               }
-              className="flex min-w-0 shrink items-center gap-1.5 text-[12px] text-muted transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex min-w-0 shrink items-center gap-1 text-[10px] text-muted transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
             >
-              <Icon
-                icon={maxLoading ? 'lucide:loader-circle' : 'lucide:wallet-cards'}
-                width={14}
-                height={14}
-                className={maxLoading ? 'shrink-0 animate-spin' : 'shrink-0'}
-              />
+              {maxLoading && (
+                <Icon
+                  icon="lucide:loader-circle"
+                  width={12}
+                  height={12}
+                  className="shrink-0 animate-spin"
+                />
+              )}
+              <span className="shrink-0">Bal.</span>
               <span className="min-w-0 truncate text-right font-mono" title={balance}>
                 {formatTokenQuantity(balance)}
               </span>
             </button>
+            {onMaxClick && (
+              <button
+                type="button"
+                onClick={onMaxClick}
+                disabled={maxLoading || maxDisabled}
+                title={maxDisabled ? maxDisabledReason : 'Use maximum balance'}
+                className="shrink-0 text-[10px] font-medium text-foreground hover:text-primary disabled:opacity-50"
+              >
+                Max
+              </button>
+            )}
             {balanceHelp && <BalanceHelp kind="available" />}
           </div>
         )}
@@ -276,7 +301,7 @@ function SwapAssetCard({
           longAmount
             ? 'flex flex-col items-stretch gap-2'
             : 'flex items-center justify-between gap-3',
-          validationMessage ? 'mt-2' : 'mt-5'
+          validationMessage ? 'mt-2' : 'mt-4'
         )}
       >
         <button
@@ -284,17 +309,17 @@ function SwapAssetCard({
           onClick={onTokenSelect}
           disabled={tokenSelectLocked}
           aria-label={`${direction} asset`}
-          className="flex min-w-0 items-center gap-2.5 text-left transition-opacity enabled:hover:opacity-80"
+          className="flex min-w-0 items-center gap-2 text-left transition-opacity enabled:hover:opacity-80"
         >
-          <TokenIcon token={token || undefined} size={36} />
+          <TokenIcon token={token || undefined} size={30} />
           <span className="min-w-0">
-            <span className="flex items-center gap-1.5 text-lg font-semibold leading-5">
+            <span className="flex items-center gap-1 text-base font-semibold leading-5">
               {formatSymbol(token?.symbol) || 'Select'}
               {!tokenSelectLocked && (
                 <Icon icon="lucide:chevron-down" width={16} height={16} className="text-muted" />
               )}
             </span>
-            <span className="mt-1 block truncate text-xs text-muted">
+            <span className="mt-0.5 block truncate text-[10px] text-muted">
               {token ? formatChainName(token.blockchain) : 'Choose network'}
             </span>
           </span>
@@ -307,7 +332,7 @@ function SwapAssetCard({
               aria-label={isEstimatedAmount && amount ? `Estimated output: ${amount}` : undefined}
               title={amount || undefined}
               className={cn(
-                'break-all font-mono text-xl leading-6',
+                'break-all font-sans text-lg font-medium leading-6',
                 isEstimatedAmount && 'text-muted'
               )}
             >
@@ -338,10 +363,15 @@ function SwapAssetCard({
               aria-label={`${direction} amount`}
               aria-invalid={Boolean(validationMessage) || undefined}
               aria-describedby={validationMessage ? 'swap-source-amount-error' : undefined}
-              className="w-full min-w-0 bg-transparent text-right font-mono text-xl leading-6 outline-none placeholder:text-muted/60"
+              className="w-full min-w-0 bg-transparent text-right font-sans text-lg font-medium leading-6 outline-none placeholder:text-muted/60"
             />
           )}
-          <p className={cn('mt-1 truncate text-xs text-muted', isEstimatedAmount && 'opacity-70')}>
+          <p
+            className={cn(
+              'mt-0.5 truncate text-[10px] text-muted',
+              isEstimatedAmount && 'opacity-70'
+            )}
+          >
             {isEstimatedAmount ? (
               <span className="inline-flex items-center justify-end gap-1">
                 {isAmountLoading && (
@@ -354,8 +384,7 @@ function SwapAssetCard({
                   />
                 )}
                 <span>
-                  Estimated
-                  {fiatValue ? ` · ≈${formatFiatAmount(fiatValue, { showSign: true })}` : ''}
+                  {fiatValue ? `≈${formatFiatAmount(fiatValue, { showSign: true })}` : 'Estimated'}
                 </span>
               </span>
             ) : fiatValue ? (
@@ -392,6 +421,7 @@ export function SwapInputView({
   fromFiat,
   toFiat,
   rate,
+  providerName,
   addressType,
   destinationAddress,
   spendableBalance,
@@ -434,7 +464,8 @@ export function SwapInputView({
   onOpenSlippageSetting,
   onGetQuote
 }: SwapInputViewProps) {
-  const [showDetails, setShowDetails] = useState(false)
+  const [showRefundAddress, setShowRefundAddress] = useState(false)
+  const [recipientSelectorOpen, setRecipientSelectorOpen] = useState(false)
   const destinationBadge =
     destinationBadgeOverride ??
     (isZecDestination && !requiresRecipientAddress
@@ -446,6 +477,7 @@ export function SwapInputView({
     ? insufficientMessage ||
       (feeIsApproximate ? 'Insufficient balance' : `Insufficient balance (Fee: ${networkFee} ZEC)`)
     : undefined
+  const hasQuoteDetails = Boolean(estimatedOut) && rate !== '...' && rate !== '0'
 
   if (catalogError) {
     return (
@@ -463,7 +495,7 @@ export function SwapInputView({
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3 pt-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-2">
         <div className="relative">
           <SwapAssetCard
             direction="From"
@@ -487,7 +519,7 @@ export function SwapInputView({
             validationMessage={balanceValidationMessage}
           />
 
-          <div className="relative mt-2">
+          <div className="relative border-t border-white/10 pt-2">
             {!hideSwitchAssets && (
               <Button
                 type="button"
@@ -502,14 +534,14 @@ export function SwapInputView({
                       ? 'Switch assets'
                       : 'The destination asset is not available in this wallet'
                 }
-                className="absolute -top-6 left-1/2 z-10 size-9 -translate-x-1/2 rounded-full border-[3px] border-background bg-card p-0 text-foreground hover:bg-popover disabled:opacity-40"
+                className="absolute -top-3.5 left-1/2 z-10 size-7 -translate-x-1/2 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
                 variant="secondary"
               >
                 <Icon
                   icon={switchingTokens ? 'lucide:loader-circle' : 'lucide:arrow-down-up'}
                   className={switchingTokens ? 'animate-spin' : undefined}
-                  width={17}
-                  height={17}
+                  width={16}
+                  height={16}
                 />
               </Button>
             )}
@@ -522,6 +554,44 @@ export function SwapInputView({
               accountAddress={destinationAddress}
               accountBadge={destinationBadge}
               accountFallbackLabel={requiresRecipientAddress ? 'Custom address' : 'Wallet'}
+              accountAction={
+                !hideReceiveAddress && tokenOut && !destinationAssetsLoading ? (
+                  <button
+                    type="button"
+                    onClick={() => setRecipientSelectorOpen(true)}
+                    aria-label="Choose receive account"
+                    title={destinationAddress || 'Choose receive account'}
+                    className="flex min-w-0 items-center gap-1.5 text-[11px] transition-colors hover:text-primary"
+                  >
+                    <span className="min-w-0 truncate font-mono text-[10px] text-muted">
+                      {destinationAddress
+                        ? formatSortAddress(destinationAddress)
+                        : requiresRecipientAddress
+                          ? 'Custom address'
+                          : 'Wallet'}
+                    </span>
+                    {destinationBadge &&
+                      (destinationBadge === 'Public' || destinationBadge === 'Private' ? (
+                        <ExecutionAccountBadge
+                          mode={destinationBadge === 'Public' ? 'main' : 'private'}
+                          className="h-[17px] px-1.5"
+                        />
+                      ) : (
+                        <span
+                          className={cn(
+                            'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
+                            destinationBadge === 'Shield' || destinationBadge === 'Shielded'
+                              ? 'bg-success/10 text-success'
+                              : 'bg-white/7 text-muted'
+                          )}
+                        >
+                          {destinationBadge}
+                        </span>
+                      ))}
+                    <Icon icon="lucide:chevron-down" width={12} height={12} className="shrink-0" />
+                  </button>
+                ) : undefined
+              }
               onTokenSelect={() => onSelectToken('out')}
               tokenSelectDisabled={destinationAssetsLoading}
               tokenSelectLocked={destinationAssetLocked}
@@ -541,14 +611,14 @@ export function SwapInputView({
           />
         )}
 
-        {!hideReceiveAddress && tokenOut && (
-          <div className="mt-5">
+        {!hideReceiveAddress && tokenOut && (requiresRecipientAddress || recipientError) && (
+          <div className="mt-2">
             {destinationAssetsLoading ? (
               <ReceiveAddressSkeleton />
             ) : (
               <div>
                 <SendRecipientInputCard
-                  id="swap-recipient"
+                  id="swap-recipient-inline"
                   label="Receive at"
                   variant="filled"
                   value={destinationAddress ?? ''}
@@ -563,60 +633,86 @@ export function SwapInputView({
           </div>
         )}
 
-        <div className="mt-4">
+        {!hasQuoteDetails && (
           <button
             type="button"
-            onClick={() => setShowDetails(value => !value)}
-            aria-expanded={showDetails}
-            className="flex w-full items-center justify-between py-1 text-sm"
+            onClick={onOpenSlippageSetting}
+            className="mt-2 flex w-full items-center justify-end gap-1 text-[11px] text-muted hover:text-foreground"
+            aria-label={`Set slippage, currently ${slippage}%`}
           >
-            {networkFee && isZecSource && (
-              <span className="flex items-center gap-1.5 text-muted">
-                Fee:
-                <span className="text-foreground">
-                  {`${feeIsApproximate ? '≈ ' : ''}${formatFeeAmount(networkFee)} ZEC`}
-                </span>
-              </span>
-            )}
-            <span className="ml-auto flex items-center gap-2 text-muted">
-              Slippage <span className="text-foreground">{slippage}%</span>
-              <Icon
-                icon="lucide:chevron-down"
-                width={16}
-                height={16}
-                className={cn('transition-transform', showDetails && 'rotate-180')}
-              />
-            </span>
+            Slippage {slippage}%
+            <Icon icon="lucide:chevron-down" width={12} height={12} />
           </button>
+        )}
 
-          {showDetails && (
-            <div className="mt-2 space-y-3 rounded-xl bg-card/60 p-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted">Rate</span>
-                <span className="text-right">
-                  1 {formatSymbol(tokenIn?.symbol) || '—'} ={' '}
-                  {isEstimatedOut && rate !== '...' ? '≈ ' : ''}
-                  {formatTokenQuantity(rate)} {formatSymbol(tokenOut?.symbol) || '—'}
+        {hasQuoteDetails && (
+          <div className="mt-3 space-y-2 rounded-lg border border-white/15 px-2.5 py-2.5 text-[11px]">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="text-muted">Slippage</span>
+              <button
+                type="button"
+                onClick={onOpenSlippageSetting}
+                className="flex shrink-0 items-center gap-1 hover:text-primary"
+                aria-label={`Set slippage, currently ${slippage}%`}
+              >
+                {slippage}% <Icon icon="lucide:chevron-down" width={12} height={12} />
+              </button>
+            </div>
+            {providerName && (
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="text-muted">Provider</span>
+                <span className="truncate" title={providerName}>
+                  {providerName}
                 </span>
               </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted">Slippage tolerance</span>
-                <Button onClick={onOpenSlippageSetting} variant="secondary" size="sm">
-                  {slippage}%
-                  <Icon icon="lucide:settings" width={14} height={14} />
-                </Button>
+            )}
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="shrink-0 text-muted">Rate</span>
+              <span
+                className="min-w-0 truncate text-right"
+                title={`1 ${formatSymbol(tokenIn?.symbol)} = ${rate} ${formatSymbol(tokenOut?.symbol)}`}
+              >
+                1 {formatSymbol(tokenIn?.symbol) || '—'} = {isEstimatedOut ? '≈ ' : ''}
+                {formatTokenQuantity(rate)} {formatSymbol(tokenOut?.symbol) || '—'}
+              </span>
+            </div>
+            {networkFee && isZecSource && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted">Network fee</span>
+                <span>
+                  {feeIsApproximate ? '≈ ' : ''}
+                  {formatFeeAmount(networkFee)} ZEC
+                </span>
               </div>
-              {walletManagedRefundAddress && (
-                <div className="text-sm">
-                  <p className="text-muted">Refund to this wallet</p>
-                  <p className="mt-1 truncate font-mono text-xs" title={walletManagedRefundAddress}>
+            )}
+            {walletManagedRefundAddress && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowRefundAddress(value => !value)}
+                  aria-expanded={showRefundAddress}
+                  className="flex w-full items-center justify-between text-muted hover:text-foreground"
+                >
+                  <span>Refund address</span>
+                  <Icon
+                    icon="lucide:chevron-down"
+                    width={12}
+                    height={12}
+                    className={cn('transition-transform', showRefundAddress && 'rotate-180')}
+                  />
+                </button>
+                {showRefundAddress && (
+                  <p
+                    className="mt-1 break-all font-mono text-[10px]"
+                    title={walletManagedRefundAddress}
+                  >
                     {walletManagedRefundAddress}
                   </p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="page-footer">
@@ -624,11 +720,55 @@ export function SwapInputView({
           onClick={onGetQuote}
           disabled={!canGetQuote || hasInsufficientFunds || actionLoading}
           isLoading={isQuoting || actionLoading}
-          className="h-[45px] w-full"
+          className="h-[45px] w-full text-sm text-black"
         >
           {actionLabel}
         </Button>
       </div>
+
+      <Dialog
+        open={recipientSelectorOpen && !hideReceiveAddress}
+        onOpenChange={setRecipientSelectorOpen}
+      >
+        <DialogContent
+          className="w-[calc(100%-2rem)] max-w-[343px] gap-5 rounded-lg p-4"
+          showCloseButton
+        >
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-sm">Receive at</DialogTitle>
+          </DialogHeader>
+          {tokenOut && (
+            <div>
+              <SendRecipientInputCard
+                id="swap-recipient"
+                label="Address"
+                variant="filled"
+                value={destinationAddress ?? ''}
+                placeholder={`${formatChainName(tokenOut.blockchain)} address`}
+                onChange={onRecipientAddressChange}
+                autoFocus
+                onSelectRecipient={
+                  onSelectRecipientFromWallet
+                    ? () => {
+                        setRecipientSelectorOpen(false)
+                        window.requestAnimationFrame(() => onSelectRecipientFromWallet())
+                      }
+                    : undefined
+                }
+                invalid={Boolean(recipientError)}
+              />
+              {recipientError && <InlineError message={recipientError} className="mt-2" />}
+            </div>
+          )}
+          <Button
+            type="button"
+            onClick={() => setRecipientSelectorOpen(false)}
+            className="h-10 w-full"
+          >
+            Done
+          </Button>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

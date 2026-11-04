@@ -97,7 +97,7 @@ export function getConfidentialFundingStatusCopy(
                 ? 'Funds returned to Confidential balance.'
                 : funding.stage === 'failed'
                   ? 'Confidential funding could not be completed.'
-                  : 'Funds arrive privately in batches over about 10 minutes.',
+                  : 'Preparing your transfer.',
     resultStatus:
       funding.stage === 'ready'
         ? 'success'

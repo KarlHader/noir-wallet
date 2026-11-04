@@ -591,6 +591,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   GET_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
   CANCEL_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
+  REFRESH_CONFIDENTIAL_BALANCES: { required: { scope: isRecord, authorize: isBoolean } },
   GET_ASSET_MARKET_HISTORY: {
     required: {
       assetId: isShortString,
@@ -946,6 +947,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     CONFIRM_CONFIDENTIAL_FUNDING: ['extension-page'],
     GET_CONFIDENTIAL_FUNDING: ['extension-page'],
     CANCEL_CONFIDENTIAL_FUNDING: ['extension-page'],
+    REFRESH_CONFIDENTIAL_BALANCES: ['extension-page'],
     GET_ASSET_MARKET_HISTORY: ['extension-page'],
     GET_ADDITIONAL_RECEIVE_TARGETS: ['extension-page'],
     GET_ACCOUNT_NETWORKS: ['extension-page'],

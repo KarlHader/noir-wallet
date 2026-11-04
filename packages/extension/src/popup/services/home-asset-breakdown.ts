@@ -1,8 +1,10 @@
 import Big from '@/lib/big'
 import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfolio-prices'
 import type { PortfolioReadModel } from '@/core/portfolio'
+import type { AssetPriceReadModel } from '@/core/prices'
 import type { ZcashBalance } from '@/types'
 import { isPortfolioModelForScope } from './portfolio-cache'
+import { buildShieldProviderGroups, summarizeAssetDomainsUsd } from './asset-domains'
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
 
@@ -29,7 +31,8 @@ export function resolveHomePortfolioTotalStatus(
 
 export interface HomeAssetBreakdown {
   readonly publicUsd: string
-  readonly confidentialUsd: string
+  readonly shieldUsd: string | null
+  readonly privateUsd: string
   readonly lendingUsd: string
 }
 
@@ -53,22 +56,31 @@ export function getHomeAssetBreakdown(input: {
   readonly multichainEnabled: boolean
   readonly liveMultichainTotal: boolean
   readonly multichainFiat: PortfolioFiatSummary
+  readonly portfolio?: PortfolioReadModel | null
+  readonly prices?: AssetPriceReadModel | null
   readonly zcashBalance: ZcashBalance | null | undefined
   readonly zecPrice: number
   readonly lendingUsd: number
 }): HomeAssetBreakdown | null {
   if (input.multichainEnabled) {
-    if (!input.liveMultichainTotal) return null
+    if (!input.liveMultichainTotal || !input.portfolio) return null
+    const domains = summarizeAssetDomainsUsd(input.portfolio, input.prices ?? null)
+    if (!domains) return null
     return Object.freeze({
-      publicUsd: input.multichainFiat.mainUsd,
-      confidentialUsd: input.multichainFiat.privateUsd,
+      ...domains,
+      shieldUsd: buildShieldProviderGroups(input.portfolio, input.prices ?? null).some(
+        group => group.fiat === null
+      )
+        ? null
+        : domains.shieldUsd,
       lendingUsd: new Big(input.lendingUsd).toFixed()
     })
   }
   if (!input.zcashBalance || input.zecPrice <= 0) return null
   return Object.freeze({
     publicUsd: new Big(input.zcashBalance.transparent).times(input.zecPrice).toFixed(),
-    confidentialUsd: new Big(input.zcashBalance.shielded).times(input.zecPrice).toFixed(),
+    shieldUsd: new Big(input.zcashBalance.shielded).times(input.zecPrice).toFixed(),
+    privateUsd: '0',
     lendingUsd: new Big(input.lendingUsd).toFixed()
   })
 }

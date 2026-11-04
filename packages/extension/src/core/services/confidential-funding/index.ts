@@ -3,9 +3,11 @@ export {
   CONFIDENTIAL_WITHDRAW_MAX_COUNT,
   CONFIDENTIAL_WITHDRAW_MIN_COUNT,
   aggregateConfidentialSettlement,
+  assertDirectConfidentialWithdrawIntentBinding,
   assertConfidentialIntentBinding,
   assertConfidentialQuoteBinding,
   fingerprintConfidentialValue,
+  fingerprintDirectConfidentialApproval,
   getConfidentialFundingProgress,
   mergeConfidentialWithdrawObservation,
   normalizeConfidentialWithdrawRequest,
@@ -24,6 +26,9 @@ export {
 } from './confidential-funding-model'
 export { createConfidentialFundingGraph } from './confidential-funding-graph'
 export {
+  CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID,
+  confidentialPrivateTokenId,
+  getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
   type ConfidentialPortfolioAssetMapping,
   type ConfidentialPortfolioBalance

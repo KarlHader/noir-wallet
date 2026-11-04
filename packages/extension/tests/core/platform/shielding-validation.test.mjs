@@ -106,8 +106,8 @@ describe('Shielding minimum balance regressions', () => {
 
   it('shows a shield action only when the Zcash transparent balance is positive', () => {
     assert.match(assetDetailSource, /aria-label="Zcash balance breakdown"/)
-    assert.match(assetDetailSource, />Shielded</)
-    assert.match(assetDetailSource, />Transparent</)
+    assert.match(assetDetailSource, />Shield</)
+    assert.match(assetDetailSource, />Public</)
     assert.match(assetDetailSource, /BigInt\(asset\.balance\.shieldableRaw \?\? '0'\) > 0n/)
     assert.match(assetDetailSource, /aria-label="Shield transparent ZEC"/)
     assert.match(assetDetailSource, /useShieldFunds\(\)/)

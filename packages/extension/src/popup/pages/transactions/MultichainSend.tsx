@@ -645,8 +645,9 @@ export function MultichainSend() {
       ? selection.asset.asset.id
       : null
   const crossChainSourceMode = selection?.chain.chain.family === 'evm' ? evmSourceMode : 'main'
+  const walletMode = searchParams.get('mode') === 'private' ? 'private' : 'public'
   return (
-    <div className="page-container">
+    <div className="page-container" data-wallet-mode={walletMode}>
       <PageHeader
         title="Send"
         showBack
@@ -677,6 +678,8 @@ export function MultichainSend() {
       />
       {selection?.chain.chain.family === 'evm' && visibleModel ? (
         <EvmSendForm
+          walletMode={walletMode}
+          onSelectAsset={() => setSelection(null)}
           selection={selection}
           portfolio={visibleModel}
           priceUsd={availableUsdPrice(selection.asset, assetPrices)}

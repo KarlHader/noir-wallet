@@ -1,9 +1,14 @@
 import type { Network } from '@/types'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
-import type { ConfidentialBalance, ConfidentialSession } from './confidential-funding-api'
+import type {
+  ConfidentialBalance,
+  ConfidentialOrderAuthToken,
+  ConfidentialSession
+} from './confidential-funding-api'
 
 const PLAN_PREFIX = 'confidential_funding_plan:'
 const SESSION_PREFIX = 'confidential_funding_session:'
+const HISTORY_SESSION_PREFIX = 'confidential_order_history_session:'
 const BALANCE_PREFIX = 'confidential_funding_balance:'
 export const CONFIDENTIAL_BALANCE_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -126,9 +131,45 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     !isBoundedString(plan.destination.protocolAssetId) ||
     (plan.resumePhase !== undefined && !PHASES.has(plan.resumePhase)) ||
     (plan.orderId !== undefined && !isBoundedString(plan.orderId)) ||
+    (plan.batchSubmissionAttemptedAt !== undefined &&
+      (!Number.isSafeInteger(plan.batchSubmissionAttemptedAt) ||
+        plan.batchSubmissionAttemptedAt < plan.createdAt)) ||
     (plan.backendStatus !== undefined && !isBoundedString(plan.backendStatus, 128)) ||
     (plan.errorStatus !== undefined && !isBoundedString(plan.errorStatus, 256)) ||
-    plan.withdraws.length < 2 ||
+    (plan.operation !== undefined &&
+      plan.operation !== 'deposit' &&
+      plan.operation !== 'withdraw' &&
+      plan.operation !== 'cluster') ||
+    (plan.operation === undefined &&
+      (plan.sourceDomain !== undefined || plan.destinationDomain !== undefined)) ||
+    (plan.operation === 'deposit' &&
+      (!['public', 'private'].includes(plan.sourceDomain ?? '') ||
+        plan.destinationDomain !== 'shield' ||
+        !plan.requiresDeposit ||
+        plan.withdraws.length !== 0 ||
+        plan.splitSourceAmounts.length !== 0 ||
+        !plan.depositQuote ||
+        !plan.preparedDeposit)) ||
+    (plan.operation === 'withdraw' &&
+      (plan.sourceDomain !== 'shield' ||
+        !['public', 'private'].includes(plan.destinationDomain ?? '') ||
+        plan.requiresDeposit ||
+        plan.withdraws.length !== 1 ||
+        plan.splitSourceAmounts[0] !== plan.source.amountRaw)) ||
+    (plan.operation === 'cluster' &&
+      (!['public', 'private', 'shield'].includes(plan.sourceDomain ?? '') ||
+        !['public', 'private'].includes(plan.destinationDomain ?? '') ||
+        plan.sourceDomain === plan.destinationDomain ||
+        plan.requiresDeposit !== (plan.sourceDomain !== 'shield') ||
+        plan.source.chainId !== plan.destination.chainId ||
+        plan.source.assetId !== plan.destination.assetId ||
+        plan.source.protocolAssetId !== plan.destination.protocolAssetId ||
+        plan.withdraws.length < 2 ||
+        (plan.requiresDeposit && (!plan.depositQuote || !plan.preparedDeposit)) ||
+        (!plan.requiresDeposit && (plan.depositQuote || plan.preparedDeposit)))) ||
+    (plan.operation !== 'cluster' && plan.batchSubmissionAttemptedAt !== undefined) ||
+    (plan.batchSubmissionAttemptedAt !== undefined && !plan.frozenRequest) ||
+    (plan.operation === undefined && plan.withdraws.length < 2) ||
     plan.withdraws.length > 5 ||
     plan.splitSourceAmounts.length !== plan.withdraws.length ||
     plan.splitSourceAmounts.some(amount => !isRawAmount(amount, true)) ||
@@ -147,6 +188,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         !Number.isSafeInteger(row.deadline) ||
         !isBoundedString(row.status, 64) ||
         (row.intentHash !== undefined && !isBoundedString(row.intentHash, 256)) ||
+        (row.scheduledAt !== undefined &&
+          (!Number.isSafeInteger(row.scheduledAt) || row.scheduledAt < 0)) ||
         (row.signedPayload !== undefined && !isSignedPayload(row.signedPayload))
     ) ||
     (plan.requestFingerprint !== undefined && !/^[0-9a-f]{64}$/.test(plan.requestFingerprint)) ||
@@ -262,6 +305,60 @@ export class ChromeConfidentialFundingStore {
     return `${SESSION_PREFIX}${network}:${encodeURIComponent(keyDomainId)}:${encodeURIComponent(accountId)}`
   }
 
+  private historySessionKey(network: Network, keyDomainId: string, accountId: string): string {
+    return `${HISTORY_SESSION_PREFIX}${network}:${encodeURIComponent(keyDomainId)}:${encodeURIComponent(accountId)}`
+  }
+
+  async getHistorySession(
+    network: Network,
+    keyDomainId: string,
+    accountId: string
+  ): Promise<ConfidentialOrderAuthToken | null> {
+    const key = this.historySessionKey(network, keyDomainId, accountId)
+    const value = (await chrome.storage.session.get(key))[key]
+    if (
+      !isRecord(value) ||
+      !isBoundedString(value.token, 8192) ||
+      !isBoundedString(value.expiresAt) ||
+      !Number.isSafeInteger(Date.parse(value.expiresAt)) ||
+      Date.parse(value.expiresAt) <= this.now() ||
+      !isBoundedString(value.queryAddress) ||
+      (value.principalType !== 'wallet' && value.principalType !== 'mca') ||
+      (value.mcaAccountId !== null && !isBoundedString(value.mcaAccountId))
+    ) {
+      if (value !== undefined) await chrome.storage.session.remove(key)
+      return null
+    }
+    return value as unknown as ConfidentialOrderAuthToken
+  }
+
+  async putHistorySession(
+    network: Network,
+    keyDomainId: string,
+    accountId: string,
+    token: ConfidentialOrderAuthToken
+  ): Promise<void> {
+    if (
+      !isBoundedString(token.token, 8192) ||
+      !isBoundedString(token.expiresAt) ||
+      !Number.isSafeInteger(Date.parse(token.expiresAt)) ||
+      Date.parse(token.expiresAt) <= this.now() ||
+      !isBoundedString(token.queryAddress)
+    )
+      throw new Error('Wallet history session is invalid')
+    await chrome.storage.session.set({
+      [this.historySessionKey(network, keyDomainId, accountId)]: token
+    })
+  }
+
+  async deleteHistorySession(
+    network: Network,
+    keyDomainId: string,
+    accountId: string
+  ): Promise<void> {
+    await chrome.storage.session.remove(this.historySessionKey(network, keyDomainId, accountId))
+  }
+
   private balanceKey(network: Network, keyDomainId: string, accountId: string): string {
     return `${BALANCE_PREFIX}${network}:${encodeURIComponent(keyDomainId)}:${encodeURIComponent(accountId)}`
   }
@@ -327,8 +424,8 @@ export class ChromeConfidentialFundingStore {
   }
 
   async clearAllSessions(): Promise<void> {
-    const keys = Object.keys(await chrome.storage.session.get(null)).filter(key =>
-      key.startsWith(SESSION_PREFIX)
+    const keys = Object.keys(await chrome.storage.session.get(null)).filter(
+      key => key.startsWith(SESSION_PREFIX) || key.startsWith(HISTORY_SESSION_PREFIX)
     )
     if (keys.length > 0) await chrome.storage.session.remove(keys)
   }

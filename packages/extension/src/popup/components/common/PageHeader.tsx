@@ -28,13 +28,13 @@ export function PageHeader({
   if (!visibleTitle && !showBack && !rightContent && !action) return null
 
   return (
-    <header className="h-14 flex items-center justify-center shrink-0 relative px-4 border-b border-white/10 bg-background">
+    <header className="h-14 flex items-center justify-center shrink-0 relative px-4">
       {showBack && (
         <button
           onClick={handleBack}
           disabled={backDisabled}
           aria-label="Back"
-          className="absolute left-4 w-[26px] h-[26px] rounded-full bg-card text-foreground flex items-center justify-center hover:bg-accent transition-colors cursor-pointer disabled:pointer-events-none disabled:opacity-50"
+          className="absolute left-3 size-8 rounded-lg text-foreground flex items-center justify-center hover:bg-accent transition-colors cursor-pointer disabled:pointer-events-none disabled:opacity-50"
         >
           <svg
             aria-hidden="true"
@@ -51,7 +51,9 @@ export function PageHeader({
           </svg>
         </button>
       )}
-      {visibleTitle && <h1 className="text-base font-medium text-white">{visibleTitle}</h1>}
+      {visibleTitle && (
+        <h1 className="text-lg font-medium leading-[23px] text-white">{visibleTitle}</h1>
+      )}
 
       {(rightContent || action) && (
         <div className="absolute right-4 flex items-center">

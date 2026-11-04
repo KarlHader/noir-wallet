@@ -1,4 +1,5 @@
 import type { Network } from '@/types'
+import { confidentialPrivateTokenId } from './confidential-funding-portfolio'
 
 export const CONFIDENTIAL_WITHDRAW_MIN_COUNT = 2
 export const CONFIDENTIAL_WITHDRAW_MAX_COUNT = 5
@@ -43,6 +44,7 @@ export interface ConfidentialQuoteBinding {
   readonly destinationAsset: string
   readonly amountRaw: string
   readonly signerId: string
+  readonly refundTo?: string
   readonly recipient: string
   readonly depositType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
   readonly refundType: 'ORIGIN_CHAIN' | 'CONFIDENTIAL_INTENTS'
@@ -63,6 +65,7 @@ export interface ConfidentialWithdrawRow {
   readonly intentHash?: string
   readonly errorStatus?: string
   readonly transactionHash?: string
+  readonly scheduledAt?: number
   readonly signedPayload?: ConfidentialSignedPayload
 }
 
@@ -117,6 +120,9 @@ export function normalizeConfidentialWithdrawRequest(
 
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly sourceDomain?: 'public' | 'private' | 'shield'
+  readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly planId: string
   readonly network: Network
   readonly keyDomainId: string
@@ -162,6 +168,7 @@ export interface ConfidentialFundingPlan {
   readonly frozenRequest?: ConfidentialWithdrawRequest
   readonly requestFingerprint?: string
   readonly orderId?: string
+  readonly batchSubmissionAttemptedAt?: number
   readonly backendStatus?: string
   readonly errorStatus?: string
   readonly dedupKey?: string
@@ -171,6 +178,12 @@ export interface ConfidentialFundingPlan {
 
 export interface ConfidentialFundingReview {
   readonly planId: string
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly sourceDomain?: 'public' | 'private' | 'shield'
+  readonly destinationDomain?: 'public' | 'private' | 'shield'
+  readonly network?: Network
+  readonly keyDomainId?: string
+  readonly accountId?: string
   readonly transactionId: string
   readonly phase: ConfidentialFundingPhase
   readonly payloadFingerprint: string
@@ -183,7 +196,6 @@ export interface ConfidentialFundingReview {
   readonly sourceAddress: string
   readonly destinationAddress: string
   readonly withdrawCount: number
-  readonly estimatedDurationMinutes: 10
   readonly sourceNetworkFee?: Readonly<{
     raw: string
     symbol: string
@@ -319,8 +331,8 @@ export function mergeConfidentialWithdrawObservation(
 export function aggregateConfidentialSettlement(
   statuses: readonly unknown[]
 ): ConfidentialBatchSettlement {
-  if (statuses.length < CONFIDENTIAL_WITHDRAW_MIN_COUNT) {
-    throw new Error('A confidential settlement requires at least two child statuses')
+  if (statuses.length === 0) {
+    throw new Error('A confidential settlement requires a child status')
   }
   const normalized = statuses.map(normalizeChildStatus)
   const successes = normalized.filter(status => status === 'success').length
@@ -412,7 +424,7 @@ export function assertConfidentialQuoteBinding(
     request.destinationAsset !== expected.destinationAsset ||
     request.amount !== expected.amountRaw ||
     quote.quote.amountIn !== expected.amountRaw ||
-    !equalAddress(request.refundTo, expected.signerId) ||
+    !equalAddress(request.refundTo, expected.refundTo ?? expected.signerId) ||
     request.depositType !== expected.depositType ||
     request.refundType !== expected.refundType ||
     !equalAddress(request.recipient, expected.recipient) ||
@@ -484,8 +496,106 @@ export function assertConfidentialIntentBinding(input: {
   return Object.freeze({ standard: 'erc191' as const, payload: record.payload, deadline })
 }
 
+export function assertDirectConfidentialWithdrawIntentBinding(input: {
+  readonly intent: unknown
+  readonly quote: ConfidentialQuote
+  readonly signerId: string
+  readonly sourceAsset: string
+  readonly sourceAmountRaw: string
+  readonly destinationAsset: string
+  readonly destinationAddress: string
+  readonly now?: number
+}): Readonly<{ standard: 'erc191'; payload: string; deadline: number }> {
+  if (!input.intent || typeof input.intent !== 'object' || Array.isArray(input.intent)) {
+    throw new Error('Shield withdraw intent is invalid')
+  }
+  const generated = input.intent as Record<string, unknown>
+  if (generated.standard !== 'erc191' || typeof generated.payload !== 'string') {
+    throw new Error('Shield withdraw intent signing standard is invalid')
+  }
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(generated.payload)
+  } catch {
+    throw new Error('Shield withdraw intent payload is invalid')
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new Error('Shield withdraw intent payload is invalid')
+  }
+  const payload = decoded as Record<string, unknown>
+  const keys = Object.keys(payload).sort()
+  if (
+    keys.join(',') !== 'deadline,intents,nonce,signer_id,verifying_contract' ||
+    payload.verifying_contract !== 'intents.far' ||
+    !equalAddress(payload.signer_id, input.signerId) ||
+    payload.deadline !== input.quote.quote.deadline ||
+    typeof payload.nonce !== 'string' ||
+    !/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=?$/.test(payload.nonce) ||
+    !Array.isArray(payload.intents) ||
+    payload.intents.length !== 1
+  ) {
+    throw new Error('Shield withdraw intent does not match the approved quote')
+  }
+  let nonce: Uint8Array
+  try {
+    nonce = Uint8Array.from(atob(payload.nonce), value => value.charCodeAt(0))
+  } catch {
+    throw new Error('Shield withdraw intent nonce is invalid')
+  }
+  if (nonce.length !== 32) throw new Error('Shield withdraw intent nonce is invalid')
+  const action = payload.intents[0]
+  if (
+    !action ||
+    typeof action !== 'object' ||
+    Array.isArray(action) ||
+    Object.keys(action).sort().join(',') !== 'intent,receiver_id,tokens'
+  ) {
+    throw new Error('Shield withdraw intent action is invalid')
+  }
+  const transfer = action as Record<string, unknown>
+  const tokens = transfer.tokens
+  const tokenId = confidentialPrivateTokenId(input.sourceAsset)
+  if (
+    transfer.intent !== 'transfer' ||
+    !equalAddress(transfer.receiver_id, input.quote.quote.depositAddress) ||
+    !tokens ||
+    typeof tokens !== 'object' ||
+    Array.isArray(tokens) ||
+    Object.keys(tokens).length !== 1 ||
+    (tokens as Record<string, unknown>)[tokenId] !== input.sourceAmountRaw ||
+    input.quote.quote.amountIn !== input.sourceAmountRaw ||
+    input.quote.quoteRequest.originAsset !== input.sourceAsset ||
+    input.quote.quoteRequest.destinationAsset !== input.destinationAsset ||
+    !equalAddress(input.quote.quoteRequest.recipient, input.destinationAddress)
+  ) {
+    throw new Error('Shield withdraw intent transfer does not match the approved quote')
+  }
+  const deadline = Date.parse(input.quote.quote.deadline)
+  if (!Number.isSafeInteger(deadline) || deadline <= (input.now ?? Date.now())) {
+    throw new Error('Shield withdraw intent deadline is invalid or expired')
+  }
+  return Object.freeze({ standard: 'erc191' as const, payload: generated.payload, deadline })
+}
+
 export async function fingerprintConfidentialValue(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value))
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function canonicalConfidentialValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalConfidentialValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, child]) => child !== undefined)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, child]) => [key, canonicalConfidentialValue(child)])
+    )
+  }
+  return value
+}
+
+export function fingerprintDirectConfidentialApproval(value: unknown): Promise<string> {
+  return fingerprintConfidentialValue(canonicalConfidentialValue(value))
 }

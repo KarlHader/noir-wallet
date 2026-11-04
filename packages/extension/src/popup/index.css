@@ -2,6 +2,29 @@
 @import 'tw-animate-css';
 
 @font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/dm-sans-latin.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/dm-sans-latin-ext.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
   font-family: 'Jost';
   font-style: normal;
   font-weight: 400 700;
@@ -78,7 +101,7 @@
   --secondary: lab(15.204% 0 -0.00000596046);
   --secondary-foreground: #ffffff;
 
-  --muted: #7e8a93;
+  --muted: #8b8e93;
   --muted-foreground: #ffffff;
 
   --accent: #202029;
@@ -121,9 +144,20 @@
   --color-success-foreground: #000000;
   --color-danger: #ff4444;
   --color-danger-foreground: #ffffff;
+  --color-private: #ffa200;
+  --color-wallet-surface: #22222d;
+  --color-wallet-selected: #414152;
+  --color-wallet-secondary: #bcbcc8;
+  --color-wallet-mode: #d58a00;
 
-  --font-family-sans: 'Jost', sans-serif;
+  --font-family-sans: 'DM Sans', 'Jost', sans-serif;
   --font-family-mono: 'DM Mono', monospace;
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
+
+  --text-sm--line-height: 18px;
+  --text-base--line-height: 21px;
+  --text-lg--line-height: 23px;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -184,6 +218,25 @@ html[data-surface='side-panel'] #root {
   flex-direction: column;
 }
 
+[data-wallet-mode='private'] {
+  --primary: var(--color-private);
+  --ring: var(--color-private);
+  --color-primary: var(--color-private);
+  --color-ring: var(--color-private);
+  --color-background: #14110c;
+  --color-card: #222019;
+  --color-popover: #25231c;
+  --color-accent: #2b2820;
+  --color-wallet-surface: #222019;
+  --color-wallet-selected: #3b3528;
+  background-color: var(--color-background);
+  background-image: radial-gradient(
+    ellipse 375px 375px at 0 0,
+    rgb(255 162 0 / 20%),
+    transparent 100%
+  );
+}
+
 /* Full browser tab (hardware wallet flows): show the app as a centered card */
 @media (min-width: 600px) and (min-height: 700px) {
   html,
@@ -238,12 +291,13 @@ html[data-surface='side-panel'] #root {
 
 .page-content {
   flex: 1;
-  padding: 16px 20px;
+  min-height: 0;
+  padding: 16px;
   overflow-y: auto;
 }
 
 .page-footer {
-  padding: 8px 20px 20px;
+  padding: 8px 16px 20px;
   flex-shrink: 0;
 }
 

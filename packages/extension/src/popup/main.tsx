@@ -1,7 +1,16 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { addCollection } from '@iconify/react'
+import walletUiIcons from './lib/wallet-ui-icons.json'
+import walletPrivateIcon from './lib/wallet-private-icon.json'
+import walletDesignIcons from './lib/wallet-design-icons.json'
 import './index.css'
 import { initializeRuntimeNetwork } from '@/lib/runtime-network'
+
+// Navigation and action icons must remain available without the Iconify API.
+addCollection(walletUiIcons)
+addCollection(walletPrivateIcon)
+addCollection(walletDesignIcons)
 
 if (new URLSearchParams(window.location.search).get('surface') === 'side-panel') {
   document.documentElement.dataset.surface = 'side-panel'

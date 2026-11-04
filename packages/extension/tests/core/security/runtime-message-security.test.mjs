@@ -203,6 +203,22 @@ test.describe('Runtime message security', () => {
     ).toBe(false)
     expect(isTrustedRuntimeMessageSender('GET_PORTFOLIO', popupSender, extensionId)).toBe(true)
     expect(isTrustedRuntimeMessageSender('GET_ACTIVITY', popupSender, extensionId)).toBe(true)
+    const shieldRefresh = {
+      type: 'REFRESH_CONFIDENTIAL_BALANCES',
+      scope: { network: 'mainnet', keyDomainId: 'wallet:1', accountId: 'account:1' },
+      authorize: true
+    }
+    expect(parseTrustedExtensionRuntimeMessage(shieldRefresh)).toEqual(shieldRefresh)
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, authorize: 'true' })
+    ).toThrow()
+    expect(isTrustedRuntimeMessageSender(shieldRefresh.type, popupSender, extensionId)).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender(shieldRefresh.type, contentScriptSender, extensionId)
+    ).toBe(false)
+    expect(
+      isTrustedRuntimeMessageSender(shieldRefresh.type, serviceWorkerSender, extensionId)
+    ).toBe(false)
     expect(isTrustedRuntimeMessageSender('GET_BITCOIN_ACTIVITY', popupSender, extensionId)).toBe(
       true
     )

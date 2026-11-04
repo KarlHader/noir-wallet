@@ -64,7 +64,7 @@ export function PrivateExecutionModeIconButton({
       className={cn(
         'relative flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50',
         privateMode
-          ? 'bg-primary/10 text-primary hover:bg-primary/15'
+          ? 'bg-private/10 text-private hover:bg-private/15'
           : 'bg-card/60 text-foreground/70 hover:bg-accent hover:text-foreground'
       )}
     >
@@ -73,7 +73,7 @@ export function PrivateExecutionModeIconButton({
         aria-hidden="true"
         className={cn(
           'absolute right-0.5 top-0.5 size-1.5 rounded-full ring-2 ring-background',
-          privateMode ? 'bg-primary' : 'bg-muted/50'
+          privateMode ? 'bg-private' : 'bg-muted/50'
         )}
       />
     </button>
@@ -84,20 +84,22 @@ export function AccountAddressSelectorButton({
   mode,
   address,
   ariaLabel,
+  showModeBadge = false,
+  className,
   disabled = false,
   onClick
 }: {
   readonly mode: DAppExecutionMode | 'custom'
   readonly address?: string
   readonly ariaLabel: string
+  readonly showModeBadge?: boolean
+  readonly className?: string
   readonly disabled?: boolean
   readonly onClick: () => void
 }) {
   return (
     <Tooltip
-      content={
-        mode === 'private' ? 'Confidential' : mode === 'custom' ? 'Custom address' : 'Public'
-      }
+      content={mode === 'private' ? 'Private' : mode === 'custom' ? 'Custom address' : 'Public'}
     >
       <button
         type="button"
@@ -105,12 +107,19 @@ export function AccountAddressSelectorButton({
         aria-haspopup="dialog"
         disabled={disabled}
         onClick={onClick}
-        className="flex min-w-0 items-center gap-1.5 text-[13px] transition-colors hover:text-primary disabled:opacity-50"
+        className={cn(
+          'flex min-w-0 items-center gap-1.5 text-[13px] transition-colors hover:text-primary disabled:opacity-50',
+          className
+        )}
       >
         <span className="truncate font-mono" title={address}>
           {address ? formatSortAddress(address) : mode === 'custom' ? 'Custom address' : 'Wallet'}
         </span>
-        {mode === 'private' && <PrivateExecutionIcon size={14} className="shrink-0 text-primary" />}
+        {showModeBadge && mode !== 'custom' ? (
+          <ExecutionAccountBadge mode={mode} />
+        ) : mode === 'private' ? (
+          <PrivateExecutionIcon size={14} className="shrink-0 text-private" />
+        ) : null}
         <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0 text-muted" />
       </button>
     </Tooltip>
@@ -142,14 +151,14 @@ export function ExecutionAccountBadge({
   readonly iconOnly?: boolean
   readonly className?: string
 }) {
-  const label = mode === 'private' ? 'Confidential' : 'Public'
+  const label = mode === 'private' ? 'Private' : 'Public'
   const badge = (
     <span
       aria-label={iconOnly ? label : undefined}
       className={cn(
         'inline-flex shrink-0 items-center justify-center rounded-md',
         iconOnly ? 'size-5' : 'gap-1 px-1.5 py-0.5 text-[10px] font-medium leading-4',
-        mode === 'private' ? 'bg-primary/12 text-primary' : 'bg-white/7 text-muted',
+        mode === 'private' ? 'bg-private/12 text-private' : 'bg-white/7 text-muted',
         className
       )}
     >
@@ -200,7 +209,9 @@ export function ExecutionAccountOptionRow({
       className={cn(
         'flex min-h-[62px] w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors',
         selected
-          ? 'border-primary/40 bg-primary/8'
+          ? mode === 'private'
+            ? 'border-private/40 bg-private/8'
+            : 'border-primary/40 bg-primary/8'
           : 'border-border/60 bg-card/45 hover:border-primary/25',
         disabled && 'cursor-not-allowed opacity-45'
       )}
@@ -208,7 +219,11 @@ export function ExecutionAccountOptionRow({
       <span
         className={cn(
           'flex size-9 shrink-0 items-center justify-center rounded-xl',
-          selected ? 'bg-primary/15 text-primary' : 'bg-white/6 text-muted'
+          selected
+            ? mode === 'private'
+              ? 'bg-private/15 text-private'
+              : 'bg-primary/15 text-primary'
+            : 'bg-white/6 text-muted'
         )}
       >
         {locked ? (
@@ -228,7 +243,10 @@ export function ExecutionAccountOptionRow({
         icon={selected ? 'lucide:circle-check' : 'lucide:circle'}
         width={17}
         height={17}
-        className={cn('shrink-0', selected ? 'text-primary' : 'text-muted/45')}
+        className={cn(
+          'shrink-0',
+          selected ? (mode === 'private' ? 'text-private' : 'text-primary') : 'text-muted/45'
+        )}
       />
     </button>
   )
@@ -275,8 +293,8 @@ export function ExecutionAccountSelectorDialog({
       <DialogContent position="bottom" className="gap-0 p-0" showCloseButton>
         <DialogHeader className="px-5 pb-4 pt-5">
           <DialogTitle className="text-center">Choose {purpose} account</DialogTitle>
-          <DialogDescription className="text-center text-xs">
-            This choice applies only to this wallet action.
+          <DialogDescription className="sr-only">
+            Choose an account for this action
           </DialogDescription>
         </DialogHeader>
         <div
@@ -293,7 +311,7 @@ export function ExecutionAccountSelectorDialog({
                 mode={option.mode}
                 selected={selected}
                 disabled={disabled}
-                label={option.mode === 'private' ? 'Confidential account' : 'Public account'}
+                label={option.mode === 'private' ? 'Private account' : 'Public account'}
                 address={option.address}
                 unavailableLabel={disabled ? 'Not available' : 'Address unavailable'}
                 onClick={() => {
@@ -349,16 +367,11 @@ export function ExecutionAccountSelectorDialog({
                 onOpenChange(false)
                 onFundPrivate()
               }}
-              className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium text-private transition-colors hover:bg-private/10"
             >
               <Icon icon="lucide:plus" width={15} height={15} />
-              Transfer to Confidential
+              Transfer to Private
             </button>
-          )}
-          {!privateAvailable && (
-            <p className="px-1 pt-1 text-[11px] leading-4 text-muted">
-              Confidential requires a supported software wallet with a Confidential address.
-            </p>
           )}
         </div>
       </DialogContent>

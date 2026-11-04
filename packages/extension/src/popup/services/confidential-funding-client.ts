@@ -5,10 +5,18 @@ import type {
 } from '@/core/services/confidential-funding'
 import type { SwapStatus } from '@/core/services/intents-api'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
+import type { Network } from '@/types'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
+export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
 
 export interface PrepareConfidentialFundingRequest {
+  readonly network: Network
+  readonly keyDomainId: string
+  readonly accountId: string
+  readonly operation: 'deposit' | 'withdraw' | 'cluster'
+  readonly sourceDomain: 'public' | 'private' | 'shield'
+  readonly destinationDomain: 'public' | 'private' | 'shield'
   readonly source: Readonly<{
     chainId: string
     chainName: string
@@ -116,9 +124,19 @@ function parseReview(value: unknown): ConfidentialFundingReview {
     !/^0x[0-9a-fA-F]{40}$/.test(review.sourceAddress) ||
     !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress) ||
     !Number.isSafeInteger(review.withdrawCount) ||
-    review.withdrawCount < 2 ||
-    review.withdrawCount > 5 ||
-    review.estimatedDurationMinutes !== 10 ||
+    (review.operation !== undefined &&
+      !['deposit', 'withdraw', 'cluster'].includes(review.operation)) ||
+    (review.operation === 'deposit'
+      ? review.withdrawCount !== 0
+      : review.operation === 'withdraw'
+        ? review.withdrawCount !== 1
+        : review.withdrawCount < 2 || review.withdrawCount > 5) ||
+    (review.operation !== undefined &&
+      ((review.network !== 'mainnet' && review.network !== 'testnet') ||
+        typeof review.keyDomainId !== 'string' ||
+        typeof review.accountId !== 'string' ||
+        !['public', 'private', 'shield'].includes(review.sourceDomain ?? '') ||
+        !['public', 'private', 'shield'].includes(review.destinationDomain ?? ''))) ||
     (review.sourceNetworkFee !== undefined &&
       (!/^\d+$/.test(review.sourceNetworkFee.raw) ||
         typeof review.sourceNetworkFee.symbol !== 'string' ||
@@ -139,14 +157,27 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     typeof plan.transactionId !== 'string' ||
     !PHASES.has(plan.phase) ||
     !/^\d+$/.test(plan.expectedOutputRaw) ||
-    plan.withdraws.length < 2 ||
-    plan.withdraws.length > 5 ||
+    (plan.operation !== undefined &&
+      !['deposit', 'withdraw', 'cluster'].includes(plan.operation)) ||
+    (plan.batchSubmissionAttemptedAt !== undefined &&
+      (!Number.isSafeInteger(plan.batchSubmissionAttemptedAt) ||
+        plan.batchSubmissionAttemptedAt <= 0)) ||
+    (plan.operation === 'deposit'
+      ? plan.withdraws.length !== 0
+      : plan.operation === 'withdraw'
+        ? plan.withdraws.length !== 1
+        : plan.withdraws.length < 2 || plan.withdraws.length > 5) ||
+    (plan.operation !== undefined &&
+      (!['public', 'private', 'shield'].includes(plan.sourceDomain ?? '') ||
+        !['public', 'private', 'shield'].includes(plan.destinationDomain ?? ''))) ||
     plan.withdraws.some(
       (row, index) =>
         !isRecord(row) ||
         row.sequence !== index ||
         typeof row.status !== 'string' ||
-        !/^\d+$/.test(row.amountRaw)
+        !/^\d+$/.test(row.amountRaw) ||
+        (row.scheduledAt !== undefined &&
+          (!Number.isSafeInteger(row.scheduledAt) || row.scheduledAt <= 0))
     )
   ) {
     throw new Error('Confidential funding status is invalid')
@@ -176,6 +207,25 @@ export function createConfidentialFundingClient(
       parsePlan(unwrap(await send({ type: 'GET_CONFIDENTIAL_FUNDING', planId }))),
     cancel: async (planId: string): Promise<void> => {
       unwrap(await send({ type: 'CANCEL_CONFIDENTIAL_FUNDING', planId }))
+    },
+    refreshBalances: async (
+      scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>,
+      authorize: boolean
+    ): Promise<readonly ConfidentialBalance[]> => {
+      const result = unwrap(await send({ type: 'REFRESH_CONFIDENTIAL_BALANCES', scope, authorize }))
+      if (
+        !Array.isArray(result) ||
+        result.some(
+          row =>
+            !isRecord(row) ||
+            typeof row.tokenId !== 'string' ||
+            typeof row.available !== 'string' ||
+            !/^\d+$/.test(row.available) ||
+            typeof row.source !== 'string'
+        )
+      )
+        throw new Error('Shield balances are unavailable')
+      return Object.freeze(result as ConfidentialBalance[])
     }
   })
 }

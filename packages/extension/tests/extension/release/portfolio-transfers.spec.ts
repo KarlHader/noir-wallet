@@ -190,7 +190,14 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
     })
   })
   await popup.reload()
-  await popup.getByRole('tab', { name: 'Lending' }).click()
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Settings' })
+    .click()
+  await popup.getByRole('button', { name: 'DApps Connection' }).click()
+  await popup.getByRole('button', { name: 'Explore dApps' }).click()
+  await popup.getByRole('button', { name: 'My positions' }).click()
   await expect(popup.getByText('0.000666 USDC', { exact: true })).toBeVisible()
   await expect(popup.getByText('<0.00000001 rNEAR', { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'REF-13215-lending-small-decimal-balances.png')
@@ -198,12 +205,13 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(
     popup.getByTestId('home-total-assets').locator('[data-slot="tooltip-trigger"]')
   ).toHaveCount(1)
-  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
-  const dappAddressDialog = popup.getByRole('dialog', { name: 'dApp address' })
-  await expect(dappAddressDialog.getByTestId('main-address-total')).toHaveText(/^\$/)
-  await expect(dappAddressDialog.getByTestId('private-address-total')).toHaveText(/^\$/)
+  await popup.getByRole('button', { name: /Total assets .*show asset breakdown/ }).hover()
+  const breakdown = popup.getByRole('tooltip')
+  for (const domain of ['Public', 'Shield', 'Private']) {
+    await expect(breakdown.getByText(domain, { exact: true }).locator('..')).toContainText('$')
+  }
   await captureScreenshot(popup, 'private-defi-home-address-totals.png')
-  await dappAddressDialog.getByRole('button', { name: 'Close' }).click()
+  await popup.mouse.move(0, 0)
 
   const ethereumRpcUrl = new URL(EVM_NETWORK_CONFIGS.mainnet[0].rpcUrl).href
   let abortedEthereumRpcRequests = 0
@@ -248,10 +256,11 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   expect(portfolioRpcRequests.slice(requestCountBeforeReload)).toEqual([])
 
   await popup.getByRole('button', { name: 'Send ETH on Ethereum' }).click()
-  await expect(popup.getByLabel('Send To')).toBeFocused()
+  await expect(popup.getByRole('textbox', { name: 'ETH amount' })).toBeVisible()
+  await expect(popup.getByLabel('Send To')).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Change asset' })).toHaveCount(0)
-  await expect(popup.getByTestId('send-asset-header')).toContainText('ETH')
-  await expect(popup.getByTestId('send-asset-header')).toContainText('Ethereum')
+  await expect(popup.getByRole('button', { name: 'Select send asset' })).toContainText('ETH')
+  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
   const sendSourceButton = popup.getByRole('button', {
     name: 'Choose source account, current main'
   })
@@ -259,9 +268,9 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(popup.getByRole('button', { name: 'Choose send source account' })).toHaveCount(0)
   await sendSourceButton.click()
   let sendSourceDialog = popup.getByRole('dialog', { name: 'Choose source account' })
-  await expect(sendSourceDialog).toContainText('This choice applies only to this wallet action.')
+  await expect(sendSourceDialog).toContainText('Choose an account for this action')
   await expect(sendSourceDialog.getByText('Selected', { exact: true })).toHaveCount(0)
-  await sendSourceDialog.getByRole('radio', { name: /Confidential account/ }).click()
+  await sendSourceDialog.getByRole('radio', { name: /Private account/ }).click()
   const privateSendSourceButton = popup.getByRole('button', {
     name: 'Choose source account, current private'
   })
@@ -275,9 +284,9 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   ).toBeVisible()
   await expect(popup.getByText('Send to', { exact: true })).toBeVisible()
   await expect(popup.getByText('Amount', { exact: true })).toBeVisible()
-  await expect(popup.getByLabel('Send To')).toHaveCSS('height', '56px')
-  await expect(popup.getByTestId('send-amount-card')).toHaveCSS('min-height', '92px')
-  await expect(popup.getByTestId('send-network-fee')).toBeVisible()
+  await expect(popup.getByLabel('Send To')).toHaveCSS('height', '54px')
+  await expect(popup.getByTestId('send-amount-card')).toHaveCSS('min-height', '40px')
+  await expect(popup.getByText('Fee', { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'release-default-send-input-cards.png')
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByLabel('Search your assets')).toBeVisible()
@@ -341,7 +350,7 @@ test('REF-13211 shows the Private USDC Gas requirement before transfer preparati
   await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
   await popup
     .getByRole('dialog', { name: 'Choose source account' })
-    .getByRole('radio', { name: /Confidential account/ })
+    .getByRole('radio', { name: /Private account/ })
     .click()
 
   await expect(popup.getByTestId('send-asset-header')).toContainText('USDC')
@@ -400,13 +409,19 @@ test('resyncs only active Wallet Zcash data and preserves EVM and Bitcoin state'
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 30_000 })
   await popup.getByRole('button', { name: 'Show account addresses' }).click()
-  await popup.getByLabel('Account address menu').getByRole('button', { name: 'View all' }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
-  await popup.getByRole('button', { name: 'Open Zcash settings' }).click()
-  await expect(popup.getByRole('heading', { name: 'Zcash settings' })).toBeVisible()
-  const resyncZcashButton = popup.getByRole('button', { name: 'Resync Zcash' })
-  await resyncZcashButton.scrollIntoViewIfNeeded()
-  await resyncZcashButton.click()
+  const addresses = popup.getByRole('dialog', { name: 'Account 1 addresses' })
+  await addresses.getByRole('button', { name: 'View all' }).click()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
+  await popup.getByRole('button', { name: 'Account actions for Account 1' }).click()
+  await popup.getByRole('menuitem', { name: 'Account details' }).click()
+  await popup.getByRole('button', { name: 'More account actions' }).click()
+  await popup.getByRole('menuitem', { name: 'Resync Zcash' }).click()
   const resyncDialog = popup.getByRole('dialog')
   await expect(resyncDialog.getByRole('heading', { name: 'Resync Zcash' })).toBeVisible()
   await expect(resyncDialog.locator('input[type="number"]')).not.toHaveValue('')

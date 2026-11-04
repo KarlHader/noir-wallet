@@ -4,7 +4,11 @@ import { safeBig } from '@/lib/big'
 import { formatWalletName, getAccountDisplayName } from '@/lib/format'
 import { buildAccountKey } from '@/store/account-data-store'
 import type { AccountData, WalletItem, ZcashBalance } from '@/types'
-import type { AccountNetworksCatalogView, AccountNetworksView } from './account-networks-client'
+import type {
+  AccountNetworksCatalogView,
+  AccountNetworksView,
+  AccountNetworkView
+} from './account-networks-client'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 
 export interface AccountListItem {
@@ -31,6 +35,71 @@ export interface RegularAccountEntry {
   readonly hardwareVendor: string | null
   readonly addAccount: WalletAddAccountAction | null
   readonly accounts: readonly RegularAccountItem[]
+}
+
+export interface SwitcherAccount {
+  readonly walletId: string
+  readonly accountId: string
+  readonly name: string
+  readonly networks: readonly AccountNetworkView[]
+  readonly active: boolean
+}
+
+export interface SwitcherGroup {
+  readonly walletId: string
+  readonly name: string
+  readonly accounts: readonly SwitcherAccount[]
+}
+
+export function buildAccountSwitcherGroups(input: {
+  readonly wallets: WalletItem[]
+  readonly catalogAccounts: readonly AccountNetworksView[]
+  readonly accountDisplayNames: Readonly<Record<string, string>>
+  readonly currentWalletId: string | null
+  readonly currentAccountId: string | null
+}): readonly SwitcherGroup[] {
+  const { wallets, catalogAccounts, accountDisplayNames, currentWalletId, currentAccountId } = input
+  const groups = new Map<string, { name: string; accounts: SwitcherAccount[] }>()
+  const catalogByKey = new Map(
+    catalogAccounts.map(account => [accountListKey(account.walletId, account.accountId), account])
+  )
+  const retained = new Set<string>()
+  for (const wallet of wallets) {
+    const group = { name: formatWalletName(wallet, wallets), accounts: [] as SwitcherAccount[] }
+    for (const account of wallet.accounts) {
+      const key = accountListKey(wallet.id, account.id)
+      retained.add(key)
+      if (account.isHidden) continue
+      group.accounts.push({
+        walletId: wallet.id,
+        accountId: account.id,
+        name: getAccountDisplayName(wallet.id, account.id, account.name, accountDisplayNames),
+        networks: catalogByKey.get(key)?.networks ?? [],
+        active: wallet.id === currentWalletId && account.id === currentAccountId
+      })
+    }
+    groups.set(wallet.id, group)
+  }
+  for (const account of catalogAccounts) {
+    if (retained.has(accountListKey(account.walletId, account.accountId))) continue
+    const group = groups.get(account.walletId) ?? { name: account.walletDisplayName, accounts: [] }
+    group.accounts.push({
+      walletId: account.walletId,
+      accountId: account.accountId,
+      name: getAccountDisplayName(
+        account.walletId,
+        account.accountId,
+        account.accountDisplayName,
+        accountDisplayNames
+      ),
+      networks: account.networks,
+      active: account.active
+    })
+    groups.set(account.walletId, group)
+  }
+  return [...groups]
+    .filter(([, group]) => group.accounts.length > 0)
+    .map(([walletId, group]) => ({ walletId, ...group }))
 }
 
 export function accountListKey(walletId: string, accountId: string): string {

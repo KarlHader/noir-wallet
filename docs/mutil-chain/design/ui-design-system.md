@@ -11,7 +11,7 @@ This reference applies to the extension popup, dApp approval window, side panel,
 | Primary    | `primary`, `#00d18a`      | One filled primary action per screen, focus, selected borders, success |
 | Card       | `card`, `#282832`         | Items and selections                                                   |
 | Popover    | `popover`, `#202029`      | Dialogs and layered surfaces                                           |
-| Muted      | `muted`, `#7e8a93`        | Secondary text                                                         |
+| Muted      | `muted`, `#8b8e93`        | Secondary text                                                         |
 | Border     | White at 10% opacity      | Dividers and default item borders                                      |
 | Input      | White at 15% opacity      | Default input borders                                                  |
 | Warning    | `#ffc201`                 | Recoverable risk requiring attention                                   |
@@ -19,9 +19,9 @@ This reference applies to the extension popup, dApp approval window, side panel,
 
 Use semantic theme classes such as `bg-primary`, `text-muted`, and `bg-card`. Do not add screen-local copies of these colors. A selected item uses a subtle primary border or tint and a radio/check marker; it does not compete with the filled primary button. Selection must not depend on color alone.
 
-Product UI uses **Jost** at weights 400-700. Addresses, hashes, and precise machine-readable values use **DM Mono**. The bundled font files and licenses live under [public/fonts](../../../packages/extension/public/fonts/). Do not add an old Figma font to reproduce a legacy mockup. Typical hierarchy is an 18px page title, 16px navigation title, 14-16px body, 13-14px field label, and 12px caption; match the component and available space.
+Product UI uses **DM Sans** at weights 400-700, with Jost as a fallback for unsupported character ranges. Addresses, hashes, and precise machine-readable values use **DM Mono**. The bundled font files and licenses live under [public/fonts](../../../packages/extension/public/fonts/). Typical hierarchy is an 18px page title, 16px navigation title, 14-16px body, 13-14px field label, and 12px caption; match the component and available space.
 
-Use a 4px spacing scale, favoring 8, 12, 16, 20, 24, and 32px. The content column has 20px horizontal padding; the 56px header has 16px horizontal padding. The footer has 20px horizontal padding, 20px bottom padding, and must remain visible. Reuse the [Button](../../../packages/extension/src/popup/components/ui/button.tsx) and [PageHeader](../../../packages/extension/src/popup/components/common/PageHeader.tsx) implementations for actual size, radius, focus, loading, and disabled behavior.
+Use a 4px spacing scale, favoring 8, 12, 16, 20, 24, and 32px. The content column and 56px header have 16px horizontal padding. The footer has 16px horizontal padding, 20px bottom padding, and must remain visible. Reuse the [Button](../../../packages/extension/src/popup/components/ui/button.tsx) and [PageHeader](../../../packages/extension/src/popup/components/common/PageHeader.tsx) implementations for actual size, radius, focus, loading, and disabled behavior.
 
 ## Viewports And Layout
 
@@ -71,6 +71,6 @@ Use a separate amount line or move the asset symbol when the full integer is too
 
 ## Figma To Code
 
-Inspect a target Figma screen's structure and screenshot before implementing it. Keep the original design intact and place experimental changes in a `CODEX REVIEW` section. Map designs to the production tokens, Jost/DM Mono, and the target 375px viewport; the older 344 x 588 canvas is not a production acceptance size.
+Inspect a target Figma screen's structure and screenshot before implementing it. Keep the original design intact and place experimental changes in a `CODEX REVIEW` section. Map designs to the production tokens, DM Sans/DM Mono, and the target 375px viewport; the older 344 x 588 canvas is not a production acceptance size.
 
 Reuse components under [popup/components](../../../packages/extension/src/popup/components/) and use `cn()` for conditional classes. Compare a rendered screenshot at the target viewport, checking clipping, overlap, footer visibility, text density, and selection states. Run the relevant real extension flow when popup, storage, MV3 lifecycle, or approval behavior changes.

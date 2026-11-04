@@ -63,7 +63,6 @@ import {
   isCrossChainSendDestination,
   isCrossChainSendRecipientValid
 } from '@/popup/services/cross-chain-send-assets'
-import { AddressTypeSwitch } from '../../components/account/AddressType'
 import { FundingSourceSelector } from '../../components/transaction/FundingSourceSelector'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
 import { getActiveAccountScopeKey } from '@/popup/lib/active-account-scope'
@@ -343,7 +342,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const zcashFundingBalance = getFundingBalance(storeBalance, fundingSource)
   const zcashAvailableBalance = zcashFundingBalance.available
 
-  const zecPrice = useWalletStore(state => state.zecPrice)
   const swapPreferenceScope = createSwapTokenPreferenceScope(effectiveWalletId, effectiveAccountId)
   const savedTokenSelection = useSwapPreferences(state =>
     swapPreferenceScope ? state.tokenSelections[swapPreferenceScope] : undefined
@@ -3231,8 +3229,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           capabilities: CROSS_CHAIN_SEND_CAPABILITIES
         })
       await openModal({
-        title: crossChainSendRequested ? 'SELECT NETWORK' : 'SELECT ASSET',
+        title: crossChainSendRequested
+          ? 'Select network'
+          : type === 'in'
+            ? 'Select pay token'
+            : 'Select receive token',
         showCloseButton: true,
+        className:
+          'border-0 bg-popover px-4 pt-5 [&_[data-slot=dialog-header]]:text-left [&_[data-slot=dialog-title]]:text-base [&_[data-slot=dialog-title]]:font-medium',
         body: (_resolve, close) => (
           <SwapTokenSelector
             initialTokens={
@@ -3464,14 +3468,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
   const sourceAccountAction =
     viewStep === 'input' && swap.isZecSource ? (
-      <AddressTypeSwitch
-        type={fundingSource}
-        ariaLabel="Select funding source"
+      <button
+        type="button"
+        aria-label="Select funding source"
+        aria-haspopup="dialog"
+        className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted hover:text-foreground"
         onClick={() => {
           if (!currentAccount) return
           const scope = getActiveAccountScopeKey()
           void openModal<FundingSource>({
             title: 'Funding source',
+            className:
+              'border-0 bg-popover px-4 pt-5 [&_[data-slot=dialog-header]]:text-left [&_[data-slot=dialog-title]]:text-base [&_[data-slot=dialog-title]]:font-medium',
             body: resolve => (
               <FundingSourceSelector
                 options={getFundingSourceOptions(
@@ -3480,7 +3488,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   currentWallet?.keySource
                 )}
                 selectedType={fundingSource}
-                zecPrice={zecPrice}
                 onSelect={source => {
                   if (scope !== getActiveAccountScopeKey()) return
                   if (
@@ -3512,13 +3519,29 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             )
           })
         }}
-      />
+      >
+        <span className="truncate" title={currentAccount?.addresses[fundingSource]}>
+          {formatSortAddress(currentAccount?.addresses[fundingSource] ?? '')}
+        </span>
+        <span
+          className={
+            fundingSource === 'shielded'
+              ? 'rounded-full bg-success/10 px-1.5 py-0.5 text-success'
+              : 'rounded-full bg-white/7 px-1.5 py-0.5 text-muted'
+          }
+        >
+          {fundingSource === 'shielded' ? 'Shield' : 'Public'}
+        </span>
+        <Icon icon="lucide:chevron-down" width={12} className="shrink-0" />
+      </button>
     ) : viewStep === 'input' &&
       !isPrivateFunding &&
       !privateTransferRequested &&
       walletSourceQuoteTarget?.kind === 'evm' ? (
       <AccountAddressSelectorButton
         mode={sourceMode}
+        showModeBadge
+        className="text-[10px] text-muted"
         address={
           sourceMode === 'private' ? sourcePrivateExecutionAddress : walletSourceQuoteTarget.address
         }
@@ -3732,6 +3755,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           <TransactionReviewView
             title="Review Transfer"
             showTitle={false}
+            variant="figma"
             asset={{
               assetId: swap.tokenIn.assetId,
               symbol: formatSymbol(swap.tokenIn.symbol),
@@ -3780,6 +3804,36 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
       return (
         <SwapReviewView
+          sourceAccount={{
+            name: storageV2Account?.accountDisplayName ?? currentAccount?.name,
+            address: swap.isZecSource
+              ? currentAccount?.addresses[fundingSource]
+              : walletOwnedSource?.refundAddress,
+            badge: swap.isZecSource
+              ? fundingSource === 'shielded'
+                ? 'Shield'
+                : 'Public'
+              : executionSourceMode === 'private'
+                ? 'Private'
+                : 'Public'
+          }}
+          destinationAccount={{
+            name: requiresRecipientAddress
+              ? undefined
+              : (storageV2Account?.accountDisplayName ?? currentAccount?.name),
+            address: reviewedQuote.recipient,
+            badge: requiresRecipientAddress
+              ? undefined
+              : isZecDestination
+                ? swap.addressType === 'shielded'
+                  ? 'Shield'
+                  : 'Public'
+                : destinationMode === 'private'
+                  ? 'Private'
+                  : 'Public'
+          }}
+          rate={swap.rate}
+          onCancel={handleReturnToInput}
           destinationDetails={
             (crossChainSendRequested || privateTransferRequested) && swap.tokenOut
               ? {
@@ -3901,6 +3955,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         fromFiat={swap.fromFiat}
         toFiat={swap.toFiat}
         rate={swap.rate}
+        providerName={quoteResult?.router}
         addressType={swap.addressType}
         destinationAddress={resolvedRecipientAddress}
         spendableBalance={spendableBalance}
@@ -3969,24 +4024,20 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         walletManagedRefundAddress={resolvedRefundAddress || undefined}
         feeIsApproximate={feeIsApproximate}
         sourceAddress={
-          isPrivateFunding
-            ? swap.isZecSource
-              ? currentAccount?.addresses[fundingSource]
-              : resolvedRefundAddress
-            : !swap.isZecSource
-              ? walletOwnedSource?.refundAddress
-              : undefined
+          swap.isZecSource
+            ? currentAccount?.addresses[fundingSource]
+            : walletOwnedSource?.refundAddress
         }
         sourceBadge={
           isPrivateFunding
             ? 'Public'
             : !swap.isZecSource
               ? executionSourceMode === 'private'
-                ? 'Confidential'
+                ? 'Private'
                 : 'Public'
               : fundingSource === 'transparent'
-                ? 'Transparent'
-                : 'Shielded'
+                ? 'Public'
+                : 'Shield'
         }
         onAmountInChange={value => {
           reviewAfterQuoteRefresh.current = null
@@ -4050,12 +4101,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         sourceAccountAction={sourceAccountAction}
         destinationBadge={
           isPrivateFunding
-            ? 'Confidential'
+            ? 'Private'
             : !requiresRecipientAddress && walletDestinationTarget?.kind === 'evm'
               ? destinationMode === 'private'
-                ? 'Confidential'
+                ? 'Private'
                 : 'Public'
-              : undefined
+              : isZecDestination && !requiresRecipientAddress
+                ? swap.addressType === 'shielded'
+                  ? 'Shield'
+                  : 'Public'
+                : undefined
         }
         destinationAssetLocked={isPrivateFunding || privateTransferRequested}
         sourceAssetLocked={privateTransferRequested || crossChainSendRequested}
@@ -4121,7 +4176,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   ? 'Review Send'
                   : 'Send'
                 : viewStep === 'review'
-                  ? 'Review Swap'
+                  ? 'Confirm Swap'
                   : 'Swap'
         }
         {...(viewStep === 'approval-pending' ? {} : getHeaderProps())}
@@ -4164,6 +4219,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         <TransactionReviewView
           title="Review Transfer"
           showTitle={false}
+          variant="figma"
           asset={
             swap.tokenIn
               ? {

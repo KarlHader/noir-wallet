@@ -154,7 +154,8 @@ export function MultichainActivityPanel({
     olderRequestSequence.current += 1
     setOlderStatus('ready')
     setStatus('loading')
-    const chainIds = selectedChainKey ? selectedChainKey.split(',') : undefined
+    const chainIds =
+      !focusTransactionId && selectedChainKey ? selectedChainKey.split(',') : undefined
     let localModelAvailable = false
     try {
       const local = await evmWalletClient.getActivity(
@@ -176,7 +177,13 @@ export function MultichainActivityPanel({
       const refreshed = await evmWalletClient.getActivity(
         'refresh',
         'all',
-        filteredChainId ? { chainIds: [filteredChainId] } : chainIds ? { chainIds } : undefined
+        focusTransactionId
+          ? undefined
+          : filteredChainId
+            ? { chainIds: [filteredChainId] }
+            : chainIds
+              ? { chainIds }
+              : undefined
       )
       if (request !== requestSequence.current) return
       if (!isActivityModelForScope(refreshed, walletId, accountId)) {
@@ -189,7 +196,7 @@ export function MultichainActivityPanel({
       if (request !== requestSequence.current) return
       setStatus(localModelAvailable ? 'ready' : 'error')
     }
-  }, [accountId, filteredChainId, selectedChainKey, walletId])
+  }, [accountId, filteredChainId, focusTransactionId, selectedChainKey, walletId])
 
   useEffect(() => {
     const retainedModel = isActivityModelForScope(initialModel, walletId, accountId)
@@ -201,7 +208,10 @@ export function MultichainActivityPanel({
       setStatus('ready')
       return
     }
-    if (retainedModel) {
+    if (
+      retainedModel &&
+      (!focusTransactionId || retainedModel.items.some(item => item.id === focusTransactionId))
+    ) {
       setStatus('ready')
       return
     }
@@ -211,7 +221,7 @@ export function MultichainActivityPanel({
       requestSequence.current += 1
       olderRequestSequence.current += 1
     }
-  }, [walletId, accountId, network, initialModel, load])
+  }, [walletId, accountId, network, initialModel, focusTransactionId, load])
 
   useEffect(() => {
     if (!walletId || !accountId) return
@@ -278,11 +288,11 @@ export function MultichainActivityPanel({
   )
   useEffect(() => {
     if (!focusTransactionId || !onItemClick) return
-    const item = visibleItems.find(candidate => candidate.id === focusTransactionId)
+    const item = visibleModel?.items.find(candidate => candidate.id === focusTransactionId)
     if (!item || focusedTransactionId.current === focusTransactionId) return
     focusedTransactionId.current = focusTransactionId
     onItemClick(item)
-  }, [focusTransactionId, onItemClick, visibleItems])
+  }, [focusTransactionId, onItemClick, visibleModel])
   const pendingEvmChainKey = useMemo(
     () =>
       [

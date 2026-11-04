@@ -6,11 +6,13 @@ import { ConfidentialFundingApiError } from '../../../src/background/confidentia
 import { serializeConfidentialFundingPlan } from '../../../src/background/confidential-funding-store.ts'
 import {
   createConfidentialFundingGraph,
-  fingerprintConfidentialValue
+  fingerprintConfidentialValue,
+  fingerprintDirectConfidentialApproval
 } from '../../../src/core/services/confidential-funding/index.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import { parseTransactionGraph } from '../../../src/core/transactions/domain/index.ts'
+import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 
 const scope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
 const signerId = '0x1111111111111111111111111111111111111111'
@@ -24,8 +26,8 @@ class SignedTransactionRepository extends InMemoryTransactionRepository {
   }
 }
 
-async function harness(phase = 'submitting') {
-  const withdraws = [0, 1, 2].map(sequence => ({
+async function harness(phase = 'submitting', direct = false, cluster = false) {
+  const withdraws = (direct ? [0] : [0, 1, 2]).map(sequence => ({
     sequence,
     sourceAmountRaw: '1000',
     amountRaw: '990',
@@ -38,7 +40,7 @@ async function harness(phase = 'submitting') {
     signedPayload: { standard: 'erc191', payload: `frozen-${sequence}`, signature: 'signature' }
   }))
   const frozenRequest = {
-    from_amount: '3000',
+    from_amount: direct ? '1000' : '3000',
     from_chain: 'eth',
     from_token: 'nep141:eth.omft.near',
     mode: 'TRANSFER',
@@ -60,6 +62,15 @@ async function harness(phase = 'submitting') {
     planId: 'recovery-one',
     transactionId: 'tx:confidential:recovery-one',
     network: 'mainnet',
+    ...(cluster
+      ? { operation: 'cluster', sourceDomain: 'shield', destinationDomain: 'private' }
+      : direct
+        ? {
+            operation: 'withdraw',
+            sourceDomain: 'shield',
+            destinationDomain: 'private'
+          }
+        : {}),
     ...scope,
     phase,
     source: {
@@ -67,7 +78,7 @@ async function harness(phase = 'submitting') {
       chainName: 'eth',
       assetId: 'eip155:1/slip44:60',
       protocolAssetId: 'nep141:eth.omft.near',
-      amountRaw: '3000',
+      amountRaw: direct ? '1000' : '3000',
       address: signerId
     },
     destination: {
@@ -81,17 +92,18 @@ async function harness(phase = 'submitting') {
     addressIndex: 0,
     slippageBps: 100,
     requiresDeposit: false,
-    confidentialBaselineRaw: '3000',
+    confidentialBaselineRaw: direct ? '1000' : '3000',
     approvalFingerprint: 'a'.repeat(64),
     approvalExpiresAt: 50_000,
-    expectedOutputRaw: '2970',
-    minimumOutputRaw: '2940',
-    splitSourceAmounts: ['1000', '1000', '1000'],
+    expectedOutputRaw: direct ? '990' : '2970',
+    minimumOutputRaw: direct ? '980' : '2940',
+    splitSourceAmounts: direct ? ['1000'] : ['1000', '1000', '1000'],
     withdraws,
     requestFingerprint: await fingerprintConfidentialValue(frozenRequest),
-    ...(phase === 'submitting'
+    ...(phase === 'submitting' || cluster
       ? {
-          frozenRequest
+          frozenRequest,
+          ...(phase === 'processing' ? { orderId: 'order-one' } : {})
         }
       : { orderId: 'order-one' }),
     createdAt: now,
@@ -105,10 +117,7 @@ async function harness(phase = 'submitting') {
     authSignatures: 0,
     monitoring: 0,
     refreshes: 0,
-    statuses:
-      phase === 'processing'
-        ? ['PROCESSING', 'PROCESSING', 'PROCESSING']
-        : ['PENDING_DEPOSIT', 'PENDING_DEPOSIT', 'PENDING_DEPOSIT'],
+    statuses: withdraws.map(() => (phase === 'processing' ? 'PROCESSING' : 'PENDING_DEPOSIT')),
     session: {
       accessToken: 'token',
       refreshToken: 'refresh',
@@ -118,7 +127,20 @@ async function harness(phase = 'submitting') {
     submitError: null,
     statusError: null,
     processingHashes: new Set(),
-    identityAccount: scope.accountId
+    identityAccount: scope.accountId,
+    batchSubmissions: 0,
+    acceptedOrder: null,
+    historySignatures: 0,
+    historyAuthError: null,
+    depositSignatures: 0,
+    cancelledDeposits: 0,
+    historyToken: {
+      token: 'wallet-history-token',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      queryAddress: signerId,
+      principalType: 'wallet',
+      mcaAccountId: null
+    }
   }
   const store = {
     async getPlan(id) {
@@ -139,9 +161,42 @@ async function harness(phase = 'submitting') {
     async deleteSession() {
       state.session = null
     },
-    async putBalances() {}
+    async putBalances() {},
+    async getHistorySession() {
+      return state.historyToken
+    },
+    async putHistorySession(_network, _domain, _account, token) {
+      state.historyToken = token
+    },
+    async deleteHistorySession() {
+      state.historyToken = null
+    }
   }
   const api = {
+    async submitWithdraws() {
+      state.batchSubmissions += 1
+      if (state.submitError) throw state.submitError
+      return { orderId: 'order-one' }
+    },
+    async getPrivateOrders() {
+      return { orders: state.acceptedOrder ? [state.acceptedOrder] : [], hasNextPage: false }
+    },
+    async getPrivateOrderDetails() {
+      return state.acceptedOrder ? [state.acceptedOrder] : []
+    },
+    async createOrderAuthChallenge() {
+      if (state.historyAuthError) throw state.historyAuthError
+      return { message: 'history-challenge' }
+    },
+    async authenticateOrderChallenge() {
+      return {
+        token: 'renewed-history-token',
+        expiresAt: new Date(Date.now() + 120_000).toISOString(),
+        queryAddress: signerId,
+        principalType: 'wallet',
+        mcaAccountId: null
+      }
+    },
     async submitIntent(signedData) {
       state.submissions.push(structuredClone(signedData))
       if (state.submitError) throw state.submitError
@@ -184,17 +239,37 @@ async function harness(phase = 'submitting') {
       }
     },
     async signMessage({ payload }) {
+      if (payload === 'history-challenge') {
+        state.historySignatures += 1
+        return { standard: 'erc191', payload, signature: 'history-signature' }
+      }
       if (payload !== 'authorize-session') {
         state.intentSignatures += 1
         throw new Error('Recovery must not re-sign withdraws')
       }
       state.authSignatures += 1
       return { standard: 'erc191', payload, signature: 'auth-signature' }
+    },
+    async confirmTransaction() {
+      state.depositSignatures += 1
+      throw new Error('Unexpected deposit signature')
+    },
+    async cancelTransaction() {
+      state.cancelledDeposits += 1
     }
   }
   const repository = new SignedTransactionRepository()
   const graph = createConfidentialFundingGraph({
     planId: initial.planId,
+    ...(cluster
+      ? { operation: 'cluster', sourceDomain: 'shield', destinationDomain: 'private' }
+      : direct
+        ? {
+            operation: 'withdraw',
+            sourceDomain: 'shield',
+            destinationDomain: 'private'
+          }
+        : {}),
     scope,
     source: initial.source,
     destination: { ...initial.destination, expectedAmountRaw: initial.expectedOutputRaw },
@@ -232,7 +307,496 @@ async function harness(phase = 'submitting') {
   return { initial, state, store, repository, restart }
 }
 
+function directPreparationHarness() {
+  const plans = new Map()
+  const state = {
+    now: 1_000,
+    signatures: 0,
+    formalQuotes: 0,
+    session: {
+      accessToken: 'session',
+      refreshToken: 'refresh',
+      expiresAt: 1_000_000,
+      refreshExpiresAt: 2_000_000
+    }
+  }
+  const assetId = 'eip155:1/slip44:60'
+  const protocolAssetId = 'nep141:eth.omft.near'
+  const store = {
+    getPlan: async id => structuredClone(plans.get(id) ?? null),
+    listPlans: async () => [...plans.values()].map(value => structuredClone(value)),
+    putPlan: async value => {
+      plans.set(value.planId, serializeConfidentialFundingPlan(value))
+    },
+    deletePlan: async id => {
+      plans.delete(id)
+    },
+    getSession: async () => state.session,
+    putBalances: async () => {}
+  }
+  const signer = {
+    resolveIdentity: async () => ({
+      address: signerId,
+      peaAddress,
+      addressIndex: 0,
+      context: { chainAccount: { scope: { ...scope, chainId: 'eip155:1' } } }
+    }),
+    signMessage: async () => {
+      state.signatures += 1
+      throw new Error('unexpected signature')
+    }
+  }
+  const api = {
+    getBalances: async () => [
+      {
+        tokenId: confidentialPrivateTokenId(protocolAssetId),
+        available: '100',
+        source: 'intents'
+      }
+    ],
+    quote: async input => {
+      if (!input.dry) {
+        state.formalQuotes += 1
+        throw new Error('formal quote unavailable in this test')
+      }
+      return {
+        correlationId: 'quote-one',
+        quoteRequest: {
+          swapType: 'EXACT_INPUT',
+          confidentiality: 'basic',
+          originAsset: input.originAsset,
+          destinationAsset: input.destinationAsset,
+          amount: input.amountRaw,
+          refundTo: input.signerId,
+          depositType: input.depositType,
+          refundType: input.refundType,
+          recipient: input.recipient,
+          recipientType: input.recipientType,
+          slippageTolerance: input.slippageBps
+        },
+        quote: {
+          amountIn: input.amountRaw,
+          amountOut: input.amountRaw,
+          minAmountOut: input.amountRaw,
+          depositAddress: 'deposit.near',
+          deadline: new Date(state.now + 60_000).toISOString()
+        }
+      }
+    }
+  }
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    api,
+    store,
+    signer,
+    repository: new InMemoryTransactionRepository(),
+    assets: { get: () => ({}) },
+    evmNetworks: [],
+    assetMappings: [{ assetId, protocolAssetId }],
+    now: () => state.now,
+    createId: () => `direct-${plans.size}-${state.now}`,
+    scheduleMonitoring: async () => {}
+  })
+  const request = (amountRaw, accountId = scope.accountId) => ({
+    network: 'mainnet',
+    keyDomainId: scope.keyDomainId,
+    accountId,
+    operation: 'withdraw',
+    sourceDomain: 'shield',
+    destinationDomain: 'private',
+    source: {
+      chainId: 'eip155:1',
+      chainName: 'eth',
+      assetId,
+      protocolAssetId,
+      amountRaw
+    },
+    destination: { chainId: 'eip155:1', chainName: 'eth', assetId, protocolAssetId },
+    slippageBps: 100
+  })
+  return { coordinator, state, plans, request }
+}
+
 test.describe('confidential funding persisted recovery', () => {
+  test('releases unsigned direct withdraws interrupted before signing, even without a session', async () => {
+    for (const phase of ['authorized', 'signing-withdraws', 'needs-auth']) {
+      const h = directPreparationHarness()
+      const request = h.request('10')
+      const review = await h.coordinator.prepare(request)
+      const prepared = await h.coordinator.getPlan(review.planId)
+      h.plans.set(
+        review.planId,
+        serializeConfidentialFundingPlan({
+          ...prepared,
+          phase,
+          ...(phase === 'needs-auth' ? { resumePhase: 'signing-withdraws' } : {})
+        })
+      )
+      const session = h.state.session
+      h.state.session = null
+      await h.coordinator.resumeAll()
+      const interrupted = await h.coordinator.getPlan(review.planId)
+      expect(interrupted.phase).toBe('failed')
+      expect(interrupted.errorStatus).toBe('WITHDRAW_SIGNING_INTERRUPTED')
+      expect(h.state.signatures).toBe(0)
+      h.state.session = session
+      const replacement = await h.coordinator.prepare(request)
+      expect(replacement.planId).not.toBe(review.planId)
+      expect(replacement.withdrawCount).toBe(1)
+    }
+  })
+
+  test('confirms the same Private to Shield review after JSON storage reorders prepared transaction keys', async () => {
+    const plans = new Map()
+    const assetId = 'eip155:1/slip44:60'
+    const protocolAssetId = 'nep141:eth.omft.near'
+    const depositAddress = '0x3333333333333333333333333333333333333333'
+    const transactionHash = `0x${'ab'.repeat(32)}`
+    const state = { prepared: null, broadcasts: 0 }
+    const reverseKeys = (_key, value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).reverse())
+        : value
+    const store = {
+      getPlan: async id => structuredClone(plans.get(id) ?? null),
+      listPlans: async () => [...plans.values()].map(value => structuredClone(value)),
+      putPlan: async value => {
+        plans.set(
+          value.planId,
+          serializeConfidentialFundingPlan(JSON.parse(JSON.stringify(value, reverseKeys)))
+        )
+      },
+      deletePlan: async id => {
+        plans.delete(id)
+      },
+      getSession: async () => ({
+        accessToken: 'session',
+        refreshToken: 'refresh',
+        expiresAt: Date.now() + 600_000,
+        refreshExpiresAt: Date.now() + 1_200_000
+      }),
+      putBalances: async () => {}
+    }
+    const asset = {
+      asset: { id: assetId, chainId: 'eip155:1', kind: 'native', namespace: 'slip44' },
+      metadata: { symbol: 'ETH', decimals: 18 },
+      verification: 'verified'
+    }
+    const signer = {
+      resolveIdentity: async () => ({
+        address: signerId,
+        peaAddress,
+        addressIndex: 0,
+        context: { chainAccount: { scope: { ...scope, chainId: 'eip155:1' } } }
+      }),
+      prepareTransaction: async ({ prepared }) => {
+        state.prepared = prepared
+        return {
+          commandId: 'command-one',
+          payloadFingerprint: 'a'.repeat(64),
+          expiresAt: Date.now() + 600_000
+        }
+      },
+      confirmTransaction: async () => ({ rawTransaction: '0xdeadbeef', transactionHash })
+    }
+    const api = {
+      getBalances: async () => [],
+      getStatus: async () => ({ status: 'PROCESSING' }),
+      quote: async input => ({
+        correlationId: 'quote-one',
+        quoteRequest: {
+          swapType: 'EXACT_INPUT',
+          confidentiality: 'basic',
+          originAsset: input.originAsset,
+          destinationAsset: input.destinationAsset,
+          amount: input.amountRaw,
+          refundTo: input.refundTo,
+          depositType: input.depositType,
+          refundType: input.refundType,
+          recipient: input.recipient,
+          recipientType: input.recipientType,
+          slippageTolerance: input.slippageBps
+        },
+        quote: {
+          amountIn: input.amountRaw,
+          amountOut: input.amountRaw,
+          minAmountOut: input.amountRaw,
+          depositAddress,
+          deadline: new Date(Date.now() + 300_000).toISOString()
+        }
+      })
+    }
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      api,
+      store,
+      signer,
+      repository: new InMemoryTransactionRepository(),
+      assets: { get: () => asset, list: () => [asset] },
+      evmNetworks: [],
+      assetMappings: [{ assetId, protocolAssetId }],
+      scheduleMonitoring: async () => {}
+    })
+    coordinator.rpcByChain.set('eip155:1', {
+      assertExpectedChain: async () => {},
+      getPendingNonce: async () => '0',
+      getNativeBalance: async () => '1000000000000000000',
+      simulateCall: async () => '0x',
+      estimateGas: async () => '21000',
+      getMaximumPriorityFeePerGas: async () => '1000000000',
+      getLatestBlockFee: async () => ({ blockNumber: '1', baseFeePerGas: '1000000000' }),
+      broadcastRawTransaction: async () => {
+        state.broadcasts += 1
+        return transactionHash
+      }
+    })
+    const review = await coordinator.prepare({
+      network: 'mainnet',
+      ...scope,
+      operation: 'deposit',
+      sourceDomain: 'private',
+      destinationDomain: 'shield',
+      source: {
+        chainId: 'eip155:1',
+        chainName: 'eth',
+        assetId,
+        protocolAssetId,
+        amountRaw: '1000'
+      },
+      destination: { chainId: 'eip155:1', chainName: 'eth', assetId, protocolAssetId },
+      slippageBps: 100
+    })
+    const stored = await store.getPlan(review.planId)
+    expect(state.prepared.from.toLowerCase()).toBe(peaAddress)
+    expect(stored.depositQuote.quoteRequest.refundTo).toBe(peaAddress)
+    expect(JSON.stringify(stored.preparedDeposit.preparedTransfer)).not.toBe(
+      JSON.stringify(state.prepared)
+    )
+    await store.putPlan({
+      ...stored,
+      source: { ...stored.source, amountRaw: '1001' }
+    })
+    await expect(coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+      'approval content changed'
+    )
+    expect(state.broadcasts).toBe(0)
+    await store.putPlan(stored)
+    expect((await coordinator.confirm(review.planId, review.payloadFingerprint)).phase).toBe(
+      'deposit-confirming'
+    )
+    expect(state.broadcasts).toBe(1)
+  })
+
+  test('reserves Shield funds across concurrent prepares and releases cancelled or expired reviews', async () => {
+    const h = directPreparationHarness()
+    const attempts = await Promise.allSettled([
+      h.coordinator.prepare(h.request('60')),
+      h.coordinator.prepare(h.request('50'))
+    ])
+    expect(attempts.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
+    expect(attempts[1].reason.message).toContain('insufficient')
+    const first = attempts[0].value
+    await h.coordinator.cancel(first.planId)
+    const second = await h.coordinator.prepare(h.request('50'))
+    expect(second.withdrawCount).toBe(1)
+    h.state.now = second.expiresAt + 1
+    const third = await h.coordinator.prepare(h.request('60'))
+    expect(third.withdrawCount).toBe(1)
+    expect(h.plans.has(second.planId)).toBe(false)
+    expect(h.state.signatures).toBe(0)
+  })
+
+  test('reserves a credited Cluster deposit while its Shield withdraws are queued', async () => {
+    const h = directPreparationHarness()
+    const review = await h.coordinator.prepare(h.request('10'))
+    const base = await h.coordinator.getPlan(review.planId)
+    await h.coordinator.cancel(review.planId)
+    const cluster = serializeConfidentialFundingPlan({
+      ...base,
+      planId: 'credited-cluster',
+      operation: 'cluster',
+      sourceDomain: 'public',
+      destinationDomain: 'private',
+      phase: 'signing-withdraws',
+      source: { ...base.source, amountRaw: '60' },
+      requiresDeposit: true,
+      depositQuote: { quote: { amountOut: '60' } },
+      preparedDeposit: { commandId: 'signed-source' },
+      splitSourceAmounts: ['20', '20', '20'],
+      withdraws: [0, 1, 2].map(sequence => ({
+        ...base.withdraws[0],
+        sequence,
+        sourceAmountRaw: '20',
+        amountRaw: '20'
+      }))
+    })
+    h.plans.set(cluster.planId, cluster)
+    await expect(h.coordinator.prepare(h.request('50'))).rejects.toThrow('insufficient')
+    expect((await h.coordinator.prepare(h.request('40'))).sourceAmountRaw).toBe('40')
+  })
+
+  test('rejects a changed Account and makes cancel and confirm mutually exclusive', async () => {
+    const h = directPreparationHarness()
+    await expect(h.coordinator.prepare(h.request('10', 'account:other'))).rejects.toThrow(
+      'account or network changed'
+    )
+    expect(h.plans.size).toBe(0)
+    const first = await h.coordinator.prepare(h.request('10'))
+    const cancelling = h.coordinator.cancel(first.planId)
+    await expect(h.coordinator.confirm(first.planId, first.payloadFingerprint)).rejects.toThrow(
+      'being cancelled'
+    )
+    await cancelling
+    expect(h.plans.size).toBe(0)
+    const second = await h.coordinator.prepare(h.request('10'))
+    const confirming = h.coordinator.confirm(second.planId, second.payloadFingerprint)
+    await expect(h.coordinator.cancel(second.planId)).rejects.toThrow('in progress')
+    await expect(confirming).rejects.toThrow('formal quote unavailable')
+    expect((await h.coordinator.getPlan(second.planId)).phase).toBe('failed')
+    expect(h.state.formalQuotes).toBe(1)
+    expect(h.state.signatures).toBe(0)
+  })
+
+  test('settles a refunded Shield deposit after its on-chain origin is final', async () => {
+    const planId = 'refunded-direct-deposit'
+    const transactionId = `tx:confidential:${planId}`
+    const depositAddress = '0x3333333333333333333333333333333333333333'
+    const transactionHash = `0x${'ab'.repeat(32)}`
+    let plan = serializeConfidentialFundingPlan({
+      schemaVersion: 1,
+      planId,
+      transactionId,
+      network: 'mainnet',
+      ...scope,
+      operation: 'deposit',
+      sourceDomain: 'public',
+      destinationDomain: 'shield',
+      phase: 'deposit-confirming',
+      source: {
+        chainId: 'eip155:1',
+        chainName: 'eth',
+        assetId: 'eip155:1/slip44:60',
+        protocolAssetId: 'nep141:eth.omft.near',
+        amountRaw: '1000',
+        address: signerId
+      },
+      destination: {
+        chainId: 'eip155:1',
+        chainName: 'eth',
+        assetId: 'eip155:1/slip44:60',
+        protocolAssetId: 'nep141:eth.omft.near',
+        address: signerId
+      },
+      signerId,
+      addressIndex: 0,
+      slippageBps: 100,
+      requiresDeposit: true,
+      confidentialBaselineRaw: '0',
+      depositQuote: {
+        correlationId: 'quote-one',
+        quoteRequest: {},
+        quote: {
+          amountIn: '1000',
+          amountOut: '990',
+          minAmountOut: '980',
+          depositAddress,
+          deadline: new Date(60_000).toISOString()
+        }
+      },
+      preparedDeposit: {
+        commandId: 'command-one',
+        payloadFingerprint: 'a'.repeat(64),
+        expiresAt: 60_000,
+        preparedTransfer: {}
+      },
+      approvalFingerprint: 'b'.repeat(64),
+      approvalExpiresAt: 60_000,
+      expectedOutputRaw: '990',
+      minimumOutputRaw: '980',
+      splitSourceAmounts: [],
+      withdraws: [],
+      createdAt: now,
+      updatedAt: now
+    })
+    const repository = new SignedTransactionRepository()
+    const graph = createConfidentialFundingGraph({
+      planId,
+      operation: 'deposit',
+      sourceDomain: 'public',
+      destinationDomain: 'shield',
+      scope,
+      source: { ...plan.source, transactionHash },
+      destination: { ...plan.destination, expectedAmountRaw: plan.expectedOutputRaw },
+      withdrawDepositAddresses: [],
+      requiresDeposit: true,
+      now
+    })
+    await repository.create({
+      ...graph,
+      root: { ...graph.root, status: 'confirming' },
+      segments: graph.segments.map(segment =>
+        segment.role === 'origin'
+          ? { ...segment, status: 'final' }
+          : segment.role === 'relay'
+            ? { ...segment, status: 'confirming' }
+            : segment
+      )
+    })
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      api: {
+        getStatus: async () => ({ status: 'REFUNDED' }),
+        getBalances: async () => []
+      },
+      store: {
+        getPlan: async () => structuredClone(plan),
+        putPlan: async next => {
+          plan = serializeConfidentialFundingPlan(next)
+        },
+        getSession: async () => ({
+          accessToken: 'session',
+          refreshToken: 'refresh',
+          expiresAt: 1_000_000,
+          refreshExpiresAt: 2_000_000
+        }),
+        putBalances: async () => {}
+      },
+      signer: {},
+      repository,
+      assets: {},
+      evmNetworks: [],
+      assetMappings: [],
+      now: () => now,
+      scheduleMonitoring: async () => {}
+    })
+    expect((await coordinator.continuePlan(planId)).phase).toBe('refunded')
+    const settled = await repository.get(scope, transactionId)
+    expect(settled.root.status).toBe('failed')
+    expect(settled.segments.find(segment => segment.role === 'origin').status).toBe('final')
+    expect(settled.segments.find(segment => segment.role === 'relay').status).toBe('failed')
+  })
+
+  test('recovers one approved Shield withdraw without signing again or expanding the amount', async () => {
+    const h = await harness('submitting', true)
+    const resumed = await h.restart().continuePlan(h.initial.planId)
+    expect(resumed.operation).toBe('withdraw')
+    expect(resumed.phase).toBe('processing')
+    expect(resumed.withdraws).toHaveLength(1)
+    expect(h.state.submissions).toEqual([h.initial.frozenRequest.withdraws[0].signed_payload])
+    expect(h.state.intentSignatures).toBe(0)
+    expect(() =>
+      serializeConfidentialFundingPlan({
+        ...h.initial,
+        sourceDomain: 'public'
+      })
+    ).toThrow('bindings are invalid')
+    expect(() =>
+      serializeConfidentialFundingPlan({
+        ...h.initial,
+        withdraws: [...h.initial.withdraws, h.initial.withdraws[0]]
+      })
+    ).toThrow('bindings are invalid')
+  })
   test('submits the original signed intents when storage changes nested object key order', async () => {
     const h = await harness()
     const reordered = JSON.parse(
@@ -344,6 +908,10 @@ test.describe('confidential funding persisted recovery', () => {
     expect((await h.store.getPlan(h.initial.planId)).frozenRequest).toEqual(h.initial.frozenRequest)
     h.state.statuses[0] = 'PROCESSING'
     h.state.now = 70_000
+    const uncertain = await h.restart().continuePlan(h.initial.planId)
+    expect(uncertain.phase).toBe('submitting')
+    expect(uncertain.frozenRequest).toEqual(h.initial.frozenRequest)
+    h.state.statuses = ['PROCESSING', 'EXPIRED', 'EXPIRED']
     const recovered = await h.restart().continuePlan(h.initial.planId)
     expect(recovered.phase).toBe('processing')
     expect(recovered.frozenRequest).toBeUndefined()
@@ -382,7 +950,8 @@ test.describe('confidential funding persisted recovery', () => {
         })
       } else h.state.now = 70_000
       const result = await h.restart().continuePlan(h.initial.planId)
-      expect(result.phase).toBe(modified ? 'submitting' : 'expired')
+      expect(result.phase).toBe('submitting')
+      if (!modified) expect(result.frozenRequest).toEqual(h.initial.frozenRequest)
       if (modified) expect(result.errorStatus).toBe('LOCAL_PROCESSING_FAILED')
       expect(h.state.submissions).toHaveLength(0)
       expect(h.state.intentSignatures).toBe(0)
@@ -503,5 +1072,205 @@ test.describe('confidential funding persisted recovery', () => {
       h.initial.frozenRequest.withdraws.map(row => row.signed_payload)
     )
     expect(h.state.intentSignatures).toBe(0)
+  })
+
+  test('never resubmits an attempted Cluster batch and recovers only its complete order', async () => {
+    const h = await harness('submitting', false, true)
+    h.state.submitError = new ConfidentialFundingApiError('timeout', null, true)
+    const order = {
+      orderId: 'order-one',
+      signerId,
+      status: 'SCHEDULED',
+      mode: 'TRANSFER',
+      fromAmount: '3000',
+      fromChain: 'eth',
+      fromToken: h.initial.source.protocolAssetId,
+      transactions: h.initial.withdraws.map(row => ({
+        sequence: row.sequence,
+        transactionType: 'WITHDRAW',
+        amount: row.amountRaw,
+        depositAddress: row.depositAddress,
+        destinationAddress: row.destinationAddress,
+        destinationChain: row.destinationChain,
+        token: row.token,
+        status: 'SCHEDULED',
+        scheduledAt: 30_000
+      }))
+    }
+    const attempted = await h.restart().continuePlan(h.initial.planId)
+    expect(attempted.phase).toBe('submitting')
+    expect(attempted.batchSubmissionAttemptedAt).toBe(now)
+    expect(h.state.batchSubmissions).toBe(1)
+
+    h.state.acceptedOrder = { ...order, transactions: order.transactions.slice(0, 2) }
+    expect((await h.restart().continuePlan(h.initial.planId)).phase).toBe('submitting')
+    expect(h.state.batchSubmissions).toBe(1)
+
+    h.state.acceptedOrder = order
+    const recovered = await h.restart().continuePlan(h.initial.planId)
+    expect(recovered.phase).toBe('processing')
+    expect(recovered.orderId).toBe('order-one')
+    expect(recovered.withdraws.map(row => row.scheduledAt)).toEqual([30_000, 30_000, 30_000])
+    expect(h.state.batchSubmissions).toBe(1)
+    expect(h.state.intentSignatures).toBe(0)
+  })
+
+  test('releases an unsent Cluster batch after definite history authentication rejection', async () => {
+    const h = await harness('submitting', false, true)
+    h.state.historyToken = null
+    h.state.historyAuthError = new ConfidentialFundingApiError(
+      'Origin must be a valid HTTP origin',
+      400,
+      false
+    )
+    const failed = await h.restart().continuePlan(h.initial.planId)
+    expect(failed.phase).toBe('failed')
+    expect(failed.errorStatus).toBe('HISTORY_AUTH_REJECTED')
+    expect(failed.frozenRequest).toBeUndefined()
+    expect(failed.requestFingerprint).toBeUndefined()
+    expect(failed.withdraws.every(row => row.status === 'FAILED' && !row.signedPayload)).toBe(true)
+    expect(failed.batchSubmissionAttemptedAt).toBeUndefined()
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.intentSignatures).toBe(0)
+    const graph = await h.repository.get(scope, h.initial.transactionId)
+    expect(graph.root.status).toBe('failed')
+    expect(
+      graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'failed')
+    ).toBe(true)
+
+    const balance = directPreparationHarness()
+    balance.plans.set(failed.planId, failed)
+    expect((await balance.coordinator.prepare(balance.request('100'))).sourceAmountRaw).toBe('100')
+    expect((await h.restart().continuePlan(h.initial.planId)).phase).toBe('failed')
+    expect(h.state.batchSubmissions).toBe(0)
+  })
+
+  test('blocks a new deposit-backed Cluster before signing when history authentication fails', async () => {
+    const h = await harness('submitting', false, true)
+    const { frozenRequest: _frozenRequest, requestFingerprint: _fingerprint, ...base } = h.initial
+    const prepared = {
+      ...base,
+      phase: 'prepared',
+      sourceDomain: 'public',
+      requiresDeposit: true,
+      depositQuote: { quote: { amountOut: '3000' } },
+      preparedDeposit: { commandId: 'prepared-deposit' },
+      withdraws: base.withdraws.map(({ signedPayload: _signedPayload, ...row }) => ({
+        ...row,
+        status: 'PREVIEW'
+      }))
+    }
+    prepared.approvalFingerprint = await fingerprintDirectConfidentialApproval({
+      network: prepared.network,
+      keyDomainId: prepared.keyDomainId,
+      accountId: prepared.accountId,
+      operation: prepared.operation,
+      sourceDomain: prepared.sourceDomain,
+      destinationDomain: prepared.destinationDomain,
+      source: prepared.source,
+      destination: prepared.destination,
+      signerId: prepared.signerId,
+      addressIndex: prepared.addressIndex,
+      slippageBps: prepared.slippageBps,
+      expectedOutputRaw: prepared.expectedOutputRaw,
+      minimumOutputRaw: prepared.minimumOutputRaw,
+      expiresAt: prepared.approvalExpiresAt,
+      depositQuote: prepared.depositQuote,
+      preparedDeposit: prepared.preparedDeposit,
+      withdraws: prepared.withdraws
+    })
+    await h.store.putPlan(prepared)
+    h.state.historyToken = null
+    h.state.historyAuthError = new ConfidentialFundingApiError(
+      'Origin must be a valid HTTP origin',
+      400,
+      false
+    )
+    await expect(
+      h.restart().confirm(prepared.planId, prepared.approvalFingerprint)
+    ).rejects.toThrow('Origin must be a valid HTTP origin')
+    const failed = await h.store.getPlan(prepared.planId)
+    expect(failed.phase).toBe('failed')
+    expect(failed.errorStatus).toBe('HISTORY_AUTH_REJECTED')
+    expect(h.state.depositSignatures).toBe(0)
+    expect(h.state.cancelledDeposits).toBe(1)
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.intentSignatures).toBe(0)
+  })
+
+  test('retains an attempted Cluster batch when history authentication is rejected', async () => {
+    const h = await harness('submitting', false, true)
+    await h.store.putPlan({ ...h.initial, batchSubmissionAttemptedAt: now })
+    h.state.historyToken = null
+    h.state.historyAuthError = new ConfidentialFundingApiError(
+      'Origin must be a valid HTTP origin',
+      400,
+      false
+    )
+    const pending = await h.restart().continuePlan(h.initial.planId)
+    expect(pending.phase).toBe('submitting')
+    expect(pending.batchSubmissionAttemptedAt).toBe(now)
+    expect(pending.frozenRequest).toEqual(h.initial.frozenRequest)
+    expect(pending.withdraws.every(row => Boolean(row.signedPayload))).toBe(true)
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.monitoring).toBeGreaterThan(0)
+  })
+
+  test('does not replace a service-refunded Cluster child with stale 1Click success', async () => {
+    const h = await harness('processing', false, true)
+    h.state.acceptedOrder = {
+      orderId: 'order-one',
+      signerId,
+      status: 'PARTIAL',
+      mode: 'TRANSFER',
+      fromAmount: '3000',
+      fromChain: 'eth',
+      fromToken: h.initial.source.protocolAssetId,
+      transactions: h.initial.withdraws.map(row => ({
+        sequence: row.sequence,
+        transactionType: 'WITHDRAW',
+        amount: row.amountRaw,
+        depositAddress: row.depositAddress,
+        destinationAddress: row.destinationAddress,
+        destinationChain: row.destinationChain,
+        token: row.token,
+        status: row.sequence === 0 ? 'REFUNDED' : 'SCHEDULED'
+      }))
+    }
+    h.state.statuses = ['SUCCESS', 'PROCESSING', 'PROCESSING']
+    const plan = await h.restart().continuePlan(h.initial.planId)
+    expect(plan.phase).toBe('processing')
+    expect(plan.withdraws[0].status).toBe('REFUNDED')
+    expect(plan.withdraws[1].status).toBe('PROCESSING')
+  })
+
+  test('renews an expired history session to observe a pre-broadcast Cluster failure', async () => {
+    const h = await harness('processing', false, true)
+    h.state.historyToken = null
+    h.state.acceptedOrder = {
+      orderId: 'order-one',
+      signerId,
+      status: 'PARTIAL',
+      mode: 'TRANSFER',
+      fromAmount: '3000',
+      fromChain: 'eth',
+      fromToken: h.initial.source.protocolAssetId,
+      transactions: h.initial.withdraws.map(row => ({
+        sequence: row.sequence,
+        transactionType: 'WITHDRAW',
+        amount: row.amountRaw,
+        depositAddress: row.depositAddress,
+        destinationAddress: row.destinationAddress,
+        destinationChain: row.destinationChain,
+        token: row.token,
+        status: row.sequence === 0 ? 'EXPIRED' : 'SCHEDULED'
+      }))
+    }
+    h.state.statuses = ['PENDING_DEPOSIT', 'PROCESSING', 'PROCESSING']
+    const plan = await h.restart().continuePlan(h.initial.planId)
+    expect(h.state.historySignatures).toBe(1)
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(plan.withdraws[0].status).toBe('EXPIRED')
+    expect(plan.phase).toBe('processing')
   })
 })

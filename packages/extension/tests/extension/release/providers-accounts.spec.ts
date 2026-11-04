@@ -473,11 +473,14 @@ test('adds a Zcash account after the service worker restores an unlocked session
   await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({
     timeout: 30_000
   })
-  await expect(popup.getByRole('button', { name: 'Show account addresses' })).toBeVisible()
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
   try {
-    await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+    await popup.getByRole('button', { name: 'Add account', exact: true }).click()
     await selectNewZcashAccountHistory(popup)
     await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
     await expect(popup.getByText('Account setup incomplete')).toHaveCount(0)
@@ -509,8 +512,12 @@ test('wallet-side Connect restores an existing EVM site for the active account',
     }
   })
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
-  await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+  await popup.getByRole('button', { name: 'Add account', exact: true }).click()
   await selectNewZcashAccountHistory(popup)
   await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
   await removeZcashHistoryMock()
@@ -657,8 +664,12 @@ test('connects the SDK example with multi-wallet Zcash, EVM, Bitcoin, Solana, an
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
-  await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+  await popup.getByRole('button', { name: 'Add account', exact: true }).click()
   await selectNewZcashAccountHistory(popup)
   await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
   await removeZcashHistoryMock()
@@ -865,6 +876,10 @@ test('imports and exports scoped EVM and Bitcoin private-key Wallets across Work
     await expect(addWallet.or(chooseWallet)).toBeVisible({ timeout: 30_000 })
     if (await chooseWallet.isVisible()) {
       await chooseWallet.click()
+      await popup
+        .getByRole('dialog', { name: 'Accounts' })
+        .getByRole('button', { name: 'Accounts', exact: true })
+        .click()
       await expect(addWallet).toBeVisible({ timeout: 30_000 })
     }
     await addWallet.click()
@@ -962,6 +977,10 @@ test('imports and exports scoped EVM and Bitcoin private-key Wallets across Work
 
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
   await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
+  await popup
     .locator('section[aria-label="Wallet group Imported Private Key"]')
     .getByRole('button', { name: `Account actions for ${evmAccount.accountDisplayName}` })
     .first()
@@ -1041,6 +1060,10 @@ test('imports and exports scoped EVM and Bitcoin private-key Wallets across Work
     )
     .toEqual(['Imported Bitcoin Test', 'Imported EVM Test'])
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
   await expect(popup.getByRole('heading', { name: 'Noir Wallet' })).toBeVisible({
     timeout: 30_000
   })
@@ -1116,63 +1139,52 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
   await importTestWallet(popup)
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 60_000 })
 
-  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
-  const executionModeCard = popup
-    .getByRole('dialog', { name: 'dApp address' })
-    .getByTestId('dapp-execution-mode-card')
-  await expect(executionModeCard).toBeVisible()
-  await expect(executionModeCard.getByText('No dApps connected.', { exact: true })).toBeVisible()
-  await expect(
-    executionModeCard.getByRole('radio', { name: 'Use Public address for dApps' })
-  ).toBeChecked()
-  await expect(
-    executionModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' })
-  ).toBeEnabled({ timeout: 30_000 })
-
-  await expect
-    .poll(async () => {
-      const [cardBox, viewportHeight] = await Promise.all([
-        executionModeCard.boundingBox(),
-        popup.evaluate(() => document.documentElement.clientHeight)
-      ])
-      return Boolean(
-        cardBox && cardBox.y >= 0 && cardBox.y + cardBox.height <= viewportHeight + 0.5
-      )
-    })
-    .toBe(true)
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Settings' })
+    .click()
+  await popup.getByRole('button', { name: 'DApps Connection' }).click()
+  await expect(popup.getByRole('heading', { name: 'DApps Connection' })).toBeVisible()
+  await expect(popup.getByText('No connected dApps')).toBeVisible()
+  await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Back' }).click()
+  const publicMode = popup.getByRole('radio', { name: 'Public mode' })
+  const privateMode = popup.getByRole('radio', { name: 'Private mode' })
+  await expect(publicMode).toBeChecked()
+  await expect(privateMode).toBeEnabled({ timeout: 30_000 })
+  await expect(privateMode).toBeInViewport({ ratio: 1 })
   await captureScreenshot(popup, 'release-default-dapp-mode-empty.png')
-  await executionModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' }).click()
+  await privateMode.click()
   const privateSetupDialog = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
   if (await privateSetupDialog.isVisible()) {
     await privateSetupDialog.getByRole('button', { name: 'Turn on' }).click()
   }
-  await expect(popup.getByRole('button', { name: 'dApp address: Confidential' })).toBeVisible()
-  await popup.getByRole('button', { name: 'dApp address: Confidential' }).click()
-  const privateModeCard = popup
-    .getByRole('dialog', { name: 'dApp address' })
-    .getByTestId('dapp-execution-mode-card')
-  await expect(
-    privateModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' })
-  ).toBeChecked()
+  await expect(privateMode).toBeChecked()
   await captureScreenshot(popup, 'release-default-dapp-mode-private.png')
-  await popup.getByRole('button', { name: 'Close' }).click()
 
   await popup.getByRole('button', { name: 'Show account addresses' }).click()
-  const accountAddressMenu = popup.getByLabel('Account address menu')
+  const accountAddressMenu = popup.getByRole('dialog', { name: 'Account 1 addresses' })
+  await accountAddressMenu
+    .getByRole('group', { name: 'EVM address mode' })
+    .getByRole('button', { name: 'Private' })
+    .click()
   await expect(
-    accountAddressMenu.getByRole('button', { name: 'Copy EVM Confidential address' })
+    accountAddressMenu.getByRole('button', { name: 'Copy EVM Private address' })
   ).toBeVisible()
   await captureScreenshot(popup, 'release-default-private-address-menu.png')
   await accountAddressMenu.getByRole('button', { name: 'View all' }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
-  await expect(
-    popup.getByRole('button', { name: 'Copy Confidential address' }).first()
-  ).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  await popup
+    .getByRole('group', { name: 'Address mode' })
+    .getByRole('button', { name: 'Private' })
+    .click()
+  await expect(popup.getByRole('button', { name: 'Copy EVM private address' })).toBeVisible()
   await captureScreenshot(popup, 'release-default-private-addresses.png')
   await popup.getByRole('button', { name: 'Back' }).click()
 
+  await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
-  await popup.getByRole('button', { name: 'Send ETH on Ethereum' }).click()
   const privateSendSource = popup.getByRole('button', {
     name: 'Choose source account, current private'
   })
@@ -1182,14 +1194,13 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
   await expect(
     popup
       .getByRole('dialog', { name: 'Choose source account' })
-      .getByRole('radio', { name: /Confidential account/ })
+      .getByRole('radio', { name: /Private account/ })
   ).toBeChecked()
   await popup.getByRole('button', { name: 'Close' }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByLabel('Search your assets')).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
-
-  await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
+  await expect(popup.getByRole('heading', { name: 'ETH', exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Swap', exact: true }).click()
   await expect(popup.getByRole('status', { name: 'Loading swap assets' })).toHaveCount(0, {
     timeout: 30_000

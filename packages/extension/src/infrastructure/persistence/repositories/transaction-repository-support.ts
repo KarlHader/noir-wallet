@@ -111,7 +111,10 @@ export function assertPersistableTransactionGraph(graph: TransactionGraph): void
       return segment.evidence?.transactionHash !== undefined
     }
     if (
-      graph.root.kind === 'swap' &&
+      (graph.root.kind === 'swap' ||
+        (graph.root.kind === 'withdraw' &&
+          (graph.root.intent?.shield?.operation === 'withdraw' ||
+            graph.root.intent?.shield?.operation === 'cluster'))) &&
       graph.root.id.startsWith('tx:confidential:') &&
       segment.target.kind === 'protocol' &&
       segment.target.provider === 'Confidential Intents' &&

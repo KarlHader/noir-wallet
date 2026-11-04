@@ -1,8 +1,17 @@
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
-import { InlineEditableName } from '../../components/account/InlineEditableName'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import { Input } from '../../components/ui/input'
+import { Button } from '../../components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '../../components/ui/dropdown-menu'
 import { RemoveWalletContent } from '../../components/account/RemoveWalletContent'
 import { openModal } from '../../provider/ModalManager'
 import { useNavigate } from '../../provider/Router'
@@ -22,6 +31,9 @@ export function AccountDetail() {
   const { alert, confirm } = useDialog()
   const { accountDisplayNames, wallets, currentWalletId, currentAccountId } = useWalletStore()
   const openResyncZcash = useResyncZcash()
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renaming, setRenaming] = useState(false)
 
   const wallet = walletId ? wallets.find(w => w.id === walletId) : null
   const account = wallet && accountId ? wallet.accounts.find(a => a.id === accountId) : null
@@ -34,7 +46,7 @@ export function AccountDetail() {
   if (!account || !wallet) {
     return (
       <div className="page-container">
-        <PageHeader title="Account details" showBack />
+        <PageHeader title="Account Details" showBack />
         <div className="flex flex-1 items-center justify-center px-5">
           <p className="text-center text-muted">No account available</p>
         </div>
@@ -44,10 +56,20 @@ export function AccountDetail() {
 
   const isHardwareWallet = isZcashHardwareKeySource(wallet?.keySource)
   const isCurrentAccount = wallet.id === currentWalletId && account.id === currentAccountId
+  const avatarIndex =
+    Math.max(
+      0,
+      wallet.accounts.findIndex(item => item.id === account.id)
+    ) % 3
+  const avatarSrc = [
+    '/icons/wallet-avatar-main.png',
+    '/icons/wallet-avatar-meme.png',
+    '/icons/wallet-avatar-nft.png'
+  ][avatarIndex]
 
   const menuItems = [
     {
-      label: 'Addresses',
+      label: 'Address',
       value: undefined,
       icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
       action: () => navigate(`/addresses-list?accountId=${accountId}&walletId=${walletId}`)
@@ -61,14 +83,14 @@ export function AccountDetail() {
           action: undefined
         }
       : {
-          label: 'View secret phrase',
+          label: 'Seed Phrase',
           value: undefined,
           icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
           action: () => navigate(`/view-seed-phrase?accountId=${accountId}&walletId=${walletId}`)
         },
     !isHardwareWallet
       ? {
-          label: 'Export private key',
+          label: 'Private Key',
           value: undefined,
           icon: <Icon icon="lucide:chevron-right" width={16} height={16} />,
           action: () => navigate(`/export-private-key?accountId=${accountId}&walletId=${walletId}`)
@@ -113,7 +135,7 @@ export function AccountDetail() {
         ]
       : []),
     {
-      label: 'Remove account',
+      label: 'Delete Account',
       danger: true,
       icon: <Icon icon="lucide:trash-2" width={16} height={16} />,
       action: async () => {
@@ -177,30 +199,95 @@ export function AccountDetail() {
 
   return (
     <div className="page-container">
-      <PageHeader title="Account details" showBack />
+      <PageHeader
+        title="Account Details"
+        showBack
+        rightContent={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="More account actions"
+                className="flex size-7 items-center justify-center text-muted hover:text-foreground"
+              >
+                <Icon icon="lucide:ellipsis" width={18} height={18} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {actionItems
+                .filter(item => !('danger' in item && item.danger))
+                .map(item => (
+                  <DropdownMenuItem key={item.label} onClick={() => void item.action()}>
+                    {item.icon}
+                    <span className="ml-2">{item.label}</span>
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+      />
 
-      <div className="page-content">
-        <div className="space-y-3 mb-6">
-          <div className="flex items-center justify-between gap-3 rounded-2xl bg-card px-4 py-4">
-            <span className="shrink-0 text-base text-white/90">Account name</span>
-            <InlineEditableName
-              value={accountName}
-              kind="account"
-              className="text-base font-medium text-white"
-              onSave={name => zcashWalletRuntimeClient.renameAccount(wallet.id, account.id, name)}
+      <div className="page-content min-h-0 !px-0 !pt-4">
+        <div className="flex flex-col items-center pb-[21px] pt-[11px]">
+          <img
+            src={avatarSrc}
+            alt=""
+            aria-hidden="true"
+            width={74}
+            height={74}
+            className="size-[74px] rounded-full object-cover ring-2 ring-wallet-selected"
+          />
+          <h2 className="mt-[14px] max-w-[300px] truncate text-lg font-normal leading-[23px]">
+            {accountName}
+          </h2>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            className="flex h-[61px] w-full items-center gap-[17px] px-[27px] text-left transition-colors hover:bg-card"
+            onClick={() => {
+              setRenameDraft(accountName)
+              setRenameOpen(true)
+            }}
+          >
+            <Icon
+              icon="lucide:pencil-line"
+              width={20}
+              height={20}
+              className="shrink-0 text-muted"
             />
-          </div>
+            <span className="flex-1 text-lg leading-[23px]">Rename</span>
+            <Icon icon="lucide:chevron-right" width={16} height={16} className="text-muted" />
+          </button>
           {menuItems.map(item => {
             const rowClassName =
-              'w-full px-4 py-4 bg-card rounded-2xl transition-colors ' +
-              (item.action ? 'hover:bg-white/5 cursor-pointer' : '')
+              'flex h-[61px] w-full items-center px-[27px] text-left transition-colors ' +
+              (item.label === 'Address' ? 'bg-wallet-surface ' : '') +
+              (item.action ? 'hover:bg-wallet-surface cursor-pointer' : '')
 
             const content = (
-              <div className="flex items-center justify-between">
-                <span className="text-base text-white/90">{item.label}</span>
-                <div className="flex items-center gap-2">
+              <div className="flex w-full items-center gap-[17px]">
+                <Icon
+                  icon={
+                    item.label === 'Address'
+                      ? 'lucide:layers-3'
+                      : item.label === 'Seed Phrase'
+                        ? 'lucide:panel-left'
+                        : item.label === 'Private Key'
+                          ? 'lucide:key-round'
+                          : 'lucide:hard-drive'
+                  }
+                  width={20}
+                  height={20}
+                  className="shrink-0 text-muted"
+                />
+                <span className="min-w-0 flex-1 text-lg leading-[23px] text-foreground">
+                  {item.label}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
                   {'value' in item && item.value && (
-                    <span className="text-base font-medium text-white">{item.value}</span>
+                    <span className="text-sm text-muted">{item.value}</span>
                   )}
                   {item.icon && <div className="text-muted">{item.icon}</div>}
                 </div>
@@ -228,25 +315,60 @@ export function AccountDetail() {
           })}
         </div>
 
-        <div className="pt-4 border-t border-white/10">
-          <p className="text-xs text-muted mb-3">Actions</p>
-          <div className="space-y-2">
-            {actionItems.map(item => (
-              <button
-                key={item.label}
-                type="button"
-                onClick={item.action}
-                className={`w-full flex items-center gap-3 p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer ${'danger' in item && item.danger ? 'text-danger' : ''}`}
-              >
-                <div className={'danger' in item && item.danger ? 'text-danger' : 'text-muted'}>
-                  {item.icon}
-                </div>
-                <span className="text-base">{item.label}</span>
-              </button>
-            ))}
+        <div>
+          <div>
+            {actionItems
+              .filter(item => 'danger' in item && item.danger)
+              .map(item => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={item.action}
+                  className="flex h-[61px] w-full items-center gap-[17px] px-[27px] text-left text-lg text-danger transition-colors hover:bg-wallet-surface"
+                >
+                  <div className="flex size-5 shrink-0 items-center justify-center text-danger">
+                    {item.icon}
+                  </div>
+                  <span className="text-lg leading-[23px]">{item.label}</span>
+                </button>
+              ))}
           </div>
         </div>
       </div>
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent position="bottom" className="gap-4 p-5">
+          <DialogHeader>
+            <DialogTitle>Rename account</DialogTitle>
+          </DialogHeader>
+          <Input
+            aria-label="Account name"
+            value={renameDraft}
+            maxLength={128}
+            onChange={event => setRenameDraft(event.target.value)}
+          />
+          <Button
+            disabled={!renameDraft.trim()}
+            isLoading={renaming}
+            onClick={async () => {
+              setRenaming(true)
+              try {
+                await zcashWalletRuntimeClient.renameAccount(
+                  wallet.id,
+                  account.id,
+                  renameDraft.trim()
+                )
+                setRenameOpen(false)
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : 'Unable to rename account')
+              } finally {
+                setRenaming(false)
+              }
+            }}
+          >
+            Save
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

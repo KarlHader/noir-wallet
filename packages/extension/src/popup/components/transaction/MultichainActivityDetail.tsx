@@ -35,6 +35,7 @@ import {
   confidentialFundingClient,
   getConfidentialFundingPlanId
 } from '@/popup/services/confidential-funding-client'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { toast } from '@/store/toast-store'
 import { DetailRow } from '../common/DetailRow'
 import { AmountDisplay } from '../common/AmountDisplay'
@@ -56,7 +57,10 @@ import {
 } from '@/popup/services/activity-transaction-references'
 import {
   getActivityDetailTitle,
+  getActivityAccountRouteLabel,
   getActivityRouteTitle,
+  getClusterBatchStatusLabel,
+  getClusterChildStatusLabel,
   getActivityTransferRecipient,
   getActivitySwapSourceMethodLabel,
   getActivityDisplayChanges,
@@ -148,6 +152,7 @@ export function MultichainActivityDetail({
   const [retrying, setRetrying] = useState(false)
   const [retryOutcome, setRetryOutcome] = useState<'broadcast' | 'pending' | 'failed' | null>(null)
   const [privateFundingNeedsAuth, setPrivateFundingNeedsAuth] = useState(false)
+  const [confidentialPlan, setConfidentialPlan] = useState<ConfidentialFundingPlan | null>(null)
   const [resumingPrivateFunding, setResumingPrivateFunding] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [zcashRecord, setZcashRecord] = useState<Transaction | null>(null)
@@ -363,21 +368,65 @@ export function MultichainActivityDetail({
     direction === 'outgoing' &&
     visibleItem.snapshot?.sender === undefined
   const privateFundingPlanId = getConfidentialFundingPlanId(visibleItem.id)
+  const activeConfidentialPlan =
+    confidentialPlan?.transactionId === visibleItem.id &&
+    confidentialPlan.network === network &&
+    confidentialPlan.keyDomainId === visibleItem.scope.keyDomainId &&
+    confidentialPlan.accountId === visibleItem.scope.accountId
+      ? confidentialPlan
+      : null
 
   useEffect(() => {
     let cancelled = false
+    let latestUpdatedAt = -Infinity
     setPrivateFundingNeedsAuth(false)
+    setConfidentialPlan(null)
     if (!privateFundingPlanId) return
-    void confidentialFundingClient
-      .get(privateFundingPlanId)
-      .then(plan => {
-        if (!cancelled) setPrivateFundingNeedsAuth(plan.phase === 'needs-auth')
-      })
-      .catch(() => {})
+    const refreshPlan = () => {
+      void confidentialFundingClient
+        .get(privateFundingPlanId)
+        .then(plan => {
+          if (
+            !cancelled &&
+            plan.network === network &&
+            plan.keyDomainId === visibleItem.scope.keyDomainId &&
+            plan.accountId === visibleItem.scope.accountId &&
+            plan.transactionId === visibleItem.id
+          ) {
+            if (plan.updatedAt >= latestUpdatedAt) {
+              latestUpdatedAt = plan.updatedAt
+              setPrivateFundingNeedsAuth(plan.phase === 'needs-auth')
+              setConfidentialPlan(plan)
+            }
+          }
+        })
+        .catch(() => {})
+    }
+    const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      if (
+        message &&
+        typeof message === 'object' &&
+        'type' in message &&
+        message.type === 'TRANSACTION_UPDATED'
+      ) {
+        refreshPlan()
+      }
+    }
+    refreshPlan()
+    chrome.runtime.onMessage.addListener(listener)
     return () => {
       cancelled = true
+      chrome.runtime.onMessage.removeListener(listener)
     }
-  }, [privateFundingPlanId, visibleItem.updatedAt])
+  }, [
+    privateFundingPlanId,
+    visibleItem.updatedAt,
+    visibleItem.id,
+    visibleItem.scope.keyDomainId,
+    visibleItem.scope.accountId,
+    network
+  ])
 
   const handleRetryBroadcast = async () => {
     setRetrying(true)
@@ -438,7 +487,13 @@ export function MultichainActivityDetail({
       const plan = await confidentialFundingClient.get(privateFundingPlanId)
       await confidentialFundingClient.confirm(plan.planId, plan.approvalFingerprint)
       setPrivateFundingNeedsAuth(false)
-      toast.success('Confidential funding resumed')
+      toast.success(
+        plan.operation === 'cluster'
+          ? 'Cluster transfer resumed'
+          : plan.operation
+            ? 'Shield transfer resumed'
+            : 'Confidential funding resumed'
+      )
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : 'Confidential funding could not continue'
@@ -713,9 +768,7 @@ export function MultichainActivityDetail({
               swap.destinationAccountMode &&
               swap.sourceAccountMode !== swap.destinationAccountMode && (
                 <DetailRow label="Account">
-                  <span className="text-sm">
-                    {swap.sourceAccountMode} → {swap.destinationAccountMode}
-                  </span>
+                  <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
                 </DetailRow>
               )}
           </>
@@ -734,27 +787,66 @@ export function MultichainActivityDetail({
             data-activity-status-value
             className={cn('text-sm', getTransactionStatusToneClassName(status.tone))}
           >
-            {status.label}
+            {activeConfidentialPlan?.operation === 'cluster'
+              ? getClusterBatchStatusLabel(activeConfidentialPlan)
+              : status.label}
           </span>
         </DetailRow>
-        {visibleItem.kind === 'shield' && (
+        {activeConfidentialPlan?.operation === 'cluster' && (
+          <>
+            <DetailRow label="Method">
+              <span className="text-sm">Cluster</span>
+            </DetailRow>
+            <DetailRow label="Transfers">
+              <span className="text-sm">{activeConfidentialPlan.withdraws.length}</span>
+            </DetailRow>
+            <div className="space-y-2 border-t border-white/10 pt-3">
+              {activeConfidentialPlan.withdraws.map(row => (
+                <div key={row.sequence} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="text-muted">Transfer {row.sequence + 1}</span>
+                  <div className="min-w-0 text-right">
+                    <div>{getClusterChildStatusLabel(row)}</div>
+                    {row.scheduledAt && Number.isSafeInteger(row.scheduledAt) && (
+                      <div className="text-xs text-muted">
+                        Earliest broadcast {new Date(row.scheduledAt).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {visibleItem.kind === 'shield' && !visibleItem.snapshot?.shield && (
           <DetailRow label="Privacy">
             <span className="text-sm">Transparent → Shielded</span>
           </DetailRow>
         )}
-        {visibleItem.kind !== 'shield' && visibleItem.snapshot?.sender && (
-          <DetailRow label="From">
-            <span
-              className="max-w-[220px] truncate font-mono text-sm"
-              title={visibleItem.snapshot.sender.address}
-            >
-              {formatSortAddress(visibleItem.snapshot.sender.address)}
-            </span>
-          </DetailRow>
-        )}
+        {(visibleItem.kind !== 'shield' || visibleItem.snapshot?.shield) &&
+          visibleItem.snapshot?.sender &&
+          visibleItem.snapshot?.shield?.sourceDomain !== 'shield' && (
+            <DetailRow label="From">
+              <span
+                className="max-w-[220px] truncate font-mono text-sm"
+                title={visibleItem.snapshot.sender.address}
+              >
+                {formatSortAddress(visibleItem.snapshot.sender.address)}
+              </span>
+            </DetailRow>
+          )}
         {usesShieldedPoolSource && (
           <DetailRow label="From">
             <span className="text-sm">Shielded Pool</span>
+          </DetailRow>
+        )}
+        {visibleItem.snapshot?.shield?.sourceDomain === 'shield' && (
+          <DetailRow label="From">
+            <span className="text-sm">NEAR Confidential</span>
+          </DetailRow>
+        )}
+        {visibleItem.snapshot?.shield?.destinationDomain === 'shield' && (
+          <DetailRow label="To">
+            <span className="text-sm">NEAR Confidential</span>
           </DetailRow>
         )}
         {swap?.recipientAddress ? (

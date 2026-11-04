@@ -7,6 +7,11 @@ import {
   hasCompletePortfolioTotal,
   resolveHomePortfolioTotalStatus
 } from '../../../src/popup/services/home-asset-breakdown.ts'
+import {
+  getAssetDomainRaw,
+  projectPortfolioForDomain,
+  summarizeAssetDomainsUsd
+} from '../../../src/popup/services/asset-domains.ts'
 
 test('Home total requires a complete current-account Portfolio and ready prices', () => {
   const model = { scope: { keyDomainId: 'wallet-a', accountId: 'account-a' }, status: 'ready' }
@@ -57,11 +62,45 @@ test('Home distinguishes an initial load, an unavailable valuation and a confirm
   expect(status({ ...model, status: 'empty' }, 'ready', 'error')).toBe('ready')
 })
 
-test('home asset breakdown keeps Public, Confidential and lending values separate', () => {
+test('home asset domains count each EVM and Zcash balance once', () => {
+  const evmAsset = {
+    asset: { id: 'eip155:1/slip44:60', chainId: 'eip155:1', kind: 'native' },
+    metadata: { decimals: 0, symbol: 'ETH' },
+    balance: {
+      totalRaw: '100',
+      mainRaw: '50',
+      privateRaw: '50',
+      privateOnchainRaw: '30',
+      confidentialRaw: '20',
+      pendingRaw: '0'
+    }
+  }
+  const zcashAsset = {
+    asset: {
+      id: 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133',
+      chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+      kind: 'native'
+    },
+    metadata: { decimals: 0, symbol: 'ZEC' },
+    balance: { totalRaw: '10', transparentRaw: '4', shieldedRaw: '6', pendingRaw: '0' }
+  }
+  const model = {
+    assets: [evmAsset, zcashAsset],
+    chains: [
+      { chain: { id: evmAsset.asset.chainId }, assets: [evmAsset] },
+      { chain: { id: zcashAsset.asset.chainId }, assets: [zcashAsset] }
+    ]
+  }
+  const prices = {
+    quotes: [
+      { assetId: evmAsset.asset.id, priceUsd: '2' },
+      { assetId: zcashAsset.asset.id, priceUsd: '3' }
+    ]
+  }
   const multichainFiat = {
-    totalUsd: '30',
-    mainUsd: '10',
-    privateUsd: '20',
+    totalUsd: '230',
+    mainUsd: '112',
+    privateUsd: '118',
     pricedAssetCount: 2,
     missingAssetCount: 0,
     staleAssetCount: 0
@@ -70,15 +109,50 @@ test('home asset breakdown keeps Public, Confidential and lending values separat
     multichainEnabled: true,
     liveMultichainTotal: true,
     multichainFiat,
+    portfolio: model,
+    prices,
     zcashBalance: null,
     zecPrice: 0,
     lendingUsd: 5
   }
   expect(getHomeAssetBreakdown(input)).toEqual({
-    publicUsd: '10',
-    confidentialUsd: '20',
+    publicUsd: '112',
+    shieldUsd: '58',
+    privateUsd: '60',
     lendingUsd: '5'
   })
+  expect(summarizeAssetDomainsUsd(model, prices)).toEqual({
+    publicUsd: '112',
+    shieldUsd: '58',
+    privateUsd: '60'
+  })
+  expect(getAssetDomainRaw(evmAsset, 'private')).toBe('30')
+  const baseOnly = {
+    ...evmAsset,
+    balance: { totalRaw: '100', mainRaw: '50', privateRaw: '50' }
+  }
+  expect(getAssetDomainRaw(baseOnly, 'private')).toBe('50')
+  expect(getAssetDomainRaw(baseOnly, 'shield')).toBe('0')
+  expect(
+    getAssetDomainRaw(
+      { ...evmAsset, balance: { ...baseOnly.balance, confidentialRaw: '20' } },
+      'private'
+    )
+  ).toBeNull()
+  expect(
+    getAssetDomainRaw(
+      { ...evmAsset, balance: { ...evmAsset.balance, privateOnchainRaw: '29' } },
+      'private'
+    )
+  ).toBeNull()
+  expect(getAssetDomainRaw(zcashAsset, 'shield')).toBe('6')
+  expect(
+    projectPortfolioForDomain(model, 'shield').assets.map(asset => asset.balance.totalRaw)
+  ).toEqual(['20', '6'])
+  expect(evmAsset.balance.totalRaw).toBe('100')
+  expect(zcashAsset.balance.totalRaw).toBe('10')
+  expect(getHomeAssetBreakdown({ ...input, portfolio: null })).toBeNull()
+  expect(getAssetDomainRaw({ ...evmAsset, balance: { totalRaw: '100' } }, 'public')).toBeNull()
   expect(getHomeAssetBreakdown({ ...input, liveMultichainTotal: false })).toBeNull()
   expect(
     getHomeAssetBreakdown({
@@ -87,7 +161,12 @@ test('home asset breakdown keeps Public, Confidential and lending values separat
       zcashBalance: { transparent: '2', shielded: '3', total: '5' },
       zecPrice: 4
     })
-  ).toEqual({ publicUsd: '8', confidentialUsd: '12', lendingUsd: '5' })
+  ).toEqual({
+    publicUsd: '8',
+    shieldUsd: '12',
+    privateUsd: '0',
+    lendingUsd: '5'
+  })
 })
 
 test('confidential transfer timing is configured by chain family', () => {
