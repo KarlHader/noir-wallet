@@ -104,10 +104,11 @@ pnpm dev:docs
 **Note**:
 
 - After starting `pnpm dev:extension`, load the `packages/extension/dist/` directory in `chrome://extensions` with Developer Mode enabled
-- Main local entrypoints match production routes:
+- Default local entrypoints match production routes:
   - `http://localhost:5001`
   - `http://localhost:5001/beta`
-- The SDK example runs separately at `http://localhost:5002/example/` so it can be tested with the extension injection flow intact
+- The SDK example defaults to `http://localhost:5002/example/` so it can be tested with the extension injection flow intact
+- The extension dev server selects a free port; the website and SDK example use the next available port when their default is occupied. Use the URL printed in that terminal and load each worktree's own extension build when debugging multiple versions.
 
 ### Build
 

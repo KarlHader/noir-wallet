@@ -7,6 +7,7 @@ import manifest from './manifest.config'
 import path from 'path'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
+import { createServer, type AddressInfo } from 'node:net'
 import { name, version } from './package.json'
 import { shouldEnableAnalyticsReporting } from './analytics-build-policy'
 
@@ -68,6 +69,7 @@ function adaptWasmWindowGlobalsForWorker() {
 }
 
 export default defineConfig({
+  cacheDir: path.resolve(__dirname, `../../output/node_modules/.vite/extension-${networkMode}`),
   define: {
     __APP_VERSION__: JSON.stringify(version),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
@@ -83,6 +85,22 @@ export default defineConfig({
     pure: debugLogsEnabled ? [] : ['console.log']
   },
   plugins: [
+    {
+      name: 'extension-dev-port',
+      apply: 'serve',
+      async config() {
+        // CRXJS and Vite both capture the HMR port before the dev server starts.
+        const port = await new Promise<number>((resolve, reject) => {
+          const probe = createServer()
+          probe.once('error', reject)
+          probe.listen(0, 'localhost', () => {
+            const { port } = probe.address() as AddressInfo
+            probe.close(error => (error ? reject(error) : resolve(port)))
+          })
+        })
+        return { server: { port, strictPort: true, hmr: { port } } }
+      }
+    },
     react(),
     tailwindcss(),
     crx({ manifest }),
@@ -108,6 +126,11 @@ export default defineConfig({
     {
       name: 'configure-headers',
       configureServer(server) {
+        server.httpServer?.once('listening', () => {
+          server.config.logger.info(
+            `Extension dev server: http://localhost:${server.config.server.port}/`
+          )
+        })
         server.middlewares.use((_req, res, next) => {
           res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
           res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
@@ -153,9 +176,6 @@ export default defineConfig({
   server: {
     port: 5004,
     strictPort: true,
-    hmr: {
-      port: 5004
-    },
     // Extension specific CORS
     cors: {
       origin: [/chrome-extension:\/\//]
