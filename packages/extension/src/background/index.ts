@@ -230,6 +230,7 @@ import { accountContextTransition } from './account-context-transition'
 import { createBackgroundAdditionalReceiveTargetsCoordinator } from './receive-targets'
 import { createBackgroundAccountNetworksCoordinator } from './account-networks'
 import { WalletDAppConnectionCoordinator } from './wallet-dapp-connection'
+import { isPublicSigningRequest } from './dapp-message-signing'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
 import { createBackgroundEvmDAppHandler } from './evm-dapp'
 import { handleEvmDAppNetworkSwitch } from './evm-dapp-network-switch'
@@ -600,6 +601,14 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
     await dappHandler.connectPublic(origin)
     await dappHandler.notifyPublicAccountsChanged()
   },
+  connectNativeAndPublic: async origin => {
+    await dappHandler.connectPublic(
+      origin,
+      {},
+      { signingModes: ['current', 'noir_protocol_public'] }
+    )
+    await dappHandler.notifyPublicAccountsChanged()
+  },
   connectSession: async origin => {
     if (!multichainSessionDAppHandler) throw new Error('Multichain connection is unavailable')
     await multichainSessionDAppHandler.reconnect(origin)
@@ -669,7 +678,7 @@ async function dispatchDAppChainRequest(
   origin: string,
   tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
 ): Promise<unknown> {
-  await assertCaip25MethodPermission(chainId, request.method, origin)
+  await assertCaip25MethodPermission(chainId, request.method, origin, request.params)
   if (chainId === 'evm') {
     return evmDAppHandler.request(
       {
@@ -738,7 +747,8 @@ const CAIP25_CONNECTION_METHODS = new Set([
 async function assertCaip25MethodPermission(
   family: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near',
   method: string,
-  origin: string
+  origin: string,
+  params?: readonly unknown[] | Readonly<Record<string, unknown>>
 ): Promise<void> {
   if (
     family === 'zcash' &&
@@ -749,16 +759,17 @@ async function assertCaip25MethodPermission(
   // Public has an independent grant even when the same origin has a Native
   // session. wallet_invokeMethod rejects Public before reaching this dispatch.
   if (
-    family === 'zcash' &&
-    [
-      'zcash_requestPublicAccount',
-      'zcash_disconnectPublic',
-      'zcash_getPublicAccount',
-      'zcash_activatePublicAccount',
-      'zcash_getPublicAssets',
-      'zcash_sendPublicTransaction',
-      'zcash_getPublicTransaction'
-    ].includes(method)
+    (family === 'zcash' &&
+      [
+        'zcash_requestPublicAccount',
+        'zcash_disconnectPublic',
+        'zcash_getPublicAccount',
+        'zcash_activatePublicAccount',
+        'zcash_getPublicAssets',
+        'zcash_sendPublicTransaction',
+        'zcash_getPublicTransaction'
+      ].includes(method)) ||
+    (family === 'zcash' && isPublicSigningRequest(method, params))
   )
     return
   if (CAIP25_CONNECTION_METHODS.has(method)) return
@@ -5433,6 +5444,18 @@ async function handleDAppRequest(
 
     if (request.method === 'zcash_requestPublicAccount') {
       if (!(await credentialSession.hasUnlockSession())) {
+        await promptUnlock({ restoreZcashRuntime: false })
+      }
+      return dappHandler.handleRequest({
+        method: request.method,
+        params: request.params,
+        origin,
+        tabInfo
+      })
+    }
+
+    if (isPublicSigningRequest(request.method, request.params)) {
+      if (request.method === 'zcash_signMessage' && !(await credentialSession.hasUnlockSession())) {
         await promptUnlock({ restoreZcashRuntime: false })
       }
       return dappHandler.handleRequest({

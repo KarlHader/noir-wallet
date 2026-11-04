@@ -8,6 +8,8 @@ const otherAccount = { walletId: 'wallet-2', accountId: 'account-2' }
 
 function managerFixture() {
   const values = new Map()
+  let writes = 0
+  let failNextWrite = false
   const storage = {
     async get(keys) {
       return Object.fromEntries(
@@ -17,11 +19,64 @@ function managerFixture() {
       )
     },
     async set(items) {
+      writes += 1
+      if (failNextWrite) {
+        failNextWrite = false
+        throw new Error('Storage write failed')
+      }
       for (const [key, value] of Object.entries(items)) values.set(key, structuredClone(value))
     }
   }
-  return { manager: new DAppManager(storage), storage }
+  return {
+    manager: new DAppManager(storage),
+    storage,
+    get writes() {
+      return writes
+    },
+    failNextWrite() {
+      failNextWrite = true
+    }
+  }
 }
+
+test('combined Native and Public approval commits one revision and preserves both grants on failure', async () => {
+  const fixture = managerFixture()
+  const { manager, storage } = fixture
+  const first = await manager.setNativeAndPublicAuthorizedAccount(origin, {}, account, 0)
+  assert.equal(first, 1)
+  assert.equal(fixture.writes, 1)
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [account])
+  assert.deepEqual(await manager.getPublicAuthorization(origin), {
+    revision: first,
+    binding: account
+  })
+  assert.equal(await manager.canAutoConnect(origin), false)
+
+  await assert.rejects(
+    manager.setNativeAndPublicAuthorizedAccount(origin, {}, otherAccount, 0),
+    /Site authorization changed/
+  )
+  assert.equal(fixture.writes, 1)
+  fixture.failNextWrite()
+  await assert.rejects(
+    manager.setNativeAndPublicAuthorizedAccount(origin, {}, otherAccount, first),
+    /Storage write failed/
+  )
+  assert.equal(fixture.writes, 2)
+  const reloaded = new DAppManager(storage)
+  assert.equal(await reloaded.getAuthorizationRevision(origin), first)
+  assert.deepEqual(await reloaded.getAuthorizedAccounts(origin), [account])
+  assert.deepEqual((await reloaded.getPublicAuthorization(origin)).binding, account)
+
+  const second = await reloaded.setNativeAndPublicAuthorizedAccount(origin, {}, otherAccount, first)
+  assert.equal(second, first + 1)
+  const afterRestart = new DAppManager(storage)
+  assert.deepEqual(await afterRestart.getAuthorizedAccounts(origin), [otherAccount])
+  assert.deepEqual(await afterRestart.getPublicAuthorization(origin), {
+    revision: second,
+    binding: otherAccount
+  })
+})
 
 test('explicit revocation survives reload and a stale connect approval cannot restore access', async () => {
   const { manager, storage } = managerFixture()

@@ -20,6 +20,7 @@ interface WalletDAppConnectionOptions {
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
   readonly connectPublic?: (origin: string) => Promise<void>
+  readonly connectNativeAndPublic?: (origin: string) => Promise<void>
   readonly connectSession: (origin: string) => Promise<void>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
 }
@@ -103,6 +104,16 @@ export class WalletDAppConnectionCoordinator {
         return targets
       })
       .then(async targets => {
+        if (
+          !targets.session &&
+          targets.zcash &&
+          targets.public &&
+          this.options.connectNativeAndPublic
+        ) {
+          if (targets.evm) await this.options.connectEvm(origin)
+          await this.options.connectNativeAndPublic(origin)
+          return
+        }
         // Connection callbacks may open approval and must acquire their own account
         // transition lock when committing after the approval returns.
         if (targets.session) {

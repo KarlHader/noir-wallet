@@ -44,6 +44,7 @@ import {
 import {
   parsePublicActivationReview,
   parsePublicConnectReview,
+  parsePublicMessageReview,
   parsePublicTransactionReview
 } from '@/popup/services/noir-public-approval-review'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -56,6 +57,7 @@ import { getBundledEvmAssetDefinitions } from '@/core/chains/registry/product-ch
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { useNavigate } from '@/popup/provider/Router'
+import type { NoirPublicFunctionCallRequest } from '@/core/services/noir-protocol/public/types'
 import {
   formatDAppHost,
   parseBitcoinSigningSummary,
@@ -128,10 +130,12 @@ function ApprovalBackIcon() {
 
 function ConnectionPermissionSummary({
   includesActivity = false,
-  publicAccount = false
+  publicAccount = false,
+  nativeAndPublic = false
 }: {
   includesActivity?: boolean
   publicAccount?: boolean
+  nativeAndPublic?: boolean
 }) {
   return (
     <section aria-label="Permissions" className="space-y-2 px-1 text-xs leading-5 text-muted">
@@ -140,18 +144,16 @@ function ConnectionPermissionSummary({
           <ApprovalCheckIcon />
         </span>
         <span>
-          {publicAccount
-            ? 'View this Public account, balances, and activity.'
-            : `View selected addresses and balances${includesActivity ? ' and public activity' : ''}.`}
+          {nativeAndPublic
+            ? 'View Native and Public addresses, balances, and activity.'
+            : publicAccount
+              ? 'View this Public account, balances, and activity.'
+              : `View selected addresses and balances${includesActivity ? ' and public activity' : ''}.`}
         </span>
       </div>
       <div className="flex items-start gap-2">
         <Icon icon="lucide:shield-check" className="mt-0.5 size-3.5 shrink-0 text-primary" />
-        <span>
-          {publicAccount
-            ? 'Public transactions still require your approval.'
-            : 'Transactions and signatures still require your approval.'}
-        </span>
+        <span>Transactions and signatures still require your approval.</span>
       </div>
     </section>
   )
@@ -163,6 +165,65 @@ function IdentityLinkNotice() {
       <span>This site can link your Native and Public identities after you connect.</span>
     </WarningBox>
   )
+}
+
+function PublicFunctionCalls({
+  requests,
+  executionFeeRaw
+}: {
+  requests: readonly NoirPublicFunctionCallRequest[]
+  executionFeeRaw?: string
+}) {
+  return requests.map((request, requestIndex) => (
+    <ApprovalDetailCard
+      key={requestIndex}
+      title={
+        executionFeeRaw && requestIndex === 0
+          ? 'Execution fee'
+          : `FunctionCall ${requestIndex + (executionFeeRaw ? 0 : 1)}`
+      }
+    >
+      <div className="space-y-3 text-xs">
+        {executionFeeRaw && requestIndex === 0 && (
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+            <span className="text-muted">Amount</span>
+            <span className="text-right font-medium">
+              {formatBaseUnitDecimalAmount(executionFeeRaw, 8)} ZEC
+            </span>
+          </div>
+        )}
+        <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+          <span className="text-muted">Receiver</span>
+          <span className="break-all text-right font-mono">{request.FunctionCall.receiver_id}</span>
+        </div>
+        {request.FunctionCall.function_calls.map((call, callIndex) => (
+          <div
+            key={callIndex}
+            className="space-y-2 border-t border-border/70 pt-3 first:border-0 first:pt-0"
+          >
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Method</span>
+              <span className="break-all text-right font-mono">{call.method_name}</span>
+            </div>
+            <div className="min-w-0 space-y-1.5">
+              <p className="text-muted">Arguments</p>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/50 p-2.5 text-left font-mono leading-5 text-foreground/90">
+                {call.args}
+              </pre>
+            </div>
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Deposit</span>
+              <span className="break-all text-right font-mono">{call.deposit} yoctoNEAR</span>
+            </div>
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Gas</span>
+              <span className="break-all text-right font-mono">{call.gas}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </ApprovalDetailCard>
+  ))
 }
 
 export function ApprovalPage() {
@@ -256,9 +317,11 @@ export function ApprovalPage() {
   const isNearMessage = action === 'nearMessage'
   const isMultichainConnect = action === 'multichainConnect'
   const isPublicConnect = action === 'publicConnect'
+  const isPublicSignMessage = action === 'publicSignMessage'
   const isPublicTransaction = action === 'publicTransaction'
   const isPublicActivate = action === 'publicActivate'
   const publicConnectReview = isPublicConnect ? parsePublicConnectReview(data) : null
+  const publicMessageReview = isPublicSignMessage ? parsePublicMessageReview(data) : null
   const publicTransactionReview = isPublicTransaction ? parsePublicTransactionReview(data) : null
   const publicActivationReview = isPublicActivate ? parsePublicActivationReview(data) : null
   const requiresZcashAccountReady =
@@ -735,8 +798,21 @@ export function ApprovalPage() {
                 )}
               </div>
             </ApprovalDetailCard>
+            {publicConnectReview.nativeAccount && (
+              <ApprovalDetailCard title="Native account">
+                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-xs">
+                  <span className="text-muted">Address</span>
+                  <span className="break-all text-right font-mono">
+                    {publicConnectReview.nativeAccount.address}
+                  </span>
+                </div>
+              </ApprovalDetailCard>
+            )}
             {publicConnectReview.linksIdentities && <IdentityLinkNotice />}
-            <ConnectionPermissionSummary publicAccount />
+            <ConnectionPermissionSummary
+              publicAccount={!publicConnectReview.nativeAccount}
+              nativeAndPublic={Boolean(publicConnectReview.nativeAccount)}
+            />
           </div>
         ) : (
           renderInvalidSigningRequest('The Public connection request is invalid.', false)
@@ -794,63 +870,67 @@ export function ApprovalPage() {
                 </div>
               </div>
             </ApprovalDetailCard>
-            {publicTransactionReview.txRequests.map((request, requestIndex) => (
-              <ApprovalDetailCard
-                key={requestIndex}
-                title={requestIndex === 0 ? 'Execution fee' : `Transaction ${requestIndex}`}
-              >
-                <div className="space-y-3 text-xs">
-                  {requestIndex === 0 && (
-                    <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                      <span className="text-muted">Amount</span>
-                      <span className="text-right font-medium">
-                        {formatBaseUnitDecimalAmount(
-                          publicTransactionReview.executionFee.amountRaw,
-                          8
-                        )}{' '}
-                        ZEC
-                      </span>
-                    </div>
-                  )}
-                  <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                    <span className="text-muted">Receiver</span>
-                    <span className="break-all text-right font-mono">
-                      {request.FunctionCall.receiver_id}
-                    </span>
-                  </div>
-                  {request.FunctionCall.function_calls.map((call, callIndex) => (
-                    <div
-                      key={callIndex}
-                      className="space-y-2 border-t border-border/70 pt-3 first:border-0 first:pt-0"
-                    >
-                      <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                        <span className="text-muted">Method</span>
-                        <span className="break-all text-right font-mono">{call.method_name}</span>
-                      </div>
-                      <div className="min-w-0 space-y-1.5">
-                        <p className="text-muted">Arguments</p>
-                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/50 p-2.5 text-left font-mono leading-5 text-foreground/90">
-                          {call.args}
-                        </pre>
-                      </div>
-                      <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                        <span className="text-muted">Deposit</span>
-                        <span className="break-all text-right font-mono">
-                          {call.deposit} yoctoNEAR
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                        <span className="text-muted">Gas</span>
-                        <span className="break-all text-right font-mono">{call.gas}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </ApprovalDetailCard>
-            ))}
+            <PublicFunctionCalls
+              requests={publicTransactionReview.txRequests}
+              executionFeeRaw={publicTransactionReview.executionFee.amountRaw}
+            />
           </div>
         ) : (
           renderInvalidSigningRequest('The Public transaction request is invalid.', false)
+        )
+
+      case 'publicSignMessage':
+        return publicMessageReview ? (
+          <div className="space-y-4">
+            <DAppRequestHeader domain={dappDomain} pageUrl={dappPageUrl} action="Sign message" />
+            <DAppNetworkCard chain="zcash" network="Zcash" />
+            <ApprovalDetailCard title="Public signer">
+              <div className="space-y-2 text-xs">
+                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                  <span className="text-muted">Address</span>
+                  <span className="break-all text-right font-mono">
+                    {publicMessageReview.account.address}
+                  </span>
+                </div>
+                {publicMessageReview.account.mcaId && (
+                  <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                    <span className="text-muted">MCA</span>
+                    <span className="break-all text-right font-mono">
+                      {publicMessageReview.account.mcaId}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </ApprovalDetailCard>
+            {publicMessageReview.business && (
+              <>
+                <ApprovalDetailCard title="Transaction intent">
+                  <div className="space-y-2 text-xs">
+                    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                      <span className="text-muted">Nonce</span>
+                      <span className="break-all text-right font-mono">
+                        {publicMessageReview.business.nonce}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                      <span className="text-muted">Deadline</span>
+                      <span className="break-all text-right font-mono">
+                        {publicMessageReview.business.deadline}
+                      </span>
+                    </div>
+                  </div>
+                </ApprovalDetailCard>
+                <PublicFunctionCalls requests={publicMessageReview.business.txRequests} />
+              </>
+            )}
+            <ApprovalDetailCard title="Message bytes">
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs font-mono leading-5">
+                {publicMessageReview.message}
+              </pre>
+            </ApprovalDetailCard>
+          </div>
+        ) : (
+          renderInvalidSigningRequest('The Public signing request is invalid.', true)
         )
 
       case 'multichainConnect': {
@@ -1765,6 +1845,7 @@ export function ApprovalPage() {
               (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||
               (isPublicTransaction && publicTransactionReview === null) ||
+              (isPublicSignMessage && publicMessageReview === null) ||
               (isPublicConnect && publicConnectReview === null) ||
               (isPublicActivate && publicActivationReview === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
@@ -1799,21 +1880,23 @@ export function ApprovalPage() {
                         ? 'Connect'
                         : isPublicActivate
                           ? 'Pay & activate'
-                          : isPublicTransaction
-                            ? 'Confirm'
-                            : isSolanaConnect || isNearConnect
-                              ? 'Connect'
-                              : isEvmTransaction
-                                ? 'Confirm'
-                                : isEvmMessage
-                                  ? 'Sign message'
-                                  : isSolanaMessage || isNearMessage
+                          : isPublicSignMessage
+                            ? 'Sign message'
+                            : isPublicTransaction
+                              ? 'Confirm'
+                              : isSolanaConnect || isNearConnect
+                                ? 'Connect'
+                                : isEvmTransaction
+                                  ? 'Confirm'
+                                  : isEvmMessage
                                     ? 'Sign message'
-                                    : action === 'signMessage'
+                                    : isSolanaMessage || isNearMessage
                                       ? 'Sign message'
-                                      : action === 'sendTransaction' || action === 'shieldFunds'
-                                        ? 'Confirm'
-                                        : 'Approve'}
+                                      : action === 'signMessage'
+                                        ? 'Sign message'
+                                        : action === 'sendTransaction' || action === 'shieldFunds'
+                                          ? 'Confirm'
+                                          : 'Approve'}
           </Button>
         </div>
       }

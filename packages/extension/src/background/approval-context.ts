@@ -15,6 +15,7 @@ const ZCASH_ACTIONS = new Set([
   'signMessage',
   'shieldFunds',
   'publicConnect',
+  'publicSignMessage',
   'publicActivate',
   'publicTransaction'
 ])
@@ -27,7 +28,12 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
   await rehydrateWalletStore()
   const authorization = await dappManager.getAuthorization(request.origin)
   const publicAuthorization = await dappManager.getPublicAuthorization(request.origin)
-  const isPublic = ['publicConnect', 'publicActivate', 'publicTransaction'].includes(request.action)
+  const isPublic = [
+    'publicConnect',
+    'publicActivate',
+    'publicTransaction',
+    'publicSignMessage'
+  ].includes(request.action)
   const publicLocked = isPublic && !(await credentialSession.hasUnlockSession())
   const state = useWalletStore.getState()
   const wallet = state.getWallet(request.walletId)

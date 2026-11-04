@@ -1,12 +1,14 @@
 export type TraceMethod =
-  | 'getPublicAccount'
-  | 'connectPublic'
-  | 'disconnectPublic'
+  | 'getAccounts'
+  | 'connect'
+  | 'disconnect'
+  | 'getPublicKey'
+  | 'signMessage'
+  | 'accountsChanged'
   | 'activatePublicAccount'
   | 'getPublicAssets'
   | 'sendPublicTransaction'
   | 'getPublicTransaction'
-  | 'publicAccountChanged'
 
 export interface TraceEntry {
   sequence: number

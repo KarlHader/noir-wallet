@@ -265,6 +265,22 @@ test('Native Zcash sessions reject Public methods, including methods retained in
       )
     ).rejects.toMatchObject({ code: 4100 })
   }
+  for (const [method, params] of [
+    ['zcash_getPublicKey', [{ signingMode: 'noir_protocol_public' }]],
+    ['zcash_signMessage', ['reviewed', { signingMode: 'noir_protocol_public' }]]
+  ]) {
+    stored = { scopes: [{ chainId: zcash, methods: [method], notifications: [] }] }
+    await expect(
+      handler.request(
+        {
+          method: 'wallet_invokeMethod',
+          params: { scope: zcash, request: { method, params } }
+        },
+        origin,
+        {}
+      )
+    ).rejects.toMatchObject({ code: 4100 })
+  }
   expect(dispatched).toEqual([])
 })
 

@@ -906,6 +906,46 @@ export class DAppManager {
     })
   }
 
+  async setNativeAndPublicAuthorizedAccount(
+    origin: string,
+    tabInfo: { title?: string; favIconUrl?: string },
+    binding: AccountRef,
+    expectedRevision: number
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const state = this.authorizationState[origin]
+      if (
+        !Number.isSafeInteger(expectedRevision) ||
+        expectedRevision < 0 ||
+        expectedRevision !== (state?.revision ?? 0)
+      )
+        throw new Error('Site authorization changed. Connect again.')
+      const existing = this.connectedDApps.get(origin)
+      this.assertConnectionCapacity(existing)
+      const selection = {
+        origin,
+        id: this.generateId(),
+        title: tabInfo.title,
+        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
+        accounts: [binding],
+        binding,
+        now: Date.now()
+      }
+      const native = replaceDAppAuthorization(existing, selection)
+      const replacement = replaceDAppChainAuthorization(native, {
+        ...selection,
+        chainId: PUBLIC_CHAIN_ID
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, replacement)
+      const states = this.advancePublicRevisions([origin])
+      states[origin] = { ...states[origin], mode: 'approved' }
+      await this.commitConnections(next, states)
+      return states[origin].revision
+    })
+  }
+
   async removePublicAuthorization(origin: string): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()

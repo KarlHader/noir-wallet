@@ -30,7 +30,7 @@ import { useWalletStore, rehydrateWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { EVM_GAS_FUNDING_APPROVAL_TIMEOUT_MS, pendingRequestsManager } from './pending-requests'
 import { getApprovalContext } from './approval-context'
-import { signApprovedDAppMessage } from './dapp-message-signing'
+import { parseZcashSigningMode, signApprovedDAppMessage } from './dapp-message-signing'
 import { sleep } from '@/lib/utils'
 import { logger } from '@/lib/logger'
 import { ANALYTICS_EVENTS, PAGE_IDS, trackEvent } from '@/background/analytics/reporter'
@@ -109,6 +109,7 @@ const APPROVAL_ACTION_PREFIXES = Object.freeze({
     'signMessage',
     'shieldFunds',
     'publicConnect',
+    'publicSignMessage',
     'publicActivate',
     'publicTransaction'
   ]),
@@ -321,7 +322,7 @@ export class DAppHandler {
         return this.getPublicKey(origin, request.params?.[0])
 
       case 'zcash_requestPublicAccount':
-        return this.connectPublic(origin, request.tabInfo ?? {})
+        return this.connectPublic(origin, request.tabInfo ?? {}, request.params?.[0])
       case 'zcash_disconnectPublic': {
         const revokedRevision = await accountContextTransition.runActiveOperation(() =>
           dappManager.removePublicAuthorization(origin)
@@ -338,6 +339,17 @@ export class DAppHandler {
       case 'zcash_getPublicTransaction':
       case 'zcash_activatePublicAccount':
       case 'zcash_sendPublicTransaction': {
+        if (request.method === 'zcash_getPublicAccount' && request.params?.[0]?.nullable === true) {
+          const authorization = await dappManager.getPublicAuthorization(origin)
+          const state = useWalletStore.getState()
+          if (
+            !authorization.binding ||
+            authorization.binding.walletId !== state.currentWalletId ||
+            authorization.binding.accountId !== state.currentAccountId ||
+            !(await credentialSession.hasUnlockSession())
+          )
+            return null
+        }
         const context = await capturePublicContext(origin)
         const approve = (action: 'publicActivate' | 'publicTransaction', data: unknown) =>
           this.requestExternalApproval(origin, action, data)
@@ -386,23 +398,48 @@ export class DAppHandler {
     }
   }
 
-  async connectPublic(origin: string, tabInfo: DAppTabInfo = {}) {
+  async connectPublic(origin: string, tabInfo: DAppTabInfo = {}, options?: unknown) {
+    let nativeRequested = false
+    if (options !== undefined) {
+      if (!options || typeof options !== 'object' || Array.isArray(options))
+        throw new Error('Invalid connection options')
+      const value = options as Record<string, unknown>
+      const modes = value.signingModes
+      if (
+        Object.keys(value).length !== 1 ||
+        !Array.isArray(modes) ||
+        modes.length !== 2 ||
+        !modes.includes('current') ||
+        !modes.includes('noir_protocol_public')
+      )
+        throw new Error('Unsupported connection signing modes')
+      nativeRequested = true
+    }
     const context = await capturePublicContext(origin, false, true)
     const account = await noirPublicRuntime.getAccount(context)
     await assertPublicContext(context)
     const wallet = useWalletStore.getState().getWallet(context.walletId)
+    const nativeAccount = useWalletStore.getState().getAccount(context.walletId, context.accountId)
+    if (!nativeAccount) throw new Error('No account available')
     const native = await dappManager.getAuthorization(origin)
     const approval = await this.requestUserApprovalWithId(origin, 'publicConnect', {
       account,
       accountLabel: wallet?.accounts.find(item => item.id === context.accountId)?.name || 'Account',
-      linksIdentities: native.accounts.length > 0,
+      linksIdentities: nativeRequested || native.accounts.length > 0,
+      ...(nativeRequested
+        ? { nativeAccount: { address: nativeAccount.addresses.transparent } }
+        : {}),
       ...dappApprovalMetadata(tabInfo)
     })
     if (!approval.approved) throw new Error('User rejected the request')
     await assertPublicContext(context)
     const authorizationRevision = await accountContextTransition.runActiveOperation(async () => {
       await assertPublicContext(context)
-      return dappManager.setPublicAuthorizedAccount(
+      return (
+        nativeRequested
+          ? dappManager.setNativeAndPublicAuthorizedAccount.bind(dappManager)
+          : dappManager.setPublicAuthorizedAccount.bind(dappManager)
+      )(
         origin,
         tabInfo,
         { walletId: context.walletId, accountId: context.accountId },
@@ -417,6 +454,27 @@ export class DAppHandler {
     await assertPublicContext(authorized)
     const result = await noirPublicRuntime.getAccount(authorized, false)
     await assertPublicContext(authorized)
+    if (nativeRequested) {
+      const accounts = await this.resolveAccounts(origin)
+      await assertPublicContext(authorized)
+      await this.assertApprovedAccountAuthorized(
+        origin,
+        context.walletId,
+        context.accountId,
+        authorizationRevision
+      )
+      this.setPermissionForAccount(origin, nativeAccount)
+      return {
+        identities: {
+          current: {
+            transparent: nativeAccount.addresses.transparent,
+            shielded: nativeAccount.addresses.shielded,
+            accounts
+          },
+          noir_protocol_public: result
+        }
+      }
+    }
     return result
   }
 
@@ -1062,13 +1120,18 @@ export class DAppHandler {
 
   private async getPublicKey(
     origin: string,
-    options?: { signingMode?: 'derived' | 'current' | 'legacy_index0' }
+    options?: { signingMode?: 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public' }
   ): Promise<{
     pubkey: string
     address: string
-    signingMode: 'derived' | 'current' | 'legacy_index0'
+    signingMode: 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public'
     originAddress?: string
   } | null> {
+    const mode = parseZcashSigningMode(options)
+    if (mode === 'noir_protocol_public') {
+      const context = await capturePublicContext(origin)
+      return noirPublicRuntime.getSigningIdentity(context)
+    }
     await this.ensurePermission(origin)
 
     if (backgroundZcashWalletRuntime.isLocked()) {
@@ -1089,7 +1152,6 @@ export class DAppHandler {
 
     const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
     const network = useWalletStore.getState().currentNetwork
-    const mode: IdentitySigningMode = options?.signingMode ?? 'current'
     const identity = await fetchCachedIdentity(
       network,
       walletId,
@@ -1535,16 +1597,28 @@ export class DAppHandler {
   private async signMessage(
     origin: string,
     message: string,
-    options: { signingMode?: 'derived' | 'current' | 'legacy_index0' } | undefined,
+    options:
+      | { signingMode?: 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public' }
+      | undefined,
     tabInfo: DAppTabInfo
   ): Promise<{
     signature: string
     pubkey: string
     address: string
-    signingMode: 'derived' | 'current' | 'legacy_index0'
+    signingMode: 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public'
     originAddress?: string
   }> {
     this.validateSignMessageParam(message)
+    const mode = parseZcashSigningMode(options)
+    if (mode === 'noir_protocol_public') {
+      const context = await capturePublicContext(origin)
+      return noirPublicRuntime.signMessage(context, message, (action, data) =>
+        this.requestExternalApproval(origin, action, {
+          ...(data as Record<string, unknown>),
+          ...dappApprovalMetadata(tabInfo)
+        })
+      )
+    }
     await this.ensurePermission(origin)
 
     const { approved, walletId, accountId, authorizationRevision } = await this.requestUserApproval(
@@ -1563,7 +1637,6 @@ export class DAppHandler {
 
     return accountContextTransition.runActiveOperation(async () => {
       await this.ensureApprovedAccountContext(origin, walletId, accountId, authorizationRevision)
-      const mode: IdentitySigningMode = options?.signingMode ?? 'current'
       const dedupKey = `${walletId}:${accountId}:${message}:${mode}`
       const pending = this.signMessageInFlight.get(dedupKey)
       if (pending) {
@@ -1580,7 +1653,7 @@ export class DAppHandler {
         walletCore,
         message,
         approvedAccountIndex,
-        options?.signingMode,
+        mode,
         SIGNING_ACCOUNT_INDEX
       ).finally(() => {
         if (this.signMessageInFlight.get(dedupKey) === promise) {

@@ -5,6 +5,7 @@ import { parsePendingApprovalResponse } from '../../../src/popup/services/dapp-a
 import {
   parsePublicActivationReview,
   parsePublicConnectReview,
+  parsePublicMessageReview,
   parsePublicTransactionReview
 } from '../../../src/popup/services/noir-public-approval-review.ts'
 import {
@@ -117,6 +118,48 @@ test.describe('dApp approval request boundary', () => {
     } finally {
       globalThis.chrome = previousChrome
     }
+  })
+
+  test('reviews Public signing bytes and rejects a substituted business review', () => {
+    const account = {
+      chain: 'zcash-l2',
+      network: 'mainnet',
+      publicKey: 'pk',
+      address: 'public-account',
+      mcaId: 'mca.near',
+      parentContractId: 'parent.near',
+      status: 'active'
+    }
+    const txRequests = [
+      {
+        FunctionCall: {
+          receiver_id: 'token.near',
+          function_calls: [
+            { method_name: 'transfer', args: '{}', gas: '30000000000000', deposit: '1' }
+          ]
+        }
+      }
+    ]
+    const business = { nonce: '1', deadline: '9999999999', txRequests }
+    const message = JSON.stringify({
+      nonce: business.nonce,
+      deadline: business.deadline,
+      tx_requests: txRequests
+    })
+    expect(
+      parsePendingApprovalResponse(
+        response({ action: 'publicSignMessage', data: { account, message } }),
+        requestId
+      ).status
+    ).toBe('ready')
+    expect(parsePublicMessageReview({ account, message: 'Hello Public' })?.business).toBeNull()
+    expect(parsePublicMessageReview({ account, message, business })?.business?.txRequests).toEqual(
+      txRequests
+    )
+    expect(
+      parsePublicMessageReview({ account, message, business: { ...business, nonce: '2' } })
+    ).toBeNull()
+    expect(parsePublicMessageReview({ account, message: ` ${message}` })).toBeNull()
   })
 
   test('requires the actual Public transaction calls and complete activation costs', () => {

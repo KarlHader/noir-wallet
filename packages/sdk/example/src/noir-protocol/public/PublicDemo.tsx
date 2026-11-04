@@ -4,8 +4,10 @@ import type {
   PublicAssets,
   PublicTransaction,
   SendPublicTransactionParams,
+  ZcashConnectResult,
   ZcashClient
 } from '@noir-wallet/sdk'
+import { verifyMessageSignature } from '@noir-wallet/sdk'
 import {
   buildTransferRequest,
   displayAssetSymbol,
@@ -18,6 +20,8 @@ import { errorCode, errorMessage, exportTrace, type TraceEntry, type TraceMethod
 
 type ComposeMode = 'transfer' | 'function'
 type Intent = Readonly<SendPublicTransactionParams>
+type IdentitySelection = 'public' | 'native' | 'both'
+const PUBLIC_MODE = { signingMode: 'noir_protocol_public' } as const
 
 export function PublicDemo({
   client,
@@ -27,6 +31,15 @@ export function PublicDemo({
   walletVersion?: string
 }) {
   const [account, setAccount] = useState<PublicAccount | null>(null)
+  const [nativeAccount, setNativeAccount] = useState<ZcashConnectResult | null>(null)
+  const [identitySelection, setIdentitySelection] = useState<IdentitySelection>('public')
+  const [signingMessage, setSigningMessage] = useState('')
+  const [publicKey, setPublicKey] = useState<string | null>(null)
+  const [signingResult, setSigningResult] = useState<{
+    signature: string
+    verified: boolean
+    error?: string
+  } | null>(null)
   const [assets, setAssets] = useState<PublicAssets | null>(null)
   const [transaction, setTransaction] = useState<PublicTransaction | null>(null)
   const [operationId, setOperationId] = useState('')
@@ -105,6 +118,8 @@ export function PublicDemo({
     accountRef.current = null
     intentRef.current = null
     setAccount(null)
+    setSigningResult(null)
+    setPublicKey(null)
     setAssets(null)
     setAssetsBusy(false)
     setTransaction(null)
@@ -132,6 +147,8 @@ export function PublicDemo({
       setTransaction(null)
       setOperationId('')
       setLookupAttempted(false)
+      setSigningResult(null)
+      setPublicKey(null)
     }
     accountRef.current = next
     setAccount(next)
@@ -178,7 +195,7 @@ export function PublicDemo({
       if (cancelled) return
       receivedEvent = true
       appendTrace({
-        method: 'publicAccountChanged',
+        method: 'accountsChanged',
         outcome: 'event',
         status: next?.status ?? 'disconnected'
       })
@@ -187,15 +204,18 @@ export function PublicDemo({
       setRestoring(false)
       setError(null)
     }
-    client.on('publicAccountChanged', onAccountChanged)
+    client.on('accountsChanged', onAccountChanged, PUBLIC_MODE)
     void traced(
-      'getPublicAccount',
-      () => client.getPublicAccount(),
-      value => value.status
+      'getAccounts',
+      () => client.getAccounts(PUBLIC_MODE),
+      value => value?.status ?? 'disconnected'
     )
       .then(
         next => {
-          if (!cancelled && !receivedEvent) adoptAccount(next)
+          if (!cancelled && !receivedEvent) {
+            if (next) adoptAccount(next)
+            else clearAccount()
+          }
         },
         () => {
           if (!cancelled && !receivedEvent) clearAccount()
@@ -208,9 +228,29 @@ export function PublicDemo({
       cancelled = true
       epoch.current += 1
       lookupRevision.current += 1
-      client.removeListener('publicAccountChanged', onAccountChanged)
+      client.removeListener('accountsChanged', onAccountChanged, PUBLIC_MODE)
     }
   }, [client, traced, appendTrace, adoptAccount, clearAccount])
+
+  useEffect(() => {
+    let cancelled = false
+    const refreshNative = () => {
+      void client
+        .getAccounts({ signingMode: 'current' })
+        .then(value => {
+          if (!cancelled) setNativeAccount(value)
+        })
+        .catch(() => {
+          if (!cancelled) setNativeAccount(null)
+        })
+    }
+    client.on('accountsChanged', refreshNative)
+    refreshNative()
+    return () => {
+      cancelled = true
+      client.removeListener('accountsChanged', refreshNative)
+    }
+  }, [client])
 
   useEffect(() => {
     if (account) void refreshAssets(account.status === 'active')
@@ -226,11 +266,11 @@ export function PublicDemo({
       pending = true
       try {
         const next = await traced(
-          'getPublicAccount',
-          () => client.getPublicAccount(),
-          value => value.status
+          'getAccounts',
+          () => client.getAccounts(PUBLIC_MODE),
+          value => value?.status ?? 'disconnected'
         )
-        if (!cancelled && currentEpoch === epoch.current) adoptAccount(next)
+        if (!cancelled && currentEpoch === epoch.current && next) adoptAccount(next)
       } catch (cause) {
         if (!cancelled && currentEpoch === epoch.current) setError(errorMessage(cause))
       } finally {
@@ -262,30 +302,99 @@ export function PublicDemo({
   const connect = () =>
     runAction('connect', async () => {
       const currentEpoch = epoch.current
-      const next = await traced(
-        'connectPublic',
-        () => client.connectPublic(),
-        value => value.status
-      )
-      if (currentEpoch === epoch.current) adoptAccount(next)
+      if (identitySelection === 'both') {
+        const next = await traced(
+          'connect',
+          () => client.connect({ signingModes: ['current', 'noir_protocol_public'] }),
+          value => value.identities.noir_protocol_public?.status
+        )
+        if (!next.identities.current || !next.identities.noir_protocol_public) {
+          throw new Error('The wallet did not return both identities.')
+        }
+        if (currentEpoch === epoch.current) {
+          setNativeAccount(next.identities.current)
+          adoptAccount(next.identities.noir_protocol_public)
+        }
+      } else if (identitySelection === 'native') {
+        const next = await traced('connect', () => client.connect({ signingMode: 'current' }))
+        setNativeAccount(next)
+      } else {
+        const next = await traced(
+          'connect',
+          () => client.connect(PUBLIC_MODE),
+          value => value.status
+        )
+        if (currentEpoch === epoch.current) adoptAccount(next)
+      }
     })
 
   const disconnect = () =>
     runAction('disconnect', async () => {
-      await traced('disconnectPublic', () => client.disconnectPublic())
+      await traced('disconnect', () => client.disconnect(PUBLIC_MODE))
       clearAccount()
     })
+
+  const disconnectNative = () =>
+    runAction('disconnect-native', async () => {
+      await traced('disconnect', () => client.disconnect({ signingMode: 'current' }))
+      setNativeAccount(null)
+    })
+
+  const readPublicKey = async (): Promise<void> => {
+    const signer = accountRef.current
+    if (!signer) return
+    const key = await traced('getPublicKey', () => client.getPublicKey(PUBLIC_MODE))
+    if (
+      !key ||
+      key.pubkey.toLowerCase() !== signer.publicKey.toLowerCase() ||
+      key.address !== signer.address ||
+      key.signingMode !== 'noir_protocol_public'
+    ) {
+      throw new Error('Public signing identity changed.')
+    }
+    setPublicKey(key.pubkey)
+  }
+
+  const getPublicKey = () => runAction('public-key', readPublicKey)
+
+  const sign = (event: FormEvent) => {
+    event.preventDefault()
+    void runAction('sign', async () => {
+      const signer = accountRef.current
+      if (!signer || !signingMessage) return
+      setSigningResult(null)
+      await readPublicKey()
+      const signed = await traced('signMessage', () =>
+        client.signMessage(signingMessage, PUBLIC_MODE)
+      )
+      const verification = verifyMessageSignature({
+        message: signingMessage,
+        signature: signed.signature,
+        pubkey: signer.publicKey,
+        address: signer.address,
+        network: signer.network
+      })
+      const verified =
+        verification.valid &&
+        signed.pubkey.toLowerCase() === signer.publicKey.toLowerCase() &&
+        signed.address === signer.address &&
+        signed.signingMode === 'noir_protocol_public'
+      setSigningResult({ signature: signed.signature, verified, error: verification.error })
+    })
+  }
 
   const refresh = () =>
     runAction('refresh', async () => {
       const currentEpoch = epoch.current
       const next = await traced(
-        'getPublicAccount',
-        () => client.getPublicAccount(),
-        value => value.status
+        'getAccounts',
+        () => client.getAccounts(PUBLIC_MODE),
+        value => value?.status ?? 'disconnected'
       )
       if (currentEpoch !== epoch.current) return
-      adoptAccount(next)
+      if (next) adoptAccount(next)
+      else clearAccount()
+      setNativeAccount(await client.getAccounts({ signingMode: 'current' }))
       await refreshAssets()
     })
 
@@ -389,7 +498,7 @@ export function PublicDemo({
     <div className="tab-panel grid-2 public-example public-demo">
       <section className="card card-compact public-demo-account">
         <div className="card-header">
-          <h2>Public account</h2>
+          <h2>Connection</h2>
           <div className="public-account-actions">
             {account ? (
               <>
@@ -408,17 +517,53 @@ export function PublicDemo({
                   Disconnect Public
                 </button>
               </>
-            ) : (
+            ) : null}
+            {nativeAccount && (
               <button
-                className="btn btn-primary btn-xs"
-                onClick={() => void connect()}
-                disabled={!!busy || restoring}
+                className="btn btn-secondary btn-xs"
+                onClick={() => void disconnectNative()}
+                disabled={!!busy}
               >
-                {busy === 'connect' ? 'Connecting...' : 'Connect Public'}
+                Disconnect Native
               </button>
             )}
           </div>
         </div>
+        <div className="public-demo-connect-controls">
+          <div className="public-demo-segmented" role="group" aria-label="Identities to connect">
+            {(['public', 'native', 'both'] as const).map(mode => (
+              <button
+                key={mode}
+                type="button"
+                className={identitySelection === mode ? 'active' : ''}
+                aria-pressed={identitySelection === mode}
+                onClick={() => setIdentitySelection(mode)}
+                disabled={!!busy}
+              >
+                {mode === 'both' ? 'Native + Public' : mode === 'public' ? 'Public' : 'Native'}
+              </button>
+            ))}
+          </div>
+          <button
+            className="btn btn-primary btn-xs"
+            onClick={() => void connect()}
+            disabled={!!busy || restoring}
+          >
+            {busy === 'connect'
+              ? 'Connecting...'
+              : identitySelection === 'public'
+                ? 'Connect Public'
+                : 'Connect'}
+          </button>
+        </div>
+        {nativeAccount && (
+          <div className="public-demo-facts">
+            <div>
+              <span>Native address</span>
+              <code>{nativeAccount.transparent}</code>
+            </div>
+          </div>
+        )}
         {account ? (
           <div className="public-demo-facts" data-testid="public-account">
             <div>
@@ -482,6 +627,69 @@ export function PublicDemo({
           </div>
         ) : (
           <p className="message">{assetsBusy ? 'Loading assets...' : 'No assets available.'}</p>
+        )}
+      </section>
+
+      <section className="card card-compact grid-span-2 public-demo-signing">
+        <div className="card-header">
+          <h2>Public signing</h2>
+        </div>
+        <form onSubmit={sign}>
+          <div className="form-group">
+            <label className="label" htmlFor="public-sign-message">
+              Message
+            </label>
+            <textarea
+              id="public-sign-message"
+              className="input textarea-sm"
+              value={signingMessage}
+              onChange={event => {
+                setSigningMessage(event.target.value)
+                setSigningResult(null)
+              }}
+            />
+          </div>
+          <div className="public-demo-actions">
+            <button
+              className="btn btn-secondary btn-xs"
+              type="button"
+              onClick={() => void getPublicKey()}
+              disabled={!account || !!busy}
+            >
+              Get public key
+            </button>
+            <button
+              className="btn btn-primary btn-xs"
+              type="submit"
+              disabled={!account || !signingMessage || !!busy}
+            >
+              {busy === 'sign' ? 'Signing...' : 'Sign message'}
+            </button>
+          </div>
+        </form>
+        {publicKey && (
+          <div className="public-demo-facts public-demo-signing-result">
+            <div>
+              <span>Public key</span>
+              <code>{publicKey}</code>
+            </div>
+          </div>
+        )}
+        {signingResult && (
+          <div className="public-demo-facts public-demo-signing-result">
+            <div>
+              <span>Verification</span>
+              <strong>
+                {signingResult.verified
+                  ? 'Valid for this Public identity'
+                  : (signingResult.error ?? 'Failed')}
+              </strong>
+            </div>
+            <div>
+              <span>Signature</span>
+              <code>{signingResult.signature}</code>
+            </div>
+          </div>
         )}
       </section>
 

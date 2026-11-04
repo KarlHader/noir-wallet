@@ -187,6 +187,202 @@ test('Public Zcash methods preserve request IDs and positional wire parameters',
   ])
 })
 
+test('identity selectors keep Native and Public grants separate', async () => {
+  const calls = []
+  const native = { transparent: 't-native', shielded: 'zs-native' }
+  const publicAccount = {
+    chain: 'zcash-l2',
+    network: 'testnet',
+    publicKey: 'public-key',
+    address: 'public-address',
+    mcaId: null,
+    parentContractId: 'parent',
+    status: 'inactive'
+  }
+  const api = new ZcashAPI({
+    supportedSigningModes: ['current', 'derived', 'legacy_index0', 'noir_protocol_public'],
+    async request(args) {
+      calls.push(args)
+      switch (args.method) {
+        case 'zcash_requestAccounts':
+          return native
+        case 'zcash_getAccounts':
+          return null
+        case 'zcash_requestPublicAccount':
+          return args.params
+            ? { identities: { current: native, noir_protocol_public: publicAccount } }
+            : publicAccount
+        case 'zcash_getPublicAccount':
+          return null
+        case 'zcash_disconnect':
+        case 'zcash_disconnectPublic':
+          return null
+        case 'zcash_getPublicKey':
+          return {
+            pubkey: 'public-key',
+            address: 'public-address',
+            signingMode: 'noir_protocol_public'
+          }
+        case 'zcash_signMessage':
+          return {
+            signature: 'sig',
+            pubkey: 'public-key',
+            address: 'public-address',
+            signingMode: 'noir_protocol_public'
+          }
+        default:
+          throw new Error(`Unexpected method: ${args.method}`)
+      }
+    },
+    on() {},
+    async disconnect() {}
+  })
+  const normalized = {
+    ...native,
+    accounts: [
+      { id: 'current', label: 'Current Account', walletId: '', accountId: '', addresses: native }
+    ]
+  }
+
+  assert.deepEqual(await api.connect(), normalized)
+  assert.deepEqual(await api.connect({ signingMode: 'noir_protocol_public' }), publicAccount)
+  assert.deepEqual(await api.connect({ signingModes: ['noir_protocol_public'] }), {
+    identities: { noir_protocol_public: publicAccount }
+  })
+  assert.deepEqual(await api.connect({ signingModes: ['noir_protocol_public', 'current'] }), {
+    identities: { current: normalized, noir_protocol_public: publicAccount }
+  })
+  assert.equal(await api.getAccounts({ signingMode: 'noir_protocol_public' }), null)
+  assert.deepEqual(await api.getAccounts({ signingModes: ['current', 'noir_protocol_public'] }), {
+    identities: { current: null, noir_protocol_public: null }
+  })
+  assert.deepEqual(await api.getPublicKey({ signingMode: 'noir_protocol_public' }), {
+    pubkey: 'public-key',
+    address: 'public-address',
+    signingMode: 'noir_protocol_public'
+  })
+  assert.deepEqual(await api.signMessage('hello', { signingMode: 'noir_protocol_public' }), {
+    signature: 'sig',
+    pubkey: 'public-key',
+    address: 'public-address',
+    signingMode: 'noir_protocol_public'
+  })
+  await api.disconnect({ signingModes: ['noir_protocol_public', 'current'] })
+  assert.deepEqual(calls, [
+    { method: 'zcash_requestAccounts' },
+    { method: 'zcash_requestPublicAccount' },
+    { method: 'zcash_requestPublicAccount' },
+    {
+      method: 'zcash_requestPublicAccount',
+      params: [{ signingModes: ['current', 'noir_protocol_public'] }]
+    },
+    { method: 'zcash_getPublicAccount', params: [{ nullable: true }] },
+    { method: 'zcash_getAccounts' },
+    { method: 'zcash_getPublicAccount', params: [{ nullable: true }] },
+    { method: 'zcash_getPublicKey', params: [{ signingMode: 'noir_protocol_public' }] },
+    { method: 'zcash_signMessage', params: ['hello', { signingMode: 'noir_protocol_public' }] },
+    { method: 'zcash_disconnect' },
+    { method: 'zcash_disconnectPublic' }
+  ])
+})
+
+test('unsupported and invalid selectors never fall back to Native RPC', async () => {
+  const calls = []
+  const api = new ZcashAPI({
+    async request(args) {
+      calls.push(args)
+      throw new Error('Unexpected request')
+    },
+    on() {},
+    async disconnect() {}
+  })
+  for (const selection of [
+    { signingMode: 'noir_protocol_public' },
+    { signingModes: ['current', 'noir_protocol_public'] }
+  ]) {
+    await assert.rejects(api.connect(selection), /does not support/)
+    await assert.rejects(api.getAccounts(selection), /does not support/)
+    await assert.rejects(api.disconnect(selection), /does not support/)
+  }
+  await assert.rejects(
+    api.getPublicKey({ signingMode: 'noir_protocol_public' }),
+    /does not support/
+  )
+  await assert.rejects(
+    api.signMessage('hello', { signingMode: 'noir_protocol_public' }),
+    /does not support/
+  )
+  for (const selection of [
+    { signingModes: [] },
+    { signingModes: ['current', 'current'] },
+    { signingModes: ['unknown'] },
+    { signingMode: 'unknown' },
+    { signingMode: 'current', signingModes: ['current'] }
+  ]) {
+    await assert.rejects(api.connect(selection), TypeError)
+    await assert.rejects(api.getAccounts(selection), TypeError)
+    await assert.rejects(api.disconnect(selection), TypeError)
+  }
+  await assert.rejects(api.getPublicKey({ signingMode: 'unknown' }), TypeError)
+  await assert.rejects(api.signMessage('hello', { signingMode: 'unknown' }), TypeError)
+  assert.deepEqual(calls, [])
+})
+
+test('combined connection rejects incomplete identity responses', async () => {
+  for (const response of [
+    null,
+    { identities: {} },
+    { identities: { current: { transparent: 't', shielded: 'zs' } } },
+    { identities: { current: { transparent: 't', shielded: 'zs' }, noir_protocol_public: null } }
+  ]) {
+    const api = new ZcashAPI({
+      supportedSigningModes: ['noir_protocol_public'],
+      async request() {
+        return response
+      },
+      on() {},
+      async disconnect() {}
+    })
+    await assert.rejects(
+      api.connect({ signingModes: ['current', 'noir_protocol_public'] }),
+      /Invalid combined connection response/
+    )
+  }
+})
+
+test('scoped account listeners map to Public events without changing legacy listeners', () => {
+  const listeners = new Map()
+  const api = new ZcashAPI({
+    async request() {},
+    on(event, handler) {
+      listeners.set(event, handler)
+    },
+    removeListener(event, handler) {
+      if (listeners.get(event) === handler) listeners.delete(event)
+    },
+    async disconnect() {}
+  })
+  const native = () => {}
+  const publicHandler = () => {}
+  api.on('accountsChanged', native)
+  api.on('accountsChanged', native, { signingMode: 'current' })
+  api.on('accountsChanged', publicHandler, { signingMode: 'noir_protocol_public' })
+  assert.equal(listeners.get('accountsChanged'), native)
+  assert.equal(listeners.get('publicAccountChanged'), publicHandler)
+  assert.throws(
+    () => api.on('accountsChanged', publicHandler, { signingMode: 'unknown' }),
+    TypeError
+  )
+  assert.throws(
+    () => api.removeListener('accountsChanged', native, { signingMode: 'unknown' }),
+    TypeError
+  )
+  api.removeListener('accountsChanged', publicHandler, { signingMode: 'noir_protocol_public' })
+  assert.equal(listeners.has('publicAccountChanged'), false)
+  api.removeListener('accountsChanged', native, { signingMode: 'current' })
+  assert.equal(listeners.has('accountsChanged'), false)
+})
+
 test('npm-verified provenance must bind the signer and accepted build', async () => {
   const metadata = {
     version: '0.1.9',

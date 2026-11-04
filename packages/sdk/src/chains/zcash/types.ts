@@ -1,4 +1,5 @@
 export interface ZcashProvider {
+  readonly supportedSigningModes?: readonly SigningMode[]
   request(args: RequestArguments): Promise<any>
   on(event: 'publicAccountChanged', handler: (account: PublicAccount | null) => void): void
   on(event: string, handler: (...args: any[]) => void): void
@@ -172,7 +173,29 @@ export interface TransactionReceipt {
   timestamp: number
 }
 
-export type SigningMode = 'derived' | 'current' | 'legacy_index0'
+export type SigningMode = 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public'
+
+export type ConnectionSigningMode = 'current' | 'noir_protocol_public'
+
+export type ConnectionOptions =
+  | { readonly signingMode: ConnectionSigningMode; readonly signingModes?: never }
+  | { readonly signingModes: readonly ConnectionSigningMode[]; readonly signingMode?: never }
+
+export interface ConnectionIdentities {
+  current?: ZcashConnectResult
+  noir_protocol_public?: PublicAccount
+}
+
+export interface ConnectedIdentities {
+  identities: ConnectionIdentities
+}
+
+export interface QueriedIdentities {
+  identities: {
+    current?: ZcashConnectResult | null
+    noir_protocol_public?: PublicAccount | null
+  }
+}
 
 export interface SignMessageOptions {
   /**
@@ -182,6 +205,7 @@ export interface SignMessageOptions {
    *   cryptographically unlinkable to the main address. Recommended for identity binding.
    * - `'legacy_index0'`: Signs with BIP-44 index 0 key via pure JS (for legacy MCA accounts)
    *   (e.g. MCA creation) to prevent on-chain linkage.
+   * - `'noir_protocol_public'`: Signs with the authorized Noir Protocol Public identity.
    */
   signingMode?: SigningMode
 }

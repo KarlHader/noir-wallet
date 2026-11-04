@@ -10,6 +10,7 @@ import {
   createPublicMcaMessage,
   parsePublicCandidate,
   parsePublicFunctionCallRequests,
+  parsePublicSigningMessage,
   serializePublicBusiness,
   serializePublicCandidate,
   stringifyPublicWire
@@ -80,6 +81,44 @@ function recoverZcashPublicKey(message, compactSignature) {
 }
 
 test.describe('Public wire contract', () => {
+  test('recognizes canonical Business bytes and rejects malformed or changed signing bytes', () => {
+    const business = serializePublicBusiness({
+      nonce: '7',
+      deadline: '1760000000000',
+      txRequests: [request]
+    })
+    expect(parsePublicSigningMessage('ordinary message')).toBeNull()
+    expect(parsePublicSigningMessage(JSON.stringify({ greeting: 'hello' }))).toBeNull()
+    expect(parsePublicSigningMessage(business)).toEqual({
+      nonce: '7',
+      deadline: '1760000000000',
+      txRequests: [request]
+    })
+    expect(() => parsePublicSigningMessage(`${business} `)).toThrow(/canonical signing bytes/)
+    expect(() =>
+      parsePublicSigningMessage(
+        JSON.stringify({
+          deadline: '1760000000000',
+          nonce: '7',
+          tx_requests: [request]
+        })
+      )
+    ).toThrow(/canonical signing bytes/)
+    expect(() =>
+      parsePublicSigningMessage(
+        JSON.stringify({
+          nonce: '7',
+          deadline: '1760000000000',
+          tx_requests: [request],
+          extra: true
+        })
+      )
+    ).toThrow(/Invalid Public business fields/)
+    expect(() => parsePublicSigningMessage('{"nonce":"7",')).toThrow(
+      /Invalid Public business message/
+    )
+  })
+
   test('produces the signed Business bytes and Go submission ID from structured fields', () => {
     const candidate = createPublicCandidate({
       tgas: 250,

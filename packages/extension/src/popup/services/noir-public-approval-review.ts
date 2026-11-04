@@ -6,6 +6,7 @@ import type { PublicConnectApprovalData } from '@/background/pending-requests'
 import Big from '@/lib/big'
 import {
   parsePublicFunctionCallRequests,
+  parsePublicSigningMessage,
   readPublicAccountId,
   readPublicTgas,
   readPublicDecimal
@@ -22,6 +23,16 @@ export interface NoirPublicTransactionReview {
     amountRaw: string
     recipient: string
   }>
+}
+
+export interface NoirPublicMessageReview {
+  readonly account: NoirPublicAccount
+  readonly message: string
+  readonly business: Readonly<{
+    nonce: string
+    deadline: string
+    txRequests: readonly NoirPublicFunctionCallRequest[]
+  }> | null
 }
 
 export interface NoirPublicActivationReview {
@@ -66,14 +77,54 @@ export function parsePublicConnectReview(value: unknown): PublicConnectApprovalD
     typeof value.accountLabel !== 'string' ||
     value.accountLabel.trim().length === 0 ||
     value.accountLabel.length > 128 ||
-    typeof value.linksIdentities !== 'boolean'
+    typeof value.linksIdentities !== 'boolean' ||
+    (value.nativeAccount !== undefined &&
+      (!record(value.nativeAccount) ||
+        typeof value.nativeAccount.address !== 'string' ||
+        value.nativeAccount.address.length === 0 ||
+        value.nativeAccount.address.length > 256))
   )
     return null
   return {
     account: value.account,
     accountLabel: value.accountLabel,
-    linksIdentities: value.linksIdentities
+    linksIdentities: value.linksIdentities,
+    ...(value.nativeAccount === undefined
+      ? {}
+      : { nativeAccount: { address: (value.nativeAccount as { address: string }).address } })
   }
+}
+
+export function parsePublicMessageReview(value: unknown): NoirPublicMessageReview | null {
+  if (
+    !record(value) ||
+    !account(value.account) ||
+    typeof value.message !== 'string' ||
+    value.message.length === 0 ||
+    value.message.length > 100_000
+  )
+    return null
+
+  let business: ReturnType<typeof parsePublicSigningMessage>
+  try {
+    business = parsePublicSigningMessage(value.message)
+  } catch {
+    return null
+  }
+  if (value.business !== undefined) {
+    if (!record(value.business) || business === null) return null
+    try {
+      const supplied = {
+        nonce: readPublicDecimal(value.business.nonce, 'Public nonce'),
+        deadline: readPublicDecimal(value.business.deadline, 'Public deadline'),
+        txRequests: parsePublicFunctionCallRequests(value.business.txRequests)
+      }
+      if (JSON.stringify(supplied) !== JSON.stringify(business)) return null
+    } catch {
+      return null
+    }
+  }
+  return { account: value.account, message: value.message, business }
 }
 
 export function parsePublicTransactionReview(value: unknown): NoirPublicTransactionReview | null {

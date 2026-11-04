@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { approvalContextMatches } from '../../../src/background/approval-context-policy.ts'
-import { signApprovedDAppMessage } from '../../../src/background/dapp-message-signing.ts'
+import {
+  isPublicSigningRequest,
+  parseZcashSigningMode,
+  signApprovedDAppMessage
+} from '../../../src/background/dapp-message-signing.ts'
 
 function approval(overrides = {}) {
   return {
@@ -88,4 +92,37 @@ test('all message signing modes bind their primary signature to the reviewed HD 
     { message: 'reviewed', accountIndex: 99, addressIndex: undefined },
     { message: 'reviewed', accountIndex: 3, addressIndex: undefined }
   ])
+})
+
+test('shared Zcash signing methods recognize Public mode and reject unsupported options', () => {
+  assert.equal(parseZcashSigningMode(undefined), 'current')
+  for (const mode of ['current', 'derived', 'legacy_index0', 'noir_protocol_public']) {
+    assert.equal(parseZcashSigningMode({ signingMode: mode }), mode)
+  }
+  assert.equal(
+    isPublicSigningRequest('zcash_getPublicKey', [{ signingMode: 'noir_protocol_public' }]),
+    true
+  )
+  assert.equal(
+    isPublicSigningRequest('zcash_signMessage', [
+      'message',
+      { signingMode: 'noir_protocol_public' }
+    ]),
+    true
+  )
+  assert.equal(
+    isPublicSigningRequest('zcash_signMessage', ['message', { signingMode: 'current' }]),
+    false
+  )
+  assert.equal(
+    isPublicSigningRequest('zcash_getAccounts', [{ signingMode: 'noir_protocol_public' }]),
+    false
+  )
+  for (const options of [
+    { signingMode: 'unknown' },
+    { signingMode: 'current', unexpected: true },
+    []
+  ]) {
+    assert.throws(() => parseZcashSigningMode(options), /Zcash signing/)
+  }
 })

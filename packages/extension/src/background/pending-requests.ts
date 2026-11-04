@@ -5,6 +5,7 @@ export interface PublicConnectApprovalData {
   readonly account: NoirPublicAccount
   readonly accountLabel: string
   readonly linksIdentities: boolean
+  readonly nativeAccount?: Readonly<{ address: string }>
 }
 
 export interface PendingRequest {

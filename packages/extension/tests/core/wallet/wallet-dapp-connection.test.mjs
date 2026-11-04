@@ -80,6 +80,15 @@ function fixture({
       authorization.accounts = [active.reference]
       authorization.binding = active.reference
     },
+    connectNativeAndPublic: async () => {
+      calls.push('native-and-public')
+      dapp.authorizedAccounts = [active.reference]
+      dapp.boundWalletId = active.reference.walletId
+      dapp.boundAccountId = active.reference.accountId
+      const authorization = dapp.chainAuthorizations.find(item => item.chainId === publicChainId)
+      authorization.accounts = [active.reference]
+      authorization.binding = active.reference
+    },
     runActiveOperation: operation => transition.runActiveOperation(operation)
   })
   return {
@@ -152,7 +161,9 @@ test('Native and Public grants both follow their own account scope', async () =>
   state.dapp.boundAccountId = current.accountId
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
-  assert.deepEqual(state.calls, ['zcash', 'public'])
+  assert.deepEqual(state.calls, ['native-and-public'])
+  assert.deepEqual(state.dapp.authorizedAccounts, [current])
+  assert.deepEqual(state.dapp.chainAuthorizations[0].binding, current)
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 

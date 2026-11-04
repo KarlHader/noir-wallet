@@ -30,6 +30,7 @@ import type {
 import type { BackgroundEvmDAppHandler } from './evm-dapp-handler'
 import type { BackgroundNearDAppHandler } from './near-dapp-handler'
 import type { BackgroundSolanaDAppHandler } from './solana-dapp-handler'
+import { isPublicSigningRequest } from './dapp-message-signing'
 
 export interface MultichainSessionRequest {
   readonly method: Caip25RuntimeMethod
@@ -630,7 +631,10 @@ export class BackgroundMultichainSessionDAppHandler {
     tabInfo: MultichainSessionTabInfo
   ): Promise<unknown> {
     const parsed = parseCaip27InvokeMethodRequest(params)
-    if (PUBLIC_ZCASH_METHODS.has(parsed.request.method)) {
+    if (
+      PUBLIC_ZCASH_METHODS.has(parsed.request.method) ||
+      isPublicSigningRequest(parsed.request.method, parsed.request.params)
+    ) {
       throw new Caip25ProviderError(4100, `${parsed.request.method} requires a Public connection.`)
     }
     const stored = await this.options.manager.getCaip25Session(origin)
