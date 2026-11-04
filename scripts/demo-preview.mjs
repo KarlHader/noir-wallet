@@ -12,7 +12,6 @@ import {
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateSdkArtifact } from './sdk-release.mjs'
 
 const sha = /^[0-9a-f]{40}$/
 const positiveId = value => Number.isSafeInteger(value) && value > 0
@@ -112,19 +111,6 @@ export function validateStaticDemo(directory, source) {
     if (metadata[key] !== value) throw new Error('Demo and extension provenance mismatch')
   }
   if (!lstatSync(path.join(directory, 'index.html')).isFile()) throw new Error('Missing demo entry')
-  const sdkDirectory = path.join(directory, 'sdk')
-  const sdkStat = lstatSync(sdkDirectory)
-  if (!sdkStat.isDirectory() || sdkStat.isSymbolicLink())
-    throw new Error('SDK package directory must not be a symlink')
-  const sdk = validateSdkArtifact(sdkDirectory, {
-    mode: 'check',
-    repository: source.repository,
-    sourceSha: source.sourceSha,
-    workflowSha: source.sourceSha,
-    runId: source.runId,
-    runAttempt: source.runAttempt
-  })
-  const sdkTarball = path.join(sdkDirectory, sdk.tarball)
   const extensions = new Set([
     '.html',
     '.js',
@@ -159,25 +145,18 @@ export function validateStaticDemo(directory, source) {
       else if (
         !stat.isFile() ||
         stat.size > 25 * 1024 * 1024 ||
-        (!extensions.has(path.extname(name)) && file !== sdkTarball)
+        !extensions.has(path.extname(name))
       )
         throw new Error('Unexpected static demo file')
     }
   }
   validate(directory)
-  return sdk
 }
 
 export function deploymentDemoUrl(repository, source) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error('Invalid preview URL identity')
   const [owner, name] = repository.split('/')
   return `https://${owner.toLowerCase()}.github.io/${name}/${previewPath(source)}/#noir-public`
-}
-
-export function deploymentSdkUrl(repository, source, tarball) {
-  if (!/^noir-wallet-sdk-[0-9][0-9A-Za-z.-]*\.tgz$/.test(tarball))
-    throw new Error('Invalid SDK tarball URL filename')
-  return new URL(`sdk/${tarball}`, deploymentDemoUrl(repository, source)).href
 }
 
 function previewPath(source) {
@@ -331,18 +310,16 @@ async function main() {
     return
   }
   if (command !== 'report') throw new Error('Unknown preview command')
-  const sdk = validateStaticDemo('preview', source)
   const url = deploymentDemoUrl(source.repository, source)
-  const sdkUrl = deploymentSdkUrl(source.repository, source, sdk.tarball)
   const extension = `${env.GITHUB_SERVER_URL}/${source.repository}/actions/runs/${source.runId}/artifacts/${source.extensionArtifactId}`
-  const summary = `[Open Public demo](${url}) · [Download paired extension](${extension}) · [Download paired SDK](${sdkUrl})\n\nInstall this PR SDK in your dApp:\n\n\`\`\`sh\npnpm add ${sdkUrl}\n\`\`\`\n\nTested merge commit: \`${source.sourceSha}\`. SDK SHA-256: \`${sdk.sha256}\`. The SDK URL is immutable and does not require GitHub login. Extension download requires GitHub access and expires after three days. Use this SDK with the paired extension; the npm beta may not include these experimental APIs.\n`
+  const summary = `[Open Public demo](${url}) · [Download paired extension](${extension})\n\nTested merge commit: \`${source.sourceSha}\`. Extension download requires GitHub access and expires after three days.\n`
   await githubRequest(source.repository, env.GH_TOKEN)('check-runs', {
     name: 'Public demo',
     head_sha: source.headSha,
     status: 'completed',
     conclusion: 'success',
     details_url: url,
-    output: { title: 'Demo, SDK, and extension from the same tested merge', summary }
+    output: { title: 'Demo and extension from the same tested merge', summary }
   })
   appendFileSync(env.GITHUB_OUTPUT, `url=${url}\n`)
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary)

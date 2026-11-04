@@ -295,7 +295,7 @@ The package also exports lower-level helpers such as `detectProvider()`, `getZca
 
 ## Noir Protocol Public (experimental)
 
-Use the extension and SDK from the same tested commit for this demo capability; do not assume an installed npm `beta` package or released extension includes it. Public currently requires Mainnet mode and a mnemonic software account. See the [Public demo guide](../../docs/mutil-chain/operations/noir-protocol-public-demo.md) for local setup, PR SDK installation, deployment configuration, and controlled testing.
+Use the extension and SDK from the same tested commit for this demo capability; do not assume an installed npm `beta` package or released extension includes it. Public currently requires Mainnet mode and a mnemonic software account. See the [Public demo guide](../../docs/mutil-chain/operations/noir-protocol-public-demo.md) for local setup, temporary SDK installation, deployment configuration, and controlled testing.
 
 Public reuses the Zcash client with an explicit identity selector:
 
