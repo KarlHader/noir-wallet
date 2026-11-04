@@ -318,3 +318,122 @@ test('account deletion cannot widen a CAIP-25 scope to another shared EVM accoun
   assert.equal(await manager.getChainAuthorization(origin, 'eip155:1'), null)
   assert.deepEqual((await manager.getChainAuthorization(origin, 'eip155:56'))?.accounts, [other])
 })
+
+test('wallet-side CAIP-25 account authorization stays within approved scopes and commits atomically', async () => {
+  const { manager, storage, setFailWrites } = managerFixture()
+  const next = { walletId: 'wallet-2', accountId: 'account-2' }
+  const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  await manager.setCaip25Session(
+    origin,
+    {},
+    [
+      { chainId: 'eip155:1', accounts: [account], binding: account },
+      { chainId: 'eip155:56', accounts: [account], binding: account },
+      { chainId: zcash, accounts: [account], binding: account }
+    ],
+    {
+      scopes: [
+        {
+          chainId: 'eip155:1',
+          methods: ['eth_accounts'],
+          notifications: ['wallet_sessionChanged']
+        },
+        { chainId: 'eip155:56', methods: ['eth_accounts', 'personal_sign'], notifications: [] },
+        { chainId: zcash, methods: ['zcash_getBalance'], notifications: [] }
+      ],
+      properties: { purpose: 'lending' }
+    },
+    { accounts: [account], binding: account }
+  )
+  const before = await manager.getConnection(origin)
+  const pendingRevision = await manager.getAuthorizationRevision(origin)
+  await assert.rejects(
+    manager.addCaip25AuthorizedAccount(origin, ['eip155:137'], next),
+    /network permission/
+  )
+  assert.deepEqual(await manager.getConnection(origin), before)
+  setFailWrites(true)
+  await assert.rejects(
+    manager.addCaip25AuthorizedAccount(origin, ['eip155:1', zcash], next),
+    /storage unavailable/
+  )
+  assert.deepEqual(await manager.getConnection(origin), before)
+  assert.equal(await manager.getAuthorizationRevision(origin), pendingRevision)
+  setFailWrites(false)
+  await manager.addCaip25AuthorizedAccount(origin, ['eip155:1', zcash], next)
+  assert.equal(await manager.getAuthorizationRevision(origin), pendingRevision + 1)
+  await assert.rejects(
+    manager.setCaip25Session(
+      origin,
+      {},
+      [{ chainId: 'eip155:1', accounts: [account], binding: account }],
+      { scopes: [{ chainId: 'eip155:1', methods: ['eth_accounts'], notifications: [] }] },
+      undefined,
+      pendingRevision
+    ),
+    /authorization changed/
+  )
+  const reloaded = new DAppManager(storage)
+  assert.deepEqual((await reloaded.getChainAuthorization(origin, 'eip155:1'))?.accounts, [
+    account,
+    next
+  ])
+  assert.deepEqual((await reloaded.getChainAuthorization(origin, 'eip155:56'))?.accounts, [account])
+  assert.deepEqual((await reloaded.getChainAuthorization(origin, 'eip155:137'))?.accounts, [
+    account
+  ])
+  assert.deepEqual((await reloaded.getChainAuthorization(origin, zcash))?.accounts, [account, next])
+  assert.deepEqual(await reloaded.getAuthorizedAccounts(origin), [account, next])
+  const after = await reloaded.getConnection(origin)
+  assert.deepEqual(
+    after.caip25Session.scopes.map(scope => scope.methods),
+    before.caip25Session.scopes.map(scope => scope.methods)
+  )
+  assert.deepEqual(
+    after.caip25Session.scopes.map(scope => scope.chainId),
+    before.caip25Session.scopes.map(scope => scope.chainId)
+  )
+  assert.deepEqual(after.caip25Session.properties, before.caip25Session.properties)
+  assert.deepEqual(after.caip25Session.scopes[0].accounts, [account, next])
+  assert.deepEqual(after.caip25Session.scopes[1].accounts, [account])
+})
+
+test('revoking legacy Zcash permission does not block an existing EVM session account', async () => {
+  const { manager } = managerFixture()
+  const next = { walletId: 'wallet-2', accountId: 'account-2' }
+  await manager.setCaip25Session(
+    origin,
+    {},
+    [{ chainId: 'eip155:1', accounts: [account], binding: account }],
+    { scopes: [{ chainId: 'eip155:1', methods: ['eth_accounts'], notifications: [] }] }
+  )
+  await manager.removeLegacyAuthorization(origin)
+  assert.equal(await manager.isRevoked(origin), true)
+  await manager.addCaip25AuthorizedAccount(origin, ['eip155:1'], next)
+  assert.deepEqual((await manager.getChainAuthorization(origin, 'eip155:1'))?.accounts, [
+    account,
+    next
+  ])
+
+  const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  await manager.setCaip25Session(
+    origin,
+    {},
+    [
+      { chainId: 'eip155:1', accounts: [account], binding: account },
+      { chainId: zcash, accounts: [account], binding: account }
+    ],
+    {
+      scopes: [
+        { chainId: 'eip155:1', methods: ['eth_accounts'], notifications: [] },
+        { chainId: zcash, methods: ['zcash_getBalance'], notifications: [] }
+      ]
+    },
+    { accounts: [account], binding: account }
+  )
+  await manager.removeLegacyAuthorization(origin)
+  await assert.rejects(
+    manager.addCaip25AuthorizedAccount(origin, [zcash], next),
+    /Zcash permission/
+  )
+})

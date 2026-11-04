@@ -1,4 +1,7 @@
 import { chromium, type BrowserContext, type Page, type Route } from '@playwright/test'
+import { createServer, type ClientRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+import type { AddressInfo } from 'node:net'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -68,6 +71,7 @@ const PROVIDER_ICON_DATA_URL = `data:image/png;base64,${(
 const test = extensionTest.extend<{
   readonly offlineRpcRegistry: void
   readonly cleanupHistoryWorkers: void
+  readonly zcashCustomRpcUrl: string
 }>({
   offlineRpcRegistry: [
     async ({ context }, use) => {
@@ -88,7 +92,92 @@ const test = extensionTest.extend<{
       await Promise.all(runtimes.map(runtime => runtime.dispose()))
     },
     { auto: true }
-  ]
+  ],
+  zcashCustomRpcUrl: async ({}, use) => {
+    const registeredUrl = RPC_REGISTRY.chains
+      .find(entry => entry.id === 'zcash-mainnet')
+      ?.endpoints.find(endpoint => endpoint.id === 'deltarpc-web')?.url
+    if (!registeredUrl) throw new Error('Zcash custom RPC fixture is missing')
+    const upstreamOrigin = new URL(registeredUrl).origin
+    const corsHeaders = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'POST, OPTIONS',
+      'access-control-allow-headers': 'content-type, x-grpc-web, x-user-agent, grpc-timeout',
+      'access-control-expose-headers': 'grpc-status, grpc-message'
+    }
+    const upstreamRequests = new Set<ClientRequest>()
+    const server = createServer((request, response) => {
+      const path = new URL(request.url ?? '/', 'http://localhost')
+      if (
+        !path.pathname.startsWith('/cash.z.wallet.sdk.rpc.CompactTxStreamer/') ||
+        path.search ||
+        path.hash
+      ) {
+        response.writeHead(404, corsHeaders).end()
+        return
+      }
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204, corsHeaders).end()
+        return
+      }
+      if (request.method !== 'POST') {
+        response.writeHead(405, corsHeaders).end()
+        return
+      }
+      const upstream = httpsRequest(
+        `${upstreamOrigin}${path.pathname}`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': request.headers['content-type'] ?? 'application/grpc-web+proto',
+            'x-grpc-web': request.headers['x-grpc-web'] ?? '1',
+            ...(request.headers['x-user-agent'] === undefined
+              ? {}
+              : { 'x-user-agent': request.headers['x-user-agent'] }),
+            ...(request.headers['grpc-timeout'] === undefined
+              ? {}
+              : { 'grpc-timeout': request.headers['grpc-timeout'] }),
+            ...(request.headers['content-length'] === undefined
+              ? {}
+              : { 'content-length': request.headers['content-length'] })
+          }
+        },
+        upstreamResponse => {
+          response.writeHead(upstreamResponse.statusCode ?? 502, {
+            ...upstreamResponse.headers,
+            ...corsHeaders
+          })
+          upstreamResponse.on('error', () => response.destroy())
+          upstreamResponse.pipe(response)
+        }
+      )
+      upstream.on('error', () => {
+        if (!response.headersSent) response.writeHead(502, corsHeaders)
+        response.end()
+      })
+      upstreamRequests.add(upstream)
+      upstream.once('close', () => upstreamRequests.delete(upstream))
+      request.on('aborted', () => upstream.destroy())
+      response.once('close', () => upstream.destroy())
+      request.pipe(upstream)
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, 'localhost', () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    try {
+      await use(`http://localhost:${(server.address() as AddressInfo).port}`)
+    } finally {
+      for (const upstream of upstreamRequests) upstream.destroy()
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => (error ? reject(error) : resolve()))
+      })
+    }
+  }
 })
 
 async function mockBetaInviteApi(context: BrowserContext): Promise<void> {
@@ -369,7 +458,8 @@ async function mockReleasedEvmRpc(
                   transactionHash: requestedHash,
                   blockHash: `0x${'b'.repeat(64)}`,
                   blockNumber: '0x100',
-                  status: '0x1'
+                  status: '0x1',
+                  logs: []
                 }
               : null
         }
@@ -760,6 +850,21 @@ async function importTestWallet(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Got it' }).click()
 }
 
+async function stopImportedZcashSync(page: Page): Promise<void> {
+  await page.evaluate(() => chrome.runtime.sendMessage({ type: 'ABORT_SYNC' }))
+  await expect
+    .poll(
+      async () => {
+        const state = (await page.evaluate(() =>
+          chrome.runtime.sendMessage({ type: 'GET_SYNC_STATE' })
+        )) as { isSyncing?: boolean }
+        return state.isSyncing
+      },
+      { timeout: 75_000 }
+    )
+    .toBe(false)
+}
+
 async function seedFreshAssetPrices(page: Page): Promise<void> {
   const fetchedAt = Date.now()
   const pricesBySymbol: Readonly<Record<string, string>> = Object.freeze({
@@ -845,18 +950,15 @@ async function seedFreshAssetPrices(page: Page): Promise<void> {
   )
 }
 
-async function seedSettledZcashBalance(page: Page, balance: ZcashBalance): Promise<void> {
-  await page.evaluate(() => chrome.runtime.sendMessage({ type: 'ABORT_SYNC' }))
-  await expect
-    .poll(async () => {
-      const state = (await page.evaluate(() =>
-        chrome.runtime.sendMessage({ type: 'GET_SYNC_STATE' })
-      )) as { isSyncing?: boolean }
-      return state.isSyncing
-    })
-    .toBe(false)
+async function seedSettledZcashBalance(
+  page: Page,
+  balance: ZcashBalance,
+  options: { hydrateBackground?: boolean } = {}
+): Promise<void> {
+  await stopImportedZcashSync(page)
 
-  await page.evaluate(async accountBalance => {
+  const fixture = { balance, hydrateBackground: options.hydrateBackground === true }
+  await page.evaluate(async accountFixture => {
     const local = await chrome.storage.local.get(['wallet_state', 'account_data'])
     const walletState =
       typeof local.wallet_state === 'string' ? JSON.parse(local.wallet_state) : local.wallet_state
@@ -873,7 +975,7 @@ async function seedSettledZcashBalance(page: Page, balance: ZcashBalance): Promi
       ...(accountData ?? {}),
       state: {
         ...(accountData?.state ?? {}),
-        balances: { ...(accountData?.state?.balances ?? {}), [accountKey]: accountBalance },
+        balances: { ...(accountData?.state?.balances ?? {}), [accountKey]: accountFixture.balance },
         syncStates: {
           ...(accountData?.state?.syncStates ?? {}),
           [walletKey]: {
@@ -881,7 +983,7 @@ async function seedSettledZcashBalance(page: Page, balance: ZcashBalance): Promi
             syncProgress: 100,
             currentHeight: 3_000_000,
             latestHeight: 3_000_000,
-            lastSyncTime: Date.now(),
+            lastSyncTime: Date.now() + (accountFixture.hydrateBackground ? 60_000 : 0),
             etaMs: null,
             syncReason: null
           }
@@ -891,7 +993,22 @@ async function seedSettledZcashBalance(page: Page, balance: ZcashBalance): Promi
     await chrome.storage.local.set({
       account_data: typeof local.account_data === 'string' ? JSON.stringify(next) : next
     })
-  }, balance)
+  }, fixture)
+
+  if (options.hydrateBackground) {
+    await page.evaluate(() => chrome.alarms.create('wallet-balance-sync', { when: Date.now() + 1 }))
+    await expect
+      .poll(
+        async () => {
+          const state = (await page.evaluate(() =>
+            chrome.runtime.sendMessage({ type: 'GET_SYNC_STATE' })
+          )) as { balance?: ZcashBalance }
+          return state.balance
+        },
+        { timeout: 45_000 }
+      )
+      .toEqual(balance)
+  }
 }
 
 async function expectPopupWidth(page: Page): Promise<void> {
@@ -1109,6 +1226,7 @@ export {
   rm,
   seedFreshAssetPrices,
   seedSettledZcashBalance,
+  stopImportedZcashSync,
   selectNewZcashAccountHistory,
   serveSdkExample,
   solanaEnabled,

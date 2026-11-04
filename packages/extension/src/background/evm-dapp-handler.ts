@@ -317,9 +317,13 @@ export class BackgroundEvmDAppHandler {
     }
   }
 
-  async notifyAccountsChanged(): Promise<void> {
+  async notifyAccountsChanged(origin?: string): Promise<void> {
     const connections = await this.options.manager.getAllConnections()
-    const evmConnections = connections.filter(connectionHasEvmAuthorization)
+    const evmConnections = connections.filter(
+      connection =>
+        (origin === undefined || connection.origin === origin) &&
+        connectionHasEvmAuthorization(connection)
+    )
     if (evmConnections.length === 0) return
     await Promise.all(
       evmConnections.map(async connection => {

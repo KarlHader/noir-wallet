@@ -26,7 +26,7 @@ import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explor
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { buildAccountKey } from '@/store/account-data-store'
-import { useUserEvmAssets } from '@/popup/hooks/useUserEvmAssets'
+import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import {
   buildActivityPresentationCatalog,
   type ActivityChainMetadata
@@ -155,7 +155,7 @@ export function MultichainActivityDetail({
   const { activeAccount: activeSwapAccount } = useActiveAccountNetworks()
   const { copyToClipboard, showToast } = useCopyToClipboard()
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
-  const userEvmAssets = useUserEvmAssets()
+  const { userAssets: userEvmAssets, detectedAssets: detectedEvmAssets } = useActivityEvmAssets()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
@@ -279,8 +279,15 @@ export function MultichainActivityDetail({
     }
   }, [item.id, item.scope.accountId, item.source])
   const { assetMetadata, chainMetadata, evmChainIds } = useMemo(
-    () => buildActivityPresentationCatalog({ network, endpointSettings, userEvmAssets, portfolio }),
-    [endpointSettings, network, portfolio, userEvmAssets]
+    () =>
+      buildActivityPresentationCatalog({
+        network,
+        endpointSettings,
+        userEvmAssets,
+        detectedEvmAssets,
+        portfolio
+      }),
+    [endpointSettings, network, portfolio, userEvmAssets, detectedEvmAssets]
   )
   const executionAddressModes = useMemo(
     () => buildActivityExecutionAddressModes(accountNetworks),

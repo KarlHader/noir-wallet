@@ -84,20 +84,20 @@ function AccountBalanceTooltip({
   return (
     <Tooltip
       side="left"
-      className="w-48"
+      className="w-max max-w-[calc(100vw-24px)]"
       content={
         <span className="block space-y-1">
           <span className="flex items-center justify-between gap-3">
-            <span>Public</span>
-            <span className="min-w-0 break-all text-right font-mono">
+            <span className="shrink-0">Public</span>
+            <span className="min-w-0 truncate whitespace-nowrap text-right font-mono tabular-nums">
               <span title={`${breakdown.main.toFixed()} ${symbol}`}>
                 {formatDisplayAmount(breakdown.main)} {symbol}
               </span>
             </span>
           </span>
           <span className="flex items-center justify-between gap-3">
-            <span>Confidential</span>
-            <span className="min-w-0 break-all text-right font-mono">
+            <span className="shrink-0">Confidential</span>
+            <span className="min-w-0 truncate whitespace-nowrap text-right font-mono tabular-nums">
               <span title={`${breakdown.privateBalance.toFixed()} ${symbol}`}>
                 {formatDisplayAmount(breakdown.privateBalance)} {symbol}
               </span>
@@ -168,7 +168,11 @@ function PortfolioAssetBalanceRow({
   const pendingAmount = assetPendingAmount(entry.asset)
   const fiat = getPortfolioAssetUsdValue(entry.asset, prices)
   const quote = findAssetPrice(prices, entry.asset.asset.id)
-  const chainAlias = resolveChainIconAlias(entry.chain.chain.family, entry.chain.chain.displayName)
+  const chainAlias = resolveChainIconAlias(
+    entry.chain.chain.family,
+    entry.chain.chain.displayName,
+    entry.chain.chain.id
+  )
   const breakdown = calculatePortfolioAccountBalanceBreakdown([entry])
 
   return (
@@ -306,7 +310,8 @@ export function PortfolioAssetGroupCard({
             directAsset && group.entries[0]
               ? resolveChainIconAlias(
                   group.entries[0].chain.chain.family,
-                  group.entries[0].chain.chain.displayName
+                  group.entries[0].chain.chain.displayName,
+                  group.entries[0].chain.chain.id
                 )
               : undefined
           }

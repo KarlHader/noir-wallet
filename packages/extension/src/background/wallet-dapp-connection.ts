@@ -19,6 +19,16 @@ interface WalletDAppConnectionOptions {
   readonly getZcashChainId: () => string
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
+  readonly connectSession: (
+    origin: string,
+    chainIds: readonly string[],
+    account: AccountRef
+  ) => Promise<void>
+  readonly notifyChainAccountsChanged: (
+    origin: string,
+    chainIds: readonly string[]
+  ) => Promise<void>
+  readonly notifySessionChanged: (origin: string) => Promise<void>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
@@ -41,19 +51,38 @@ export class WalletDAppConnectionCoordinator {
   getCurrentTabDAppStatus() {
     return this.options.runActiveOperation(async () => {
       const dapp = await this.options.getCurrentTabDApp()
-      if (!dapp) return { dapp: null, currentAccountAuthorized: false }
+      if (!dapp) {
+        return { dapp: null, currentAccountAuthorized: false, currentAccountConnectable: false }
+      }
       const active = await this.options.loadActiveAccount()
-      if (!active) return { dapp, currentAccountAuthorized: false }
+      if (!active) {
+        return { dapp, currentAccountAuthorized: false, currentAccountConnectable: false }
+      }
       const targets = this.targets(dapp, active)
+      const sessionChains =
+        dapp.caip25Session?.scopes
+          .filter(scope => active.chainIds.includes(scope.chainId))
+          .map(scope => scope.chainId) ?? []
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const currentAccountAuthorized =
-        !dapp.caip25Session && (targets.evm || targets.zcash)
+      const currentAccountAuthorized = dapp.caip25Session
+        ? sessionChains.length > 0 &&
+          sessionChains.every(chainId =>
+            getConnectionChainAuthorization(dapp, chainId)?.accounts.some(matches)
+          )
+        : targets.evm || targets.zcash
           ? (!targets.evm || targets.evm.accounts.some(matches)) &&
             (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference))
           : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
-      return { dapp, currentAccountAuthorized }
+      return {
+        dapp,
+        currentAccountAuthorized,
+        currentAccountConnectable: dapp.caip25Session
+          ? sessionChains.length > 0 &&
+            sessionChains.every(chainId => getConnectionChainAuthorization(dapp, chainId) !== null)
+          : Boolean(targets.evm || targets.zcash)
+      }
     })
   }
 
@@ -61,11 +90,23 @@ export class WalletDAppConnectionCoordinator {
     return this.options.runActiveOperation(async () => {
       const dapp = await this.options.getConnection(origin)
       if (!dapp) throw new Error('No connection found for this site')
-      if (dapp.caip25Session) {
-        throw new Error('Reconnect from the site to update this multichain session')
-      }
       const active = await this.options.loadActiveAccount()
       if (!active) throw new Error('No active account')
+      if (dapp.caip25Session) {
+        const chainIds = dapp.caip25Session.scopes
+          .filter(scope => active.chainIds.includes(scope.chainId))
+          .map(scope => scope.chainId)
+        if (chainIds.length === 0) {
+          throw new Error('Reconnect from the site to update this network permission')
+        }
+        await this.options.connectSession(origin, chainIds, active.reference)
+        if (chainIds.includes(this.options.getZcashChainId())) {
+          await this.options.connectZcash(origin)
+        }
+        await this.options.notifyChainAccountsChanged(origin, chainIds)
+        await this.options.notifySessionChanged(origin)
+        return
+      }
       const targets = this.targets(dapp, active)
       if (!targets.evm && !targets.zcash) {
         throw new Error('Reconnect from the site to update this network permission')

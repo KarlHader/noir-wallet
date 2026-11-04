@@ -124,19 +124,21 @@ export function ManageTokens() {
     [chainByChainId, managedAssets, networkByChainId]
   )
 
-  const networkFilterOptions = useMemo(
-    () =>
-      Array.from(new Set(availableManagedAssets.map(asset => asset.chainId))).map(assetChainId => {
-        const chain = chainByChainId.get(assetChainId)
-        const network = networkByChainId.get(assetChainId)
-        return {
-          id: assetChainId,
-          family: chain?.family ?? network?.iconChain ?? assetChainId,
-          displayName: chain?.displayName ?? network?.displayName ?? assetChainId
-        }
-      }),
-    [availableManagedAssets, chainByChainId, networkByChainId]
-  )
+  const networkFilterOptions = useMemo(() => {
+    const chainIds = new Set(availableManagedAssets.map(asset => asset.chainId))
+    for (const network of addTokenNetworks) {
+      if (!network.disabled) chainIds.add(network.chainId)
+    }
+    return Array.from(chainIds).map(assetChainId => {
+      const chain = chainByChainId.get(assetChainId)
+      const network = networkByChainId.get(assetChainId)
+      return {
+        id: assetChainId,
+        family: chain?.family ?? network?.iconChain ?? assetChainId,
+        displayName: chain?.displayName ?? network?.displayName ?? assetChainId
+      }
+    })
+  }, [addTokenNetworks, availableManagedAssets, chainByChainId, networkByChainId])
   const selectedNetworkId =
     selectedNetworkIds.length === 1 &&
     networkFilterOptions.some(option => option.id === selectedNetworkIds[0])
@@ -401,9 +403,10 @@ export function ManageTokens() {
               <div className="mb-3 flex size-11 items-center justify-center rounded-full bg-card">
                 <Icon icon="lucide:search-x" className="size-5 text-muted" />
               </div>
-              <p className="text-sm font-medium">No matching Tokens</p>
-              <p className="mt-1 text-xs leading-5 text-muted">
-                Try another symbol, exact contract address, or network.
+              <p className="text-sm font-medium">
+                {selectedNetworkId && !searchQuery.trim()
+                  ? 'No Tokens on this network'
+                  : 'No matching Tokens'}
               </p>
             </div>
           )}

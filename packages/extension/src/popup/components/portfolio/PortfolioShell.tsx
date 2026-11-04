@@ -102,7 +102,7 @@ function UnloadedChainBalance({ chain }: { readonly chain: PortfolioChainView })
       className="flex min-h-16 items-center gap-3 rounded-xl bg-card/60 px-3 py-3"
     >
       <ChainIcon
-        chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
+        chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName, chain.chain.id)}
         width={32}
         height={32}
         showTooltip={false}
@@ -431,7 +431,11 @@ export function PortfolioShell({
                     className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
                   >
                     <ChainIcon
-                      chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
+                      chain={resolveChainIconAlias(
+                        chain.chain.family,
+                        chain.chain.displayName,
+                        chain.chain.id
+                      )}
                       width={18}
                       height={18}
                       className="shrink-0 rounded-[5px]"

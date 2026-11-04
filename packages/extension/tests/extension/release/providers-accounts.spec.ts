@@ -23,6 +23,7 @@ import {
   selectNewZcashAccountHistory,
   serveSdkExample,
   solanaEnabled,
+  stopImportedZcashSync,
   terminateExtensionServiceWorker,
   test,
   waitForBackgroundWalletInitialization
@@ -302,6 +303,7 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
 
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
   try {
@@ -311,6 +313,10 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   } finally {
     await removeZcashHistoryMock()
   }
+  await popup.getByRole('button', { name: 'Back' }).click()
+  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({
+    timeout: 30_000
+  })
 
   await popup.evaluate(async site => {
     const key = 'dapp_authorization_state'
@@ -881,6 +887,153 @@ test('wallet-side Connect restores an existing EVM site for the active account',
   ])
   expect(connection?.authorizedAccounts).toBeUndefined()
   await captureScreenshot(popup, 'wallet-side-evm-connect-success.png')
+})
+
+test('wallet-side Connect reauthorizes the active account in an existing CAIP-25 session', async ({
+  context,
+  popup
+}) => {
+  test.skip(
+    process.env.APPROVAL_WINDOW_E2E !== '1',
+    'Chrome popup windows require an explicit real-browser approval run'
+  )
+  test.setTimeout(180_000)
+  const origin = 'https://provider-release.noir.test'
+  const chainId = 'eip155:1'
+  await context.route(`${origin}/**`, serveSdkExample)
+  await mockReleasedEvmRpc(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
+  try {
+    await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+    await selectNewZcashAccountHistory(popup)
+    await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
+  } finally {
+    await removeZcashHistoryMock()
+  }
+  await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
+    position: { x: 4, y: 4 }
+  })
+  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({
+    timeout: 30_000
+  })
+  await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
+
+  const page = await context.newPage()
+  await page.goto(`${origin}/example/`)
+  await page.waitForFunction(() => Boolean(Reflect.get(window, 'noirwallet')))
+  const approvalPromise = context.waitForEvent('page')
+  const sessionPromise = page.evaluate(async scope => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: {
+        createSession(request: { scopes: Record<string, unknown> }): Promise<{
+          scopes: Record<string, { accounts: string[]; methods: string[] }>
+        }>
+      }
+    }
+    return wallet.multichain.createSession({
+      scopes: {
+        [scope]: {
+          methods: ['eth_accounts'],
+          notifications: ['wallet_sessionChanged', 'accountsChanged']
+        }
+      }
+    })
+  }, chainId)
+  const approval = await approvalPromise
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  const initialSession = await sessionPromise
+  expect(initialSession.scopes[chainId].accounts).toHaveLength(1)
+  await page.evaluate(() => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: { on(name: string, listener: (session: unknown) => void): void }
+      ethereum: { on(name: string, listener: (accounts: unknown) => void): void }
+    }
+    Reflect.set(window, 'sessionChanges', [])
+    Reflect.set(window, 'evmAccountChanges', [])
+    wallet.multichain.on('wallet_sessionChanged', session => {
+      ;(Reflect.get(window, 'sessionChanges') as unknown[]).push(session)
+    })
+    wallet.ethereum.on('accountsChanged', accounts => {
+      ;(Reflect.get(window, 'evmAccountChanges') as unknown[]).push(accounts)
+    })
+  })
+
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
+    position: { x: 4, y: 4 }
+  })
+  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({
+    timeout: 30_000
+  })
+  await expect(popup.getByTestId('dapp-connect-prompt')).toBeVisible()
+  await captureScreenshot(popup, 'wallet-side-caip25-connect-prompt.png')
+  const beforeConnect = await page.evaluate(() => ({
+    sessions: (Reflect.get(window, 'sessionChanges') as unknown[]).length,
+    accounts: (Reflect.get(window, 'evmAccountChanges') as unknown[]).length
+  }))
+  await popup.getByTestId('dapp-connect-prompt').getByRole('button', { name: 'Connect' }).click()
+  await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
+  const readState = () =>
+    page.evaluate(async scope => {
+      const wallet = Reflect.get(window, 'noirwallet') as {
+        multichain: {
+          getSession(): Promise<{
+            scopes: Record<string, { accounts: string[]; methods: string[] }>
+          }>
+        }
+        ethereum: { request(input: { method: string }): Promise<string[]> }
+      }
+      const session = await wallet.multichain.getSession()
+      return {
+        scopes: Object.keys(session.scopes),
+        methods: session.scopes[scope].methods,
+        accounts: session.scopes[scope].accounts,
+        evmAccounts: await wallet.ethereum.request({ method: 'eth_accounts' }),
+        sessionEvents: (Reflect.get(window, 'sessionChanges') as unknown[]).length,
+        accountEvents: (Reflect.get(window, 'evmAccountChanges') as unknown[]).length
+      }
+    }, chainId)
+  await expect.poll(readState).toMatchObject({
+    scopes: [chainId],
+    methods: ['eth_accounts'],
+    sessionEvents: expect.any(Number),
+    accountEvents: expect.any(Number)
+  })
+  await expect.poll(async () => (await readState()).accounts.length).toBe(2)
+  const connected = await readState()
+  expect(connected.accounts).toContain(initialSession.scopes[chainId].accounts[0])
+  const connectedAccount = connected.accounts.find(
+    account => account !== initialSession.scopes[chainId].accounts[0]
+  )
+  expect(connectedAccount).toMatch(/^eip155:1:0x[0-9a-f]{40}$/)
+  expect(connected.sessionEvents).toBeGreaterThan(beforeConnect.sessions)
+  expect(connected.accountEvents).toBeGreaterThan(beforeConnect.accounts)
+  expect(connected.evmAccounts).toContain(connectedAccount!.slice(`${chainId}:`.length))
+  await captureScreenshot(popup, 'wallet-side-caip25-connect-success.png')
+
+  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
+  const modeCard = popup
+    .getByRole('dialog', { name: 'dApp address' })
+    .getByTestId('dapp-execution-mode-card')
+  await modeCard.getByRole('radio', { name: 'Use Confidential address for dApps' }).click()
+  const privateSetupDialog = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
+  if (await privateSetupDialog.isVisible()) {
+    await privateSetupDialog.getByRole('button', { name: 'Turn on' }).click()
+  }
+  await expect(popup.getByRole('button', { name: 'dApp address: Confidential' })).toBeVisible()
+  await expect.poll(readState).toMatchObject({
+    scopes: [chainId],
+    methods: ['eth_accounts'],
+    accounts: [expect.stringMatching(/^eip155:1:0x[0-9a-f]{40}$/)]
+  })
+  const privateState = await readState()
+  expect(privateState.accounts[0]).not.toBe(connectedAccount)
+  expect(privateState.sessionEvents).toBeGreaterThan(connected.sessionEvents)
+  expect(privateState.accountEvents).toBeGreaterThan(connected.accountEvents)
 })
 
 test('connects the SDK example with multi-wallet Zcash, EVM, Bitcoin, Solana, and named NEAR accounts', async ({

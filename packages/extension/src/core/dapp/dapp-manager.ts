@@ -614,15 +614,26 @@ export function getConnectionChainAuthorization(
   if (isEvmChain(chainId) && dapp.evmAuthorization) {
     const shared = normalizeAccountAuthorization(dapp.evmAuthorization)
     const scope = dapp.caip25Session?.scopes.find(item => item.chainId === chainId)
-    const accounts =
+    const scoped = normalizeChainAuthorizations(dapp.chainAuthorizations).find(
+      item => item.chainId === chainId
+    )
+    const sharedAccounts =
       scope?.accounts === undefined
         ? shared.accounts
         : shared.accounts.filter(account =>
             scope.accounts!.some(selected => accountRefsEqual(account, selected))
           )
+    const scopedAccounts = (scoped?.accounts ?? []).filter(
+      account =>
+        scope?.accounts?.some(selected => accountRefsEqual(account, selected)) &&
+        !sharedAccounts.some(selected => accountRefsEqual(account, selected))
+    )
+    const accounts = scope ? [...sharedAccounts, ...scopedAccounts] : sharedAccounts
     if (accounts.length === 0) return null
     const binding =
-      accounts.find(account => accountRefsEqual(account, shared.binding)) ?? accounts[0]
+      accounts.find(account => scoped && accountRefsEqual(account, scoped.binding)) ??
+      accounts.find(account => accountRefsEqual(account, shared.binding)) ??
+      accounts[0]
     return Object.freeze({ chainId, accounts, binding })
   }
   const authorizations = normalizeChainAuthorizations(dapp.chainAuthorizations)
@@ -1174,7 +1185,7 @@ export class DAppManager {
     return this.enqueueMutation(async () => {
       await this.initialize()
       const dapp = this.connectedDApps.get(origin)
-      const states = this.advanceEvmRevision(origin)
+      const states = this.advanceAuthorizationRevision(origin)
       if (!dapp) {
         await this.commitConnections(new Map(this.connectedDApps), states)
         return
@@ -1257,6 +1268,98 @@ export class DAppManager {
         })
       )
       await this.commitConnections(next)
+    })
+  }
+
+  async addCaip25AuthorizedAccount(
+    origin: string,
+    chainIds: readonly string[],
+    account: AccountRef
+  ): Promise<void> {
+    if (!isAccountRef(account) || !Array.isArray(chainIds) || chainIds.length === 0) {
+      throw new Error('Invalid wallet-side session account selection')
+    }
+    const requested = new Set(chainIds.map(normalizeDAppChainId))
+    if (requested.size !== chainIds.length) {
+      throw new Error('Duplicate wallet-side session chain')
+    }
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      const session = existing?.caip25Session
+      if (!existing || !session) {
+        throw new Error('No active multichain session for this site')
+      }
+      if (
+        this.authorizationState[origin]?.mode === 'revoked' &&
+        [...requested].some(chainId => ZCASH_DAPP_CHAIN_IDS.has(chainId))
+      ) {
+        throw new Error('Reconnect from the site to update this Zcash permission')
+      }
+      if (
+        [...requested].some(chainId => !session.scopes.some(scope => scope.chainId === chainId))
+      ) {
+        throw new Error('Reconnect from the site to update this network permission')
+      }
+      const chainAuthorizations = normalizeChainAuthorizations(existing.chainAuthorizations)
+      let zcashAccounts = existing.authorizedAccounts
+      let zcashBinding =
+        existing.boundWalletId && existing.boundAccountId
+          ? { walletId: existing.boundWalletId, accountId: existing.boundAccountId }
+          : undefined
+      const nextChains = [...chainAuthorizations]
+      const nextScopes = session.scopes.map(scope => {
+        if (!requested.has(scope.chainId)) return scope
+        const authorization = getConnectionChainAuthorization(existing, scope.chainId)
+        if (!authorization) {
+          throw new Error('Reconnect from the site to update this network permission')
+        }
+        const accounts = normalizeAccountRefs(
+          authorization.accounts.some(ref => accountRefsEqual(ref, account))
+            ? authorization.accounts
+            : [...authorization.accounts, account]
+        )
+        if (isEvmChain(scope.chainId)) {
+          if (!existing.evmAuthorization) {
+            throw new Error('Reconnect from the site to update this network permission')
+          }
+          const index = nextChains.findIndex(item => item.chainId === scope.chainId)
+          const scoped = normalizeChainAuthorization({
+            chainId: scope.chainId,
+            accounts,
+            binding: account
+          })
+          if (index < 0) nextChains.push(scoped)
+          else nextChains[index] = scoped
+          return { ...scope, accounts }
+        }
+        const index = nextChains.findIndex(item => item.chainId === scope.chainId)
+        if (index < 0) {
+          throw new Error('Reconnect from the site to update this network permission')
+        }
+        nextChains[index] = normalizeChainAuthorization({
+          chainId: scope.chainId,
+          accounts,
+          binding: account
+        })
+        if (ZCASH_DAPP_CHAIN_IDS.has(scope.chainId)) {
+          zcashAccounts = accounts
+          zcashBinding = account
+        }
+        return scope
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...existing,
+        chainAuthorizations: normalizeChainAuthorizations(nextChains),
+        caip25Session: parseStoredCaip25Session({ ...session, scopes: nextScopes }),
+        ...(zcashAccounts === undefined ? {} : { authorizedAccounts: zcashAccounts }),
+        ...(zcashBinding === undefined
+          ? {}
+          : { boundWalletId: zcashBinding.walletId, boundAccountId: zcashBinding.accountId }),
+        lastActiveAt: nextActivityTime(existing)
+      })
+      await this.commitConnections(next, this.advanceAuthorizationRevision(origin))
     })
   }
 
@@ -1618,7 +1721,7 @@ export class DAppManager {
     return states
   }
 
-  private advanceEvmRevision(origin: string): Record<string, AuthorizationState> {
+  private advanceAuthorizationRevision(origin: string): Record<string, AuthorizationState> {
     const states = { ...this.authorizationState }
     const revision = states[origin]?.revision ?? 0
     if (revision >= Number.MAX_SAFE_INTEGER)

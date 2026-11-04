@@ -1,4 +1,8 @@
-import { formatConfiguredChainIconUrl, isDynamicEvmChainIcon } from '@/config/icons'
+import {
+  formatConfiguredChainIconUrl,
+  isDynamicEvmChainIcon,
+  resolveEvmChainIconAlias
+} from '@/config/icons'
 
 const EVM_CHAIN_ICON_CATALOG_URL = 'https://api.llama.fi/chains'
 const EVM_CHAIN_ICON_BASE_URL = 'https://icons.llamao.fi/icons/chains'
@@ -56,10 +60,15 @@ export function formatChainIconUrl(chain: string): string {
   return formatConfiguredChainIconUrl(chain)
 }
 
-export function resolveChainIconAlias(family: string, displayName: string): string {
+export function resolveChainIconAlias(
+  family: string,
+  displayName: string,
+  chainId?: string
+): string {
   if (family === 'zcash') return 'zec'
   if (family === 'bitcoin') return 'btc'
   if (family !== 'evm') return family
+  if (chainId) return resolveEvmChainIconAlias(chainId)
 
   const normalized = displayName.toLowerCase()
   if (normalized.includes('arbitrum')) return 'arbitrum'

@@ -15,6 +15,7 @@ import {
   nearEnabled,
   seedFreshAssetPrices,
   solanaEnabled,
+  stopImportedZcashSync,
   test,
   waitForBackgroundWalletInitialization
 } from '../../helpers/release-default'
@@ -105,6 +106,7 @@ test('adds and removes an exact custom Token without symbol or icon spoofing', a
   await mockReleasedEvmRpc(context)
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
 
   await popup.getByRole('button', { name: 'Manage Tokens' }).click()
   await expect(popup.getByRole('heading', { name: 'Manage Tokens' })).toBeVisible()

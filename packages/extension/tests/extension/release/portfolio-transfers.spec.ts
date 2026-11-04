@@ -12,6 +12,7 @@ import {
   mockUnknownZcashAccountHistory,
   seedFreshAssetPrices,
   seedSettledZcashBalance,
+  stopImportedZcashSync,
   terminateExtensionServiceWorker,
   test,
   waitForBackgroundWalletInitialization
@@ -333,11 +334,62 @@ test('REF-13211 shows the Private USDC Gas requirement before transfer preparati
   await importTestWallet(popup)
   await seedFreshAssetPrices(popup)
 
+  await popup.evaluate(() => {
+    const originalSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime) as (
+      message: unknown
+    ) => Promise<unknown>
+    const gate = window as typeof window & {
+      pendingModeReads?: number
+      deferredModeReadModes?: string[]
+      releaseInitialModeRead?: () => void
+    }
+    const releasePending: Array<() => void> = []
+    gate.pendingModeReads = 0
+    gate.deferredModeReadModes = []
+    let released = false
+    gate.releaseInitialModeRead = () => {
+      released = true
+      for (const release of releasePending.splice(0)) release()
+      gate.pendingModeReads = 0
+    }
+    chrome.runtime.sendMessage = (async (message: unknown) => {
+      const shouldDefer =
+        !released &&
+        typeof message === 'object' &&
+        message !== null &&
+        'type' in message &&
+        message.type === 'GET_DAPP_EXECUTION_MODE'
+      const response = await originalSendMessage(message)
+      if (!shouldDefer || released) return response
+      const mode =
+        typeof response === 'object' &&
+        response !== null &&
+        'state' in response &&
+        typeof response.state === 'object' &&
+        response.state !== null &&
+        'mode' in response.state
+          ? response.state.mode
+          : undefined
+      if (typeof mode === 'string') gate.deferredModeReadModes?.push(mode)
+      return new Promise(resolve => {
+        releasePending.push(() => resolve(response))
+        gate.pendingModeReads = releasePending.length
+      })
+    }) as typeof chrome.runtime.sendMessage
+  })
+
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(popup.getByRole('status', { name: 'Loading additional networks' })).toHaveCount(0, {
     timeout: 30_000
   })
   await popup.getByRole('button', { name: 'Send USDC on Arbitrum' }).click()
+  await expect
+    .poll(() =>
+      popup.evaluate(
+        () => (window as typeof window & { pendingModeReads?: number }).pendingModeReads
+      )
+    )
+    .toBeGreaterThan(0)
   await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
   await popup
     .getByRole('dialog', { name: 'Choose source account' })
@@ -348,6 +400,23 @@ test('REF-13211 shows the Private USDC Gas requirement before transfer preparati
   await expect(
     popup.getByTestId('send-asset-header').getByText('To Arbitrum', { exact: true })
   ).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'Choose source account, current private' })
+  ).toBeVisible()
+  await expect(
+    popup.evaluate(
+      () => (window as typeof window & { deferredModeReadModes?: string[] }).deferredModeReadModes
+    )
+  ).resolves.toContain('main')
+  await popup.evaluate(async () => {
+    const gate = window as typeof window & { releaseInitialModeRead?: () => void }
+    if (!gate.releaseInitialModeRead)
+      throw new Error('Initial execution mode read was not deferred')
+    gate.releaseInitialModeRead()
+    await new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    )
+  })
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current private' })
   ).toBeVisible()
@@ -375,6 +444,7 @@ test('resyncs only active Wallet Zcash data and preserves EVM and Bitcoin state'
   await mockReleasedBitcoinEsplora(context)
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
 
   const addedAccount = await popup.evaluate(async () => {
     const stored = (await chrome.storage.local.get('wallet_state')).wallet_state
@@ -462,17 +532,20 @@ test('shows Shield on positive transparent ZEC and uses the readable modal backd
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
 
-  await seedSettledZcashBalance(popup, {
-    total: '0.512',
-    transparent: '0.002',
-    shielded: '0.51',
-    spendable: '0.5',
-    available: '0.5',
-    shieldable: '0.002',
-    pending: { total: '0.01', transparent: '0', shielded: '0.01' }
-  })
+  await seedSettledZcashBalance(
+    popup,
+    {
+      total: '0.512',
+      transparent: '0.002',
+      shielded: '0.51',
+      spendable: '0.5',
+      available: '0.5',
+      shieldable: '0.002',
+      pending: { total: '0.01', transparent: '0', shielded: '0.01' }
+    },
+    { hydrateBackground: true }
+  )
 
-  await terminateExtensionServiceWorker(context, popup)
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   const zecRow = popup.getByRole('button', { name: 'View ZEC details on Zcash' })
   await expect(zecRow).toBeVisible({ timeout: 30_000 })

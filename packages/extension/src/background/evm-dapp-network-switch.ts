@@ -29,6 +29,30 @@ export interface EvmDAppNetworkSwitchOptions {
   ) => Promise<{ readonly approved: boolean }>
 }
 
+export class EvmDAppNetworkSwitchCoordinator {
+  private readonly pending = new Map<string, Promise<void>>()
+
+  run(
+    requested: ParsedEip1193ChainRequest,
+    origin: string,
+    action: 'switch' | 'add',
+    context: string,
+    options: EvmDAppNetworkSwitchOptions
+  ): Promise<void> {
+    const key = JSON.stringify([origin, action, requested, context])
+    const existing = this.pending.get(key)
+    if (existing) return existing
+
+    const operation = handleEvmDAppNetworkSwitch(requested, origin, action, options)
+    this.pending.set(key, operation)
+    const clear = () => {
+      if (this.pending.get(key) === operation) this.pending.delete(key)
+    }
+    void operation.then(clear, clear)
+    return operation
+  }
+}
+
 export async function handleEvmDAppNetworkSwitch(
   requested: ParsedEip1193ChainRequest,
   origin: string,

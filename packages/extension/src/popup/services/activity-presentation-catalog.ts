@@ -4,9 +4,14 @@ import {
   createAssetRegistry,
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions,
+  parseAssetId,
   type AssetRegistryEntry
 } from '@/core/chains/registry'
-import { userEvmAssetToDefinition, type UserEvmAssetRecord } from '@/core/chains/user-assets'
+import {
+  userEvmAssetToDefinition,
+  type DetectedEvmAssetRecord,
+  type UserEvmAssetRecord
+} from '@/core/chains/user-assets'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import type { Network } from '@/types'
@@ -22,16 +27,30 @@ interface ActivityPresentationCatalogInput {
   readonly network: Network
   readonly endpointSettings: ChainEndpointSettings
   readonly userEvmAssets: readonly UserEvmAssetRecord[]
+  readonly detectedEvmAssets?: readonly DetectedEvmAssetRecord[]
   readonly portfolio?: PortfolioReadModel | null
 }
 
 export function mergeActivityAssetMetadata(
   registryEntries: readonly AssetRegistryEntry[],
-  portfolio: PortfolioReadModel | null | undefined
+  portfolio: PortfolioReadModel | null | undefined,
+  detectedAssets: readonly DetectedEvmAssetRecord[] = []
 ): ReadonlyMap<string, ActivityAssetMetadata> {
-  const metadata = new Map<string, ActivityAssetMetadata>(
-    registryEntries.map(entry => [entry.asset.id, entry])
-  )
+  const metadata = new Map<string, ActivityAssetMetadata>()
+  for (const detected of detectedAssets) {
+    const asset = parseAssetId(detected.assetId)
+    metadata.set(detected.assetId, {
+      asset: {
+        id: asset.id,
+        chainId: asset.chainId,
+        namespace: 'erc20',
+        reference: asset.reference,
+        kind: 'token'
+      },
+      metadata: detected.metadata
+    })
+  }
+  for (const entry of registryEntries) metadata.set(entry.asset.id, entry)
   for (const asset of portfolio?.assets ?? []) {
     metadata.set(asset.asset.id, asset)
   }
@@ -42,6 +61,7 @@ export function buildActivityPresentationCatalog({
   network,
   endpointSettings,
   userEvmAssets,
+  detectedEvmAssets = [],
   portfolio
 }: ActivityPresentationCatalogInput) {
   const evmCatalog = resolveEvmNetworkCatalog(network, endpointSettings)
@@ -56,13 +76,13 @@ export function buildActivityPresentationCatalog({
       chain.id,
       {
         displayName: chain.displayName,
-        iconAlias: resolveChainIconAlias(chain.family, chain.displayName)
+        iconAlias: resolveChainIconAlias(chain.family, chain.displayName, chain.id)
       }
     ])
   )
 
   return Object.freeze({
-    assetMetadata: mergeActivityAssetMetadata(assets.list(), portfolio),
+    assetMetadata: mergeActivityAssetMetadata(assets.list(), portfolio, detectedEvmAssets),
     chainMetadata,
     evmChainIds: Object.freeze(evmCatalog.map(config => config.chainId))
   })

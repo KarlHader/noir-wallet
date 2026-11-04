@@ -229,7 +229,7 @@ import { createBackgroundAccountNetworksCoordinator } from './account-networks'
 import { WalletDAppConnectionCoordinator } from './wallet-dapp-connection'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
 import { createBackgroundEvmDAppHandler } from './evm-dapp'
-import { handleEvmDAppNetworkSwitch } from './evm-dapp-network-switch'
+import { EvmDAppNetworkSwitchCoordinator } from './evm-dapp-network-switch'
 import {
   type ParsedEip1193ChainRequest,
   Eip1193ProviderError,
@@ -524,6 +524,7 @@ let solanaDAppHandler: ReturnType<typeof createBackgroundSolanaDAppHandler> | nu
 let nearDAppHandler: ReturnType<typeof createBackgroundNearDAppHandler> | null = null
 let multichainSessionDAppHandler: BackgroundMultichainSessionDAppHandler | null = null
 const chainEndpointSettingsCoordinator = new ChainEndpointSettingsCoordinator()
+const evmDAppNetworkSwitchCoordinator = new EvmDAppNetworkSwitchCoordinator()
 
 function refreshAssetPrices(assetId?: string) {
   const service = assetPriceService
@@ -570,6 +571,31 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
   getZcashChainId: () => getZcashChainId(DEFAULT_NETWORK),
   connectEvm: origin => evmDAppHandler.connectCurrentAccountToDApp(origin),
   connectZcash: origin => dappHandler.connectCurrentAccountToDApp(origin),
+  connectSession: (origin, chainIds, account) =>
+    dappManager.addCaip25AuthorizedAccount(origin, chainIds, account),
+  notifyChainAccountsChanged: async (origin, chainIds) => {
+    if (chainIds.includes(evmDAppHandler.getCaip2ChainId())) {
+      await evmDAppHandler.notifyAccountsChanged(origin)
+    }
+    if (chainIds.includes(getBitcoinChainId(DEFAULT_NETWORK))) {
+      await bitcoinDAppHandler.notifyAccountsChanged(origin)
+    }
+    if (
+      solanaDAppHandler &&
+      chainIds.includes(resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId)
+    ) {
+      await solanaDAppHandler.notifyAccountsChanged(origin)
+    }
+    if (
+      nearDAppHandler &&
+      chainIds.includes(resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId)
+    ) {
+      await nearDAppHandler.notifyAccountsChanged(origin)
+    }
+  },
+  notifySessionChanged: async origin => {
+    await multichainSessionDAppHandler?.notifySessionChanged(origin)
+  },
   runActiveOperation: async operation => {
     await rehydrateWalletStore()
     await multichainRuntimeReady
@@ -591,6 +617,7 @@ async function notifyDAppExecutionModeChanged(scope: DAppExecutionModeScope): Pr
   dappHandler.cancelPendingApprovalsForContext(scope.keyDomainId, scope.accountId, 'evm')
   await multichainRuntimeReady
   await evmDAppHandler.notifyAccountsChanged()
+  await multichainSessionDAppHandler?.notifyAllSessionsChanged()
 }
 
 const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCoordinator(
@@ -779,27 +806,33 @@ async function handleEvmDAppNetworkRequest(
     }
   }
   await validateRequest()
-  await handleEvmDAppNetworkSwitch(requested, origin, action, {
-    readSettings: () => chainEndpointSettingsCoordinator.read(),
-    validateRequest,
-    commitCustomNetwork: async network => {
-      await updateChainEndpointSettings(async () => {
-        await validateRequest()
-        return chainEndpointSettingsCoordinator.saveCustomEvmNetwork(
-          network,
-          undefined,
-          validateRequest
-        )
-      })
-    },
-    commitActiveChain: chainId => commitEvmDAppActiveChain(chainId, validateRequest),
-    requestApproval: (approvalOrigin, approvalAction, data) =>
-      dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
-        ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
-        ...(tabInfo.favIconUrl === undefined ? {} : { favicon: tabInfo.favIconUrl }),
-        ...(tabInfo.pageUrl === undefined ? {} : { faviconPageUrl: tabInfo.pageUrl })
-      })
-  })
+  await evmDAppNetworkSwitchCoordinator.run(
+    requested,
+    origin,
+    action,
+    JSON.stringify([accountIdentity, sourceChainId, authorization, unlockEpoch]),
+    {
+      readSettings: () => chainEndpointSettingsCoordinator.read(),
+      validateRequest,
+      commitCustomNetwork: async network => {
+        await updateChainEndpointSettings(async () => {
+          await validateRequest()
+          return chainEndpointSettingsCoordinator.saveCustomEvmNetwork(
+            network,
+            undefined,
+            validateRequest
+          )
+        })
+      },
+      commitActiveChain: chainId => commitEvmDAppActiveChain(chainId, validateRequest),
+      requestApproval: (approvalOrigin, approvalAction, data) =>
+        dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
+          ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
+          ...(tabInfo.favIconUrl === undefined ? {} : { favicon: tabInfo.favIconUrl }),
+          ...(tabInfo.pageUrl === undefined ? {} : { faviconPageUrl: tabInfo.pageUrl })
+        })
+    }
+  )
 }
 
 function commitEvmDAppActiveChain(

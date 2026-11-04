@@ -42,7 +42,7 @@ export function NetworkFilter({
   const renderOption = (option: NetworkFilterOption) => (
     <DropdownMenuRadioItem key={option.id} value={option.id} className="cursor-pointer py-2">
       <ChainIcon
-        chain={resolveChainIconAlias(option.family, option.displayName)}
+        chain={resolveChainIconAlias(option.family, option.displayName, option.id)}
         width={16}
         height={16}
         className="rounded-[4px]"
