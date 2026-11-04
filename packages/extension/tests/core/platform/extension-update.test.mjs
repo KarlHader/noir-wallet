@@ -11,6 +11,7 @@ import {
 const packageJson = JSON.parse(
   readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')
 )
+const extensionVersion = packageJson.version.split('-')[0]
 const releaseNotes = JSON.parse(
   readFileSync(new URL('../../../../web/public/changelog.json', import.meta.url), 'utf8')
 )
@@ -21,9 +22,9 @@ it('uses the RHEA SDK release that propagates lending RPC failures', () => {
 
 it.describe('Product release notes', () => {
   it('match the extension version and schema', () => {
-    assert.deepEqual(parseProductReleaseNotesManifest(releaseNotes, packageJson.version), {
-      version: packageJson.version,
-      changes: releaseNotes.releases[packageJson.version].changes
+    assert.deepEqual(parseProductReleaseNotesManifest(releaseNotes, extensionVersion), {
+      version: extensionVersion,
+      changes: releaseNotes.releases[extensionVersion].changes
     })
   })
 
@@ -35,7 +36,7 @@ it.describe('Product release notes', () => {
       },
       {
         value: {
-          ...releaseNotes.releases[packageJson.version],
+          ...releaseNotes.releases[extensionVersion],
           internalNotes: 'Do not show this to users'
         },
         error: /unknown fields/
@@ -63,10 +64,10 @@ it.describe('Product release notes', () => {
         ...releaseNotes,
         releases: {
           ...releaseNotes.releases,
-          [packageJson.version]: value
+          [extensionVersion]: value
         }
       }
-      assert.throws(() => parseProductReleaseNotesManifest(manifest, packageJson.version), error)
+      assert.throws(() => parseProductReleaseNotesManifest(manifest, extensionVersion), error)
     }
   })
 })

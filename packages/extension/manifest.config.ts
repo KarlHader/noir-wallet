@@ -27,6 +27,7 @@ export default defineManifest(async env => ({
       ? '[Staging] Noir Wallet'
       : 'Noir Wallet',
   version: extensionVersion,
+  ...(version !== extensionVersion ? { version_name: version } : {}),
   description,
   permissions: ['storage', 'offscreen', 'notifications', 'alarms', 'sidePanel', 'favicon'],
   host_permissions: ['https://*/*', 'http://localhost/*'],
