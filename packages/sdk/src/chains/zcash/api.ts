@@ -28,9 +28,6 @@ import type {
 type AccountEventOptions = { readonly signingMode: ConnectionSigningMode }
 
 function accountEventName(event: string, options?: AccountEventOptions): string {
-  if (event === 'publicAccountChanged') {
-    throw new TypeError('Use accountsChanged with signingMode: noir_protocol_public.')
-  }
   if (options === undefined) return event
   if (
     !options ||

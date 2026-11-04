@@ -322,14 +322,10 @@ test('scoped account listeners isolate Public and Native event channels', () => 
   })
   const native = () => {}
   const publicHandler = () => {}
-  assert.throws(() => api.on('publicAccountChanged', publicHandler), TypeError)
-  assert.equal(listeners.size, 0)
   api.on('accountsChanged', native)
   api.on('accountsChanged', native, { signingMode: 'current' })
   api.on('accountsChanged', publicHandler, { signingMode: 'noir_protocol_public' })
   assert.equal(listeners.get('accountsChanged'), native)
-  assert.equal(listeners.get('publicAccountChanged'), publicHandler)
-  assert.throws(() => api.removeListener('publicAccountChanged', publicHandler), TypeError)
   assert.equal(listeners.get('publicAccountChanged'), publicHandler)
   assert.throws(
     () => api.on('accountsChanged', publicHandler, { signingMode: 'unknown' }),
