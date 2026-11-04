@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-      tag: ${{ steps.package.outputs.tag }}
+      prerelease_tag: ${{ steps.package.outputs.artifact_label }}
     steps:
       # No selected-source programs execute in the trusted packaging job.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -221,9 +221,10 @@ jobs:
           printf '## Acceptance build\n\nRun ID: `%s`\n\nAttempt: `%s`\n\nSource SHA: `%s`\n\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
           cat release-assets/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
 
-  publish_beta:
+  publish_prerelease:
     if: >-
-      inputs.mode == 'beta' && inputs.publish_beta &&
+      (inputs.mode == 'candidate' || (inputs.mode == 'beta' && inputs.publish_beta)) &&
+      github.ref == 'refs/heads/main' &&
       github.event.repository.fork == false &&
       (github.repository == 'NoirWallet/noir-wallet' || github.event.repository.private == false)
     needs: [prepare, package]
@@ -245,9 +246,9 @@ jobs:
         with:
           artifact-ids: ${{ needs.package.outputs.artifact_id }}
           path: release-assets
-      - name: Verify beta artifact identity and checksums
+      - name: Verify prerelease artifact identity and checksums
         env:
-          EXPECTED_MODE: beta
+          EXPECTED_MODE: ${{ inputs.mode }}
           EXPECTED_REPOSITORY: ${{ github.repository }}
           EXPECTED_RUN_ID: ${{ github.run_id }}
           EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -255,14 +256,18 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: node scripts/extension-release.mjs verify release-assets
-      - name: Publish beta
+      - name: Prepare prerelease download notes
+        run: node scripts/extension-release.mjs prerelease-notes release-assets > prerelease-notes.md
+      - name: Publish prerelease for download
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.package.outputs.tag }}
+          TAG: ${{ needs.package.outputs.prerelease_tag }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
-          gh release create "$TAG" --repo "$GH_REPO" \
+          RELEASE_URL=$(gh release create "$TAG" --repo "$GH_REPO" \
             --title "Noir Wallet $TAG" --prerelease --latest=false --target "$SOURCE_SHA" \
-            --notes-file release-assets/release-body.md \
-            release-assets/*.zip release-assets/SHA256SUMS
+            --notes-file prerelease-notes.md \
+            release-assets/*.zip release-assets/SHA256SUMS)
+          printf '## Download prerelease\n\n[%s](%s)\n\n' "$TAG" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
+          cat prerelease-notes.md >> "$GITHUB_STEP_SUMMARY"

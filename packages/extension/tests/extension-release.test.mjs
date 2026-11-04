@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   packageReleaseArtifact,
+  prereleaseNotes,
   verifyReleaseArtifact
 } from '../../../scripts/extension-release.mjs'
 import {
@@ -313,10 +314,22 @@ describe('Extension release artifacts', () => {
       ['noir-wallet-v1.0.39.zip', 'noir-wallet-v1.0.39-testnet.zip']
     )
     assert.match(readFileSync(path.join(output, 'release-body.md'), 'utf8'), /Current fix/)
+    const acceptedBody = readFileSync(path.join(output, 'release-body.md'), 'utf8')
+    const checksums = readFileSync(path.join(output, 'SHA256SUMS'), 'utf8')
+    const notes = prereleaseNotes(output)
+    const download = `https://github.com/${metadata.repository}/releases/download/${metadata.artifactLabel}`
+    for (const name of [...metadata.assets.map(asset => asset.name), 'SHA256SUMS']) {
+      assert.ok(notes.includes(`${download}/${name}`))
+    }
+    assert.ok(notes.includes(`Source SHA: \`${SOURCE_SHA}\``))
+    assert.ok(notes.includes('/actions/runs/12345/attempts/2'))
+    assert.ok(acceptedBody.includes('/releases/download/v1.0.39/'))
+    assert.equal(readFileSync(path.join(output, 'release-body.md'), 'utf8'), acceptedBody)
+    assert.equal(readFileSync(path.join(output, 'SHA256SUMS'), 'utf8'), checksums)
     assert.equal(verifyReleaseArtifact(output, { mode: 'candidate' }).mode, 'candidate')
   })
 
-  it('uses a run-bound beta label and only beta publishes a prerelease tag', async t => {
+  it('uses a run-bound beta tag and preserves its prerelease notes', async t => {
     const { root, source, output, env } = fixture(t, { mode: 'beta' })
     env.GITHUB_OUTPUT = path.join(root, 'github-output')
     const cli = spawnSync(process.execPath, [SCRIPT, 'package', source, output], {
@@ -327,6 +340,10 @@ describe('Extension release artifacts', () => {
     const metadata = verifyReleaseArtifact(output, { mode: 'beta' })
     assert.equal(metadata.artifactLabel, 'v1.0.39-beta.12345.2.aaaaaaa')
     assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /tag=v1\.0\.39-beta\.12345\.2\.aaaaaaa\n/)
+    assert.equal(
+      prereleaseNotes(output),
+      readFileSync(path.join(output, 'release-body.md'), 'utf8')
+    )
   })
 
   it('includes the source commit log without treating subjects as markup', async t => {

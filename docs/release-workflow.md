@@ -219,6 +219,7 @@ Analytics values embedded in the extension are visible to its users. They must n
 The publish job runs in `NoirWallet/noir-wallet` regardless of visibility, and in other public, non-fork repositories. It downloads the exact artifact ID, validates provenance and checksums, and publishes to `github.repository`. Only publication jobs receive `contents: write`; they use the built-in `GITHUB_TOKEN`. Production promotion performs validation and publication in one job, executes no wallet source code, and performs no build. Releases in a private repository are visible only to people with repository access.
 
 - Beta uses a prerelease and is not marked Latest. Its tag points to the wallet source commit that produced the ZIPs.
+- Candidates also publish a prerelease under their `v{version}-rc.{runId}.{attempt}.{shortSha}` label, with direct ZIP downloads and acceptance build details. They are not marked Latest; production promotion still verifies and publishes the original Actions artifact without rebuilding.
 - Production creates `v{version}` at the accepted source SHA and is marked Latest. If that tag already exists, it must resolve to the same source commit. Earlier prereleases remain available.
 - Production notes come from the matching `CHANGELOG.md` section. Each Release includes a source commit link, the ZIPs for its build profile, and `SHA256SUMS`.
 
@@ -299,7 +300,7 @@ For V2, run `pnpm test` and `pnpm build:extension`; there is no separate testnet
 
 Open **Actions → Prepare Extension Release → Run workflow** from `main`. Select `mode=candidate`, set `source_ref=release/1.0.40`, and enter the full reviewed release branch HEAD in `confirm_sha`. `publish_beta` is ignored for candidates.
 
-After all jobs succeed, download the final `noir-wallet-v1.0.40-rc.…` artifact, check `SHA256SUMS`, and validate both V1 network ZIPs or the single V2 multichain ZIP. Use the actual ZIPs, not a local rebuild or a previous Beta. Keep the run ID, attempt, and full source SHA from the run summary for promotion. See [review responsibilities](../CONTRIBUTING.md#review-and-acceptance).
+After all jobs succeed, open the `v1.0.40-rc.…` prerelease on the repository's Releases page or follow the download link in the run summary. Download its network ZIPs and `SHA256SUMS`, check the hashes, and validate both V1 network ZIPs or the single V2 multichain ZIP. The same files remain available in the final Actions artifact. Use these ZIPs, not a local rebuild or a previous Beta. Keep the run ID, attempt, and full source SHA from the prerelease notes or run summary for promotion. See [review responsibilities](../CONTRIBUTING.md#review-and-acceptance).
 
 ### 3. Promote the accepted artifact
 

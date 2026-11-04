@@ -426,6 +426,36 @@ export function verifyReleaseArtifact(directory, expected = {}) {
   return metadata
 }
 
+export function prereleaseNotes(directory) {
+  const metadata = verifyReleaseArtifact(directory)
+  if (!['beta', 'candidate'].includes(metadata.mode)) {
+    throw new Error('Only Beta and candidate artifacts can be published as prereleases')
+  }
+  const body = readFileSync(path.join(directory, 'release-body.md'), 'utf8')
+  if (metadata.mode === 'beta') return body
+
+  const releaseBase = `https://github.com/${metadata.repository}/releases/download/`
+  return [
+    body
+      .replace(
+        `## Noir Wallet v${metadata.version}\n`,
+        `## Noir Wallet ${metadata.artifactLabel}\n\nRelease candidate for testing; not the stable release.\n`
+      )
+      .replaceAll(
+        `${releaseBase}v${metadata.version}/`,
+        `${releaseBase}${metadata.artifactLabel}/`
+      ),
+    '### Acceptance build',
+    '',
+    `[Build and acceptance details](https://github.com/${metadata.repository}/actions/runs/${metadata.runId}/attempts/${metadata.runAttempt})`,
+    '',
+    `Run ID: \`${metadata.runId}\``,
+    `Attempt: \`${metadata.runAttempt}\``,
+    `Source SHA: \`${metadata.sourceSha}\``,
+    ''
+  ].join('\n')
+}
+
 function isCliEntry() {
   if (!process.argv[1]) return false
   try {
@@ -461,9 +491,11 @@ if (isCli) {
           expected[key] = process.env[name]
       }
       verifyReleaseArtifact(path.resolve(args[0]), expected)
+    } else if (command === 'prerelease-notes' && args.length === 1) {
+      process.stdout.write(prereleaseNotes(path.resolve(args[0])))
     } else {
       throw new Error(
-        'Usage: extension-release.mjs package <sourceDir> <outputDir> [networkBuildDir] | verify <artifactDir>'
+        'Usage: extension-release.mjs package <sourceDir> <outputDir> [networkBuildDir] | verify <artifactDir> | prerelease-notes <artifactDir>'
       )
     }
   } catch (error) {
