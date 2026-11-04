@@ -590,6 +590,7 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
   loadActiveAccount: () => accountNetworksCoordinator.readActiveAccount(),
   getEvmChainId: () => evmDAppHandler.getCaip2ChainId(),
   getZcashChainId: () => getZcashChainId(DEFAULT_NETWORK),
+  supportsSessionChain: chainId => multichainSessionDAppHandler?.supportsChain(chainId) ?? false,
   connectEvm: origin =>
     accountContextTransition.runActiveOperation(() =>
       evmDAppHandler.connectCurrentAccountToDApp(origin)

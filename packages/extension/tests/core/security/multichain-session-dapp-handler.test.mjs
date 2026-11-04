@@ -5,6 +5,7 @@ import { BackgroundMultichainSessionDAppHandler } from '../../../src/background/
 
 const ethereum = 'eip155:1'
 const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
 const reference = { walletId: 'wallet-1', accountId: 'account-1' }
 const address = '0x1111111111111111111111111111111111111111'
 
@@ -43,6 +44,7 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
   const approvals = []
   const events = []
   const invocations = []
+  let approveConnection = true
   const handler = new BackgroundMultichainSessionDAppHandler({
     network: 'mainnet',
     evmNetworks: [
@@ -80,7 +82,7 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
       requestExternalApproval: async (_origin, action, data) => {
         approvals.push({ action, data })
         return {
-          approved: true,
+          approved: approveConnection,
           requestId: 'approval-1',
           selectedScopes: { [ethereum]: ['account-1'] }
         }
@@ -109,6 +111,7 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
       resolveSessionAccountSelection: async value => selection(value),
       getSessionAccounts: async () => []
     },
+    bitcoinEnabled: false,
     solana: null,
     near: null,
     dispatch: async (...args) => {
@@ -148,11 +151,21 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
   ])
 
   const previousSession = stored
+  stored = {
+    ...stored,
+    scopes: [...stored.scopes, { chainId: bitcoin, methods: ['getAccounts'], notifications: [] }]
+  }
+  approveConnection = false
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 4001 })
+  expect(stored.scopes.map(scope => scope.chainId)).toEqual([ethereum, bitcoin])
+  expect(revision).toBe(1)
+  approveConnection = true
   await handler.reconnect('https://dapp.example')
-  expect(approvals).toHaveLength(2)
+  expect(approvals).toHaveLength(3)
   expect(stored).toEqual(previousSession)
   expect(revision).toBe(2)
-  expect(approvals[1].data.scopes[0].methods).toEqual(['eth_accounts'])
+  expect(approvals[2].data.scopes[0].methods).toEqual(['eth_accounts'])
+  expect(approvals[2].data.scopes).toHaveLength(1)
 
   await expect(
     handler.request(
@@ -176,6 +189,10 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
       {}
     )
   ).rejects.toMatchObject({ code: 4100 })
+  stored = { scopes: [{ chainId: bitcoin, methods: ['getAccounts'], notifications: [] }] }
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 5100 })
+  expect(approvals).toHaveLength(3)
+  expect(stored.scopes[0].chainId).toBe(bitcoin)
 })
 
 test('Native Zcash sessions reject Public methods, including methods retained in old sessions', async () => {

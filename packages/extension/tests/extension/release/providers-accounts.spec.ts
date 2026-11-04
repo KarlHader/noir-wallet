@@ -497,6 +497,7 @@ for (const sessionConnection of [false, true]) {
       'Requires real approval windows'
     )
     const origin = 'https://wallet-connect.noir.test'
+    const retiredChain = sessionConnection && !bitcoinEnabled ? BITCOIN_MAINNET_CHAIN_ID : null
     await context.route(`${origin}/**`, route =>
       route.fulfill({ contentType: 'text/html', body: '<title>Wallet Connect</title>' })
     )
@@ -549,7 +550,7 @@ for (const sessionConnection of [false, true]) {
     })
     await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
     await popup.evaluate(
-      ({ site, account, sessionConnection }) =>
+      ({ site, account, sessionConnection, retiredChain }) =>
         chrome.storage.local.set({
           connectedDApps: [
             {
@@ -560,7 +561,12 @@ for (const sessionConnection of [false, true]) {
               favicon: '',
               connectedAt: Date.now(),
               lastActiveAt: Date.now(),
-              chainAuthorizations: [{ chainId: 'eip155:1', accounts: [account], binding: account }],
+              chainAuthorizations: [
+                { chainId: 'eip155:1', accounts: [account], binding: account },
+                ...(retiredChain
+                  ? [{ chainId: retiredChain, accounts: [account], binding: account }]
+                  : [])
+              ],
               ...(sessionConnection
                 ? {
                     caip25Session: {
@@ -569,7 +575,10 @@ for (const sessionConnection of [false, true]) {
                           chainId: 'eip155:1',
                           methods: ['eth_accounts'],
                           notifications: ['wallet_sessionChanged', 'accountsChanged']
-                        }
+                        },
+                        ...(retiredChain
+                          ? [{ chainId: retiredChain, methods: ['getAccounts'], notifications: [] }]
+                          : [])
                       ]
                     }
                   }
@@ -577,7 +586,7 @@ for (const sessionConnection of [false, true]) {
             }
           ]
         }),
-      { site: origin, account: previous, sessionConnection }
+      { site: origin, account: previous, sessionConnection, retiredChain }
     )
     await terminateExtensionServiceWorker(context, popup)
     await popup.reload()
@@ -647,13 +656,20 @@ for (const sessionConnection of [false, true]) {
           binding: { walletId: string; accountId: string }
         }>
         authorizedAccounts?: unknown
+        caip25Session?: { scopes: Array<{ chainId: string }> }
       }>
       return stored.find(item => item.origin === site)
     }, origin)
     expect(connection?.chainAuthorizations).toEqual([
+      ...(retiredChain ? [{ chainId: retiredChain, accounts: [previous], binding: previous }] : []),
       { chainId: 'eip155:1', accounts: expect.arrayContaining([previous, active]), binding: active }
     ])
-    expect(connection?.chainAuthorizations[0].accounts).toHaveLength(2)
+    expect(
+      connection?.chainAuthorizations.find(item => item.chainId === 'eip155:1')?.accounts
+    ).toHaveLength(2)
+    if (sessionConnection) {
+      expect(connection?.caip25Session?.scopes.map(scope => scope.chainId)).toEqual(['eip155:1'])
+    }
     expect(connection?.authorizedAccounts).toBeUndefined()
     await expect(popup.getByTestId('dapp-connect-prompt')).toHaveCount(0)
     await expect(

@@ -16,6 +16,7 @@ interface WalletDAppConnectionOptions {
   readonly loadActiveAccount: () => Promise<WalletDAppActiveAccount | null>
   readonly getEvmChainId: () => string
   readonly getZcashChainId: () => string
+  readonly supportsSessionChain: (chainId: string) => boolean
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
   readonly connectPublic?: (origin: string) => Promise<void>
@@ -32,7 +33,12 @@ export class WalletDAppConnectionCoordinator {
   private targets(dapp: ConnectedDApp, active: WalletDAppActiveAccount) {
     const evmChainId = this.options.getEvmChainId()
     const hasZcash = active.chainIds.includes(this.options.getZcashChainId())
-    const sessionAuthorized = dapp.caip25Session?.scopes.every(scope =>
+    const sessionScopes = dapp.caip25Session?.scopes.filter(scope =>
+      this.options.supportsSessionChain(scope.chainId)
+    )
+    const includesNativeChain = (chainId: string) =>
+      sessionScopes === undefined || sessionScopes.some(scope => scope.chainId === chainId)
+    const sessionAuthorized = sessionScopes?.every(scope =>
       dapp.chainAuthorizations
         ?.find(authorization => authorization.chainId === scope.chainId)
         ?.accounts.some(
@@ -42,15 +48,18 @@ export class WalletDAppConnectionCoordinator {
         )
     )
     return {
-      evm: active.chainIds.includes(evmChainId)
-        ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === evmChainId)
-        : undefined,
+      evm:
+        active.chainIds.includes(evmChainId) && includesNativeChain(evmChainId)
+          ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === evmChainId)
+          : undefined,
       zcash:
-        hasZcash && (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined),
+        hasZcash &&
+        includesNativeChain(this.options.getZcashChainId()) &&
+        (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined),
       public: hasZcash
         ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === PUBLIC_CHAIN_ID)
         : undefined,
-      session: dapp.caip25Session,
+      session: sessionScopes?.length ? dapp.caip25Session : undefined,
       sessionAuthorized
     }
   }
@@ -65,14 +74,17 @@ export class WalletDAppConnectionCoordinator {
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const nativeAuthorized =
+      const grantsAuthorized =
         targets.evm || targets.zcash || targets.public
           ? (!targets.evm || targets.evm.accounts.some(matches)) &&
             (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference)) &&
             (!targets.public || targets.public.accounts.some(matches))
-          : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
+          : targets.session
+            ? targets.sessionAuthorized === true
+            : !dapp.caip25Session &&
+              connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
       const currentAccountAuthorized =
-        nativeAuthorized && (!targets.session || targets.sessionAuthorized === true)
+        grantsAuthorized && (!targets.session || targets.sessionAuthorized === true)
       return { dapp, currentAccountAuthorized }
     })
   }

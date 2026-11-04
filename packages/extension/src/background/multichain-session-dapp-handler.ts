@@ -344,15 +344,26 @@ export class BackgroundMultichainSessionDAppHandler {
     )
   }
 
-  /** Reuse the site's approved capabilities, with a fresh account-selection approval. */
+  supportsChain(chainId: string): boolean {
+    return this.supportedScopes.has(chainId)
+  }
+
+  /** Review previously approved capabilities that this runtime still supports. */
   async reconnect(origin: string): Promise<void> {
     const revision = await this.options.manager.getAuthorizationRevision(origin)
     const session = await this.options.manager.getCaip25Session(origin)
     if (!session) throw new Caip25ProviderError(4100, 'The site session is no longer available.')
+    const scopes = session.scopes.filter(scope => this.supportsChain(scope.chainId))
+    if (scopes.length === 0) {
+      throw new Caip25ProviderError(
+        5100,
+        'No supported networks remain. Connect from the site again.'
+      )
+    }
     await this.createSession(
       {
         scopes: Object.fromEntries(
-          session.scopes.map(scope => [
+          scopes.map(scope => [
             scope.chainId,
             { methods: scope.methods, notifications: scope.notifications }
           ])
