@@ -431,6 +431,9 @@ function assertGraphSigningContext(graph: TransactionGraph, chainId: string): vo
     }
     return
   }
+  if (protocol.provider === 'noir-public') {
+    throw new Error('EVM signing review has an invalid protocol graph')
+  }
   const sourceTarget =
     protocol.provider === 'near-intents' ? protocol.depositAddress : protocol.sourceTarget
   if (

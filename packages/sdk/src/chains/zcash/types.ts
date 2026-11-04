@@ -1,4 +1,5 @@
 export interface ZcashProvider {
+  readonly supportedSigningModes?: readonly SigningMode[]
   request(args: RequestArguments): Promise<any>
   on(event: string, handler: (...args: any[]) => void): void
   removeListener?(event: string, handler: (...args: any[]) => void): void
@@ -68,6 +69,59 @@ export interface ZcashBalanceResult extends Balance {
   accounts: ZcashAccountBalance[]
 }
 
+export interface PublicAccount {
+  chain: 'zcash-l2'
+  network: 'mainnet' | 'testnet'
+  publicKey: string
+  address: string
+  mcaId: string | null
+  parentContractId: string
+  status: 'inactive' | 'activating' | 'active'
+  activationId?: string
+}
+
+export interface PublicAsset {
+  tokenId: string
+  symbol: string
+  name: string
+  decimals: number
+  balanceRaw: string | null
+  status: 'fresh' | 'stale' | 'unavailable'
+  updatedAt?: number
+}
+
+export interface PublicAssets {
+  account: PublicAccount
+  assets: PublicAsset[]
+}
+
+export interface PublicFunctionCallRequest {
+  FunctionCall: {
+    receiver_id: string
+    function_calls: Array<{
+      method_name: string
+      args: string
+      gas: string
+      deposit: string
+    }>
+  }
+}
+
+export interface SendPublicTransactionParams {
+  requestId: string
+  txRequests: PublicFunctionCallRequest[]
+}
+
+export interface PublicTransaction {
+  operationId: string
+  requestId: string
+  status: 'signed' | 'broadcast' | 'confirming' | 'final' | 'failed'
+  submissionId?: string
+  transactionHash?: string
+  anchor?: { status: string; transactionHash?: string }
+  error?: string
+}
+
 export type FundingSource = 'shielded' | 'transparent'
 
 export interface SendTransactionParams {
@@ -114,7 +168,29 @@ export interface TransactionReceipt {
   timestamp: number
 }
 
-export type SigningMode = 'derived' | 'current' | 'legacy_index0'
+export type SigningMode = 'derived' | 'current' | 'legacy_index0' | 'noir_protocol_public'
+
+export type ConnectionSigningMode = 'current' | 'noir_protocol_public'
+
+export type ConnectionOptions =
+  | { readonly signingMode: ConnectionSigningMode; readonly signingModes?: never }
+  | { readonly signingModes: readonly ConnectionSigningMode[]; readonly signingMode?: never }
+
+export interface ConnectionIdentities {
+  current?: ZcashConnectResult
+  noir_protocol_public?: PublicAccount
+}
+
+export interface ConnectedIdentities {
+  identities: ConnectionIdentities
+}
+
+export interface QueriedIdentities {
+  identities: {
+    current?: ZcashConnectResult | null
+    noir_protocol_public?: PublicAccount | null
+  }
+}
 
 export interface SignMessageOptions {
   /**
@@ -124,6 +200,7 @@ export interface SignMessageOptions {
    *   cryptographically unlinkable to the main address. Recommended for identity binding.
    * - `'legacy_index0'`: Signs with BIP-44 index 0 key via pure JS (for legacy MCA accounts)
    *   (e.g. MCA creation) to prevent on-chain linkage.
+   * - `'noir_protocol_public'`: Signs with the authorized Noir Protocol Public identity.
    */
   signingMode?: SigningMode
 }

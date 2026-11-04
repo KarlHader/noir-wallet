@@ -60,6 +60,7 @@ export function buildActivityPresentationCatalog({
       }
     ])
   )
+  chainMetadata.set(`noir:${network}`, { displayName: 'Zcash', iconAlias: 'zcash' })
 
   return Object.freeze({
     assetMetadata: mergeActivityAssetMetadata(assets.list(), portfolio),

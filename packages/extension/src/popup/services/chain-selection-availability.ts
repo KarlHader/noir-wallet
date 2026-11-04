@@ -8,6 +8,7 @@ import {
 } from '@/config/multichain-feature-flags'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { resolveIntentsEvmChainId } from '@/core/services/intents-evm-assets'
+import { getZcashChainId } from '@/core/chains/registry'
 
 export type SelectableChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near'
 
@@ -45,6 +46,44 @@ export function deferredChainChoices(enabledFlags: readonly ChainFeatureFlagValu
   return DEFERRED_CHAIN_CHOICES.filter(
     option => !isSelectableChainFamily(option.family, enabledFlags)
   )
+}
+
+export function networkDisplayId(chainId: string): string {
+  const publicNetwork = /^noir:(mainnet|testnet)$/.exec(chainId)
+  return publicNetwork
+    ? getZcashChainId(publicNetwork[1] === 'mainnet' ? 'mainnet' : 'testnet')
+    : chainId
+}
+
+export interface NetworkDisplayOption {
+  readonly id: string
+  readonly family: string
+  readonly displayName: string
+}
+
+export function groupNetworkDisplayOptions(options: readonly NetworkDisplayOption[]) {
+  const groups = new Map<string, NetworkDisplayOption & { chainIds: string[] }>()
+  for (const option of options) {
+    const id = networkDisplayId(option.id)
+    const existing = groups.get(id)
+    if (existing) existing.chainIds.push(option.id)
+    else groups.set(id, { ...option, id, chainIds: [option.id] })
+  }
+  return [...groups.values()]
+}
+
+export function resolveNetworkDisplaySelection(
+  availableChainIds: readonly string[],
+  persistedSelection: readonly string[] | null | undefined
+): readonly string[] {
+  if (!persistedSelection) return availableChainIds
+  const available = new Set(availableChainIds)
+  const selectedNetworks = new Set(
+    persistedSelection.filter(id => available.has(id)).map(networkDisplayId)
+  )
+  return selectedNetworks.size === 1
+    ? availableChainIds.filter(id => selectedNetworks.has(networkDisplayId(id)))
+    : availableChainIds
 }
 
 export function isSelectableSwapBlockchain(

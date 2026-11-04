@@ -8,6 +8,9 @@ on:
       - 'packages/extension/**'
       - '!packages/extension/**/*.md'
       - 'packages/sdk/package.json'
+      - 'packages/sdk/src/**'
+      - 'packages/sdk/example/**'
+      - '!packages/sdk/example/**/*.md'
       - 'packages/evm-history-worker/**'
       - '!packages/evm-history-worker/**/*.md'
       - 'scripts/extension-release.mjs'
@@ -30,6 +33,10 @@ on:
       - '.github/workflows/extension-ci.yml'
       - '.github/workflows/extension-release.yml'
       - '.github/workflows/extension-preview-comment.yml'
+      - '.github/workflows/demo-preview.yml'
+      - 'scripts/demo-preview.mjs'
+      - 'scripts/sdk-release.mjs'
+      - 'scripts/sdk-package-check.mjs'
 
 concurrency:
   group: extension-ci-${{ github.event.pull_request.number }}
@@ -174,3 +181,35 @@ jobs:
           retention-days: 3
           if-no-files-found: error
           compression-level: 0
+
+      - name: Build and test paired SDK
+        if: steps.profile.outputs.source_profile == 'multichain'
+        working-directory: wallet
+        run: pnpm --filter @noir-wallet/sdk test
+      - name: Pack paired SDK
+        id: sdk
+        if: steps.profile.outputs.source_profile == 'multichain'
+        working-directory: wallet
+        run: node scripts/sdk-release.mjs pack-check ../sdk-preview-artifact
+      - name: Check exact paired SDK package
+        if: steps.profile.outputs.source_profile == 'multichain'
+        working-directory: wallet
+        env:
+          TARBALL: ${{ steps.sdk.outputs.tarball }}
+        run: node scripts/sdk-package-check.mjs "../sdk-preview-artifact/$TARBALL"
+      - name: Build paired SDK demo
+        if: steps.profile.outputs.source_profile == 'multichain'
+        working-directory: wallet
+        env:
+          GITHUB_PAGES_BASE: ./
+        run: |
+          pnpm --filter @noir-wallet/example build
+          cp ../release-assets/release-metadata.json packages/sdk/example/dist/extension-preview.json
+          cp -R ../sdk-preview-artifact packages/sdk/example/dist/sdk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.profile.outputs.source_profile == 'multichain'
+        with:
+          name: noir-wallet-demo-${{ steps.package.outputs.artifact_label }}
+          path: wallet/packages/sdk/example/dist/
+          retention-days: 3
+          if-no-files-found: error

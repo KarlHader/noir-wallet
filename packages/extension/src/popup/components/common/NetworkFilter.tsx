@@ -3,6 +3,8 @@ import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { ChainIcon } from './ChainIcon'
 import {
   deferredChainChoices,
+  groupNetworkDisplayOptions,
+  networkDisplayId,
   selectableChainOptions
 } from '@/popup/services/chain-selection-availability'
 import {
@@ -32,11 +34,14 @@ export function NetworkFilter({
   selectedIds,
   onSelectionChange
 }: NetworkFilterProps) {
-  const selectableOptions = selectableChainOptions(options, __ENABLED_CHAIN_FEATURE_FLAGS__)
-  const availableIds = selectableOptions.map(option => option.id)
+  const selectableOptions = groupNetworkDisplayOptions(
+    selectableChainOptions(options, __ENABLED_CHAIN_FEATURE_FLAGS__)
+  )
+  const availableIds = selectableOptions.flatMap(option => option.chainIds)
   const selectedIdSet = new Set(selectedIds)
   const normalizedSelectedIds = availableIds.filter(id => selectedIdSet.has(id))
-  const selectedId = normalizedSelectedIds.length === 1 ? normalizedSelectedIds[0] : 'all'
+  const selectedNetworkIds = [...new Set(normalizedSelectedIds.map(networkDisplayId))]
+  const selectedId = selectedNetworkIds.length === 1 ? selectedNetworkIds[0] : 'all'
   const selectedOption = selectableOptions.find(option => option.id === selectedId)
   const label = selectedOption?.displayName ?? 'All Networks'
   const renderOption = (option: NetworkFilterOption) => (
@@ -70,7 +75,13 @@ export function NetworkFilter({
       <DropdownMenuContent align="start" className="max-h-[320px] min-w-[230px]">
         <DropdownMenuRadioGroup
           value={selectedId}
-          onValueChange={value => onSelectionChange(value === 'all' ? availableIds : [value])}
+          onValueChange={value =>
+            onSelectionChange(
+              value === 'all'
+                ? availableIds
+                : (selectableOptions.find(option => option.id === value)?.chainIds ?? [])
+            )
+          }
         >
           <DropdownMenuRadioItem value="all" className="cursor-pointer py-2">
             <Icon icon="lucide:network" width={16} height={16} className="text-muted" />

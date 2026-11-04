@@ -23,6 +23,7 @@ import {
   buildPortfolioAssetGroups,
   getPortfolioChainUsdValue,
   getPortfolioChainBalanceStatus,
+  groupPortfolioDisplayChains,
   partitionPortfolioAssetGroups,
   partitionPortfolioAssets,
   sortPortfolioAssets,
@@ -105,6 +106,7 @@ function UnloadedChainBalance({ chain }: { readonly chain: PortfolioChainView })
         chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
         width={32}
         height={32}
+        className="shrink-0 rounded-full"
         showTooltip={false}
       />
       <div className="min-w-0 flex-1">
@@ -214,7 +216,7 @@ export function PortfolioShell({
     [assetGroups, lowValueUsdThreshold, prices]
   )
   const sortedChains = useMemo(
-    () => sortPortfolioChains(visibleChains, prices),
+    () => sortPortfolioChains(groupPortfolioDisplayChains(visibleChains), prices),
     [prices, visibleChains]
   )
   const sortedNetworkOptions = useMemo(

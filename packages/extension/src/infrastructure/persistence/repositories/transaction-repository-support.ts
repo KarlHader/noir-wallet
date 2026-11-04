@@ -15,6 +15,7 @@ import {
   type TransactionGraph,
   type TransactionId,
   type TransactionLifecycleStatus,
+  type TransactionProtocolBinding,
   type TransactionSegmentEvent,
   type TransactionSegmentId
 } from '@/core/transactions/domain'
@@ -44,6 +45,7 @@ export interface ParsedTransactionScope {
 export interface ParsedTransactionListQuery {
   readonly scope: ParsedTransactionScope
   readonly chainId?: string
+  readonly provider?: TransactionProtocolBinding['provider']
   readonly statuses?: ReadonlySet<TransactionLifecycleStatus>
   readonly limit: number
 }
@@ -100,6 +102,30 @@ export function transactionGraphMatchesScope(
 }
 
 export function assertPersistableTransactionGraph(graph: TransactionGraph): void {
+  const publicBinding = graph.root.intent?.protocol
+  if (publicBinding?.provider === 'noir-public' && publicBinding.kind === 'public-activation') {
+    const origin = graph.segments.find(segment => segment.role === 'origin')
+    if (
+      graph.root.kind === 'contract-call' &&
+      graph.root.status === 'prepared' &&
+      graph.root.intent?.direction === 'contract' &&
+      graph.root.intent.sender?.chainId === `noir:${publicBinding.network}` &&
+      graph.root.intent.sender.address === publicBinding.accountAddress &&
+      publicBinding.accountAddress === publicBinding.parentContractId &&
+      publicBinding.paymentIntent?.recipient === publicBinding.parentContractId &&
+      publicBinding.requestId === publicBinding.activationId &&
+      graph.segments.length === 1 &&
+      origin?.status === 'prepared' &&
+      origin.requiredForFinality &&
+      origin.target.kind === 'protocol' &&
+      origin.target.provider === 'noir-public' &&
+      origin.target.account === publicBinding.accountAddress &&
+      origin.evidence?.externalReference === publicBinding.activationId
+    ) {
+      return
+    }
+    throw new Error('Invalid Noir Public activation graph')
+  }
   if (UNPERSISTABLE_TRANSACTION_STATUSES.has(graph.root.status)) {
     throw new Error('Transaction repository requires a signed transaction graph')
   }
@@ -109,6 +135,22 @@ export function assertPersistableTransactionGraph(graph: TransactionGraph): void
     }
     if (segment.target.kind === 'onchain') {
       return segment.evidence?.transactionHash !== undefined
+    }
+    if (
+      publicBinding?.provider === 'noir-public' &&
+      publicBinding.kind === 'contract-call' &&
+      graph.root.kind === 'contract-call' &&
+      graph.root.intent?.direction === 'contract' &&
+      graph.root.intent.sender?.chainId === `noir:${publicBinding.network}` &&
+      graph.root.intent.sender.address === publicBinding.accountAddress &&
+      graph.root.intent.recipient?.chainId === `noir:${publicBinding.network}` &&
+      graph.root.intent.recipient.address === publicBinding.accountAddress &&
+      segment.target.kind === 'protocol' &&
+      segment.target.provider === 'noir-public' &&
+      segment.target.account === publicBinding.accountAddress &&
+      segment.evidence?.externalReference === publicBinding.submissionId
+    ) {
+      return true
     }
     if (
       graph.root.kind === 'swap' &&
@@ -150,14 +192,27 @@ export function parseTransactionListQuery(value: TransactionListQuery): ParsedTr
   if (
     !isTransactionRepositoryRecord(value) ||
     !Object.prototype.hasOwnProperty.call(value, 'scope') ||
-    !hasOnlyTransactionRepositoryKeys(value, ['scope', 'chainId', 'statuses', 'limit'])
+    !hasOnlyTransactionRepositoryKeys(value, ['scope', 'chainId', 'provider', 'statuses', 'limit'])
   ) {
     throw new Error('Invalid transaction list query')
   }
   const scope = parseTransactionRepositoryScope(value.scope)
+  const provider = value.provider
+  if (
+    provider !== undefined &&
+    provider !== 'near-intents' &&
+    provider !== 'rhea-cross-chain-dex' &&
+    provider !== 'noir-public'
+  ) {
+    throw new Error('Invalid transaction protocol provider query')
+  }
   const limit =
     value.limit === undefined ? 50 : parseTransactionRepositoryRevision(value.limit, 'query.limit')
-  if (limit === 0 || limit > TRANSACTION_REPOSITORY_LIMITS.list) {
+  const maximumLimit =
+    provider === 'noir-public'
+      ? TRANSACTION_REPOSITORY_LIMITS.recordsPerAccount
+      : TRANSACTION_REPOSITORY_LIMITS.list
+  if (limit === 0 || limit > maximumLimit) {
     throw new Error('Transaction query limit is out of range')
   }
   const chainId = value.chainId === undefined ? undefined : parseChainId(value.chainId).id
@@ -177,6 +232,7 @@ export function parseTransactionListQuery(value: TransactionListQuery): ParsedTr
     scope,
     limit,
     ...(chainId === undefined ? {} : { chainId }),
+    ...(provider === undefined ? {} : { provider }),
     ...(statuses === undefined ? {} : { statuses })
   })
 }

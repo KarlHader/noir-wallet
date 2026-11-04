@@ -238,6 +238,9 @@ function assertGraphSigningContext(graph: TransactionGraph): void {
     }
     return
   }
+  if (protocol.provider === 'noir-public') {
+    throw new Error('Bitcoin signing review has an invalid protocol graph')
+  }
   const sourceTarget =
     protocol.provider === 'near-intents' ? protocol.depositAddress : protocol.sourceTarget
   if (

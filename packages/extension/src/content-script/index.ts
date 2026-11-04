@@ -55,6 +55,7 @@ const NEAR_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.ne
 const BACKGROUND_RESPONSE_ERROR =
   'No response from Noir Wallet background. Reload the page and try again.'
 const CONNECTION_METHODS = new Set([
+  'zcash_requestPublicAccount',
   'zcash_requestAccounts',
   'eth_requestAccounts',
   'wallet_requestPermissions',

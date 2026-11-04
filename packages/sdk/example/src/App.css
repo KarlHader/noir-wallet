@@ -4,6 +4,43 @@
   flex-direction: column;
 }
 
+.demo-navigation {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  margin-right: auto;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+}
+
+.demo-navigation a {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-radius: var(--border-radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.demo-navigation a:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.demo-navigation a[aria-current='page'] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
 .header {
   position: sticky;
   z-index: 100;
@@ -18,9 +55,14 @@
   max-width: 1080px;
   margin: 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px;
+}
+
+.header-status {
+  margin-left: auto;
 }
 
 .logo,
@@ -649,6 +691,288 @@
 .textarea-sm {
   min-height: 88px;
   resize: vertical;
+}
+
+.public-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.public-example .form-group {
+  margin-bottom: 14px;
+}
+
+.public-example .btn-row .input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.public-request-editor {
+  width: 100%;
+  min-height: 245px;
+  font-family: var(--font-mono);
+}
+
+.public-demo {
+  align-items: start;
+}
+
+.public-demo .card {
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.public-demo .card-header {
+  flex-wrap: wrap;
+}
+
+.public-demo .message {
+  margin: 12px 0 0;
+}
+
+.public-demo-connect-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.public-demo-signing-result {
+  margin-top: 16px;
+}
+
+.public-demo-facts {
+  display: grid;
+  gap: 1px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--border-color);
+}
+
+.public-demo-facts > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(100px, 30%) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 11px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.public-demo-facts span,
+.public-demo-muted,
+.public-demo-asset small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.public-demo-facts code,
+.public-demo-facts strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.public-demo-facts code,
+.public-demo-trace-list code {
+  font-family: var(--font-mono);
+  color: #8ce9c7;
+}
+
+.public-demo-asset-list {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid var(--border-color);
+}
+
+.public-demo-asset {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.public-demo-asset > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.public-demo-asset strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.public-demo-asset-value {
+  text-align: right;
+}
+
+.public-demo-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.public-demo-segmented button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.public-demo-segmented button.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.public-demo-segmented button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.public-demo-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 14px;
+}
+
+.public-demo-form-grid .form-group:first-child {
+  grid-column: 1 / -1;
+}
+
+.public-demo-amount {
+  position: relative;
+}
+
+.public-demo-amount .input {
+  padding-right: 70px;
+}
+
+.public-demo-amount span {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  transform: translateY(-50%);
+}
+
+.public-demo-actions,
+.public-demo-lookup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.public-demo-actions {
+  margin-top: 18px;
+}
+
+.public-demo-lookup .input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.public-demo-tx-facts {
+  margin-top: 18px;
+}
+
+.public-demo-tx-facts details {
+  min-width: 0;
+  padding: 10px;
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.public-demo-tx-facts summary {
+  cursor: pointer;
+}
+
+.public-demo-tx-facts pre {
+  max-height: 260px;
+  margin-top: 9px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.public-demo-trace-list {
+  display: grid;
+  gap: 0;
+  list-style: none;
+}
+
+.public-demo-trace-list li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 9px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+}
+
+.public-demo-trace-list span:not(.public-demo-trace-dot) {
+  color: var(--text-secondary);
+}
+
+.public-demo-trace-list small {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.public-demo-trace-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--color-warning);
+}
+
+.public-demo-trace-dot.success,
+.public-demo-trace-dot.event {
+  background: var(--color-success);
+}
+.public-demo-trace-dot.error {
+  background: var(--color-error);
+}
+
+.public-demo-build {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 2px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+@media (max-width: 620px) {
+  .public-demo-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .public-demo-form-grid .form-group:first-child {
+    grid-column: auto;
+  }
+  .public-demo-facts > div {
+    grid-template-columns: minmax(80px, 28%) minmax(0, 1fr);
+  }
 }
 
 .input-sm {

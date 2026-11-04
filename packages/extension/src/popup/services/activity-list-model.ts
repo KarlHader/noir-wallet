@@ -1,5 +1,6 @@
 import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { resolveActivityChainId } from '@/popup/components/transaction/activity-chain'
+import { resolveNetworkDisplaySelection } from './chain-selection-availability'
 
 export function isActivityModelForScope(
   model: ActivityReadModel | null | undefined,
@@ -18,10 +19,7 @@ export function resolveAvailableActivityChainSelection(
   availableChainIds: readonly string[],
   persistedSelection: readonly string[] | null | undefined
 ): readonly string[] {
-  if (!persistedSelection) return availableChainIds
-  const availableChainIdSet = new Set(availableChainIds)
-  const availableSelection = persistedSelection.filter(chainId => availableChainIdSet.has(chainId))
-  return availableSelection.length === 1 ? availableSelection : availableChainIds
+  return resolveNetworkDisplaySelection(availableChainIds, persistedSelection)
 }
 
 export function filterActivityItems(input: {

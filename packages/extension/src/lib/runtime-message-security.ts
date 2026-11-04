@@ -36,11 +36,18 @@ export interface RuntimeMessageSenderLike {
 export type OwnExtensionSenderContext = 'service-worker' | 'offscreen-document' | 'extension-page'
 
 export const ZCASH_DAPP_RUNTIME_METHODS = Object.freeze([
+  'zcash_requestPublicAccount',
+  'zcash_disconnectPublic',
   'zcash_getAccounts',
   'zcash_requestAccounts',
   'zcash_getBalance',
   'zcash_getMaxTransfer',
   'zcash_getPublicKey',
+  'zcash_getPublicAccount',
+  'zcash_activatePublicAccount',
+  'zcash_getPublicAssets',
+  'zcash_sendPublicTransaction',
+  'zcash_getPublicTransaction',
   'zcash_getAddresses',
   'zcash_sendTransaction',
   'zcash_signMessage',
@@ -101,6 +108,7 @@ export interface NoirRuntimeEventMessage {
   readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
   readonly eventName:
     | 'accountsChanged'
+    | 'publicAccountChanged'
     | 'accountCapabilitiesChanged'
     | 'chainChanged'
     | 'networkChanged'
@@ -348,6 +356,9 @@ const isDiagnosticLogDraft: RuntimeFieldValidator = value =>
   (value.sequence as number) >= 0
 
 const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = Object.freeze({
+  PUBLIC_GET_ACCOUNT: {},
+  PUBLIC_GET_ASSETS: { optional: { refresh: isBoolean } },
+  PUBLIC_ACTIVATE_ACCOUNT: {},
   PORTFOLIO_UPDATED: { required: { walletId: isShortString, accountId: isShortString } },
   SYNC_PROGRESS: {
     optional: {
@@ -965,6 +976,9 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     SET_TOKEN_HIDDEN: ['extension-page'],
     REFRESH_INTENTS_PROTOCOL_ASSETS: ['extension-page'],
     GET_PORTFOLIO: ['extension-page'],
+    PUBLIC_GET_ACCOUNT: ['extension-page'],
+    PUBLIC_GET_ASSETS: ['extension-page'],
+    PUBLIC_ACTIVATE_ACCOUNT: ['extension-page'],
     GET_EVM_PORTFOLIO: ['extension-page'],
     GET_EVM_TOKEN_ALLOWANCE: ['extension-page'],
     PREPARE_EVM_TRANSFER: ['extension-page'],
@@ -1387,6 +1401,7 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
       value.chainId !== 'near' &&
       value.chainId !== 'multichain') ||
     (value.eventName !== 'accountsChanged' &&
+      value.eventName !== 'publicAccountChanged' &&
       value.eventName !== 'accountCapabilitiesChanged' &&
       value.eventName !== 'chainChanged' &&
       value.eventName !== 'networkChanged' &&
@@ -1398,6 +1413,8 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
   }
   if (value.eventName === 'accountCapabilitiesChanged' && value.chainId !== 'solana')
     throw new Error('Invalid account capability event chain')
+  if (value.eventName === 'publicAccountChanged' && value.chainId !== 'zcash')
+    throw new Error('Invalid Public account event chain')
 
   return {
     type: 'NOIR_EVENT',

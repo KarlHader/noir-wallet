@@ -50,6 +50,7 @@ import { Send } from './pages/transactions/Send'
 import { MultichainSend } from './pages/transactions/MultichainSend'
 import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
+import { NoirPublicAssetDetail } from './pages/portfolio/NoirPublicAssetDetail'
 
 // Swap Page
 import { Swap } from './pages/swap/Swap'
@@ -236,6 +237,7 @@ function AppRoutes() {
       )}
       <Route path="/transaction-result" element={<TransactionResultPage />} />
       <Route path="/asset-detail" element={<AssetDetail />} />
+      <Route path="/public-asset-detail" element={<NoirPublicAssetDetail />} />
       <Route path="/account-list" element={<AccountList />} />
       <Route path="/account-detail" element={<AccountDetail />} />
       <Route path="/add-wallet" element={<AddWalletEntry />} />

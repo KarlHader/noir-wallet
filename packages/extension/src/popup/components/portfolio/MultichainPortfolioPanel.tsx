@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { PortfolioShell } from './PortfolioShell'
-import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
+import {
+  isSelectableChainFamily,
+  resolveNetworkDisplaySelection
+} from '@/popup/services/chain-selection-availability'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { ListSkeleton } from '../ui/skeleton'
 import type { ZcashSyncProgressState } from '../common/ZcashSyncProgress'
@@ -98,12 +101,10 @@ export function MultichainPortfolioPanel({
     visibleModel?.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
       .map(chain => chain.chain.id) ?? []
-  const availableChainIdSet = new Set<string>(availableChainIds)
-  const persistedAvailableChainIds = persistedChainSelection?.filter(chainId =>
-    availableChainIdSet.has(chainId)
+  const selectedChainIds = resolveNetworkDisplaySelection(
+    availableChainIds,
+    persistedChainSelection
   )
-  const selectedChainIds =
-    persistedAvailableChainIds?.length === 1 ? persistedAvailableChainIds : availableChainIds
   const balanceRecoveryNeeded =
     status === 'error' ||
     (visibleModel !== null &&

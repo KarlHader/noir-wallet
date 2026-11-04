@@ -30,6 +30,10 @@ type RootContracts = [
   RootTypes.SignMessageOptions,
   RootTypes.SignMessageResult,
   RootTypes.SigningMode,
+  RootTypes.ConnectionSigningMode,
+  RootTypes.ConnectionOptions,
+  RootTypes.ConnectedIdentities,
+  RootTypes.QueriedIdentities,
   RootTypes.LendingMcaStatus,
   RootTypes.LendingSigningMode,
   RootTypes.Network,
@@ -55,6 +59,10 @@ type ZcashContracts = [
   ZcashTypes.SignMessageOptions,
   ZcashTypes.SignMessageResult,
   ZcashTypes.SigningMode,
+  ZcashTypes.ConnectionSigningMode,
+  ZcashTypes.ConnectionOptions,
+  ZcashTypes.ConnectedIdentities,
+  ZcashTypes.QueriedIdentities,
   ZcashTypes.LendingMcaStatus,
   ZcashTypes.LendingSigningMode,
   ZcashTypes.Network,
@@ -64,7 +72,29 @@ type ZcashContracts = [
 
 declare const provider: ZcashTypes.ZcashProvider
 const api: ZcashAPI = new ZcashAPI(provider)
+api.on('accountsChanged', account => void account, { signingMode: 'current' })
+api.removeListener('accountsChanged', account => void account, { signingMode: 'current' })
 const connect: Promise<RootTypes.ZcashConnectResult> = api.connect()
+const publicConnect: Promise<RootTypes.PublicAccount> = api.connect({
+  signingMode: 'noir_protocol_public'
+})
+const selectedConnect: Promise<RootTypes.ConnectedIdentities> = api.connect({
+  signingModes: ['current', 'noir_protocol_public']
+})
+const publicAccounts: Promise<RootTypes.PublicAccount | null> = api.getAccounts({
+  signingMode: 'noir_protocol_public'
+})
+const selectedAccounts: Promise<RootTypes.QueriedIdentities> = api.getAccounts({
+  signingModes: ['current']
+})
+declare const connectionOptions: RootTypes.ConnectionOptions | undefined
+const configuredConnect: Promise<
+  RootTypes.ZcashConnectResult | RootTypes.PublicAccount | RootTypes.ConnectedIdentities
+> = api.connect(connectionOptions)
+const configuredAccounts: Promise<
+  RootTypes.ZcashConnectResult | RootTypes.PublicAccount | RootTypes.QueriedIdentities | null
+> = api.getAccounts(connectionOptions)
+const configuredDisconnect: Promise<void> = api.disconnect(connectionOptions)
 const balance: Promise<ZcashTypes.ZcashBalanceResult> = api.getBalance()
 const send: Promise<string> = api.sendTransaction({
   to: 't-address',
@@ -77,5 +107,22 @@ const detected: Promise<ZcashTypes.ZcashProvider> = detectProvider()
 const address: string = publicKeyToAddress('02' + '00'.repeat(32))
 const valid: boolean = verifyMessageSignature({ message: 'x', signature: 'y' }).valid
 declare const publicTypes: [RootContracts, ZcashContracts]
-void [connect, balance, send, wallet, installed, rawProvider, detected, address, valid]
+void [
+  connect,
+  publicConnect,
+  selectedConnect,
+  publicAccounts,
+  selectedAccounts,
+  configuredConnect,
+  configuredAccounts,
+  configuredDisconnect,
+  balance,
+  send,
+  wallet,
+  installed,
+  rawProvider,
+  detected,
+  address,
+  valid
+]
 void publicTypes

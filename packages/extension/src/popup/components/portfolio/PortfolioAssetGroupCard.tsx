@@ -23,6 +23,8 @@ import {
   calculatePortfolioAccountBalanceBreakdown,
   getAvailablePortfolioAssetGroupUsdValue,
   getPortfolioAssetGroupUnitQuote,
+  getPortfolioAssetNetworkLabel,
+  isPublicPortfolioAsset,
   type PortfolioAccountBalanceBreakdown,
   type PortfolioAssetGroup,
   type PortfolioAssetGroupEntry
@@ -175,7 +177,7 @@ function PortfolioAssetBalanceRow({
     <div>
       <button
         type="button"
-        aria-label={`View ${entry.asset.metadata.symbol} details on ${entry.chain.chain.displayName}`}
+        aria-label={`View ${entry.asset.metadata.symbol} details on ${getPortfolioAssetNetworkLabel(entry)}`}
         onClick={() => onSelectAsset?.(entry.asset.asset.id)}
         className={cn(
           'flex min-h-14 w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.03]',
@@ -201,7 +203,12 @@ function PortfolioAssetBalanceRow({
         )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">
-            {leading === 'chain' ? entry.chain.chain.displayName : entry.asset.metadata.symbol}
+            {leading === 'chain'
+              ? getPortfolioAssetNetworkLabel(entry)
+              : entry.asset.metadata.symbol}
+            {leading === 'token' && isPublicPortfolioAsset(entry.asset) && (
+              <span className="ml-1.5 text-xs font-normal text-muted">Public</span>
+            )}
           </p>
           {showUnitPrice && (
             <UnitPrice
@@ -286,7 +293,7 @@ export function PortfolioAssetGroupCard({
         type="button"
         aria-label={
           directAsset
-            ? `View ${group.symbol} details on ${group.entries[0]?.chain.chain.displayName}`
+            ? `View ${group.symbol} details on ${getPortfolioAssetNetworkLabel(group.entries[0])}`
             : `${expanded ? 'Collapse' : 'Expand'} ${group.symbol} networks`
         }
         aria-expanded={directAsset ? undefined : expanded}
@@ -316,6 +323,9 @@ export function PortfolioAssetGroupCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <p className="truncate text-base font-medium">{group.symbol}</p>
+            {group.entries.some(entry => isPublicPortfolioAsset(entry.asset)) && (
+              <span className="shrink-0 text-xs text-muted">Public</span>
+            )}
             {!group.bundled && (
               <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
                 Custom

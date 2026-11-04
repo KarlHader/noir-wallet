@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { DemoHeader } from './DemoHeader'
 import {
   addEvmNetwork,
   detectBitcoinProvider,
@@ -292,25 +293,10 @@ function ExampleLayout({
 
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <div className="logo">
-            <a href="/" className="logo-link">
-              <img
-                src={`${import.meta.env.BASE_URL}logo.png`}
-                alt="Noir Wallet"
-                className="logo-img"
-              />
-              <span className="logo-text">
-                <span className="logo-noir">Noir </span>
-                <span className="logo-wallet">Wallet</span>
-              </span>
-            </a>
-            <span className="logo-badge">SDK Example V2</span>
-          </div>
-          <span className={`status-badge ${statusClass}`}>{statusLabel}</span>
-        </div>
-      </header>
+      <DemoHeader
+        active="examples"
+        status={<span className={`status-badge ${statusClass}`}>{statusLabel}</span>}
+      />
       <main className="main">
         <section className="page-intro">
           <div>
