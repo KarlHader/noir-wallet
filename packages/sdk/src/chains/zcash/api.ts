@@ -47,6 +47,9 @@ function readConnectionOptions(
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('Invalid connection options.')
   }
+  if (Object.keys(options).some(key => key !== 'signingMode' && key !== 'signingModes')) {
+    throw new TypeError('Invalid connection options.')
+  }
   const hasMode = Object.prototype.hasOwnProperty.call(options, 'signingMode')
   const hasModes = Object.prototype.hasOwnProperty.call(options, 'signingModes')
   if (hasMode === hasModes) throw new TypeError('Select exactly one signingMode or signingModes.')
@@ -68,7 +71,17 @@ function readConnectionOptions(
   return { kind: 'multiple', modes }
 }
 
-function readSigningMode(mode: SigningMode): SigningMode {
+function readSigningMode(options?: SignMessageOptions): SigningMode {
+  if (options === undefined) return 'current'
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    Object.keys(options).some(key => key !== 'signingMode')
+  ) {
+    throw new TypeError('Invalid signing options.')
+  }
+  const mode = options.signingMode === undefined ? 'current' : options.signingMode
   if (
     mode !== 'current' &&
     mode !== 'derived' &&
@@ -112,8 +125,26 @@ function isPublicAccount(value: unknown): value is PublicAccount {
   )
 }
 
+function isZcashConnectResult(value: unknown): value is ZcashConnectResult {
+  return (
+    isZcashAddress(value) &&
+    'accounts' in value &&
+    Array.isArray(value.accounts) &&
+    value.accounts.length > 0 &&
+    value.accounts.every(
+      account =>
+        account &&
+        typeof account.id === 'string' &&
+        typeof account.label === 'string' &&
+        typeof account.walletId === 'string' &&
+        typeof account.accountId === 'string' &&
+        isZcashAddress(account.addresses)
+    )
+  )
+}
+
 function readCombinedConnection(value: unknown): {
-  current: ZcashAddress
+  current: ZcashConnectResult
   noir_protocol_public: PublicAccount
 } {
   const identities =
@@ -126,7 +157,7 @@ function readCombinedConnection(value: unknown): {
     identities && typeof identities === 'object' && 'noir_protocol_public' in identities
       ? identities.noir_protocol_public
       : null
-  if (!isZcashAddress(current) || !isPublicAccount(publicAccount)) {
+  if (!isZcashConnectResult(current) || !isPublicAccount(publicAccount)) {
     throw new TypeError('Invalid combined connection response.')
   }
   return { current, noir_protocol_public: publicAccount }
@@ -191,6 +222,9 @@ export class ZcashClient {
   connect(options: {
     readonly signingModes: readonly ConnectionSigningMode[]
   }): Promise<ConnectedIdentities>
+  connect(
+    options?: ConnectionOptions
+  ): Promise<ZcashConnectResult | PublicAccount | ConnectedIdentities>
   async connect(
     options?: ConnectionOptions
   ): Promise<ZcashConnectResult | PublicAccount | ConnectedIdentities> {
@@ -213,13 +247,7 @@ export class ZcashClient {
           method: 'zcash_requestPublicAccount',
           params: [{ signingModes: ['current', 'noir_protocol_public'] }]
         })
-        const result = readCombinedConnection(response)
-        return {
-          identities: {
-            current: this.normalizeConnect(result.current) as ZcashConnectResult,
-            noir_protocol_public: result.noir_protocol_public
-          }
-        }
+        return { identities: readCombinedConnection(response) }
       }
     }
     return this.requestCurrentAccounts()
@@ -252,6 +280,9 @@ export class ZcashClient {
   getAccounts(options: {
     readonly signingModes: readonly ConnectionSigningMode[]
   }): Promise<QueriedIdentities>
+  getAccounts(
+    options?: ConnectionOptions
+  ): Promise<ZcashConnectResult | PublicAccount | null | QueriedIdentities>
   async getAccounts(
     options?: ConnectionOptions
   ): Promise<ZcashConnectResult | PublicAccount | null | QueriedIdentities> {
@@ -282,7 +313,7 @@ export class ZcashClient {
   }
 
   private queryPublicAccount(): Promise<PublicAccount | null> {
-    return this.provider.request({ method: 'zcash_getPublicAccount', params: [{ nullable: true }] })
+    return this.provider.request({ method: 'zcash_getPublicAccount' })
   }
 
   /**
@@ -318,8 +349,7 @@ export class ZcashClient {
     signingMode: SigningMode
     originAddress?: string
   } | null> {
-    const signingMode = options?.signingMode === undefined ? 'current' : options.signingMode
-    readSigningMode(signingMode)
+    const signingMode = readSigningMode(options)
     if (signingMode === 'noir_protocol_public') this.requirePublicCapability()
     return this.provider.request({
       method: 'zcash_getPublicKey',
@@ -335,8 +365,7 @@ export class ZcashClient {
   }
 
   async signMessage(message: string, options?: SignMessageOptions): Promise<SignMessageResult> {
-    const signingMode = options?.signingMode === undefined ? 'current' : options.signingMode
-    readSigningMode(signingMode)
+    const signingMode = readSigningMode(options)
     if (signingMode === 'noir_protocol_public') this.requirePublicCapability()
     return this.provider.request({
       method: 'zcash_signMessage',
@@ -381,8 +410,6 @@ export class ZcashClient {
     return this.provider.request({ method: 'zcash_checkLendingMcaAccount' })
   }
 
-  disconnect(): Promise<void>
-  disconnect(options: ConnectionOptions): Promise<void>
   async disconnect(options?: ConnectionOptions): Promise<void> {
     if (options !== undefined) {
       const selection = readConnectionOptions(options)

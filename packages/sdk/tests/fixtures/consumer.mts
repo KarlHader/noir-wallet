@@ -87,6 +87,14 @@ const publicAccounts: Promise<RootTypes.PublicAccount | null> = api.getAccounts(
 const selectedAccounts: Promise<RootTypes.QueriedIdentities> = api.getAccounts({
   signingModes: ['current']
 })
+declare const connectionOptions: RootTypes.ConnectionOptions | undefined
+const configuredConnect: Promise<
+  RootTypes.ZcashConnectResult | RootTypes.PublicAccount | RootTypes.ConnectedIdentities
+> = api.connect(connectionOptions)
+const configuredAccounts: Promise<
+  RootTypes.ZcashConnectResult | RootTypes.PublicAccount | RootTypes.QueriedIdentities | null
+> = api.getAccounts(connectionOptions)
+const configuredDisconnect: Promise<void> = api.disconnect(connectionOptions)
 const balance: Promise<ZcashTypes.ZcashBalanceResult> = api.getBalance()
 const send: Promise<string> = api.sendTransaction({
   to: 't-address',
@@ -105,6 +113,9 @@ void [
   selectedConnect,
   publicAccounts,
   selectedAccounts,
+  configuredConnect,
+  configuredAccounts,
+  configuredDisconnect,
   balance,
   send,
   wallet,

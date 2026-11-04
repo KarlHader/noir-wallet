@@ -215,9 +215,18 @@ export class DAppHandler {
       result.affectedOrigins.map(async origin => {
         this.permissions.delete(origin)
         pendingRequestsManager.cancelOrigin(origin)
+        const publicAuthorization = await dappManager.getPublicAuthorization(origin)
         await Promise.allSettled([
           this.broadcastEvent(origin, 'accountsChanged', null),
-          this.broadcastEvent(origin, 'publicAccountChanged', null)
+          ...(publicAuthorization.binding === null
+            ? [
+                this.broadcastEvent(origin, 'publicAccountChanged', null, 'zcash', async () => {
+                  const current = await dappManager.getPublicAuthorization(origin)
+                  if (current.revision !== publicAuthorization.revision || current.binding !== null)
+                    throw new Error('Site authorization changed')
+                })
+              ]
+            : [])
         ])
       })
     )
@@ -267,7 +276,6 @@ export class DAppHandler {
     'zcash_requestPublicAccount',
     'zcash_signMessage',
     'zcash_getPublicKey',
-    'zcash_getPublicAccount',
     'zcash_activatePublicAccount',
     'zcash_getPublicAssets',
     'zcash_sendPublicTransaction',
@@ -339,7 +347,7 @@ export class DAppHandler {
       case 'zcash_getPublicTransaction':
       case 'zcash_activatePublicAccount':
       case 'zcash_sendPublicTransaction': {
-        if (request.method === 'zcash_getPublicAccount' && request.params?.[0]?.nullable === true) {
+        if (request.method === 'zcash_getPublicAccount') {
           const authorization = await dappManager.getPublicAuthorization(origin)
           const state = useWalletStore.getState()
           if (

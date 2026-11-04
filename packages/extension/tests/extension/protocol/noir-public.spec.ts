@@ -640,8 +640,95 @@ test('keeps Public authorization separate from Native across revocation and work
   expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
     transparent: expect.any(String)
   })
+
+  const active = await popup.evaluate(async () => {
+    const stored = (await chrome.storage.local.get('wallet_state')).wallet_state
+    const state = typeof stored === 'string' ? JSON.parse(stored).state : stored?.state
+    return { walletId: state?.currentWalletId, accountId: state?.currentAccountId }
+  })
+  expect(active).toEqual({ walletId: expect.any(String), accountId: expect.any(String) })
+  const added = await popup.evaluate(
+    walletId =>
+      chrome.runtime.sendMessage({
+        type: 'ADD_ACCOUNT',
+        walletId,
+        accountName: 'Native extra',
+        birthdayHeight: 3_000_000
+      }),
+    active.walletId
+  )
+  expect(added).toMatchObject({ success: true, accountId: expect.any(String) })
+  const addedAccountId = (added as { accountId: string }).accountId
+  const currentAccountId = await popup.evaluate(async () => {
+    const stored = (await chrome.storage.local.get('wallet_state')).wallet_state
+    const state = typeof stored === 'string' ? JSON.parse(stored).state : stored?.state
+    return state?.currentAccountId as string | undefined
+  })
+  expect(currentAccountId).toBe(active.accountId)
+
+  const expandNativeWindow = context.waitForEvent('page')
+  const expandNativeRequest = requestPublic(dapp, 'zcash_requestAccounts')
+  const expandNativeApproval = await expandNativeWindow
+  await expandNativeApproval.waitForURL(/#approval\?requestId=/)
+  await expandNativeApproval.getByRole('button', { name: 'Edit accounts' }).click()
+  await expandNativeApproval
+    .locator('[data-dapp-account-option="true"]')
+    .filter({ hasText: 'Native extra' })
+    .click()
+  await expandNativeApproval.getByRole('button', { name: 'Done' }).click()
+  await expandNativeApproval.getByRole('button', { name: /^Connect/ }).click()
+  const expandedNative = (await expandNativeRequest).result as {
+    accounts: Array<{ accountId: string }>
+  }
+  expect(expandedNative.accounts).toEqual(
+    expect.arrayContaining([expect.objectContaining({ accountId: addedAccountId })])
+  )
+  if (!expandNativeApproval.isClosed()) await expandNativeApproval.close()
+  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
+    chain: 'zcash-l2'
+  })
+
+  await dapp.evaluate(() => {
+    const state = window as typeof window & {
+      noirwallet: { zcash: { on: (event: string, listener: (value: unknown) => void) => void } }
+      publicCleanupEvents: { native: number; publicNull: number }
+    }
+    state.publicCleanupEvents = { native: 0, publicNull: 0 }
+    state.noirwallet.zcash.on('accountsChanged', () => {
+      state.publicCleanupEvents.native += 1
+    })
+    state.noirwallet.zcash.on('publicAccountChanged', value => {
+      if (value === null) state.publicCleanupEvents.publicNull += 1
+    })
+  })
+  const removed = await popup.evaluate(
+    ({ walletId, accountId }) =>
+      chrome.runtime.sendMessage({ type: 'REMOVE_ACCOUNT', walletId, accountId }),
+    { walletId: active.walletId, accountId: addedAccountId }
+  )
+  expect(removed).toMatchObject({ success: true })
+  await expect
+    .poll(() =>
+      dapp.evaluate(
+        () =>
+          (window as typeof window & { publicCleanupEvents: { native: number } })
+            .publicCleanupEvents.native
+      )
+    )
+    .toBeGreaterThan(0)
+  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
+    chain: 'zcash-l2'
+  })
+  expect(
+    await dapp.evaluate(
+      () =>
+        (window as typeof window & { publicCleanupEvents: { publicNull: number } })
+          .publicCleanupEvents.publicNull
+    )
+  ).toBe(0)
+
   expect(await requestPublic(dapp, 'zcash_disconnectPublic')).toEqual({ result: null })
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).error).toBeTruthy()
+  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
   expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
     transparent: expect.any(String)
   })
@@ -737,7 +824,7 @@ test('keeps Public authorization separate from Native across revocation and work
     /authorization|connection|cancel|expired|reject/i
   )
   await capturePublicScreenshot(dapp, 'public-20-public-disconnected.png')
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).error).toBeTruthy()
+  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
   expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
   await terminateExtensionServiceWorker(context, popup)
   await waitForBackgroundWalletInitialization(popup)
@@ -814,7 +901,7 @@ test('keeps Public authorization separate from Native across revocation and work
   expect(revokedRead.result).toBeUndefined()
   expect(revokedRead.error?.message).toMatch(/authorization|connection|reconnect/i)
   await capturePublicScreenshot(dapp, 'public-21-inflight-revoked.png')
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).error).toBeTruthy()
+  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
 })
 
 test('signs a Public FunctionCall once and recovers after response loss and restart', async ({

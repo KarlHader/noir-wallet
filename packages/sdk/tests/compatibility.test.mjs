@@ -148,6 +148,18 @@ test('Public Zcash methods preserve request IDs and positional wire parameters',
 test('identity selectors keep Native and Public grants separate', async () => {
   const calls = []
   const native = { transparent: 't-native', shielded: 'zs-native' }
+  const nativeConnection = {
+    ...native,
+    accounts: [
+      {
+        id: 'wallet:account',
+        label: 'Wallet',
+        walletId: 'wallet',
+        accountId: 'account',
+        addresses: native
+      }
+    ]
+  }
   const publicAccount = {
     chain: 'zcash-l2',
     network: 'testnet',
@@ -168,7 +180,7 @@ test('identity selectors keep Native and Public grants separate', async () => {
           return null
         case 'zcash_requestPublicAccount':
           return args.params
-            ? { identities: { current: native, noir_protocol_public: publicAccount } }
+            ? { identities: { current: nativeConnection, noir_protocol_public: publicAccount } }
             : publicAccount
         case 'zcash_getPublicAccount':
           return null
@@ -208,7 +220,7 @@ test('identity selectors keep Native and Public grants separate', async () => {
     identities: { noir_protocol_public: publicAccount }
   })
   assert.deepEqual(await api.connect({ signingModes: ['noir_protocol_public', 'current'] }), {
-    identities: { current: normalized, noir_protocol_public: publicAccount }
+    identities: { current: nativeConnection, noir_protocol_public: publicAccount }
   })
   assert.equal(await api.getAccounts({ signingMode: 'noir_protocol_public' }), null)
   assert.deepEqual(await api.getAccounts({ signingModes: ['current', 'noir_protocol_public'] }), {
@@ -234,9 +246,9 @@ test('identity selectors keep Native and Public grants separate', async () => {
       method: 'zcash_requestPublicAccount',
       params: [{ signingModes: ['current', 'noir_protocol_public'] }]
     },
-    { method: 'zcash_getPublicAccount', params: [{ nullable: true }] },
+    { method: 'zcash_getPublicAccount' },
     { method: 'zcash_getAccounts' },
-    { method: 'zcash_getPublicAccount', params: [{ nullable: true }] },
+    { method: 'zcash_getPublicAccount' },
     { method: 'zcash_getPublicKey', params: [{ signingMode: 'noir_protocol_public' }] },
     { method: 'zcash_signMessage', params: ['hello', { signingMode: 'noir_protocol_public' }] },
     { method: 'zcash_disconnect' },
@@ -275,23 +287,53 @@ test('unsupported and invalid selectors never fall back to Native RPC', async ()
     { signingModes: ['current', 'current'] },
     { signingModes: ['unknown'] },
     { signingMode: 'unknown' },
+    { signingMode: 'current', unexpected: true },
     { signingMode: 'current', signingModes: ['current'] }
   ]) {
     await assert.rejects(api.connect(selection), TypeError)
     await assert.rejects(api.getAccounts(selection), TypeError)
     await assert.rejects(api.disconnect(selection), TypeError)
   }
-  await assert.rejects(api.getPublicKey({ signingMode: 'unknown' }), TypeError)
-  await assert.rejects(api.signMessage('hello', { signingMode: 'unknown' }), TypeError)
+  for (const options of [
+    null,
+    [],
+    { signingMode: 'unknown' },
+    { signingModes: ['noir_protocol_public'] },
+    { signingMode: 'current', unexpected: true }
+  ]) {
+    await assert.rejects(api.getPublicKey(options), TypeError)
+    await assert.rejects(api.signMessage('hello', options), TypeError)
+  }
   assert.deepEqual(calls, [])
 })
 
 test('combined connection rejects incomplete identity responses', async () => {
+  const publicAccount = {
+    chain: 'zcash-l2',
+    network: 'mainnet',
+    publicKey: 'public-key',
+    address: 'public-address',
+    mcaId: null,
+    parentContractId: 'parent',
+    status: 'inactive'
+  }
   for (const response of [
     null,
     { identities: {} },
     { identities: { current: { transparent: 't', shielded: 'zs' } } },
-    { identities: { current: { transparent: 't', shielded: 'zs' }, noir_protocol_public: null } }
+    { identities: { current: { transparent: 't', shielded: 'zs' }, noir_protocol_public: null } },
+    {
+      identities: {
+        current: { transparent: 't', shielded: 'zs' },
+        noir_protocol_public: publicAccount
+      }
+    },
+    {
+      identities: {
+        current: { transparent: 't', shielded: 'zs', accounts: [] },
+        noir_protocol_public: publicAccount
+      }
+    }
   ]) {
     const api = new ZcashAPI({
       supportedSigningModes: ['noir_protocol_public'],
