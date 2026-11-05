@@ -637,7 +637,7 @@ export function PublicDemo({
         <form onSubmit={sign}>
           <div className="form-group">
             <label className="label" htmlFor="public-sign-message">
-              JSON
+              Message
             </label>
             <textarea
               id="public-sign-message"
