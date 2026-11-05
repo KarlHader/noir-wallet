@@ -43,14 +43,16 @@ test.beforeEach(async ({ context }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        gas_fee_account: 'fees.near',
-        gas_tokens: { 'zec.omft.near': 'ZEC' },
-        minimum_fees: { ZEC: '34' },
-        batch: {
-          batch_id: '1',
-          completed_at: new Date().toISOString(),
-          gas_units: '1000000000000',
-          quotes: [{ symbol: 'ZEC', decimals: 8, fee_atomic: '34' }]
+        code: 0,
+        data: {
+          gas_fee_account: 'fees.near',
+          gas_tokens: { 'zec.omft.near': 'ZEC' },
+          batch: {
+            batch_id: '1',
+            completed_at: new Date().toISOString(),
+            gas_units: '1000000000000',
+            quotes: [{ symbol: 'ZEC', decimals: 8, fee_atomic: '34' }]
+          }
         }
       })
     })
@@ -949,8 +951,8 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
           ? {
               code: 0,
               data: {
-                submission_id: computePublicSubmissionId(submissions[0]),
-                status: 'EXECUTED',
+                hash: computePublicSubmissionId(submissions[0]),
+                status: 'COMPLETED',
                 tx_hash: PUBLIC_TX_HASH
               }
             }

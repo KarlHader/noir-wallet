@@ -15,6 +15,7 @@ import {
 } from '@/core/services/noir-protocol/public/activation-quote'
 import {
   createPublicCandidate,
+  computePublicSubmissionId,
   parsePublicFunctionCallRequests,
   assertPublicJsonMessage,
   serializePublicBusiness
@@ -608,7 +609,14 @@ export class NoirPublicRuntime {
     let current = record
     const client = clientFor(record.binding.network)
     try {
-      const observation = await client.getPublicTransaction(record.binding.submissionId!)
+      // Old durable requests retain their binding and signed bytes. Only their
+      // lookup identifier changes; recovery never signs or submits them again.
+      const hash =
+        record.candidate.tgas === undefined
+          ? record.binding.submissionId!
+          : computePublicSubmissionId(record.candidate)
+      const remote = await client.getPublicTransaction(hash)
+      const observation = { ...remote, submission_id: record.binding.submissionId! }
       const execution = observation.tx_hash
         ? await client.verifiedPublicExecution(record.candidate, observation.tx_hash)
         : { status: 'unknown' as const }

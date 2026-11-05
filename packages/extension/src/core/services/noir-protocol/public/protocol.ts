@@ -1,5 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2'
 import { bytesToHex } from '@noble/hashes/utils'
+import { encodeBase58, parseNearBase58 } from '@/core/chains/near/identifiers'
 
 import type { NoirPublicFunctionCallRequest } from './types'
 
@@ -7,7 +8,6 @@ const DECIMAL = /^(0|[1-9][0-9]{0,77})$/
 const ACCOUNT_ID = /^(?=.{2,64}$)[a-z0-9]+(?:[._-][a-z0-9]+)*$/
 const PUBLIC_KEY = /^04[0-9a-f]{128}$/
 const COMPACT_SIGNATURE = /^[0-9a-fA-F]{130}$/
-const SUBMISSION_ID = /^[0-9a-f]{64}$/
 const MAX_ACTIONS = 16
 const MAX_CALLS = 16
 const MAX_ARGS_BYTES = 32 * 1024
@@ -112,10 +112,7 @@ export function readPublicSignature(value: unknown): string {
 }
 
 export function readPublicSubmissionId(value: unknown): string {
-  if (typeof value !== 'string' || !SUBMISSION_ID.test(value)) {
-    throw new Error('Invalid Public submission ID')
-  }
-  return value
+  return parseNearBase58(value, 32, 'Public business hash')
 }
 
 export function parsePublicFunctionCallRequests(
@@ -286,7 +283,7 @@ export function createPublicMcaMessage(publicKey: unknown, signature: unknown): 
   })
 }
 
-export function computePublicSubmissionId(candidate: NoirPublicTxCandidate): string {
+export function computeLegacyPublicSubmissionId(candidate: NoirPublicTxCandidate): string {
   const parsed = parsePublicCandidate(candidate)
   const fields = [
     parsed.address,
@@ -316,4 +313,35 @@ export function computePublicSubmissionId(candidate: NoirPublicTxCandidate): str
     offset += part.length
   }
   return bytesToHex(sha256(payload))
+}
+
+// Canonicalization is for the backend identifier only; never change signing bytes.
+function canonicalPublicJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalPublicJson).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, field]) => `${stringifyPublicWire(key)}:${canonicalPublicJson(field)}`)
+      .join(',')}}`
+  }
+  return stringifyPublicWire(value)
+}
+
+export function computePublicSubmissionId(candidate: NoirPublicTxCandidate): string {
+  const parsed = parsePublicCandidate(candidate)
+  if (parsed.tgas === undefined) return computeLegacyPublicSubmissionId(parsed)
+  const parts = [textEncoder.encode('NOIR_INTENT_ID_V1\0')]
+  for (const field of ['mainnet', 'public', canonicalPublicJson(parsed)]) {
+    const bytes = textEncoder.encode(field)
+    const size = new Uint8Array(8)
+    new DataView(size.buffer).setBigUint64(0, BigInt(bytes.length), false)
+    parts.push(size, bytes)
+  }
+  const payload = new Uint8Array(parts.reduce((size, part) => size + part.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    payload.set(part, offset)
+    offset += part.length
+  }
+  return encodeBase58(sha256(payload))
 }

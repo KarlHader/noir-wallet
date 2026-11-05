@@ -4,6 +4,7 @@ import { expect } from '@playwright/test'
 import { mapTransactionGraphToActivityItem } from '../../../src/core/activity/activity-read-model.ts'
 import {
   computePublicSubmissionId,
+  computeLegacyPublicSubmissionId,
   createPublicCandidate,
   parsePublicCandidate,
   serializePublicCandidate
@@ -189,9 +190,15 @@ test('Public signed request survives submission recovery and is scoped to its or
   )
 })
 
-test('persisted V1 Public requests retain their original ID and cannot be resubmitted', async () => {
+test('persisted Public requests retain their original IDs and signed bytes', async () => {
   const repository = new NoirPublicTransactionRepository(new InMemoryTransactionRepository())
   const created = await repository.createSigned({ ...common, candidate })
+  const previous = parseNoirPublicTransactionBinding({
+    ...created.binding,
+    submissionId: computeLegacyPublicSubmissionId(candidate)
+  })
+  expect(previous.signedRequest).toBe(serializePublicCandidate(candidate))
+  expect(previous.submissionId).toBe(computeLegacyPublicSubmissionId(candidate))
   const legacy = parsePublicCandidate({
     address: candidate.address,
     nonce: candidate.nonce,
@@ -229,7 +236,7 @@ test('Public execution finality and anchor progress are independent of provision
   const unverified = await repository.applyObservation(
     scope,
     operationId,
-    { submission_id: submissionId, status: 'EXECUTED', tx_hash: 'near-execution-hash' },
+    { submission_id: submissionId, status: 'COMPLETED', tx_hash: 'near-execution-hash' },
     1_250
   )
   expect(unverified.transaction.status).toBe('broadcast')
@@ -238,7 +245,7 @@ test('Public execution finality and anchor progress are independent of provision
     operationId,
     {
       submission_id: submissionId,
-      status: 'EXECUTED',
+      status: 'COMPLETED',
       tx_hash: 'near-execution-hash',
       verifiedExecution: 'success'
     },
@@ -252,17 +259,17 @@ test('Public execution finality and anchor progress are independent of provision
     operationId,
     {
       submission_id: submissionId,
-      status: 'ANCHORED',
+      status: 'COMPLETED',
       anchor: { txid_hex: 'zcash-anchor-hash' }
     },
     1_400
   )
   expect(anchored.transaction.status).toBe('final')
   expect(anchored.transaction.anchor).toEqual({
-    status: 'final',
+    status: 'broadcast',
     transactionHash: 'zcash-anchor-hash'
   })
-  expect(await repository.listPending([scope], 'testnet')).toEqual([])
+  expect((await repository.listPending([scope], 'testnet')).length).toBe(1)
 })
 
 test('Public expiry requires matching final-chain nonce and no execution hash', async () => {
@@ -301,7 +308,7 @@ test('Public expiry requires matching final-chain nonce and no execution hash', 
   await repository.applyObservation(
     scope,
     observed.transaction.operationId,
-    { submission_id: observed.binding.submissionId, status: 'EXECUTED', tx_hash: 'near-hash' },
+    { submission_id: observed.binding.submissionId, status: 'COMPLETED', tx_hash: 'near-hash' },
     1_300
   )
   await expect(
@@ -367,7 +374,7 @@ test('Public pending scan survives more than 200 newer unrelated account transac
     created.graph.root.id,
     {
       submission_id: created.binding.submissionId,
-      status: 'EXECUTED',
+      status: 'COMPLETED',
       tx_hash: 'near-execution-hash',
       verifiedExecution: 'success'
     },

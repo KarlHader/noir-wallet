@@ -2,6 +2,7 @@ import { parseAssetDisplayMetadata, parseAssetId, parseChainId } from '@/core/ch
 import type { AssetDisplayMetadata, AssetId, ChainId } from '@/core/chains/domain'
 import {
   computePublicSubmissionId,
+  computeLegacyPublicSubmissionId,
   parsePublicCandidate,
   readPublicAccountId,
   readPublicKey,
@@ -240,10 +241,10 @@ export function parseNoirPublicTransactionBinding(value: unknown): NoirPublicTra
     throw new Error('Noir Public signed request does not match its binding')
   }
   const submissionId = parseString(value.submissionId, 'Noir Public submission ID')
-  if (!/^[0-9a-f]{64}$/.test(submissionId)) {
-    throw new Error('Invalid Noir Public submission ID')
-  }
-  if (computePublicSubmissionId(candidate) !== submissionId) {
+  const expectedSubmissionId = /^[0-9a-f]{64}$/.test(submissionId)
+    ? computeLegacyPublicSubmissionId(candidate)
+    : computePublicSubmissionId(candidate)
+  if (expectedSubmissionId !== submissionId) {
     throw new Error('Noir Public submission ID does not match its signed request')
   }
   const originalRequests =

@@ -16,22 +16,18 @@ import {
 type JsonRecord = Record<string, unknown>
 
 export type NoirPublicTxStatus =
-  | 'REJECTED'
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'COMPLETED'
   | 'FAILED'
-  | 'EXECUTED'
-  | 'INDEXED'
-  | 'CHECKPOINTED'
-  | 'ANCHOR_SUBMITTED'
-  | 'ANCHORED'
+  | 'PARTIALLY_SUCCEEDED'
 
 export interface NoirPublicTxStatusResponse {
   readonly submission_id: string
   readonly tx_hash?: string
   readonly status: NoirPublicTxStatus
   readonly failure_reason?: string
-  readonly inclusion?: Readonly<{ leaf_hash_hex: string; leaf_index: number }>
-  readonly checkpoint?: Readonly<{ state_seq: number; noir_root_hex: string }>
-  readonly anchor?: Readonly<{ txid_hex: string; confirmed_height?: number }>
+  readonly anchor?: Readonly<{ txid_hex: string }>
 }
 
 export interface NoirPublicSubmitResponse {
@@ -69,11 +65,6 @@ function readOptionalString(value: unknown, label: string, max = 512): string | 
   return value
 }
 
-function readSafeIndex(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`Invalid ${label}`)
-  return value as number
-}
-
 function readHex(value: unknown, label: string): string {
   if (typeof value !== 'string' || !/^[0-9a-fA-F]{64}$/.test(value)) {
     throw new Error(`Invalid ${label}`)
@@ -82,9 +73,11 @@ function readHex(value: unknown, label: string): string {
 }
 
 function parseSubmitResponse(value: unknown, expectedId: string): NoirPublicSubmitResponse {
-  const response = record(value, 'Public submission response')
-  const submission_id = readPublicSubmissionId(response.submission_id)
-  if (submission_id !== expectedId || response.status !== 'ACCEPTED_FOR_PROCESSING') {
+  const envelope = record(value, 'Public submission envelope')
+  if (envelope.code !== 0) throw new Error('Public submission failed')
+  const response = record(envelope.data, 'Public submission response')
+  const submission_id = readPublicSubmissionId(response.hash)
+  if (submission_id !== expectedId) {
     throw new Error('Public submission response does not match the signed candidate')
   }
   return Object.freeze({ submission_id, status: 'ACCEPTED_FOR_PROCESSING' })
@@ -95,7 +88,9 @@ export function parsePublicGasFeeQuote(
   config: NoirPublicNetworkConfig,
   now = Date.now()
 ): NoirPublicGasFeeQuote {
-  const response = record(value, 'Public gas fee response')
+  const envelope = record(value, 'Public gas fee envelope')
+  if (envelope.code !== 0) throw new Error('Public gas fee query failed')
+  const response = record(envelope.data, 'Public gas fee response')
   const tokens = record(response.gas_tokens, 'Public gas tokens')
   if (tokens[config.zecTokenId] !== 'ZEC') throw new Error('Public ZEC fee token is unavailable')
   const feeAccount = readPublicAccountId(response.gas_fee_account, 'Public gas fee account')
@@ -120,14 +115,7 @@ export function parsePublicGasFeeQuote(
   if (zec.decimals !== 8) throw new Error('Invalid Public ZEC fee decimals')
   const latestUnit = readPublicDecimal(zec.fee_atomic, 'Public ZEC fee per Tgas')
   if (latestUnit === '0') throw new Error('Invalid Public ZEC gas fee')
-  let feePerTgasRaw = latestUnit
-  if (response.minimum_fees !== undefined) {
-    const minima = record(response.minimum_fees, 'Public minimum fees')
-    feePerTgasRaw = readPublicDecimal(minima.ZEC, 'Public minimum ZEC fee')
-    if (feePerTgasRaw === '0' || BigInt(feePerTgasRaw) > BigInt(latestUnit)) {
-      throw new Error('Invalid Public minimum ZEC fee')
-    }
-  }
+  const feePerTgasRaw = latestUnit
   return Object.freeze({ feeAccount, feePerTgasRaw, decimals: 8, batchId, completedAt })
 }
 
@@ -136,59 +124,38 @@ export function parsePublicTxStatusResponse(
   expectedId: string
 ): NoirPublicTxStatusResponse {
   const response = record(value, 'Public transaction status')
-  const submission_id = readPublicSubmissionId(response.submission_id)
+  const submission_id = readPublicSubmissionId(response.hash)
   if (submission_id !== readPublicSubmissionId(expectedId)) {
-    throw new Error('Public status submission ID does not match the request')
+    throw new Error('Public status hash does not match the request')
   }
   const statuses: readonly NoirPublicTxStatus[] = [
-    'REJECTED',
+    'PENDING',
+    'PROCESSING',
+    'COMPLETED',
     'FAILED',
-    'EXECUTED',
-    'INDEXED',
-    'CHECKPOINTED',
-    'ANCHOR_SUBMITTED',
-    'ANCHORED'
+    'PARTIALLY_SUCCEEDED'
   ]
   if (!statuses.includes(response.status as NoirPublicTxStatus))
     throw new Error('Invalid Public status')
-  const status = response.status as NoirPublicTxStatus
-  const tx_hash = readOptionalString(response.tx_hash, 'Public transaction hash', 128)
-  const failure_reason = readOptionalString(response.failure_reason, 'Public failure reason')
-  let inclusion: NoirPublicTxStatusResponse['inclusion']
-  let checkpoint: NoirPublicTxStatusResponse['checkpoint']
-  let anchor: NoirPublicTxStatusResponse['anchor']
-  if (response.inclusion !== undefined) {
-    const raw = record(response.inclusion, 'Public inclusion')
-    inclusion = Object.freeze({
-      leaf_hash_hex: readHex(raw.leaf_hash_hex, 'Public leaf hash'),
-      leaf_index: readSafeIndex(raw.leaf_index, 'Public leaf index')
-    })
-  }
-  if (response.checkpoint !== undefined) {
-    const raw = record(response.checkpoint, 'Public checkpoint')
-    checkpoint = Object.freeze({
-      state_seq: readSafeIndex(raw.state_seq, 'Public state sequence'),
-      noir_root_hex: readHex(raw.noir_root_hex, 'Public root')
-    })
-  }
-  if (response.anchor !== undefined) {
-    const raw = record(response.anchor, 'Public anchor')
-    const confirmed_height =
-      raw.confirmed_height === undefined
-        ? undefined
-        : readSafeIndex(raw.confirmed_height, 'Public anchor height')
-    anchor = Object.freeze({
-      txid_hex: readHex(raw.txid_hex, 'Public anchor transaction ID'),
-      ...(confirmed_height === undefined ? {} : { confirmed_height })
-    })
-  }
+  const tx_hash =
+    response.tx_hash === ''
+      ? undefined
+      : readOptionalString(response.tx_hash, 'Public transaction hash', 128)
+  const failure_reason =
+    response.error_message === ''
+      ? undefined
+      : readOptionalString(response.error_message, 'Public failure reason')
+  const anchor =
+    response.anchor_txid_hex === undefined || response.anchor_txid_hex === ''
+      ? undefined
+      : Object.freeze({
+          txid_hex: readHex(response.anchor_txid_hex, 'Public anchor transaction ID')
+        })
   return Object.freeze({
     submission_id,
+    status: response.status as NoirPublicTxStatus,
     ...(tx_hash ? { tx_hash } : {}),
-    status,
     ...(failure_reason ? { failure_reason } : {}),
-    ...(inclusion ? { inclusion } : {}),
-    ...(checkpoint ? { checkpoint } : {}),
     ...(anchor ? { anchor } : {})
   })
 }

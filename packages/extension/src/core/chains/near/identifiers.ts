@@ -31,7 +31,7 @@ function decodeBase58(value: string, label: string): Uint8Array {
   return decoded
 }
 
-function encodeBase58(bytes: Uint8Array): string {
+export function encodeBase58(bytes: Uint8Array): string {
   if (bytes.byteLength === 0) throw new Error('NEAR public key bytes must not be empty')
   const digits = [0]
   for (const byte of bytes) {

@@ -73,14 +73,7 @@ export interface CreateSignedNoirPublicTransactionInput extends NoirPublicRecord
 export interface NoirPublicTransactionObservation {
   readonly submission_id: string
   readonly tx_hash?: string
-  readonly status:
-    | 'REJECTED'
-    | 'FAILED'
-    | 'EXECUTED'
-    | 'INDEXED'
-    | 'CHECKPOINTED'
-    | 'ANCHOR_SUBMITTED'
-    | 'ANCHORED'
+  readonly status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'PARTIALLY_SUCCEEDED'
   readonly failure_reason?: string
   readonly anchor?: { readonly txid_hex: string; readonly confirmed_height?: number }
   readonly verifiedExecution?: 'success' | 'failure'
@@ -442,9 +435,9 @@ export class NoirPublicTransactionRepository {
         ? 'final'
         : observation.verifiedExecution === 'failure'
           ? 'failed'
-          : observation.status === 'REJECTED' || observation.status === 'FAILED'
+          : observation.status === 'FAILED'
             ? original.root.status
-            : observation.status === 'EXECUTED'
+            : observation.status === 'COMPLETED' || observation.status === 'PARTIALLY_SUCCEEDED'
               ? 'broadcast'
               : 'confirming'
     const origin = await this.applyProgress(
@@ -456,18 +449,10 @@ export class NoirPublicTransactionRepository {
       { ...(observation.tx_hash ? { transactionHash: observation.tx_hash } : {}) },
       status === 'failed' ? 'reverted' : undefined
     )
-    if (
-      observation.anchor &&
-      (observation.status === 'ANCHOR_SUBMITTED' || observation.status === 'ANCHORED')
-    ) {
-      await this.applyProgress(
-        parsedScope,
-        id,
-        'destination',
-        observation.status === 'ANCHORED' ? 'final' : 'broadcast',
-        now,
-        { transactionHash: observation.anchor.txid_hex }
-      )
+    if (observation.anchor) {
+      await this.applyProgress(parsedScope, id, 'destination', 'broadcast', now, {
+        transactionHash: observation.anchor.txid_hex
+      })
     }
     return projectPublicTransaction((await this.repository.get(parsedScope, id)) ?? origin)
   }

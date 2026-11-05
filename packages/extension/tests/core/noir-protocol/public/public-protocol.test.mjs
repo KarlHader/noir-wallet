@@ -20,6 +20,7 @@ import {
   assertPublicFeeQuoteStillCovers
 } from '../../../../src/core/services/noir-protocol/public/fee.ts'
 import {
+  NoirPublicClient,
   parsePublicNonceSnapshot,
   parsePublicTxStatusResponse,
   parsePublicGasFeeQuote,
@@ -131,7 +132,7 @@ test.describe('Public wire contract', () => {
       })
     )
     expect(computePublicSubmissionId(candidate)).toBe(
-      'cd00204a65e6318736ef72c27174b9aff59cf75da61b634ee7af06fb587fa5ca'
+      'FFhU1Up9uoyNqfgurFdUtJ8EwfGH5QSjgRgM89X9gbhs'
     )
     const legacy = parsePublicCandidate(
       JSON.parse(serializePublicCandidate(candidate), (key, value) =>
@@ -209,7 +210,6 @@ test.describe('Public wire contract', () => {
     const response = {
       gas_tokens: { 'zec.omft.near': 'ZEC' },
       gas_fee_account: 'fees.near',
-      minimum_fees: { ZEC: '32' },
       batch: {
         batch_id: '1',
         completed_at: '2026-11-03T09:29:00Z',
@@ -217,27 +217,27 @@ test.describe('Public wire contract', () => {
         quotes: [{ symbol: 'ZEC', decimals: 8, fee_atomic: '34' }]
       }
     }
-    const quote = parsePublicGasFeeQuote(response, PUBLIC_MAINNET_CONFIG, now)
+    const quote = parsePublicGasFeeQuote({ code: 0, data: response }, PUBLIC_MAINNET_CONFIG, now)
     const paid = buildPublicPaidRequests([request], quote, PUBLIC_MAINNET_CONFIG)
     expect(paid.tgas).toBe(200)
-    expect(paid.feeAmountRaw).toBe('6400')
+    expect(paid.feeAmountRaw).toBe('6800')
     expect(paid.txRequests.slice(1)).toEqual(parsePublicFunctionCallRequests([request]))
     expect(paid.txRequests[0].FunctionCall).toEqual({
       receiver_id: 'zec.omft.near',
       function_calls: [
         {
           method_name: 'ft_transfer',
-          args: '{"receiver_id":"fees.near","amount":"6400"}',
+          args: '{"receiver_id":"fees.near","amount":"6800"}',
           gas: '30000000000000',
           deposit: '1'
         }
       ]
     })
     expect(() =>
-      assertPublicFeeQuoteStillCovers(paid, quote, { ...quote, feePerTgasRaw: '33' })
+      assertPublicFeeQuoteStillCovers(paid, quote, { ...quote, feePerTgasRaw: '35' })
     ).toThrow(/fee changed/)
     expect(() =>
-      parsePublicGasFeeQuote(response, PUBLIC_MAINNET_CONFIG, now + 31 * 60_000)
+      parsePublicGasFeeQuote({ code: 0, data: response }, PUBLIC_MAINNET_CONFIG, now + 31 * 60_000)
     ).toThrow(/stale/)
     expect(() =>
       buildPublicPaidRequests(Array(16).fill(request), quote, PUBLIC_MAINNET_CONFIG)
@@ -283,7 +283,7 @@ test.describe('Public wire contract', () => {
       signature
     })
     expect(serializePublicCandidate(candidate)).toContain('你好')
-    expect(computePublicSubmissionId(candidate)).toMatch(/^[0-9a-f]{64}$/)
+    expect(computePublicSubmissionId(candidate)).toMatch(/^[1-9A-HJ-NP-Za-km-z]{43,44}$/)
   })
 
   test('signs generic MCA creation and Unicode Business with packaged Zcash WASM and recovers the public key', async () => {
@@ -341,30 +341,75 @@ test.describe('Public wire contract', () => {
     ).toBe(signed.signature)
   })
 
-  test('accepts business success before anchoring and retains its later proof fields', () => {
-    const id = 'a'.repeat(64)
-    expect(
-      parsePublicTxStatusResponse({ submission_id: id, status: 'EXECUTED', tx_hash: 'hash' }, id)
-    ).toEqual({
-      submission_id: id,
-      status: 'EXECUTED',
-      tx_hash: 'hash'
-    })
+  test('parses the backend submission lifecycle independently of anchor confirmation', () => {
+    const id = 'FFhU1Up9uoyNqfgurFdUtJ8EwfGH5QSjgRgM89X9gbhs'
+    for (const status of ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'PARTIALLY_SUCCEEDED']) {
+      expect(
+        parsePublicTxStatusResponse(
+          { hash: id, status, tx_hash: '', error_message: '', anchor_txid_hex: '' },
+          id
+        )
+      ).toEqual({ submission_id: id, status })
+    }
+    const result = parsePublicTxStatusResponse(
+      { hash: id, status: 'COMPLETED', tx_hash: 'near-hash', anchor_txid_hex: 'd'.repeat(64) },
+      id
+    )
+    expect(result.anchor).toEqual({ txid_hex: 'd'.repeat(64) })
+    expect(result.anchor.confirmed_height).toBeUndefined()
     expect(
       parsePublicTxStatusResponse(
-        {
-          submission_id: id,
-          status: 'ANCHORED',
-          inclusion: { leaf_hash_hex: 'b'.repeat(64), leaf_index: 1 },
-          checkpoint: { state_seq: 2, noir_root_hex: 'c'.repeat(64) },
-          anchor: { txid_hex: 'd'.repeat(64), confirmed_height: 3 }
-        },
+        { hash: id, status: 'PARTIALLY_SUCCEEDED', error_message: 'one action failed' },
         id
-      ).anchor?.confirmed_height
-    ).toBe(3)
+      ).failure_reason
+    ).toBe('one action failed')
     expect(() =>
-      parsePublicTxStatusResponse({ submission_id: 'b'.repeat(64), status: 'EXECUTED' }, id)
+      parsePublicTxStatusResponse({ hash: '1'.repeat(32), status: 'COMPLETED' }, id)
     ).toThrow()
+    expect(() => parsePublicTxStatusResponse({ hash: id, status: 'ANCHORED' }, id)).toThrow()
+  })
+
+  test('checks enveloped submit hashes and reads the matching submission row', async () => {
+    const candidate = createPublicCandidate({
+      tgas: 250,
+      address: 'a.ma.private-mainnet.ref-dev-team.near',
+      nonce: '7',
+      deadline: '1760000000000',
+      txRequests: [request],
+      publicKey,
+      signature
+    })
+    const id = computePublicSubmissionId(candidate)
+    const client = new NoirPublicClient(PUBLIC_MAINNET_CONFIG, 'https://rpc.mainnet.near.org')
+    const originalFetch = globalThis.fetch
+    let returnedHash = id
+    globalThis.fetch = async (url, init) => {
+      if (init.method === 'POST') {
+        expect(JSON.parse(init.body)).toEqual(candidate)
+        return new Response(JSON.stringify({ code: 0, data: { hash: returnedHash } }))
+      }
+      expect(String(url)).toBe(`${PUBLIC_MAINNET_CONFIG.queryBaseUrl}/public/txs/${id}`)
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            hash: id,
+            status: 'PROCESSING',
+            tx_hash: '',
+            error_message: '',
+            anchor_txid_hex: ''
+          }
+        })
+      )
+    }
+    try {
+      expect((await client.submitPublicTransaction(candidate)).submission_id).toBe(id)
+      expect((await client.getPublicTransaction(id)).status).toBe('PROCESSING')
+      returnedHash = '1'.repeat(32)
+      await expect(client.submitPublicTransaction(candidate)).rejects.toThrow(/does not match/)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('binds an exact-output ZEC activation quote to the generic MCA message and minimum fee', () => {
