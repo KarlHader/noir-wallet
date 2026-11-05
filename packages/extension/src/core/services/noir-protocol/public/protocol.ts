@@ -202,33 +202,12 @@ export function serializePublicBusiness(input: {
   return JSON.stringify(business)
 }
 
-// Recognize business bytes before message review. Non-canonical or malformed
-// business objects must never fall back to an opaque message approval.
-export function parsePublicSigningMessage(message: string): {
-  nonce: string
-  deadline: string
-  txRequests: readonly NoirPublicFunctionCallRequest[]
-} | null {
-  let parsed: unknown
+export function assertPublicJsonMessage(message: string): void {
   try {
-    parsed = JSON.parse(message)
+    JSON.parse(message)
   } catch {
-    if (/"(?:nonce|deadline|tx_requests)"\s*:/.test(message))
-      throw new Error('Invalid Public business message')
-    return null
+    throw new Error('Public signing message must be valid JSON')
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-  const value = parsed as Record<string, unknown>
-  if (!['nonce', 'deadline', 'tx_requests'].some(key => key in value)) return null
-  exactKeys(value, ['nonce', 'deadline', 'tx_requests'], 'Public business')
-  const business = {
-    nonce: readPublicDecimal(value.nonce, 'Public nonce'),
-    deadline: readPublicDecimal(value.deadline, 'Public deadline'),
-    txRequests: parsePublicFunctionCallRequests(value.tx_requests)
-  }
-  if (serializePublicBusiness(business) !== message)
-    throw new Error('Public business message must use canonical signing bytes')
-  return Object.freeze(business)
 }
 
 export function createPublicCandidate(input: {

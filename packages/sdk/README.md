@@ -312,7 +312,10 @@ const publicAccount = await zcash.connect(publicMode)
 const publicKey = await zcash.getPublicKey(publicMode)
 
 // Call from a signing action; the wallet requests approval.
-const signedPublic = await zcash.signMessage('Sign in to Example', publicMode)
+const signedPublic = await zcash.signMessage(
+  JSON.stringify({ message: 'Sign in to Example' }),
+  publicMode
+)
 
 function handlePublicAccountChanged(account: PublicAccount | null) {
   // Refresh this identity's state, or clear it when account is null.
@@ -352,9 +355,9 @@ Public account initialization and wallet-managed transactions use these addition
 | `sendPublicTransaction({ requestId, txRequests })` | Approve, sign, submit, and monitor FunctionCalls; return a `PublicTransaction` with `operationId`. Reuse the same ID and unchanged calls when retrying an operation. |
 | `getPublicTransaction(operationId)`                | Return the authorized operation or `null`, including execution status, transaction hash, and optional anchoring progress.                                            |
 
-`signMessage()` only signs; it does not submit or monitor a transaction. A Public business message must use canonical JSON with exactly `{ nonce, deadline, tx_requests }`. Use the current MCA nonce and a deadline within five minutes; both are decimal strings, and the deadline is Unix time in milliseconds. The wallet reviews the actual calls and signs the original bytes. The dApp owns external submission and status tracking; use `sendPublicTransaction()` for wallet-managed execution. Its `final` status means verified execution, `failed` means failure, and `signed`, `broadcast`, and `confirming` remain pending. Anchoring is tracked separately.
+`signMessage()` accepts valid JSON text and signs the original string after approval. The wallet displays that JSON without interpreting its fields or action types. The dApp owns transaction construction, nonce, expiry, external submission, and status tracking.
 
-The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes.
+`sendPublicTransaction()` retains its FunctionCall shape and automatic fee handling for wallet-managed execution. Its `final` status means verified execution, `failed` means failure, and `signed`, `broadcast`, and `confirming` remain pending. Anchoring is tracked separately. The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes.
 
 ## Handle errors
 

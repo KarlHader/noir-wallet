@@ -902,29 +902,8 @@ export function ApprovalPage() {
                 )}
               </div>
             </ApprovalDetailCard>
-            {publicMessageReview.business && (
-              <>
-                <ApprovalDetailCard title="Transaction intent">
-                  <div className="space-y-2 text-xs">
-                    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                      <span className="text-muted">Nonce</span>
-                      <span className="break-all text-right font-mono">
-                        {publicMessageReview.business.nonce}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                      <span className="text-muted">Deadline</span>
-                      <span className="break-all text-right font-mono">
-                        {publicMessageReview.business.deadline}
-                      </span>
-                    </div>
-                  </div>
-                </ApprovalDetailCard>
-                <PublicFunctionCalls requests={publicMessageReview.business.txRequests} />
-              </>
-            )}
-            <ApprovalDetailCard title="Message bytes">
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs font-mono leading-5">
+            <ApprovalDetailCard title="JSON">
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs font-mono leading-5">
                 {publicMessageReview.message}
               </pre>
             </ApprovalDetailCard>

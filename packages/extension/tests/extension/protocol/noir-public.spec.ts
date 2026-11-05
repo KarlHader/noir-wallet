@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { NEAR_NETWORKS } from '../../../src/config/networks'
 import {
   computePublicSubmissionId,
-  serializePublicBusiness,
   type NoirPublicTxCandidate
 } from '../../../src/core/services/noir-protocol/public/protocol'
 import { verifyMessageSignature } from '../../../../sdk/src/chains/zcash/utils'
@@ -384,8 +383,13 @@ test('signs with the Public-only identity after explicit review and rejects stal
     address: account.address,
     signingMode: 'noir_protocol_public'
   })
-  const message = 'Noir Public identity: exact message bytes'
+  const message = JSON.stringify({ message: 'Noir Public identity: exact message bytes' })
   const options = { signingMode: 'noir_protocol_public' }
+  const pageCount = context.pages().length
+  expect(
+    (await requestPublic(dapp, 'zcash_signMessage', ['{"broken":', options])).error?.message
+  ).toMatch(/valid JSON/)
+  expect(context.pages()).toHaveLength(pageCount)
   const rejectWindow = context.waitForEvent('page', { timeout: 60_000 })
   const rejected = requestPublic(dapp, 'zcash_signMessage', [message, options])
   const rejectWindowOrResult = await Promise.race([
@@ -433,35 +437,38 @@ test('signs with the Public-only identity after explicit review and rejects stal
   ).toMatchObject({ valid: true, pubkeyMatch: true, addressMatch: true })
   if (!signApproval.isClosed()) await signApproval.close()
 
-  const deadline = String(Date.now() + 180_000)
+  const deadline = '0'
   const args = JSON.stringify({ receiver_id: 'recipient.near', amount: '25000000' })
-  const business = serializePublicBusiness({
-    nonce: '7',
-    deadline,
-    txRequests: [
-      {
-        FunctionCall: {
-          receiver_id: 'zec.omft.near',
-          function_calls: [
-            { method_name: 'ft_transfer', args, gas: '30000000000000', deposit: '1' }
-          ]
-        }
-      }
-    ]
-  })
+  const business = JSON.stringify(
+    {
+      nonce: '7',
+      deadline,
+      tx_requests: [
+        { GasPayment: { token_id: 'near', amount: '100' } },
+        {
+          FunctionCall: {
+            receiver_id: 'zec.omft.near',
+            function_calls: [
+              { method_name: 'ft_transfer', args, gas: '30000000000000', deposit: '1' }
+            ]
+          }
+        },
+        { ProtocolExtension: { payload: { enabled: true }, memo: '<future>' } }
+      ],
+      protocol_version: 2
+    },
+    null,
+    2
+  )
   const businessWindow = context.waitForEvent('page', { timeout: 60_000 })
   const businessRequest = requestPublic(dapp, 'zcash_signMessage', [business, options])
   const businessApproval = await businessWindow
   await businessApproval.waitForURL(/#approval\?requestId=/)
   await businessApproval.setViewportSize({ width: 375, height: 632 })
-  await expect(businessApproval.getByText('Transaction intent')).toBeVisible()
-  await expect(businessApproval.getByText('7', { exact: true })).toBeVisible()
-  await expect(businessApproval.getByText(deadline, { exact: true })).toBeVisible()
-  await expect(businessApproval.getByText('ft_transfer', { exact: true })).toBeVisible()
-  await expect(businessApproval.getByText(args, { exact: true })).toBeVisible()
+  await expect(businessApproval.getByText('JSON', { exact: true })).toBeVisible()
+  await expect(businessApproval.getByText(business, { exact: true })).toBeVisible()
+  await expect(businessApproval.getByText('Transaction intent')).toHaveCount(0)
   await capturePublicScreenshot(businessApproval, 'public-23a-business-signing-review.png')
-  await businessApproval.getByText(args, { exact: true }).scrollIntoViewIfNeeded()
-  await capturePublicScreenshot(businessApproval, 'public-23c-business-call-details.png')
   await businessApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
   const businessSignature = (await businessRequest).result as { signature: string; pubkey: string }
   expect(businessSignature.pubkey).toBe(account.publicKey)
@@ -476,7 +483,10 @@ test('signs with the Public-only identity after explicit review and rejects stal
   if (!businessApproval.isClosed()) await businessApproval.close()
 
   const staleWindow = context.waitForEvent('page', { timeout: 60_000 })
-  const staleRequest = requestPublic(dapp, 'zcash_signMessage', [`${message} stale`, options])
+  const staleRequest = requestPublic(dapp, 'zcash_signMessage', [
+    JSON.stringify({ message: 'stale request' }),
+    options
+  ])
   const staleApproval = await staleWindow
   await staleApproval.waitForURL(/#approval\?requestId=/)
   const staleRequestId = new URL(staleApproval.url()).hash.match(/requestId=([^&]+)/)?.[1]

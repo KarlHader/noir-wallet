@@ -10,7 +10,7 @@ import {
   createPublicMcaMessage,
   parsePublicCandidate,
   parsePublicFunctionCallRequests,
-  parsePublicSigningMessage,
+  assertPublicJsonMessage,
   serializePublicBusiness,
   serializePublicCandidate,
   stringifyPublicWire
@@ -81,42 +81,24 @@ function recoverZcashPublicKey(message, compactSignature) {
 }
 
 test.describe('Public wire contract', () => {
-  test('recognizes canonical Business bytes and rejects malformed or changed signing bytes', () => {
-    const business = serializePublicBusiness({
-      nonce: '7',
-      deadline: '1760000000000',
-      txRequests: [request]
-    })
-    expect(parsePublicSigningMessage('ordinary message')).toBeNull()
-    expect(parsePublicSigningMessage(JSON.stringify({ greeting: 'hello' }))).toBeNull()
-    expect(parsePublicSigningMessage(business)).toEqual({
-      nonce: '7',
-      deadline: '1760000000000',
-      txRequests: [request]
-    })
-    expect(() => parsePublicSigningMessage(`${business} `)).toThrow(/canonical signing bytes/)
-    expect(() =>
-      parsePublicSigningMessage(
-        JSON.stringify({
-          deadline: '1760000000000',
-          nonce: '7',
-          tx_requests: [request]
-        })
-      )
-    ).toThrow(/canonical signing bytes/)
-    expect(() =>
-      parsePublicSigningMessage(
-        JSON.stringify({
-          nonce: '7',
-          deadline: '1760000000000',
-          tx_requests: [request],
-          extra: true
-        })
-      )
-    ).toThrow(/Invalid Public business fields/)
-    expect(() => parsePublicSigningMessage('{"nonce":"7",')).toThrow(
-      /Invalid Public business message/
-    )
+  test('Public message signing accepts any JSON syntax without business schema checks', () => {
+    for (const value of [
+      JSON.stringify(
+        {
+          tx_requests: [{ GasPayment: { token_id: 'near', amount: '100' } }, request],
+          extra: true,
+          deadline: '0'
+        },
+        null,
+        2
+      ),
+      ' [null, true, 1, {"FutureAction": {"any_field": "value"}}] ',
+      '"sign in"',
+      'null'
+    ])
+      expect(() => assertPublicJsonMessage(value)).not.toThrow()
+    for (const value of ['ordinary message', '{"nonce":"7",', '{"value": undefined}'])
+      expect(() => assertPublicJsonMessage(value)).toThrow(/valid JSON/)
   })
 
   test('produces the signed Business bytes and Go submission ID from structured fields', () => {

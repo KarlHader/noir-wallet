@@ -6,7 +6,7 @@ import type { PublicConnectApprovalData } from '@/background/pending-requests'
 import Big from '@/lib/big'
 import {
   parsePublicFunctionCallRequests,
-  parsePublicSigningMessage,
+  assertPublicJsonMessage,
   readPublicAccountId,
   readPublicTgas,
   readPublicDecimal
@@ -28,11 +28,6 @@ export interface NoirPublicTransactionReview {
 export interface NoirPublicMessageReview {
   readonly account: NoirPublicAccount
   readonly message: string
-  readonly business: Readonly<{
-    nonce: string
-    deadline: string
-    txRequests: readonly NoirPublicFunctionCallRequest[]
-  }> | null
 }
 
 export interface NoirPublicActivationReview {
@@ -105,26 +100,12 @@ export function parsePublicMessageReview(value: unknown): NoirPublicMessageRevie
   )
     return null
 
-  let business: ReturnType<typeof parsePublicSigningMessage>
   try {
-    business = parsePublicSigningMessage(value.message)
+    assertPublicJsonMessage(value.message)
   } catch {
     return null
   }
-  if (value.business !== undefined) {
-    if (!record(value.business) || business === null) return null
-    try {
-      const supplied = {
-        nonce: readPublicDecimal(value.business.nonce, 'Public nonce'),
-        deadline: readPublicDecimal(value.business.deadline, 'Public deadline'),
-        txRequests: parsePublicFunctionCallRequests(value.business.txRequests)
-      }
-      if (JSON.stringify(supplied) !== JSON.stringify(business)) return null
-    } catch {
-      return null
-    }
-  }
-  return { account: value.account, message: value.message, business }
+  return { account: value.account, message: value.message }
 }
 
 export function parsePublicTransactionReview(value: unknown): NoirPublicTransactionReview | null {

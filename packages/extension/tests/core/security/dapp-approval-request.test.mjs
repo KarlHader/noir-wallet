@@ -120,7 +120,7 @@ test.describe('dApp approval request boundary', () => {
     }
   })
 
-  test('reviews Public signing bytes and rejects a substituted business review', () => {
+  test('reviews only the original Public JSON signing bytes', () => {
     const account = {
       chain: 'zcash-l2',
       network: 'mainnet',
@@ -152,14 +152,12 @@ test.describe('dApp approval request boundary', () => {
         requestId
       ).status
     ).toBe('ready')
-    expect(parsePublicMessageReview({ account, message: 'Hello Public' })?.business).toBeNull()
-    expect(parsePublicMessageReview({ account, message, business })?.business?.txRequests).toEqual(
-      txRequests
-    )
+    expect(parsePublicMessageReview({ account, message: 'Hello Public' })).toBeNull()
+    const original = ` \n${message}\n `
     expect(
-      parsePublicMessageReview({ account, message, business: { ...business, nonce: '2' } })
-    ).toBeNull()
-    expect(parsePublicMessageReview({ account, message: ` ${message}` })).toBeNull()
+      parsePublicMessageReview({ account, message: original, business: { nonce: '2' } })
+    ).toEqual({ account, message: original })
+    expect(parsePublicMessageReview({ account, message: '{"tx_requests":' })).toBeNull()
   })
 
   test('requires the actual Public transaction calls and complete activation costs', () => {

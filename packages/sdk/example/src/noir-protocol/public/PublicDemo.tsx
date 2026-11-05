@@ -637,10 +637,11 @@ export function PublicDemo({
         <form onSubmit={sign}>
           <div className="form-group">
             <label className="label" htmlFor="public-sign-message">
-              Message
+              JSON
             </label>
             <textarea
               id="public-sign-message"
+              placeholder='{"message":"Sign in"}'
               className="input textarea-sm"
               value={signingMessage}
               onChange={event => {

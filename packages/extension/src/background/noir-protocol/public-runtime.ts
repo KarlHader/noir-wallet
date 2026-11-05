@@ -16,7 +16,7 @@ import {
 import {
   createPublicCandidate,
   parsePublicFunctionCallRequests,
-  parsePublicSigningMessage,
+  assertPublicJsonMessage,
   serializePublicBusiness
 } from '@/core/services/noir-protocol/public/protocol'
 import type {
@@ -281,70 +281,28 @@ export class NoirPublicRuntime {
     approve: (action: 'publicSignMessage', data: unknown) => Promise<{ approved: boolean }>
   ) {
     const identity = await this.getSigningIdentity(context)
-    const business = parsePublicSigningMessage(message)
+    assertPublicJsonMessage(message)
     const account = await this.getAccount(context)
     if (account.publicKey !== identity.pubkey || account.address !== identity.address)
       throw new Error('Public signing identity changed')
-    return this.serial(
-      queueKey(context, business && account.mcaId ? account.mcaId : identity.pubkey),
-      async () => {
-        const client = clientFor(context.network)
-        const checkBusiness = async () => {
-          await assertPublicContext(context)
-          if (!business) return
-          if (!account.mcaId || account.status !== 'active')
-            throw new Error('Activate the Public account before signing transactions')
-          const deadline = Number(business.deadline)
-          if (
-            !Number.isSafeInteger(deadline) ||
-            deadline <= Date.now() ||
-            deadline > Date.now() + 5 * 60_000
-          )
-            throw new Error('Public transaction deadline must be within five minutes')
-          if ((await client.getMcaByWallet(identity.pubkey)) !== account.mcaId)
-            throw new Error('Public account binding changed')
-          if ((await client.getMcaNonce(account.mcaId)) !== business.nonce)
-            throw new Error('Public account nonce changed. Review a new request.')
-          const pending = await this.repository.listPending(this.accountScopes(), context.network)
-          if (
-            pending.some(
-              item =>
-                'candidate' in item &&
-                item.binding.accountAddress === account.mcaId &&
-                BigInt(item.candidate.nonce) >= BigInt(business.nonce)
-            )
-          )
-            throw new Error('An earlier Public transaction is still processing')
-          await assertPublicContext(context)
-        }
-        await checkBusiness()
-        if (
-          !(
-            await approve('publicSignMessage', {
-              account,
-              message,
-              ...(business ? { business } : {})
-            })
-          ).approved
+    return this.serial(queueKey(context, identity.pubkey), async () => {
+      await assertPublicContext(context)
+      if (!(await approve('publicSignMessage', { account, message })).approved)
+        throw new Error('User rejected the signature request')
+      return accountContextTransition.runActiveOperation(async () => {
+        await assertPublicContext(context)
+        const core = await this.getSigningCore(context)
+        await assertPublicContext(context)
+        const signature = await signPublicMessage(
+          core,
+          context.derivationIndex,
+          identity.pubkey,
+          message
         )
-          throw new Error('User rejected the signature request')
-        return accountContextTransition.runActiveOperation(async () => {
-          await checkBusiness()
-          const core = await this.getSigningCore(context)
-          await checkBusiness()
-          const signature = await signPublicMessage(
-            core,
-            context.derivationIndex,
-            identity.pubkey,
-            message
-          )
-          await assertPublicContext(context)
-          if (business && Date.now() >= Number(business.deadline))
-            throw new Error('Public transaction expired')
-          return { ...identity, signature }
-        })
-      }
-    )
+        await assertPublicContext(context)
+        return { ...identity, signature }
+      })
+    })
   }
 
   async activate(
