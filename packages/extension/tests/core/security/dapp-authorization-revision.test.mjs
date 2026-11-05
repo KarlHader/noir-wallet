@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { DAppManager } from '../../../src/core/dapp/dapp-manager.ts'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { connectionAuthorizesAccount, DAppManager } from '../../../src/core/dapp/dapp-manager.ts'
+
+const require = createRequire(import.meta.url)
+const typescript = require('typescript')
 
 const origin = 'https://connected.example'
 const account = { walletId: 'wallet-1', accountId: 'account-1' }
@@ -30,6 +35,130 @@ function managerFixture() {
     }
   }
 }
+
+function balanceHandlerFixture(manager) {
+  const first = {
+    id: account.accountId,
+    name: 'First',
+    addresses: { transparent: 't-first', shielded: 'zs-first' }
+  }
+  const second = {
+    id: 'account-2',
+    name: 'Second',
+    addresses: { transparent: 't-second', shielded: 'zs-second' }
+  }
+  const wallet = { id: account.walletId, name: 'Wallet', accounts: [first, second] }
+  const state = {
+    currentWalletId: wallet.id,
+    currentAccountId: first.id,
+    currentNetwork: 'mainnet',
+    wallets: [wallet],
+    accountDisplayNames: {},
+    getAccount(walletId, accountId) {
+      return this.wallets
+        .find(item => item.id === walletId)
+        ?.accounts.find(item => item.id === accountId)
+    }
+  }
+  const runtime = {
+    locked: false,
+    isLocked() {
+      return this.locked
+    },
+    getCurrentAccount() {
+      return state.getAccount(state.currentWalletId, state.currentAccountId)
+    }
+  }
+  const balance = {
+    transparent: '1',
+    shielded: '2',
+    total: '3',
+    spendable: '2',
+    available: '2'
+  }
+  const source = readFileSync(
+    new URL('../../../src/background/dapp-handler.ts', import.meta.url),
+    'utf8'
+  )
+  const { outputText } = typescript.transpileModule(source, {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022
+    }
+  })
+  const module = { exports: {} }
+  const dependencies = {
+    '../core/dapp/dapp-manager': { dappManager: manager, connectionAuthorizesAccount },
+    '@/core/dapp/first-party-policy': { shouldAutoConnectDApp: () => false },
+    './zcash-wallet-runtime': { backgroundZcashWalletRuntime: runtime },
+    './sync-scheduler': { syncScheduler: { requestPassiveSync() {} } },
+    '@/store/wallet-store': { useWalletStore: { getState: () => state } },
+    '@/store/account-data-store': {
+      useAccountDataStore: { getState: () => ({ getBalance: () => balance }) }
+    },
+    '@/config/wallet': { WALLET_CONFIG: { SYNC: { DAPP_BALANCE_SYNC_STALE_MS: 30_000 } } },
+    '@/lib/format': {
+      getAccountDisplayName: (_walletId, _accountId, name) => name,
+      formatWalletName: item => item.name
+    },
+    '@/core/zcash/wallet-rpc-errors': { isRetryableWalletRpcError: () => false }
+  }
+  new Function('require', 'module', 'exports', outputText)(
+    specifier => dependencies[specifier] ?? {},
+    module,
+    module.exports
+  )
+  return { handler: new module.exports.DAppHandler(), state, runtime, balance }
+}
+
+test('Zcash balance reads recheck the authorized context after account resolution', async t => {
+  for (const change of ['none', 'revoke', 'account', 'lock', 'network']) {
+    await t.test(change, async () => {
+      const { manager } = managerFixture()
+      await manager.setAuthorizedAccounts(origin, {}, [account], account)
+      const { handler, state, runtime, balance } = balanceHandlerFixture(manager)
+      await handler.initialize()
+
+      let signalResolved
+      let releaseResolution
+      const resolved = new Promise(resolve => {
+        signalResolved = resolve
+      })
+      const hold = new Promise(resolve => {
+        releaseResolution = resolve
+      })
+      const resolveBalances = handler.resolveAccountBalances.bind(handler)
+      handler.resolveAccountBalances = async site => {
+        const accounts = await resolveBalances(site)
+        signalResolved()
+        await hold
+        return accounts
+      }
+
+      const reading = handler.handleRequest({ method: 'zcash_getBalance', origin })
+      await resolved
+      try {
+        if (change === 'revoke') await manager.removeConnection(origin)
+        if (change === 'account') state.currentAccountId = 'account-2'
+        if (change === 'lock') runtime.locked = true
+        if (change === 'network') state.currentNetwork = 'testnet'
+      } finally {
+        releaseResolution()
+      }
+
+      if (change === 'none') {
+        const result = await reading
+        assert.equal(result.total, balance.total)
+        assert.deepEqual(
+          result.accounts.map(item => item.accountId),
+          [account.accountId]
+        )
+      } else {
+        await assert.rejects(reading, /Wallet account or site connection changed/)
+      }
+    })
+  }
+})
 
 test('explicit revocation survives reload and a stale connect approval cannot restore access', async () => {
   const { manager, storage } = managerFixture()
