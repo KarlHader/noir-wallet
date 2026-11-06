@@ -2,14 +2,26 @@
   "schemaVersion": 3,
   "engine": "zcash",
   "packageVersion": "0.1.0",
-  "abiVersion": "zcash-wallet-7d6921d-v1",
-  "sourceCommit": "7d6921d51b9fe4f4a13b8886481a9a098d6f1e7f",
+  "abiVersion": "zcash-wallet-cb8da9d-v1",
+  "sourceCommit": "cb8da9dc60d51dbf3958657be35427210d544541",
   "artifacts": [
+    {
+      "path": "LICENSE.md",
+      "role": "support",
+      "bytes": 4200,
+      "sha256": "0020b2060ca781ea5a61d8ef77002611a98efef3089925921f906ccefbe292c3"
+    },
+    {
+      "path": "README.md",
+      "role": "support",
+      "bytes": 2893,
+      "sha256": "2fa13d5a66df8a6a42a77347f891df9af77e0b897e93fb62f58b4ab04074ab14"
+    },
     {
       "path": "package.json",
       "role": "metadata",
-      "bytes": 298,
-      "sha256": "08e72324afabc9ff4feae396383398241765cf8e75223be750073413e8b71e69"
+      "bytes": 340,
+      "sha256": "9f7c36a92d73da2eae5bdbf18330928b53ad76d773bdf21c830befe824ff2d3a"
     },
     {
       "path": "snippets/wasm-bindgen-rayon-38edf6e439f6d70d/src/workerHelpers.js",
@@ -20,31 +32,31 @@
     {
       "path": "zcash_wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 50490,
-      "sha256": "9c3b0a9df260973d02653a68c213ac458ecfd964fa64686b7221a9a230f7f0d3"
+      "bytes": 50376,
+      "sha256": "8ec9f7e46d03495a58b94f05affa19748779525c558901f61d301aa535613630"
     },
     {
       "path": "zcash_wallet_wasm.js",
       "role": "loader",
-      "bytes": 142800,
-      "sha256": "42d9c349fbbdec23b4ac61b501ee33400e2dd00d8fed8f1936fd4e8148c95bbe"
+      "bytes": 142171,
+      "sha256": "82088e60075fa3c1a3d814eefb93ecdf3f7f48a6cfcd6563bcecdcb3b4c09ace"
     },
     {
       "path": "zcash_wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 66568964,
-      "sha256": "77e9fe5439172367b06f4eb2e47bb33bc1c12241eb9faaae9d9c2d25b4e64ba0"
+      "bytes": 66472202,
+      "sha256": "0b83c3963486310a881a1ebdd24d241c0e595496b60aa1b154c853ad47f71a8e"
     },
     {
       "path": "zcash_wallet_wasm_bg.wasm.d.ts",
       "role": "binary-types",
-      "bytes": 16146,
-      "sha256": "8e359d95d64c977a368aec8255a77f143aa8ff940b4c2d88da5a2486db29b030"
+      "bytes": 16138,
+      "sha256": "cd265e03b91e66eff50c27cb99fe0d7f13935c50ef30723c8b3a5572370cebed"
     }
   ],
   "sourceRepository": "https://github.com/NoirWallet/zcash-wallet-wasm.git",
   "build": {
-    "rustToolchain": "nightly-2025-11-15",
+    "rustToolchain": "nightly-2026-10-20",
     "wasmPack": "0.14.0",
     "wasmBindgen": "0.2.122",
     "llvm": "22.1.4",

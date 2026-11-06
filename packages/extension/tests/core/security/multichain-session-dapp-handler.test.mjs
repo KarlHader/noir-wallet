@@ -2,8 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { BackgroundMultichainSessionDAppHandler } from '../../../src/background/multichain-session-dapp-handler.ts'
+import { selectDAppSessionAccounts } from '../../../src/background/dapp-session-accounts.ts'
 
 const ethereum = 'eip155:1'
+const custom = 'eip155:4663'
 const reference = { walletId: 'wallet-1', accountId: 'account-1' }
 const address = '0x1111111111111111111111111111111111111111'
 
@@ -25,49 +27,42 @@ function proposal(scope = { chainId: ethereum, chainName: 'Ethereum', iconChain:
   }
 }
 
-function selection(value) {
-  return {
-    authorization: {
-      chainId: value.chainId,
-      accounts: [reference],
-      binding: reference
-    },
-    addresses: [address]
-  }
-}
-
-test('creates one atomic CAIP-25 session and enforces scoped invocation methods', async () => {
+function createHandler({ selectedIds = ['account-1'], prepareProposal = proposal } = {}) {
   let stored = null
   const approvals = []
   const events = []
   const invocations = []
   const handler = new BackgroundMultichainSessionDAppHandler({
     network: 'mainnet',
-    evmNetworks: [
-      {
-        networkMode: 'mainnet',
-        chainId: ethereum,
-        numericChainId: 1,
-        networkName: 'mainnet',
-        displayName: 'Ethereum',
-        iconChain: 'eth',
-        nativeCurrency: {
-          name: 'Ether',
-          symbol: 'ETH',
-          decimals: 18,
-          slip44Reference: '60'
-        },
-        rpcUrl: 'https://rpc.example',
-        explorerUrl: 'https://explorer.example'
-      }
-    ],
+    evmNetworks: [ethereum, custom].map(chainId => ({
+      networkMode: 'mainnet',
+      chainId,
+      numericChainId: Number(chainId.split(':')[1]),
+      networkName: 'mainnet',
+      displayName: 'Ethereum',
+      iconChain: 'eth',
+      nativeCurrency: {
+        name: 'Ether',
+        symbol: 'ETH',
+        decimals: 18,
+        slip44Reference: '60'
+      },
+      rpcUrl: 'https://rpc.example',
+      explorerUrl: 'https://explorer.example'
+    })),
     manager: {
       getAllConnections: async () => [],
+      getAuthorizationRevision: async () => 4,
       getCaip25Session: async () => stored,
-      setCaip25Session: async (_origin, _tab, authorizations, session) => {
-        expect(authorizations).toEqual([
-          { chainId: ethereum, accounts: [reference], binding: reference }
-        ])
+      setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, revision) => {
+        expect(revision).toBe(4)
+        expect(authorizations).toEqual(
+          session.scopes.map(scope => ({
+            chainId: scope.chainId,
+            accounts: [reference],
+            binding: reference
+          }))
+        )
         stored = session
       }
     },
@@ -77,7 +72,7 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
         return {
           approved: true,
           requestId: 'approval-1',
-          selectedScopes: { [ethereum]: ['account-1'] }
+          selectedScopes: { evm: selectedIds }
         }
       },
       broadcastProviderEvent: async (...args) => {
@@ -87,21 +82,21 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
     },
     zcash: {
       prepareSessionAccountSelection: async () => proposal(),
-      resolveSessionAccountSelection: async value => selection(value),
+      resolveSessionAccountSelection: async (value, ids) => selectDAppSessionAccounts(value, ids),
       getSessionAccounts: async () => [],
       revokeAllPermissions: async () => {
         stored = null
       }
     },
     evm: {
-      prepareSessionAccountSelection: async (_origin, scope) => proposal(scope),
-      resolveSessionAccountSelection: async value => selection(value),
+      prepareSessionAccountSelection: async (_origin, scope) => prepareProposal(scope),
+      resolveSessionAccountSelection: async (value, ids) => selectDAppSessionAccounts(value, ids),
       getSessionAccounts: async () => [address],
       getCaip2ChainId: () => ethereum
     },
     bitcoin: {
       prepareSessionAccountSelection: async () => proposal(),
-      resolveSessionAccountSelection: async value => selection(value),
+      resolveSessionAccountSelection: async (value, ids) => selectDAppSessionAccounts(value, ids),
       getSessionAccounts: async () => []
     },
     solana: null,
@@ -111,6 +106,11 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
       return 'invoked'
     }
   })
+  return { handler, approvals, events, invocations, getStored: () => stored }
+}
+
+test('creates one shared EVM approval while preserving atomic chain scopes and methods', async () => {
+  const { handler, approvals, events, invocations, getStored } = createHandler()
 
   const session = await handler.request(
     {
@@ -120,6 +120,10 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
           [ethereum]: {
             methods: ['eth_accounts'],
             notifications: ['wallet_sessionChanged']
+          },
+          [custom]: {
+            methods: ['eth_accounts'],
+            notifications: []
           }
         }
       }
@@ -135,7 +139,11 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
   expect(approvals).toHaveLength(1)
   expect(approvals[0].data.favicon).toBe('https://dapp.example/icon.png')
   expect(approvals[0].data.faviconPageUrl).toBe('https://dapp.example/swap')
+  expect(approvals[0].data.scopes).toHaveLength(1)
+  expect(approvals[0].data.scopes[0]).toMatchObject({ chainId: 'evm', chainName: 'EVM' })
   expect(session.scopes[ethereum].accounts).toEqual([`${ethereum}:${address}`])
+  expect(session.scopes[custom].accounts).toEqual([`${custom}:${address}`])
+  expect(getStored().scopes.map(scope => scope.accounts)).toEqual([[reference], [reference]])
   expect(events.at(-1).slice(0, 3)).toEqual([
     'https://dapp.example',
     'multichain',
@@ -164,4 +172,56 @@ test('creates one atomic CAIP-25 session and enforces scoped invocation methods'
       {}
     )
   ).rejects.toMatchObject({ code: 4100 })
+
+  await expect(
+    handler.request(
+      {
+        method: 'wallet_invokeMethod',
+        params: { scope: 'eip155:999', request: { method: 'eth_accounts' } }
+      },
+      'https://dapp.example',
+      {}
+    )
+  ).rejects.toMatchObject({ code: 4100 })
+})
+
+test('shared EVM selection cannot widen a scope with a narrower account request', async () => {
+  const otherAddress = '0x2222222222222222222222222222222222222222'
+  const { handler, approvals, getStored } = createHandler({
+    selectedIds: ['account-1', 'account-2'],
+    prepareProposal: scope => ({
+      ...proposal(scope),
+      accounts: [
+        ...proposal(scope).accounts,
+        {
+          id: 'account-2',
+          label: 'Account 2',
+          address: otherAddress,
+          reference: { walletId: 'wallet-2', accountId: 'account-2' },
+          required: false
+        }
+      ]
+    })
+  })
+  await expect(
+    handler.request(
+      {
+        method: 'wallet_createSession',
+        params: {
+          scopes: {
+            [ethereum]: { methods: ['eth_accounts'], notifications: [] },
+            [custom]: {
+              accounts: [`${custom}:${address}`],
+              methods: ['eth_accounts'],
+              notifications: []
+            }
+          }
+        }
+      },
+      'https://dapp.example',
+      {}
+    )
+  ).rejects.toMatchObject({ code: 4100 })
+  expect(approvals[0].data.scopes[0].accounts.map(account => account.id)).toEqual(['account-1'])
+  expect(getStored()).toBeNull()
 })

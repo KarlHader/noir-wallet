@@ -128,7 +128,11 @@ function PortfolioAssetBalanceRow({
   const pendingAmount = assetPendingAmount(entry.asset)
   const fiat = getPortfolioAssetUsdValue(entry.asset, prices)
   const quote = findAssetPrice(prices, entry.asset.asset.id)
-  const chainAlias = resolveChainIconAlias(entry.chain.chain.family, entry.chain.chain.displayName)
+  const chainAlias = resolveChainIconAlias(
+    entry.chain.chain.family,
+    entry.chain.chain.displayName,
+    entry.chain.chain.id
+  )
 
   return (
     <div>
@@ -249,7 +253,8 @@ export function PortfolioAssetGroupCard({
             directAsset && group.entries[0]
               ? resolveChainIconAlias(
                   group.entries[0].chain.chain.family,
-                  group.entries[0].chain.chain.displayName
+                  group.entries[0].chain.chain.displayName,
+                  group.entries[0].chain.chain.id
                 )
               : undefined
           }

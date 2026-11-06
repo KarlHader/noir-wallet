@@ -1045,6 +1045,7 @@ export function Home() {
       {currentDApp && currentAccountAuthorized && (
         <ConnectedDAppBar
           dapp={currentDApp}
+          account={effectiveAccount}
           onManage={handleDAppClick}
           onDisconnect={disconnectDApp}
         />

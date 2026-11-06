@@ -5,9 +5,7 @@ import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-
 import type { AddressType, TransactionType, Transaction, QuoteBinding } from '@/types/wallet'
 import type { ZcashOperationAnalyticsContext } from '@/lib/analytics/operations'
 import { WALLET_CONFIG } from '@/config/wallet'
-import { MARGINAL_FEE_ZATS } from '@/config/fee'
-import { sanitizeMarginalFeeZats } from '@/core/zcash/fee-policy'
-import { safeBig } from '@/lib/big'
+import type { FeeTier } from '@/config/fee'
 import { classifyError, getResponseErrorMessage } from '@/lib/errors'
 import { sanitizeMemoForRecipient } from '@/lib/zcash-memo'
 import { waitForZcashTxCompleted } from '@/popup/services/zcash-transaction-completion'
@@ -30,6 +28,8 @@ export interface SendTransactionParams {
   fee?: string
   /** ZIP-317 marginal fee per action (zatoshis); omitted = standard tier. */
   marginalFeeZats?: number
+  feeQuoteId?: string
+  feeTier?: FeeTier
   /** Expired transaction being retried by this send. */
   replacesTransactionId?: string
   /** Require this exact account to remain active until the send is dispatched. */
@@ -99,6 +99,8 @@ export function useTransaction(): UseTransactionReturn {
         memo: _memo,
         fee: explicitFee,
         marginalFeeZats,
+        feeQuoteId,
+        feeTier,
         replacesTransactionId,
         expectedAccountKey,
         displayTo,
@@ -111,15 +113,7 @@ export function useTransaction(): UseTransactionReturn {
       const memo = _memo ?? ''
       const onChainMemo = sanitizeMemoForRecipient(to, _memo)
 
-      // Pending record fee: prefer caller-supplied value; otherwise derive a
-      // tier-aware approximation from marginalFeeZats so Fast tier doesn't
-      // surface as Standard. The on-chain fee will be reconciled when the
-      // tx is mined.
-      const fee =
-        explicitFee ??
-        safeBig(WALLET_CONFIG.NETWORK_FEE)
-          .times(sanitizeMarginalFeeZats(marginalFeeZats) / MARGINAL_FEE_ZATS.standard)
-          .toFixed()
+      const fee = explicitFee ?? WALLET_CONFIG.NETWORK_FEE
 
       setStep('pending')
       setError(null)
@@ -218,6 +212,8 @@ export function useTransaction(): UseTransactionReturn {
               txType,
               sendParams: { to, amount, memo: onChainMemo, fundingSource: fromType },
               marginalFeeZats,
+              feeQuoteId,
+              feeTier,
               monitorParams: monitorParams
                 ? {
                     depositAddress: monitorParams.depositAddress,

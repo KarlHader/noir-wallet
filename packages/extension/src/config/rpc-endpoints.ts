@@ -22,9 +22,9 @@ export const MAX_GRPC_WEB_RESPONSE_BYTES = 1_048_576
 export const RPC_DEFAULT_ENDPOINTS = {
   zcash: {
     mainnet: {
-      id: 'deltarpc',
-      label: 'DeltaRPC',
-      url: 'https://zcash-wallet-grpc-self.deltarpc.com'
+      id: 'deltarpc-web-sg',
+      label: 'DeltaRPC Singapore',
+      url: 'https://zcashwebrpcsg.deltarpc.com'
     },
     testnet: {
       id: 'chainsafe',

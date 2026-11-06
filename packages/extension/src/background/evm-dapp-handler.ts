@@ -85,10 +85,11 @@ export interface BackgroundEvmDAppHandlerOptions {
   readonly manager: Pick<
     DAppManager,
     | 'getAllConnections'
+    | 'getAuthorizationRevision'
     | 'getChainAuthorization'
     | 'addEvmAuthorizedAccount'
-    | 'removeChainAuthorization'
-    | 'setChainAuthorizedAccounts'
+    | 'removeEvmAuthorization'
+    | 'setEvmAuthorizedAccounts'
   >
   readonly approval: EvmDAppApprovalPort
   readonly loadActiveContext: () => Promise<ActiveEvmPortfolioContext | null>
@@ -279,7 +280,7 @@ export class BackgroundEvmDAppHandler {
       case 'wallet_revokePermissions':
         parseEthAccountsPermissionRequest(params)
         await this.options.runActiveOperation(async () => {
-          await this.options.manager.removeChainAuthorization(origin, this.chainId)
+          await this.options.manager.removeEvmAuthorization(origin)
           this.options.approval.cancelPendingApprovals(origin, 'evm')
           await this.options.approval
             .broadcastProviderEvent(origin, 'evm', 'accountsChanged', [])
@@ -316,9 +317,13 @@ export class BackgroundEvmDAppHandler {
     }
   }
 
-  async notifyAccountsChanged(): Promise<void> {
+  async notifyAccountsChanged(origin?: string): Promise<void> {
     const connections = await this.options.manager.getAllConnections()
-    const evmConnections = connections.filter(connectionHasEvmAuthorization)
+    const evmConnections = connections.filter(
+      connection =>
+        (origin === undefined || connection.origin === origin) &&
+        connectionHasEvmAuthorization(connection)
+    )
     if (evmConnections.length === 0) return
     await Promise.all(
       evmConnections.map(async connection => {
@@ -569,6 +574,7 @@ export class BackgroundEvmDAppHandler {
     tabInfo: EvmDAppTabInfo,
     forceReview = false
   ): Promise<readonly string[]> {
+    const authorizationRevision = await this.options.manager.getAuthorizationRevision(origin)
     const active = await this.requireUnlockedActiveAccount()
     const existing = await this.options.manager.getChainAuthorization(origin, this.chainId)
     if (
@@ -587,7 +593,7 @@ export class BackgroundEvmDAppHandler {
       .map(item => item.id)
     const decision = await this.options.approval.requestExternalApproval(origin, 'evmConnect', {
       chainId: this.chainId,
-      chainName: this.options.network.displayName,
+      chainName: 'EVM',
       address: active.address,
       executionMode: active.executionMode,
       accounts: available.map(item => ({
@@ -617,12 +623,12 @@ export class BackgroundEvmDAppHandler {
       if (!chosen.some(item => accountRefsEqual(item.reference, current.reference))) {
         throw new Eip1193ProviderError(4100, 'The active EVM account must remain authorized.')
       }
-      await this.options.manager.setChainAuthorizedAccounts(
+      await this.options.manager.setEvmAuthorizedAccounts(
         origin,
         tabInfo,
-        this.chainId,
         chosen.map(item => item.reference),
-        current.reference
+        current.reference,
+        authorizationRevision
       )
       emitDAppEvent(this.options.analytics, 'evm', ANALYTICS_EVENTS.DAPP_CONNECTED, {
         extra: { account_count: chosen.length, source: 'approval' }

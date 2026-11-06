@@ -37,7 +37,6 @@ test('preserves the V1 response and publishes the multi-chain registry on reques
   const zcash = RPC_REGISTRY.chains.find(chain => chain.id === 'zcash-mainnet')
   expect(zcash?.endpoints.map(endpoint => endpoint.id)).toEqual([
     'zec-rocks',
-    'deltarpc',
     'deltarpc-web',
     'deltarpc-web-1',
     'deltarpc-web-2',
@@ -45,8 +44,7 @@ test('preserves the V1 response and publishes the multi-chain registry on reques
     'deltarpc-web-us',
     'deltarpc-web-eu',
     'deltarpc-web-eu-2',
-    'deltarpc-web-eu-3',
-    'chainsafe'
+    'deltarpc-web-eu-3'
   ])
   expect(
     RPC_REGISTRY.chains.find(chain => chain.id === 'eip155:1')?.endpoints.length
@@ -80,7 +78,7 @@ test('derives monitor targets from the same registry across chain namespaces', (
   }
 
   const targets = getMonitorTargets(registry)
-  expect(targets).toHaveLength(12)
+  expect(targets).toHaveLength(10)
   expect(targets.at(-1)).toMatchObject({
     chainId: 'zcash-testnet',
     chain: 'zcash',

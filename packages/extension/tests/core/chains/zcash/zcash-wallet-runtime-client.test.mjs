@@ -29,12 +29,23 @@ test.describe('Zcash wallet Background client', () => {
 
   test('passes exact transfer parameters and validates the estimate response', async () => {
     const messages = []
+    const feeQuote = {
+      id: 'quote-1',
+      standardMarginalFeeZats: 5000,
+      expiresAt: Date.now() + 60_000
+    }
     const originalChrome = globalThis.chrome
     globalThis.chrome = {
       runtime: {
         sendMessage: async message => {
           messages.push(message)
-          return { success: true, maxAmountZats: '1000', feeZats: '500' }
+          return {
+            success: true,
+            maxAmountZats: '1000',
+            feeZats: '500',
+            marginalFeeZats: '5000',
+            feeQuote
+          }
         }
       }
     }
@@ -45,15 +56,22 @@ test.describe('Zcash wallet Background client', () => {
           to: 'u1destination',
           memo: 'Swap ZEC → ETH',
           marginalFeeZats: 5000,
+          feeQuoteId: feeQuote.id,
           fundingSource: 'transparent'
         })
-      ).resolves.toEqual({ maxAmountZats: '1000', feeZats: '500' })
+      ).resolves.toEqual({
+        maxAmountZats: '1000',
+        feeZats: '500',
+        marginalFeeZats: '5000',
+        feeQuote
+      })
       expect(messages).toEqual([
         {
           type: 'ESTIMATE_ZCASH_MAX_TRANSFER',
           to: 'u1destination',
           memo: 'Swap ZEC → ETH',
           marginalFeeZats: 5000,
+          feeQuoteId: feeQuote.id,
           fundingSource: 'transparent'
         }
       ])

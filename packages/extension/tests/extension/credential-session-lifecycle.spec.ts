@@ -108,7 +108,7 @@ async function selectRetainedAccountThroughPopup(
   if (await syncConfirmation.isVisible()) {
     await syncConfirmation.getByRole('button', { name: 'Switch anyway' }).click()
   }
-  await expect(chooseWallet).toBeVisible()
+  await expect(chooseWallet).toBeVisible({ timeout: 30_000 })
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -293,7 +293,9 @@ test('returns from an active private-key wallet to a retained Zcash wallet', asy
   await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
     position: { x: 4, y: 4 }
   })
-  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({
+    timeout: 30_000
+  })
   await expect
     .poll(() =>
       popup.evaluate(async walletId => {

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../ui/button'
 import { ListSkeleton } from '../ui/skeleton'
+import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
 import { InlineError } from '../common/InlineError'
 import { useDAppConnection } from '@/popup/hooks/useDAppConnection'
@@ -13,6 +15,8 @@ export function DAppConnectionModal() {
     useDAppConnection()
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const networkMode = useWalletStore(state => state.currentNetwork)
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
 
   const handleDisconnect = async (origin?: string) => {
     if (disconnecting) return
@@ -52,7 +56,10 @@ export function DAppConnectionModal() {
               </div>
             )}
             {connectedDApps.map(dapp => {
-              const permissions = presentDAppPermissions(dapp)
+              const permissions = presentDAppPermissions(dapp, {
+                network: networkMode,
+                endpointSettings
+              })
               return (
                 <div key={dapp.id}>
                   <div className="flex min-h-[68px] items-center gap-3 px-4">

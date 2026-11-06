@@ -39,6 +39,7 @@ import {
   selectNewZcashAccountHistory,
   serveSdkExample,
   solanaEnabled,
+  stopImportedZcashSync,
   terminateExtensionServiceWorker,
   test,
   tmpdir,
@@ -147,7 +148,8 @@ test('attests custom endpoints for every released chain including Zcash', async 
 test('adds, persists, selects and removes custom RPCs through the real popup', async ({
   context,
   popup,
-  extensionId
+  extensionId,
+  zcashCustomRpcUrl
 }) => {
   test.setTimeout(180_000)
   await context.route('https://rpc.zknoir.com/v1/rpc-endpoints?scope=multichain', route =>
@@ -159,6 +161,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
   await mockReleasedBitcoinEsplora(context)
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
   await popup.getByRole('button', { name: 'Open menu' }).click()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
   await popup.getByRole('button', { name: 'Networks', exact: true }).click()
@@ -185,7 +188,8 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
     ['Zcash', 'zcash']
   ]
   for (const [index, [chain, path]] of releasedRpcChains.entries()) {
-    const customUrl = `https://endpoint-release.noir.test/${path}`
+    const customUrl =
+      chain === 'Zcash' ? zcashCustomRpcUrl : `https://endpoint-release.noir.test/${path}`
     await openChainRpc(chain)
     const dialog = popup.getByRole('dialog')
     await expect(dialog.getByLabel(`${chain} RPC URL`)).toHaveCount(0)

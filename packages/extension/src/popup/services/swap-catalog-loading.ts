@@ -3,6 +3,7 @@ import type { ChainDefinition } from '@/core/chains/registry'
 import { rheaSwapClient } from './rhea-swap-client'
 import { getChainFromAssetId } from '@/lib/format'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 
 export interface SwapInitialCatalogOptions {
   readonly sourceAssetId?: string | null
@@ -27,6 +28,25 @@ export function getEnabledSwapChains(enabledChains: readonly ChainDefinition[] =
     if (!match || seen.has(match.tokenListChainId)) return []
     seen.add(match.tokenListChainId)
     return [match]
+  })
+}
+
+export function getUnavailableSwapNetworks(enabledChains: readonly ChainDefinition[] = []) {
+  const supportedIds = new Set(
+    getEnabledSwapChains(enabledChains).map(chain => `eip155:${chain.apiChainId}`)
+  )
+  return enabledChains.flatMap(chain => {
+    if (chain.family !== 'evm' || supportedIds.has(chain.id)) return []
+    const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(
+      candidate => chain.id === `eip155:${candidate.apiChainId}`
+    )
+    return [
+      {
+        id: descriptor?.blockchain ?? chain.id,
+        label: chain.displayName,
+        iconChain: resolveEvmChainIconAlias(chain.id)
+      }
+    ]
   })
 }
 

@@ -5,10 +5,20 @@ import { AccountContextTransitionCoordinator } from '../../../src/background/acc
 
 const evmChainId = 'eip155:1'
 const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+const bitcoinChainId = 'bip122:000000000019d6689c085ae165831e93'
+const solanaChainId = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+const nearChainId = 'near:mainnet'
 const previous = { walletId: 'wallet:previous', accountId: 'account:previous' }
 const current = { walletId: 'wallet:current', accountId: 'account:current' }
 
-function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = false } = {}) {
+function fixture({
+  chains = [evmChainId],
+  currentEvmChainId = evmChainId,
+  evm = true,
+  sharedEvm = false,
+  zcash = false,
+  caip25 = false
+} = {}) {
   const transition = new AccountContextTransitionCoordinator()
   let active = { reference: current, chainIds: chains }
   let failZcash = false
@@ -21,7 +31,10 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
     favicon: '',
     connectedAt: 1,
     lastActiveAt: 1,
-    ...(evm
+    ...(evm && (sharedEvm || caip25)
+      ? { evmAuthorization: { accounts: [previous], binding: previous } }
+      : {}),
+    ...(evm && !sharedEvm && !caip25
       ? { chainAuthorizations: [{ chainId: evmChainId, accounts: [previous], binding: previous }] }
       : {}),
     ...(zcash
@@ -31,18 +44,42 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
           boundAccountId: previous.accountId
         }
       : {}),
-    ...(caip25 ? { caip25Session: {} } : {})
+    ...(caip25
+      ? {
+          caip25Session: {
+            scopes: [
+              {
+                chainId: evmChainId,
+                accounts: [previous],
+                methods: ['eth_accounts'],
+                notifications: ['wallet_sessionChanged']
+              },
+              ...(zcash
+                ? [{ chainId: zcashChainId, methods: ['zcash_getBalance'], notifications: [] }]
+                : [])
+            ]
+          },
+          ...(zcash
+            ? {
+                chainAuthorizations: [
+                  { chainId: zcashChainId, accounts: [previous], binding: previous }
+                ]
+              }
+            : {})
+        }
+      : {})
   }
   const coordinator = new WalletDAppConnectionCoordinator({
     getCurrentTabDApp: async () => dapp,
     getConnection: async origin => (origin === dapp.origin ? dapp : null),
     loadActiveAccount: async () => active,
-    getEvmChainId: () => evmChainId,
+    getEvmChainId: () => currentEvmChainId,
     getZcashChainId: () => zcashChainId,
     connectEvm: async () => {
       calls.push('evm')
-      dapp.chainAuthorizations[0].accounts = [previous, active.reference]
-      dapp.chainAuthorizations[0].binding = active.reference
+      const grant = sharedEvm || caip25 ? dapp.evmAuthorization : dapp.chainAuthorizations[0]
+      grant.accounts = [previous, active.reference]
+      grant.binding = active.reference
     },
     connectZcash: async () => {
       calls.push('zcash')
@@ -50,6 +87,30 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
       dapp.authorizedAccounts = [previous, active.reference]
       dapp.boundWalletId = active.reference.walletId
       dapp.boundAccountId = active.reference.accountId
+    },
+    connectSession: async (origin, chainIds, account) => {
+      calls.push(['session', chainIds, account])
+      for (const chainId of chainIds) {
+        const scope = dapp.caip25Session.scopes.find(item => item.chainId === chainId)
+        if (chainId === evmChainId) {
+          dapp.evmAuthorization.accounts.push(account)
+          dapp.evmAuthorization.binding = account
+          scope.accounts = [...scope.accounts, account]
+        } else if (chainId === zcashChainId) {
+          dapp.chainAuthorizations[0].accounts.push(account)
+          dapp.chainAuthorizations[0].binding = account
+        } else {
+          const grant = dapp.chainAuthorizations.find(item => item.chainId === chainId)
+          grant.accounts.push(account)
+          grant.binding = account
+        }
+      }
+    },
+    notifyChainAccountsChanged: async (origin, chainIds) => {
+      calls.push(['chains-notified', origin, chainIds])
+    },
+    notifySessionChanged: async () => {
+      calls.push('session-notified')
     },
     runActiveOperation: operation => transition.runActiveOperation(operation)
   })
@@ -77,6 +138,15 @@ test('native EVM connection status uses the authoritative account without legacy
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   state.select({ reference: { ...current, accountId: 'account:another' }, chainIds: [evmChainId] })
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+})
+
+test('shared EVM grant remains connectable after the active EVM chain changes', async () => {
+  const state = fixture({ chains: ['eip155:56'], currentEvmChainId: 'eip155:56', sharedEvm: true })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, ['evm'])
+  assert.deepEqual(state.dapp.evmAuthorization.binding, current)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
 test('mixed EVM and Zcash Connect updates both grants and requires both for connected status', async () => {
@@ -118,12 +188,69 @@ test('partial authorization failure remains visible and can be completed by retr
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
-test('CAIP-25 sessions still require reconnection from the site', async () => {
+test('wallet Connect adds only the current account to an existing CAIP-25 scope', async () => {
   const state = fixture({ caip25: true })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).canConnectCurrentAccount, true)
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, [
+    ['session', [evmChainId], current],
+    ['chains-notified', state.dapp.origin, [evmChainId]],
+    'session-notified'
+  ])
+  assert.deepEqual(state.dapp.caip25Session.scopes[0].accounts, [previous, current])
+  assert.deepEqual(state.dapp.caip25Session.scopes[0].methods, ['eth_accounts'])
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+})
+
+test('wallet Connect updates matching EVM and Zcash scopes of a mixed CAIP-25 session', async () => {
+  const state = fixture({ caip25: true, zcash: true, chains: [evmChainId, zcashChainId] })
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, [
+    ['session', [evmChainId, zcashChainId], current],
+    'zcash',
+    ['chains-notified', state.dapp.origin, [evmChainId, zcashChainId]],
+    'session-notified'
+  ])
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+})
+
+test('wallet Connect notifies native chains only when their existing CAIP-25 scopes are updated', async () => {
+  const nativeChainIds = [bitcoinChainId, solanaChainId, nearChainId]
+  const state = fixture({
+    caip25: true,
+    chains: [evmChainId, ...nativeChainIds, zcashChainId]
+  })
+  state.dapp.caip25Session.scopes.push(
+    ...nativeChainIds.map(chainId => ({ chainId, methods: ['getAccounts'], notifications: [] }))
+  )
+  state.dapp.chainAuthorizations = nativeChainIds.map(chainId => ({
+    chainId,
+    accounts: [previous],
+    binding: previous
+  }))
+  await state.coordinator.connectCurrentAccount(state.dapp.origin)
+  assert.deepEqual(state.calls, [
+    ['session', [evmChainId, ...nativeChainIds], current],
+    ['chains-notified', state.dapp.origin, [evmChainId, ...nativeChainIds]],
+    'session-notified'
+  ])
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
+  assert.equal(
+    state.dapp.caip25Session.scopes.some(scope => scope.chainId === zcashChainId),
+    false
+  )
+  for (const grant of state.dapp.chainAuthorizations) {
+    assert.deepEqual(grant.accounts, [previous, current])
+  }
+})
+
+test('wallet Connect does not offer an unsupported CAIP-25 chain', async () => {
+  const state = fixture({ caip25: true, chains: [zcashChainId] })
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).canConnectCurrentAccount, false)
   await assert.rejects(
     state.coordinator.connectCurrentAccount(state.dapp.origin),
-    /Reconnect from the site/
+    /network permission/
   )
   assert.deepEqual(state.calls, [])
 })

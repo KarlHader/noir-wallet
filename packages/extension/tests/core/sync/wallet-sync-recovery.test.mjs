@@ -1,6 +1,8 @@
 import { test as it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import ts from 'typescript'
+import { ZcashWorkerClient } from '../../../src/core/worker/client.ts'
 
 const describe = it.describe
 
@@ -32,6 +34,161 @@ const zcashSettingsSource = readFileSync(
   new URL('../../../src/popup/pages/account/ZcashSettings.tsx', import.meta.url),
   'utf-8'
 )
+
+function syncSessionHarness() {
+  const source = ts.createSourceFile('offscreen.ts', offscreenSource, ts.ScriptTarget.Latest, true)
+  const names = [
+    'assertCurrentSyncOwner',
+    'awaitActiveSyncBatch',
+    'waitForActiveSyncBatch',
+    'waitForActiveSyncSession',
+    'waitForActiveSyncOperations',
+    'beginSyncSession',
+    'endSyncSession',
+    'reconcileWalletState'
+  ]
+  const declarations = source.statements.filter(
+    statement => ts.isFunctionDeclaration(statement) && names.includes(statement.name?.text)
+  )
+  assert.equal(declarations.length, names.length)
+  const code = ts.transpileModule(
+    declarations.map(declaration => declaration.getText(source)).join('\n'),
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const sessions = new Map()
+  const batches = new Map()
+  const owners = new Map()
+  const started = new Map()
+  const aborted = new Set()
+  const dirty = new Set()
+  const dependencies = {
+    activeSyncSessionByWallet: sessions,
+    activeSyncBatchByWallet: batches,
+    syncOwnerByWallet: owners,
+    syncSessionStartedAt: started,
+    pendingInitByWallet: new Map(),
+    pendingInitStartedAt: new Map(),
+    PENDING_INIT_STALE_MS: 90_000,
+    isSyncSessionActive: walletId => sessions.has(walletId),
+    isSyncBatchActive: walletId => batches.has(walletId),
+    signalSyncAbort: async walletId => aborted.add(walletId),
+    markWalletDirty: walletId => dirty.add(walletId),
+    bumpWalletGeneration() {},
+    offscreenLog() {},
+    offscreenWarn() {}
+  }
+  const functions = new Function(
+    ...Object.keys(dependencies),
+    `${code}\nreturn { ${names.join(', ')} }`
+  )(...Object.values(dependencies))
+  return { ...functions, sessions, batches, aborted, dirty }
+}
+
+it('new service worker waits for journal completion and rejects the old session owner', async () => {
+  const harness = syncSessionHarness()
+  const oldOwner = { ownerId: 'old-worker', ownerStartedAt: 100 }
+  const newOwner = { ownerId: 'new-worker', ownerStartedAt: 200 }
+  const newestOwner = { ownerId: 'newest-worker', ownerStartedAt: 300 }
+  harness.beginSyncSession('wallet', oldOwner)
+  let finishOldJournal
+  harness.batches.set(
+    'wallet',
+    new Promise(resolve => {
+      finishOldJournal = resolve
+    })
+  )
+
+  const recovery = harness.reconcileWalletState('wallet', newOwner)
+  await new Promise(resolve => setImmediate(resolve))
+  let finishNewJournal
+  harness.batches.set(
+    'wallet',
+    new Promise(resolve => {
+      finishNewJournal = resolve
+    })
+  )
+  const newestRecovery = harness.reconcileWalletState('wallet', newestOwner)
+  harness.endSyncSession('wallet', oldOwner)
+  assert.equal(harness.sessions.has('wallet'), true)
+  assert.equal(harness.aborted.has('wallet'), true)
+  assert.equal(harness.dirty.has('wallet'), false)
+  assert.throws(() => harness.beginSyncSession('wallet', oldOwner), /owner changed/)
+
+  finishOldJournal()
+  await recovery
+  assert.equal(harness.sessions.has('wallet'), true)
+  assert.equal(harness.dirty.has('wallet'), false)
+
+  finishNewJournal()
+  await newestRecovery
+  assert.equal(harness.sessions.has('wallet'), false)
+  assert.equal(harness.dirty.has('wallet'), true)
+
+  harness.beginSyncSession('wallet', newestOwner)
+  harness.endSyncSession('wallet', oldOwner)
+  assert.equal(harness.sessions.has('wallet'), true)
+  harness.endSyncSession('wallet', newestOwner)
+  assert.equal(harness.sessions.has('wallet'), false)
+})
+
+it('forced reset takes over a fresh orphan session before dispatching exclusive reset', async () => {
+  const harness = syncSessionHarness()
+  const oldOwner = { ownerId: 'old-worker', ownerStartedAt: 100 }
+  harness.beginSyncSession('wallet', oldOwner)
+  let finishOldJournal
+  harness.batches.set(
+    'wallet',
+    new Promise(resolve => {
+      finishOldJournal = resolve
+    })
+  )
+
+  const client = Object.create(ZcashWorkerClient.prototype)
+  client.walletId = 'wallet'
+  client.environment = 'extension'
+  client.isInitialized = false
+  client.initDedup = { abort() {} }
+  client.accountReady = { reset() {} }
+  const requests = []
+  client.request = async (method, payload) => {
+    requests.push(method)
+    if (method === 'wallet.reconcile') {
+      return harness.reconcileWalletState(
+        payload.walletId,
+        { ownerId: payload.ownerId, ownerStartedAt: payload.ownerStartedAt },
+        payload.force
+      )
+    }
+    if (method === 'wallet.reset') {
+      await harness.waitForActiveSyncOperations(payload.walletId)
+      return true
+    }
+    throw new Error(`Unexpected method: ${method}`)
+  }
+
+  const reset = client.reset({ force: true, strict: true }).then(
+    () => ({ success: true }),
+    error => ({ success: false, error })
+  )
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(harness.aborted.has('wallet'), true)
+    assert.equal(harness.sessions.has('wallet'), true)
+    assert.equal(harness.dirty.has('wallet'), false)
+    assert.deepEqual(requests, ['wallet.reconcile'])
+
+    finishOldJournal()
+    assert.deepEqual(await reset, { success: true })
+    assert.equal(harness.sessions.has('wallet'), false)
+    assert.equal(harness.dirty.has('wallet'), true)
+    assert.deepEqual(requests, ['wallet.reconcile', 'wallet.reset'])
+    assert.throws(() => harness.beginSyncSession('wallet', oldOwner), /owner changed/)
+  } finally {
+    finishOldJournal()
+    harness.endSyncSession('wallet', oldOwner)
+    await reset
+  }
+})
 
 describe('Wallet sync recovery', () => {
   it('automatically resyncs transaction locator conflicts from the earliest birthday', () => {

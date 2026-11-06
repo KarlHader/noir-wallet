@@ -178,5 +178,31 @@ for (const config of configs) {
         data: []
       })
     })
+
+    test('limits a wallet-side account event to the requested site', async () => {
+      const state = harness(config)
+      const origin = 'https://dapp.example'
+      const other = 'https://other.example'
+      await state.handler.request({ method: 'connect' }, origin, {})
+      const getAllConnections = state.manager.getAllConnections.bind(state.manager)
+      state.manager.getAllConnections = async () => {
+        const connections = await getAllConnections()
+        return [...connections, { ...connections[0], origin: other }]
+      }
+      state.events.length = 0
+      await state.handler.notifyAccountsChanged(origin)
+      expect(
+        state.events
+          .filter(event => event.eventName === 'accountsChanged')
+          .map(event => event.origin)
+      ).toEqual([origin])
+      state.events.length = 0
+      await state.handler.notifyAccountsChanged()
+      expect(
+        state.events
+          .filter(event => event.eventName === 'accountsChanged')
+          .map(event => event.origin)
+      ).toEqual([origin, other])
+    })
   })
 }

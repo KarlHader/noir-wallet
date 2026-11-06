@@ -2,6 +2,7 @@
   "name": "zcash-wallet-wasm",
   "type": "module",
   "version": "0.1.0",
+  "license": "SEE LICENSE IN LICENSE.md",
   "files": [
     "zcash_wallet_wasm_bg.wasm",
     "zcash_wallet_wasm.js",

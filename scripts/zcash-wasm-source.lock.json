@@ -1,29 +1,37 @@
 {
-  "sourceCommit": "7d6921d51b9fe4f4a13b8886481a9a098d6f1e7f",
+  "sourceCommit": "cb8da9dc60d51dbf3958657be35427210d544541",
   "generatedArtifacts": {
+    "LICENSE.md": {
+      "bytes": 4200,
+      "sha256": "0020b2060ca781ea5a61d8ef77002611a98efef3089925921f906ccefbe292c3"
+    },
     "package.json": {
-      "bytes": 297,
-      "sha256": "cbef1b5a638bcc7b1b024a6b3ddff0afdf8b1e1307dda1a1d439b4fad22f1497"
+      "bytes": 339,
+      "sha256": "731098f96e3a1bcaf8319a14cf2634ca9f2ff529cff48f1dc987ce0f4f2a9466"
+    },
+    "README.md": {
+      "bytes": 2893,
+      "sha256": "2fa13d5a66df8a6a42a77347f891df9af77e0b897e93fb62f58b4ab04074ab14"
     },
     "snippets/wasm-bindgen-rayon-38edf6e439f6d70d/src/workerHelpers.js": {
       "bytes": 4546,
       "sha256": "6982a7a006a69849d666aaf4ac7ea07a42931f850c31006782b1937fd5704f96"
     },
-    "zcash_wallet_wasm.d.ts": {
-      "bytes": 50239,
-      "sha256": "90e6fbec41b1be5407aa43c475a9d37903f242d5436d09d948a5f7d5311e71aa"
-    },
-    "zcash_wallet_wasm.js": {
-      "bytes": 154051,
-      "sha256": "d5ff3e7eedad8b5d58817422ea3a34f4245f50b8c4ab91bd9059ac843a64750d"
-    },
     "zcash_wallet_wasm_bg.wasm": {
-      "bytes": 66570948,
-      "sha256": "d3c852cb07d8efb4d08d72de2e80f83cbe09dbb900fcd65097d5ba4f445e6fb9"
+      "bytes": 66472202,
+      "sha256": "0b83c3963486310a881a1ebdd24d241c0e595496b60aa1b154c853ad47f71a8e"
     },
     "zcash_wallet_wasm_bg.wasm.d.ts": {
-      "bytes": 15757,
-      "sha256": "55861ce3abc5b3dde58d65ac1f489ad83e86ca99af63e6b5c4b2f9c15cbfa054"
+      "bytes": 15749,
+      "sha256": "fb175fad10e5e4e7c6c43b6383e4505273d35af0c84fb70a8ae7069f498843ba"
+    },
+    "zcash_wallet_wasm.d.ts": {
+      "bytes": 50132,
+      "sha256": "6849dea59b26873d549a8cfbf282e2012b44297500c760d783452200775a9145"
+    },
+    "zcash_wallet_wasm.js": {
+      "bytes": 153361,
+      "sha256": "5813daf29c44ce3efeaefb5a67a1da16d279bd2cac946e84975c2d1ba3a52cbc"
     }
   }
 }

@@ -7,7 +7,7 @@ import manifest from './manifest.config'
 import path from 'path'
 import { mkdirSync, readFileSync, renameSync, watch, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { createServer } from 'node:net'
+import { createServer, type AddressInfo } from 'node:net'
 import { name, version } from './package.json'
 import { rdns as NOIR_WALLET_RDNS } from '../sdk/package.json'
 import {
@@ -92,36 +92,20 @@ const buildOutDir = isExtensionDevServer
 
 const preferredExtensionDevServerPort = 5004
 
-async function isPortAvailable(port: number): Promise<boolean> {
+async function findExtensionDevServerPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
     server.unref()
-    server.once('error', error => {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'EADDRINUSE' || code === 'EACCES') {
-        resolve(false)
-        return
-      }
-      reject(error)
-    })
-    server.listen({ host: 'localhost', port, exclusive: true }, () => {
-      server.close(error => {
-        if (error) reject(error)
-        else resolve(true)
-      })
+    server.once('error', reject)
+    server.listen(0, 'localhost', () => {
+      const { port } = server.address() as AddressInfo
+      server.close(error => (error ? reject(error) : resolve(port)))
     })
   })
 }
 
-async function findExtensionDevServerPort(startPort: number): Promise<number> {
-  for (let port = startPort; port < startPort + 100; port += 1) {
-    if (await isPortAvailable(port)) return port
-  }
-  throw new Error(`No available extension development port found from ${startPort}`)
-}
-
 const extensionDevServerPort = isExtensionDevServer
-  ? await findExtensionDevServerPort(preferredExtensionDevServerPort)
+  ? await findExtensionDevServerPort()
   : preferredExtensionDevServerPort
 
 function stripDiagnosticCallbacks(code: string): string {
@@ -161,6 +145,7 @@ function adaptWasmWindowGlobalsForWorker() {
 }
 
 export default defineConfig({
+  cacheDir: path.resolve(__dirname, `../../output/node_modules/.vite/extension-${networkMode}`),
   define: {
     __APP_VERSION__: JSON.stringify(version),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
@@ -336,11 +321,11 @@ export default defineConfig({
         server.config.logger.info(
           `[Noir Wallet] Chrome extension directory: ${path.resolve(__dirname, buildOutDir)}`
         )
-        if (extensionDevServerPort !== preferredExtensionDevServerPort) {
+        server.httpServer?.once('listening', () => {
           server.config.logger.info(
-            `[Noir Wallet] Port ${preferredExtensionDevServerPort} is in use; using ${extensionDevServerPort}`
+            `Extension dev server: http://localhost:${server.config.server.port}/`
           )
-        }
+        })
         server.middlewares.use((_req, res, next) => {
           res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
           res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')

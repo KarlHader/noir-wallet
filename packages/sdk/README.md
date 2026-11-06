@@ -18,7 +18,7 @@ Typed TypeScript SDK for connecting web apps to Noir Wallet's Zcash and optional
 The Zcash client lets your app:
 
 - request access to one or more wallet accounts;
-- read addresses, balances, and transaction history;
+- read addresses and balances;
 - estimate the exact maximum transfer and send ZEC;
 - shield transparent funds;
 - sign and verify messages;
@@ -75,6 +75,8 @@ async function connectEvmWallet() {
   return { ethereum, accounts, chainId }
 }
 ```
+
+EVM account access is shared across configured EVM networks, including custom networks. Adding or switching networks still requires wallet confirmation. CAIP-25 sessions retain their approved chain, method, and account limits. Explicitly reauthorizing through `eth_requestAccounts` or `wallet_requestPermissions` clears the session's EVM scopes; create a new session to use them again. Revoking `eth_accounts` removes the site's EVM account access across networks while preserving its other provider permissions.
 
 The package also exports `getBitcoinProvider()` / `detectBitcoinProvider()`, `getSolanaProvider()` / `detectSolanaProvider()`, and `getNearProvider()` / `detectNearProvider()`. Synchronous getters return `null` when unavailable; asynchronous discovery rejects if no provider appears before its timeout. Use `addEvmNetwork()` and `switchEvmChain()` for the [EVM network requests](https://github.com/NoirWallet/noir-wallet/blob/v2/packages/docs/content/docs/developers/provider-api.mdx#evm-network-requests) supported by the installed wallet; they do not change the global Mainnet/Testnet Mode.
 
@@ -158,7 +160,7 @@ if (selected) {
 }
 ```
 
-`synced: false` means the value is cached or unavailable because that account is locked or has not finished syncing.
+`synced: false` means no current balance data is available for that account. `getBalance()` rejects while the wallet is locked.
 
 ### Amounts and available balance
 
@@ -282,7 +284,6 @@ The methods below are available on `getNoirWallet().zcash`.
 | `getMaxTransfer(params)`         |       No | Calculate the exact Max amount and fee                  |
 | `sendTransaction(params)`        |      Yes | Approve and broadcast a Zcash transaction               |
 | `shieldFunds()`                  |      Yes | Move transparent funds into the shielded balance        |
-| `getTransactionHistory()`        |       No | Read on-chain and locally pending transactions          |
 | `getPublicKey(options?)`         |       No | Read the public identity key for a signing mode         |
 | `signMessage(message, options?)` |      Yes | Approve and sign a message                              |
 | `checkLendingMcaAccount()`       |       No | Read lending MCA and signing-mode status                |

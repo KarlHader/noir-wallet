@@ -1,21 +1,27 @@
 import { useState } from 'react'
 import { Icon } from '@iconify/react'
-import type { ConnectedDApp } from '@/core/dapp/dapp-manager'
+import type { AccountRef, ConnectedDApp } from '@/core/dapp/dapp-manager'
 import { presentDAppPermissions } from '@/popup/services/dapp-connection-presentation'
+import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
 import { toast } from '@/store/toast-store'
 
 export function ConnectedDAppBar({
   dapp,
+  account,
   onManage,
   onDisconnect
 }: {
   readonly dapp: ConnectedDApp
+  readonly account: AccountRef | null
   readonly onManage: () => void
   readonly onDisconnect: (origin: string) => Promise<void>
 }) {
   const [disconnecting, setDisconnecting] = useState(false)
-  const permissions = presentDAppPermissions(dapp)
+  const network = useWalletStore(state => state.currentNetwork)
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const permissions = presentDAppPermissions(dapp, { network, endpointSettings, account })
   return (
     <footer
       aria-label="Current dApp connection"

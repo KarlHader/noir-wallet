@@ -14,6 +14,11 @@ import { buildAccountKey } from '@/store/account-data-store'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import { loadTransactions } from '@/lib/indexed-db'
 import { toast } from '@/store/toast-store'
+import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
+import type { FeeTier } from '@/config/fee'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { ZEC_DECIMALS } from '@/config/wallet'
 
 interface SpeedUpSelection {
   tx: Transaction
@@ -51,11 +56,15 @@ export function useSpeedUp() {
   const { navigate } = useNavigate()
   const [selection, setSelection] = useState<SpeedUpSelection | null>(null)
   const confirmingRef = useRef(false)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const [sheetRevision, setSheetRevision] = useState(0)
+  const openRevision = useRef(0)
 
   const requestSpeedUp = useCallback((tx: Transaction) => {
     const scope = getActiveAccountScope()
     if (scope && tx.network === scope.network && getTransactionRecoveryAction(tx) === 'speed_up') {
       confirmingRef.current = false
+      openRevision.current += 1
       setSelection({ tx: { ...tx }, ...scope })
     }
   }, [])
@@ -64,102 +73,177 @@ export function useSpeedUp() {
     async ({
       amount,
       fee,
-      marginalFeeZats
+      marginalFeeZats,
+      feeQuoteId,
+      feeTier,
+      usesMaxTransfer
     }: {
       amount: string
       fee: string
       marginalFeeZats: number
+      feeQuoteId: string
+      feeTier: FeeTier
+      usesMaxTransfer: boolean
     }) => {
-      if (confirmingRef.current) return
+      if (confirmingRef.current || !selection) return
       confirmingRef.current = true
       const opened = selection
-      setSelection(null)
-      if (!opened) return
-      if (getActiveAccountScope()?.accountKey !== opened.accountKey) {
-        toast.error('Account changed. Reopen Speed Up.')
-        return
-      }
-
-      let transactions: Transaction[]
+      const revision = openRevision.current
+      setIsConfirming(true)
+      const context = JSON.stringify([
+        getActiveAccountScope()?.accountKey,
+        useSettingsStore.getState().rpcEndpointPreferences.zcash,
+        getChainEndpointRuntimeKey(useSettingsStore.getState().chainEndpointSettings)
+      ])
       try {
-        transactions = await loadTransactions(opened.accountKey)
-        await rehydrateWalletStore()
-      } catch {
-        toast.error('Unable to verify this transaction')
-        return
-      }
-      const active = getActiveAccountScope()
-      const confirmationError = getSpeedUpConfirmationError(
-        opened.tx,
-        transactions,
-        opened.accountKey,
-        active?.accountKey ?? null
-      )
-      if (confirmationError) {
-        toast.error(
-          confirmationError === 'account_changed'
-            ? 'Account changed. Reopen Speed Up.'
-            : 'This transaction is no longer eligible for Speed Up'
-        )
-        return
-      }
-      const tx = transactions.find(transaction => transaction.id === opened.tx.id)
-      if (!tx) return
-
-      zcashWalletRuntimeClient.requestSync()
-
-      const pendingResult = {
-        type: 'zcash' as const,
-        step: 'pending' as const,
-        amount,
-        toAddress: tx.to,
-        showTo: true
-      }
-      setResult(pendingResult, '/')
-      navigate('/transaction-result')
-
-      const eventOptions = {
-        chain: 'zcash' as const,
-        inputSymbol: 'ZEC',
-        extra: { funding_source: tx.fromType ?? 'shielded', kind: 'send' }
-      }
-      sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, eventOptions)
-      const result = await sendTransaction({
-        to: tx.to,
-        amount,
-        from: tx.from,
-        fromType: tx.fromType ?? 'shielded',
-        memo: tx.memo,
-        fee,
-        marginalFeeZats,
-        replacesTransactionId: tx.id,
-        expectedAccountKey: opened.accountKey,
-        analytics: { fundingSource: tx.fromType ?? 'shielded' },
-        onCreated: (transaction, accountKey) => {
-          if (useTransactionResultStore.getState().data !== pendingResult) return
-          updateStep('pending', {
-            accountKey,
-            transactionId: transaction.id,
-            timestamp: transaction.timestamp
-          })
+        if (getActiveAccountScope()?.accountKey !== opened.accountKey) {
+          toast.error('Account changed. Reopen Speed Up.')
+          return
         }
-      })
 
-      if (result.step === 'success') {
-        updateStep(
-          'submitted',
-          { txHash: result.txHash, timestamp: result.timestamp },
-          result.accountKey,
-          result.transactionId
-        )
-      } else if (result.step === 'pending') {
-        updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
-      } else {
-        if (result.transactionId) {
-          updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
-        } else if (useTransactionResultStore.getState().data === pendingResult) {
-          updateStep('failed', { error: result.error })
+        let transactions: Transaction[]
+        try {
+          transactions = await loadTransactions(opened.accountKey)
+          await rehydrateWalletStore()
+        } catch {
+          toast.error('Unable to verify this transaction')
+          return
         }
+        const active = getActiveAccountScope()
+        const confirmationError = getSpeedUpConfirmationError(
+          opened.tx,
+          transactions,
+          opened.accountKey,
+          active?.accountKey ?? null
+        )
+        if (confirmationError) {
+          toast.error(
+            confirmationError === 'account_changed'
+              ? 'Account changed. Reopen Speed Up.'
+              : 'This transaction is no longer eligible for Speed Up'
+          )
+          return
+        }
+        const tx = transactions.find(transaction => transaction.id === opened.tx.id)
+        if (!tx) return
+
+        try {
+          const quote = await zcashWalletRuntimeClient.getFeeQuote()
+          const currentContext = JSON.stringify([
+            getActiveAccountScope()?.accountKey,
+            useSettingsStore.getState().rpcEndpointPreferences.zcash,
+            getChainEndpointRuntimeKey(useSettingsStore.getState().chainEndpointSettings)
+          ])
+          if (
+            revision !== openRevision.current ||
+            currentContext !== context ||
+            quote.id !== feeQuoteId ||
+            quote.expiresAt <= Date.now()
+          ) {
+            setSheetRevision(value => value + 1)
+            return
+          }
+          const estimate = usesMaxTransfer
+            ? await zcashWalletRuntimeClient.estimateMaxTransfer({
+                to: tx.to,
+                memo: tx.memo,
+                fundingSource: tx.fromType ?? 'shielded',
+                marginalFeeZats,
+                feeQuoteId
+              })
+            : await zcashWalletRuntimeClient.estimateTransferFee({
+                to: tx.to,
+                amount,
+                memo: tx.memo,
+                fundingSource: tx.fromType ?? 'shielded',
+                marginalFeeZats,
+                feeQuoteId
+              })
+          if (
+            revision !== openRevision.current ||
+            estimate.feeQuote.id !== feeQuoteId ||
+            estimate.feeQuote.expiresAt <= Date.now() ||
+            Number(estimate.marginalFeeZats) !== marginalFeeZats ||
+            formatBaseUnitDecimalAmount(estimate.feeZats, ZEC_DECIMALS) !== fee ||
+            (usesMaxTransfer &&
+              (!('maxAmountZats' in estimate) ||
+                formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS) !== amount)) ||
+            context !==
+              JSON.stringify([
+                getActiveAccountScope()?.accountKey,
+                useSettingsStore.getState().rpcEndpointPreferences.zcash,
+                getChainEndpointRuntimeKey(useSettingsStore.getState().chainEndpointSettings)
+              ])
+          ) {
+            setSheetRevision(value => value + 1)
+            return
+          }
+        } catch {
+          if (revision === openRevision.current) setSheetRevision(value => value + 1)
+          return
+        }
+        setSelection(null)
+
+        zcashWalletRuntimeClient.requestSync()
+
+        const pendingResult = {
+          type: 'zcash' as const,
+          step: 'pending' as const,
+          amount,
+          toAddress: tx.to,
+          showTo: true
+        }
+        setResult(pendingResult, '/')
+        navigate('/transaction-result')
+
+        const eventOptions = {
+          chain: 'zcash' as const,
+          inputSymbol: 'ZEC',
+          extra: { funding_source: tx.fromType ?? 'shielded', kind: 'send' }
+        }
+        sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, eventOptions)
+        const result = await sendTransaction({
+          to: tx.to,
+          amount,
+          from: tx.from,
+          fromType: tx.fromType ?? 'shielded',
+          memo: tx.memo,
+          fee,
+          marginalFeeZats,
+          feeQuoteId,
+          feeTier,
+          replacesTransactionId: tx.id,
+          expectedAccountKey: opened.accountKey,
+          analytics: { fundingSource: tx.fromType ?? 'shielded' },
+          onCreated: (transaction, accountKey) => {
+            if (useTransactionResultStore.getState().data !== pendingResult) return
+            updateStep('pending', {
+              accountKey,
+              transactionId: transaction.id,
+              timestamp: transaction.timestamp
+            })
+          }
+        })
+
+        if (result.step === 'success') {
+          updateStep(
+            'submitted',
+            { txHash: result.txHash, timestamp: result.timestamp },
+            result.accountKey,
+            result.transactionId
+          )
+        } else if (result.step === 'pending') {
+          updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
+        } else {
+          if (result.transactionId) {
+            updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
+          } else if (useTransactionResultStore.getState().data === pendingResult) {
+            updateStep('failed', { error: result.error })
+          }
+        }
+      } finally {
+        confirmingRef.current = false
+        setIsConfirming(false)
       }
     },
     [selection, sendTransaction, setResult, updateStep, navigate]
@@ -167,9 +251,16 @@ export function useSpeedUp() {
 
   const speedUpSheet = (
     <SpeedUpConfirmSheet
+      key={sheetRevision}
       open={!!selection}
-      onOpenChange={open => !open && setSelection(null)}
+      onOpenChange={open => {
+        if (!open) {
+          openRevision.current += 1
+          setSelection(null)
+        }
+      }}
       tx={selection?.tx ?? null}
+      isConfirming={isConfirming}
       onConfirm={executeSpeedUp}
     />
   )

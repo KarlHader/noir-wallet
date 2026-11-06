@@ -6,7 +6,6 @@ import {
   e2eEnabledChainFeatureFlags,
   expect,
   mockUnknownZcashAccountHistory,
-  mockReleaseNotesVersion,
   selectImportedZcashHistory,
   selectNewZcashAccountHistory,
   test,
@@ -610,6 +609,10 @@ test('opens the available update notice without overflowing the real popup', asy
   popup
 }) => {
   await waitForBackgroundWalletInitialization(popup)
+  const availableVersion = await popup.evaluate(() => {
+    const parts = chrome.runtime.getManifest().version.split('.')
+    return [...parts.slice(0, -1), String(Number(parts.at(-1)) + 1)].join('.')
+  })
   await popup.evaluate(async version => {
     await chrome.storage.local.set({
       extension_update_notice: {
@@ -618,12 +621,12 @@ test('opens the available update notice without overflowing the real popup', asy
         detectedAt: Date.now()
       }
     })
-  }, mockReleaseNotesVersion)
+  }, availableVersion)
 
   await popup.goto(`chrome-extension://${extensionId}/index.html?update-available-test=1#/update`)
 
   await expect(popup.getByText('Update available')).toBeVisible()
-  await expect(popup.getByText(`Version ${mockReleaseNotesVersion} is ready.`)).toBeVisible()
+  await expect(popup.getByText(`Version ${availableVersion} is ready.`)).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Restart', exact: true })).toBeInViewport({
     ratio: 1
   })

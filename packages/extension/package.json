@@ -1,6 +1,6 @@
 {
   "name": "@noir-wallet/extension",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "description": "Noir Wallet is a self-custodial crypto wallet designed to support privacy-preserving on-chain activity.",
   "type": "module",
   "license": "BUSL-1.1",

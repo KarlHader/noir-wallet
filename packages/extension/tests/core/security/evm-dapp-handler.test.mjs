@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { BackgroundEvmDAppHandler } from '../../../src/background/evm-dapp-handler.ts'
-import { EVM_NETWORKS } from '../../../src/config/networks.ts'
+import { BUILTIN_EVM_NETWORKS, EVM_NETWORKS } from '../../../src/config/networks.ts'
 import { EvmRpcError } from '../../../src/infrastructure/chains/evm/evm-rpc-client.ts'
 
 const account = {
@@ -44,6 +44,7 @@ function harness(overrides = {}) {
     ...optionOverrides
   } = overrides
   let authorization = null
+  let authorizationRevision = 0
   const approvalCalls = []
   const analyticsEvents = []
   const events = []
@@ -60,17 +61,23 @@ function harness(overrides = {}) {
   const manager = {
     async getAllConnections() {
       return authorization
-        ? [{ origin: 'https://dapp.example', chainAuthorizations: [authorization] }]
+        ? [{ origin: 'https://dapp.example', evmAuthorization: authorization }]
         : []
     },
-    async getChainAuthorization() {
-      return authorization
+    async getChainAuthorization(origin, chainId) {
+      return authorization ? { chainId, ...authorization } : null
     },
-    async setChainAuthorizedAccounts(origin, tabInfo, chainId, accounts, binding) {
-      authorization = { chainId, accounts, binding }
+    async getAuthorizationRevision() {
+      return authorizationRevision
+    },
+    async setEvmAuthorizedAccounts(origin, tabInfo, accounts, binding, expectedRevision) {
+      if (expectedRevision !== authorizationRevision) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      authorization = { accounts, binding }
     },
     async addEvmAuthorizedAccount(origin, chainId, accountRef) {
-      if (!authorization || authorization.chainId !== chainId) {
+      if (!authorization) {
         throw new Error('Reconnect from the site to update this network permission')
       }
       authorization = {
@@ -83,8 +90,9 @@ function harness(overrides = {}) {
         binding: accountRef
       }
     },
-    async removeChainAuthorization() {
+    async removeEvmAuthorization() {
       authorization = null
+      authorizationRevision += 1
     }
   }
   const approval = {
@@ -322,7 +330,6 @@ test.describe('Background EVM dApp handler', () => {
     }
     await state.handler.connectCurrentAccountToDApp(origin)
     expect(state.getAuthorization()).toEqual({
-      chainId: 'eip155:1',
       accounts: [
         { walletId: 'wallet-1', accountId: 'account-1' },
         { walletId: 'wallet-1', accountId: 'account-2' }
@@ -348,8 +355,8 @@ test.describe('Background EVM dApp handler', () => {
     )
   })
 
-  test('grants one chain-scoped account after explicit approval', async () => {
-    const { handler, approvalCalls, getAuthorization } = harness()
+  test('grants one shared EVM account after explicit approval', async () => {
+    const { handler, approvalCalls, getAuthorization, manager } = harness()
 
     await expect(
       handler.request({ method: 'eth_accounts' }, 'https://dapp.example', {})
@@ -363,13 +370,31 @@ test.describe('Background EVM dApp handler', () => {
     ).resolves.toEqual([account.chainAccount.identity.value])
     expect(approvalCalls).toHaveLength(1)
     expect(approvalCalls[0].action).toBe('evmConnect')
+    expect(approvalCalls[0].data.chainName).toBe('EVM')
     expect(approvalCalls[0].data.favicon).toBe('https://dapp.example/icon.png')
     expect(approvalCalls[0].data.faviconPageUrl).toBe('https://dapp.example/swap')
     expect(getAuthorization()).toEqual({
-      chainId: 'eip155:1',
       accounts: [{ walletId: 'wallet-1', accountId: 'account-1' }],
       binding: { walletId: 'wallet-1', accountId: 'account-1' }
     })
+    const bsc = harness({
+      network: BUILTIN_EVM_NETWORKS.mainnet[1],
+      manager,
+      loadActiveContext: async () => ({
+        ...account,
+        chainAccount: {
+          ...account.chainAccount,
+          scope: { ...account.chainAccount.scope, chainId: 'eip155:56' }
+        }
+      })
+    })
+    await expect(
+      bsc.handler.request({ method: 'eth_accounts' }, 'https://dapp.example', {})
+    ).resolves.toEqual([account.chainAccount.identity.value])
+    await expect(
+      bsc.handler.request({ method: 'eth_requestAccounts' }, 'https://dapp.example', {})
+    ).resolves.toEqual([account.chainAccount.identity.value])
+    expect(bsc.approvalCalls).toHaveLength(0)
   })
 
   test('persists and returns every explicitly selected EVM account', async () => {
@@ -401,7 +426,6 @@ test.describe('Background EVM dApp handler', () => {
       state.handler.request({ method: 'eth_accounts' }, 'https://dapp.example', {})
     ).resolves.toEqual([account.chainAccount.identity.value, secondAddress])
     expect(state.getAuthorization()).toEqual({
-      chainId: 'eip155:1',
       accounts: [
         { walletId: 'wallet-1', accountId: 'account-1' },
         { walletId: 'wallet-2', accountId: 'account-2' }
@@ -466,6 +490,34 @@ test.describe('Background EVM dApp handler', () => {
     expect(state.getAuthorization()).toBeNull()
   })
 
+  test('does not restore permission from an approval completed after revocation', async () => {
+    let resumeApproval
+    let approvalRequested
+    const requested = new Promise(resolve => {
+      approvalRequested = resolve
+    })
+    const state = harness({
+      approval: {
+        requestExternalApproval: async () => {
+          approvalRequested()
+          return new Promise(resolve => {
+            resumeApproval = () => resolve({ approved: true, requestId: 'late-approval' })
+          })
+        }
+      }
+    })
+    const pending = state.handler.request(
+      { method: 'eth_requestAccounts' },
+      'https://dapp.example',
+      {}
+    )
+    await requested
+    await state.manager.removeEvmAuthorization('https://dapp.example')
+    resumeApproval()
+    await expect(pending).rejects.toThrow('Site authorization changed. Connect again.')
+    expect(state.getAuthorization()).toBeNull()
+  })
+
   test('hides accounts while locked without deleting the persistent permission', async () => {
     let unlocked = true
     const state = harness({ hasUnlockSession: async () => unlocked })
@@ -478,7 +530,7 @@ test.describe('Background EVM dApp handler', () => {
     expect(state.getAuthorization()).not.toBeNull()
   })
 
-  test('revokes only the active EVM chain after persistence and cancels its approvals', async () => {
+  test('revokes shared EVM permission after persistence and cancels its approvals', async () => {
     const state = harness()
     await state.handler.request({ method: 'eth_requestAccounts' }, 'https://dapp.example', {})
 
@@ -504,7 +556,7 @@ test.describe('Background EVM dApp handler', () => {
   test('keeps EVM permission and approval state when revoke persistence fails', async () => {
     const state = harness()
     await state.handler.request({ method: 'eth_requestAccounts' }, 'https://dapp.example', {})
-    state.manager.removeChainAuthorization = async () => {
+    state.manager.removeEvmAuthorization = async () => {
       throw new Error('storage unavailable')
     }
 
@@ -814,6 +866,28 @@ test.describe('Background EVM dApp handler', () => {
       eventName: 'accountsChanged',
       data: [privateExecutionAddress]
     })
+  })
+
+  test('limits a wallet-side account event to the requested site', async () => {
+    const state = harness()
+    const origin = 'https://dapp.example'
+    const other = 'https://other.example'
+    await state.handler.request({ method: 'eth_requestAccounts' }, origin, {})
+    const getAllConnections = state.manager.getAllConnections.bind(state.manager)
+    state.manager.getAllConnections = async () => {
+      const connections = await getAllConnections()
+      return [...connections, { ...connections[0], origin: other }]
+    }
+    state.events.length = 0
+    await state.handler.notifyAccountsChanged(origin)
+    expect(
+      state.events.filter(event => event.eventName === 'accountsChanged').map(event => event.origin)
+    ).toEqual([origin])
+    state.events.length = 0
+    await state.handler.notifyAccountsChanged()
+    expect(
+      state.events.filter(event => event.eventName === 'accountsChanged').map(event => event.origin)
+    ).toEqual([origin, other])
   })
 
   test('routes Private transactions and messages to the PEA execution context', async () => {
@@ -1246,7 +1320,7 @@ test.describe('Background EVM dApp handler', () => {
     state = harness({
       approval: {
         async requestExternalApproval(_origin, action) {
-          if (action === 'evmTransaction') await state.manager.removeChainAuthorization()
+          if (action === 'evmTransaction') await state.manager.removeEvmAuthorization()
           return { approved: true, requestId: action }
         },
         async broadcastProviderEvent() {},
@@ -1354,9 +1428,13 @@ test.describe('Background EVM dApp handler', () => {
       network: EVM_NETWORKS.mainnet,
       manager: {
         getAllConnections: async () => [],
-        getChainAuthorization: async () => state.getAuthorization(),
-        setChainAuthorizedAccounts: async () => {},
-        removeChainAuthorization: async () => {}
+        getAuthorizationRevision: async () => 0,
+        getChainAuthorization: async (origin, chainId) => ({
+          chainId,
+          ...state.getAuthorization()
+        }),
+        setEvmAuthorizedAccounts: async () => {},
+        removeEvmAuthorization: async () => {}
       },
       approval: {
         requestExternalApproval: async () => ({ approved: false, requestId: 'denied' }),
@@ -1512,8 +1590,11 @@ test.describe('Background EVM dApp handler', () => {
       async getChainAuthorization() {
         return null
       },
-      async setChainAuthorizedAccounts() {},
-      async removeChainAuthorization() {}
+      async getAuthorizationRevision() {
+        return 0
+      },
+      async setEvmAuthorizedAccounts() {},
+      async removeEvmAuthorization() {}
     }
     const state = harness({
       manager,
@@ -1579,8 +1660,11 @@ test.describe('Background EVM dApp handler', () => {
           const authorization = authorizations.get(origin)
           return authorization?.chainId === chainId ? authorization : null
         },
-        async setChainAuthorizedAccounts() {},
-        async removeChainAuthorization() {}
+        async getAuthorizationRevision() {
+          return 0
+        },
+        async setEvmAuthorizedAccounts() {},
+        async removeEvmAuthorization() {}
       },
       approval: {
         async requestExternalApproval() {

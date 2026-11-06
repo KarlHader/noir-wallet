@@ -48,9 +48,11 @@ interface SwapReviewViewProps {
   feeTier?: FeeTier
   onFeeTierChange?: (tier: FeeTier) => void
   feeByTier?: Record<FeeTier, number | null>
+  feeLoadingByTier?: Record<FeeTier, boolean>
   feeLoading?: boolean
-  /** Estimated fee for the selected tier in ZEC; '—' shown while pending. */
-  selectedFeeZec?: string
+  feeUnavailable?: boolean
+  feeError?: boolean
+  onRetryFee?: () => void
   fundingSource?: FundingSource
   sourceNetworkFee?: { readonly amount: string; readonly symbol: string } | null
   sourceFeeTier?: NetworkFeeTier
@@ -99,8 +101,11 @@ export function SwapReviewView({
   feeTier,
   onFeeTierChange,
   feeByTier,
+  feeLoadingByTier,
   feeLoading,
-  selectedFeeZec,
+  feeUnavailable,
+  feeError,
+  onRetryFee,
   fundingSource,
   sourceNetworkFee,
   sourceFeeTier,
@@ -217,20 +222,15 @@ export function SwapReviewView({
                 profile="fee"
                 className="font-sans tabular-nums"
               />
-            ) : selectedFeeZec && feeTier && onFeeTierChange && feeByTier ? (
+            ) : feeTier && onFeeTierChange && feeByTier ? (
               <FeeTierPicker
                 tier={feeTier}
                 onTierChange={onFeeTierChange}
                 feeByTier={feeByTier}
+                loadingByTier={feeLoadingByTier}
                 loading={feeLoading}
+                allowFallback={false}
                 hideLabel
-              />
-            ) : selectedFeeZec ? (
-              <AmountDisplay
-                value={selectedFeeZec}
-                symbol="ZEC"
-                profile="fee"
-                className="font-sans tabular-nums"
               />
             ) : (
               '—'
@@ -318,6 +318,13 @@ export function SwapReviewView({
             className="mt-3 px-1"
           />
         )}
+        {feeError && onRetryFee && (
+          <InlineError
+            message="Could not estimate network fee"
+            onRetry={onRetryFee}
+            className="mt-3 px-1"
+          />
+        )}
         {insufficient && (
           <p className="text-warning text-xs mt-3 px-1">
             Amount exceeds balance at this fee. Go back to lower the amount or switch fee tier.
@@ -342,7 +349,7 @@ export function SwapReviewView({
           type="button"
           size="wallet"
           onClick={onConfirm}
-          disabled={isLoading || insufficient || Boolean(preparationError)}
+          disabled={isLoading || insufficient || feeUnavailable || Boolean(preparationError)}
           isLoading={isLoading}
           aria-label={actionLabel}
           className="min-w-0 flex-[2] text-sm text-black"

@@ -5,12 +5,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { FeeTierPicker } from './FeeTierPicker'
 import { useFeeEstimate } from '../../hooks/useFeeEstimate'
 import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats
-} from '@/core/zcash/fee-policy'
+import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import type { FeeTier } from '@/config/fee'
 import { formatSortAddress } from '@/lib/format'
 import { AmountDisplay } from '../common/AmountDisplay'
@@ -27,7 +22,15 @@ interface SpeedUpConfirmSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   tx: Transaction | null
-  onConfirm: (params: { amount: string; fee: string; marginalFeeZats: number }) => void
+  isConfirming?: boolean
+  onConfirm: (params: {
+    amount: string
+    fee: string
+    marginalFeeZats: number
+    feeQuoteId: string
+    feeTier: FeeTier
+    usesMaxTransfer: boolean
+  }) => void
 }
 
 /**
@@ -39,6 +42,7 @@ export function SpeedUpConfirmSheet({
   open,
   onOpenChange,
   tx,
+  isConfirming,
   onConfirm
 }: SpeedUpConfirmSheetProps) {
   const [tier, setTier] = useState<FeeTier>('fast')
@@ -55,15 +59,12 @@ export function SpeedUpConfirmSheet({
     fundingSource,
     enabled: open && !!tx
   })
-  useEffect(() => {
-    if (open && tx?.to) void maxTransfer.request()
-  }, [open, tx?.id, tx?.to, tier])
   const balance = useAccountDataStore(state => state.getCurrentBalance())
   const available = getFundingBalance(balance, fundingSource).available
   const spendable = resolveZcashTransferAvailability({
     availableBalance: available,
-    selectedFeeZats: staticFeeFallbackZats(tier),
-    standardFeeZats: staticFeeFallbackZats('standard'),
+    selectedFeeZats: maxTransfer.feeByTier[tier] ?? staticFeeFallbackZats(tier),
+    standardFeeZats: maxTransfer.feeByTier.standard ?? staticFeeFallbackZats('standard'),
     maximumAmount: maxTransfer.maxAmount,
     feeAlreadyReservedZats: fundingSource === 'transparent' ? 0 : undefined
   }).amount
@@ -77,19 +78,22 @@ export function SpeedUpConfirmSheet({
     amount: retryAmount,
     memo: tx?.memo,
     fundingSource,
+    feeTier: tier,
     enabled: open && !!tx && !maxTransfer.loading && !maxTransfer.error && !usesMaxTransfer
   })
-  const feeByTier = usesMaxTransfer
-    ? deriveFeeByTierFromEstimate(
-        maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-        tier,
-        maxTransfer.error
-      )
-    : deriveFeeByTier(estimate.feeZats, estimate.error)
+  const feeByTier = usesMaxTransfer ? maxTransfer.feeByTier : estimate.feeByTier
+  const loadingByTier = usesMaxTransfer ? maxTransfer.loadingByTier : estimate.loadingByTier
   const selectedFeeZats = feeByTier[tier] ?? staticFeeFallbackZats(tier)
   const selectedFee = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   const loading = maxTransfer.loading || (!usesMaxTransfer && estimate.loading)
   const unavailable = safeBig(spendable).lte(0)
+  const selectedQuote = usesMaxTransfer ? maxTransfer.feeQuote : estimate.feeQuote
+  const feeReady =
+    !!selectedQuote &&
+    selectedQuote.expiresAt > Date.now() &&
+    feeByTier[tier] !== null &&
+    !loading &&
+    !(usesMaxTransfer ? maxTransfer.error : estimate.error)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -120,9 +124,13 @@ export function SpeedUpConfirmSheet({
         <div className="mx-5 bg-card rounded-xl p-4">
           <FeeTierPicker
             tier={tier}
-            onTierChange={setTier}
+            onTierChange={next => {
+              if (!isConfirming) setTier(next)
+            }}
             feeByTier={feeByTier}
+            loadingByTier={loadingByTier}
             loading={loading}
+            allowFallback={false}
           />
         </div>
 
@@ -131,14 +139,19 @@ export function SpeedUpConfirmSheet({
             Cancel
           </Button>
           <Button
-            disabled={loading || unavailable}
+            disabled={!feeReady || unavailable || isConfirming}
             onClick={() =>
+              selectedQuote &&
               onConfirm({
                 amount: retryAmount,
                 fee: usesMaxTransfer && maxTransfer.fee ? maxTransfer.fee : selectedFee,
-                marginalFeeZats: marginalFeeForTier(tier)
+                marginalFeeZats: marginalFeeForTier(tier, selectedQuote.standardMarginalFeeZats),
+                feeQuoteId: selectedQuote.id,
+                feeTier: tier,
+                usesMaxTransfer
               })
             }
+            isLoading={isConfirming}
             className="flex-1 h-[45px]"
           >
             Speed Up

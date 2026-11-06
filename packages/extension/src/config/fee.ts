@@ -1,14 +1,35 @@
 /**
  * Dynamic fee tiers for Zcash sends/shields.
  *
- * Zcash has no continuous fee market like Bitcoin. The only lever is the
- * ZIP-317 per-action marginal fee. "Standard" is the protocol baseline
- * (5,000 zat/action); "Fast" pays 4x to incentivize prompt inclusion under
- * congestion, per the Shielded Labs dynamic-fee proposal. Going below the
- * standard fee risks the transaction not being relayed or mined, so no
- * cheaper tier is offered.
+ * Standard follows the wallet RPC's recommended ZIP-317 marginal fee; Fast
+ * uses four times that recommendation. Fixed rates are the fallback when the
+ * RPC cannot provide a valid recommendation.
  */
 export type FeeTier = 'standard' | 'fast'
+
+export interface FeeQuote {
+  id: string
+  standardMarginalFeeZats: number
+  expiresAt: number
+}
+
+export interface QuotedFeeEstimate {
+  feeZats: string
+  marginalFeeZats: string
+  feeQuote: FeeQuote
+}
+
+export const FEE_QUOTE_TTL_MS = 5 * 60_000
+export const MAX_MARGINAL_FEE_ZATS = Math.floor(2_100_000_000_000_000 / 4)
+
+export function isValidMarginalFeeZats(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_MARGINAL_FEE_ZATS
+  )
+}
 
 /** ZIP-317 marginal fee per logical action, in zatoshis, keyed by tier. */
 export const MARGINAL_FEE_ZATS: Record<FeeTier, number> = {
@@ -18,22 +39,8 @@ export const MARGINAL_FEE_ZATS: Record<FeeTier, number> = {
 
 export const DEFAULT_FEE_TIER: FeeTier = 'standard'
 
-/**
- * Expiry delta (blocks) for one-click sends/shields.
- *
- * The baseline keeps a transaction "land fast or fail fast" when the wallet
- * is current. One-click builders extend it by the gap between the wallet's
- * chain tip and the live node tip, up to the 40-block default.
- *
- * The floor is set by zcashd's DoS guard, not by block spacing: AcceptToMemoryPool
- * rejects "expiring soon" txs whose expiry is within TX_EXPIRING_SOON_THRESHOLD (3)
- * blocks of the next block. librustzcash builds expiry as (chain_tip + 1) + delta,
- * so the node only accepts delta >= 3, and anything lower is refused at broadcast
- * with "tx-expiring-soon". We use 5 to keep a 2-block margin in case a block is
- * mined between build and submit, while still failing fast (~6 min at 75s spacing;
- * ~2 min once NU7/ZIP-218 drops spacing to 25s).
- */
-export const DEFAULT_EXPIRY_DELTA_BLOCKS = 5
+/** Leave enough blocks for NU7 transaction proving and broadcast. */
+export const DEFAULT_EXPIRY_DELTA_BLOCKS = 40
 
 interface FeeTierMeta {
   id: FeeTier

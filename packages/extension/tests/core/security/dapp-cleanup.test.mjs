@@ -654,6 +654,7 @@ test.describe('dApp account reference cleanup', () => {
     const account = { walletId: 'wallet-1', accountId: 'account-1' }
     const otherAccount = { walletId: 'wallet-2', accountId: 'account-2' }
     await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [account], account)
+    await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:10', [otherAccount], otherAccount)
     await manager.setChainAuthorizedAccounts(
       'https://other.example',
       {},
@@ -706,8 +707,9 @@ test.describe('dApp account reference cleanup', () => {
     const origin = 'https://wallet-connect.example'
     const previous = { walletId: 'wallet-1', accountId: 'account-1' }
     const active = { walletId: 'wallet-1', accountId: 'account-2' }
+    const different = { walletId: 'wallet-2', accountId: 'account-3' }
     await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [previous], previous)
-    await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:56', [previous], previous)
+    await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:56', [different], different)
 
     await manager.addEvmAuthorizedAccount(origin, 'eip155:1', active)
     const reloaded = new DAppManager(storage)
@@ -718,8 +720,8 @@ test.describe('dApp account reference cleanup', () => {
     })
     await expect(reloaded.getChainAuthorization(origin, 'eip155:56')).resolves.toEqual({
       chainId: 'eip155:56',
-      accounts: [previous],
-      binding: previous
+      accounts: [different],
+      binding: different
     })
     await expect(reloaded.getAuthorizedAccounts(origin)).resolves.toEqual([])
     await expect(reloaded.addEvmAuthorizedAccount(origin, 'eip155:137', active)).rejects.toThrow(
