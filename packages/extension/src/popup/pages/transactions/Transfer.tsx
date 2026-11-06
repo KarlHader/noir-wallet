@@ -1065,7 +1065,34 @@ function TransferForm() {
 
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
-      <PageHeader title="Move" showBack onBack={goBack} />
+      <PageHeader
+        title="Move"
+        showBack
+        onBack={goBack}
+        rightContent={
+          fundingRoute &&
+          (shieldConnection === 'connected' || shieldConnection === 'busy') && (
+            <button
+              type="button"
+              onClick={() => void refreshShield()}
+              disabled={shieldConnection === 'busy'}
+              aria-label="Refresh Shield balance"
+              aria-busy={shieldConnection === 'busy'}
+              title={
+                shieldConnection === 'busy' ? 'Updating Shield balance…' : 'Refresh Shield balance'
+              }
+              className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-muted hover:bg-wallet-selected hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
+            >
+              <Icon
+                icon="lucide:refresh-cw"
+                width={16}
+                height={16}
+                className={cn(shieldConnection === 'busy' && 'animate-spin')}
+              />
+            </button>
+          )
+        }
+      />
       <div className="page-content flex min-h-0 flex-col !px-4 !pb-2 !pt-3">
         <div className="flex h-[122px] shrink-0 flex-col items-center justify-center gap-2 pt-2">
           <input
@@ -1208,18 +1235,6 @@ function TransferForm() {
           <Button size="wallet" variant="outline" onClick={() => void refreshShield()}>
             Connect Shield
           </Button>
-        )}
-        {fundingRoute && shieldConnection === 'connected' && (
-          <button
-            type="button"
-            onClick={() => void refreshShield()}
-            className="self-end text-xs text-primary"
-          >
-            Refresh Shield balance
-          </button>
-        )}
-        {fundingRoute && shieldConnection === 'busy' && (
-          <p className="text-xs text-muted">Connecting Shield…</p>
         )}
         {shieldError && !activeShieldReview && (
           <p role="alert" className="text-xs text-warning">
