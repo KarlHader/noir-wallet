@@ -15,7 +15,7 @@ In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-
 
 Use a mnemonic software account in Mainnet mode. The current [Public configuration](../../../packages/extension/src/core/services/noir-protocol/public/config.ts) defines the deployment and supported tokens; Testnet and hardware accounts are unavailable. Mainnet development services are not a testnet. Use an isolated test wallet and an explicit spending limit for funded integration. Use the controlled verification below when real funds are unnecessary.
 
-For temporary integration in another dApp, install the manually prepared SDK tarball linked in the PR description with `pnpm add <SDK_TARBALL_URL>`. Use the paired extension identified there and keep the generated lockfile. The fixed-commit download URL does not require GitHub login or an npm release; updates are prepared manually.
+For temporary integration in another dApp, download the checked SDK artifact from the PR's successful **SDK CI** run, extract its tarball, and install it with `pnpm add /path/to/noir-wallet-sdk-<version>.tgz`. Use the paired extension from the same tested commit and keep the generated lockfile. Artifact downloads require GitHub access. Earlier manually published tarballs may use a different experimental API; the version string alone does not identify this preview.
 
 ## Integration Flow
 
