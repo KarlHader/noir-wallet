@@ -43,6 +43,7 @@ const projects = {
     'chain.solana,chain.near'
   ),
   'private-key-testnet': isolated('testnet-private-key', allChains, {
+    prepareExample: true,
     env: { APPROVAL_WINDOW_E2E: '1' }
   }),
   'bitcoin-testnet': isolated('testnet-bitcoin', 'chain.bitcoin', {
