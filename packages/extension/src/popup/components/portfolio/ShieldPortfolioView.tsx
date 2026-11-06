@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { safeBig } from '@/lib/big'
 import nearLogo from '@/images/figma-near-confidential.svg'
@@ -9,12 +9,15 @@ import { getFundingBalance } from '@/core/wallet/funding-balance'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useAccountDataStore } from '@/store/account-data-store'
+import { useWalletStore } from '@/store/wallet-store'
 import { useShieldFunds } from '@/popup/hooks/useShieldFunds'
+import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { useNavigate } from '@/popup/provider/Router'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import { buildShieldProviderGroups, type ShieldProvider } from '@/popup/services/asset-domains'
 import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
+import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { PortfolioChainAssetRow } from './PortfolioAssetGroupCard'
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 
@@ -70,23 +73,39 @@ export function ShieldPortfolioView({
   readonly onSelectAsset?: (assetId: string) => void
 }) {
   const { navigate } = useNavigate()
+  const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const { activeAccount } = useActiveAccountNetworks()
   const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
   const { isShielding, handleShieldFunds, shieldSheet } = useShieldFunds()
   const near = summarizeNearConfidentialHoldings(model, prices)
   const zcashGroup = buildShieldProviderGroups(model, prices).find(
     group => group.id === 'zcash-shield'
   )
-  const providers: readonly ShieldProvider[] = zcashGroup
-    ? ['near-confidential', 'zcash-shield']
-    : ['near-confidential']
+  const nearChainIds = getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet')
+  const canManageNear = nearChainIds.length > 0
+  const hasSpendableNear = near.entries.some(
+    entry =>
+      entry.asset.assetId &&
+      nearChainIds.some(chainId => entry.asset.assetId?.startsWith(`${chainId}/`)) &&
+      safeBig(entry.asset.availableRaw).gt(0)
+  )
+  const hasNear = canManageNear || near.entries.length > 0
+  const providers: readonly ShieldProvider[] = [
+    ...(hasNear ? (['near-confidential'] as const) : []),
+    ...(zcashGroup ? (['zcash-shield'] as const) : [])
+  ]
   const modeQuery = `&mode=${mode}`
   const [pendingAction, setPendingAction] = useState<'deposit' | 'withdraw' | null>(null)
   const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<ShieldProvider>>(
     () => new Set()
   )
+  useEffect(() => {
+    setPendingAction(null)
+    setCollapsedProviders(new Set())
+  }, [currentNetwork, model.scope.keyDomainId, model.scope.accountId])
   const canUseProvider = (provider: ShieldProvider, action: 'deposit' | 'withdraw') =>
     provider === 'near-confidential'
-      ? action === 'deposit' || near.status !== 'ready' || near.entries.length > 0
+      ? canManageNear && (action === 'deposit' || near.status !== 'ready' || hasSpendableNear)
       : action === 'deposit'
         ? canShieldTransparentFunds(zcashBalance) && !isShielding
         : safeBig(getFundingBalance(zcashBalance, 'shielded').available).gt(0)
@@ -103,8 +122,9 @@ export function ShieldPortfolioView({
   }
 
   const openAction = (action: 'deposit' | 'withdraw') => {
-    if (providers.length === 1) runProviderAction(providers[0]!, action)
-    else setPendingAction(action)
+    const available = providers.filter(provider => canUseProvider(provider, action))
+    if (available.length === 1) runProviderAction(available[0]!, action)
+    else if (available.length > 1) setPendingAction(action)
   }
 
   return (
@@ -316,18 +336,19 @@ export function ShieldPortfolioView({
             {pendingAction === 'withdraw' ? 'Withdraw from' : 'Deposit to'}
           </DialogTitle>
           <DialogDescription className="sr-only">Choose a Shield provider</DialogDescription>
-          {providers.map(provider => (
-            <button
-              key={provider}
-              type="button"
-              disabled={pendingAction === null || !canUseProvider(provider, pendingAction)}
-              onClick={() => pendingAction && runProviderAction(provider, pendingAction)}
-              className="wallet-interactive flex h-12 items-center gap-3 rounded-lg bg-background px-3 text-left text-sm enabled:hover:bg-white/10 enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
-            >
-              <ShieldProviderLogo provider={provider} size={26} />
-              {SHIELD_PROVIDERS[provider].name}
-            </button>
-          ))}
+          {providers
+            .filter(provider => pendingAction && canUseProvider(provider, pendingAction))
+            .map(provider => (
+              <button
+                key={provider}
+                type="button"
+                onClick={() => pendingAction && runProviderAction(provider, pendingAction)}
+                className="wallet-interactive flex h-12 items-center gap-3 rounded-lg bg-background px-3 text-left text-sm hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+              >
+                <ShieldProviderLogo provider={provider} size={26} />
+                {SHIELD_PROVIDERS[provider].name}
+              </button>
+            ))}
         </DialogContent>
       </Dialog>
       {shieldSheet}

@@ -12,6 +12,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
@@ -53,8 +54,17 @@ function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): st
 }
 
 export function ShieldWithdrawPage() {
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
+  return <ShieldWithdrawForm key={`${network}:${walletId}:${accountId}`} />
+}
+
+function ShieldWithdrawForm() {
   const [params] = useSearchParams()
   const { navigate } = useNavigate()
+  const providerIsNear =
+    params.get('provider') === null || params.get('provider') === 'near-confidential'
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
@@ -64,8 +74,13 @@ export function ShieldWithdrawPage() {
     currentAccountId,
     nativeAccount: activeAccount
   })
+  const canManageNear =
+    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
   const { model, refresh } = useHomePortfolio(account?.walletId ?? null, account?.accountId ?? null)
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
+  const latestScope = useRef(scopeKey)
+  latestScope.current = scopeKey
+  const mounted = useRef(false)
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [balances, setBalances] = useState<readonly ConfidentialBalance[] | null>(null)
@@ -90,6 +105,32 @@ export function ShieldWithdrawPage() {
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const confirmationAttempt = useRef<string | null>(null)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!providerIsNear) navigate('/shield-funds', { replace: true })
+  }, [providerIsNear, navigate])
+
+  useEffect(() => {
+    setSourceId(params.get('assetId') ?? '')
+    setDestinationId('')
+    setAmount('')
+    setRecipient('')
+    setSlippageBps(50)
+    setPicker(null)
+    setPrepared(null)
+    setBusy(false)
+    setConnecting(false)
+    setUncertain(false)
+    setError(null)
+    confirmationAttempt.current = null
+  }, [scopeKey])
 
   useEffect(() => {
     let active = true
@@ -119,7 +160,7 @@ export function ShieldWithdrawPage() {
     let active = true
     setBalances(null)
     setBalanceScope('')
-    if (!account) return
+    if (!account || !canManageNear) return
     void confidentialFundingClient
       .refreshBalances(
         {
@@ -140,7 +181,7 @@ export function ShieldWithdrawPage() {
     return () => {
       active = false
     }
-  }, [scopeKey])
+  }, [scopeKey, canManageNear])
 
   const options = useMemo(
     () => listShieldFundingAssets(model, managedAssets, catalogTokens, network),
@@ -169,6 +210,8 @@ export function ShieldWithdrawPage() {
   const scopeStillCurrent = () => {
     const wallet = useWalletStore.getState()
     return (
+      mounted.current &&
+      latestScope.current === scopeKey &&
       wallet.currentWalletId === currentWalletId &&
       wallet.currentAccountId === currentAccountId &&
       wallet.currentNetwork === network
@@ -179,7 +222,7 @@ export function ShieldWithdrawPage() {
       navigate(`/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`)
   }
   const refreshBalances = async () => {
-    if (!account || connecting) return
+    if (!account || !canManageNear || connecting || !scopeStillCurrent()) return
     setConnecting(true)
     setError(null)
     try {
@@ -200,12 +243,13 @@ export function ShieldWithdrawPage() {
       if (scopeStillCurrent())
         setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
     } finally {
-      setConnecting(false)
+      if (scopeStillCurrent()) setConnecting(false)
     }
   }
   const prepare = async () => {
     if (
       !account ||
+      !canManageNear ||
       !source ||
       !destination ||
       !amountState?.amountRaw ||
@@ -248,7 +292,7 @@ export function ShieldWithdrawPage() {
       if (scopeStillCurrent())
         setError(cause instanceof Error ? cause.message : 'Withdraw quote unavailable')
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
   }
   const inspectPlan = async (planId: string) => {
@@ -267,7 +311,7 @@ export function ShieldWithdrawPage() {
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
   }
   const cancelReview = async () => {
-    if (!prepared || busy) return
+    if (!prepared || busy || !scopeStillCurrent()) return
     setBusy(true)
     try {
       if (confirmationAttempt.current === prepared.review.planId) {
@@ -275,21 +319,24 @@ export function ShieldWithdrawPage() {
         if (state !== 'prepared') return
       }
       await confidentialFundingClient.cancel(prepared.review.planId)
+      if (!scopeStillCurrent()) return
       setPrepared(null)
       setUncertain(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to cancel review')
+      if (scopeStillCurrent())
+        setError(cause instanceof Error ? cause.message : 'Unable to cancel review')
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
   }
   const confirm = async () => {
-    if (!prepared || busy || !scopeStillCurrent()) return
+    if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
     setBusy(true)
     setError(null)
     try {
       if (uncertain) {
         const state = await inspectPlan(prepared.review.planId)
+        if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
           setError('Withdraw was not started. Review and try again.')
@@ -308,6 +355,7 @@ export function ShieldWithdrawPage() {
     } catch (cause) {
       try {
         const state = await inspectPlan(prepared.review.planId)
+        if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
           setError(cause instanceof Error ? cause.message : 'Withdraw could not start')
@@ -316,12 +364,25 @@ export function ShieldWithdrawPage() {
           setError('Withdraw status is pending. Check status before trying again.')
         }
       } catch {
-        setUncertain(true)
-        setError('Withdraw status unavailable. Check status before trying again.')
+        if (scopeStillCurrent()) {
+          setUncertain(true)
+          setError('Withdraw status unavailable. Check status before trying again.')
+        }
       }
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
+  }
+
+  if (activeAccount && !canManageNear) {
+    return (
+      <div className="page-container">
+        <PageHeader title="Withdraw" showBack />
+        <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
+          Shield unavailable for this account
+        </p>
+      </div>
+    )
   }
 
   if (prepared) {
@@ -569,6 +630,7 @@ export function ShieldWithdrawPage() {
             variant="outline"
             size="wallet"
             isLoading={connecting}
+            disabled={!canManageNear}
             onClick={() => void refreshBalances()}
             className="mt-4 w-full"
           >
@@ -582,6 +644,7 @@ export function ShieldWithdrawPage() {
           className="w-full"
           isLoading={busy}
           disabled={
+            !canManageNear ||
             !currentBalances ||
             !source ||
             !destination ||

@@ -10,6 +10,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -52,6 +53,8 @@ export function ShieldSwapPage() {
 function ShieldSwapForm() {
   const [params] = useSearchParams()
   const { navigate } = useNavigate()
+  const providerIsNear =
+    params.get('provider') === null || params.get('provider') === 'near-confidential'
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
@@ -61,7 +64,12 @@ function ShieldSwapForm() {
     currentAccountId: accountId,
     nativeAccount: activeAccount
   })
+  const canManageNear =
+    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
+  const latestScope = useRef(scopeKey)
+  latestScope.current = scopeKey
+  const mounted = useRef(false)
   const { model, status, refresh } = useHomePortfolio(
     account?.walletId ?? null,
     account?.accountId ?? null
@@ -91,6 +99,32 @@ function ShieldSwapForm() {
   const confirmationAttempt = useRef<string | null>(null)
 
   useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!providerIsNear) navigate('/shield-funds', { replace: true })
+  }, [providerIsNear, navigate])
+
+  useEffect(() => {
+    setFromId(params.get('assetId'))
+    setToId(null)
+    setAmount('')
+    setSlippageBps(50)
+    setPicker(null)
+    setSearch('')
+    setPrepared(null)
+    setBusy(false)
+    setConnecting(false)
+    setUncertain(false)
+    setError(null)
+    confirmationAttempt.current = null
+  }, [scopeKey])
+
+  useEffect(() => {
     let active = true
     const load = async () => {
       try {
@@ -118,7 +152,7 @@ function ShieldSwapForm() {
     let active = true
     setBalances(null)
     setBalanceScope('')
-    if (!account) return
+    if (!account || !canManageNear) return
     void confidentialFundingClient
       .refreshBalances(
         {
@@ -139,7 +173,7 @@ function ShieldSwapForm() {
     return () => {
       active = false
     }
-  }, [scopeKey])
+  }, [scopeKey, canManageNear])
 
   const options = useMemo(
     () => listShieldFundingAssets(model, managedAssets, tokens, network),
@@ -167,6 +201,8 @@ function ShieldSwapForm() {
   const scopeStillCurrent = () => {
     const state = useWalletStore.getState()
     return (
+      mounted.current &&
+      latestScope.current === scopeKey &&
       state.currentWalletId === walletId &&
       state.currentAccountId === accountId &&
       state.currentNetwork === network
@@ -177,7 +213,7 @@ function ShieldSwapForm() {
       navigate(`/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`)
   }
   const refreshBalances = async () => {
-    if (!account || connecting) return
+    if (!account || !canManageNear || connecting || !scopeStillCurrent()) return
     setConnecting(true)
     setError(null)
     try {
@@ -198,12 +234,13 @@ function ShieldSwapForm() {
       if (scopeStillCurrent())
         setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
     } finally {
-      setConnecting(false)
+      if (scopeStillCurrent()) setConnecting(false)
     }
   }
   const prepare = async () => {
     if (
       !account ||
+      !canManageNear ||
       !from ||
       !to ||
       !currentBalances ||
@@ -246,7 +283,7 @@ function ShieldSwapForm() {
       if (scopeStillCurrent())
         setError(cause instanceof Error ? cause.message : 'Swap quote unavailable')
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
   }
   const inspectPlan = async (planId: string) => {
@@ -265,7 +302,7 @@ function ShieldSwapForm() {
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
   }
   const cancelReview = async () => {
-    if (!prepared || busy) return
+    if (!prepared || busy || !scopeStillCurrent()) return
     setBusy(true)
     try {
       if (
@@ -274,21 +311,24 @@ function ShieldSwapForm() {
       )
         return
       await confidentialFundingClient.cancel(prepared.review.planId)
+      if (!scopeStillCurrent()) return
       setPrepared(null)
       setUncertain(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to cancel review')
+      if (scopeStillCurrent())
+        setError(cause instanceof Error ? cause.message : 'Unable to cancel review')
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
   }
   const confirm = async () => {
-    if (!prepared || busy || !scopeStillCurrent()) return
+    if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
     setBusy(true)
     setError(null)
     try {
       if (uncertain) {
         const state = await inspectPlan(prepared.review.planId)
+        if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
           setError('Swap was not started. Review and try again.')
@@ -307,6 +347,7 @@ function ShieldSwapForm() {
     } catch (cause) {
       try {
         const state = await inspectPlan(prepared.review.planId)
+        if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
           setError(cause instanceof Error ? cause.message : 'Swap could not start')
@@ -315,12 +356,25 @@ function ShieldSwapForm() {
           setError('Swap status is pending. Check status before trying again.')
         }
       } catch {
-        setUncertain(true)
-        setError('Swap status unavailable. Check status before trying again.')
+        if (scopeStillCurrent()) {
+          setUncertain(true)
+          setError('Swap status unavailable. Check status before trying again.')
+        }
       }
     } finally {
-      setBusy(false)
+      if (scopeStillCurrent()) setBusy(false)
     }
+  }
+
+  if (activeAccount && !canManageNear) {
+    return (
+      <div className="page-container">
+        <PageHeader title="Swap" showBack />
+        <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
+          Shield unavailable for this account
+        </p>
+      </div>
+    )
   }
 
   if (prepared) {
@@ -540,6 +594,7 @@ function ShieldSwapForm() {
             variant="outline"
             size="wallet"
             isLoading={connecting}
+            disabled={!canManageNear}
             onClick={() => void refreshBalances()}
             className="mt-4 w-full"
           >
@@ -552,7 +607,7 @@ function ShieldSwapForm() {
           size="wallet"
           className="w-full"
           isLoading={busy}
-          disabled={!currentBalances || !from || !to || !validAmount || busy}
+          disabled={!canManageNear || !currentBalances || !from || !to || !validAmount || busy}
           onClick={() => void prepare()}
         >
           Swap

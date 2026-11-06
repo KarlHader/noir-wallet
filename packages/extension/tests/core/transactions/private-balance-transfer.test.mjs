@@ -3,9 +3,11 @@ import { expect } from '@playwright/test'
 
 import {
   normalizePrivateBalanceTransferInput,
-  resolvePrivateBalanceTransferAmount
+  resolvePrivateBalanceTransferAmount,
+  selectDefaultTransferAssetId
 } from '../../../src/popup/services/private-balance-transfer.ts'
 import { createInitialProductChainRegistry } from '../../../src/core/chains/registry/index.ts'
+import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import {
   listShieldFundingAssets,
   shieldFundingSources,
@@ -119,6 +121,19 @@ test('uses independently held Shield tokens without adding them to Public assets
   const sources = shieldFundingSources(options, balances)
   expect(model.assets).toHaveLength(0)
   expect(sources.map(item => item.asset.asset.id)).toEqual([sourceId])
+  const zcash = {
+    chain: { chain: { id: ZCASH_CHAIN_IDS.mainnet, family: 'zcash' } },
+    asset: {
+      asset: { id: `${ZCASH_CHAIN_IDS.mainnet}/slip44:133`, chainId: ZCASH_CHAIN_IDS.mainnet },
+      balance: { totalRaw: '100000000', transparentRaw: '0', shieldedRaw: '100000000' }
+    }
+  }
+  const move = { from: 'shield', to: 'private', eligibleChainIds: ['eip155:1'] }
+  expect(selectDefaultTransferAssetId({ ...move, assets: [zcash, ...sources] })).toBe(sourceId)
+  expect(selectDefaultTransferAssetId({ ...move, assets: [zcash] })).toBeNull()
+  expect(
+    selectDefaultTransferAssetId({ ...move, assets: sources, eligibleChainIds: [] })
+  ).toBeNull()
   expect(options.map(item => item.asset.asset.id)).toContain(destinationId)
   expect(
     buildShieldSwapRequest({

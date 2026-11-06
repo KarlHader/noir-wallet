@@ -9,6 +9,7 @@ import type { ChainDefinition } from '@/core/chains/registry'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import {
   availableDepositTokens,
@@ -52,6 +53,13 @@ function depositChainIconAlias(network: ChainDefinition): string {
 }
 
 export function ShieldDepositPage() {
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
+  return <ShieldDepositContent key={`${network}:${walletId}:${accountId}`} />
+}
+
+function ShieldDepositContent() {
   const [searchParams] = useSearchParams()
   const { navigate, replace } = useNavigate()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -75,10 +83,12 @@ export function ShieldDepositPage() {
     accountCatalog?.accounts.find(
       item => item.walletId === walletId && item.accountId === accountId
     ) ?? null
-  const accountUnavailable = !loading && !account
+  const canManageNear = getPrivateTransferChainIds(account, currentNetwork === 'mainnet').length > 0
+  const accountUnavailable = !loading && (!account || !canManageNear)
   const scopeKey = `${currentNetwork}:${walletId ?? ''}:${accountId ?? ''}`
   const scopeRef = useRef(scopeKey)
   scopeRef.current = scopeKey
+  const mounted = useRef(false)
   const { copyToClipboard, showToast } = useCopyToClipboard()
   const [catalog, setCatalog] = useState<readonly SwapToken[]>([])
   const [picker, setPicker] = useState<Picker>(null)
@@ -101,27 +111,42 @@ export function ShieldDepositPage() {
   const requestIdRef = useRef<string | null>(null)
 
   useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const requestedProvider = searchParams.get('provider')
+    if (!requestedProvider || requestedProvider === 'near-confidential') return
     if (
-      searchParams.get('provider') === 'zcash-shield' &&
+      requestedProvider === 'zcash-shield' &&
       walletId &&
       accountId &&
       account?.networks.some(network => network.chain.family === 'zcash')
     ) {
       replace(
-        `/addresses-list?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
+        `/addresses-list?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}&chain=zcash&privacy=shielded`
       )
+    } else if (requestedProvider !== 'zcash-shield' || account) {
+      replace('/shield-funds')
     }
   }, [searchParams, walletId, accountId, account, replace])
 
   useEffect(() => {
     setTokenId(undefined)
     setNetworkId(null)
+    setProvider('near-confidential')
+    setPicker(null)
     setRefundAddress('')
     setRefundEdited(false)
     setShowRefundError(false)
     setAmount('')
     setShowAmountError(false)
     setReviewOpen(false)
+    setBusy(false)
+    setRefreshing(false)
     setError(null)
     requestIdRef.current = null
   }, [walletId, accountId, currentNetwork])
@@ -196,9 +221,6 @@ export function ShieldDepositPage() {
       network => network.id === (selectedToken && depositTokenChainId(selectedToken))
     ) ??
     null
-  const tokensForPicker = networkId
-    ? tokens.filter(token => depositTokenChainId(token) === networkId)
-    : tokens
   const defaultRefund = defaultDepositRefundAddress(selectedNetwork, account?.networks ?? [])
   const effectiveRefund = refundEdited ? refundAddress : defaultRefund
   const refundError = depositRefundAddressError(effectiveRefund, selectedNetwork)
@@ -267,6 +289,7 @@ export function ShieldDepositPage() {
     if (
       historyLoading ||
       !account ||
+      !canManageNear ||
       !walletId ||
       !accountId ||
       !selectedToken ||
@@ -284,6 +307,7 @@ export function ShieldDepositPage() {
       !walletId ||
       !accountId ||
       !account ||
+      !canManageNear ||
       !selectedToken ||
       !selectedNetwork ||
       !sourceAssetId ||
@@ -312,7 +336,12 @@ export function ShieldDepositPage() {
         requestId
       })
       const wallet = useWalletStore.getState()
-      if (wallet.currentNetwork !== currentNetwork || scopeRef.current !== scopeKey) return
+      if (
+        !mounted.current ||
+        wallet.currentNetwork !== currentNetwork ||
+        scopeRef.current !== scopeKey
+      )
+        return
       setRecords(current => [
         created,
         ...current.filter(record => record.depositId !== created.depositId)
@@ -323,21 +352,26 @@ export function ShieldDepositPage() {
       requestIdRef.current = null
     } catch {
       const wallet = useWalletStore.getState()
-      if (wallet.currentNetwork === currentNetwork && scopeRef.current === scopeKey)
+      if (
+        mounted.current &&
+        wallet.currentNetwork === currentNetwork &&
+        scopeRef.current === scopeKey
+      )
         setError('Deposit address unavailable. Try again.')
     } finally {
-      setBusy(false)
+      if (mounted.current && scopeRef.current === scopeKey) setBusy(false)
     }
   }
 
   const refreshDeposit = async () => {
-    if (!viewedRecord || refreshing) return
+    if (!viewedRecord || refreshing || !mounted.current) return
     setRefreshing(true)
     setError(null)
     try {
       const updated = await externalShieldDepositClient.refresh(viewedRecord.depositId)
       const wallet = useWalletStore.getState()
       if (
+        !mounted.current ||
         wallet.currentNetwork !== updated.network ||
         scopeRef.current !== `${updated.network}:${updated.keyDomainId}:${updated.accountId}`
       )
@@ -347,9 +381,10 @@ export function ShieldDepositPage() {
       )
       setNow(Date.now())
     } catch {
-      setError('Could not check deposit status')
+      if (mounted.current && scopeRef.current === scopeKey)
+        setError('Could not check deposit status')
     } finally {
-      setRefreshing(false)
+      if (mounted.current && scopeRef.current === scopeKey) setRefreshing(false)
     }
   }
 
@@ -379,7 +414,7 @@ export function ShieldDepositPage() {
   const openReceive = () => {
     if (!walletId || !accountId) return
     navigate(
-      `/addresses-list?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
+      `/addresses-list?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}&chain=zcash&privacy=shielded`
     )
   }
 
@@ -393,7 +428,11 @@ export function ShieldDepositPage() {
             className="mt-3 flex items-center justify-between gap-3 text-xs text-danger"
           >
             <span>
-              {accountCatalogError ? 'Account addresses unavailable' : 'Account unavailable'}
+              {accountCatalogError
+                ? 'Account addresses unavailable'
+                : account
+                  ? 'Shield unavailable for this account'
+                  : 'Account unavailable'}
             </span>
             <button
               type="button"
@@ -710,6 +749,7 @@ export function ShieldDepositPage() {
               disabled={
                 loading ||
                 !account ||
+                !canManageNear ||
                 historyLoading ||
                 busy ||
                 !selectedToken ||
@@ -723,7 +763,8 @@ export function ShieldDepositPage() {
             <button
               type="button"
               onClick={() => navigate('/transfer?from=public&to=shield')}
-              className="wallet-interactive mt-4 h-10 w-full rounded-lg border border-white/10 text-sm hover:border-white/25 hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+              disabled={!canManageNear}
+              className="wallet-interactive mt-4 h-10 w-full rounded-lg border border-white/10 text-sm enabled:hover:border-white/25 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
             >
               Move from this account
             </button>
@@ -829,12 +870,7 @@ export function ShieldDepositPage() {
           </div>
           <DialogDescription className="sr-only">Choose deposit source</DialogDescription>
           {picker === 'token' && (
-            <TokenSelector
-              tokens={tokensForPicker}
-              onSelect={selectToken}
-              fullHeight
-              stableCatalogOrder
-            />
+            <TokenSelector tokens={tokens} onSelect={selectToken} fullHeight stableCatalogOrder />
           )}
           {picker === 'network' && (
             <div className="min-h-0 overflow-y-auto px-4 pb-5">
@@ -875,24 +911,24 @@ export function ShieldDepositPage() {
                   <Icon icon="lucide:check" width={18} height={18} className="text-primary" />
                 )}
               </button>
-              {account?.networks.some(network => network.chain.family === 'zcash') && (
-                <button
-                  type="button"
-                  aria-pressed={provider === 'zcash-shield'}
-                  onClick={() => {
-                    setProvider('zcash-shield')
-                    setPicker(null)
-                    openReceive()
-                  }}
-                  className={`wallet-interactive flex h-14 w-full items-center gap-3 rounded-lg border bg-wallet-surface px-3 text-left text-sm hover:bg-wallet-selected active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${provider === 'zcash-shield' ? 'border-primary' : 'border-transparent'}`}
-                >
-                  <ShieldProviderLogo provider="zcash-shield" size={30} />
-                  <span className="min-w-0 flex-1 truncate">Zcash shield</span>
-                  {provider === 'zcash-shield' && (
-                    <Icon icon="lucide:check" width={18} height={18} className="text-primary" />
-                  )}
-                </button>
-              )}
+              {selectedNetwork?.family === 'zcash' &&
+                account?.networks.some(network => network.chain.family === 'zcash') && (
+                  <button
+                    type="button"
+                    aria-pressed={provider === 'zcash-shield'}
+                    onClick={() => {
+                      setPicker(null)
+                      openReceive()
+                    }}
+                    className={`wallet-interactive flex h-14 w-full items-center gap-3 rounded-lg border bg-wallet-surface px-3 text-left text-sm hover:bg-wallet-selected active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${provider === 'zcash-shield' ? 'border-primary' : 'border-transparent'}`}
+                  >
+                    <ShieldProviderLogo provider="zcash-shield" size={30} />
+                    <span className="min-w-0 flex-1 truncate">Zcash shield</span>
+                    {provider === 'zcash-shield' && (
+                      <Icon icon="lucide:check" width={18} height={18} className="text-primary" />
+                    )}
+                  </button>
+                )}
             </div>
           )}
         </DialogContent>

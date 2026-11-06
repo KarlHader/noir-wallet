@@ -107,8 +107,17 @@ async function openShieldEthTransfer(
   cluster = false
 ) {
   await openNearShieldAction(page, 'Move')
+  const initialFrom = await page
+    .getByRole('button', { name: /^From: .* Change account$/ })
+    .getAttribute('aria-label')
+  const initialTo = await page
+    .getByRole('button', { name: /^To: .* Change account$/ })
+    .getAttribute('aria-label')
+  expect(initialFrom?.replace('From:', '')).not.toBe(initialTo?.replace('To:', ''))
+  await expect(page.getByRole('button', { name: 'Select transfer asset' })).not.toContainText('ZEC')
   await page.getByRole('button', { name: 'Select transfer asset' }).click()
   const picker = page.getByRole('dialog', { name: 'Select asset' })
+  await expect(picker.getByText('ZEC', { exact: true })).toHaveCount(0)
   const eth = picker
     .getByRole('button')
     .filter({ has: page.getByText('ETH', { exact: true }) })

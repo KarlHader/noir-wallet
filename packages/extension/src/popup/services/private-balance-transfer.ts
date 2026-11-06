@@ -30,22 +30,16 @@ export function resolveTransferDomains(input: {
   readonly mode: 'public' | 'private'
   readonly from?: string | null
   readonly to?: string | null
-  readonly family?: 'evm' | 'zcash' | null
 }): Readonly<{ from: TransferDomain; to: TransferDomain }> {
-  const zcash = input.family === 'zcash'
-  const defaultFrom = input.mode === 'public' ? (zcash ? 'shield' : 'private') : 'public'
-  const defaultTo = input.mode === 'private' ? (zcash ? 'shield' : 'private') : 'public'
+  const defaultFrom = input.mode === 'public' ? 'private' : 'public'
+  const defaultTo = input.mode === 'private' ? 'private' : 'public'
   const requestedFrom = parseTransferDomain(input.from)
   const requestedTo = parseTransferDomain(input.to)
   let from = requestedFrom ?? defaultFrom
   let to = requestedTo ?? defaultTo
-  if (zcash) {
-    if (from === 'private') from = 'shield'
-    if (to === 'private') to = 'shield'
-  }
-  if (from === to && !(requestedFrom && requestedTo)) {
-    if (!requestedFrom) from = to === 'public' ? (zcash ? 'shield' : 'private') : 'public'
-    else to = from === 'public' ? (zcash ? 'shield' : 'private') : 'public'
+  if (from === to) {
+    if (!requestedFrom) from = to === 'public' ? 'private' : 'public'
+    else to = from === 'public' ? 'private' : 'public'
   }
   return Object.freeze({ from, to })
 }
@@ -79,23 +73,11 @@ export function selectDefaultTransferAssetId(input: {
     const raw = getTransferDomainBalanceRaw(item.asset, input.from)
     return raw !== null && BigInt(raw) > 0n
   }
-  const privatePair =
-    (input.from === 'public' && input.to === 'private') ||
-    (input.from === 'private' && input.to === 'public')
-  const eligible = privatePair
-    ? input.assets.filter(item => input.eligibleChainIds.includes(item.chain.chain.id))
-    : []
-  const evm = input.assets.filter(item => item.chain.chain.family === 'evm')
-  return (
-    (
-      eligible.find(funded) ??
-      eligible[0] ??
-      (privatePair ? (evm.find(funded) ?? evm[0]) : undefined) ??
-      input.assets.find(funded) ??
-      input.assets[0] ??
-      null
-    )?.asset.asset.id ?? null
+  const eligible = input.assets.filter(
+    item =>
+      item.chain.chain.family === 'evm' && input.eligibleChainIds.includes(item.chain.chain.id)
   )
+  return (eligible.find(funded) ?? eligible[0])?.asset.asset.id ?? null
 }
 
 export function resolvePrivateBalanceTransferSource(input: {

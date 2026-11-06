@@ -6,7 +6,6 @@ import { formatBaseUnitAmount, formatTokenQuantity } from '@/lib/number-format'
 import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { getAssetShieldProvider } from '@/popup/services/asset-domains'
 import { cn } from '@/lib/utils'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -19,7 +18,6 @@ import { InlineError } from '@/popup/components/common/InlineError'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import nearLogo from '@/images/figma-near-confidential.svg'
-import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
 import { Button } from '@/popup/components/ui/button'
 import {
   Dialog,
@@ -96,11 +94,11 @@ function DomainCard({
   network,
   networkName,
   showNetwork,
-  shieldProvider,
   onClick,
   onMax,
   maxDisabled,
-  maxLoading
+  maxLoading,
+  disabled
 }: {
   label: 'From' | 'To'
   accountName: string
@@ -110,11 +108,11 @@ function DomainCard({
   network: string
   networkName: string
   showNetwork: boolean
-  shieldProvider: 'near-confidential' | 'zcash-shield' | null
   onClick: () => void
   onMax?: () => void
   maxDisabled?: boolean
   maxLoading?: boolean
+  disabled?: boolean
 }) {
   return (
     <div className="flex min-h-[104px] w-full flex-col justify-between rounded-lg border border-white/10 bg-wallet-surface px-3 py-3">
@@ -124,12 +122,13 @@ function DomainCard({
           <button
             type="button"
             onClick={onClick}
+            disabled={disabled}
             aria-label={`Select ${label.toLowerCase()} account and network`}
             className="wallet-interactive flex min-w-0 max-w-[60%] items-center gap-1 rounded text-xs text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
           >
             {domain === 'shield' ? (
               <img
-                src={shieldProvider === 'zcash-shield' ? zcashShieldLogo : nearLogo}
+                src={nearLogo}
                 alt=""
                 aria-hidden="true"
                 className="size-4 shrink-0 rounded-[3px]"
@@ -146,11 +145,7 @@ function DomainCard({
               />
             )}
             <span className="truncate">
-              {domain === 'shield'
-                ? shieldProvider === 'zcash-shield'
-                  ? 'Zcash shield'
-                  : 'NEAR Confidential'
-                : networkName}
+              {domain === 'shield' ? 'NEAR Confidential' : networkName}
             </span>
             <Icon icon="lucide:chevron-down" width={13} height={13} />
           </button>
@@ -160,6 +155,7 @@ function DomainCard({
         <button
           type="button"
           onClick={onClick}
+          disabled={disabled}
           aria-label={`${label}: ${domainLabel(domain)}. Change account`}
           className="wallet-interactive flex min-w-0 items-center gap-1.5 rounded text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-primary"
         >
@@ -251,6 +247,14 @@ function MethodCard({
 
 export function Transfer() {
   const [params] = useSearchParams()
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
+  return <TransferForm key={`${network}:${walletId}:${accountId}:${params.toString()}`} />
+}
+
+function TransferForm() {
+  const [params] = useSearchParams()
   const walletMode = params.get('mode') === 'private' ? 'private' : 'public'
   const routeFrom = params.get('from')
   const routeTo = params.get('to')
@@ -269,6 +273,15 @@ export function Transfer() {
     nativeAccount: activeAccount
   })
   const scopeKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}:${endpointRuntimeKey}`
+  const latestScopeKey = useRef(scopeKey)
+  latestScopeKey.current = scopeKey
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const {
     model: portfolio,
     status: loadState,
@@ -277,7 +290,6 @@ export function Transfer() {
   const [retry, setRetry] = useState(0)
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
-  const [shieldPicker, setShieldPicker] = useState<'from' | 'to' | null>(null)
   const [pickerAccountId, setPickerAccountId] = useState<string | null>(null)
   const [selectedAssetId, setSelectedAssetId] = useState(params.get('assetId'))
   const [from, setFrom] = useState<TransferDomain>(
@@ -366,22 +378,34 @@ export function Transfer() {
   }, [scopeKey])
 
   useEffect(() => {
+    const domains = resolveTransferDomains({ mode: walletMode, from: routeFrom, to: routeTo })
+    setFrom(domains.from)
+    setTo(domains.to)
+    setSelectedAssetId(params.get('assetId'))
     setAmount('')
+    setMethod('directly')
     setMaxSelected(false)
+    setPreparingShield(false)
+    setConfirmingShield(false)
+    setCancellingShield(false)
     setShieldError(null)
     setConfirmUncertain(false)
     setAssetPickerOpen(false)
     setDomainPicker(null)
-    setShieldPicker(null)
     setPickerAccountId(null)
   }, [scopeKey])
 
+  const eligibleChainIds = useMemo(
+    () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
+    [activeAccount, currentNetwork]
+  )
   const assets = useMemo<TransferAsset[]>(() => {
     if (!portfolio) return []
     const chains = new Map(portfolio.chains.map(chain => [chain.chain.id, chain]))
     const publicAssets = portfolio.assets.flatMap(asset => {
       const chain = chains.get(asset.asset.chainId)
-      return (chain?.chain.family === 'evm' || chain?.chain.family === 'zcash') &&
+      return chain?.chain.family === 'evm' &&
+        eligibleChainIds.includes(chain.chain.id) &&
         chain.chain.capabilities.transaction.status === 'available'
         ? [{ asset, chain }]
         : []
@@ -398,31 +422,27 @@ export function Transfer() {
     return [
       ...publicAssets,
       ...heldShieldAssets
-        .filter(item => !existing.has(item.asset.asset.id))
+        .filter(
+          item =>
+            eligibleChainIds.includes(item.chain.chain.id) && !existing.has(item.asset.asset.id)
+        )
         .map(({ asset, chain }) => ({ asset, chain }))
     ]
-  }, [portfolio, shieldSnapshot, scopeKey, managedAssets, catalogTokens, currentNetwork])
-  const eligibleChainIds = useMemo(
-    () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
-    [activeAccount, currentNetwork]
-  )
+  }, [
+    portfolio,
+    shieldSnapshot,
+    scopeKey,
+    managedAssets,
+    catalogTokens,
+    currentNetwork,
+    eligibleChainIds
+  ])
   const defaultAssetId = useMemo(
     () => selectDefaultTransferAssetId({ assets, from, to, eligibleChainIds }),
     [assets, from, to, eligibleChainIds]
   )
   const selected =
     assets.find(item => item.asset.asset.id === (selectedAssetId ?? defaultAssetId)) ?? null
-  useEffect(() => {
-    if (!selected) return
-    const domains = resolveTransferDomains({
-      mode: walletMode,
-      from: routeFrom,
-      to: routeTo,
-      family: selected.chain.chain.family === 'zcash' ? 'zcash' : 'evm'
-    })
-    setFrom(domains.from)
-    setTo(domains.to)
-  }, [walletMode, routeFrom, routeTo, selected?.chain.chain.family])
   const accountNetwork = activeAccount?.networks.find(
     item => item.chain.id === selected?.chain.chain.id
   )
@@ -643,13 +663,14 @@ export function Transfer() {
     if (selected) setSelectedAssetId(selected.asset.asset.id)
     if (side === 'from') {
       setFrom(domain)
+      if (domain === to) setTo(from)
     } else {
       setTo(domain)
+      if (domain === from) setFrom(to)
     }
     setAmount('')
     setMaxSelected(false)
     setDomainPicker(null)
-    setShieldPicker(null)
   }
   const openDomainPicker = (side: 'from' | 'to') => {
     setPickerAccountId(effective?.accountId ?? null)
@@ -727,20 +748,9 @@ export function Transfer() {
   const pickerNetwork = pickerAccount?.networks.find(
     item => item.chain.id === selected?.chain.chain.id
   )
-  const pickerShieldRaw =
-    pickerIsActive && selected
-      ? selected.chain.chain.family === 'evm'
-        ? refreshedShieldRaw
-        : getTransferDomainBalanceRaw(selected.asset, 'shield')
-      : null
+  const pickerShieldRaw = pickerIsActive && selected ? refreshedShieldRaw : null
   const addressFor = (domain: TransferDomain) => {
     if (domain === 'shield') return ''
-    if (selected?.chain.chain.family === 'zcash') {
-      if (domain === 'private') return ''
-      return (
-        accountNetwork?.addresses.find(address => address.privacy === 'transparent')?.value ?? ''
-      )
-    }
     return domain === 'private' ? privateAddress : mainAddress
   }
   const maxDisabled = fundingRoute
@@ -766,6 +776,8 @@ export function Transfer() {
   const scopeStillCurrent = () => {
     const wallet = useWalletStore.getState()
     return Boolean(
+      mounted.current &&
+      latestScopeKey.current === scopeKey &&
       effective &&
       wallet.currentWalletId === currentWalletId &&
       wallet.currentAccountId === currentAccountId &&
@@ -842,17 +854,17 @@ export function Transfer() {
       if (scopeStillCurrent())
         setShieldError(error instanceof Error ? error.message : 'Shield review is unavailable')
     } finally {
-      setPreparingShield(false)
+      if (scopeStillCurrent()) setPreparingShield(false)
     }
   }
   const openShieldActivity = (plan: ConfidentialFundingPlan) => {
-    setPreparedShield(null)
     if (
       scopeStillCurrent() &&
       plan.network === currentNetwork &&
       plan.keyDomainId === effective?.walletId &&
       plan.accountId === effective.accountId
     ) {
+      setPreparedShield(null)
       navigate(`/?tab=activity&transactionId=${encodeURIComponent(plan.transactionId)}`)
     }
   }
@@ -896,11 +908,12 @@ export function Transfer() {
         if (status !== 'prepared') return
       }
       await confidentialFundingClient.cancel(pending.planId)
+      if (!scopeStillCurrent()) return
       setPreparedShield(null)
     } catch {
       if (scopeStillCurrent()) setPreparedShield(null)
     } finally {
-      setCancellingShield(false)
+      if (scopeStillCurrent()) setCancellingShield(false)
     }
   }
   const confirmShield = async () => {
@@ -931,7 +944,7 @@ export function Transfer() {
       if (status === 'prepared' && scopeStillCurrent())
         setShieldError(error instanceof Error ? error.message : 'Shield transfer could not start')
     } finally {
-      setConfirmingShield(false)
+      if (scopeStillCurrent()) setConfirmingShield(false)
     }
   }
 
@@ -1060,6 +1073,7 @@ export function Transfer() {
             aria-label="Transfer amount"
             inputMode="decimal"
             value={amount}
+            disabled={!selected}
             title={amount || undefined}
             style={{
               fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, amount.length))))}px`
@@ -1103,16 +1117,10 @@ export function Transfer() {
             address={addressFor(from)}
             balance={sourceBalance}
             networkName={selected?.chain.chain.displayName ?? ''}
-            network={
-              from === 'shield'
-                ? selected?.chain.chain.family === 'zcash'
-                  ? 'zcash'
-                  : 'near'
-                : networkIcon
-            }
+            network={from === 'shield' ? 'near' : networkIcon}
             showNetwork={false}
-            shieldProvider={selected ? getAssetShieldProvider(selected.asset) : null}
             onClick={() => openDomainPicker('from')}
+            disabled={!selected}
             onMax={selected ? handleMax : undefined}
             maxDisabled={maxDisabled}
             maxLoading={maximum.loading}
@@ -1124,16 +1132,10 @@ export function Transfer() {
             address={addressFor(to)}
             balance={targetBalance}
             networkName={selected?.chain.chain.displayName ?? ''}
-            network={
-              to === 'shield'
-                ? selected?.chain.chain.family === 'zcash'
-                  ? 'zcash'
-                  : 'near'
-                : networkIcon
-            }
+            network={to === 'shield' ? 'near' : networkIcon}
             showNetwork={selected?.chain.chain.family === 'evm'}
-            shieldProvider={selected ? getAssetShieldProvider(selected.asset) : null}
             onClick={() => openDomainPicker('to')}
+            disabled={!selected}
           />
           <button
             type="button"
@@ -1145,6 +1147,7 @@ export function Transfer() {
               setMaxSelected(false)
             }}
             aria-label="Switch transfer direction"
+            disabled={!selected}
             className={cn(
               'wallet-interactive absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary',
               walletMode === 'private' ? 'text-private' : 'text-foreground'
@@ -1153,6 +1156,11 @@ export function Transfer() {
             <Icon icon="lucide:arrow-up-down" width={18} height={18} />
           </button>
         </div>
+        {!selected && loadState !== 'loading' && loadState !== 'error' && (
+          <p role="status" className="mt-3 text-center text-sm text-muted">
+            No transferable assets
+          </p>
+        )}
         {transferError && (
           <p role="alert" className="mt-2 text-xs text-warning">
             {transferError}
@@ -1253,16 +1261,7 @@ export function Transfer() {
                 key={item.asset.asset.id}
                 type="button"
                 onClick={() => {
-                  const sameFamily = selected?.chain.chain.family === item.chain.chain.family
-                  const domains = resolveTransferDomains({
-                    mode: walletMode,
-                    from: sameFamily ? from : routeFrom,
-                    to: sameFamily ? to : routeTo,
-                    family: item.chain.chain.family === 'zcash' ? 'zcash' : 'evm'
-                  })
                   setSelectedAssetId(item.asset.asset.id)
-                  setFrom(domains.from)
-                  setTo(domains.to)
                   setAmount('')
                   setMaxSelected(false)
                   setAssetPickerOpen(false)
@@ -1326,6 +1325,7 @@ export function Transfer() {
                 type="button"
                 role="tab"
                 aria-selected={pickerAccount?.accountId === account.accountId}
+                disabled={account.accountId !== effective?.accountId}
                 onClick={() => setPickerAccountId(account.accountId)}
                 className={cn(
                   'h-8 shrink-0 rounded-2xl border px-3 text-sm font-medium leading-[18px]',
@@ -1349,15 +1349,12 @@ export function Transfer() {
             className="space-y-2 pb-2"
           >
             {(['public', 'private'] as const).map(domain => {
-              const supported = selected?.chain.chain.family !== 'zcash' || domain === 'public'
               const address =
-                selected?.chain.chain.family === 'zcash'
-                  ? pickerNetwork?.addresses.find(item => item.privacy === 'transparent')?.value
-                  : domain === 'private'
-                    ? pickerNetwork?.privateExecutionAddress
-                    : pickerNetwork?.addresses.find(item => item.preferredForReceive)?.value
+                domain === 'private'
+                  ? pickerNetwork?.privateExecutionAddress
+                  : pickerNetwork?.addresses.find(item => item.preferredForReceive)?.value
               const raw =
-                pickerIsActive && supported && selected
+                pickerIsActive && selected
                   ? getTransferDomainBalanceRaw(selected.asset, domain)
                   : null
               return (
@@ -1365,7 +1362,7 @@ export function Transfer() {
                   key={domain}
                   type="button"
                   onClick={() => domainPicker && selectDomain(domain, domainPicker)}
-                  disabled={!pickerIsActive || !supported || !address}
+                  disabled={!pickerIsActive || !address}
                   aria-label={`Select ${domainLabel(domain)} account`}
                   aria-pressed={pickerIsActive && (domainPicker === 'from' ? from : to) === domain}
                   className={cn(
@@ -1403,12 +1400,9 @@ export function Transfer() {
               type="button"
               onClick={() => {
                 if (!domainPicker || !selected) return
-                if (selected.chain.chain.family === 'zcash') {
-                  setShieldPicker(domainPicker)
-                  setDomainPicker(null)
-                } else selectDomain('shield', domainPicker)
+                selectDomain('shield', domainPicker)
               }}
-              disabled={!pickerIsActive || !selected}
+              disabled={!pickerIsActive || !managedAsset}
               aria-label="Select Shield balance"
               aria-pressed={pickerIsActive && (domainPicker === 'from' ? from : to) === 'shield'}
               className={cn(
@@ -1422,77 +1416,16 @@ export function Transfer() {
                 <span className="block text-base font-medium leading-[21px]">Shield</span>
                 <span className="mt-1 flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
                   <img
-                    src={selected?.chain.chain.family === 'zcash' ? zcashShieldLogo : nearLogo}
+                    src={nearLogo}
                     alt=""
                     aria-hidden="true"
                     className="size-4 shrink-0 rounded-[3px]"
                   />
-                  <span className="truncate">
-                    {selected?.chain.chain.family === 'zcash'
-                      ? 'Zcash shield'
-                      : 'NEAR Confidential'}
-                  </span>
+                  <span className="truncate">NEAR Confidential</span>
                 </span>
               </span>
               <span className="max-w-[38%] break-all text-right text-base font-medium leading-[21px]">
                 {pickerShieldRaw !== null && selected
-                  ? formatTokenQuantity(
-                      formatBaseUnitAmount(pickerShieldRaw, selected.asset.metadata.decimals)
-                    )
-                  : '—'}
-              </span>
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={shieldPicker !== null} onOpenChange={open => !open && setShieldPicker(null)}>
-        <DialogContent
-          position="bottom"
-          data-wallet-mode={walletMode}
-          className="max-h-[75dvh] min-h-0 overflow-y-auto bg-wallet-surface p-4"
-        >
-          <DialogHeader className="items-center pt-1">
-            <TokenIcon symbol={symbol || 'ZEC'} nativeChain="zcash" size={32} />
-            <DialogTitle className="text-base font-medium">{symbol || 'ZEC'}</DialogTitle>
-            <DialogDescription className="sr-only">Select a Shield provider.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 pb-2">
-            <button
-              type="button"
-              disabled
-              aria-label="NEAR Confidential unavailable for ZEC"
-              className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-left opacity-45"
-            >
-              <img src={nearLogo} alt="" aria-hidden="true" className="size-4 shrink-0 rounded" />
-              <span className="min-w-0 flex-1 truncate text-xs font-medium leading-4">
-                NEAR Confidential
-              </span>
-              <span className="text-base font-medium leading-[21px]">—</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => shieldPicker && selectDomain('shield', shieldPicker)}
-              disabled={!pickerIsActive || !selected || selected.chain.chain.family !== 'zcash'}
-              aria-label="Select Zcash shield"
-              aria-pressed={pickerIsActive && (shieldPicker === 'from' ? from : to) === 'shield'}
-              className={cn(
-                'flex min-h-14 w-full items-center gap-2 rounded-lg border bg-white/5 px-3 text-left disabled:opacity-45',
-                pickerIsActive && (shieldPicker === 'from' ? from : to) === 'shield'
-                  ? 'border-primary ring-1 ring-primary'
-                  : 'border-white/10'
-              )}
-            >
-              <img
-                src={zcashShieldLogo}
-                alt=""
-                aria-hidden="true"
-                className="size-4 shrink-0 rounded"
-              />
-              <span className="min-w-0 flex-1 truncate text-xs font-medium leading-4">
-                Zcash shield
-              </span>
-              <span className="text-base font-medium leading-[21px]">
-                {selected && pickerShieldRaw !== null
                   ? formatTokenQuantity(
                       formatBaseUnitAmount(pickerShieldRaw, selected.asset.metadata.decimals)
                     )
