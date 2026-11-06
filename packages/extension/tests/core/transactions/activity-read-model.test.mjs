@@ -267,6 +267,16 @@ test.describe('Activity read model', () => {
         privateToMain.root.id
       ].sort()
     )
+    expect(
+      filterActivityItems({ ...selection, assetId: ethAssetId, domain: 'public' })
+        .map(item => item.id)
+        .sort()
+    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id].sort())
+    expect(
+      filterActivityItems({ ...selection, assetId: ethAssetId, domain: 'private' })
+        .map(item => item.id)
+        .sort()
+    ).toEqual([incomingPrivate.root.id, privateToMain.root.id].sort())
   })
 
   test('preserves a persisted pre-finality reorg through the strict Activity boundary', () => {

@@ -30,7 +30,20 @@ export function homeTabPath(search: string, tab: HomeDefaultTab): string {
   const params = new URLSearchParams(search)
   params.delete('transactionId')
   if (tab === 'activity') params.set('tab', tab)
-  else params.delete('tab')
+  else {
+    params.delete('tab')
+    params.delete('assetId')
+    params.delete('mode')
+  }
+  const remaining = params.toString()
+  return remaining ? `/?${remaining}` : '/'
+}
+
+export function clearHomeActivityAssetFilter(search: string): string {
+  const params = new URLSearchParams(search)
+  params.delete('assetId')
+  params.delete('domain')
+  params.delete('mode')
   const remaining = params.toString()
   return remaining ? `/?${remaining}` : '/'
 }
@@ -45,6 +58,8 @@ export function homeAssetDomainPath(search: string, domain: AssetDomain): string
   if (domain === 'shield') return '/shield-funds'
   const params = new URLSearchParams(search)
   params.delete('transactionId')
+  params.delete('assetId')
+  params.delete('mode')
   if (domain === 'all') params.delete('domain')
   else params.set('domain', domain)
   params.delete('tab')

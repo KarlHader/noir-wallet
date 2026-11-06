@@ -35,6 +35,13 @@ test('loads only the current pair chains on entry and reuses source tokens for s
   ).toEqual({ sourceChainIds: [900002], destinationChainIds: [1] })
   expect(
     buildInitialSwapCatalogPlan({
+      sourceAssetId: `${zcashChain.id}/slip44:133`,
+      destinationAssetId: 'nep141:eth.omft.near',
+      enabledChains: [bitcoinChain, zcashChain, ethereumChain]
+    })
+  ).toEqual({ sourceChainIds: [900010], destinationChainIds: [1] })
+  expect(
+    buildInitialSwapCatalogPlan({
       sourceAssetId: 'nep245:v2_1.omni.hot.tg:137_11111111111111111111',
       destinationApiChainId: '137',
       enabledChains: [polygonChain]

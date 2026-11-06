@@ -4,6 +4,7 @@ import { rheaSwapClient } from './rhea-swap-client'
 import { getChainFromAssetId } from '@/lib/format'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
 import { resolveEvmChainIconAlias } from '@/config/icons'
+import { BITCOIN_CHAIN_IDS, ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 
 export interface SwapInitialCatalogOptions {
   readonly sourceAssetId?: string | null
@@ -98,8 +99,16 @@ function assetChain(assetId?: string | null) {
   const numericChain =
     /^nep245:[^:]+:([0-9]+)_/.exec(assetId)?.[1] ?? /^eip155:([0-9]+)(?:\/|$)/.exec(assetId)?.[1]
   if (numericChain) return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === numericChain)
-  if (assetId.startsWith('bip122:'))
-    return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === 'btc')
+  if (assetId.startsWith('bip122:')) {
+    const chainId = assetId.split('/')[0]
+    const blockchain =
+      chainId === ZCASH_CHAIN_IDS.mainnet
+        ? 'zec'
+        : chainId === BITCOIN_CHAIN_IDS.mainnet
+          ? 'btc'
+          : undefined
+    return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.blockchain === blockchain)
+  }
   const blockchain = getChainFromAssetId(assetId)
   const aliases: Readonly<Record<string, string>> = {
     ethereum: 'eth',

@@ -37,6 +37,7 @@ interface MultichainActivityPanelProps {
   readonly accountNetworks?: readonly AccountNetworkView[]
   readonly onItemClick?: (item: ActivityItem) => void
   readonly filterAssetId?: string
+  readonly filterDomain?: 'public' | 'private'
   readonly showToolbar?: boolean
   readonly maxItems?: number
   readonly compact?: boolean
@@ -93,6 +94,7 @@ export function MultichainActivityPanel({
   accountNetworks = EMPTY_ACCOUNT_NETWORKS,
   onItemClick,
   filterAssetId,
+  filterDomain,
   showToolbar = true,
   maxItems,
   compact = false,
@@ -151,8 +153,11 @@ export function MultichainActivityPanel({
     [selectableAccountNetworks]
   )
   const selectedChainIds = useMemo(
-    () => resolveAvailableActivityChainSelection(availableChainIds, persistedChainSelection),
-    [availableChainIds, persistedChainSelection]
+    () =>
+      filteredChainId && availableChainIds.includes(filteredChainId)
+        ? [filteredChainId]
+        : resolveAvailableActivityChainSelection(availableChainIds, persistedChainSelection),
+    [availableChainIds, filteredChainId, persistedChainSelection]
   )
   const selectedChainKey = selectedChainIds.join(',')
 
@@ -274,10 +279,11 @@ export function MultichainActivityPanel({
     setVisibleLimit(ACTIVITY_DISPLAY_PAGE_SIZE)
     setOlderStatus('ready')
     olderRequestSequence.current += 1
-  }, [walletId, accountId, network, selectedChainKey, filterAssetId])
+  }, [walletId, accountId, network, selectedChainKey, filterAssetId, filterDomain])
   const selectedAddress = selectedNetwork?.addresses.find(address => address.preferredForReceive)
   const selectedHistoryAddress =
-    accountMode === 'private' && selectedNetwork?.privateExecutionAddress
+    (filterDomain === 'private' || (!filterDomain && accountMode === 'private')) &&
+    selectedNetwork?.privateExecutionAddress
       ? selectedNetwork.privateExecutionAddress
       : selectedAddress?.value
   const fullHistoryUrl =
@@ -289,9 +295,10 @@ export function MultichainActivityPanel({
       filterActivityItems({
         items: visibleModel?.items ?? [],
         selectedChainIds,
-        assetId: filterAssetId
+        assetId: filterAssetId,
+        domain: filterDomain
       }),
-    [filterAssetId, selectedChainIds, visibleModel]
+    [filterAssetId, filterDomain, selectedChainIds, visibleModel]
   )
   useEffect(() => {
     if (!focusTransactionId || !onItemClick) return
@@ -404,11 +411,15 @@ export function MultichainActivityPanel({
         )
         return (
           <EvmNonceRecoveryBanner
-            key={`${accountId}:${chainId}:${accountMode ?? 'main'}`}
+            key={`${accountId}:${chainId}:${filterDomain ?? accountMode ?? 'main'}`}
             accountId={accountId}
             chainId={chainId}
             networkName={chainMetadata.get(chainId)?.displayName ?? 'EVM'}
-            executionMode={accountMode === 'private' ? 'private' : 'main'}
+            executionMode={
+              filterDomain === 'private' || (!filterDomain && accountMode === 'private')
+                ? 'private'
+                : 'main'
+            }
             feeSymbol={nativeAsset?.metadata.symbol ?? 'native'}
             feeDecimals={nativeAsset?.metadata.decimals ?? 18}
             activityItems={visibleModel?.items ?? []}

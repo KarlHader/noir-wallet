@@ -367,8 +367,14 @@ export function AddressesList() {
   const [searchParams] = useSearchParams()
   const walletId = searchParams.get('walletId')
   const accountId = searchParams.get('accountId')
+  const scopedChainId = searchParams.get('chainId')
+  const scopedReceive = searchParams.has('chainId')
+  const requestedMode = searchParams.get('mode') === 'private' ? 'private' : 'public'
+  const requestedPrivacy = searchParams.get('privacy')
   const shieldedZcashOnly =
     searchParams.get('chain') === 'zcash' && searchParams.get('privacy') === 'shielded'
+  const shieldedReceive = shieldedZcashOnly || (scopedReceive && requestedPrivacy === 'shielded')
+  const pageTitle = shieldedReceive ? 'Shield address' : scopedReceive ? 'Receive' : 'Address'
   const shieldedReceiveAddress = useWalletStore(state =>
     walletId && accountId
       ? state.getAccount(walletId, accountId)?.networkAddresses?.[DEFAULT_NETWORK]?.shielded
@@ -376,6 +382,7 @@ export function AddressesList() {
   )
   const [networkQuery, setNetworkQuery] = useState('')
   const [mode, setMode] = useState<'public' | 'private'>('public')
+  const activeMode = scopedReceive ? requestedMode : mode
   const [evmExpanded, setEvmExpanded] = useState(false)
   const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
   const [accountIdentity, setAccountIdentity] = useState<{ name: string; index: number } | null>(
@@ -438,6 +445,22 @@ export function AddressesList() {
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
     return networks.flatMap(network => {
+      if (scopedReceive) {
+        if (network.chain.id !== scopedChainId) return []
+        if (network.chain.family === 'zcash') {
+          const privacy =
+            requestedPrivacy === 'transparent' || requestedPrivacy === 'shielded'
+              ? requestedPrivacy
+              : requestedMode === 'private'
+                ? 'shielded'
+                : 'transparent'
+          const addresses = network.addresses.filter(address => address.privacy === privacy)
+          return addresses.length > 0 ? [{ ...network, addresses }] : []
+        }
+        if (requestedPrivacy) return []
+        if (requestedMode === 'private' && !network.privateExecutionAddress) return []
+        return [network]
+      }
       if (shieldedZcashOnly) {
         if (network.chain.family !== 'zcash') return []
         const addresses = network.addresses.filter(address => address.privacy === 'shielded')
@@ -453,7 +476,16 @@ export function AddressesList() {
         ? [network]
         : []
     })
-  }, [networkQuery, networks, mode, shieldedZcashOnly])
+  }, [
+    networkQuery,
+    networks,
+    mode,
+    requestedMode,
+    requestedPrivacy,
+    scopedChainId,
+    scopedReceive,
+    shieldedZcashOnly
+  ])
   const hasPrivateAddresses = networks.some(
     network => network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)
   )
@@ -471,7 +503,7 @@ export function AddressesList() {
     <AddressNetworkGroup
       key={network.chain.id}
       network={network}
-      mode={mode}
+      mode={activeMode}
       onCopy={value => void copyToClipboard(value)}
       onCopyPrivateExecution={address => setPrivateAddressAction({ address })}
       onShowQr={target =>
@@ -480,7 +512,7 @@ export function AddressesList() {
           : setQrTarget(target)
       }
       onOpenSettings={
-        network.chain.family === 'zcash'
+        !scopedReceive && network.chain.family === 'zcash'
           ? () => {
               if (!walletId || !accountId) return
               navigate(
@@ -495,7 +527,7 @@ export function AddressesList() {
   if (!walletId || !accountId) {
     return (
       <div className="page-container">
-        <PageHeader title={shieldedZcashOnly ? 'Shield address' : 'Address'} showBack />
+        <PageHeader title={pageTitle} showBack />
         <div className="flex flex-1 items-center justify-center px-5">
           <p className="text-center text-muted">No account available</p>
         </div>
@@ -506,10 +538,10 @@ export function AddressesList() {
   return (
     <div className="page-container">
       <CopyToast show={showToast} message="Address copied" />
-      <PageHeader title={shieldedZcashOnly ? 'Shield address' : 'Address'} showBack />
+      <PageHeader title={pageTitle} showBack />
 
       <div className="page-content min-h-0 !px-4 !pt-2">
-        {!shieldedZcashOnly && (
+        {!shieldedZcashOnly && !scopedReceive && (
           <Input
             value={networkQuery}
             onChange={event => setNetworkQuery(event.target.value)}
@@ -523,7 +555,12 @@ export function AddressesList() {
         )}
 
         {loading ? (
-          <ListSkeleton rows={4} label="Loading addresses" className="mt-5" card />
+          <ListSkeleton
+            rows={scopedReceive ? 1 : 4}
+            label="Loading addresses"
+            className="mt-5"
+            card
+          />
         ) : error ? (
           <InlineError
             message={error}
@@ -532,12 +569,18 @@ export function AddressesList() {
           />
         ) : filteredNetworks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted">
-            {shieldedZcashOnly ? 'Shield address unavailable' : 'No matching networks'}
+            {shieldedReceive
+              ? 'Shield address unavailable'
+              : scopedReceive
+                ? 'Address unavailable'
+                : 'No matching networks'}
           </p>
         ) : (
           <div role="region" className="mt-3 pb-4" aria-label="Account network addresses">
-            {otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
-            {showOtherChains && (
+            {scopedReceive && filteredNetworks.map(renderNetwork)}
+            {!scopedReceive &&
+              otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
+            {!scopedReceive && showOtherChains && (
               <div className="mt-3 flex min-h-10 min-w-0 items-center justify-between gap-2 border-t border-border/40 pt-2">
                 <h2 className="min-w-0 text-sm text-wallet-secondary">Other chains</h2>
                 <div
@@ -571,7 +614,7 @@ export function AddressesList() {
                 </div>
               </div>
             )}
-            {firstEvm && (
+            {!scopedReceive && firstEvm && (
               <div className="mt-2">
                 {evmExpanded ? (
                   <button
@@ -661,7 +704,7 @@ export function AddressesList() {
                 {evmExpanded && evmNetworks.map(renderNetwork)}
               </div>
             )}
-            {otherChainNetworks.map(renderNetwork)}
+            {!scopedReceive && otherChainNetworks.map(renderNetwork)}
           </div>
         )}
       </div>

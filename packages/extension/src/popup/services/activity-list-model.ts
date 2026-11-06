@@ -28,6 +28,7 @@ export function filterActivityItems(input: {
   readonly items: readonly ActivityItem[]
   readonly selectedChainIds: readonly string[]
   readonly assetId?: string
+  readonly domain?: 'public' | 'private'
 }): readonly ActivityItem[] {
   const selectedChainIdSet = new Set(input.selectedChainIds)
   return input.items.filter(item => {
@@ -35,6 +36,10 @@ export function filterActivityItems(input: {
     return (
       chainId !== undefined &&
       selectedChainIdSet.has(chainId) &&
+      (input.domain === undefined ||
+        (input.domain === 'private'
+          ? item.accountMode === 'private'
+          : item.accountMode !== 'private')) &&
       (!input.assetId ||
         item.snapshot?.primaryAmount?.assetId === input.assetId ||
         item.snapshot?.counterAmount?.assetId === input.assetId ||

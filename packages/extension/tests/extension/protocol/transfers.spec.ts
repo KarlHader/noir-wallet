@@ -854,26 +854,26 @@ test('keeps transfer input free of warnings while route readiness is pending', a
   })
   try {
     await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
-    await popup.getByRole('button', { name: 'Transfer ETH between Public and Private' }).click()
-    const dialog = popup.getByRole('dialog', { name: 'Transfer ETH' })
-    const amount = dialog.getByLabel('Transfer amount')
-    const review = dialog.getByRole('button', { name: 'Review transfer' })
+    await popup.getByRole('button', { name: 'Move', exact: true }).click()
+    await expect(popup.getByRole('heading', { name: 'Move', exact: true })).toBeVisible()
+    const amount = popup.getByRole('textbox', { name: 'Transfer amount' })
+    const review = popup.getByRole('button', { name: 'Transfer', exact: true })
     await expect(review).toBeDisabled()
-    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(popup.getByRole('alert')).toHaveCount(0)
     await amount.fill('0.')
-    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(popup.getByRole('alert')).toHaveCount(0)
     await amount.fill('0.01')
     await expect(review).toBeDisabled()
-    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(popup.getByRole('alert')).toHaveCount(0)
     await captureScreenshot(popup, 'balance-transfer-route-loading.png')
     releaseCatalog()
     await expect(review).toBeEnabled()
-    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(popup.getByRole('alert')).toHaveCount(0)
     await amount.fill('999')
-    await expect(dialog.getByRole('alert')).toContainText('Amount exceeds')
+    await expect(popup.getByRole('alert')).toContainText('Amount exceeds')
     await expect(review).toBeDisabled()
     await amount.fill('0.01')
-    await expect(dialog.getByRole('alert')).toHaveCount(0)
+    await expect(popup.getByRole('alert')).toHaveCount(0)
     await expect(review).toBeEnabled()
     await expectNoOverflow(popup)
     await captureScreenshot(popup, 'balance-transfer-clean-input.png')
@@ -901,16 +901,17 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
     const ethDetails = popup.getByRole('button', { name: 'View ETH details on Ethereum' })
     await expect(ethDetails).toBeVisible({ timeout: 30_000 })
     await ethDetails.click()
-    await popup.getByRole('button', { name: 'Transfer ETH between Public and Private' }).click()
-    const sheet = popup.getByRole('dialog', { name: 'Transfer ETH' })
+    await popup.getByRole('button', { name: 'Move', exact: true }).click()
     if (direction === 'private-to-main')
-      await sheet.getByRole('button', { name: 'Switch transfer direction' }).click()
-    await expect(sheet.getByTestId('private-balance-transfer-amount')).toContainText(
-      'Balance 0.002976 ETH',
-      { timeout: 30_000 }
-    )
-    await sheet.getByLabel('Transfer amount').fill('0.002976040456329')
-    const maxButton = sheet.getByRole('button', { name: 'Max', exact: true })
+      await popup.getByRole('button', { name: 'Switch transfer direction' }).click()
+    const sourceAccount = popup.getByRole('button', {
+      name: `From: ${direction === 'main-to-private' ? 'Public' : 'Private'}. Change account`
+    })
+    await expect(sourceAccount).toBeVisible()
+    await expect(sourceAccount.locator('..')).toContainText('0.002976', { timeout: 30_000 })
+    const amount = popup.getByRole('textbox', { name: 'Transfer amount' })
+    await amount.fill('0.002976040456329')
+    const maxButton = popup.getByRole('button', { name: 'Max', exact: true })
     if (direction === 'main-to-private') {
       let probeStarted = false
       let releaseProbe!: () => void
@@ -927,22 +928,19 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
       try {
         await maxButton.click()
         await expect.poll(() => probeStarted).toBe(true)
-        const switchDirection = sheet.getByRole('button', { name: 'Switch transfer direction' })
+        const switchDirection = popup.getByRole('button', { name: 'Switch transfer direction' })
         await switchDirection.click()
         await switchDirection.click()
-        await expect(sheet.getByLabel('Transfer amount')).toHaveValue('')
+        await expect(amount).toHaveValue('')
       } finally {
         releaseProbe()
       }
       await expect(maxButton).toBeEnabled()
     }
     await maxButton.click()
-    await expect(sheet.getByLabel('Transfer amount')).toHaveValue('0.002301040456329', {
+    await expect(amount).toHaveValue('0.002301040456329', {
       timeout: 30_000
     })
-    await expect(sheet.getByTestId('private-balance-transfer-amount')).toContainText(
-      'Available 0.002301 ETH'
-    )
     await expectNoOverflow(popup)
     await captureScreenshot(
       popup,
@@ -950,7 +948,7 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
         ? 'transfer-native-max-main-to-private-available.png'
         : 'transfer-native-max-private-to-main-available.png'
     )
-    await sheet.getByRole('button', { name: 'Review transfer' }).click()
+    await popup.getByRole('button', { name: 'Transfer', exact: true }).click()
     await expect(popup.getByRole('button', { name: 'Confirm', exact: true })).toBeEnabled({
       timeout: 60_000
     })
@@ -1168,7 +1166,7 @@ test('deducts native gas from Available and Max in Public Send', async ({
   await captureScreenshot(popup, 'send-native-max-main-review.png')
 })
 
-test('reviews and submits Main to Confidential from the unified transfer sheet', async ({
+test('reviews and submits Public to Private from AssetDetail Move', async ({
   context,
   popup,
   extensionId
@@ -1208,15 +1206,15 @@ test('reviews and submits Main to Confidential from the unified transfer sheet',
   await captureScreenshot(popup, 'home-total-assets-amount.png')
   await popup.keyboard.press('Escape')
   await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Transfer ETH between Public and Private' }).click()
-  const transferDialog = popup.getByRole('dialog', { name: 'Transfer ETH' })
-  await expect(transferDialog.locator('p[title^="0x"]')).toHaveCount(2)
+  await popup.getByRole('button', { name: 'Move', exact: true }).click()
+  await expect(popup.getByRole('button', { name: 'From: Public. Change account' })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'To: Private. Change account' })).toBeVisible()
   await captureScreenshot(popup, 'balance-transfer-public-confidential-addresses.png')
-  await transferDialog.getByLabel('Transfer amount').fill('0.01')
-  await expect(transferDialog.getByRole('button', { name: 'Review transfer' })).toBeEnabled({
+  await popup.getByRole('textbox', { name: 'Transfer amount' }).fill('0.01')
+  await expect(popup.getByRole('button', { name: 'Transfer', exact: true })).toBeEnabled({
     timeout: 30_000
   })
-  await transferDialog.getByRole('button', { name: 'Review transfer' }).click()
+  await popup.getByRole('button', { name: 'Transfer', exact: true }).click()
 
   try {
     await expect(popup.getByRole('button', { name: 'Confirm', exact: true })).toBeDisabled({
@@ -1291,7 +1289,7 @@ test('reviews and submits Main to Confidential from the unified transfer sheet',
   await captureScreenshot(popup, 'activity-public-to-confidential-transfer.png')
 })
 
-test('reviews and submits Confidential to Main from the unified transfer sheet', async ({
+test('reviews and submits Private to Public from AssetDetail Move', async ({
   context,
   popup,
   extensionId
@@ -1308,14 +1306,15 @@ test('reviews and submits Confidential to Main from the unified transfer sheet',
     timeout: 30_000
   })
   await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Transfer ETH between Public and Private' }).click()
-  const transferDialog = popup.getByRole('dialog', { name: 'Transfer ETH' })
-  await transferDialog.getByRole('button', { name: 'Switch transfer direction' }).click()
-  await transferDialog.getByLabel('Transfer amount').fill('0.01')
-  await expect(transferDialog.getByRole('button', { name: 'Review transfer' })).toBeEnabled({
+  await popup.getByRole('button', { name: 'Move', exact: true }).click()
+  await popup.getByRole('button', { name: 'Switch transfer direction' }).click()
+  await expect(popup.getByRole('button', { name: 'From: Private. Change account' })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'To: Public. Change account' })).toBeVisible()
+  await popup.getByRole('textbox', { name: 'Transfer amount' }).fill('0.01')
+  await expect(popup.getByRole('button', { name: 'Transfer', exact: true })).toBeEnabled({
     timeout: 30_000
   })
-  await transferDialog.getByRole('button', { name: 'Review transfer' }).click()
+  await popup.getByRole('button', { name: 'Transfer', exact: true }).click()
 
   await expect(popup.getByRole('button', { name: 'Confirm', exact: true })).toBeVisible({
     timeout: 30_000

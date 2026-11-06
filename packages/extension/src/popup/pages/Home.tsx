@@ -50,6 +50,7 @@ import {
   resolveEvmFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import {
+  clearHomeActivityAssetFilter,
   clearHomeTransactionFocus,
   homeTabPath,
   homeAssetDomainPath,
@@ -204,6 +205,42 @@ export function Home() {
   )
   const assetDomain = resolveHomeAssetDomain(location.search)
   const privateMode = dappExecutionMode.state?.mode === 'private'
+  const activityFilterAssetId = new URLSearchParams(location.search).get('assetId') || null
+  const activityFilterAsset = activityFilterAssetId
+    ? multichainPortfolio?.assets.find(asset => asset.asset.id === activityFilterAssetId)
+    : undefined
+  const activityFilterDomain =
+    activityFilterAssetId?.startsWith('eip155:') &&
+    (assetDomain === 'public' || assetDomain === 'private')
+      ? assetDomain
+      : undefined
+  const activityFilterLabel = activityFilterAsset?.metadata.symbol ?? 'Asset'
+  const activityFilterScope =
+    effectiveWalletId && effectiveAccountId
+      ? JSON.stringify([currentNetwork, effectiveWalletId, effectiveAccountId])
+      : null
+  const activityExecutionMode = dappExecutionMode.state?.mode ?? null
+  const previousActivityFilterContext = useRef<{
+    scope: string
+    mode: DAppExecutionMode | null
+  } | null>(null)
+  useEffect(() => {
+    if (!activityFilterScope) return
+    const previous = previousActivityFilterContext.current
+    if (
+      previous &&
+      (previous.scope !== activityFilterScope ||
+        (previous.mode && activityExecutionMode && previous.mode !== activityExecutionMode)) &&
+      activityFilterAssetId
+    ) {
+      navigate.replace(clearHomeActivityAssetFilter(location.search))
+    }
+    previousActivityFilterContext.current = {
+      scope: activityFilterScope,
+      mode:
+        activityExecutionMode ?? (previous?.scope === activityFilterScope ? previous.mode : null)
+    }
+  }, [activityExecutionMode, activityFilterAssetId, activityFilterScope, location.search, navigate])
   const openTransfer = () => navigate.navigate('/transfer?mode=private')
   useEffect(() => {
     const tab = resolveHomeDefaultTab(location.search)
@@ -1021,6 +1058,25 @@ export function Home() {
           </TabsContent>
 
           <TabsContent value="activity" className="mt-0">
+            {activityFilterAssetId && multichainPortfolioEnabled && (
+              <div className="flex min-h-10 items-center justify-between gap-2 border-b border-white/8 px-5 py-2">
+                <span className="min-w-0 truncate text-sm text-wallet-secondary">
+                  {activityFilterLabel}
+                  {activityFilterDomain
+                    ? ` · ${activityFilterDomain === 'private' ? 'Private' : 'Public'}`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Clear activity asset filter"
+                  title="Clear filter"
+                  onClick={() => navigate.replace(clearHomeActivityAssetFilter(location.search))}
+                  className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-sm text-muted hover:bg-white/5 hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+                >
+                  <Icon icon="lucide:x" width={15} height={15} />
+                </button>
+              </div>
+            )}
             {multichainPortfolioEnabled ? (
               <MultichainActivityPanel
                 walletId={effectiveWalletId}
@@ -1028,7 +1084,16 @@ export function Home() {
                 network={network}
                 portfolio={multichainPortfolio}
                 accountNetworks={storageV2Account?.networks}
-                accountMode={dappExecutionMode.state?.mode ?? 'main'}
+                accountMode={
+                  activityFilterDomain === 'private'
+                    ? 'private'
+                    : activityFilterDomain === 'public'
+                      ? 'main'
+                      : (dappExecutionMode.state?.mode ?? 'main')
+                }
+                filterAssetId={activityFilterAssetId ?? undefined}
+                filterDomain={activityFilterDomain}
+                showToolbar={!activityFilterAssetId}
                 focusTransactionId={focusTransactionId}
                 onItemClick={handleMultichainActivityClick}
               />

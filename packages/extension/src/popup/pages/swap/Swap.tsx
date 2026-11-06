@@ -295,7 +295,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     })
   const currentAccount = useWalletStore(state => state.getCurrentAccount())
   const currentWallet = useWalletStore(state => state.getCurrentWallet())
-  const [selectedFundingSource, setFundingSource] = useState<FundingSource>('shielded')
+  const [selectedFundingSource, setFundingSource] = useState<FundingSource>(
+    searchParams.get('fundingSource') === 'transparent' ? 'transparent' : 'shielded'
+  )
   const fundingSource = getFundingSourceUnavailableReason(
     currentWallet?.keySource,
     selectedFundingSource
