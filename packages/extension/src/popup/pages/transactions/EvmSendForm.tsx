@@ -56,7 +56,6 @@ import {
   type EvmSendSourceMode
 } from './evm-send-validation'
 import {
-  resolveAccountAvailableRaw,
   resolveEvmAccountAvailability,
   resolvePortfolioTransferAvailability
 } from '@/popup/services/transfer-availability'
@@ -66,7 +65,6 @@ import {
   ExecutionAccountSelectorDialog
 } from '@/popup/components/account/ExecutionAccountSelector'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
-import { PrivateBalanceTransferDialog } from '@/popup/components/portfolio/PrivateBalanceTransferDialog'
 import {
   recordSendApprovalFailure,
   recordSendResult,
@@ -133,7 +131,7 @@ export function EvmSendForm({
   sourceSelectorOpen: boolean
   onSourceModeChange: (mode: EvmSendSourceMode) => void
   onSourceSelectorOpenChange: (open: boolean) => void
-  onFundPrivate?: (amount: string, maximum?: boolean) => void
+  onFundPrivate?: () => void
   initialRecipient?: string
   initialDraft?: Readonly<{
     recipient: string
@@ -144,7 +142,6 @@ export function EvmSendForm({
   onSubmitted: (submission: EvmTransferSubmission) => void
 }) {
   const [amount, setAmount] = useState('')
-  const [fundingDialogOpen, setFundingDialogOpen] = useState(false)
   const [privacyProviderOpen, setPrivacyProviderOpen] = useState(false)
   const [privateSendScope, setPrivateSendScope] = useState<string | null>(null)
   const [recipient, setRecipient] = useState(initialRecipient ?? '')
@@ -1134,33 +1131,8 @@ export function EvmSendForm({
         privateBalance={privateSourceBalance}
         privateUnavailableBalance={privateUnavailableBalance}
         symbol={asset.metadata.symbol}
-        onFundPrivate={onFundPrivate ? () => setFundingDialogOpen(true) : undefined}
+        onFundPrivate={onFundPrivate}
       />
-      {onFundPrivate && (
-        <PrivateBalanceTransferDialog
-          open={fundingDialogOpen}
-          onOpenChange={setFundingDialogOpen}
-          defaultDirection="main-to-private"
-          lockDirection
-          assetId={asset.asset.id}
-          symbol={asset.metadata.symbol}
-          icon={asset.metadata.iconUrl}
-          blockchain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
-          decimals={asset.metadata.decimals}
-          priceUsd={priceUsd}
-          mainBalanceRaw={resolveAccountAvailableRaw(asset.balance, 'main')}
-          privateBalanceRaw={resolveAccountAvailableRaw(asset.balance, 'private')}
-          unavailableReason={privateSourceAvailable ? null : 'Confidential transfer is unavailable'}
-          asset={asset}
-          chain={chain}
-          mainAddress={mainSourceAddress ?? ''}
-          privateAddress={privateSourceAddress ?? ''}
-          onContinue={(_direction, transferAmount, maximum) => {
-            setFundingDialogOpen(false)
-            onFundPrivate(transferAmount, maximum)
-          }}
-        />
-      )}
     </>
   )
 }

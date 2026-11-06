@@ -47,11 +47,7 @@ import {
   readCachedPortfolio,
   refreshPortfolioFromCache
 } from '@/popup/services/portfolio-cache'
-import {
-  buildAddToPrivateEvmPath,
-  parsePublicPrivateEvmSendDraft,
-  type EvmSendSourceMode
-} from './evm-send-validation'
+import { parsePublicPrivateEvmSendDraft, type EvmSendSourceMode } from './evm-send-validation'
 import { useWalletActionExecutionMode } from '@/popup/hooks/useWalletActionExecutionMode'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getCrossChainSendAssetGroup } from '@/popup/services/cross-chain-send-assets'
@@ -719,14 +715,14 @@ export function MultichainSend() {
             onSourceSelectorOpenChange={setEvmSourceSelectorOpen}
             onFundPrivate={
               currentNetwork === 'mainnet'
-                ? (amount, maximum) =>
+                ? () =>
                     navigate(
-                      buildAddToPrivateEvmPath({
-                        chainId: selection.chain.chain.id,
+                      `/transfer?${new URLSearchParams({
                         assetId: selection.asset.asset.id,
-                        amount,
-                        maximum
-                      })
+                        from: 'public',
+                        to: 'private',
+                        mode: walletMode
+                      })}`
                     )
                 : undefined
             }
