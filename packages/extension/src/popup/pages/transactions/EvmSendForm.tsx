@@ -351,6 +351,8 @@ export function EvmSendForm({
   })
   const spendableRaw = transferAvailability.amountRaw
   const validAmount = isTransferAmountSpendable(amountRaw, spendableRaw)
+  const maximumPending =
+    maxSelected && asset.asset.kind === 'native' && (maximum.loading || !maximum.value)
   useEffect(() => {
     if (maxSelected && maximum.value)
       setAmount(formatBaseUnitDecimalAmount(maximum.value.amountRaw, asset.metadata.decimals))
@@ -395,6 +397,7 @@ export function EvmSendForm({
   const handleMaximum = () => {
     if (!validRecipient || route === 'pending' || !sourceAddress) return
     setError(null)
+    setAmount('')
     setMaxSelected(true)
     void maximum.request()
   }
@@ -463,6 +466,7 @@ export function EvmSendForm({
       !amountRaw ||
       !validAmount ||
       !validRecipient ||
+      maximumPending ||
       preparing
     )
       return
@@ -778,25 +782,6 @@ export function EvmSendForm({
               >
                 {formatTokenQuantity(transferAvailability.display)}
               </span>
-              <button
-                type="button"
-                aria-label="Max"
-                onClick={
-                  asset.asset.kind === 'token'
-                    ? () => setAmount(transferAvailability.display)
-                    : () => void handleMaximum()
-                }
-                disabled={
-                  route === 'pending' ||
-                  !sourceAddress ||
-                  (asset.asset.kind === 'native' &&
-                    (!validRecipient || BigInt(availableRaw) <= 0n)) ||
-                  maximum.loading
-                }
-                className="rounded bg-white/10 px-2 py-0.5 text-[11px] leading-4 text-muted disabled:opacity-40"
-              >
-                Max
-              </button>
             </div>
           </div>
         </div>
@@ -837,10 +822,24 @@ export function EvmSendForm({
           maxSelected={maxSelected}
           onMax={
             asset.asset.kind === 'token'
-              ? () => setAmount(transferAvailability.display)
+              ? () => {
+                  setError(null)
+                  setMaxSelected(true)
+                  setAmount(transferAvailability.display)
+                }
               : handleMaximum
           }
-          maxDisabled={route === 'pending' || !validRecipient || !sourceAddress}
+          maxDisabledReason={
+            route === 'pending'
+              ? 'Checking transfer route…'
+              : !sourceAddress
+                ? 'Source account unavailable'
+                : BigInt(availableRaw) <= 0n
+                  ? 'No available balance'
+                  : asset.asset.kind === 'native' && !validRecipient
+                    ? 'Enter a valid recipient to calculate Max'
+                    : undefined
+          }
           maxLoading={maximum.loading}
         />
 
@@ -912,6 +911,7 @@ export function EvmSendForm({
           disabled={
             !validAmount ||
             !validRecipient ||
+            maximumPending ||
             !sourceAddress ||
             route === 'pending' ||
             tokenFeeBalanceError !== null ||

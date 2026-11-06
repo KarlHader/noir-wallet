@@ -243,44 +243,31 @@ function SwapAssetCard({
         </div>
         {balance !== undefined && (
           <div className="ml-auto flex min-w-0 max-w-[48%] shrink items-center gap-1">
-            <button
-              type="button"
-              onClick={onMaxClick}
-              disabled={!onMaxClick || maxLoading || maxDisabled}
-              aria-label={
-                balanceHelp
-                  ? `Available balance: ${balance}`
-                  : maxDisabled && maxDisabledReason
-                    ? `${maxDisabledReason}. Available balance: ${balance}`
-                    : `Use maximum balance: ${balance}`
-              }
-              title={
-                maxDisabled ? maxDisabledReason : onMaxClick ? 'Use maximum balance' : 'Balance'
-              }
-              className="flex min-w-0 shrink items-center gap-1 text-xs font-medium text-muted transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
-            >
-              {maxLoading && (
-                <Icon
-                  icon="lucide:loader-circle"
-                  width={12}
-                  height={12}
-                  className="shrink-0 animate-spin"
-                />
-              )}
+            <span className="flex min-w-0 shrink items-center gap-1 text-xs font-medium text-muted">
               <span className="shrink-0">Bal.</span>
               <span className="min-w-0 truncate text-right font-sans tabular-nums" title={balance}>
                 {formatTokenQuantity(balance)}
               </span>
-            </button>
+            </span>
             {onMaxClick && (
               <button
                 type="button"
                 onClick={onMaxClick}
                 disabled={maxLoading || maxDisabled}
+                aria-label="Use maximum balance"
                 title={maxDisabled ? maxDisabledReason : 'Use maximum balance'}
-                className="shrink-0 text-xs font-medium text-foreground hover:text-primary disabled:opacity-50"
+                className="inline-flex min-w-7 shrink-0 items-center justify-center text-xs font-medium text-foreground enabled:hover:text-primary disabled:opacity-50"
               >
-                Max
+                {maxLoading ? (
+                  <Icon
+                    icon="lucide:loader-circle"
+                    width={12}
+                    height={12}
+                    className="animate-spin"
+                  />
+                ) : (
+                  'Max'
+                )}
               </button>
             )}
             {balanceHelp && <BalanceHelp kind="available" />}

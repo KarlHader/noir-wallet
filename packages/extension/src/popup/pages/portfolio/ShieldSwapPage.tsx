@@ -192,6 +192,7 @@ function ShieldSwapForm() {
     options.find(asset => asset.managed.protocolAssetId !== from?.managed.protocolAssetId) ??
     null
   const balance = shieldSwapFormBalance(from, displayBalances)
+  const currentBalance = shieldSwapFormBalance(from, currentBalances)
   const amountError = shieldSwapFormAmountError(amount, from, displayBalances)
   const validAmount = Boolean(amount && from && currentBalances && !amountError)
   const pickable = (picker === 'from' ? sources : options).filter(
@@ -480,8 +481,9 @@ function ShieldSwapForm() {
               <button
                 type="button"
                 className="wallet-interactive rounded text-foreground enabled:hover:bg-white/10 enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-40"
-                disabled={busy || balance === null}
-                onClick={() => balance !== null && setAmount(balance)}
+                disabled={busy || connecting || currentBalance === null || currentBalance === '0'}
+                title={!currentBalances ? 'Connect Shield to use Max' : 'Use maximum balance'}
+                onClick={() => currentBalance !== null && setAmount(currentBalance)}
               >
                 Max
               </button>

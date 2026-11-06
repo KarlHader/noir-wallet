@@ -495,7 +495,15 @@ export function BitcoinSendForm({
           symbol={balanceKnown ? 'BTC' : ''}
           priceUsd={balanceKnown ? priceUsd : null}
           maxSelected={sendMaximum}
-          maxDisabled={!balanceKnown || !parsedRecipient || BigInt(selectedAvailableRaw) <= 0n}
+          maxDisabledReason={
+            !balanceKnown
+              ? 'Balance unavailable'
+              : BigInt(selectedAvailableRaw) <= 0n
+                ? 'No available balance'
+                : !parsedRecipient
+                  ? 'Enter a valid recipient to calculate Max'
+                  : undefined
+          }
           maxLoading={maximum.loading}
           onMax={() => {
             setSendMaximum(true)

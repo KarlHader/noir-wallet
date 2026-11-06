@@ -348,8 +348,8 @@ for (const sourceMode of ['main', 'private'] as const) {
         .click()
     }
     await expect(popup.getByRole('button', { name: 'To asset' })).toContainText('USDC')
-    const balance = popup.getByRole('button', { name: /^Use maximum balance:/ })
-    const balanceLabel = await balance.getAttribute('aria-label')
+    const maxButton = popup.getByRole('button', { name: 'Use maximum balance' })
+    const maxLabel = await maxButton.getAttribute('aria-label')
     let probeStarted = false
     let releaseProbe!: () => void
     const probePending = new Promise<void>(resolve => {
@@ -362,12 +362,12 @@ for (const sourceMode of ['main', 'private'] as const) {
       }
       await route.fallback()
     })
-    await balance.click()
+    await maxButton.click()
     try {
       await expect.poll(() => probeStarted).toBe(true)
       await expect(popup.getByRole('textbox', { name: 'From amount' })).toHaveValue('')
-      await expect(balance).toBeDisabled()
-      await expect(balance).toHaveAttribute('aria-label', balanceLabel!)
+      await expect(maxButton).toBeDisabled()
+      await expect(maxButton).toHaveAttribute('aria-label', maxLabel!)
       await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeDisabled()
       await captureScreenshot(popup, `swap-native-max-${sourceMode}-calculating.png`)
     } finally {
@@ -376,7 +376,7 @@ for (const sourceMode of ['main', 'private'] as const) {
     await expect(popup.getByRole('textbox', { name: 'From amount' })).toHaveValue('0.999325', {
       timeout: 30_000
     })
-    await expect(balance).toHaveAttribute('aria-label', balanceLabel!)
+    await expect(maxButton).toHaveAttribute('aria-label', maxLabel!)
     await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeEnabled()
     expect(api.getQuoteRequests().map(request => request.amount)).toEqual([
       '500000000000000000',
@@ -444,7 +444,7 @@ test('recalculates ETH Swap Max when the source balance changes', async ({
       .click()
   }
   const amount = popup.getByRole('textbox', { name: 'From amount' })
-  await popup.getByRole('button', { name: /^Use maximum balance:/ }).click()
+  await popup.getByRole('button', { name: 'Use maximum balance' }).click()
   await expect(amount).toHaveValue('0.999325', { timeout: 30_000 })
 
   const mainAddress = await popup.evaluate(async () => {
@@ -529,12 +529,12 @@ test('recovers expired Swap review and shows preparation loading in real MV3', a
     .first()
     .click()
   expect(maxQuoteRequests).toBe(0)
-  const maxButton = popup.getByRole('button', { name: 'Use maximum balance: 1' })
+  const maxButton = popup.getByRole('button', { name: 'Use maximum balance' })
   await expect(maxButton).toBeEnabled({ timeout: 30_000 })
   await maxButton.click()
   await expect.poll(() => maxQuoteRequests).toBe(1)
   await expect(popup.getByRole('textbox', { name: 'From amount', exact: true })).toHaveValue('0.95')
-  await expect(maxButton).toHaveAttribute('aria-label', 'Use maximum balance: 1')
+  await expect(maxButton).toHaveAttribute('aria-label', 'Use maximum balance')
   await captureScreenshot(popup, 'swap-max-fallback-balance.png')
   await expect(popup.getByText('Could not calculate Max amount.')).toHaveCount(0)
   await popup.getByRole('textbox', { name: 'From amount', exact: true }).fill('0.002')
@@ -1411,7 +1411,7 @@ test('uses the active Polygon wallet source and POL fees in Swap', async ({ cont
   await popup.getByPlaceholder('Search tokens').fill('ZEC')
   await popup.getByRole('button', { name: /ZEC.*Zcash/i }).click()
   const swapAmountInput = popup.locator('input[placeholder="0"]')
-  await popup.getByRole('button', { name: /^Use maximum balance:/ }).click()
+  await popup.getByRole('button', { name: 'Use maximum balance' }).click()
   await expect(swapAmountInput).toHaveValue('0.9999055', { timeout: 30_000 })
   await expectNoOverflow(popup)
   const submitSwap = popup.getByRole('button', { name: 'Swap', exact: true })

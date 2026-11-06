@@ -570,24 +570,6 @@ export function Send() {
                 >
                   {formatTokenQuantity(sourceBalance.available)}
                 </span>
-                <button
-                  type="button"
-                  aria-label="Max"
-                  onClick={() => {
-                    setMaxSelected(true)
-                    setAmount(effectiveMaxStr)
-                    void maxTransfer.request()
-                  }}
-                  disabled={
-                    !effectiveToAddress ||
-                    !fromAddress ||
-                    safeBig(effectiveMaxStr).lte(0) ||
-                    maxTransfer.loading
-                  }
-                  className="rounded bg-white/10 px-2 py-0.5 text-[11px] leading-4 text-muted disabled:opacity-40"
-                >
-                  Max
-                </button>
               </span>
             </div>
           </div>
@@ -646,6 +628,21 @@ export function Send() {
             symbol="ZEC"
             priceUsd={zecPrice}
             maxSelected={maxSelected}
+            onMax={() => {
+              setMaxSelected(true)
+              setAmount(effectiveMaxStr)
+              void maxTransfer.request()
+            }}
+            maxDisabledReason={
+              !fromAddress
+                ? 'Source account unavailable'
+                : safeBig(effectiveMaxStr).lte(0)
+                  ? 'No available balance after fees'
+                  : !effectiveToAddress || zns.loading
+                    ? 'Enter a valid recipient to calculate Max'
+                    : undefined
+            }
+            maxLoading={maxTransfer.loading}
             invalid={reviewInsufficient}
             error={amountErrorCopy}
           />

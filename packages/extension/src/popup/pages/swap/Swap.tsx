@@ -4248,14 +4248,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }
         maxLoading={routeMaximum.loading || maxTransfer.loading}
         maxDisabled={
-          !swap.isZecSource &&
-          walletOwnedSource?.asset.asset.kind === 'native' &&
-          !canEstimateRouteMaximum
+          swap.isZecSource
+            ? safeBig(spendableBalance || '0').lte(0)
+            : Boolean(
+                walletOwnedSource &&
+                (BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n ||
+                  (walletOwnedSource.asset.asset.kind === 'native' && !canEstimateRouteMaximum))
+              )
         }
         maxDisabledReason={
-          !resolvedRecipientAddress
-            ? 'Enter a destination address to use Max'
-            : 'Max is unavailable for this route'
+          (swap.isZecSource && safeBig(spendableBalance || '0').lte(0)) ||
+          (walletOwnedSource && BigInt(walletOwnedSource.asset.balance.availableRaw) === 0n)
+            ? 'No available balance'
+            : !resolvedRecipientAddress
+              ? 'Enter a destination address to use Max'
+              : 'Max is unavailable for this route'
         }
         catalogError={swap.catalogError}
         sourceAssetsLoading={swap.sourceTokens.length === 0}

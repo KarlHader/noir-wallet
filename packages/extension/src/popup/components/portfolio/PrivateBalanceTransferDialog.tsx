@@ -170,8 +170,8 @@ export function PrivateBalanceTransferDialog({
   const spendableRaw = transferAvailability.amountRaw
   const available = transferAvailability.display
   useEffect(() => {
-    if (maxSelected) setAmount(available)
-  }, [maxSelected, available])
+    if (maxSelected && (asset.asset.kind !== 'native' || maximum.value)) setAmount(available)
+  }, [maxSelected, available, asset.asset.kind, maximum.value])
   const amountState = useMemo(
     () =>
       resolvePrivateBalanceTransferAmount({
@@ -183,7 +183,11 @@ export function PrivateBalanceTransferDialog({
     [amount, spendableRaw, decimals, source.sourceLabel]
   )
   const error = (loading ? null : unavailableReason) ?? amountState.error
-  const canContinue = !loading && unavailableReason === null && amountState.amountRaw !== null
+  const canContinue =
+    !loading &&
+    unavailableReason === null &&
+    amountState.amountRaw !== null &&
+    !(maxSelected && asset.asset.kind === 'native' && (maximum.loading || !maximum.value))
 
   const switchDirection = () => {
     setDirection(current => (current === 'main-to-private' ? 'private-to-main' : 'main-to-private'))
@@ -259,12 +263,20 @@ export function PrivateBalanceTransferDialog({
             priceUsd={priceUsd}
             onMax={() => {
               setMaxSelected(true)
-              if (asset.asset.kind === 'native') void maximum.request()
-              else setAmount(available)
+              if (asset.asset.kind === 'native') {
+                setAmount('')
+                void maximum.request()
+              } else setAmount(available)
             }}
             maxSelected={maxSelected}
             maxLoading={maximum.loading}
             maxDisabled={BigInt(availableRaw) === 0n || loading || unavailableReason !== null}
+            maxDisabledReason={
+              loading
+                ? 'Loading balance'
+                : (unavailableReason ??
+                  (BigInt(availableRaw) === 0n ? 'No available balance' : undefined))
+            }
             invalid={Boolean(error && amount.length > 0)}
             testId="private-balance-transfer-amount"
           />
@@ -274,6 +286,15 @@ export function PrivateBalanceTransferDialog({
               message={error}
               onRetry={onRetryAvailability}
               retrying={loading}
+              className="px-1 leading-4"
+            />
+          )}
+
+          {maxSelected && maximum.fallbackUsed && (
+            <InlineError
+              message="Could not estimate exact Max. Review the proposed amount or try again."
+              onRetry={() => void maximum.request()}
+              retrying={maximum.loading}
               className="px-1 leading-4"
             />
           )}

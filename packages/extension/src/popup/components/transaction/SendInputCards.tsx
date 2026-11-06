@@ -7,6 +7,7 @@ import { TokenIcon } from '../tokens/TokenIcon'
 import { Input } from '../ui/input'
 import { BalanceHelp } from './BalanceHelp'
 import { safeBig } from '@/lib/big'
+import { Tooltip } from '../ui/tooltip'
 
 export function SendRecipientInputCard({
   id,
@@ -89,6 +90,7 @@ export function SendAmountInputCard({
   priceUsd,
   onMax,
   maxDisabled = false,
+  maxDisabledReason,
   maxLoading = false,
   maxSelected = false,
   invalid = false,
@@ -109,6 +111,7 @@ export function SendAmountInputCard({
   readonly priceUsd?: string | number | null
   readonly onMax?: () => void
   readonly maxDisabled?: boolean
+  readonly maxDisabledReason?: string
   readonly maxLoading?: boolean
   readonly maxSelected?: boolean
   readonly invalid?: boolean
@@ -122,6 +125,25 @@ export function SendAmountInputCard({
 }) {
   const amountFiat = formatSendFiatValue(value, priceUsd)
   const availableFiat = formatSendFiatValue(available, priceUsd)
+  const maxButton = onMax ? (
+    <button
+      type="button"
+      aria-label="Max"
+      aria-pressed={maxSelected}
+      onClick={onMax}
+      disabled={maxDisabled || Boolean(maxDisabledReason) || maxLoading}
+      className={cn(
+        'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
+        maxSelected && 'bg-primary/15 text-primary'
+      )}
+    >
+      {maxLoading ? (
+        <Icon icon="lucide:loader-circle" width={15} height={15} className="animate-spin" />
+      ) : (
+        'Max'
+      )}
+    </button>
+  ) : null
 
   return (
     <div className={cn('space-y-1.5', hero && 'space-y-0')}>
@@ -165,24 +187,21 @@ export function SendAmountInputCard({
             )}
           />
           {onMax && (
-            <button
-              type="button"
-              aria-label="Max"
-              aria-pressed={maxSelected}
-              onClick={onMax}
-              disabled={maxDisabled || maxLoading}
-              className={cn(
-                'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
-                hero && 'absolute right-0 top-1/2 -translate-y-1/2',
-                maxSelected && 'bg-primary/15 text-primary'
-              )}
-            >
-              {maxLoading ? (
-                <Icon icon="lucide:loader-circle" width={15} height={15} className="animate-spin" />
+            <span className={cn('shrink-0', hero && 'absolute right-0 top-1/2 -translate-y-1/2')}>
+              {maxDisabledReason ? (
+                <Tooltip content={maxDisabledReason}>
+                  <span
+                    tabIndex={0}
+                    aria-label={maxDisabledReason}
+                    className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    {maxButton}
+                  </span>
+                </Tooltip>
               ) : (
-                'Max'
+                maxButton
               )}
-            </button>
+            </span>
           )}
         </div>
         <div

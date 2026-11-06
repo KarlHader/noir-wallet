@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { QuoteDepositMaximum } from '@/popup/services/quote-deposit-transfer-client'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -27,8 +27,9 @@ export function useTransferMaximum(options: {
     fallbackUsed: boolean
     error: unknown
   }>({ key: '', value: null, loading: false, fallbackUsed: false, error: null })
-  useEffect(() => {
+  useLayoutEffect(() => {
     sequence.current += 1
+    setState({ key: requestKey, value: null, loading: false, fallbackUsed: false, error: null })
     return () => {
       sequence.current += 1
     }
@@ -36,21 +37,30 @@ export function useTransferMaximum(options: {
 
   const request = async () => {
     if (!latest.current.enabled) return
+    const { estimate, fallback } = latest.current
     const current = ++sequence.current
     setState({ key: requestKey, value: null, loading: true, fallbackUsed: false, error: null })
     try {
-      const value = await latest.current.estimate()
+      const value = await estimate()
       if (current === sequence.current)
         setState({ key: requestKey, value, loading: false, fallbackUsed: false, error: null })
     } catch (error) {
-      if (current === sequence.current)
+      if (current === sequence.current) {
+        let value: QuoteDepositMaximum | null = null
+        let failure = error
+        try {
+          value = fallback?.() ?? null
+        } catch (fallbackError) {
+          failure = fallbackError
+        }
         setState({
           key: requestKey,
-          value: latest.current.fallback?.() ?? null,
+          value,
           loading: false,
-          fallbackUsed: Boolean(latest.current.fallback),
-          error
+          fallbackUsed: value !== null,
+          error: failure
         })
+      }
     }
   }
   const current = options.enabled && state.key === requestKey

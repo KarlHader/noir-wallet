@@ -147,6 +147,8 @@ export function SolanaSendForm({
   })
   const spendableRaw = transferAvailability.amountRaw
   const amountWithinBalance = isTransferAmountSpendable(amountRaw, spendableRaw)
+  const maximumPending =
+    maxSelected && asset.asset.kind === 'native' && (maximum.loading || !maximum.value)
   useEffect(() => {
     if (maxSelected && maximum.value)
       setAmount(formatBaseUnitDecimalAmount(maximum.value.amountRaw, asset.metadata.decimals))
@@ -186,6 +188,7 @@ export function SolanaSendForm({
       return
     }
     setError(null)
+    setAmount('')
     setMaxSelected(true)
     void maximum.request()
   }
@@ -226,7 +229,7 @@ export function SolanaSendForm({
   const previewFee = feePreview.amountRaw ? formatBaseUnitAmount(feePreview.amountRaw, 9) : '—'
 
   const handleContinue = async () => {
-    if (!amountWithinBalance || !amountRaw || !parsedRecipient) return
+    if (!amountWithinBalance || !amountRaw || !parsedRecipient || maximumPending) return
     setPreparing(true)
     setError(null)
     let value: SolanaTransferReview | null = null
@@ -364,9 +367,12 @@ export function SolanaSendForm({
           symbol={asset.metadata.symbol}
           priceUsd={priceUsd}
           maxSelected={maxSelected}
-          maxDisabled={
-            asset.asset.kind === 'native' &&
-            (!parsedRecipient || BigInt(asset.balance.availableRaw) <= 0n)
+          maxDisabledReason={
+            BigInt(asset.balance.availableRaw) <= 0n
+              ? 'No available balance'
+              : asset.asset.kind === 'native' && !parsedRecipient
+                ? 'Enter a valid recipient to calculate Max'
+                : undefined
           }
           maxLoading={maximum.loading}
           onMax={() => void handleMaximum()}
@@ -391,7 +397,9 @@ export function SolanaSendForm({
       <div className="page-footer">
         <Button
           className="h-[45px] w-full"
-          disabled={!amountWithinBalance || !parsedRecipient || feePreview.loading}
+          disabled={
+            !amountWithinBalance || !parsedRecipient || maximumPending || feePreview.loading
+          }
           isLoading={preparing || feePreview.loading}
           onClick={handleContinue}
         >

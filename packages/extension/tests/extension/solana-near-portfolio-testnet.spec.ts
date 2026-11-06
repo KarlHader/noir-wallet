@@ -321,7 +321,9 @@ test('loads Solana and NEAR native balances through the real MV3 Portfolio bound
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
-  await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(
+    popup.getByRole('button', { name: 'Asset category: Total assets', exact: true })
+  ).toBeVisible({ timeout: 30_000 })
 
   const response = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_PORTFOLIO', action: 'refresh' })
@@ -382,7 +384,9 @@ test('signs, broadcasts and finalizes a Solana Devnet transfer through the real 
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
-  await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(
+    popup.getByRole('button', { name: 'Asset category: Total assets', exact: true })
+  ).toBeVisible({ timeout: 30_000 })
   const portfolio = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_PORTFOLIO', action: 'refresh' })
   )
@@ -453,7 +457,9 @@ test('signs, broadcasts and finalizes a NEAR Testnet transfer through the real M
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
-  await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(
+    popup.getByRole('button', { name: 'Asset category: Total assets', exact: true })
+  ).toBeVisible({ timeout: 30_000 })
   const portfolio = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_PORTFOLIO', action: 'refresh' })
   )

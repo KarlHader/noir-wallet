@@ -527,7 +527,8 @@ function ShieldWithdrawForm() {
             </span>
             <button
               type="button"
-              disabled={busy || !source || availableRaw === '0'}
+              disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
+              title={!currentBalances ? 'Connect Shield to use Max' : 'Use maximum balance'}
               onClick={() =>
                 source &&
                 setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))

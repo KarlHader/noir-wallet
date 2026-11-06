@@ -910,7 +910,33 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
       { timeout: 30_000 }
     )
     await sheet.getByLabel('Transfer amount').fill('0.002976040456329')
-    await sheet.getByRole('button', { name: 'Max', exact: true }).click()
+    const maxButton = sheet.getByRole('button', { name: 'Max', exact: true })
+    if (direction === 'main-to-private') {
+      let probeStarted = false
+      let releaseProbe!: () => void
+      const probePending = new Promise<void>(resolve => {
+        releaseProbe = resolve
+      })
+      await context.route(QUOTE_URL, async route => {
+        if (!probeStarted) {
+          probeStarted = true
+          await probePending
+        }
+        await route.fallback()
+      })
+      try {
+        await maxButton.click()
+        await expect.poll(() => probeStarted).toBe(true)
+        const switchDirection = sheet.getByRole('button', { name: 'Switch transfer direction' })
+        await switchDirection.click()
+        await switchDirection.click()
+        await expect(sheet.getByLabel('Transfer amount')).toHaveValue('')
+      } finally {
+        releaseProbe()
+      }
+      await expect(maxButton).toBeEnabled()
+    }
+    await maxButton.click()
     await expect(sheet.getByLabel('Transfer amount')).toHaveValue('0.002301040456329', {
       timeout: 30_000
     })
