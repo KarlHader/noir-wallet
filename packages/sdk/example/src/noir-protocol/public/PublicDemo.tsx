@@ -16,7 +16,14 @@ import {
   parseRequests,
   supportedTransferAssets
 } from './requests'
-import { errorCode, errorMessage, exportTrace, type TraceEntry, type TraceMethod } from './trace'
+import {
+  errorCode,
+  errorMessage,
+  exportTrace,
+  publicConnectErrorMessage,
+  type TraceEntry,
+  type TraceMethod
+} from './trace'
 import {
   assertPublicMainnet,
   buildPublicSessionRequest,
@@ -432,8 +439,11 @@ export function PublicDemo({ wallet }: { wallet: NoirWalletProvider }) {
         'createSession',
         () => wallet.multichain!.createSession(buildPublicSessionRequest(scopes)),
         () => 'connected'
-      )
-      if (revision !== connectionRevision.current) return
+      ).catch((cause: unknown) => {
+        if (revision === connectionRevision.current) setError(publicConnectErrorMessage(cause))
+        return null
+      })
+      if (!session || revision !== connectionRevision.current) return
       if (chain === 'auto') {
         await restoreSession()
         return

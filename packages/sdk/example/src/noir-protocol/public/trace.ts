@@ -35,6 +35,12 @@ export function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : 'Request failed'
 }
 
+export function publicConnectErrorMessage(cause: unknown): string {
+  return errorCode(cause) === 5101
+    ? 'This wallet build does not support Noir Protocol Public. Load the extension paired with this demo and refresh the page.'
+    : errorMessage(cause)
+}
+
 export function exportTrace(entries: TraceEntry[], walletVersion?: string): void {
   const build = typeof __PUBLIC_DEMO_BUILD__ === 'undefined' ? null : __PUBLIC_DEMO_BUILD__
   const safeVersion = (value: string | undefined) =>
