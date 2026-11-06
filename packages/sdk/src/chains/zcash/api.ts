@@ -12,10 +12,6 @@ import type {
   SignMessageOptions,
   SignMessageResult,
   SigningMode,
-  ConnectionSigningMode,
-  ConnectionOptions,
-  ConnectedIdentities,
-  QueriedIdentities,
   LendingMcaStatus,
   Network,
   PublicAccount,
@@ -23,52 +19,6 @@ import type {
   PublicTransaction,
   SendPublicTransactionParams
 } from './types'
-
-type AccountEventOptions = { readonly signingMode: ConnectionSigningMode }
-
-function accountEventName(event: string, options?: AccountEventOptions): string {
-  if (options === undefined) return event
-  if (
-    !options ||
-    event !== 'accountsChanged' ||
-    (options.signingMode !== 'current' && options.signingMode !== 'noir_protocol_public')
-  ) {
-    throw new TypeError('Unknown event signing mode.')
-  }
-  return options.signingMode === 'noir_protocol_public' ? 'publicAccountChanged' : event
-}
-
-function readConnectionOptions(
-  options: ConnectionOptions
-):
-  | { kind: 'single'; mode: ConnectionSigningMode }
-  | { kind: 'multiple'; modes: readonly ConnectionSigningMode[] } {
-  if (!options || typeof options !== 'object' || Array.isArray(options)) {
-    throw new TypeError('Invalid connection options.')
-  }
-  if (Object.keys(options).some(key => key !== 'signingMode' && key !== 'signingModes')) {
-    throw new TypeError('Invalid connection options.')
-  }
-  const hasMode = Object.prototype.hasOwnProperty.call(options, 'signingMode')
-  const hasModes = Object.prototype.hasOwnProperty.call(options, 'signingModes')
-  if (hasMode === hasModes) throw new TypeError('Select exactly one signingMode or signingModes.')
-  if (hasMode) {
-    if (options.signingMode !== 'current' && options.signingMode !== 'noir_protocol_public') {
-      throw new TypeError('Unknown connection signing mode.')
-    }
-    return { kind: 'single', mode: options.signingMode }
-  }
-  const modes = options.signingModes
-  if (
-    !Array.isArray(modes) ||
-    modes.length === 0 ||
-    Array.from(modes).some(mode => mode !== 'current' && mode !== 'noir_protocol_public') ||
-    new Set(modes).size !== modes.length
-  ) {
-    throw new TypeError('Connection signingModes must be distinct supported modes.')
-  }
-  return { kind: 'multiple', modes }
-}
 
 function readSigningMode(options?: SignMessageOptions): SigningMode {
   if (options === undefined) return 'current'
@@ -81,85 +31,10 @@ function readSigningMode(options?: SignMessageOptions): SigningMode {
     throw new TypeError('Invalid signing options.')
   }
   const mode = options.signingMode === undefined ? 'current' : options.signingMode
-  if (
-    mode !== 'current' &&
-    mode !== 'derived' &&
-    mode !== 'legacy_index0' &&
-    mode !== 'noir_protocol_public'
-  ) {
+  if (mode !== 'current' && mode !== 'derived' && mode !== 'legacy_index0') {
     throw new TypeError('Unknown signing mode.')
   }
   return mode
-}
-
-function isZcashAddress(value: unknown): value is ZcashAddress {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    'transparent' in value &&
-    typeof value.transparent === 'string' &&
-    'shielded' in value &&
-    typeof value.shielded === 'string'
-  )
-}
-
-function isPublicAccount(value: unknown): value is PublicAccount {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    'chain' in value &&
-    value.chain === 'zcash-l2' &&
-    'network' in value &&
-    (value.network === 'mainnet' || value.network === 'testnet') &&
-    'publicKey' in value &&
-    typeof value.publicKey === 'string' &&
-    'address' in value &&
-    typeof value.address === 'string' &&
-    'mcaId' in value &&
-    (value.mcaId === null || typeof value.mcaId === 'string') &&
-    'parentContractId' in value &&
-    typeof value.parentContractId === 'string' &&
-    'status' in value &&
-    (value.status === 'inactive' || value.status === 'activating' || value.status === 'active')
-  )
-}
-
-function isZcashConnectResult(value: unknown): value is ZcashConnectResult {
-  return (
-    isZcashAddress(value) &&
-    'accounts' in value &&
-    Array.isArray(value.accounts) &&
-    value.accounts.length > 0 &&
-    value.accounts.every(
-      account =>
-        account &&
-        typeof account.id === 'string' &&
-        typeof account.label === 'string' &&
-        typeof account.walletId === 'string' &&
-        typeof account.accountId === 'string' &&
-        isZcashAddress(account.addresses)
-    )
-  )
-}
-
-function readCombinedConnection(value: unknown): {
-  current: ZcashConnectResult
-  noir_protocol_public: PublicAccount
-} {
-  const identities =
-    value && typeof value === 'object' && 'identities' in value ? value.identities : null
-  const current =
-    identities && typeof identities === 'object' && 'current' in identities
-      ? identities.current
-      : null
-  const publicAccount =
-    identities && typeof identities === 'object' && 'noir_protocol_public' in identities
-      ? identities.noir_protocol_public
-      : null
-  if (!isZcashConnectResult(current) || !isPublicAccount(publicAccount)) {
-    throw new TypeError('Invalid combined connection response.')
-  }
-  return { current, noir_protocol_public: publicAccount }
 }
 
 /** High-level Zcash SDK client built on top of the injected request provider. */
@@ -212,107 +87,15 @@ export class ZcashClient {
    * `transparent`/`shielded` are the primary account; `accounts` lists every
    * authorized wallet's addresses.
    */
-  connect(): Promise<ZcashConnectResult>
-  connect(options: { readonly signingMode: 'current' }): Promise<ZcashConnectResult>
-  connect(options: { readonly signingMode: 'noir_protocol_public' }): Promise<PublicAccount>
-  connect(options: {
-    readonly signingMode: ConnectionSigningMode
-  }): Promise<ZcashConnectResult | PublicAccount>
-  connect(options: {
-    readonly signingModes: readonly ConnectionSigningMode[]
-  }): Promise<ConnectedIdentities>
-  connect(
-    options?: ConnectionOptions
-  ): Promise<ZcashConnectResult | PublicAccount | ConnectedIdentities>
-  async connect(
-    options?: ConnectionOptions
-  ): Promise<ZcashConnectResult | PublicAccount | ConnectedIdentities> {
-    if (options !== undefined) {
-      const selection = readConnectionOptions(options)
-      if (selection.kind === 'single') {
-        if (selection.mode === 'noir_protocol_public') {
-          this.requirePublicCapability()
-          return this.requestPublicAccount()
-        }
-      } else {
-        if (selection.modes.includes('noir_protocol_public')) this.requirePublicCapability()
-        if (selection.modes.length === 1) {
-          if (selection.modes[0] === 'noir_protocol_public') {
-            return { identities: { noir_protocol_public: await this.requestPublicAccount() } }
-          }
-          return { identities: { current: await this.requestCurrentAccounts() } }
-        }
-        const response: unknown = await this.provider.request({
-          method: 'zcash_requestPublicAccount',
-          params: [{ signingModes: ['current', 'noir_protocol_public'] }]
-        })
-        return { identities: readCombinedConnection(response) }
-      }
-    }
-    return this.requestCurrentAccounts()
-  }
-
-  private async requestCurrentAccounts(): Promise<ZcashConnectResult> {
+  async connect(): Promise<ZcashConnectResult> {
     const res = await this.provider.request({ method: 'zcash_requestAccounts' })
     return this.normalizeConnect(res) as ZcashConnectResult
   }
 
-  private requestPublicAccount(): Promise<PublicAccount> {
-    return this.provider.request({ method: 'zcash_requestPublicAccount' })
-  }
-
-  private requirePublicCapability(): void {
-    if (!this.provider.supportedSigningModes?.includes('noir_protocol_public')) {
-      throw new Error('This Noir Wallet provider does not support the Public signing mode.')
-    }
-  }
-
   /** Silently query the connected accounts (no popup). `null` when not connected. */
-  getAccounts(): Promise<ZcashConnectResult | null>
-  getAccounts(options: { readonly signingMode: 'current' }): Promise<ZcashConnectResult | null>
-  getAccounts(options: {
-    readonly signingMode: 'noir_protocol_public'
-  }): Promise<PublicAccount | null>
-  getAccounts(options: {
-    readonly signingMode: ConnectionSigningMode
-  }): Promise<ZcashConnectResult | PublicAccount | null>
-  getAccounts(options: {
-    readonly signingModes: readonly ConnectionSigningMode[]
-  }): Promise<QueriedIdentities>
-  getAccounts(
-    options?: ConnectionOptions
-  ): Promise<ZcashConnectResult | PublicAccount | null | QueriedIdentities>
-  async getAccounts(
-    options?: ConnectionOptions
-  ): Promise<ZcashConnectResult | PublicAccount | null | QueriedIdentities> {
-    if (options !== undefined) {
-      const selection = readConnectionOptions(options)
-      if (selection.kind === 'single') {
-        if (selection.mode === 'noir_protocol_public') {
-          this.requirePublicCapability()
-          return this.queryPublicAccount()
-        }
-      } else {
-        if (selection.modes.includes('noir_protocol_public')) this.requirePublicCapability()
-        const identities: QueriedIdentities['identities'] = {}
-        if (selection.modes.includes('current'))
-          identities.current = await this.queryCurrentAccounts()
-        if (selection.modes.includes('noir_protocol_public')) {
-          identities.noir_protocol_public = await this.queryPublicAccount()
-        }
-        return { identities }
-      }
-    }
-    return this.queryCurrentAccounts()
-  }
-
-  private async queryCurrentAccounts(): Promise<ZcashConnectResult | null> {
+  async getAccounts(): Promise<ZcashConnectResult | null> {
     const res = await this.provider.request({ method: 'zcash_getAccounts' })
     return this.normalizeConnect(res)
-  }
-
-  private queryPublicAccount(): Promise<PublicAccount | null> {
-    return this.provider.request({ method: 'zcash_getPublicAccount' })
   }
 
   /**
@@ -349,7 +132,6 @@ export class ZcashClient {
     originAddress?: string
   } | null> {
     const signingMode = readSigningMode(options)
-    if (signingMode === 'noir_protocol_public') this.requirePublicCapability()
     return this.provider.request({
       method: 'zcash_getPublicKey',
       params: [{ signingMode }]
@@ -365,7 +147,6 @@ export class ZcashClient {
 
   async signMessage(message: string, options?: SignMessageOptions): Promise<SignMessageResult> {
     const signingMode = readSigningMode(options)
-    if (signingMode === 'noir_protocol_public') this.requirePublicCapability()
     return this.provider.request({
       method: 'zcash_signMessage',
       params: [message, { signingMode }]
@@ -404,52 +185,16 @@ export class ZcashClient {
     return this.provider.request({ method: 'zcash_checkLendingMcaAccount' })
   }
 
-  async disconnect(options?: ConnectionOptions): Promise<void> {
-    if (options !== undefined) {
-      const selection = readConnectionOptions(options)
-      const modes = selection.kind === 'single' ? [selection.mode] : selection.modes
-      if (modes.includes('noir_protocol_public')) this.requirePublicCapability()
-      if (modes.includes('current')) await this.provider.request({ method: 'zcash_disconnect' })
-      if (modes.includes('noir_protocol_public'))
-        await this.provider.request({ method: 'zcash_disconnectPublic' })
-      return
-    }
+  async disconnect(): Promise<void> {
     await this.provider.request({ method: 'zcash_disconnect' })
   }
 
-  on(
-    event: 'accountsChanged',
-    handler: (account: ZcashAddress | null) => void,
-    options: { readonly signingMode: 'current' }
-  ): void
-  on(
-    event: 'accountsChanged',
-    handler: (account: PublicAccount | null) => void,
-    options: { readonly signingMode: 'noir_protocol_public' }
-  ): void
-  on(event: string, handler: (...args: any[]) => void): void
-  on(event: string, handler: (...args: any[]) => void, options?: AccountEventOptions): void {
-    this.provider.on(accountEventName(event, options), handler)
+  on(event: string, handler: (...args: any[]) => void): void {
+    this.provider.on(event, handler)
   }
 
-  removeListener(
-    event: 'accountsChanged',
-    handler: (account: ZcashAddress | null) => void,
-    options: { readonly signingMode: 'current' }
-  ): void
-  removeListener(
-    event: 'accountsChanged',
-    handler: (account: PublicAccount | null) => void,
-    options: { readonly signingMode: 'noir_protocol_public' }
-  ): void
-  removeListener(event: string, handler: (...args: any[]) => void): void
-  removeListener(
-    event: string,
-    handler: (...args: any[]) => void,
-    options?: AccountEventOptions
-  ): void {
-    const rawEvent = accountEventName(event, options)
-    this.provider.removeListener?.(rawEvent, handler)
+  removeListener(event: string, handler: (...args: any[]) => void): void {
+    this.provider.removeListener?.(event, handler)
   }
 }
 

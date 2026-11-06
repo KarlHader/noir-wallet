@@ -2,7 +2,8 @@ import type { NoirPublicAccount } from '@/core/services/noir-protocol/public/typ
 import type { Network } from '@/types'
 import { WALLET_STATE_KEY } from '@/lib/wallet-metadata-storage'
 
-const PREFIX = 'public-account-v1:'
+const PREFIX = 'protocol-account-v2:'
+const LEGACY_PREFIX = 'public-account-v1:'
 const ACCOUNT_DATA_LOCK = 'noir-account-data'
 
 export interface NoirPublicProjectionScope {
@@ -58,6 +59,7 @@ export async function readPublicAccountProjection(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Partial<NoirPublicAccount>
   if (
+    (record.signingMode !== 'derived' && record.signingMode !== 'legacy_index0') ||
     record.chain !== 'zcash-l2' ||
     record.network !== scope.network ||
     record.parentContractId !== parent ||
@@ -75,6 +77,7 @@ export async function readPublicAccountProjection(
     network: scope.network,
     parentContractId: parent,
     publicKey: record.publicKey,
+    signingMode: record.signingMode,
     address: record.address,
     mcaId: record.mcaId,
     status: record.status!,
@@ -101,10 +104,11 @@ export async function deletePublicAccountProjections(
   await withPublicAccountDataLock(async () => {
     const saved = await chrome.storage.local.get(null)
     const keys = Object.keys(saved).filter(storageKey => {
-      if (!storageKey.startsWith(PREFIX)) return false
+      const prefix = storageKey.startsWith(PREFIX) ? PREFIX : LEGACY_PREFIX
+      if (!storageKey.startsWith(prefix)) return false
       if (!walletId) return true
       try {
-        const parts: unknown = JSON.parse(storageKey.slice(PREFIX.length))
+        const parts: unknown = JSON.parse(storageKey.slice(prefix.length))
         return (
           Array.isArray(parts) &&
           parts[1] === walletId &&

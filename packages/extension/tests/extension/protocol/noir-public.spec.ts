@@ -70,6 +70,9 @@ test.beforeEach(async ({ context }) => {
 
 async function capturePublicScreenshot(page: Page, filename: string): Promise<void> {
   if (process.env.E2E_SCREENSHOTS !== '1') return
+  if (page.url().startsWith('chrome-extension://') && page.url().includes('#approval')) {
+    await page.setViewportSize({ width: 375, height: 632 })
+  }
   await page.mouse.move(1, 1)
   await page.evaluate(
     () =>
@@ -203,22 +206,22 @@ async function connectPublicDApp(
   const page = await context.newPage()
   await page.goto(`${origin}/example/#noir-public`)
   await page.waitForFunction(() => Boolean(window.noirwallet?.zcash))
-  await expect(page.getByRole('button', { name: 'Connect Public' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
   if (screenshotName) {
     await capturePublicScreenshot(page, screenshotName.replace(/\.png$/, '-demo-disconnected.png'))
   }
   const approvalPromise = context.waitForEvent('page')
-  await page.getByRole('button', { name: 'Connect Public' }).click()
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
   const approval = await approvalPromise
   await approval.waitForURL(/#approval\?requestId=/)
   await approval.setViewportSize({ width: 375, height: 632 })
   await expect(approval.getByText('Connect to', { exact: true })).toBeVisible()
   if (screenshotName) await capturePublicScreenshot(approval, screenshotName)
   await approval.getByRole('button', { name: /^Connect/ }).click()
-  await expect(page.getByRole('button', { name: 'Disconnect Public' })).toBeVisible({
+  await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible({
     timeout: 30_000
   })
-  await expect(page.getByTestId('public-account')).toBeVisible()
+  await expect(page.getByTestId('public-account')).toBeVisible({ timeout: 30_000 })
   if (!approval.isClosed()) await approval.close()
   return page
 }
@@ -285,6 +288,7 @@ test('reads an inactive Public account without paying for activation in real MV3
     network: 'mainnet',
     parentContractId: PUBLIC_PARENT,
     status: 'inactive',
+    signingMode: 'derived',
     mcaId: null
   })
   await expect(dapp.getByTestId('public-status')).toHaveText('inactive')
@@ -356,7 +360,7 @@ test('reads an inactive Public account without paying for activation in real MV3
   })
 })
 
-test('signs with the Public-only identity after explicit review and rejects stale approval', async ({
+test('uses the Native identity for Public signing and cancels stale approval on disconnect', async ({
   context,
   popup
 }) => {
@@ -369,42 +373,30 @@ test('signs with the Public-only identity after explicit review and rejects stal
   await importTestWallet(popup)
 
   const dapp = await connectPublicDApp(context, 'public-22-signing-connect.png')
-  const account = (await requestPublic(dapp, 'zcash_getPublicAccount')).result as {
-    publicKey: string
-    address: string
-  }
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
-  expect((await requestPublic(dapp, 'zcash_getAddresses')).error?.message).toMatch(
-    /authorized|reconnect/i
-  )
-  const key = await requestPublic(dapp, 'zcash_getPublicKey', [
-    { signingMode: 'noir_protocol_public' }
-  ])
+  const assets = await requestPublic(dapp, 'zcash_getPublicAssets')
+  const account = (
+    assets.result as {
+      account: { publicKey: string; address: string; signingMode: 'derived' | 'legacy_index0' }
+    }
+  ).account
+  expect(account.signingMode).toBe('legacy_index0')
+  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
+    transparent: expect.any(String)
+  })
+  const options = { signingMode: account.signingMode }
+  const key = await requestPublic(dapp, 'zcash_getPublicKey', [options])
   expect(key.result).toMatchObject({
     pubkey: account.publicKey,
     address: account.address,
-    signingMode: 'noir_protocol_public'
+    signingMode: account.signingMode
   })
+
   const message = JSON.stringify({ message: 'Noir Public identity: exact message bytes' })
-  const options = { signingMode: 'noir_protocol_public' }
-  const pageCount = context.pages().length
-  expect(
-    (await requestPublic(dapp, 'zcash_signMessage', ['{"broken":', options])).error?.message
-  ).toMatch(/valid JSON/)
-  expect(context.pages()).toHaveLength(pageCount)
   const rejectWindow = context.waitForEvent('page', { timeout: 60_000 })
   const rejected = requestPublic(dapp, 'zcash_signMessage', [message, options])
-  const rejectWindowOrResult = await Promise.race([
-    rejectWindow.then(page => ({ page })),
-    rejected.then(result => ({ result }))
-  ])
-  expect(rejectWindowOrResult).toHaveProperty('page')
-  if (!('page' in rejectWindowOrResult)) throw new Error('Public signing approval did not open')
-  const rejectApproval = rejectWindowOrResult.page
+  const rejectApproval = await rejectWindow
   await rejectApproval.waitForURL(/#approval\?requestId=/)
   await rejectApproval.setViewportSize({ width: 375, height: 632 })
-  await expect(rejectApproval.getByText('Public signer')).toBeVisible()
-  await expect(rejectApproval.getByText(account.address, { exact: true })).toBeVisible()
   await expect(rejectApproval.getByText(message, { exact: true })).toBeVisible()
   await capturePublicScreenshot(rejectApproval, 'public-23-signing-review.png')
   await rejectApproval.getByRole('button', { name: 'Reject', exact: true }).click()
@@ -417,11 +409,7 @@ test('signs with the Public-only identity after explicit review and rejects stal
   const signApproval = await signWindow
   await signApproval.waitForURL(/#approval\?requestId=/)
   await signApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
-  await expect(dapp.locator('.public-demo-signing-result').last()).toContainText(
-    'Valid for this Public identity'
-  )
-  await expect(dapp.locator('.public-demo-signing-result').first()).toContainText(account.publicKey)
-  await capturePublicScreenshot(dapp, 'public-23b-demo-signature-verified.png')
+  await expect(dapp.locator('.public-demo-signing-result').last()).toContainText('Valid')
   const signature = await dapp
     .locator('.public-demo-signing-result')
     .last()
@@ -439,23 +427,24 @@ test('signs with the Public-only identity after explicit review and rejects stal
   ).toMatchObject({ valid: true, pubkeyMatch: true, addressMatch: true })
   if (!signApproval.isClosed()) await signApproval.close()
 
-  const deadline = '0'
-  const args = JSON.stringify({ receiver_id: 'recipient.near', amount: '25000000' })
   const business = JSON.stringify(
     {
       nonce: '7',
-      deadline,
+      deadline: '0',
       tx_requests: [
-        { GasPayment: { token_id: 'near', amount: '100' } },
         {
           FunctionCall: {
             receiver_id: 'zec.omft.near',
             function_calls: [
-              { method_name: 'ft_transfer', args, gas: '30000000000000', deposit: '1' }
+              {
+                method_name: 'ft_transfer',
+                args: JSON.stringify({ receiver_id: 'recipient.near', amount: '25000000' }),
+                gas: '30000000000000',
+                deposit: '1'
+              }
             ]
           }
-        },
-        { ProtocolExtension: { payload: { enabled: true }, memo: '<future>' } }
+        }
       ],
       protocol_version: 2
     },
@@ -466,10 +455,7 @@ test('signs with the Public-only identity after explicit review and rejects stal
   const businessRequest = requestPublic(dapp, 'zcash_signMessage', [business, options])
   const businessApproval = await businessWindow
   await businessApproval.waitForURL(/#approval\?requestId=/)
-  await businessApproval.setViewportSize({ width: 375, height: 632 })
-  await expect(businessApproval.getByText('JSON', { exact: true })).toBeVisible()
   await expect(businessApproval.getByText(business, { exact: true })).toBeVisible()
-  await expect(businessApproval.getByText('Transaction intent')).toHaveCount(0)
   await capturePublicScreenshot(businessApproval, 'public-23a-business-signing-review.png')
   await businessApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
   const businessSignature = (await businessRequest).result as { signature: string; pubkey: string }
@@ -493,7 +479,7 @@ test('signs with the Public-only identity after explicit review and rejects stal
   await staleApproval.waitForURL(/#approval\?requestId=/)
   const staleRequestId = new URL(staleApproval.url()).hash.match(/requestId=([^&]+)/)?.[1]
   expect(staleRequestId).toBeTruthy()
-  expect(await requestPublic(dapp, 'zcash_disconnectPublic')).toEqual({ result: null })
+  expect(await requestPublic(dapp, 'zcash_disconnect')).toEqual({ result: null })
   const pending = await popup.evaluate(
     id => chrome.runtime.sendMessage({ type: 'GET_PENDING_REQUEST', requestId: id }),
     staleRequestId
@@ -505,8 +491,7 @@ test('signs with the Public-only identity after explicit review and rejects stal
   expect((await requestPublic(dapp, 'zcash_getPublicKey', [options])).error).toBeTruthy()
   if (!staleApproval.isClosed()) await staleApproval.close()
 })
-
-test('connects Native and Public in one review and keeps both grants after worker restart', async ({
+test('shares Native authorization through restart and rejects a late Public read after disconnect', async ({
   context,
   popup
 }) => {
@@ -518,370 +503,51 @@ test('connects Native and Public in one review and keeps both grants after worke
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
 
-  await context.route(`${PUBLIC_DAPP_ORIGIN}/**`, serveSdkExample)
-  const dapp = await context.newPage()
-  await dapp.goto(`${PUBLIC_DAPP_ORIGIN}/example/#noir-public`)
-  await dapp.waitForFunction(() => Boolean(window.noirwallet?.zcash))
-  const pageCount = context.pages().length
-  const connectWindow = context.waitForEvent('page')
-  const connectRequest = requestPublic(dapp, 'zcash_requestPublicAccount', [
-    { signingModes: ['current', 'noir_protocol_public'] }
-  ])
-  const approval = await connectWindow
-  await approval.waitForURL(/#approval\?requestId=/)
-  await approval.setViewportSize({ width: 375, height: 632 })
-  await expect(approval.getByText('Native account', { exact: true })).toBeVisible()
-  await expect(approval.getByText('Public account', { exact: true })).toBeVisible()
-  await expect(approval.getByText(/link your Native and Public identities/)).toBeVisible()
-  await capturePublicScreenshot(approval, 'public-24-combined-connect-review.png')
-  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
-  const connected = (await connectRequest).result as {
-    identities: {
-      current: { transparent: string; shielded: string; accounts: unknown[] }
-      noir_protocol_public: { publicKey: string; address: string }
-    }
+  const dapp = await connectPublicDApp(context, 'public-14-native-connect-review.png')
+  const native = await requestPublic(dapp, 'zcash_getAccounts')
+  expect(native.result).toMatchObject({ transparent: expect.any(String) })
+  const publicAccount = await requestPublic(dapp, 'zcash_getPublicAccount')
+  expect(publicAccount.result).toMatchObject({
+    chain: 'zcash-l2',
+    mcaId: ACTIVE_MCA,
+    signingMode: 'legacy_index0'
+  })
+  const account = publicAccount.result as {
+    publicKey: string
+    address: string
+    signingMode: 'derived' | 'legacy_index0'
   }
-  expect(connected.identities.current).toMatchObject({
-    transparent: expect.any(String),
-    shielded: expect.any(String),
-    accounts: expect.any(Array)
+  const key = await requestPublic(dapp, 'zcash_getPublicKey', [
+    { signingMode: account.signingMode }
+  ])
+  expect(key.result).toMatchObject({
+    pubkey: account.publicKey,
+    address: account.address,
+    signingMode: account.signingMode
   })
-  expect(connected.identities.noir_protocol_public).toMatchObject({
-    publicKey: expect.stringMatching(/^04[0-9a-f]{128}$/),
-    address: expect.any(String)
-  })
-  expect(context.pages().length).toBeLessThanOrEqual(pageCount + 1)
-  if (!approval.isClosed()) await approval.close()
 
   await terminateExtensionServiceWorker(context, popup)
   await waitForBackgroundWalletInitialization(popup)
   expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
-    transparent: connected.identities.current.transparent
+    transparent: (native.result as { transparent: string }).transparent
   })
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
-    publicKey: connected.identities.noir_protocol_public.publicKey
-  })
-  const publicKey = await requestPublic(dapp, 'zcash_getPublicKey', [
-    { signingMode: 'noir_protocol_public' }
-  ])
-  expect(publicKey.error).toBeUndefined()
-  expect(publicKey.result).toMatchObject({
-    pubkey: connected.identities.noir_protocol_public.publicKey
-  })
-
-  const beforeInvoke = context.pages().length
-  const invoked = await dapp.evaluate(async () => {
-    const provider = (
-      window as typeof window & {
-        noirwallet: {
-          multichain: {
-            request: (input: { method: string; params: unknown }) => Promise<unknown>
-          }
-        }
-      }
-    ).noirwallet.multichain
-    return Promise.all(
-      ['zcash_getPublicKey', 'zcash_signMessage'].map(async method => {
-        try {
-          const result = await provider.request({
-            method: 'wallet_invokeMethod',
-            params: {
-              scope: 'bip122:00040fe8ec8471911baa1db1266ea15d',
-              request: {
-                method,
-                params:
-                  method === 'zcash_getPublicKey'
-                    ? [{ signingMode: 'noir_protocol_public' }]
-                    : ['CAIP must not sign', { signingMode: 'noir_protocol_public' }]
-              }
-            }
-          })
-          return { result }
-        } catch (cause) {
-          const error = cause as { code?: number; message?: string }
-          return { error: { code: error.code, message: error.message } }
-        }
-      })
-    )
-  })
-  expect(invoked).toEqual([
-    { error: { code: 4100, message: expect.stringMatching(/Public connection/i) } },
-    { error: { code: 4100, message: expect.stringMatching(/Public connection/i) } }
-  ])
-  expect(context.pages()).toHaveLength(beforeInvoke)
-})
-
-test('keeps Public authorization separate from Native across revocation and worker restart', async ({
-  context,
-  popup
-}) => {
-  test.setTimeout(180_000)
-  await mockEvmNetwork(context)
-  await mockBitcoinNetwork(context)
-  await mockProtocolApis(context, { mcaByWallet: () => ACTIVE_MCA })
-  await mockPublicNearReads(context)
-  await waitForBackgroundWalletInitialization(popup)
-  await importTestWallet(popup)
-
-  const dapp = await connectPublicDApp(
-    context,
-    'public-14-public-only-review.png',
-    FIRST_PARTY_ORIGIN
-  )
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
-  await capturePublicScreenshot(dapp, 'public-14a-native-unavailable.png')
-  expect((await requestPublic(dapp, 'zcash_getAddresses')).error?.message).toMatch(
-    /authorized|reconnect/i
-  )
-
-  const nativeWindow = context.waitForEvent('page', { timeout: 60_000 })
-  const nativeRequest = requestPublic(dapp, 'zcash_requestAccounts')
-  const nativeWindowOrResult = await Promise.race([
-    nativeWindow.then(page => ({ page })),
-    nativeRequest.then(result => ({ result }))
-  ])
-  expect(nativeWindowOrResult).toHaveProperty('page')
-  if (!('page' in nativeWindowOrResult)) throw new Error('Native approval did not open')
-  const nativeApproval = nativeWindowOrResult.page
-  await nativeApproval.waitForURL(/#approval\?requestId=/)
-  await nativeApproval.setViewportSize({ width: 375, height: 632 })
-  await expect(nativeApproval.getByText(/link your Native and Public identities/)).toBeVisible()
-  await capturePublicScreenshot(nativeApproval, 'public-15-native-link-review.png')
-  await nativeApproval.getByRole('button', { name: /^Connect/ }).click()
-  expect((await nativeRequest).result).toMatchObject({ transparent: expect.any(String) })
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
-    transparent: expect.any(String)
-  })
-
-  const active = await popup.evaluate(async () => {
-    const stored = (await chrome.storage.local.get('wallet_state')).wallet_state
-    const state = typeof stored === 'string' ? JSON.parse(stored).state : stored?.state
-    return { walletId: state?.currentWalletId, accountId: state?.currentAccountId }
-  })
-  expect(active).toEqual({ walletId: expect.any(String), accountId: expect.any(String) })
-  const added = await popup.evaluate(
-    walletId =>
-      chrome.runtime.sendMessage({
-        type: 'ADD_ACCOUNT',
-        walletId,
-        accountName: 'Native extra',
-        birthdayHeight: 3_000_000
-      }),
-    active.walletId
-  )
-  expect(added).toMatchObject({ success: true, accountId: expect.any(String) })
-  const addedAccountId = (added as { accountId: string }).accountId
-  const currentAccountId = await popup.evaluate(async () => {
-    const stored = (await chrome.storage.local.get('wallet_state')).wallet_state
-    const state = typeof stored === 'string' ? JSON.parse(stored).state : stored?.state
-    return state?.currentAccountId as string | undefined
-  })
-  expect(currentAccountId).toBe(active.accountId)
-
-  const expandNativeWindow = context.waitForEvent('page')
-  const expandNativeRequest = requestPublic(dapp, 'zcash_requestAccounts')
-  const expandNativeApproval = await expandNativeWindow
-  await expandNativeApproval.waitForURL(/#approval\?requestId=/)
-  await expandNativeApproval.getByRole('button', { name: 'Edit accounts' }).click()
-  await expandNativeApproval
-    .locator('[data-dapp-account-option="true"]')
-    .filter({ hasText: 'Native extra' })
-    .click()
-  await expandNativeApproval.getByRole('button', { name: 'Done' }).click()
-  await expandNativeApproval.getByRole('button', { name: /^Connect/ }).click()
-  const expandedNative = (await expandNativeRequest).result as {
-    accounts: Array<{ accountId: string }>
-  }
-  expect(expandedNative.accounts).toEqual(
-    expect.arrayContaining([expect.objectContaining({ accountId: addedAccountId })])
-  )
-  if (!expandNativeApproval.isClosed()) await expandNativeApproval.close()
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
-    chain: 'zcash-l2'
+  const restoredAccount = await requestPublic(dapp, 'zcash_getPublicAccount')
+  expect(restoredAccount.error).toBeUndefined()
+  expect(restoredAccount.result).toMatchObject({
+    publicKey: account.publicKey,
+    signingMode: account.signingMode
   })
 
   await dapp.evaluate(() => {
     const state = window as typeof window & {
       noirwallet: { zcash: { on: (event: string, listener: (value: unknown) => void) => void } }
-      publicCleanupEvents: { native: number; publicNull: number }
+      nativeAccountsChanged: unknown[]
     }
-    state.publicCleanupEvents = { native: 0, publicNull: 0 }
-    state.noirwallet.zcash.on('accountsChanged', () => {
-      state.publicCleanupEvents.native += 1
-    })
-    state.noirwallet.zcash.on('publicAccountChanged', value => {
-      if (value === null) state.publicCleanupEvents.publicNull += 1
+    state.nativeAccountsChanged = []
+    state.noirwallet.zcash.on('accountsChanged', value => {
+      state.nativeAccountsChanged.push(value)
     })
   })
-  const removed = await popup.evaluate(
-    ({ walletId, accountId }) =>
-      chrome.runtime.sendMessage({ type: 'REMOVE_ACCOUNT', walletId, accountId }),
-    { walletId: active.walletId, accountId: addedAccountId }
-  )
-  expect(removed).toMatchObject({ success: true })
-  await expect
-    .poll(() =>
-      dapp.evaluate(
-        () =>
-          (window as typeof window & { publicCleanupEvents: { native: number } })
-            .publicCleanupEvents.native
-      )
-    )
-    .toBeGreaterThan(0)
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
-    chain: 'zcash-l2'
-  })
-  expect(
-    await dapp.evaluate(
-      () =>
-        (window as typeof window & { publicCleanupEvents: { publicNull: number } })
-          .publicCleanupEvents.publicNull
-    )
-  ).toBe(0)
-
-  expect(await requestPublic(dapp, 'zcash_disconnectPublic')).toEqual({ result: null })
-  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toMatchObject({
-    transparent: expect.any(String)
-  })
-  await capturePublicScreenshot(dapp, 'public-17-native-retained.png')
-
-  const publicWindowPromise = context.waitForEvent('page')
-  const publicRequest = requestPublic(dapp, 'zcash_requestPublicAccount')
-  const publicApproval = await publicWindowPromise
-  await publicApproval.waitForURL(/#approval\?requestId=/)
-  await publicApproval.setViewportSize({ width: 375, height: 632 })
-  await expect(publicApproval.getByText(/link your Native and Public identities/)).toBeVisible()
-  await capturePublicScreenshot(publicApproval, 'public-16-public-link-review.png')
-  await publicApproval.getByRole('button', { name: /^Connect/ }).click()
-  expect((await publicRequest).result).toMatchObject({ chain: 'zcash-l2' })
-  expect(await requestPublic(dapp, 'zcash_disconnect')).toEqual({ result: null })
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
-    chain: 'zcash-l2'
-  })
-  await capturePublicScreenshot(dapp, 'public-18-public-retained.png')
-
-  const firstParty = await context.newPage()
-  await firstParty.goto(`${FIRST_PARTY_ORIGIN}/another-tab`)
-  await firstParty.waitForFunction(() => Boolean(window.noirwallet?.zcash))
-  expect((await requestPublic(firstParty, 'zcash_getAccounts')).result).toBeNull()
-  await popup.evaluate(async origin => {
-    const stored = await chrome.storage.local.get('connectedDApps')
-    const connections = stored.connectedDApps as Array<Record<string, unknown>>
-    const connection = connections.find(candidate => candidate.origin === origin)
-    if (!connection) throw new Error('Public connection was not persisted')
-    connection.caip25Session = {
-      scopes: [
-        {
-          chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
-          methods: ['zcash_getPublicAccount', 'zcash_getAccounts'],
-          notifications: []
-        }
-      ]
-    }
-    await chrome.storage.local.set({ connectedDApps: connections })
-  }, FIRST_PARTY_ORIGIN)
-  await terminateExtensionServiceWorker(context, popup)
-  await waitForBackgroundWalletInitialization(popup)
-  expect(await requestPublic(dapp, 'zcash_getAccounts')).toEqual({ result: null })
-  await capturePublicScreenshot(dapp, 'public-19-old-session-native-unavailable.png')
-  expect((await requestPublic(firstParty, 'zcash_getAccounts')).result).toBeNull()
-  const invoke = await dapp.evaluate(async () => {
-    const provider = (
-      window as typeof window & {
-        noirwallet: {
-          multichain: {
-            request: (input: { method: string; params: unknown }) => Promise<unknown>
-          }
-        }
-      }
-    ).noirwallet.multichain
-    try {
-      return {
-        result: await provider.request({
-          method: 'wallet_invokeMethod',
-          params: {
-            scope: 'bip122:00040fe8ec8471911baa1db1266ea15d',
-            request: { method: 'zcash_getPublicAccount' }
-          }
-        })
-      }
-    } catch (cause) {
-      const error = cause as { code?: number; message?: string }
-      return { error: { code: error.code, message: error.message } }
-    }
-  })
-  expect(invoke).toMatchObject({ error: { code: 4100 } })
-
-  const staleWindow = context.waitForEvent('page', { timeout: 60_000 })
-  const staleRequest = requestPublic(dapp, 'zcash_requestPublicAccount')
-  const staleWindowOrResult = await Promise.race([
-    staleWindow.then(page => ({ page })),
-    staleRequest.then(result => ({ result }))
-  ])
-  expect(staleWindowOrResult).toHaveProperty('page')
-  if (!('page' in staleWindowOrResult)) throw new Error('Public approval did not open')
-  const staleApproval = staleWindowOrResult.page
-  await staleApproval.waitForURL(/#approval\?requestId=/)
-  const staleRequestId = new URL(staleApproval.url()).hash.match(/requestId=([^&]+)/)?.[1]
-  expect(staleRequestId).toBeTruthy()
-  expect(await requestPublic(dapp, 'zcash_disconnectPublic')).toEqual({ result: null })
-  const pendingApproval = await popup.evaluate(
-    id => chrome.runtime.sendMessage({ type: 'GET_PENDING_REQUEST', requestId: id }),
-    staleRequestId
-  )
-  expect(pendingApproval?.error).toMatch(/not found|expired/i)
-  expect((await staleRequest).error?.message).toMatch(
-    /authorization|connection|cancel|expired|reject/i
-  )
-  await capturePublicScreenshot(dapp, 'public-20-public-disconnected.png')
-  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
-  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
-  await terminateExtensionServiceWorker(context, popup)
-  await waitForBackgroundWalletInitialization(popup)
-  expect((await requestPublic(firstParty, 'zcash_getAccounts')).result).toBeNull()
-
-  const reconnectApprovalPromise = context.waitForEvent('page')
-  const reconnectRequest = requestPublic(dapp, 'zcash_requestPublicAccount')
-  const reconnectApproval = await reconnectApprovalPromise
-  await reconnectApproval.waitForURL(/#approval\?requestId=/)
-  await reconnectApproval.getByRole('button', { name: /^Connect/ }).click()
-  const reconnected = await reconnectRequest
-  expect(reconnected.error).toBeUndefined()
-  const reconnectRevision = await popup.evaluate(async origin => {
-    const stored = await chrome.storage.local.get('dapp_authorization_state')
-    return stored.dapp_authorization_state?.[origin]?.revision as number | undefined
-  }, FIRST_PARTY_ORIGIN)
-  expect(reconnectRevision).toEqual(expect.any(Number))
-  const expiredAfterReconnect = await popup.evaluate(
-    id => chrome.runtime.sendMessage({ type: 'GET_PENDING_REQUEST', requestId: id }),
-    staleRequestId
-  )
-  expect(expiredAfterReconnect?.error).toMatch(/not found|expired/i)
-  if (!staleApproval.isClosed()) {
-    await staleApproval
-      .evaluate(
-        id =>
-          chrome.runtime.sendMessage({
-            type: 'DAPP_APPROVAL_RESULT',
-            requestId: id,
-            success: true
-          }),
-        staleRequestId
-      )
-      .catch(() => undefined)
-  }
-  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
-    publicKey: (reconnected.result as { publicKey: string }).publicKey
-  })
-  expect(
-    await popup.evaluate(async origin => {
-      const stored = await chrome.storage.local.get('dapp_authorization_state')
-      return stored.dapp_authorization_state?.[origin]?.revision as number | undefined
-    }, FIRST_PARTY_ORIGIN)
-  ).toBe(reconnectRevision)
-
   let releaseRead: (() => void) | undefined
   const readHeld = new Promise<void>(resolve => {
     releaseRead = resolve
@@ -905,17 +571,37 @@ test('keeps Public authorization separate from Native across revocation and work
   const pendingAssets = requestPublic(dapp, 'zcash_getPublicAssets')
   try {
     await readStarted
-    expect(await requestPublic(dapp, 'zcash_disconnectPublic')).toEqual({ result: null })
+    expect(await requestPublic(dapp, 'zcash_disconnect')).toEqual({ result: null })
   } finally {
     releaseRead?.()
   }
   const revokedRead = await pendingAssets
   expect(revokedRead.result).toBeUndefined()
   expect(revokedRead.error?.message).toMatch(/authorization|connection|reconnect/i)
-  await capturePublicScreenshot(dapp, 'public-21-inflight-revoked.png')
-  expect(await requestPublic(dapp, 'zcash_getPublicAccount')).toEqual({ result: null })
-})
+  await expect
+    .poll(() =>
+      dapp.evaluate(
+        () =>
+          (window as typeof window & { nativeAccountsChanged: unknown[] }).nativeAccountsChanged
+            .length
+      )
+    )
+    .toBeGreaterThan(0)
+  expect((await requestPublic(dapp, 'zcash_getAccounts')).result).toBeNull()
+  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toBeNull()
+  await capturePublicScreenshot(dapp, 'public-21-native-revoked.png')
 
+  const reconnectWindow = context.waitForEvent('page', { timeout: 60_000 })
+  const reconnectRequest = requestPublic(dapp, 'zcash_requestAccounts')
+  const reconnectApproval = await reconnectWindow
+  await reconnectApproval.waitForURL(/#approval\?requestId=/)
+  await reconnectApproval.getByRole('button', { name: /^Connect/ }).click()
+  expect((await reconnectRequest).result).toMatchObject({ transparent: expect.any(String) })
+  expect((await requestPublic(dapp, 'zcash_getPublicAccount')).result).toMatchObject({
+    publicKey: account.publicKey
+  })
+  if (!reconnectApproval.isClosed()) await reconnectApproval.close()
+})
 test('signs a Public FunctionCall once and recovers after response loss and restart', async ({
   context,
   popup,
@@ -1036,7 +722,10 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
   const assets = await requestPublic(dapp, 'zcash_getPublicAssets')
   expect(assets.error).toBeUndefined()
   expect(assets.result).toMatchObject({
-    account: { mcaId: ACTIVE_MCA },
+    account: {
+      mcaId: ACTIVE_MCA,
+      signingMode: 'legacy_index0'
+    },
     assets: expect.arrayContaining([
       expect.objectContaining({ tokenId: 'zec.omft.near', decimals: 8, balanceRaw: '125000000' }),
       expect.objectContaining({

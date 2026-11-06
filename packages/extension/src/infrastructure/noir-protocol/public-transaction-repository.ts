@@ -553,7 +553,10 @@ export class NoirPublicTransactionRepository {
   async applyActivationBound(
     scope: TransactionAccountScope,
     operationId: string,
-    account: NoirPublicAccount,
+    account: Pick<
+      NoirPublicAccount,
+      'chain' | 'status' | 'network' | 'parentContractId' | 'publicKey' | 'mcaId'
+    >,
     now: number
   ): Promise<NoirPublicActivationRecord> {
     const parsedScope = parseScope(scope)

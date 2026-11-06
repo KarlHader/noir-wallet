@@ -90,6 +90,23 @@ test.describe('connected dApp permission presentation', () => {
     expect(presentDAppPermissions(connection(), context)).toEqual([])
   })
 
+  test('does not present a legacy Public grant as an active permission', () => {
+    expect(
+      presentDAppPermissions(
+        connection({
+          chainAuthorizations: [
+            {
+              chainId: 'noir:mainnet',
+              accounts: [{ walletId: 'wallet-1', accountId: 'account-1' }],
+              binding: { walletId: 'wallet-1', accountId: 'account-1' }
+            }
+          ]
+        }),
+        context
+      )
+    ).toEqual([])
+  })
+
   test('uses configured custom network metadata and an exact fallback for unknown EVM chains', () => {
     expect(
       presentDAppPermissions(

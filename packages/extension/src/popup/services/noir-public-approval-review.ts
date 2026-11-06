@@ -2,11 +2,9 @@ import type {
   NoirPublicAccount,
   NoirPublicFunctionCallRequest
 } from '@/core/services/noir-protocol/public/types'
-import type { PublicConnectApprovalData } from '@/background/pending-requests'
 import Big from '@/lib/big'
 import {
   parsePublicFunctionCallRequests,
-  assertPublicJsonMessage,
   readPublicAccountId,
   readPublicTgas,
   readPublicDecimal
@@ -23,11 +21,6 @@ export interface NoirPublicTransactionReview {
     amountRaw: string
     recipient: string
   }>
-}
-
-export interface NoirPublicMessageReview {
-  readonly account: NoirPublicAccount
-  readonly message: string
 }
 
 export interface NoirPublicActivationReview {
@@ -52,6 +45,7 @@ function account(value: unknown): value is NoirPublicAccount {
     value.network === 'mainnet' &&
     typeof value.publicKey === 'string' &&
     value.publicKey.length > 0 &&
+    (value.signingMode === 'derived' || value.signingMode === 'legacy_index0') &&
     typeof value.address === 'string' &&
     value.address.length > 0 &&
     (value.mcaId === null || typeof value.mcaId === 'string') &&
@@ -63,49 +57,6 @@ function account(value: unknown): value is NoirPublicAccount {
 
 function decimal(value: unknown): value is string {
   return typeof value === 'string' && /^(0|[1-9]\d*)(\.\d+)?$/.test(value)
-}
-
-export function parsePublicConnectReview(value: unknown): PublicConnectApprovalData | null {
-  if (
-    !record(value) ||
-    !account(value.account) ||
-    typeof value.accountLabel !== 'string' ||
-    value.accountLabel.trim().length === 0 ||
-    value.accountLabel.length > 128 ||
-    typeof value.linksIdentities !== 'boolean' ||
-    (value.nativeAccount !== undefined &&
-      (!record(value.nativeAccount) ||
-        typeof value.nativeAccount.address !== 'string' ||
-        value.nativeAccount.address.length === 0 ||
-        value.nativeAccount.address.length > 256))
-  )
-    return null
-  return {
-    account: value.account,
-    accountLabel: value.accountLabel,
-    linksIdentities: value.linksIdentities,
-    ...(value.nativeAccount === undefined
-      ? {}
-      : { nativeAccount: { address: (value.nativeAccount as { address: string }).address } })
-  }
-}
-
-export function parsePublicMessageReview(value: unknown): NoirPublicMessageReview | null {
-  if (
-    !record(value) ||
-    !account(value.account) ||
-    typeof value.message !== 'string' ||
-    value.message.length === 0 ||
-    value.message.length > 100_000
-  )
-    return null
-
-  try {
-    assertPublicJsonMessage(value.message)
-  } catch {
-    return null
-  }
-  return { account: value.account, message: value.message }
 }
 
 export function parsePublicTransactionReview(value: unknown): NoirPublicTransactionReview | null {

@@ -36,8 +36,6 @@ export interface RuntimeMessageSenderLike {
 export type OwnExtensionSenderContext = 'service-worker' | 'offscreen-document' | 'extension-page'
 
 export const ZCASH_DAPP_RUNTIME_METHODS = Object.freeze([
-  'zcash_requestPublicAccount',
-  'zcash_disconnectPublic',
   'zcash_getAccounts',
   'zcash_requestAccounts',
   'zcash_getBalance',
@@ -107,7 +105,6 @@ export interface NoirRuntimeEventMessage {
   readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
   readonly eventName:
     | 'accountsChanged'
-    | 'publicAccountChanged'
     | 'accountCapabilitiesChanged'
     | 'chainChanged'
     | 'networkChanged'
@@ -1417,7 +1414,6 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
       value.chainId !== 'near' &&
       value.chainId !== 'multichain') ||
     (value.eventName !== 'accountsChanged' &&
-      value.eventName !== 'publicAccountChanged' &&
       value.eventName !== 'accountCapabilitiesChanged' &&
       value.eventName !== 'chainChanged' &&
       value.eventName !== 'networkChanged' &&
@@ -1429,8 +1425,6 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
   }
   if (value.eventName === 'accountCapabilitiesChanged' && value.chainId !== 'solana')
     throw new Error('Invalid account capability event chain')
-  if (value.eventName === 'publicAccountChanged' && value.chainId !== 'zcash')
-    throw new Error('Invalid Public account event chain')
 
   return {
     type: 'NOIR_EVENT',

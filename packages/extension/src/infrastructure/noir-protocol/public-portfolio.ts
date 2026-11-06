@@ -49,7 +49,10 @@ function publicChainAccount(
       accountId: parseAccountId(scope.accountId),
       chainId: parseChainId(`noir:${account.network}`).id
     },
-    derivation: { scheme: 'zcash-public-v1', path: publicIdentityPath(scope.derivationIndex) },
+    derivation: {
+      scheme: 'zcash-lending-v1',
+      path: publicIdentityPath(scope.derivationIndex, account.signingMode)
+    },
     identity: { kind: 'public-key', value: account.publicKey },
     createdAt: 0
   }

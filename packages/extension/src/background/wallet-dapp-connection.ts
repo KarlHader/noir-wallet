@@ -20,8 +20,6 @@ interface WalletDAppConnectionOptions {
   readonly supportsSessionChain: (chainId: string) => boolean
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
-  readonly connectPublic?: (origin: string) => Promise<void>
-  readonly connectNativeAndPublic?: (origin: string) => Promise<void>
   readonly connectSession: (
     origin: string,
     chainIds: readonly string[],
@@ -34,8 +32,6 @@ interface WalletDAppConnectionOptions {
   readonly notifySessionChanged: (origin: string) => Promise<void>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
 }
-
-const PUBLIC_CHAIN_ID = 'noir:mainnet'
 
 /** Keeps wallet-side connection status and authorization on the same account scope. */
 export class WalletDAppConnectionCoordinator {
@@ -61,7 +57,6 @@ export class WalletDAppConnectionCoordinator {
         !dapp.caip25Session &&
         hasZcash &&
         (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined),
-      public: hasZcash ? getConnectionChainAuthorization(dapp, PUBLIC_CHAIN_ID) : null,
       sessionChains: sessionChains ?? [],
       sessionConnectable:
         sessionChains !== undefined &&
@@ -94,24 +89,17 @@ export class WalletDAppConnectionCoordinator {
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const nativeAuthorized = dapp.caip25Session
+      const currentAccountAuthorized = dapp.caip25Session
         ? targets.sessionAuthorized
         : targets.evm || targets.zcash
           ? (!targets.evm || targets.evm.accounts.some(matches)) &&
             (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference))
-          : !targets.public && connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
-      const currentAccountAuthorized = targets.public
-        ? targets.public.accounts.some(matches) &&
-          (targets.sessionChains.length > 0 || targets.evm || targets.zcash
-            ? nativeAuthorized
-            : true)
-        : nativeAuthorized
+          : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
       return {
         dapp,
         currentAccountAuthorized,
         currentAccountConnectable: Boolean(
-          targets.public ||
-          (dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash)
+          dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash
         )
       }
     })
@@ -125,10 +113,7 @@ export class WalletDAppConnectionCoordinator {
         const active = await this.options.loadActiveAccount()
         if (!active) throw new Error('No active account')
         const targets = this.targets(dapp, active)
-        if (
-          !targets.public &&
-          !(dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash)
-        ) {
+        if (!(dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash)) {
           throw new Error('Reconnect from the site to update this network permission')
         }
         return { targets, account: active.reference, hasSession: Boolean(dapp.caip25Session) }
@@ -142,17 +127,9 @@ export class WalletDAppConnectionCoordinator {
             await this.options.notifySessionChanged(origin)
             return
           }
-        } else if (targets.zcash && targets.public && this.options.connectNativeAndPublic) {
-          if (targets.evm) await this.options.connectEvm(origin)
-          await this.options.connectNativeAndPublic(origin)
-          return
         } else {
           if (targets.evm) await this.options.connectEvm(origin)
           if (targets.zcash) await this.options.connectZcash(origin)
-        }
-        if (targets.public) {
-          if (!this.options.connectPublic) throw new Error('Public connection is unavailable')
-          await this.options.connectPublic(origin)
         }
       })
   }

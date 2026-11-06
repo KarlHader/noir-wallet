@@ -1,3 +1,6 @@
+import { signPublicMessage } from '../../../../src/core/services/noir-protocol/public/identity.ts'
+import { signApprovedDAppMessage } from '../../../../src/background/dapp-message-signing.ts'
+import { SIGNING_ACCOUNT_INDEX } from '../../../../src/config/wallet.ts'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -779,4 +782,36 @@ test.describe('Public wire contract', () => {
       })
     ).toThrow(/do not match/)
   })
+})
+
+// Both entry points must resolve the same signer and retain the reviewed bytes.
+test('Protocol signing reuses Lending derived and legacy paths for every HD account', async () => {
+  const message = ' {"nonce":"3", "tx_requests":[]}\n'
+  for (const index of [0, 2]) {
+    for (const mode of ['derived', 'legacy_index0']) {
+      const calls = []
+      const core = {
+        signMessage: async (...args) => {
+          calls.push(args)
+          return { pubkey: publicKey, address: 't-signer', signature }
+        }
+      }
+      await signApprovedDAppMessage(core, message, index, mode, SIGNING_ACCOUNT_INDEX)
+      const lendingCall = calls[0]
+      calls.length = 0
+      expect(await signPublicMessage(core, index, publicKey, message, mode)).toBe(signature)
+      expect(calls).toEqual([lendingCall])
+      if (mode === 'derived') expect(lendingCall).toEqual([message, SIGNING_ACCOUNT_INDEX])
+      else expect(lendingCall).toEqual([message, index, 0])
+    }
+  }
+  await expect(
+    signPublicMessage(
+      { signMessage: async () => ({ pubkey: `04${'33'.repeat(64)}`, signature }) },
+      0,
+      publicKey,
+      message,
+      'derived'
+    )
+  ).rejects.toThrow('identity changed')
 })

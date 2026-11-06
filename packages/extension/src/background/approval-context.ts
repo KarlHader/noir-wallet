@@ -15,8 +15,6 @@ const ZCASH_ACTIONS = new Set([
   'sendTransaction',
   'signMessage',
   'shieldFunds',
-  'publicConnect',
-  'publicSignMessage',
   'publicActivate',
   'publicTransaction'
 ])
@@ -28,13 +26,7 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
 
   await rehydrateWalletStore()
   const authorization = await dappManager.getAuthorization(request.origin)
-  const publicAuthorization = await dappManager.getPublicAuthorization(request.origin)
-  const isPublic = [
-    'publicConnect',
-    'publicActivate',
-    'publicTransaction',
-    'publicSignMessage'
-  ].includes(request.action)
+  const isPublic = request.action === 'publicActivate' || request.action === 'publicTransaction'
   const publicLocked = isPublic && !(await credentialSession.hasUnlockSession())
   const state = useWalletStore.getState()
   const wallet = state.getWallet(request.walletId)
@@ -43,13 +35,9 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
     request.origin === `chrome-extension://${chrome.runtime.id}`
   const accountAuthorized =
     internalPublicActivation ||
-    (isPublic
-      ? publicAuthorization.binding?.walletId === request.walletId &&
-        publicAuthorization.binding.accountId === request.accountId
-      : authorization.accounts.some(
-          account =>
-            account.walletId === request.walletId && account.accountId === request.accountId
-        ))
+    authorization.accounts.some(
+      account => account.walletId === request.walletId && account.accountId === request.accountId
+    )
   if (
     !approvalContextMatches({
       action: request.action,
@@ -64,9 +52,7 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
         ? publicLocked
         : !isZcashHardwareKeySource(wallet?.keySource) && backgroundZcashWalletRuntime.isLocked(),
       authorizationRevision: request.authorizationRevision,
-      currentAuthorizationRevision: isPublic
-        ? publicAuthorization.revision
-        : authorization.revision,
+      currentAuthorizationRevision: authorization.revision,
       accountAuthorized,
       requestStillPending: pendingRequestsManager.get(requestId) === request
     })

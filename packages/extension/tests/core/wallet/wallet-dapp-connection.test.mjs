@@ -43,9 +43,7 @@ function fixture({
       ...(zcash && caip25
         ? [{ chainId: zcashChainId, accounts: [previous], binding: previous }]
         : []),
-      ...(publicGrant
-        ? [{ chainId: publicChainId, accounts: [previous], binding: previous }]
-        : [])
+      ...(publicGrant ? [{ chainId: publicChainId, accounts: [previous], binding: previous }] : [])
     ],
     ...(zcash
       ? {
@@ -72,6 +70,11 @@ function fixture({
         }
       : {})
   }
+  if (caip25 && publicGrant) {
+    dapp.chainAuthorizations = dapp.chainAuthorizations.filter(
+      item => item.chainId !== publicChainId
+    )
+  }
   const coordinator = new WalletDAppConnectionCoordinator({
     getCurrentTabDApp: async () => dapp,
     getConnection: async origin => (origin === dapp.origin ? dapp : null),
@@ -82,9 +85,10 @@ function fixture({
       [evmChainId, zcashChainId, bitcoinChainId, solanaChainId, nearChainId].includes(chainId),
     connectEvm: async () => {
       calls.push('evm')
-      const grant = sharedEvm || caip25
-        ? dapp.evmAuthorization
-        : dapp.chainAuthorizations.find(item => item.chainId === evmChainId)
+      const grant =
+        sharedEvm || caip25
+          ? dapp.evmAuthorization
+          : dapp.chainAuthorizations.find(item => item.chainId === evmChainId)
       grant.accounts = [previous, active.reference]
       grant.binding = active.reference
     },
@@ -94,21 +98,6 @@ function fixture({
       dapp.authorizedAccounts = [previous, active.reference]
       dapp.boundWalletId = active.reference.walletId
       dapp.boundAccountId = active.reference.accountId
-    },
-    connectPublic: async () => {
-      calls.push('public')
-      const authorization = dapp.chainAuthorizations.find(item => item.chainId === publicChainId)
-      authorization.accounts = [active.reference]
-      authorization.binding = active.reference
-    },
-    connectNativeAndPublic: async () => {
-      calls.push('native-and-public')
-      dapp.authorizedAccounts = [active.reference]
-      dapp.boundWalletId = active.reference.walletId
-      dapp.boundAccountId = active.reference.accountId
-      const authorization = dapp.chainAuthorizations.find(item => item.chainId === publicChainId)
-      authorization.accounts = [active.reference]
-      authorization.binding = active.reference
     },
     connectSession: async (origin, chainIds, account) => {
       calls.push(['session', chainIds, account])
@@ -192,7 +181,7 @@ test('a Zcash-only account is not routed into a sites existing EVM grant', async
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
-test('Public-only Connect updates the Public grant without creating Native Zcash permission', async () => {
+test('legacy Public-only grant does not create a wallet Connect target', async () => {
   for (const disabledSession of [false, true]) {
     const state = fixture({ chains: [zcashChainId], evm: false, publicGrant: true })
     if (disabledSession) {
@@ -204,32 +193,40 @@ test('Public-only Connect updates the Public grant without creating Native Zcash
       (await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized,
       false
     )
-    await state.coordinator.connectCurrentAccount(state.dapp.origin)
-    assert.deepEqual(state.calls, ['public'])
+    assert.equal(
+      (await state.coordinator.getCurrentTabDAppStatus()).currentAccountConnectable,
+      false
+    )
+    await assert.rejects(
+      state.coordinator.connectCurrentAccount(state.dapp.origin),
+      /network permission/
+    )
+    assert.deepEqual(state.calls, [])
     assert.equal(state.dapp.authorizedAccounts, undefined)
     assert.equal(state.dapp.boundWalletId, undefined)
-    assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   }
 })
 
-test('Native and Public grants both follow their own account scope', async () => {
+test('legacy Public grant does not change the Native Zcash account scope', async () => {
   const state = fixture({ chains: [zcashChainId], evm: false, zcash: true, publicGrant: true })
   state.dapp.authorizedAccounts = [current]
   state.dapp.boundWalletId = current.walletId
   state.dapp.boundAccountId = current.accountId
-  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
-  assert.deepEqual(state.calls, ['native-and-public'])
-  assert.deepEqual(state.dapp.authorizedAccounts, [current])
-  assert.deepEqual(state.dapp.chainAuthorizations[0].binding, current)
+  assert.deepEqual(state.calls, ['zcash'])
+  assert.deepEqual(state.dapp.authorizedAccounts, [previous, current])
+  assert.deepEqual(state.dapp.chainAuthorizations[0].binding, previous)
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
 test('wallet connection callbacks can acquire the account-transition lock after approval', async () => {
   const transition = new AccountContextTransitionCoordinator()
   const dapp = {
-    origin: 'https://public.example',
-    chainAuthorizations: [{ chainId: publicChainId, accounts: [previous], binding: previous }]
+    origin: 'https://native.example',
+    authorizedAccounts: [previous],
+    boundWalletId: previous.walletId,
+    boundAccountId: previous.accountId
   }
   let committed = false
   const coordinator = new WalletDAppConnectionCoordinator({
@@ -241,8 +238,7 @@ test('wallet connection callbacks can acquire the account-transition lock after 
     supportsSessionChain: chainId => [evmChainId, zcashChainId].includes(chainId),
     connectEvm: async () => {},
     connectSession: async () => {},
-    connectZcash: async () => {},
-    connectPublic: async () => {
+    connectZcash: async () => {
       await transition.runActiveOperation(async () => {
         committed = true
       })
@@ -278,19 +274,19 @@ test('partial authorization failure remains visible and can be completed by retr
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
-test('an existing Native session does not hide a missing independent Public grant', async () => {
+test('an existing Native session ignores a legacy Public grant', async () => {
   const state = fixture({ chains: [evmChainId, zcashChainId], caip25: true, publicGrant: true })
   state.dapp.evmAuthorization.accounts = [current]
   state.dapp.evmAuthorization.binding = current
   state.dapp.caip25Session.scopes[0].accounts = [current]
-  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
-  assert.deepEqual(state.calls, ['public'])
+  assert.deepEqual(state.calls, [])
   assert.equal(state.dapp.authorizedAccounts, undefined)
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 
-test('CAIP-25 reconnect leaves an independent Public grant for a separate approval', async () => {
+test('CAIP-25 reconnect does not request a second legacy Public approval', async () => {
   const state = fixture({ chains: [evmChainId, zcashChainId], caip25: true, publicGrant: true })
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
   assert.deepEqual(state.calls, [
@@ -298,13 +294,13 @@ test('CAIP-25 reconnect leaves an independent Public grant for a separate approv
     ['chains-notified', state.dapp.origin, [evmChainId]],
     'session-notified'
   ])
-  assert.deepEqual(
-    state.dapp.chainAuthorizations.find(item => item.chainId === publicChainId).accounts,
-    [previous]
+  assert.equal(
+    state.dapp.chainAuthorizations.some(item => item.chainId === publicChainId),
+    false
   )
-  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
-  assert.equal(state.calls.at(-1), 'public')
+  assert.equal(state.calls.length, 3)
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
 })
 

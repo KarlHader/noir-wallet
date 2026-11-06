@@ -1,13 +1,12 @@
+import { checkLendingMcaAccount } from '@/core/services/lending-service'
+import { fetchCachedIdentity } from '@/core/wallet/identity-cache'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { requirePublicConfig } from '@/core/services/noir-protocol/public/config'
 import {
   assertPublicFeeQuoteStillCovers,
   buildPublicPaidRequests
 } from '@/core/services/noir-protocol/public/fee'
-import {
-  derivePublicIdentity,
-  signPublicMessage
-} from '@/core/services/noir-protocol/public/identity'
+import { signPublicMessage } from '@/core/services/noir-protocol/public/identity'
 import {
   assertPublicActivationQuoteForPayment,
   createPublicActivationQuoteRequest
@@ -16,7 +15,6 @@ import {
   createPublicCandidate,
   computePublicSubmissionId,
   parsePublicFunctionCallRequests,
-  assertPublicJsonMessage,
   serializePublicBusiness
 } from '@/core/services/noir-protocol/public/protocol'
 import type {
@@ -103,10 +101,7 @@ function queueKey(context: NoirPublicRequestContext, publicKey: string): string 
   ])
 }
 
-let accountChangedListener: (() => void) | null = null
-
 function notifyChanged(context: Pick<NoirPublicRequestContext, 'walletId' | 'accountId'>): void {
-  accountChangedListener?.()
   void chrome.runtime
     .sendMessage({
       type: 'PORTFOLIO_UPDATED',
@@ -117,9 +112,6 @@ function notifyChanged(context: Pick<NoirPublicRequestContext, 'walletId' | 'acc
 }
 
 export class NoirPublicRuntime {
-  setAccountChangedListener(listener: () => void): void {
-    accountChangedListener = listener
-  }
   private readonly repository = new NoirPublicTransactionRepository(
     new IndexedDbTransactionRepository()
   )
@@ -179,8 +171,10 @@ export class NoirPublicRuntime {
       }
       return cached
     }
+    // This projection only contains identities selected by the shared Lending resolver.
+    // Read-only refreshes must not depend on restoring the signing Worker after a restart.
     const identity = cached
-      ? { pubkey: cached.publicKey, address: cached.address }
+      ? { pubkey: cached.publicKey, address: cached.address, signingMode: cached.signingMode }
       : await this.deriveIdentity(context)
     await assertPublicContext(context)
     // Reimported aliases of the same key must share an in-flight payment.
@@ -200,7 +194,9 @@ export class NoirPublicRuntime {
     try {
       mcaId = await clientFor(context.network).getMcaByWallet(identity.pubkey)
     } catch (error) {
-      if (cached) return cached
+      await assertPublicContext(context)
+      if (cached?.publicKey === identity.pubkey && cached.signingMode === identity.signingMode)
+        return cached
       throw error
     }
     await assertPublicContext(context)
@@ -208,6 +204,7 @@ export class NoirPublicRuntime {
       chain: 'zcash-l2',
       network: context.network,
       publicKey: identity.pubkey,
+      signingMode: identity.signingMode,
       address: identity.address,
       mcaId,
       parentContractId: config.parentContractId,
@@ -264,47 +261,27 @@ export class NoirPublicRuntime {
   }
 
   private async deriveIdentity(context: NoirPublicRequestContext) {
-    return derivePublicIdentity(await this.getSigningCore(context), context.derivationIndex)
-  }
-
-  async getSigningIdentity(context: NoirPublicRequestContext) {
-    const account = await this.getAccount(context, false)
+    const core = await this.getSigningCore(context)
+    const resolve = (mode: 'derived' | 'legacy_index0') =>
+      fetchCachedIdentity(
+        context.network,
+        context.walletId,
+        context.accountId,
+        context.derivationIndex,
+        mode,
+        core
+      )
+    const status = await checkLendingMcaAccount(
+      context.walletId,
+      context.accountId,
+      async mode => (await resolve(mode === 'derived' ? 'derived' : 'legacy_index0')).pubkey
+    )
     await assertPublicContext(context)
-    return {
-      pubkey: account.publicKey,
-      address: account.address,
-      signingMode: 'noir_protocol_public' as const
-    }
-  }
-
-  async signMessage(
-    context: NoirPublicRequestContext,
-    message: string,
-    approve: (action: 'publicSignMessage', data: unknown) => Promise<{ approved: boolean }>
-  ) {
-    const identity = await this.getSigningIdentity(context)
-    assertPublicJsonMessage(message)
-    const account = await this.getAccount(context)
-    if (account.publicKey !== identity.pubkey || account.address !== identity.address)
-      throw new Error('Public signing identity changed')
-    return this.serial(queueKey(context, identity.pubkey), async () => {
-      await assertPublicContext(context)
-      if (!(await approve('publicSignMessage', { account, message })).approved)
-        throw new Error('User rejected the signature request')
-      return accountContextTransition.runActiveOperation(async () => {
-        await assertPublicContext(context)
-        const core = await this.getSigningCore(context)
-        await assertPublicContext(context)
-        const signature = await signPublicMessage(
-          core,
-          context.derivationIndex,
-          identity.pubkey,
-          message
-        )
-        await assertPublicContext(context)
-        return { ...identity, signature }
-      })
-    })
+    const signingMode: 'derived' | 'legacy_index0' =
+      status.signingMode === 'derived' ? 'derived' : 'legacy_index0'
+    const identity = await resolve(signingMode)
+    if (identity.pubkey !== status.publicKey) throw new Error('Lending signing identity changed')
+    return { ...identity, signingMode }
   }
 
   async activate(
@@ -329,7 +306,8 @@ export class NoirPublicRuntime {
         core,
         context.derivationIndex,
         account.publicKey,
-        JSON.stringify([{ Zcash: account.publicKey }])
+        JSON.stringify([{ Zcash: account.publicKey }]),
+        account.signingMode
       )
       const fee = await client.getCreateMcaFee(config.zecTokenId)
       const refundAddress = useWalletStore
@@ -549,7 +527,8 @@ export class NoirPublicRuntime {
           core,
           context.derivationIndex,
           account.publicKey,
-          serializePublicBusiness({ nonce, deadline, txRequests: paid.txRequests })
+          serializePublicBusiness({ nonce, deadline, txRequests: paid.txRequests }),
+          account.signingMode
         )
         await assertPublicContext(context)
         const candidate = createPublicCandidate({
@@ -685,20 +664,20 @@ export class NoirPublicRuntime {
         { network: binding.network, walletId: scope.keyDomainId, accountId: scope.accountId },
         binding.parentContractId
       )
-      const account: NoirPublicAccount = {
-        chain: 'zcash-l2',
+      const account = {
+        chain: 'zcash-l2' as const,
         network: binding.network,
         publicKey: binding.identityPublicKey,
         address: cached?.address ?? '',
         mcaId,
         parentContractId: binding.parentContractId,
-        status: 'active'
+        status: 'active' as const
       }
       await this.repository.applyActivationBound(scope, record.graph.root.id, account, Date.now())
-      if (cached)
+      if (cached?.publicKey === binding.identityPublicKey)
         await writePublicAccountProjection(
           { network: binding.network, walletId: scope.keyDomainId, accountId: scope.accountId },
-          account
+          { ...cached, mcaId, status: 'active' }
         )
       await this.refreshKnownAssets(record, mcaId).catch(() => {})
       notifyChanged({ walletId: scope.keyDomainId, accountId: scope.accountId })
@@ -739,12 +718,13 @@ export class NoirPublicRuntime {
     )
     const mcaId =
       boundMcaId ?? (binding.kind === 'contract-call' ? binding.accountAddress : cached?.mcaId)
-    if (!mcaId || (cached && cached.publicKey !== binding.identityPublicKey)) return
+    if (!mcaId || !cached || cached.publicKey !== binding.identityPublicKey) return
     const account: NoirPublicAccount = {
       chain: 'zcash-l2',
       network: binding.network,
       publicKey: binding.identityPublicKey,
-      address: cached?.address ?? '',
+      signingMode: cached.signingMode,
+      address: cached.address,
       mcaId,
       parentContractId: binding.parentContractId,
       status: 'active'

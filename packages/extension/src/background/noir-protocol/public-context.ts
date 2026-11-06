@@ -37,7 +37,6 @@ export interface NoirPublicRequestContext {
   readonly internal: boolean
   readonly authorizationRevision: number
   readonly requestEpoch: number
-  readonly connecting?: boolean
 }
 
 export function publicTransactionScope(
@@ -55,8 +54,7 @@ export function publicInternalOrigin(): string {
 
 export async function capturePublicContext(
   origin: string,
-  internal = false,
-  connecting = false
+  internal = false
 ): Promise<NoirPublicRequestContext> {
   await rehydrateWalletStore()
   const state = useWalletStore.getState()
@@ -70,7 +68,6 @@ export async function capturePublicContext(
     network: state.currentNetwork,
     origin,
     internal,
-    connecting,
     requestEpoch,
     authorizationRevision: await dappManager.getAuthorizationRevision(origin)
   }
@@ -104,13 +101,13 @@ export async function assertPublicContext(context: NoirPublicRequestContext): Pr
     if (context.requestEpoch !== requestEpoch) throw new Error('Wallet context changed')
     return
   }
-  const authorization = await dappManager.getPublicAuthorization(context.origin)
+  const authorization = await dappManager.getAuthorization(context.origin)
   if (
     context.requestEpoch !== requestEpoch ||
     authorization.revision !== context.authorizationRevision ||
-    (!context.connecting &&
-      (authorization.binding?.walletId !== context.walletId ||
-        authorization.binding.accountId !== context.accountId))
+    !authorization.accounts.some(
+      account => account.walletId === context.walletId && account.accountId === context.accountId
+    )
   )
     throw new Error('Wallet connection changed. Reconnect and try again.')
 }

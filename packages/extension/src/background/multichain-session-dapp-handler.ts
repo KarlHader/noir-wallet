@@ -30,7 +30,6 @@ import type {
 import type { BackgroundEvmDAppHandler } from './evm-dapp-handler'
 import type { BackgroundNearDAppHandler } from './near-dapp-handler'
 import type { BackgroundSolanaDAppHandler } from './solana-dapp-handler'
-import { isPublicSigningRequest } from './dapp-message-signing'
 
 export interface MultichainSessionRequest {
   readonly method: Caip25RuntimeMethod
@@ -116,11 +115,7 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
   readonly evmNetworks: readonly EvmNetworkConfig[]
   readonly manager: Pick<
     DAppManager,
-    | 'getAllConnections'
-    | 'getCaip25Session'
-    | 'getAuthorizationRevision'
-    | 'getPublicAuthorization'
-    | 'setCaip25Session'
+    'getAllConnections' | 'getCaip25Session' | 'getAuthorizationRevision' | 'setCaip25Session'
   >
   readonly approval: Pick<
     DAppHandler,
@@ -185,8 +180,6 @@ function invocableMethods(
 
 const PUBLIC_ZCASH_METHODS = Object.freeze(
   new Set([
-    'zcash_requestPublicAccount',
-    'zcash_disconnectPublic',
     'zcash_getPublicAccount',
     'zcash_activatePublicAccount',
     'zcash_getPublicAssets',
@@ -523,12 +516,6 @@ export class BackgroundMultichainSessionDAppHandler {
     }
     const expectedRevision =
       reconnectRevision ?? (await this.options.manager.getAuthorizationRevision(origin))
-    const requestsNativeZcash = Object.keys(parsed.scopes).includes(
-      getZcashChainId(this.options.network)
-    )
-    const linksIdentities =
-      requestsNativeZcash &&
-      (await this.options.manager.getPublicAuthorization(origin)).binding !== null
     const prepared = await Promise.all(
       Object.entries(parsed.scopes).map(([chainId, scope]) =>
         this.prepareScope(origin, chainId, scope)
@@ -551,7 +538,6 @@ export class BackgroundMultichainSessionDAppHandler {
       origin,
       'multichainConnect',
       {
-        ...(linksIdentities ? { linksIdentities: true } : {}),
         scopes: approvalScopes.map(proposal => ({
           chainId: proposal.chainId,
           chainName: proposal.chainName,
@@ -700,11 +686,11 @@ export class BackgroundMultichainSessionDAppHandler {
     tabInfo: MultichainSessionTabInfo
   ): Promise<unknown> {
     const parsed = parseCaip27InvokeMethodRequest(params)
-    if (
-      PUBLIC_ZCASH_METHODS.has(parsed.request.method) ||
-      isPublicSigningRequest(parsed.request.method, parsed.request.params)
-    ) {
-      throw new Caip25ProviderError(4100, `${parsed.request.method} requires a Public connection.`)
+    if (PUBLIC_ZCASH_METHODS.has(parsed.request.method)) {
+      throw new Caip25ProviderError(
+        4100,
+        `${parsed.request.method} is unavailable in this session.`
+      )
     }
     const stored = await this.options.manager.getCaip25Session(origin)
     const granted = stored?.scopes.find(scope => scope.chainId === parsed.scope)

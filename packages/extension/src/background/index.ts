@@ -229,7 +229,6 @@ import { accountContextTransition } from './account-context-transition'
 import { createBackgroundAdditionalReceiveTargetsCoordinator } from './receive-targets'
 import { createBackgroundAccountNetworksCoordinator } from './account-networks'
 import { WalletDAppConnectionCoordinator } from './wallet-dapp-connection'
-import { isPublicSigningRequest } from './dapp-message-signing'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
 import { createBackgroundEvmDAppHandler } from './evm-dapp'
 import { EvmDAppNetworkSwitchCoordinator } from './evm-dapp-network-switch'
@@ -393,10 +392,6 @@ if (__MULTICHAIN_CONFORMANCE_RPC_ENABLED__) {
 const runtimeNetworkReady = initializeRuntimeNetwork()
 
 noirPublicRuntime.setIdentityReadiness(restoreBackgroundZcashRuntimeFromSession)
-noirPublicRuntime.setAccountChangedListener(() => {
-  void dappHandler.notifyPublicAccountsChanged().catch(() => {})
-})
-
 noirPublicRuntime.setPaymentExecutor(async payment => {
   const { context } = payment
   await handleBackgroundZcashTx({
@@ -598,18 +593,6 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
       evmDAppHandler.connectCurrentAccountToDApp(origin)
     ),
   connectZcash: origin => dappHandler.connectCurrentAccountToDApp(origin),
-  connectPublic: async origin => {
-    await dappHandler.connectPublic(origin)
-    await dappHandler.notifyPublicAccountsChanged()
-  },
-  connectNativeAndPublic: async origin => {
-    await dappHandler.connectPublic(
-      origin,
-      {},
-      { signingModes: ['current', 'noir_protocol_public'] }
-    )
-    await dappHandler.notifyPublicAccountsChanged()
-  },
   connectSession: (origin, chainIds, account) =>
     dappManager.addCaip25AuthorizedAccount(origin, chainIds, account),
   notifyChainAccountsChanged: async (origin, chainIds) => {
@@ -701,7 +684,7 @@ async function dispatchDAppChainRequest(
   origin: string,
   tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
 ): Promise<unknown> {
-  await assertCaip25MethodPermission(chainId, request.method, origin, request.params)
+  await assertCaip25MethodPermission(chainId, request.method, origin)
   if (chainId === 'evm') {
     const result = await evmDAppHandler.request(
       {
@@ -778,8 +761,7 @@ const CAIP25_CONNECTION_METHODS = new Set([
 async function assertCaip25MethodPermission(
   family: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near',
   method: string,
-  origin: string,
-  params?: readonly unknown[] | Readonly<Record<string, unknown>>
+  origin: string
 ): Promise<void> {
   if (
     family === 'zcash' &&
@@ -787,20 +769,17 @@ async function assertCaip25MethodPermission(
     (await dappManager.getAuthorization(origin)).accounts.length === 0
   )
     return
-  // Public has an independent grant even when the same origin has a Native
-  // session. wallet_invokeMethod rejects Public before reaching this dispatch.
+  // Protocol business calls use the ordinary Zcash grant. They remain outside
+  // CAIP-25; wallet_invokeMethod rejects them before this dispatch.
   if (
-    (family === 'zcash' &&
-      [
-        'zcash_requestPublicAccount',
-        'zcash_disconnectPublic',
-        'zcash_getPublicAccount',
-        'zcash_activatePublicAccount',
-        'zcash_getPublicAssets',
-        'zcash_sendPublicTransaction',
-        'zcash_getPublicTransaction'
-      ].includes(method)) ||
-    (family === 'zcash' && isPublicSigningRequest(method, params))
+    family === 'zcash' &&
+    [
+      'zcash_getPublicAccount',
+      'zcash_activatePublicAccount',
+      'zcash_getPublicAssets',
+      'zcash_sendPublicTransaction',
+      'zcash_getPublicTransaction'
+    ].includes(method)
   )
     return
   if (CAIP25_CONNECTION_METHODS.has(method)) return
@@ -5493,30 +5472,6 @@ async function handleDAppRequest(
   try {
     await ensureDAppHandlerReady()
 
-    if (request.method === 'zcash_requestPublicAccount') {
-      if (!(await credentialSession.hasUnlockSession())) {
-        await promptUnlock({ restoreZcashRuntime: false })
-      }
-      return dappHandler.handleRequest({
-        method: request.method,
-        params: request.params,
-        origin,
-        tabInfo
-      })
-    }
-
-    if (isPublicSigningRequest(request.method, request.params)) {
-      if (request.method === 'zcash_signMessage' && !(await credentialSession.hasUnlockSession())) {
-        await promptUnlock({ restoreZcashRuntime: false })
-      }
-      return dappHandler.handleRequest({
-        method: request.method,
-        params: request.params,
-        origin,
-        tabInfo
-      })
-    }
-
     if (request.method === 'zcash_getAccounts') {
       const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(origin)
       if (!snapshot) return null
@@ -5536,12 +5491,9 @@ async function handleDAppRequest(
     // Persisted Public account and operation reads do not need a Zcash sync or
     // Worker restore. The Public runtime initializes signing only on a cache miss.
     if (
-      [
-        'zcash_getPublicAccount',
-        'zcash_getPublicAssets',
-        'zcash_getPublicTransaction',
-        'zcash_disconnectPublic'
-      ].includes(request.method)
+      ['zcash_getPublicAccount', 'zcash_getPublicAssets', 'zcash_getPublicTransaction'].includes(
+        request.method
+      )
     ) {
       return dappHandler.handleRequest({
         method: request.method,

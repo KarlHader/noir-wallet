@@ -44,7 +44,7 @@ export interface DAppAccountAuthorization {
 
 const STORAGE_KEY = 'connectedDApps'
 const AUTHORIZATION_KEY = 'dapp_authorization_state'
-const PUBLIC_CHAIN_ID = 'noir:mainnet'
+const LEGACY_PUBLIC_CHAIN_ID = 'noir:mainnet'
 const MAX_CONNECTED_DAPPS = 256
 const MAX_AUTHORIZED_ACCOUNTS = 100
 const MAX_ACCOUNT_REF_LENGTH = 256
@@ -154,8 +154,7 @@ function normalizeDAppChainId(value: string): string {
     chain.namespace !== 'eip155' &&
     !BITCOIN_DAPP_CHAIN_IDS.has(chain.id) &&
     !ZCASH_DAPP_CHAIN_IDS.has(chain.id) &&
-    !RELEASED_NATIVE_DAPP_CHAIN_IDS.has(chain.id) &&
-    chain.id !== PUBLIC_CHAIN_ID
+    !RELEASED_NATIVE_DAPP_CHAIN_IDS.has(chain.id)
   ) {
     throw new Error('dApp chain authorization requires a released provider chain')
   }
@@ -243,20 +242,44 @@ function normalizeLegacyEvmAuthorization(connection: ConnectedDApp): ConnectedDA
 function readConnectionsForMigration(stored: unknown): {
   readonly connections: ConnectedDApp[]
   readonly migrated: boolean
+  readonly legacyPublicOrigins: readonly string[]
 } {
-  const connections = stored === undefined ? [] : parseStoredDAppConnections(stored)
+  const parsed = stored === undefined ? [] : parseStoredDAppConnections(stored)
   const raw = Array.isArray(stored) ? stored : []
-  const migrated = connections.some(
-    connection =>
-      connection.evmAuthorization !== undefined &&
+  const legacyPublicOrigins = parsed
+    .filter(connection =>
       raw.some(
         candidate =>
           isRecord(candidate) &&
           candidate.origin === connection.origin &&
-          candidate.evmAuthorization === undefined
+          Array.isArray(candidate.chainAuthorizations) &&
+          candidate.chainAuthorizations.some(
+            (authorization: unknown) =>
+              isRecord(authorization) && authorization.chainId === LEGACY_PUBLIC_CHAIN_ID
+          )
       )
+    )
+    .map(connection => connection.origin)
+  const connections = parsed.filter(
+    connection =>
+      !legacyPublicOrigins.includes(connection.origin) ||
+      getConnectionAccountRefs(connection).length > 0 ||
+      Boolean(connection.evmAuthorization) ||
+      (connection.chainAuthorizations?.length ?? 0) > 0
   )
-  return { connections, migrated }
+  const migrated =
+    legacyPublicOrigins.length > 0 ||
+    connections.some(
+      connection =>
+        connection.evmAuthorization !== undefined &&
+        raw.some(
+          candidate =>
+            isRecord(candidate) &&
+            candidate.origin === connection.origin &&
+            candidate.evmAuthorization === undefined
+        )
+    )
+  return { connections, migrated, legacyPublicOrigins }
 }
 
 function normalizeChainAuthorizations(
@@ -408,7 +431,11 @@ export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
   const chainAuthorizations =
     value.chainAuthorizations === undefined
       ? undefined
-      : normalizeChainAuthorizations(value.chainAuthorizations as DAppChainAuthorization[])
+      : normalizeChainAuthorizations(
+          (value.chainAuthorizations as DAppChainAuthorization[]).filter(
+            authorization => authorization?.chainId !== LEGACY_PUBLIC_CHAIN_ID
+          )
+        )
   const evmAuthorization =
     value.evmAuthorization === undefined
       ? undefined
@@ -1087,134 +1114,6 @@ export class DAppManager {
     return (await this.getAuthorization(origin)).revision
   }
 
-  async getPublicAuthorization(
-    origin: string
-  ): Promise<{ revision: number; binding: AccountRef | null }> {
-    await this.waitForStableState()
-    const connection = this.connectedDApps.get(origin)
-    const authorization = connection && getConnectionChainAuthorization(connection, PUBLIC_CHAIN_ID)
-    return {
-      revision: this.authorizationState[origin]?.revision ?? 0,
-      binding: authorization?.binding ?? null
-    }
-  }
-
-  async setPublicAuthorizedAccount(
-    origin: string,
-    tabInfo: { title?: string; favIconUrl?: string },
-    binding: AccountRef,
-    expectedRevision: number
-  ): Promise<number> {
-    return this.enqueueMutation(async () => {
-      await this.initialize()
-      const current = this.authorizationState[origin]
-      if (
-        !Number.isSafeInteger(expectedRevision) ||
-        expectedRevision < 0 ||
-        expectedRevision !== (current?.revision ?? 0)
-      ) {
-        throw new Error('Site authorization changed. Connect again.')
-      }
-      const existing = this.connectedDApps.get(origin)
-      this.assertConnectionCapacity(existing)
-      const replacement = replaceDAppChainAuthorization(existing, {
-        origin,
-        id: this.generateId(),
-        title: tabInfo.title,
-        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
-        chainId: PUBLIC_CHAIN_ID,
-        accounts: [binding],
-        binding,
-        now: Date.now()
-      })
-      const next = new Map(this.connectedDApps)
-      next.set(origin, replacement)
-      const states = this.advancePublicRevisions([origin])
-      await this.commitConnections(next, states)
-      return states[origin].revision
-    })
-  }
-
-  async setNativeAndPublicAuthorizedAccount(
-    origin: string,
-    tabInfo: { title?: string; favIconUrl?: string },
-    binding: AccountRef,
-    expectedRevision: number
-  ): Promise<number> {
-    return this.enqueueMutation(async () => {
-      await this.initialize()
-      const state = this.authorizationState[origin]
-      if (
-        !Number.isSafeInteger(expectedRevision) ||
-        expectedRevision < 0 ||
-        expectedRevision !== (state?.revision ?? 0)
-      )
-        throw new Error('Site authorization changed. Connect again.')
-      const existing = this.connectedDApps.get(origin)
-      this.assertConnectionCapacity(existing)
-      const selection = {
-        origin,
-        id: this.generateId(),
-        title: tabInfo.title,
-        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
-        accounts: [binding],
-        binding,
-        now: Date.now()
-      }
-      const native = replaceDAppAuthorization(existing, selection)
-      const replacement = replaceDAppChainAuthorization(native, {
-        ...selection,
-        chainId: PUBLIC_CHAIN_ID
-      })
-      const next = new Map(this.connectedDApps)
-      next.set(origin, replacement)
-      const states = this.advancePublicRevisions([origin])
-      states[origin] = { ...states[origin], mode: 'approved' }
-      await this.commitConnections(next, states)
-      return states[origin].revision
-    })
-  }
-
-  async removePublicAuthorization(origin: string): Promise<number> {
-    return this.enqueueMutation(async () => {
-      await this.initialize()
-      const existing = this.connectedDApps.get(origin)
-      const next = new Map(this.connectedDApps)
-      if (existing) {
-        const remaining = normalizeChainAuthorizations(existing.chainAuthorizations).filter(
-          item => item.chainId !== PUBLIC_CHAIN_ID
-        )
-        if (
-          remaining.length === 0 &&
-          getConnectionAccountRefs(existing).length === 0 &&
-          !existing.evmAuthorization
-        ) {
-          next.delete(origin)
-        } else {
-          next.set(origin, {
-            ...existing,
-            chainAuthorizations: remaining.length === 0 ? undefined : remaining,
-            caip25Session: retainSessionScopes(
-              existing.caip25Session,
-              new Set([
-                ...remaining.map(item => item.chainId),
-                ...(existing.evmAuthorization
-                  ? (existing.caip25Session?.scopes ?? [])
-                      .filter(scope => isEvmChain(scope.chainId))
-                      .map(scope => scope.chainId)
-                  : [])
-              ])
-            ),
-            lastActiveAt: nextActivityTime(existing)
-          })
-        }
-      }
-      const states = this.advancePublicRevisions([origin])
-      await this.commitConnections(next, states)
-      return states[origin].revision
-    })
-  }
-
   async canAutoConnect(origin: string): Promise<boolean> {
     await this.waitForStableState()
     const state = this.authorizationState[origin]
@@ -1238,9 +1137,6 @@ export class DAppManager {
     accounts: AccountRef[],
     binding: AccountRef
   ): Promise<void> {
-    if (normalizeDAppChainId(chainId) === PUBLIC_CHAIN_ID) {
-      throw new Error('Public authorization requires a reviewed revision')
-    }
     return this.enqueueMutation(async () => {
       await this.initialize()
       const existing = this.connectedDApps.get(origin)
@@ -1571,12 +1467,6 @@ export class DAppManager {
       ) {
         throw new Error('Site authorization changed. Connect again.')
       }
-      if (
-        authorizations.some(item => item.chainId === PUBLIC_CHAIN_ID) ||
-        session.scopes.some(scope => scope.chainId === PUBLIC_CHAIN_ID)
-      ) {
-        throw new Error('Public authorization requires a reviewed revision')
-      }
       const existing = this.connectedDApps.get(origin)
       this.assertConnectionCapacity(existing)
       const replacement = replaceDAppCaip25Session(existing, {
@@ -1642,12 +1532,7 @@ export class DAppManager {
           lastActiveAt: nextActivityTime(dapp)
         })
       }
-      await this.commitConnections(
-        next,
-        chainId === PUBLIC_CHAIN_ID
-          ? this.advancePublicRevisions([origin])
-          : this.advanceRevisions([origin])
-      )
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -1773,12 +1658,7 @@ export class DAppManager {
         Array.from(this.connectedDApps.values()),
         chainIds
       )
-      const removesPublic = chainIds.some(
-        chainId => normalizeDAppChainId(chainId) === PUBLIC_CHAIN_ID
-      )
-      const states = removesPublic
-        ? this.advancePublicRevisions(result.affectedOrigins)
-        : this.advanceRevisions(result.affectedOrigins)
+      const states = this.advanceRevisions(result.affectedOrigins)
       await this.commitConnections(
         new Map(result.connections.map(connection => [connection.origin, connection])),
         states
@@ -1877,8 +1757,22 @@ export class DAppManager {
 
   private async reloadStorage(): Promise<void> {
     const result = await this.getStorage().get([STORAGE_KEY, AUTHORIZATION_KEY])
-    const { connections, migrated } = readConnectionsForMigration(result[STORAGE_KEY])
+    const { connections, migrated, legacyPublicOrigins } = readConnectionsForMigration(
+      result[STORAGE_KEY]
+    )
     const states = parseAuthorizationState(result[AUTHORIZATION_KEY])
+    for (const origin of legacyPublicOrigins) {
+      const state = states[origin]
+      if ((state?.revision ?? 0) >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('Site authorization revision exhausted')
+      }
+      states[origin] = {
+        ...state,
+        revision: (state?.revision ?? 0) + 1,
+        mode: state?.mode ?? 'unreviewed',
+        publicExplicit: true
+      }
+    }
     if (migrated) {
       await this.getStorage().set({ [STORAGE_KEY]: connections, [AUTHORIZATION_KEY]: states })
     }
@@ -1911,14 +1805,6 @@ export class DAppManager {
         revision: this.nextRevision(origin),
         mode: states[origin]?.mode ?? 'unreviewed'
       }
-    }
-    return states
-  }
-
-  private advancePublicRevisions(origins: readonly string[]): Record<string, AuthorizationState> {
-    const states = this.advanceRevisions(origins)
-    for (const origin of origins) {
-      states[origin] = { ...states[origin], publicExplicit: true }
     }
     return states
   }

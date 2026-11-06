@@ -325,12 +325,7 @@ function createMultichainProvider(): MultichainProvider {
 
 function createZcashProvider(): ChainProvider {
   const provider: ChainProvider = {
-    supportedSigningModes: Object.freeze([
-      'current',
-      'derived',
-      'legacy_index0',
-      'noir_protocol_public'
-    ]),
+    supportedSigningModes: Object.freeze(['current', 'derived', 'legacy_index0']),
     request: args => requestProvider('zcash', args),
     on(event, handler) {
       addProviderListener('zcash', event, handler)

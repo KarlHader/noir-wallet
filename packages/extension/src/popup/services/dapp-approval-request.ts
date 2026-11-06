@@ -27,8 +27,6 @@ const SUPPORTED_APPROVAL_ACTIONS = [
   'nearConnect',
   'nearTransaction',
   'nearMessage',
-  'publicConnect',
-  'publicSignMessage',
   'publicTransaction',
   'publicActivate'
 ] as const

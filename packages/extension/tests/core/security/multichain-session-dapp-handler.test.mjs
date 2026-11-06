@@ -58,7 +58,6 @@ function createHandler({ selectedIds = ['account-1'], prepareProposal = proposal
       getAllConnections: async () => [],
       getCaip25Session: async () => stored,
       getAuthorizationRevision: async () => revision,
-      getPublicAuthorization: async () => ({ revision: 0, binding: null }),
       setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, expected) => {
         expect(expected).toBe(revision)
         expect(authorizations).toEqual(
@@ -254,7 +253,6 @@ test('Native Zcash sessions reject Public methods, including methods retained in
       getAllConnections: async () => [],
       getCaip25Session: async () => stored,
       getAuthorizationRevision: async () => 0,
-      getPublicAuthorization: async () => ({ revision: 0, binding: null }),
       setCaip25Session: async () => {
         throw new Error('Unexpected commit')
       }
@@ -279,8 +277,6 @@ test('Native Zcash sessions reject Public methods, including methods retained in
   })
   const origin = 'https://dapp.example'
   for (const method of [
-    'zcash_requestPublicAccount',
-    'zcash_disconnectPublic',
     'zcash_getPublicAccount',
     'zcash_activatePublicAccount',
     'zcash_getPublicAssets',
@@ -312,26 +308,10 @@ test('Native Zcash sessions reject Public methods, including methods retained in
       )
     ).rejects.toMatchObject({ code: 4100 })
   }
-  for (const [method, params] of [
-    ['zcash_getPublicKey', [{ signingMode: 'noir_protocol_public' }]],
-    ['zcash_signMessage', ['reviewed', { signingMode: 'noir_protocol_public' }]]
-  ]) {
-    stored = { scopes: [{ chainId: zcash, methods: [method], notifications: [] }] }
-    await expect(
-      handler.request(
-        {
-          method: 'wallet_invokeMethod',
-          params: { scope: zcash, request: { method, params } }
-        },
-        origin,
-        {}
-      )
-    ).rejects.toMatchObject({ code: 4100 })
-  }
   expect(dispatched).toEqual([])
 })
 
-test('Native Zcash approval links an existing Public grant and aborts on intervening authorization changes', async () => {
+test('Native Zcash approval aborts on intervening authorization changes', async () => {
   let revision = 3
   let changeDuringApproval = false
   let changeDuringSessionNotification = false
@@ -351,7 +331,6 @@ test('Native Zcash approval links an existing Public grant and aborts on interve
         return stored
       },
       getAuthorizationRevision: async () => revision,
-      getPublicAuthorization: async () => ({ revision, binding: reference }),
       setCaip25Session: async (_origin, _tab, _authorizations, session, _zcash, expected) => {
         committedRevisions.push(expected)
         stored = session
@@ -392,7 +371,7 @@ test('Native Zcash approval links an existing Public grant and aborts on interve
       {}
     )
   await expect(request()).resolves.toMatchObject({ scopes: { [zcash]: {} } })
-  expect(approvalData.linksIdentities).toBe(true)
+  expect(approvalData.linksIdentities).toBeUndefined()
   expect(committedRevisions).toEqual([3])
   expect(broadcasts).toBe(1)
   changeDuringApproval = true

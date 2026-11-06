@@ -4,8 +4,6 @@ import { readFileSync } from 'node:fs'
 import { parsePendingApprovalResponse } from '../../../src/popup/services/dapp-approval-request.ts'
 import {
   parsePublicActivationReview,
-  parsePublicConnectReview,
-  parsePublicMessageReview,
   parsePublicTransactionReview
 } from '../../../src/popup/services/noir-public-approval-review.ts'
 import {
@@ -41,32 +39,15 @@ function response(overrides = {}) {
 }
 
 test.describe('dApp approval request boundary', () => {
-  test('accepts only complete Public connection reviews for a web origin', () => {
-    const data = {
-      account: {
-        chain: 'zcash-l2',
-        network: 'mainnet',
-        publicKey: 'pk',
-        address: 'public-account',
-        mcaId: null,
-        parentContractId: 'parent.near',
-        status: 'inactive'
-      },
-      accountLabel: 'Account 1',
-      linksIdentities: true
+  test('accepts Native connection and rejects retired Public approval actions', () => {
+    expect(
+      parsePendingApprovalResponse(response({ action: 'connect', data: {} }), requestId)
+    ).toMatchObject({ status: 'ready', request: { action: 'connect' } })
+    for (const action of ['publicConnect', 'publicSignMessage']) {
+      expect(parsePendingApprovalResponse(response({ action, data: {} }), requestId).status).toBe(
+        'error'
+      )
     }
-    expect(
-      parsePendingApprovalResponse(response({ action: 'publicConnect', data }), requestId)
-    ).toMatchObject({ status: 'ready', request: { action: 'publicConnect', data } })
-    expect(parsePublicConnectReview(data)).toEqual(data)
-    expect(parsePublicConnectReview({ ...data, linksIdentities: undefined })).toBeNull()
-    expect(parsePublicConnectReview({ ...data, account: undefined })).toBeNull()
-    expect(
-      parsePendingApprovalResponse(
-        response({ action: 'publicConnect', origin: 'chrome-extension://wallet-id', data }),
-        requestId
-      ).status
-    ).toBe('error')
   })
 
   test('accepts web Public activation and only the wallet own internal activation origin', () => {
@@ -120,51 +101,12 @@ test.describe('dApp approval request boundary', () => {
     }
   })
 
-  test('reviews only the original Public JSON signing bytes', () => {
-    const account = {
-      chain: 'zcash-l2',
-      network: 'mainnet',
-      publicKey: 'pk',
-      address: 'public-account',
-      mcaId: 'mca.near',
-      parentContractId: 'parent.near',
-      status: 'active'
-    }
-    const txRequests = [
-      {
-        FunctionCall: {
-          receiver_id: 'token.near',
-          function_calls: [
-            { method_name: 'transfer', args: '{}', gas: '30000000000000', deposit: '1' }
-          ]
-        }
-      }
-    ]
-    const business = { nonce: '1', deadline: '9999999999', txRequests }
-    const message = JSON.stringify({
-      nonce: business.nonce,
-      deadline: business.deadline,
-      tx_requests: txRequests
-    })
-    expect(
-      parsePendingApprovalResponse(
-        response({ action: 'publicSignMessage', data: { account, message } }),
-        requestId
-      ).status
-    ).toBe('ready')
-    expect(parsePublicMessageReview({ account, message: 'Hello Public' })).toBeNull()
-    const original = ` \n${message}\n `
-    expect(
-      parsePublicMessageReview({ account, message: original, business: { nonce: '2' } })
-    ).toEqual({ account, message: original })
-    expect(parsePublicMessageReview({ account, message: '{"tx_requests":' })).toBeNull()
-  })
-
   test('requires the actual Public transaction calls and complete activation costs', () => {
     const account = {
       chain: 'zcash-l2',
       network: 'mainnet',
       publicKey: 'pk',
+      signingMode: 'derived',
       address: 'public-account',
       mcaId: 'mca',
       parentContractId: 'parent.near',
@@ -216,6 +158,12 @@ test.describe('dApp approval request boundary', () => {
       parsePublicTransactionReview(review)?.txRequests[1].FunctionCall.function_calls[0].args
     ).toBe(call.args)
     expect(parsePublicTransactionReview({ ...review, txRequests: [] })).toBeNull()
+    expect(
+      parsePublicTransactionReview({
+        ...review,
+        account: { ...account, signingMode: 'noir_protocol_public' }
+      })
+    ).toBeNull()
     expect(
       parsePublicTransactionReview({
         ...review,

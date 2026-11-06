@@ -1,7 +1,6 @@
 export type DAppMessageSigningMode = 'derived' | 'current' | 'legacy_index0'
-export type ZcashIdentitySigningMode = DAppMessageSigningMode | 'noir_protocol_public'
 
-export function parseZcashSigningMode(options: unknown): ZcashIdentitySigningMode {
+export function parseZcashSigningMode(options: unknown): DAppMessageSigningMode {
   if (options === undefined) return 'current'
   if (!options || typeof options !== 'object' || Array.isArray(options))
     throw new Error('Invalid Zcash signing options')
@@ -9,20 +8,9 @@ export function parseZcashSigningMode(options: unknown): ZcashIdentitySigningMod
   if (Object.keys(value).some(key => key !== 'signingMode'))
     throw new Error('Invalid Zcash signing options')
   const mode = value.signingMode === undefined ? 'current' : value.signingMode
-  if (
-    typeof mode !== 'string' ||
-    !['current', 'derived', 'legacy_index0', 'noir_protocol_public'].includes(mode)
-  )
+  if (typeof mode !== 'string' || !['current', 'derived', 'legacy_index0'].includes(mode))
     throw new Error('Unsupported Zcash signing mode')
-  return mode as ZcashIdentitySigningMode
-}
-
-export function isPublicSigningRequest(method: string, params: unknown): boolean {
-  if (method !== 'zcash_getPublicKey' && method !== 'zcash_signMessage') return false
-  if (!Array.isArray(params)) return false
-  return (
-    parseZcashSigningMode(params[method === 'zcash_signMessage' ? 1 : 0]) === 'noir_protocol_public'
-  )
+  return mode as DAppMessageSigningMode
 }
 
 export async function signApprovedDAppMessage<T extends { pubkey?: string; address?: string }>(

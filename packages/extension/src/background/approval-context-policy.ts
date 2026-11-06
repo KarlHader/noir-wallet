@@ -24,9 +24,7 @@ export function approvalContextMatches(snapshot: ApprovalContextSnapshot): boole
     snapshot.currentAccountId === snapshot.requestAccountId &&
     snapshot.accountExists &&
     snapshot.currentAuthorizationRevision === snapshot.authorizationRevision &&
-    (snapshot.action === 'connect' ||
-      snapshot.action === 'publicConnect' ||
-      snapshot.accountAuthorized) &&
+    (snapshot.action === 'connect' || snapshot.accountAuthorized) &&
     snapshot.requestStillPending
   )
 }

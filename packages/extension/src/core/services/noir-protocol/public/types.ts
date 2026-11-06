@@ -4,6 +4,7 @@ export interface NoirPublicAccount {
   readonly chain: 'zcash-l2'
   readonly network: Network
   readonly publicKey: string
+  readonly signingMode: 'derived' | 'legacy_index0'
   readonly address: string
   readonly mcaId: string | null
   readonly parentContractId: string

@@ -49,6 +49,7 @@ export function presentDAppPermissions(
   }
 
   for (const authorization of dapp.chainAuthorizations ?? []) {
+    if (authorization.chainId === 'noir:mainnet') continue
     if (dapp.evmAuthorization && parseChainId(authorization.chainId).namespace === 'eip155') {
       continue
     }

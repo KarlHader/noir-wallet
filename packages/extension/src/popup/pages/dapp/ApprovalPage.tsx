@@ -44,8 +44,6 @@ import {
 } from '@/popup/services/dapp-approval-request'
 import {
   parsePublicActivationReview,
-  parsePublicConnectReview,
-  parsePublicMessageReview,
   parsePublicTransactionReview
 } from '@/popup/services/noir-public-approval-review'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -127,15 +125,7 @@ function ApprovalBackIcon() {
   )
 }
 
-function ConnectionPermissionSummary({
-  includesActivity = false,
-  publicAccount = false,
-  nativeAndPublic = false
-}: {
-  includesActivity?: boolean
-  publicAccount?: boolean
-  nativeAndPublic?: boolean
-}) {
+function ConnectionPermissionSummary({ includesActivity = false }: { includesActivity?: boolean }) {
   return (
     <section aria-label="Permissions" className="space-y-2 px-1 text-xs leading-5 text-muted">
       <div className="flex items-start gap-2">
@@ -143,11 +133,7 @@ function ConnectionPermissionSummary({
           <ApprovalCheckIcon />
         </span>
         <span>
-          {nativeAndPublic
-            ? 'View Native and Public addresses, balances, and activity.'
-            : publicAccount
-              ? 'View this Public account, balances, and activity.'
-              : `View selected addresses and balances${includesActivity ? ' and public activity' : ''}.`}
+          View selected addresses and balances{includesActivity ? ' and public activity' : ''}.
         </span>
       </div>
       <div className="flex items-start gap-2">
@@ -155,14 +141,6 @@ function ConnectionPermissionSummary({
         <span>Transactions and signatures still require your approval.</span>
       </div>
     </section>
-  )
-}
-
-function IdentityLinkNotice() {
-  return (
-    <WarningBox>
-      <span>This site can link your Native and Public identities after you connect.</span>
-    </WarningBox>
   )
 }
 
@@ -316,12 +294,8 @@ export function ApprovalPage() {
   const isNearTransaction = action === 'nearTransaction'
   const isNearMessage = action === 'nearMessage'
   const isMultichainConnect = action === 'multichainConnect'
-  const isPublicConnect = action === 'publicConnect'
-  const isPublicSignMessage = action === 'publicSignMessage'
   const isPublicTransaction = action === 'publicTransaction'
   const isPublicActivate = action === 'publicActivate'
-  const publicConnectReview = isPublicConnect ? parsePublicConnectReview(data) : null
-  const publicMessageReview = isPublicSignMessage ? parsePublicMessageReview(data) : null
   const publicTransactionReview = isPublicTransaction ? parsePublicTransactionReview(data) : null
   const publicActivationReview = isPublicActivate ? parsePublicActivationReview(data) : null
   const requiresZcashAccountReady =
@@ -831,53 +805,6 @@ export function ApprovalPage() {
 
   const renderContent = () => {
     switch (action) {
-      case 'publicConnect':
-        return publicConnectReview ? (
-          <div className="space-y-4">
-            <DAppConnectionHeader domain={dappDomain} pageUrl={dappPageUrl} />
-            <DAppNetworkCard chain="zcash" network="Zcash" />
-            <ApprovalDetailCard title="Public account">
-              <div className="space-y-2 text-xs">
-                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                  <span className="text-muted">Account</span>
-                  <span className="break-words text-right">{publicConnectReview.accountLabel}</span>
-                </div>
-                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                  <span className="text-muted">Address</span>
-                  <span className="break-all text-right font-mono">
-                    {publicConnectReview.account.address}
-                  </span>
-                </div>
-                {publicConnectReview.account.mcaId && (
-                  <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                    <span className="text-muted">MCA</span>
-                    <span className="break-all text-right font-mono">
-                      {publicConnectReview.account.mcaId}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </ApprovalDetailCard>
-            {publicConnectReview.nativeAccount && (
-              <ApprovalDetailCard title="Native account">
-                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-xs">
-                  <span className="text-muted">Address</span>
-                  <span className="break-all text-right font-mono">
-                    {publicConnectReview.nativeAccount.address}
-                  </span>
-                </div>
-              </ApprovalDetailCard>
-            )}
-            {publicConnectReview.linksIdentities && <IdentityLinkNotice />}
-            <ConnectionPermissionSummary
-              publicAccount={!publicConnectReview.nativeAccount}
-              nativeAndPublic={Boolean(publicConnectReview.nativeAccount)}
-            />
-          </div>
-        ) : (
-          renderInvalidSigningRequest('The Public connection request is invalid.', false)
-        )
-
       case 'publicActivate':
         return publicActivationReview ? (
           <div className="space-y-4">
@@ -937,39 +864,6 @@ export function ApprovalPage() {
           </div>
         ) : (
           renderInvalidSigningRequest('The Public transaction request is invalid.', false)
-        )
-
-      case 'publicSignMessage':
-        return publicMessageReview ? (
-          <div className="space-y-4">
-            <DAppRequestHeader domain={dappDomain} pageUrl={dappPageUrl} action="Sign message" />
-            <DAppNetworkCard chain="zcash" network="Zcash" />
-            <ApprovalDetailCard title="Public signer">
-              <div className="space-y-2 text-xs">
-                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                  <span className="text-muted">Address</span>
-                  <span className="break-all text-right font-mono">
-                    {publicMessageReview.account.address}
-                  </span>
-                </div>
-                {publicMessageReview.account.mcaId && (
-                  <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
-                    <span className="text-muted">MCA</span>
-                    <span className="break-all text-right font-mono">
-                      {publicMessageReview.account.mcaId}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </ApprovalDetailCard>
-            <ApprovalDetailCard title="JSON">
-              <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs font-mono leading-5">
-                {publicMessageReview.message}
-              </pre>
-            </ApprovalDetailCard>
-          </div>
-        ) : (
-          renderInvalidSigningRequest('The Public signing request is invalid.', true)
         )
 
       case 'multichainConnect': {
@@ -1119,7 +1013,6 @@ export function ApprovalPage() {
               })}
             </section>
 
-            {data.linksIdentities === true && <IdentityLinkNotice />}
             <ConnectionPermissionSummary />
           </div>
         )
@@ -1261,7 +1154,6 @@ export function ApprovalPage() {
                   </div>
                 </div>
               ))}
-            {!editingAccounts && data.linksIdentities === true && <IdentityLinkNotice />}
             {!editingAccounts && <ConnectionPermissionSummary />}
           </div>
         )
@@ -1461,7 +1353,6 @@ export function ApprovalPage() {
               </WarningBox>
             )}
 
-            {!editingAccounts && data.linksIdentities === true && <IdentityLinkNotice />}
             {!editingAccounts && <ConnectionPermissionSummary />}
           </div>
         )
@@ -1872,10 +1763,7 @@ export function ApprovalPage() {
             disabled={isLoading}
             size="lg"
           >
-            {isMultichainConnect ||
-            isPublicConnect ||
-            isPublicActivate ||
-            MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
+            {isMultichainConnect || isPublicActivate || MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
               ? 'Cancel'
               : 'Reject'}
           </Button>
@@ -1891,8 +1779,6 @@ export function ApprovalPage() {
               (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||
               (isPublicTransaction && publicTransactionReview === null) ||
-              (isPublicSignMessage && publicMessageReview === null) ||
-              (isPublicConnect && publicConnectReview === null) ||
               (isPublicActivate && publicActivationReview === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&
@@ -1910,7 +1796,7 @@ export function ApprovalPage() {
             }
             size="lg"
           >
-            {isMultichainConnect || isPublicConnect
+            {isMultichainConnect
               ? 'Connect'
               : MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
                 ? 'Connect'
@@ -1926,23 +1812,21 @@ export function ApprovalPage() {
                         ? 'Connect'
                         : isPublicActivate
                           ? 'Pay & activate'
-                          : isPublicSignMessage
-                            ? 'Sign message'
-                            : isPublicTransaction
-                              ? 'Confirm'
-                              : isSolanaConnect || isNearConnect
-                                ? 'Connect'
-                                : isEvmTransaction
-                                  ? 'Confirm'
-                                  : isEvmMessage
+                          : isPublicTransaction
+                            ? 'Confirm'
+                            : isSolanaConnect || isNearConnect
+                              ? 'Connect'
+                              : isEvmTransaction
+                                ? 'Confirm'
+                                : isEvmMessage
+                                  ? 'Sign message'
+                                  : isSolanaMessage || isNearMessage
                                     ? 'Sign message'
-                                    : isSolanaMessage || isNearMessage
+                                    : action === 'signMessage'
                                       ? 'Sign message'
-                                      : action === 'signMessage'
-                                        ? 'Sign message'
-                                        : action === 'sendTransaction' || action === 'shieldFunds'
-                                          ? 'Confirm'
-                                          : 'Approve'}
+                                      : action === 'sendTransaction' || action === 'shieldFunds'
+                                        ? 'Confirm'
+                                        : 'Approve'}
           </Button>
         </div>
       }

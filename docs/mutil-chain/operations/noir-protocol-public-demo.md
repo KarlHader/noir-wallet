@@ -1,6 +1,6 @@
 # Noir Protocol Public DeFi Demo Integration
 
-This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and workspace SDK from the same checkout. Public uses a Zcash signing identity and a NEAR MCA for assets and execution. It is separate from the wallet's native Zcash balance and Lending identity.
+This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and workspace SDK from the same checkout. Public reuses the Lending signing identity and ordinary Zcash authorization, with a NEAR MCA for assets and execution. Its balances remain separate from native Zcash. MCA bindings also depend on the configured parent contract; deployments with different parents may return different MCAs for the same key.
 
 ## Local Setup
 
@@ -11,7 +11,7 @@ pnpm --filter @noir-wallet/sdk build
 pnpm dev:example
 ```
 
-In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-dev/` through **Load unpacked** in `chrome://extensions`. Open [the Public demo](http://localhost:5002/example/#noir-public) and select **Connect Public**; native Zcash connection is not required. The demo stays in the [existing SDK example](../../../packages/sdk/example/src/noir-protocol/public/), sharing its SDK and build.
+In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-dev/` through **Load unpacked** in `chrome://extensions`. Open [the Public demo](http://localhost:5002/example/#noir-public) and select **Connect**. The demo stays in the [existing SDK example](../../../packages/sdk/example/src/noir-protocol/public/), sharing its SDK and build.
 
 Use a mnemonic software account in Mainnet mode. The current [Public configuration](../../../packages/extension/src/core/services/noir-protocol/public/config.ts) defines the deployment and supported tokens; Testnet and hardware accounts are unavailable. Mainnet development services are not a testnet. Use an isolated test wallet and an explicit spending limit for funded integration. Use the controlled verification below when real funds are unnecessary.
 
