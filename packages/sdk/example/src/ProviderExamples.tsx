@@ -27,6 +27,7 @@ import {
   getEvmNetworkExample,
   getEvmNetworkExamples,
   getExampleChainIconUrl,
+  parseEvmNetworkRequest,
   type EvmNetworkExample
 } from './evm-network-catalog'
 import { buildExampleMultichainSessionRequest } from './multichain-session-request'
@@ -430,6 +431,13 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [networkReady, setNetworkReady] = useState(false)
+  const [networkRequest, setNetworkRequest] = useState(() =>
+    JSON.stringify(navigation.selectedEvmNetwork.request, null, 2)
+  )
+
+  useEffect(() => {
+    setNetworkRequest(JSON.stringify(navigation.selectedEvmNetwork.request, null, 2))
+  }, [navigation.selectedEvmNetwork])
   const initialSelectionVersion = useRef(navigation.evmSelectionVersion)
 
   useEffect(() => {
@@ -634,11 +642,21 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
       return `Typed-data signature: ${signature}`
     })
 
-  const addSelectedNetwork = () =>
+  const addNetwork = () =>
     run(async () => {
-      if (!provider) throw new Error('Connect an EVM account first.')
-      await addEvmNetwork(provider, navigation.selectedEvmNetwork.request)
-      return `${navigation.selectedEvmNetwork.label} is already available in Noir Wallet.`
+      if (!provider) throw new Error('Noir Wallet EVM provider is unavailable.')
+      const network = parseEvmNetworkRequest(networkRequest)
+      await addEvmNetwork(provider, network)
+      return `${network.chainName} is available in Noir Wallet.`
+    })
+
+  const switchNetwork = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet EVM provider is unavailable.')
+      const network = parseEvmNetworkRequest(networkRequest)
+      lastHandledSelectionVersion.current = navigation.evmSelectionVersion
+      await switchEvmChain(provider, network.chainId)
+      return `Switched to ${network.chainName}.`
     })
 
   const callTestBench = (functionName: 'increment' | 'setValue' | 'deposit' | 'alwaysRevert') =>
@@ -709,19 +727,36 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
             value={balance ? `${balance} native units` : 'Unavailable'}
           />
           <details className="network-method-example">
-            <summary>EIP-3085 add-network example</summary>
-            <p>
-              Noir Wallet accepts released built-in chains here. Custom EVM networks stay disabled
-              in this release.
-            </p>
-            <button
-              type="button"
-              className="btn btn-secondary btn-full"
-              onClick={() => void addSelectedNetwork()}
-              disabled={!account || busy}
-            >
-              Add {navigation.selectedEvmNetwork.label}
-            </button>
+            <summary>Add or switch network</summary>
+            <label className="label" htmlFor="evm-network-request">
+              EIP-3085 parameters
+            </label>
+            <textarea
+              id="evm-network-request"
+              className="input textarea"
+              rows={10}
+              value={networkRequest}
+              onChange={event => setNetworkRequest(event.target.value)}
+              spellCheck={false}
+            />
+            <div className="provider-actions compact-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void addNetwork()}
+                disabled={!provider || busy}
+              >
+                Add network
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void switchNetwork()}
+                disabled={!provider || busy}
+              >
+                Switch network
+              </button>
+            </div>
           </details>
         </section>
         <AuthorizedAccountsExample

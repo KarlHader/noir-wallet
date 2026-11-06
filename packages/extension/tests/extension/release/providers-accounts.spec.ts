@@ -540,42 +540,49 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
 
   const customChainId = '0x7a69'
   const customRpcUrl = 'https://custom-evm.noir.test/rpc'
+  let customBroadcasts = 0
   await context.route(customRpcUrl, route => {
     const request = route.request().postDataJSON() as { id?: unknown; method?: unknown }
+    if (request.method === 'eth_sendRawTransaction') customBroadcasts += 1
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: request.id,
-        result: request.method === 'eth_chainId' ? customChainId : '0x0'
+        result:
+          request.method === 'eth_chainId'
+            ? customChainId
+            : request.method === 'eth_getBalance'
+              ? '0xde0b6b3a7640000'
+              : request.method === 'eth_estimateGas'
+                ? '0x5208'
+                : request.method === 'eth_maxPriorityFeePerGas'
+                  ? '0x3b9aca00'
+                  : request.method === 'eth_call'
+                    ? '0x'
+                    : request.method === 'eth_getBlockByNumber'
+                      ? { number: '0x101', baseFeePerGas: '0x3b9aca00' }
+                      : '0x0'
       })
     })
   })
-  const addApprovalPromise = context.waitForEvent('page')
-  const addNetworkPromise = page.evaluate(
-    async ({ chainId, rpcUrl }) => {
-      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
-        request(input: { method: string; params: unknown[] }): Promise<unknown>
-      }
-      return provider.request({
-        method: 'wallet_addEthereumChain',
-        params: [
-          {
-            chainId,
-            chainName: 'QA Local EVM',
-            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-            rpcUrls: [rpcUrl]
-          }
-        ]
-      })
-    },
-    { chainId: customChainId, rpcUrl: customRpcUrl }
+  await page.getByRole('button', { name: 'Ethereum', exact: true }).click()
+  await page.getByText('Add or switch network', { exact: true }).click()
+  await page.getByLabel('EIP-3085 parameters').fill(
+    JSON.stringify({
+      chainId: customChainId,
+      chainName: 'QA Local EVM',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: [customRpcUrl]
+    })
   )
+  const addApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Add network', exact: true }).click()
   const addApproval = await addApprovalPromise
   await addApproval.waitForURL(/#approval\?requestId=/)
   await expect(addApproval.getByText('Add network', { exact: true })).toBeVisible()
   await addApproval.getByRole('button', { name: 'Add Network' }).click()
-  await expect(addNetworkPromise).resolves.toBeNull()
+  await expect(page.getByText('QA Local EVM is available in Noir Wallet.')).toBeVisible()
   const unrequestedScopeCode = await page.evaluate(async () => {
     const wallet = Reflect.get(window, 'noirwallet') as {
       multichain: {
@@ -595,17 +602,12 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   expect(unrequestedScopeCode).toBe(4100)
 
   const switchApprovalPromise = context.waitForEvent('page')
-  const switchNetworkPromise = page.evaluate(async chainId => {
-    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
-      request(input: { method: string; params: unknown[] }): Promise<unknown>
-    }
-    return provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] })
-  }, customChainId)
+  await page.getByRole('button', { name: 'Switch network', exact: true }).click()
   const switchApproval = await switchApprovalPromise
   await switchApproval.waitForURL(/#approval\?requestId=/)
   await expect(switchApproval.getByText('Switch network', { exact: true })).toBeVisible()
   await switchApproval.getByRole('button', { name: 'Switch Network' }).click()
-  await expect(switchNetworkPromise).resolves.toBeNull()
+  await expect(page.getByText('Switched to QA Local EVM.')).toBeVisible()
   await expect
     .poll(() => readEvmProviderChainIds(page))
     .toEqual({
@@ -619,6 +621,56 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
     return provider.request({ method: 'eth_accounts' })
   })
   expect(customAccounts).toEqual(providerState.evmAccounts)
+  expect(context.pages().filter(candidate => candidate.url().includes('#approval?'))).toHaveLength(
+    0
+  )
+
+  await page.getByRole('button', { name: 'Disconnect', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Connect EVM' })).toBeEnabled()
+  const customConnectApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Connect EVM' }).click()
+  const customConnectApproval = await customConnectApprovalPromise
+  await customConnectApproval.waitForURL(/#approval\?requestId=/)
+  await expectDAppConnectionHeader(customConnectApproval, {
+    domain: 'provider-release.noir.test',
+    pageUrl: `${origin}/example/`
+  })
+  await customConnectApproval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Reconnect EVM' })).toBeVisible()
+  const [customAddress] = (await page.evaluate(async () => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string }): Promise<string[]>
+    }
+    return provider.request({ method: 'eth_accounts' })
+  })) as string[]
+  expect(customAddress).toBe(providerState.evmAccounts[0])
+
+  const customSignApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Personal sign' }).click()
+  const customSignApproval = await customSignApprovalPromise
+  await customSignApproval.waitForURL(/#approval\?requestId=/)
+  await customSignApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
+  await expect(page.getByText(/^Personal signature: 0x[0-9a-fA-F]{130}$/)).toBeVisible()
+
+  const customTransferApprovalPromise = context.waitForEvent('page')
+  const customTransferPromise = page.evaluate(async address => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string; params: unknown[] }): Promise<unknown>
+    }
+    try {
+      return await provider.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: '0x2222222222222222222222222222222222222222', value: '0x1' }]
+      })
+    } catch (error) {
+      return typeof error === 'object' && error !== null ? Reflect.get(error, 'code') : null
+    }
+  }, customAddress)
+  const customTransferApproval = await customTransferApprovalPromise
+  await customTransferApproval.waitForURL(/#approval\?requestId=/)
+  await customTransferApproval.getByRole('button', { name: 'Reject', exact: true }).click()
+  expect(await customTransferPromise).toBe(4001)
+  expect(customBroadcasts).toBe(0)
 
   const restoreApprovalPromise = context.waitForEvent('page')
   const restoreNetworkPromise = page.evaluate(async () => {

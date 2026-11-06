@@ -132,6 +132,17 @@ test('preserves imported EVM Connect during Zcash discovery and cancels it on lo
   const dapp = await context.newPage()
   await dapp.goto('https://private-key-dapp.example/')
   await dapp.waitForFunction(() => Boolean((window as PrivateKeyDAppWindow).noirwallet?.ethereum))
+  const zcashConnect = await dapp.evaluate(async () => {
+    try {
+      await (window as PrivateKeyDAppWindow).noirwallet.zcash.request({
+        method: 'zcash_requestAccounts'
+      })
+      return 'connected'
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  })
+  expect(zcashConnect).toContain('active Wallet does not support Zcash')
   const approvalOpened = context.waitForEvent('page')
   const connecting = dapp.evaluate(async () => {
     try {
@@ -170,6 +181,23 @@ test('preserves imported EVM Connect during Zcash discovery and cancels it on lo
   await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
   expect(await reconnecting).toEqual({ code: 4001 })
   await expect.poll(() => reconnectApproval.isClosed()).toBe(true)
+
+  const unlockOpened = context.waitForEvent('page')
+  const lockedZcashConnect = dapp.evaluate(async () => {
+    try {
+      await (window as PrivateKeyDAppWindow).noirwallet.zcash.request({
+        method: 'zcash_requestAccounts'
+      })
+      return 'connected'
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  })
+  const unlock = await unlockOpened
+  await unlock.waitForURL(/#unlock\?from=dapp/)
+  await unlock.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
+  await unlock.getByRole('button', { name: 'Unlock', exact: true }).click()
+  expect(await lockedZcashConnect).toContain('active Wallet does not support Zcash')
 })
 
 test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async ({

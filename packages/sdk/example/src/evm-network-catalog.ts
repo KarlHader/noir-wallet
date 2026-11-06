@@ -52,6 +52,44 @@ export interface EvmNetworkExample {
   readonly request: AddEvmNetworkParameters
 }
 
+export function parseEvmNetworkRequest(input: string): AddEvmNetworkParameters {
+  const value: unknown = JSON.parse(input)
+  const isRecord = (candidate: unknown): candidate is Record<string, unknown> =>
+    typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate)
+  const isStringArray = (candidate: unknown): candidate is string[] =>
+    Array.isArray(candidate) && candidate.every(item => typeof item === 'string')
+
+  if (
+    !isRecord(value) ||
+    typeof value.chainId !== 'string' ||
+    typeof value.chainName !== 'string' ||
+    !isRecord(value.nativeCurrency) ||
+    typeof value.nativeCurrency.name !== 'string' ||
+    typeof value.nativeCurrency.symbol !== 'string' ||
+    typeof value.nativeCurrency.decimals !== 'number' ||
+    !isStringArray(value.rpcUrls) ||
+    (value.blockExplorerUrls !== undefined && !isStringArray(value.blockExplorerUrls)) ||
+    (value.iconUrls !== undefined && !isStringArray(value.iconUrls))
+  ) {
+    throw new Error('Enter valid EIP-3085 network parameters.')
+  }
+
+  return {
+    chainId: value.chainId,
+    chainName: value.chainName,
+    nativeCurrency: {
+      name: value.nativeCurrency.name,
+      symbol: value.nativeCurrency.symbol,
+      decimals: value.nativeCurrency.decimals
+    },
+    rpcUrls: value.rpcUrls,
+    ...(value.blockExplorerUrls === undefined
+      ? {}
+      : { blockExplorerUrls: value.blockExplorerUrls }),
+    ...(value.iconUrls === undefined ? {} : { iconUrls: value.iconUrls })
+  }
+}
+
 function network(
   mode: EvmNetworkExample['mode'],
   label: string,

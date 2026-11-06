@@ -5616,7 +5616,7 @@ async function handleDAppRequest(
     if (request.method === 'zcash_requestAccounts') {
       const hasWallet = useWalletStore.getState().wallets.length > 0
 
-      if (!hasWallet) {
+      if (!hasWallet && !(await credentialLifecycle.hasActiveWalletSet())) {
         return await dappHandler.handleRequest({
           method: request.method,
           params: request.params,
@@ -5633,9 +5633,28 @@ async function handleDAppRequest(
       })
 
       if (unlockRequired) {
-        await promptUnlock()
+        await promptUnlock({ restoreZcashRuntime: false })
         // After unlock, continue to process the request (don't throw error)
       }
+    }
+
+    if (
+      (await credentialSession.hasUnlockSession()) &&
+      (await credentialLifecycle.activeAccountSupportsChain('zcash')) === false
+    ) {
+      throw new Error('The active Wallet does not support Zcash.')
+    }
+
+    if (
+      request.method === 'zcash_requestAccounts' &&
+      useWalletStore.getState().wallets.length === 0
+    ) {
+      return dappHandler.handleRequest({
+        method: request.method,
+        params: request.params,
+        origin,
+        tabInfo
+      })
     }
 
     if (backgroundZcashWalletRuntime.isLocked()) {
