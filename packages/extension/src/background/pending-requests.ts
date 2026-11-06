@@ -179,8 +179,10 @@ export class PendingRequestsManager {
     return cancelled
   }
 
-  cancelAll(): number {
-    const ids = [...this.requests.keys()]
+  cancelAll(matchesAction: (action: string) => boolean = () => true): number {
+    const ids = [...this.requests.values()]
+      .filter(entry => matchesAction(entry.request.action))
+      .map(entry => entry.request.id)
     ids.forEach(id => this.cancel(id))
     return ids.length
   }
