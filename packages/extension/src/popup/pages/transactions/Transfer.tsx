@@ -1136,7 +1136,7 @@ function TransferForm() {
             <Icon icon="lucide:chevron-down" width={14} height={14} />
           </button>
         </div>
-        <div className="relative mt-4 shrink-0 space-y-2.5">
+        <div className="relative mt-4 grid shrink-0 grid-rows-2 gap-2.5">
           <DomainCard
             label="From"
             accountName={accountName}
