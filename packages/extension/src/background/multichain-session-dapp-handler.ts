@@ -113,6 +113,7 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
   readonly analytics?: DAppAnalyticsSink
   readonly network: Network
   readonly evmNetworks: readonly EvmNetworkConfig[]
+  readonly activeChainIds?: () => Promise<readonly string[]>
   readonly manager: Pick<
     DAppManager,
     'getAllConnections' | 'getCaip25Session' | 'setCaip25Session' | 'getAuthorizationRevision'
@@ -455,11 +456,24 @@ export class BackgroundMultichainSessionDAppHandler {
     tabInfo: MultichainSessionTabInfo
   ): Promise<Caip25Session> {
     const parsed = parseCaip25CreateSessionRequest(params)
+    const activeChains = this.options.activeChainIds
+      ? new Set(await this.options.activeChainIds())
+      : null
+    const requested = Object.entries(parsed.scopes).filter(
+      ([chainId]) =>
+        this.supportedScopes.has(chainId) && (activeChains === null || activeChains.has(chainId))
+    )
+    if (requested.length === 0)
+      throw new Caip25ProviderError(
+        5100,
+        'The requested networks are not supported by the active account.'
+      )
+    for (const [chainId, scope] of requested) {
+      assertScopeCapabilities(this.getSupportedScope(chainId), scope)
+    }
     const authorizationRevision = await this.options.manager.getAuthorizationRevision(origin)
     const prepared = await Promise.all(
-      Object.entries(parsed.scopes).map(([chainId, scope]) =>
-        this.prepareScope(origin, chainId, scope)
-      )
+      requested.map(([chainId, scope]) => this.prepareScope(origin, chainId, scope))
     )
     const evmProposal = evmApprovalProposal(prepared)
     const approvalScopes = prepared.flatMap((item, index) => {

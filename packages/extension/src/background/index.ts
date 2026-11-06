@@ -1148,6 +1148,8 @@ async function reloadMultichainRuntime(
     analytics: trackEvent,
     network: DEFAULT_NETWORK,
     evmNetworks: catalog,
+    activeChainIds: async () =>
+      (await accountNetworksCoordinator.readActiveAccount())?.chainIds ?? [],
     manager: dappManager,
     approval: dappHandler,
     zcash: dappHandler,
@@ -2249,9 +2251,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             isRuntimeRecord(Reflect.get(request.params, 'scopes'))
               ? (Reflect.get(request.params, 'scopes') as Record<string, unknown>)
               : null
+          const activeAccount = await accountNetworksCoordinator.readActiveAccount()
           const needsZcashRuntime = Boolean(
             requestedScopes &&
-            Object.prototype.hasOwnProperty.call(requestedScopes, getZcashChainId(DEFAULT_NETWORK))
+            Object.prototype.hasOwnProperty.call(
+              requestedScopes,
+              getZcashChainId(DEFAULT_NETWORK)
+            ) &&
+            activeAccount?.chainIds.includes(getZcashChainId(DEFAULT_NETWORK))
           )
           if (unlockRequired) await promptUnlock({ restoreZcashRuntime: needsZcashRuntime })
         }

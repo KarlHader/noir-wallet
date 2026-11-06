@@ -8,6 +8,7 @@ import {
   waitForBackgroundWalletInitialization
 } from '../helpers/extension-fixtures'
 import { BUILTIN_EVM_NETWORKS } from '../../src/config/networks'
+import { mockReleasedEvmRpc, serveSdkExample } from '../helpers/release-default'
 
 const TEST_MNEMONIC_12 = `${'abandon '.repeat(11)}about`
 const TEST_PASSWORD = 'private-key-testnet-password'
@@ -110,7 +111,8 @@ test('preserves imported EVM Connect during Zcash discovery and cancels it on lo
   context,
   popup
 }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(180_000)
+  const evmRequests = await mockReleasedEvmRpc(context, 'testnet')
   await waitForBackgroundWalletInitialization(popup)
   await importMnemonicWallet(popup)
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
@@ -125,6 +127,54 @@ test('preserves imported EVM Connect during Zcash discovery and cancels it on lo
   await popup.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
   await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
+
+  await context.route('https://private-key-sdk.noir.test/**', serveSdkExample)
+  const sdkDemo = await context.newPage()
+  await sdkDemo.goto('https://private-key-sdk.noir.test/example/')
+  await sdkDemo.waitForFunction(() => Boolean(Reflect.get(window, 'noirwallet')))
+  await sdkDemo.getByRole('button', { name: 'Testnet', exact: true }).click()
+  const sdkApprovalOpened = context.waitForEvent('page')
+  await sdkDemo.getByRole('button', { name: 'Connect all networks' }).click()
+  const sdkApproval = await sdkApprovalOpened
+  await sdkApproval.waitForURL(/#approval\?requestId=/)
+  await expect(sdkApproval.getByRole('button', { name: 'Connect', exact: true })).toBeVisible()
+  await sdkApproval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(sdkDemo.locator('.multichain-session-bar')).toContainText('1 networks authorized')
+
+  const sdkSession = await sdkDemo.evaluate(async () => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: {
+        getSession(): Promise<{ scopes: Record<string, { accounts: string[] }> } | null>
+        invokeMethod(input: { scope: string; request: { method: string } }): Promise<unknown>
+      }
+    }
+    const session = await wallet.multichain.getSession()
+    const deniedScopes = [
+      'bip122:05a60a92d99d85997cce3b87616c089f',
+      'bip122:000000000933ea01ad0ee984209779ba',
+      'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+      'near:testnet'
+    ]
+    const deniedCodes = await Promise.all(
+      deniedScopes.map(async scope => {
+        try {
+          await wallet.multichain.invokeMethod({ scope, request: { method: 'getAccounts' } })
+          return null
+        } catch (error) {
+          return error && typeof error === 'object' ? Reflect.get(error, 'code') : null
+        }
+      })
+    )
+    return { session, deniedCodes }
+  })
+  expect(sdkSession.session).not.toBeNull()
+  expect(Object.keys(sdkSession.session?.scopes ?? {})).toEqual(['eip155:11155111'])
+  expect(sdkSession.session?.scopes['eip155:11155111'].accounts).toEqual([
+    `eip155:11155111:${EVM_ADDRESS.toLowerCase()}`
+  ])
+  expect(sdkSession.deniedCodes).toEqual([4100, 4100, 4100, 4100])
+  await sdkDemo.getByRole('button', { name: 'Revoke session' }).click()
+  await expect(sdkDemo.getByRole('button', { name: 'Connect all networks' })).toBeVisible()
 
   await context.route('https://private-key-dapp.example/**', route =>
     route.fulfill({ contentType: 'text/html', body: '<html><body>EVM dApp</body></html>' })
@@ -198,6 +248,27 @@ test('preserves imported EVM Connect during Zcash discovery and cancels it on lo
   await unlock.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
   await unlock.getByRole('button', { name: 'Unlock', exact: true }).click()
   expect(await lockedZcashConnect).toContain('active Wallet does not support Zcash')
+
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
+  const sdkUnlockOpened = context.waitForEvent('page')
+  await sdkDemo.getByRole('button', { name: 'Connect all networks' }).click()
+  const sdkUnlock = await sdkUnlockOpened
+  await sdkUnlock.waitForURL(/#unlock\?from=dapp/)
+  const sdkReconnectOpened = context.waitForEvent('page')
+  await sdkUnlock.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
+  await sdkUnlock.getByRole('button', { name: 'Unlock', exact: true }).click()
+  const sdkReconnect = await sdkReconnectOpened
+  await sdkReconnect.waitForURL(/#approval\?requestId=/)
+  await sdkReconnect.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(sdkDemo.locator('.multichain-session-bar')).toContainText('1 networks authorized')
+  const restoredScopes = await sdkDemo.evaluate(async () => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: { getSession(): Promise<{ scopes: Record<string, unknown> } | null> }
+    }
+    return (await wallet.multichain.getSession())?.scopes
+  })
+  expect(restoredScopes).toEqual(sdkSession.session?.scopes)
+  expect(evmRequests.some(request => request.endsWith(':eth_sendRawTransaction'))).toBe(false)
 })
 
 test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async ({

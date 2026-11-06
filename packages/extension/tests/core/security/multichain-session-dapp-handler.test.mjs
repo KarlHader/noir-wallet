@@ -27,13 +27,18 @@ function proposal(scope = { chainId: ethereum, chainName: 'Ethereum', iconChain:
   }
 }
 
-function createHandler({ selectedIds = ['account-1'], prepareProposal = proposal } = {}) {
+function createHandler({
+  selectedIds = ['account-1'],
+  prepareProposal = proposal,
+  activeChainIds
+} = {}) {
   let stored = null
   const approvals = []
   const events = []
   const invocations = []
   const handler = new BackgroundMultichainSessionDAppHandler({
     network: 'mainnet',
+    ...(activeChainIds === undefined ? {} : { activeChainIds }),
     evmNetworks: [ethereum, custom].map(chainId => ({
       networkMode: 'mainnet',
       chainId,
@@ -183,6 +188,47 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
       {}
     )
   ).rejects.toMatchObject({ code: 4100 })
+})
+
+test('multichain Connect grants only networks supported by the active account', async () => {
+  const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
+  const { handler, approvals, getStored } = createHandler({
+    activeChainIds: async () => [ethereum]
+  })
+  const origin = 'https://dapp.example'
+  const request = scopes =>
+    handler.request({ method: 'wallet_createSession', params: { scopes } }, origin, {})
+  const session = await request({
+    [zcash]: { methods: ['zcash_getAccounts'], notifications: [] },
+    [ethereum]: { methods: ['eth_accounts'], notifications: [] },
+    [custom]: { methods: ['eth_accounts'], notifications: [] },
+    [bitcoin]: { methods: ['getAccounts'], notifications: [] },
+    'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { methods: ['getAccounts'], notifications: [] },
+    'near:mainnet': { methods: ['getAccounts'], notifications: [] }
+  })
+  expect(Object.keys(session.scopes)).toEqual([ethereum])
+  expect(getStored().scopes.map(scope => scope.chainId)).toEqual([ethereum])
+  expect(approvals).toHaveLength(1)
+  expect(approvals[0].data.scopes.map(scope => scope.chainId)).toEqual(['evm'])
+  await expect(
+    handler.request(
+      {
+        method: 'wallet_invokeMethod',
+        params: { scope: zcash, request: { method: 'zcash_getAccounts' } }
+      },
+      origin,
+      {}
+    )
+  ).rejects.toMatchObject({ code: 4100 })
+  await expect(
+    request({ [zcash]: { methods: ['zcash_getAccounts'], notifications: [] } })
+  ).rejects.toMatchObject({ code: 5100 })
+  await expect(
+    request({ [ethereum]: { methods: ['zcash_getAccounts'], notifications: [] } })
+  ).rejects.toMatchObject({ code: 5101 })
+  expect(approvals).toHaveLength(1)
+  expect(getStored().scopes.map(scope => scope.chainId)).toEqual([ethereum])
 })
 
 test('shared EVM selection cannot widen a scope with a narrower account request', async () => {
