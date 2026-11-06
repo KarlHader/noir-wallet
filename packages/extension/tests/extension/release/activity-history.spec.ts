@@ -50,7 +50,7 @@ test('loads a quiet chain when another chain fills the shared History page', asy
     )
   ).toBe(true)
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.001 ETH', { exact: true })).toBeVisible()
+  await expect(popup.getByTitle('+0.001 ETH', { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'history-quiet-chain-after-shared-page.png')
 })
 
@@ -346,7 +346,7 @@ test('retains current EVM address history during failed refresh and popup reload
   )
   await popup.getByRole('tab', { name: 'Activity' }).click()
   try {
-    await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+    await expect(popup.getByTitle('+0.00587151 ETH', { exact: true }).first()).toBeVisible()
     await expect(popup.getByText('No activity yet', { exact: true })).toHaveCount(0)
     await captureScreenshot(popup, 'history-activity-cached-refresh.png')
   } finally {
@@ -359,10 +359,10 @@ test('retains current EVM address history during failed refresh and popup reload
   for (const id of seeded) expect(await readIds()).toContain(id)
   await popup.getByRole('tab', { name: 'Assets' }).click()
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+  await expect(popup.getByTitle('+0.00587151 ETH', { exact: true }).first()).toBeVisible()
   await popup.reload()
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+  await expect(popup.getByTitle('+0.00587151 ETH', { exact: true }).first()).toBeVisible()
   for (const id of seeded) expect(await readIds()).toContain(id)
   await expect(popup.getByText('No activity yet', { exact: true })).toHaveCount(0)
   await captureScreenshot(popup, 'history-activity-retained-after-reload.png')

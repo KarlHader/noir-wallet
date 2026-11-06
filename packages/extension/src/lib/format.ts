@@ -52,7 +52,7 @@ export function formatChainName(blockchain: string): string {
     near: 'NEAR',
     eth: 'Ethereum',
     ethereum: 'Ethereum',
-    evm: 'Ethereum',
+    evm: 'EVM',
     arb: 'Arbitrum',
     base: 'Base',
     op: 'Optimism',

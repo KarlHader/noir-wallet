@@ -6,6 +6,10 @@ import {
   createInitialProductChainRegistry
 } from '../../../src/core/chains/registry/index.ts'
 import { createReceiveTargetsClient } from '../../../src/popup/services/receive-targets-client.ts'
+import {
+  getActiveChainEndpointSettings,
+  setActiveChainEndpointSettings
+} from '../../../src/core/chains/chain-endpoint-settings.ts'
 
 const keyDomainId = 'wallet:receive-client'
 const accountId = 'account:receive-client:0'
@@ -149,6 +153,54 @@ test.describe('Receive targets Popup client', () => {
     await expect(client.getAdditionalTargets({ keyDomainId, accountId })).rejects.toMatchObject({
       code: 'unavailable'
     })
+  })
+
+  test('keeps built-in targets usable as custom networks are added and removed', async t => {
+    const previousSettings = getActiveChainEndpointSettings()
+    const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+    t.after(() => {
+      setActiveChainEndpointSettings(previousSettings)
+      globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+    })
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.zcash', 'chain.evm']
+    setActiveChainEndpointSettings()
+    const builtin = {
+      chainId: 'eip155:42161',
+      kind: 'evm',
+      address: '0xF278cF59F82eDcf871d630F28EcC8056f25C1cdb'
+    }
+    const custom = { ...builtin, chainId: 'eip155:4663' }
+    let targets = [builtin]
+    const client = createReceiveTargetsClient(async () => result({ targets }))
+    const read = () => client.getAdditionalTargets({ keyDomainId, accountId })
+    expect((await read()).targets).toHaveLength(1)
+
+    setActiveChainEndpointSettings({
+      schemaVersion: 1,
+      customEvmNetworks: [
+        {
+          chainId: custom.chainId,
+          numericChainId: 4663,
+          displayName: 'Robinhood',
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+          rpc: { protocol: 'evm-json-rpc', label: 'Robinhood RPC', url: 'https://rpc.example.com' }
+        }
+      ],
+      overrides: []
+    })
+    targets = [builtin, custom]
+    expect((await read()).targets.map(target => target.chain.id)).toEqual([
+      builtin.chainId,
+      custom.chainId
+    ])
+
+    targets = [builtin, { ...custom, chainId: 'eip155:31337' }]
+    await expect(read()).rejects.toMatchObject({ code: 'invalid-response' })
+    setActiveChainEndpointSettings()
+    targets = [builtin, custom]
+    await expect(read()).rejects.toMatchObject({ code: 'invalid-response' })
+    targets = [builtin]
+    expect((await read()).targets).toHaveLength(1)
   })
 
   test('rejects stale scope, extra fields, duplicate chains, and malformed Bitcoin addresses', async () => {

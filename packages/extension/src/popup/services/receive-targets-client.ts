@@ -16,6 +16,8 @@ import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { parseStorageV2GenerationId } from '@/infrastructure/persistence/schema'
 import type { StorageV2GenerationId } from '@/ports/repositories'
+import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 
 export type AdditionalReceiveTargetView =
   | Readonly<{ chain: ChainDefinition; kind: 'evm'; address: string }>
@@ -159,7 +161,7 @@ function parseResponse(
 
 export function createReceiveTargetsClient(
   sendMessage: ReceiveTargetsRuntimeMessenger,
-  chains: AddressGatedChainRegistry
+  chains?: AddressGatedChainRegistry
 ) {
   return Object.freeze({
     getAdditionalTargets: async (scope: {
@@ -175,19 +177,21 @@ export function createReceiveTargetsClient(
         walletId: expected.keyDomainId,
         accountId: expected.accountId
       })
-      return parseResponse(response, expected, chains)
+      return parseResponse(response, expected, chains ?? resolveProductionChains())
     }
   })
 }
 
-let productionClient: ReturnType<typeof createReceiveTargetsClient> | undefined
-
-export const receiveTargetsClient = Object.freeze({
-  getAdditionalTargets: (scope: { readonly keyDomainId: string; readonly accountId: string }) => {
-    productionClient ??= createReceiveTargetsClient(
-      message => chrome.runtime.sendMessage(message),
-      createBuildAddressGatedChainRegistry(createInitialProductChainRegistry(DEFAULT_NETWORK))
+function resolveProductionChains(): AddressGatedChainRegistry {
+  const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings())
+  return createBuildAddressGatedChainRegistry(
+    createInitialProductChainRegistry(
+      DEFAULT_NETWORK,
+      catalog.filter(network => network.source === 'custom')
     )
-    return productionClient.getAdditionalTargets(scope)
-  }
-})
+  )
+}
+
+export const receiveTargetsClient = createReceiveTargetsClient(message =>
+  chrome.runtime.sendMessage(message)
+)

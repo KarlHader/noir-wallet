@@ -1,4 +1,3 @@
-import { MARGINAL_FEE_ZATS } from '@/config/fee'
 import { resolveNearRuntimeNetworkConfig } from '@/core/chains/solana-near-runtime-config'
 import { requirePublicConfig } from '@/core/services/noir-protocol/public/config'
 import {
@@ -68,6 +67,8 @@ export interface NoirPublicPayment {
   readonly depositAddress: string
   readonly amount: string
   readonly expiresAt: number
+  readonly marginalFeeZats: number
+  readonly feeQuoteId: string
 }
 
 function parseRequest(value: unknown): NoirPublicTransactionParams {
@@ -348,13 +349,17 @@ export class NoirPublicRuntime {
       assertPublicActivationQuoteForPayment(quote, config, fee)
       const expectedCreditRaw = (BigInt(quote.amountOutRaw) - BigInt(fee)).toString()
       const amount = formatBaseUnitDecimalAmount(quote.amountInRaw, 8)
-      const feeRaw = await backgroundZcashWalletRuntime.estimateTransferFee(
+      const feeQuote = await core.getFeeQuote()
+      const feeEstimate = await backgroundZcashWalletRuntime.estimateTransferFee(
         quote.depositAddress,
         amount,
         undefined,
-        MARGINAL_FEE_ZATS.standard,
-        'shielded'
+        feeQuote.standardMarginalFeeZats,
+        'shielded',
+        undefined,
+        feeQuote.id
       )
+      const feeRaw = feeEstimate.feeZats
       await assertPublicContext(context)
       const expiresAt = Date.parse(quote.expiresAt)
       const review = {
@@ -379,11 +384,17 @@ export class NoirPublicRuntime {
           quote.depositAddress,
           amount,
           undefined,
-          MARGINAL_FEE_ZATS.standard,
-          'shielded'
+          feeQuote.standardMarginalFeeZats,
+          'shielded',
+          undefined,
+          feeQuote.id
         )
-        if (BigInt(currentFee) > BigInt(feeRaw))
-          throw new Error('Network fee increased. Review the activation again.')
+        if (
+          currentFee.feeQuote.id !== feeQuote.id ||
+          currentFee.marginalFeeZats !== feeEstimate.marginalFeeZats ||
+          currentFee.feeZats !== feeRaw
+        )
+          throw new Error('Network fee changed. Review the activation again.')
         await assertPublicContext(context)
         if (!this.paymentExecutor) throw new Error('Public payment runtime is unavailable')
         const accountKey = buildAccountKey(context.network, context.walletId, context.accountId)
@@ -438,7 +449,9 @@ export class NoirPublicRuntime {
           transactionId: payment.id,
           depositAddress: quote.depositAddress,
           amount,
-          expiresAt
+          expiresAt,
+          marginalFeeZats: feeQuote.standardMarginalFeeZats,
+          feeQuoteId: feeQuote.id
         })
         await this.reconcileActivation(record)
         notifyChanged(context)

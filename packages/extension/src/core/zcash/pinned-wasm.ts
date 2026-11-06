@@ -1,7 +1,7 @@
 import manifest from '../../lib/wasm-pkg/wasm-integrity.json'
 
-export const PINNED_ZCASH_ABI_VERSION = 'zcash-wallet-7d6921d-v1'
-export const PINNED_ZCASH_SOURCE_COMMIT = '7d6921d51b9fe4f4a13b8886481a9a098d6f1e7f'
+export const PINNED_ZCASH_ABI_VERSION = 'zcash-wallet-cb8da9d-v1'
+export const PINNED_ZCASH_SOURCE_COMMIT = 'cb8da9dc60d51dbf3958657be35427210d544541'
 export const PINNED_ZCASH_CAPABILITIES = Object.freeze(
   [
     'account.zcash.derive',
@@ -28,7 +28,7 @@ function parseStaticManifest() {
     manifest.packageVersion !== '0.1.0' ||
     manifest.abiVersion !== PINNED_ZCASH_ABI_VERSION ||
     manifest.sourceCommit !== PINNED_ZCASH_SOURCE_COMMIT ||
-    manifest.build.rustToolchain !== 'nightly-2025-11-15' ||
+    manifest.build.rustToolchain !== 'nightly-2026-10-20' ||
     manifest.build.wasmPack !== '0.14.0' ||
     manifest.build.wasmBindgen !== '0.2.122' ||
     manifest.build.llvm !== '22.1.4' ||

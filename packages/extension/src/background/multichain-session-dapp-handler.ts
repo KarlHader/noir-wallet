@@ -60,6 +60,51 @@ interface PreparedScope {
   readonly proposal: DAppSessionAccountProposal
 }
 
+function evmApprovalProposal(
+  prepared: readonly PreparedScope[]
+): DAppSessionAccountProposal | null {
+  const evm = prepared.filter(item => item.supported.family === 'evm')
+  const first = evm[0]?.proposal
+  if (!first) return null
+  const accounts = first.accounts.filter(account =>
+    evm.every(item =>
+      item.proposal.accounts.some(
+        candidate =>
+          candidate.id === account.id &&
+          candidate.reference.walletId === account.reference.walletId &&
+          candidate.reference.accountId === account.reference.accountId &&
+          candidate.address === account.address
+      )
+    )
+  )
+  if (
+    !accounts.some(account => account.required) ||
+    evm.some(
+      item =>
+        item.proposal.activeReference.walletId !== first.activeReference.walletId ||
+        item.proposal.activeReference.accountId !== first.activeReference.accountId ||
+        item.proposal.activeAddress !== first.activeAddress
+    )
+  ) {
+    throw new Caip25ProviderError(5100, 'No common EVM account is available for this session.')
+  }
+  return Object.freeze({
+    ...first,
+    chainId: 'evm',
+    chainName: 'EVM',
+    iconChain: 'evm',
+    accounts: Object.freeze(accounts),
+    preselectedIds: Object.freeze(
+      accounts
+        .filter(
+          account =>
+            account.required || evm.every(item => item.proposal.preselectedIds.includes(account.id))
+        )
+        .map(account => account.id)
+    )
+  })
+}
+
 type SessionHandler = Pick<
   BackgroundBitcoinDAppHandler,
   'prepareSessionAccountSelection' | 'resolveSessionAccountSelection' | 'getSessionAccounts'
@@ -495,24 +540,29 @@ export class BackgroundMultichainSessionDAppHandler {
       }
     }
     await assertUnchanged()
+    const evmProposal = evmApprovalProposal(prepared)
+    const approvalScopes = prepared.flatMap((item, index) => {
+      if (item.supported.family !== 'evm') return [item.proposal]
+      return prepared.findIndex(scope => scope.supported.family === 'evm') === index && evmProposal
+        ? [evmProposal]
+        : []
+    })
     const decision = await this.options.approval.requestExternalApproval(
       origin,
       'multichainConnect',
       {
         ...(linksIdentities ? { linksIdentities: true } : {}),
-        scopes: prepared.map(item => ({
-          chainId: item.supported.chainId,
-          chainName: item.supported.chainName,
-          iconChain: item.supported.iconChain,
-          methods: item.request.methods,
-          notifications: item.request.notifications,
-          accounts: item.proposal.accounts.map(account => ({
+        scopes: approvalScopes.map(proposal => ({
+          chainId: proposal.chainId,
+          chainName: proposal.chainName,
+          iconChain: proposal.iconChain,
+          accounts: proposal.accounts.map(account => ({
             id: account.id,
             label: account.label,
             address: account.address,
             required: account.required
           })),
-          preselectedIds: item.proposal.preselectedIds
+          preselectedIds: proposal.preselectedIds
         })),
         ...(tabInfo.favIconUrl === undefined ? {} : { favicon: tabInfo.favIconUrl }),
         ...(tabInfo.pageUrl === undefined ? {} : { faviconPageUrl: tabInfo.pageUrl })
@@ -526,11 +576,27 @@ export class BackgroundMultichainSessionDAppHandler {
     if (!selectedScopes) {
       throw new Caip25ProviderError(-32603, 'The wallet approval did not return scope selections.')
     }
+    if (
+      Object.keys(selectedScopes).some(
+        id => !approvalScopes.some(proposal => proposal.chainId === id)
+      ) ||
+      approvalScopes.some(proposal => {
+        const ids = selectedScopes[proposal.chainId]
+        return (
+          !ids ||
+          ids.length === 0 ||
+          new Set(ids).size !== ids.length ||
+          ids.some(id => !proposal.accounts.some(account => account.id === id))
+        )
+      })
+    ) {
+      throw new Caip25ProviderError(4100, 'The selected session accounts are not available.')
+    }
     const selections = await Promise.all(
       prepared.map(item =>
         this.resolveScopeSelection(
           item,
-          selectedScopes[item.supported.chainId] ?? item.proposal.preselectedIds
+          selectedScopes[item.supported.family === 'evm' ? 'evm' : item.supported.chainId]!
         )
       )
     )
@@ -539,11 +605,14 @@ export class BackgroundMultichainSessionDAppHandler {
     )
     const zcashIndex = prepared.findIndex(item => item.supported.family === 'zcash')
     const zcashSelection = zcashIndex < 0 ? undefined : selections[zcashIndex]
-    const storedScopes: Caip25StoredScope[] = prepared.map(item =>
+    const storedScopes: Caip25StoredScope[] = prepared.map((item, index) =>
       Object.freeze({
         chainId: item.supported.chainId,
         methods: item.request.methods,
-        notifications: item.request.notifications
+        notifications: item.request.notifications,
+        ...(item.supported.family === 'evm'
+          ? { accounts: selections[index]!.authorization.accounts }
+          : {})
       })
     )
     const committedRevision = await this.options.manager.setCaip25Session(

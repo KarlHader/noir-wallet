@@ -1,6 +1,7 @@
 import {
   connectionAuthorizesAccount,
   connectionAuthorizesAccountForWalletStatus,
+  getConnectionChainAuthorization,
   type AccountRef,
   type ConnectedDApp
 } from '@/core/dapp/dapp-manager'
@@ -21,7 +22,16 @@ interface WalletDAppConnectionOptions {
   readonly connectZcash: (origin: string) => Promise<void>
   readonly connectPublic?: (origin: string) => Promise<void>
   readonly connectNativeAndPublic?: (origin: string) => Promise<void>
-  readonly connectSession: (origin: string) => Promise<void>
+  readonly connectSession: (
+    origin: string,
+    chainIds: readonly string[],
+    account: AccountRef
+  ) => Promise<void>
+  readonly notifyChainAccountsChanged: (
+    origin: string,
+    chainIds: readonly string[]
+  ) => Promise<void>
+  readonly notifySessionChanged: (origin: string) => Promise<void>
   readonly runActiveOperation: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
@@ -33,60 +43,77 @@ export class WalletDAppConnectionCoordinator {
 
   private targets(dapp: ConnectedDApp, active: WalletDAppActiveAccount) {
     const evmChainId = this.options.getEvmChainId()
-    const hasZcash = active.chainIds.includes(this.options.getZcashChainId())
-    const sessionScopes = dapp.caip25Session?.scopes.filter(scope =>
-      this.options.supportsSessionChain(scope.chainId)
-    )
-    const includesNativeChain = (chainId: string) =>
-      sessionScopes === undefined || sessionScopes.some(scope => scope.chainId === chainId)
-    const sessionAuthorized = sessionScopes?.every(scope =>
-      dapp.chainAuthorizations
-        ?.find(authorization => authorization.chainId === scope.chainId)
-        ?.accounts.some(
-          account =>
-            account.walletId === active.reference.walletId &&
-            account.accountId === active.reference.accountId
-        )
-    )
+    const zcashChainId = this.options.getZcashChainId()
+    const hasZcash = active.chainIds.includes(zcashChainId)
+    const sessionChains = dapp.caip25Session?.scopes
+      .filter(
+        scope =>
+          active.chainIds.includes(scope.chainId) &&
+          this.options.supportsSessionChain(scope.chainId)
+      )
+      .map(scope => scope.chainId)
     return {
       evm:
-        active.chainIds.includes(evmChainId) && includesNativeChain(evmChainId)
-          ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === evmChainId)
-          : undefined,
+        !dapp.caip25Session && active.chainIds.includes(evmChainId)
+          ? getConnectionChainAuthorization(dapp, evmChainId)
+          : null,
       zcash:
+        !dapp.caip25Session &&
         hasZcash &&
-        includesNativeChain(this.options.getZcashChainId()) &&
         (dapp.authorizedAccounts !== undefined || dapp.boundWalletId !== undefined),
-      public: hasZcash
-        ? dapp.chainAuthorizations?.find(authorization => authorization.chainId === PUBLIC_CHAIN_ID)
-        : undefined,
-      session: sessionScopes?.length ? dapp.caip25Session : undefined,
-      sessionAuthorized
+      public: hasZcash ? getConnectionChainAuthorization(dapp, PUBLIC_CHAIN_ID) : null,
+      sessionChains: sessionChains ?? [],
+      sessionConnectable:
+        sessionChains !== undefined &&
+        sessionChains.length > 0 &&
+        sessionChains.every(chainId => getConnectionChainAuthorization(dapp, chainId) !== null),
+      sessionAuthorized:
+        sessionChains !== undefined &&
+        sessionChains.length > 0 &&
+        sessionChains.every(chainId =>
+          getConnectionChainAuthorization(dapp, chainId)?.accounts.some(
+            account =>
+              account.walletId === active.reference.walletId &&
+              account.accountId === active.reference.accountId
+          )
+        )
     }
   }
 
   getCurrentTabDAppStatus() {
     return this.options.runActiveOperation(async () => {
       const dapp = await this.options.getCurrentTabDApp()
-      if (!dapp) return { dapp: null, currentAccountAuthorized: false }
+      if (!dapp) {
+        return { dapp: null, currentAccountAuthorized: false, currentAccountConnectable: false }
+      }
       const active = await this.options.loadActiveAccount()
-      if (!active) return { dapp, currentAccountAuthorized: false }
+      if (!active) {
+        return { dapp, currentAccountAuthorized: false, currentAccountConnectable: false }
+      }
       const targets = this.targets(dapp, active)
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const grantsAuthorized =
-        targets.evm || targets.zcash || targets.public
+      const nativeAuthorized = dapp.caip25Session
+        ? targets.sessionAuthorized
+        : targets.evm || targets.zcash
           ? (!targets.evm || targets.evm.accounts.some(matches)) &&
-            (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference)) &&
-            (!targets.public || targets.public.accounts.some(matches))
-          : targets.session
-            ? targets.sessionAuthorized === true
-            : !dapp.caip25Session &&
-              connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
-      const currentAccountAuthorized =
-        grantsAuthorized && (!targets.session || targets.sessionAuthorized === true)
-      return { dapp, currentAccountAuthorized }
+            (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference))
+          : !targets.public && connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
+      const currentAccountAuthorized = targets.public
+        ? targets.public.accounts.some(matches) &&
+          (targets.sessionChains.length > 0 || targets.evm || targets.zcash
+            ? nativeAuthorized
+            : true)
+        : nativeAuthorized
+      return {
+        dapp,
+        currentAccountAuthorized,
+        currentAccountConnectable: Boolean(
+          targets.public ||
+          (dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash)
+        )
+      }
     })
   }
 
@@ -98,34 +125,33 @@ export class WalletDAppConnectionCoordinator {
         const active = await this.options.loadActiveAccount()
         if (!active) throw new Error('No active account')
         const targets = this.targets(dapp, active)
-        if (!targets.evm && !targets.zcash && !targets.public && !targets.session) {
+        if (
+          !targets.public &&
+          !(dapp.caip25Session ? targets.sessionConnectable : targets.evm || targets.zcash)
+        ) {
           throw new Error('Reconnect from the site to update this network permission')
         }
-        return targets
+        return { targets, account: active.reference, hasSession: Boolean(dapp.caip25Session) }
       })
-      .then(async targets => {
-        if (
-          !targets.session &&
-          targets.zcash &&
-          targets.public &&
-          this.options.connectNativeAndPublic
-        ) {
+      .then(async ({ targets, account, hasSession }) => {
+        // Approval callbacks can acquire the account-transition lock when committing.
+        if (hasSession) {
+          if (targets.sessionConnectable && !targets.sessionAuthorized) {
+            await this.options.connectSession(origin, targets.sessionChains, account)
+            await this.options.notifyChainAccountsChanged(origin, targets.sessionChains)
+            await this.options.notifySessionChanged(origin)
+            return
+          }
+        } else if (targets.zcash && targets.public && this.options.connectNativeAndPublic) {
           if (targets.evm) await this.options.connectEvm(origin)
           await this.options.connectNativeAndPublic(origin)
           return
-        }
-        // Connection callbacks may open approval and must acquire their own account
-        // transition lock when committing after the approval returns.
-        if (targets.session) {
-          if (!targets.sessionAuthorized) await this.options.connectSession(origin)
         } else {
           if (targets.evm) await this.options.connectEvm(origin)
           if (targets.zcash) await this.options.connectZcash(origin)
         }
         if (targets.public) {
-          if (!this.options.connectPublic) {
-            throw new Error('Public connection is unavailable')
-          }
+          if (!this.options.connectPublic) throw new Error('Public connection is unavailable')
           await this.options.connectPublic(origin)
         }
       })

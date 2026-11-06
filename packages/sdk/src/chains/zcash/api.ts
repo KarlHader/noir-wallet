@@ -18,7 +18,6 @@ import type {
   QueriedIdentities,
   LendingMcaStatus,
   Network,
-  TransactionHistoryEntry,
   PublicAccount,
   PublicAssets,
   PublicTransaction,
@@ -376,11 +375,6 @@ export class ZcashClient {
   /** Shield transparent funds to the private (shielded) balance. Requires user approval. */
   async shieldFunds(): Promise<string> {
     return this.provider.request({ method: 'zcash_shieldFunds' })
-  }
-
-  /** Fetch transaction history (on-chain + local pending). */
-  async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {
-    return this.provider.request({ method: 'zcash_getTransactionHistory' })
   }
 
   async activatePublicAccount(): Promise<PublicAccount> {

@@ -32,7 +32,6 @@ export type {
   QueriedIdentities,
   LendingMcaStatus,
   LendingSigningMode,
-  TransactionHistoryEntry,
   Network,
   VerifyMessageParams,
   VerifyMessageResult

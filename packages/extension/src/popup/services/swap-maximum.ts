@@ -32,6 +32,15 @@ export interface SwapMaximumAdjustment {
   readonly maximum?: QuoteDepositMaximum
 }
 
+export function isSwapMaximumQuotePending(input: {
+  readonly selected: boolean
+  readonly nativeSource: boolean
+  readonly loading: boolean
+  readonly maximum: QuoteDepositMaximum | null
+}): boolean {
+  return input.selected && (input.loading || (input.nativeSource && input.maximum === null))
+}
+
 export function resolveSelectedSwapMaximum(input: {
   readonly selected: boolean
   readonly currentAmount: string

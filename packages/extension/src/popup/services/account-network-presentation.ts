@@ -1,4 +1,5 @@
 import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import type {
   AccountNetworkAddressView,
   AccountNetworkView
@@ -11,6 +12,7 @@ export function accountNetworkLabel(network: AccountNetworkView): string {
 }
 
 export function accountNetworkIconChain(network: AccountNetworkView): string {
+  if (network.chain.family === 'evm') return resolveEvmChainIconAlias(network.chain.id)
   return resolveChainIconAlias(network.chain.family, network.chain.displayName)
 }
 

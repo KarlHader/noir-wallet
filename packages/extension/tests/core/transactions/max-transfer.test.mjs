@@ -2,6 +2,7 @@ import { test as it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolveZcashSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
+import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 
 const describe = it.describe
 const readSource = relativePath =>
@@ -15,12 +16,16 @@ describe('dynamic maximum transfer regressions', () => {
     for (const source of [send, swap]) {
       assert.match(source, /const isMaxTransferAmount\s*=/)
       assert.match(source, /!maxSelected[\s\S]*?!isMaxTransferAmount/)
-      assert.match(source, /const displayedFeeByTier = isMaxFeeMode \? maxFeeByTier : feeByTier/)
       assert.match(
         source,
-        /maxTransfer\.fee && isMaxTransferAmount \? maxTransfer\.fee : estimatedFeeZec/
+        /const displayedFeeByTier = isMaxFeeMode \? maxTransfer\.feeByTier : feeEstimate\.feeByTier/
       )
     }
+    const feeQuote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: 2000 }
+    const max = { feeZats: 20000, feeQuote, loading: false, error: false }
+    const amount = { feeZats: 15000, feeQuote, loading: false, error: false }
+    assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 1000).feeZats, 20000)
+    assert.equal(selectSwapFeeEstimate('0.7', false, '0.8', max, amount, 1000).feeZats, 15000)
   })
 
   it('re-quotes cross-chain Max transfers after the exact destination is known', () => {
@@ -141,7 +146,8 @@ describe('dynamic maximum transfer regressions', () => {
     assert.doesNotMatch(worker, /w\.estimate_pczt_transparent_transfer_fee\(/)
     assert.doesNotMatch(worker, /w\.oneclick_pczt_transparent_transfer_dynamic_fee\(/)
     assert.match(approval, /Spending transparent funds reveals and may link/)
-    assert.match(approval, /feeZats: feeByTier\[feeTier\]/)
+    assert.match(approval, /feeQuoteId: feeEstimate\.feeQuote\.id/)
+    assert.match(approval, /feeZats: feeEstimate\.feeZats/)
     assert.match(handler, /feeZats: extras\?\.feeZats/)
     assert.match(sdkTypes, /export type FundingSource = 'shielded' \| 'transparent'/)
     assert.match(sdkTypes, /fundingSource\?: FundingSource/)

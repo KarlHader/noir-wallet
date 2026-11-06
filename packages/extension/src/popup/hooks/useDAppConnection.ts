@@ -8,6 +8,7 @@ export type { ConnectedDApp } from '@/core/dapp/dapp-manager'
 export function useDAppConnection() {
   const [currentDApp, setCurrentDApp] = useState<ConnectedDApp | null>(null)
   const [currentAccountAuthorized, setCurrentAccountAuthorized] = useState(true)
+  const [currentAccountConnectable, setCurrentAccountConnectable] = useState(false)
   const [connectedDApps, setConnectedDApps] = useState<ConnectedDApp[]>([])
   const [loading, setLoading] = useState(true)
   const { currentWalletId, currentAccountId } = useWalletStore()
@@ -24,11 +25,13 @@ export function useDAppConnection() {
       if (request !== statusRequest.current) return
       setCurrentDApp(response.dapp ?? null)
       setCurrentAccountAuthorized(response.dapp ? !!response.currentAccountAuthorized : true)
+      setCurrentAccountConnectable(response.dapp ? !!response.currentAccountConnectable : false)
     } catch (error) {
       if (request !== statusRequest.current) return
       console.error('Failed to load current tab dApp:', error)
       setCurrentDApp(null)
       setCurrentAccountAuthorized(true)
+      setCurrentAccountConnectable(false)
     }
   }, [])
 
@@ -62,6 +65,7 @@ export function useDAppConnection() {
       if (currentDApp?.origin === origin) {
         setCurrentDApp(null)
         setCurrentAccountAuthorized(true)
+        setCurrentAccountConnectable(false)
       }
     } catch (error) {
       console.error('Failed to disconnect dApp:', error)
@@ -111,6 +115,7 @@ export function useDAppConnection() {
   return {
     currentDApp,
     currentAccountAuthorized,
+    currentAccountConnectable,
     connectedDApps,
     loading,
     refreshCurrentDApp: loadCurrentTabDApp,

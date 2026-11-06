@@ -4,17 +4,13 @@ export function isIncompleteCommitmentTreeError(error: unknown): boolean {
 }
 
 export async function runWithCommitmentTreeRecovery<T>({
-  isFresh,
   refresh,
   operation
 }: {
-  isFresh: () => boolean
   refresh: () => Promise<void>
   operation: () => Promise<T>
 }): Promise<T> {
-  if (!isFresh()) {
-    await refresh()
-  }
+  await refresh()
 
   try {
     return await operation()

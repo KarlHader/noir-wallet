@@ -30,6 +30,10 @@ export const DEFAULT_RPC_ENDPOINT_PREFERENCES: RpcEndpointPreferences = {
 
 let activeRpcEndpointGroups = cloneRpcEndpointGroups(RPC_ENDPOINT_GROUPS)
 let rpcEndpointOptionsByChain = buildOptionsByChain(activeRpcEndpointGroups)
+const RETIRED_ZCASH_RPC_URLS = new Set([
+  'https://zcash-wallet-grpc-self.deltarpc.com',
+  'https://zcash-mainnet.chainsafe.dev'
+])
 
 function buildOptionsByChain(groups: RpcEndpointGroup[]) {
   return groups.reduce(
@@ -170,13 +174,15 @@ function applyRegistryGroups(registry: ReturnType<typeof parseRpcRegistryDocumen
     chain => chain.chain === 'zcash' && chain.network === 'mainnet'
   )
   if (!zcash) return
+  const endpoints = zcash.endpoints.filter(endpoint => !RETIRED_ZCASH_RPC_URLS.has(endpoint.url))
+  if (endpoints.length === 0) return
 
   setRpcEndpointGroups([
     {
       chain: 'zcash',
       label: zcash.label,
       iconChain: zcash.iconChain,
-      options: zcash.endpoints
+      options: endpoints
     }
   ])
 }
@@ -239,7 +245,8 @@ export function ensureRpcEndpointPreferencesLoaded(): Promise<RpcEndpointPrefere
       return { ...preferences }
     })().catch(() => syncActiveRpcEndpointPreferencesFromStorage())
   }
-  return loadPromise
+  // A selection made while initialization was pending takes precedence over its snapshot.
+  return loadPromise.then(() => ({ ...activeRpcEndpointPreferences }))
 }
 
 let registryRefreshPromise: Promise<RpcEndpointPreferences> | null = null

@@ -269,7 +269,8 @@ test('runs the persisted EVM receipt monitor inside the real MV3 service worker'
               transactionHash,
               blockHash,
               blockNumber: '0x65',
-              status: '0x1'
+              status: '0x1',
+              logs: []
             }
           : request.method === 'eth_getBlockByNumber'
             ? { number: '0x65' }
@@ -339,7 +340,8 @@ test('resumes the persisted EVM receipt monitor after service worker reconstruct
               transactionHash,
               blockHash,
               blockNumber: '0x65',
-              status: '0x1'
+              status: '0x1',
+              logs: []
             }
           : request.method === 'eth_getBlockByNumber'
             ? { number: '0x65' }

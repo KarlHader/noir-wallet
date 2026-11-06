@@ -6,7 +6,10 @@ import {
   withChainExplorer,
   withChainRpcEndpoint
 } from '../../../src/core/chains/chain-endpoint-settings.ts'
-import { handleEvmDAppNetworkSwitch } from '../../../src/background/evm-dapp-network-switch.ts'
+import {
+  EvmDAppNetworkSwitchCoordinator,
+  handleEvmDAppNetworkSwitch
+} from '../../../src/background/evm-dapp-network-switch.ts'
 
 const bscRequest = { chainId: '0x38', numericChainId: 56 }
 
@@ -119,5 +122,103 @@ test.describe('EVM dApp network switch coordinator', () => {
       )
     ).rejects.toMatchObject({ code: 4902 })
     expect(unsupported.approvals).toEqual([])
+  })
+
+  test('shares one pending approval for the same request and permits retry after rejection', async () => {
+    const coordinator = new EvmDAppNetworkSwitchCoordinator()
+    let resolveApproval
+    let signalApproval
+    const approvalStarted = new Promise(resolve => {
+      signalApproval = resolve
+    })
+    const decision = new Promise(resolve => {
+      resolveApproval = resolve
+    })
+    const state = harness({
+      requestApproval: async (origin, action, data) => {
+        state.approvals.push({ origin, action, data })
+        signalApproval()
+        return decision
+      }
+    })
+    const first = coordinator.run(
+      bscRequest,
+      'https://dapp.example',
+      'switch',
+      'account-a',
+      state.options
+    )
+    const second = coordinator.run(
+      bscRequest,
+      'https://dapp.example',
+      'switch',
+      'account-a',
+      state.options
+    )
+
+    await approvalStarted
+    expect(state.approvals).toHaveLength(1)
+    resolveApproval({ approved: false })
+    await expect(Promise.all([first, second])).rejects.toMatchObject({ code: 4001 })
+    expect(state.commits).toEqual([])
+
+    await expect(
+      coordinator.run(bscRequest, 'https://dapp.example', 'switch', 'account-a', state.options)
+    ).rejects.toMatchObject({ code: 4001 })
+    expect(state.approvals).toHaveLength(2)
+  })
+
+  test('keeps different network metadata and wallet contexts separate', async () => {
+    const coordinator = new EvmDAppNetworkSwitchCoordinator()
+    let resolveApprovals
+    const decision = new Promise(resolve => {
+      resolveApprovals = resolve
+    })
+    const state = harness({
+      requestApproval: async (origin, action, data) => {
+        state.approvals.push({ origin, action, data })
+        return decision
+      }
+    })
+    const customRequest = rpcUrl => ({
+      chainId: '0x7a69',
+      numericChainId: 31337,
+      metadata: {
+        chainName: 'Example',
+        nativeCurrency: { name: 'Example', symbol: 'EX', decimals: 18 },
+        rpcUrls: [rpcUrl],
+        blockExplorerUrls: []
+      }
+    })
+    const requests = [
+      coordinator.run(
+        customRequest('https://rpc-one.example/'),
+        'https://dapp.example',
+        'add',
+        'account-a',
+        state.options
+      ),
+      coordinator.run(
+        customRequest('https://rpc-two.example/'),
+        'https://dapp.example',
+        'add',
+        'account-a',
+        state.options
+      ),
+      coordinator.run(
+        customRequest('https://rpc-one.example/'),
+        'https://dapp.example',
+        'add',
+        'account-b',
+        state.options
+      )
+    ]
+
+    await new Promise(resolve => setImmediate(resolve))
+    expect(state.approvals).toHaveLength(3)
+    resolveApprovals({ approved: false })
+    const results = await Promise.allSettled(requests)
+    expect(results.map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected'])
+    expect(state.commits).toEqual([])
   })
 })

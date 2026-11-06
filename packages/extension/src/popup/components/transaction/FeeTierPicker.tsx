@@ -1,9 +1,17 @@
 import { Icon } from '@iconify/react'
+import { useState } from 'react'
 import { DetailRow } from '../common/DetailRow'
 import { FeeTierSelector } from './FeeTierSelector'
 import { getFeeTierLabel, type FeeTier } from '@/config/fee'
 import { staticFeeFallbackZats } from '@/core/zcash/fee-policy'
-import { openModal } from '../../provider/ModalManager'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from '../ui/dialog'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { AmountDisplay } from '../common/AmountDisplay'
@@ -15,6 +23,7 @@ interface FeeTierPickerProps {
   /** Estimated fee per tier (zatoshis); null while pending. */
   feeByTier: Record<FeeTier, number | null>
   loading?: boolean
+  loadingByTier?: Record<FeeTier, boolean>
   /** Show coarse fees only before a reviewable transfer intent exists. */
   allowFallback?: boolean
   /**
@@ -45,10 +54,12 @@ export function FeeTierPicker({
   onTierChange,
   feeByTier,
   loading,
+  loadingByTier,
   allowFallback = true,
   variant = 'inline',
   hideLabel
 }: FeeTierPickerProps) {
+  const [open, setOpen] = useState(false)
   const selectedFeeZats = feeByTier[tier] ?? (allowFallback ? staticFeeFallbackZats(tier) : null)
   const selectedFeeZec =
     selectedFeeZats === null
@@ -71,25 +82,6 @@ export function FeeTierPicker({
           fast: feeByTier.fast ?? staticFeeFallbackZats('fast')
         }
 
-  const handleEdit = () => {
-    void openModal({
-      title: 'Network Fee',
-      showCloseButton: true,
-      body: (_resolve, close) => (
-        <FeeTierEditContent
-          selectedTier={tier}
-          feeByTier={sheetFeeByTier}
-          loading={loading}
-          isApproximate={isApproximate}
-          onSelect={t => {
-            onTierChange(t)
-            close()
-          }}
-        />
-      )
-    })
-  }
-
   const trailingIcon = <Icon icon="lucide:pencil" className="text-muted" />
   const feeAmount = loading ? (
     <div role="status" aria-label="Estimating network fee" className="inline-flex items-center">
@@ -104,77 +96,85 @@ export function FeeTierPicker({
     </>
   )
 
-  if (variant === 'stacked') {
-    return (
+  const trigger =
+    variant === 'stacked' ? (
       <div>
         <label className="block text-sm text-muted mb-2">Network Fee</label>
         <div className="flex h-[54px] w-full items-center justify-between rounded-xl bg-card px-4">
           <div className="flex min-w-0 items-center gap-1.5 text-sm">{feeAmount}</div>
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
+              aria-label="Edit network fee"
+            >
+              <span>({getFeeTierLabel(tier)})</span>
+              <span className="size-3.5 inline-flex items-center justify-center [&_svg]:size-3.5">
+                {trailingIcon}
+              </span>
+            </button>
+          </DialogTrigger>
+        </div>
+      </div>
+    ) : hideLabel ? (
+      <div className="inline-flex min-w-0 items-center gap-1.5">
+        {feeAmount}
+        <DialogTrigger asChild>
           <button
             type="button"
-            onClick={handleEdit}
             className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
             aria-label="Edit network fee"
           >
             <span>({getFeeTierLabel(tier)})</span>
-            <span className="size-3.5 inline-flex items-center justify-center [&_svg]:size-3.5">
+            <span className="size-3 inline-flex items-center justify-center [&_svg]:size-3">
               {trailingIcon}
             </span>
           </button>
-        </div>
+        </DialogTrigger>
       </div>
+    ) : (
+      <DetailRow label="Network Fee">
+        <div className="inline-flex min-w-0 items-center gap-1.5">
+          {feeAmount}
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
+              aria-label="Edit network fee"
+            >
+              <span>({getFeeTierLabel(tier)})</span>
+              <span className="size-3 inline-flex items-center justify-center [&_svg]:size-3">
+                {trailingIcon}
+              </span>
+            </button>
+          </DialogTrigger>
+        </div>
+      </DetailRow>
     )
-  }
 
-  const inlineTrigger = (
-    <div className="inline-flex min-w-0 items-center gap-1.5">
-      {feeAmount}
-      <button
-        type="button"
-        onClick={handleEdit}
-        className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
-        aria-label="Edit network fee"
-      >
-        <span>({getFeeTierLabel(tier)})</span>
-        <span className="size-3 inline-flex items-center justify-center [&_svg]:size-3">
-          {trailingIcon}
-        </span>
-      </button>
-    </div>
-  )
-
-  if (hideLabel) return inlineTrigger
-
-  return <DetailRow label="Network Fee">{inlineTrigger}</DetailRow>
-}
-
-function FeeTierEditContent({
-  selectedTier,
-  feeByTier,
-  loading,
-  isApproximate,
-  onSelect
-}: {
-  selectedTier: FeeTier
-  feeByTier: Record<FeeTier, number | null>
-  loading?: boolean
-  isApproximate?: boolean
-  onSelect: (tier: FeeTier) => void
-}) {
   return (
-    <div className="pt-1 pb-4 space-y-3">
-      <FeeTierSelector
-        value={selectedTier}
-        onChange={onSelect}
-        feeByTier={feeByTier}
-        loading={loading}
-        hideLabel
-      />
-      {isApproximate && (
-        <p className="text-xs text-muted leading-relaxed">
-          Approximate ZIP-317 estimate. Live fee appears once transfer details are complete.
-        </p>
-      )}
-    </div>
+    <Dialog open={open} onOpenChange={setOpen}>
+      {trigger}
+      <DialogContent position="bottom">
+        <DialogHeader>
+          <DialogTitle>Network Fee</DialogTitle>
+          <DialogDescription className="sr-only">Select a network fee</DialogDescription>
+        </DialogHeader>
+        <div className="pt-1 pb-4 space-y-3">
+          <FeeTierSelector
+            value={tier}
+            onChange={next => {
+              onTierChange(next)
+              setOpen(false)
+            }}
+            feeByTier={sheetFeeByTier}
+            loading={loading}
+            loadingByTier={loadingByTier}
+            hideLabel
+          />
+          {isApproximate && <p className="text-xs text-muted">Approximate fee</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

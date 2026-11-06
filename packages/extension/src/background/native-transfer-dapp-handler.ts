@@ -146,10 +146,12 @@ export class BackgroundNativeTransferDAppHandler {
     }
   }
 
-  async notifyAccountsChanged(): Promise<void> {
+  async notifyAccountsChanged(origin?: string): Promise<void> {
     const connections = await this.options.manager.getAllConnections()
-    const matching = connections.filter(connection =>
-      connection.chainAuthorizations?.some(item => item.chainId === this.options.chainId)
+    const matching = connections.filter(
+      connection =>
+        (origin === undefined || connection.origin === origin) &&
+        connection.chainAuthorizations?.some(item => item.chainId === this.options.chainId)
     )
     if (matching.length === 0) return
     await Promise.all(

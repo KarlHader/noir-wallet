@@ -94,7 +94,7 @@ describe('Shielding minimum balance regressions', () => {
 
   it('blocks the built-in shield action and fee estimate below the minimum', () => {
     assert.match(shieldSheetSource, /enabled:\s*open && hasEnoughBalance/)
-    assert.match(shieldSheetSource, /disabled=\{!hasEnoughBalance\}/)
+    assert.match(shieldSheetSource, /disabled=\{!hasEnoughBalance \|\| !feeReady\}/)
     assert.match(shieldSheetSource, /MIN_SHIELDING_BALANCE_MESSAGE/)
 
     const validation = shieldHookSource.indexOf(

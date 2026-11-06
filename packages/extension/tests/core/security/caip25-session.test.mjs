@@ -82,6 +82,7 @@ test.describe('CAIP-25 sessions', () => {
     const connection = replaceDAppCaip25Session(undefined, {
       origin: 'https://session.example',
       id: 'session-example',
+      favicon: `data:image/x-icon;base64,${'a'.repeat(20_000)}`,
       authorizations: [
         { chainId: ethereum, accounts: [account], binding: account },
         { chainId: bitcoin, accounts: [account], binding: account }
@@ -95,7 +96,9 @@ test.describe('CAIP-25 sessions', () => {
       now: 1_700_000_000_000
     })
 
-    expect(parseStoredDAppConnection(connection).caip25Session?.scopes).toHaveLength(2)
+    const restored = parseStoredDAppConnection(structuredClone(connection))
+    expect(restored.caip25Session?.scopes).toHaveLength(2)
+    expect(restored.favicon).toBe('https://session.example/favicon.ico')
     const pruned = pruneDAppAccountReferences([connection], account)
     expect(pruned.connections).toEqual([])
     expect(pruned.disconnectedOrigins).toEqual(['https://session.example'])

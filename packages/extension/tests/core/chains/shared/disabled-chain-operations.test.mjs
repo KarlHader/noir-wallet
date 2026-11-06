@@ -72,6 +72,7 @@ describe('disabled chain operation policy', () => {
       evmNetworks: [],
       bitcoinEnabled: false,
       manager: {
+        getAuthorizationRevision: async () => 0,
         getCaip25Session: async () => ({
           scopes: [{ chainId: bitcoinId, methods: ['getAccounts'], notifications: [] }]
         })

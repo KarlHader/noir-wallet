@@ -8,6 +8,7 @@ interface WalletActionExecutionModeState {
   readonly mode: DAppExecutionMode
   readonly privateAvailable: boolean
   readonly loading: boolean
+  readonly selectedByUser: boolean
 }
 
 export function useWalletActionExecutionMode(
@@ -20,33 +21,53 @@ export function useWalletActionExecutionMode(
     scopeKey: null,
     mode: 'main',
     privateAvailable: false,
-    loading: Boolean(scopeKey)
+    loading: Boolean(scopeKey),
+    selectedByUser: false
   })
 
   useEffect(() => {
     let cancelled = false
     if (!scopeKey) {
-      setState({ scopeKey: null, mode: 'main', privateAvailable: false, loading: false })
+      setState({
+        scopeKey: null,
+        mode: 'main',
+        privateAvailable: false,
+        loading: false,
+        selectedByUser: false
+      })
       return () => {
         cancelled = true
       }
     }
 
-    setState({ scopeKey, mode: 'main', privateAvailable: false, loading: true })
+    setState({
+      scopeKey,
+      mode: 'main',
+      privateAvailable: false,
+      loading: true,
+      selectedByUser: false
+    })
     void dappExecutionModeClient
       .read()
       .then(next => {
         if (cancelled) return
-        setState({
+        setState(current => ({
           scopeKey,
-          mode: next.mode,
+          mode: current.scopeKey === scopeKey && current.selectedByUser ? current.mode : next.mode,
           privateAvailable: next.privateAvailable,
-          loading: false
-        })
+          loading: false,
+          selectedByUser: current.scopeKey === scopeKey && current.selectedByUser
+        }))
       })
       .catch(() => {
         if (cancelled) return
-        setState({ scopeKey, mode: 'main', privateAvailable: false, loading: false })
+        setState(current => ({
+          scopeKey,
+          mode: current.scopeKey === scopeKey && current.selectedByUser ? current.mode : 'main',
+          privateAvailable: false,
+          loading: false,
+          selectedByUser: current.scopeKey === scopeKey && current.selectedByUser
+        }))
       })
 
     return () => {
@@ -61,7 +82,8 @@ export function useWalletActionExecutionMode(
         scopeKey,
         mode,
         privateAvailable: current.scopeKey === scopeKey && current.privateAvailable,
-        loading: false
+        loading: false,
+        selectedByUser: true
       }))
     },
     [scopeKey]

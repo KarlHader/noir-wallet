@@ -3,6 +3,7 @@ import type {
   TransferResult,
   TransferSubmissionStatus
 } from '@/lib/wasm-pkg/zcash_wallet_wasm'
+import { MAX_MARGINAL_FEE_ZATS } from '../../config/fee'
 
 export type { TransferEstimate, TransferResult }
 
@@ -47,11 +48,18 @@ function isZatsString(value: unknown): value is string {
   return typeof value === 'string' && /^\d+$/.test(value)
 }
 
-export function parseTransferEstimate(value: unknown): TransferEstimate {
+export function parseTransferEstimate(
+  value: unknown,
+  expectedMarginalFeeZats?: number
+): TransferEstimate {
   if (
     !isRecord(value) ||
     !isZatsString(value.amountZats) ||
     !isZatsString(value.feeZats) ||
+    !isZatsString(value.marginalFeeZats) ||
+    !Number.isSafeInteger(Number(value.marginalFeeZats)) ||
+    Number(value.marginalFeeZats) <= 0 ||
+    Number(value.marginalFeeZats) > MAX_MARGINAL_FEE_ZATS * 4 ||
     !Number.isSafeInteger(value.transactionCount) ||
     (value.transactionCount as number) < 1 ||
     !Array.isArray(value.stepFeesZats) ||
@@ -64,6 +72,12 @@ export function parseTransferEstimate(value: unknown): TransferEstimate {
   const totalFee = value.stepFeesZats.reduce((sum, fee) => sum + BigInt(fee), 0n)
   if (totalFee !== BigInt(value.feeZats)) {
     throw new Error('Transfer estimate fee total does not match its steps')
+  }
+  if (
+    expectedMarginalFeeZats !== undefined &&
+    BigInt(value.marginalFeeZats) !== BigInt(expectedMarginalFeeZats)
+  ) {
+    throw new Error('Transfer estimate does not use the confirmed network fee')
   }
 
   return value as unknown as TransferEstimate

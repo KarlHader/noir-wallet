@@ -5,6 +5,7 @@ import { getOffscreenClient } from '@/core/worker/client'
 import type { RPCSchema, ZcashTransactionContext } from '@/core/worker/types'
 import { decodeWorkerRpcError, encodeWorkerRpcError } from '@/core/worker/rpc-errors'
 import { isTransactionSubmissionUnknown } from '@/core/zcash/transfer-result'
+import { replayJournalPages } from '@/lib/sync-journal'
 import {
   applyZcashWorkerBroadcast,
   zcashWorkerBroadcastResult
@@ -173,8 +174,10 @@ const reinitializingByWallet = new Map<string, Promise<void>>()
 const pendingInitByWallet = new Map<string, Promise<any>>()
 const pendingInitStartedAt = new Map<string, number>()
 const activeSyncBatchByWallet = new Map<string, Promise<unknown>>()
-type SyncSessionEntry = { promise: Promise<void>; resolve: () => void }
+type SyncOwner = { ownerId: string; ownerStartedAt: number }
+type SyncSessionEntry = SyncOwner & { promise: Promise<void>; resolve: () => void }
 const activeSyncSessionByWallet = new Map<string, SyncSessionEntry>()
+const syncOwnerByWallet = new Map<string, SyncOwner>()
 const walletGenerationByWallet = new Map<string, number>()
 const dirtyWalletsByWallet = new Set<string>()
 const PENDING_INIT_STALE_MS = WALLET_CONFIG.SYNC.ORPHAN_SESSION_TTL_MS
@@ -245,17 +248,59 @@ async function awaitActiveSyncBatch(walletId: string): Promise<void> {
   await pending.catch(() => {})
 }
 
-function reconcileWalletState(walletId: string): void {
-  const sessionStarted = syncSessionStartedAt.get(walletId)
+function parseSyncOwner(value: unknown): SyncOwner {
   if (
-    isSyncSessionActive(walletId) &&
-    sessionStarted &&
-    Date.now() - sessionStarted > PENDING_INIT_STALE_MS
+    !isRuntimeRecord(value) ||
+    typeof value.ownerId !== 'string' ||
+    value.ownerId.length === 0 ||
+    value.ownerId.length > 128 ||
+    typeof value.ownerStartedAt !== 'number' ||
+    !Number.isFinite(value.ownerStartedAt) ||
+    value.ownerStartedAt <= 0
   ) {
-    offscreenWarn('[WALLET RECONCILE] Force-ending orphan sync session', walletId)
+    throw new Error('Invalid sync session owner')
+  }
+  return { ownerId: value.ownerId, ownerStartedAt: value.ownerStartedAt }
+}
+
+function assertCurrentSyncOwner(walletId: string, owner: SyncOwner): void {
+  const current = syncOwnerByWallet.get(walletId)
+  if (current && current.ownerId !== owner.ownerId) {
+    throw new Error('STALE_WALLET_RPC: sync session owner changed')
+  }
+}
+
+async function reconcileWalletState(
+  walletId: string,
+  owner?: SyncOwner,
+  force = false
+): Promise<void> {
+  const current = syncOwnerByWallet.get(walletId)
+  if (owner && current?.ownerId !== owner.ownerId) {
+    if (current && owner.ownerStartedAt <= current.ownerStartedAt) {
+      throw new Error('STALE_WALLET_RPC: sync session owner changed')
+    }
+    syncOwnerByWallet.set(walletId, owner)
+    force = true
+  }
+  const sessionStarted = syncSessionStartedAt.get(walletId)
+  const orphaned =
+    isSyncSessionActive(walletId) &&
+    (force || !sessionStarted || Date.now() - sessionStarted > PENDING_INIT_STALE_MS)
+  if (orphaned || (force && isSyncBatchActive(walletId))) {
+    const claimedOwner = syncOwnerByWallet.get(walletId)
+    const claimedSession = activeSyncSessionByWallet.get(walletId)
+    offscreenWarn('[WALLET RECONCILE] Recovering interrupted sync session', walletId)
+    await signalSyncAbort(walletId)
+    await awaitActiveSyncBatch(walletId)
+    if (
+      syncOwnerByWallet.get(walletId) !== claimedOwner ||
+      activeSyncSessionByWallet.get(walletId) !== claimedSession
+    ) {
+      return
+    }
     endSyncSession(walletId)
-  } else if (isSyncSessionActive(walletId) && !sessionStarted) {
-    endSyncSession(walletId)
+    markWalletDirty(walletId)
   }
 
   for (const key of [...pendingInitByWallet.keys()]) {
@@ -489,20 +534,33 @@ function clearWalletDirty(walletId: string): void {
   dirtyWalletsByWallet.delete(walletId)
 }
 
-function beginSyncSession(walletId: string): void {
-  if (activeSyncSessionByWallet.has(walletId)) return
+function beginSyncSession(walletId: string, owner: SyncOwner): void {
+  assertCurrentSyncOwner(walletId, owner)
+  const active = activeSyncSessionByWallet.get(walletId)
+  if (active) {
+    if (active.ownerId !== owner.ownerId) {
+      throw new Error('SYNC_BUSY: previous sync session still active')
+    }
+    return
+  }
+  syncOwnerByWallet.set(walletId, owner)
   let resolve!: () => void
   const promise = new Promise<void>(r => {
     resolve = r
   })
-  activeSyncSessionByWallet.set(walletId, { promise, resolve })
+  activeSyncSessionByWallet.set(walletId, { ...owner, promise, resolve })
   syncSessionStartedAt.set(walletId, Date.now())
   offscreenLog('Sync session started', walletId)
 }
 
-function endSyncSession(walletId: string): void {
+function endSyncSession(walletId: string, owner?: SyncOwner): void {
   const entry = activeSyncSessionByWallet.get(walletId)
   if (!entry) return
+  if (
+    owner &&
+    (syncOwnerByWallet.get(walletId)?.ownerId !== owner.ownerId || entry.ownerId !== owner.ownerId)
+  )
+    return
   entry.resolve()
   activeSyncSessionByWallet.delete(walletId)
   syncSessionStartedAt.delete(walletId)
@@ -527,7 +585,6 @@ function isSoftReadRpc(method: string): boolean {
 }
 
 function clearWalletInitState(walletId: string): void {
-  reconcileWalletState(walletId)
   initPayloadsByWallet.delete(walletId)
   reinitializingByWallet.delete(walletId)
   activeSyncBatchByWallet.delete(walletId)
@@ -599,18 +656,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (message.walletId === undefined || typeof message.walletId === 'string') &&
     (message.all === undefined || typeof message.all === 'boolean')
   ) {
-    if (message.walletId && message.walletId !== '*') {
-      reconcileWalletState(message.walletId)
-    } else {
-      for (const walletId of [...activeSyncSessionByWallet.keys()]) {
-        reconcileWalletState(walletId)
+    const requestedWalletId = message.walletId
+    void (async () => {
+      try {
+        if (typeof requestedWalletId === 'string' && requestedWalletId !== '*') {
+          await reconcileWalletState(requestedWalletId)
+        } else {
+          const walletIds = new Set([...activeSyncSessionByWallet.keys()])
+          for (const key of pendingInitByWallet.keys()) {
+            const walletId = key.split(':')[0]
+            if (walletId) walletIds.add(walletId)
+          }
+          await Promise.all([...walletIds].map(walletId => reconcileWalletState(walletId)))
+        }
+        sendResponse({ success: true })
+      } catch (error) {
+        sendResponse({ error: error instanceof Error ? error.message : String(error) })
       }
-      for (const key of [...pendingInitByWallet.keys()]) {
-        const walletId = key.split(':')[0]
-        if (walletId) reconcileWalletState(walletId)
-      }
-    }
-    sendResponse({ success: true })
+    })()
     return true
   }
   sendResponse({ error: 'Invalid offscreen control message' })
@@ -1401,12 +1464,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const walletId = message.payload?.walletId as string | undefined
     ;(async () => {
       try {
+        const owner = parseSyncOwner(message.payload)
+        const force = message.payload?.force === true
         if (walletId && walletId !== '*') {
-          reconcileWalletState(walletId)
+          await reconcileWalletState(walletId, owner, force)
         } else {
-          for (const id of [...activeSyncSessionByWallet.keys()]) {
-            reconcileWalletState(id)
-          }
+          await Promise.all(
+            [...activeSyncSessionByWallet.keys()].map(id => reconcileWalletState(id, owner, force))
+          )
         }
         sendResponse({ result: true })
       } catch (error: any) {
@@ -1418,15 +1483,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.method === 'wallet.beginSyncSession') {
     const walletId = message.payload?.walletId as string | undefined
-    if (walletId) beginSyncSession(walletId)
-    sendResponse({ result: true })
+    try {
+      if (!walletId) throw new Error('Missing sync wallet ID')
+      beginSyncSession(walletId, parseSyncOwner(message.payload))
+      sendResponse({ result: true })
+    } catch (error) {
+      sendResponse({ error: error instanceof Error ? error.message : String(error) })
+    }
     return true
   }
 
   if (message.method === 'wallet.endSyncSession') {
     const walletId = message.payload?.walletId as string | undefined
-    if (walletId) endSyncSession(walletId)
-    sendResponse({ result: true })
+    try {
+      if (!walletId) throw new Error('Missing sync wallet ID')
+      endSyncSession(walletId, parseSyncOwner(message.payload))
+      sendResponse({ result: true })
+    } catch (error) {
+      sendResponse({ error: error instanceof Error ? error.message : String(error) })
+    }
     return true
   }
 
@@ -1463,14 +1538,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       journalWalletId?: string
       refresh?: boolean
     }
+    try {
+      assertCurrentSyncOwner(walletId, parseSyncOwner(message.payload))
+      if (activeSyncSessionByWallet.get(walletId)?.ownerId !== message.payload.ownerId) {
+        throw new Error('STALE_WALLET_RPC: sync session owner changed')
+      }
+    } catch (error) {
+      sendResponse({ error: error instanceof Error ? error.message : String(error) })
+      return true
+    }
     const generation = getWalletGeneration(walletId)
-    const batchPromise = zcashWorkerClient.requestToWorker('wallet.prepareSyncBatch', {
-      walletId,
-      batchSize,
-      refresh
-    })
-    activeSyncBatchByWallet.set(walletId, batchPromise)
-    batchPromise
+    const batchOperation = zcashWorkerClient
+      .requestToWorker('wallet.prepareSyncBatch', { walletId, batchSize, refresh })
       .then(async (result: any) => {
         trySetupLogForwarding()
         if (!result) {
@@ -1502,46 +1581,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ error: msg })
       })
       .finally(() => {
-        if (activeSyncBatchByWallet.get(walletId) === batchPromise) {
+        if (activeSyncBatchByWallet.get(walletId) === batchOperation) {
           activeSyncBatchByWallet.delete(walletId)
         }
       })
+    activeSyncBatchByWallet.set(walletId, batchOperation)
     return true
   }
 
   if (message.method === 'wallet.replayJournalEntries') {
     const { walletId, network, journalWalletId, allowAfterAbort } =
-      message.payload as RPCSchema['wallet.replayJournalEntries']['request']
-    const JOURNAL_REPLAY_CHUNK_SIZE = 5
+      message.payload as RPCSchema['wallet.replayJournalEntries']['request'] & {
+        network: string
+        journalWalletId: string
+        allowAfterAbort?: boolean
+      }
     ;(async () => {
       try {
-        const { getJournalManifest, loadJournalEntries } = await import('@/lib/indexed-db')
+        const { getJournalManifest, loadJournalPage } = await import('@/lib/indexed-db')
         const manifest = await getJournalManifest(network, journalWalletId)
         if (!manifest || manifest.nextSeq <= (manifest.baseSnapshotSeq ?? 0)) {
           sendResponse({ result: 0 })
           return
         }
-        const fromSeq = manifest.baseSnapshotSeq ?? 0
-        const entries = await loadJournalEntries(network, journalWalletId, fromSeq)
-        if (entries.length === 0) {
-          sendResponse({ result: 0 })
-          return
-        }
-        const entryData = entries.map(e => e.data)
-        let replayed = 0
-        for (let i = 0; i < entryData.length; i += JOURNAL_REPLAY_CHUNK_SIZE) {
-          // Finalization applies only completed journal batches. Keep the abort
-          // flag set for scanning while allowing its recovery snapshot to finish.
-          if (allowAfterAbort !== true && isSyncAbortRequested(walletId)) {
-            throw new SyncAbortedError(walletId)
+        const replayed = await replayJournalPages({
+          fromSeq: manifest.baseSnapshotSeq ?? 0,
+          toSeq: manifest.nextSeq,
+          readPage: (fromSeq, toSeq) => loadJournalPage(network, journalWalletId, fromSeq, toSeq),
+          applyPage: entries =>
+            zcashWorkerClient.requestToWorker('wallet.replayJournalEntries', { walletId, entries }),
+          ensureActive: () => {
+            // A completed batch can still finish recovery after scan cancellation.
+            if (allowAfterAbort !== true && isSyncAbortRequested(walletId)) {
+              throw new SyncAbortedError(walletId)
+            }
           }
-          const chunk = entryData.slice(i, i + JOURNAL_REPLAY_CHUNK_SIZE)
-          await zcashWorkerClient.requestToWorker('wallet.replayJournalEntries' as any, {
-            walletId,
-            entries: chunk
-          })
-          replayed += chunk.length
-        }
+        })
         trySetupLogForwarding()
         sendResponse({ result: replayed })
       } catch (error: any) {

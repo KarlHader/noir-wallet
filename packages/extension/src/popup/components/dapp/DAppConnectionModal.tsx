@@ -4,6 +4,7 @@ import { useDAppConnection } from '@/popup/hooks/useDAppConnection'
 import { useState } from 'react'
 import { ListSkeleton } from '../ui/skeleton'
 import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
 import { presentDAppPermissions } from '@/popup/services/dapp-connection-presentation'
 
@@ -11,6 +12,7 @@ export function DAppConnectionModal() {
   const { connectedDApps, loading, disconnectDApp } = useDAppConnection()
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const networkMode = useWalletStore(state => state.currentNetwork)
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
 
   const handleDisconnect = async (origin: string) => {
     if (disconnecting) return
@@ -54,7 +56,10 @@ export function DAppConnectionModal() {
         ) : (
           <div className="max-h-[calc(100dvh-15rem)] space-y-2 overflow-y-auto overscroll-contain pr-1">
             {connectedDApps.map(dapp => {
-              const permissions = presentDAppPermissions(dapp)
+              const permissions = presentDAppPermissions(dapp, {
+                network: networkMode,
+                endpointSettings
+              })
               return (
                 <div key={dapp.id} className="space-y-3 rounded-xl bg-card px-4 py-3">
                   <div className="flex min-w-0 items-center gap-3 overflow-hidden">

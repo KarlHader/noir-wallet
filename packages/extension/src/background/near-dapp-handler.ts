@@ -155,8 +155,8 @@ export class BackgroundNearDAppHandler {
     )
   }
 
-  notifyAccountsChanged(): Promise<void> {
-    return this.options.native.notifyAccountsChanged()
+  notifyAccountsChanged(origin?: string): Promise<void> {
+    return this.options.native.notifyAccountsChanged(origin)
   }
 
   prepareSessionAccountSelection(origin: string): Promise<DAppSessionAccountProposal> {

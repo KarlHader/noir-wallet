@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
+  isSwapMaximumQuotePending,
   resolveEvmSwapMaximumInsufficientFundsAdjustment,
   resolveSwapMaximumAdjustment
 } from '../../../src/popup/services/swap-maximum.ts'
@@ -36,6 +37,17 @@ function input(overrides = {}) {
     ...overrides
   }
 }
+
+test('native Max waits for its route estimate before allowing an inherited transfer amount to quote', () => {
+  const maximum = { amountRaw: '800000', networkFeeRaw: '100000' }
+  const initial = { selected: true, nativeSource: true, loading: false, maximum: null }
+  expect(isSwapMaximumQuotePending(initial)).toBe(true)
+  expect(isSwapMaximumQuotePending({ ...initial, loading: true })).toBe(true)
+  expect(isSwapMaximumQuotePending({ ...initial, maximum })).toBe(false)
+  expect(isSwapMaximumQuotePending({ ...initial, selected: false })).toBe(false)
+  expect(isSwapMaximumQuotePending({ ...initial, nativeSource: false })).toBe(false)
+  expect(isSwapMaximumQuotePending({ ...initial, nativeSource: false, loading: true })).toBe(true)
+})
 
 test('quotes a smaller real native amount before estimating Max or a changed fee tier', async () => {
   const unexpected = async () => {

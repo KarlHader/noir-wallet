@@ -10,6 +10,7 @@ test('forced strict reset propagates failure, preserves retry state, and clears 
   let aborted = 0
   let readinessReset = 0
   client.walletId = 'wallet-a'
+  client.environment = 'extension'
   client.isInitialized = false
   client.dbKey = 'mainnet_wallet-a'
   client.dbBytes = new Uint8Array([1])
@@ -24,6 +25,11 @@ test('forced strict reset propagates failure, preserves retry state, and clears 
     }
   }
   client.request = async (method, payload) => {
+    if (method === 'wallet.reconcile') {
+      assert.equal(payload.walletId, 'wallet-a')
+      assert.equal(payload.force, true)
+      return true
+    }
     assert.equal(method, 'wallet.reset')
     assert.deepEqual(payload, { walletId: 'wallet-a' })
     if (++attempts === 1) throw failure

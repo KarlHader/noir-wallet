@@ -594,9 +594,9 @@ export function SwapInputView({
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted">Rate</span>
                 <span className="text-right">
-                  1 {formatSymbol(tokenIn?.symbol) || '—'} ={' '}
-                  {isEstimatedOut && rate !== '...' ? '≈ ' : ''}
-                  {formatTokenQuantity(rate)} {formatSymbol(tokenOut?.symbol) || '—'}
+                  1 {formatSymbol(tokenIn?.symbol) || '—'}{' '}
+                  {isEstimatedOut && rate !== '...' ? '≈' : '='} {formatTokenQuantity(rate)}{' '}
+                  {formatSymbol(tokenOut?.symbol) || '—'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-sm">

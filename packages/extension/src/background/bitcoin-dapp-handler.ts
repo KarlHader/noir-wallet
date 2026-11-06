@@ -257,12 +257,14 @@ export class BackgroundBitcoinDAppHandler {
     }
   }
 
-  async notifyAccountsChanged(): Promise<void> {
+  async notifyAccountsChanged(origin?: string): Promise<void> {
     const connections = await this.options.manager.getAllConnections()
-    const bitcoinConnections = connections.filter(connection =>
-      connection.chainAuthorizations?.some(
-        authorization => authorization.chainId === this.options.network.chainId
-      )
+    const bitcoinConnections = connections.filter(
+      connection =>
+        (origin === undefined || connection.origin === origin) &&
+        connection.chainAuthorizations?.some(
+          authorization => authorization.chainId === this.options.network.chainId
+        )
     )
     if (bitcoinConnections.length === 0) return
     await Promise.all(

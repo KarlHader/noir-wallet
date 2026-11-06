@@ -237,6 +237,21 @@ describe('dApp message bridge', () => {
     ])
   })
 
+  it('does not forward the retired transaction history method', async () => {
+    const harness = createBridgeHarness([])
+
+    await harness.request('zcash_getTransactionHistory')
+
+    assert.equal(harness.sentMessages.length, 0)
+    assert.deepEqual(plain(harness.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-1',
+        error: 'Invalid or unsupported method'
+      }
+    ])
+  })
+
   it('keeps EVM requests closed when the build feature is disabled', async () => {
     const harness = createBridgeHarness([], [])
 

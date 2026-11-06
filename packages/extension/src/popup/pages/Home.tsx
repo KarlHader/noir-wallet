@@ -106,6 +106,7 @@ export function Home() {
   const {
     currentDApp,
     currentAccountAuthorized,
+    currentAccountConnectable,
     connectedDApps,
     loading: connectedDAppsLoading,
     connectCurrentAccount
@@ -1302,7 +1303,7 @@ export function Home() {
         </Tabs>
       </div>
 
-      {currentDApp && !currentAccountAuthorized && (
+      {currentDApp && !currentAccountAuthorized && currentAccountConnectable && (
         <DAppConnectPrompt
           host={currentDApp.host}
           favicon={currentDApp.favicon}

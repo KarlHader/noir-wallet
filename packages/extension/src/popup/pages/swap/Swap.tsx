@@ -14,12 +14,8 @@ import {
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import { getConfidentialTransferEstimate } from '@/config/intents'
-import {
-  deriveFeeByTier,
-  deriveFeeByTierFromEstimate,
-  marginalFeeForTier,
-  staticFeeFallbackZats
-} from '@/core/zcash/fee-policy'
+import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
+import { selectSwapFeeEstimate } from '@/lib/swap-fee'
 import { isZecToken } from '@/core/services/intents-api'
 import type {
   RheaSwapEvmSignatureReview,
@@ -104,6 +100,7 @@ import {
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { calculatePrivateFundingSourceAmount } from '@/core/transactions/private-funding'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { getUnavailableSwapNetworks } from '@/popup/services/swap-catalog-loading'
 import { classifyError } from '@/lib/errors'
 import { createDebugRequestId, logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
 import { logger } from '@/lib/logger'
@@ -111,6 +108,7 @@ import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wall
 import {
   resolveSwapMaximumAdjustment,
   resolveEvmSwapMaximumInsufficientFundsAdjustment,
+  isSwapMaximumQuotePending,
   resolveSelectedSwapMaximum,
   resolveZcashSwapMaximumAdjustment
 } from '@/popup/services/swap-maximum'
@@ -387,6 +385,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [quoteRetryable, setQuoteRetryable] = useState(false)
   const [isPreparingReview, setIsPreparingReview] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const feeConfirmationInFlight = useRef(false)
   const [isPrivateFundingSubmitting, setIsPrivateFundingSubmitting] = useState(false)
   const [transferPreparationError, setTransferPreparationError] = useState<string | null>(null)
   const [networkFeeTier, setNetworkFeeTier] = useState<NetworkFeeTier>(DEFAULT_NETWORK_FEE_TIER)
@@ -1457,19 +1456,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     to: swap.depositAddress,
     amount: swap.amountIn,
     fundingSource,
+    feeTier,
     enabled: swap.isZecSource && !!swap.depositAddress && !maxSelected && !isMaxTransferAmount
   })
-  const feeByTier = deriveFeeByTier(feeEstimate.feeZats, feeEstimate.error)
-  const maxFeeByTier = deriveFeeByTierFromEstimate(
-    maxTransfer.fee ? safeBig(maxTransfer.fee).mul(1e8).toNumber() : null,
-    feeTier,
-    maxTransfer.error
-  )
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxFeeByTier : feeByTier
+  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
+  const displayedFeeLoadingByTier = isMaxFeeMode
+    ? maxTransfer.loadingByTier
+    : feeEstimate.loadingByTier
   const displayedFeeLoading = isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading
-  const standardFeeZats = feeByTier.standard ?? staticFeeFallbackZats('standard')
-  const selectedFeeZats = feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
+  const standardFeeZats = feeEstimate.feeByTier.standard ?? staticFeeFallbackZats('standard')
+  const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
   const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   // Approximate while no live estimate is in flight or resolved (e.g. before a
   // quote has produced a deposit address). UI uses this to avoid implying the
@@ -1610,7 +1607,35 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     swap.updateAmountIn,
     zcashAvailability.amount
   ])
-  const networkFee = maxTransfer.fee && isMaxTransferAmount ? maxTransfer.fee : estimatedFeeZec
+  const selectedFee = selectSwapFeeEstimate(
+    swap.amountIn,
+    maxSelected,
+    maxTransfer.maxAmount,
+    { ...maxTransfer, feeZats: maxTransfer.feeByTier[feeTier] },
+    feeEstimate
+  )
+  const networkFee =
+    selectedFee.feeZats === null
+      ? estimatedFeeZec
+      : formatBaseUnitDecimalAmount(String(selectedFee.feeZats), ZEC_DECIMALS)
+  const feeSelectionKey = JSON.stringify([
+    swap.amountIn,
+    swap.depositAddress,
+    feeTier,
+    fundingSource,
+    walletSourcesScope,
+    useSettingsStore.getState().rpcEndpointPreferences.zcash,
+    getChainEndpointRuntimeKey(useSettingsStore.getState().chainEndpointSettings),
+    quoteResult?.quoteHandle
+  ])
+  const latestFee = useRef({ ...selectedFee, feeSelectionKey })
+  latestFee.current = { ...selectedFee, feeSelectionKey }
+  useEffect(() => {
+    if (!swap.isZecSource || !selectedFee.staleMax || isSending || viewStep !== 'review') return
+    setMaxSelected(false)
+    setViewStep('input')
+    toast.info('Maximum amount changed', 'Review the quote again before sending.')
+  }, [swap.isZecSource, selectedFee.staleMax, isSending, viewStep])
 
   const zcashAmountError = swap.isZecSource
     ? getFundingAmountError(swap.amountIn, zcashFundingBalance, zcashAvailability.amount)
@@ -1648,7 +1673,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           ? 'basic'
           : undefined,
       blocked:
-        (maxSelected && routeMaximum.loading) ||
+        isSwapMaximumQuotePending({
+          selected: maxSelected && viewStep === 'input',
+          nativeSource: !swap.isZecSource && walletOwnedSource?.asset.asset.kind === 'native',
+          loading: routeMaximum.loading,
+          maximum: routeMaximum.value
+        }) ||
         walletActionMode.loading ||
         destinationWalletActionMode.loading ||
         (crossChainSendRequested &&
@@ -1680,7 +1710,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     destinationWalletActionMode.loading,
     hasInvalidWalletAmount,
     maxSelected,
+    viewStep,
     routeMaximum.loading,
+    routeMaximum.value,
     zcashAmountError,
     walletSourcesLoading,
     isPrivateFunding,
@@ -2007,13 +2039,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
 
           const transferTarget = review.execution.target
-          const marginalFeeZats = marginalFeeForTier(feeTier)
+          const feeQuote = await zcashWalletRuntimeClient.getFeeQuote()
+          const marginalFeeZats = marginalFeeForTier(feeTier, feeQuote.standardMarginalFeeZats)
           if (maxSelected) {
             const estimate = await measure('zcash-estimate-maximum', () =>
               zcashWalletRuntimeClient.estimateMaxTransfer({
                 to: transferTarget,
                 fundingSource,
                 marginalFeeZats,
+                feeQuoteId: feeQuote.id,
                 debugRequestId: requestId
               })
             ).catch(() => null)
@@ -2052,6 +2086,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               amount: swap.amountIn,
               fundingSource,
               marginalFeeZats,
+              feeQuoteId: feeQuote.id,
               debugRequestId: requestId
             })
           )
@@ -2697,213 +2732,274 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       return
     }
     if (reviewAction === 'zcash-transfer') {
-      const quoteBinding =
-        quoteResult && rheaReview
-          ? {
-              provider: 'rhea-cross-chain-dex' as const,
-              quoteHandle: quoteResult.quoteHandle,
-              executionId: rheaReview.executionId,
-              router: rheaReview.router,
-              isCrossChain: rheaReview.isCrossChain,
-              destinationChain: swap.tokenOut?.blockchain,
-              depositAddress: swap.depositAddress,
-              originAsset: swap.tokenIn?.assetId,
-              destinationAsset: swap.tokenOut?.assetId,
-              expectedAmountOut: quoteResult.estimatedOut,
-              minAmountOut: quoteResult.minAmountOut,
-              recipient: quoteResult.recipient,
-              deadline: getRheaSwapQuoteDeadline(quoteResult)
-            }
-          : undefined
-
-      const marginalFeeZats = marginalFeeForTier(feeTier)
-
+      if (!selectedFee.ready || !selectedFee.feeQuote) {
+        toast.error('Network fee estimate is unavailable. Please try again.')
+        return
+      }
+      if (feeConfirmationInFlight.current) return
+      feeConfirmationInFlight.current = true
       try {
-        await zcashWalletRuntimeClient.estimateTransferFee({
-          to: swap.depositAddress,
-          amount: swap.amountIn,
-          fundingSource,
-          marginalFeeZats
-        })
-      } catch (error) {
-        if (isPrivateFunding) {
-          setIsPrivateFundingSubmitting(false)
+        const reviewedFee = selectedFee
+        const reviewedFeeQuote = selectedFee.feeQuote
+        const reviewedKey = feeSelectionKey
+        const reviewSequence = quoteRequestSequence.current
+        try {
+          const currentQuote = await zcashWalletRuntimeClient.getFeeQuote()
+          if (
+            reviewSequence !== quoteRequestSequence.current ||
+            latestFee.current.feeSelectionKey !== reviewedKey ||
+            !latestFee.current.ready ||
+            latestFee.current.feeQuote?.id !== reviewedFeeQuote.id ||
+            latestFee.current.feeZats !== reviewedFee.feeZats ||
+            currentQuote.id !== reviewedFeeQuote.id ||
+            reviewedFeeQuote.expiresAt <= Date.now()
+          ) {
+            if (isMaxFeeMode) void maxTransfer.request()
+            else feeEstimate.retry()
+            return
+          }
+        } catch {
+          if (isMaxFeeMode) void maxTransfer.request()
+          else feeEstimate.retry()
+          return
         }
-        const message = classifyError(error).userMessage
-        swap.setQuoteError(message)
-        setViewStep('input')
-        toast.error(message)
-        return
-      }
+        const quoteBinding =
+          quoteResult && rheaReview
+            ? {
+                provider: 'rhea-cross-chain-dex' as const,
+                quoteHandle: quoteResult.quoteHandle,
+                executionId: rheaReview.executionId,
+                router: rheaReview.router,
+                isCrossChain: rheaReview.isCrossChain,
+                destinationChain: swap.tokenOut?.blockchain,
+                depositAddress: swap.depositAddress,
+                originAsset: swap.tokenIn?.assetId,
+                destinationAsset: swap.tokenOut?.assetId,
+                expectedAmountOut: quoteResult.estimatedOut,
+                minAmountOut: quoteResult.minAmountOut,
+                recipient: quoteResult.recipient,
+                deadline: getRheaSwapQuoteDeadline(quoteResult)
+              }
+            : undefined
 
-      if (!isRheaSwapQuoteFresh(quoteResult)) {
-        await refreshExpiredReview()
-        return
-      }
+        const marginalFeeZats = marginalFeeForTier(
+          feeTier,
+          reviewedFeeQuote.standardMarginalFeeZats
+        )
 
-      const submitBase = swapEventBase()
-      sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_SUBMITTED, {
-        ...submitBase,
-        hasTransaction: 1,
-        extra: { ...submitBase.extra, hardware: isHardwareWallet, funding_source: fundingSource }
-      })
-
-      // Hardware wallets sign the deposit transfer via QR in a dedicated tab
-      if (isHardwareWallet) {
-        const { currentWalletId } = useWalletStore.getState()
-        if (!currentWalletId || !currentAccount) return
-        const request = {
-          kind: 'swap' as const,
-          walletId: currentWalletId,
-          accountId: currentAccount.id,
-          to: swap.depositAddress,
-          amount: swap.amountIn,
-          displayTo: quoteResult.recipient,
-          quoteBinding,
-          fundingSource,
-          marginalFeeZats
-        }
-        if (!isSidePanelSurface(window.location.search)) {
-          await openHardwareSignTab(request)
-          window.close()
+        try {
+          const updatedEstimate = await zcashWalletRuntimeClient.estimateTransferFee({
+            to: swap.depositAddress,
+            amount: swap.amountIn,
+            fundingSource,
+            marginalFeeZats,
+            feeQuoteId: reviewedFeeQuote.id
+          })
+          if (
+            updatedEstimate.feeQuote.id !== reviewedFeeQuote.id ||
+            updatedEstimate.feeZats !== String(reviewedFee.feeZats) ||
+            Number(updatedEstimate.marginalFeeZats) !== marginalFeeZats ||
+            updatedEstimate.feeQuote.expiresAt <= Date.now() ||
+            latestFee.current.feeSelectionKey !== reviewedKey ||
+            !latestFee.current.ready ||
+            latestFee.current.feeQuote?.id !== reviewedFeeQuote.id ||
+            latestFee.current.feeZats !== reviewedFee.feeZats ||
+            reviewSequence !== quoteRequestSequence.current
+          ) {
+            if (isMaxFeeMode) void maxTransfer.request()
+            else feeEstimate.retry()
+            return
+          }
+        } catch (error) {
+          if (isPrivateFunding) {
+            setIsPrivateFundingSubmitting(false)
+          }
+          const message = classifyError(error).userMessage
+          swap.setQuoteError(message)
+          setViewStep('input')
+          toast.error(message)
           return
         }
 
-        setIsSending(true)
-        try {
-          const result = await openHardwareSignAndWait(request, { presentation: 'window' })
-          if (result.status === 'success') {
-            navigateToSwapResult(result.txHash, 'zcash', result.transactionId, false, {
-              accountKey: result.accountKey,
-              transactionId: result.transactionId
-            })
-          } else if (result.status === 'timeout') {
-            toast.error('Hardware signing timed out', 'The swap review has been restored.')
-          } else {
-            toast.info('Hardware signing cancelled')
+        if (!isRheaSwapQuoteFresh(quoteResult)) {
+          await refreshExpiredReview()
+          return
+        }
+
+        const submitBase = swapEventBase()
+        sendAnalyticsEvent(ANALYTICS_EVENTS.SWAP_SUBMITTED, {
+          ...submitBase,
+          hasTransaction: 1,
+          extra: { ...submitBase.extra, hardware: isHardwareWallet, funding_source: fundingSource }
+        })
+
+        // Hardware wallets sign the deposit transfer via QR in a dedicated tab
+        if (isHardwareWallet) {
+          const { currentWalletId } = useWalletStore.getState()
+          if (!currentWalletId || !currentAccount) return
+          const request = {
+            kind: 'swap' as const,
+            walletId: currentWalletId,
+            accountId: currentAccount.id,
+            to: swap.depositAddress,
+            amount: swap.amountIn,
+            displayTo: quoteResult.recipient,
+            quoteBinding,
+            fundingSource,
+            marginalFeeZats,
+            feeQuoteId: reviewedFeeQuote.id,
+            feeTier
           }
+          if (!isSidePanelSurface(window.location.search)) {
+            await openHardwareSignTab(request)
+            window.close()
+            return
+          }
+
+          setIsSending(true)
+          try {
+            const result = await openHardwareSignAndWait(request, { presentation: 'window' })
+            if (result.status === 'success') {
+              navigateToSwapResult(result.txHash, 'zcash', result.transactionId, false, {
+                accountKey: result.accountKey,
+                transactionId: result.transactionId
+              })
+            } else if (result.status === 'timeout') {
+              toast.error('Hardware signing timed out', 'The swap review has been restored.')
+            } else {
+              toast.info('Hardware signing cancelled')
+            }
+          } catch (cause) {
+            toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+          } finally {
+            setIsSending(false)
+          }
+          return
+        }
+
+        navigateToSwapResult(undefined, 'zcash')
+        setIsSending(true)
+
+        let result: Awaited<ReturnType<typeof sendTransaction>>
+        try {
+          const fromAddress = currentAccount?.addresses[fundingSource] || ''
+          result = await sendTransaction({
+            to: swap.depositAddress,
+            amount: swap.amountIn,
+            from: fromAddress,
+            fromType: fundingSource,
+            txType: 'swap',
+            displayTo: quoteResult.recipient,
+            quoteBinding,
+            marginalFeeZats,
+            feeQuoteId: reviewedFeeQuote.id,
+            feeTier,
+            fee: networkFee,
+            analytics: {
+              pageId: PAGE_IDS.SWAP,
+              fundingSource,
+              outputSymbol: swap.tokenOut?.symbol,
+              direction: resolveSwapAnalyticsContext({
+                sourceFamily: 'zcash',
+                destinationBlockchain: swap.tokenOut?.blockchain,
+                destinationChainId: swap.tokenOut?.rheaChainId,
+                isTransfer: false,
+                executionSourceMode
+              }).direction
+            },
+            onCreated: (transaction, accountKey) =>
+              updateSwapOriginTransaction(
+                'zcash',
+                undefined,
+                { accountKey, transactionId: transaction.id },
+                quoteResult.quoteHandle
+              )
+          })
         } catch (cause) {
-          toast.error('Could not open hardware signing', classifyError(cause).userMessage)
+          result = { step: 'failed', error: classifyError(cause).userMessage }
         } finally {
           setIsSending(false)
         }
-        return
-      }
 
-      navigateToSwapResult(undefined, 'zcash')
-      setIsSending(true)
-
-      let result: Awaited<ReturnType<typeof sendTransaction>>
-      try {
-        const fromAddress = currentAccount?.addresses[fundingSource] || ''
-        result = await sendTransaction({
-          to: swap.depositAddress,
-          amount: swap.amountIn,
-          from: fromAddress,
-          fromType: fundingSource,
-          txType: 'swap',
-          displayTo: quoteResult.recipient,
-          quoteBinding,
-          marginalFeeZats,
-          analytics: {
-            pageId: PAGE_IDS.SWAP,
-            fundingSource,
-            outputSymbol: swap.tokenOut?.symbol,
-            direction: resolveSwapAnalyticsContext({
-              sourceFamily: 'zcash',
-              destinationBlockchain: swap.tokenOut?.blockchain,
-              destinationChainId: swap.tokenOut?.rheaChainId,
-              isTransfer: false,
-              executionSourceMode
-            }).direction
-          },
-          onCreated: (transaction, accountKey) =>
+        if (result.step === 'success') {
+          if (result.txHash && result.transactionId && result.accountKey) {
             updateSwapOriginTransaction(
               'zcash',
-              undefined,
-              { accountKey, transactionId: transaction.id },
+              result.txHash,
+              { accountKey: result.accountKey, transactionId: result.transactionId },
               quoteResult.quoteHandle
             )
-        })
-      } catch (cause) {
-        result = { step: 'failed', error: classifyError(cause).userMessage }
-      } finally {
-        setIsSending(false)
-      }
-
-      if (result.step === 'success') {
-        if (result.txHash && result.transactionId && result.accountKey) {
-          updateSwapOriginTransaction(
-            'zcash',
-            result.txHash,
-            { accountKey: result.accountKey, transactionId: result.transactionId },
-            quoteResult.quoteHandle
-          )
-        }
-        if (
-          result.txHash &&
-          result.transactionId &&
-          result.accountKey &&
-          quoteResult &&
-          rheaReview &&
-          effectiveWalletId &&
-          effectiveAccountId
-        ) {
-          try {
-            await rheaSwapClient.recordTransactionSubmission(quoteResult.quoteHandle, result.txHash)
-            const outcomes = await Promise.allSettled([
-              rheaSwapClient.startMonitoring({
-                quoteHandle: quoteResult.quoteHandle,
-                accountKey: result.accountKey,
-                walletId: effectiveWalletId,
-                accountId: effectiveAccountId,
-                transactionId: result.transactionId,
-                isCrossChain: rheaReview.isCrossChain,
-                destinationAsset: swap.tokenOut
-                  ? resolveRheaSwapDestinationIdentity(swap.tokenOut, portfolio).assetId
-                  : undefined,
-                destinationChain: swap.tokenOut?.blockchain
-              }),
-              rheaSwapClient.reportSubmission(quoteResult.quoteHandle)
-            ])
-            if (outcomes.some(outcome => outcome.status === 'rejected')) {
+          }
+          if (
+            result.txHash &&
+            result.transactionId &&
+            result.accountKey &&
+            quoteResult &&
+            rheaReview &&
+            effectiveWalletId &&
+            effectiveAccountId
+          ) {
+            try {
+              await rheaSwapClient.recordTransactionSubmission(
+                quoteResult.quoteHandle,
+                result.txHash
+              )
+              const outcomes = await Promise.allSettled([
+                rheaSwapClient.startMonitoring({
+                  quoteHandle: quoteResult.quoteHandle,
+                  accountKey: result.accountKey,
+                  walletId: effectiveWalletId,
+                  accountId: effectiveAccountId,
+                  transactionId: result.transactionId,
+                  isCrossChain: rheaReview.isCrossChain,
+                  destinationAsset: swap.tokenOut
+                    ? resolveRheaSwapDestinationIdentity(swap.tokenOut, portfolio).assetId
+                    : undefined,
+                  destinationChain: swap.tokenOut?.blockchain
+                }),
+                rheaSwapClient.reportSubmission(quoteResult.quoteHandle)
+              ])
+              if (outcomes.some(outcome => outcome.status === 'rejected')) {
+                toast.error('Swap was broadcast. Status updates will retry in the background.')
+              }
+            } catch {
               toast.error('Swap was broadcast. Status updates will retry in the background.')
             }
-          } catch {
-            toast.error('Swap was broadcast. Status updates will retry in the background.')
           }
-        }
-      } else if (result.step === 'pending') {
-        const currentResult = useTransactionResultStore.getState().data
-        if (
-          currentResult?.type === 'swap' &&
-          currentResult.depositAddress === swap.depositAddress
-        ) {
+        } else if (result.step === 'pending') {
+          const currentResult = useTransactionResultStore.getState().data
+          if (
+            currentResult?.type === 'swap' &&
+            currentResult.depositAddress === swap.depositAddress
+          ) {
+            setResult(
+              {
+                type: 'zcash',
+                step: 'pending',
+                amount: swap.amountIn,
+                error: result.error,
+                accountKey: result.accountKey,
+                transactionId: result.transactionId,
+                timestamp: result.timestamp
+              },
+              '/'
+            )
+          }
+        } else {
           setResult(
             {
               type: 'zcash',
-              step: 'pending',
+              step: 'failed',
               amount: swap.amountIn,
-              error: result.error,
-              accountKey: result.accountKey,
-              transactionId: result.transactionId,
-              timestamp: result.timestamp
+              customTitle: 'Swap Failed',
+              customDescription: result.error || 'Failed to send ZEC to deposit address.',
+              error: result.error
             },
             '/'
           )
         }
-      } else {
-        setResult(
-          {
-            type: 'zcash',
-            step: 'failed',
-            amount: swap.amountIn,
-            customTitle: 'Swap Failed',
-            customDescription: result.error || 'Failed to send ZEC to deposit address.',
-            error: result.error
-          },
-          '/'
-        )
+      } finally {
+        feeConfirmationInFlight.current = false
       }
     } else if (reviewAction === 'wallet-transfer' && preparedQuoteTransfer) {
       const submitBase = swapEventBase()
@@ -3235,6 +3331,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         showCloseButton: true,
         body: (_resolve, close) => (
           <SwapTokenSelector
+            unavailableNetworks={getUnavailableSwapNetworks(enabledSwapChains)}
             initialTokens={
               type === 'in' ? swap.sourceTokens : filterDestinations(swap.destinationTokens)
             }
@@ -3818,8 +3915,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           feeTier={swap.isZecSource ? feeTier : undefined}
           onFeeTierChange={swap.isZecSource ? setFeeTier : undefined}
           feeByTier={swap.isZecSource ? displayedFeeByTier : undefined}
+          feeLoadingByTier={swap.isZecSource ? displayedFeeLoadingByTier : undefined}
           feeLoading={swap.isZecSource ? displayedFeeLoading : undefined}
-          selectedFeeZec={swap.isZecSource ? networkFee : undefined}
+          feeUnavailable={swap.isZecSource && !selectedFee.ready}
+          feeError={swap.isZecSource && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)}
+          onRetryFee={() => {
+            if (isMaxFeeMode) void maxTransfer.request()
+            else feeEstimate.retry()
+          }}
           fundingSource={swap.isZecSource ? fundingSource : undefined}
           sourceNetworkFee={getPreparedSwapNetworkFee(preparedQuoteTransfer)}
           sourceFeeTier={

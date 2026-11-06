@@ -474,14 +474,20 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
       if (typeof value === 'string') setChainId(value)
       void refresh(provider, true).catch(refreshError => setError(formatError(refreshError)))
     }
+    const onSessionChanged = () => {
+      void refresh(provider).catch(refreshError => setError(formatError(refreshError)))
+    }
+    const multichain = getNoirWallet()?.multichain
     provider.on('accountsChanged', onAccountsChanged)
     provider.on('chainChanged', onChainChanged)
+    multichain?.on('wallet_sessionChanged', onSessionChanged)
     void refresh(provider, initialSelectionVersion.current === 0).catch(refreshError =>
       setError(formatError(refreshError))
     )
     return () => {
       provider.removeListener('accountsChanged', onAccountsChanged)
       provider.removeListener('chainChanged', onChainChanged)
+      multichain?.removeListener('wallet_sessionChanged', onSessionChanged)
     }
   }, [provider, refresh])
 

@@ -39,6 +39,7 @@ import {
   selectNewZcashAccountHistory,
   serveSdkExample,
   solanaEnabled,
+  stopImportedZcashSync,
   terminateExtensionServiceWorker,
   test,
   tmpdir,
@@ -147,7 +148,8 @@ test('attests custom endpoints for every released chain including Zcash', async 
 test('adds, persists, selects and removes custom RPCs through the real popup', async ({
   context,
   popup,
-  extensionId
+  extensionId,
+  zcashCustomRpcUrl
 }) => {
   test.setTimeout(180_000)
   await context.route('https://rpc.zknoir.com/v1/rpc-endpoints?scope=multichain', route =>
@@ -159,9 +161,10 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
   await mockReleasedBitcoinEsplora(context)
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
-  await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'RPC Endpoints' })).toBeVisible()
+  await popup.getByRole('button', { name: 'Networks', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Networks' })).toBeVisible()
 
   const releasedRpcChains = [
     ['Arbitrum', 'arbitrum'],
@@ -171,11 +174,10 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
     ['Zcash', 'zcash']
   ]
   for (const [index, [chain, path]] of releasedRpcChains.entries()) {
+    await popup.getByRole('button', { name: `Configure ${chain} network` }).click()
+    await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
     const customUrl =
-      chain === 'Zcash'
-        ? 'https://zcashwebrpc.deltarpc.com'
-        : `https://endpoint-release.noir.test/${path}`
-    await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+      chain === 'Zcash' ? zcashCustomRpcUrl : `https://endpoint-release.noir.test/${path}`
     const dialog = popup.getByRole('dialog')
     await expect(dialog.getByLabel(`${chain} RPC URL`)).toHaveCount(0)
     if (chain === 'Arbitrum') {
@@ -188,10 +190,10 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       await captureScreenshot(popup, 'rpc-arbitrum-presets.png')
       await dialog.getByRole('button', { name: 'Use automatic RPC' }).click()
       await expect(dialog).toHaveCount(0)
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
       await dialog.getByRole('button', { name: 'Use dRPC RPC' }).click()
       await expect(dialog).toHaveCount(0)
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
       await expect(dialog.getByRole('button', { name: 'Use dRPC RPC' })).toHaveAttribute(
         'aria-pressed',
         'true'
@@ -225,20 +227,29 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
               : 'rpc-add-zcash.png'
     )
     await dialog.getByRole('button', { name: 'Verify & Add' }).click()
-    await expect(dialog).toHaveCount(0, { timeout: 30_000 })
+    if (chain === 'Zcash') {
+      await expect(popup.getByRole('dialog', { name: 'Add Zcash RPC' })).toHaveCount(0, {
+        timeout: 30_000
+      })
+      await popup.keyboard.press('Escape')
+    } else {
+      await expect(dialog).toHaveCount(0, { timeout: 30_000 })
+    }
+    await popup.getByRole('button', { name: 'Back' }).click()
   }
 
   await popup.reload()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
-  await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'RPC Endpoints' })).toBeVisible()
+  await popup.getByRole('button', { name: 'Networks', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Networks' })).toBeVisible()
   const stored = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
   )
   expect(stored.result.savedRpcEndpoints).toHaveLength(releasedRpcChains.length)
   expect(await readPersistedEndpointModes(popup)).toEqual(['mainnet'])
   for (const [chain] of releasedRpcChains) {
-    await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+    await popup.getByRole('button', { name: `Configure ${chain} network` }).click()
+    await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
     const dialog = popup.getByRole('dialog')
     await expect(dialog.getByRole('button', { name: `Use My ${chain} RPC` })).toBeVisible()
     await dialog.getByRole('button', { name: `Use My ${chain} RPC` }).click()
@@ -249,7 +260,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       )
     } else {
       await expect(dialog).toHaveCount(0, { timeout: 30_000 })
-      await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+      await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
     }
     await captureScreenshot(
       popup,
@@ -273,7 +284,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
         chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
       )
       expect(findChainEndpointOverride(autoSettings.result, 'eip155:42161')?.rpc).toBeUndefined()
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
       await expect(dialog.getByRole('button', { name: 'Use automatic RPC' })).toHaveAttribute(
         'aria-pressed',
         'true'
@@ -297,7 +308,11 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       .getByRole('button', { name: `Remove My ${chain}` })
       .click()
     await popup.getByRole('dialog').getByRole('button', { name: 'Remove', exact: true }).click()
-    await expect(popup.getByRole('dialog')).toHaveCount(0, { timeout: 30_000 })
+    await expect(popup.getByRole('dialog', { name: 'Remove Custom RPC?' })).toHaveCount(0, {
+      timeout: 30_000
+    })
+    if (chain === 'Zcash') await popup.keyboard.press('Escape')
+    await popup.getByRole('button', { name: 'Back' }).click()
   }
   const removed = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
@@ -309,8 +324,9 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
   await sidePanel.setViewportSize({ width: 480, height: 900 })
   await sidePanel.goto(`chrome-extension://${extensionId}/index.html?surface=side-panel`)
   await sidePanel.getByRole('button', { name: 'Settings', exact: true }).click()
+  await sidePanel.getByRole('button', { name: 'Networks', exact: true }).click()
+  await sidePanel.getByRole('button', { name: 'Configure Arbitrum network' }).click()
   await sidePanel.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await sidePanel.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
   const sidePanelDialog = sidePanel.getByRole('dialog')
   const presets = sidePanelDialog.getByTestId('provider-presets')
   await expect(sidePanelDialog.getByRole('button', { name: 'Use ZAN RPC' })).toBeInViewport()

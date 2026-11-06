@@ -13,7 +13,9 @@ test('SDK example requests only the scopes exposed by a two-chain wallet', () =>
     'eip155:1'
   ])
   assert.deepEqual(request.scopes['eip155:1'].methods, [
+    'eth_chainId',
     'eth_accounts',
+    'eth_getBalance',
     'eth_sendTransaction',
     'personal_sign',
     'eth_signTypedData_v4'
