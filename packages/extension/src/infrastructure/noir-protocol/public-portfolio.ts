@@ -41,7 +41,8 @@ function publicChainAccount(
         scope.walletId,
         scope.accountId,
         account.parentContractId,
-        account.mcaId
+        account.mcaId,
+        ...(account.chain === 'evm' ? ['evm'] : [])
       ])
     ),
     scope: {
@@ -49,11 +50,20 @@ function publicChainAccount(
       accountId: parseAccountId(scope.accountId),
       chainId: parseChainId(`noir:${account.network}`).id
     },
-    derivation: {
-      scheme: 'zcash-lending-v1',
-      path: publicIdentityPath(scope.derivationIndex, account.signingMode)
-    },
-    identity: { kind: 'public-key', value: account.publicKey },
+    derivation:
+      account.chain === 'evm'
+        ? { scheme: 'evm-address', path: account.address }
+        : {
+            scheme: 'zcash-lending-v1',
+            path: publicIdentityPath(
+              scope.derivationIndex,
+              account.signingMode as 'derived' | 'legacy_index0'
+            )
+          },
+    identity:
+      account.chain === 'evm'
+        ? { kind: 'account-identifier', value: account.address }
+        : { kind: 'public-key', value: account.publicKey },
     createdAt: 0
   }
 }

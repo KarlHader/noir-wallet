@@ -69,7 +69,7 @@ api.removeListener('accountsChanged', account => void account)
 const connect: Promise<RootTypes.ZcashConnectResult> = api.connect()
 const accounts: Promise<RootTypes.ZcashConnectResult | null> = api.getAccounts()
 const publicAssets: Promise<RootTypes.PublicAssets> = api.getPublicAssets()
-const publicSigningMode: Promise<'derived' | 'legacy_index0'> = publicAssets.then(
+const publicSigningMode: Promise<RootTypes.PublicAccount['signingMode']> = publicAssets.then(
   ({ account }) => account.signingMode
 )
 const disconnect: Promise<void> = api.disconnect()

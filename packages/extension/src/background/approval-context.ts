@@ -9,6 +9,7 @@ import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { pendingRequestsManager, type PendingRequest } from './pending-requests'
 import { approvalContextMatches } from './approval-context-policy'
 import { credentialSession } from './credential-session'
+import { capturePublicEvmContext } from './noir-protocol/public-context'
 
 const ZCASH_ACTIONS = new Set([
   'connect',
@@ -23,6 +24,26 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
   const request = pendingRequestsManager.get(requestId)
   if (!request) throw new Error('Request not found or expired')
   if (!ZCASH_ACTIONS.has(request.action)) return request
+
+  if (
+    (request.action === 'publicActivate' || request.action === 'publicTransaction') &&
+    request.data?.account?.chain === 'evm'
+  ) {
+    try {
+      const context = await capturePublicEvmContext(request.origin, request.data.chainId)
+      if (
+        context.evmAddress !== request.data.account.publicKey ||
+        context.executionModeRevision !== request.data.executionModeRevision ||
+        context.authorizationRevision !== request.authorizationRevision ||
+        pendingRequestsManager.get(requestId) !== request
+      )
+        throw new Error('Public EVM approval context changed')
+      return request
+    } catch {
+      pendingRequestsManager.cancel(requestId)
+      throw new Error('EVM account or site connection changed. Reconnect and try again.')
+    }
+  }
 
   await rehydrateWalletStore()
   const authorization = await dappManager.getAuthorization(request.origin)

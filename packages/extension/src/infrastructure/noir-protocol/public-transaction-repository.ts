@@ -8,7 +8,8 @@ import type {
 import {
   computePublicSubmissionId,
   readPublicAccountId,
-  readPublicKey,
+  readPublicEvmAddress,
+  readPublicIdentity,
   parsePublicCandidate,
   parsePublicFunctionCallRequests,
   serializePublicCandidate,
@@ -54,6 +55,7 @@ interface NoirPublicRecordIdentity {
   readonly accountAddress: string
   readonly parentContractId: string
   readonly identityPublicKey: string
+  readonly identityChain?: 'evm'
   readonly now: number
 }
 
@@ -63,6 +65,7 @@ export interface CreateNoirPublicActivationInput extends Omit<
 > {
   readonly activationId: string
   readonly paymentIntent: NoirPublicActivationIntent
+  readonly preparedTransferGraph?: TransactionGraph
 }
 
 export interface CreateSignedNoirPublicTransactionInput extends NoirPublicRecordIdentity {
@@ -235,6 +238,30 @@ function createPublicGraph(
 export class NoirPublicTransactionRepository {
   constructor(private readonly repository: TransactionRepository) {}
 
+  private async listEvmActivations(
+    scope: TransactionAccountScope,
+    network: NoirPublicNetwork,
+    parentContractId: string,
+    identityPublicKey: string
+  ): Promise<readonly NoirPublicActivationRecord[]> {
+    const graphs = await this.repository.list({
+      scope,
+      provider: 'noir-public',
+      statuses: ['prepared', 'signed', 'broadcast', 'confirming', 'final', 'failed'],
+      limit: TRANSACTION_REPOSITORY_LIMITS.recordsPerAccount
+    })
+    return graphs.flatMap(graph => {
+      const binding = requirePublicBinding(graph)
+      return binding.kind === 'public-activation' &&
+        binding.identityChain === 'evm' &&
+        binding.network === network &&
+        binding.parentContractId === parentContractId &&
+        binding.identityPublicKey === identityPublicKey
+        ? [Object.freeze({ graph, binding })]
+        : []
+    })
+  }
+
   async createPreparedActivation(
     input: CreateNoirPublicActivationInput
   ): Promise<NoirPublicActivationRecord> {
@@ -242,17 +269,73 @@ export class NoirPublicTransactionRepository {
     const paymentIntent = parseNoirPublicActivationIntent(input.paymentIntent)
     if (
       input.requestId !== input.activationId ||
-      paymentIntent.recipient !== input.parentContractId
+      paymentIntent.recipient !== input.parentContractId ||
+      (input.identityChain === 'evm'
+        ? !paymentIntent.evmPayment ||
+          paymentIntent.evmPayment.accountAddress !==
+            readPublicIdentity(input.identityPublicKey, 'evm') ||
+          paymentIntent.evmPayment.transactionId !== input.activationId ||
+          paymentIntent.refundAddress !== readPublicIdentity(input.identityPublicKey, 'evm')
+        : paymentIntent.evmPayment !== undefined)
     ) {
       throw new Error('Noir Public activation does not match its payment intent')
     }
     const scope = parseScope(input.scope)
+    if (paymentIntent.evmPayment) {
+      if (!input.preparedTransferGraph) {
+        throw new Error('Noir Public EVM payment review graph is missing')
+      }
+      const transfer = parseTransactionGraph(input.preparedTransferGraph)
+      if (
+        transfer.root.id !== paymentIntent.evmPayment.transactionId ||
+        transfer.root.scope.keyDomainId !== scope.keyDomainId ||
+        transfer.root.scope.accountId !== scope.accountId ||
+        transfer.root.kind !== 'transfer' ||
+        transfer.root.status !== 'prepared' ||
+        transfer.root.intent?.sender?.chainId !== paymentIntent.evmPayment.chainId ||
+        readPublicEvmAddress(transfer.root.intent?.sender?.address) !==
+          paymentIntent.evmPayment.accountAddress ||
+        transfer.root.intent?.recipient?.chainId !== paymentIntent.evmPayment.chainId ||
+        readPublicEvmAddress(transfer.root.intent?.recipient?.address) !==
+          readPublicEvmAddress(paymentIntent.depositAddress) ||
+        transfer.root.intent.primaryAmount?.assetId !== paymentIntent.evmPayment.assetId ||
+        transfer.root.intent.primaryAmount?.amountRaw !== paymentIntent.amountInRaw
+      )
+        throw new Error('Noir Public EVM payment does not match the prepared transfer')
+      const previous = await this.listEvmActivations(
+        scope,
+        input.network,
+        input.parentContractId,
+        paymentIntent.evmPayment.accountAddress
+      )
+      for (const record of previous) {
+        if (
+          record.graph.root.status !== 'failed' ||
+          !['user-rejected', 'cancelled'].includes(record.graph.root.failure?.code ?? '') ||
+          record.graph.segments.some(segment => segment.evidence?.transactionHash)
+        )
+          throw new Error('Noir Public activation already exists for this account')
+        const previousPayment = record.binding.paymentIntent?.evmPayment
+        if (!previousPayment) throw new Error('Noir Public EVM activation payment is missing')
+        const durable = await this.repository.get(
+          scope,
+          parseTransactionId(previousPayment.transactionId)
+        )
+        if (
+          durable &&
+          (durable.root.status !== 'failed' ||
+            durable.segments.some(segment => segment.evidence?.transactionHash))
+        )
+          throw new Error('Noir Public EVM payment may still execute')
+      }
+    }
     const operationId = await publicOperationId('activation', [
       scope.keyDomainId,
       scope.accountId,
       input.network,
       input.parentContractId,
-      readPublicKey(input.identityPublicKey)
+      readPublicIdentity(input.identityPublicKey, input.identityChain ?? 'zcash'),
+      ...(input.identityChain === 'evm' ? [input.activationId] : [])
     ])
     const binding = parseNoirPublicTransactionBinding({
       schemaVersion: 1,
@@ -263,7 +346,11 @@ export class NoirPublicTransactionRepository {
       origin: input.origin,
       accountAddress: input.parentContractId,
       parentContractId: readPublicAccountId(input.parentContractId, 'Public parent contract'),
-      identityPublicKey: readPublicKey(input.identityPublicKey),
+      identityPublicKey: readPublicIdentity(
+        input.identityPublicKey,
+        input.identityChain ?? 'zcash'
+      ),
+      ...(input.identityChain === 'evm' ? { identityChain: 'evm' as const } : {}),
       requestFingerprint: await sha256(JSON.stringify(paymentIntent)),
       activationId: input.activationId,
       paymentIntent
@@ -286,6 +373,7 @@ export class NoirPublicTransactionRepository {
     input: CreateSignedNoirPublicTransactionInput
   ): Promise<NoirPublicTransactionRecord> {
     const candidate = parsePublicCandidate(input.candidate)
+    const identityChain = 'EVM' in candidate.signer_wallet ? 'evm' : 'zcash'
     if (candidate.tgas === undefined) throw new Error('Cannot create a legacy Public submission')
     const originalTxRequests = input.originalTxRequests
       ? parsePublicFunctionCallRequests(input.originalTxRequests)
@@ -302,7 +390,8 @@ export class NoirPublicTransactionRepository {
       scope.accountId,
       input.network,
       input.origin,
-      input.requestId
+      input.requestId,
+      ...(identityChain === 'evm' ? ['evm'] : [])
     ])
     const submissionId = await computePublicSubmissionId(candidate)
     const binding = parseNoirPublicTransactionBinding({
@@ -314,7 +403,8 @@ export class NoirPublicTransactionRepository {
       origin: input.origin,
       accountAddress: input.accountAddress,
       parentContractId: readPublicAccountId(input.parentContractId, 'Public parent contract'),
-      identityPublicKey: readPublicKey(input.identityPublicKey),
+      identityPublicKey: readPublicIdentity(input.identityPublicKey, identityChain),
+      ...(identityChain === 'evm' ? { identityChain: 'evm' as const } : {}),
       requestFingerprint: await fingerprintPublicRequests(originalTxRequests),
       submissionId,
       signedRequest: serializePublicCandidate(candidate)
@@ -331,7 +421,8 @@ export class NoirPublicTransactionRepository {
     scope: TransactionAccountScope,
     network: NoirPublicNetwork,
     origin: string,
-    requestId: string
+    requestId: string,
+    identityChain: 'zcash' | 'evm' = 'zcash'
   ): Promise<NoirPublicTransactionRecord | null> {
     const parsedScope = parseScope(scope)
     const id = await publicOperationId('transaction', [
@@ -339,10 +430,13 @@ export class NoirPublicTransactionRepository {
       parsedScope.accountId,
       network,
       origin,
-      requestId
+      requestId,
+      ...(identityChain === 'evm' ? ['evm'] : [])
     ])
     const graph = await this.repository.get(parsedScope, parseTransactionId(id))
-    return graph && assertRecordContext(graph, network, origin)
+    return graph &&
+      assertRecordContext(graph, network, origin) &&
+      (requirePublicBinding(graph).identityChain === 'evm' ? 'evm' : 'zcash') === identityChain
       ? projectPublicTransaction(graph)
       : null
   }
@@ -351,10 +445,14 @@ export class NoirPublicTransactionRepository {
     scope: TransactionAccountScope,
     network: NoirPublicNetwork,
     origin: string,
-    operationId: string
+    operationId: string,
+    identityChain?: 'zcash' | 'evm'
   ): Promise<NoirPublicTransactionRecord | null> {
     const graph = await this.repository.get(parseScope(scope), parseTransactionId(operationId))
-    return graph && assertRecordContext(graph, network, origin)
+    return graph &&
+      assertRecordContext(graph, network, origin) &&
+      (identityChain === undefined ||
+        (requirePublicBinding(graph).identityChain === 'evm' ? 'evm' : 'zcash') === identityChain)
       ? projectPublicTransaction(graph)
       : null
   }
@@ -363,15 +461,29 @@ export class NoirPublicTransactionRepository {
     scope: TransactionAccountScope,
     network: NoirPublicNetwork,
     parentContractId: string,
-    identityPublicKey: string
+    identityPublicKey: string,
+    identityChain: 'zcash' | 'evm' = 'zcash'
   ): Promise<NoirPublicActivationRecord | null> {
     const parsedScope = parseScope(scope)
+    if (identityChain === 'evm') {
+      const activations = await this.listEvmActivations(
+        parsedScope,
+        network,
+        parentContractId,
+        readPublicIdentity(identityPublicKey, 'evm')
+      )
+      return (
+        activations.find(
+          record => record.graph.root.status !== 'final' && record.graph.root.status !== 'failed'
+        ) ?? null
+      )
+    }
     const id = await publicOperationId('activation', [
       parsedScope.keyDomainId,
       parsedScope.accountId,
       network,
       parentContractId,
-      readPublicKey(identityPublicKey)
+      readPublicIdentity(identityPublicKey, identityChain)
     ])
     const graph = await this.repository.get(parsedScope, parseTransactionId(id))
     if (!graph || graph.root.status === 'final' || graph.root.status === 'failed') return null
@@ -550,6 +662,107 @@ export class NoirPublicTransactionRepository {
     return Object.freeze({ graph: updated, binding: requirePublicBinding(updated) })
   }
 
+  async markEvmActivationPaymentRejected(
+    scope: TransactionAccountScope,
+    operationId: string,
+    now: number,
+    failedTransferGraph?: TransactionGraph
+  ): Promise<NoirPublicActivationRecord> {
+    const parsedScope = parseScope(scope)
+    const id = parseTransactionId(operationId)
+    const activation = await this.repository.get(parsedScope, id)
+    const payment = activation && requirePublicBinding(activation).paymentIntent?.evmPayment
+    if (!payment) throw new Error('Noir Public EVM activation payment is missing')
+    const durableTransfer = await this.repository.get(
+      parsedScope,
+      parseTransactionId(payment.transactionId)
+    )
+    const transfer =
+      durableTransfer ?? (failedTransferGraph ? parseTransactionGraph(failedTransferGraph) : null)
+    if (
+      transfer?.root.id !== payment.transactionId ||
+      transfer.root.scope.keyDomainId !== parsedScope.keyDomainId ||
+      transfer.root.scope.accountId !== parsedScope.accountId ||
+      transfer.root.status !== 'failed' ||
+      transfer.segments.some(segment => segment.evidence?.transactionHash)
+    )
+      throw new Error('Noir Public EVM transfer has not failed without a broadcast')
+    const updated = await this.applyProgress(
+      parsedScope,
+      id,
+      'origin',
+      'failed',
+      now,
+      {},
+      'user-rejected',
+      graph => {
+        const binding = requirePublicBinding(graph)
+        const origin = graph.segments.find(segment => segment.role === 'origin')
+        if (
+          binding.kind !== 'public-activation' ||
+          binding.identityChain !== 'evm' ||
+          !binding.paymentIntent?.evmPayment ||
+          origin?.status !== 'prepared' ||
+          origin.evidence?.transactionHash
+        )
+          throw new Error('Noir Public activation payment cannot be rejected')
+      }
+    )
+    return Object.freeze({ graph: updated, binding: requirePublicBinding(updated) })
+  }
+
+  async markEvmActivationPaymentAbandoned(
+    scope: TransactionAccountScope,
+    operationId: string,
+    now: number,
+    confirmNoPending: () => Promise<boolean>
+  ): Promise<NoirPublicActivationRecord> {
+    const parsedScope = parseScope(scope)
+    const id = parseTransactionId(operationId)
+    const activation = await this.repository.get(parsedScope, id)
+    const binding = activation && requirePublicBinding(activation)
+    const payment =
+      binding?.kind === 'public-activation' && binding.identityChain === 'evm'
+        ? binding.paymentIntent?.evmPayment
+        : undefined
+    if (!payment) throw new Error('Noir Public EVM activation payment is missing')
+    if (!(await confirmNoPending())) {
+      throw new Error('Noir Public EVM payment is still pending')
+    }
+    const durable = await this.repository.get(
+      parsedScope,
+      parseTransactionId(payment.transactionId)
+    )
+    if (
+      durable &&
+      (durable.root.status !== 'failed' ||
+        durable.segments.some(segment => segment.evidence?.transactionHash))
+    )
+      throw new Error('Noir Public EVM payment may still execute')
+    const updated = await this.applyProgress(
+      parsedScope,
+      id,
+      'origin',
+      'failed',
+      now,
+      {},
+      'cancelled',
+      graph => {
+        const current = requirePublicBinding(graph)
+        const origin = graph.segments.find(segment => segment.role === 'origin')
+        if (
+          current.kind !== 'public-activation' ||
+          current.identityChain !== 'evm' ||
+          current.paymentIntent?.evmPayment?.transactionId !== payment.transactionId ||
+          origin?.status !== 'prepared' ||
+          origin.evidence?.transactionHash
+        )
+          throw new Error('Noir Public activation payment cannot be abandoned')
+      }
+    )
+    return Object.freeze({ graph: updated, binding: requirePublicBinding(updated) })
+  }
+
   async applyActivationBound(
     scope: TransactionAccountScope,
     operationId: string,
@@ -566,11 +779,12 @@ export class NoirPublicTransactionRepository {
     if (
       !graph ||
       binding?.kind !== 'public-activation' ||
-      account.chain !== 'zcash-l2' ||
+      account.chain !== (binding.identityChain === 'evm' ? 'evm' : 'zcash-l2') ||
       account.status !== 'active' ||
       account.network !== binding.network ||
       account.parentContractId !== binding.parentContractId ||
-      readPublicKey(account.publicKey) !== binding.identityPublicKey ||
+      readPublicIdentity(account.publicKey, binding.identityChain ?? 'zcash') !==
+        binding.identityPublicKey ||
       !account.mcaId ||
       readPublicAccountId(account.mcaId, 'Bound Noir Public account') === binding.accountAddress
     ) {
@@ -587,7 +801,7 @@ export class NoirPublicTransactionRepository {
     status: TransactionLifecycleStatus,
     now: number,
     evidence: { readonly transactionHash?: string },
-    failure?: 'reverted' | 'expired',
+    failure?: 'reverted' | 'expired' | 'user-rejected' | 'cancelled',
     precondition?: (graph: TransactionGraph) => void
   ): Promise<TransactionGraph> {
     for (let attempt = 0; attempt < 4; attempt += 1) {

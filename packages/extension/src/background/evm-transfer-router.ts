@@ -50,6 +50,13 @@ export interface BackgroundEvmTransferRouteController {
     transactionIdValue: string,
     payloadFingerprint: string
   ) => Promise<EvmTransferApprovalResult>
+  readonly approveForDApp: (
+    transactionIdValue: string,
+    payloadFingerprint: string,
+    authorize: (
+      context: import('@/infrastructure/chains/evm').ActiveEvmPortfolioContext
+    ) => Promise<void>
+  ) => Promise<EvmTransferApprovalResult>
   readonly prepareCancel: (
     originalTransactionIdValue: string,
     executionModeValue?: unknown
@@ -216,6 +223,21 @@ export class BackgroundEvmTransferRouter {
     return routed?.controller.getPendingApproval(routed.transactionId) ?? null
   }
 
+  async hasPendingTransferForScope(
+    transactionIdValue: string,
+    scope: TransactionAccountScope
+  ): Promise<boolean> {
+    const pending = await this.options.pendingStore.get(parseTransactionId(transactionIdValue))
+    if (!pending) return false
+    if (
+      pending.scope.keyDomainId !== scope.keyDomainId ||
+      pending.scope.accountId !== scope.accountId
+    ) {
+      throw new Error('Pending EVM transfer belongs to another account')
+    }
+    return true
+  }
+
   async prepareCancel(
     chainIdValue: string,
     originalTransactionIdValue: string,
@@ -271,6 +293,17 @@ export class BackgroundEvmTransferRouter {
     return routed.controller.approve(routed.transactionId, payloadFingerprint)
   }
 
+  async approveForPublic(
+    transactionIdValue: string,
+    payloadFingerprint: string,
+    authorize: (
+      context: import('@/infrastructure/chains/evm').ActiveEvmPortfolioContext
+    ) => Promise<void>
+  ): Promise<EvmTransferApprovalResult> {
+    const routed = await this.requirePendingController(transactionIdValue)
+    return routed.controller.approveForDApp(routed.transactionId, payloadFingerprint, authorize)
+  }
+
   async getExternalSigningRequest(
     transactionIdValue: string
   ): Promise<BackgroundEvmExternalSigningRequest | null> {
@@ -300,10 +333,16 @@ export class BackgroundEvmTransferRouter {
     transactionIdValue: string,
     scope: TransactionAccountScope
   ): Promise<boolean> {
+    return (await this.rejectForScopeWithGraph(transactionIdValue, scope)) !== null
+  }
+
+  async rejectForScopeWithGraph(
+    transactionIdValue: string,
+    scope: TransactionAccountScope
+  ): Promise<TransactionGraph | null> {
     const routed = await this.resolvePendingController(transactionIdValue)
-    if (!routed) return false
-    await routed.controller.rejectForScope(routed.transactionId, scope)
-    return true
+    if (!routed) return null
+    return routed.controller.rejectForScope(routed.transactionId, scope)
   }
 
   async resumeBroadcast(transactionIdValue: string): Promise<EvmTransferSubmission> {

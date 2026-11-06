@@ -9,15 +9,24 @@ export function NoirPublicActivationReview({ review }: { readonly review: Activa
     <div className="space-y-4">
       <section aria-label="Total payment" className="py-4 text-center">
         <p className="mb-2 text-xs text-muted">Total payment</p>
-        <AmountDisplay value={review.totalPayment} symbol="ZEC" className="text-2xl font-medium" />
+        <AmountDisplay
+          value={review.totalPayment}
+          symbol={review.sourceSymbol}
+          className="text-2xl font-medium"
+        />
       </section>
 
       <ApprovalDetailCard ariaLabel="Payment breakdown">
         <DetailRow label="Activation payment">
-          <AmountDisplay value={review.amount} symbol="ZEC" className="text-sm" />
+          <AmountDisplay value={review.amount} symbol={review.sourceSymbol} className="text-sm" />
         </DetailRow>
         <DetailRow label="Network fee">
-          <AmountDisplay value={review.fee} symbol="ZEC" profile="fee" className="text-sm" />
+          <AmountDisplay
+            value={review.fee}
+            symbol={review.sourceSymbol}
+            profile="fee"
+            className="text-sm"
+          />
         </DetailRow>
       </ApprovalDetailCard>
 

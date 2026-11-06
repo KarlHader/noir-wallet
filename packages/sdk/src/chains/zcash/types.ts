@@ -69,9 +69,9 @@ export interface ZcashBalanceResult extends Balance {
 }
 
 export interface PublicAccount {
-  chain: 'zcash-l2'
+  chain: 'zcash-l2' | 'evm'
   network: 'mainnet' | 'testnet'
-  signingMode: 'derived' | 'legacy_index0'
+  signingMode: 'derived' | 'legacy_index0' | 'evm'
   publicKey: string
   address: string
   mcaId: string | null

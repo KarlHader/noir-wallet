@@ -156,7 +156,14 @@ import {
 import { createBackgroundEvmPortfolioCoordinator } from './evm-portfolio'
 import { createBackgroundPortfolioCoordinator } from './portfolio'
 import { noirPublicRuntime, PUBLIC_TRANSACTION_MONITOR_ALARM } from './noir-protocol/public-runtime'
-import { capturePublicContext, publicInternalOrigin } from './noir-protocol/public-context'
+import {
+  capturePublicContext,
+  capturePublicEvmContext,
+  publicInternalOrigin,
+  assertPublicContext
+} from './noir-protocol/public-context'
+import { PUBLIC_SESSION_METHODS } from './multichain-session-dapp-handler'
+import { selectPublicAccount } from './noir-protocol/public-account-selection'
 import { createBackgroundActivityCoordinator } from './activity'
 import {
   createBackgroundAssetMarketHistoryService,
@@ -258,7 +265,11 @@ import {
   BackgroundMultichainSessionDAppHandler,
   toCaip25ErrorShape
 } from './multichain-session-dapp-handler'
-import { caip25SessionAllowsMethod, type Caip25RuntimeMethod } from '@/core/dapp/caip25'
+import {
+  Caip25ProviderError,
+  caip25SessionAllowsMethod,
+  type Caip25RuntimeMethod
+} from '@/core/dapp/caip25'
 import {
   resolveNearRuntimeNetworkConfig,
   resolveSolanaRuntimeNetworkConfig
@@ -682,8 +693,50 @@ async function dispatchDAppChainRequest(
     readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
   },
   origin: string,
-  tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
+  tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string },
+  caip27Scope?: string
 ): Promise<unknown> {
+  if (PUBLIC_SESSION_METHODS.has(request.method)) {
+    if (!caip27Scope || (chainId !== 'evm' && chainId !== 'zcash'))
+      throw new Error('Public requires an authorized CAIP-27 scope')
+    const context =
+      chainId === 'evm'
+        ? await capturePublicEvmContext(origin, caip27Scope)
+        : await capturePublicContext(origin)
+    const params = Array.isArray(request.params) ? request.params : []
+    const approve = async (
+      action:
+        | 'publicActivate'
+        | 'publicTransaction'
+        | 'signMessage'
+        | 'evmMessage'
+        | 'evmTransaction',
+      data: unknown
+    ) => {
+      const decision = await dappHandler.requestExternalApproval(origin, action, {
+        ...(data as object),
+        ...(tabInfo.favIconUrl ? { favicon: tabInfo.favIconUrl } : {})
+      })
+      if (!decision.approved) throw new Caip25ProviderError(4001, 'User rejected the request.')
+      return decision
+    }
+    const result =
+      request.method === 'noir_getPublicAccount'
+        ? await noirPublicRuntime.getAccount(context)
+        : request.method === 'noir_getPublicAssets'
+          ? await noirPublicRuntime.getAssets(context)
+          : request.method === 'noir_getPublicTransaction'
+            ? await noirPublicRuntime.getTransaction(context, params[0])
+            : request.method === 'noir_activatePublicAccount'
+              ? await noirPublicRuntime.activate(context, approve, approve)
+              : request.method === 'noir_sendPublicTransaction'
+                ? await noirPublicRuntime.send(context, params[0], approve)
+                : request.method === 'noir_getPublicKey'
+                  ? await noirPublicRuntime.getPublicKey(context)
+                  : await noirPublicRuntime.signMessage(context, params[0], approve)
+    await assertPublicContext(context)
+    return result
+  }
   await assertCaip25MethodPermission(chainId, request.method, origin)
   if (chainId === 'evm') {
     const result = await evmDAppHandler.request(
@@ -1035,6 +1088,7 @@ async function reloadMultichainRuntime(
       : null
   evmTransferController = evmTransferRuntime?.activeController ?? null
   evmTransferRouter = evmTransferRuntime?.router ?? null
+  noirPublicRuntime.setEvmPaymentRouter(evmTransferRouter)
   confidentialFundingCoordinator = evmFeatureRuntimePolicy.newOperationsEnabled
     ? createBackgroundConfidentialFundingCoordinator(
         catalog,
@@ -1116,6 +1170,8 @@ async function reloadMultichainRuntime(
     analytics: trackEvent,
     network: DEFAULT_NETWORK,
     evmNetworks: catalog,
+    activeChainIds: async () =>
+      (await accountNetworksCoordinator.readActiveAccount())?.chainIds ?? [],
     manager: dappManager,
     approval: dappHandler,
     zcash: dappHandler,
@@ -1142,7 +1198,10 @@ async function reloadMultichainRuntime(
             iconChain: 'near'
           }
         }),
-    dispatch: dispatchDAppChainRequest
+    dispatch: (family, request, origin, tabInfo, scope) =>
+      dispatchDAppChainRequest(family, request, origin, tabInfo, scope),
+    selectPublicAccount: (origin, scopes) =>
+      selectPublicAccount(origin, scopes, context => noirPublicRuntime.getAccount(context))
   })
   assetPriceService = createBackgroundAssetPriceService(
     userAssets.definitions,
@@ -2212,9 +2271,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             isRuntimeRecord(Reflect.get(request.params, 'scopes'))
               ? (Reflect.get(request.params, 'scopes') as Record<string, unknown>)
               : null
+          const activeAccount = await accountNetworksCoordinator.readActiveAccount()
           const needsZcashRuntime = Boolean(
             requestedScopes &&
-            Object.prototype.hasOwnProperty.call(requestedScopes, getZcashChainId(DEFAULT_NETWORK))
+            Object.prototype.hasOwnProperty.call(
+              requestedScopes,
+              getZcashChainId(DEFAULT_NETWORK)
+            ) &&
+            activeAccount?.chainIds.includes(getZcashChainId(DEFAULT_NETWORK))
           )
           if (unlockRequired) await promptUnlock({ restoreZcashRuntime: needsZcashRuntime })
         }

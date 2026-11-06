@@ -23,7 +23,10 @@ import type {
   NoirPublicTransaction,
   NoirPublicTransactionParams
 } from '@/core/services/noir-protocol/public/types'
-import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
+import {
+  IndexedDbTransactionRepository,
+  IndexedDbStorageV2Repository
+} from '@/infrastructure/persistence/repositories'
 import { NoirPublicClient } from '@/infrastructure/noir-protocol/public-client'
 import { getPublicActivationQuote } from '@/infrastructure/noir-protocol/public-activation-client'
 import {
@@ -51,11 +54,18 @@ import {
 } from './public-context'
 import { backgroundZcashWalletRuntime } from '../zcash-wallet-runtime'
 import { transactionRecorder } from '../transaction-recorder'
+import { signPublicEvmMessage } from './public-evm-signing'
+import { getEvmNetworkConfigs } from '@/config/networks'
+import { getEvmNativeProtocolAssetId } from '@/config/asset-market-assets'
+import { parseChainId } from '@/core/chains/registry'
+import { parseTransactionId } from '@/core/transactions/domain'
+import { createBackgroundEvmTransferAssetRegistry } from '../evm-transfer-assets'
+import type { BackgroundEvmTransferRouter } from '../evm-transfer-router'
 
 export const PUBLIC_TRANSACTION_MONITOR_ALARM = 'noir-public-monitor'
 
-type NoirPublicApproval = (
-  action: 'publicActivate' | 'publicTransaction',
+type NoirPublicApproval<Action extends string = 'publicActivate' | 'publicTransaction'> = (
+  action: Action,
   data: unknown
 ) => Promise<{ approved: boolean }>
 
@@ -120,6 +130,7 @@ export class NoirPublicRuntime {
   private readonly monitor = new DedupPromise<void>()
   private readonly accountRefreshes = new Map<string, Promise<NoirPublicAccount>>()
   private paymentExecutor: ((payment: NoirPublicPayment) => Promise<void>) | null = null
+  private evmPaymentRouter: BackgroundEvmTransferRouter | null = null
   private identityReadiness: (() => Promise<boolean>) | null = null
 
   setIdentityReadiness(ready: () => Promise<boolean>): void {
@@ -128,6 +139,10 @@ export class NoirPublicRuntime {
 
   setPaymentExecutor(execute: (payment: NoirPublicPayment) => Promise<void>): void {
     this.paymentExecutor = execute
+  }
+
+  setEvmPaymentRouter(router: BackgroundEvmTransferRouter | null): void {
+    this.evmPaymentRouter = router
   }
 
   private async serial<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -142,21 +157,49 @@ export class NoirPublicRuntime {
     }
   }
 
-  private accountScopes() {
-    return useWalletStore
+  private async accountScopes(context?: NoirPublicRequestContext) {
+    const legacy = useWalletStore
       .getState()
       .wallets.flatMap(wallet =>
         wallet.accounts.map(account =>
           publicTransactionScope({ walletId: wallet.id, accountId: account.id })
         )
       )
+    const storage = new IndexedDbStorageV2Repository()
+    const pointer = await storage.getActivePointer()
+    const snapshot = pointer ? await storage.getSnapshot(pointer.generationId) : null
+    const native =
+      snapshot?.manifest.status === 'verified' &&
+      snapshot.manifest.sourceFingerprint === pointer?.sourceFingerprint
+        ? snapshot.accounts.map(account => ({
+            keyDomainId: account.keyDomainId,
+            accountId: account.id
+          }))
+        : []
+    const scopes = [...legacy, ...native, ...(context ? [publicTransactionScope(context)] : [])]
+    return scopes.filter(
+      (scope, index) =>
+        scopes.findIndex(
+          candidate =>
+            candidate.keyDomainId === scope.keyDomainId && candidate.accountId === scope.accountId
+        ) === index
+    )
   }
 
   async getAccount(context: NoirPublicRequestContext, refresh = true): Promise<NoirPublicAccount> {
     await assertPublicContext(context)
     const config = requirePublicConfig(context.network)
-    const cached = await readPublicAccountProjection(context, config.parentContractId)
-    if (cached && !refresh) {
+    const cached = await readPublicAccountProjection(
+      context,
+      config.parentContractId,
+      context.chainId ? 'evm' : 'zcash-l2'
+    )
+    if (
+      cached &&
+      cached.chain === (context.chainId ? 'evm' : 'zcash-l2') &&
+      (!context.chainId || cached.publicKey === context.evmAddress) &&
+      !refresh
+    ) {
       const key = queueKey(context, cached.publicKey)
       if (!this.accountRefreshes.has(key)) {
         const pending = this.getAccount(context, true)
@@ -173,26 +216,33 @@ export class NoirPublicRuntime {
     }
     // This projection only contains identities selected by the shared Lending resolver.
     // Read-only refreshes must not depend on restoring the signing Worker after a restart.
-    const identity = cached
-      ? { pubkey: cached.publicKey, address: cached.address, signingMode: cached.signingMode }
-      : await this.deriveIdentity(context)
+    const identity = context.chainId
+      ? { pubkey: context.evmAddress!, address: context.evmAddress!, signingMode: 'evm' as const }
+      : cached
+        ? { pubkey: cached.publicKey, address: cached.address, signingMode: cached.signingMode }
+        : await this.deriveIdentity(context)
     await assertPublicContext(context)
     // Reimported aliases of the same key must share an in-flight payment.
     const pending = (
       await Promise.all(
-        this.accountScopes().map(scope =>
+        (await this.accountScopes(context)).map(scope =>
           this.repository.getPendingActivation(
             scope,
             context.network,
             config.parentContractId,
-            identity.pubkey
+            identity.pubkey,
+            context.chainId ? 'evm' : 'zcash'
           )
         )
       )
     ).find(record => record !== null)
     let mcaId: string | null
     try {
-      mcaId = await clientFor(context.network).getMcaByWallet(identity.pubkey)
+      mcaId = await clientFor(context.network).getMcaByWallet(
+        identity.pubkey,
+        undefined,
+        context.chainId ? 'evm' : 'zcash'
+      )
     } catch (error) {
       await assertPublicContext(context)
       if (cached?.publicKey === identity.pubkey && cached.signingMode === identity.signingMode)
@@ -201,7 +251,7 @@ export class NoirPublicRuntime {
     }
     await assertPublicContext(context)
     const account: NoirPublicAccount = {
-      chain: 'zcash-l2',
+      chain: context.chainId ? 'evm' : 'zcash-l2',
       network: context.network,
       publicKey: identity.pubkey,
       signingMode: identity.signingMode,
@@ -261,6 +311,7 @@ export class NoirPublicRuntime {
   }
 
   private async deriveIdentity(context: NoirPublicRequestContext) {
+    if (context.chainId) throw new Error('EVM identity must come from the authorized scope')
     const core = await this.getSigningCore(context)
     const resolve = (mode: 'derived' | 'legacy_index0') =>
       fetchCachedIdentity(
@@ -284,10 +335,76 @@ export class NoirPublicRuntime {
     return { ...identity, signingMode }
   }
 
+  async getPublicKey(context: NoirPublicRequestContext) {
+    const account = await this.getAccount(context, false)
+    await assertPublicContext(context)
+    return {
+      pubkey: account.publicKey,
+      address: account.address,
+      signingMode: account.signingMode,
+      network: context.network
+    }
+  }
+
+  private async signZcashMessage(
+    context: NoirPublicRequestContext,
+    account: NoirPublicAccount,
+    message: string
+  ): Promise<string> {
+    if (account.signingMode === 'evm') throw new Error('Zcash signing identity changed')
+    return signPublicMessage(
+      await this.getSigningCore(context),
+      context.derivationIndex,
+      account.publicKey,
+      message,
+      account.signingMode
+    )
+  }
+
+  async signMessage(
+    context: NoirPublicRequestContext,
+    value: unknown,
+    approve: NoirPublicApproval<'signMessage' | 'evmMessage'>
+  ) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 4096)
+      throw new Error('Invalid Public message')
+    const account = await this.getAccount(context, false)
+    await assertPublicContext(context)
+    if (!context.chainId && !(await approve('signMessage', { message: value })).approved)
+      throw new Error('User rejected the signature request')
+    return accountContextTransition.runActiveOperation(async () => {
+      await assertPublicContext(context)
+      const signature = context.chainId
+        ? await signPublicEvmMessage(context, value, review =>
+            approve('evmMessage', {
+              chainName: context.chainId,
+              executionMode: context.evmExecutionMode,
+              review,
+              method: 'personal_sign',
+              message: value
+            })
+          )
+        : await this.signZcashMessage(context, account, value)
+      await assertPublicContext(context)
+      return {
+        signature,
+        pubkey: account.publicKey,
+        address: account.address,
+        signingMode: account.signingMode,
+        network: context.network
+      }
+    })
+  }
+
   async activate(
     context: NoirPublicRequestContext,
-    approve: NoirPublicApproval
+    approve: NoirPublicApproval<'publicActivate'>,
+    approveEvmPayment?: NoirPublicApproval<'evmTransaction'>
   ): Promise<NoirPublicAccount> {
+    if (context.chainId) {
+      if (!approveEvmPayment) throw new Error('Public EVM payment approval is unavailable')
+      return this.activateEvm(context, approve, approveEvmPayment)
+    }
     const initial = await this.getAccount(context)
     return this.serial(queueKey(context, initial.publicKey), async () => {
       await assertPublicContext(context)
@@ -296,18 +413,23 @@ export class NoirPublicRuntime {
       const config = requirePublicConfig(context.network)
       const client = clientFor(context.network)
       // Recheck the binding without a cached fallback before preparing any payment.
-      if (await client.getMcaByWallet(account.publicKey)) return this.getAccount(context)
+      if (
+        await client.getMcaByWallet(
+          account.publicKey,
+          undefined,
+          account.chain === 'evm' ? 'evm' : 'zcash'
+        )
+      )
+        return this.getAccount(context)
       const core = await backgroundZcashWalletRuntime.getWalletCore(
         context.walletId,
         context.accountId
       )
       await assertPublicContext(context)
-      const signature = await signPublicMessage(
-        core,
-        context.derivationIndex,
-        account.publicKey,
-        JSON.stringify([{ Zcash: account.publicKey }]),
-        account.signingMode
+      const signature = await this.signZcashMessage(
+        context,
+        account,
+        JSON.stringify([{ Zcash: account.publicKey }])
       )
       const fee = await client.getCreateMcaFee(config.zecTokenId)
       const refundAddress = useWalletStore
@@ -438,6 +560,228 @@ export class NoirPublicRuntime {
     })
   }
 
+  private async activateEvm(
+    context: NoirPublicRequestContext,
+    approve: NoirPublicApproval<'publicActivate'>,
+    approvePayment: NoirPublicApproval<'evmTransaction'>
+  ): Promise<NoirPublicAccount> {
+    if (!context.chainId || !context.evmAddress || !context.evmExecutionMode)
+      throw new Error('Public EVM account is unavailable')
+    const chainId = parseChainId(context.chainId).id
+    const initial = await this.getAccount(context)
+    return this.serial(queueKey(context, initial.publicKey), async () => {
+      await assertPublicContext(context)
+      const account = await this.getAccount(context)
+      if (account.status !== 'inactive') return account
+      const router = this.evmPaymentRouter
+      if (!router) throw new Error('EVM transfer is unavailable')
+      const network = getEvmNetworkConfigs(context.network).find(item => item.chainId === chainId)
+      const protocolAssetId = getEvmNativeProtocolAssetId(chainId)
+      if (!network || !protocolAssetId) throw new Error('Public EVM payment asset is unavailable')
+      const native = createBackgroundEvmTransferAssetRegistry(network, [])
+        .list(chainId)
+        .find(entry => entry.asset.kind === 'native')
+      if (!native) throw new Error('EVM native asset is unavailable')
+      const config = requirePublicConfig(context.network)
+      const client = clientFor(context.network)
+      if (await client.getMcaByWallet(account.publicKey, undefined, 'evm'))
+        return this.getAccount(context)
+      const message = JSON.stringify([{ EVM: account.publicKey.slice(2) }])
+      const signature = await signPublicEvmMessage(context, message)
+      const fee = await client.getCreateMcaFee(config.zecTokenId)
+      const quote = await getPublicActivationQuote(
+        createPublicActivationQuoteRequest({
+          config,
+          publicKey: account.publicKey,
+          signature,
+          evmSource: { chainId, protocolAssetId },
+          refundAddress: account.address,
+          amountOutRaw: fee
+        }),
+        config
+      )
+      assertPublicActivationQuoteForPayment(quote, config, fee)
+      if (!/^0x[0-9a-fA-F]{40}$/.test(quote.depositAddress))
+        throw new Error('Public EVM deposit address is invalid')
+      const expiresAt = Date.parse(quote.expiresAt)
+      const prepared = await router.prepare(
+        { assetId: native.asset.id, recipient: quote.depositAddress, amountRaw: quote.amountInRaw },
+        undefined,
+        undefined,
+        context.evmExecutionMode
+      )
+      const transferId = prepared.graph.root.id
+      const scope = publicTransactionScope(context)
+      const feeLimit = prepared.graph.root.intent?.feeLimit?.amountRaw
+      try {
+        if (
+          prepared.graph.root.scope.keyDomainId !== scope.keyDomainId ||
+          prepared.graph.root.scope.accountId !== scope.accountId ||
+          prepared.review.chainId !== chainId ||
+          typeof feeLimit !== 'string'
+        )
+          throw new Error('EVM payment review does not match the Public account')
+        const review = {
+          account,
+          chainId,
+          executionModeRevision: context.executionModeRevision,
+          sourceSymbol: native.metadata.symbol,
+          amount: formatBaseUnitDecimalAmount(quote.amountInRaw, native.metadata.decimals),
+          fee: formatBaseUnitDecimalAmount(feeLimit, native.metadata.decimals),
+          creationFee: formatBaseUnitDecimalAmount(fee, 8),
+          expectedCredit: formatBaseUnitDecimalAmount(
+            (BigInt(quote.amountOutRaw) - BigInt(fee)).toString(),
+            8
+          ),
+          depositAddress: quote.depositAddress,
+          expiresAt
+        }
+        await assertPublicContext(context)
+        if (!(await approve('publicActivate', review)).approved)
+          throw new Error('User rejected Public activation')
+        await assertPublicContext(context)
+        const paymentDecision = await approvePayment('evmTransaction', {
+          chainName: network.displayName,
+          iconChain: network.iconChain,
+          executionMode: context.evmExecutionMode,
+          privacyRoute: 'onchain',
+          nativeCurrency: network.nativeCurrency,
+          token: null,
+          review: prepared.review,
+          intent: {
+            assetId: native.asset.id,
+            recipient: quote.depositAddress,
+            amountRaw: quote.amountInRaw
+          },
+          feeSelection: { kind: 'tier', tier: 'standard' },
+          feeTier: 'standard',
+          feeEditingAvailable: false
+        })
+        if (!paymentDecision.approved) throw new Error('User rejected the EVM payment')
+      } catch (error) {
+        await router.reject(transferId).catch(() => {})
+        throw error
+      }
+      let paymentSubmitted = false
+      let activationId: string | null = null
+      try {
+        await assertPublicContext(context)
+        if (await client.getMcaByWallet(account.publicKey, undefined, 'evm')) {
+          await router.reject(transferId)
+          return this.getAccount(context)
+        }
+        if ((await client.getCreateMcaFee(config.zecTokenId)) !== fee)
+          throw new Error('Activation fee changed. Review a new quote.')
+        assertPublicActivationQuoteForPayment(quote, config, fee)
+        if (Date.now() >= expiresAt) throw new Error('Public activation quote expired')
+        const pendingTransfer = await router.getPendingApproval(transferId)
+        if (
+          !pendingTransfer ||
+          pendingTransfer.review.payloadFingerprint.digestHex !==
+            prepared.review.payloadFingerprint.digestHex
+        )
+          throw new Error('EVM payment changed. Review a new activation.')
+        await assertPublicContext(context)
+        const record = await this.repository.createPreparedActivation({
+          scope,
+          network: context.network,
+          origin: context.origin,
+          requestId: transferId,
+          activationId: transferId,
+          parentContractId: config.parentContractId,
+          identityPublicKey: account.publicKey,
+          identityChain: 'evm',
+          preparedTransferGraph: pendingTransfer.graph,
+          now: Date.now(),
+          paymentIntent: {
+            depositAddress: quote.depositAddress,
+            amountInRaw: quote.amountInRaw,
+            amountOutRaw: quote.amountOutRaw,
+            feeRaw: feeLimit,
+            expiresAt,
+            refundAddress: account.address,
+            recipient: config.parentContractId,
+            parentMessage: quote.request.customRecipientMsg,
+            evmPayment: {
+              chainId,
+              assetId: native.asset.id,
+              protocolAssetId,
+              accountAddress: account.address,
+              transactionId: transferId
+            }
+          }
+        })
+        activationId = record.graph.root.id
+        await writePublicAccountProjection(context, {
+          ...account,
+          status: 'activating',
+          activationId: record.graph.root.id
+        })
+        await this.ensureMonitoring()
+        paymentSubmitted = true
+        try {
+          const submission = await router.approveForPublic(
+            transferId,
+            prepared.review.payloadFingerprint.digestHex,
+            async active => {
+              await assertPublicContext(context)
+              if (
+                active.generationId !== context.generationId ||
+                active.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
+                active.chainAccount.scope.accountId !== scope.accountId ||
+                active.chainAccount.scope.chainId !== chainId
+              )
+                throw new Error('EVM payment account changed before approval')
+            }
+          )
+          if (submission.status === 'external-signature-required')
+            throw new Error('Public EVM activation requires a software account')
+        } catch (error) {
+          const payment = await new IndexedDbTransactionRepository().get(
+            scope,
+            parseTransactionId(transferId)
+          )
+          const transactionHash = payment?.segments.find(segment => segment.role === 'origin')
+            ?.evidence?.transactionHash
+          if (!transactionHash && (!payment || payment.root.status === 'failed')) {
+            const failedTransfer = await router
+              .rejectForScopeWithGraph(transferId, scope)
+              .catch(() => null)
+            if (failedTransfer || payment?.root.status === 'failed')
+              await this.repository.markEvmActivationPaymentRejected(
+                scope,
+                record.graph.root.id,
+                Date.now(),
+                failedTransfer ?? undefined
+              )
+            throw error
+          }
+          // A signed transfer may still broadcast after an ambiguous response.
+        }
+        await this.reconcileActivation(record)
+        notifyChanged(context)
+        return this.getAccount(context)
+      } catch (error) {
+        if (!paymentSubmitted) {
+          const failedTransfer = await router
+            .rejectForScopeWithGraph(transferId, scope)
+            .catch(() => null)
+          if (activationId) {
+            await this.repository
+              .markEvmActivationPaymentRejected(
+                scope,
+                activationId,
+                Date.now(),
+                failedTransfer ?? undefined
+              )
+              .catch(() => {})
+          }
+        }
+        throw error
+      }
+    })
+  }
+
   async send(
     context: NoirPublicRequestContext,
     value: unknown,
@@ -453,7 +797,8 @@ export class NoirPublicRuntime {
         scope,
         context.network,
         context.origin,
-        request.requestId
+        request.requestId,
+        context.chainId ? 'evm' : 'zcash'
       )
       if (previous) {
         if (
@@ -464,9 +809,18 @@ export class NoirPublicRuntime {
         }
         return (await this.reconcileTransaction(previous)).transaction
       }
-      const pending = await this.repository.listPending(this.accountScopes(), context.network)
+      const pending = await this.repository.listPending(
+        await this.accountScopes(context),
+        context.network
+      )
       const client = clientFor(context.network)
-      if ((await client.getMcaByWallet(account.publicKey)) !== account.mcaId)
+      if (
+        (await client.getMcaByWallet(
+          account.publicKey,
+          undefined,
+          account.chain === 'evm' ? 'evm' : 'zcash'
+        )) !== account.mcaId
+      )
         throw new Error('Public account binding changed')
       const nonce = await client.getMcaNonce(account.mcaId!)
       if (
@@ -498,6 +852,9 @@ export class NoirPublicRuntime {
       await assertPublicContext(context)
       const review = {
         account,
+        ...(context.chainId
+          ? { chainId: context.chainId, executionModeRevision: context.executionModeRevision }
+          : {}),
         txRequests: paid.txRequests,
         nonce,
         deadline,
@@ -515,21 +872,19 @@ export class NoirPublicRuntime {
         if (Date.now() >= Number(deadline)) throw new Error('Public transaction expired')
         if ((await client.getMcaNonce(account.mcaId!)) !== nonce)
           throw new Error('Public account nonce changed. Review a new request.')
-        if ((await client.getMcaByWallet(account.publicKey)) !== account.mcaId)
+        if (
+          (await client.getMcaByWallet(
+            account.publicKey,
+            undefined,
+            account.chain === 'evm' ? 'evm' : 'zcash'
+          )) !== account.mcaId
+        )
           throw new Error('Public account binding changed')
         assertPublicFeeQuoteStillCovers(paid, feeQuote, await client.getGasFeeQuote())
-        const core = await backgroundZcashWalletRuntime.getWalletCore(
-          context.walletId,
-          context.accountId
-        )
-        await assertPublicContext(context)
-        const signature = await signPublicMessage(
-          core,
-          context.derivationIndex,
-          account.publicKey,
-          serializePublicBusiness({ nonce, deadline, txRequests: paid.txRequests }),
-          account.signingMode
-        )
+        const business = serializePublicBusiness({ nonce, deadline, txRequests: paid.txRequests })
+        const signature = context.chainId
+          ? await signPublicEvmMessage(context, business)
+          : await this.signZcashMessage(context, account, business)
         await assertPublicContext(context)
         const candidate = createPublicCandidate({
           address: account.mcaId,
@@ -538,7 +893,8 @@ export class NoirPublicRuntime {
           txRequests: paid.txRequests,
           tgas: paid.tgas,
           publicKey: account.publicKey,
-          signature
+          signature,
+          ...(context.chainId ? { identityChain: 'evm' as const } : {})
         })
         const record = await this.repository.createSigned({
           scope,
@@ -587,7 +943,8 @@ export class NoirPublicRuntime {
       publicTransactionScope(context),
       context.network,
       context.origin,
-      operationId
+      operationId,
+      context.chainId ? 'evm' : 'zcash'
     )
     if (!record) return null
     const result = await this.reconcileTransaction(record)
@@ -658,14 +1015,19 @@ export class NoirPublicRuntime {
   private async reconcileActivation(record: NoirPublicActivationRecord): Promise<void> {
     const binding = record.binding
     const scope = record.graph.root.scope
-    const mcaId = await clientFor(binding.network).getMcaByWallet(binding.identityPublicKey)
+    const mcaId = await clientFor(binding.network).getMcaByWallet(
+      binding.identityPublicKey,
+      undefined,
+      binding.identityChain ?? 'zcash'
+    )
     if (mcaId) {
       const cached = await readPublicAccountProjection(
         { network: binding.network, walletId: scope.keyDomainId, accountId: scope.accountId },
-        binding.parentContractId
+        binding.parentContractId,
+        binding.identityChain === 'evm' ? 'evm' : 'zcash-l2'
       )
       const account = {
-        chain: 'zcash-l2' as const,
+        chain: binding.identityChain === 'evm' ? ('evm' as const) : ('zcash-l2' as const),
         network: binding.network,
         publicKey: binding.identityPublicKey,
         address: cached?.address ?? '',
@@ -681,6 +1043,51 @@ export class NoirPublicRuntime {
         )
       await this.refreshKnownAssets(record, mcaId).catch(() => {})
       notifyChanged({ walletId: scope.keyDomainId, accountId: scope.accountId })
+      return
+    }
+    if (binding.identityChain === 'evm') {
+      const paymentId = binding.paymentIntent?.evmPayment?.transactionId
+      if (!paymentId) throw new Error('Public EVM activation payment binding is missing')
+      const payment = await new IndexedDbTransactionRepository().get(
+        scope,
+        parseTransactionId(paymentId)
+      )
+      if (!payment) {
+        const router = this.evmPaymentRouter
+        if (!router) return
+        if (await router.hasPendingTransferForScope(paymentId, scope)) return
+        await this.repository.markEvmActivationPaymentAbandoned(
+          scope,
+          record.graph.root.id,
+          Date.now(),
+          async () => !(await router.hasPendingTransferForScope(paymentId, scope))
+        )
+        return
+      }
+      const transactionHash = payment.segments.find(segment => segment.role === 'origin')?.evidence
+        ?.transactionHash
+      if (payment.root.status === 'failed' && !transactionHash) {
+        await this.repository.markEvmActivationPaymentRejected(
+          scope,
+          record.graph.root.id,
+          Date.now()
+        )
+        return
+      }
+      if (
+        transactionHash &&
+        (payment.root.status === 'broadcast' ||
+          payment.root.status === 'confirming' ||
+          payment.root.status === 'final')
+      ) {
+        await this.repository.applyActivationPayment(
+          scope,
+          record.graph.root.id,
+          transactionHash,
+          payment.root.status,
+          Date.now()
+        )
+      }
       return
     }
     const transactions = await loadTransactions(
@@ -711,16 +1118,18 @@ export class NoirPublicRuntime {
     const walletId = scope.keyDomainId
     const accountId = scope.accountId
     const retained = useWalletStore.getState().getAccount(walletId, accountId)
-    if (!retained || binding.network !== DEFAULT_NETWORK) return
+    if ((!retained && binding.identityChain !== 'evm') || binding.network !== DEFAULT_NETWORK)
+      return
     const cached = await readPublicAccountProjection(
       { walletId, accountId, network: binding.network },
-      binding.parentContractId
+      binding.parentContractId,
+      binding.identityChain === 'evm' ? 'evm' : 'zcash-l2'
     )
     const mcaId =
       boundMcaId ?? (binding.kind === 'contract-call' ? binding.accountAddress : cached?.mcaId)
     if (!mcaId || !cached || cached.publicKey !== binding.identityPublicKey) return
     const account: NoirPublicAccount = {
-      chain: 'zcash-l2',
+      chain: binding.identityChain === 'evm' ? 'evm' : 'zcash-l2',
       network: binding.network,
       publicKey: binding.identityPublicKey,
       signingMode: cached.signingMode,
@@ -729,7 +1138,7 @@ export class NoirPublicRuntime {
       parentContractId: binding.parentContractId,
       status: 'active'
     }
-    const context = { walletId, accountId, derivationIndex: retained.derivationIndex }
+    const context = { walletId, accountId, derivationIndex: retained?.derivationIndex ?? 0 }
     const tokens = requirePublicConfig(binding.network).assets
     const previous = await this.portfolio.read(account, context, tokens)
     const client = clientFor(binding.network)
@@ -766,7 +1175,7 @@ export class NoirPublicRuntime {
     return this.monitor.run(async () => {
       if (DEFAULT_NETWORK !== 'mainnet') return
       await rehydrateWalletStore()
-      const pending = await this.repository.listPending(this.accountScopes(), DEFAULT_NETWORK)
+      const pending = await this.repository.listPending(await this.accountScopes(), DEFAULT_NETWORK)
       if (!pending.length) {
         await chrome.alarms.clear(PUBLIC_TRANSACTION_MONITOR_ALARM)
         return

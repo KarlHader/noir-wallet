@@ -6,7 +6,7 @@ import {
   computePublicSubmissionId,
   readPublicAccountId,
   readPublicDecimal,
-  readPublicKey,
+  createPublicSignerWallet,
   readPublicSubmissionId,
   serializePublicBusiness,
   serializePublicCandidate,
@@ -477,12 +477,16 @@ export class NoirPublicClient {
     )
   }
 
-  async getMcaByWallet(publicKey: string, signal?: AbortSignal): Promise<string | null> {
+  async getMcaByWallet(
+    publicKey: string,
+    signal?: AbortSignal,
+    identityChain: 'zcash' | 'evm' = 'zcash'
+  ): Promise<string | null> {
     const result = await this.callNearView(
       this.config.parentContractId,
       'get_mca_by_wallet',
       {
-        wallet: { Zcash: readPublicKey(publicKey) }
+        wallet: createPublicSignerWallet(publicKey, identityChain)
       },
       signal
     )

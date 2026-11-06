@@ -7,6 +7,15 @@ import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
 import type { Network } from '@/types'
 import { credentialSession } from '../credential-session'
 import { accountContextTransition } from '../account-context-transition'
+import { loadActiveEvmPortfolioContext, parseEvmAccountBinding } from '@/infrastructure/chains/evm'
+import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
+import { dappExecutionModeCoordinator, dappExecutionModeRequestGate } from '../dapp-execution-mode'
+import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
+import { parseChainId } from '@/core/chains/registry'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+
+const evmStorage = new IndexedDbStorageV2Repository()
+const evmSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
 
 // In-flight requests must stay invalid after an account switches away and back.
 let requestEpoch = 0
@@ -37,6 +46,66 @@ export interface NoirPublicRequestContext {
   readonly internal: boolean
   readonly authorizationRevision: number
   readonly requestEpoch: number
+  readonly chainId?: string
+  readonly evmAddress?: string
+  readonly evmExecutionMode?: 'main' | 'private'
+  readonly generationId?: string
+  readonly executionModeRevision?: number
+}
+
+async function activeEvmIdentity(chainId: string) {
+  const active = await loadActiveEvmPortfolioContext(evmStorage, chainId)
+  if (!active) throw new Error('No active EVM account')
+  if (!supportsEvmPrivateExecution(active.keyDomainSource))
+    throw new Error('Public requires a supported EVM signing account')
+  const binding = parseEvmAccountBinding(active.chainAccount, parseChainId(chainId).id)
+  const reference = active.chainAccount.scope
+  const modeToken = dappExecutionModeRequestGate.capture({
+    network: DEFAULT_NETWORK,
+    keyDomainId: reference.keyDomainId,
+    accountId: reference.accountId
+  })
+  await dappExecutionModeRequestGate.waitForStable(modeToken)
+  const mode = await dappExecutionModeCoordinator.read({
+    network: DEFAULT_NETWORK,
+    keyDomainId: reference.keyDomainId,
+    accountId: reference.accountId
+  })
+  const address =
+    mode.mode === 'private'
+      ? (await evmSigner.deriveGlobalPea(reference.keyDomainId, binding.addressIndex)).address
+      : binding.address
+  await dappExecutionModeRequestGate.waitForStable(modeToken)
+  return { active, binding, address: address.toLowerCase(), mode: mode.mode, modeToken }
+}
+
+export async function capturePublicEvmContext(
+  origin: string,
+  chainIdValue: string
+): Promise<NoirPublicRequestContext> {
+  const chain = parseChainId(chainIdValue)
+  if (chain.namespace !== 'eip155') throw new Error('Public EVM requires an EVM scope')
+  if (!(await credentialSession.hasUnlockSession()))
+    throw new Error('Unlock the wallet to continue')
+  const identity = await activeEvmIdentity(chain.id)
+  const reference = identity.active.chainAccount.scope
+  const context: NoirPublicRequestContext = {
+    walletId: reference.keyDomainId,
+    accountId: reference.accountId,
+    derivationIndex: identity.binding.addressIndex,
+    network: DEFAULT_NETWORK,
+    origin,
+    internal: false,
+    authorizationRevision: await dappManager.getAuthorizationRevision(origin),
+    requestEpoch,
+    chainId: chain.id,
+    evmAddress: identity.address,
+    evmExecutionMode: identity.mode,
+    generationId: identity.active.generationId,
+    executionModeRevision: identity.modeToken.revision
+  }
+  await assertPublicContext(context)
+  return context
 }
 
 export function publicTransactionScope(
@@ -78,6 +147,52 @@ export async function capturePublicContext(
 export async function assertPublicContext(context: NoirPublicRequestContext): Promise<void> {
   if (context.requestEpoch !== requestEpoch)
     throw new Error('Wallet context changed. Review the request again.')
+  if (context.chainId) {
+    if (
+      context.network !== DEFAULT_NETWORK ||
+      !context.evmAddress ||
+      !context.generationId ||
+      context.executionModeRevision === undefined
+    )
+      throw new Error('Invalid Public EVM account context')
+    if (!(await credentialSession.hasUnlockSession()))
+      throw new Error('Unlock the wallet to continue')
+    const modeToken = {
+      scope: {
+        network: DEFAULT_NETWORK,
+        keyDomainId: parseKeyDomainId(context.walletId),
+        accountId: parseAccountId(context.accountId)
+      },
+      revision: context.executionModeRevision
+    }
+    await dappExecutionModeRequestGate.waitForStable(modeToken)
+    const identity = await activeEvmIdentity(context.chainId)
+    const scope = identity.active.chainAccount.scope
+    if (
+      context.requestEpoch !== requestEpoch ||
+      scope.keyDomainId !== context.walletId ||
+      scope.accountId !== context.accountId ||
+      identity.active.generationId !== context.generationId ||
+      identity.binding.addressIndex !== context.derivationIndex ||
+      identity.modeToken.revision !== context.executionModeRevision ||
+      identity.mode !== context.evmExecutionMode ||
+      identity.address !== context.evmAddress
+    )
+      throw new Error('EVM account or execution mode changed. Review the request again.')
+    const [revision, authorization] = await Promise.all([
+      dappManager.getAuthorizationRevision(context.origin),
+      dappManager.getChainAuthorization(context.origin, context.chainId)
+    ])
+    if (
+      revision !== context.authorizationRevision ||
+      !authorization?.accounts.some(
+        account => account.walletId === context.walletId && account.accountId === context.accountId
+      )
+    )
+      throw new Error('Wallet connection changed. Reconnect and try again.')
+    await dappExecutionModeRequestGate.waitForStable(modeToken)
+    return
+  }
   const state = useWalletStore.getState()
   const wallet = state.getWallet(context.walletId)
   const account = state.getAccount(context.walletId, context.accountId)

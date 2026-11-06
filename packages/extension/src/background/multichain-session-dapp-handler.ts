@@ -113,6 +113,7 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
   readonly analytics?: DAppAnalyticsSink
   readonly network: Network
   readonly evmNetworks: readonly EvmNetworkConfig[]
+  readonly activeChainIds?: () => Promise<readonly string[]>
   readonly manager: Pick<
     DAppManager,
     'getAllConnections' | 'getCaip25Session' | 'getAuthorizationRevision' | 'setCaip25Session'
@@ -162,7 +163,12 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
       readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
     },
     origin: string,
-    tabInfo: MultichainSessionTabInfo
+    tabInfo: MultichainSessionTabInfo,
+    scope: string
+  ) => Promise<unknown>
+  readonly selectPublicAccount: (
+    origin: string,
+    scopes: readonly Caip25StoredScope[]
   ) => Promise<unknown>
 }
 
@@ -188,18 +194,39 @@ const PUBLIC_ZCASH_METHODS = Object.freeze(
   ])
 )
 
-const ZCASH_SESSION_METHODS = invocableMethods(ZCASH_DAPP_RUNTIME_METHODS, [
-  'zcash_requestAccounts',
-  'zcash_disconnect',
-  'zcash_switchNetwork',
-  ...PUBLIC_ZCASH_METHODS
+export const PUBLIC_SESSION_METHODS = Object.freeze(
+  new Set([
+    'noir_getPublicAccount',
+    'noir_getPublicAssets',
+    'noir_activatePublicAccount',
+    'noir_sendPublicTransaction',
+    'noir_getPublicTransaction',
+    'noir_getPublicKey',
+    'noir_signMessage'
+  ])
+)
+const PUBLIC_SELECTION_METHOD = 'noir_selectPublicAccount'
+
+const ZCASH_SESSION_METHODS = new Set([
+  ...invocableMethods(ZCASH_DAPP_RUNTIME_METHODS, [
+    'zcash_requestAccounts',
+    'zcash_disconnect',
+    'zcash_switchNetwork',
+    ...PUBLIC_ZCASH_METHODS
+  ]),
+  ...PUBLIC_SESSION_METHODS,
+  PUBLIC_SELECTION_METHOD
 ])
-const EVM_SESSION_METHODS = invocableMethods(EVM_DAPP_RUNTIME_METHODS, [
-  'eth_requestAccounts',
-  'wallet_requestPermissions',
-  'wallet_revokePermissions',
-  'wallet_switchEthereumChain',
-  'wallet_addEthereumChain'
+const EVM_SESSION_METHODS = new Set([
+  ...invocableMethods(EVM_DAPP_RUNTIME_METHODS, [
+    'eth_requestAccounts',
+    'wallet_requestPermissions',
+    'wallet_revokePermissions',
+    'wallet_switchEthereumChain',
+    'wallet_addEthereumChain'
+  ]),
+  ...PUBLIC_SESSION_METHODS,
+  PUBLIC_SELECTION_METHOD
 ])
 const BITCOIN_SESSION_METHODS = invocableMethods(BITCOIN_DAPP_RUNTIME_METHODS, [
   'connect',
@@ -511,15 +538,25 @@ export class BackgroundMultichainSessionDAppHandler {
     reconnectRevision?: number
   ): Promise<Caip25Session> {
     const parsed = parseCaip25CreateSessionRequest(params)
-    for (const [chainId, scope] of Object.entries(parsed.scopes)) {
+    const activeChains = this.options.activeChainIds
+      ? new Set(await this.options.activeChainIds())
+      : null
+    const requested = Object.entries(parsed.scopes).filter(
+      ([chainId]) =>
+        this.supportedScopes.has(chainId) && (activeChains === null || activeChains.has(chainId))
+    )
+    if (requested.length === 0)
+      throw new Caip25ProviderError(
+        5100,
+        'The requested networks are not supported by the active account.'
+      )
+    for (const [chainId, scope] of requested) {
       assertScopeCapabilities(this.getSupportedScope(chainId), scope)
     }
     const expectedRevision =
       reconnectRevision ?? (await this.options.manager.getAuthorizationRevision(origin))
     const prepared = await Promise.all(
-      Object.entries(parsed.scopes).map(([chainId, scope]) =>
-        this.prepareScope(origin, chainId, scope)
-      )
+      requested.map(([chainId, scope]) => this.prepareScope(origin, chainId, scope))
     )
     const assertUnchanged = async () => {
       if ((await this.options.manager.getAuthorizationRevision(origin)) !== expectedRevision) {
@@ -702,6 +739,10 @@ export class BackgroundMultichainSessionDAppHandler {
       )
     }
     const supported = this.getSupportedScope(parsed.scope)
+    if (parsed.request.method === PUBLIC_SELECTION_METHOD) {
+      parseCaip25NoParams(parsed.request.params)
+      return this.options.selectPublicAccount(origin, stored!.scopes)
+    }
     if (supported.family === 'evm' && this.options.evm.getCaip2ChainId() !== parsed.scope) {
       throw new Caip25ProviderError(
         4901,
@@ -715,7 +756,8 @@ export class BackgroundMultichainSessionDAppHandler {
         ...(parsed.request.params === undefined ? {} : { params: parsed.request.params })
       },
       origin,
-      tabInfo
+      tabInfo,
+      parsed.scope
     )
   }
 }

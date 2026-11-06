@@ -3,6 +3,7 @@ import test from 'node:test'
 import { validateVerifiedPublishedProvenance } from '../../../scripts/sdk-package-check.mjs'
 import {
   ZcashAPI,
+  NoirPublicClient,
   detectProvider,
   getNoirWallet,
   getZcashProvider,
@@ -361,4 +362,26 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
     validateVerifiedPublishedProvenance({ verified: [] }, metadata, async () => {}, tufCachePath),
     /npm-verified/
   )
+})
+
+test('Public execution remains bound to its CAIP scope and preserves rejection', async () => {
+  const calls = []
+  const rejection = Object.assign(new Error('User rejected the transaction'), { code: 4001 })
+  const provider = {
+    async invokeMethod(input) {
+      calls.push(input)
+      throw rejection
+    }
+  }
+  const client = new NoirPublicClient(provider, 'eip155:1')
+  const intent = { requestId: 'reviewed-intent', txRequests: [] }
+  await assert.rejects(client.sendPublicTransaction(intent), error => error === rejection)
+  assert.deepEqual(calls, [
+    {
+      scope: 'eip155:1',
+      request: { method: 'noir_sendPublicTransaction', params: [intent] }
+    }
+  ])
+  assert.throws(() => new NoirPublicClient(provider, 'near:mainnet'), /EVM or Zcash/)
+  assert.equal(calls.length, 1)
 })

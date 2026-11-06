@@ -1,5 +1,6 @@
 import { chromium, type BrowserContext, type Page } from '@playwright/test'
 import { Buffer } from 'buffer'
+import { verifyMessage, type Hex } from 'viem'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +10,7 @@ import {
   type NoirPublicTxCandidate
 } from '../../../src/core/services/noir-protocol/public/protocol'
 import { verifyMessageSignature } from '../../../../sdk/src/chains/zcash/utils'
+import { PUBLIC_SESSION_METHODS } from '../../../../sdk/src/protocol/public'
 import { extensionDir, terminateExtensionServiceWorker } from '../../helpers/extension-fixtures'
 import { serveSdkExample } from '../../helpers/release-default'
 import {
@@ -200,7 +202,8 @@ async function requestPublic(
 async function connectPublicDApp(
   context: BrowserContext,
   screenshotName?: string,
-  origin = PUBLIC_DAPP_ORIGIN
+  origin = PUBLIC_DAPP_ORIGIN,
+  nativeSigning = false
 ): Promise<Page> {
   await context.route(`${origin}/**`, serveSdkExample)
   const page = await context.newPage()
@@ -210,14 +213,35 @@ async function connectPublicDApp(
   if (screenshotName) {
     await capturePublicScreenshot(page, screenshotName.replace(/\.png$/, '-demo-disconnected.png'))
   }
+  await page.getByLabel('Connection chain').selectOption('zcash')
   const approvalPromise = context.waitForEvent('page')
-  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  const nativeConnection = nativeSigning
+    ? page.evaluate(
+        methods =>
+          window.noirwallet!.multichain!.createSession({
+            scopes: {
+              'bip122:00040fe8ec8471911baa1db1266ea15d': {
+                methods: [
+                  ...methods,
+                  'zcash_getAccounts',
+                  'zcash_getPublicKey',
+                  'zcash_signMessage'
+                ],
+                notifications: ['wallet_sessionChanged', 'accountsChanged']
+              }
+            }
+          }),
+        [...PUBLIC_SESSION_METHODS]
+      )
+    : null
+  if (!nativeConnection) await page.getByRole('button', { name: 'Connect', exact: true }).click()
   const approval = await approvalPromise
   await approval.waitForURL(/#approval\?requestId=/)
   await approval.setViewportSize({ width: 375, height: 632 })
   await expect(approval.getByText('Connect to', { exact: true })).toBeVisible()
   if (screenshotName) await capturePublicScreenshot(approval, screenshotName)
   await approval.getByRole('button', { name: /^Connect/ }).click()
+  if (nativeConnection) await nativeConnection
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible({
     timeout: 30_000
   })
@@ -372,7 +396,12 @@ test('uses the Native identity for Public signing and cancels stale approval on 
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
 
-  const dapp = await connectPublicDApp(context, 'public-22-signing-connect.png')
+  const dapp = await connectPublicDApp(
+    context,
+    'public-22-signing-connect.png',
+    PUBLIC_DAPP_ORIGIN,
+    true
+  )
   const assets = await requestPublic(dapp, 'zcash_getPublicAssets')
   const account = (
     assets.result as {
@@ -503,7 +532,12 @@ test('shares Native authorization through restart and rejects a late Public read
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
 
-  const dapp = await connectPublicDApp(context, 'public-14-native-connect-review.png')
+  const dapp = await connectPublicDApp(
+    context,
+    'public-14-native-connect-review.png',
+    PUBLIC_DAPP_ORIGIN,
+    true
+  )
   const native = await requestPublic(dapp, 'zcash_getAccounts')
   expect(native.result).toMatchObject({ transparent: expect.any(String) })
   const publicAccount = await requestPublic(dapp, 'zcash_getPublicAccount')
@@ -968,9 +1002,11 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
   ])
   expect(exported.entries.length).toBeGreaterThan(0)
   const allowedMethods = new Set([
-    'getAccounts',
-    'connect',
-    'disconnect',
+    'getSession',
+    'createSession',
+    'revokeSession',
+    'wallet_sessionChanged',
+    'chainChanged',
     'getPublicKey',
     'signMessage',
     'activatePublicAccount',
@@ -1077,4 +1113,254 @@ test('signs a Public FunctionCall once and recovers after response loss and rest
   } finally {
     await freshContext.close()
   }
+})
+
+async function importPublicEvmAccount(popup: Page): Promise<void> {
+  await importTestWallet(popup)
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  const accountManager = popup.getByRole('button', { name: 'Accounts', exact: true })
+  if (await accountManager.isVisible()) await accountManager.click()
+  await popup.getByRole('button', { name: 'Add Wallet', exact: true }).click()
+  await popup.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+  await popup.getByRole('button', { name: 'Private Key', exact: true }).click()
+  await popup.getByLabel('Wallet name').fill('Public EVM fixture')
+  await popup.getByLabel('Private key', { exact: true }).fill(`0x${'00'.repeat(31)}01`)
+  await popup.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(popup.getByText('EVM address preview', { exact: true })).toBeVisible()
+  await popup.getByRole('button', { name: 'Import wallet', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
+}
+
+test('EVM Public connects a locked private-key account through a scoped session and signs its own transactions', async ({
+  context,
+  popup
+}) => {
+  test.setTimeout(180_000)
+  const address = '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf'
+  await mockEvmNetwork(context)
+  await mockBitcoinNetwork(context)
+  await mockProtocolApis(context, { mcaByWallet: () => ACTIVE_MCA })
+  await mockPublicNearReads(context)
+  let candidate: NoirPublicTxCandidate | null = null
+  await context.route(PUBLIC_RECEIVE_URL, async route => {
+    candidate = route.request().postDataJSON() as NoirPublicTxCandidate
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 0, data: { hash: computePublicSubmissionId(candidate) } })
+    })
+  })
+  await context.route(PUBLIC_QUERY_URL, route => route.fulfill({ status: 404, body: '{}' }))
+  await waitForBackgroundWalletInitialization(popup)
+  await importPublicEvmAccount(popup)
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
+
+  const origin = 'https://public-evm.example'
+  await context.route(`${origin}/**`, serveSdkExample)
+  const dapp = await context.newPage()
+  await dapp.goto(`${origin}/example/#noir-public`)
+  await expect(dapp.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  const unlockOpened = context.waitForEvent('page')
+  await dapp.getByRole('button', { name: 'Connect', exact: true }).click()
+  const unlock = await unlockOpened
+  await unlock.waitForURL(/#unlock/)
+  await unlock.getByPlaceholder('Enter Password').fill('protocol-wallet-source-password')
+  const approvalOpened = context.waitForEvent('page')
+  await unlock.getByRole('button', { name: 'Unlock', exact: true }).click()
+  const approval = await approvalOpened
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dapp.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible()
+  await expect(dapp.getByTestId('public-account')).toContainText(address, { ignoreCase: true })
+  await expect(dapp.locator('.public-demo-assets')).toContainText('1.25 ZEC')
+
+  const invoke = async (method: string, params: unknown[] = [], scope = 'eip155:1') =>
+    dapp.evaluate(
+      async ({ method, params, scope }) => {
+        try {
+          const result = await window.noirwallet!.multichain!.invokeMethod({
+            scope,
+            request: { method, params }
+          })
+          return { result }
+        } catch (cause) {
+          const error = cause as { code?: number; message?: string }
+          return { error: { code: error.code, message: error.message } }
+        }
+      },
+      { method, params, scope }
+    )
+  expect((await invoke('noir_getPublicAssets', [], 'eip155:999999')).error?.code).toBe(4100)
+  const message = JSON.stringify({ message: 'Public EVM fixture identity' })
+  const signatureApprovalOpened = context.waitForEvent('page')
+  const signing = invoke('noir_signMessage', [message])
+  const signatureApproval = await signatureApprovalOpened
+  await signatureApproval.waitForURL(/#approval\?requestId=/)
+  await signatureApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
+  const signResult = await signing
+  expect(signResult.error).toBeUndefined()
+  const signed = signResult.result as { signature: Hex; address: Hex; signingMode: string }
+  expect(signed.address.toLowerCase()).toBe(address)
+  expect(signed.signingMode).toBe('evm')
+  expect(
+    await verifyMessage({ address: address as Hex, message, signature: signed.signature })
+  ).toBe(true)
+
+  const intent = {
+    requestId: 'evm-public-fixture',
+    txRequests: [
+      {
+        FunctionCall: {
+          receiver_id: 'wrap.near',
+          function_calls: [
+            {
+              method_name: 'ft_transfer',
+              args: '{"receiver_id":"recipient.near","amount":"1"}',
+              gas: '30000000000000',
+              deposit: '1'
+            }
+          ]
+        }
+      }
+    ]
+  }
+  const transactionApprovalOpened = context.waitForEvent('page')
+  const sending = invoke('noir_sendPublicTransaction', [intent])
+  const transactionApproval = await transactionApprovalOpened
+  await transactionApproval.waitForURL(/#approval\?requestId=/)
+  await transactionApproval.getByRole('button', { name: 'Confirm', exact: true }).click()
+  const submitted = await sending
+  expect(submitted.error).toBeUndefined()
+  expect(candidate).not.toBeNull()
+  expect(candidate!.signer_wallet).toEqual({ EVM: address.slice(2) })
+  const operation = submitted.result as { operationId: string }
+  expect((await invoke('noir_getPublicTransaction', [operation.operationId])).result).toMatchObject(
+    { operationId: operation.operationId }
+  )
+
+  await dapp.reload()
+  await expect(dapp.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible()
+  await expect(dapp.getByTestId('public-account')).toContainText(address, { ignoreCase: true })
+  await dapp.getByRole('button', { name: 'Disconnect', exact: true }).click()
+  await expect(dapp.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  expect((await invoke('noir_getPublicAssets')).error?.code).toBe(4100)
+})
+
+test('EVM Public activation binds the reviewed quote to one native payment', async ({
+  context,
+  popup
+}) => {
+  test.setTimeout(180_000)
+  const address = '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf'
+  const deposit = `0x${'3'.repeat(40)}`
+  const evm = await mockEvmNetwork(context, { allowBroadcast: true })
+  await mockBitcoinNetwork(context)
+  await mockProtocolApis(context, {
+    mcaByWallet: () => (evm.getBroadcastCount() ? ACTIVE_MCA : null)
+  })
+  await mockPublicNearReads(context)
+  await context.route(PUBLIC_QUOTE_URL, async route => {
+    const request = route.request().postDataJSON()
+    expect(request.originAsset).toBe('nep141:eth.omft.near')
+    expect(request.refundTo.toLowerCase()).toBe(address)
+    expect(JSON.parse(request.customRecipientMsg).w).toEqual([{ EVM: address.slice(2) }])
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        quote: {
+          amountIn: '100000000000000',
+          amountOut: request.amount,
+          minAmountOut: request.amount,
+          deadline: request.deadline,
+          depositAddress: deposit
+        }
+      })
+    })
+  })
+  await waitForBackgroundWalletInitialization(popup)
+  await importPublicEvmAccount(popup)
+  const origin = 'https://public-evm-activation.example'
+  await context.route(`${origin}/**`, serveSdkExample)
+  const dapp = await context.newPage()
+  await dapp.goto(`${origin}/example/#noir-public`)
+  await expect(dapp.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  const connectOpened = context.waitForEvent('page')
+  await dapp.getByRole('button', { name: 'Connect', exact: true }).click()
+  const connect = await connectOpened
+  await connect.waitForURL(/#approval\?requestId=/)
+  await connect.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dapp.getByTestId('public-status')).toHaveText('inactive')
+  for (const decision of ['Reject', 'Confirm']) {
+    const reviewOpened = context.waitForEvent('page')
+    await dapp.getByRole('button', { name: 'Activate public account', exact: true }).click()
+    const review = await reviewOpened
+    await review.waitForURL(/#approval\?requestId=/)
+    await expect(review.getByText('ETH', { exact: false }).first()).toBeVisible()
+    const paymentReviewOpened = context.waitForEvent('page')
+    await review.getByRole('button', { name: 'Pay & activate', exact: true }).click()
+    const paymentReview = await paymentReviewOpened
+    await paymentReview.waitForURL(/#approval\?requestId=/)
+    await paymentReview.getByRole('button', { name: decision, exact: true }).click()
+    if (decision === 'Reject') {
+      await expect(dapp.getByRole('alert')).toBeVisible()
+      await expect(dapp.getByTestId('public-status')).toHaveText('inactive')
+      expect(evm.getBroadcastCount()).toBe(0)
+    }
+  }
+  // Native submission is intercepted by mockEvmNetwork, never a live RPC.
+  await expect
+    .poll(
+      async () => evm.getBroadcastCount() === 1 || (await dapp.getByRole('alert').isVisible()),
+      { timeout: 30_000 }
+    )
+    .toBe(true)
+  await expect(dapp.getByRole('alert')).not.toBeVisible()
+  expect(evm.getBroadcastCount()).toBe(1)
+  await expect(dapp.getByTestId('public-status')).toHaveText('active', { timeout: 30_000 })
+  expect(evm.getBroadcastValues()).toEqual([100000000000000n])
+  const account = await dapp.evaluate(() =>
+    window.noirwallet!.multichain!.invokeMethod({
+      scope: 'eip155:1',
+      request: { method: 'noir_activatePublicAccount' }
+    })
+  )
+  expect(account).toMatchObject({ status: 'active', mcaId: ACTIVE_MCA })
+  expect(evm.getBroadcastCount()).toBe(1)
+})
+
+test('EVM Public auto selection uses a funded chain of the active multichain account', async ({
+  context,
+  popup
+}) => {
+  test.setTimeout(120_000)
+  const evm = await mockEvmNetwork(context)
+  await mockBitcoinNetwork(context)
+  await mockProtocolApis(context, { mcaByWallet: () => null })
+  await mockPublicNearReads(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  const origin = 'https://public-auto.example'
+  await context.route(`${origin}/**`, serveSdkExample)
+  const dapp = await context.newPage()
+  await dapp.goto(`${origin}/example/#noir-public`)
+  await expect(dapp.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+  const approvalOpened = context.waitForEvent('page')
+  await dapp.getByRole('button', { name: 'Connect', exact: true }).click()
+  const approval = await approvalOpened
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dapp.getByTestId('public-account')).toBeVisible({ timeout: 30_000 })
+  const session = await dapp.evaluate(() => window.noirwallet!.multichain!.getSession())
+  expect(Object.keys(session!.scopes)).toContain('bip122:00040fe8ec8471911baa1db1266ea15d')
+  expect(Object.keys(session!.scopes)).toContain('eip155:1')
+  const selected = await dapp.evaluate(() =>
+    window.noirwallet!.multichain!.invokeMethod({
+      scope: 'eip155:1',
+      request: { method: 'noir_selectPublicAccount' }
+    })
+  )
+  expect(selected).toMatchObject({
+    scope: 'eip155:1',
+    account: { chain: 'evm', status: 'inactive' }
+  })
+  expect(evm.getBroadcastCount()).toBe(0)
 })

@@ -740,6 +740,17 @@
   margin-bottom: 14px;
 }
 
+.public-demo-connect-controls .input {
+  width: auto;
+  min-width: 120px;
+}
+
+.public-demo-account-list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 .public-demo-signing-result {
   margin-top: 16px;
 }

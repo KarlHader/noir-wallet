@@ -4,10 +4,10 @@ import type {
   PublicAssets,
   PublicTransaction,
   SendPublicTransactionParams,
-  ZcashConnectResult,
-  ZcashClient
+  NoirWalletProvider
 } from '@noir-wallet/sdk'
-import { verifyMessageSignature } from '@noir-wallet/sdk'
+import { NoirPublicClient, switchEvmChain, verifyMessageSignature } from '@noir-wallet/sdk'
+import { verifyMessage } from 'viem'
 import {
   buildTransferRequest,
   displayAssetSymbol,
@@ -17,19 +17,25 @@ import {
   supportedTransferAssets
 } from './requests'
 import { errorCode, errorMessage, exportTrace, type TraceEntry, type TraceMethod } from './trace'
+import {
+  assertPublicMainnet,
+  buildPublicSessionRequest,
+  autoPublicScopes,
+  evmPublicScope,
+  publicSessionConnections,
+  readPublicConnection,
+  zcashPublicScope,
+  type PublicChain,
+  type PublicConnection
+} from './connection'
 
 type ComposeMode = 'transfer' | 'function'
 type Intent = Readonly<SendPublicTransactionParams>
 
-export function PublicDemo({
-  client,
-  walletVersion
-}: {
-  client: ZcashClient
-  walletVersion?: string
-}) {
+export function PublicDemo({ wallet }: { wallet: NoirWalletProvider }) {
+  const [selectedChain, setSelectedChain] = useState<PublicChain>('auto')
+  const [connection, setConnection] = useState<PublicConnection | null>(null)
   const [account, setAccount] = useState<PublicAccount | null>(null)
-  const [nativeAccount, setNativeAccount] = useState<ZcashConnectResult | null>(null)
   const [signingMessage, setSigningMessage] = useState('')
   const [publicKey, setPublicKey] = useState<string | null>(null)
   const [signingResult, setSigningResult] = useState<{
@@ -64,6 +70,19 @@ export function PublicDemo({
   const lookupBusyRevision = useRef<number | null>(null)
   const sequence = useRef(0)
   const callSequence = useRef(0)
+  const connectionRevision = useRef(0)
+  const selectedChainRef = useRef(selectedChain)
+  const connectionRef = useRef(connection)
+  const selectedScopeRef = useRef<string | null>(null)
+  const expectedSwitchScopeRef = useRef<string | null>(null)
+  const client = useMemo(
+    () =>
+      connection && wallet.multichain
+        ? new NoirPublicClient(wallet.multichain, connection.scope)
+        : null,
+    [connection?.scope, wallet.multichain]
+  )
+  const walletVersion = wallet.version
   const build = typeof __PUBLIC_DEMO_BUILD__ === 'undefined' ? null : __PUBLIC_DEMO_BUILD__
 
   const appendTrace = useCallback((entry: Omit<TraceEntry, 'sequence' | 'at'>) => {
@@ -153,6 +172,7 @@ export function PublicDemo({
 
   const refreshAssets = useCallback(
     async (force = false): Promise<void> => {
+      if (!client) return
       const currentEpoch = epoch.current
       if (assetsBusyEpoch.current === currentEpoch) {
         if (force) assetsRefreshQueued.current = true
@@ -182,44 +202,179 @@ export function PublicDemo({
     [client, traced, adoptAccount]
   )
 
-  useEffect(() => {
-    let cancelled = false
-    let revision = 0
-    const restore = async () => {
-      const currentRevision = ++revision
-      try {
-        const next = await traced(
-          'getAccounts',
-          () => client.getAccounts(),
-          value => (value ? 'connected' : 'disconnected')
-        )
-        if (cancelled || currentRevision !== revision) return
-        setError(null)
-        setNativeAccount(next)
-        if (next) await refreshAssets()
-        else clearAccount()
-        if (cancelled || currentRevision !== revision) return
-      } catch (cause) {
-        if (!cancelled && currentRevision === revision) setError(errorMessage(cause))
-      } finally {
-        if (!cancelled && currentRevision === revision) setRestoring(false)
+  const adoptConnection = useCallback(
+    (next: PublicConnection | null) => {
+      const previous = connectionRef.current
+      if (
+        previous?.scope !== next?.scope ||
+        previous?.accounts.join('\0') !== next?.accounts.join('\0')
+      ) {
+        clearAccount()
       }
+      connectionRef.current = next
+      setConnection(next)
+    },
+    [clearAccount]
+  )
+
+  const restoreSession = useCallback(
+    async (allowSwitch = true) => {
+      const revision = ++connectionRevision.current
+      setRestoring(true)
+      const multichain = wallet.multichain
+      if (!multichain) {
+        adoptConnection(null)
+        setRestoring(false)
+        return
+      }
+      try {
+        const session = await traced('getSession', () => multichain.getSession())
+        if (revision !== connectionRevision.current) return
+        let currentEvmScope: string | null = null
+        if (wallet.ethereum) {
+          let currentEvmChainId: string | null = null
+          try {
+            currentEvmChainId = await wallet.ethereum.request<string>({ method: 'eth_chainId' })
+          } catch (cause) {
+            if (publicSessionConnections(session).some(candidate => candidate.chain === 'evm')) {
+              throw cause
+            }
+          }
+          assertPublicMainnet(currentEvmChainId)
+          if (currentEvmChainId) currentEvmScope = evmPublicScope(currentEvmChainId)
+        }
+        if (revision !== connectionRevision.current) return
+        const chain = selectedChainRef.current
+        if (chain !== 'auto') {
+          const scope = chain === 'evm' ? currentEvmScope : zcashPublicScope('mainnet')
+          const next = scope ? readPublicConnection(session, scope) : null
+          selectedScopeRef.current = next?.scope ?? null
+          adoptConnection(next)
+          setError(null)
+          return
+        }
+        const connections = publicSessionConnections(session)
+        const cached = connections.find(
+          candidate =>
+            candidate.scope === selectedScopeRef.current &&
+            (candidate.chain === 'zcash' || candidate.scope === currentEvmScope)
+        )
+        if (cached) {
+          adoptConnection(cached)
+          setError(null)
+          return
+        }
+        const seed =
+          connections.find(candidate => candidate.scope === currentEvmScope) ??
+          connections.find(candidate => candidate.chain === 'zcash') ??
+          connections[0]
+        if (!seed) {
+          selectedScopeRef.current = null
+          adoptConnection(null)
+          setError(null)
+          return
+        }
+        const selection = await traced('selectPublicAccount', () =>
+          new NoirPublicClient(multichain, seed.scope).selectPublicAccount()
+        )
+        if (revision !== connectionRevision.current) return
+        const chosen = connections.find(candidate => candidate.scope === selection.scope)
+        if (!chosen || selection.account.chain !== (chosen.chain === 'evm' ? 'evm' : 'zcash-l2')) {
+          throw new Error('Wallet selected an unauthorized Public account.')
+        }
+        if (chosen.chain === 'evm' && chosen.scope !== currentEvmScope) {
+          if (!wallet.ethereum || !allowSwitch) {
+            adoptConnection(null)
+            return
+          }
+          selectedScopeRef.current = chosen.scope
+          expectedSwitchScopeRef.current = chosen.scope
+          try {
+            await traced('switchEvmChain', () =>
+              switchEvmChain(wallet.ethereum!, `0x${BigInt(chosen.scope.slice(7)).toString(16)}`)
+            )
+          } catch (cause) {
+            expectedSwitchScopeRef.current = null
+            throw cause
+          }
+          if (expectedSwitchScopeRef.current === chosen.scope) {
+            expectedSwitchScopeRef.current = null
+          }
+          if (revision !== connectionRevision.current) return
+          const switched = evmPublicScope(
+            await wallet.ethereum.request<string>({ method: 'eth_chainId' })
+          )
+          if (revision !== connectionRevision.current) return
+          if (switched !== chosen.scope) throw new Error('The selected EVM network is not active.')
+        }
+        selectedScopeRef.current = chosen.scope
+        adoptConnection(chosen)
+        adoptAccount(selection.account)
+        setError(null)
+      } catch (cause) {
+        if (revision === connectionRevision.current) {
+          adoptConnection(null)
+          setError(errorMessage(cause))
+        }
+      } finally {
+        if (revision === connectionRevision.current) setRestoring(false)
+      }
+    },
+    [wallet.multichain, wallet.ethereum, traced, adoptConnection, adoptAccount]
+  )
+
+  useEffect(() => {
+    const onSessionChanged = () => {
+      appendTrace({ method: 'wallet_sessionChanged', outcome: 'event' })
+      adoptConnection(null)
+      void restoreSession()
     }
-    const onAccountChanged = () => {
+    const onAccountsChanged = () => {
       appendTrace({ method: 'accountsChanged', outcome: 'event' })
-      clearAccount()
-      void restore()
+      selectedScopeRef.current = null
+      adoptConnection(null)
+      void restoreSession()
     }
-    client.on('accountsChanged', onAccountChanged)
-    void restore()
+    const onChainChanged = (chainId: unknown) => {
+      appendTrace({ method: 'chainChanged', outcome: 'event' })
+      const expected = expectedSwitchScopeRef.current
+      expectedSwitchScopeRef.current = null
+      let changedScope: string | null = null
+      try {
+        changedScope = evmPublicScope(chainId)
+      } catch {
+        // The next session read will validate the active chain.
+      }
+      selectedScopeRef.current = changedScope === expected ? expected : null
+      adoptConnection(null)
+      void restoreSession(false)
+    }
+    wallet.multichain?.on('wallet_sessionChanged', onSessionChanged)
+    wallet.zcash.on('accountsChanged', onAccountsChanged)
+    wallet.ethereum?.on('accountsChanged', onAccountsChanged)
+    wallet.ethereum?.on('chainChanged', onChainChanged)
+    void restoreSession()
     return () => {
-      cancelled = true
-      revision += 1
+      connectionRevision.current += 1
       epoch.current += 1
       lookupRevision.current += 1
-      client.removeListener('accountsChanged', onAccountChanged)
+      wallet.multichain?.removeListener('wallet_sessionChanged', onSessionChanged)
+      wallet.zcash.removeListener('accountsChanged', onAccountsChanged)
+      wallet.ethereum?.removeListener('accountsChanged', onAccountsChanged)
+      wallet.ethereum?.removeListener('chainChanged', onChainChanged)
     }
-  }, [client, traced, appendTrace, clearAccount, refreshAssets])
+  }, [
+    wallet.multichain,
+    wallet.zcash,
+    wallet.ethereum,
+    appendTrace,
+    adoptConnection,
+    restoreSession
+  ])
+
+  useEffect(() => {
+    if (client) void refreshAssets()
+  }, [client, connection?.accounts, refreshAssets])
 
   useEffect(() => {
     if (account?.status !== 'activating') return
@@ -261,31 +416,49 @@ export function PublicDemo({
 
   const connect = () =>
     runAction('connect', async () => {
-      const currentEpoch = epoch.current
-      const next = await traced(
-        'connect',
-        () => client.connect(),
+      if (!wallet.multichain) throw new Error('Multichain provider is unavailable.')
+      const revision = ++connectionRevision.current
+      const chain = selectedChainRef.current
+      const evmChainId = wallet.ethereum
+        ? await wallet.ethereum.request<string>({ method: 'eth_chainId' })
+        : null
+      assertPublicMainnet(evmChainId)
+      const scopes =
+        chain === 'auto'
+          ? autoPublicScopes(evmChainId)
+          : [chain === 'evm' ? evmPublicScope(evmChainId) : zcashPublicScope('mainnet')]
+      if (revision !== connectionRevision.current) return
+      const session = await traced(
+        'createSession',
+        () => wallet.multichain!.createSession(buildPublicSessionRequest(scopes)),
         () => 'connected'
       )
-      if (currentEpoch === epoch.current) {
-        setNativeAccount(next)
-        await refreshAssets()
+      if (revision !== connectionRevision.current) return
+      if (chain === 'auto') {
+        await restoreSession()
+        return
       }
+      const scope = scopes[0]
+      const next = readPublicConnection(session, scope)
+      if (!next) throw new Error('The selected chain was not authorized.')
+      selectedScopeRef.current = scope
+      adoptConnection(next)
     })
 
   const disconnect = () =>
     runAction('disconnect', async () => {
-      await traced('disconnect', () => client.disconnect())
-      setNativeAccount(null)
-      clearAccount()
+      if (!wallet.multichain) return
+      const revision = ++connectionRevision.current
+      await traced('revokeSession', () => wallet.multichain!.revokeSession())
+      if (revision === connectionRevision.current) adoptConnection(null)
     })
 
   const readPublicKey = async (): Promise<void> => {
     const signer = accountRef.current
-    if (!signer) return
-    const key = await traced('getPublicKey', () =>
-      client.getPublicKey({ signingMode: signer.signingMode })
-    )
+    if (!signer || !client) return
+    const currentEpoch = epoch.current
+    const key = await traced('getPublicKey', () => client.getPublicKey())
+    if (currentEpoch !== epoch.current) return
     if (
       !key ||
       key.pubkey.toLowerCase() !== signer.publicKey.toLowerCase() ||
@@ -303,19 +476,33 @@ export function PublicDemo({
     event.preventDefault()
     void runAction('sign', async () => {
       const signer = accountRef.current
-      if (!signer || !signingMessage) return
+      if (!signer || !signingMessage || !client) return
+      const currentEpoch = epoch.current
       setSigningResult(null)
       await readPublicKey()
-      const signed = await traced('signMessage', () =>
-        client.signMessage(signingMessage, { signingMode: signer.signingMode })
-      )
-      const verification = verifyMessageSignature({
-        message: signingMessage,
-        signature: signed.signature,
-        pubkey: signer.publicKey,
-        address: signer.address,
-        network: signer.network
-      })
+      if (currentEpoch !== epoch.current) return
+      const signed = await traced('signMessage', () => client.signMessage(signingMessage))
+      if (currentEpoch !== epoch.current) return
+      const verification =
+        signer.chain === 'evm'
+          ? {
+              valid:
+                /^0x[0-9a-f]{130}$/i.test(signed.signature) &&
+                (await verifyMessage({
+                  address: signer.address as `0x${string}`,
+                  message: signingMessage,
+                  signature: signed.signature as `0x${string}`
+                })),
+              error: 'Invalid EVM signature'
+            }
+          : verifyMessageSignature({
+              message: signingMessage,
+              signature: signed.signature,
+              pubkey: signer.publicKey,
+              address: signer.address,
+              network: signer.network
+            })
+      if (currentEpoch !== epoch.current) return
       const verified =
         verification.valid &&
         signed.pubkey.toLowerCase() === signer.publicKey.toLowerCase() &&
@@ -327,20 +514,12 @@ export function PublicDemo({
 
   const refresh = () =>
     runAction('refresh', async () => {
-      const currentEpoch = epoch.current
-      const next = await traced(
-        'getAccounts',
-        () => client.getAccounts(),
-        value => (value ? 'connected' : 'disconnected')
-      )
-      if (currentEpoch !== epoch.current) return
-      setNativeAccount(next)
-      if (next) await refreshAssets()
-      else clearAccount()
+      await restoreSession()
     })
 
   const activate = () =>
     runAction('activate', async () => {
+      if (!client) return
       const currentEpoch = epoch.current
       const next = await traced(
         'activatePublicAccount',
@@ -356,6 +535,7 @@ export function PublicDemo({
   const send = (event: FormEvent) => {
     event.preventDefault()
     void runAction('send', async () => {
+      if (!client) return
       if (accountRef.current?.status !== 'active')
         throw new Error('Activate the Public account first.')
       let submitted = intentRef.current
@@ -398,7 +578,7 @@ export function PublicDemo({
 
   const lookup = useCallback(
     async (id: string) => {
-      if (!id.trim()) return
+      if (!id.trim() || !client) return
       const currentEpoch = epoch.current
       const currentRevision = lookupRevision.current
       if (lookupBusyRevision.current === currentRevision) return
@@ -441,7 +621,7 @@ export function PublicDemo({
         <div className="card-header">
           <h2>Protocol account</h2>
           <div className="public-account-actions">
-            {nativeAccount ? (
+            {connection ? (
               <>
                 <button
                   className="btn btn-secondary btn-xs"
@@ -461,22 +641,57 @@ export function PublicDemo({
             ) : null}
           </div>
         </div>
-        {!nativeAccount && (
+        {!connection && (
           <div className="public-demo-connect-controls">
+            <label className="label" htmlFor="public-chain">
+              Connection chain
+            </label>
+            <select
+              id="public-chain"
+              className="input"
+              value={selectedChain}
+              disabled={!!busy || restoring}
+              onChange={event => {
+                const chain = event.target.value as PublicChain
+                connectionRevision.current += 1
+                selectedChainRef.current = chain
+                selectedScopeRef.current = null
+                setSelectedChain(chain)
+                adoptConnection(null)
+                setRestoring(true)
+                void restoreSession()
+              }}
+            >
+              <option value="auto">Auto</option>
+              {wallet.ethereum && <option value="evm">EVM</option>}
+              <option value="zcash">Zcash</option>
+            </select>
             <button
               className="btn btn-primary btn-xs"
               onClick={() => void connect()}
-              disabled={!!busy || restoring || !!nativeAccount}
+              disabled={!!busy || restoring || !wallet.multichain}
             >
               {busy === 'connect' ? 'Connecting...' : 'Connect'}
             </button>
           </div>
         )}
-        {nativeAccount && (
+        {connection && (
           <div className="public-demo-facts">
             <div>
-              <span>Zcash address</span>
-              <code>{nativeAccount.transparent}</code>
+              <span>Chain</span>
+              <strong>{connection.chain === 'evm' ? 'EVM' : 'Zcash'}</strong>
+            </div>
+            <div>
+              <span>Scope</span>
+              <code>{connection.scope}</code>
+            </div>
+            <div>
+              <span>Account</span>
+              <div className="public-demo-account-list">
+                {connection.accounts.map(value => (
+                  <code key={value}>{value}</code>
+                ))}
+              </div>
             </div>
             <div>
               <span>Connection</span>
@@ -484,338 +699,337 @@ export function PublicDemo({
             </div>
           </div>
         )}
-        {account ? (
-          <div className="public-demo-facts" data-testid="public-account">
-            <div>
-              <span>Status</span>
-              <strong data-testid="public-status">{account.status}</strong>
-            </div>
-            <div>
-              <span>Network</span>
-              <strong>{account.network}</strong>
-            </div>
-            <div>
-              <span>Address</span>
-              <code>{account.address}</code>
-            </div>
-            <div>
-              <span>Signing mode</span>
-              <strong>{account.signingMode}</strong>
-            </div>
-            <div>
-              <span>MCA ID</span>
-              <code>{account.mcaId ?? 'Not active'}</code>
-            </div>
-            <div>
-              <span>Parent contract</span>
-              <code>{account.parentContractId}</code>
-            </div>
-            {account.activationId && (
+        {connection &&
+          (account ? (
+            <div className="public-demo-facts" data-testid="public-account">
               <div>
-                <span>Activation ID</span>
-                <code>{account.activationId}</code>
+                <span>Status</span>
+                <strong data-testid="public-status">{account.status}</strong>
               </div>
-            )}
-          </div>
-        ) : (
-          <p className="message">
-            {restoring
-              ? 'Checking connection...'
-              : nativeAccount
-                ? 'Protocol account unavailable.'
-                : 'Disconnected.'}
-          </p>
-        )}
+              <div>
+                <span>Network</span>
+                <strong>{account.network}</strong>
+              </div>
+              <div>
+                <span>Address</span>
+                <code>{account.address}</code>
+              </div>
+              <div>
+                <span>Signing mode</span>
+                <strong>{account.signingMode}</strong>
+              </div>
+              <div>
+                <span>MCA ID</span>
+                <code>{account.mcaId ?? 'Not active'}</code>
+              </div>
+              <div>
+                <span>Parent contract</span>
+                <code>{account.parentContractId}</code>
+              </div>
+              {account.activationId && (
+                <div>
+                  <span>Activation ID</span>
+                  <code>{account.activationId}</code>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="message">
+              {restoring ? 'Checking connection...' : 'Protocol account unavailable.'}
+            </p>
+          ))}
         {account?.status === 'inactive' && (
           <button className="btn btn-primary" onClick={() => void activate()} disabled={!!busy}>
             {busy === 'activate' ? 'Activating...' : 'Activate public account'}
           </button>
         )}
+        {error && (
+          <div className="message error public-demo-error" role="alert">
+            {error}
+          </div>
+        )}
       </section>
 
-      <section className="card card-compact public-demo-assets">
-        <div className="card-header">
-          <h2>Assets</h2>
-          {assetsBusy && <span className="public-demo-muted">Refreshing...</span>}
-        </div>
-        {assets?.assets.length ? (
-          <div className="public-demo-asset-list">
-            {assets.assets.map(asset => (
-              <div className="public-demo-asset" key={asset.tokenId}>
-                <div>
-                  <strong>{displayAssetSymbol(asset)}</strong>
-                  <small>{asset.tokenId === 'wrap.near' ? 'NEAR' : asset.name}</small>
-                </div>
-                <div className="public-demo-asset-value">
-                  <strong>{formatAssetBalance(asset)}</strong>
-                  <small>{asset.status}</small>
-                </div>
+      {connection && (
+        <>
+          <section className="card card-compact public-demo-assets">
+            <div className="card-header">
+              <h2>Assets</h2>
+              {assetsBusy && <span className="public-demo-muted">Refreshing...</span>}
+            </div>
+            {assets?.assets.length ? (
+              <div className="public-demo-asset-list">
+                {assets.assets.map(asset => (
+                  <div className="public-demo-asset" key={asset.tokenId}>
+                    <div>
+                      <strong>{displayAssetSymbol(asset)}</strong>
+                      <small>{asset.tokenId === 'wrap.near' ? 'NEAR' : asset.name}</small>
+                    </div>
+                    <div className="public-demo-asset-value">
+                      <strong>{formatAssetBalance(asset)}</strong>
+                      <small>{asset.status}</small>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="message">{assetsBusy ? 'Loading assets...' : 'No assets available.'}</p>
-        )}
-      </section>
+            ) : (
+              <p className="message">{assetsBusy ? 'Loading assets...' : 'No assets available.'}</p>
+            )}
+          </section>
 
-      <section className="card card-compact grid-span-2 public-demo-signing">
-        <div className="card-header">
-          <h2>Public signing</h2>
-        </div>
-        <form onSubmit={sign}>
-          <div className="form-group">
-            <label className="label" htmlFor="public-sign-message">
-              Message
-            </label>
-            <textarea
-              id="public-sign-message"
-              placeholder='{"message":"Sign in"}'
-              className="input textarea-sm"
-              value={signingMessage}
-              onChange={event => {
-                setSigningMessage(event.target.value)
-                setSigningResult(null)
-              }}
-            />
-          </div>
-          <div className="public-demo-actions">
-            <button
-              className="btn btn-secondary btn-xs"
-              type="button"
-              onClick={() => void getPublicKey()}
-              disabled={!account || !!busy}
-            >
-              Get public key
-            </button>
-            <button
-              className="btn btn-primary btn-xs"
-              type="submit"
-              disabled={!account || !signingMessage || !!busy}
-            >
-              {busy === 'sign' ? 'Signing...' : 'Sign message'}
-            </button>
-          </div>
-        </form>
-        {publicKey && (
-          <div className="public-demo-facts public-demo-signing-result">
-            <div>
-              <span>Public key</span>
-              <code>{publicKey}</code>
+          <section className="card card-compact grid-span-2 public-demo-signing">
+            <div className="card-header">
+              <h2>Public signing</h2>
             </div>
-          </div>
-        )}
-        {signingResult && (
-          <div className="public-demo-facts public-demo-signing-result">
-            <div>
-              <span>Verification</span>
-              <strong>
-                {signingResult.verified
-                  ? 'Valid for this Public identity'
-                  : (signingResult.error ?? 'Failed')}
-              </strong>
-            </div>
-            <div>
-              <span>Signature</span>
-              <code>{signingResult.signature}</code>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="card card-compact grid-span-2 public-demo-compose">
-        <div className="card-header">
-          <h2>Transaction</h2>
-          <div className="public-demo-segmented" role="group" aria-label="Request type">
-            <button
-              type="button"
-              className={mode === 'transfer' ? 'active' : ''}
-              onClick={() => setMode('transfer')}
-              disabled={!!intent}
-            >
-              Token transfer
-            </button>
-            <button
-              type="button"
-              className={mode === 'function' ? 'active' : ''}
-              onClick={() => setMode('function')}
-              disabled={!!intent}
-            >
-              FunctionCall
-            </button>
-          </div>
-        </div>
-        <form onSubmit={send}>
-          {mode === 'transfer' ? (
-            <div className="public-demo-form-grid">
+            <form onSubmit={sign}>
               <div className="form-group">
-                <label className="label" htmlFor="public-token">
-                  Asset
+                <label className="label" htmlFor="public-sign-message">
+                  Message
                 </label>
-                <select
-                  id="public-token"
-                  className="input"
-                  value={selectedAsset?.tokenId ?? ''}
-                  onChange={event => setTokenId(event.target.value)}
-                  disabled={!!intent}
-                >
-                  {transferAssets.map(asset => (
-                    <option key={asset.tokenId} value={asset.tokenId}>
-                      {displayAssetSymbol(asset)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="label" htmlFor="public-recipient">
-                  Recipient NEAR account
-                </label>
-                <input
-                  id="public-recipient"
-                  className="input"
-                  value={recipient}
-                  onChange={event => setRecipient(event.target.value)}
-                  disabled={!!intent}
+                <textarea
+                  id="public-sign-message"
+                  placeholder='{"message":"Sign in"}'
+                  className="input textarea-sm"
+                  value={signingMessage}
+                  onChange={event => {
+                    setSigningMessage(event.target.value)
+                    setSigningResult(null)
+                  }}
                 />
               </div>
-              <div className="form-group">
-                <label className="label" htmlFor="public-amount">
-                  Amount
-                </label>
-                <div className="public-demo-amount">
-                  <input
-                    id="public-amount"
-                    className="input"
-                    inputMode="decimal"
-                    value={amount}
-                    onChange={event => setAmount(event.target.value)}
-                    disabled={!!intent}
-                  />
-                  <span>{selectedAsset ? displayAssetSymbol(selectedAsset) : 'Token'}</span>
+              <div className="public-demo-actions">
+                <button
+                  className="btn btn-secondary btn-xs"
+                  type="button"
+                  onClick={() => void getPublicKey()}
+                  disabled={!account || !!busy}
+                >
+                  Get public key
+                </button>
+                <button
+                  className="btn btn-primary btn-xs"
+                  type="submit"
+                  disabled={!account || !signingMessage || !!busy}
+                >
+                  {busy === 'sign' ? 'Signing...' : 'Sign message'}
+                </button>
+              </div>
+            </form>
+            {publicKey && (
+              <div className="public-demo-facts public-demo-signing-result">
+                <div>
+                  <span>Public key</span>
+                  <code>{publicKey}</code>
                 </div>
               </div>
+            )}
+            {signingResult && (
+              <div className="public-demo-facts public-demo-signing-result">
+                <div>
+                  <span>Verification</span>
+                  <strong>
+                    {signingResult.verified
+                      ? 'Valid for this Public identity'
+                      : (signingResult.error ?? 'Failed')}
+                  </strong>
+                </div>
+                <div>
+                  <span>Signature</span>
+                  <code>{signingResult.signature}</code>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="card card-compact grid-span-2 public-demo-compose">
+            <div className="card-header">
+              <h2>Transaction</h2>
+              <div className="public-demo-segmented" role="group" aria-label="Request type">
+                <button
+                  type="button"
+                  className={mode === 'transfer' ? 'active' : ''}
+                  onClick={() => setMode('transfer')}
+                  disabled={!!intent}
+                >
+                  Token transfer
+                </button>
+                <button
+                  type="button"
+                  className={mode === 'function' ? 'active' : ''}
+                  onClick={() => setMode('function')}
+                  disabled={!!intent}
+                >
+                  FunctionCall
+                </button>
+              </div>
             </div>
-          ) : (
+            <form onSubmit={send}>
+              {mode === 'transfer' ? (
+                <div className="public-demo-form-grid">
+                  <div className="form-group">
+                    <label className="label" htmlFor="public-token">
+                      Asset
+                    </label>
+                    <select
+                      id="public-token"
+                      className="input"
+                      value={selectedAsset?.tokenId ?? ''}
+                      onChange={event => setTokenId(event.target.value)}
+                      disabled={!!intent}
+                    >
+                      {transferAssets.map(asset => (
+                        <option key={asset.tokenId} value={asset.tokenId}>
+                          {displayAssetSymbol(asset)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="label" htmlFor="public-recipient">
+                      Recipient NEAR account
+                    </label>
+                    <input
+                      id="public-recipient"
+                      className="input"
+                      value={recipient}
+                      onChange={event => setRecipient(event.target.value)}
+                      disabled={!!intent}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="label" htmlFor="public-amount">
+                      Amount
+                    </label>
+                    <div className="public-demo-amount">
+                      <input
+                        id="public-amount"
+                        className="input"
+                        inputMode="decimal"
+                        value={amount}
+                        onChange={event => setAmount(event.target.value)}
+                        disabled={!!intent}
+                      />
+                      <span>{selectedAsset ? displayAssetSymbol(selectedAsset) : 'Token'}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label className="label" htmlFor="public-requests">
+                    Transaction requests
+                  </label>
+                  <textarea
+                    id="public-requests"
+                    className="textarea public-request-editor"
+                    spellCheck={false}
+                    value={requests}
+                    onChange={event => setRequests(event.target.value)}
+                    disabled={!!intent}
+                  />
+                </div>
+              )}
+              <div className="form-group">
+                <label className="label" htmlFor="public-request-id">
+                  Request ID
+                </label>
+                <input
+                  id="public-request-id"
+                  className="input"
+                  value={requestId}
+                  onChange={event => setRequestId(event.target.value)}
+                  disabled={!!intent}
+                  required
+                />
+              </div>
+              <div className="public-demo-actions">
+                <button
+                  className="btn btn-primary"
+                  type="submit"
+                  disabled={!!busy || account?.status !== 'active'}
+                >
+                  {busy === 'send'
+                    ? 'Sending...'
+                    : intent
+                      ? 'Retry same request'
+                      : 'Send public transaction'}
+                </button>
+                {intent && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={newIntent}
+                    disabled={!!busy}
+                  >
+                    New intent
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+          <section className="card card-compact public-demo-transaction">
+            <h2>Transaction status</h2>
             <div className="form-group">
-              <label className="label" htmlFor="public-requests">
-                Transaction requests
+              <label className="label" htmlFor="public-operation-id">
+                Operation ID
               </label>
-              <textarea
-                id="public-requests"
-                className="textarea public-request-editor"
-                spellCheck={false}
-                value={requests}
-                onChange={event => setRequests(event.target.value)}
-                disabled={!!intent}
-              />
+              <div className="public-demo-lookup">
+                <input
+                  id="public-operation-id"
+                  className="input"
+                  value={operationId}
+                  onChange={event => {
+                    lookupRevision.current += 1
+                    setOperationId(event.target.value)
+                    setTransaction(null)
+                    setLookupAttempted(false)
+                  }}
+                />
+                <button
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => void lookup(operationId)}
+                  disabled={!operationId.trim() || !!busy}
+                >
+                  Check status
+                </button>
+              </div>
             </div>
-          )}
-          <div className="form-group">
-            <label className="label" htmlFor="public-request-id">
-              Request ID
-            </label>
-            <input
-              id="public-request-id"
-              className="input"
-              value={requestId}
-              onChange={event => setRequestId(event.target.value)}
-              disabled={!!intent}
-              required
-            />
-          </div>
-          <div className="public-demo-actions">
-            <button
-              className="btn btn-primary"
-              type="submit"
-              disabled={!!busy || account?.status !== 'active'}
-            >
-              {busy === 'send'
-                ? 'Sending...'
-                : intent
-                  ? 'Retry same request'
-                  : 'Send public transaction'}
-            </button>
-            {intent && (
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={newIntent}
-                disabled={!!busy}
-              >
-                New intent
-              </button>
+            {transaction && (
+              <div className="public-demo-facts public-demo-tx-facts">
+                <div>
+                  <span>Status</span>
+                  <strong>{transaction.status}</strong>
+                </div>
+                {transaction.transactionHash && (
+                  <div>
+                    <span>Transaction hash</span>
+                    <code>{transaction.transactionHash}</code>
+                  </div>
+                )}
+                {transaction.submissionId && (
+                  <div>
+                    <span>Submission ID</span>
+                    <code>{transaction.submissionId}</code>
+                  </div>
+                )}
+                {transaction.anchor && (
+                  <div>
+                    <span>Anchor</span>
+                    <strong>{transaction.anchor.status}</strong>
+                  </div>
+                )}
+                {transaction.error && <p className="message error">{transaction.error}</p>}
+                <details>
+                  <summary>Response</summary>
+                  <pre>{JSON.stringify(transaction, null, 2)}</pre>
+                </details>
+              </div>
             )}
-          </div>
-        </form>
-      </section>
-      {error && (
-        <div className="message error public-demo-error grid-span-2" role="alert">
-          {error}
-        </div>
+            {lookupAttempted && !transaction && !error && (
+              <p className="message">No transaction found.</p>
+            )}
+          </section>
+        </>
       )}
-
-      <section className="card card-compact public-demo-transaction">
-        <h2>Transaction status</h2>
-        <div className="form-group">
-          <label className="label" htmlFor="public-operation-id">
-            Operation ID
-          </label>
-          <div className="public-demo-lookup">
-            <input
-              id="public-operation-id"
-              className="input"
-              value={operationId}
-              onChange={event => {
-                lookupRevision.current += 1
-                setOperationId(event.target.value)
-                setTransaction(null)
-                setLookupAttempted(false)
-              }}
-            />
-            <button
-              className="btn btn-secondary btn-xs"
-              onClick={() => void lookup(operationId)}
-              disabled={!operationId.trim() || !!busy}
-            >
-              Check status
-            </button>
-          </div>
-        </div>
-        {transaction && (
-          <div className="public-demo-facts public-demo-tx-facts">
-            <div>
-              <span>Status</span>
-              <strong>{transaction.status}</strong>
-            </div>
-            {transaction.transactionHash && (
-              <div>
-                <span>Transaction hash</span>
-                <code>{transaction.transactionHash}</code>
-              </div>
-            )}
-            {transaction.submissionId && (
-              <div>
-                <span>Submission ID</span>
-                <code>{transaction.submissionId}</code>
-              </div>
-            )}
-            {transaction.anchor && (
-              <div>
-                <span>Anchor</span>
-                <strong>{transaction.anchor.status}</strong>
-              </div>
-            )}
-            {transaction.error && <p className="message error">{transaction.error}</p>}
-            <details>
-              <summary>Response</summary>
-              <pre>{JSON.stringify(transaction, null, 2)}</pre>
-            </details>
-          </div>
-        )}
-        {lookupAttempted && !transaction && !error && (
-          <p className="message">No transaction found.</p>
-        )}
-      </section>
-
       <section className="card card-compact public-demo-trace">
         <div className="card-header">
           <h2>SDK trace</h2>

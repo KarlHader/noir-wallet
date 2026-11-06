@@ -298,36 +298,38 @@ The package also exports lower-level helpers such as `detectProvider()`, `getZca
 
 Use the extension and SDK from the same tested commit for this demo capability; do not assume an installed npm `beta` package or released extension includes it. See the [Public demo guide](../../docs/mutil-chain/operations/noir-protocol-public-demo.md) for local setup and controlled testing.
 
-Protocol uses the same connection and account-change event as Native Zcash:
+Connect through a CAIP-25 session for the EVM or Zcash identity used by the Protocol account. Bind the Public client to that authorized scope; an EVM-only wallet does not need a Zcash account:
 
 ```ts
-import { verifyMessageSignature } from '@noir-wallet/sdk'
+import { getNoirWallet, NoirPublicClient, PUBLIC_SESSION_METHODS } from '@noir-wallet/sdk'
 
-await zcash.connect()
-const connected = await zcash.getAccounts()
-if (!connected) throw new Error('Wallet disconnected')
-
-const { account } = await zcash.getPublicAssets()
-const key = await zcash.getPublicKey({ signingMode: account.signingMode })
-if (!key || key.pubkey !== account.publicKey) throw new Error('Account changed')
-
-const message = '{ "message": "Sign in to Example" }'
-const signed = await zcash.signMessage(message, { signingMode: account.signingMode })
-const verification = verifyMessageSignature({
-  message,
-  signature: signed.signature,
-  pubkey: account.publicKey,
-  address: account.address,
-  network: account.network
+const wallet = getNoirWallet()
+if (!wallet?.multichain || !wallet.ethereum) throw new Error('EVM wallet unavailable')
+const chainId = await wallet.ethereum.request<string>({ method: 'eth_chainId' })
+const scope = `eip155:${BigInt(chainId)}`
+await wallet.multichain.createSession({
+  scopes: {
+    [scope]: {
+      methods: [...PUBLIC_SESSION_METHODS, 'eth_chainId'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
+    }
+  }
 })
-if (!verification.valid) throw new Error(verification.error ?? 'Invalid signature')
-
-await zcash.disconnect()
+const protocol = new NoirPublicClient(wallet.multichain, scope)
+const { account } = await protocol.getPublicAssets()
+const key = await protocol.getPublicKey()
+if (key.pubkey !== account.publicKey) throw new Error('Account changed')
+const signed = await protocol.signMessage('{ "message": "Sign in to Example" }')
+// Verify signed against account.address using ERC-191 for EVM, or
+// verifyMessageSignature for Zcash. Signing does not submit a transaction.
+await wallet.multichain.revokeSession()
 ```
 
-On `accountsChanged`, query `getAccounts()` again. If connected, refresh `getPublicAssets()`; otherwise clear the Protocol account and assets.
+For Zcash, use its Mainnet or Testnet CAIP-2 scope from the [scope definitions](./example/src/noir-protocol/public/connection.ts). Restore authorization with `getSession()` and handle `wallet_sessionChanged`; clear account, asset, and pending intent state when the authorized accounts or scope change. Existing direct `zcash_*` Public methods remain available for Zcash integrations.
 
-`PublicAccount` is returned by `getPublicAssets().account` and contains `publicKey`, `address`, `mcaId`, `parentContractId`, `network`, `status`, and `signingMode` (`derived` or `legacy_index0`). `mcaId` is `null` before activation. The signing mode follows the account's binding: new accounts use `derived`, while legacy accounts use `legacy_index0`. Public assets and balances belong to the MCA and remain separate from native Zcash assets.
+`selectPublicAccount()` chooses among the current account's authorized Public scopes without creating an account or paying a fee. It reuses an existing MCA or activation first, then prefers a scope with a positive native Gas balance. That balance is a selection signal; activation still validates the complete quote and network fee. Use its returned `scope` for the next `NoirPublicClient`, and confirm an EVM network switch when needed.
+
+`PublicAccount` contains `chain`, `publicKey`, `address`, `mcaId`, `parentContractId`, `network`, `status`, and `signingMode`. EVM uses `chain: 'evm'`, `signingMode: 'evm'`, and the authorized EVM address as its identity in `publicKey` and `address`. Zcash uses `chain: 'zcash-l2'` and its existing `derived` or `legacy_index0` identity. `mcaId` is `null` before activation. Each identity's MCA binding belongs to the configured Public parent contract; a Lending MCA from a different contract is not interchangeable. Public balances remain separate from native-chain balances.
 
 Public account activation and wallet-managed transactions use these additional methods:
 

@@ -823,7 +823,11 @@ export function ApprovalPage() {
                   pageUrl={dappPageUrl}
                   action="Activate Public"
                 />
-                <DAppNetworkCard chain="zcash" network="Zcash" />
+                <DAppNetworkCard
+                  chain={publicActivationReview.account.chain === 'evm' ? 'evm' : 'zcash'}
+                  network={publicActivationReview.account.chain === 'evm' ? 'EVM' : 'Zcash'}
+                  chainId={publicActivationReview.chainId}
+                />
               </>
             )}
             <NoirPublicActivationReview review={publicActivationReview} />
@@ -840,7 +844,11 @@ export function ApprovalPage() {
               pageUrl={dappPageUrl}
               action="Review Public transaction"
             />
-            <DAppNetworkCard chain="zcash" network="Zcash" />
+            <DAppNetworkCard
+              chain={publicTransactionReview.account.chain === 'evm' ? 'evm' : 'zcash'}
+              network={publicTransactionReview.account.chain === 'evm' ? 'EVM' : 'Zcash'}
+              chainId={publicTransactionReview.account.chain === 'evm' ? data.chainId : undefined}
+            />
             <ApprovalDetailCard title="Public account">
               <div className="space-y-3 text-xs">
                 <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">

@@ -19,12 +19,12 @@ export function PublicDemoApp() {
       <main className="main">
         <section className="page-intro">
           <div>
-            <p className="eyebrow">Zcash / Public</p>
+            <p className="eyebrow">Multichain / Public</p>
             <h1>Noir Protocol</h1>
           </div>
         </section>
         {wallet ? (
-          <PublicDemo client={wallet.zcash} walletVersion={wallet.version} />
+          <PublicDemo wallet={wallet} />
         ) : (
           <section className="card install-prompt">
             <h2>Wallet not detected</h2>

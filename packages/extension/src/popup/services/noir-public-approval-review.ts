@@ -32,6 +32,8 @@ export interface NoirPublicActivationReview {
   readonly depositAddress: string
   readonly expiresAt: number
   readonly totalPayment: string
+  readonly sourceSymbol: string
+  readonly chainId?: string
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -41,11 +43,18 @@ function record(value: unknown): value is Record<string, unknown> {
 function account(value: unknown): value is NoirPublicAccount {
   return (
     record(value) &&
-    value.chain === 'zcash-l2' &&
+    (value.chain === 'zcash-l2' || value.chain === 'evm') &&
     value.network === 'mainnet' &&
     typeof value.publicKey === 'string' &&
     value.publicKey.length > 0 &&
-    (value.signingMode === 'derived' || value.signingMode === 'legacy_index0') &&
+    (value.signingMode === 'derived' ||
+      value.signingMode === 'legacy_index0' ||
+      value.signingMode === 'evm') &&
+    (value.chain === 'evm'
+      ? value.signingMode === 'evm' &&
+        /^0x[0-9a-f]{40}$/.test(value.publicKey) &&
+        value.address === value.publicKey
+      : value.signingMode !== 'evm') &&
     typeof value.address === 'string' &&
     value.address.length > 0 &&
     (value.mcaId === null || typeof value.mcaId === 'string') &&
@@ -115,6 +124,14 @@ export function parsePublicActivationReview(value: unknown): NoirPublicActivatio
     value.expiresAt <= Date.now()
   )
     return null
+  if (
+    value.account.chain === 'evm' &&
+    (typeof value.chainId !== 'string' ||
+      !/^eip155:[1-9][0-9]*$/.test(value.chainId) ||
+      typeof value.sourceSymbol !== 'string' ||
+      !/^[A-Za-z0-9]{1,16}$/.test(value.sourceSymbol))
+  )
+    return null
   return {
     account: value.account,
     amount: value.amount,
@@ -123,6 +140,8 @@ export function parsePublicActivationReview(value: unknown): NoirPublicActivatio
     expectedCredit: value.expectedCredit,
     depositAddress: value.depositAddress,
     expiresAt: value.expiresAt,
-    totalPayment: new Big(value.amount).plus(value.fee).toFixed()
+    totalPayment: new Big(value.amount).plus(value.fee).toFixed(),
+    sourceSymbol: value.account.chain === 'evm' ? (value.sourceSymbol as string) : 'ZEC',
+    ...(value.account.chain === 'evm' ? { chainId: value.chainId as string } : {})
   }
 }

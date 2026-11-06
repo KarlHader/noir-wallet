@@ -1,10 +1,10 @@
 import type { Network } from '@/types'
 
 export interface NoirPublicAccount {
-  readonly chain: 'zcash-l2'
+  readonly chain: 'zcash-l2' | 'evm'
   readonly network: Network
   readonly publicKey: string
-  readonly signingMode: 'derived' | 'legacy_index0'
+  readonly signingMode: 'derived' | 'legacy_index0' | 'evm'
   readonly address: string
   readonly mcaId: string | null
   readonly parentContractId: string

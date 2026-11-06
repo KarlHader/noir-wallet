@@ -1,6 +1,6 @@
 # Noir Protocol Public DeFi Demo Integration
 
-This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and workspace SDK from the same checkout. Public reuses the Lending signing identity and ordinary Zcash authorization, with a NEAR MCA for assets and execution. Its balances remain separate from native Zcash. MCA bindings also depend on the configured parent contract; deployments with different parents may return different MCAs for the same key.
+This guide is for developers testing the Public demo. These APIs are experimental and may change; use the extension and workspace SDK from the same checkout. Public uses a CAIP-25 EVM or Zcash authorization, with a NEAR MCA for assets and execution. Zcash retains its Lending signing identity; EVM uses the authorized EVM identity. Its balances remain separate from native-chain balances. MCA bindings also depend on the configured parent contract; deployments with different parents may return different MCAs for the same key.
 
 ## Local Setup
 
@@ -11,9 +11,9 @@ pnpm --filter @noir-wallet/sdk build
 pnpm dev:example
 ```
 
-In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-dev/` through **Load unpacked** in `chrome://extensions`. Open [the Public demo](http://localhost:5002/example/#noir-public) and select **Connect**. The demo stays in the [existing SDK example](../../../packages/sdk/example/src/noir-protocol/public/), sharing its SDK and build.
+In another terminal, run `pnpm dev:extension` and load `packages/extension/dist-dev/` through **Load unpacked** in `chrome://extensions`. Open [the Public demo](http://localhost:5002/example/#noir-public) and select **Connect**. Automatic selection reuses an existing MCA, then prefers a supported chain with native Gas; the chain selector provides a manual override. The demo stays in the [existing SDK example](../../../packages/sdk/example/src/noir-protocol/public/), sharing its SDK and build.
 
-Use a mnemonic software account in Mainnet mode. The current [Public configuration](../../../packages/extension/src/core/services/noir-protocol/public/config.ts) defines the deployment and supported tokens; Testnet and hardware accounts are unavailable. Mainnet development services are not a testnet. Use an isolated test wallet and an explicit spending limit for funded integration. Use the controlled verification below when real funds are unnecessary.
+Use a mnemonic software account or an imported EVM private-key account in Mainnet mode. The current [Public configuration](../../../packages/extension/src/core/services/noir-protocol/public/config.ts) defines the deployment and supported tokens; Testnet and hardware accounts are unavailable. Mainnet development services are not a testnet. Use an isolated test wallet and an explicit spending limit for funded integration. Use the controlled verification below when real funds are unnecessary.
 
 For temporary integration in another dApp, download the checked SDK artifact from the PR's successful **SDK CI** run, extract its tarball, and install it with `pnpm add /path/to/noir-wallet-sdk-<version>.tgz`. Use the paired extension from the same tested commit and keep the generated lockfile. Artifact downloads require GitHub access. Earlier manually published tarballs may use a different experimental API; the version string alone does not identify this preview.
 
@@ -21,7 +21,7 @@ For temporary integration in another dApp, download the checked SDK artifact fro
 
 Follow the [SDK Public integration reference](../../../packages/sdk/README.md#noir-protocol-public-experimental) for identity selection, authorization, account events, message signing, and wallet-managed transaction APIs. The steps below cover the demo's activation and transaction workflow.
 
-Activation needs an acceptable bridge quote, the creation payment, and the Zcash network fee. An unavailable or unverified quote blocks activation. Account and asset reads never initiate that payment. The activation refund currently uses a wallet Zcash address and may link the Public identity to that address.
+Activation needs an acceptable bridge quote, the creation payment, and the selected chain's network fee. An unavailable or unverified quote blocks activation. Account and asset reads never initiate that payment. The activation refund uses the selected wallet identity's address and may link it to the Public account.
 
 Each `txRequests` entry has this shape; replace the placeholder contract and method with the deployment being tested:
 

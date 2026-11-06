@@ -8,6 +8,8 @@ const DECIMAL = /^(0|[1-9][0-9]{0,77})$/
 const ACCOUNT_ID = /^(?=.{2,64}$)[a-z0-9]+(?:[._-][a-z0-9]+)*$/
 const PUBLIC_KEY = /^04[0-9a-f]{128}$/
 const COMPACT_SIGNATURE = /^[0-9a-fA-F]{130}$/
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
+const EVM_SIGNATURE = /^(?:0x)?[0-9a-fA-F]{128}(?:1b|1c)$/i
 const MAX_ACTIONS = 16
 const MAX_CALLS = 16
 const MAX_ARGS_BYTES = 32 * 1024
@@ -44,9 +46,12 @@ export interface NoirPublicTxCandidate {
   readonly nonce: string
   readonly deadline: string
   readonly tx_requests: readonly NoirPublicFunctionCallRequest[]
-  readonly signer_wallet: Readonly<{ Zcash: string }>
+  readonly signer_wallet: NoirPublicSignerWallet
   readonly signature: string
 }
+
+export type NoirPublicIdentityChain = 'zcash' | 'evm'
+export type NoirPublicSignerWallet = Readonly<{ Zcash: string }> | Readonly<{ EVM: string }>
 
 export function readPublicTgas(value: unknown): number {
   if (
@@ -100,6 +105,59 @@ export function readPublicKey(value: unknown): string {
     throw new Error('Invalid Public Zcash uncompressed public key')
   }
   return value
+}
+
+export function readPublicEvmAddress(value: unknown): string {
+  if (typeof value !== 'string' || !EVM_ADDRESS.test(value)) {
+    throw new Error('Invalid Public EVM address')
+  }
+  return value.toLowerCase()
+}
+
+export function readPublicIdentity(
+  value: unknown,
+  chain: NoirPublicIdentityChain = 'zcash'
+): string {
+  if (chain === 'evm') return readPublicEvmAddress(value)
+  if (chain === 'zcash') return readPublicKey(value)
+  throw new Error('Invalid Public identity chain')
+}
+
+export function createPublicSignerWallet(
+  identity: unknown,
+  chain: NoirPublicIdentityChain = 'zcash'
+): NoirPublicSignerWallet {
+  const value = readPublicIdentity(identity, chain)
+  return chain === 'evm' ? Object.freeze({ EVM: value.slice(2) }) : Object.freeze({ Zcash: value })
+}
+
+export function parsePublicSignerWallet(value: unknown): NoirPublicSignerWallet {
+  const wallet = record(value, 'Public signer wallet')
+  if (Object.keys(wallet).length !== 1) throw new Error('Invalid Public signer wallet fields')
+  if ('EVM' in wallet) {
+    if (typeof wallet.EVM !== 'string' || !/^[0-9a-f]{40}$/.test(wallet.EVM)) {
+      throw new Error('Invalid Public EVM signer wallet')
+    }
+    return Object.freeze({ EVM: wallet.EVM })
+  }
+  exactKeys(wallet, ['Zcash'], 'Public signer wallet')
+  return Object.freeze({ Zcash: readPublicKey(wallet.Zcash) })
+}
+
+export function readPublicEvmSignature(value: unknown): string {
+  if (typeof value !== 'string' || !EVM_SIGNATURE.test(value)) {
+    throw new Error('Invalid Public EVM signature')
+  }
+  return value.replace(/^0x/i, '').toLowerCase()
+}
+
+export function readPublicIdentitySignature(
+  value: unknown,
+  chain: NoirPublicIdentityChain = 'zcash'
+): string {
+  if (chain === 'evm') return readPublicEvmSignature(value)
+  if (chain === 'zcash') return readPublicSignature(value)
+  throw new Error('Invalid Public identity chain')
 }
 
 export function readPublicSignature(value: unknown): string {
@@ -215,15 +273,17 @@ export function createPublicCandidate(input: {
   txRequests: unknown
   publicKey: unknown
   signature: unknown
+  identityChain?: NoirPublicIdentityChain
 }): NoirPublicTxCandidate {
+  const chain = input.identityChain ?? 'zcash'
   const candidate: NoirPublicTxCandidate = Object.freeze({
     tgas: readPublicTgas(input.tgas),
     address: readPublicAccountId(input.address, 'Public MCA address'),
     nonce: readPublicDecimal(input.nonce, 'Public nonce'),
     deadline: readPublicDecimal(input.deadline, 'Public deadline'),
     tx_requests: parsePublicFunctionCallRequests(input.txRequests),
-    signer_wallet: Object.freeze({ Zcash: readPublicKey(input.publicKey) }),
-    signature: readPublicSignature(input.signature)
+    signer_wallet: createPublicSignerWallet(input.publicKey, chain),
+    signature: readPublicIdentitySignature(input.signature, chain)
   })
   if (textEncoder.encode(stringifyPublicWire(candidate)).length > MAX_BODY_BYTES) {
     throw new Error('Public submission is too large')
@@ -246,14 +306,15 @@ export function parsePublicCandidate(value: unknown): NoirPublicTxCandidate {
     ],
     'Public candidate'
   )
-  const wallet = record(candidate.signer_wallet, 'Public signer wallet')
-  exactKeys(wallet, ['Zcash'], 'Public signer wallet')
+  const wallet = parsePublicSignerWallet(candidate.signer_wallet)
+  const chain: NoirPublicIdentityChain = 'EVM' in wallet ? 'evm' : 'zcash'
   const fields = {
     address: candidate.address,
     nonce: candidate.nonce,
     deadline: candidate.deadline,
     txRequests: candidate.tx_requests,
-    publicKey: wallet.Zcash,
+    publicKey: 'EVM' in wallet ? `0x${wallet.EVM}` : wallet.Zcash,
+    identityChain: chain,
     signature: candidate.signature
   }
   if (candidate.tgas !== undefined)
@@ -263,8 +324,8 @@ export function parsePublicCandidate(value: unknown): NoirPublicTxCandidate {
     nonce: readPublicDecimal(fields.nonce, 'Public nonce'),
     deadline: readPublicDecimal(fields.deadline, 'Public deadline'),
     tx_requests: parsePublicFunctionCallRequests(fields.txRequests),
-    signer_wallet: Object.freeze({ Zcash: readPublicKey(fields.publicKey) }),
-    signature: readPublicSignature(fields.signature)
+    signer_wallet: createPublicSignerWallet(fields.publicKey, chain),
+    signature: readPublicIdentitySignature(fields.signature, chain)
   })
   if (textEncoder.encode(stringifyPublicWire(legacy)).length > MAX_BODY_BYTES) {
     throw new Error('Public submission is too large')
@@ -276,10 +337,14 @@ export function serializePublicCandidate(candidate: NoirPublicTxCandidate): stri
   return stringifyPublicWire(parsePublicCandidate(candidate))
 }
 
-export function createPublicMcaMessage(publicKey: unknown, signature: unknown): string {
+export function createPublicMcaMessage(
+  publicKey: unknown,
+  signature: unknown,
+  identityChain: NoirPublicIdentityChain = 'zcash'
+): string {
   return JSON.stringify({
-    w: [{ Zcash: readPublicKey(publicKey) }],
-    s: [readPublicSignature(signature)]
+    w: [createPublicSignerWallet(publicKey, identityChain)],
+    s: [readPublicIdentitySignature(signature, identityChain)]
   })
 }
 

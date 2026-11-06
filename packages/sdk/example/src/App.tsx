@@ -672,9 +672,7 @@ function App() {
           </div>
         )}
 
-        {isInstalled && activeTab === 'public' && noirWallet && (
-          <PublicDemo client={noirWallet.zcash} walletVersion={noirWallet.version} />
-        )}
+        {isInstalled && activeTab === 'public' && noirWallet && <PublicDemo wallet={noirWallet} />}
 
         {connected && (
           <>

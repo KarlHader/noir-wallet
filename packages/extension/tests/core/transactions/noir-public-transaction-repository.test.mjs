@@ -12,6 +12,7 @@ import {
 import { parseNoirPublicTransactionBinding } from '../../../src/core/transactions/domain/protocol.ts'
 import { NoirPublicClient } from '../../../src/infrastructure/noir-protocol/public-client.ts'
 import { PUBLIC_MAINNET_CONFIG } from '../../../src/core/services/noir-protocol/public/config.ts'
+import { getEvmNativeProtocolAssetId } from '../../../src/config/asset-market-assets.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import {
@@ -142,6 +143,246 @@ test('Public activation persists the exact payment intent before payment and ded
   expect(bound.graph.root.status).toBe('final')
 })
 
+test('EVM Public activation binds the same account after an origin payment', async () => {
+  const identityPublicKey = `0x${'ab'.repeat(20)}`
+  const transferGraph = (transactionId = 'evm-activation') => ({
+    root: {
+      id: transactionId,
+      scope,
+      kind: 'transfer',
+      status: 'prepared',
+      segmentIds: [`${transactionId}:origin`],
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      revision: 0,
+      intent: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '1000' },
+        sender: { chainId: 'eip155:1', address: identityPublicKey },
+        recipient: { chainId: 'eip155:1', address: `0x${'cd'.repeat(20)}` }
+      }
+    },
+    segments: [
+      {
+        id: `${transactionId}:origin`,
+        transactionId,
+        role: 'origin',
+        target: { kind: 'onchain', chainId: 'eip155:1' },
+        status: 'prepared',
+        requiredForFinality: true,
+        dependsOn: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        revision: 0
+      }
+    ]
+  })
+  const repository = new NoirPublicTransactionRepository(new InMemoryTransactionRepository())
+  const activationInput = {
+    ...common,
+    identityChain: 'evm',
+    identityPublicKey,
+    preparedTransferGraph: transferGraph(),
+    requestId: 'evm-activation',
+    activationId: 'evm-activation',
+    paymentIntent: {
+      depositAddress: `0x${'cd'.repeat(20)}`,
+      amountInRaw: '1000',
+      amountOutRaw: '900',
+      feeRaw: '100',
+      expiresAt: 2_000,
+      refundAddress: identityPublicKey,
+      recipient: common.parentContractId,
+      parentMessage: '{"account":"mca.parent.testnet"}',
+      evmPayment: {
+        chainId: 'eip155:1',
+        assetId: 'eip155:1/slip44:60',
+        protocolAssetId: getEvmNativeProtocolAssetId('eip155:1'),
+        accountAddress: identityPublicKey,
+        transactionId: 'evm-activation'
+      }
+    }
+  }
+  const created = await repository.createPreparedActivation(activationInput)
+  expect(created.binding.identityChain).toBe('evm')
+  expect(
+    (
+      await repository.getPendingActivation(
+        scope,
+        'testnet',
+        common.parentContractId,
+        identityPublicKey,
+        'evm'
+      )
+    )?.graph.root.id
+  ).toBe(created.graph.root.id)
+  await repository.applyActivationPayment(
+    scope,
+    created.graph.root.id,
+    'evm-hash',
+    'confirming',
+    1_050
+  )
+  const bound = await repository.applyActivationBound(
+    scope,
+    created.graph.root.id,
+    {
+      chain: 'evm',
+      network: 'testnet',
+      publicKey: identityPublicKey,
+      address: identityPublicKey,
+      mcaId: candidate.address,
+      parentContractId: common.parentContractId,
+      status: 'active'
+    },
+    1_100
+  )
+  expect(bound.graph.root.status).toBe('final')
+  await expect(
+    repository.markEvmActivationPaymentRejected(scope, created.graph.root.id, 1_150)
+  ).rejects.toThrow(/has not failed/)
+  const rejectedRepository = new NoirPublicTransactionRepository(
+    new InMemoryTransactionRepository()
+  )
+  const rejected = await rejectedRepository.createPreparedActivation(activationInput)
+  const reviewStore = new InMemoryTransactionRepository()
+  await reviewStore.create(transferGraph())
+  const failedTransferGraph = (
+    await reviewStore.applySegmentEvent({
+      scope,
+      transactionId: 'evm-activation',
+      segmentId: 'evm-activation:origin',
+      event: {
+        id: 'event:evm-activation:rejected',
+        status: 'failed',
+        cause: 'failure',
+        observedAt: 1_025,
+        failure: { code: 'user-rejected', occurredAt: 1_025 }
+      },
+      expectedRootRevision: 0,
+      expectedSegmentRevision: 0
+    })
+  ).graph
+  const failed = await rejectedRepository.markEvmActivationPaymentRejected(
+    scope,
+    rejected.graph.root.id,
+    1_050,
+    failedTransferGraph
+  )
+  expect(failed.graph.root.status).toBe('failed')
+  expect(
+    await rejectedRepository.getPendingActivation(
+      scope,
+      'testnet',
+      common.parentContractId,
+      identityPublicKey,
+      'evm'
+    )
+  ).toBeNull()
+  const retryInput = {
+    ...activationInput,
+    requestId: 'evm-activation-retry',
+    activationId: 'evm-activation-retry',
+    preparedTransferGraph: transferGraph('evm-activation-retry'),
+    paymentIntent: {
+      ...activationInput.paymentIntent,
+      evmPayment: {
+        ...activationInput.paymentIntent.evmPayment,
+        transactionId: 'evm-activation-retry'
+      }
+    }
+  }
+  const retry = await rejectedRepository.createPreparedActivation(retryInput)
+  expect(retry.graph.root.id).not.toBe(rejected.graph.root.id)
+  expect(
+    (
+      await rejectedRepository.getPendingActivation(
+        scope,
+        'testnet',
+        common.parentContractId,
+        identityPublicKey,
+        'evm'
+      )
+    )?.graph.root.id
+  ).toBe(retry.graph.root.id)
+  await expect(
+    rejectedRepository.createPreparedActivation({
+      ...retryInput,
+      requestId: 'evm-activation-third',
+      activationId: 'evm-activation-third',
+      preparedTransferGraph: transferGraph('evm-activation-third'),
+      paymentIntent: {
+        ...retryInput.paymentIntent,
+        evmPayment: {
+          ...retryInput.paymentIntent.evmPayment,
+          transactionId: 'evm-activation-third'
+        }
+      }
+    })
+  ).rejects.toThrow(/already exists/)
+
+  const durableStore = new InMemoryTransactionRepository()
+  await durableStore.create(transferGraph())
+  const durableRepository = new NoirPublicTransactionRepository(durableStore)
+  const durableActivation = await durableRepository.createPreparedActivation(activationInput)
+  await durableStore.applySegmentEvent({
+    scope,
+    transactionId: 'evm-activation',
+    segmentId: 'evm-activation:origin',
+    event: {
+      id: 'event:evm-activation:signed',
+      status: 'signed',
+      cause: 'progress',
+      observedAt: 1_025
+    },
+    expectedRootRevision: 0,
+    expectedSegmentRevision: 0
+  })
+  await expect(
+    durableRepository.markEvmActivationPaymentRejected(
+      scope,
+      durableActivation.graph.root.id,
+      1_050,
+      failedTransferGraph
+    )
+  ).rejects.toThrow(/has not failed/)
+  await expect(
+    durableRepository.markEvmActivationPaymentAbandoned(
+      scope,
+      durableActivation.graph.root.id,
+      1_050,
+      async () => true
+    )
+  ).rejects.toThrow(/may still execute/)
+  const conflictingStore = new InMemoryTransactionRepository()
+  await conflictingStore.create(failed.graph)
+  await conflictingStore.create(await durableStore.get(scope, 'evm-activation'))
+  await expect(
+    new NoirPublicTransactionRepository(conflictingStore).createPreparedActivation(retryInput)
+  ).rejects.toThrow(/may still execute/)
+
+  const abandonedRepository = new NoirPublicTransactionRepository(
+    new InMemoryTransactionRepository()
+  )
+  const abandoned = await abandonedRepository.createPreparedActivation(activationInput)
+  await expect(
+    abandonedRepository.markEvmActivationPaymentAbandoned(
+      scope,
+      abandoned.graph.root.id,
+      1_050,
+      async () => false
+    )
+  ).rejects.toThrow(/still pending/)
+  const cancelled = await abandonedRepository.markEvmActivationPaymentAbandoned(
+    scope,
+    abandoned.graph.root.id,
+    1_075,
+    async () => true
+  )
+  expect(cancelled.graph.root.status).toBe('failed')
+})
+
 test('Public signed request survives submission recovery and is scoped to its origin', async () => {
   const repository = new NoirPublicTransactionRepository(new InMemoryTransactionRepository())
   const created = await repository.createSigned({ ...common, candidate })
@@ -188,6 +429,54 @@ test('Public signed request survives submission recovery and is scoped to its or
   await expect(repository.createSigned({ ...common, candidate: changed })).rejects.toThrow(
     /different signed payload/
   )
+})
+
+test('EVM Public signed requests retain their wallet binding across persistence', async () => {
+  const identityPublicKey = `0x${'ab'.repeat(20)}`
+  const evmCandidate = createPublicCandidate({
+    tgas: 200,
+    address: candidate.address,
+    nonce: candidate.nonce,
+    deadline: candidate.deadline,
+    txRequests: candidate.tx_requests,
+    publicKey: identityPublicKey,
+    signature: `0x${'33'.repeat(64)}1c`,
+    identityChain: 'evm'
+  })
+  const repository = new NoirPublicTransactionRepository(new InMemoryTransactionRepository())
+  const created = await repository.createSigned({
+    ...common,
+    identityPublicKey,
+    candidate: evmCandidate
+  })
+  expect(created.binding.identityChain).toBe('evm')
+  const zcash = await repository.createSigned({ ...common, candidate })
+  expect(zcash.transaction.operationId).not.toBe(created.transaction.operationId)
+  expect(
+    (await repository.getByRequestId(scope, 'testnet', common.origin, common.requestId, 'evm'))
+      ?.transaction.operationId
+  ).toBe(created.transaction.operationId)
+  expect(
+    (await repository.getByRequestId(scope, 'testnet', common.origin, common.requestId))
+      ?.transaction.operationId
+  ).toBe(zcash.transaction.operationId)
+  expect(parseNoirPublicTransactionBinding(created.binding)).toEqual(created.binding)
+  expect(
+    (
+      await repository.getByOperationId(
+        scope,
+        'testnet',
+        common.origin,
+        created.transaction.operationId
+      )
+    )?.candidate
+  ).toEqual(evmCandidate)
+  expect(() =>
+    parseNoirPublicTransactionBinding({
+      ...created.binding,
+      identityPublicKey: `0x${'cd'.repeat(20)}`
+    })
+  ).toThrow(/does not match/)
 })
 
 test('persisted Public requests retain their original IDs and signed bytes', async () => {

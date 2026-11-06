@@ -31,8 +31,10 @@ import {
   verifyPublicExecutionOutcome
 } from '../../../../src/infrastructure/noir-protocol/public-client.ts'
 import { PUBLIC_MAINNET_CONFIG } from '../../../../src/core/services/noir-protocol/public/config.ts'
+import { getEvmNativeProtocolAssetId } from '../../../../src/config/asset-market-assets.ts'
 import {
   assertPublicActivationQuoteForPayment,
+  assertPublicActivationQuoteRequest,
   createPublicActivationQuoteRequest,
   increasePublicActivationQuoteRequest,
   parsePublicBridgeMinimum,
@@ -42,6 +44,8 @@ import { getPublicActivationQuote } from '../../../../src/infrastructure/noir-pr
 
 const publicKey = `04${'11'.repeat(64)}`
 const signature = `1b${'22'.repeat(64)}`
+const evmAddress = `0x${'ab'.repeat(20)}`
+const evmSignature = `0x${'33'.repeat(64)}1b`
 const request = {
   FunctionCall: {
     receiver_id: 'token.near',
@@ -85,6 +89,85 @@ function recoverZcashPublicKey(message, compactSignature) {
 }
 
 test.describe('Public wire contract', () => {
+  test('encodes EVM signer identity and signature for MCA lookup and submission', () => {
+    const candidate = createPublicCandidate({
+      tgas: 250,
+      address: 'a.ma.private-mainnet.ref-dev-team.near',
+      nonce: '7',
+      deadline: '1760000000000',
+      txRequests: [request],
+      publicKey: evmAddress.toUpperCase().replace('0X', '0x'),
+      signature: evmSignature,
+      identityChain: 'evm'
+    })
+    expect(candidate.signer_wallet).toEqual({ EVM: evmAddress.slice(2) })
+    expect(candidate.signature).toBe(evmSignature.slice(2))
+    expect(parsePublicCandidate(JSON.parse(serializePublicCandidate(candidate)))).toEqual(candidate)
+    expect(JSON.parse(createPublicMcaMessage(evmAddress, evmSignature, 'evm'))).toEqual({
+      w: [{ EVM: evmAddress.slice(2) }],
+      s: [evmSignature.slice(2)]
+    })
+    expect(() =>
+      parsePublicCandidate({ ...candidate, signer_wallet: { EVM: evmAddress } })
+    ).toThrow()
+    expect(() =>
+      createPublicCandidate({
+        tgas: 250,
+        address: candidate.address,
+        nonce: '7',
+        deadline: candidate.deadline,
+        txRequests: [request],
+        publicKey: evmAddress,
+        signature: evmSignature.slice(0, -2) + '00',
+        identityChain: 'evm'
+      })
+    ).toThrow(/signature/)
+  })
+
+  test('looks up an EVM MCA using the contract wallet variant', async () => {
+    const originalFetch = globalThis.fetch
+    let wallet
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body)
+      wallet = JSON.parse(atob(body.params.args_base64)).wallet
+      return new Response(
+        JSON.stringify({ result: { result: [...new TextEncoder().encode('null')] } })
+      )
+    }
+    try {
+      const client = new NoirPublicClient(PUBLIC_MAINNET_CONFIG, 'https://rpc.mainnet.near.org')
+      expect(await client.getMcaByWallet(evmAddress, undefined, 'evm')).toBeNull()
+      expect(wallet).toEqual({ EVM: evmAddress.slice(2) })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('selects only a registered native EVM activation asset', () => {
+    const originAsset = getEvmNativeProtocolAssetId('eip155:1')
+    const request = createPublicActivationQuoteRequest({
+      config: PUBLIC_MAINNET_CONFIG,
+      publicKey: evmAddress,
+      signature: evmSignature,
+      evmSource: { chainId: 'eip155:1', protocolAssetId: originAsset },
+      refundAddress: evmAddress,
+      amountOutRaw: '30000'
+    })
+    expect(request.originAsset).toBe(originAsset)
+    expect(() => assertPublicActivationQuoteRequest(request, PUBLIC_MAINNET_CONFIG)).not.toThrow()
+    expect(JSON.parse(request.customRecipientMsg).w).toEqual([{ EVM: evmAddress.slice(2) }])
+    expect(() =>
+      createPublicActivationQuoteRequest({
+        config: PUBLIC_MAINNET_CONFIG,
+        publicKey: evmAddress,
+        signature: evmSignature,
+        evmSource: { chainId: 'eip155:8453', protocolAssetId: originAsset },
+        refundAddress: evmAddress,
+        amountOutRaw: '30000'
+      })
+    ).toThrow(/not registered/)
+  })
+
   test('Public message signing accepts any JSON syntax without business schema checks', () => {
     for (const value of [
       JSON.stringify(

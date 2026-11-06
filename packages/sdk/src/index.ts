@@ -121,3 +121,10 @@ export type {
   VerifyMessageParams,
   VerifyMessageResult
 } from './chains/zcash'
+
+export { NoirPublicClient, PUBLIC_SESSION_METHODS } from './protocol/public'
+export type {
+  PublicSigningIdentity,
+  PublicMessageSignature,
+  PublicAccountSelection
+} from './protocol/public'
