@@ -27,8 +27,97 @@ import {
 import type { Hex, Route } from '../../helpers/protocol-wallet'
 import type { Page } from '@playwright/test'
 import { getZcashChainId } from '../../../src/core/chains/registry'
+import { seedSettledZcashBalance } from '../../helpers/release-default'
 
 registerProtocolFixtures()
+
+test('quotes ZEC Shield to the same Account Private ETH while Private mode is selected', async ({
+  context,
+  popup,
+  extensionId
+}) => {
+  test.setTimeout(180_000)
+  await mockEvmNetwork(context)
+  await mockBitcoinNetwork(context)
+  const api = await mockProtocolApis(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  await seedSettledZcashBalance(
+    popup,
+    {
+      total: '2',
+      transparent: '0',
+      shielded: '2',
+      spendable: '2',
+      available: '2',
+      confirmed: { shielded: '2', transparent: '0' }
+    },
+    { hydrateBackground: true }
+  )
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await expect
+    .poll(() =>
+      popup.evaluate(async () => {
+        const snapshot = await chrome.runtime.sendMessage({ type: 'GET_SYNC_STATE' })
+        return snapshot.balance?.confirmed?.shielded
+      })
+    )
+    .toBe('2')
+  await popup.getByRole('radio', { name: 'Private mode' }).click()
+  await popup.getByRole('button', { name: 'Swap', exact: true }).click()
+
+  const fromAsset = popup.getByRole('button', { name: 'From asset' })
+  await expect(fromAsset).toBeEnabled({ timeout: 60_000 })
+  await fromAsset.click()
+  await popup
+    .getByRole('dialog', { name: 'Select Token' })
+    .getByRole('button', { name: /^ZEC on Zcash/ })
+    .click()
+  await expect(fromAsset).toContainText('ZEC')
+  await popup.getByRole('button', { name: 'To asset' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Select Token' })
+    .getByRole('button', { name: /^ETH on Ethereum/ })
+    .click()
+
+  const addresses = await popup.evaluate(async zcashChainId => {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
+    const account = response?.result?.accounts?.find(
+      (candidate: { active?: unknown }) => candidate.active === true
+    )
+    const zcash = account?.networks?.find(
+      (network: { chainId?: unknown }) => network.chainId === zcashChainId
+    )
+    const evm = account?.networks?.find(
+      (network: { chainId?: unknown }) => network.chainId === 'eip155:1'
+    )
+    const refund = zcash?.addresses?.find(
+      (address: { scheme?: unknown }) => address.scheme === 'zcash-transparent-p2pkh'
+    )?.value
+    if (typeof refund !== 'string' || typeof evm?.privateExecutionAddress !== 'string') {
+      throw new Error('Test Account route is unavailable')
+    }
+    return { refund, recipient: evm.privateExecutionAddress as string }
+  }, getZcashChainId('mainnet'))
+  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+  await expect(
+    popup.getByRole('button', { name: 'Choose source account, current private' })
+  ).toHaveCount(0)
+
+  const quoteCount = api.getQuoteRequests().length
+  await popup.getByRole('textbox', { name: 'From amount' }).fill('1')
+  await expect.poll(() => api.getQuoteRequests().length).toBe(quoteCount + 1)
+  expect(api.getQuoteRequests().at(-1)).toMatchObject({
+    originAsset: 'zec',
+    destinationAsset: ETH_ASSET,
+    amount: '100000000',
+    refundTo: addresses.refund,
+    recipient: addresses.recipient,
+    confidentiality: 'basic'
+  })
+  await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeEnabled()
+  await captureScreenshot(popup, 'swap-zec-shield-own-private-quote.png')
+})
 
 function swapAssetDialog(popup: Page, _direction: 'From' | 'To') {
   return popup.getByRole('dialog', { name: 'Select Token' })

@@ -748,7 +748,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const executionSourceMode: QuoteDepositExecutionMode = publicPrivacySendRequested
     ? 'main'
-    : privateTransferRequested || privateSwapRequested
+    : privateTransferRequested || (privateSwapRequested && walletOwnedSourceBase?.family === 'evm')
       ? 'private'
       : resolveSwapExecutionSourceMode({
           requestedMode: sourceMode,
@@ -758,7 +758,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         })
   const quotePurpose = publicPrivacySendRequested
     ? 'public-private-send'
-    : privateSwapRequested
+    : privateSwapRequested && executionSourceMode === 'private'
       ? 'private-swap'
       : privateTransferRequested
         ? 'private-transfer'
