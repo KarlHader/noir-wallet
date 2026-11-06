@@ -104,7 +104,7 @@ export interface TransactionIntentSnapshot {
   readonly protocol?: TransactionProtocolBinding
   readonly shield?: Readonly<{
     readonly schemaVersion: 1
-    readonly operation: 'deposit' | 'withdraw' | 'cluster'
+    readonly operation: 'deposit' | 'withdraw' | 'cluster' | 'swap'
     readonly sourceDomain: 'public' | 'private' | 'shield'
     readonly destinationDomain: 'public' | 'private' | 'shield'
   }>
@@ -142,6 +142,7 @@ export interface TransactionFailure {
 export interface TransactionSegmentEvidence {
   readonly transactionHash?: string
   readonly assetEffects?: TransactionAssetEffects
+  readonly settledAmount?: TransactionAssetAmount
   readonly replacementTransactionHash?: string
   readonly externalReference?: string
   readonly blockHash?: string

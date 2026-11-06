@@ -6,6 +6,8 @@ import {
   MemoryRheaSwapQuoteSessionStore,
   RHEA_SWAP_CHAIN_CATALOG,
   RheaSwapService,
+  assertPrivateQuoteRoute,
+  assertPrivateSwapAccountRoute,
   parseRheaSwapQuoteRequest,
   toSdkQuoteRequest,
   toRheaSwapToken
@@ -77,6 +79,123 @@ test('quote request parser forwards only supported confidential routing', () => 
   expect(() => parseRheaSwapQuoteRequest({ ...quoteRequest, confidentiality: 'advanced' })).toThrow(
     /confidentiality is invalid/
   )
+})
+
+test('Private Swap quote remains bound to the same Account and its Private addresses', () => {
+  const source = `0x${'1'.repeat(40)}`
+  const destination = `0x${'2'.repeat(40)}`
+  const account = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    networks: [
+      {
+        chainId: 'eip155:1',
+        privateExecutionAddress: source,
+        addresses: [{ value: `0x${'4'.repeat(40)}` }]
+      },
+      { chainId: 'eip155:56', privateExecutionAddress: destination }
+    ]
+  }
+  const route = {
+    fromChain: '1',
+    toChain: '56',
+    sender: source,
+    recipient: destination,
+    confidentiality: 'basic',
+    tokenIn: { address: 'native' },
+    tokenOut: { address: 'native' }
+  }
+  expect(() => assertPrivateSwapAccountRoute(route, account, account)).not.toThrow()
+  expect(() =>
+    assertPrivateSwapAccountRoute({ ...route, recipient: `0x${'3'.repeat(40)}` }, account)
+  ).toThrow(/this Account/)
+  expect(() =>
+    assertPrivateSwapAccountRoute(route, account, { ...account, accountId: 'account-2' })
+  ).toThrow(/account changed/)
+  expect(() => assertPrivateSwapAccountRoute(route, null)).toThrow(/account changed/)
+  const main = account.networks[0].addresses[0].value
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: '1', recipient: main },
+      account,
+      'private-transfer'
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: '1', recipient: `0x${'5'.repeat(40)}` },
+      account,
+      'private-transfer'
+    )
+  ).toThrow(/must stay in this Account/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: '1', recipient: main, tokenOut: { address: 'other' } },
+      account,
+      'private-transfer'
+    )
+  ).toThrow(/asset/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, recipient: `0x${'5'.repeat(40)}` },
+      account,
+      'private-cross-chain-send'
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: '1', recipient: main },
+      account,
+      'private-cross-chain-send'
+    )
+  ).toThrow(/route is invalid/)
+  const privateDappRoute = {
+    ...route,
+    toChain: '1',
+    recipient: `0x${'5'.repeat(40)}`
+  }
+  expect(() =>
+    assertPrivateQuoteRoute(privateDappRoute, account, 'private-dapp-transfer')
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...privateDappRoute, tokenOut: { address: 'other' } },
+      account,
+      'private-dapp-transfer'
+    )
+  ).toThrow(/route is invalid/)
+  const publicRoute = {
+    ...route,
+    toChain: '1',
+    sender: main,
+    recipient: `0x${'5'.repeat(40)}`
+  }
+  expect(() => assertPrivateQuoteRoute(publicRoute, account, 'public-private-send')).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute({ ...publicRoute, sender: source }, account, 'public-private-send')
+  ).toThrow(/route is invalid/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...publicRoute, confidentiality: undefined },
+      account,
+      'public-private-send'
+    )
+  ).toThrow(/account changed/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...publicRoute, tokenOut: { address: 'other' } },
+      account,
+      'public-private-send'
+    )
+  ).toThrow(/route is invalid/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      publicRoute,
+      { ...account, accountId: 'other' },
+      'public-private-send',
+      account
+    )
+  ).toThrow(/account changed/)
 })
 
 test('RHEA Swap quote sends the Noir Swap referral', () => {
@@ -509,6 +628,11 @@ test('quote and build remain bound across a session-store reload', async () => {
     now: () => 2_000
   })
   const replacedBuildQuote = await replacedBuildService.quote(confidentialQuoteRequest)
+  await expect(
+    replacedBuildService.readQuoteSecurityContext(replacedBuildQuote.quoteHandle)
+  ).resolves.toMatchObject({
+    scope: null
+  })
   buildRecipient = 'attacker.near'
   await expect(replacedBuildService.prepare(replacedBuildQuote.quoteHandle)).rejects.toThrow(
     /does not match its quote/
@@ -519,13 +643,15 @@ test('quote and build remain bound across a session-store reload', async () => {
     now: () => now,
     createHandle: () => 'fixed'
   })
-  const quoteView = await service.quote(confidentialQuoteRequest)
+  const privateSwapScope = { walletId: 'wallet-1', accountId: 'account-1' }
+  const quoteView = await service.quote(confidentialQuoteRequest, undefined, privateSwapScope)
   expect(quoteView.quoteHandle).toBe('rhea-quote:fixed')
   await expect(sessions.get(quoteView.quoteHandle)).resolves.toMatchObject({
     request: { confidentiality: 'basic' }
   })
   const review = await service.prepare(quoteView.quoteHandle)
   expect(review.execution).toMatchObject({ kind: 'zcash-transfer', target: 't1deposit' })
+  await expect(service.hasRecordedOrder(quoteView.quoteHandle)).resolves.toBe(false)
   expect((await service.readPreparedBuild(quoteView.quoteHandle)).executionId).toBe('execution-1')
   const depositTransfer = { executionId: 'execution-1', to: 't1deposit', amountZats: '100000000' }
   await expect(
@@ -556,6 +682,14 @@ test('quote and build remain bound across a session-store reload', async () => {
   )
 
   const restored = new RheaSwapService(client, sessions, { now: () => 40_000 })
+  await expect(restored.hasRecordedOrder(quoteView.quoteHandle)).resolves.toBe(true)
+  await expect(restored.readPrivateSwapRequest(quoteView.quoteHandle)).resolves.toMatchObject({
+    scope: privateSwapScope,
+    request: { recipient: 'alice.near' }
+  })
+  await expect(restored.readQuoteSecurityContext(quoteView.quoteHandle)).resolves.toMatchObject({
+    scope: privateSwapScope
+  })
   await expect(
     restored.recordTransactionSubmission(quoteView.quoteHandle, 'source-hash')
   ).resolves.toMatchObject({ sourceHash: 'source-hash' })

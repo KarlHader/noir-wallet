@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
-  createNearIntentsSupplyBinding,
   createNearIntentsSwapBinding,
   createQuoteDepositTransferClient,
   createRheaSwapBinding,
@@ -1208,64 +1207,6 @@ test.describe('quote deposit transfer client', () => {
 
     expect(() => create({ amountIn: '999' })).toThrow(/does not match/)
     expect(() => create({ deadline: '2026-08-10T23:59:59.000Z' })).toThrow(/expired/)
-  })
-
-  test('binds an existing-MCA EVM supply quote to the RHEA position and exact source transfer', () => {
-    const source = resolveWalletOwnedQuoteAsset(
-      token('nep141:eth.omft.near', 'eth', 18),
-      portfolio(),
-      receiveTargets,
-      mappings
-    )
-    const quote = {
-      depositAddress: '0x2222222222222222222222222222222222222222',
-      expectedReceived: '0.009',
-      minAmountOut: '0.0089',
-      amountInRaw: '1000000000000000',
-      amountOutRaw: '900000',
-      minAmountOutRaw: '890000',
-      deadline: '2026-08-11T01:00:00.000Z'
-    }
-    const binding = createNearIntentsSupplyBinding({
-      source,
-      amountInRaw: quote.amountInRaw,
-      mcaId: 'rhea00000x.multica.near',
-      quote,
-      destinationAsset: 'nep141:eth.bridge.near',
-      now: Date.parse('2026-08-11T00:00:00.000Z')
-    })
-
-    expect(binding).toEqual({
-      schemaVersion: 1,
-      provider: 'near-intents',
-      kind: 'supply',
-      depositAddress: quote.depositAddress,
-      refundAddress: source.refundAddress,
-      expiresAt: Date.parse(quote.deadline),
-      origin: {
-        chainId: EVM_CHAIN_ID,
-        assetId: EVM_ASSET_ID,
-        protocolAssetId: 'nep141:eth.omft.near'
-      },
-      destination: {
-        chainId: EVM_CHAIN_ID,
-        assetId: EVM_ASSET_ID,
-        protocolAssetId: 'nep141:eth.bridge.near',
-        recipient: 'rhea00000x.multica.near',
-        expectedAmountRaw: '900000',
-        minimumAmountRaw: '890000'
-      }
-    })
-    expect(() =>
-      createNearIntentsSupplyBinding({
-        source,
-        amountInRaw: '999',
-        mcaId: 'rhea00000x.multica.near',
-        quote,
-        destinationAsset: 'nep141:eth.bridge.near',
-        now: Date.parse('2026-08-11T00:00:00.000Z')
-      })
-    ).toThrow(/does not match/)
   })
 
   test('routes Bitcoin quote deposits as exact-value PSBT transfers', async () => {

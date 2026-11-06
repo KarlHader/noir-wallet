@@ -363,6 +363,7 @@ export function buildLiveSwapQuoteRequest(input: {
   readonly slippage: number
   readonly refundAddress: string
   readonly recipientAddress: string
+  readonly privateRecipientAddress?: string
   readonly confidentiality?: 'basic'
   readonly blocked: boolean
 }): Readonly<{
@@ -380,6 +381,8 @@ export function buildLiveSwapQuoteRequest(input: {
     safeBig(input.amountIn).lte(0) ||
     !input.refundAddress ||
     !input.recipientAddress ||
+    (input.privateRecipientAddress !== undefined &&
+      input.recipientAddress.toLowerCase() !== input.privateRecipientAddress.toLowerCase()) ||
     input.blocked
   ) {
     return null

@@ -25,14 +25,11 @@ import { formatFiatAmount } from '@/lib/number-format'
 import type { AccountData, WalletItem } from '@/types'
 import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
-import { CopyToast, useCopyToClipboard } from '../../components/common/CopyToast'
 import {
   accountNetworksClient,
   type AccountNetworksCatalogView,
-  type AccountNetworksView,
-  type AccountNetworkView
+  type AccountNetworksView
 } from '../../services/account-networks-client'
-import { AccountNetworks } from '../../components/account/AccountNetworks'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import { accountNetworkIconChain } from '@/popup/services/account-network-presentation'
 import { HardwareWalletLogo } from '../../components/hardware/HardwareWalletLogo'
@@ -86,23 +83,32 @@ function AccountTotalValue({
   )
 }
 
+function SelectedAccountIndicator({ selected }: { selected: boolean }) {
+  return (
+    <span
+      aria-label={selected ? 'Current account' : undefined}
+      className={cn(
+        'flex size-[18px] shrink-0 items-center justify-center rounded-full',
+        selected && 'bg-foreground text-wallet-surface'
+      )}
+    >
+      {selected && <Icon icon="lucide:check" width={13} height={13} />}
+    </span>
+  )
+}
+
 export function AccountList() {
   const { navigate, replace } = useNavigate()
   const { alert, confirm } = useDialog()
-  const { copyToClipboard, showToast } = useCopyToClipboard()
   const { wallets, accountDisplayNames, currentNetwork, zecPrice } = useWalletStore()
   const portfolioValues = useAccountDataStore(state => state.portfolioValues)
   const zcashBalances = useAccountDataStore(state => state.balances)
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const [loading, setLoading] = useState(true)
-  const [accountNetworks, setAccountNetworks] = useState<
-    Map<string, readonly AccountNetworkView[]>
-  >(new Map())
   const [networkCatalog, setNetworkCatalog] = useState<AccountNetworksCatalogView | null>(null)
   const [networksLoading, setNetworksLoading] = useState(true)
   const [catalogError, setCatalogError] = useState(false)
   const loadRequest = useRef(0)
-  const [expandedAccountKey, setExpandedAccountKey] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
@@ -133,14 +139,6 @@ export function AccountList() {
       const nextCatalog = await accountNetworksClient.getCatalog()
       if (request !== loadRequest.current) return
       setNetworkCatalog(nextCatalog)
-      setAccountNetworks(
-        new Map(
-          (nextCatalog?.accounts ?? []).map(account => [
-            accountListKey(account.walletId, account.accountId),
-            account.networks
-          ])
-        )
-      )
       setCatalogError(false)
     } catch {
       if (request === loadRequest.current) setCatalogError(true)
@@ -342,13 +340,12 @@ export function AccountList() {
 
   return (
     <div className="page-container">
-      <CopyToast show={showToast} message="Address copied" />
       <header className="relative flex h-14 shrink-0 items-center justify-center px-4">
         <button
           type="button"
           aria-label="Close"
           onClick={() => replace('/')}
-          className="absolute left-4 flex size-6 items-center justify-center text-foreground"
+          className="wallet-interactive absolute left-4 flex size-6 items-center justify-center rounded-md text-foreground hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
         >
           <Icon icon="lucide:x" width={20} height={20} />
         </button>
@@ -393,19 +390,6 @@ export function AccountList() {
                             walletDisplayName={formatWalletName(wallet, wallets)}
                             showWalletName={true}
                             switchingAccountKey={switchingAccountKey}
-                            networks={
-                              accountNetworks.get(accountListKey(account.walletId, account.id)) ??
-                              []
-                            }
-                            networksLoading={networksLoading}
-                            expanded={
-                              expandedAccountKey === accountListKey(account.walletId, account.id)
-                            }
-                            onToggleNetworks={() => {
-                              const key = accountListKey(account.walletId, account.id)
-                              setExpandedAccountKey(current => (current === key ? null : key))
-                            }}
-                            onCopyAddress={address => void copyToClipboard(address)}
                             onSelect={handleAccountSelect}
                             onRenameWallet={name => handleWalletRename(wallet.id, name)}
                             onRenameAccount={name =>
@@ -442,7 +426,7 @@ export function AccountList() {
                     aria-label={`Wallet group ${entry.displayName}`}
                     className="border-b border-white/10"
                   >
-                    <div className="flex h-11 min-w-0 items-center gap-2 px-5">
+                    <div className="flex h-11 min-w-0 items-center gap-2 pl-5 pr-3 pt-3">
                       {(entry.hardwareVendor === 'ledger' ||
                         entry.hardwareVendor === 'keystone') && (
                         <span
@@ -464,53 +448,6 @@ export function AccountList() {
                           {entry.displayName}
                         </span>
                       )}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            aria-label={`Actions for ${entry.displayName}`}
-                            className="flex size-6 shrink-0 items-center justify-center text-muted hover:text-foreground"
-                          >
-                            <Icon icon="lucide:ellipsis" width={16} height={16} />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {entry.addAccount && entry.walletId && (
-                            <DropdownMenuItem onClick={() => handleAddAccount(entry.addAccount)}>
-                              <Icon icon="lucide:plus" className="mr-2 size-4" />
-                              Add account
-                            </DropdownMenuItem>
-                          )}
-                          {entry.kind === 'private-key' && (
-                            <DropdownMenuItem onClick={() => navigate('/import-private-key')}>
-                              <Icon icon="lucide:key-round" className="mr-2 size-4" />
-                              Import Private Key
-                            </DropdownMenuItem>
-                          )}
-                          {entry.accounts.length > 0 && (
-                            <DropdownMenuItem
-                              onClick={() => {
-                                const first = entry.accounts[0]
-                                if (!first) return
-                                const walletId =
-                                  first.kind === 'retained'
-                                    ? first.wallet.id
-                                    : first.account.walletId
-                                const accountId =
-                                  first.kind === 'retained'
-                                    ? first.account.id
-                                    : first.account.accountId
-                                navigate(
-                                  `/addresses-list?walletId=${encodeURIComponent(walletId)}&accountId=${encodeURIComponent(accountId)}`
-                                )
-                              }}
-                            >
-                              <Icon icon="lucide:qr-code" className="mr-2 size-4" />
-                              Addresses
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
                       <button
                         type="button"
                         aria-label={
@@ -522,7 +459,7 @@ export function AccountList() {
                         onClick={() =>
                           setCollapsedGroups(state => ({ ...state, [entry.id]: !state[entry.id] }))
                         }
-                        className="flex size-6 shrink-0 items-center justify-center text-foreground"
+                        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                       >
                         <Icon
                           icon={
@@ -546,15 +483,6 @@ export function AccountList() {
                                 accountListKey(account.walletId, account.accountId)
                               }
                               removing={removingWalletId === account.walletId}
-                              expanded={
-                                expandedAccountKey ===
-                                accountListKey(account.walletId, account.accountId)
-                              }
-                              onToggleNetworks={() => {
-                                const key = accountListKey(account.walletId, account.accountId)
-                                setExpandedAccountKey(current => (current === key ? null : key))
-                              }}
-                              onCopyAddress={address => void copyToClipboard(address)}
                               onSelect={handleNativeAccountSelect}
                               onRename={name =>
                                 handleAccountRename(account.walletId, account.accountId, name)
@@ -585,16 +513,6 @@ export function AccountList() {
                             wallet={wallet}
                             showWalletName={false}
                             switchingAccountKey={switchingAccountKey}
-                            networks={
-                              accountNetworks.get(accountListKey(wallet.id, account.id)) ?? []
-                            }
-                            networksLoading={networksLoading}
-                            expanded={expandedAccountKey === accountListKey(wallet.id, account.id)}
-                            onToggleNetworks={() => {
-                              const key = accountListKey(wallet.id, account.id)
-                              setExpandedAccountKey(current => (current === key ? null : key))
-                            }}
-                            onCopyAddress={address => void copyToClipboard(address)}
                             onSelect={handleAccountSelect}
                             onRenameAccount={name =>
                               handleAccountRename(wallet.id, account.id, name)
@@ -616,9 +534,9 @@ export function AccountList() {
                         onClick={() => handleAddAccount(entry.addAccount)}
                         disabled={addingWalletId === entry.walletId}
                         variant="ghost"
-                        className="h-[68px] w-full justify-start rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
+                        className="h-[68px] w-full justify-start gap-2.5 rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
                       >
-                        <span className="mr-1 flex size-[30px] items-center justify-center rounded-md bg-wallet-selected text-foreground">
+                        <span className="flex size-[30px] items-center justify-center rounded-md bg-wallet-selected text-foreground">
                           <Icon
                             icon={
                               addingWalletId === entry.walletId ? 'lucide:loader-2' : 'lucide:plus'
@@ -636,10 +554,10 @@ export function AccountList() {
                     {!collapsedGroups[entry.id] && entry.kind === 'private-key' && (
                       <Button
                         variant="ghost"
-                        className="h-[68px] w-full justify-start rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
+                        className="h-[68px] w-full justify-start gap-2.5 rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
                         onClick={() => navigate('/import-private-key')}
                       >
-                        <span className="mr-1 flex size-[30px] items-center justify-center rounded-md bg-wallet-selected">
+                        <span className="flex size-[30px] items-center justify-center rounded-md bg-wallet-selected">
                           <Icon icon="lucide:plus" width={14} height={14} />
                         </span>
                         Import Private Key
@@ -669,19 +587,6 @@ export function AccountList() {
                             walletDisplayName={formatWalletName(wallet, wallets)}
                             showWalletName={true}
                             switchingAccountKey={switchingAccountKey}
-                            networks={
-                              accountNetworks.get(accountListKey(account.walletId, account.id)) ??
-                              []
-                            }
-                            networksLoading={networksLoading}
-                            expanded={
-                              expandedAccountKey === accountListKey(account.walletId, account.id)
-                            }
-                            onToggleNetworks={() => {
-                              const key = accountListKey(account.walletId, account.id)
-                              setExpandedAccountKey(current => (current === key ? null : key))
-                            }}
-                            onCopyAddress={address => void copyToClipboard(address)}
                             onSelect={handleAccountSelect}
                             onRenameWallet={name => handleWalletRename(wallet.id, name)}
                             onRenameAccount={name =>
@@ -718,7 +623,7 @@ export function AccountList() {
       </div>
 
       <div className="page-footer bg-background !px-4">
-        <Button onClick={handleAddWallet} size="wallet" className="w-full">
+        <Button onClick={handleAddWallet} size="wallet" className="w-full text-background">
           <Icon icon="lucide:plus" width={16} height={16} />
           Add Wallet
         </Button>
@@ -731,9 +636,6 @@ function NativeAccountItem({
   account,
   switching,
   removing,
-  expanded,
-  onToggleNetworks,
-  onCopyAddress,
   onSelect,
   onRename,
   onRemove,
@@ -744,9 +646,6 @@ function NativeAccountItem({
   account: AccountNetworksView
   switching: boolean
   removing: boolean
-  expanded: boolean
-  onToggleNetworks: () => void
-  onCopyAddress: (address: string) => void
   onSelect: (accountId: string, walletId: string) => void
   onRename: (name: string) => Promise<void>
   onRemove: (account: AccountNetworksView) => void
@@ -759,17 +658,18 @@ function NativeAccountItem({
   const [editingName, setEditingName] = useState(false)
   const selectionStartedWhileEditing = useRef(false)
   return (
-    <div className="group">
+    <div>
       <div
         className={cn(
-          'relative flex min-h-[67px] w-full items-center px-5 py-2 transition-colors hover:bg-wallet-surface',
+          'relative flex min-h-[67px] w-full flex-col justify-center px-5 py-2',
           account.active ? 'bg-wallet-surface' : ''
         )}
       >
         <button
           type="button"
           aria-label={`Switch to ${account.accountDisplayName}`}
-          className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 disabled:cursor-not-allowed"
+          aria-current={account.active ? 'true' : undefined}
+          className="wallet-interactive absolute inset-0 z-0 enabled:hover:bg-wallet-surface enabled:active:bg-wallet-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 disabled:cursor-not-allowed"
           disabled={removing}
           onPointerDown={() => {
             selectionStartedWhileEditing.current = editingName
@@ -782,7 +682,7 @@ function NativeAccountItem({
             onSelect(account.accountId, account.walletId)
           }}
         />
-        <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-2">
+        <div className="pointer-events-none relative z-10 flex w-full min-w-0 items-center gap-2">
           <div className="min-w-0 flex-1 text-left">
             <div className="flex min-w-0 items-center gap-1.5">
               <InlineEditableName
@@ -792,15 +692,17 @@ function NativeAccountItem({
                 onEditingChange={setEditingName}
                 disabled={removing || switching}
                 className="text-base font-medium leading-[21px]"
+                endContent={
+                  account.networks[0] && (
+                    <ChainIcon
+                      chain={accountNetworkIconChain(account.networks[0])}
+                      width={15}
+                      height={15}
+                      className="shrink-0 rounded-[4px]"
+                    />
+                  )
+                }
               />
-              {account.networks[0] && (
-                <ChainIcon
-                  chain={accountNetworkIconChain(account.networks[0])}
-                  width={15}
-                  height={15}
-                  className="shrink-0 rounded-[4px]"
-                />
-              )}
             </div>
             {switching || removing ? (
               <Icon
@@ -862,22 +764,9 @@ function NativeAccountItem({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {account.active && (
-              <Icon icon="lucide:circle-check" className="text-foreground" width={18} height={18} />
-            )}
+            <SelectedAccountIndicator selected={account.active} />
           </div>
         </div>
-        {expanded && (
-          <div className="pointer-events-auto w-full">
-            <AccountNetworks
-              networks={account.networks}
-              loading={false}
-              expanded={expanded}
-              onToggle={onToggleNetworks}
-              onCopyAddress={onCopyAddress}
-            />
-          </div>
-        )}
       </div>
     </div>
   )
@@ -889,11 +778,6 @@ function AccountItem({
   walletDisplayName,
   showWalletName = true,
   switchingAccountKey,
-  networks,
-  networksLoading,
-  expanded,
-  onToggleNetworks,
-  onCopyAddress,
   onSelect,
   onAddAccount,
   onRenameWallet,
@@ -907,11 +791,6 @@ function AccountItem({
   walletDisplayName?: string
   showWalletName?: boolean
   switchingAccountKey: string | null
-  networks: readonly AccountNetworkView[]
-  networksLoading: boolean
-  expanded: boolean
-  onToggleNetworks: () => void
-  onCopyAddress: (address: string) => void
   onSelect: (accountId: string, walletId: string) => void
   onAddAccount?: () => void
   onRenameWallet?: (name: string) => Promise<void>
@@ -939,17 +818,18 @@ function AccountItem({
   const itemKey = accountListKey(wallet.id, account.id)
 
   return (
-    <div className="group relative">
+    <div className="relative">
       <div
         className={cn(
-          'relative flex min-h-[60px] w-full items-center px-5 py-2 transition-colors hover:bg-wallet-surface',
+          'relative flex min-h-[60px] w-full flex-col justify-center px-5 py-2',
           isActiveAccount ? 'bg-wallet-surface' : ''
         )}
       >
         <button
           type="button"
           aria-label={`Switch to ${displayName}`}
-          className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          aria-current={isActiveAccount ? 'true' : undefined}
+          className="wallet-interactive absolute inset-0 z-0 hover:bg-wallet-surface active:bg-wallet-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
           onPointerDown={() => {
             selectionStartedWhileEditing.current = editingName
           }}
@@ -961,7 +841,7 @@ function AccountItem({
             onSelect(account.id, wallet.id)
           }}
         />
-        <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-2">
+        <div className="pointer-events-none relative z-10 flex w-full min-w-0 items-center gap-2">
           <div className="min-w-0 flex-1 text-left">
             <div className="flex min-w-0 items-center gap-1.5">
               <InlineEditableName
@@ -1081,22 +961,9 @@ function AccountItem({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {isActiveAccount && (
-              <Icon icon="lucide:circle-check" className="text-foreground" width={18} height={18} />
-            )}
+            <SelectedAccountIndicator selected={isActiveAccount} />
           </div>
         </div>
-        {expanded && (
-          <div className="pointer-events-auto w-full">
-            <AccountNetworks
-              networks={networks}
-              loading={networksLoading}
-              expanded={expanded}
-              onToggle={onToggleNetworks}
-              onCopyAddress={onCopyAddress}
-            />
-          </div>
-        )}
       </div>
     </div>
   )

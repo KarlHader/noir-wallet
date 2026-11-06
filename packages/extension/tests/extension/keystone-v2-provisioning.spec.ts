@@ -353,6 +353,15 @@ async function expectPopupFits(page: import('@playwright/test').Page): Promise<v
     .toEqual({ viewportWidth: 375, documentWidth: 375, viewportHeight: 600 })
 }
 
+async function openAccountList(page: import('@playwright/test').Page): Promise<void> {
+  await page.getByRole('button', { name: 'Choose wallet' }).click()
+  await page
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts' })
+    .click()
+  await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible()
+}
+
 test('groups a Keystone wallet and persists wallet and account names', async ({
   popup,
   extensionId
@@ -380,7 +389,7 @@ test('groups a Keystone wallet and persists wallet and account names', async ({
   expect(account).toMatchObject({ walletId, walletSource: { kind: 'hardware' } })
 
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   const group = popup.locator('section[aria-label="Wallet group Keystone Multi-Coin"]')
   await expect(group).toBeVisible()
   await expect(group.locator('[aria-label^="Account actions for "]')).toHaveCount(1)
@@ -404,7 +413,7 @@ test('groups a Keystone wallet and persists wallet and account names', async ({
   await group.getByRole('textbox', { name: 'Wallet name' }).press('Enter')
   await expect(group.getByRole('textbox', { name: 'Wallet name' })).toHaveCount(0)
   await popup.reload()
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   const renamedGroup = popup.locator('section[aria-label="Wallet group Keystone Archive"]')
   await expect(
     renamedGroup.getByRole('button', { name: 'Account actions for Keystone Treasury' })
@@ -460,26 +469,35 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeVisible()
   await expectPopupFits(popup)
 
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await expect(popup.getByText('Keystone Multi-Coin', { exact: true })).toBeVisible()
-  const networkTrigger = popup.getByRole('button', { name: 'Expand account networks' })
-  await expect(networkTrigger).toContainText(`Networks (${MAINNET_EVM_NETWORK_NAMES.length + 1})`)
-  await networkTrigger.click()
-  const networks = popup.getByRole('region', { name: 'Account networks' })
-  await expect(networks.getByText('EVM', { exact: true })).toBeVisible()
-  await expect(networks.getByText('Bitcoin', { exact: true })).toBeVisible()
-  await expect(networks.getByText('Zcash', { exact: true })).toHaveCount(0)
-  const evmAddressButtons = networks.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)
-  await expect(evmAddressButtons).toHaveCount(1)
-  await expect(evmAddressButtons).toBeVisible()
-  await expect(networks.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
-  await expectPopupFits(popup)
-  await captureScreenshot(popup, 'keystone-v2-account-networks.png')
+  await popup
+    .locator('section[aria-label="Wallet group Keystone Multi-Coin"]')
+    .getByRole('button', { name: /^Account actions for / })
+    .click()
+  await popup.getByRole('menuitem', { name: 'Addresses' }).click()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  const accountAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await accountAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
+  for (const network of [...MAINNET_EVM_NETWORK_NAMES, 'Bitcoin']) {
+    await expect(
+      accountAddresses.getByRole('heading', { name: network, exact: true })
+    ).toBeVisible()
+  }
+  await expect(accountAddresses.getByRole('heading', { name: 'Zcash' })).toHaveCount(0)
+  await expect(accountAddresses.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(
+    MAINNET_EVM_NETWORK_NAMES.length
+  )
+  await expect(accountAddresses.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
+  await expectPopupFits(popup, false)
+  await captureScreenshot(popup, 'keystone-v2-account-addresses.png')
 
   await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Close', exact: true }).click()
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await receiveAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   for (const network of [...MAINNET_EVM_NETWORK_NAMES, 'Bitcoin']) {
     await expect(
       receiveAddresses.getByRole('heading', { name: network, exact: true })
@@ -646,14 +664,17 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await evmSendPage.getByLabel('Send To').fill(EVM_RECIPIENT)
   await evmSendPage.locator('input[aria-label="ETH amount"]').fill('0.001')
   await evmSendPage.getByRole('button', { name: 'Continue', exact: true }).click()
-  const evmReviewDialog = evmSendPage.getByRole('dialog')
-  await expect(evmReviewDialog.getByRole('heading', { name: 'Review Send' })).toBeVisible({
+  const evmReviewDialog = evmSendPage.getByRole('dialog', { name: 'Sending' })
+  await expect(evmReviewDialog.getByRole('heading', { name: 'Sending' })).toBeVisible({
     timeout: 30_000
   })
   await expect(evmReviewDialog.getByText('Ethereum', { exact: true }).first()).toBeVisible()
   await expect(evmReviewDialog.getByText('0.001063 ETH', { exact: true })).toBeVisible()
+  await expect(
+    evmReviewDialog.getByText('This transfer may reveal a link between these addresses.')
+  ).toBeVisible()
   const evmSigningPagePromise = context.waitForEvent('page', { timeout: 60_000 })
-  await evmReviewDialog.getByRole('button', { name: 'Send', exact: true }).click()
+  await evmReviewDialog.getByRole('button', { name: 'Send anyway', exact: true }).click()
   const evmSigningPage = await evmSigningPagePromise
   await evmSigningPage.setViewportSize({ width: 375, height: 632 })
   const evmSigningUrl = evmSigningPage.url()
@@ -879,7 +900,7 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeVisible({
     timeout: 30_000
   })
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await popup
     .locator('section[aria-label="Wallet group Keystone Multi-Coin"]')
     .getByRole('button', {
@@ -954,7 +975,7 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeVisible({
     timeout: 30_000
   })
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await popup
     .locator('section[aria-label="Wallet group Keystone Daily"]')
     .getByRole('button', {
@@ -963,14 +984,13 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
     .click()
   await popup.getByRole('menuitem', { name: 'Remove wallet' }).click()
   await popup.getByRole('button', { name: 'Remove', exact: true }).click()
-  await expect(popup.getByText('Removing wallet...', { exact: true })).toBeVisible()
-  await expect(popup.getByText('Keystone Daily', { exact: true })).toHaveCount(0, {
+  await expect(popup.locator('section[aria-label="Wallet group Keystone Daily"]')).toHaveCount(0, {
     timeout: 30_000
   })
-  await expect(popup.getByText('Enter your password', { exact: true })).toBeVisible()
-  await popup.getByPlaceholder('Enter Password').fill(NEW_PASSWORD)
-  await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
-  await expect(popup.getByText('Wallet 1', { exact: true })).toBeVisible()
+  await expect(popup.locator('section[aria-label="Wallet group Wallet 1"]')).toBeVisible()
+  await expect(
+    popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
+  ).resolves.toEqual({ active: true })
   await captureScreenshot(popup, 'keystone-v2-wallet-removed.png')
   const softwareOnlyCatalog = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
@@ -983,11 +1003,23 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await expect(
     popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
   ).resolves.toEqual({ success: true })
+  await expect(
+    popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
+  ).resolves.toEqual({ active: false })
   const mixedUnlock = await popup.evaluate(
     password => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password }),
     NEW_PASSWORD
   )
   expect(mixedUnlock).toMatchObject({ success: true })
+  await expect(
+    popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
+  ).resolves.toEqual({ active: true })
+  const unlockedCatalog = await popup.evaluate(() =>
+    chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
+  )
+  expect(unlockedCatalog.result.accounts).toEqual([
+    expect.objectContaining({ walletSource: { kind: 'software' }, active: true })
+  ])
 
   const zcashHardware = await popup.evaluate(
     ({ ufvk, seedFingerprintHex }) =>
@@ -1054,21 +1086,26 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await expect(popup.getByText('No networks available', { exact: true })).toHaveCount(0)
   await captureScreenshot(popup, 'keystone-v2-zcash-syncing.png')
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  await expect(popup.getByText('Keystone Cypherpunk', { exact: true })).toBeVisible({
+  const accountDrawer = popup.getByRole('dialog', { name: 'Accounts' })
+  await expect(accountDrawer.locator('p[title="Keystone Cypherpunk"]')).toBeVisible({
     timeout: 30_000
   })
-  const activeBadge = popup.getByText('Active', { exact: true })
-  await expect(activeBadge).toHaveCount(1)
-  await activeBadge.scrollIntoViewIfNeeded()
-  await expect(activeBadge).toBeVisible()
-  const cypherpunkNetworkTrigger = popup
-    .getByRole('button', { name: 'Expand account networks' })
-    .last()
-  await cypherpunkNetworkTrigger.click()
-  const cypherpunkNetworks = popup.getByRole('region', { name: 'Account networks' }).last()
-  await expect(cypherpunkNetworks.getByText('Zcash', { exact: true })).toBeVisible()
-  await expect(cypherpunkNetworks.getByText('Ethereum', { exact: true })).toHaveCount(0)
-  await expect(cypherpunkNetworks.getByText('Bitcoin', { exact: true })).toHaveCount(0)
-  await expectPopupFits(popup)
+  const activeAccount = completeCatalog.result.accounts.find(account => account.active)
+  const activeDrawerAccount = accountDrawer.locator('button[aria-current="true"]')
+  await expect(activeDrawerAccount).toHaveCount(1)
+  await expect(activeDrawerAccount).toHaveAccessibleName(
+    `Switch to ${activeAccount.accountDisplayName}`
+  )
+  await accountDrawer.getByRole('button', { name: 'Accounts' }).click()
+  await popup
+    .locator('section[aria-label="Wallet group Keystone Cypherpunk"]')
+    .getByRole('button', { name: `Account actions for ${activeAccount.accountDisplayName}` })
+    .click()
+  await popup.getByRole('menuitem', { name: 'Addresses' }).click()
+  const cypherpunkAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await expect(cypherpunkAddresses.getByRole('heading', { name: 'Zcash' })).toBeVisible()
+  await expect(cypherpunkAddresses.getByRole('heading', { name: 'Ethereum' })).toHaveCount(0)
+  await expect(cypherpunkAddresses.getByRole('heading', { name: 'Bitcoin' })).toHaveCount(0)
+  await expectPopupFits(popup, false)
   await captureScreenshot(popup, 'keystone-v2-mixed-wallets.png')
 })

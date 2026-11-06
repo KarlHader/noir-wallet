@@ -1,6 +1,7 @@
 import { decodeFunctionData, parseAbi } from 'viem'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { parseAccountId } from '@/core/accounts/domain'
+import { parseAssetId } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import type { BackgroundEvmTransferRouter } from './evm-transfer-router'
@@ -29,6 +30,7 @@ export interface SwapApprovalContinuation {
   readonly sourceMode: 'main' | 'private'
   readonly destinationMode: 'main' | 'private'
   readonly customRecipient: boolean
+  readonly purpose?: 'public-private-send'
   readonly createdAt: number
 }
 
@@ -42,6 +44,22 @@ function matchesActive(record: SwapApprovalContinuationInput, active: ActiveScop
     record.walletId === active.walletId &&
     record.accountId === active.accountId
   )
+}
+
+function matchesApprovedToken(assetId: unknown, chainId: unknown, token: unknown): boolean {
+  if (typeof assetId !== 'string' || typeof chainId !== 'string' || typeof token !== 'string') {
+    return false
+  }
+  try {
+    const asset = parseAssetId(assetId)
+    return (
+      asset.chainId === chainId &&
+      asset.namespace === 'erc20' &&
+      asset.reference.toLowerCase() === token.toLowerCase()
+    )
+  } catch {
+    return false
+  }
 }
 
 function parseInput(value: unknown): SwapApprovalContinuationInput {
@@ -70,7 +88,15 @@ function parseInput(value: unknown): SwapApprovalContinuationInput {
     item.amountIn.length > 80 ||
     (item.sourceMode !== 'main' && item.sourceMode !== 'private') ||
     (item.destinationMode !== 'main' && item.destinationMode !== 'private') ||
-    typeof item.customRecipient !== 'boolean'
+    typeof item.customRecipient !== 'boolean' ||
+    (item.purpose !== undefined && item.purpose !== 'public-private-send') ||
+    (item.purpose === 'public-private-send' &&
+      (item.sourceMode !== 'main' ||
+        item.sourceAssetId !== item.destinationAssetId ||
+        !matchesApprovedToken(item.sourceAssetId, item.chainId, item.token) ||
+        typeof item.recipientAddress !== 'string' ||
+        !ADDRESS.test(item.recipientAddress) ||
+        /^0x0{40}$/i.test(item.recipientAddress)))
   )
     throw new Error('Invalid Swap continuation')
   return {
@@ -89,7 +115,8 @@ function parseInput(value: unknown): SwapApprovalContinuationInput {
     recipientAddress: item.recipientAddress as string,
     sourceMode: item.sourceMode,
     destinationMode: item.destinationMode,
-    customRecipient: item.customRecipient
+    customRecipient: item.customRecipient,
+    ...(item.purpose === 'public-private-send' ? { purpose: item.purpose } : {})
   }
 }
 

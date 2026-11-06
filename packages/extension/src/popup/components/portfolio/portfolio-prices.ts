@@ -3,6 +3,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { PortfolioAssetView, PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { isBundledWalletAsset } from '@/popup/components/tokens/token-display-policy'
+import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
 
 const MIN_LOW_VALUE_USD = new Big('0.01')
 const MAX_LOW_VALUE_USD = new Big('1')
@@ -60,15 +61,37 @@ export function summarizePortfolioFiat(
   let pricedAssetCount = 0
   let missingAssetCount = 0
   let staleAssetCount = 0
+  const independentConfidential =
+    portfolio.confidential !== undefined ||
+    portfolio.chains?.some(
+      chain => chain.chain.family === 'evm' && chain.chain.network?.kind === 'mainnet'
+    ) === true
   for (const asset of portfolio.assets) {
-    if (BigInt(asset.balance.totalRaw) === 0n) continue
+    const embeddedConfidential =
+      independentConfidential && asset.asset.chainId.startsWith('eip155:')
+        ? BigInt(asset.balance.confidentialRaw ?? '0')
+        : 0n
+    const onchainRaw = BigInt(asset.balance.totalRaw) - embeddedConfidential
+    if (onchainRaw < 0n) {
+      missingAssetCount += 1
+      continue
+    }
+    const privateOnchainRaw =
+      asset.balance.privateRaw === undefined
+        ? null
+        : BigInt(asset.balance.privateRaw) - embeddedConfidential
+    if (privateOnchainRaw !== null && privateOnchainRaw < 0n) {
+      missingAssetCount += 1
+      continue
+    }
+    if (onchainRaw === 0n) continue
     const quote = findAssetPrice(prices, asset.asset.id)
     if (!quote) {
       missingAssetCount += 1
       continue
     }
     const decimals = asset.metadata.decimals
-    const totalValue = new Big(formatBaseUnitDecimalAmount(asset.balance.totalRaw, decimals)).times(
+    const totalValue = new Big(formatBaseUnitDecimalAmount(onchainRaw.toString(), decimals)).times(
       quote.priceUsd
     )
     total = total.plus(totalValue)
@@ -77,7 +100,7 @@ export function summarizePortfolioFiat(
         new Big(formatBaseUnitDecimalAmount(asset.balance.mainRaw, decimals)).times(quote.priceUsd)
       )
       privateBalance = privateBalance.plus(
-        new Big(formatBaseUnitDecimalAmount(asset.balance.privateRaw, decimals)).times(
+        new Big(formatBaseUnitDecimalAmount(privateOnchainRaw?.toString() ?? '0', decimals)).times(
           quote.priceUsd
         )
       )
@@ -86,6 +109,18 @@ export function summarizePortfolioFiat(
     }
     pricedAssetCount += 1
     if (quote.freshness === 'stale') staleAssetCount += 1
+  }
+  if (independentConfidential) {
+    const confidential = summarizeNearConfidentialHoldings(portfolio, prices)
+    if (confidential.status === 'unavailable') missingAssetCount += 1
+    for (const entry of confidential.entries) {
+      if (entry.fiat === null) missingAssetCount += 1
+      else {
+        total = total.plus(entry.fiat)
+        pricedAssetCount += 1
+        if (entry.priceFreshness !== 'fresh') staleAssetCount += 1
+      }
+    }
   }
   return Object.freeze({
     totalUsd: total.toFixed(),

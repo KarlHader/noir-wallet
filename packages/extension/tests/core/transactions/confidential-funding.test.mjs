@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { ConfidentialFundingApi } from '../../../src/background/confidential-funding-api.ts'
+import { ConfidentialFundingCoordinator } from '../../../src/background/confidential-funding-coordinator.ts'
+import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
+import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
+import {
+  createExternalShieldDepositGraph,
+  projectExternalShieldDepositActivityGraph
+} from '../../../src/core/services/confidential-funding/confidential-external-deposit.ts'
 
 import {
   aggregateConfidentialSettlement,
@@ -12,6 +19,7 @@ import {
   splitConfidentialFundingAmount
 } from '../../../src/core/services/confidential-funding/confidential-funding-model.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
+import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
 
 const apiConfig = {
   oneClickApiUrl: 'https://example.test/1click',
@@ -20,6 +28,306 @@ const apiConfig = {
 }
 
 test.describe('confidential funding safety rules', () => {
+  test('external Shield deposit is account-bound, idempotent and recovers from status without local signing', async () => {
+    const address = '0x1111111111111111111111111111111111111111'
+    const refundAddress = '0x2222222222222222222222222222222222222222'
+    const source = {
+      chainId: 'eip155:8453',
+      chainName: 'Base',
+      assetId: 'eip155:8453/slip44:60',
+      protocolAssetId: 'nep141:base.omft.near',
+      amountRaw: '1000'
+    }
+    const records = new Map()
+    const repository = new InMemoryTransactionRepository()
+    let quoteCalls = 0
+    let catalogBlockchain = 'base'
+    let balanceReads = 0
+    let simulateConcurrentBalanceReads = false
+    let concurrentBalanceRead = 0
+    let cachedBalance
+    let signingCalls = 0
+    let serviceStatus = 'PENDING_DEPOSIT'
+    let depositedAmountRaw
+    const coordinator = new ConfidentialFundingCoordinator({
+      network: 'mainnet',
+      api: {
+        async quote(request) {
+          quoteCalls += 1
+          return {
+            correlationId: 'external-quote',
+            quoteRequest: {
+              swapType: 'EXACT_INPUT',
+              confidentiality: 'basic',
+              originAsset: request.originAsset,
+              destinationAsset: request.destinationAsset,
+              amount: request.amountRaw,
+              refundTo: request.refundTo,
+              depositType: request.depositType,
+              refundType: request.refundType,
+              recipient: request.recipient,
+              recipientType: request.recipientType,
+              slippageTolerance: request.slippageBps
+            },
+            quote: {
+              amountIn: '1000',
+              amountOut: '990',
+              minAmountOut: '980',
+              depositAddress: '0x3333333333333333333333333333333333333333',
+              depositMemo: 'memo-1',
+              deadline: new Date(60_000).toISOString()
+            }
+          }
+        },
+        async getOneClickStatus(_address, memo) {
+          expect(memo).toBe('memo-1')
+          return {
+            status: serviceStatus,
+            ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
+            ...(serviceStatus === 'SUCCESS' ? { settledAmountOutRaw: '987' } : {})
+          }
+        },
+        async getBalances() {
+          balanceReads += 1
+          if (simulateConcurrentBalanceReads) {
+            const read = ++concurrentBalanceRead
+            await new Promise(resolve => setTimeout(resolve, read === 1 ? 15 : 0))
+            return [{ tokenId: source.protocolAssetId, available: String(read), source: 'intents' }]
+          }
+          return []
+        }
+      },
+      store: {
+        async getExternalDeposit(id) {
+          return records.get(id) ?? null
+        },
+        async listExternalDeposits() {
+          return [...records.values()]
+        },
+        async listPlans() {
+          return []
+        },
+        async putExternalDeposit(record) {
+          records.set(record.depositId, structuredClone(record))
+        },
+        async withExternalDepositScope(_scope, operation) {
+          return operation()
+        },
+        async getSession() {
+          return { accessToken: 'synthetic', expiresAt: 1_000_000 }
+        },
+        async putBalances(_network, _domain, _account, balances) {
+          cachedBalance = balances
+        }
+      },
+      signer: {
+        async resolveIdentity() {
+          return {
+            address,
+            addressIndex: 0,
+            peaAddress: refundAddress,
+            context: {
+              chainAccount: {
+                scope: {
+                  keyDomainId: 'wallet:one',
+                  accountId: 'account:one',
+                  chainId: 'eip155:8453'
+                }
+              }
+            }
+          }
+        },
+        async signMessage() {
+          signingCalls += 1
+          throw new Error('Unexpected signing')
+        },
+        async prepareTransaction() {
+          signingCalls += 1
+          throw new Error('Unexpected signing')
+        }
+      },
+      repository,
+      assets: { get: () => ({ asset: {}, metadata: { symbol: 'ETH', decimals: 18 } }) },
+      protocolTokens: [{ assetId: source.protocolAssetId, blockchain: 'base', decimals: 18 }],
+      getProtocolTokens: () => [
+        { assetId: source.protocolAssetId, blockchain: catalogBlockchain, decimals: 18 }
+      ],
+      evmNetworks: getEvmNetworkConfigs('mainnet').filter(
+        network => network.chainId === source.chainId
+      ),
+      assetMappings: [{ assetId: source.assetId, protocolAssetId: source.protocolAssetId }],
+      now: () => 1_000,
+      createId: () => 'external-one',
+      scheduleMonitoring: async () => {}
+    })
+    const request = {
+      network: 'mainnet',
+      keyDomainId: 'wallet:one',
+      accountId: 'account:one',
+      source,
+      refundAddress,
+      requestId: 'create-one'
+    }
+    const created = await coordinator.createExternalDeposit(request)
+    const pendingGraph = createExternalShieldDepositGraph(created)
+    expect(() => assertPersistableTransactionGraph(pendingGraph)).not.toThrow()
+    expect(() =>
+      assertPersistableTransactionGraph({
+        ...pendingGraph,
+        root: {
+          ...pendingGraph.root,
+          intent: { ...pendingGraph.root.intent, direction: 'outgoing' }
+        }
+      })
+    ).toThrow('signed transaction graph')
+    const failedGraph = {
+      root: {
+        ...pendingGraph.root,
+        status: 'failed',
+        failure: { code: 'relay-failed', occurredAt: 2_000 }
+      },
+      segments: pendingGraph.segments.map(segment => ({
+        ...segment,
+        status: 'failed',
+        failure: { code: 'relay-failed', occurredAt: 2_000 }
+      }))
+    }
+    const refundedView = projectExternalShieldDepositActivityGraph(failedGraph, {
+      ...created,
+      phase: 'refunded',
+      updatedAt: 3_000
+    })
+    expect(failedGraph.root.failure.code).toBe('relay-failed')
+    expect(refundedView.root.failure.code).toBe('refunded')
+    expect(refundedView.segments.every(segment => segment.failure.code === 'refunded')).toBe(true)
+    expect(
+      projectExternalShieldDepositActivityGraph(failedGraph, {
+        ...created,
+        accountId: 'other',
+        phase: 'refunded'
+      })
+    ).toBe(failedGraph)
+    expect(created.depositAddress).toBe('0x3333333333333333333333333333333333333333')
+    expect(created.depositMemo).toBe('memo-1')
+    records.set(created.depositId, {
+      ...records.get(created.depositId),
+      source: Object.fromEntries(Object.entries(source).reverse())
+    })
+    expect((await coordinator.createExternalDeposit(request)).depositId).toBe(created.depositId)
+    catalogBlockchain = 'eth'
+    await expect(
+      coordinator.createExternalDeposit({
+        ...request,
+        requestId: 'wrong-source-network',
+        source
+      })
+    ).rejects.toThrow('asset catalog changed')
+    catalogBlockchain = 'base'
+    expect(quoteCalls).toBe(1)
+    await expect(
+      coordinator.createExternalDeposit({ ...request, accountId: 'other' })
+    ).rejects.toThrow('Account changed')
+    await expect(
+      coordinator.createExternalDeposit({ ...request, refundAddress: address })
+    ).rejects.toThrow('request ID was reused')
+    serviceStatus = 'INCOMPLETE_DEPOSIT'
+    depositedAmountRaw = '400'
+    expect((await coordinator.refreshExternalDeposit(created.depositId)).depositedAmountRaw).toBe(
+      '400'
+    )
+    depositedAmountRaw = '200'
+    expect((await coordinator.refreshExternalDeposit(created.depositId)).depositedAmountRaw).toBe(
+      '400'
+    )
+    serviceStatus = 'PROCESSING'
+    expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('processing')
+    serviceStatus = 'INCOMPLETE_DEPOSIT'
+    depositedAmountRaw = '500'
+    const processingPartial = await coordinator.refreshExternalDeposit(created.depositId)
+    expect(processingPartial.phase).toBe('processing')
+    expect(processingPartial.depositedAmountRaw).toBe('500')
+    serviceStatus = 'SUCCESS'
+    depositedAmountRaw = '1000'
+    expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('ready')
+    expect(balanceReads).toBe(1)
+    const graph = await repository.get(
+      { keyDomainId: 'wallet:one', accountId: 'account:one' },
+      created.transactionId
+    )
+    expect(graph.root.status).toBe('final')
+    expect(graph.root.intent.counterAmount.amountRaw).toBe('990')
+    expect(graph.segments.find(segment => segment.role === 'destination').evidence).toMatchObject({
+      settledAmount: { assetId: source.assetId, amountRaw: '987' }
+    })
+    expect((await coordinator.getExternalDeposit(created.depositId)).settledOutputRaw).toBe('987')
+    expect((await coordinator.getExternalDeposit(created.depositId)).depositedAmountRaw).toBe(
+      '1000'
+    )
+    expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('ready')
+    expect(balanceReads).toBe(1)
+    expect(signingCalls).toBe(0)
+
+    for (const [depositId, phase] of [
+      ['refund-recovery', 'refunded'],
+      ['failure-recovery', 'failed'],
+      ['ready-recovery', 'ready']
+    ]) {
+      const interrupted = {
+        ...created,
+        depositId,
+        transactionId: `tx:confidential-external:${depositId}`,
+        phase,
+        ...(phase === 'ready' ? { settledOutputRaw: '987', balanceRefreshedAt: 1_000 } : {})
+      }
+      records.set(depositId, interrupted)
+      await repository.create(createExternalShieldDepositGraph(interrupted))
+    }
+    await coordinator.resumeAll()
+    for (const [depositId, expectedStatus] of [
+      ['refund-recovery', 'failed'],
+      ['failure-recovery', 'failed'],
+      ['ready-recovery', 'final']
+    ]) {
+      const recovered = await repository.get(
+        { keyDomainId: 'wallet:one', accountId: 'account:one' },
+        `tx:confidential-external:${depositId}`
+      )
+      expect(recovered.root.status).toBe(expectedStatus)
+    }
+    const refundGraph = await repository.get(
+      { keyDomainId: 'wallet:one', accountId: 'account:one' },
+      'tx:confidential-external:refund-recovery'
+    )
+    expect(refundGraph.root.failure.code).toBe('refunded')
+    const readyGraph = await repository.get(
+      { keyDomainId: 'wallet:one', accountId: 'account:one' },
+      'tx:confidential-external:ready-recovery'
+    )
+    expect(
+      readyGraph.segments.find(segment => segment.role === 'destination').evidence
+    ).toMatchObject({
+      settledAmount: { amountRaw: '987' }
+    })
+    for (const depositId of ['balance-recovery-one', 'balance-recovery-two']) {
+      const pendingBalance = {
+        ...created,
+        depositId,
+        transactionId: `tx:confidential-external:${depositId}`,
+        phase: 'ready',
+        settledOutputRaw: '987'
+      }
+      records.set(depositId, pendingBalance)
+      await repository.create(createExternalShieldDepositGraph(pendingBalance))
+    }
+    simulateConcurrentBalanceReads = true
+    await Promise.all([
+      coordinator.refreshExternalDeposit('balance-recovery-one'),
+      coordinator.refreshExternalDeposit('balance-recovery-two')
+    ])
+    expect(cachedBalance).toEqual([
+      { tokenId: source.protocolAssetId, available: '2', source: 'intents' }
+    ])
+  })
   test('does not turn a malformed balance response into a confirmed zero', async () => {
     const originalFetch = globalThis.fetch
     const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', '')
@@ -60,6 +368,50 @@ test.describe('confidential funding safety rules', () => {
     }
   })
 
+  test('accepts a pending internal swap status and rejects a mismatched echoed quote', async () => {
+    const originalFetch = globalThis.fetch
+    let echoedAddress = 'deposit-one'
+    let echoedMemo
+    globalThis.fetch = async url => {
+      expect(url).toBe(
+        `https://example.test/1click/status?depositAddress=deposit-one${echoedMemo ? '&depositMemo=+memo-1+' : ''}`
+      )
+      return new Response(
+        JSON.stringify({
+          status: 'PENDING_DEPOSIT',
+          quoteResponse: {
+            quote: {
+              depositAddress: echoedAddress,
+              ...(echoedMemo ? { depositMemo: echoedMemo } : {})
+            }
+          },
+          swapDetails: { depositedAmount: '400' }
+        }),
+        { status: 200 }
+      )
+    }
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', '')
+      await expect(api.getOneClickStatus('deposit-one')).resolves.toMatchObject({
+        status: 'PENDING_DEPOSIT',
+        depositedAmountRaw: '400'
+      })
+      echoedMemo = ' memo-1 '
+      await expect(api.getOneClickStatus('deposit-one', ' memo-1 ')).resolves.toMatchObject({
+        status: 'PENDING_DEPOSIT'
+      })
+      echoedMemo = 'different'
+      await expect(api.getOneClickStatus('deposit-one', ' memo-1 ')).rejects.toThrow(
+        'memo does not match'
+      )
+      echoedMemo = undefined
+      echoedAddress = 'deposit-other'
+      await expect(api.getOneClickStatus('deposit-one')).rejects.toThrow('does not match')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('binds confidential quote fees to the current application config', async () => {
     const originalFetch = globalThis.fetch
     let feeConfig = {
@@ -72,6 +424,7 @@ test.describe('confidential funding safety rules', () => {
     let echoedFees
     const quoteRequests = []
     let feeReads = 0
+    let providerFee = { recipient: 'provider.near', fee: 20 }
     globalThis.fetch = async (url, init) => {
       if (url === 'https://example.test/api/swap/confidential-app-fee') {
         feeReads += 1
@@ -81,6 +434,14 @@ test.describe('confidential funding safety rules', () => {
       expect(url).toBe('https://example.test/1click/quote')
       const requestBody = JSON.parse(init.body)
       quoteRequests.push(requestBody)
+      const responseFees =
+        requestBody.depositType === 'CONFIDENTIAL_INTENTS'
+          ? requestBody.appFees
+            ? (echoedFees ?? [...requestBody.appFees, ...(providerFee ? [providerFee] : [])])
+            : providerFee
+              ? [providerFee]
+              : []
+          : undefined
       return new Response(
         JSON.stringify({
           code: 0,
@@ -88,7 +449,7 @@ test.describe('confidential funding safety rules', () => {
             correlationId: 'quote-1',
             quoteRequest: {
               ...requestBody,
-              ...(echoedFees !== undefined ? { appFees: echoedFees } : {})
+              ...(responseFees !== undefined ? { appFees: responseFees } : {})
             },
             quote: {
               amountIn: '1000',
@@ -114,17 +475,38 @@ test.describe('confidential funding safety rules', () => {
         slippageBps: 50,
         dry: false
       }
-      await api.quote(withdrawal)
-      expect(quoteRequests[0].referral).toBe('noir_swap')
-      expect(quoteRequests[0].appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
+      const quotedWithdrawal = await api.quote(withdrawal)
+      expect(quoteRequests[0].dry).toBe(true)
+      expect(quoteRequests[0].appFees).toBeUndefined()
+      expect(quoteRequests[1].referral).toBe('noir_swap')
+      expect(quoteRequests[1].appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
+      expect(quotedWithdrawal.quoteRequest.appFees).toEqual([
+        { recipient: 'platform.near', fee: 50 },
+        providerFee
+      ])
       expect(feeReads).toBe(1)
       await api.quote({
         ...withdrawal,
         depositType: 'ORIGIN_CHAIN',
         recipientType: 'CONFIDENTIAL_INTENTS'
       })
-      expect(quoteRequests[1].appFees).toBeUndefined()
+      expect(quoteRequests[2].appFees).toBeUndefined()
       expect(feeReads).toBe(1)
+      await api.quote({
+        ...withdrawal,
+        recipient: withdrawal.signerId,
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        dry: true
+      })
+      expect(quoteRequests[4]).toMatchObject({
+        swapType: 'EXACT_INPUT',
+        depositType: 'CONFIDENTIAL_INTENTS',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        refundType: 'CONFIDENTIAL_INTENTS',
+        recipient: withdrawal.signerId,
+        refundTo: withdrawal.signerId,
+        appFees: [{ recipient: 'platform.near', fee: 50 }]
+      })
       const concurrentApi = new ConfidentialFundingApi(
         apiConfig,
         'https://near.example.test',
@@ -134,13 +516,22 @@ test.describe('confidential funding safety rules', () => {
       expect(feeReads).toBe(2)
       echoedFees = [{ recipient: 'platform.near', fee: 2 }]
       await expect(api.quote(withdrawal)).rejects.toThrow('app fees do not match')
+      echoedFees = [
+        { recipient: 'platform.near', fee: 50 },
+        { ...providerFee, recipient: 'other.near' }
+      ]
+      await expect(api.quote(withdrawal)).rejects.toThrow('app fees do not match')
+      echoedFees = undefined
+      providerFee = undefined
+      const partnerQuote = await api.quote(withdrawal)
+      expect(partnerQuote.quoteRequest.appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
       feeConfig = { ...feeConfig, confidentialPlatformFeeBps: 10_001 }
       await expect(
         new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt').quote(
           withdrawal
         )
       ).rejects.toThrow('fee rate is invalid')
-      expect(quoteRequests).toHaveLength(5)
+      expect(quoteRequests).toHaveLength(15)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -350,7 +741,7 @@ test.describe('confidential funding safety rules', () => {
     ).not.toBe(original)
   })
 
-  test('submits a signed Cluster batch once with Swap authorization', async () => {
+  test('submits signed single and Cluster withdrawals with Swap authorization', async () => {
     const originalFetch = globalThis.fetch
     const calls = []
     globalThis.fetch = async (url, init) => {
@@ -387,6 +778,38 @@ test.describe('confidential funding safety rules', () => {
       expect(JSON.parse(calls[0].init.body)).toMatchObject({
         signer_chain_family: 'evm',
         withdraws: [{ sequence: 0 }, { sequence: 1 }]
+      })
+      await expect(
+        api.submitWithdraws({
+          from_amount: '10',
+          from_chain: 'eth',
+          from_token: 'nep141:eth.omft.near',
+          mode: 'SWAP',
+          signer_id: '0x1111111111111111111111111111111111111111',
+          withdraws: [row(0)]
+        })
+      ).resolves.toEqual({ orderId: 'order-1' })
+      expect(calls).toHaveLength(2)
+      expect(JSON.parse(calls[1].init.body)).toMatchObject({
+        mode: 'SWAP',
+        signer_chain_family: 'evm',
+        withdraws: [{ sequence: 0 }]
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('preserves a private batch business rejection code', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ code: 2002, msg: 'app fee does not match' }), { status: 200 })
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt')
+      await expect(api.submitWithdraws({ withdraws: [{}, {}] })).rejects.toMatchObject({
+        status: 200,
+        businessCode: 2002,
+        ambiguous: false
       })
     } finally {
       globalThis.fetch = originalFetch

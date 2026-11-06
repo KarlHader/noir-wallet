@@ -405,12 +405,28 @@ export function AssetDetail() {
 
   const handleSend = () => {
     if (!asset || !chain || !canSend) return
+    const domain = searchParams.get('domain')
+    if (chain.chain.family === 'evm' && domain === 'private') {
+      navigate(
+        `/transfer?${new URLSearchParams({ assetId: asset.asset.id, from: 'private', to: 'shield' })}`
+      )
+      return
+    }
     if (chain.chain.family === 'zcash') {
-      navigate('/send/zcash')
+      navigate(
+        domain === 'shield'
+          ? '/send/zcash?from=shielded'
+          : domain === 'public'
+            ? '/send/zcash?from=transparent'
+            : '/send/zcash'
+      )
       return
     }
     const query = new URLSearchParams({ assetId: asset.asset.id })
     if (searchParams.get('mode') === 'private') query.set('mode', 'private')
+    if (chain.chain.family === 'evm') {
+      if (domain === 'public') query.set('sourceMode', 'main')
+    }
     navigate(`/send?${query.toString()}`)
   }
 
@@ -446,7 +462,18 @@ export function AssetDetail() {
 
   const handleSwap = () => {
     if (!asset || !canSwap) return
-    navigate(`/swap?source=${encodeURIComponent(asset.asset.id)}`)
+    const query = new URLSearchParams({ source: asset.asset.id })
+    if (
+      searchParams.get('domain') === 'private' &&
+      chain?.chain.family === 'evm' &&
+      effectiveWalletId &&
+      effectiveAccountId
+    ) {
+      query.set('sourceMode', 'private')
+      query.set('sourceWalletId', effectiveWalletId)
+      query.set('sourceAccountId', effectiveAccountId)
+    }
+    navigate(`/swap?${query.toString()}`)
   }
 
   const handlePrivateBalanceTransfer = (
@@ -636,7 +663,7 @@ export function AssetDetail() {
               onClick={handleShieldFunds}
               disabled={isShielding}
               aria-label="Shield transparent ZEC"
-              className="mt-3 inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-primary/20 bg-primary/8 px-3.5 text-xs font-medium text-primary/90 transition-colors hover:border-primary/30 hover:bg-primary/12 disabled:cursor-not-allowed disabled:opacity-50"
+              className="wallet-interactive mt-3 inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-primary/20 bg-primary/8 px-3.5 text-xs font-medium text-primary/90 enabled:hover:border-primary/30 enabled:hover:bg-primary/12 enabled:active:bg-primary/16 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Icon icon="lucide:shield" width={12} height={12} />
               <span>{isShielding ? 'Shielding...' : 'Shield'}</span>
@@ -647,16 +674,23 @@ export function AssetDetail() {
         <div className="flex justify-center gap-8 pb-5">
           <WalletActionButton
             icon={<Icon icon="lucide:send" width={20} height={20} />}
-            label="Send"
-            disabled={!canSend}
+            label={detailDomain === 'private' && chain.chain.family === 'evm' ? 'Move' : 'Send'}
+            disabled={
+              !canSend ||
+              (detailDomain === 'private' &&
+                chain.chain.family === 'evm' &&
+                privateTransferDisabledReason !== null)
+            }
             onClick={handleSend}
           />
-          <WalletActionButton
-            icon={<Icon icon="lucide:arrow-down" width={20} height={20} />}
-            label="Receive"
-            disabled={!canReceive}
-            onClick={handleReceive}
-          />
+          {(detailDomain !== 'private' || chain.chain.family !== 'evm') && (
+            <WalletActionButton
+              icon={<Icon icon="lucide:arrow-down" width={20} height={20} />}
+              label="Receive"
+              disabled={!canReceive}
+              onClick={handleReceive}
+            />
+          )}
           <WalletActionButton
             icon={<Icon icon="lucide:arrow-left-right" width={20} height={20} />}
             label="Swap"
@@ -934,7 +968,7 @@ export function AssetDetail() {
                     type="button"
                     aria-label="Copy Bitcoin receive address"
                     onClick={() => void copyToClipboard(preferredBitcoinAddress.value)}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-white/10 hover:text-foreground"
+                    className="wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-full text-muted enabled:hover:bg-white/10 enabled:hover:text-foreground enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     <Icon icon="lucide:copy" width={16} height={16} />
                   </button>
@@ -943,7 +977,7 @@ export function AssetDetail() {
                     aria-label="Receive Bitcoin"
                     onClick={handleReceive}
                     disabled={!canReceive}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-white/10 hover:text-foreground"
+                    className="wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     <Icon icon="lucide:chevron-right" width={17} height={17} />
                   </button>
@@ -962,7 +996,7 @@ export function AssetDetail() {
                     type="button"
                     aria-label="Copy contract address"
                     onClick={() => void copyToClipboard(contractAddress)}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-white/10 hover:text-foreground"
+                    className="wallet-interactive flex size-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-white/10 hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     <Icon icon="lucide:copy" width={16} height={16} />
                   </button>

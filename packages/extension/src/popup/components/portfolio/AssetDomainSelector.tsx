@@ -22,11 +22,13 @@ export const ASSET_DOMAIN_ICONS: Record<AssetDomain, string> = {
 export function AssetDomainSelector({
   value,
   totals,
+  shieldPartial = false,
   balancesHidden,
   onChange
 }: {
   readonly value: AssetDomain
   readonly totals: Readonly<Record<AssetDomain, string | number | null>>
+  readonly shieldPartial?: boolean
   readonly balancesHidden: boolean
   readonly onChange: (domain: AssetDomain) => void
 }) {
@@ -37,7 +39,7 @@ export function AssetDomainSelector({
         <button
           type="button"
           aria-label={`Asset category: ${ASSET_DOMAIN_LABELS[value]}`}
-          className="inline-flex h-[26px] items-center gap-1.5 rounded-md px-2 text-sm text-foreground hover:bg-white/5"
+          className="wallet-interactive inline-flex h-[26px] items-center gap-1.5 rounded-md px-2 text-sm text-foreground hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
         >
           <Icon
             icon={ASSET_DOMAIN_ICONS[value]}
@@ -67,7 +69,7 @@ export function AssetDomainSelector({
                 setOpen(false)
               }}
               className={cn(
-                'flex min-h-[38px] w-full items-center gap-2 px-3.5 py-2 text-left text-sm hover:bg-white/5',
+                'wallet-interactive flex min-h-[38px] w-full items-center gap-2 px-3.5 py-2 text-left text-sm hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2',
                 value === domain && 'bg-white/6'
               )}
             >
@@ -86,7 +88,7 @@ export function AssetDomainSelector({
                   ? '••••'
                   : totals[domain] === null
                     ? '—'
-                    : formatFiatAmount(totals[domain]!, { showSign: true })}
+                    : `${formatFiatAmount(totals[domain]!, { showSign: true })}${domain === 'shield' && shieldPartial ? '+' : ''}`}
               </span>
             </button>
           ))}

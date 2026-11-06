@@ -222,9 +222,19 @@ export function createRheaSwapClient(
       },
       options?: { readonly bypassCache?: boolean }
     ): Promise<RheaSwapCatalogResult> => getTokens(input, options),
-    quote: async (requestValue: RheaSwapQuoteRequest): Promise<RheaSwapQuoteView> => {
+    quote: async (
+      requestValue: RheaSwapQuoteRequest,
+      purpose?:
+        | 'private-swap'
+        | 'private-transfer'
+        | 'private-cross-chain-send'
+        | 'public-private-send'
+    ): Promise<RheaSwapQuoteView> => {
       const request = parseRheaSwapQuoteRequest(requestValue)
-      return unwrap(await send({ type: 'QUOTE_RHEA_SWAP', request }), parseRheaSwapQuoteView)
+      return unwrap(
+        await send({ type: 'QUOTE_RHEA_SWAP', request, ...(purpose ? { purpose } : {}) }),
+        parseRheaSwapQuoteView
+      )
     },
     prepare: async (quoteHandle: string): Promise<RheaSwapReviewView> =>
       unwrap(await send({ type: 'PREPARE_RHEA_SWAP', quoteHandle }), parseRheaSwapReviewView),

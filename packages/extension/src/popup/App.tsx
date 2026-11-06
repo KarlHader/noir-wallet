@@ -52,6 +52,10 @@ import { Transfer } from './pages/transactions/Transfer'
 import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
 import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
+import { ShieldFundsPage } from './pages/portfolio/ShieldFundsPage'
+import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
+import { ShieldDepositPage } from './pages/portfolio/ShieldDepositPage'
+import { ShieldSwapPage } from './pages/portfolio/ShieldSwapPage'
 
 // Swap Page
 import { Swap } from './pages/swap/Swap'
@@ -66,7 +70,7 @@ import { KeystoneEvmSignPage } from './pages/hardware/KeystoneEvmSignPage'
 // DApp Pages
 import { ApprovalPage } from './pages/dapp/ApprovalPage'
 import { EvmWalletChoice } from './pages/dapp/EvmWalletChoice'
-import { DApps, DAppConnections } from './pages/dapp/DApps'
+import { DAppConnections } from './pages/dapp/DAppConnections'
 
 // Settings Pages
 import { Settings } from './pages/settings/Settings'
@@ -288,9 +292,12 @@ function AppRoutes() {
       <Route path="/hardware/bitcoin-sign" element={<KeystoneBitcoinSignPage />} />
       <Route path="/hardware/evm-sign" element={<KeystoneEvmSignPage />} />
 
-      <Route path="/dapps" element={<DApps />} />
       <Route path="/dapp-connections" element={<DAppConnections />} />
       <Route path="/shield-provider" element={<ShieldProviderDetail />} />
+      <Route path="/shield-funds" element={<ShieldFundsPage />} />
+      <Route path="/shield-withdraw" element={<ShieldWithdrawPage />} />
+      <Route path="/shield-deposit" element={<ShieldDepositPage />} />
+      <Route path="/shield-swap" element={<ShieldSwapPage />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/default-evm-wallet" element={<DefaultEvmWallet />} />
       <Route path="/general" element={<General />} />

@@ -26,7 +26,10 @@ import {
 import { credentialSession } from './credential-session'
 import { EVM_TRANSACTION_MONITOR_ALARM } from './evm-transaction-monitor'
 import { NEAR_INTENTS_TRANSACTION_MONITOR_ALARM } from './near-intents-transaction-monitor'
-import { BackgroundEvmTransferController } from './evm-transfer-controller'
+import {
+  BackgroundEvmTransferController,
+  type BackgroundEvmTransferControllerOptions
+} from './evm-transfer-controller'
 import { BackgroundEvmTransferRouter } from './evm-transfer-router'
 import { recordRheaSwapGraphBroadcast } from './rhea-swap'
 import { reportBackgroundSendBroadcast } from './analytics/send-broadcast'
@@ -95,7 +98,8 @@ export function hasBackgroundEvmTransferCapability(
 
 export function createBackgroundEvmTransferController(
   network: EvmNetworkConfig = getEvmNetworkConfig(DEFAULT_NETWORK),
-  userEvmAssets: readonly AssetDefinitionInput[] = []
+  userEvmAssets: readonly AssetDefinitionInput[] = [],
+  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote']
 ): BackgroundEvmTransferController {
   const storageRepository = new IndexedDbStorageV2Repository()
   const externalSigner = new HardwareEvmSigningContextResolver({
@@ -107,6 +111,7 @@ export function createBackgroundEvmTransferController(
   const peaSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
   const allowanceRpc = createConfiguredEvmRpcClient(DEFAULT_NETWORK, network)
   return new BackgroundEvmTransferController({
+    validateRheaSwapQuote,
     orchestrator: createBackgroundEvmTransferOrchestrator(network, userEvmAssets),
     readTokenAllowance: (token, owner, spender) =>
       readEvmTokenAllowance(allowanceRpc, token, owner, spender),
@@ -133,7 +138,8 @@ export function createBackgroundEvmTransferController(
 export function createBackgroundEvmTransferRuntime(
   networks: readonly EvmNetworkConfig[],
   activeNetwork: EvmNetworkConfig,
-  userEvmAssets: readonly AssetDefinitionInput[] = []
+  userEvmAssets: readonly AssetDefinitionInput[] = [],
+  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote']
 ): BackgroundEvmTransferRuntime {
   const capableNetworks = networks.filter(hasBackgroundEvmTransferCapability)
   const controllers = new Map(
@@ -141,7 +147,7 @@ export function createBackgroundEvmTransferRuntime(
       network =>
         [
           parseChainId(network.chainId).id,
-          createBackgroundEvmTransferController(network, userEvmAssets)
+          createBackgroundEvmTransferController(network, userEvmAssets, validateRheaSwapQuote)
         ] as const
     )
   )

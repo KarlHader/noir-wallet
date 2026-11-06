@@ -4,13 +4,13 @@ import { expect } from '@playwright/test'
 import {
   assertNearTransferSigningMatchesPrepared,
   computeNearTransactionFingerprint,
+  parsePreparedNearTransfer,
   parsePreparedNearLendingSupply,
   prepareNearNativeTransfer,
-  prepareNearLendingSupply,
   prepareNearTokenTransfer,
   parsePreparedNearTokenTransfer
 } from '../../../../src/infrastructure/chains/near/index.ts'
-import { createNearLendingSupplyMessage } from '../../../../src/core/services/lending-near-supply.ts'
+import { createNearLendingSupplyMessage } from '../../../../src/core/chains/near/near-burrow-supply-binding.ts'
 
 const signerId = '00'.repeat(32)
 const publicKey = `ed25519:${'1'.repeat(32)}`
@@ -299,94 +299,125 @@ test.describe('NEAR native transfer preparation', () => {
   })
 })
 
-test.describe('NEAR Lending Supply preparation', () => {
-  test('prepares a registered NEP-141 transfer call with the canonical Lending message', async () => {
-    const contractId = 'token.testnet'
-    const recipientId = 'rhea00000x.multica.testnet'
-    const state = harness({
-      getFungibleTokenBalance: async (requestedContract, accountId) => ({
-        contractId: requestedContract,
-        accountId,
-        amountRaw: '2500000',
-        blockHash,
-        blockHeight: 10
-      }),
-      isFungibleTokenAccountRegistered: async () => true
-    })
+test.describe('persisted NEAR Lending Supply transfers', () => {
+  const encodeArgs = args => Buffer.from(JSON.stringify(args)).toString('base64')
+  const legacyPrepared = sourceKind => {
+    const native = sourceKind === 'native'
+    const recipientId = native ? 'multica.testnet' : 'rhea00000x.multica.testnet'
+    const tokenContractId = native ? 'wrap.testnet' : 'token.testnet'
+    const amountRaw = native ? '1000000000000000000000000' : '1500000'
     const customRecipientMsg = createNearLendingSupplyMessage({
       accountId: signerId,
-      reason: 'BurrowCollateral',
-      createsMca: false
+      reason: native ? 'BurrowRegisterAndCollateral' : 'BurrowCollateral',
+      createsMca: native
     })
-    const prepared = await prepareNearLendingSupply({
+    const functionCall = (methodName, args, gas, depositYocto) => ({
+      type: 'functionCall',
+      methodName,
+      args: encodeArgs(args),
+      gas,
+      depositYocto
+    })
+    const actions = native
+      ? [
+          functionCall(
+            'storage_deposit',
+            { account_id: signerId, registration_only: true },
+            '50000000000000',
+            '1250000000000000000000'
+          ),
+          functionCall('near_deposit', {}, '50000000000000', amountRaw),
+          functionCall(
+            'storage_deposit',
+            { account_id: recipientId, registration_only: true },
+            '50000000000000',
+            '1250000000000000000000'
+          )
+        ]
+      : []
+    actions.push(
+      functionCall(
+        'ft_transfer_call',
+        { receiver_id: recipientId, amount: amountRaw, msg: customRecipientMsg },
+        '250000000000000',
+        '1'
+      )
+    )
+    return {
+      kind: 'lending-supply',
       chainId: 'near:testnet',
       accountIndex: 0,
-      assetId: 'near:testnet/nep141:token.testnet',
+      assetId: native ? 'near:testnet/slip44:397' : 'near:testnet/nep141:token.testnet',
+      sourceKind,
       signerId,
       publicKey,
       recipientId,
-      tokenContractId: contractId,
-      amountRaw: '1500000',
+      tokenContractId,
+      amountRaw,
       customRecipientMsg,
-      rpc: state.rpc
-    })
-
-    expect(prepared).toMatchObject({
-      kind: 'lending-supply',
-      sourceKind: 'token',
-      recipientId,
-      tokenContractId: contractId,
-      amountRaw: '1500000',
-      protocolDepositYocto: '1',
+      estimatedFeeYocto: native ? '40000000000000000000000' : '25000000000000000000000',
+      maximumFeeYocto: native ? '400000000000000000000000' : '250000000000000000000000',
+      storageReserveYocto: '1000000000000000000000',
+      protocolDepositYocto: native ? '1002500000000000000000001' : '1',
+      totalRequiredYocto: native ? '1403500000000000000000001' : '251000000000000000000001',
       transaction: {
-        receiverId: contractId,
-        actions: [
-          {
-            type: 'functionCall',
-            methodName: 'ft_transfer_call',
-            gas: '250000000000000',
-            depositYocto: '1'
-          }
-        ]
+        chainId: 'near:testnet',
+        accountIndex: 0,
+        signerId,
+        receiverId: tokenContractId,
+        nonce: '42',
+        blockHash,
+        actions
       }
-    })
-    expect(parsePreparedNearLendingSupply(structuredClone(prepared))).toEqual(prepared)
+    }
+  }
+
+  test('parses and validates a persisted token Supply transfer for recovery', async () => {
+    const prepared = legacyPrepared('token')
+    expect(parsePreparedNearTransfer(structuredClone(prepared))).toEqual(prepared)
+    const signing = {
+      chainId: prepared.chainId,
+      operation: 'transaction',
+      execution: { kind: 'internal' },
+      summary: {
+        schema: 'near.transaction.v1',
+        review: { level: 'standard', issues: [] },
+        fields: {
+          signerId,
+          publicKey,
+          nonce: prepared.transaction.nonce,
+          receiverId: prepared.tokenContractId,
+          blockHash,
+          actions: prepared.transaction.actions.map(action => ({
+            kind: 'function-call',
+            methodName: action.methodName,
+            args: { encoding: 'base64', value: action.args },
+            gas: action.gas,
+            depositYocto: action.depositYocto
+          }))
+        }
+      },
+      payloadFingerprint: {
+        digestHex: await computeNearTransactionFingerprint(prepared.transaction)
+      }
+    }
+    await expect(
+      assertNearTransferSigningMatchesPrepared(prepared, signing)
+    ).resolves.toBeUndefined()
+    await expect(
+      assertNearTransferSigningMatchesPrepared(prepared, {
+        ...signing,
+        summary: {
+          ...signing.summary,
+          fields: { ...signing.summary.fields, receiverId: 'mallory.testnet' }
+        }
+      })
+    ).rejects.toThrow(/does not match/)
   })
 
-  test('wraps native NEAR and registers both token accounts before supplying a new MCA', async () => {
-    const contractId = 'wrap.testnet'
-    const recipientId = 'multica.testnet'
-    const state = harness({
-      getFungibleTokenBalance: async () => {
-        throw new Error('native source must not read an existing token balance')
-      },
-      isFungibleTokenAccountRegistered: async () => false
-    })
-    const prepared = await prepareNearLendingSupply({
-      chainId: 'near:testnet',
-      accountIndex: 0,
-      assetId: 'near:testnet/slip44:397',
-      signerId,
-      publicKey,
-      recipientId,
-      tokenContractId: contractId,
-      amountRaw: '1000000000000000000000000',
-      customRecipientMsg: createNearLendingSupplyMessage({
-        accountId: signerId,
-        reason: 'BurrowRegisterAndCollateral',
-        createsMca: true
-      }),
-      rpc: state.rpc
-    })
-
-    expect(prepared.transaction.actions.map(action => action.methodName)).toEqual([
-      'storage_deposit',
-      'near_deposit',
-      'storage_deposit',
-      'ft_transfer_call'
-    ])
-    expect(prepared.protocolDepositYocto).toBe('1002500000000000000000001')
-    expect(parsePreparedNearLendingSupply(structuredClone(prepared))).toEqual(prepared)
+  test('parses a persisted native Supply transfer and rejects tampering', () => {
+    const prepared = legacyPrepared('native')
+    expect(parsePreparedNearTransfer(structuredClone(prepared))).toEqual(prepared)
     expect(() =>
       parsePreparedNearLendingSupply({
         ...structuredClone(prepared),

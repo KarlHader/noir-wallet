@@ -43,12 +43,26 @@ export function KeystoneEvmSignPage() {
   const [scannerKey, setScannerKey] = useState(0)
   const started = useRef(false)
   const terminal = useRef(false)
+  const submitting = useRef(false)
   const network = request
     ? resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings()).find(
         candidate => candidate.chainId === request.chainId
       )
     : undefined
   const networkName = network?.displayName ?? 'EVM network'
+
+  const expire = useCallback(() => {
+    if (terminal.current || submitting.current) return
+    terminal.current = true
+    setStep('invalid')
+    if (transactionId) void evmWalletClient.rejectTransfer(transactionId).catch(() => {})
+  }, [transactionId])
+
+  useEffect(() => {
+    if (!request || (step !== 'show-qr' && step !== 'scan')) return
+    const timer = window.setTimeout(expire, Math.max(0, request.expiresAt - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [request, step, expire])
 
   useEffect(() => {
     if (started.current) return
@@ -60,6 +74,7 @@ export function KeystoneEvmSignPage() {
     void evmWalletClient
       .getExternalSigningRequest(transactionId)
       .then(value => {
+        if (terminal.current) return
         if (!value || value.expiresAt <= Date.now()) {
           setStep('invalid')
           return
@@ -67,12 +82,18 @@ export function KeystoneEvmSignPage() {
         setRequest(value)
         setStep('show-qr')
       })
-      .catch(() => setStep('invalid'))
+      .catch(() => {
+        if (!terminal.current) setStep('invalid')
+      })
   }, [transactionId])
 
   const handleScan = useCallback(
     async (ur: UR) => {
-      if (!transactionId || !request) return
+      if (!transactionId || !request || terminal.current || submitting.current) return
+      if (Date.now() >= request.expiresAt) {
+        expire()
+        return
+      }
       let signatureCborBase64: string
       try {
         parseKeystoneEthereumSignature(ur)
@@ -82,7 +103,13 @@ export function KeystoneEvmSignPage() {
         setScannerKey(value => value + 1)
         return
       }
+      if (terminal.current || submitting.current) return
+      if (Date.now() >= request.expiresAt) {
+        expire()
+        return
+      }
       setScanError(null)
+      submitting.current = true
       setStep('broadcasting')
       try {
         const value = await evmWalletClient.submitExternalSignature(
@@ -95,16 +122,19 @@ export function KeystoneEvmSignPage() {
         setStep('success')
       } catch {
         setStep('failed')
+      } finally {
+        submitting.current = false
       }
     },
-    [request, transactionId]
+    [request, transactionId, expire]
   )
 
   const close = async () => {
-    if (transactionId && !terminal.current) {
+    const shouldReject = !terminal.current
+    terminal.current = true
+    if (transactionId && shouldReject) {
       await evmWalletClient.rejectTransfer(transactionId).catch(() => {})
     }
-    terminal.current = true
     window.close()
   }
 

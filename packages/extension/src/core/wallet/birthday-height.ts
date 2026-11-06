@@ -7,6 +7,24 @@ const SAPLING_ACTIVATION_HEIGHT: Record<Network, number> = {
   testnet: 280_000
 }
 
+const MAX_ZCASH_BLOCK_HEIGHT = 0xffffffff
+
+export function isValidZcashBirthdayHeight(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_ZCASH_BLOCK_HEIGHT
+  )
+}
+
+export function parseZcashBirthdayHeightInput(value: string): number | null {
+  const trimmed = value.trim()
+  if (!/^\d+$|^\d{1,3}(,\d{3})+$/.test(trimmed)) return null
+  const height = Number(trimmed.replace(/,/g, ''))
+  return isValidZcashBirthdayHeight(height) ? height : null
+}
+
 export function selectCachedChainTipHeight(heights: readonly unknown[]): number | null {
   const validHeights = heights.filter(
     (height): height is number =>

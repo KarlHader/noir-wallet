@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import { useLendingStore } from '@/store/lending-store'
 import { SETTINGS_STORAGE_KEY, useSettingsStore } from '@/store/settings-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
@@ -40,7 +39,6 @@ export function usePersistedExtensionContextSync(): void {
           if (settingsChanged) await useSettingsStore.persist.rehydrate()
 
           if (walletChanged && readWalletScope() !== previousWalletScope) {
-            useLendingStore.getState().reset()
             useTransactionResultStore.getState().clear()
           }
         })

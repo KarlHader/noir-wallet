@@ -10,6 +10,8 @@ export {
   PORTFOLIO_READ_LIMITS,
   PORTFOLIO_READ_ERROR_CODES,
   type PortfolioAssetView,
+  type ConfidentialPortfolioAssetView,
+  type ConfidentialPortfolioView,
   type PortfolioBalanceSnapshot,
   type PortfolioBalanceView,
   type PortfolioChainView,

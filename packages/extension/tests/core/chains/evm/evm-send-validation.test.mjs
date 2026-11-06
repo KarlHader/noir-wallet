@@ -5,8 +5,11 @@ import {
   buildAddToPrivateEvmPath,
   buildMoveToMainEvmPath,
   buildPrivateEvmTransferPath,
+  buildPublicPrivateEvmSendPath,
   buildPrivateGasFundingPath,
   getEvmTokenFeeBalanceError,
+  parsePublicPrivateEvmSendDraft,
+  parsePublicPrivateEvmSwapRoute,
   resolveEvmNativeMaximumAmount
 } from '../../../../src/popup/pages/transactions/evm-send-validation.ts'
 import { resolveAccountAvailableRaw } from '../../../../src/popup/services/transfer-availability.ts'
@@ -84,6 +87,41 @@ test.describe('EVM send validation', () => {
       amount: '1.25',
       review: '1'
     })
+  })
+
+  test('binds Public Confidential Send and its return draft to the selected account', () => {
+    const scope = {
+      walletId: 'wallet-1',
+      accountId: 'account-1',
+      network: 'mainnet',
+      assetId: 'eip155:1/slip44:60'
+    }
+    const recipient = '0x2222222222222222222222222222222222222222'
+    const route = new URL(
+      buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '1.25', maximum: true }),
+      'https://wallet.invalid'
+    )
+    expect(route.pathname).toBe('/swap')
+    expect(parsePublicPrivateEvmSwapRoute(route.searchParams, scope)).toEqual({
+      recipient,
+      amount: '1.25',
+      maximum: true,
+      sendPrivately: true
+    })
+    const draft = new URLSearchParams(route.searchParams)
+    draft.delete('source')
+    draft.set('assetId', scope.assetId)
+    draft.delete('publicPrivacySend')
+    draft.set('sendPrivately', '1')
+    expect(parsePublicPrivateEvmSendDraft(draft, scope)?.recipient).toBe(recipient)
+    expect(
+      parsePublicPrivateEvmSwapRoute(route.searchParams, { ...scope, accountId: 'other' })
+    ).toBeNull()
+    draft.set('sourceMode', 'private')
+    expect(parsePublicPrivateEvmSendDraft(draft, scope)).toBeNull()
+    expect(() => buildPublicPrivateEvmSendPath({ ...scope, recipient, amount: '0' })).toThrow(
+      /Invalid/
+    )
   })
 
   test('locks one-click Add to Private to the selected asset and chain', () => {

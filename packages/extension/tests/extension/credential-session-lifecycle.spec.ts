@@ -668,17 +668,18 @@ test('routes an open side panel to unlock when its credential session ends', asy
   await sidePanel.goto(`chrome-extension://${extensionId}/index.html?surface=side-panel`)
   await waitForBackgroundWalletInitialization(sidePanel)
   await sidePanel.getByRole('button', { name: 'Choose wallet' }).click()
-  await expect(sidePanel.getByText('Noir Wallet', { exact: true })).toBeVisible()
+  await expect(sidePanel.getByRole('dialog', { name: 'Accounts', exact: true })).toBeVisible()
 
   await expect(
     popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
   ).resolves.toMatchObject({ success: true })
 
   await expect(sidePanel.getByRole('heading', { name: 'Enter your password' })).toBeVisible()
+  await expect(sidePanel.getByRole('dialog', { name: 'Accounts', exact: true })).toHaveCount(0)
   await expect(sidePanel.getByRole('dialog', { name: 'Unable to switch account' })).toHaveCount(0)
   await sidePanel.getByPlaceholder('Enter Password').fill(password)
   await sidePanel.getByRole('button', { name: 'Unlock' }).click()
-  await expect(sidePanel.getByPlaceholder('Search Account')).toBeVisible()
+  await expect(sidePanel.getByRole('button', { name: 'Choose wallet' })).toBeVisible()
 })
 
 test('requires the password after closing and reopening a persistent browser Profile', async () => {
@@ -790,40 +791,6 @@ test('uses the production Background credential binding for one EVM signing comm
   expect(response.result.prepared.payloadFingerprint.digestHex).toBe(
     response.result.hostFingerprint
   )
-})
-
-test('reads the active Zcash lending identity through the Background credential session', async ({
-  popup,
-  extensionId
-}) => {
-  test.setTimeout(180_000)
-  const setup = await prepareUnlockedInventorySession(
-    popup,
-    extensionId,
-    'background-zcash-lending-password'
-  )
-  const accountId = setup.accountIds[0]
-  await expect(
-    popup.evaluate(
-      ({ walletId, accountId }) =>
-        chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', walletId, accountId }),
-      { walletId: setup.walletId, accountId }
-    )
-  ).resolves.toMatchObject({ success: true })
-
-  const identity = await popup.evaluate(
-    ({ walletId, accountId }) =>
-      chrome.runtime.sendMessage({
-        type: 'GET_ZCASH_LENDING_PUBLIC_KEY',
-        walletId,
-        accountId,
-        signingMode: 'derived'
-      }),
-    { walletId: setup.walletId, accountId }
-  )
-  expect(identity).toMatchObject({
-    result: { publicKey: expect.stringMatching(/^[0-9a-f]+$/) }
-  })
 })
 
 test('restores Zcash signing after Background reconstruction without returning a secret', async ({

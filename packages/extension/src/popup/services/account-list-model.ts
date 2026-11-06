@@ -151,6 +151,7 @@ export function resolveAccountPortfolioValue(
   const balance = zcashBalances.get(key)
   if (!balance || zecPrice <= 0) return null
   return Object.freeze({
+    valuationBasis: 'wallet-assets-v2',
     totalUsd: safeBig(balance.total).times(zecPrice).toFixed(),
     updatedAt: 0,
     complete: false

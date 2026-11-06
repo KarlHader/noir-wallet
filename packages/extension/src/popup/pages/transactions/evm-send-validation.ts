@@ -8,6 +8,10 @@ function assertRoutableAssetId(assetId: string): void {
   }
 }
 
+function isPositiveRouteAmount(amount: string): boolean {
+  return /^\d+(?:\.\d+)?$/.test(amount) && /[1-9]/.test(amount)
+}
+
 function appendTransferAmount(
   query: URLSearchParams,
   amount: string | undefined,
@@ -111,6 +115,126 @@ export function buildPrivateEvmTransferPath(input: {
   })
   if (input.maximum) query.set('maximum', '1')
   return `/swap?${query.toString()}`
+}
+
+export function buildPublicPrivateEvmSendPath(input: {
+  readonly assetId: string
+  readonly recipient: string
+  readonly amount: string
+  readonly maximum?: boolean
+  readonly walletId: string
+  readonly accountId: string
+  readonly network: 'mainnet' | 'testnet'
+}): string {
+  assertRoutableAssetId(input.assetId)
+  if (
+    !/^eip155:[1-9][0-9]*\//.test(input.assetId) ||
+    !/^0x[0-9a-fA-F]{40}$/.test(input.recipient) ||
+    /^0x0{40}$/i.test(input.recipient) ||
+    !isPositiveRouteAmount(input.amount) ||
+    !input.walletId ||
+    !input.accountId ||
+    [input.walletId, input.accountId].some(
+      value => value.length > 160 || /[\u0000-\u001f\u007f]/.test(value)
+    ) ||
+    (input.network !== 'mainnet' && input.network !== 'testnet')
+  ) {
+    throw new Error('Invalid Public Confidential Send route')
+  }
+  const query = new URLSearchParams({
+    privateTransfer: '1',
+    publicPrivacySend: '1',
+    sourceMode: 'main',
+    sourceWalletId: input.walletId,
+    sourceAccountId: input.accountId,
+    sourceNetwork: input.network,
+    source: input.assetId,
+    recipient: input.recipient,
+    amount: input.amount,
+    review: '1'
+  })
+  if (input.maximum) query.set('maximum', '1')
+  return `/swap?${query.toString()}`
+}
+
+function parseScopedPublicPrivacyDraft(
+  searchParams: URLSearchParams,
+  scope: Readonly<{
+    walletId: string
+    accountId: string
+    network: 'mainnet' | 'testnet'
+    assetId: string
+  }>,
+  assetKey: 'assetId' | 'source',
+  privacyKey: 'sendPrivately' | 'publicPrivacySend'
+): Readonly<{
+  recipient: string
+  amount: string
+  maximum: boolean
+  sendPrivately: true
+}> | null {
+  const required = [
+    'sourceWalletId',
+    'sourceAccountId',
+    'sourceNetwork',
+    assetKey,
+    'sourceMode',
+    privacyKey,
+    'recipient',
+    'amount'
+  ]
+  if (required.some(key => searchParams.getAll(key).length !== 1)) return null
+  const recipient = searchParams.get('recipient') ?? ''
+  const amount = searchParams.get('amount') ?? ''
+  if (
+    searchParams.get('sourceWalletId') !== scope.walletId ||
+    searchParams.get('sourceAccountId') !== scope.accountId ||
+    searchParams.get('sourceNetwork') !== scope.network ||
+    searchParams.get(assetKey) !== scope.assetId ||
+    searchParams.get('sourceMode') !== 'main' ||
+    searchParams.get(privacyKey) !== '1' ||
+    !/^0x[0-9a-fA-F]{40}$/.test(recipient) ||
+    /^0x0{40}$/i.test(recipient) ||
+    !isPositiveRouteAmount(amount) ||
+    (searchParams.has('maximum') && searchParams.get('maximum') !== '1')
+  ) {
+    return null
+  }
+  return Object.freeze({
+    recipient,
+    amount,
+    maximum: searchParams.get('maximum') === '1',
+    sendPrivately: true
+  })
+}
+
+export function parsePublicPrivateEvmSendDraft(
+  searchParams: URLSearchParams,
+  scope: Readonly<{
+    walletId: string
+    accountId: string
+    network: 'mainnet' | 'testnet'
+    assetId: string
+  }>
+): ReturnType<typeof parseScopedPublicPrivacyDraft> {
+  return parseScopedPublicPrivacyDraft(searchParams, scope, 'assetId', 'sendPrivately')
+}
+
+export function parsePublicPrivateEvmSwapRoute(
+  searchParams: URLSearchParams,
+  scope: Readonly<{
+    walletId: string
+    accountId: string
+    network: 'mainnet' | 'testnet'
+    assetId: string
+  }>
+): ReturnType<typeof parseScopedPublicPrivacyDraft> {
+  if (
+    searchParams.getAll('privateTransfer').length !== 1 ||
+    searchParams.get('privateTransfer') !== '1'
+  )
+    return null
+  return parseScopedPublicPrivacyDraft(searchParams, scope, 'source', 'publicPrivacySend')
 }
 
 export function getEvmTokenFeeBalanceError(

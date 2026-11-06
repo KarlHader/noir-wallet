@@ -37,7 +37,7 @@ export function isRuntimeNetworkInitialized(): boolean {
   return runtimeNetworkInitialized
 }
 
-export type MainnetProtocolFeature = 'Swap' | 'Lending'
+export type MainnetProtocolFeature = 'Swap'
 
 export function assertMainnetProtocolFeature(feature: MainnetProtocolFeature): void {
   if (DEFAULT_NETWORK !== 'mainnet') {

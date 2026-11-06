@@ -56,3 +56,77 @@ test('explicit revocation survives reload and a stale connect approval cannot re
   assert.equal(await afterModeChange.isRevoked(origin), true)
   assert.deepEqual(await afterModeChange.getAuthorizedAccounts(origin), [])
 })
+
+test('Public authorization metadata survives reload without restoring revoked or automatic access', async () => {
+  const { manager, storage } = managerFixture()
+  const revokedOrigin = 'https://revoked.example'
+  const publicOrigin = 'https://public.example'
+  const unreviewedOrigin = 'https://unreviewed.example'
+  const legacyOrigin = 'https://legacy.example'
+  await manager.setAuthorizedAccounts(origin, {}, [account], account)
+  await storage.set({
+    dapp_authorization_state: {
+      [origin]: { revision: 3, mode: 'approved', publicExplicit: true },
+      [revokedOrigin]: { revision: 4, mode: 'revoked', publicExplicit: true },
+      [publicOrigin]: { revision: 5, publicExplicit: true },
+      [unreviewedOrigin]: { revision: 6, mode: 'unreviewed' },
+      [legacyOrigin]: { revision: 7 }
+    }
+  })
+  const restored = new DAppManager(storage)
+  await restored.initialize()
+  assert.deepEqual(await restored.getAuthorization(origin), { revision: 3, accounts: [account] })
+  assert.equal(await restored.isRevoked(revokedOrigin), true)
+  assert.equal(await restored.canAutoConnect(revokedOrigin), false)
+  assert.equal(await restored.canAutoConnect(publicOrigin), false)
+  assert.deepEqual(await restored.getAuthorizedAccounts(publicOrigin), [])
+  assert.equal(await restored.canAutoConnect(unreviewedOrigin), true)
+  assert.equal(await restored.canAutoConnect(legacyOrigin), true)
+  await assert.rejects(
+    restored.setAuthorizedAccounts(publicOrigin, {}, [account], account, { automatic: true }),
+    /Site authorization changed/
+  )
+  await assert.rejects(
+    restored.setAuthorizedAccounts(unreviewedOrigin, {}, [account], account, {
+      expectedRevision: 5
+    }),
+    /Site authorization changed/
+  )
+  await restored.setAuthorizedAccounts(unreviewedOrigin, {}, [account], account, {
+    automatic: true,
+    expectedRevision: 6
+  })
+  await restored.setAuthorizedAccounts(publicOrigin, {}, [account], account, {
+    expectedRevision: 5
+  })
+  await restored.removeConnection(publicOrigin)
+  const { dapp_authorization_state: persisted } = await storage.get('dapp_authorization_state')
+  assert.deepEqual(persisted[publicOrigin], { revision: 6, mode: 'revoked', publicExplicit: true })
+  const reloaded = new DAppManager(storage)
+  assert.equal(await reloaded.canAutoConnect(publicOrigin), false)
+  assert.equal(await reloaded.isRevoked(revokedOrigin), true)
+  assert.deepEqual(await reloaded.getAuthorizedAccounts(unreviewedOrigin), [account])
+})
+
+test('a browser favicon data URL does not erase approved connections on reload', async () => {
+  const { manager, storage } = managerFixture()
+  const favicon = `data:image/png;base64,${'a'.repeat(20_000)}`
+  await manager.setAuthorizedAccounts(origin, { favIconUrl: favicon }, [account], account)
+
+  const restored = new DAppManager(storage)
+  const [connection] = await restored.getAllConnections()
+  assert.equal(connection?.favicon, favicon)
+  assert.deepEqual(await restored.getAuthorizedAccounts(origin), [account])
+
+  const { connectedDApps } = await storage.get('connectedDApps')
+  await storage.set({
+    connectedDApps: [{ ...connectedDApps[0], favicon: `data:image/png;base64,${'a'.repeat(300_000)}` }]
+  })
+  const oversizedLegacy = new DAppManager(storage)
+  assert.equal((await oversizedLegacy.getAllConnections())[0]?.favicon, `${origin}/favicon.ico`)
+  assert.deepEqual(await oversizedLegacy.getAuthorizedAccounts(origin), [account])
+  await oversizedLegacy.removeConnection(origin)
+  const disconnected = new DAppManager(storage)
+  assert.deepEqual(await disconnected.getAllConnections(), [])
+  assert.equal(await disconnected.isRevoked(origin), true)
+})

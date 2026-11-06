@@ -86,10 +86,31 @@ export interface PortfolioChainView {
   readonly errorCodes: readonly PortfolioReadErrorCode[]
 }
 
+export interface ConfidentialPortfolioAssetView {
+  readonly tokenId: string
+  readonly protocolAssetId: string
+  readonly availableRaw: string
+  readonly assetId?: string
+  readonly chainId?: string
+  readonly blockchain?: string
+  readonly symbol?: string
+  readonly name?: string
+  readonly decimals?: number
+  readonly iconUrl?: string
+  readonly priceUsd?: string
+  readonly priceUpdatedAt?: string
+}
+
+export interface ConfidentialPortfolioView {
+  readonly status: 'ready' | 'unavailable'
+  readonly assets: readonly ConfidentialPortfolioAssetView[]
+}
+
 export interface PortfolioReadModel {
   readonly scope: PortfolioScope
   readonly status: PortfolioViewStatus
   readonly chains: readonly PortfolioChainView[]
   readonly assets: readonly PortfolioAssetView[]
   readonly ignoredAssetCount: number
+  readonly confidential?: ConfidentialPortfolioView
 }

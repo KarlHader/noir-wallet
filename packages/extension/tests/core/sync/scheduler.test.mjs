@@ -50,6 +50,7 @@ function createSchedulerHarness() {
     '@/store/account-data-store': {
       useAccountDataStore: {
         getState: () => ({
+          getWalletSyncState: () => ({ syncReason: null }),
           setWalletSyncStateFor: (_network, _walletId, state) => syncStates.push(state)
         })
       }
@@ -136,6 +137,7 @@ test('sync snapshot reads the current background balance for the requested accou
     '@/store/account-data-store': {
       useAccountDataStore: {
         getState: () => ({
+          getWalletSyncState: () => ({ syncReason: null }),
           getBalance: (network, walletId, accountId) =>
             balances.get(`${network}_${walletId}_${accountId}`) ?? null
         })

@@ -179,7 +179,7 @@ export function EvmNonceRecoveryBanner({
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-muted">Maximum network fee</span>
-                <span className="font-mono">
+                <span className="font-sans tabular-nums">
                   <AmountDisplay
                     value={formatBaseUnitAmount(summary.fields.maximumFeeWei, feeDecimals)}
                     symbol={feeSymbol}
@@ -189,7 +189,7 @@ export function EvmNonceRecoveryBanner({
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-muted">Max fee per gas</span>
-                <span className="font-mono">
+                <span className="font-sans tabular-nums">
                   <AmountDisplay
                     value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
                     symbol="GWEI"
@@ -199,7 +199,7 @@ export function EvmNonceRecoveryBanner({
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-muted">Priority fee</span>
-                <span className="font-mono">
+                <span className="font-sans tabular-nums">
                   <AmountDisplay
                     value={formatEvmWeiAsGwei(summary.fields.maxPriorityFeePerGasWei ?? '0')}
                     symbol="GWEI"

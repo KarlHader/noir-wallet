@@ -5,6 +5,7 @@ import {
   parseTransactionId,
   parseNearIntentsTransactionBinding,
   parseRheaSwapTransactionBinding,
+  type RheaSwapTransactionBinding,
   type TransactionAccountScope,
   type TransactionGraph
 } from '@/core/transactions/domain'
@@ -40,6 +41,12 @@ export interface BackgroundEvmTransferControllerOptions {
     context: ActiveEvmPortfolioContext
   ) => Promise<PeaEvmExecutionAccount>
   readonly readTokenAllowance: (token: string, owner: string, spender: string) => Promise<string>
+  readonly validateRheaSwapQuote?: (
+    quoteHandle: string,
+    executionMode: EvmTransferExecutionMode | undefined,
+    binding: RheaSwapTransactionBinding,
+    executionAccount?: PeaEvmExecutionAccount
+  ) => Promise<void>
 }
 
 export type EvmTransferExecutionMode = 'main' | 'private'
@@ -81,6 +88,7 @@ export class BackgroundEvmTransferController {
   private readonly resolveExternalSigner: BackgroundEvmTransferControllerOptions['resolveExternalSigner']
   private readonly resolvePrivateExecutionAccount?: BackgroundEvmTransferControllerOptions['resolvePrivateExecutionAccount']
   private readonly readTokenAllowance: BackgroundEvmTransferControllerOptions['readTokenAllowance']
+  private readonly validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote']
 
   constructor(options: BackgroundEvmTransferControllerOptions) {
     this.orchestrator = options.orchestrator
@@ -88,6 +96,7 @@ export class BackgroundEvmTransferController {
     this.resolveExternalSigner = options.resolveExternalSigner
     this.resolvePrivateExecutionAccount = options.resolvePrivateExecutionAccount
     this.readTokenAllowance = options.readTokenAllowance
+    this.validateRheaSwapQuote = options.validateRheaSwapQuote
   }
 
   private async resolveTransactionExternalSigner(
@@ -171,6 +180,13 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
+      if (rheaSwapBinding)
+        await this.validateRheaSwapQuote?.(
+          rheaSwapBinding.quoteHandle,
+          executionModeValue,
+          rheaSwapBinding,
+          executionAccount
+        )
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
         throw new Error('EVM transfer asset does not match the active network')
@@ -233,6 +249,13 @@ export class BackgroundEvmTransferController {
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     return accountContextTransition.runActiveOperation(async () => {
+      if (rheaSwapBinding)
+        await this.validateRheaSwapQuote?.(
+          rheaSwapBinding.quoteHandle,
+          executionModeValue,
+          rheaSwapBinding,
+          executionAccount
+        )
       const context = await measure('evm-load-active-context', () => this.requireActiveContext())
       if (intent.chainId !== context.chainAccount.scope.chainId) {
         throw new Error('EVM contract call does not match the active network')
@@ -379,6 +402,14 @@ export class BackgroundEvmTransferController {
     return accountContextTransition.runActiveOperation(async () => {
       const context = await this.requireActiveContext()
       await authorize?.(context)
+      const pending = await this.orchestrator.getPendingApproval({
+        scope: context.chainAccount.scope,
+        transactionId
+      })
+      const protocol = pending?.graph.root.intent?.protocol
+      if (protocol?.provider === 'rhea-cross-chain-dex') {
+        await this.validateRheaSwapQuote?.(protocol.quoteHandle, undefined, protocol)
+      }
       return this.orchestrator.approve({
         scope: context.chainAccount.scope,
         transactionId,

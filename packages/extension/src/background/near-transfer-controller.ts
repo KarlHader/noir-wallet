@@ -1,9 +1,6 @@
 import type { Account, ChainAccount } from '@/core/accounts/domain'
 import { parseNearAccountId } from '@/core/chains/near'
-import { parseAssetId } from '@/core/chains/registry'
 import type { ChainId } from '@/core/chains/domain'
-import { parseNearLendingSupplyBinding } from '@/core/services/lending-near-supply'
-import { config_near } from '@rhea-finance/cross-chain-sdk'
 import type { KeyDomainSource, SigningSummary } from '@/core/keyring/domain'
 import {
   parseNearIntentsTransactionBinding,
@@ -116,8 +113,7 @@ export class BackgroundNearTransferController {
 
   async prepare(
     intentValue: unknown,
-    nearIntentsBindingValue?: unknown,
-    nearLendingSupplyBindingValue?: unknown
+    nearIntentsBindingValue?: unknown
   ): Promise<BackgroundNearTransferReview> {
     const intent = parseIntent(intentValue)
     const nearIntentsBinding =
@@ -129,38 +125,12 @@ export class BackgroundNearTransferController {
       if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
         throw new Error('NEAR transfer asset does not match the active network')
       }
-      const nearLendingSupplyBinding =
-        nearLendingSupplyBindingValue === undefined
-          ? undefined
-          : parseNearLendingSupplyBinding(
-              nearLendingSupplyBindingValue,
-              context.chainAccount.identity.value
-            )
-      if (nearIntentsBinding && nearLendingSupplyBinding) {
-        throw new Error('NEAR transfer cannot use multiple protocol bindings')
-      }
-      if (nearLendingSupplyBinding) {
-        if (nearLendingSupplyBinding.recipientId !== intent.recipient) {
-          throw new Error('NEAR Lending recipient does not match the transfer intent')
-        }
-        const asset = parseAssetId(intent.assetId)
-        const expectedContract =
-          asset.namespace === 'slip44' && asset.reference === '397'
-            ? config_near.WRAP_NEAR_CONTRACT_ID
-            : asset.namespace === 'nep141'
-              ? asset.reference.replace(/%5F/gi, '_')
-              : null
-        if (!expectedContract || nearLendingSupplyBinding.tokenContractId !== expectedContract) {
-          throw new Error('NEAR Lending token contract does not match the transfer asset')
-        }
-      }
       const base = {
         chainAccount: context.chainAccount,
         accountIndex: context.accountIndex,
         publicKey: context.publicKey,
         receiverId: intent.recipient,
-        ...(nearIntentsBinding === undefined ? {} : { nearIntentsBinding }),
-        ...(nearLendingSupplyBinding === undefined ? {} : { nearLendingSupplyBinding })
+        ...(nearIntentsBinding === undefined ? {} : { nearIntentsBinding })
       }
       return toBackgroundReview(
         await this.options.orchestrator.prepare(

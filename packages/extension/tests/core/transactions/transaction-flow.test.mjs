@@ -28,10 +28,6 @@ const zcashMonitorSource = readFileSync(
   new URL('../../../src/background/zcash-tx-monitor.ts', import.meta.url),
   'utf-8'
 )
-const lendingStoreSource = readFileSync(
-  new URL('../../../src/store/lending-store.ts', import.meta.url),
-  'utf-8'
-)
 const txSyncSource = readFileSync(
   new URL('../../../src/background/tx-sync.ts', import.meta.url),
   'utf-8'
@@ -222,21 +218,5 @@ describe('dApp shield history regressions', () => {
 
     assert.match(shieldHandler, /transactionRecorder\.addTransaction\([\s\S]*?type:\s*'shield'/)
     assert.match(shieldHandler, /zcashTxMonitor\.addTransaction\([\s\S]*?type:\s*'shield'/)
-  })
-})
-
-describe('Lending loading regressions', () => {
-  it('does not add an unconditional three-second startup delay', () => {
-    assert.ok(
-      !lendingStoreSource.includes('setTimeout(r, 3000)'),
-      'lending refresh must begin immediately'
-    )
-  })
-
-  it('deduplicates concurrent full refreshes', () => {
-    assert.ok(
-      lendingStoreSource.includes('refreshDedup.run'),
-      'Home refreshes must share the same in-flight request'
-    )
   })
 })

@@ -3,10 +3,49 @@ import { expect } from '@playwright/test'
 
 import { ConfidentialFundingCoordinator } from '../../../src/background/confidential-funding-coordinator.ts'
 import {
+  buildConfidentialPortfolioView,
   confidentialPrivateTokenId,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio
 } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
+
+test('projects Shield-only holdings independently of Public assets and preserves unknown tokens', () => {
+  const protocolAssetId = 'nep141:usdc.omft.near'
+  const assetId = 'eip155:1/erc20:0x1111111111111111111111111111111111111111'
+  const token = {
+    assetId: protocolAssetId,
+    blockchain: 'eth',
+    contractAddress: '0x1111111111111111111111111111111111111111',
+    decimals: 6,
+    symbol: 'USDC',
+    price: 1,
+    priceUpdatedAt: '2026-01-01T00:00:00Z'
+  }
+  const view = buildConfidentialPortfolioView(
+    [
+      { tokenId: protocolAssetId, available: '9' },
+      { tokenId: confidentialPrivateTokenId(protocolAssetId), available: '42' },
+      { tokenId: 'unknown:asset', available: '7' }
+    ],
+    [token],
+    [{ protocolAssetId, assetId, chainId: 'eip155:1', blockchain: 'eth' }],
+    [{ assetId, protocolAssetId }],
+    { get: () => undefined }
+  )
+  expect(view.status).toBe('ready')
+  expect(view.assets).toEqual([
+    expect.objectContaining({
+      tokenId: confidentialPrivateTokenId(protocolAssetId),
+      protocolAssetId,
+      availableRaw: '42',
+      assetId,
+      chainId: 'eip155:1',
+      decimals: 6,
+      priceUsd: '1'
+    }),
+    { tokenId: 'unknown:asset', protocolAssetId: 'unknown:asset', availableRaw: '7' }
+  ])
+})
 
 test('only counts the verified treasury token as Shield balance', () => {
   const asset = 'nep141:eth.omft.near'
@@ -113,11 +152,22 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
     now: () => 1000
   })
 
-  expect(await coordinator.enrichPortfolio(model)).toBe(model)
+  expect((await coordinator.enrichPortfolio(model)).confidential).toEqual({
+    status: 'unavailable',
+    assets: []
+  })
   expect(resolvedIdentity).toBe(false)
 
   session = { accessToken: 'session', expiresAt: 1_000_000_000, refreshExpiresAt: 2_000_000_000 }
-  expect(await coordinator.enrichPortfolio(model)).toBe(model)
+  expect((await coordinator.enrichPortfolio(model, false)).confidential).toEqual({
+    status: 'unavailable',
+    assets: []
+  })
+  expect(resolvedIdentity).toBe(false)
+  expect((await coordinator.enrichPortfolio(model)).confidential).toEqual({
+    status: 'unavailable',
+    assets: []
+  })
   expect(resolvedIdentity).toBe(true)
 
   snapshot = { fresh: true, balances: [] }
@@ -128,4 +178,5 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
     privateOnchainRaw: '50',
     confidentialRaw: '0'
   })
+  expect(knownZero.confidential).toEqual({ status: 'ready', assets: [] })
 })

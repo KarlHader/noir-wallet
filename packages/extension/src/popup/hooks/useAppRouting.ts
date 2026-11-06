@@ -26,7 +26,9 @@ export function useAppRouting() {
   const { replace } = useNavigate()
   const location = useLocation()
   const [isLoading, setIsLoading] = useState(true)
-  const [hasAnyWallet, setHasAnyWallet] = useState(false)
+  const hasProjectedWallet = useWalletStore(state => state.wallets.length > 0)
+  const [hasCatalogWallet, setHasCatalogWallet] = useState(false)
+  const hasAnyWallet = hasProjectedWallet || hasCatalogWallet
   const [initializationFailure, setInitializationFailure] = useState<'upgrade' | 'startup' | null>(
     null
   )
@@ -78,14 +80,21 @@ export function useAppRouting() {
   }, [betaInviteStatus.state.phase, isLoading, location.pathname, location.search, replace])
 
   const routeToUnlock = useCallback(() => {
-    if (!hasAnyWallet || location.pathname === '/unlock') return
+    // Import/create can complete without remounting the app. Read the current
+    // projection as well as the startup catalog when the session ends.
+    if (
+      (!useWalletStore.getState().wallets.length && !hasCatalogWallet) ||
+      location.pathname === '/unlock'
+    ) {
+      return
+    }
     if (isDApp.current) {
       window.close()
       return
     }
     const target = `${location.pathname}${location.search || ''}`
     replace(`/unlock?redirect=${encodeURIComponent(target)}`)
-  }, [hasAnyWallet, location.pathname, location.search, replace])
+  }, [hasCatalogWallet, location.pathname, location.search, replace])
 
   // Auto-lock handler
   const handleAutoLock = useCallback(async () => {
@@ -218,7 +227,7 @@ export function useAppRouting() {
 
       const hasRetainedV1Wallet = useWalletStore.getState().wallets.length > 0
       const storageV2Catalog = hasRetainedV1Wallet ? null : await accountNetworksClient.getCatalog()
-      setHasAnyWallet(hasRetainedV1Wallet || (storageV2Catalog?.accounts.length ?? 0) > 0)
+      setHasCatalogWallet((storageV2Catalog?.accounts.length ?? 0) > 0)
       if (!hasRetainedV1Wallet && (storageV2Catalog?.accounts.length ?? 0) === 0) {
         // Hardware connect tab handles the first-wallet case itself
         // (collects a password during setup)

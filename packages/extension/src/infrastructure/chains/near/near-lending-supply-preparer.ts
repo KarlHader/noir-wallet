@@ -5,10 +5,9 @@ import {
   parseNearPublicKey
 } from '@/core/chains/near'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
-import { parseNearLendingSupplyBinding } from '@/core/services/lending-near-supply'
-import type { NearReadRpc } from './near-rpc-types'
+import { parseNearLendingSupplyBinding } from '@/core/chains/near/near-burrow-supply-binding'
 import { encodeNearFunctionArgs } from './near-rpc-codecs'
-import type { NearTransferAction, NearTransferTransaction } from './near-transfer-preparer'
+import type { NearTransferTransaction } from './near-transfer-preparer'
 
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 const MAXIMUM_U128 = 340_282_366_920_938_463_463_374_607_431_768_211_455n
@@ -16,29 +15,6 @@ const STORAGE_DEPOSIT_YOCTO = 1_250_000_000_000_000_000_000n
 const STORAGE_DEPOSIT_GAS = 50_000_000_000_000n
 const WRAP_NEAR_GAS = 50_000_000_000_000n
 const LENDING_TRANSFER_GAS = 250_000_000_000_000n
-
-export interface PrepareNearLendingSupplyInput {
-  readonly chainId: string
-  readonly accountIndex: number
-  readonly assetId: string
-  readonly signerId: string
-  readonly publicKey: string
-  readonly recipientId: string
-  readonly tokenContractId: string
-  readonly amountRaw: string
-  readonly customRecipientMsg: string
-  readonly rpc: Pick<
-    NearReadRpc,
-    | 'assertExpectedChain'
-    | 'getAccount'
-    | 'getAccessKey'
-    | 'getGasPrice'
-    | 'getNativeTransferCostConfig'
-    | 'getFungibleTokenBalance'
-    | 'isFungibleTokenAccountRegistered'
-  >
-  readonly signal?: AbortSignal
-}
 
 export interface PreparedNearLendingSupply {
   readonly kind: 'lending-supply'
@@ -83,26 +59,6 @@ function readRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function checkedU128(value: bigint, label: string): bigint {
-  if (value > MAXIMUM_U128) throw new Error(`${label} exceeds u128`)
-  return value
-}
-
-function functionCall(
-  methodName: string,
-  args: Readonly<Record<string, unknown>>,
-  gas: bigint,
-  depositYocto: bigint
-): NearTransferAction {
-  return Object.freeze({
-    type: 'functionCall' as const,
-    methodName,
-    args: encodeNearFunctionArgs(args),
-    gas: gas.toString(),
-    depositYocto: depositYocto.toString()
-  })
-}
-
 function assertSigner(signerId: string, publicKey: string): void {
   if (
     /^[0-9a-f]{64}$/.test(signerId) &&
@@ -110,161 +66,6 @@ function assertSigner(signerId: string, publicKey: string): void {
   ) {
     throw new Error('NEAR signer does not match its public key')
   }
-}
-
-export async function prepareNearLendingSupply(
-  input: PrepareNearLendingSupplyInput
-): Promise<PreparedNearLendingSupply> {
-  const chain = parseChainId(input.chainId)
-  if (chain.namespace !== 'near') throw new Error('NEAR Lending Supply requires a NEAR chain')
-  const accountIndex = parseAccountIndex(input.accountIndex)
-  const signerId = parseNearAccountId(input.signerId, 'NEAR signer account ID')
-  const publicKey = parseNearPublicKey(input.publicKey)
-  assertSigner(signerId, publicKey)
-  const recipientId = parseNearAccountId(input.recipientId, 'NEAR Lending recipient')
-  const tokenContractId = parseNearAccountId(input.tokenContractId, 'NEAR token contract')
-  const binding = parseNearLendingSupplyBinding(
-    { tokenContractId, recipientId, customRecipientMsg: input.customRecipientMsg },
-    signerId
-  )
-  const asset = parseAssetId(input.assetId)
-  if (asset.chainId !== chain.id) throw new Error('NEAR Lending asset has the wrong chain')
-  const sourceKind = asset.namespace === 'slip44' && asset.reference === '397' ? 'native' : 'token'
-  if (
-    sourceKind === 'token' &&
-    (asset.namespace !== 'nep141' || asset.reference.replace(/%5F/gi, '_') !== tokenContractId)
-  ) {
-    throw new Error('NEAR Lending token asset does not match its contract')
-  }
-  const amount = parseUnsigned(input.amountRaw, MAXIMUM_U128, 'NEAR Lending Supply amount')
-  if (amount === 0n) throw new Error('NEAR Lending Supply amount must be greater than zero')
-
-  await input.rpc.assertExpectedChain(input.signal)
-  const [sender, accessKey, gasPriceRaw, costs, senderRegistered, recipientRegistered] =
-    await Promise.all([
-      input.rpc.getAccount(signerId, input.signal),
-      input.rpc.getAccessKey(signerId, publicKey, input.signal),
-      input.rpc.getGasPrice(input.signal),
-      input.rpc.getNativeTransferCostConfig(input.signal),
-      sourceKind === 'native'
-        ? input.rpc.isFungibleTokenAccountRegistered(tokenContractId, signerId, input.signal)
-        : Promise.resolve(true),
-      input.rpc.isFungibleTokenAccountRegistered(tokenContractId, recipientId, input.signal)
-    ])
-  if (!sender) throw new Error('NEAR sender account was not found')
-  if (!accessKey) throw new Error('The derived NEAR access key is not registered')
-  if (accessKey.permission.kind !== 'full-access') {
-    throw new Error('NEAR Lending Supply requires a full-access key')
-  }
-  if (sourceKind === 'token') {
-    const tokenBalance = await input.rpc.getFungibleTokenBalance(
-      tokenContractId,
-      signerId,
-      input.signal
-    )
-    if (BigInt(tokenBalance.amountRaw) < amount) {
-      throw new Error('NEAR token balance is insufficient')
-    }
-  }
-
-  const actions: NearTransferAction[] = []
-  let protocolDeposit = 1n
-  let totalGas = LENDING_TRANSFER_GAS
-  if (!senderRegistered) {
-    actions.push(
-      functionCall(
-        'storage_deposit',
-        { account_id: signerId, registration_only: true },
-        STORAGE_DEPOSIT_GAS,
-        STORAGE_DEPOSIT_YOCTO
-      )
-    )
-    protocolDeposit += STORAGE_DEPOSIT_YOCTO
-    totalGas += STORAGE_DEPOSIT_GAS
-  }
-  if (sourceKind === 'native') {
-    actions.push(functionCall('near_deposit', {}, WRAP_NEAR_GAS, amount))
-    protocolDeposit += amount
-    totalGas += WRAP_NEAR_GAS
-  }
-  if (!recipientRegistered && recipientId !== signerId) {
-    actions.push(
-      functionCall(
-        'storage_deposit',
-        { account_id: recipientId, registration_only: true },
-        STORAGE_DEPOSIT_GAS,
-        STORAGE_DEPOSIT_YOCTO
-      )
-    )
-    protocolDeposit += STORAGE_DEPOSIT_YOCTO
-    totalGas += STORAGE_DEPOSIT_GAS
-  }
-  actions.push(
-    functionCall(
-      'ft_transfer_call',
-      { receiver_id: recipientId, amount: amount.toString(), msg: binding.customRecipientMsg },
-      LENDING_TRANSFER_GAS,
-      1n
-    )
-  )
-
-  const nonce = parseUnsigned(accessKey.nonce, MAXIMUM_U64, 'NEAR access key nonce')
-  if (nonce === MAXIMUM_U64) throw new Error('NEAR access key nonce is exhausted')
-  const gasPrice = parseUnsigned(gasPriceRaw, MAXIMUM_U128, 'NEAR gas price')
-  const minimumGasPrice = parseUnsigned(
-    costs.minGasPurchasePriceRaw,
-    MAXIMUM_U128,
-    'NEAR minimum gas purchase price'
-  )
-  const estimatedFee = checkedU128(totalGas * gasPrice, 'NEAR estimated fee')
-  const maximumFee = checkedU128(
-    totalGas * (gasPrice > minimumGasPrice ? gasPrice : minimumGasPrice),
-    'NEAR maximum fee'
-  )
-  const storageAmountPerByte = parseUnsigned(
-    costs.storageAmountPerByteRaw,
-    MAXIMUM_U128,
-    'NEAR storage amount per byte'
-  )
-  const storageReserve = checkedU128(
-    BigInt(sender.storageUsage) * storageAmountPerByte,
-    'NEAR storage reserve'
-  )
-  const totalRequired = checkedU128(
-    maximumFee + storageReserve + protocolDeposit,
-    'NEAR total debit'
-  )
-  if (totalRequired > parseUnsigned(sender.amountRaw, MAXIMUM_U128, 'NEAR sender balance')) {
-    throw new Error('NEAR balance cannot cover the Lending Supply transaction')
-  }
-
-  return Object.freeze({
-    kind: 'lending-supply' as const,
-    chainId: chain.id,
-    accountIndex,
-    assetId: asset.id,
-    sourceKind,
-    signerId,
-    publicKey,
-    recipientId,
-    tokenContractId,
-    amountRaw: amount.toString(),
-    customRecipientMsg: binding.customRecipientMsg,
-    estimatedFeeYocto: estimatedFee.toString(),
-    maximumFeeYocto: maximumFee.toString(),
-    storageReserveYocto: storageReserve.toString(),
-    protocolDepositYocto: protocolDeposit.toString(),
-    totalRequiredYocto: totalRequired.toString(),
-    transaction: Object.freeze({
-      chainId: chain.id,
-      accountIndex,
-      signerId,
-      receiverId: tokenContractId,
-      nonce: (nonce + 1n).toString(),
-      blockHash: accessKey.blockHash,
-      actions: Object.freeze(actions)
-    })
-  })
 }
 
 export function parsePreparedNearLendingSupply(value: unknown): PreparedNearLendingSupply {

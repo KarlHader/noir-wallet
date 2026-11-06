@@ -2,10 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import {
-  clearLendingMcaCache,
+  clearZcashMcaCache,
   getMcaCacheKey,
   runMcaCheckDeduped
-} from '../../../src/core/services/lending-mca-cache.ts'
+} from '../../../src/core/services/zcash-mca-cache.ts'
 
 const noMca = Object.freeze({
   mcaId: null,
@@ -15,7 +15,7 @@ const noMca = Object.freeze({
 })
 
 test.afterEach(() => {
-  clearLendingMcaCache()
+  clearZcashMcaCache()
 })
 
 test('does not persist a negative MCA lookup while an account may still be created by a relay', async () => {

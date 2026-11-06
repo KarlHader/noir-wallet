@@ -178,16 +178,10 @@ async function connectAdditionalEvmDApp(
   return Object.freeze({ page, address: accounts[0] })
 }
 
-async function openDAppExecutionMode(page: Page) {
-  const trigger = page.getByRole('button', { name: /dApp address:/ })
-  await expect(trigger).toBeVisible()
-  await expect
-    .poll(async () => await trigger.boundingBox())
-    .toMatchObject({ width: 32, height: 32 })
-  await trigger.click()
-  const dialog = page.getByRole('dialog', { name: 'dApp address' })
-  await expect(dialog).toBeVisible()
-  return Object.freeze({ trigger, dialog, panel: dialog.getByTestId('dapp-execution-mode-card') })
+async function getWalletModeGroup(page: Page) {
+  const group = page.getByRole('radiogroup', { name: 'Wallet mode' })
+  await expect(group).toBeVisible()
+  return group
 }
 
 async function expectHomeHeaderActionsAligned(page: Page) {
@@ -1253,31 +1247,14 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
 
   await popup.bringToFront()
   await popup.reload()
-  let pendingMode = await openDAppExecutionMode(popup)
-  let pendingModeCard = pendingMode.panel
-  await pendingModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' }).click()
-  const privateSetupDialog = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
-  await expect(privateSetupDialog).toBeVisible()
-  await privateSetupDialog.getByRole('button', { name: 'Turn on', exact: true }).click()
-  const cancelPendingDialog = popup.getByRole('dialog', {
-    name: 'Cancel pending dApp operations?'
-  })
-  await expect(cancelPendingDialog).toContainText(
-    '1 pending EVM dApp operation was prepared for the current address'
-  )
-  await cancelPendingDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(popup.getByRole('button', { name: 'dApp address: Public' })).toBeVisible()
-  await expect(pendingApproval.getByRole('heading', { name: 'Review transaction' })).toBeVisible()
-
   const privateEventAfterCancellation = waitForAccountsChanged(dapp)
-  pendingMode = await openDAppExecutionMode(popup)
-  pendingModeCard = pendingMode.panel
-  await pendingModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' }).click()
-  await expect(privateSetupDialog).toBeVisible()
-  await privateSetupDialog.getByRole('button', { name: 'Turn on', exact: true }).click()
-  await expect(cancelPendingDialog).toBeVisible()
-  await captureScreenshot(popup, 'dapp-mode-switch-pending-confirmation.png')
-  await cancelPendingDialog.getByRole('button', { name: 'Switch & Cancel' }).click()
+  const walletMode = await getWalletModeGroup(popup)
+  const privateMode = walletMode.getByRole('radio', { name: 'Private mode' })
+  const publicMode = walletMode.getByRole('radio', { name: 'Public mode' })
+  await expect(publicMode).toBeChecked()
+  await privateMode.click()
+  await expect(privateMode).toBeChecked()
+  await captureScreenshot(popup, 'dapp-mode-switch-pending-cancelled.png')
   const cancelledPrivateEvent = (await privateEventAfterCancellation) as string[]
   expect(cancelledPrivateEvent).toEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/)])
   expect(cancelledPrivateEvent[0]?.toLowerCase()).not.toBe(connectedAddress.toLowerCase())
@@ -1287,7 +1264,7 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
       message: 'User rejected the transaction request.'
     }
   })
-  await expect(popup.getByRole('button', { name: 'dApp address: Confidential' })).toBeVisible()
+  await expect(privateMode).toBeChecked()
 
   const privateContractApprovalPromise = context.waitForEvent('page')
   const privateContractResult = dapp.evaluate(
@@ -1333,11 +1310,9 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
   await expect(privateContractResult).resolves.toEqual({ rejected: 4001 })
 
   const mainEventAfterCancellation = waitForAccountsChanged(dapp)
-  pendingMode = await openDAppExecutionMode(popup)
-  pendingModeCard = pendingMode.panel
-  await pendingModeCard.getByRole('radio', { name: 'Use Public address for dApps' }).click()
+  await publicMode.click()
   await expect(mainEventAfterCancellation).resolves.toEqual([connectedAddress])
-  await expect(popup.getByRole('button', { name: 'dApp address: Public' })).toBeVisible()
+  await expect(publicMode).toBeChecked()
 
   const zcashConnectApprovalPromise = context.waitForEvent('page')
   const zcashConnectResultPromise = dapp.evaluate(() => {
@@ -2334,13 +2309,6 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await expect(totalBalanceTooltip).toContainText('Public')
   await expect(totalBalanceTooltip).toContainText('Confidential')
   await popup.mouse.move(374, 1)
-  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
-  const addressTotalsDialog = popup.getByRole('dialog', { name: 'dApp address' })
-  await expect(addressTotalsDialog.getByTestId('main-address-total')).toHaveText(/^\$/)
-  await expect(addressTotalsDialog.getByTestId('private-address-total')).toHaveText(/^\$/)
-  await captureScreenshot(popup, 'evm-testnet-private-defi-home-address-totals.png')
-  await addressTotalsDialog.getByRole('button', { name: 'Close' }).click()
-
   const usdcBalanceTooltipTrigger = usdcAsset.locator('[data-slot="tooltip-trigger"]')
   await usdcBalanceTooltipTrigger.hover()
   const assetBalanceTooltip = popup.locator(
@@ -2356,7 +2324,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await popup.getByRole('tab', { name: 'Activity' }).click()
   await expect(popup.getByRole('region', { name: 'Multichain activity' })).toBeVisible()
   const activityFilter = popup.getByRole('button', {
-    name: 'Filter activity by network: All Networks'
+    name: 'Filter activity by network: All networks'
   })
   await expect(activityFilter).toBeVisible()
   await expect(popup.getByText(/EVM activity shows transactions submitted/)).toHaveCount(0)

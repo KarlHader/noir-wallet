@@ -12,6 +12,10 @@ import {
   type BirthdayHeightSource
 } from '@/lib/zcash-birthday'
 import { classifyError } from '@/lib/errors'
+import {
+  isValidZcashBirthdayHeight,
+  parseZcashBirthdayHeightInput
+} from '@/core/wallet/birthday-height'
 
 type ResyncEditMode = 'height' | 'date'
 
@@ -38,6 +42,7 @@ export function ResyncZcashContent({
   const [blockTimestamp, setBlockTimestamp] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const parsedHeight = parseZcashBirthdayHeightInput(editHeight)
 
   useEffect(() => {
     let cancelled = false
@@ -108,8 +113,16 @@ export function ResyncZcashContent({
           height = await zcashWalletRuntimeClient.getBlockByTime(timestamp)
         }
       } else {
-        height = parseInt(editHeight, 10)
-        if (isNaN(height) || height < 0) return
+        if (parsedHeight === null) {
+          setError('Enter a valid whole-number Zcash block height.')
+          return
+        }
+        height = parsedHeight
+      }
+
+      if (!isValidZcashBirthdayHeight(height)) {
+        setError('Enter a valid whole-number Zcash block height.')
+        return
       }
 
       await onConfirm(height)
@@ -164,12 +177,22 @@ export function ResyncZcashContent({
         {editMode === 'height' ? (
           <>
             <Input
-              type="number"
+              type="text"
+              inputMode="numeric"
+              aria-label="Zcash resync block height"
               value={editHeight}
-              onChange={e => setEditHeight(e.target.value)}
+              onChange={e => {
+                setEditHeight(e.target.value)
+                setError(null)
+              }}
               placeholder="e.g. 1000000"
               className="h-[46px] rounded-xl"
             />
+            {editHeight && parsedHeight === null && (
+              <p role="alert" className="mt-1.5 text-xs text-destructive">
+                Enter a valid whole-number Zcash block height.
+              </p>
+            )}
             <p className="text-xs text-muted mt-1.5">
               {formatBirthdayResyncHint(resolvedHeight, blockTimestamp, heightSource)}
             </p>
@@ -201,7 +224,11 @@ export function ResyncZcashContent({
           variant="destructive"
           onClick={handleResync}
           isLoading={isLoading}
-          disabled={editMode === 'height' && (!editHeight || parseInt(editHeight, 10) < 0)}
+          disabled={
+            editMode === 'height'
+              ? parsedHeight === null
+              : !syncDate && !isValidZcashBirthdayHeight(resolvedHeight)
+          }
           className="flex-1 h-[45px]"
         >
           Resync

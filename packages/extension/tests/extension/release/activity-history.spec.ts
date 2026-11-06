@@ -50,7 +50,9 @@ test('loads a quiet chain when another chain fills the shared History page', asy
     )
   ).toBe(true)
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.001 ETH', { exact: true })).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'View Received ETH details on Base' })
+  ).toContainText(/\+0\.001\s*ETH/)
   await captureScreenshot(popup, 'history-quiet-chain-after-shared-page.png')
 })
 
@@ -346,7 +348,9 @@ test('retains current EVM address history during failed refresh and popup reload
   )
   await popup.getByRole('tab', { name: 'Activity' }).click()
   try {
-    await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+    await expect(
+      popup.getByRole('button', { name: 'View Received ETH details on Ethereum' }).first()
+    ).toContainText(/\+0\.005871\s*ETH/)
     await expect(popup.getByText('No activity yet', { exact: true })).toHaveCount(0)
     await captureScreenshot(popup, 'history-activity-cached-refresh.png')
   } finally {
@@ -357,12 +361,16 @@ test('retains current EVM address history during failed refresh and popup reload
     timeout: 30_000
   })
   for (const id of seeded) expect(await readIds()).toContain(id)
-  await popup.getByRole('tab', { name: 'Assets' }).click()
+  await popup.getByRole('tab', { name: 'Total assets' }).click()
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'View Received ETH details on Ethereum' }).first()
+  ).toContainText(/\+0\.005871\s*ETH/)
   await popup.reload()
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByText('+0.005871 ETH', { exact: true }).first()).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'View Received ETH details on Ethereum' }).first()
+  ).toContainText(/\+0\.005871\s*ETH/)
   for (const id of seeded) expect(await readIds()).toContain(id)
   await expect(popup.getByText('No activity yet', { exact: true })).toHaveCount(0)
   await captureScreenshot(popup, 'history-activity-retained-after-reload.png')

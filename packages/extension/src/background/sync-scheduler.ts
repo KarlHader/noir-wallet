@@ -14,7 +14,7 @@ import { hasPendingZcashTxForWallet } from '../core/wallet/pending-zcash-tx'
 import { recordRpcFailure, recordRpcSuccess } from '@/infrastructure/chains/rpc-failover'
 import { shouldResumeInterruptedSync, shouldSchedulePassiveSync } from './passive-sync-policy'
 import { isRpcEndpointError } from '@/lib/errors'
-import type { ZcashBalance } from '@/types'
+import type { SyncReason, ZcashBalance } from '@/types'
 
 export type SyncStateSnapshot = {
   isSyncing: boolean
@@ -24,6 +24,7 @@ export type SyncStateSnapshot = {
   walletId?: string
   accountId?: string
   etaMs?: number | null
+  syncReason?: SyncReason | null
   balance?: ZcashBalance | null
 }
 
@@ -90,6 +91,12 @@ export class SyncScheduler {
       currentHeight: cached.currentHeight ?? 0,
       latestHeight: cached.latestHeight ?? 0,
       etaMs: cached.etaMs ?? null,
+      syncReason: targetWalletId
+        ? useAccountDataStore
+            .getState()
+            .getWalletSyncState(backgroundZcashWalletRuntime.getNetwork(), targetWalletId)
+            .syncReason
+        : null,
       walletId: targetWalletId ?? undefined,
       accountId: targetAccountId ?? undefined,
       ...(targetWalletId && targetAccountId

@@ -1,5 +1,6 @@
 import { useId } from 'react'
 import { Icon } from '@iconify/react'
+import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { cn } from '@/lib/utils'
 import { formatSortAddress } from '@/lib/format'
 import type {
@@ -43,7 +44,7 @@ function ConfidentialAddressButton({
       type="button"
       title={address}
       aria-label="Copy EVM Private address"
-      className="flex w-full min-w-0 items-center gap-1.5 font-mono text-xs text-primary transition-colors hover:text-primary/80"
+      className="flex w-full min-w-0 flex-wrap items-center gap-1.5 font-mono text-xs text-primary transition-colors hover:text-primary/80"
       onClick={event => {
         event.stopPropagation()
         onCopy(address)
@@ -52,7 +53,7 @@ function ConfidentialAddressButton({
       <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-primary">
         Private
       </span>
-      <span className="min-w-0 truncate">{formatSortAddress(address)}</span>
+      <span className="shrink-0 whitespace-nowrap">{formatSortAddress(address)}</span>
       <span className="ml-auto shrink-0">
         <CopyIcon />
       </span>
@@ -122,7 +123,7 @@ function AddressButton({
       title={address.value}
       aria-label={`Copy ${displayName ?? network.chain.displayName} ${label} address`}
       className={cn(
-        'flex w-full min-w-0 items-center gap-1 font-mono text-xs transition-colors hover:text-foreground',
+        'flex w-full min-w-0 flex-wrap items-center gap-1 font-mono text-xs transition-colors hover:text-foreground',
         address.preferredForReceive ? 'text-primary' : 'text-muted'
       )}
       onClick={event => {
@@ -141,7 +142,7 @@ function AddressButton({
           {bitcoinType}
         </span>
       )}
-      <span className="min-w-0 truncate">{formatSortAddress(address.value)}</span>
+      <span className="shrink-0 whitespace-nowrap">{formatSortAddress(address.value)}</span>
       <span className="ml-auto shrink-0">
         <CopyIcon />
       </span>
@@ -181,17 +182,28 @@ export function AccountNetworkAddressSummary({
             return (
               <div key={group.id} className="min-w-0 py-2 first:pt-0 last:pb-0">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="flex shrink-0 -space-x-1">
-                    {group.networks.slice(0, 4).map(item => (
-                      <ChainIcon
-                        key={item.chain.id}
-                        chain={accountNetworkIconChain(item)}
-                        width={16}
-                        height={16}
-                        className="rounded-[4px] ring-1 ring-card"
-                      />
-                    ))}
-                  </span>
+                  {group.family === 'evm' ? (
+                    <img
+                      src={evmGroupIcon}
+                      alt=""
+                      aria-hidden="true"
+                      width={26}
+                      height={26}
+                      className="size-[26px] shrink-0"
+                    />
+                  ) : (
+                    <span className="flex shrink-0 -space-x-1">
+                      {group.networks.slice(0, 4).map(item => (
+                        <ChainIcon
+                          key={item.chain.id}
+                          chain={accountNetworkIconChain(item)}
+                          width={16}
+                          height={16}
+                          className="rounded-[4px] ring-1 ring-card"
+                        />
+                      ))}
+                    </span>
+                  )}
                   <span
                     className="min-w-0 break-words text-[13px] text-foreground"
                     title={group.networks.map(item => item.chain.displayName).join(', ')}

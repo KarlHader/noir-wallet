@@ -272,8 +272,6 @@ const isAssetMarketHistoryRange: RuntimeFieldValidator = value =>
   value === 'all'
 const isNetworkMode: RuntimeFieldValidator = value => value === 'mainnet' || value === 'testnet'
 const isDAppExecutionMode: RuntimeFieldValidator = value => value === 'main' || value === 'private'
-const isZcashLendingSigningMode: RuntimeFieldValidator = value =>
-  value === 'derived' || value === 'legacy' || value === 'legacy_index0'
 const isEvmPayloadFingerprint: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
 const isCanonicalBitcoinPsbtBase64: RuntimeFieldValidator = value =>
@@ -535,13 +533,6 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   GET_BITCOIN_ACTIVITY: { optional: { action: isPortfolioAction } },
   GET_BITCOIN_WALLET_IDENTITY: {},
-  GET_ZCASH_LENDING_PUBLIC_KEY: {
-    required: {
-      walletId: isShortString,
-      accountId: isShortString,
-      signingMode: isZcashLendingSigningMode
-    }
-  },
   GET_ASSET_PRICES: {
     required: { action: isPortfolioAction },
     optional: { assetId: isShortString }
@@ -552,7 +543,16 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       tokenListChainIds: isRheaSwapTokenListChainIdArray
     }
   },
-  QUOTE_RHEA_SWAP: { required: { request: isRheaSwapQuoteRequest } },
+  QUOTE_RHEA_SWAP: {
+    required: { request: isRheaSwapQuoteRequest },
+    optional: {
+      purpose: (value: unknown) =>
+        value === 'private-swap' ||
+        value === 'private-transfer' ||
+        value === 'private-cross-chain-send' ||
+        value === 'public-private-send'
+    }
+  },
   PREPARE_RHEA_SWAP: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   GET_RHEA_SWAP_EVM_PLAN: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   GET_RHEA_SWAP_EVM_SIGNATURE_PLAN: { required: { quoteHandle: isRheaSwapQuoteHandle } },
@@ -586,10 +586,15 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   START_RHEA_SWAP_MONITOR: { required: { transaction: isRecord } },
   DISCARD_RHEA_SWAP: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   PREPARE_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
+  CREATE_EXTERNAL_SHIELD_DEPOSIT: { required: { request: isRecord } },
+  GET_EXTERNAL_SHIELD_DEPOSIT: { required: { depositId: isShortString } },
+  LIST_EXTERNAL_SHIELD_DEPOSITS: { required: { scope: isRecord } },
+  REFRESH_EXTERNAL_SHIELD_DEPOSIT: { required: { depositId: isShortString } },
   CONFIRM_CONFIDENTIAL_FUNDING: {
     required: { planId: isShortString, payloadFingerprint: isEvmPayloadFingerprint }
   },
   GET_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
+  CHECK_CONFIDENTIAL_FUNDING_SUBMISSION: { required: { planId: isShortString } },
   CANCEL_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
   REFRESH_CONFIDENTIAL_BALANCES: { required: { scope: isRecord, authorize: isBoolean } },
   GET_ASSET_MARKET_HISTORY: {
@@ -922,7 +927,6 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_ACTIVITY: ['extension-page'],
     GET_BITCOIN_ACTIVITY: ['extension-page'],
     GET_BITCOIN_WALLET_IDENTITY: ['extension-page'],
-    GET_ZCASH_LENDING_PUBLIC_KEY: ['extension-page'],
     GET_ASSET_PRICES: ['extension-page'],
     GET_RHEA_SWAP_TOKENS: ['extension-page'],
     QUOTE_RHEA_SWAP: ['extension-page'],
@@ -944,8 +948,13 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     START_RHEA_SWAP_MONITOR: ['extension-page'],
     DISCARD_RHEA_SWAP: ['extension-page'],
     PREPARE_CONFIDENTIAL_FUNDING: ['extension-page'],
+    CREATE_EXTERNAL_SHIELD_DEPOSIT: ['extension-page'],
+    GET_EXTERNAL_SHIELD_DEPOSIT: ['extension-page'],
+    LIST_EXTERNAL_SHIELD_DEPOSITS: ['extension-page'],
+    REFRESH_EXTERNAL_SHIELD_DEPOSIT: ['extension-page'],
     CONFIRM_CONFIDENTIAL_FUNDING: ['extension-page'],
     GET_CONFIDENTIAL_FUNDING: ['extension-page'],
+    CHECK_CONFIDENTIAL_FUNDING_SUBMISSION: ['extension-page'],
     CANCEL_CONFIDENTIAL_FUNDING: ['extension-page'],
     REFRESH_CONFIDENTIAL_BALANCES: ['extension-page'],
     GET_ASSET_MARKET_HISTORY: ['extension-page'],

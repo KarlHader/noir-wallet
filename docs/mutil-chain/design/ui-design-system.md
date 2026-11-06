@@ -54,8 +54,6 @@ Pages use a header, a scrollable content region with `min-h-0` where needed, and
 
 Use the contextual profiles in [number-format.ts](../../../packages/extension/src/lib/number-format.ts). Display strings are never arithmetic or transaction inputs. Keep base-unit values and asset decimals authoritative; Max fills the exact spendable value and must not copy a shortened balance label.
 
-Lending protocol balances use each asset's `metadata.decimals + config.extra_decimals`; wallet token balances use base token decimals. Preserve decimal values through valuation and aggregation, and apply the display profile only when rendering.
-
 | Surface                               | Display profile                                                                                                                                                                                                 |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Holdings and Activity quantities      | Preserve and group all integer digits. At or above 1,000, show at most 2 fraction digits; at or above 1, show at most 4. Below 1, keep 4 significant digits with an 8-fraction-digit cap. Truncate toward zero. |

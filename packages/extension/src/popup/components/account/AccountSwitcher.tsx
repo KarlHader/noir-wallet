@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useWalletStore } from '@/store/wallet-store'
@@ -21,6 +21,7 @@ import { useNavigate } from '@/popup/provider/Router'
 import { useDialog } from '@/popup/hooks/useDialog'
 import { CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { ChainIcon } from '../common/ChainIcon'
+import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { cn } from '@/lib/utils'
 
@@ -102,7 +103,12 @@ function AccountAvatar({
       aria-hidden="true"
       width={size}
       height={size}
-      className={cn('shrink-0 rounded-full object-cover', active && 'ring-2 ring-primary')}
+      className={cn(
+        'shrink-0 rounded-full object-cover ring-2 ring-offset-2 ring-offset-wallet-surface motion-safe:transition-[box-shadow,filter] motion-safe:duration-160',
+        active
+          ? 'ring-primary group-hover:ring-4 group-focus-visible:ring-4'
+          : 'ring-transparent group-hover:ring-primary/70 group-focus-visible:ring-primary/70'
+      )}
       title={name}
     />
   )
@@ -129,7 +135,12 @@ function AccountAddressPopover({
   const evmAddress = evmMode === 'private' ? evmAddresses.privateAddress : evmAddresses.mainAddress
 
   return (
-    <div className={cn('z-[70] w-[281px] rounded-md bg-wallet-surface p-3 shadow-2xl', className)}>
+    <div
+      className={cn(
+        '@container z-[70] w-[281px] rounded-md bg-wallet-surface p-3 shadow-2xl',
+        className
+      )}
+    >
       {zcash && zcashAddresses.length > 0 && (
         <div className="flex items-start gap-2.5 pb-2">
           <ChainIcon
@@ -139,12 +150,12 @@ function AccountAddressPopover({
             className="mt-1 size-[26px] shrink-0 rounded-[5px]"
           />
           <div className="min-w-0 flex-1">
-            {zcashAddresses.map((address, index) => (
+            <p className="text-sm leading-[18px]">Zcash</p>
+            {zcashAddresses.map(address => (
               <div
                 key={`${address.scheme}:${address.value}`}
-                className={cn('flex h-8 min-w-0 items-center gap-1', index > 0 && 'pl-[72px]')}
+                className="flex min-h-8 min-w-0 flex-wrap items-center gap-x-1 gap-y-1 py-1"
               >
-                {index === 0 && <span className="shrink-0 text-sm leading-[18px]">Zcash</span>}
                 <span
                   className={cn(
                     'shrink-0 rounded px-1.5 py-0.5 text-[10px]',
@@ -155,21 +166,23 @@ function AccountAddressPopover({
                 >
                   {address.privacy === 'shielded' ? 'Shield' : 'Transparent'}
                 </span>
-                <span
-                  className="min-w-0 flex-1 truncate text-sm leading-[18px] text-muted"
-                  title={address.value}
-                >
-                  {formatSortAddress(address.value)}
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  <span
+                    className="shrink-0 whitespace-nowrap font-mono text-xs leading-[18px] text-muted"
+                    title={address.value}
+                  >
+                    {formatSortAddress(address.value)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Copy Zcash ${address.privacy} address`}
+                    title="Copy address"
+                    onClick={() => onCopy(address.value)}
+                    className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/8 hover:text-foreground active:bg-white/12 focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    <Icon icon="lucide:copy" width={14} height={14} />
+                  </button>
                 </span>
-                <button
-                  type="button"
-                  aria-label={`Copy Zcash ${address.privacy} address`}
-                  title="Copy address"
-                  onClick={() => onCopy(address.value)}
-                  className="flex size-6 shrink-0 items-center justify-center text-muted hover:text-foreground"
-                >
-                  <Icon icon="lucide:copy" width={14} height={14} />
-                </button>
               </div>
             ))}
           </div>
@@ -190,8 +203,10 @@ function AccountAddressPopover({
                   aria-pressed={evmMode === 'public'}
                   onClick={() => setEvmMode('public')}
                   className={cn(
-                    'rounded px-2 text-xs font-medium',
-                    evmMode === 'public' ? 'bg-wallet-selected text-white' : 'text-muted'
+                    'wallet-interactive rounded px-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-primary active:brightness-90',
+                    evmMode === 'public'
+                      ? 'bg-wallet-selected text-white hover:brightness-110'
+                      : 'text-muted hover:bg-white/6 hover:text-foreground'
                   )}
                 >
                   Public
@@ -201,8 +216,10 @@ function AccountAddressPopover({
                   aria-pressed={evmMode === 'private'}
                   onClick={() => setEvmMode('private')}
                   className={cn(
-                    'rounded px-2 text-xs',
-                    evmMode === 'private' ? 'bg-private text-background' : 'text-muted'
+                    'wallet-interactive rounded px-2 text-xs focus-visible:outline-2 focus-visible:outline-primary active:brightness-90',
+                    evmMode === 'private'
+                      ? 'bg-private text-background hover:brightness-110'
+                      : 'text-muted hover:bg-white/6 hover:text-foreground'
                   )}
                 >
                   Private
@@ -210,25 +227,22 @@ function AccountAddressPopover({
               </div>
             )}
           </div>
-          <div className="flex min-h-10 items-center gap-2">
-            <span className="flex w-[33px] shrink-0 flex-wrap gap-0.5">
-              {evm.slice(0, 4).map(network => (
-                <ChainIcon
-                  key={network.chain.id}
-                  chain={accountNetworkIconChain(network)}
-                  width={15}
-                  height={15}
-                  className="rounded-[3px]"
-                />
-              ))}
-            </span>
-            <span className="min-w-0 flex-1 text-sm leading-[18px]">
+          <div className="grid min-h-10 grid-cols-[26px_minmax(0,1fr)_auto_24px] items-center gap-x-2 gap-y-1 @max-[240px]:grid-cols-[26px_minmax(0,1fr)_24px]">
+            <img
+              src={evmGroupIcon}
+              alt=""
+              aria-hidden="true"
+              width={26}
+              height={26}
+              className="size-[26px] shrink-0"
+            />
+            <span className="min-w-0 text-sm leading-[18px] @max-[240px]:col-span-2">
               Ethereum
               <br />
               &amp; EVM
             </span>
             <span
-              className="max-w-[86px] truncate text-sm leading-[18px] text-muted"
+              className="whitespace-nowrap font-mono text-xs leading-[18px] text-muted @max-[240px]:col-start-2 @max-[240px]:row-start-2"
               title={evmAddress}
             >
               {evmAddress ? formatSortAddress(evmAddress) : '—'}
@@ -239,7 +253,7 @@ function AccountAddressPopover({
                 aria-label={`Copy EVM ${evmMode === 'private' ? 'Private' : 'Public'} address`}
                 title="Copy address"
                 onClick={() => onCopy(evmAddress)}
-                className="flex size-6 shrink-0 items-center justify-center text-muted hover:text-foreground"
+                className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/8 hover:text-foreground active:bg-white/12 focus-visible:outline-2 focus-visible:outline-primary @max-[240px]:col-start-3 @max-[240px]:row-start-2"
               >
                 <Icon icon="lucide:copy" width={14} height={14} />
               </button>
@@ -253,7 +267,7 @@ function AccountAddressPopover({
       <button
         type="button"
         onClick={onViewAll}
-        className="mt-2 flex h-8 w-full items-center justify-center gap-1 border-t border-white/10 pt-1 text-xs text-wallet-secondary hover:text-white"
+        className="wallet-interactive mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-sm border-t border-white/10 pt-1 text-xs text-wallet-secondary hover:bg-white/6 hover:text-white active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary"
       >
         View all <Icon icon="lucide:chevron-right" width={13} height={13} />
       </button>
@@ -278,10 +292,57 @@ export function AccountSwitcher({
   const [switching, setSwitching] = useState<string | null>(null)
   const [preview, setPreview] = useState<SwitcherAccount | null>(null)
   const [previewTop, setPreviewTop] = useState(72)
+  const previewElement = useRef<HTMLDivElement>(null)
+  const previewAnchor = useRef<HTMLButtonElement | null>(null)
+  const accountList = useRef<HTMLDivElement>(null)
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const cancelPreviewTimer = useCallback(() => {
+    if (previewTimer.current !== null) {
+      clearTimeout(previewTimer.current)
+      previewTimer.current = null
+    }
+  }, [])
+
+  const positionPreview = useCallback(() => {
+    const anchor = previewAnchor.current
+    if (!anchor) return
+    const bounds = anchor.getBoundingClientRect()
+    const listBounds = accountList.current?.getBoundingClientRect()
+    if (
+      !anchor.isConnected ||
+      (listBounds && (bounds.bottom <= listBounds.top || bounds.top >= listBounds.bottom))
+    ) {
+      previewAnchor.current = null
+      setPreview(null)
+      return
+    }
+    const height = previewElement.current?.offsetHeight ?? 0
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+    const maximumTop = Math.max(12, viewportHeight - height - 12)
+    setPreviewTop(Math.max(12, Math.min(bounds.top, maximumTop)))
+  }, [])
+
+  const showPreview = (account: SwitcherAccount, anchor: HTMLButtonElement, immediate = false) => {
+    cancelPreviewTimer()
+    const show = () => {
+      previewTimer.current = null
+      previewAnchor.current = anchor
+      setPreview(account)
+      positionPreview()
+    }
+    if (immediate) show()
+    else previewTimer.current = setTimeout(show, 80)
+  }
 
   useEffect(() => {
-    if (!drawerOpen) setPreview(null)
-  }, [drawerOpen])
+    if (!drawerOpen) {
+      cancelPreviewTimer()
+      previewAnchor.current = null
+      setPreview(null)
+    }
+    return cancelPreviewTimer
+  }, [drawerOpen, cancelPreviewTimer])
 
   useEffect(() => {
     if (!drawerOpen && !addressesOpen) return
@@ -309,6 +370,26 @@ export function AccountSwitcher({
     [wallets, catalogAccounts, accountDisplayNames, currentWalletId, currentAccountId]
   )
   const accounts = groups.flatMap(group => group.accounts)
+  const previewAccount = preview
+    ? accounts.find(
+        account => account.walletId === preview.walletId && account.accountId === preview.accountId
+      )
+    : undefined
+
+  useLayoutEffect(() => {
+    const element = previewElement.current
+    if (!previewAccount || !element) return
+    positionPreview()
+    const observer = new ResizeObserver(positionPreview)
+    observer.observe(element)
+    window.addEventListener('resize', positionPreview)
+    window.visualViewport?.addEventListener('resize', positionPreview)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', positionPreview)
+      window.visualViewport?.removeEventListener('resize', positionPreview)
+    }
+  }, [previewAccount, positionPreview])
   const active = accounts.find(account => account.active)
   const retainedActive = wallets
     .find(wallet => wallet.id === currentWalletId)
@@ -400,28 +481,35 @@ export function AccountSwitcher({
             type="button"
             aria-label="Choose wallet"
             title="Choose wallet"
-            className="flex size-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="group wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-full hover:brightness-110 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <AccountAvatar name={activeName} index={activeIndex} />
           </button>
         </DialogPrimitive.Trigger>
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/60" />
+          <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-180 motion-reduce:animate-none" />
           <DialogPrimitive.Content
             aria-describedby={undefined}
-            className="fixed left-0 top-0 z-[61] flex h-[100dvh] max-h-[600px] w-24 flex-col bg-wallet-surface outline-none"
+            className="fixed inset-y-0 left-0 z-[61] flex w-24 flex-col bg-wallet-surface outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-180 motion-reduce:animate-none"
           >
             <DialogPrimitive.Title className="sr-only">Accounts</DialogPrimitive.Title>
             <DialogPrimitive.Close asChild>
               <button
                 type="button"
                 aria-label="Close account drawer"
-                className="flex h-14 shrink-0 items-center justify-center text-foreground"
+                className="wallet-interactive flex h-14 shrink-0 items-center justify-center text-foreground hover:bg-white/6 active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               >
                 <SidebarIcon kind="back" />
               </button>
             </DialogPrimitive.Close>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div
+              ref={accountList}
+              className="min-h-0 flex-1 overflow-y-auto"
+              onScroll={() => {
+                cancelPreviewTimer()
+                positionPreview()
+              }}
+            >
               {groups.map((group, groupIndex) => (
                 <div key={group.walletId} className="border-b border-white/10 py-2">
                   <p
@@ -435,28 +523,16 @@ export function AccountSwitcher({
                       key={`${account.walletId}:${account.accountId}`}
                       type="button"
                       aria-label={`Switch to ${account.name}`}
+                      aria-current={account.active ? 'true' : undefined}
                       disabled={Boolean(switching)}
                       onPointerEnter={event => {
-                        setPreview(account)
-                        setPreviewTop(
-                          Math.min(
-                            event.currentTarget.getBoundingClientRect().top,
-                            Math.max(65, window.innerHeight - 410)
-                          )
-                        )
+                        if (event.pointerType !== 'touch') showPreview(account, event.currentTarget)
                       }}
-                      onFocus={event => {
-                        setPreview(account)
-                        setPreviewTop(
-                          Math.min(
-                            event.currentTarget.getBoundingClientRect().top,
-                            Math.max(65, window.innerHeight - 410)
-                          )
-                        )
-                      }}
+                      onPointerLeave={cancelPreviewTimer}
+                      onFocus={event => showPreview(account, event.currentTarget, true)}
                       onClick={() => void select(account)}
                       className={cn(
-                        'flex w-full flex-col items-center gap-1 px-1 py-2 text-center disabled:opacity-50',
+                        'group wallet-interactive flex w-full flex-col items-center gap-1 rounded-lg px-1 py-2 text-center hover:bg-white/6 active:bg-white/10 focus-visible:bg-white/6 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:pointer-events-none disabled:opacity-50',
                         account.active && 'text-primary'
                       )}
                     >
@@ -483,7 +559,7 @@ export function AccountSwitcher({
                   setDrawerOpen(false)
                   navigate('/account-list')
                 }}
-                className="flex size-10 items-center justify-center rounded-md text-wallet-secondary hover:bg-white/10 hover:text-white"
+                className="wallet-interactive flex size-10 items-center justify-center rounded-md text-wallet-secondary hover:bg-white/10 hover:text-white active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary"
               >
                 <SidebarIcon kind="accounts" />
               </button>
@@ -495,18 +571,27 @@ export function AccountSwitcher({
                   setDrawerOpen(false)
                   navigate('/settings')
                 }}
-                className="flex size-10 items-center justify-center rounded-md text-wallet-secondary hover:bg-white/10 hover:text-white"
+                className="wallet-interactive flex size-10 items-center justify-center rounded-md text-wallet-secondary hover:bg-white/10 hover:text-white active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary"
               >
                 <SidebarIcon kind="settings" />
               </button>
             </div>
-            {preview && preview.networks.length > 0 && (
-              <div className="fixed left-[84px] z-[62]" style={{ top: previewTop }}>
-                <AccountAddressPopover
-                  account={preview}
-                  onCopy={value => void copyToClipboard(value)}
-                  onViewAll={() => viewAddresses(preview)}
-                />
+            {previewAccount && previewAccount.networks.length > 0 && (
+              <div
+                ref={previewElement}
+                role="group"
+                aria-label={`${previewAccount.name} address preview`}
+                className="fixed left-[84px] top-0 z-[62] motion-safe:transition-transform motion-safe:duration-180 motion-safe:ease-out"
+                style={{ transform: `translateY(${previewTop}px)` }}
+              >
+                <div className="animate-in fade-in-0 slide-in-from-left-1 duration-140 motion-reduce:animate-none">
+                  <AccountAddressPopover
+                    account={previewAccount}
+                    className="max-w-[calc(100vw-96px)]"
+                    onCopy={value => void copyToClipboard(value)}
+                    onViewAll={() => viewAddresses(previewAccount)}
+                  />
+                </div>
               </div>
             )}
           </DialogPrimitive.Content>
@@ -524,7 +609,7 @@ export function AccountSwitcher({
             type="button"
             aria-label="Show account addresses"
             title="Show account addresses"
-            className="flex min-w-0 max-w-[150px] items-center gap-1 text-sm font-semibold leading-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <span className="min-w-0 truncate">{activeName}</span>
             <Icon

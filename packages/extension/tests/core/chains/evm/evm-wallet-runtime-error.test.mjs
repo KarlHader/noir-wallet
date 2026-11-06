@@ -60,6 +60,14 @@ test.describe('EVM wallet runtime error mapping', () => {
     })
     expect(
       mapEvmWalletRuntimeError(
+        new EvmTransactionError('stale-nonce', 'An earlier EVM review expired. Review again')
+      )
+    ).toEqual({
+      code: 'expired',
+      message: 'The EVM signing request expired'
+    })
+    expect(
+      mapEvmWalletRuntimeError(
         new Error('Wallet locked and no attested credential session is available')
       )
     ).toEqual({

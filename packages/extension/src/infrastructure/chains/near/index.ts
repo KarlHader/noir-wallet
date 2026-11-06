@@ -59,9 +59,7 @@ export {
 } from './near-transfer-preparer'
 export {
   parsePreparedNearLendingSupply,
-  prepareNearLendingSupply,
-  type PreparedNearLendingSupply,
-  type PrepareNearLendingSupplyInput
+  type PreparedNearLendingSupply
 } from './near-lending-supply-preparer'
 export {
   createNearTransferGraph,

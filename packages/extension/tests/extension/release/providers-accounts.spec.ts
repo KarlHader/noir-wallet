@@ -549,7 +549,9 @@ test('wallet-side Connect restores an existing EVM site for the active account',
   await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
     position: { x: 4, y: 4 }
   })
-  await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Show account addresses' })).toContainText(
+    'Account 1'
+  )
   await popup.evaluate(
     ({ site, account }) =>
       chrome.storage.local.set({
@@ -598,7 +600,9 @@ test('wallet-side Connect restores an existing EVM site for the active account',
   await popup.getByRole('button', { name: 'Switch to Account 2' }).click({
     position: { x: 4, y: 4 }
   })
-  await expect(popup.getByText('Account 2', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Show account addresses' })).toContainText(
+    'Account 2'
+  )
   await expect.poll(readAccounts).toEqual([previousAddress])
   await expect(popup.getByTestId('dapp-connect-prompt')).toBeVisible()
   await popup.getByTestId('dapp-connect-prompt').getByRole('button', { name: 'Connect' }).click()
@@ -1156,10 +1160,6 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
   await expect(privateMode).toBeInViewport({ ratio: 1 })
   await captureScreenshot(popup, 'release-default-dapp-mode-empty.png')
   await privateMode.click()
-  const privateSetupDialog = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
-  if (await privateSetupDialog.isVisible()) {
-    await privateSetupDialog.getByRole('button', { name: 'Turn on' }).click()
-  }
   await expect(privateMode).toBeChecked()
   await captureScreenshot(popup, 'release-default-dapp-mode-private.png')
 
@@ -1185,20 +1185,15 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
 
   await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
-  const privateSendSource = popup.getByRole('button', {
-    name: 'Choose source account, current private'
-  })
-  await expect(privateSendSource).toBeVisible()
-  await captureScreenshot(popup, 'release-default-send-global-private.png')
-  await privateSendSource.click()
+  await expect(popup.getByRole('heading', { name: 'Move' })).toBeVisible()
+  const privateMoveSource = popup.getByRole('button', { name: 'From: Private. Change account' })
+  await expect(privateMoveSource).toBeVisible()
+  await captureScreenshot(popup, 'release-default-move-global-private.png')
+  await privateMoveSource.click()
   await expect(
-    popup
-      .getByRole('dialog', { name: 'Choose source account' })
-      .getByRole('radio', { name: /Private account/ })
-  ).toBeChecked()
+    popup.getByRole('dialog').getByRole('button', { name: 'Select Private account' })
+  ).toHaveAttribute('aria-pressed', 'true')
   await popup.getByRole('button', { name: 'Close' }).click()
-  await popup.getByRole('button', { name: 'Back' }).click()
-  await expect(popup.getByLabel('Search your assets')).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'ETH', exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Swap', exact: true }).click()
@@ -1206,18 +1201,31 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
     timeout: 30_000
   })
   await popup.getByRole('button', { name: 'From asset' }).click()
-  const sourceSelector = popup.getByRole('dialog')
+  const sourceSelector = popup.getByRole('dialog', { name: 'Select Token' })
   await sourceSelector
-    .getByRole('button', { name: 'Filter assets by network: All Networks' })
+    .getByRole('group', { name: 'Filter assets by network' })
+    .getByRole('button', { name: 'Ethereum' })
     .click()
-  await popup.getByRole('menuitemradio', { name: 'Ethereum', exact: true }).click()
   await sourceSelector.getByPlaceholder('Search tokens').fill('ETH')
   await sourceSelector
     .getByRole('button', { name: /^ETH on Ethereum/ })
     .first()
     .click()
+  const privateEvmAddress = await popup.evaluate(async () => {
+    const catalog = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
+    const active = catalog.result.accounts.find((account: { active: boolean }) => account.active)
+    return active?.networks.find((network: { chainId: string }) => network.chainId === 'eip155:1')
+      ?.privateExecutionAddress as string | undefined
+  })
+  expect(privateEvmAddress).toMatch(/^0x[0-9a-f]{40}$/i)
+  const swapSource = popup
+    .locator('section')
+    .filter({ has: popup.getByRole('button', { name: 'From asset' }) })
+    .first()
+  await expect(swapSource).toContainText('Private')
+  await expect(swapSource.locator(`span[title="${privateEvmAddress}"]`)).toBeVisible()
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current private' })
-  ).toBeVisible({ timeout: 30_000 })
+  ).toHaveCount(0)
   await captureScreenshot(popup, 'release-default-swap-global-private.png')
 })

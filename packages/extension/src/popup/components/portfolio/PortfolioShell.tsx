@@ -329,24 +329,24 @@ export function PortfolioShell({
               aria-label="Portfolio view"
               className="flex h-8 items-center rounded-xl bg-[var(--color-wallet-surface)] p-1"
             >
-              <Tooltip content="Group the portfolio by asset." side="bottom">
+              <Tooltip content="View by token" side="bottom">
                 <button
                   type="button"
                   aria-label="Show token view"
                   aria-pressed={view === 'assets'}
                   onClick={() => setView('assets')}
-                  className="flex size-6 items-center justify-center rounded-lg aria-pressed:bg-[var(--color-wallet-selected)]"
+                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
                 >
                   <PortfolioViewIcon view="assets" active={view === 'assets'} />
                 </button>
               </Tooltip>
-              <Tooltip content="Group the portfolio by network." side="bottom">
+              <Tooltip content="View by network" side="bottom">
                 <button
                   type="button"
                   aria-label="Show chain view"
                   aria-pressed={view === 'chains'}
                   onClick={() => setView('chains')}
-                  className="flex size-6 items-center justify-center rounded-lg aria-pressed:bg-[var(--color-wallet-selected)]"
+                  className="wallet-interactive flex size-6 items-center justify-center rounded-lg hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 aria-pressed:bg-[var(--color-wallet-selected)]"
                 >
                   <PortfolioViewIcon view="chains" active={view === 'chains'} />
                 </button>
@@ -358,7 +358,7 @@ export function PortfolioShell({
                   <button
                     type="button"
                     aria-label="Portfolio options"
-                    className="flex size-8 items-center justify-center text-[var(--color-wallet-secondary)]"
+                    className="wallet-interactive flex size-8 items-center justify-center rounded-lg text-[var(--color-wallet-secondary)] hover:bg-white/5 hover:text-foreground active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     <Icon icon="lucide:ellipsis" width={21} height={21} />
                   </button>
@@ -413,7 +413,7 @@ export function PortfolioShell({
                   aria-expanded={lowValueExpanded}
                   aria-label={`${lowValueExpanded ? 'Collapse' : 'Expand'} low value assets`}
                   onClick={() => setLowValueExpanded(current => !current)}
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
+                  className="wallet-interactive flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 >
                   <Icon icon="lucide:archive" width={16} height={16} className="text-muted" />
                   <span className="min-w-0 flex-1 text-sm font-medium">Low value</span>
@@ -437,7 +437,7 @@ export function PortfolioShell({
             )}
           </div>
         ) : (
-          <div className="space-y-2 px-4 pb-2">
+          <div className="divide-y divide-white/[0.08] pb-2">
             {sortedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
               const chainFiat = getPortfolioChainUsdValue(chain, prices)
@@ -451,7 +451,7 @@ export function PortfolioShell({
               return (
                 <section
                   key={chain.chain.id}
-                  className="overflow-hidden rounded-xl bg-card/60"
+                  className="overflow-hidden"
                   aria-label={`${chain.chain.displayName} portfolio`}
                 >
                   <button
@@ -466,16 +466,16 @@ export function PortfolioShell({
                         return next
                       })
                     }
-                    className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
+                    className="wallet-interactive flex min-h-[66px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                   >
                     <ChainIcon
                       chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
-                      width={18}
-                      height={18}
-                      className="shrink-0 rounded-[5px]"
+                      width={32}
+                      height={32}
+                      className="shrink-0 rounded-[6px]"
                       showTooltip={false}
                     />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    <span className="min-w-0 flex-1 truncate text-base font-medium">
                       {chain.chain.displayName}
                     </span>
                     {!balancesHidden &&
@@ -485,7 +485,7 @@ export function PortfolioShell({
                     ) : !balancesHidden && chainFiat === null && pricesLoading ? (
                       <Skeleton className="h-3 w-14" />
                     ) : (
-                      <span className="text-xs text-muted">
+                      <span className="text-base font-medium">
                         {balancesHidden
                           ? '••••'
                           : chainFiat === null
@@ -535,7 +535,7 @@ export function PortfolioShell({
                                 return next
                               })
                             }
-                            className="flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-white/[0.03]"
+                            className="wallet-interactive flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                           >
                             <Icon icon="lucide:archive" width={14} height={14} />
                             <span className="flex-1">Low value ({lowValueAssets.length})</span>

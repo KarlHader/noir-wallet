@@ -59,8 +59,8 @@ test('estimates confidential native gas using the actual smaller route and disca
   }
   const dependencies = {
     rhea: {
-      quote: async request => {
-        calls.push(['quote', request])
+      quote: async (request, purpose) => {
+        calls.push(['quote', request, purpose])
         return { quoteHandle: 'probe' }
       },
       prepare: async () => ({
@@ -85,6 +85,7 @@ test('estimates confidential native gas using the actual smaller route and disca
     tokenOut: token,
     recipient: '0x2222222222222222222222222222222222222222',
     confidential: true,
+    purpose: 'private-swap',
     executionMode: 'private',
     feeTier: 'fast'
   }
@@ -98,7 +99,8 @@ test('estimates confidential native gas using the actual smaller route and disca
       confidentiality: 'basic',
       sender: source.refundAddress,
       recipient: input.recipient
-    }
+    },
+    'private-swap'
   ])
   expect(calls[1]).toMatchObject([
     'estimate',

@@ -16,6 +16,7 @@ import {
   parseBitcoinAccount,
   parseMultiAccounts
 } from '../../../src/lib/keystone/account-ur.ts'
+import { projectKeystoneBitcoinAccounts } from '../../../src/lib/keystone/public-account-projection.ts'
 
 const OFFICIAL_MULTI_ACCOUNT_CBOR =
   'a5011ae9181cf30281d9012fa203582102eae4b876a8696134b868f88cc2f51f715f2dbedb7446b8e6edf3d4541c4eb67b06d90130a10188182cf51901f5f500f500f503686b657973746f6e65047828323834373563386438306636633036626166626534366137643137353066336663663235363566370565312e302e32'
@@ -69,12 +70,15 @@ test.describe('Keystone public account QR parsing', () => {
   })
 
   test('parses a BIP-84 crypto-account descriptor and public origin metadata', () => {
-    const result = parseBitcoinAccount(createBitcoinAccountUr())
+    const ur = createBitcoinAccountUr()
+    const result = parseBitcoinAccount(ur)
+    const vendorDescriptor = CryptoAccount.fromCBOR(Buffer.from(ur.cbor))
+      .getOutputDescriptors()[0].toString()
 
     expect(result.masterFingerprintHex).toBe('37b5eed4')
     expect(result.descriptors).toHaveLength(1)
     expect(result.descriptors[0].scriptExpressions).toEqual(['wpkh'])
-    expect(result.descriptors[0].descriptor).toContain('wpkh(')
+    expect(result.descriptors[0].descriptor).toBe(vendorDescriptor)
     expect(result.descriptors[0].key).toMatchObject({
       publicKeyHex: '03fd433450b6924b4f7efdd5d1ed017d364be95ab2b592dc8bddb3b00c1c24f63f',
       chainCodeHex: '72ede7334d5acf91c6fda622c205199c595a31f9218ed30792d301d5ee9e3a88',
@@ -82,6 +86,9 @@ test.describe('Keystone public account QR parsing', () => {
       sourceFingerprintHex: '37b5eed4',
       parentFingerprintHex: '0d5de1d7'
     })
+    expect(projectKeystoneBitcoinAccounts(result, 'mainnet')[0].identity).toBe(
+      'bc1qz7qjtsx3lq5hvf8xn0ac62uy4cs7j9vvtyva0c'
+    )
   })
 
   test('rejects private keys in a Multi-Coin account export', () => {

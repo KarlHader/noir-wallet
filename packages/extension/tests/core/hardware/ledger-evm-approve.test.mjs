@@ -276,6 +276,48 @@ it('binds a Swap continuation to the approved Ledger calldata and active account
     const saved = await saveSwapApprovalContinuation(input, router, async () => active)
     assert.equal(saved.transactionId, transactionId)
     assert.equal(values.size, 1)
+    const confidentialSend = {
+      ...input,
+      sourceAssetId: `${chainId}/erc20:${token}`,
+      destinationAssetId: `${chainId}/erc20:${token}`,
+      recipientAddress: '0x2222222222222222222222222222222222222222',
+      customRecipient: true,
+      purpose: 'public-private-send'
+    }
+    const savedConfidential = await saveSwapApprovalContinuation(
+      confidentialSend,
+      router,
+      async () => active
+    )
+    assert.equal(savedConfidential.purpose, 'public-private-send')
+    await assert.rejects(
+      saveSwapApprovalContinuation(
+        { ...confidentialSend, sourceMode: 'private' },
+        router,
+        async () => active
+      ),
+      /Invalid Swap continuation/
+    )
+    await assert.rejects(
+      saveSwapApprovalContinuation(
+        { ...confidentialSend, destinationAssetId: input.destinationAssetId },
+        router,
+        async () => active
+      ),
+      /Invalid Swap continuation/
+    )
+    await assert.rejects(
+      saveSwapApprovalContinuation(
+        {
+          ...confidentialSend,
+          sourceAssetId: `${chainId}/erc20:${spender}`,
+          destinationAssetId: `${chainId}/erc20:${spender}`
+        },
+        router,
+        async () => active
+      ),
+      /Invalid Swap continuation/
+    )
   } finally {
     globalThis.chrome = originalChrome
   }

@@ -100,6 +100,7 @@ export function transactionGraphMatchesScope(
 }
 
 export function assertPersistableTransactionGraph(graph: TransactionGraph): void {
+  if (isExternalShieldDepositAwaitingPayment(graph)) return
   if (UNPERSISTABLE_TRANSACTION_STATUSES.has(graph.root.status)) {
     throw new Error('Transaction repository requires a signed transaction graph')
   }
@@ -132,6 +133,62 @@ export function assertPersistableTransactionGraph(graph: TransactionGraph): void
   if (!hasSignedOrigin) {
     throw new Error('Transaction repository requires signed origin transaction evidence')
   }
+}
+
+function isExternalShieldDepositAwaitingPayment(graph: TransactionGraph): boolean {
+  const intent = graph.root.intent
+  const [origin, relay, destination] = graph.segments
+  const match = /^tx:confidential-external:(.+)$/.exec(graph.root.id)
+  if (
+    !match ||
+    graph.root.status !== 'created' ||
+    graph.root.kind !== 'shield' ||
+    intent?.direction !== 'incoming' ||
+    intent.shield?.operation !== 'deposit' ||
+    intent.shield.sourceDomain !== 'public' ||
+    intent.shield.destinationDomain !== 'shield' ||
+    !intent.primaryAmount ||
+    intent.primaryAmount.amountRaw === '0' ||
+    intent.counterAmount?.assetId !== intent.primaryAmount.assetId ||
+    !intent.recipient ||
+    graph.segments.length !== 3 ||
+    graph.root.segmentIds.length !== 3 ||
+    !origin ||
+    !relay ||
+    !destination
+  )
+    return false
+  const suffix = match[1]
+  return (
+    origin.id === `segment:confidential-external:${suffix}:origin` &&
+    relay.id === `segment:confidential-external:${suffix}:relay` &&
+    destination.id === `segment:confidential-external:${suffix}:destination` &&
+    graph.root.segmentIds[0] === origin.id &&
+    graph.root.segmentIds[1] === relay.id &&
+    graph.root.segmentIds[2] === destination.id &&
+    origin.role === 'origin' &&
+    origin.status === 'created' &&
+    origin.target.kind === 'onchain' &&
+    origin.target.chainId === intent.recipient.chainId &&
+    intent.primaryAmount.assetId.startsWith(`${origin.target.chainId}/`) &&
+    origin.evidence?.externalReference === intent.recipient.address &&
+    origin.evidence.transactionHash === undefined &&
+    origin.dependsOn.length === 0 &&
+    relay.role === 'relay' &&
+    relay.status === 'created' &&
+    relay.target.kind === 'protocol' &&
+    relay.target.provider === 'Confidential Intents' &&
+    /^quote:.+$/.test(relay.evidence?.externalReference ?? '') &&
+    relay.dependsOn.length === 1 &&
+    relay.dependsOn[0] === origin.id &&
+    destination.role === 'destination' &&
+    destination.status === 'created' &&
+    destination.target.kind === 'protocol' &&
+    destination.target.provider === 'Confidential Intents' &&
+    destination.target.account === relay.target.account &&
+    destination.dependsOn.length === 1 &&
+    destination.dependsOn[0] === relay.id
+  )
 }
 
 export function transactionGraphFingerprint(graph: TransactionGraph): string {

@@ -40,19 +40,20 @@ export class WalletDAppConnectionCoordinator {
   getCurrentTabDAppStatus() {
     return this.options.runActiveOperation(async () => {
       const dapp = await this.options.getCurrentTabDApp()
-      if (!dapp) return { dapp: null, currentAccountAuthorized: false }
+      if (!dapp)
+        return { dapp: null, currentAccountAuthorized: false, canConnectCurrentAccount: false }
       const active = await this.options.loadActiveAccount()
-      if (!active) return { dapp, currentAccountAuthorized: false }
+      if (!active) return { dapp, currentAccountAuthorized: false, canConnectCurrentAccount: false }
       const targets = this.targets(dapp, active)
+      const canConnectCurrentAccount = !dapp.caip25Session && Boolean(targets.evm || targets.zcash)
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
         account.accountId === active.reference.accountId
-      const currentAccountAuthorized =
-        !dapp.caip25Session && (targets.evm || targets.zcash)
-          ? (!targets.evm || targets.evm.accounts.some(matches)) &&
-            (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference))
-          : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
-      return { dapp, currentAccountAuthorized }
+      const currentAccountAuthorized = canConnectCurrentAccount
+        ? (!targets.evm || targets.evm.accounts.some(matches)) &&
+          (!targets.zcash || connectionAuthorizesAccount(dapp, active.reference))
+        : connectionAuthorizesAccountForWalletStatus(dapp, active.reference)
+      return { dapp, currentAccountAuthorized, canConnectCurrentAccount }
     })
   }
 

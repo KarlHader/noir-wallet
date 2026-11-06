@@ -13,8 +13,7 @@ import {
   type TransactionGraph,
   type TransactionId
 } from '@/core/transactions/domain'
-import type { NearLendingSupplyBinding } from '@/core/services/lending-near-supply'
-import { parseNearLendingSupplyBinding } from '@/core/services/lending-near-supply'
+import { parseNearLendingSupplyBinding } from '@/core/chains/near/near-burrow-supply-binding'
 
 import {
   parseNearTransferActivityResponse,
@@ -67,7 +66,6 @@ export interface NearWalletClient {
     intent: NearTransferIntent,
     options?: Readonly<{
       nearIntentsBinding?: NearIntentsTransactionBinding
-      nearLendingSupplyBinding?: NearLendingSupplyBinding
     }>
   ) => Promise<NearTransferReview>
   readonly getPendingTransfer: (transactionId: TransactionId) => Promise<NearTransferReview | null>
@@ -374,7 +372,6 @@ export function createNearWalletClient(sendMessage: NearRuntimeMessenger): NearW
       intentValue: NearTransferIntent,
       options?: Readonly<{
         nearIntentsBinding?: NearIntentsTransactionBinding
-        nearLendingSupplyBinding?: NearLendingSupplyBinding
       }>
     ) => {
       const intent = parseClientInput(() => parseIntent(intentValue))
@@ -384,10 +381,7 @@ export function createNearWalletClient(sendMessage: NearRuntimeMessenger): NearW
           intent,
           ...(options?.nearIntentsBinding === undefined
             ? {}
-            : { nearIntentsBinding: options.nearIntentsBinding }),
-          ...(options?.nearLendingSupplyBinding === undefined
-            ? {}
-            : { nearLendingSupplyBinding: options.nearLendingSupplyBinding })
+            : { nearIntentsBinding: options.nearIntentsBinding })
         },
         value => parseReview(value, undefined, intent)
       )

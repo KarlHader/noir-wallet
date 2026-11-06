@@ -57,10 +57,12 @@ import { zcashTxMonitor } from './zcash-tx-monitor'
 import { credentialSession } from './credential-session'
 import { OffscreenCompatibilityWorkerPort } from './offscreen-compatibility-worker'
 import { accountContextTransition } from './account-context-transition'
+import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 import {
   clearAllSwapApprovalContinuations,
   clearSwapApprovalContinuationsForAccount
 } from './swap-approval-continuation'
+import { ChromeEvmDAppPrivateTransferStore } from './evm-dapp-private-transfer'
 import { WalletMetadataCoordinator } from '@/infrastructure/keyring/wallet-metadata-coordinator'
 import { pendingRequestsManager } from './pending-requests'
 import {
@@ -77,10 +79,6 @@ import {
   USER_ASSET_MARKET_CACHE_STORAGE_KEY,
   USER_ASSET_ONE_CLICK_PRICE_CACHE_STORAGE_KEY
 } from '@/infrastructure/prices'
-import {
-  deleteLendingMarketCache,
-  LENDING_MARKET_CACHE_STORAGE_KEY
-} from '@/infrastructure/lending/chrome-lending-market-cache'
 import { SWAP_TOKEN_CATALOG_CACHE_STORAGE_KEY } from '@/infrastructure/persistence/swap-token-catalog-storage'
 import { ActivityHistoryCache } from './activity-history-cache'
 import { dappExecutionModeCoordinator } from './dapp-execution-mode'
@@ -92,6 +90,8 @@ type ActiveAccount = {
   walletId: string | null
   accountId: string | null
 }
+
+const LEGACY_LENDING_MARKET_CACHE_STORAGE_KEY = 'lending_market_cache_v1'
 
 async function blockWalletWrites(walletId: string): Promise<void> {
   await blockWalletRecords('mainnet', walletId)
@@ -760,6 +760,7 @@ export class WalletCleanupCoordinator {
           this.activityHistoryCache.clear(),
           dappExecutionModeCoordinator.clear(),
           clearAllSwapApprovalContinuations(),
+          new ChromeEvmDAppPrivateTransferStore().clearAll(),
           chrome.storage.local.remove([
             getUserEvmAssetCatalogStorageKey('mainnet'),
             getUserEvmAssetCatalogStorageKey('testnet'),
@@ -774,7 +775,7 @@ export class WalletCleanupCoordinator {
             USER_ASSET_ONE_CLICK_PRICE_CACHE_STORAGE_KEY,
             DEFI_LLAMA_MARKET_CACHE_STORAGE_KEY,
             'coin_gecko_market_change_cache_v1',
-            LENDING_MARKET_CACHE_STORAGE_KEY,
+            LEGACY_LENDING_MARKET_CACHE_STORAGE_KEY,
             SWAP_TOKEN_CATALOG_CACHE_STORAGE_KEY
           ])
         ])
@@ -792,6 +793,7 @@ export class WalletCleanupCoordinator {
       keyDomainId: parseKeyDomainId(walletId),
       accountId: parseAccountId(accountId)
     }
+    const confidentialFundingStore = new ChromeConfidentialFundingStore()
     await Promise.all([
       this.bitcoinDiscovery.deleteByAccountScope(scope),
       this.bitcoinChangeReservations.deleteByAccountScope(scope),
@@ -799,10 +801,14 @@ export class WalletCleanupCoordinator {
       deleteHistoryCacheByAccountScope(scope),
       this.transactionRepository.deleteByAccountScope(scope),
       this.portfolioCache.deleteByAccountScope(scope),
-      deleteLendingMarketCache(walletId, accountId),
+      confidentialFundingStore.deleteExternalDepositsByAccountScope(walletId, accountId),
+      confidentialFundingStore.deleteBalancesByAccountScope(walletId, accountId),
+      confidentialFundingStore.deleteSessionsByAccountScope(walletId, accountId),
+      chrome.storage.local.remove(LEGACY_LENDING_MARKET_CACHE_STORAGE_KEY),
       this.activityHistoryCache.deleteByScope(scope),
       dappExecutionModeCoordinator.removeAccount(walletId, accountId),
-      clearSwapApprovalContinuationsForAccount(walletId, accountId)
+      clearSwapApprovalContinuationsForAccount(walletId, accountId),
+      new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId)
     ])
   }
 

@@ -35,7 +35,11 @@ export interface ConfidentialQuote {
     amountOut: string
     minAmountOut: string
     depositAddress: string
+    depositMemo?: string
     deadline: string
+    withdrawFee?: string
+    refundFee?: string
+    timeEstimate?: number
   }>
 }
 
@@ -120,7 +124,7 @@ export function normalizeConfidentialWithdrawRequest(
 
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly planId: string
@@ -146,11 +150,14 @@ export interface ConfidentialFundingPlan {
     address: string
   }>
   readonly signerId: string
+  readonly externalRecipient?: string
   readonly addressIndex: number
   readonly slippageBps: number
   readonly requiresDeposit: boolean
   readonly confidentialBaselineRaw: string
   readonly depositQuote?: ConfidentialQuote
+  readonly swapQuote?: ConfidentialQuote
+  readonly reviewedAppFeesFingerprint?: string
   readonly preparedDeposit?: Readonly<{
     commandId: string
     payloadFingerprint: string
@@ -176,9 +183,29 @@ export interface ConfidentialFundingPlan {
   readonly updatedAt: number
 }
 
+export function needsConfidentialSubmissionCheck(
+  plan: Pick<ConfidentialFundingPlan, 'operation' | 'phase' | 'errorStatus'>
+): boolean {
+  return (
+    plan.operation === 'withdraw' &&
+    plan.phase === 'submitting' &&
+    /^SERVICE_4\d\d$/.test(plan.errorStatus ?? '')
+  )
+}
+
+export function canRetryConfidentialSubmission(
+  plan: Pick<ConfidentialFundingPlan, 'operation' | 'phase' | 'errorStatus' | 'withdraws'>,
+  now = Date.now()
+): boolean {
+  return (
+    needsConfidentialSubmissionCheck(plan) &&
+    plan.withdraws.some(row => row.status.trim().toUpperCase() === 'SIGNED' && row.deadline > now)
+  )
+}
+
 export interface ConfidentialFundingReview {
   readonly planId: string
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly network?: Network
@@ -195,7 +222,13 @@ export interface ConfidentialFundingReview {
   readonly minimumOutputRaw: string
   readonly sourceAddress: string
   readonly destinationAddress: string
+  readonly externalRecipient?: string
   readonly withdrawCount: number
+  readonly quoteWithdrawFeeRaw?: string
+  readonly quoteRefundFeeRaw?: string
+  readonly quoteTimeEstimateSeconds?: number
+  readonly quoteAppFeeBps?: number
+  readonly slippageBps?: number
   readonly sourceNetworkFee?: Readonly<{
     raw: string
     symbol: string

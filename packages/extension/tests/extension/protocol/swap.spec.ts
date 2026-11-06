@@ -30,10 +30,8 @@ import { getZcashChainId } from '../../../src/core/chains/registry'
 
 registerProtocolFixtures()
 
-function swapAssetDialog(popup: Page, direction: 'From' | 'To') {
-  return popup.getByRole('dialog', {
-    name: direction === 'From' ? 'Select pay token' : 'Select receive token'
-  })
+function swapAssetDialog(popup: Page, _direction: 'From' | 'To') {
+  return popup.getByRole('dialog', { name: 'Select Token' })
 }
 
 async function selectSwapWalletRecipient(popup: Page) {
@@ -106,7 +104,8 @@ test('renders usable Swap assets while unrelated chain catalogs are pending', as
     await popup.getByRole('button', { name: 'From asset' }).click()
     const selector = swapAssetDialog(popup, 'From')
     await expect(selector.getByRole('button', { name: /^ETH on Ethereum/ })).toBeVisible()
-    await selector.getByRole('button', { name: 'Close', exact: true }).click()
+    await selector.getByRole('button', { name: 'Back' }).click()
+    await expect(selector).toHaveCount(0)
     // Keep destination requests blocked across React commits to exercise the former update loop.
     await popup.evaluate(async () => {
       for (let frame = 0; frame < 20; frame++) {
@@ -591,9 +590,28 @@ test('reviews dApp gas funding from same-chain Main without the Swap input page'
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   const dapp = await connectEvmDApp(context)
   await popup.getByRole('radio', { name: 'Private mode' }).click()
-  const setup = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
-  await expect(setup).toBeVisible()
-  await setup.getByRole('button', { name: 'Turn on' }).click()
+  await expect(popup.getByRole('radio', { name: 'Private mode' })).toBeChecked()
+  if ((await readEvmAccounts(dapp.page))[0] === dapp.address) {
+    await popup.evaluate(() =>
+      chrome.runtime.sendMessage({
+        type: 'DISCONNECT_DAPP',
+        origin: 'https://private-defi.example'
+      })
+    )
+    const reconnectApprovalPromise = context.waitForEvent('page')
+    const reconnectPromise = dapp.page.evaluate(() => {
+      const provider = (
+        window as typeof window & {
+          noirwallet: { ethereum: { request: (input: { method: string }) => Promise<unknown> } }
+        }
+      ).noirwallet.ethereum
+      return provider.request({ method: 'eth_requestAccounts' })
+    })
+    const reconnectApproval = await reconnectApprovalPromise
+    await reconnectApproval.waitForURL(/#approval\?requestId=/)
+    await reconnectApproval.getByRole('button', { name: 'Connect', exact: true }).click()
+    await reconnectPromise
+  }
   await expect.poll(async () => (await readEvmAccounts(dapp.page))[0]).not.toBe(dapp.address)
   const [privateAddress] = await readEvmAccounts(dapp.page)
   network.setAddressBalanceRaw(privateAddress, 1n)
@@ -650,7 +668,7 @@ test('reviews dApp gas funding from same-chain Main without the Swap input page'
   expect((await transactionPromise).code).toBe(4001)
 })
 
-test('selects independent source and destination accounts in Swap in real MV3', async ({
+test('keeps Private Swap within the Account and Public Swap supports external recipients in real MV3', async ({
   context,
   popup,
   extensionId
@@ -711,6 +729,15 @@ test('selects independent source and destination accounts in Swap in real MV3', 
   await expectNoOverflow(popup)
   await captureScreenshot(popup, 'swap-main-to-confidential.png')
 
+  const customAddress = '0x1111111111111111111111111111111111111111'
+  const receiveAt = await openSwapReceiveAt(popup)
+  await receiveAt.locator('input[id^="swap-recipient"]').fill(customAddress)
+  await receiveAt.getByRole('button', { name: 'Done' }).click()
+  await expect
+    .poll(() => api.getQuoteRequests().at(-1)?.recipient.toLowerCase())
+    .toBe(customAddress)
+  await captureScreenshot(popup, 'swap-custom-destination.png')
+
   await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
   await popup
     .getByRole('dialog', { name: 'Choose source account' })
@@ -723,43 +750,13 @@ test('selects independent source and destination accounts in Swap in real MV3', 
   await expect
     .poll(() => api.getQuoteRequests().at(-1)?.refundTo.toLowerCase())
     .toBe(addresses.private.toLowerCase())
-  await (await selectSwapWalletRecipient(popup))
-    .getByRole('button', { name: /Send to .* Public/ })
-    .click()
-  await expect
-    .poll(() => api.getQuoteRequests().at(-1)?.recipient.toLowerCase())
-    .toBe(addresses.main.toLowerCase())
-  await expect
-    .poll(() => api.getQuoteRequests().at(-1)?.refundTo.toLowerCase())
-    .toBe(addresses.private.toLowerCase())
+  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+  await expect(popup.locator('input[id^="swap-recipient"]')).toHaveCount(0)
   await expectNoOverflow(popup)
-  await captureScreenshot(popup, 'swap-confidential-to-main.png')
-
-  await selectSwapWalletRecipient(popup)
-  await captureScreenshot(popup, 'swap-destination-account-selector.png')
-  await popup
-    .getByRole('dialog', { name: 'Select Recipient' })
-    .getByRole('button', { name: 'Close', exact: true })
-    .click()
-  const customAddress = '0x1111111111111111111111111111111111111111'
-  const receiveAt = await openSwapReceiveAt(popup)
-  await receiveAt.locator('input[id^="swap-recipient"]').fill(customAddress)
-  await receiveAt.getByRole('button', { name: 'Done' }).click()
-  await expect
-    .poll(() => api.getQuoteRequests().at(-1)?.recipient.toLowerCase())
-    .toBe(customAddress)
-  await captureScreenshot(popup, 'swap-custom-destination.png')
-  await (await selectSwapWalletRecipient(popup))
-    .getByRole('button', { name: /Send to .* Public/ })
-    .click()
-  await expect
-    .poll(() => api.getQuoteRequests().at(-1)?.recipient.toLowerCase())
-    .toBe(addresses.main.toLowerCase())
+  await captureScreenshot(popup, 'swap-private-account-fixed.png')
   for (const confidential of [true, false]) {
     await popup.goto(`chrome-extension://${extensionId}/index.html`)
     await popup.getByRole('radio', { name: confidential ? 'Private mode' : 'Public mode' }).click()
-    const setup = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
-    if (await setup.isVisible()) await setup.getByRole('button', { name: 'Turn on' }).click()
     await expect(
       popup.getByRole('radio', { name: confidential ? 'Private mode' : 'Public mode' })
     ).toBeChecked()
@@ -780,13 +777,18 @@ test('selects independent source and destination accounts in Swap in real MV3', 
         .click()
     }
     const mode = confidential ? 'private' : 'main'
-    await expect(
-      popup.getByRole('button', { name: `Choose source account, current ${mode}` })
-    ).toBeVisible()
-    await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveAttribute(
-      'title',
-      confidential ? addresses.private : addresses.main
-    )
+    if (confidential) {
+      await expect(popup.getByRole('button', { name: 'Choose source account' })).toHaveCount(0)
+      await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+    } else {
+      await expect(
+        popup.getByRole('button', { name: `Choose source account, current ${mode}` })
+      ).toBeVisible()
+      await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveAttribute(
+        'title',
+        addresses.main
+      )
+    }
     const notification = popup.getByRole('button', { name: 'Dismiss notification' })
     if (await notification.isVisible()) await notification.click()
     await captureScreenshot(
@@ -828,13 +830,10 @@ test('shows account privacy badges in Swap and Confidential labels in address vi
     .getByRole('radio', { name: /Private account/ })
     .click()
   const icon = popup.getByRole('button', { name: 'Choose source account, current private' })
-  await expect(icon).toBeVisible()
-  await expect(icon).toContainText('Private')
+  await expect(icon).toHaveCount(0)
+  await expect(popup.getByText('Private', { exact: true }).first()).toBeVisible()
   await expectNoOverflow(popup)
   await captureScreenshot(popup, 'swap-confidential-icon.png')
-  await icon.hover()
-  await expect(popup.getByRole('tooltip')).toContainText('Private')
-  await captureScreenshot(popup, 'swap-confidential-icon-hover.png', { preservePointer: true })
 
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   await popup.getByRole('button', { name: 'Show account addresses' }).click()
@@ -1101,7 +1100,7 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
   await networkFilter.getByRole('button', { name: 'All', exact: true }).click()
   await expect(zecSwapSource).toBeVisible()
   await captureScreenshot(popup, 'protocol-wallet-swap-source-selector.png')
-  await sourceSelector.getByRole('button', { name: 'Close', exact: true }).click()
+  await sourceSelector.getByRole('button', { name: 'Back' }).click()
   await popup.getByRole('button', { name: 'Switch assets', exact: true }).click()
   await expect(popup.getByRole('button', { name: 'From asset' })).toContainText('ETH')
   const swapSourceButton = popup.getByRole('button', {
@@ -1110,14 +1109,15 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
   await expect(swapSourceButton).toBeVisible()
   await captureScreenshot(popup, 'private-defi-swap-account-main.png')
   await swapSourceButton.click()
-  let swapSourceDialog = popup.getByRole('dialog', { name: 'Choose source account' })
+  const swapSourceDialog = popup.getByRole('dialog', { name: 'Choose source account' })
   await expect(swapSourceDialog.getByText('Selected', { exact: true })).toHaveCount(0)
   await captureScreenshot(popup, 'private-defi-swap-account-selector.png')
   await swapSourceDialog.getByRole('radio', { name: /Private account/ }).click()
   const privateSwapSourceButton = popup.getByRole('button', {
     name: 'Choose source account, current private'
   })
-  await expect(privateSwapSourceButton).toBeVisible()
+  await expect(privateSwapSourceButton).toHaveCount(0)
+  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
   await captureScreenshot(popup, 'private-defi-swap-account-private.png')
   const privateSwapSourceAddress = await popup.evaluate(async () => {
     const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
@@ -1148,10 +1148,14 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
   })
   expect(privateSwapQuote?.refundTo.toLowerCase()).toBe(privateSwapSourceAddress.toLowerCase())
   expect(privateSwapQuote?.recipient).toMatch(/^0x[0-9a-fA-F]{40}$/)
-  await popup.locator('input[placeholder="0"]').fill('')
-  await privateSwapSourceButton.click()
-  swapSourceDialog = popup.getByRole('dialog', { name: 'Choose source account' })
-  await swapSourceDialog.getByRole('radio', { name: /Public account/ }).click()
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await popup.getByRole('button', { name: 'Swap', exact: true }).click()
+  await popup.getByRole('button', { name: 'From asset' }).click()
+  await popup.getByPlaceholder('Search tokens').fill('ETH')
+  await popup
+    .getByRole('button', { name: /^ETH on Ethereum/ })
+    .first()
+    .click()
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current main' })
   ).toBeVisible()
@@ -1301,7 +1305,7 @@ test('waits for ERC-20 approval confirmation before preparing the Swap call', as
   await popup.getByRole('button', { name: 'From asset' }).click()
   await popup.getByPlaceholder('Search tokens').fill('USDC')
   await popup
-    .getByRole('dialog', { name: 'Select pay token' })
+    .getByRole('dialog', { name: 'Select Token' })
     .getByRole('button', { name: 'USDC on Ethereum, balance 10 USDC' })
     .click()
   await expect(popup.getByRole('button', { name: 'From asset' })).toContainText('USDC')
@@ -1347,10 +1351,7 @@ test('uses the active Polygon wallet source and POL fees in Swap', async ({ cont
   test.setTimeout(300_000)
   const evmNetwork = await mockEvmNetwork(context)
   await mockBitcoinNetwork(context)
-  await mockProtocolApis(context, {
-    mcaId: 'rhea00000x.multica.near',
-    includeMultichainMarkets: true
-  })
+  await mockProtocolApis(context)
 
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)

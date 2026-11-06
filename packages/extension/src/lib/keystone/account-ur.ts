@@ -1,6 +1,7 @@
 // Must come first: installs the global Buffer required by the UR libraries.
 import '../buffer-polyfill'
 import { Buffer } from 'buffer'
+import { HDKey } from '@scure/bip32'
 import {
   CryptoAccount,
   CryptoMultiAccounts,
@@ -167,6 +168,31 @@ function assertUniqueKeys(keys: readonly KeystoneHdPublicKey[], label: string): 
   }
 }
 
+// The vendor formatter's CommonJS bs58check export fails in the browser bundle.
+function bitcoinOutputDescriptor(
+  key: KeystoneHdPublicKey & { readonly chainCodeHex: string },
+  scriptExpressions: readonly string[],
+  childrenPath: string | undefined
+): string {
+  const path = key.derivationPath.slice(2).split('/')
+  const last = path[path.length - 1]
+  const hardened = last.endsWith("'")
+  const index = Number.parseInt(hardened ? last.slice(0, -1) : last, 10)
+  const publicKey = Buffer.from(key.publicKeyHex, 'hex')
+  if (publicKey.length !== 33) throw new Error('Bitcoin descriptor public key is invalid')
+
+  const xpub = new HDKey({
+    depth: path.length,
+    index: index + (hardened ? 0x80000000 : 0),
+    parentFingerprint: key.parentFingerprintHex ? Number.parseInt(key.parentFingerprintHex, 16) : 0,
+    chainCode: Buffer.from(key.chainCodeHex, 'hex'),
+    publicKey
+  }).publicExtendedKey
+  const origin = key.sourceFingerprintHex ? `${key.sourceFingerprintHex}/${path.join('/')}` : ''
+  const content = `${origin}${xpub}${childrenPath ? `/${childrenPath}` : ''}`
+  return scriptExpressions.reduceRight((value, expression) => `${expression}(${value})`, content)
+}
+
 export function parseMultiAccounts(ur: UR): KeystoneMultiAccountsPayload {
   assertAccountUr(ur, KEYSTONE_ACCOUNT_UR_TYPE.MULTI_ACCOUNTS)
   const decoded = decodeAccountQr('Keystone account QR', () =>
@@ -240,12 +266,16 @@ export function parseBitcoinAccount(ur: UR): KeystoneBitcoinAccountPayload {
           return value
         })
       )
-      const descriptor = output.toString()
-      if (typeof descriptor !== 'string' || descriptor.length === 0 || descriptor.length > 4096) {
-        throw new Error(`${label} is invalid`)
-      }
       const key = readHdPublicKey(output.getHDKey(), label, { requireChainCode: true })
       if (key.chainCodeHex === undefined) throw new Error(`${label} chain code is missing`)
+      const descriptor = bitcoinOutputDescriptor(
+        { ...key, chainCodeHex: key.chainCodeHex },
+        scriptExpressions,
+        output.getHDKey()?.getChildren()?.getPath()
+      )
+      if (descriptor.length === 0 || descriptor.length > 4096) {
+        throw new Error(`${label} is invalid`)
+      }
       return Object.freeze({
         descriptor,
         scriptExpressions,

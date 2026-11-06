@@ -110,6 +110,7 @@ export async function estimateRheaRouteMaximum(
     readonly tokenOut: RheaSwapToken
     readonly recipient: string
     readonly confidential: boolean
+    readonly purpose?: Parameters<typeof rheaSwapClient.quote>[1]
     readonly executionMode: 'main' | 'private'
     readonly feeTier?: 'low' | 'standard' | 'fast'
     readonly slippageBps?: number
@@ -132,17 +133,20 @@ export async function estimateRheaRouteMaximum(
     isNative: token.isNative
   })
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const quote = await dependencies.rhea.quote({
-      fromChain: input.tokenIn.rheaChainId,
-      toChain: input.tokenOut.rheaChainId,
-      tokenIn: assetRef(input.tokenIn),
-      tokenOut: assetRef(input.tokenOut),
-      amountIn: probe.toString(),
-      sender: input.source.refundAddress,
-      recipient: input.recipient,
-      slippageBps: input.slippageBps ?? 100,
-      ...(input.confidential ? { confidentiality: 'basic' as const } : {})
-    })
+    const quote = await dependencies.rhea.quote(
+      {
+        fromChain: input.tokenIn.rheaChainId,
+        toChain: input.tokenOut.rheaChainId,
+        tokenIn: assetRef(input.tokenIn),
+        tokenOut: assetRef(input.tokenOut),
+        amountIn: probe.toString(),
+        sender: input.source.refundAddress,
+        recipient: input.recipient,
+        slippageBps: input.slippageBps ?? 100,
+        ...(input.confidential ? { confidentiality: 'basic' as const } : {})
+      },
+      input.purpose
+    )
     try {
       const review = await dependencies.rhea.prepare(quote.quoteHandle)
       if (review.execution.kind === 'evm-signature') {
@@ -206,6 +210,7 @@ export async function estimateConfidentialTransferMaximum(input: {
     tokenOut: token,
     recipient: input.recipient,
     confidential: true,
+    ...(input.executionMode === 'private' ? { purpose: 'private-transfer' as const } : {}),
     executionMode: input.executionMode
   })
 }

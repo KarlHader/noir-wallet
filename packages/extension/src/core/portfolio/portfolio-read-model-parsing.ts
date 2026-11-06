@@ -5,6 +5,7 @@ import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   PORTFOLIO_READ_ERROR_CODES,
   PORTFOLIO_READ_LIMITS,
+  type ConfidentialPortfolioView,
   type PortfolioAssetView,
   type PortfolioBalanceView,
   type PortfolioChainView,
@@ -97,6 +98,128 @@ function readTimestamp(value: unknown, label: string): number {
     throw new Error(`Invalid ${label}`)
   }
   return value as number
+}
+
+function readBoundedString(value: unknown, label: string, limit: number): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > limit ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value)
+  ) {
+    throw new Error(`Invalid ${label}`)
+  }
+  return value
+}
+
+function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
+  const record = readRecord(value, 'Confidential portfolio')
+  assertExactKeys(record, ['status', 'assets'], [], 'Confidential portfolio')
+  if (record.status !== 'ready' && record.status !== 'unavailable') {
+    throw new Error('Invalid Confidential portfolio status')
+  }
+  if (
+    !Array.isArray(record.assets) ||
+    record.assets.length > PORTFOLIO_READ_LIMITS.balancesPerSource
+  ) {
+    throw new Error('Invalid Confidential portfolio assets')
+  }
+  if (record.status === 'unavailable' && record.assets.length !== 0) {
+    throw new Error('Unavailable Confidential portfolio cannot contain balances')
+  }
+  const seen = new Set<string>()
+  const entries = record.assets.map(value => {
+    const item = readRecord(value, 'Confidential portfolio asset')
+    assertExactKeys(
+      item,
+      ['tokenId', 'protocolAssetId', 'availableRaw'],
+      [
+        'assetId',
+        'chainId',
+        'blockchain',
+        'symbol',
+        'name',
+        'decimals',
+        'iconUrl',
+        'priceUsd',
+        'priceUpdatedAt'
+      ],
+      'Confidential portfolio asset'
+    )
+    const tokenId = readBoundedString(item.tokenId, 'Confidential token ID', 512)
+    const protocolAssetId = readBoundedString(
+      item.protocolAssetId,
+      'Confidential protocol asset ID',
+      512
+    )
+    const availableRaw = readRawAmount(item.availableRaw, 'Confidential available balance')
+    if (availableRaw === '0' || seen.has(protocolAssetId)) {
+      throw new Error('Duplicate or empty Confidential portfolio asset')
+    }
+    seen.add(protocolAssetId)
+    const assetId =
+      item.assetId === undefined
+        ? undefined
+        : parseAssetId(readBoundedString(item.assetId, 'Confidential asset ID', 512)).id
+    const chainId =
+      item.chainId === undefined
+        ? undefined
+        : readBoundedString(item.chainId, 'Confidential chain ID', 128)
+    if ((assetId && !chainId) || (assetId && !assetId.startsWith(`${chainId}/`))) {
+      throw new Error('Confidential asset chain does not match its asset ID')
+    }
+    const decimals = item.decimals === undefined ? undefined : item.decimals
+    if (
+      decimals !== undefined &&
+      (!Number.isSafeInteger(decimals) || (decimals as number) < 0 || (decimals as number) > 255)
+    ) {
+      throw new Error('Invalid Confidential asset decimals')
+    }
+    const iconUrl =
+      item.iconUrl === undefined
+        ? undefined
+        : readBoundedString(item.iconUrl, 'Confidential icon URL', 2048)
+    if (iconUrl && !iconUrl.startsWith('https://')) throw new Error('Invalid Confidential icon URL')
+    const priceUsd =
+      item.priceUsd === undefined
+        ? undefined
+        : readBoundedString(item.priceUsd, 'Confidential USD price', 128)
+    if (priceUsd && (!/^(0|[1-9]\d*)(\.\d+)?$/.test(priceUsd) || Number(priceUsd) <= 0)) {
+      throw new Error('Invalid Confidential USD price')
+    }
+    const priceUpdatedAt =
+      item.priceUpdatedAt === undefined
+        ? undefined
+        : readBoundedString(item.priceUpdatedAt, 'Confidential price timestamp', 64)
+    if (
+      (priceUsd === undefined) !== (priceUpdatedAt === undefined) ||
+      (priceUpdatedAt && !Number.isFinite(Date.parse(priceUpdatedAt)))
+    ) {
+      throw new Error('Invalid Confidential price timestamp')
+    }
+    return Object.freeze({
+      tokenId,
+      protocolAssetId,
+      availableRaw,
+      ...(assetId === undefined ? {} : { assetId }),
+      ...(chainId === undefined ? {} : { chainId }),
+      ...(item.blockchain === undefined
+        ? {}
+        : { blockchain: readBoundedString(item.blockchain, 'Confidential blockchain', 64) }),
+      ...(item.symbol === undefined
+        ? {}
+        : { symbol: readBoundedString(item.symbol, 'Confidential symbol', 64) }),
+      ...(item.name === undefined
+        ? {}
+        : { name: readBoundedString(item.name, 'Confidential name', 128) }),
+      ...(decimals === undefined ? {} : { decimals: decimals as number }),
+      ...(iconUrl === undefined ? {} : { iconUrl }),
+      ...(priceUsd === undefined ? {} : { priceUsd }),
+      ...(priceUpdatedAt === undefined ? {} : { priceUpdatedAt })
+    })
+  })
+  return Object.freeze({ status: record.status, assets: Object.freeze(entries) })
 }
 
 function parseBalanceView(value: unknown): PortfolioBalanceView {
@@ -308,7 +431,7 @@ export function parsePortfolioReadModel(
   assertExactKeys(
     record,
     ['scope', 'status', 'chains', 'assets', 'ignoredAssetCount'],
-    [],
+    ['confidential'],
     'Portfolio read model'
   )
   const scope = readRecord(record.scope, 'Portfolio scope')
@@ -356,6 +479,9 @@ export function parsePortfolioReadModel(
     status: derivedStatus,
     chains: Object.freeze(parsedChains),
     assets: Object.freeze(topLevelAssets),
-    ignoredAssetCount: record.ignoredAssetCount as number
+    ignoredAssetCount: record.ignoredAssetCount as number,
+    ...(record.confidential === undefined
+      ? {}
+      : { confidential: parseConfidentialView(record.confidential) })
   })
 }

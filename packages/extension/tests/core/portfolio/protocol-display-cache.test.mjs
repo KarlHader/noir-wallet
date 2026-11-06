@@ -1,12 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import {
-  deleteLendingMarketCache,
-  parseLendingMarketCacheState,
-  readLendingMarketCache,
-  writeLendingMarketCache
-} from '../../../src/infrastructure/lending/chrome-lending-market-cache.ts'
 import { swapTokenCatalogClient } from '../../../src/popup/services/swap-token-catalog-client.ts'
 import { parseSwapTokenCatalogSnapshot } from '../../../src/infrastructure/persistence/chrome-swap-token-catalog-cache.ts'
 
@@ -23,23 +17,6 @@ function swapToken(assetId = 'nep141:eth.bridge.near') {
     priceUpdatedAt: '2026-08-22T23:59:00.000Z',
     symbol: 'ETH',
     icon: 'https://img.rhea.finance/images/eth.svg'
-  }
-}
-
-function lendingMarket(tokenId = 'eth.bridge.near') {
-  return {
-    id: tokenId,
-    tokenId,
-    destinationAssetId: `nep141:${tokenId}`,
-    symbol: 'ETH',
-    displayName: 'Ether',
-    decimals: 18,
-    priceUsd: 2500,
-    supplyApy: '3.5',
-    totalSupplied: '42',
-    totalSuppliedUsd: '105000.00',
-    supplied: '1.5',
-    suppliedUsd: '3750.00'
   }
 }
 
@@ -110,39 +87,6 @@ test('validates and freezes the persisted Swap token catalog', () => {
   expect(withoutIcon?.tokens[0]).toMatchObject({ icon: null })
 })
 
-test('materializes bounded dynamic Lending market snapshots', () => {
-  const parsed = parseLendingMarketCacheState(
-    {
-      version: 3,
-      entries: {
-        'wallet:account': { cachedAt: NOW, markets: [lendingMarket()] }
-      }
-    },
-    NOW
-  )
-
-  expect(parsed.entries['wallet:account'].markets[0]).toMatchObject({
-    id: 'eth.bridge.near',
-    tokenId: 'eth.bridge.near',
-    symbol: 'ETH',
-    supplied: '1.5'
-  })
-  expect(() =>
-    parseLendingMarketCacheState(
-      {
-        version: 3,
-        entries: {
-          'wallet:account': {
-            cachedAt: NOW,
-            markets: [{ ...lendingMarket(), destinationAssetId: 'nep141:wrong.near' }]
-          }
-        }
-      },
-      NOW
-    )
-  ).toThrow('Invalid cached Lending destination asset ID')
-})
-
 test('hydrates the persisted Swap catalog before a network refresh', async () => {
   const now = Date.now()
   const storage = installChromeStorage({
@@ -156,27 +100,6 @@ test('hydrates the persisted Swap catalog before a network refresh', async () =>
     await expect(swapTokenCatalogClient.readCached()).resolves.toMatchObject([
       { assetId: 'nep141:eth.bridge.near', symbol: 'ETH', price: 2500 }
     ])
-  } finally {
-    storage.restore()
-  }
-})
-
-test('persists and removes account-scoped Lending market snapshots', async () => {
-  const storage = installChromeStorage()
-  try {
-    await writeLendingMarketCache('wallet-1:account-1', [lendingMarket()])
-    await writeLendingMarketCache('wallet-1:account-1:mainnet', [lendingMarket()])
-    await writeLendingMarketCache('wallet-1:account-1:testnet', [lendingMarket()])
-    await writeLendingMarketCache('wallet-1:account-2:mainnet', [lendingMarket()])
-    await expect(readLendingMarketCache('wallet-1:account-1:mainnet')).resolves.toMatchObject([
-      { id: 'eth.bridge.near', symbol: 'ETH', supplied: '1.5' }
-    ])
-
-    await deleteLendingMarketCache('wallet-1', 'account-1')
-    await expect(readLendingMarketCache('wallet-1:account-1')).resolves.toEqual([])
-    await expect(readLendingMarketCache('wallet-1:account-1:mainnet')).resolves.toEqual([])
-    await expect(readLendingMarketCache('wallet-1:account-1:testnet')).resolves.toEqual([])
-    await expect(readLendingMarketCache('wallet-1:account-2:mainnet')).resolves.toHaveLength(1)
   } finally {
     storage.restore()
   }

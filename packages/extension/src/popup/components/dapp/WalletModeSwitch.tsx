@@ -32,13 +32,13 @@ export function WalletModeSwitch({
           disabled={busy || !state || (mode === 'private' && !state.privateAvailable)}
           onClick={() => onChange(mode)}
           className={cn(
-            'h-6 min-w-0 flex-1 rounded-lg text-[13px] font-normal leading-[17px] transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+            'wallet-interactive h-6 min-w-0 flex-1 rounded-lg text-[13px] font-normal leading-[17px] enabled:active:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-45',
             (state?.mode ?? 'main') === mode && 'font-medium',
             (state?.mode ?? 'main') === mode
               ? mode === 'private'
                 ? 'bg-wallet-mode text-white'
                 : 'bg-wallet-selected text-foreground'
-              : 'text-muted hover:text-foreground'
+              : 'text-muted enabled:hover:bg-white/[0.06] enabled:hover:text-foreground'
           )}
         >
           {mode === 'main' ? 'Public' : 'Private'}

@@ -119,6 +119,10 @@ it('retains the reviewed sender, recipient, amount and privacy mode when a quote
   })
   assert.equal(changedRecipient.request.recipient, 'other-recipient')
   assert.notEqual(changedRecipient.key, quote.key)
+  assert.equal(
+    buildLiveSwapQuoteRequest({ ...input, privateRecipientAddress: 'different-private-address' }),
+    null
+  )
   assert.equal(quote.request.confidentiality, 'basic')
   assert.equal(quote.request.slippageBps, 100)
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.0000001' }), null)

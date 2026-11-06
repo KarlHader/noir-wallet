@@ -433,6 +433,11 @@ it('retains older quote timing budgets when saving new sessions and rejects inva
   const current = {
     ...legacy,
     quoteHandle: 'rhea-quote:current-timing',
+    privateSwapScope: {
+      walletId: 'wallet:monitor',
+      accountId: 'account:monitor',
+      purpose: 'private-transfer'
+    },
     request: {
       ...legacy.request,
       quoteWaitingTimeMs: 6000,
@@ -446,6 +451,7 @@ it('retains older quote timing budgets when saving new sessions and rejects inva
     legacy.request
   )
   assert.deepEqual((await store.get(current.quoteHandle)).request, current.request)
+  assert.deepEqual((await store.get(current.quoteHandle)).privateSwapScope, current.privateSwapScope)
 
   for (const [field, value] of [
     ['quoteWaitingTimeMs', -1],

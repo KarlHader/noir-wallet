@@ -8,6 +8,7 @@ import type { FeeTier } from '@/config/fee'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
 import { FeeTierPicker } from '../transaction/FeeTierPicker'
 import { NetworkFeeTierPicker } from '../transaction/NetworkFeeTierPicker'
+import { ReviewDownTriangle } from '../transaction/TransactionReviewView'
 
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ChainIcon } from '../common/ChainIcon'
@@ -31,6 +32,7 @@ interface SwapReviewViewProps {
   toFiat: string
   /** Output token units received for one input token unit. */
   rate?: string
+  sendMethod?: string
   sourceAccount?: SwapReviewAccount
   destinationAccount?: SwapReviewAccount
   slippage: number
@@ -85,6 +87,7 @@ export function SwapReviewView({
   fromFiat,
   toFiat,
   rate,
+  sendMethod,
   sourceAccount,
   destinationAccount,
   slippage,
@@ -130,7 +133,7 @@ export function SwapReviewView({
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6 [&_.font-mono]:font-sans">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6">
         <div className="space-y-3 px-1">
           <QuoteAssetRow
             direction="pay"
@@ -140,12 +143,7 @@ export function SwapReviewView({
             account={{ ...sourceAccount, address: sourceAddress, badge: sourceBadge }}
           />
           <div className="flex h-3 items-center pl-4 text-muted/60" aria-hidden="true">
-            <Icon
-              icon="lucide:triangle"
-              width={12}
-              height={12}
-              className="rotate-180 fill-current"
-            />
+            <ReviewDownTriangle />
           </div>
           <QuoteAssetRow
             direction="receive"
@@ -184,20 +182,24 @@ export function SwapReviewView({
               )}
             </span>
           </DetailItem>
-          <DetailItem label="Rate">
-            {rate ? (
-              <span className="inline-flex max-w-full flex-wrap items-baseline justify-end gap-x-1">
-                <span>1 {formatSymbol(tokenIn.symbol)} =</span>
-                <AmountDisplay
-                  value={rate}
-                  symbol={formatSymbol(tokenOut.symbol)}
-                  className="font-sans normal-nums"
-                />
-              </span>
-            ) : (
-              '—'
-            )}
-          </DetailItem>
+          {sendMethod ? (
+            <DetailItem label="Send method">{sendMethod}</DetailItem>
+          ) : (
+            <DetailItem label="Rate">
+              {rate ? (
+                <span className="inline-flex max-w-full flex-wrap items-baseline justify-end gap-x-1">
+                  <span>1 {formatSymbol(tokenIn.symbol)} =</span>
+                  <AmountDisplay
+                    value={rate}
+                    symbol={formatSymbol(tokenOut.symbol)}
+                    className="font-sans tabular-nums"
+                  />
+                </span>
+              ) : (
+                '—'
+              )}
+            </DetailItem>
+          )}
           <DetailItem label="Network fee">
             {sourceNetworkFee && sourceFeeTier && sourceFeeFamily && onSourceFeeTierChange ? (
               <NetworkFeeTierPicker
@@ -213,7 +215,7 @@ export function SwapReviewView({
                 value={sourceNetworkFee.amount}
                 symbol={sourceNetworkFee.symbol}
                 profile="fee"
-                className="font-sans normal-nums"
+                className="font-sans tabular-nums"
               />
             ) : selectedFeeZec && feeTier && onFeeTierChange && feeByTier ? (
               <FeeTierPicker
@@ -228,7 +230,7 @@ export function SwapReviewView({
                 value={selectedFeeZec}
                 symbol="ZEC"
                 profile="fee"
-                className="font-sans normal-nums"
+                className="font-sans tabular-nums"
               />
             ) : (
               '—'
@@ -238,7 +240,7 @@ export function SwapReviewView({
             <AmountDisplay
               value={formatAmount(minAmountOut, tokenOut.decimals)}
               symbol={formatSymbol(tokenOut.symbol)}
-              className="font-sans normal-nums"
+              className="font-sans tabular-nums"
             />
           </DetailItem>
           <DetailItem label="Recipient">
@@ -375,7 +377,7 @@ function QuoteAssetRow({
             value={amount}
             symbol={formatSymbol(token.symbol)}
             prefix={direction === 'pay' ? '-' : '+'}
-            className="max-w-full justify-start gap-1 font-sans normal-nums"
+            className="max-w-full justify-start gap-1 font-sans tabular-nums"
           />
         </div>
         <p className="mt-0.5 text-sm text-muted">

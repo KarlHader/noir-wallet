@@ -120,7 +120,7 @@ import {
   isAnyWorkerInitPending,
   markWalletWorkerUnhealthy
 } from '@/core/worker/client'
-import { clearLendingMcaCache } from '@/core/services/lending-mca-cache'
+import { clearZcashMcaCache } from '@/core/services/zcash-mca-cache'
 import { resolveAccountIdForRemoval } from './account-removal-account-id'
 import { selectNextZcashAccountIndex } from '@/core/wallet/account-index'
 import { clearIdentityCache } from '@/core/wallet/identity-cache'
@@ -140,6 +140,7 @@ import { generateCanonicalMnemonic } from '@/infrastructure/keyring/multichain/c
 import {
   getFullZcashRecoveryBirthdayHeight,
   getSafeNewWalletBirthdayHeight,
+  isValidZcashBirthdayHeight,
   selectCachedChainTipHeight
 } from '@/core/wallet/birthday-height'
 
@@ -876,19 +877,13 @@ export class BackgroundZcashWalletRuntime {
     this.walletSummaryCache.delete(walletId)
   }
 
-  private clearRuntimeCaches(
-    walletId?: string,
-    accountId?: string,
-    options?: { clearLending?: boolean }
-  ): void {
-    const clearLending = options?.clearLending !== false
-
+  private clearRuntimeCaches(walletId?: string, accountId?: string): void {
     if (!walletId) {
       this.clearAccountMappingCache()
       this.clearWalletSummaryCache()
       this.clearTransactionHistoryCache()
       clearIdentityCache()
-      if (clearLending) clearLendingMcaCache()
+      clearZcashMcaCache()
       return
     }
 
@@ -896,9 +891,7 @@ export class BackgroundZcashWalletRuntime {
     this.clearWalletSummaryCache(walletId)
     this.clearTransactionHistoryCache(walletId, accountId)
     clearIdentityCache(walletId, accountId)
-    if (clearLending) {
-      clearLendingMcaCache(walletId, accountId)
-    }
+    clearZcashMcaCache(walletId, accountId)
   }
 
   private async getCachedWalletSummary(
@@ -3293,14 +3286,12 @@ export class BackgroundZcashWalletRuntime {
       throw new Error('Switch to this wallet before resyncing Zcash')
     }
 
+    if (!isValidZcashBirthdayHeight(birthdayHeight)) {
+      throw new Error('Invalid Zcash birthday height. Choose a positive whole-number block height.')
+    }
+
     const credential = await this.loadWalletCredential(walletId, this.password)
     if (!credential) throw new Error('Failed to load wallet credential')
-
-    if (!birthdayHeight || birthdayHeight <= 0) {
-      throw new Error(
-        'Cannot resync wallet: missing birthday height. Please choose a valid start height.'
-      )
-    }
 
     if (!options?.automatic) {
       this.automaticResyncAttemptedWalletIds.delete(walletId)
@@ -4352,6 +4343,16 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
+      if (!isNearChainTip(fullyScannedHeight, latestHeight)) {
+        this.updateSyncProgressForWallet(syncWalletId, {
+          isSyncing: true,
+          syncProgress: 0,
+          currentHeight: fullyScannedHeight || birthdayHeight,
+          latestHeight,
+          etaMs: null
+        })
+      }
+
       await core.beginSyncSession()
       syncSessionActive = true
 
@@ -4387,7 +4388,7 @@ export class BackgroundZcashWalletRuntime {
       const isSmallSync =
         totalRange <= getSyncBatchSize(totalRange, syncWalletId === this.currentWalletId)
       const isSilentSync = isNearChainTip(fullyScannedHeight, latestHeight)
-      const showSyncUi = !isSmallSync && !isSilentSync
+      const showSyncUi = !isSilentSync
 
       if (isSilentSync) {
         logger.log(

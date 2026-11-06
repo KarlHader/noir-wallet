@@ -21,7 +21,6 @@ import {
   type TransactionLifecycleStatus,
   type TransactionSegmentEvent
 } from '@/core/transactions/domain'
-import type { NearLendingSupplyBinding } from '@/core/services/lending-near-supply'
 import type { TransactionRepository } from '@/ports/repositories'
 import type { NearTransactionSigningPreparePayload } from '@/infrastructure/keyring/multichain/near-signing-client'
 import {
@@ -44,7 +43,6 @@ import {
   prepareNearTokenTransfer
 } from './near-transfer-preparer'
 import { createNearTransferGraph } from './near-transaction-graph'
-import { prepareNearLendingSupply } from './near-lending-supply-preparer'
 
 export interface NearTransferSigningPort {
   readonly prepare: (
@@ -89,7 +87,6 @@ interface PrepareNearTransferBaseInput {
   readonly receiverId: string
   readonly signal?: AbortSignal
   readonly nearIntentsBinding?: NearIntentsTransactionBinding
-  readonly nearLendingSupplyBinding?: NearLendingSupplyBinding
 }
 
 export type PrepareNearTransferInput = PrepareNearTransferBaseInput &
@@ -201,24 +198,8 @@ export class NearTransferOrchestrator {
     if (asset.asset.chainId !== input.chainAccount.scope.chainId) {
       throw new Error('NEAR transfer asset does not match its ChainAccount')
     }
-    if (input.nearIntentsBinding && input.nearLendingSupplyBinding) {
-      throw new Error('NEAR transfer cannot use multiple protocol bindings')
-    }
-    const prepared = input.nearLendingSupplyBinding
-      ? await prepareNearLendingSupply({
-          chainId: input.chainAccount.scope.chainId,
-          accountIndex: input.accountIndex,
-          assetId: asset.asset.id,
-          signerId: input.chainAccount.identity.value,
-          publicKey: input.publicKey,
-          recipientId: input.receiverId,
-          tokenContractId: input.nearLendingSupplyBinding.tokenContractId,
-          amountRaw,
-          customRecipientMsg: input.nearLendingSupplyBinding.customRecipientMsg,
-          rpc: this.rpc,
-          signal: input.signal
-        })
-      : asset.asset.kind === 'native'
+    const prepared =
+      asset.asset.kind === 'native'
         ? await prepareNearNativeTransfer({
             chainId: input.chainAccount.scope.chainId,
             accountIndex: input.accountIndex,

@@ -18,6 +18,7 @@ const DEFAULT_WAIT_MS = 15 * 60 * 1_000
 const DEFAULT_POLL_MS = 5_000
 const SUBMISSION_CACHE_MS = 20 * 60 * 1_000
 const COMPLETED_CACHE_MS = 5 * 60 * 1_000
+const SUBMISSION_PREFIX = 'evm_dapp_private_transfer:'
 
 export interface EvmDAppPrivateTransferInput {
   readonly origin: string
@@ -44,6 +45,9 @@ interface StoredSubmission {
   readonly quoteHandle: string
   readonly destinationHash: string | null
   readonly expiresAt: number
+  readonly walletId?: string
+  readonly accountId?: string
+  readonly networkMode?: 'mainnet' | 'testnet'
 }
 
 export interface PrivateTransferSubmissionStore {
@@ -58,6 +62,19 @@ function parseStoredSubmission(value: unknown): StoredSubmission {
   }
   const record = value as Record<string, unknown>
   if (
+    Object.keys(record).some(
+      key =>
+        ![
+          'schemaVersion',
+          'fingerprint',
+          'quoteHandle',
+          'destinationHash',
+          'expiresAt',
+          'walletId',
+          'accountId',
+          'networkMode'
+        ].includes(key)
+    ) ||
     record.schemaVersion !== 1 ||
     typeof record.fingerprint !== 'string' ||
     !/^[0-9a-f]{64}$/.test(record.fingerprint) ||
@@ -67,7 +84,15 @@ function parseStoredSubmission(value: unknown): StoredSubmission {
       (typeof record.destinationHash !== 'string' ||
         !/^0x[0-9a-fA-F]{64}$/.test(record.destinationHash))) ||
     !Number.isSafeInteger(record.expiresAt) ||
-    (record.expiresAt as number) <= 0
+    (record.expiresAt as number) <= 0 ||
+    ([record.walletId, record.accountId, record.networkMode].some(value => value !== undefined) &&
+      (typeof record.walletId !== 'string' ||
+        !record.walletId ||
+        record.walletId.length > 160 ||
+        typeof record.accountId !== 'string' ||
+        !record.accountId ||
+        record.accountId.length > 160 ||
+        (record.networkMode !== 'mainnet' && record.networkMode !== 'testnet')))
   ) {
     throw new Error('Stored Confidential dApp transfer fields are invalid')
   }
@@ -77,18 +102,28 @@ function parseStoredSubmission(value: unknown): StoredSubmission {
     quoteHandle: record.quoteHandle,
     destinationHash:
       record.destinationHash === null ? null : (record.destinationHash as string).toLowerCase(),
-    expiresAt: record.expiresAt as number
+    expiresAt: record.expiresAt as number,
+    ...(record.walletId === undefined
+      ? {}
+      : {
+          walletId: record.walletId as string,
+          accountId: record.accountId as string,
+          networkMode: record.networkMode as 'mainnet' | 'testnet'
+        })
   })
 }
 
-export class ChromeSessionEvmDAppPrivateTransferStore implements PrivateTransferSubmissionStore {
+export class ChromeEvmDAppPrivateTransferStore implements PrivateTransferSubmissionStore {
   async get(fingerprint: string): Promise<StoredSubmission | null> {
     const key = this.key(fingerprint)
-    const value = (await chrome.storage.session.get(key))[key]
+    const value =
+      (await chrome.storage.local.get(key))[key] ?? (await chrome.storage.session.get(key))[key]
     if (value === undefined) return null
     const parsed = parseStoredSubmission(value)
-    if (parsed.expiresAt <= Date.now()) {
-      await chrome.storage.session.remove(key)
+    if (parsed.fingerprint !== fingerprint)
+      throw new Error('Confidential dApp transfer key changed')
+    if (parsed.destinationHash && parsed.expiresAt <= Date.now()) {
+      await this.delete(fingerprint)
       return null
     }
     return parsed
@@ -96,18 +131,46 @@ export class ChromeSessionEvmDAppPrivateTransferStore implements PrivateTransfer
 
   async put(submission: StoredSubmission): Promise<void> {
     const parsed = parseStoredSubmission(submission)
-    await chrome.storage.session.set({ [this.key(parsed.fingerprint)]: parsed })
+    if (!parsed.walletId || !parsed.accountId || !parsed.networkMode) {
+      throw new Error('Confidential dApp transfer scope is unavailable')
+    }
+    await chrome.storage.local.set({ [this.key(parsed.fingerprint)]: parsed })
+    await chrome.storage.session.remove(this.key(parsed.fingerprint))
   }
 
   async delete(fingerprint: string): Promise<void> {
-    await chrome.storage.session.remove(this.key(fingerprint))
+    const key = this.key(fingerprint)
+    await Promise.all([chrome.storage.local.remove(key), chrome.storage.session.remove(key)])
+  }
+
+  async clearForAccount(walletId: string, accountId: string): Promise<void> {
+    const stored = await chrome.storage.local.get(null)
+    const keys: string[] = []
+    for (const [key, value] of Object.entries(stored)) {
+      if (!key.startsWith(SUBMISSION_PREFIX)) continue
+      try {
+        const record = parseStoredSubmission(value)
+        if (record.walletId === walletId && record.accountId === accountId) keys.push(key)
+      } catch {
+        keys.push(key)
+      }
+    }
+    if (keys.length > 0) await chrome.storage.local.remove(keys)
+  }
+
+  async clearAll(): Promise<void> {
+    for (const area of [chrome.storage.local, chrome.storage.session]) {
+      const stored = await area.get(null)
+      const keys = Object.keys(stored).filter(key => key.startsWith(SUBMISSION_PREFIX))
+      if (keys.length > 0) await area.remove(keys)
+    }
   }
 
   private key(fingerprint: string): string {
     if (!/^[0-9a-f]{64}$/.test(fingerprint)) {
       throw new Error('Confidential transfer key is invalid')
     }
-    return `evm_dapp_private_transfer:${fingerprint}`
+    return `${SUBMISSION_PREFIX}${fingerprint}`
   }
 }
 
@@ -124,6 +187,7 @@ export interface EvmDAppPrivateTransferCoordinatorOptions {
     | 'recordTransactionSubmission'
     | 'reportSubmission'
     | 'getOrderStatus'
+    | 'hasRecordedOrder'
     | 'discard'
   >
   readonly signatureCoordinator: Pick<
@@ -177,7 +241,7 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
   private readonly inFlight = new Map<string, Promise<string>>()
 
   constructor(private readonly options: EvmDAppPrivateTransferCoordinatorOptions) {
-    this.store = options.store ?? new ChromeSessionEvmDAppPrivateTransferStore()
+    this.store = options.store ?? new ChromeEvmDAppPrivateTransferStore()
     this.now = options.now ?? Date.now
     this.waitMs = options.waitMs ?? DEFAULT_WAIT_MS
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS
@@ -200,8 +264,36 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
     fingerprint: string
   ): Promise<string> {
     const stored = await this.store.get(fingerprint)
-    if (stored?.destinationHash) return stored.destinationHash
-    if (stored) return this.waitForDestination(stored)
+    if (stored) {
+      if (
+        stored.walletId !== undefined &&
+        (stored.walletId !== input.account.keyDomainId ||
+          stored.accountId !== input.account.accountId ||
+          stored.networkMode !== this.options.network.networkMode)
+      ) {
+        throw new Error('Confidential dApp transfer account changed')
+      }
+      if (stored.destinationHash) return stored.destinationHash
+      const scopedStored = stored.walletId
+        ? stored
+        : parseStoredSubmission({
+            ...stored,
+            walletId: input.account.keyDomainId,
+            accountId: input.account.accountId,
+            networkMode: this.options.network.networkMode
+          })
+      if (!stored.walletId) await this.store.put(scopedStored)
+      const hasRecordedOrder = await this.options.service
+        .hasRecordedOrder(scopedStored.quoteHandle)
+        .catch(() => false)
+      if (!hasRecordedOrder) {
+        throw new Eip1193ProviderError(
+          -32000,
+          'The previous Confidential transfer status is unknown. No new transfer was started. Check its result before sending again.'
+        )
+      }
+      return this.waitForDestination(scopedStored)
+    }
 
     const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(
       candidate => candidate.apiChainId === String(this.options.network.numericChainId)
@@ -232,17 +324,25 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       requestedSlippage! <= 5_000
         ? requestedSlippage!
         : DEFAULT_SLIPPAGE_BPS
-    const quote = await this.options.service.quote({
-      fromChain: token.rheaChainId,
-      toChain: token.rheaChainId,
-      tokenIn: { chain: token.rheaChainId, address: token.rheaAddress },
-      tokenOut: { chain: token.rheaChainId, address: token.rheaAddress },
-      amountIn: input.intent.amountRaw,
-      slippageBps,
-      sender: input.account.address,
-      recipient: input.intent.recipient,
-      confidentiality: 'basic'
-    })
+    const quote = await this.options.service.quote(
+      {
+        fromChain: token.rheaChainId,
+        toChain: token.rheaChainId,
+        tokenIn: { chain: token.rheaChainId, address: token.rheaAddress },
+        tokenOut: { chain: token.rheaChainId, address: token.rheaAddress },
+        amountIn: input.intent.amountRaw,
+        slippageBps,
+        sender: input.account.address,
+        recipient: input.intent.recipient,
+        confidentiality: 'basic'
+      },
+      undefined,
+      {
+        walletId: input.account.keyDomainId,
+        accountId: input.account.accountId,
+        purpose: 'private-dapp-transfer'
+      }
+    )
     const review = await this.options.service.prepare(quote.quoteHandle)
     if (review.execution.kind !== 'evm-signature' && review.execution.kind !== 'evm-transaction') {
       await this.options.service.discard(quote.quoteHandle).catch(() => {})
@@ -365,18 +465,6 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
         throw new Eip1193ProviderError(4001, 'User rejected the Confidential transfer request.')
       }
       await input.ensureIdentity()
-      const storedSubmission = parseStoredSubmission({
-        schemaVersion: 1,
-        fingerprint,
-        quoteHandle: quote.quoteHandle,
-        destinationHash: null,
-        expiresAt: this.now() + SUBMISSION_CACHE_MS
-      })
-      // Persist the request identity before the first irreversible action. If
-      // the worker stops after signing or broadcast, a dApp retry waits for
-      // this quote instead of creating a second debit.
-      await this.store.put(storedSubmission)
-      executionStarted = true
       if (approvalPrepared) {
         await this.options.transferController.approveForDApp(
           approvalPrepared.graph.root.id,
@@ -406,6 +494,20 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
         }
       }
       await input.ensureIdentity()
+      const storedSubmission = parseStoredSubmission({
+        schemaVersion: 1,
+        fingerprint,
+        quoteHandle: quote.quoteHandle,
+        destinationHash: null,
+        expiresAt: this.now() + SUBMISSION_CACHE_MS,
+        walletId: input.account.keyDomainId,
+        accountId: input.account.accountId,
+        networkMode: this.options.network.networkMode
+      })
+      // Token approval cannot debit the transfer amount. Preserve the request
+      // only when route signing or broadcast may begin.
+      await this.store.put(storedSubmission)
+      executionStarted = true
       let submission: RheaSwapSubmissionView
       if (signatureReview) {
         const result = await this.options.signatureCoordinator.confirm(
@@ -435,9 +537,8 @@ export class EvmDAppPrivateTransferCoordinator implements EvmDAppPrivateTransfer
       if (!submission.orderId) throw new Error('Confidential transfer has no settlement order')
       return this.waitForDestination(storedSubmission)
     } finally {
-      // Once approval, signing, or broadcast can have started, retain the
-      // fingerprint and prepared graph. A retry must observe the same order;
-      // deleting them here could create a second debit after an ambiguous
+      // Once route signing or broadcast can have started, retain the
+      // fingerprint. A retry must observe the same order after an ambiguous
       // extension-worker or provider response.
       if (!executionStarted) {
         await this.store.delete(fingerprint).catch(() => {})

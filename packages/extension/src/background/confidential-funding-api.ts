@@ -3,11 +3,13 @@ import { parseNearAccountId } from '@/core/chains/near/identifiers'
 import { readRheaDestinationHash } from '@/core/services/rhea-swap/rhea-order-status'
 import { DedupPromise } from '@/lib/async-utils'
 import { parseSiweMessage } from 'viem/siwe'
+import { isAddress } from 'viem'
 import type {
   ConfidentialQuote,
   ConfidentialSignedPayload,
   ConfidentialWithdrawRequest
 } from '@/core/services/confidential-funding'
+import { assertConfidentialQuoteBinding } from '@/core/services/confidential-funding'
 
 const REQUEST_TIMEOUT_MS = 30_000
 const APP_FEE_CACHE_MS = 5 * 60_000
@@ -34,6 +36,7 @@ export interface ConfidentialStatus {
   readonly errorStatus?: string
   readonly amountOutRaw?: string
   readonly settledAmountOutRaw?: string
+  readonly depositedAmountRaw?: string
 }
 
 export interface ConfidentialPrivateWithdraw {
@@ -95,7 +98,8 @@ export class ConfidentialFundingApiError extends Error {
   constructor(
     message: string,
     readonly status: number | null,
-    readonly ambiguous: boolean
+    readonly ambiguous: boolean,
+    readonly businessCode: number | null = null
   ) {
     super(message)
     this.name = 'ConfidentialFundingApiError'
@@ -115,6 +119,27 @@ function requiredString(record: Record<string, unknown>, key: string, label: str
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function optionalDepositMemo(record: Record<string, unknown>): string | undefined {
+  const value = record.depositMemo ?? record.memo
+  if (value === undefined || value === null) return undefined
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    value.length > 512 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value)
+  ) {
+    throw new Error('Confidential deposit memo is invalid')
+  }
+  if (
+    record.depositMemo !== undefined &&
+    record.memo !== undefined &&
+    record.depositMemo !== record.memo
+  ) {
+    throw new Error('Confidential deposit memo is ambiguous')
+  }
+  return value
 }
 
 function positiveRaw(value: unknown, label: string): string {
@@ -153,26 +178,46 @@ function parseConfidentialAppFees(value: unknown): readonly ConfidentialAppFee[]
   return Object.freeze(fees)
 }
 
+export function readConfidentialQuoteAppFees(
+  quote: ConfidentialQuote | undefined
+): readonly ConfidentialAppFee[] {
+  const value = quote?.quoteRequest.appFees
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('Confidential quote app fees are invalid')
+  return value.map(entry => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.fee !== 'number' ||
+      !Number.isInteger(entry.fee) ||
+      entry.fee < 0 ||
+      entry.fee > 10_000
+    ) {
+      throw new Error('Confidential quote app fees are invalid')
+    }
+    return {
+      recipient: parseNearAccountId(entry.recipient, 'Confidential quote app fee recipient'),
+      fee: entry.fee as number
+    }
+  })
+}
+
 function assertQuoteAppFees(
   quote: ConfidentialQuote,
-  expected: readonly ConfidentialAppFee[] | undefined
+  expected: readonly ConfidentialAppFee[] | undefined,
+  providerFees: readonly ConfidentialAppFee[] = []
 ): void {
-  const actual = quote.quoteRequest.appFees
-  if (expected === undefined) {
-    if (actual === undefined || (Array.isArray(actual) && actual.length === 0)) return
-  } else if (
-    Array.isArray(actual) &&
-    actual.length === expected.length &&
-    actual.every(
+  const actual = readConfidentialQuoteAppFees(quote)
+  const allExpected = [...(expected ?? []), ...providerFees]
+  if (
+    allExpected.reduce((sum, fee) => sum + fee.fee, 0) > 10_000 ||
+    actual.length !== allExpected.length ||
+    actual.some(
       (entry, index) =>
-        isRecord(entry) &&
-        entry.recipient === expected[index]?.recipient &&
-        entry.fee === expected[index]?.fee
+        entry.recipient !== allExpected[index]?.recipient || entry.fee !== allExpected[index]?.fee
     )
   ) {
-    return
+    throw new Error('Confidential quote app fees do not match the request')
   }
-  throw new Error('Confidential quote app fees do not match the request')
 }
 
 function optionalTimestamp(value: unknown, label: string): number | undefined {
@@ -369,7 +414,15 @@ function parseQuote(value: unknown): ConfidentialQuote {
         'Confidential minimum output'
       ),
       depositAddress: optionalString(quote, 'depositAddress') ?? '',
-      deadline
+      ...(optionalDepositMemo(quote) ? { depositMemo: optionalDepositMemo(quote) } : {}),
+      deadline,
+      ...(optionalRaw(quote.withdrawFee) ? { withdrawFee: optionalRaw(quote.withdrawFee) } : {}),
+      ...(optionalRaw(quote.refundFee) ? { refundFee: optionalRaw(quote.refundFee) } : {}),
+      ...(typeof quote.timeEstimate === 'number' &&
+      Number.isFinite(quote.timeEstimate) &&
+      quote.timeEstimate >= 0
+        ? { timeEstimate: quote.timeEstimate }
+        : {})
     })
   })
 }
@@ -407,7 +460,8 @@ async function readJson(response: Response): Promise<unknown> {
           optionalString(body, 'message') ??
           'Confidential request failed',
         response.status,
-        false
+        false,
+        body.code
       )
     }
     return body.data
@@ -513,7 +567,7 @@ export class ConfidentialFundingApi {
   async submitWithdraws(
     request: ConfidentialWithdrawRequest
   ): Promise<Readonly<{ orderId: string }>> {
-    if (request.withdraws.length < 2 || request.withdraws.length > 5) {
+    if (request.withdraws.length < 1 || request.withdraws.length > 5) {
       throw new Error('Confidential withdrawal count is invalid')
     }
     const value = await requestJson(
@@ -832,33 +886,71 @@ export class ConfidentialFundingApi {
       input.depositType === 'CONFIDENTIAL_INTENTS' && input.recipientType === 'DESTINATION_CHAIN'
     const isDeposit =
       input.depositType === 'ORIGIN_CHAIN' && input.recipientType === 'CONFIDENTIAL_INTENTS'
-    if (!isWithdrawal && !isDeposit) {
+    const isInternalSwap =
+      input.depositType === 'CONFIDENTIAL_INTENTS' &&
+      input.refundType === 'CONFIDENTIAL_INTENTS' &&
+      input.recipientType === 'CONFIDENTIAL_INTENTS' &&
+      input.recipient.toLowerCase() === input.signerId.toLowerCase() &&
+      input.refundTo === undefined &&
+      input.originAsset !== input.destinationAsset
+    if (!isWithdrawal && !isDeposit && !isInternalSwap) {
       throw new Error('Confidential quote route is invalid')
     }
-    const appFees = isWithdrawal ? await this.getConfidentialAppFees() : undefined
+    const appFees = isWithdrawal || isInternalSwap ? await this.getConfidentialAppFees() : undefined
+    const request = {
+      dry: input.dry,
+      swapType: 'EXACT_INPUT',
+      slippageTolerance: input.slippageBps,
+      originAsset: input.originAsset,
+      depositType: input.depositType,
+      destinationAsset: input.destinationAsset,
+      amount: input.amountRaw,
+      refundTo: input.refundTo ?? input.signerId,
+      refundType: input.refundType,
+      recipient: input.recipient,
+      recipientType: input.recipientType,
+      deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
+      referral: NOIR_SWAP_REFERRAL,
+      quoteWaitingTimeMs: 0,
+      ...(appFees ? { appFees } : {}),
+      confidentiality: 'basic'
+    }
+    let providerFees: readonly ConfidentialAppFee[] = []
+    if (appFees) {
+      const baseline = parseQuote(
+        await requestJson(this.oneClickUrl('/quote'), {
+          method: 'POST',
+          body: JSON.stringify({ ...request, dry: true, appFees: undefined })
+        })
+      )
+      assertConfidentialQuoteBinding(baseline, input)
+      if (
+        Object.entries(request).some(
+          ([key, value]) =>
+            key !== 'appFees' && baseline.quoteRequest[key] !== (key === 'dry' ? true : value)
+        )
+      ) {
+        throw new Error('Confidential provider fee quote is invalid')
+      }
+      providerFees = readConfidentialQuoteAppFees(baseline)
+      if (providerFees.length > 1 || (providerFees.length === 1 && providerFees[0]?.fee !== 20)) {
+        throw new Error('Confidential provider fee quote is invalid')
+      }
+    }
     const value = await requestJson(this.oneClickUrl('/quote'), {
       method: 'POST',
-      body: JSON.stringify({
-        dry: input.dry,
-        swapType: 'EXACT_INPUT',
-        slippageTolerance: input.slippageBps,
-        originAsset: input.originAsset,
-        depositType: input.depositType,
-        destinationAsset: input.destinationAsset,
-        amount: input.amountRaw,
-        refundTo: input.refundTo ?? input.signerId,
-        refundType: input.refundType,
-        recipient: input.recipient,
-        recipientType: input.recipientType,
-        deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
-        referral: NOIR_SWAP_REFERRAL,
-        quoteWaitingTimeMs: 0,
-        ...(appFees ? { appFees } : {}),
-        confidentiality: 'basic'
-      })
+      body: JSON.stringify(request)
     })
     const quote = parseQuote(value)
-    assertQuoteAppFees(quote, appFees)
+    if (
+      appFees &&
+      Object.entries(request).some(
+        ([key, value]) => key !== 'appFees' && quote.quoteRequest[key] !== value
+      )
+    ) {
+      throw new Error('Confidential quote does not match the requested funding route')
+    }
+    assertQuoteAppFees(quote, appFees, providerFees)
     return quote
   }
 
@@ -932,6 +1024,42 @@ export class ConfidentialFundingApi {
       ...(optionalRaw(details.amountOut)
         ? { settledAmountOutRaw: optionalRaw(details.amountOut) }
         : {}),
+      ...(optionalString(details, 'refundReason')
+        ? { errorStatus: optionalString(details, 'refundReason') }
+        : {})
+    })
+  }
+
+  async getOneClickStatus(
+    depositAddress: string,
+    depositMemo?: string
+  ): Promise<ConfidentialStatus> {
+    const query = new URLSearchParams({ depositAddress })
+    if (depositMemo) query.set('depositMemo', depositMemo)
+    const value = await requestJson(`${this.oneClickUrl('/status')}?${query.toString()}`)
+    if (!isRecord(value)) throw new Error('Shield swap status response is invalid')
+    const quoteResponse = isRecord(value.quoteResponse) ? value.quoteResponse : {}
+    const statusQuote = isRecord(quoteResponse.quote) ? quoteResponse.quote : {}
+    const echoedAddress = optionalString(statusQuote, 'depositAddress')
+    if (
+      echoedAddress &&
+      (isAddress(depositAddress)
+        ? echoedAddress.toLowerCase() !== depositAddress.toLowerCase()
+        : echoedAddress !== depositAddress)
+    ) {
+      throw new Error('Shield swap status does not match its quote')
+    }
+    const echoedMemo = optionalDepositMemo(statusQuote)
+    if (depositMemo !== undefined && echoedMemo !== undefined && echoedMemo !== depositMemo) {
+      throw new Error('Shield swap status memo does not match its quote')
+    }
+    const details = isRecord(value.swapDetails) ? value.swapDetails : {}
+    const settledAmountOutRaw = optionalRaw(details.amountOut)
+    const depositedAmountRaw = optionalRaw(details.depositedAmount)
+    return Object.freeze({
+      status: requiredString(value, 'status', 'Shield swap status'),
+      ...(settledAmountOutRaw ? { amountOutRaw: settledAmountOutRaw, settledAmountOutRaw } : {}),
+      ...(depositedAmountRaw ? { depositedAmountRaw } : {}),
       ...(optionalString(details, 'refundReason')
         ? { errorStatus: optionalString(details, 'refundReason') }
         : {})

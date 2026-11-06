@@ -219,14 +219,24 @@ test.describe('Runtime message security', () => {
     expect(
       isTrustedRuntimeMessageSender(shieldRefresh.type, serviceWorkerSender, extensionId)
     ).toBe(false)
+    const submissionCheck = {
+      type: 'CHECK_CONFIDENTIAL_FUNDING_SUBMISSION',
+      planId: 'funding-plan:1'
+    }
+    expect(parseTrustedExtensionRuntimeMessage(submissionCheck)).toEqual(submissionCheck)
+    expect(() => parseTrustedExtensionRuntimeMessage({ type: submissionCheck.type })).toThrow()
+    for (const [sender, allowed] of [
+      [popupSender, true],
+      [contentScriptSender, false],
+      [{ id: 'other-extension', url: 'https://wallet.example/app' }, false]
+    ]) {
+      expect(isTrustedRuntimeMessageSender(submissionCheck.type, sender, extensionId)).toBe(allowed)
+    }
     expect(isTrustedRuntimeMessageSender('GET_BITCOIN_ACTIVITY', popupSender, extensionId)).toBe(
       true
     )
     expect(
       isTrustedRuntimeMessageSender('GET_BITCOIN_WALLET_IDENTITY', popupSender, extensionId)
-    ).toBe(true)
-    expect(
-      isTrustedRuntimeMessageSender('GET_ZCASH_LENDING_PUBLIC_KEY', popupSender, extensionId)
     ).toBe(true)
     expect(isTrustedRuntimeMessageSender('ADD_SOFTWARE_WALLET', popupSender, extensionId)).toBe(
       true
@@ -302,13 +312,6 @@ test.describe('Runtime message security', () => {
     ).toBe(false)
     expect(
       isTrustedRuntimeMessageSender('GET_BITCOIN_WALLET_IDENTITY', contentScriptSender, extensionId)
-    ).toBe(false)
-    expect(
-      isTrustedRuntimeMessageSender(
-        'GET_ZCASH_LENDING_PUBLIC_KEY',
-        contentScriptSender,
-        extensionId
-      )
     ).toBe(false)
     expect(
       isTrustedRuntimeMessageSender('ADD_SOFTWARE_WALLET', contentScriptSender, extensionId)
@@ -1057,27 +1060,6 @@ test.describe('Runtime message security', () => {
     expect(parseTrustedExtensionRuntimeMessage({ type: 'GET_BITCOIN_WALLET_IDENTITY' })).toEqual({
       type: 'GET_BITCOIN_WALLET_IDENTITY'
     })
-    expect(
-      parseTrustedExtensionRuntimeMessage({
-        type: 'GET_ZCASH_LENDING_PUBLIC_KEY',
-        walletId: 'wallet-1',
-        accountId: 'account-1',
-        signingMode: 'derived'
-      })
-    ).toEqual({
-      type: 'GET_ZCASH_LENDING_PUBLIC_KEY',
-      walletId: 'wallet-1',
-      accountId: 'account-1',
-      signingMode: 'derived'
-    })
-    expect(() =>
-      parseTrustedExtensionRuntimeMessage({
-        type: 'GET_ZCASH_LENDING_PUBLIC_KEY',
-        walletId: 'wallet-1',
-        accountId: 'account-1',
-        signingMode: 'current'
-      })
-    ).toThrow(/schema/i)
     expect(() =>
       parseTrustedExtensionRuntimeMessage({ type: 'GET_ACTIVITY', accountId: 'account-1' })
     ).toThrow(/schema/i)
@@ -1632,6 +1614,21 @@ test.describe('Runtime message security', () => {
       type: 'QUOTE_RHEA_SWAP',
       request
     })
+    expect(
+      parseTrustedExtensionRuntimeMessage({
+        type: 'QUOTE_RHEA_SWAP',
+        request,
+        purpose: 'private-swap'
+      })
+    ).toMatchObject({ purpose: 'private-swap' })
+    for (const purpose of ['private-transfer', 'private-cross-chain-send', 'public-private-send']) {
+      expect(
+        parseTrustedExtensionRuntimeMessage({ type: 'QUOTE_RHEA_SWAP', request, purpose })
+      ).toMatchObject({ purpose })
+    }
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ type: 'QUOTE_RHEA_SWAP', request, purpose: 'transfer' })
+    ).toThrow(/schema/i)
     expect(
       parseTrustedExtensionRuntimeMessage({
         type: 'PREPARE_RHEA_SWAP',

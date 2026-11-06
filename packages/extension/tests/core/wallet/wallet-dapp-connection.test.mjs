@@ -69,7 +69,9 @@ function fixture({ chains = [evmChainId], evm = true, zcash = false, caip25 = fa
 
 test('native EVM connection status uses the authoritative account without legacy wallet pointers', async () => {
   const state = fixture()
-  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, false)
+  const disconnected = await state.coordinator.getCurrentTabDAppStatus()
+  assert.equal(disconnected.currentAccountAuthorized, false)
+  assert.equal(disconnected.canConnectCurrentAccount, true)
   await state.coordinator.connectCurrentAccount(state.dapp.origin)
   assert.deepEqual(state.calls, ['evm'])
   assert.equal((await state.coordinator.getCurrentTabDAppStatus()).currentAccountAuthorized, true)
@@ -118,6 +120,7 @@ test('partial authorization failure remains visible and can be completed by retr
 
 test('CAIP-25 sessions still require reconnection from the site', async () => {
   const state = fixture({ caip25: true })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).canConnectCurrentAccount, false)
   await assert.rejects(
     state.coordinator.connectCurrentAccount(state.dapp.origin),
     /Reconnect from the site/
@@ -138,6 +141,7 @@ test('unknown origins, absent accounts and unsupported grants fail without autho
     /No active account/
   )
   state.select({ reference: current, chainIds: [zcashChainId] })
+  assert.equal((await state.coordinator.getCurrentTabDAppStatus()).canConnectCurrentAccount, false)
   await assert.rejects(
     state.coordinator.connectCurrentAccount(state.dapp.origin),
     /Reconnect from the site/

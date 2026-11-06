@@ -13,8 +13,11 @@ import {
 } from '@/popup/components/ui/dropdown-menu'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { accountNetworksClient } from '@/popup/services/account-networks-client'
-import { DEFAULT_NETWORK } from '@/lib/runtime-network'
-import { findBuiltinEvmNetworkConfig } from '@/config/networks'
+import { AddAddressDialog } from '@/popup/components/address-book/AddAddressDialog'
+import {
+  getAddressBookNetworkChoice,
+  type AddressBookNetworkChoice
+} from '@/popup/components/address-book/address-book-network'
 import {
   Dialog,
   DialogContent,
@@ -29,19 +32,13 @@ export function AddressBook() {
   const contacts = useAddressBookStore(state => state.contacts)
   const renameContact = useAddressBookStore(state => state.renameContact)
   const removeContact = useAddressBookStore(state => state.removeContact)
-  const addContact = useAddressBookStore(state => state.addContact)
-  const getContact = useAddressBookStore(state => state.getContact)
   const { copyToClipboard, showToast } = useCopyToClipboard()
   const [editing, setEditing] = useState<AddressBookContact | null>(null)
   const [deleting, setDeleting] = useState<AddressBookContact | null>(null)
   const [adding, setAdding] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newAddress, setNewAddress] = useState('')
-  const [newChainId, setNewChainId] = useState('')
-  const [formError, setFormError] = useState<string | null>(null)
-  const [availableNetworks, setAvailableNetworks] = useState<
-    readonly { chainId: string; name: string; family: 'zcash' | 'evm' }[]
-  >([])
+  const [availableNetworks, setAvailableNetworks] = useState<readonly AddressBookNetworkChoice[]>(
+    []
+  )
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -73,28 +70,12 @@ export function AddressBook() {
       .getCatalog()
       .then(catalog => {
         if (cancelled) return
-        const choices = new Map<
-          string,
-          { chainId: string; name: string; family: 'zcash' | 'evm' }
-        >()
+        const choices = new Map<string, AddressBookNetworkChoice>()
         for (const account of catalog?.accounts ?? []) {
           for (const network of account.networks) {
-            if (network.chain.family !== 'zcash' && network.chain.family !== 'evm') continue
-            if (
-              network.chain.family === 'evm' &&
-              !findBuiltinEvmNetworkConfig(DEFAULT_NETWORK, network.chain.id)
-            )
-              continue
-            choices.set(network.chain.id, {
-              chainId: network.chain.id,
-              name:
-                network.chain.family === 'zcash'
-                  ? DEFAULT_NETWORK === 'mainnet'
-                    ? 'Zcash'
-                    : 'Zcash Testnet'
-                  : network.chain.displayName,
-              family: network.chain.family
-            })
+            const choice = getAddressBookNetworkChoice(network.chain.id)
+            if (!choice || choice.family === 'bitcoin') continue
+            choices.set(network.chain.id, choice)
           }
         }
         setAvailableNetworks([...choices.values()])
@@ -123,31 +104,6 @@ export function AddressBook() {
     if (!editing || !name.trim()) return
     renameContact(editing.id, name)
     setEditing(null)
-  }
-
-  const saveNew = () => {
-    const network = availableNetworks.find(item => item.chainId === newChainId)
-    if (!network || !newName.trim() || !newAddress.trim()) return
-    try {
-      if (getContact(network.chainId, newAddress)) {
-        setFormError('This address is already saved on this network')
-        return
-      }
-      addContact({
-        chainId: network.chainId,
-        chainFamily: network.family,
-        network: DEFAULT_NETWORK,
-        networkName: network.name,
-        address: newAddress.trim(),
-        name: newName.trim()
-      })
-      setAdding(false)
-      setNewName('')
-      setNewAddress('')
-      setFormError(null)
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Unable to save address')
-    }
   }
 
   return (
@@ -236,63 +192,13 @@ export function AddressBook() {
           variant="secondary"
           size="wallet"
           className="w-full rounded-[10px] border border-white/10 bg-wallet-surface font-medium text-foreground hover:bg-wallet-selected"
-          onClick={() => {
-            setFormError(null)
-            setAdding(true)
-          }}
+          onClick={() => setAdding(true)}
         >
           Add address
         </Button>
       </div>
 
-      <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent position="bottom" className="gap-3 p-5">
-          <DialogHeader>
-            <DialogTitle>Add address</DialogTitle>
-            <DialogDescription className="sr-only">Save a recipient address</DialogDescription>
-          </DialogHeader>
-          <Input
-            aria-label="Contact name"
-            placeholder="Name"
-            value={newName}
-            maxLength={64}
-            onChange={event => setNewName(event.target.value)}
-          />
-          <select
-            aria-label="Network"
-            value={newChainId}
-            onChange={event => {
-              setNewChainId(event.target.value)
-              setFormError(null)
-            }}
-            className="h-11 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground"
-          >
-            <option value="">Select network</option>
-            {availableNetworks.map(network => (
-              <option key={network.chainId} value={network.chainId}>
-                {network.name}
-              </option>
-            ))}
-          </select>
-          <Input
-            aria-label="Address"
-            placeholder="Address"
-            value={newAddress}
-            onChange={event => {
-              setNewAddress(event.target.value)
-              setFormError(null)
-            }}
-          />
-          {formError && (
-            <p role="alert" className="text-xs text-danger">
-              {formError}
-            </p>
-          )}
-          <Button disabled={!newName.trim() || !newAddress.trim() || !newChainId} onClick={saveNew}>
-            Save address
-          </Button>
-        </DialogContent>
-      </Dialog>
+      <AddAddressDialog open={adding} onOpenChange={setAdding} networks={availableNetworks} />
 
       <Dialog open={editing !== null} onOpenChange={open => !open && setEditing(null)}>
         <DialogContent position="bottom" className="gap-0 p-0">

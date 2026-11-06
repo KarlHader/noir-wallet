@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { toast } from '@/store/toast-store'
@@ -10,6 +10,7 @@ export function InlineEditableName({
   onSave,
   onEditingChange,
   className,
+  endContent,
   disabled = false
 }: {
   value: string
@@ -17,6 +18,7 @@ export function InlineEditableName({
   onSave: (name: string) => Promise<void>
   onEditingChange?: (editing: boolean) => void
   className?: string
+  endContent?: ReactNode
   disabled?: boolean
 }) {
   const [displayName, setDisplayName] = useState(value)
@@ -143,6 +145,7 @@ export function InlineEditableName({
           className="flex max-w-full min-w-0 items-center gap-1.5 rounded text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 disabled:cursor-not-allowed"
         >
           <span className="truncate">{displayName}</span>
+          {endContent}
           <Icon
             icon="lucide:pencil"
             width={12}

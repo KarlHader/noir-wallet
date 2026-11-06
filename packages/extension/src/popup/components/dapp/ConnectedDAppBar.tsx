@@ -24,7 +24,7 @@ export function ConnectedDAppBar({
       <button
         type="button"
         onClick={onManage}
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+        className="wallet-interactive flex min-w-0 flex-1 items-center gap-[9px] rounded-md text-left hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
       >
         <img
           src={dapp.favicon || 'icons/icon128.png'}
@@ -36,7 +36,7 @@ export function ConnectedDAppBar({
           }}
         />
         <span className="min-w-0">
-          <span className="block truncate text-base font-medium">{dapp.name}</span>
+          <span className="block truncate text-base font-normal">{dapp.name}</span>
           <span className="block truncate text-xs text-muted">{dapp.host}</span>
         </span>
       </button>
@@ -45,9 +45,15 @@ export function ConnectedDAppBar({
           type="button"
           aria-label="View connected networks"
           onClick={onManage}
-          className="flex h-[30px] items-center gap-1 rounded-lg bg-white/10 px-1.5"
+          className="wallet-interactive flex h-[30px] min-w-[51px] shrink-0 items-center justify-between gap-1 rounded-lg bg-wallet-selected/80 px-1.5 hover:bg-wallet-selected active:brightness-90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
         >
-          <ChainIcon chain={permissions[0].iconChain} width={18} height={18} showTooltip={false} />
+          <ChainIcon
+            chain={permissions[0].iconChain}
+            width={20}
+            height={20}
+            showTooltip={false}
+            className="shrink-0 rounded-full"
+          />
           {permissions.length > 1 && (
             <span className="text-xs text-muted">+{permissions.length - 1}</span>
           )}
@@ -58,7 +64,7 @@ export function ConnectedDAppBar({
         type="button"
         aria-label={`Disconnect ${dapp.name}`}
         disabled={disconnecting}
-        className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-white/10 text-muted hover:text-foreground disabled:opacity-50"
+        className="wallet-interactive flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-wallet-selected/80 text-muted hover:bg-wallet-selected hover:text-foreground active:brightness-90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={async () => {
           setDisconnecting(true)
           try {
@@ -71,7 +77,7 @@ export function ConnectedDAppBar({
         }}
       >
         <Icon
-          icon={disconnecting ? 'lucide:loader-circle' : 'lucide:unplug'}
+          icon={disconnecting ? 'lucide:loader-circle' : 'lucide:link-2-off'}
           width={16}
           height={16}
           className={disconnecting ? 'animate-spin' : ''}

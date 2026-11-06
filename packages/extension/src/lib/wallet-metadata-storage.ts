@@ -207,6 +207,28 @@ async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   return navigator.locks.request(METADATA_LOCK, operation)
 }
 
+export function withUndeletedWalletAccountMetadata<T>(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet',
+  operation: () => Promise<T>
+): Promise<T> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([DELETED_WALLETS_KEY, DELETED_ACCOUNTS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    if (
+      parseDeletedIds(saved[DELETED_WALLETS_KEY]).has(walletId) ||
+      deletedAccounts.has(`${network}_${walletId}_${accountId}`) ||
+      deletedAccounts.has(
+        `${network === 'mainnet' ? 'testnet' : 'mainnet'}_${walletId}_${accountId}`
+      )
+    ) {
+      throw new Error('Wallet Account metadata is unavailable')
+    }
+    return operation()
+  })
+}
+
 export function readWalletMetadata(): Promise<WalletSnapshot | null> {
   return withMetadataLock(async () => {
     const saved = await chrome.storage.local.get([

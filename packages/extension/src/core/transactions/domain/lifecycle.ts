@@ -80,6 +80,14 @@ function assertStableEvidence(
     throw new Error('externalReference cannot change within one transaction segment')
   }
   if (
+    current.settledAmount != null &&
+    next.settledAmount != null &&
+    (current.settledAmount.assetId !== next.settledAmount.assetId ||
+      current.settledAmount.amountRaw !== next.settledAmount.amountRaw)
+  ) {
+    throw new Error('settledAmount cannot change within one transaction segment')
+  }
+  if (
     current.requiredConfirmations != null &&
     next.requiredConfirmations != null &&
     current.requiredConfirmations !== next.requiredConfirmations

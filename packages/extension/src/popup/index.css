@@ -144,7 +144,7 @@
   --color-success-foreground: #000000;
   --color-danger: #ff4444;
   --color-danger-foreground: #ffffff;
-  --color-private: #ffa200;
+  --color-private: #ffcc00;
   --color-wallet-surface: #22222d;
   --color-wallet-selected: #414152;
   --color-wallet-secondary: #bcbcc8;
@@ -188,6 +188,28 @@ body {
 
 button {
   cursor: pointer;
+}
+
+.wallet-interactive {
+  transition-property: background-color, border-color, color, box-shadow, opacity, filter;
+  transition-duration: 160ms;
+  transition-timing-function: ease-out;
+}
+
+@media (hover: hover) {
+  .wallet-action-button:enabled:hover > .wallet-action-surface {
+    background-color: rgb(255 255 255 / 10%);
+  }
+}
+
+.wallet-action-button:enabled:active > .wallet-action-surface {
+  filter: brightness(0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wallet-interactive {
+    transition: none;
+  }
 }
 
 #root {
@@ -237,18 +259,22 @@ html[data-surface='side-panel'] #root {
   );
 }
 
+[data-wallet-mode='private'] .wallet-action-icon {
+  color: var(--color-private);
+}
+
 /* Full browser tab (hardware wallet flows): show the app as a centered card */
 @media (min-width: 600px) and (min-height: 700px) {
-  html,
-  body,
-  #root {
+  html:not([data-surface='side-panel']),
+  html:not([data-surface='side-panel']) body,
+  html:not([data-surface='side-panel']) #root {
     width: 100vw;
     height: 100vh;
     min-height: 100vh;
     max-height: none;
   }
 
-  .page-container {
+  html:not([data-surface='side-panel']) .page-container {
     max-width: 420px;
     max-height: 760px;
     border: 1px solid var(--color-border);
@@ -258,7 +284,7 @@ html[data-surface='side-panel'] #root {
 
   /* Hardware flows open in a full browser tab: fill the tab with the app
      background (no floating card) and center content in a readable column. */
-  .page-container--tab {
+  html:not([data-surface='side-panel']) .page-container--tab {
     max-width: 100%;
     max-height: 100%;
     width: 100%;
@@ -267,9 +293,9 @@ html[data-surface='side-panel'] #root {
     border-radius: 0;
   }
 
-  .page-container--tab > header,
-  .page-container--tab > .page-content,
-  .page-container--tab > .page-footer {
+  html:not([data-surface='side-panel']) .page-container--tab > header,
+  html:not([data-surface='side-panel']) .page-container--tab > .page-content,
+  html:not([data-surface='side-panel']) .page-container--tab > .page-footer {
     width: 100%;
     max-width: 440px;
     margin-left: auto;

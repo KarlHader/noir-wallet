@@ -2,7 +2,8 @@ export type EvmAddressRole = 'public' | 'confidential' | 'unknown'
 
 interface LocalAccountAddresses {
   readonly networks: readonly {
-    readonly chain: { readonly id: string }
+    readonly chain?: { readonly id: string }
+    readonly chainId?: string
     readonly addresses: readonly { readonly value: string }[]
     readonly privateExecutionAddress?: string
   }[]
@@ -17,7 +18,7 @@ export function resolveEvmAddressRole(
   if (!/^0x[0-9a-f]{40}$/i.test(address)) return 'unknown'
   const normalized = address.toLowerCase()
   const networks = accounts.flatMap(account =>
-    account.networks.filter(network => network.chain.id === chainId)
+    account.networks.filter(network => (network.chain?.id ?? network.chainId) === chainId)
   )
   if (networks.some(network => network.privateExecutionAddress?.toLowerCase() === normalized))
     return 'confidential'

@@ -19,6 +19,14 @@ export interface TransactionReviewRow {
   readonly content: ReactNode
 }
 
+export function ReviewDownTriangle({ className }: { readonly className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 12 12" width={12} height={12} className={className}>
+      <path d="M1 3h10L6 9z" fill="currentColor" />
+    </svg>
+  )
+}
+
 interface TransactionReviewViewProps {
   readonly title: string
   readonly titleId?: string
@@ -28,6 +36,7 @@ interface TransactionReviewViewProps {
   readonly amount: string
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
+  readonly summary?: ReactNode
   readonly notice?: ReactNode
   readonly error?: ReactNode
   readonly confirmLabel: string
@@ -48,6 +57,7 @@ export function TransactionReviewView({
   amount,
   network,
   rows,
+  summary,
   notice,
   error,
   confirmLabel,
@@ -94,50 +104,52 @@ export function TransactionReviewView({
           </div>
         )}
 
-        <div
-          className={
-            figma
-              ? 'flex flex-col items-center pb-5 pt-[18px]'
-              : 'flex flex-col items-center pb-4 pt-4'
-          }
-        >
-          {!figma &&
-            (asset ? (
-              <TokenIcon
-                assetId={asset.assetId}
-                symbol={asset.symbol}
-                icon={asset.icon}
-                blockchain={asset.blockchain}
-                nativeChain={asset.nativeChain}
-                size="xl"
-              />
-            ) : (
-              <Skeleton className="size-16 rounded-full" />
-            ))}
+        {summary ?? (
           <div
             className={
               figma
-                ? 'max-w-full min-w-0 break-all text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
-                : 'mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight'
+                ? 'flex flex-col items-center pb-5 pt-[18px]'
+                : 'flex flex-col items-center pb-4 pt-4'
             }
           >
-            {amount && asset ? (
-              <AmountDisplay
-                value={amount}
-                symbol={asset.symbol}
-                className={figma ? 'gap-[0.25em] font-sans normal-nums' : undefined}
-              />
-            ) : (
-              <Skeleton className="h-7 w-36" />
-            )}
+            {!figma &&
+              (asset ? (
+                <TokenIcon
+                  assetId={asset.assetId}
+                  symbol={asset.symbol}
+                  icon={asset.icon}
+                  blockchain={asset.blockchain}
+                  nativeChain={asset.nativeChain}
+                  size="xl"
+                />
+              ) : (
+                <Skeleton className="size-16 rounded-full" />
+              ))}
+            <div
+              className={
+                figma
+                  ? 'max-w-full min-w-0 break-all text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
+                  : 'mt-3 max-w-full min-w-0 text-center text-xl font-bold leading-tight'
+              }
+            >
+              {amount && asset ? (
+                <AmountDisplay
+                  value={amount}
+                  symbol={asset.symbol}
+                  className={figma ? 'justify-center gap-x-[0.25em]' : undefined}
+                />
+              ) : (
+                <Skeleton className="h-7 w-36" />
+              )}
+            </div>
+            {!figma &&
+              (network ? (
+                <p className="mt-1 text-xs text-muted">{network}</p>
+              ) : (
+                <Skeleton className="mt-2 h-3 w-20" />
+              ))}
           </div>
-          {!figma &&
-            (network ? (
-              <p className="mt-1 text-xs text-muted">{network}</p>
-            ) : (
-              <Skeleton className="mt-2 h-3 w-20" />
-            ))}
-        </div>
+        )}
 
         {notice}
 
@@ -153,7 +165,7 @@ export function TransactionReviewView({
               key={`${row.label}-${index}`}
               className={
                 figma
-                  ? 'flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-4 [&_.font-mono]:font-sans'
+                  ? 'flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-4'
                   : 'flex min-w-0 items-start justify-between gap-4 py-2.5'
               }
             >
@@ -202,6 +214,42 @@ export function TransactionReviewView({
           {confirmLabel}
         </Button>
       </div>
+    </div>
+  )
+}
+
+export function TransactionReviewExchangeSummary({
+  source,
+  destination
+}: {
+  readonly source: { readonly asset: TransactionReviewAsset; readonly amount: string }
+  readonly destination: { readonly asset: TransactionReviewAsset; readonly amount: string }
+}) {
+  return (
+    <div className="space-y-3 pb-6 pt-[18px]">
+      {([source, destination] as const).map((entry, index) => (
+        <div key={index}>
+          {index === 1 && <ReviewDownTriangle className="mb-3 ml-4 text-muted/60" />}
+          <div className="flex min-w-0 items-center gap-4">
+            <TokenIcon
+              assetId={entry.asset.assetId}
+              symbol={entry.asset.symbol}
+              icon={entry.asset.icon}
+              blockchain={entry.asset.blockchain}
+              nativeChain={entry.asset.nativeChain}
+              size={42}
+            />
+            <div className="min-w-0 flex-1 text-[26px] font-semibold leading-8">
+              <AmountDisplay
+                value={entry.amount}
+                symbol={entry.asset.symbol}
+                prefix={index === 0 ? '-' : '+'}
+                className="max-w-full justify-start font-sans tabular-nums"
+              />
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

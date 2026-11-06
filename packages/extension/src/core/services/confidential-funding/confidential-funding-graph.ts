@@ -8,7 +8,7 @@ import {
 
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
-  readonly operation?: 'deposit' | 'withdraw' | 'cluster'
+  readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly scope: TransactionAccountScope
@@ -27,6 +27,7 @@ export function createConfidentialFundingGraph(input: {
     expectedAmountRaw: string
     address: string
   }>
+  readonly externalRecipient?: boolean
   readonly withdrawDepositAddresses: readonly (string | null)[]
   readonly requiresDeposit: boolean
   readonly signedWithdrawFingerprint?: string
@@ -40,6 +41,8 @@ export function createConfidentialFundingGraph(input: {
       (input.operation === 'withdraw' &&
         (input.sourceDomain !== 'shield' ||
           !['public', 'private'].includes(input.destinationDomain ?? ''))) ||
+      (input.operation === 'swap' &&
+        (input.sourceDomain !== 'shield' || input.destinationDomain !== 'shield')) ||
       (input.operation === 'cluster' &&
         (!['public', 'private', 'shield'].includes(input.sourceDomain ?? '') ||
           !['public', 'private'].includes(input.destinationDomain ?? '') ||
@@ -74,7 +77,7 @@ export function createConfidentialFundingGraph(input: {
       revision: 0,
       intent: {
         schemaVersion: 1,
-        direction: input.operation ? 'self' : 'outgoing',
+        direction: input.operation && !input.externalRecipient ? 'self' : 'outgoing',
         ...(input.operation
           ? {
               shield: {
@@ -147,7 +150,14 @@ export function createConfidentialFundingGraph(input: {
         id,
         transactionId,
         role: 'destination' as const,
-        target: { kind: 'onchain' as const, chainId: input.destination.chainId },
+        target:
+          input.operation === 'swap'
+            ? {
+                kind: 'protocol' as const,
+                provider: 'Confidential Intents',
+                account: input.destination.address
+              }
+            : { kind: 'onchain' as const, chainId: input.destination.chainId },
         status: 'created' as const,
         requiredForFinality: false,
         dependsOn: [relayId],

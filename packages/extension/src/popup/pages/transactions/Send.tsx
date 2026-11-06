@@ -421,24 +421,6 @@ export function Send() {
       <div className="page-content min-h-0 !px-4 pt-4">
         <div className="space-y-2">
           <div className="pb-1 pt-1 text-center">
-            <SendAmountInputCard
-              hero
-              testId="zcash-amount-card"
-              ariaLabel="ZEC amount"
-              value={amount}
-              onChange={nextAmount => {
-                if (!/^\d*\.?\d*$/.test(nextAmount)) return
-                setMaxSelected(false)
-                setAmount(nextAmount)
-              }}
-              available={sourceBalance.available}
-              pending={sourceBalance.pending}
-              symbol="ZEC"
-              priceUsd={zecPrice}
-              maxSelected={maxSelected}
-              invalid={reviewInsufficient}
-              error={amountErrorCopy}
-            />
             <span className="mt-2 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2 text-base font-medium leading-[21px]">
               <TokenIcon symbol="ZEC" nativeChain="zcash" size={26} />
               ZEC
@@ -575,6 +557,24 @@ export function Send() {
               />
             )}
           </div>
+
+          <SendAmountInputCard
+            testId="zcash-amount-card"
+            ariaLabel="ZEC amount"
+            value={amount}
+            onChange={nextAmount => {
+              if (!/^\d*\.?\d*$/.test(nextAmount)) return
+              setMaxSelected(false)
+              setAmount(nextAmount)
+            }}
+            available={sourceBalance.available}
+            pending={sourceBalance.pending}
+            symbol="ZEC"
+            priceUsd={zecPrice}
+            maxSelected={maxSelected}
+            invalid={reviewInsufficient}
+            error={amountErrorCopy}
+          />
 
           <div className="flex min-h-5 items-center justify-between gap-2 text-xs">
             <span className="text-muted">Fee</span>
@@ -785,7 +785,7 @@ export function Send() {
                 <AmountDisplay
                   value={amount}
                   symbol="ZEC"
-                  className="gap-[0.25em] font-sans normal-nums"
+                  className="gap-[0.25em] font-sans tabular-nums"
                 />
               </div>
               <p className="mt-3 text-base leading-[21px] text-muted">

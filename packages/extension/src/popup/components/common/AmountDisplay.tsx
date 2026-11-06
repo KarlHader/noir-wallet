@@ -25,7 +25,7 @@ export function AmountDisplay({
 
   if (review.exact === null) {
     return (
-      <span className={className}>
+      <span className={cn('font-sans tabular-nums', className)}>
         {display}
         {symbol ? ` ${symbol}` : ''}
       </span>
@@ -39,13 +39,13 @@ export function AmountDisplay({
           <button
             type="button"
             className={cn(
-              'inline-flex max-w-full min-w-0 items-baseline justify-end gap-1 font-mono tabular-nums text-inherit hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+              'inline-flex max-w-full min-w-0 flex-wrap items-baseline justify-end gap-x-1 font-sans tabular-nums text-inherit hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
               className
             )}
             aria-label={`Show full ${symbol ? `${symbol} ` : ''}amount`}
             title="Show full amount"
           >
-            <span className="min-w-0 break-all text-right">
+            <span className="max-w-full min-w-0 break-all text-right">
               {prefix}
               {display}
             </span>

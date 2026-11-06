@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
+import type { SwapToken } from '@/core/services/intents-api'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import {
   formatBaseUnitDecimalAmount,
   formatFiatAmount,
-  formatTokenPrice
+  formatTokenPrice,
+  formatTokenQuantity
 } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { findAssetPrice } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
+import { useAccountDataStore } from '@/store/account-data-store'
+import { canShieldTransparentFunds } from '@/core/zcash/shielding'
+import { getFundingBalance } from '@/core/wallet/funding-balance'
+import Big from '@/lib/big'
+import { useShieldFunds } from '@/popup/hooks/useShieldFunds'
 import { confidentialFundingClient } from '@/popup/services/confidential-funding-client'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -16,11 +24,16 @@ import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { useNavigate } from '@/popup/provider/Router'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
+import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import {
+  availableDepositTokens,
+  depositSourceNetworks
+} from '@/popup/services/shield-deposit-options'
+import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
 import { buildShieldProviderGroups, type ShieldProvider } from '@/popup/services/asset-domains'
+import { NearConfidentialHoldingRow } from '@/popup/components/portfolio/NearConfidentialHoldingRow'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
-import { getZcashChainId } from '@/core/chains/registry'
-import { resolveChainExplorerTarget } from '@/popup/services/chain-explorer'
 import { PortfolioChainAssetRow } from '@/popup/components/portfolio/PortfolioAssetGroupCard'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import {
@@ -41,6 +54,8 @@ export function ShieldProviderDetail() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
+  const { isShielding, handleShieldFunds, shieldSheet } = useShieldFunds()
   const { activeAccount } = useActiveAccountNetworks()
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
@@ -55,8 +70,16 @@ export function ShieldProviderDetail() {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [pricesLoading, setPricesLoading] = useState(true)
+  const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
+  const hasZcashAccount =
+    activeAccount?.networks.some(network => network.chain.family === 'zcash') ??
+    model?.chains.some(chain => chain.chain.family === 'zcash') ??
+    false
+  const canShieldZcash = hasZcashAccount && canShieldTransparentFunds(zcashBalance)
+  const canSendShieldedZcash =
+    hasZcashAccount && new Big(getFundingBalance(zcashBalance, 'shielded').available).gt(0)
 
   useEffect(() => {
     let active = true
@@ -77,44 +100,56 @@ export function ShieldProviderDetail() {
     }
   }, [])
 
+  useEffect(() => {
+    if (provider !== 'near-confidential') return
+    let active = true
+    void swapTokenCatalogClient
+      .readCached()
+      .then(tokens => {
+        if (active && tokens.length > 0) setDirectoryTokens(tokens)
+      })
+      .catch(() => {})
+    void swapTokenCatalogClient
+      .refresh()
+      .then(tokens => {
+        if (active) setDirectoryTokens(tokens)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [provider])
+
+  const near = useMemo(() => summarizeNearConfidentialHoldings(model, prices), [model, prices])
   const group = useMemo(
     () =>
-      model && provider
+      model && provider === 'zcash-shield'
         ? buildShieldProviderGroups(model, prices).find(item => item.id === provider)
         : null,
     [model, prices, provider]
   )
-  const shieldBalanceUnknown = Boolean(
-    model?.assets.some(
-      asset =>
-        asset.asset.chainId.startsWith('eip155:') && asset.balance.confidentialRaw === undefined
-    )
-  )
+  const selectedNearEntry = near.entries.find(entry => entry.asset.tokenId === selectedAssetId)
+  const canAttemptNearSpend = near.status !== 'ready' || near.entries.length > 0
+  const selectedNearAssetId = selectedNearEntry?.asset.assetId
   const selectedEntry = group?.entries.find(entry => entry.asset.asset.id === selectedAssetId)
   const selectedQuote = selectedEntry ? findAssetPrice(prices, selectedEntry.asset.asset.id) : null
   const selectedAssetFiat = selectedEntry
     ? getPortfolioAssetUsdValue(selectedEntry.asset, prices)
     : null
-  const networks =
-    model?.chains.filter(chain =>
-      provider === 'near-confidential'
-        ? chain.chain.family === 'evm' && chain.chain.network.kind === 'mainnet'
-        : provider === 'zcash-shield' && chain.chain.family === 'zcash'
-    ) ?? []
+  const networks = model?.chains.filter(chain => chain.chain.family === 'zcash') ?? []
+  const supportedNetworks = useMemo(() => depositSourceNetworks(), [])
+  const supportedTokens = directoryTokens
+    ? availableDepositTokens(directoryTokens, supportedNetworks)
+    : null
+  const providerFiat = provider === 'near-confidential' ? near.fiat : group?.fiat
   const displayFiat = balancesHidden
     ? '••••'
-    : group?.fiat === null || group?.fiat === undefined
-      ? pricesLoading
+    : providerFiat === null || providerFiat === undefined
+      ? status === 'loading' || (provider === 'zcash-shield' && pricesLoading)
         ? '…'
         : '—'
-      : formatFiatAmount(group.fiat, { showSign: true })
+      : formatFiatAmount(providerFiat, { showSign: true })
   const mode = searchParams.get('mode')
-  const explorerUrl =
-    provider === 'near-confidential'
-      ? 'https://explorer.near-intents.org/'
-      : provider === 'zcash-shield'
-        ? resolveChainExplorerTarget(getZcashChainId(currentNetwork), currentNetwork)?.baseUrl
-        : null
   const connectShield = async () => {
     if (!account || connecting) return
     setConnecting(true)
@@ -157,7 +192,11 @@ export function ShieldProviderDetail() {
     return (
       <div className="page-container items-center justify-center">
         <p className="text-sm text-muted">Shield account unavailable</p>
-        <button type="button" onClick={goBack} className="mt-4 text-sm text-primary">
+        <button
+          type="button"
+          onClick={goBack}
+          className="wallet-interactive mt-4 rounded-sm text-sm text-primary hover:bg-primary/10 active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+        >
           Back
         </button>
       </div>
@@ -173,7 +212,7 @@ export function ShieldProviderDetail() {
             type="button"
             aria-label="Back"
             onClick={goBack}
-            className="absolute left-4 top-4 flex size-7 items-center justify-center text-white"
+            className="wallet-interactive absolute left-4 top-4 flex size-7 items-center justify-center rounded-md text-white hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
           >
             <Icon icon="lucide:chevron-left" width={22} height={22} />
           </button>
@@ -187,48 +226,143 @@ export function ShieldProviderDetail() {
               details are shielded from public view.
             </p>
           )}
+          {provider === 'near-confidential' ? (
+            <div className="mt-6 grid grid-cols-2 gap-3 text-center">
+              <div className="min-w-0">
+                <div className="flex h-5 items-center justify-center -space-x-1">
+                  {supportedNetworks.slice(0, 7).map(network => (
+                    <ChainIcon
+                      key={network.id}
+                      chain={
+                        network.family === 'evm'
+                          ? resolveEvmChainIconAlias(network.id)
+                          : resolveChainIconAlias(network.family, network.displayName)
+                      }
+                      width={17}
+                      height={17}
+                      className="shrink-0 rounded-full border border-background"
+                    />
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-wallet-secondary">
+                  {supportedNetworks.length} Supported networks
+                </p>
+              </div>
+              <div className="min-w-0">
+                <div className="flex h-5 items-center justify-center -space-x-1">
+                  {supportedTokens?.slice(0, 7).map(token => (
+                    <TokenIcon
+                      key={token.assetId}
+                      token={token}
+                      size={17}
+                      className="shrink-0 rounded-full border border-background"
+                    />
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-wallet-secondary">
+                  {supportedTokens?.length ?? '—'} Supported tokens
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 flex min-h-5 items-center justify-between gap-3 text-left">
+              <span className="shrink-0 text-xs text-wallet-secondary">Supported networks</span>
+              <span className="flex min-w-0 flex-wrap justify-end gap-1.5">
+                {networks.map(chain => (
+                  <ChainIcon
+                    key={chain.chain.id}
+                    chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
+                    width={16}
+                    height={16}
+                    className="shrink-0"
+                  />
+                ))}
+              </span>
+            </div>
+          )}
           <div
-            className={`${provider === 'near-confidential' ? 'mt-8' : 'mt-5'} flex min-h-5 items-center justify-between gap-3 text-left`}
+            className={`mt-4 grid gap-2 ${provider === 'near-confidential' ? 'grid-cols-4' : 'grid-cols-3'}`}
           >
-            <span className="shrink-0 text-xs text-[var(--color-wallet-secondary)]">
-              Supported networks
-            </span>
-            <span className="flex min-w-0 max-w-[190px] flex-wrap justify-end gap-1.5">
-              {networks.map(chain => (
-                <ChainIcon
-                  key={chain.chain.id}
-                  chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
-                  width={16}
-                  height={16}
-                  className="shrink-0"
-                  showTooltip
-                />
-              ))}
-            </span>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() =>
-                navigate(
-                  transferPath(group?.entries[0]?.asset.asset.id ?? null, 'public', 'shield')
-                )
-              }
-              className="flex h-[50px] items-center justify-center gap-2 rounded-xl bg-[var(--color-wallet-surface)] text-sm hover:bg-[var(--color-wallet-selected)]"
-            >
-              <Icon icon="lucide:arrow-left-right" width={20} height={20} />
-              Transfer
-            </button>
-            <a
-              href={explorerUrl ?? undefined}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-disabled={!explorerUrl}
-              className="flex h-[50px] items-center justify-center gap-2 rounded-xl bg-[var(--color-wallet-surface)] text-sm hover:bg-[var(--color-wallet-selected)] aria-disabled:pointer-events-none aria-disabled:opacity-40"
-            >
-              <Icon icon="lucide:globe" width={20} height={20} />
-              Explore
-            </a>
+            {provider === 'near-confidential' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate('/shield-deposit?provider=near-confidential')}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  <Icon icon="lucide:arrow-down-to-line" width={20} height={20} />
+                  Deposit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/shield-withdraw?provider=near-confidential')}
+                  disabled={!canAttemptNearSpend}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  <Icon icon="lucide:arrow-up-from-line" width={20} height={20} />
+                  Withdraw
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      transferPath(
+                        near.entries.find(entry => entry.asset.assetId)?.asset.assetId ?? null,
+                        'shield',
+                        'private'
+                      )
+                    )
+                  }
+                  disabled={!canAttemptNearSpend}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  <Icon icon="lucide:arrow-left-right" width={20} height={20} />
+                  Move
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/shield-swap?provider=near-confidential')}
+                  disabled={!canAttemptNearSpend}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  <Icon icon="lucide:scan" width={20} height={20} />
+                  Swap
+                </button>
+              </>
+            )}
+            {provider === 'zcash-shield' && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleShieldFunds}
+                  disabled={!canShieldZcash || isShielding}
+                  title={
+                    !canShieldZcash ? 'No confirmed transparent ZEC available to shield' : undefined
+                  }
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  <Icon icon="lucide:arrow-down-to-line" width={20} height={20} />
+                  Deposit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/send/zcash?from=shielded')}
+                  disabled={!canSendShieldedZcash}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  <Icon icon="lucide:arrow-up-from-line" width={20} height={20} />
+                  Withdraw
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/addresses-list')}
+                  className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs hover:bg-[var(--color-wallet-selected)] active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  <Icon icon="lucide:arrow-down-left" width={20} height={20} />
+                  Receive
+                </button>
+              </>
+            )}
           </div>
         </header>
 
@@ -239,14 +373,14 @@ export function ShieldProviderDetail() {
             </p>
             <div className="mt-0.5 flex items-center justify-center gap-1.5 text-sm text-[var(--color-wallet-secondary)]">
               <span>Total deposit</span>
-              {provider === 'near-confidential' && !shieldBalanceUnknown && (
+              {provider === 'near-confidential' && near.status === 'ready' && (
                 <button
                   type="button"
                   title="Refresh Shield balance"
                   aria-label="Refresh Shield balance"
                   onClick={() => void connectShield()}
                   disabled={connecting}
-                  className="text-primary disabled:opacity-50"
+                  className="wallet-interactive rounded-md text-primary enabled:hover:bg-primary/10 enabled:active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
                 >
                   <Icon
                     icon="lucide:refresh-cw"
@@ -257,12 +391,12 @@ export function ShieldProviderDetail() {
                 </button>
               )}
             </div>
-            {provider === 'near-confidential' && shieldBalanceUnknown && (
+            {provider === 'near-confidential' && near.status === 'unavailable' && (
               <button
                 type="button"
                 onClick={() => void connectShield()}
                 disabled={connecting}
-                className="mt-2 text-sm font-medium text-primary disabled:opacity-50"
+                className="wallet-interactive mt-2 rounded-md text-sm font-medium text-primary enabled:hover:bg-primary/10 enabled:active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
               >
                 {connecting ? 'Connecting…' : 'Connect Shield'}
               </button>
@@ -273,8 +407,20 @@ export function ShieldProviderDetail() {
               </p>
             )}
           </div>
-          {group?.entries.length &&
-          group.entries.some(entry => BigInt(entry.asset.balance.totalRaw) > 0n) ? (
+          {provider === 'near-confidential' && near.entries.length > 0 ? (
+            <div className="divide-y divide-white/[0.08]">
+              {near.entries.map(entry => (
+                <NearConfidentialHoldingRow
+                  key={entry.asset.tokenId}
+                  entry={entry}
+                  balancesHidden={balancesHidden}
+                  onClick={() => setSelectedAssetId(entry.asset.tokenId)}
+                />
+              ))}
+            </div>
+          ) : provider === 'zcash-shield' &&
+            group?.entries.length &&
+            group.entries.some(entry => BigInt(entry.asset.balance.totalRaw) > 0n) ? (
             <div className="divide-y divide-white/[0.08]">
               {group.entries.map(entry => (
                 <PortfolioChainAssetRow
@@ -290,21 +436,103 @@ export function ShieldProviderDetail() {
             </div>
           ) : status === 'loading' ? (
             <p className="px-4 py-5 text-center text-sm text-muted">Loading balances…</p>
-          ) : group?.fiat === '0' ? (
-            <button
-              type="button"
-              onClick={() =>
-                navigate(transferPath(group.entries[0]?.asset.asset.id ?? null, 'public', 'shield'))
-              }
-              className="mx-auto mt-4 flex h-[42px] min-w-[165px] items-center justify-center rounded-xl bg-[var(--color-wallet-selected)] px-5 text-sm font-medium hover:bg-[var(--color-wallet-surface)]"
-            >
-              Deposit
-            </button>
           ) : (
+              provider === 'near-confidential' ? near.status === 'ready' : group?.fiat === '0'
+            ) ? null : (
             <p className="px-4 py-5 text-center text-sm text-muted">Balance unavailable</p>
           )}
         </section>
       </div>
+
+      {provider === 'near-confidential' && selectedNearEntry && (
+        <Dialog open onOpenChange={open => !open && setSelectedAssetId(null)}>
+          <DialogContent
+            position="bottom"
+            className="min-h-[210px] gap-0 bg-wallet-surface px-4 pb-8 pt-4"
+            showCloseButton={false}
+          >
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => setSelectedAssetId(null)}
+              className="wallet-interactive ml-auto flex size-6 items-center justify-center rounded-md hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+            >
+              <Icon icon="lucide:x" width={20} height={20} />
+            </button>
+            <div className="mt-1 flex items-center gap-3">
+              <TokenIcon
+                assetId={selectedNearEntry.asset.assetId}
+                symbol={selectedNearEntry.asset.symbol ?? '?'}
+                icon={selectedNearEntry.asset.iconUrl}
+                size={32}
+              />
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="truncate text-base font-medium">
+                  {selectedNearEntry.asset.symbol ?? 'Unknown token'}
+                </DialogTitle>
+                <DialogDescription className="sr-only">Confidential holding</DialogDescription>
+                <p className="text-xs text-muted">
+                  {selectedNearEntry.priceUsd
+                    ? formatTokenPrice(selectedNearEntry.priceUsd, { showSign: true })
+                    : '—'}
+                </p>
+              </div>
+              <div className="min-w-0 text-right">
+                <p className="font-medium">
+                  {balancesHidden
+                    ? '••••'
+                    : selectedNearEntry.fiat === null
+                      ? '—'
+                      : formatFiatAmount(selectedNearEntry.fiat, { showSign: true })}
+                </p>
+                <p className="text-xs text-muted">
+                  {balancesHidden
+                    ? '••••'
+                    : selectedNearEntry.amount === null
+                      ? '—'
+                      : formatTokenQuantity(selectedNearEntry.amount)}
+                </p>
+              </div>
+            </div>
+            {(!selectedNearEntry.asset.symbol || selectedNearEntry.identityLabel) && (
+              <p className="mt-4 break-all font-mono text-xs text-muted">
+                {selectedNearEntry.asset.protocolAssetId}
+              </p>
+            )}
+            {!balancesHidden && selectedNearEntry.amount === null && (
+              <p className="mt-2 break-all font-mono text-xs text-muted">
+                Raw balance: {selectedNearEntry.asset.availableRaw}
+              </p>
+            )}
+            {selectedNearAssetId && selectedNearEntry.amount !== null && (
+              <div className="mt-8 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      `/shield-deposit?provider=near-confidential&assetId=${encodeURIComponent(selectedNearAssetId)}`
+                    )
+                  }
+                  className="wallet-interactive h-11 rounded-lg bg-wallet-selected text-sm font-medium hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  Deposit
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      `/shield-withdraw?provider=near-confidential&assetId=${encodeURIComponent(selectedNearAssetId)}`
+                    )
+                  }
+                  className="wallet-interactive h-11 rounded-lg bg-wallet-selected text-sm font-medium hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
+                  Withdraw
+                </button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
 
       {selectedEntry && (
         <Dialog open onOpenChange={open => !open && setSelectedAssetId(null)}>
@@ -317,7 +545,7 @@ export function ShieldProviderDetail() {
               type="button"
               aria-label="Close"
               onClick={() => setSelectedAssetId(null)}
-              className="ml-auto flex size-6 items-center justify-center"
+              className="wallet-interactive ml-auto flex size-6 items-center justify-center rounded-md hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             >
               <Icon icon="lucide:x" width={20} height={20} />
             </button>
@@ -365,18 +593,22 @@ export function ShieldProviderDetail() {
                   <button
                     type="button"
                     onClick={() =>
-                      navigate(transferPath(selectedEntry.asset.asset.id, 'public', 'shield'))
+                      navigate(
+                        `/shield-deposit?provider=near-confidential&assetId=${encodeURIComponent(selectedEntry.asset.asset.id)}`
+                      )
                     }
-                    className="h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium"
+                    className="wallet-interactive h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     Deposit
                   </button>
                   <button
                     type="button"
                     onClick={() =>
-                      navigate(transferPath(selectedEntry.asset.asset.id, 'shield', 'private'))
+                      navigate(
+                        `/shield-withdraw?provider=near-confidential&assetId=${encodeURIComponent(selectedEntry.asset.asset.id)}`
+                      )
                     }
-                    className="h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium"
+                    className="wallet-interactive h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                   >
                     Withdraw
                   </button>
@@ -386,10 +618,10 @@ export function ShieldProviderDetail() {
                   type="button"
                   onClick={() =>
                     navigate(
-                      `/asset-detail?assetId=${encodeURIComponent(selectedEntry.asset.asset.id)}&domain=shield`
+                      `/asset-detail?assetId=${encodeURIComponent(selectedEntry.asset.asset.id)}&domain=shield${mode === 'public' || mode === 'private' ? `&mode=${mode}` : ''}`
                     )
                   }
-                  className="col-span-2 h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium"
+                  className="wallet-interactive col-span-2 h-11 rounded-lg bg-[var(--color-wallet-selected)] text-sm font-medium hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
                 >
                   View Zcash actions
                 </button>
@@ -398,6 +630,7 @@ export function ShieldProviderDetail() {
           </DialogContent>
         </Dialog>
       )}
+      {shieldSheet}
     </div>
   )
 }

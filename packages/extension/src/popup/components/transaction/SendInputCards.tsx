@@ -159,9 +159,9 @@ export function SendAmountInputCard({
             onChange={event => onChange(event.target.value)}
             placeholder="0"
             className={cn(
-              'min-w-0 flex-1 bg-transparent font-mono text-2xl text-foreground outline-none placeholder:text-muted/45',
+              'min-w-0 flex-1 bg-transparent font-sans text-2xl tabular-nums text-foreground outline-none placeholder:text-muted/45',
               hero &&
-                'h-10 px-2 text-center font-sans text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
+                'h-10 px-2 text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
             )}
           />
           {onMax && (

@@ -39,6 +39,7 @@ export interface TokenSelectorProps {
   balances?: ReadonlyMap<string, string>
   catalogLoading?: boolean
   stableCatalogOrder?: boolean
+  fullHeight?: boolean
   networkFilterStyle?: 'dropdown' | 'icons'
   excludeAssetId?: string
   emptyMessage?: string
@@ -51,6 +52,7 @@ export function TokenSelector({
   balances,
   catalogLoading = false,
   stableCatalogOrder = false,
+  fullHeight = false,
   networkFilterStyle = 'dropdown',
   excludeAssetId,
   emptyMessage = 'No tokens found'
@@ -163,11 +165,15 @@ export function TokenSelector({
     <div
       className={cn(
         'flex flex-col',
-        networkFilterStyle === 'icons' ? 'h-[min(78vh,510px)]' : 'h-[60vh]'
+        fullHeight
+          ? 'h-full min-h-0'
+          : networkFilterStyle === 'icons'
+            ? 'h-[min(78vh,510px)]'
+            : 'h-[60vh]'
       )}
     >
       <div
-        className={cn('sticky top-0 z-10', networkFilterStyle === 'icons' ? 'pb-3 pt-2' : 'py-4')}
+        className={cn('sticky top-0 z-10', networkFilterStyle === 'icons' ? 'pb-3 pt-1.5' : 'py-4')}
       >
         <Input
           type="text"
@@ -176,14 +182,14 @@ export function TokenSelector({
           onChange={e => setSearch(e.target.value)}
           className={cn(
             'h-10',
-            networkFilterStyle === 'icons' && 'rounded-lg bg-card border-transparent'
+            networkFilterStyle === 'icons' && 'h-[45px] rounded-xl border-transparent bg-card'
           )}
           autoFocus
           startContent={<Icon icon="lucide:search" className="text-muted" width={16} height={16} />}
         />
         {networkFilterStyle === 'icons' ? (
           <div
-            className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1"
+            className="mt-4 flex items-center gap-2 overflow-x-auto pb-1"
             role="group"
             aria-label="Filter assets by network"
           >
@@ -192,7 +198,7 @@ export function TokenSelector({
               onClick={() => setSelectedBlockchain('all')}
               aria-pressed={effectiveBlockchain === 'all'}
               className={cn(
-                'flex size-8 shrink-0 items-center justify-center rounded-md border text-xs transition-colors',
+                'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border text-sm hover:bg-accent active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
                 effectiveBlockchain === 'all'
                   ? 'border-primary text-foreground'
                   : 'border-transparent bg-card text-muted hover:text-foreground'
@@ -210,7 +216,7 @@ export function TokenSelector({
                 aria-pressed={effectiveBlockchain === option.id}
                 title={option.label}
                 className={cn(
-                  'flex size-8 shrink-0 items-center justify-center rounded-md border transition-colors',
+                  'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border hover:bg-accent active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
                   effectiveBlockchain === option.id
                     ? 'border-primary bg-primary/10'
                     : 'border-transparent bg-card hover:bg-accent'
@@ -218,8 +224,8 @@ export function TokenSelector({
               >
                 <ChainIcon
                   chain={option.id}
-                  width={22}
-                  height={22}
+                  width={28}
+                  height={28}
                   className="rounded-[4px]"
                   showTooltip={false}
                   alt=""
@@ -236,7 +242,7 @@ export function TokenSelector({
                     aria-label="More networks"
                     title="More networks"
                     className={cn(
-                      'flex size-8 shrink-0 items-center justify-center rounded-md border text-xs transition-colors',
+                      'wallet-interactive flex size-10 shrink-0 items-center justify-center rounded-md border text-sm hover:bg-accent active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
                       moreNetworks.some(option => option.id === effectiveBlockchain)
                         ? 'border-primary bg-primary/10'
                         : 'border-transparent bg-card hover:bg-accent'
@@ -299,7 +305,7 @@ export function TokenSelector({
               <button
                 type="button"
                 aria-label={`Filter assets by network: ${selectedNetworkLabel}`}
-                className="mt-3 inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-card px-3 text-xs text-foreground transition-colors hover:bg-accent"
+                className="wallet-interactive mt-3 inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-card px-3 text-xs text-foreground hover:bg-accent active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               >
                 {selectedNetwork ? (
                   <ChainIcon
@@ -375,9 +381,12 @@ export function TokenSelector({
           </p>
         )}
       </div>
-      {networkFilterStyle === 'icons' && <p className="px-1 pb-1 text-[11px] text-muted">Token</p>}
+      {networkFilterStyle === 'icons' && <p className="pb-1 pt-2 text-xs text-muted">Token</p>}
       <div
-        className="min-h-0 flex-1 overflow-y-auto"
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto',
+          networkFilterStyle === 'icons' && fullHeight && '-mx-4'
+        )}
         onScroll={event => {
           const list = event.currentTarget
           if (
@@ -409,16 +418,29 @@ export function TokenSelector({
                   aria-pressed={selectedToken?.assetId === token.assetId}
                   aria-label={`${symbol} on ${chainName}${balance === undefined ? '' : `, balance ${balance} ${symbol}`}`}
                   className={cn(
-                    'flex min-h-[55px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-card',
+                    'wallet-interactive flex min-h-[55px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 hover:bg-card active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
                     networkFilterStyle === 'icons' &&
-                      'min-h-[64px] rounded-none px-2.5 py-3 hover:bg-white/5',
+                      'min-h-[72px] rounded-none py-3 hover:bg-white/5',
+                    networkFilterStyle === 'icons' && (fullHeight ? 'px-4' : 'px-2.5'),
                     selectedToken?.assetId === token.assetId && 'bg-primary/[0.08]'
                   )}
                 >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <TokenIcon token={token} size={30} />
+                  <div
+                    className={cn(
+                      'flex min-w-0 items-center gap-3',
+                      networkFilterStyle === 'icons' && 'gap-2'
+                    )}
+                  >
+                    <TokenIcon token={token} size={networkFilterStyle === 'icons' ? 32 : 30} />
                     <div className="min-w-0 text-left">
-                      <p className="truncate font-semibold">{symbol}</p>
+                      <p
+                        className={cn(
+                          'truncate font-semibold',
+                          networkFilterStyle === 'icons' && 'text-base font-medium'
+                        )}
+                      >
+                        {symbol}
+                      </p>
                       <p className="truncate text-xs text-muted">{chainName}</p>
                     </div>
                   </div>

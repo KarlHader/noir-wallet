@@ -1123,6 +1123,27 @@ test('reserves distinct nonces for concurrent preparations while RPC pending non
   await expect(testHarness.pendingStore.list()).resolves.toHaveLength(2)
 })
 
+test('expires an unsigned lower-nonce review before a later approval and reuses the RPC nonce', async () => {
+  const testHarness = harness({ rpc: rpc({ getPendingNonce: async () => '7' }) })
+  const first = await prepare(testHarness.orchestrator)
+  const second = await prepare(testHarness.orchestrator)
+  const firstPending = await testHarness.pendingStore.get(first.graph.root.id)
+  const firstGraph = await testHarness.pendingStore.getReviewGraph(first.graph.root.id)
+  await testHarness.pendingStore.put({ ...firstPending, expiresAt: 999 }, firstGraph)
+
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: second.graph.root.id,
+      payloadFingerprint: second.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+  await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
+
+  const retried = await prepare(testHarness.orchestrator)
+  expect(retried.signing.summary.fields.nonce).toBe('7')
+})
+
 test('blocks a new transfer when old local nonces outrun the RPC pending nonce', async () => {
   const testHarness = harness({ rpc: rpc({ getPendingNonce: async () => '9' }) })
   await testHarness.repository.create(localBroadcastGraph(21))

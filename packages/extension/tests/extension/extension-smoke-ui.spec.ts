@@ -820,12 +820,6 @@ test('imports 12 words, preserves added-wallet backup, and changes the wallet pa
   expect(context.pages()).toHaveLength(pageCountBeforeConnect)
   await zkNoirApp.close()
 
-  const lendingPagePromise = context.waitForEvent('page')
-  await popup.getByRole('button', { name: 'Lending' }).click()
-  const lendingPage = await lendingPagePromise
-  await expect(lendingPage).toHaveURL('https://app.zknoir.com/lending')
-  await lendingPage.close()
-
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
   await expect(popup.getByText('Noir Wallet', { exact: true })).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Settings' })).toHaveCount(0)
@@ -888,17 +882,12 @@ test('imports 12 words, preserves added-wallet backup, and changes the wallet pa
   const addedAccountItem = popup.getByRole('button', { name: 'Switch to Account 1' })
   await expect(addedAccountItem).toHaveCount(2)
   const addedAccountClickTarget = await addedAccountItem.first().boundingBox()
-  expect(addedAccountClickTarget?.height).toBeGreaterThan(70)
-  await expect(popup.getByText('Active', { exact: true })).toHaveCount(1)
+  expect(addedAccountClickTarget?.height).toBeGreaterThanOrEqual(60)
+  const currentAccount = popup.locator('button[aria-current="true"][aria-label^="Switch to "]')
+  await expect(currentAccount).toHaveCount(1)
+  await expect(currentAccount).toHaveAccessibleName('Switch to Account 1')
+  await expect(popup.locator('[aria-label="Current account"]')).toHaveCount(1)
   await captureScreenshot(popup, 'extension-account-list-multiwallet.png')
-  const networkTriggers = popup.getByRole('button', { name: 'Expand account networks' })
-  await expect(networkTriggers).toHaveCount(2)
-  await networkTriggers.first().click()
-  const networksRegion = popup.getByRole('region', { name: 'Account networks' })
-  await expect(networksRegion.getByText('Zcash', { exact: true })).toBeVisible()
-  await expect(networksRegion.getByRole('button', { name: /Copy Zcash .* address/ })).toHaveCount(2)
-  await captureScreenshot(popup, 'extension-account-networks-zcash.png')
-  await popup.getByRole('button', { name: 'Collapse account networks' }).click()
   const accountActionButtons = popup.getByRole('button', { name: 'Account actions for Account 1' })
   await accountActionButtons.first().click()
   const accountMenu = popup.locator('[data-slot="dropdown-menu-content"]')
@@ -1078,7 +1067,11 @@ test('imports 12 words, preserves added-wallet backup, and changes the wallet pa
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
   const switchableAccounts = popup.getByRole('button', { name: 'Switch to Account 1' })
   await expect(switchableAccounts).toHaveCount(2)
-  await expect(popup.getByText('Active', { exact: true })).toHaveCount(1)
+  const currentDrawerAccount = popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .locator('button[aria-current="true"]')
+  await expect(currentDrawerAccount).toHaveCount(1)
+  await expect(currentDrawerAccount).toHaveAccessibleName('Switch to Account 1')
   await switchableAccounts.last().click({ position: { x: 4, y: 4 } })
   await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(popup.getByRole('dialog', { name: 'Unable to switch account' })).toHaveCount(0)
@@ -1087,7 +1080,7 @@ test('imports 12 words, preserves added-wallet backup, and changes the wallet pa
     'aria-checked',
     'false'
   )
-  await popup.getByRole('button', { name: 'Security & Privacy' }).click()
+  await popup.getByRole('button', { name: 'Security', exact: true }).click()
 
   await expect(popup.getByText('Security & Privacy', { exact: true })).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Change Password' })).toBeVisible()

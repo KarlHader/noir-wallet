@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
 import {
@@ -7,7 +7,10 @@ import {
 } from '@/popup/services/account-networks-client'
 import { useAddressBookStore } from '@/store/address-book-store'
 import { useWalletStore } from '@/store/wallet-store'
+import { AddAddressDialog } from '../address-book/AddAddressDialog'
+import { getAddressBookNetworkChoice } from '../address-book/address-book-network'
 import { InlineError } from '../common/InlineError'
+import { Button } from '../ui/button'
 import { ListSkeleton } from '../ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
@@ -32,11 +35,13 @@ function addressSchemeLabel(scheme: string): string | null {
 function EmptyState({
   icon,
   title,
-  description
+  description,
+  action
 }: {
   readonly icon: string
   readonly title: string
-  readonly description: string
+  readonly description?: string
+  readonly action?: ReactNode
 }) {
   return (
     <div className="flex flex-col items-center px-4 py-8 text-center">
@@ -44,7 +49,10 @@ function EmptyState({
         <Icon icon={icon} width={22} height={22} />
       </div>
       <p className="mt-3 text-sm font-medium">{title}</p>
-      <p className="mt-1 max-w-[250px] text-xs leading-5 text-muted">{description}</p>
+      {description && (
+        <p className="mt-1 max-w-[250px] text-xs leading-5 text-muted">{description}</p>
+      )}
+      {action}
     </div>
   )
 }
@@ -67,6 +75,8 @@ export function RecipientSelector({
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [addingAddress, setAddingAddress] = useState(false)
+  const addressBookNetwork = useMemo(() => getAddressBookNetworkChoice(chainId), [chainId])
 
   const loadAccounts = async () => {
     setLoading(true)
@@ -235,10 +245,31 @@ export function RecipientSelector({
           <EmptyState
             icon="lucide:book-user"
             title="No saved recipients"
-            description="After you send on this network, Noir Wallet can offer to save the recipient here."
+            action={
+              addressBookNetwork && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="mt-5"
+                  onClick={() => setAddingAddress(true)}
+                >
+                  Add address
+                </Button>
+              )
+            }
           />
         ) : (
           <div className="space-y-2 pb-1">
+            {addressBookNetwork && (
+              <button
+                type="button"
+                onClick={() => setAddingAddress(true)}
+                className="ml-auto flex items-center gap-1.5 px-2 pb-2 text-xs text-primary"
+              >
+                <Icon icon="lucide:plus" width={14} height={14} />
+                Add address
+              </button>
+            )}
             {savedRecipients.map(contact => (
               <button
                 key={contact.id}
@@ -270,6 +301,13 @@ export function RecipientSelector({
           </div>
         )}
       </TabsContent>
+      <AddAddressDialog
+        open={addingAddress}
+        onOpenChange={setAddingAddress}
+        networks={addressBookNetwork ? [addressBookNetwork] : []}
+        initialChainId={chainId}
+        fullHeight
+      />
     </Tabs>
   )
 }

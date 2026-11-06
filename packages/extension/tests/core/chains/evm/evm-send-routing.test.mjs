@@ -4,6 +4,7 @@ import { resolveConfidentialEvmAssetSupport } from '../../../../src/core/service
 import { resolveEvmAddressRole } from '../../../../src/core/accounts/evm-address-role.ts'
 import {
   createEvmSendIntentKey,
+  getEvmSendRecipientError,
   getEvmSendPrivacyWarning,
   resolveEvmSendAvailableRaw,
   resolveEvmSendRoute
@@ -124,6 +125,8 @@ it('derives address roles from chain-scoped local identities and gives PEA prece
   assert.equal(resolveEvmAddressRole(recipient, chain.id, accounts), 'unknown')
   assert.equal(resolveEvmAddressRole(main, 'eip155:56', accounts), 'unknown')
   assert.equal(resolveEvmAddressRole(main, chain.id), 'unknown')
+  assert.match(getEvmSendRecipientError('main', 'confidential'), /Use Move/)
+  assert.equal(getEvmSendRecipientError('main', 'unknown'), null)
   assert.equal(getEvmSendPrivacyWarning('main', 'public'), null)
   for (const role of ['confidential', 'unknown']) assert.ok(getEvmSendPrivacyWarning('main', role))
   for (const role of ['public', 'confidential', 'unknown'])
@@ -136,6 +139,11 @@ it('chooses the route before any quote and keeps unknown private assets blocked'
   assert.equal(resolveEvmSendRoute('private', 'supported'), 'confidential')
   assert.equal(resolveEvmSendRoute('private', 'unsupported'), 'onchain')
   assert.equal(resolveEvmSendRoute('private', 'unknown'), 'pending')
+  assert.equal(resolveEvmSendRoute('main', 'supported', true), 'confidential')
+  for (const state of ['unsupported', 'unknown']) {
+    assert.equal(resolveEvmSendRoute('main', state, true), 'pending')
+  }
+  assert.equal(getEvmSendRecipientError('main', 'confidential', true), null)
 })
 
 it('spends only the selected source on-chain balance, including when the abstract aggregate is larger', () => {

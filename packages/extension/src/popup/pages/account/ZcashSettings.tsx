@@ -22,6 +22,7 @@ import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-
 import { classifyError } from '@/lib/errors'
 import { getAccountDisplayName } from '@/lib/format'
 import { getBirthdayDateFromBlockTimestamp } from '@/lib/zcash-birthday'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { useWalletStore } from '@/store/wallet-store'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { getZcashDerivationPaths } from '@/lib/zcash-derivation'
@@ -46,6 +47,7 @@ export function ZcashSettings() {
   const [activeAccount, setActiveAccount] = useState(false)
   const [canRotateShielded, setCanRotateShielded] = useState(false)
   const [isRotatingShielded, setIsRotatingShielded] = useState(false)
+  const [waitingForSync, setWaitingForSync] = useState<boolean | null>(null)
   const [rotationError, setRotationError] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [selectingAddress, setSelectingAddress] = useState<string | null>(null)
@@ -177,6 +179,42 @@ export function ZcashSettings() {
     }
   }, [walletId, accountId, account?.birthdayHeight])
 
+  useEffect(() => {
+    if (!isRotatingShielded || !walletId || !accountId) return
+    let cancelled = false
+    let progressEvents = 0
+    const onSyncProgress = (
+      message: { type?: string; walletId?: string; isSyncing?: boolean },
+      sender: chrome.runtime.MessageSender
+    ) => {
+      if (
+        getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker' ||
+        message.type !== 'SYNC_PROGRESS' ||
+        message.walletId !== walletId ||
+        typeof message.isSyncing !== 'boolean'
+      ) {
+        return
+      }
+      progressEvents += 1
+      setWaitingForSync(message.isSyncing)
+    }
+
+    chrome.runtime.onMessage.addListener(onSyncProgress)
+    void chrome.runtime
+      .sendMessage({ type: 'GET_SYNC_STATE', walletId, accountId })
+      .then(snapshot => {
+        if (!cancelled && progressEvents === 0 && typeof snapshot?.isSyncing === 'boolean') {
+          setWaitingForSync(snapshot.isSyncing)
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+      chrome.runtime.onMessage.removeListener(onSyncProgress)
+    }
+  }, [isRotatingShielded, walletId, accountId])
+
   if (!walletId || !accountId || !wallet || !account) {
     return (
       <div className="page-container">
@@ -191,6 +229,7 @@ export function ZcashSettings() {
   const rotateShieldedAddress = async () => {
     if (!activeAccount || !canRotateShielded || isRotatingShielded || selectingAddress) return
     setRotationError(null)
+    setWaitingForSync(null)
     setIsRotatingShielded(true)
     try {
       const addresses = await zcashWalletRuntimeClient.rotateShieldedReceiveAddress(
@@ -372,7 +411,15 @@ export function ZcashSettings() {
                 onClick={() => void rotateShieldedAddress()}
               >
                 <Icon icon="lucide:refresh-cw" width={17} height={17} />
-                Generate new shielded address
+                <span aria-live="polite">
+                  {isRotatingShielded
+                    ? waitingForSync === null
+                      ? 'Preparing address...'
+                      : waitingForSync
+                        ? 'Waiting for sync...'
+                        : 'Generating address...'
+                    : 'Generate new shielded address'}
+                </span>
               </Button>
               {rotationError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">

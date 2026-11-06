@@ -1,4 +1,12 @@
-import type { PortfolioAssetView, PortfolioReadModel } from '@/core/portfolio'
+import Big from '@/lib/big'
+import type {
+  PortfolioAssetView,
+  PortfolioReadModel,
+  ConfidentialPortfolioView
+} from '@/core/portfolio'
+import type { AssetRegistry } from '@/core/chains/registry'
+import type { SwapToken } from '@/core/services/intents-api'
+import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 
 export interface ConfidentialPortfolioBalance {
   readonly tokenId: string
@@ -27,6 +35,81 @@ export function getConfidentialAvailableForAsset(
     balances.find(balance => balance.tokenId === confidentialPrivateTokenId(protocolAssetId)) ??
     balances.find(balance => balance.tokenId === protocolAssetId)
   return row && /^(0|[1-9][0-9]*)$/.test(row.available) ? row.available : null
+}
+
+export function buildConfidentialPortfolioView(
+  balances: readonly ConfidentialPortfolioBalance[],
+  tokens: readonly SwapToken[],
+  managedAssets: readonly IntentsManagedAsset[],
+  mappings: readonly ConfidentialPortfolioAssetMapping[],
+  assets: AssetRegistry
+): ConfidentialPortfolioView {
+  const treasuryPrefix = `imt:${CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID}:`
+  const byProtocolId = new Map<
+    string,
+    { balance: ConfidentialPortfolioBalance; priority: number }
+  >()
+  for (const balance of balances) {
+    if (!/^(0|[1-9][0-9]*)$/.test(balance.available)) {
+      throw new Error('Invalid Confidential balance')
+    }
+    const verifiedImt = balance.tokenId.startsWith(treasuryPrefix)
+    const protocolAssetId = verifiedImt
+      ? balance.tokenId.slice(treasuryPrefix.length)
+      : balance.tokenId
+    if (!protocolAssetId) throw new Error('Invalid Confidential token ID')
+    const priority = verifiedImt ? 1 : 0
+    const previous = byProtocolId.get(protocolAssetId)
+    if (previous && previous.priority === priority) {
+      throw new Error('Duplicate Confidential balance')
+    }
+    if (!previous || priority > previous.priority)
+      byProtocolId.set(protocolAssetId, { balance, priority })
+  }
+
+  const tokenById = new Map(tokens.map(token => [token.assetId, token]))
+  const managedById = new Map(managedAssets.map(asset => [asset.protocolAssetId, asset]))
+  const mappedById = new Map(
+    mappings
+      .filter(mapping => mapping.assetId.startsWith('eip155:'))
+      .map(mapping => [mapping.protocolAssetId, mapping.assetId])
+  )
+  const entries = [...byProtocolId].flatMap(([protocolAssetId, { balance }]) => {
+    if (balance.available === '0') return []
+    const token = tokenById.get(protocolAssetId)
+    const managed = managedById.get(protocolAssetId)
+    const mappedAssetId = mappedById.get(protocolAssetId)
+    const registered = mappedAssetId ? assets.get(mappedAssetId) : undefined
+    const assetId = managed?.assetId ?? registered?.asset.id
+    const chainId = managed?.chainId ?? registered?.asset.chainId
+    const iconUrl = token ? (token.icon ?? token.coingeckoIcon ?? undefined) : undefined
+    const priceUsd = token && token.price > 0 ? new Big(token.price).toFixed() : undefined
+    return [
+      Object.freeze({
+        tokenId: balance.tokenId,
+        protocolAssetId,
+        availableRaw: balance.available,
+        ...(assetId ? { assetId } : {}),
+        ...(chainId ? { chainId } : {}),
+        ...(token
+          ? {
+              blockchain: token.blockchain,
+              symbol: token.symbol,
+              name: token.symbol,
+              decimals: token.decimals,
+              ...(iconUrl ? { iconUrl } : {}),
+              ...(priceUsd && priceUsd.length <= 128
+                ? {
+                    priceUsd,
+                    priceUpdatedAt: token.priceUpdatedAt
+                  }
+                : {})
+            }
+          : {})
+      })
+    ]
+  })
+  return Object.freeze({ status: 'ready', assets: Object.freeze(entries) })
 }
 
 function mergeAsset(

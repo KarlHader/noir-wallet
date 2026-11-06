@@ -47,7 +47,11 @@ import {
   readCachedPortfolio,
   refreshPortfolioFromCache
 } from '@/popup/services/portfolio-cache'
-import { buildAddToPrivateEvmPath, type EvmSendSourceMode } from './evm-send-validation'
+import {
+  buildAddToPrivateEvmPath,
+  parsePublicPrivateEvmSendDraft,
+  type EvmSendSourceMode
+} from './evm-send-validation'
 import { useWalletActionExecutionMode } from '@/popup/hooks/useWalletActionExecutionMode'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getCrossChainSendAssetGroup } from '@/popup/services/cross-chain-send-assets'
@@ -300,7 +304,7 @@ export function MultichainSend() {
   const requestedAssetId = searchParams.get('assetId')
   const requestedSourceMode = searchParams.get('sourceMode')
   const requestedRecipient = searchParams.get('recipient')
-  const { goBack, navigate } = useNavigate()
+  const { goBack, navigate, replace } = useNavigate()
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
@@ -326,7 +330,8 @@ export function MultichainSend() {
   } | null>(null)
   const [submission, setSubmission] = useState<SendSubmission | null>(null)
   const [evmSourceSelectorOpen, setEvmSourceSelectorOpen] = useState(false)
-  const { activeAccount: storageV2Account } = useActiveAccountNetworks()
+  const { activeAccount: storageV2Account, loading: accountNetworksLoading } =
+    useActiveAccountNetworks()
   const effectiveAccount = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -392,6 +397,16 @@ export function MultichainSend() {
   )
   const evmSourceMode: EvmSendSourceMode = evmActionMode.mode
   const setEvmSourceMode = evmActionMode.setMode
+  useEffect(() => {
+    if (selection?.chain.chain.family !== 'evm' || evmSourceMode !== 'private') return
+    replace(
+      `/transfer?${new URLSearchParams({
+        assetId: selection.asset.asset.id,
+        from: 'private',
+        to: 'shield'
+      })}`
+    )
+  }, [evmSourceMode, replace, selection])
   const zcashEnabled =
     storageV2Account?.networks.some(network => network.chain.family === 'zcash') ?? true
 
@@ -535,7 +550,7 @@ export function MultichainSend() {
     if (
       !requestedAssetId ||
       !visibleModel ||
-      (requestedSourceMode === 'private' && evmActionMode.loading) ||
+      (requestedSourceMode === 'private' && (accountNetworksLoading || evmActionMode.loading)) ||
       appliedRequestedAssetRef.current === requestedAssetId
     ) {
       return
@@ -562,6 +577,7 @@ export function MultichainSend() {
     }
   }, [
     assets,
+    accountNetworksLoading,
     evmActionMode.privateAvailable,
     evmActionMode.loading,
     loadStatus,
@@ -646,6 +662,15 @@ export function MultichainSend() {
       : null
   const crossChainSourceMode = selection?.chain.chain.family === 'evm' ? evmSourceMode : 'main'
   const walletMode = searchParams.get('mode') === 'private' ? 'private' : 'public'
+  const publicPrivateDraft =
+    selection && effectiveWalletId && effectiveAccountId
+      ? parsePublicPrivateEvmSendDraft(searchParams, {
+          walletId: effectiveWalletId,
+          accountId: effectiveAccountId,
+          network: currentNetwork,
+          assetId: selection.asset.asset.id
+        })
+      : null
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
       <PageHeader
@@ -677,38 +702,45 @@ export function MultichainSend() {
         }
       />
       {selection?.chain.chain.family === 'evm' && visibleModel ? (
-        <EvmSendForm
-          walletMode={walletMode}
-          onSelectAsset={() => setSelection(null)}
-          selection={selection}
-          portfolio={visibleModel}
-          priceUsd={availableUsdPrice(selection.asset, assetPrices)}
-          sourceMode={evmSourceMode}
-          sourceSelectorOpen={evmSourceSelectorOpen}
-          onSourceModeChange={setEvmSourceMode}
-          onSourceSelectorOpenChange={setEvmSourceSelectorOpen}
-          onFundPrivate={
-            currentNetwork === 'mainnet'
-              ? (amount, maximum) =>
-                  navigate(
-                    buildAddToPrivateEvmPath({
-                      chainId: selection.chain.chain.id,
-                      assetId: selection.asset.asset.id,
-                      amount,
-                      maximum
-                    })
-                  )
-              : undefined
-          }
-          initialRecipient={
-            requestedSourceMode === 'private' &&
-            requestedRecipient &&
-            /^0x[0-9a-fA-F]{40}$/.test(requestedRecipient)
-              ? requestedRecipient
-              : undefined
-          }
-          onSubmitted={value => setSubmission({ family: 'evm', value })}
-        />
+        requestedSourceMode === 'private' && !evmActionMode.privateAvailable ? (
+          <div className="page-content px-4 pt-5">
+            <InlineError message="Private send is unavailable for this account." />
+          </div>
+        ) : (
+          <EvmSendForm
+            walletMode={walletMode}
+            onSelectAsset={() => setSelection(null)}
+            selection={selection}
+            portfolio={visibleModel}
+            priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+            sourceMode={evmSourceMode}
+            sourceSelectorOpen={evmSourceSelectorOpen}
+            onSourceModeChange={setEvmSourceMode}
+            onSourceSelectorOpenChange={setEvmSourceSelectorOpen}
+            onFundPrivate={
+              currentNetwork === 'mainnet'
+                ? (amount, maximum) =>
+                    navigate(
+                      buildAddToPrivateEvmPath({
+                        chainId: selection.chain.chain.id,
+                        assetId: selection.asset.asset.id,
+                        amount,
+                        maximum
+                      })
+                    )
+                : undefined
+            }
+            initialRecipient={
+              requestedSourceMode === 'private' &&
+              requestedRecipient &&
+              /^0x[0-9a-fA-F]{40}$/.test(requestedRecipient)
+                ? requestedRecipient
+                : undefined
+            }
+            initialDraft={publicPrivateDraft ?? undefined}
+            onSubmitted={value => setSubmission({ family: 'evm', value })}
+          />
+        )
       ) : selection?.chain.chain.family === 'bitcoin' ? (
         <BitcoinSendForm
           selection={selection}

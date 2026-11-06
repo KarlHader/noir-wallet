@@ -87,6 +87,16 @@ export interface RheaSwapQuoteSessionRecord {
   readonly schemaVersion: 1
   readonly quoteHandle: string
   readonly request: QuoteRequest
+  readonly privateSwapScope?: Readonly<{
+    walletId: string
+    accountId: string
+    purpose?:
+      | 'private-swap'
+      | 'private-transfer'
+      | 'private-cross-chain-send'
+      | 'private-dapp-transfer'
+      | 'public-private-send'
+  }>
   readonly quoteRaw: SwapQuoteDataRaw
   readonly receivedAt: number
   readonly expiresAt: number | null
@@ -198,7 +208,11 @@ export class RheaSwapService {
     })
   }
 
-  async quote(value: unknown, signal?: AbortSignal): Promise<RheaSwapQuoteView> {
+  async quote(
+    value: unknown,
+    signal?: AbortSignal,
+    privateSwapScope?: RheaSwapQuoteSessionRecord['privateSwapScope']
+  ): Promise<RheaSwapQuoteView> {
     if (this.clearingSessions) throw new Error('RHEA Swap sessions are being cleared')
     const epoch = this.sessionEpoch
     const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(value))
@@ -209,6 +223,7 @@ export class RheaSwapService {
       schemaVersion: 1,
       quoteHandle,
       request,
+      ...(privateSwapScope ? { privateSwapScope: Object.freeze({ ...privateSwapScope }) } : {}),
       quoteRaw: quote.raw,
       receivedAt: quote.receivedAt,
       expiresAt: quote.expiresAt ?? null
@@ -223,6 +238,26 @@ export class RheaSwapService {
   async prepare(quoteHandle: string, signal?: AbortSignal): Promise<RheaSwapReviewView> {
     const handle = this.parseQuoteHandle(quoteHandle)
     return this.runSessionOperation(handle, () => this.prepareOnce(handle, signal))
+  }
+
+  async readPrivateSwapRequest(quoteHandle: string): Promise<Readonly<{
+    request: QuoteRequest
+    scope: NonNullable<RheaSwapQuoteSessionRecord['privateSwapScope']>
+  }> | null> {
+    const record = await this.requireSession(quoteHandle)
+    return record.privateSwapScope
+      ? Object.freeze({ request: record.request, scope: record.privateSwapScope })
+      : null
+  }
+
+  async readQuoteSecurityContext(quoteHandle: string): Promise<
+    Readonly<{
+      request: QuoteRequest
+      scope: RheaSwapQuoteSessionRecord['privateSwapScope'] | null
+    }>
+  > {
+    const record = await this.requireSession(quoteHandle)
+    return Object.freeze({ request: record.request, scope: record.privateSwapScope ?? null })
   }
 
   private async prepareOnce(
@@ -635,6 +670,11 @@ export class RheaSwapService {
       status: normalizeOrderStatus(status),
       destinationHash: readRheaDestinationHash(status) ?? null
     })
+  }
+
+  async hasRecordedOrder(quoteHandle: string): Promise<boolean> {
+    const record = await this.sessions.get(this.parseQuoteHandle(quoteHandle))
+    return Boolean(record?.submission?.orderId)
   }
 
   discard(quoteHandle: string): Promise<void> {

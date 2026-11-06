@@ -36,6 +36,7 @@ export interface DAppChainAuthorization {
 }
 
 const STORAGE_KEY = 'connectedDApps'
+const MAX_FAVICON_LENGTH = 262_144
 const AUTHORIZATION_KEY = 'dapp_authorization_state'
 const MAX_CONNECTED_DAPPS = 256
 const MAX_AUTHORIZED_ACCOUNTS = 100
@@ -44,7 +45,8 @@ const MAX_CONNECTION_TEXT_LENGTH = 2_048
 
 interface AuthorizationState {
   readonly revision: number
-  readonly mode: 'approved' | 'revoked'
+  readonly mode: 'approved' | 'revoked' | 'unreviewed'
+  readonly publicExplicit?: true
 }
 
 function parseAuthorizationState(value: unknown): Record<string, AuthorizationState> {
@@ -57,14 +59,24 @@ function parseAuthorizationState(value: unknown): Record<string, AuthorizationSt
     parseHttpOrigin(origin)
     if (
       !isRecord(state) ||
-      Object.keys(state).some(key => key !== 'revision' && key !== 'mode') ||
+      Object.keys(state).some(
+        key => key !== 'revision' && key !== 'mode' && key !== 'publicExplicit'
+      ) ||
       !Number.isSafeInteger(state.revision) ||
       (state.revision as number) < 0 ||
-      (state.mode !== 'approved' && state.mode !== 'revoked')
+      (state.mode !== undefined &&
+        state.mode !== 'approved' &&
+        state.mode !== 'revoked' &&
+        state.mode !== 'unreviewed') ||
+      (state.publicExplicit !== undefined && state.publicExplicit !== true)
     ) {
       throw new Error('Invalid stored dApp authorization state')
     }
-    states[origin] = { revision: state.revision as number, mode: state.mode }
+    states[origin] = {
+      revision: state.revision as number,
+      mode: state.mode ?? 'unreviewed',
+      ...(state.publicExplicit === true ? { publicExplicit: true } : {})
+    }
   }
   return states
 }
@@ -242,6 +254,16 @@ function nextActivityTime(connection: ConnectedDApp): number {
   return Math.max(Date.now(), connection.connectedAt, connection.lastActiveAt)
 }
 
+function fallbackFavicon(origin: string): string {
+  return `${origin}/favicon.ico`
+}
+
+function safeStoredFavicon(value: unknown, origin: string): string {
+  return typeof value === 'string' && value.length <= MAX_FAVICON_LENGTH
+    ? value
+    : fallbackFavicon(origin)
+}
+
 export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
   if (
     !isRecord(value) ||
@@ -307,10 +329,7 @@ export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
     name: parseStoredText(value.name, 'name', { maximumLength: 512 }),
     host,
     origin,
-    favicon: parseStoredText(value.favicon, 'favicon', {
-      allowEmpty: true,
-      maximumLength: 4_096
-    }),
+    favicon: safeStoredFavicon(value.favicon, origin),
     connectedAt,
     lastActiveAt,
     ...(binding === null
@@ -797,7 +816,9 @@ export class DAppManager {
       await this.initialize()
       const state = this.authorizationState[origin]
       if (
-        (authorization?.automatic && state !== undefined) ||
+        (authorization?.automatic &&
+          state !== undefined &&
+          (state.mode !== 'unreviewed' || state.publicExplicit === true)) ||
         (authorization?.expectedRevision !== undefined &&
           authorization.expectedRevision !== (state?.revision ?? 0))
       ) {
@@ -809,7 +830,7 @@ export class DAppManager {
         origin,
         id: this.generateId(),
         title: tabInfo.title,
-        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
         accounts,
         binding,
         now: Date.now()
@@ -818,7 +839,7 @@ export class DAppManager {
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
       if (!authorization?.automatic) {
-        states[origin] = { revision: state?.revision ?? 0, mode: 'approved' }
+        states[origin] = { ...state, revision: state?.revision ?? 0, mode: 'approved' }
       }
       await this.commitConnections(next, states)
     })
@@ -840,7 +861,8 @@ export class DAppManager {
 
   async canAutoConnect(origin: string): Promise<boolean> {
     await this.waitForStableState()
-    return this.authorizationState[origin] === undefined
+    const state = this.authorizationState[origin]
+    return (state === undefined || state.mode === 'unreviewed') && state?.publicExplicit !== true
   }
 
   async isRevoked(origin: string): Promise<boolean> {
@@ -868,7 +890,7 @@ export class DAppManager {
         origin,
         id: this.generateId(),
         title: tabInfo.title,
-        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
         chainId,
         accounts,
         binding,
@@ -878,7 +900,11 @@ export class DAppManager {
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
       if (ZCASH_DAPP_CHAIN_IDS.has(normalizeDAppChainId(chainId))) {
-        states[origin] = { revision: states[origin]?.revision ?? 0, mode: 'approved' }
+        states[origin] = {
+          ...states[origin],
+          revision: states[origin]?.revision ?? 0,
+          mode: 'approved'
+        }
       }
       await this.commitConnections(next, states)
     })
@@ -978,7 +1004,7 @@ export class DAppManager {
         origin,
         id: this.generateId(),
         title: tabInfo.title,
-        favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
         authorizations,
         session,
         ...(zcashAuthorization === undefined ? {} : { zcashAuthorization }),
@@ -988,7 +1014,11 @@ export class DAppManager {
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
       if (zcashAuthorization !== undefined) {
-        states[origin] = { revision: states[origin]?.revision ?? 0, mode: 'approved' }
+        states[origin] = {
+          ...states[origin],
+          revision: states[origin]?.revision ?? 0,
+          mode: 'approved'
+        }
       }
       await this.commitConnections(next, states)
     })
@@ -1255,7 +1285,7 @@ export class DAppManager {
       const revision = states[origin]?.revision ?? 0
       if (revision >= Number.MAX_SAFE_INTEGER)
         throw new Error('Site authorization revision exhausted')
-      states[origin] = { revision: revision + 1, mode: 'revoked' }
+      states[origin] = { ...states[origin], revision: revision + 1, mode: 'revoked' }
     }
     return states
   }
@@ -1285,10 +1315,16 @@ export class DAppManager {
   private getDefaultFavicon(origin: string): string {
     try {
       const url = new URL(origin)
-      return `${url.origin}/favicon.ico`
+      return fallbackFavicon(url.origin)
     } catch {
       return ''
     }
+  }
+
+  private getFavicon(origin: string, candidate?: string): string {
+    return candidate && candidate.length <= MAX_FAVICON_LENGTH
+      ? candidate
+      : this.getDefaultFavicon(origin)
   }
 }
 

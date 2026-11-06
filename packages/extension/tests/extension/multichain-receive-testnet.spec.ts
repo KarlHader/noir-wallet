@@ -138,85 +138,31 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 30_000 })
   expect(await popup.evaluate(() => crossOriginIsolated)).toBe(true)
 
-  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
-  let executionModeCard = popup
-    .getByRole('dialog', { name: 'dApp address' })
-    .getByTestId('dapp-execution-mode-card')
-  const mainMode = executionModeCard.getByRole('radio', { name: 'Use Public address for dApps' })
-  const privateMode = executionModeCard.getByRole('radio', {
-    name: 'Use Confidential address for dApps'
-  })
-  await expect(mainMode).toBeChecked()
+  const walletMode = popup.getByRole('radiogroup', { name: 'Wallet mode' })
+  const publicMode = walletMode.getByRole('radio', { name: 'Public mode' })
+  const privateMode = walletMode.getByRole('radio', { name: 'Private mode' })
+  await expect(publicMode).toBeChecked()
   await expect(privateMode).toBeEnabled()
   await privateMode.click()
-  const privateModeDialog = popup.getByRole('dialog', { name: 'Turn on dApp privacy?' })
-  await expect(privateModeDialog).toContainText(
-    'Supported connected dApps will switch from your Public address to your Confidential address'
-  )
-  await privateModeDialog.getByRole('button', { name: 'Turn on' }).click()
-  await expect(popup.getByRole('button', { name: 'dApp address: Confidential' })).toBeVisible()
-  await expect(popup.getByText('dApp privacy is on', { exact: true })).toBeVisible()
-  await popup.getByRole('button', { name: 'dApp address: Confidential' }).click()
-  executionModeCard = popup
-    .getByRole('dialog', { name: 'dApp address' })
-    .getByTestId('dapp-execution-mode-card')
-  await executionModeCard.getByRole('radio', { name: 'Use Public address for dApps' }).click()
-  await expect(popup.getByRole('button', { name: 'dApp address: Public' })).toBeVisible()
+  await expect(privateMode).toBeChecked()
+  await publicMode.click()
+  await expect(publicMode).toBeChecked()
 
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
   await expect(popup.getByText('Noir Wallet', { exact: true })).toBeVisible()
-  const networksTrigger = popup.getByRole('button', { name: 'Expand account networks' })
-  await expect(networksTrigger).toContainText(`Networks (${EXPECTED_NETWORK_LABELS.length})`)
-  await networksTrigger.click()
-  const networksRegion = popup.getByRole('region', { name: 'Account networks' })
-  for (const label of ['Zcash', 'EVM', 'Bitcoin', 'Solana Devnet', 'NEAR Testnet']) {
-    await expect(networksRegion.getByText(label, { exact: true })).toBeVisible()
-  }
-  for (const [chainName, iconFile] of [
-    ['Zcash', 'zcash.svg'],
-    ['Ethereum', 'ethereum.svg'],
-    ['Bitcoin', 'bitcoin.svg'],
-    ['Solana', 'solana.svg'],
-    ['NEAR', 'near.svg']
-  ] as const) {
-    const icon = networksRegion.getByRole('img', { name: chainName })
-    await expect(icon).toBeVisible()
-    await expect(icon).toHaveAttribute('src', `https://assets.zknoir.com/chain/${iconFile}`)
-    await expect
-      .poll(() => icon.evaluate(image => (image as HTMLImageElement).naturalWidth))
-      .toBeGreaterThan(0)
-  }
-  await expect(networksRegion.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(1)
-  await expect(networksRegion.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
-  for (const type of ['Native SegWit', 'Legacy', 'Nested SegWit', 'Taproot']) {
-    await expect(networksRegion.getByText(type, { exact: true })).toBeVisible()
-  }
-  await expect(networksRegion.getByText('Shielded', { exact: true })).toBeVisible()
-  await expect(networksRegion.getByText('Transparent', { exact: true })).toBeVisible()
-  const zcashAddressButtons = networksRegion.getByRole('button', {
-    name: /Copy Zcash .* address/
-  })
-  await expect(zcashAddressButtons).toHaveCount(2)
-  const zcashAddressTopPositions = await zcashAddressButtons.evaluateAll(buttons =>
-    buttons.map(button => button.getBoundingClientRect().top)
-  )
-  expect(Math.abs(zcashAddressTopPositions[0] - zcashAddressTopPositions[1])).toBeGreaterThan(10)
-  const nearAddressButtons = networksRegion.getByRole('button', {
-    name: /Copy NEAR Testnet .* address/
-  })
-  await expect(nearAddressButtons).toHaveCount(1)
-  await expect(nearAddressButtons.first().locator('..')).toHaveClass(/flex-col/)
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts' })
+    .click()
+  await expect(popup.getByRole('heading', { name: 'Accounts' })).toBeVisible()
   await expectPopupFits(popup)
-  await captureScreenshot(popup, 'multichain-account-networks-expanded.png')
-  await networksRegion.getByRole('button', { name: 'Copy EVM transparent address' }).click()
-  await expect(popup.getByText('Address copied', { exact: true })).toBeVisible()
-  await popup.getByRole('button', { name: 'Collapse account networks' }).click()
-
   await popup.getByRole('button', { name: 'Account actions for Account 1' }).click()
   await popup.getByRole('menuitem', { name: 'Addresses' }).click()
-  const addressSearch = popup.getByLabel('Search Networks')
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  const addressSearch = popup.getByLabel('Search Network')
   await expect(addressSearch).toBeVisible()
   const accountAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await accountAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   for (const label of EXPECTED_NETWORK_LABELS) {
     await expect(accountAddresses.getByRole('heading', { name: label, exact: true })).toBeVisible()
   }
@@ -237,16 +183,35 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(accountAddresses.getByRole('button', { name: /Copy Zcash .* address/ })).toHaveCount(
     2
   )
+  const zcashAddresses = accountAddresses.locator('section[aria-label="Zcash"]')
+  await expect(zcashAddresses.getByText('Shield', { exact: true })).toBeVisible()
+  await expect(zcashAddresses.getByText('Transparent', { exact: true })).toBeVisible()
+  const zcashAddressButtons = accountAddresses.getByRole('button', {
+    name: /Copy Zcash .* address/
+  })
+  const zcashAddressTopPositions = await zcashAddressButtons.evaluateAll(buttons =>
+    buttons.map(button => button.getBoundingClientRect().top)
+  )
+  expect(Math.abs(zcashAddressTopPositions[0] - zcashAddressTopPositions[1])).toBeGreaterThan(10)
+  await expect(
+    accountAddresses.getByRole('button', { name: /Copy NEAR Testnet .* address/ })
+  ).toHaveCount(1)
   await expect(accountAddresses.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(
     EXPECTED_EVM_NETWORK_LABELS.length
   )
-  await expect(accountAddresses.getByText('Confidential', { exact: true })).toHaveCount(
-    EXPECTED_EVM_NETWORK_LABELS.length
-  )
+  await expect(
+    accountAddresses.locator('section[aria-label="Ethereum Sepolia"]').getByText('Public', {
+      exact: true
+    })
+  ).toBeVisible()
   await expect(accountAddresses.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
   for (const type of ['Native SegWit', 'Legacy', 'Nested SegWit', 'Taproot']) {
     await expect(accountAddresses.getByText(type, { exact: true })).toBeVisible()
   }
+  await accountAddresses
+    .getByRole('button', { name: 'Copy Ethereum Sepolia transparent address' })
+    .click()
+  await expect(popup.getByText('Address copied', { exact: true })).toBeVisible()
   await expectPopupFits(popup, false)
   await captureScreenshot(popup, 'multichain-addresses-list.png')
 
@@ -271,7 +236,7 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(bitcoinQrDialog.getByLabel('Bitcoin address QR code')).toBeVisible()
   await expect(bitcoinQrDialog.getByText(EXPECTED_BITCOIN_ADDRESS, { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'multichain-address-qr.png')
-  await bitcoinQrDialog.getByRole('button', { name: 'Close' }).click()
+  await bitcoinQrDialog.getByRole('button', { name: 'Close receiving address' }).click()
   await accountAddresses
     .getByRole('button', { name: 'Copy Bitcoin Native SegWit address' })
     .first()
@@ -280,13 +245,14 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByText('Noir Wallet', { exact: true })).toBeVisible()
   await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
-  await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
 
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
-  await expect(popup.getByLabel('Search Networks')).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
+  await expect(popup.getByLabel('Search Network')).toBeVisible()
   const homeReceiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+  await homeReceiveAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   for (const label of EXPECTED_NETWORK_LABELS) {
     await expect(
       homeReceiveAddresses.getByRole('heading', { name: label, exact: true })
@@ -295,19 +261,19 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(homeReceiveAddresses.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(
     EXPECTED_EVM_NETWORK_LABELS.length
   )
-  await expect(homeReceiveAddresses.getByText('Confidential', { exact: true })).toHaveCount(0)
+  await expect(
+    homeReceiveAddresses.locator('section[aria-label="Ethereum Sepolia"]').getByText('Public', {
+      exact: true
+    })
+  ).toBeVisible()
   await expect(homeReceiveAddresses.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
   await expectPopupFits(popup, false)
   await captureScreenshot(popup, 'multichain-receive-addresses.png')
 
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
-  await popup.getByRole('button', { name: 'dApp address: Public' }).click()
-  executionModeCard = popup
-    .getByRole('dialog', { name: 'dApp address' })
-    .getByTestId('dapp-execution-mode-card')
-  await executionModeCard.getByRole('radio', { name: 'Use Confidential address for dApps' }).click()
-  await expect(popup.getByRole('button', { name: 'dApp address: Confidential' })).toBeVisible()
+  await privateMode.click()
+  await expect(privateMode).toBeChecked()
 
   const privateExecutionAddress = await popup.evaluate(async () => {
     const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
@@ -328,13 +294,20 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   const privateReceiveAddresses = popup.getByRole('region', {
     name: 'Account network addresses'
   })
+  await privateReceiveAddresses
+    .getByRole('group', { name: 'Other chains address mode' })
+    .getByRole('button', { name: 'Private' })
+    .click()
+  await privateReceiveAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   await expect(privateReceiveAddresses.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(0)
   await expect(privateReceiveAddresses.locator(`[title="${privateExecutionAddress}"]`)).toHaveCount(
     EXPECTED_EVM_NETWORK_LABELS.length
   )
-  await expect(privateReceiveAddresses.getByText('Confidential', { exact: true })).toHaveCount(
-    EXPECTED_EVM_NETWORK_LABELS.length
-  )
+  for (const label of EXPECTED_EVM_NETWORK_LABELS) {
+    await expect(
+      privateReceiveAddresses.locator(`section[aria-label="${label} private execution address"]`)
+    ).toBeVisible()
+  }
   await captureScreenshot(popup, 'multichain-receive-private-addresses.png')
 
   for (const path of ['swap', 'lending', 'supply', 'withdraw']) {

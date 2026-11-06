@@ -236,7 +236,7 @@ export function PrivateBalanceTransferDialog({
                 type="button"
                 aria-label="Switch transfer direction"
                 onClick={switchDirection}
-                className="absolute left-1/2 top-[calc(50%+2px)] z-10 flex size-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md transition-colors hover:border-primary/40 hover:text-primary"
+                className="wallet-interactive absolute left-1/2 top-[calc(50%+2px)] z-10 flex size-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md hover:border-primary/40 hover:text-primary active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               >
                 <Icon icon="lucide:arrow-up-down" width={19} height={19} />
               </button>

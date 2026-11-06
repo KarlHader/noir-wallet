@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { BUILTIN_EVM_NETWORKS, EVM_NETWORKS } from '../../../src/config/networks.ts'
-import { EvmDAppPrivateTransferCoordinator } from '../../../src/background/evm-dapp-private-transfer.ts'
+import {
+  ChromeEvmDAppPrivateTransferStore,
+  EvmDAppPrivateTransferCoordinator
+} from '../../../src/background/evm-dapp-private-transfer.ts'
 
 const PEA = '0x1111111111111111111111111111111111111111'
 const RECIPIENT = '0x2222222222222222222222222222222222222222'
@@ -14,7 +17,8 @@ function createHarness({
   approved = true,
   network = EVM_NETWORKS.mainnet,
   tokenContract,
-  analytics
+  analytics,
+  store
 } = {}) {
   const calls = {
     approvals: [],
@@ -24,6 +28,7 @@ function createHarness({
     events: [],
     preparedCalls: [],
     quotes: [],
+    quoteScopes: [],
     recorded: [],
     reports: 0,
     status: 'completed',
@@ -71,8 +76,9 @@ function createHarness({
     async listTokens() {
       return { tokens }
     },
-    async quote(request) {
+    async quote(request, _signal, scope) {
       calls.quotes.push(request)
+      calls.quoteScopes.push(scope)
       return {
         quoteHandle: 'rhea-quote:dapp-private',
         estimatedOut: '990',
@@ -146,6 +152,9 @@ function createHarness({
         destinationHash: calls.status === 'completed' ? DESTINATION_HASH : null
       }
     },
+    async hasRecordedOrder() {
+      return calls.recordedOrderAvailable !== false
+    },
     async discard(handle) {
       calls.discarded.push(handle)
     }
@@ -185,11 +194,13 @@ function createHarness({
     transferController: {
       async prepareContractCall(intent, _feeTier, binding, account) {
         calls.events.push(binding ? 'prepare-route' : 'prepare-approval')
+        if (binding && calls.prepareRouteError) throw calls.prepareRouteError
         calls.preparedCalls.push({ intent, binding, account })
         return prepared(`transaction:${calls.preparedCalls.length}`)
       },
       async approveForDApp(transactionId, _fingerprint, authorize) {
         calls.events.push(`approve:${transactionId}`)
+        if (calls.approveError) throw calls.approveError
         await authorize()
         return {
           graph: {
@@ -208,7 +219,7 @@ function createHarness({
         return { approved, requestId: 'approval-one' }
       }
     },
-    store: {
+    store: store ?? {
       async get(fingerprint) {
         return structuredClone(storeValues.get(fingerprint) ?? null)
       },
@@ -266,6 +277,13 @@ test.describe('EVM dApp Private transfer coordinator', () => {
         amountIn: '1000',
         confidentiality: 'basic'
       })
+    ])
+    expect(h.calls.quoteScopes).toEqual([
+      {
+        walletId: h.input.account.keyDomainId,
+        accountId: h.input.account.accountId,
+        purpose: 'private-dapp-transfer'
+      }
     ])
     expect(h.calls.preparedSignature.binding.isCrossChain).toBe(true)
     expect(h.calls.preparedSignature.executionMode).toBe('private')
@@ -366,6 +384,73 @@ test.describe('EVM dApp Private transfer coordinator', () => {
     await expect(h.coordinator.send(h.input)).resolves.toBe(DESTINATION_HASH)
     expect(h.calls.quotes).toHaveLength(1)
     expect(h.calls.confirmed).toHaveLength(1)
+  })
+
+  test('releases a request when token approval or route preparation failed before submission', async () => {
+    const h = createHarness({
+      executionKind: 'evm-transaction',
+      tokenContract: '0x3333333333333333333333333333333333333333'
+    })
+    h.calls.approveError = new Error('Approval declined')
+    await expect(h.coordinator.send(h.input)).rejects.toThrow('Approval declined')
+    expect(h.storeValues.size).toBe(0)
+    h.calls.approveError = null
+    h.calls.prepareRouteError = new Error('Route preparation failed')
+    await expect(h.coordinator.send(h.input)).rejects.toThrow('Route preparation failed')
+    expect(h.storeValues.size).toBe(0)
+    h.calls.prepareRouteError = null
+    await expect(h.coordinator.send(h.input)).resolves.toBe(DESTINATION_HASH)
+    expect(h.calls.quotes).toHaveLength(3)
+    expect(h.calls.recorded).toHaveLength(1)
+  })
+
+  test('keeps a pending request across worker restarts and the old session deadline', async () => {
+    const originalChrome = globalThis.chrome
+    const local = new Map()
+    const session = new Map()
+    const area = values => ({
+      get: async key => (key === null ? Object.fromEntries(values) : { [key]: values.get(key) }),
+      set: async entries => {
+        for (const [key, value] of Object.entries(entries)) values.set(key, value)
+      },
+      remove: async keys => {
+        for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key)
+      }
+    })
+    globalThis.chrome = { storage: { local: area(local), session: area(session) } }
+    try {
+      const first = createHarness({ store: new ChromeEvmDAppPrivateTransferStore() })
+      first.calls.status = 'processing'
+      await expect(first.coordinator.send(first.input)).rejects.toMatchObject({ code: -32000 })
+      expect(local.size).toBe(1)
+      expect(session.size).toBe(0)
+
+      const resumed = createHarness({ store: new ChromeEvmDAppPrivateTransferStore() })
+      resumed.calls.status = 'completed'
+      await expect(resumed.coordinator.send(resumed.input)).resolves.toBe(DESTINATION_HASH)
+      expect(resumed.calls.quotes).toHaveLength(0)
+      expect(resumed.calls.confirmed).toHaveLength(0)
+      expect(resumed.calls.statusReads).toBeGreaterThan(0)
+
+      await new ChromeEvmDAppPrivateTransferStore().clearForAccount(
+        first.input.account.keyDomainId,
+        first.input.account.accountId
+      )
+      expect(local.size).toBe(0)
+    } finally {
+      globalThis.chrome = originalChrome
+    }
+  })
+
+  test('reports an unverified previous submission promptly without starting another payment', async () => {
+    const h = createHarness()
+    h.calls.status = 'processing'
+    await expect(h.coordinator.send(h.input)).rejects.toMatchObject({ code: -32000 })
+    h.calls.recordedOrderAvailable = false
+    await expect(h.coordinator.send(h.input)).rejects.toThrow(/status is unknown/)
+    expect(h.calls.quotes).toHaveLength(1)
+    expect(h.calls.confirmed).toHaveLength(1)
+    expect(h.storeValues.size).toBe(1)
   })
 
   test('reports only observed terminal private failures without waiting for analytics', async () => {

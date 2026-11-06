@@ -75,12 +75,14 @@ export interface ActivityDisplayChange extends ActivityDisplayAmount {
 export interface ActivitySwapPresentation {
   readonly source?: ActivityDisplayAmount
   readonly destination?: ActivityDisplayAmount
+  readonly destinationIsSettled?: true
+  readonly isExternalDeposit?: true
   readonly recipientAddress?: string
   readonly sourceNetwork: string
   readonly destinationNetwork: string
   readonly sourceChainIconAlias?: string
   readonly destinationChainIconAlias?: string
-  readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield'
+  readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield' | 'External'
   readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
 }
 
@@ -112,6 +114,7 @@ export function isAccountModeTransfer(
 
 export function isOwnedAccountTransfer(route: ActivitySwapPresentation): boolean {
   return (
+    !route.isExternalDeposit &&
     route.sourceAccountMode !== undefined &&
     route.destinationAccountMode !== undefined &&
     route.sourceAccountMode !== route.destinationAccountMode
@@ -130,7 +133,9 @@ export function getActivityRouteTitle(item: ActivityItem, route: ActivitySwapPre
       ? 'Cluster transfer'
       : item.snapshot.shield.operation === 'deposit'
         ? 'Deposit'
-        : 'Withdraw'
+        : item.snapshot.shield.operation === 'swap'
+          ? 'Swap'
+          : 'Withdraw'
   }
   if (isAccountModeTransfer(item, route)) {
     return isOwnedAccountTransfer(route) ? 'Account Transfer' : 'Transfer'
@@ -217,8 +222,26 @@ export function getActivitySwapPresentation(
     return null
   }
 
+  const isExternalDeposit =
+    item.source === 'wallet-v2' &&
+    item.id.startsWith('tx:confidential-external:') &&
+    item.snapshot?.direction === 'incoming' &&
+    item.snapshot.shield?.operation === 'deposit'
   const source = resolveActivityDisplayAmount(item.snapshot?.primaryAmount, assetMetadata)
-  const destination = resolveActivityDisplayAmount(item.snapshot?.counterAmount, assetMetadata)
+  const settledAmount =
+    isExternalDeposit && item.status === 'final'
+      ? item.segments.find(
+          segment =>
+            segment.role === 'destination' &&
+            segment.status === 'final' &&
+            segment.target.kind === 'protocol' &&
+            segment.target.provider === 'Confidential Intents'
+        )?.evidence?.settledAmount
+      : undefined
+  const destination = resolveActivityDisplayAmount(
+    settledAmount ?? item.snapshot?.counterAmount,
+    assetMetadata
+  )
   const originSegment = item.segments.find(
     segment => segment.role === 'origin' && segment.target.kind === 'onchain'
   )
@@ -246,11 +269,13 @@ export function getActivitySwapPresentation(
   const senderAddress = item.snapshot?.sender?.address
   const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
     domain === 'shield' ? 'Shield' : domain === 'private' ? 'Confidential' : 'Public'
-  const sourceAccountMode = shield
-    ? shieldDomainLabel(shield.sourceDomain)
-    : senderAddress
-      ? executionAddressModes.get(senderAddress.toLowerCase())
-      : undefined
+  const sourceAccountMode = isExternalDeposit
+    ? 'External'
+    : shield
+      ? shieldDomainLabel(shield.sourceDomain)
+      : senderAddress
+        ? executionAddressModes.get(senderAddress.toLowerCase())
+        : undefined
   const destinationAccountMode = shield
     ? shieldDomainLabel(shield.destinationDomain)
     : recipientAddress
@@ -260,6 +285,8 @@ export function getActivitySwapPresentation(
   return Object.freeze({
     ...(source ? { source } : {}),
     ...(destination ? { destination } : {}),
+    ...(settledAmount ? { destinationIsSettled: true as const } : {}),
+    ...(isExternalDeposit ? { isExternalDeposit: true as const } : {}),
     ...(recipientAddress ? { recipientAddress } : {}),
     sourceNetwork:
       shield?.sourceDomain === 'shield'
@@ -407,7 +434,9 @@ export function getActivityDetailTitle(item: ActivityItem, interactionTitle?: st
       ? 'Cluster transfer'
       : item.snapshot.shield.operation === 'deposit'
         ? 'Deposit to Shield'
-        : 'Withdraw from Shield'
+        : item.snapshot.shield.operation === 'swap'
+          ? 'Shield Swap'
+          : 'Withdraw from Shield'
   if (isConfidentialFundingActivity(item)) return 'Add to Confidential'
   if (item.failureCode === 'refunded') return 'Refund'
   if (
@@ -763,7 +792,9 @@ function getActivityTitle(item: ActivityItem, chainId?: string): string {
       ? 'Cluster transfer'
       : item.snapshot.shield.operation === 'deposit'
         ? 'Deposit to Shield'
-        : 'Withdraw from Shield'
+        : item.snapshot.shield.operation === 'swap'
+          ? 'Shield Swap'
+          : 'Withdraw from Shield'
   if (isConfidentialFundingActivity(item)) return 'Added to Confidential'
   if (item.failureCode === 'refunded') return 'Refunded'
   const interaction = getActivityInteractionPresentation(item, chainId)

@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import {
   Dialog,
   DialogContent,
@@ -29,19 +30,24 @@ let globalOpenModal: (<T>(options: OpenModalOptions<T>) => Promise<T>) | null = 
 
 export function ModalProvider({ children }: { children: React.ReactNode }) {
   const [modals, setModals] = useState<ModalConfig[]>([])
+  const pending = useRef(new Map<string, () => void>())
 
   const openModalFn = useCallback(<T,>(options: OpenModalOptions<T>): Promise<T> => {
     return new Promise(resolve => {
       const id = `modal-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       const close = () => {
+        pending.current.delete(id)
         setModals(prev => prev.filter(m => m.id !== id))
+        resolve(undefined as T)
       }
 
       const handleResolve = (value: T) => {
-        close()
         resolve(value)
+        close()
       }
+
+      pending.current.set(id, close)
 
       setModals(prev => [
         ...prev,
@@ -56,6 +62,23 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
         }
       ])
     })
+  }, [])
+
+  useEffect(() => {
+    const dismiss = () => {
+      for (const close of pending.current.values()) close()
+    }
+    const handleSessionChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (didCredentialSessionEnd(changes, areaName)) dismiss()
+    }
+    chrome.storage.onChanged.addListener(handleSessionChange)
+    return () => {
+      chrome.storage.onChanged.removeListener(handleSessionChange)
+      dismiss()
+    }
   }, [])
 
   useEffect(() => {

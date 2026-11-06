@@ -59,7 +59,7 @@ function ReviewValue({
     <p
       className={cn(
         'min-w-0 whitespace-pre-wrap text-right text-xs leading-5 text-foreground/90',
-        row.code && 'font-mono',
+        row.code && !row.amount && 'font-mono',
         row.breakAll && 'break-all',
         row.tone === 'warning' && 'text-warning',
         row.tone === 'danger' && 'text-danger'
@@ -257,7 +257,10 @@ function DAppTransactionReview({
   const networkFee =
     feeControl ??
     (feeRow ? (
-      <span title={feeRow.title ?? feeRow.value} className="font-mono text-sm text-foreground/90">
+      <span
+        title={feeRow.title ?? feeRow.value}
+        className="font-sans text-sm tabular-nums text-foreground/90"
+      >
         {feeRow.value}
       </span>
     ) : undefined)

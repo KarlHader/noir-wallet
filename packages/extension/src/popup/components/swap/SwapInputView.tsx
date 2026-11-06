@@ -114,13 +114,13 @@ function SwapAssetCardSkeleton({ direction }: { readonly direction: 'From' | 'To
         <div className="flex min-w-0 items-center gap-2.5">
           <Skeleton className="size-9 shrink-0 rounded-full" />
           <div className="space-y-2">
-            <Skeleton className="h-5 w-20" />
-            <Skeleton className="h-2.5 w-16 bg-white/[0.05]" />
+            <Skeleton className="h-[26px] w-20" />
+            <Skeleton className="h-3 w-16 bg-white/[0.05]" />
           </div>
         </div>
         <div className="min-w-0 flex-1 space-y-2">
-          <Skeleton className="ml-auto h-5 w-20" />
-          <Skeleton className="ml-auto h-2.5 w-12 bg-white/[0.05]" />
+          <Skeleton className="ml-auto h-[26px] w-20" />
+          <Skeleton className="ml-auto h-3 w-12 bg-white/[0.05]" />
         </div>
       </div>
     </section>
@@ -202,14 +202,16 @@ function SwapAssetCard({
 
   return (
     <section className="min-h-[126px] py-3">
-      <div className="flex h-5 min-w-0 items-center justify-between gap-2 text-[11px]">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="shrink-0 text-muted">{direction}</span>
+      <div className="flex min-h-5 min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs leading-4">
+        <div className="flex min-w-0 max-w-full items-center gap-1.5">
+          <span className="shrink-0 text-sm font-medium leading-[18px] text-muted">
+            {direction}
+          </span>
           {accountAction}
           {!accountAction && hasAccountDetails && (
             <>
               {accountAddress ? (
-                <span className="truncate font-mono text-[10px] text-muted" title={accountAddress}>
+                <span className="truncate font-mono text-xs text-muted" title={accountAddress}>
                   {formatSortAddress(accountAddress)}
                 </span>
               ) : accountFallbackLabel ? (
@@ -255,7 +257,7 @@ function SwapAssetCard({
               title={
                 maxDisabled ? maxDisabledReason : onMaxClick ? 'Use maximum balance' : 'Balance'
               }
-              className="flex min-w-0 shrink items-center gap-1 text-[10px] text-muted transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex min-w-0 shrink items-center gap-1 text-xs font-medium text-muted transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
             >
               {maxLoading && (
                 <Icon
@@ -266,7 +268,7 @@ function SwapAssetCard({
                 />
               )}
               <span className="shrink-0">Bal.</span>
-              <span className="min-w-0 truncate text-right font-mono" title={balance}>
+              <span className="min-w-0 truncate text-right font-sans tabular-nums" title={balance}>
                 {formatTokenQuantity(balance)}
               </span>
             </button>
@@ -276,7 +278,7 @@ function SwapAssetCard({
                 onClick={onMaxClick}
                 disabled={maxLoading || maxDisabled}
                 title={maxDisabled ? maxDisabledReason : 'Use maximum balance'}
-                className="shrink-0 text-[10px] font-medium text-foreground hover:text-primary disabled:opacity-50"
+                className="shrink-0 text-xs font-medium text-foreground hover:text-primary disabled:opacity-50"
               >
                 Max
               </button>
@@ -313,13 +315,13 @@ function SwapAssetCard({
         >
           <TokenIcon token={token || undefined} size={30} />
           <span className="min-w-0">
-            <span className="flex items-center gap-1 text-base font-semibold leading-5">
+            <span className="flex items-center gap-1 text-xl font-semibold leading-[26px]">
               {formatSymbol(token?.symbol) || 'Select'}
               {!tokenSelectLocked && (
                 <Icon icon="lucide:chevron-down" width={16} height={16} className="text-muted" />
               )}
             </span>
-            <span className="mt-0.5 block truncate text-[10px] text-muted">
+            <span className="mt-0.5 block truncate text-xs leading-4 text-muted">
               {token ? formatChainName(token.blockchain) : 'Choose network'}
             </span>
           </span>
@@ -332,7 +334,7 @@ function SwapAssetCard({
               aria-label={isEstimatedAmount && amount ? `Estimated output: ${amount}` : undefined}
               title={amount || undefined}
               className={cn(
-                'break-all font-sans text-lg font-medium leading-6',
+                'break-all font-sans text-xl font-semibold leading-[26px]',
                 isEstimatedAmount && 'text-muted'
               )}
             >
@@ -363,12 +365,12 @@ function SwapAssetCard({
               aria-label={`${direction} amount`}
               aria-invalid={Boolean(validationMessage) || undefined}
               aria-describedby={validationMessage ? 'swap-source-amount-error' : undefined}
-              className="w-full min-w-0 bg-transparent text-right font-sans text-lg font-medium leading-6 outline-none placeholder:text-muted/60"
+              className="w-full min-w-0 bg-transparent text-right font-sans text-xl font-semibold leading-[26px] outline-none placeholder:text-muted/60"
             />
           )}
           <p
             className={cn(
-              'mt-0.5 truncate text-[10px] text-muted',
+              'mt-0.5 truncate text-xs leading-4 text-muted',
               isEstimatedAmount && 'opacity-70'
             )}
           >
@@ -396,7 +398,7 @@ function SwapAssetCard({
         </div>
       </div>
       {pendingBalance != null && safeBig(pendingBalance).gt(0) && (
-        <div className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted">
+        <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted">
           <span title={`${pendingBalance} ZEC pending`}>
             {formatTokenQuantity(pendingBalance)} ZEC pending
           </span>
@@ -561,9 +563,9 @@ export function SwapInputView({
                     onClick={() => setRecipientSelectorOpen(true)}
                     aria-label="Choose receive account"
                     title={destinationAddress || 'Choose receive account'}
-                    className="flex min-w-0 items-center gap-1.5 text-[11px] transition-colors hover:text-primary"
+                    className="flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-primary"
                   >
-                    <span className="min-w-0 truncate font-mono text-[10px] text-muted">
+                    <span className="min-w-0 truncate font-mono text-xs text-muted">
                       {destinationAddress
                         ? formatSortAddress(destinationAddress)
                         : requiresRecipientAddress
@@ -637,7 +639,7 @@ export function SwapInputView({
           <button
             type="button"
             onClick={onOpenSlippageSetting}
-            className="mt-2 flex w-full items-center justify-end gap-1 text-[11px] text-muted hover:text-foreground"
+            className="mt-2 flex w-full items-center justify-end gap-1 text-xs font-medium leading-4 text-muted hover:text-foreground"
             aria-label={`Set slippage, currently ${slippage}%`}
           >
             Slippage {slippage}%
@@ -646,7 +648,7 @@ export function SwapInputView({
         )}
 
         {hasQuoteDetails && (
-          <div className="mt-3 space-y-2 rounded-lg border border-white/15 px-2.5 py-2.5 text-[11px]">
+          <div className="mt-3 space-y-2 rounded-lg border border-white/15 px-2.5 py-2.5 text-xs font-medium leading-4">
             <div className="flex min-w-0 items-center justify-between gap-2">
               <span className="text-muted">Slippage</span>
               <button
@@ -703,7 +705,7 @@ export function SwapInputView({
                 </button>
                 {showRefundAddress && (
                   <p
-                    className="mt-1 break-all font-mono text-[10px]"
+                    className="mt-1 break-all font-mono text-xs font-normal"
                     title={walletManagedRefundAddress}
                   >
                     {walletManagedRefundAddress}
@@ -720,7 +722,7 @@ export function SwapInputView({
           onClick={onGetQuote}
           disabled={!canGetQuote || hasInsufficientFunds || actionLoading}
           isLoading={isQuoting || actionLoading}
-          className="h-[45px] w-full text-sm text-black"
+          className="h-[45px] w-full text-base font-semibold leading-[21px] text-black"
         >
           {actionLabel}
         </Button>

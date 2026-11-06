@@ -50,6 +50,7 @@ import {
   getEvmSendPrepareError,
   getEvmTokenFeeBalanceError,
   buildPrivateEvmTransferPath,
+  buildPublicPrivateEvmSendPath,
   resolveEvmNativeMaximumAmount,
   type EvmSendSourceMode
 } from './evm-send-validation'
@@ -74,6 +75,7 @@ import { useEvmSendSupport } from '@/popup/hooks/useEvmSendSupport'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
 import {
   createEvmSendIntentKey,
+  getEvmSendRecipientError,
   getEvmSendPrivacyWarning,
   resolveEvmSendAvailableRaw,
   resolveEvmSendRoute
@@ -118,6 +120,7 @@ export function EvmSendForm({
   onSourceSelectorOpenChange,
   onFundPrivate,
   initialRecipient,
+  initialDraft,
   onSubmitted
 }: {
   walletMode: 'public' | 'private'
@@ -131,11 +134,18 @@ export function EvmSendForm({
   onSourceSelectorOpenChange: (open: boolean) => void
   onFundPrivate?: (amount: string, maximum?: boolean) => void
   initialRecipient?: string
+  initialDraft?: Readonly<{
+    recipient: string
+    amount: string
+    maximum: boolean
+    sendPrivately: true
+  }>
   onSubmitted: (submission: EvmTransferSubmission) => void
 }) {
   const [amount, setAmount] = useState('')
   const [fundingDialogOpen, setFundingDialogOpen] = useState(false)
   const [privacyProviderOpen, setPrivacyProviderOpen] = useState(false)
+  const [privateSendScope, setPrivateSendScope] = useState<string | null>(null)
   const [recipient, setRecipient] = useState(initialRecipient ?? '')
   const [feeSelection, setFeeSelection] = useState<EvmFeeSelection>({
     kind: 'tier',
@@ -218,12 +228,25 @@ export function EvmSendForm({
     sourceAddress
   ])
   const support = useEvmSendSupport(chain.chain, asset.asset, accountContextKey)
-  const route = resolveEvmSendRoute(sourceMode, support.support)
+  const privacyScope = `${accountContextKey}:${asset.asset.id}`
+  const sendPrivately = sourceMode === 'main' && privateSendScope === privacyScope
+  const route = resolveEvmSendRoute(sourceMode, support.support, sendPrivately)
   const recipientRole = resolveEvmAddressRole(
     recipient,
     chain.chain.id,
     activeAccount ? catalog?.accounts : []
   )
+  const restoredDraft = useRef<string | null>(null)
+  useEffect(() => {
+    if (!initialDraft || sourceMode !== 'main') return
+    const key = JSON.stringify([privacyScope, initialDraft])
+    if (restoredDraft.current === key) return
+    restoredDraft.current = key
+    setAmount(initialDraft.amount)
+    setRecipient(initialDraft.recipient)
+    setMaxSelected(initialDraft.maximum)
+    setPrivateSendScope(privacyScope)
+  }, [initialDraft, privacyScope, sourceMode])
 
   useEffect(() => {
     if (initialRecipient && /^0x[0-9a-fA-F]{40}$/.test(initialRecipient)) {
@@ -248,7 +271,9 @@ export function EvmSendForm({
       return null
     }
   }, [amount, asset.metadata.decimals])
-  const validRecipient = /^0x[0-9a-fA-F]{40}$/.test(recipient) && !/^0x0{40}$/i.test(recipient)
+  const recipientPolicyError = getEvmSendRecipientError(sourceMode, recipientRole, sendPrivately)
+  const validRecipient =
+    /^0x[0-9a-fA-F]{40}$/.test(recipient) && !/^0x0{40}$/i.test(recipient) && !recipientPolicyError
   const reviewContext = {
     contextKey: accountContextKey,
     assetId: asset.asset.id,
@@ -303,7 +328,7 @@ export function EvmSendForm({
             availableRaw,
             sender: sourceAddress ?? '',
             recipient,
-            executionMode: 'private'
+            executionMode: sourceMode
           })
         : estimateNativeTransferMaximum({
             source: createNativeTransferSource({
@@ -445,6 +470,21 @@ export function EvmSendForm({
       return
     }
     if (route === 'confidential') {
+      if (sendPrivately) {
+        if (!walletId || !accountId) return
+        navigate(
+          buildPublicPrivateEvmSendPath({
+            assetId: asset.asset.id,
+            recipient,
+            amount,
+            maximum: maxSelected,
+            walletId,
+            accountId,
+            network: networkMode
+          })
+        )
+        return
+      }
       navigate(
         buildPrivateEvmTransferPath({
           assetId: asset.asset.id,
@@ -675,22 +715,6 @@ export function EvmSendForm({
     <>
       <div className="page-content min-h-0 space-y-3 !px-4 pt-4">
         <div className="!mb-[5px] pb-2 pt-1 text-center">
-          <SendAmountInputCard
-            hero
-            ariaLabel={`${asset.metadata.symbol} amount`}
-            value={amount}
-            onChange={value => {
-              if (/^\d*\.?\d*$/.test(value)) {
-                invalidateMaximum()
-                setAmount(value)
-              }
-            }}
-            available={transferAvailability.display}
-            availableLabel={transferAvailability.label}
-            symbol={asset.metadata.symbol}
-            priceUsd={priceUsd}
-            maxSelected={maxSelected}
-          />
           <button
             type="button"
             onClick={onSelectAsset}
@@ -717,18 +741,6 @@ export function EvmSendForm({
         <div className="space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium leading-[18px] text-muted">Send from</p>
-            <button
-              type="button"
-              role="switch"
-              aria-label="Send privately"
-              aria-checked={false}
-              onClick={() => setPrivacyProviderOpen(true)}
-              className="flex items-center gap-1 text-sm font-normal leading-[18px] text-muted"
-            >
-              <Icon icon="lucide:shield-check" width={15} height={15} className="text-primary" />
-              Send privately
-              <Switch checked={false} size="sm" />
-            </button>
           </div>
           <div className="flex min-h-[72px] items-start gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-[11px] pb-2 pt-[14px]">
             <button
@@ -788,7 +800,7 @@ export function EvmSendForm({
           </div>
         </div>
 
-        <div className="!mt-[30px]">
+        <div className="!mt-[18px]">
           <SendRecipientInputCard
             id="evm-send-recipient"
             value={recipient}
@@ -802,9 +814,34 @@ export function EvmSendForm({
             onSelectRecipient={() => void handleSelectRecipient()}
           />
           {recipient && !validRecipient && (
-            <p className="mt-2 px-1 text-xs text-danger">Enter a valid non-zero EVM address.</p>
+            <p className="mt-2 px-1 text-xs text-danger">
+              {recipientPolicyError ?? 'Enter a valid non-zero EVM address.'}
+            </p>
           )}
         </div>
+
+        <SendAmountInputCard
+          ariaLabel={`${asset.metadata.symbol} amount`}
+          value={amount}
+          onChange={value => {
+            if (/^\d*\.?\d*$/.test(value)) {
+              invalidateMaximum()
+              setAmount(value)
+            }
+          }}
+          available={transferAvailability.display}
+          availableLabel={transferAvailability.label}
+          symbol={asset.metadata.symbol}
+          priceUsd={priceUsd}
+          maxSelected={maxSelected}
+          onMax={
+            asset.asset.kind === 'token'
+              ? () => setAmount(transferAvailability.display)
+              : handleMaximum
+          }
+          maxDisabled={route === 'pending' || !validRecipient || !sourceAddress}
+          maxLoading={maximum.loading}
+        />
 
         {route === 'onchain' && (
           <div className="flex min-h-6 items-center justify-between gap-2 text-xs">
@@ -844,7 +881,11 @@ export function EvmSendForm({
             </p>
           ) : (
             <InlineError
-              message="Unable to check Confidential availability."
+              message={
+                support.support === 'unsupported'
+                  ? 'Confidential transfers are unavailable for this asset.'
+                  : 'Unable to check Confidential availability.'
+              }
               onRetry={support.retry}
               className="px-1"
             />
@@ -852,6 +893,18 @@ export function EvmSendForm({
       </div>
 
       <div className="page-footer">
+        <button
+          type="button"
+          role="switch"
+          aria-label="Send privately"
+          aria-checked={sendPrivately}
+          onClick={() => (sendPrivately ? setPrivateSendScope(null) : setPrivacyProviderOpen(true))}
+          className={`mb-4 flex w-full items-center justify-center gap-1.5 text-sm ${sendPrivately ? 'text-primary' : 'text-muted'}`}
+        >
+          <Icon icon="lucide:shield-check" width={15} height={15} className="text-primary" />
+          Send privately
+          <Switch checked={sendPrivately} size="sm" />
+        </button>
         <Button
           size="wallet"
           className="h-[45px] w-full"
@@ -971,7 +1024,7 @@ export function EvmSendForm({
                 {
                   label: 'Max fee per gas',
                   content: (
-                    <span className="font-mono">
+                    <span className="font-sans tabular-nums">
                       <AmountDisplay
                         value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
                         symbol="GWEI"
@@ -983,7 +1036,7 @@ export function EvmSendForm({
                 {
                   label: 'Priority fee per gas',
                   content: (
-                    <span className="font-mono">
+                    <span className="font-sans tabular-nums">
                       <AmountDisplay
                         value={formatEvmWeiAsGwei(summary.fields.maxPriorityFeePerGasWei ?? '0')}
                         symbol="GWEI"
@@ -1051,17 +1104,18 @@ export function EvmSendForm({
           <div className="px-4 pb-8">
             <button
               type="button"
-              disabled
-              aria-label="NEAR Confidential Intents unavailable"
-              className="flex min-h-[60px] w-full items-center gap-3 rounded-lg border border-white/10 bg-[var(--color-wallet-selected)] px-3 text-left text-sm opacity-40"
+              disabled={sourceMode !== 'main' || support.support !== 'supported'}
+              aria-label="Use NEAR Confidential Intents"
+              onClick={() => {
+                setPrivateSendScope(privacyScope)
+                setPrivacyProviderOpen(false)
+                setError(null)
+              }}
+              className="flex min-h-[60px] w-full items-center gap-3 rounded-lg border border-white/10 bg-wallet-selected px-3 text-left text-sm hover:bg-wallet-surface disabled:opacity-40"
             >
               <img src={nearLogo} alt="" className="size-6 shrink-0 rounded" />
               <span className="min-w-0 flex-1 truncate">NEAR Confidential Intents</span>
-              <span className="max-w-[35%] break-all text-right">
-                {asset.balance.confidentialRaw === undefined
-                  ? '—'
-                  : formatBaseUnitAmount(asset.balance.confidentialRaw, asset.metadata.decimals)}
-              </span>
+              <Icon icon="lucide:chevron-right" width={18} height={18} />
             </button>
           </div>
         </DialogContent>

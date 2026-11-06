@@ -29,7 +29,7 @@ import { ANALYTICS_EVENTS, PAGE_IDS, trackEvent } from '@/background/analytics/r
 import { transactionRecorder } from './transaction-recorder'
 import { zcashTxMonitor, computeExpiryHeight } from './zcash-tx-monitor'
 import { catchUpAfterOnChainTx } from './tx-sync'
-import { checkLendingMcaAccount, type LendingSigningMode } from '@/core/services/lending-service'
+import { checkZcashMcaAccount, type McaSigningMode } from '@/core/services/zcash-mca-account'
 import { loadTransactions } from '@/lib/indexed-db'
 import { TimeoutError, withTimeout } from '@/lib/async-utils'
 import { TRANSACTION_PENDING_MESSAGE } from '@/lib/transaction-status-copy'
@@ -1686,7 +1686,7 @@ export class DAppHandler {
       return null
     }
 
-    return checkLendingMcaAccount(walletId, account.id, mode =>
+    return checkZcashMcaAccount(walletId, account.id, mode =>
       this.resolveLendingPublicKey(walletId, account.id, mode)
     )
   }
@@ -1694,7 +1694,7 @@ export class DAppHandler {
   private async resolveLendingPublicKey(
     walletId: string,
     accountId: string,
-    mode: LendingSigningMode
+    mode: McaSigningMode
   ): Promise<string> {
     const wallet = useWalletStore.getState().getWallet(walletId)
     const account = wallet?.accounts.find(candidate => candidate.id === accountId)

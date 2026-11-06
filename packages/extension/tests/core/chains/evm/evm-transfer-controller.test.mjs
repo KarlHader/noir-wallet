@@ -358,6 +358,7 @@ test.describe('Background EVM transfer controller', () => {
     await expect(controller.resumeBroadcast('transaction:evm:3')).resolves.toBe(results.resume)
     expect(calls).toEqual([
       ['get-pending', { scope: chainAccount.scope, transactionId: 'transaction:evm:0' }],
+      ['get-pending', { scope: chainAccount.scope, transactionId: 'transaction:evm:1' }],
       [
         'approve',
         {
@@ -366,6 +367,7 @@ test.describe('Background EVM transfer controller', () => {
           payloadFingerprint: fingerprint
         }
       ],
+      ['get-pending', { scope: chainAccount.scope, transactionId: 'transaction:evm:dapp' }],
       [
         'approve',
         {
@@ -387,6 +389,38 @@ test.describe('Background EVM transfer controller', () => {
       ],
       ['resume', { scope: chainAccount.scope, transactionId: 'transaction:evm:3' }]
     ])
+  })
+
+  test('checks a persisted RHEA quote before approving an already prepared EVM transaction', async () => {
+    const binding = {
+      provider: 'rhea-cross-chain-dex',
+      quoteHandle: 'rhea-quote:legacy',
+      sender: privateExecutionAccount.address,
+      destination: { recipient: chainAccount.identity.value }
+    }
+    let approved = false
+    const controller = new BackgroundEvmTransferController({
+      orchestrator: {
+        getPendingApproval: async () => ({ graph: { root: { intent: { protocol: binding } } } }),
+        approve: async () => {
+          approved = true
+          return { status: 'broadcast' }
+        }
+      },
+      loadActiveContext: async () => activeContext,
+      resolveExternalSigner: async () => {
+        throw new Error('unexpected signer')
+      },
+      readTokenAllowance: async () => '0',
+      validateRheaSwapQuote: async quoteHandle => {
+        expect(quoteHandle).toBe(binding.quoteHandle)
+        throw new Error('Private quote needs to be refreshed before signing.')
+      }
+    })
+    await expect(controller.approve('transaction:evm:legacy', 'a'.repeat(64))).rejects.toThrow(
+      /refreshed/
+    )
+    expect(approved).toBe(false)
   })
 
   test('fails closed when the active Account has no EVM ChainAccount', async () => {

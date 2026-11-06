@@ -159,9 +159,23 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
   await mockReleasedBitcoinEsplora(context)
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
+  await popup.getByRole('button', { name: 'Open menu' }).click()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
-  await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'RPC Endpoints' })).toBeVisible()
+  await popup.getByRole('button', { name: 'Networks', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Networks' })).toBeVisible()
+
+  const openChainRpc = async (chain: string) => {
+    await popup.getByRole('button', { name: `Configure ${chain} network` }).click()
+    await expect(popup.getByRole('heading', { name: 'Network Details' })).toBeVisible()
+    await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
+  }
+  const reopenRpc = async () => {
+    await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
+  }
+  const leaveChain = async () => {
+    await popup.getByRole('button', { name: 'Back' }).click()
+    await expect(popup.getByRole('heading', { name: 'Networks' })).toBeVisible()
+  }
 
   const releasedRpcChains = [
     ['Arbitrum', 'arbitrum'],
@@ -171,11 +185,8 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
     ['Zcash', 'zcash']
   ]
   for (const [index, [chain, path]] of releasedRpcChains.entries()) {
-    const customUrl =
-      chain === 'Zcash'
-        ? 'https://zcashwebrpc.deltarpc.com'
-        : `https://endpoint-release.noir.test/${path}`
-    await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+    const customUrl = `https://endpoint-release.noir.test/${path}`
+    await openChainRpc(chain)
     const dialog = popup.getByRole('dialog')
     await expect(dialog.getByLabel(`${chain} RPC URL`)).toHaveCount(0)
     if (chain === 'Arbitrum') {
@@ -188,10 +199,10 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       await captureScreenshot(popup, 'rpc-arbitrum-presets.png')
       await dialog.getByRole('button', { name: 'Use automatic RPC' }).click()
       await expect(dialog).toHaveCount(0)
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await reopenRpc()
       await dialog.getByRole('button', { name: 'Use dRPC RPC' }).click()
       await expect(dialog).toHaveCount(0)
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await reopenRpc()
       await expect(dialog.getByRole('button', { name: 'Use dRPC RPC' })).toHaveAttribute(
         'aria-pressed',
         'true'
@@ -226,19 +237,21 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
     )
     await dialog.getByRole('button', { name: 'Verify & Add' }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30_000 })
+    await leaveChain()
   }
 
   await popup.reload()
+  await popup.getByRole('button', { name: 'Open menu' }).click()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
-  await popup.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'RPC Endpoints' })).toBeVisible()
+  await popup.getByRole('button', { name: 'Networks', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Networks' })).toBeVisible()
   const stored = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
   )
   expect(stored.result.savedRpcEndpoints).toHaveLength(releasedRpcChains.length)
   expect(await readPersistedEndpointModes(popup)).toEqual(['mainnet'])
   for (const [chain] of releasedRpcChains) {
-    await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+    await openChainRpc(chain)
     const dialog = popup.getByRole('dialog')
     await expect(dialog.getByRole('button', { name: `Use My ${chain} RPC` })).toBeVisible()
     await dialog.getByRole('button', { name: `Use My ${chain} RPC` }).click()
@@ -249,7 +262,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       )
     } else {
       await expect(dialog).toHaveCount(0, { timeout: 30_000 })
-      await popup.getByRole('button', { name: `Configure ${chain} RPC` }).click()
+      await reopenRpc()
     }
     await captureScreenshot(
       popup,
@@ -273,7 +286,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
         chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
       )
       expect(findChainEndpointOverride(autoSettings.result, 'eip155:42161')?.rpc).toBeUndefined()
-      await popup.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
+      await reopenRpc()
       await expect(dialog.getByRole('button', { name: 'Use automatic RPC' })).toHaveAttribute(
         'aria-pressed',
         'true'
@@ -298,6 +311,7 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
       .click()
     await popup.getByRole('dialog').getByRole('button', { name: 'Remove', exact: true }).click()
     await expect(popup.getByRole('dialog')).toHaveCount(0, { timeout: 30_000 })
+    await leaveChain()
   }
   const removed = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
@@ -308,9 +322,11 @@ test('adds, persists, selects and removes custom RPCs through the real popup', a
   const sidePanel = await context.newPage()
   await sidePanel.setViewportSize({ width: 480, height: 900 })
   await sidePanel.goto(`chrome-extension://${extensionId}/index.html?surface=side-panel`)
+  await sidePanel.getByRole('button', { name: 'Open menu' }).click()
   await sidePanel.getByRole('button', { name: 'Settings', exact: true }).click()
+  await sidePanel.getByRole('button', { name: 'Networks', exact: true }).click()
+  await sidePanel.getByRole('button', { name: 'Configure Arbitrum network' }).click()
   await sidePanel.getByRole('button', { name: 'RPC Endpoint', exact: true }).click()
-  await sidePanel.getByRole('button', { name: 'Configure Arbitrum RPC' }).click()
   const sidePanelDialog = sidePanel.getByRole('dialog')
   const presets = sidePanelDialog.getByTestId('provider-presets')
   await expect(sidePanelDialog.getByRole('button', { name: 'Use ZAN RPC' })).toBeInViewport()
@@ -414,7 +430,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   await expect(popup.getByRole('status', { name: 'Loading activity' })).toHaveCount(0)
   await expect(popup.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
   const activityFilter = popup.getByRole('button', {
-    name: 'Filter activity by network: All Networks'
+    name: 'Filter activity by network: All networks'
   })
   await expect(activityFilter).toBeVisible()
   const activityFilterPosition = await activityFilter.boundingBox()
@@ -464,10 +480,10 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
   expect(Math.abs(portfolioFilterPosition.x - activityFilterPosition.x)).toBeLessThan(0.5)
   expect(Math.abs(portfolioFilterPosition.y - activityFilterPosition.y)).toBeLessThan(0.5)
   await portfolioFilterForAlignment.click()
-  await popup.getByRole('menuitemradio', { name: 'All Networks', exact: true }).click()
+  await popup.getByRole('menuitemradio', { name: 'All networks', exact: true }).click()
   await activityTab.click()
   await expect(
-    popup.getByRole('button', { name: 'Filter activity by network: All Networks' })
+    popup.getByRole('button', { name: 'Filter activity by network: All networks' })
   ).toBeVisible()
   await expect(popup.getByRole('status', { name: 'Loading activity' })).toHaveCount(0)
   await expect(popup.getByText('+0.005872 ETH', { exact: true })).toBeVisible()
@@ -647,7 +663,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
     'true'
   )
   const portfolioNetworkFilter = popup.getByRole('button', {
-    name: 'Filter portfolio by network: All Networks'
+    name: 'Filter portfolio by network: All networks'
   })
   await expect(portfolioNetworkFilter).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Refresh portfolio' })).toBeVisible()
@@ -735,7 +751,7 @@ test('renders and switches the released EVM catalog and chain-scoped endpoint se
     popup.getByRole('button', { name: 'Filter portfolio by network: Ethereum' })
   ).toBeVisible({ timeout: 30_000 })
   await popup.getByRole('button', { name: 'Filter portfolio by network: Ethereum' }).click()
-  await popup.getByRole('menuitemradio', { name: 'All Networks', exact: true }).click()
+  await popup.getByRole('menuitemradio', { name: 'All networks', exact: true }).click()
   await expect(popup.getByRole('button', { name: 'Expand low value assets' })).toBeVisible()
 
   const bitcoinAddressRequests = () =>

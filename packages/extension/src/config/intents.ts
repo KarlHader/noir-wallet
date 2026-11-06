@@ -58,9 +58,6 @@ export interface IntentsAppFee {
 export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: 'noir_swap.near', fee: 35 }]
 export const NOIR_SWAP_REFERRAL = 'noir_swap'
 
-/** Lending app fee disabled for now (0 bps); recipient prewired for easy enablement. */
-export const NOIR_LENDING_APP_FEES: IntentsAppFee[] = [{ recipient: 'noir_lending.near', fee: 0 }]
-
 const CONFIDENTIAL_TRANSFER_ESTIMATES: Readonly<Record<string, string>> = Object.freeze({
   eip155: '3-5 min'
 })

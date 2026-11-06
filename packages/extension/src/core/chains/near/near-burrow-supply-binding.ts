@@ -1,4 +1,4 @@
-import { parseNearAccountId } from '@/core/chains/near'
+import { parseNearAccountId } from './identifiers'
 
 export type NearLendingSupplyReason =
   | 'BurrowCollateral'

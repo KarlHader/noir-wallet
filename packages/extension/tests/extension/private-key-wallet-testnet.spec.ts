@@ -255,7 +255,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   expect(restoredBitcoinAccount).toMatchObject({ active: true })
 
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
-  await popup.getByRole('button', { name: 'Security & Privacy', exact: true }).click()
+  await popup.getByRole('button', { name: 'Security', exact: true }).click()
   await popup.getByRole('button', { name: 'Change Password', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Change Password' })).toBeVisible()
   await popup.getByPlaceholder('Current Password').fill(TEST_PASSWORD)

@@ -4,7 +4,7 @@ import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import type { ZcashBalance } from '@/types'
 import { isPortfolioModelForScope } from './portfolio-cache'
-import { buildShieldProviderGroups, summarizeAssetDomainsUsd } from './asset-domains'
+import { summarizeAssetDomainsUsd } from './asset-domains'
 
 export type HomePortfolioTotalStatus = 'loading' | 'ready' | 'partial' | 'unavailable'
 
@@ -21,7 +21,7 @@ export function resolveHomePortfolioTotalStatus(
   }
   if (hasCompletePortfolioTotal(model, priceStatus, walletId, accountId, fiat)) return 'ready'
   if (fiat.pricedAssetCount > 0) return 'partial'
-  if (model.status === 'empty') return 'ready'
+  if (model.status === 'empty' && fiat.missingAssetCount === 0) return 'ready'
   if (model.status === 'ready' && fiat.missingAssetCount === 0) return 'ready'
   if (loadStatus === 'loading' || model.status === 'loading' || priceStatus === 'loading') {
     return 'loading'
@@ -32,8 +32,8 @@ export function resolveHomePortfolioTotalStatus(
 export interface HomeAssetBreakdown {
   readonly publicUsd: string
   readonly shieldUsd: string | null
+  readonly shieldUsdPartial: boolean
   readonly privateUsd: string
-  readonly lendingUsd: string
 }
 
 export function hasCompletePortfolioTotal(
@@ -60,27 +60,18 @@ export function getHomeAssetBreakdown(input: {
   readonly prices?: AssetPriceReadModel | null
   readonly zcashBalance: ZcashBalance | null | undefined
   readonly zecPrice: number
-  readonly lendingUsd: number
 }): HomeAssetBreakdown | null {
   if (input.multichainEnabled) {
     if (!input.liveMultichainTotal || !input.portfolio) return null
     const domains = summarizeAssetDomainsUsd(input.portfolio, input.prices ?? null)
     if (!domains) return null
-    return Object.freeze({
-      ...domains,
-      shieldUsd: buildShieldProviderGroups(input.portfolio, input.prices ?? null).some(
-        group => group.fiat === null
-      )
-        ? null
-        : domains.shieldUsd,
-      lendingUsd: new Big(input.lendingUsd).toFixed()
-    })
+    return domains
   }
   if (!input.zcashBalance || input.zecPrice <= 0) return null
   return Object.freeze({
     publicUsd: new Big(input.zcashBalance.transparent).times(input.zecPrice).toFixed(),
     shieldUsd: new Big(input.zcashBalance.shielded).times(input.zecPrice).toFixed(),
-    privateUsd: '0',
-    lendingUsd: new Big(input.lendingUsd).toFixed()
+    shieldUsdPartial: false,
+    privateUsd: '0'
   })
 }

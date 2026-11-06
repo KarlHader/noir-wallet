@@ -369,7 +369,8 @@ async function mockReleasedEvmRpc(
                   transactionHash: requestedHash,
                   blockHash: `0x${'b'.repeat(64)}`,
                   blockNumber: '0x100',
-                  status: '0x1'
+                  status: '0x1',
+                  logs: []
                 }
               : null
         }

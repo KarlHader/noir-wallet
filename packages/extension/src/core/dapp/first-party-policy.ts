@@ -1,5 +1,4 @@
 const ZKNOIR_APP_ORIGIN = 'https://app.zknoir.com'
-export const ZKNOIR_LENDING_URL = `${ZKNOIR_APP_ORIGIN}/lending`
 
 const AUTO_CONNECT_DAPP_ORIGINS: ReadonlySet<string> = new Set([ZKNOIR_APP_ORIGIN])
 

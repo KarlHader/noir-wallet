@@ -15,15 +15,7 @@ export function getMcaCacheKey(
   return `${walletId}:${accountId}:${executionMode}`
 }
 
-export function getCachedMcaStatus(key: string): McaCacheStatus | undefined {
-  return mcaStatusCache.get(key)
-}
-
-export function setCachedMcaStatus(key: string, status: McaCacheStatus): void {
-  mcaStatusCache.set(key, status)
-}
-
-export function clearLendingMcaCache(walletId?: string, accountId?: string): void {
+export function clearZcashMcaCache(walletId?: string, accountId?: string): void {
   if (walletId && accountId) {
     for (const key of mcaStatusCache.keys()) {
       if (key.startsWith(`${walletId}:${accountId}:`)) mcaStatusCache.delete(key)

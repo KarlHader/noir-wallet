@@ -82,19 +82,14 @@ export function Settings() {
   }, [isSidePanelSurface, loadSidePanelMode, syncSidePanelMode])
 
   const menuItems = [
+    { label: 'Preferences', icon: 'lucide:heart', action: () => navigate('/general') },
+    { label: 'Security', icon: 'lucide:shield-check', action: () => navigate('/security-privacy') },
     {
       label: 'Address Book',
       icon: 'lucide:contact-round',
       action: () => navigate('/address-book')
     },
     { label: 'DApps Connection', icon: 'lucide:link', action: () => navigate('/dapp-connections') },
-    { label: 'Preferences', icon: 'lucide:heart', action: () => navigate('/general') },
-    { label: 'Security', icon: 'lucide:shield-check', action: () => navigate('/security-privacy') },
-    {
-      label: 'Change Password',
-      icon: 'lucide:rectangle-ellipsis',
-      action: () => navigate('/change-password')
-    },
     { label: 'Networks', icon: 'lucide:radio', action: () => navigate('/networks') },
     {
       label: 'Default EVM Wallet',
@@ -106,12 +101,12 @@ export function Settings() {
       icon: 'lucide:code',
       action: () => navigate('/developer-settings')
     },
-    { label: 'About', icon: 'lucide:info', action: () => navigate('/about') },
-    { label: 'Help', icon: 'lucide:circle-help', action: () => navigate('/help') },
     ...(activeAccount?.walletSource.kind === 'software' &&
     activeAccount.networks.some(network => network.chain.family === 'zcash')
       ? [{ label: 'Zcash voting', icon: 'lucide:vote', action: () => navigate('/voting') }]
-      : [])
+      : []),
+    { label: 'Help', icon: 'lucide:circle-help', action: () => navigate('/help') },
+    { label: 'About', icon: 'lucide:info', action: () => navigate('/about') }
   ]
 
   const handleLock = async () => {
@@ -163,11 +158,11 @@ export function Settings() {
             aria-label="Side panel mode"
             disabled={isChangingDisplayMode || isInitializingDisplayMode || !isSidePanelModeLoaded}
             onClick={handleDisplayModeChange}
-            className="flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left hover:bg-white/5 disabled:cursor-wait disabled:opacity-50"
+            className="wallet-interactive flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-50"
           >
             <Icon icon="lucide:panel-left" width={20} height={20} />
             <span className="flex-1 text-base">Sidebar</span>
-            <Switch checked={sidePanelMode} />
+            <Switch checked={sidePanelMode} size="md" />
           </button>
         )}
 
@@ -175,7 +170,7 @@ export function Settings() {
           <button
             key={index}
             onClick={item.action}
-            className="flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left hover:bg-white/5"
+            className="wallet-interactive flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
           >
             <Icon icon={item.icon} width={20} height={20} />
             <span className="flex-1 text-base">{item.label}</span>

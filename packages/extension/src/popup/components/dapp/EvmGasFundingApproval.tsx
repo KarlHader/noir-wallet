@@ -144,13 +144,13 @@ export function EvmGasFundingApproval(props: EvmGasFundingApprovalProps) {
               <div className="space-y-3 px-4 py-3.5 text-sm">
                 <div className="flex justify-between gap-3">
                   <span className="text-muted">Current Gas</span>
-                  <span className="font-mono">
+                  <span className="font-sans tabular-nums">
                     <AmountDisplay value={format(details.availableRaw)} symbol={details.symbol} />
                   </span>
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted">Maximum Gas</span>
-                  <span className="font-mono">
+                  <span className="font-sans tabular-nums">
                     <AmountDisplay
                       value={hasEstimate ? format(details.maximumGasCostRaw) : null}
                       symbol={details.symbol}
@@ -160,7 +160,7 @@ export function EvmGasFundingApproval(props: EvmGasFundingApprovalProps) {
                 </div>
                 <div className="flex justify-between gap-3">
                   <span className="text-muted">Public balance</span>
-                  <span className="font-mono">
+                  <span className="font-sans tabular-nums">
                     <AmountDisplay
                       value={format(preview?.publicBalanceRaw ?? null)}
                       symbol={details.symbol}
@@ -170,14 +170,14 @@ export function EvmGasFundingApproval(props: EvmGasFundingApprovalProps) {
                 {hasEstimate && (
                   <div className="flex justify-between gap-3 font-medium">
                     <span>Minimum</span>
-                    <span className="font-mono text-primary">
+                    <span className="font-sans text-primary tabular-nums">
                       <AmountDisplay value={format(details.shortfallRaw)} symbol={details.symbol} />
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between gap-3 font-medium">
                   <span>Suggested</span>
-                  <span className="font-mono text-primary">
+                  <span className="font-sans text-primary tabular-nums">
                     <AmountDisplay
                       value={format(preview?.suggestedOutputRaw ?? null)}
                       symbol={details.symbol}

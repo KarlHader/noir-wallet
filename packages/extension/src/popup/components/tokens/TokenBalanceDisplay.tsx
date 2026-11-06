@@ -22,7 +22,7 @@ export function TokenBalanceDisplay({
 
   return (
     <div className={cn('min-w-0 text-right', className)}>
-      <p className="break-all font-mono text-sm" title={parsedAmount?.toFixed()}>
+      <p className="break-all font-sans text-sm tabular-nums" title={parsedAmount?.toFixed()}>
         {parsedAmount === null
           ? unavailablePriceLabel
           : formatTokenQuantity(parsedAmount.toFixed())}{' '}

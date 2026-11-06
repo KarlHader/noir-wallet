@@ -8,7 +8,6 @@ import {
   type RheaSwapTransactionBinding
 } from '@/core/transactions/domain'
 import type { QuoteResult, SwapToken } from '@/core/services/intents-api'
-import type { SupplyQuoteResult } from '@/core/services/lending-supply-quote'
 import type {
   RheaSwapQuoteView,
   RheaSwapEvmCallView,
@@ -68,7 +67,6 @@ import {
   type NearTransferSubmission,
   type NearWalletClient
 } from './near-wallet-client'
-import type { NearLendingSupplyBinding } from '@/core/services/lending-near-supply'
 
 export type QuoteDepositSourceFamily = 'evm' | 'bitcoin' | 'solana' | 'near'
 export type QuoteDepositExecutionMode = 'main' | 'private'
@@ -125,7 +123,6 @@ export interface QuoteDepositTransferClient {
     readonly feeTier?: NetworkFeeTier
     readonly feeSelection?: EvmFeeSelection
     readonly executionMode?: QuoteDepositExecutionMode
-    readonly nearLendingSupplyBinding?: NearLendingSupplyBinding
     readonly evmTransaction?: RheaSwapEvmCallView
     readonly quotedAmountRaw?: string
   }) => Promise<QuoteDepositMaximum>
@@ -134,7 +131,6 @@ export interface QuoteDepositTransferClient {
     readonly depositAddress: string
     readonly amountRaw: string
     readonly nearIntentsBinding?: NearIntentsTransactionBinding
-    readonly nearLendingSupplyBinding?: NearLendingSupplyBinding
     readonly rheaSwapBinding?: RheaSwapTransactionBinding
     readonly feeTier?: NetworkFeeTier
     readonly executionMode?: QuoteDepositExecutionMode
@@ -550,45 +546,6 @@ export function createNearIntentsSwapBinding(input: {
   })
 }
 
-export function createNearIntentsSupplyBinding(input: {
-  readonly source: WalletOwnedQuoteAsset
-  readonly amountInRaw: string
-  readonly mcaId: string
-  readonly quote: SupplyQuoteResult
-  readonly destinationAsset: string
-  readonly now?: number
-}): NearIntentsTransactionBinding {
-  if (input.quote.amountInRaw !== input.amountInRaw || input.quote.depositAddress.length === 0) {
-    throw new Error('RHEA supply quote does not match the wallet source asset')
-  }
-  const expiresAt = Date.parse(input.quote.deadline)
-  const now = input.now ?? Date.now()
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) {
-    throw new Error('RHEA supply quote is expired or has an invalid deadline')
-  }
-  return parseNearIntentsTransactionBinding({
-    schemaVersion: 1,
-    provider: 'near-intents',
-    kind: 'supply',
-    depositAddress: input.quote.depositAddress,
-    refundAddress: input.source.refundAddress,
-    expiresAt,
-    origin: {
-      chainId: input.source.chain.chain.id,
-      assetId: input.source.asset.asset.id,
-      protocolAssetId: input.source.sourceAssetId
-    },
-    destination: {
-      chainId: input.source.chain.chain.id,
-      assetId: input.source.asset.asset.id,
-      protocolAssetId: input.destinationAsset,
-      recipient: input.mcaId,
-      expectedAmountRaw: input.quote.amountOutRaw,
-      minimumAmountRaw: input.quote.minAmountOutRaw
-    }
-  })
-}
-
 function assertAmountRaw(value: string): string {
   if (!/^[1-9][0-9]{0,77}$/.test(value)) {
     throw new Error('Quote deposit amount must be a positive base-unit integer')
@@ -690,22 +647,13 @@ export function createQuoteDepositTransferClient(options: {
 
       if (input.source.family === 'solana' || input.source.family === 'near') {
         const isNative = input.source.asset.asset.kind === 'native'
-        const probeAmountRaw = isNative
-          ? input.nearLendingSupplyBinding
-            ? (availableRaw / 2n > 0n ? availableRaw / 2n : availableRaw).toString()
-            : '1'
-          : availableRaw.toString()
+        const probeAmountRaw = isNative ? '1' : availableRaw.toString()
         const wallet = input.source.family === 'solana' ? options.solana : options.near
-        const review = await wallet.prepareTransfer(
-          {
-            assetId: input.source.asset.asset.id,
-            recipient: input.depositAddress,
-            amountRaw: probeAmountRaw
-          },
-          input.source.family === 'near' && input.nearLendingSupplyBinding
-            ? { nearLendingSupplyBinding: input.nearLendingSupplyBinding }
-            : undefined
-        )
+        const review = await wallet.prepareTransfer({
+          assetId: input.source.asset.asset.id,
+          recipient: input.depositAddress,
+          amountRaw: probeAmountRaw
+        })
         try {
           const maximumFeeRaw =
             'debit' in review
@@ -777,19 +725,12 @@ export function createQuoteDepositTransferClient(options: {
     },
     prepare: async input => {
       const amountRaw = assertAmountRaw(input.amountRaw)
-      const bindingCount = [
-        input.nearIntentsBinding,
-        input.nearLendingSupplyBinding,
-        input.rheaSwapBinding
-      ].filter(Boolean).length
+      const bindingCount = [input.nearIntentsBinding, input.rheaSwapBinding].filter(Boolean).length
       if (bindingCount !== 1) {
         throw new Error('Quote deposit transfer requires exactly one protocol binding')
       }
       if (input.rheaSwapBinding && input.source.family !== 'bitcoin') {
         throw new Error('This RHEA Swap execution requires a chain-native coordinator')
-      }
-      if (input.nearLendingSupplyBinding && input.source.family !== 'near') {
-        throw new Error('Direct NEAR Lending Supply requires a NEAR wallet source')
       }
       const nearIntentsBinding = input.nearIntentsBinding
       if (input.source.family === 'evm') {
@@ -821,7 +762,7 @@ export function createQuoteDepositTransferClient(options: {
         return Object.freeze({ family: 'solana' as const, source: input.source, review })
       }
       if (input.source.family === 'near') {
-        if (!nearIntentsBinding && !input.nearLendingSupplyBinding) {
+        if (!nearIntentsBinding) {
           throw new Error('NEAR transfer protocol binding is missing')
         }
         const review = await options.near.prepareTransfer(
@@ -830,12 +771,7 @@ export function createQuoteDepositTransferClient(options: {
             recipient: input.depositAddress,
             amountRaw
           },
-          {
-            ...(nearIntentsBinding === undefined ? {} : { nearIntentsBinding }),
-            ...(input.nearLendingSupplyBinding === undefined
-              ? {}
-              : { nearLendingSupplyBinding: input.nearLendingSupplyBinding })
-          }
+          { nearIntentsBinding }
         )
         return Object.freeze({ family: 'near' as const, source: input.source, review })
       }

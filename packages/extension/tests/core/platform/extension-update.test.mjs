@@ -16,10 +16,6 @@ const releaseNotes = JSON.parse(
   readFileSync(new URL('../../../../web/public/changelog.json', import.meta.url), 'utf8')
 )
 
-it('uses the RHEA SDK release that propagates lending RPC failures', () => {
-  assert.equal(packageJson.dependencies['@rhea-finance/cross-chain-sdk'], '0.1.22')
-})
-
 it.describe('Product release notes', () => {
   it('match the extension version and schema', () => {
     assert.deepEqual(parseProductReleaseNotesManifest(releaseNotes, extensionVersion), {

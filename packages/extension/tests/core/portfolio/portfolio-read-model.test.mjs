@@ -214,6 +214,33 @@ test.describe('Portfolio read model', () => {
     )
   })
 
+  test('decodes independent Confidential holdings without requiring a Public asset entry', () => {
+    const model = buildPortfolioReadModel(
+      scope,
+      [source(ethereumId, 'error')],
+      visibleChains,
+      assetRegistry
+    )
+    const confidential = {
+      status: 'ready',
+      assets: [{
+        tokenId: 'nep141:usdc.omft.near',
+        protocolAssetId: 'nep141:usdc.omft.near',
+        availableRaw: '42',
+        assetId: `${ethereumId}/erc20:0x1111111111111111111111111111111111111111`,
+        chainId: ethereumId,
+        blockchain: 'eth',
+        symbol: 'USDC',
+        name: 'USDC',
+        decimals: 6
+      }]
+    }
+    expect(parsePortfolioReadModel({ ...model, confidential }, visibleChains, assetRegistry).confidential)
+      .toEqual(confidential)
+    expect(parsePortfolioReadModel(structuredClone(model), visibleChains, assetRegistry).confidential)
+      .toBeUndefined()
+  })
+
   test('keeps exact Main and Private balances while exposing their combined total', () => {
     const model = buildPortfolioReadModel(
       scope,

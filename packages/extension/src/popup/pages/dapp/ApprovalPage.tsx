@@ -1179,7 +1179,7 @@ export function ApprovalPage() {
               <div className="space-y-3">
                 <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3">
                   <span className="text-xs text-muted">Amount</span>
-                  <span className="text-right font-mono text-xs text-foreground/90">
+                  <span className="text-right font-sans text-xs tabular-nums text-foreground/90">
                     <AmountDisplay value={data.amount} symbol="ZEC" />
                   </span>
                 </div>
@@ -1265,7 +1265,7 @@ export function ApprovalPage() {
               <div className="space-y-3">
                 <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3">
                   <span className="text-xs text-muted">Amount</span>
-                  <span className="text-right font-mono text-xs text-foreground/90">
+                  <span className="text-right font-sans text-xs tabular-nums text-foreground/90">
                     <AmountDisplay value={data.amount} symbol="ZEC" />
                   </span>
                 </div>
@@ -1448,7 +1448,7 @@ export function ApprovalPage() {
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between gap-3">
                     <span className="text-muted">Amount</span>
-                    <span className="font-mono font-medium">
+                    <span className="font-sans font-medium tabular-nums">
                       <AmountDisplay
                         value={formatAsset(evmPrivateTransfer.amountRaw)}
                         symbol={evmPrivateTransfer.asset.symbol}
@@ -1473,7 +1473,7 @@ export function ApprovalPage() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted">Minimum received</span>
-                    <span className="font-mono">
+                    <span className="font-sans tabular-nums">
                       <AmountDisplay
                         value={formatAsset(evmPrivateTransfer.minimumOutputRaw)}
                         symbol={evmPrivateTransfer.asset.symbol}

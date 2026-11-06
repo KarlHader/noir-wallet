@@ -208,7 +208,7 @@ export function MarketPriceChart({
               aria-pressed={range === item}
               onClick={() => onRangeChange(item)}
               className={cn(
-                'h-7 flex-1 rounded-md text-[11px] font-medium transition-colors',
+                'wallet-interactive h-7 flex-1 rounded-md text-[11px] font-medium active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
                 range === item
                   ? 'bg-white/10 text-foreground'
                   : 'text-muted hover:bg-white/5 hover:text-foreground'

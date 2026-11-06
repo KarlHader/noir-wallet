@@ -65,14 +65,12 @@ const QUOTE_URL = 'https://api.rhea.finance/api/swap/quote'
 const BUILD_SWAP_URL = 'https://api.rhea.finance/api/swap/swap'
 const REPORT_SWAP_URL = 'https://api.rhea.finance/api/swap/report'
 const ORDER_STATUS_URL = 'https://api.rhea.finance/api/swap/order-status'
-const LENDING_QUOTE_URL = 'https://api.rhea.finance/api/1click/quote'
 const CONFIDENTIAL_API_URLS = [
   'https://1click.chaindefuser.com/v0',
   'https://api.rhea.finance/proxy/1click/v0'
 ] as const
 const confidentialApiPath = (path: string) => (url: URL) =>
   CONFIDENTIAL_API_URLS.some(origin => url.href === `${origin}${path}`)
-const LENDING_METADATA_URL = 'https://api.rhea.finance/list-burrow-asset-token'
 const NEAR_RPC_URLS = [
   'https://free.rpc.fastnear.com/**',
   'https://nearinner.deltarpc.com/**'
@@ -273,6 +271,7 @@ async function mockEvmNetwork(
     readonly pendingBroadcast?: boolean
     readonly contractGas?: string
     readonly balanceRaw?: bigint
+    readonly zeroBalanceTokenContracts?: readonly string[]
   } = {}
 ): Promise<MockEvmNetworkState> {
   let broadcastCount = 0
@@ -321,6 +320,10 @@ async function mockEvmNetwork(
         typeof call === 'object' && call !== null && 'data' in call
           ? (call as { data?: unknown }).data
           : undefined
+      const callTarget =
+        typeof call === 'object' && call !== null && 'to' in call && typeof call.to === 'string'
+          ? call.to.toLowerCase()
+          : ''
       const result =
         request.method === 'eth_chainId'
           ? network.chainId
@@ -332,7 +335,7 @@ async function mockEvmNetwork(
                 ? request.params?.[1] === 'latest' &&
                   typeof callData === 'string' &&
                   callData.startsWith('0x70a08231')
-                  ? `0x${USDC_BALANCE_RAW.toString(16).padStart(64, '0')}`
+                  ? `0x${(options.zeroBalanceTokenContracts?.some(address => address.toLowerCase() === callTarget) ? 0n : USDC_BALANCE_RAW).toString(16).padStart(64, '0')}`
                   : typeof callData === 'string' && callData.startsWith('0xdd62ed3e')
                     ? `0x${'0'.repeat(64)}`
                     : '0x'
@@ -540,9 +543,7 @@ interface ProtocolConfidentialBatchRequest {
 async function mockProtocolApis(
   context: BrowserContext,
   options: {
-    readonly mcaId?: string
     readonly mcaByWallet?: (wallet: Readonly<Record<string, string>>) => string | null
-    readonly includeMultichainMarkets?: boolean
     readonly tokenResponseDelayMs?: number
     readonly quoteResponseDelayMs?: number
     readonly mockRheaCatalog?: boolean
@@ -550,6 +551,7 @@ async function mockProtocolApis(
     readonly evmApproval?: boolean
     readonly orderStatus?: 'pending' | 'completed'
     readonly confidentialBalanceRaw?: string
+    readonly confidentialAssetId?: string
   } = {}
 ): Promise<{
   readonly setTokenOnline: (online: boolean) => void
@@ -843,47 +845,6 @@ async function mockProtocolApis(
       })
     })
   }
-  await context.route(LENDING_METADATA_URL, route =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        'zec.omft.near': {
-          decimals: 8,
-          icon: '',
-          name: 'Zcash',
-          symbol: 'ZEC'
-        },
-        ...(options.includeMultichainMarkets
-          ? {
-              'eth.bridge.near': {
-                decimals: 18,
-                icon: '',
-                name: 'Ether',
-                symbol: 'ETH'
-              },
-              '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': {
-                decimals: 6,
-                icon: '',
-                name: 'USD Coin',
-                symbol: 'USDC'
-              },
-              'nbtc.bridge.near': {
-                decimals: 8,
-                icon: '',
-                name: 'Bitcoin',
-                symbol: 'NBTC'
-              },
-              '6b175474e89094c44da98b954eedeac495271d0f.factory.bridge.near': {
-                decimals: 18,
-                icon: '',
-                name: 'Dai Stablecoin',
-                symbol: 'DAI'
-              }
-            }
-          : {})
-      })
-    })
-  )
   const nearRpcHandler = async (route: Route) => {
     if (!nearOnline) {
       await route.abort('failed')
@@ -926,133 +887,18 @@ async function mockProtocolApis(
     const args = request.params?.args_base64
       ? JSON.parse(Buffer.from(request.params.args_base64, 'base64').toString('utf8'))
       : {}
-    const emptyPortfolio =
-      options.mcaId && args.account_id === options.mcaId
-        ? {
-            booster_staking: null,
-            booster_stakings: [],
-            farms: [],
-            has_non_farmed_assets: false,
-            positions: {},
-            supplied: options.includeMultichainMarkets
-              ? [
-                  {
-                    token_id: 'eth.bridge.near',
-                    apr: '0',
-                    balance: '15000000000000000000000000000',
-                    shares: '15000000000000000000000000000'
-                  }
-                ]
-              : []
-          }
-        : null
     const result =
       methodName === 'current_salt'
         ? '12345678'
         : methodName === 'get_mca_by_wallet'
           ? options.mcaByWallet
             ? options.mcaByWallet(args.wallet)
-            : options.mcaId || null
-          : methodName === 'batch_views'
-            ? [
-                emptyPortfolio,
-                null,
-                [
-                  {
-                    token_id: 'zec.omft.near',
-                    config: { extra_decimals: 10 },
-                    farms: [],
-                    supplied: { balance: '0' },
-                    supply_apr: '0.05',
-                    borrow_apr: '0'
-                  },
-                  ...(options.includeMultichainMarkets
-                    ? [
-                        {
-                          token_id: 'eth.bridge.near',
-                          config: { extra_decimals: 10 },
-                          farms: [],
-                          supplied: { balance: '420000000000000000000000000000' },
-                          supply_apr: '0.03',
-                          borrow_apr: '0'
-                        },
-                        {
-                          token_id:
-                            '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
-                          config: { extra_decimals: 10 },
-                          farms: [],
-                          supplied: { balance: '1000000000000000000' },
-                          supply_apr: '9',
-                          borrow_apr: '0'
-                        },
-                        {
-                          token_id: 'nbtc.bridge.near',
-                          config: { extra_decimals: 10 },
-                          farms: [],
-                          supplied: { balance: '3000000000000000000' },
-                          supply_apr: '0.2',
-                          borrow_apr: '0'
-                        },
-                        {
-                          token_id: '6b175474e89094c44da98b954eedeac495271d0f.factory.bridge.near',
-                          config: { extra_decimals: 10 },
-                          farms: [],
-                          supplied: { balance: '50000000000000000000000000000' },
-                          supply_apr: '0.04',
-                          borrow_apr: '0'
-                        }
-                      ]
-                    : [])
-                ],
-                { enable_pyth_oracle: false },
-                null,
-                null,
-                null,
-                {}
-              ]
-            : methodName === 'get_price_data'
-              ? {
-                  prices: [
-                    {
-                      asset_id: 'zec.omft.near',
-                      price: { multiplier: '40', decimals: 8 }
-                    },
-                    ...(options.includeMultichainMarkets
-                      ? [
-                          {
-                            asset_id: 'eth.bridge.near',
-                            price: { multiplier: '2500', decimals: 18 }
-                          },
-                          {
-                            asset_id:
-                              '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
-                            price: { multiplier: '1', decimals: 6 }
-                          },
-                          {
-                            asset_id: 'nbtc.bridge.near',
-                            price: { multiplier: '60000', decimals: 8 }
-                          },
-                          {
-                            asset_id:
-                              '6b175474e89094c44da98b954eedeac495271d0f.factory.bridge.near',
-                            price: { multiplier: '1', decimals: 18 }
-                          }
-                        ]
-                      : [])
-                  ]
-                }
-              : methodName === 'ft_balance_of'
-                ? '0'
-                : methodName === 'storage_balance_of'
-                  ? null
-                  : methodName === 'get_booster_tokens' || methodName === 'get_asset_farms_paged'
-                    ? []
-                    : methodName === 'get_create_mca_fee_paged' ||
-                        methodName === 'get_near_values_paged'
-                      ? {}
-                      : methodName === 'get_create_mca_fee' || methodName === 'get_near_value'
-                        ? '0'
-                        : undefined
+            : null
+          : methodName === 'ft_balance_of'
+            ? '0'
+            : methodName === 'storage_balance_of'
+              ? null
+              : undefined
     if (result === undefined) {
       throw new Error(`Unhandled NEAR method in protocol UI test: ${methodName || 'unknown'}`)
     }
@@ -1214,7 +1060,9 @@ async function mockProtocolApis(
       readonly deadline: string
       readonly signerId: string
       readonly originAsset: string
+      readonly destinationAsset: string
       readonly amountRaw: string
+      readonly amountOutRaw: string
     }
   >()
   await context.route('https://api.rhea.finance/api/swap/confidential-app-fee', async route => {
@@ -1248,8 +1096,10 @@ async function mockProtocolApis(
       appFees?: { recipient: string; fee: number }[]
       deadline: string
     }
-    if (request.depositType === 'CONFIDENTIAL_INTENTS') {
+    if (request.depositType === 'CONFIDENTIAL_INTENTS' && request.appFees) {
       expect(request.appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
+    } else if (request.depositType === 'CONFIDENTIAL_INTENTS') {
+      expect(request.dry).toBe(true)
     } else {
       expect(request.appFees).toBeUndefined()
     }
@@ -1268,6 +1118,15 @@ async function mockProtocolApis(
     const deposit = request.depositType === 'ORIGIN_CHAIN'
     if (deposit) confidentialDepositAmount = request.amount
     if (!deposit && !request.dry) formalWithdrawQuoteCount += 1
+    const amountOutRaw =
+      request.destinationAsset === USDC_ASSET
+        ? (
+            (BigInt(request.amount) *
+              (request.originAsset === TRIAL_ASSET ? 1n : 2400n) *
+              1_000_000n) /
+            1_000_000_000_000_000_000n
+          ).toString()
+        : request.amount
     const correlationId = `confidential-${quoteRequests.length}`
     const depositAddress = deposit
       ? '0x2222222222222222222222222222222222222222'
@@ -1280,19 +1139,32 @@ async function mockProtocolApis(
         deadline: request.deadline,
         signerId: request.refundTo,
         originAsset: request.originAsset,
-        amountRaw: request.amount
+        destinationAsset: request.destinationAsset,
+        amountRaw: request.amount,
+        amountOutRaw
       })
     }
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         correlationId,
-        quoteRequest: request,
+        quoteRequest:
+          request.depositType === 'CONFIDENTIAL_INTENTS'
+            ? {
+                ...request,
+                appFees: [...(request.appFees ?? []), { recipient: 'provider.near', fee: 20 }].map(
+                  fee => (request.dry ? fee : { ...fee, limitOrderId: correlationId })
+                )
+              }
+            : request,
         quote: {
           amountIn: request.amount,
-          amountOut: request.amount,
-          minAmountOut: request.amount,
+          amountOut: amountOutRaw,
+          minAmountOut: amountOutRaw,
           deadline: request.deadline,
+          withdrawFee: '0',
+          refundFee: '0',
+          timeEstimate: 10,
           ...(depositAddress ? { depositAddress } : {})
         }
       })
@@ -1321,10 +1193,13 @@ async function mockProtocolApis(
       body: JSON.stringify({
         balances: [
           {
-            tokenId:
-              options.confidentialBalanceRaw === undefined ? ETH_ASSET : CONFIDENTIAL_ETH_ASSET,
+            tokenId: options.confidentialAssetId
+              ? `imt:51e8f94d77b5e90dc9852ca6113771e11e8382ce69473a75e313e41665de7cbe:${options.confidentialAssetId}`
+              : options.confidentialBalanceRaw === undefined
+                ? ETH_ASSET
+                : CONFIDENTIAL_ETH_ASSET,
             available,
-            source: 'confidential'
+            source: 'private'
           }
         ]
       })
@@ -1341,7 +1216,7 @@ async function mockProtocolApis(
         intent: {
           standard: 'erc191',
           payload: JSON.stringify(
-            quote.originAsset === ETH_ASSET
+            quote.originAsset === ETH_ASSET || quote.originAsset === TRIAL_ASSET
               ? {
                   signer_id: quote.signerId,
                   verifying_contract: 'intents.far',
@@ -1355,7 +1230,8 @@ async function mockProtocolApis(
                       intent: 'transfer',
                       receiver_id: request.depositAddress,
                       tokens: {
-                        [CONFIDENTIAL_ETH_ASSET]: quote.amountRaw
+                        [`imt:51e8f94d77b5e90dc9852ca6113771e11e8382ce69473a75e313e41665de7cbe:${quote.originAsset}`]:
+                          quote.amountRaw
                       }
                     }
                   ]
@@ -1395,42 +1271,31 @@ async function mockProtocolApis(
       const successful =
         address === '0x2222222222222222222222222222222222222222' ||
         (address !== null && submittedConfidentialAddresses.has(address))
+      const quoted = address ? confidentialFormalQuotes.get(address) : undefined
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
           status: successful ? 'SUCCESS' : 'PENDING_DEPOSIT',
+          ...(quoted
+            ? {
+                quoteResponse: {
+                  quote: {
+                    depositAddress: address,
+                    amountOut: quoted.amountOutRaw
+                  }
+                }
+              }
+            : {}),
           swapDetails: successful
-            ? { destinationChainTxHashes: [{ hash: `0x${'a'.repeat(64)}` }] }
+            ? {
+                ...(quoted ? { amountOut: quoted.amountOutRaw } : {}),
+                destinationChainTxHashes: [{ hash: `0x${'a'.repeat(64)}` }]
+              }
             : {}
         })
       })
     }
   )
-  await context.route(LENDING_QUOTE_URL, async route => {
-    const request = route.request().postDataJSON() as {
-      originAsset: string
-      amount: string
-      deadline: string
-    }
-    const depositAddress =
-      request.originAsset === BTC_ASSET
-        ? BITCOIN_DEPOSIT_ADDRESS
-        : '0x2222222222222222222222222222222222222222'
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        quote: {
-          amountIn: request.amount,
-          amountOut: request.amount,
-          minAmountOut: request.amount,
-          amountInFormatted: request.amount,
-          amountOutFormatted: request.amount,
-          depositAddress,
-          deadline: request.deadline
-        }
-      })
-    })
-  })
   if (options.mockRheaQuote !== false) {
     await context.route(QUOTE_URL, async route => {
       const request = route.request().postDataJSON() as {
@@ -1665,6 +1530,7 @@ export {
   POL_ASSET,
   QUOTE_URL,
   TRIAL_CONTRACT,
+  TRIAL_ASSET,
   bitcoinEnabled,
   captureScreenshot,
   connectEvmDApp,

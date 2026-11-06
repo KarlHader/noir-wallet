@@ -6,10 +6,12 @@ export {
   assertDirectConfidentialWithdrawIntentBinding,
   assertConfidentialIntentBinding,
   assertConfidentialQuoteBinding,
+  canRetryConfidentialSubmission,
   fingerprintConfidentialValue,
   fingerprintDirectConfidentialApproval,
   getConfidentialFundingProgress,
   mergeConfidentialWithdrawObservation,
+  needsConfidentialSubmissionCheck,
   normalizeConfidentialWithdrawRequest,
   splitConfidentialFundingAmount,
   type ConfidentialBatchSettlement,
@@ -26,8 +28,18 @@ export {
 } from './confidential-funding-model'
 export { createConfidentialFundingGraph } from './confidential-funding-graph'
 export {
+  createExternalShieldDepositGraph,
+  projectExternalShieldDepositActivityGraph
+} from './confidential-external-deposit'
+export type {
+  CreateExternalShieldDepositInput,
+  ExternalShieldDeposit,
+  ExternalShieldDepositScope
+} from './confidential-external-deposit'
+export {
   CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID,
   confidentialPrivateTokenId,
+  buildConfidentialPortfolioView,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
   type ConfidentialPortfolioAssetMapping,

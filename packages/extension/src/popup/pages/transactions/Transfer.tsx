@@ -51,8 +51,11 @@ import {
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
   isShieldTransferRoute,
+  listShieldFundingAssets,
   matchesShieldReview,
   resolveShieldManagedAsset,
+  shieldFundingSources,
+  shieldPortfolioBalances,
   shieldQuoteFeeRaw
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
@@ -72,7 +75,11 @@ import {
   type PrivateBalanceTransferDirection,
   type TransferDomain
 } from '@/popup/services/private-balance-transfer'
-import { buildAddToPrivateEvmPath, buildMoveToMainEvmPath } from './evm-send-validation'
+import {
+  buildAddToPrivateEvmPath,
+  buildMoveToMainEvmPath,
+  getEvmTokenFeeBalanceError
+} from './evm-send-validation'
 
 type TransferAsset = { asset: PortfolioAssetView; chain: PortfolioChainView }
 
@@ -87,6 +94,7 @@ function DomainCard({
   address,
   balance,
   network,
+  networkName,
   showNetwork,
   shieldProvider,
   onClick,
@@ -100,6 +108,7 @@ function DomainCard({
   address: string
   balance: string
   network: string
+  networkName: string
   showNetwork: boolean
   shieldProvider: 'near-confidential' | 'zcash-shield' | null
   onClick: () => void
@@ -108,25 +117,41 @@ function DomainCard({
   maxLoading?: boolean
 }) {
   return (
-    <div className="flex min-h-20 w-full flex-col justify-center rounded-lg border border-white/10 bg-wallet-surface px-3 py-2">
+    <div className="flex min-h-[104px] w-full flex-col justify-between rounded-lg border border-white/10 bg-wallet-surface px-3 py-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium leading-[18px] text-muted">{label}</span>
-        {showNetwork && domain !== 'shield' && (
+        {(showNetwork || domain === 'shield') && (
           <button
             type="button"
             onClick={onClick}
             aria-label={`Select ${label.toLowerCase()} account and network`}
-            className="flex items-center gap-1 text-muted"
+            className="wallet-interactive flex min-w-0 max-w-[60%] items-center gap-1 rounded text-xs text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
           >
-            <ChainIcon
-              chain={network}
-              width={19}
-              height={19}
-              showTooltip={false}
-              alt=""
-              aria-hidden="true"
-              className="rounded-[4px]"
-            />
+            {domain === 'shield' ? (
+              <img
+                src={shieldProvider === 'zcash-shield' ? zcashShieldLogo : nearLogo}
+                alt=""
+                aria-hidden="true"
+                className="size-4 shrink-0 rounded-[3px]"
+              />
+            ) : (
+              <ChainIcon
+                chain={network}
+                width={16}
+                height={16}
+                showTooltip={false}
+                alt=""
+                aria-hidden="true"
+                className="shrink-0 rounded-[4px]"
+              />
+            )}
+            <span className="truncate">
+              {domain === 'shield'
+                ? shieldProvider === 'zcash-shield'
+                  ? 'Zcash shield'
+                  : 'NEAR Confidential'
+                : networkName}
+            </span>
             <Icon icon="lucide:chevron-down" width={13} height={13} />
           </button>
         )}
@@ -136,7 +161,7 @@ function DomainCard({
           type="button"
           onClick={onClick}
           aria-label={`${label}: ${domainLabel(domain)}. Change account`}
-          className="flex min-w-0 items-center gap-1.5 text-left"
+          className="wallet-interactive flex min-w-0 items-center gap-1.5 rounded text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="min-w-0 truncate text-sm font-medium leading-[18px]">{accountName}</span>
           <span
@@ -151,6 +176,7 @@ function DomainCard({
           >
             {domainLabel(domain)}
           </span>
+          <Icon icon="lucide:chevron-down" width={12} height={12} className="shrink-0 text-muted" />
         </button>
         <div className="max-w-[43%] min-w-0 text-right">
           <span
@@ -162,19 +188,7 @@ function DomainCard({
         </div>
       </div>
       <div className="mt-1 flex min-w-0 items-center justify-between gap-2">
-        {domain === 'shield' ? (
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
-            <img
-              src={shieldProvider === 'zcash-shield' ? zcashShieldLogo : nearLogo}
-              alt=""
-              aria-hidden="true"
-              className="size-4 shrink-0 rounded-[3px]"
-            />
-            <span className="truncate">
-              {shieldProvider === 'zcash-shield' ? 'Zcash shield' : 'NEAR Confidential'}
-            </span>
-          </span>
-        ) : (
+        {domain !== 'shield' && (
           <span className="min-w-0 truncate font-mono text-xs text-muted" title={address}>
             {address ? formatSortAddress(address) : '—'}
           </span>
@@ -185,7 +199,7 @@ function DomainCard({
             onClick={onMax}
             disabled={maxDisabled || maxLoading}
             aria-label="Max"
-            className="shrink-0 rounded bg-white/10 px-1.5 text-xs font-medium leading-4 text-muted disabled:opacity-40"
+            className="wallet-interactive ml-auto shrink-0 rounded bg-white/10 px-1.5 text-xs font-medium leading-4 text-muted enabled:hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40"
           >
             {maxLoading ? '…' : 'Max'}
           </button>
@@ -365,14 +379,29 @@ export function Transfer() {
   const assets = useMemo<TransferAsset[]>(() => {
     if (!portfolio) return []
     const chains = new Map(portfolio.chains.map(chain => [chain.chain.id, chain]))
-    return portfolio.assets.flatMap(asset => {
+    const publicAssets = portfolio.assets.flatMap(asset => {
       const chain = chains.get(asset.asset.chainId)
       return (chain?.chain.family === 'evm' || chain?.chain.family === 'zcash') &&
         chain.chain.capabilities.transaction.status === 'available'
         ? [{ asset, chain }]
         : []
     })
-  }, [portfolio])
+    const shieldBalances =
+      shieldSnapshot?.key === scopeKey
+        ? shieldSnapshot.balances
+        : shieldPortfolioBalances(portfolio)
+    const heldShieldAssets = shieldFundingSources(
+      listShieldFundingAssets(portfolio, managedAssets, catalogTokens, currentNetwork),
+      shieldBalances
+    )
+    const existing = new Set(publicAssets.map(item => item.asset.asset.id))
+    return [
+      ...publicAssets,
+      ...heldShieldAssets
+        .filter(item => !existing.has(item.asset.asset.id))
+        .map(({ asset, chain }) => ({ asset, chain }))
+    ]
+  }, [portfolio, shieldSnapshot, scopeKey, managedAssets, catalogTokens, currentNetwork])
   const eligibleChainIds = useMemo(
     () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
     [activeAccount, currentNetwork]
@@ -407,6 +436,19 @@ export function Transfer() {
   const privateRaw = selected ? getTransferDomainBalanceRaw(selected.asset, 'private') : null
   const sourceRaw = selected ? getTransferDomainBalanceRaw(selected.asset, from) : null
   const targetRaw = selected ? getTransferDomainBalanceRaw(selected.asset, to) : null
+  const nativeFeeAsset =
+    selected?.chain.chain.family === 'evm'
+      ? portfolio?.assets.find(
+          asset =>
+            asset.asset.chainId === selected.asset.asset.chainId && asset.asset.kind === 'native'
+        )
+      : null
+  const nativeFeeRaw =
+    nativeFeeAsset && from !== 'shield' ? getTransferDomainBalanceRaw(nativeFeeAsset, from) : null
+  const tokenFeeBalanceError =
+    selected?.asset.asset.kind === 'token' && nativeFeeAsset && nativeFeeRaw !== null
+      ? getEvmTokenFeeBalanceError('token', nativeFeeRaw, nativeFeeAsset.metadata.symbol)
+      : null
   const source =
     selected?.chain.chain.family === 'evm'
       ? resolvePrivateBalanceTransferSource({
@@ -553,6 +595,12 @@ export function Transfer() {
           sourceLabel: from === 'public' ? 'Public' : from === 'private' ? 'Private' : 'Shield'
         })
       : null
+  const amountError = fundingRoute ? shieldAmountState?.error : amountState?.error
+  const transferError =
+    amountError ??
+    ((fundingRoute ? shieldAmountState?.amountRaw : amountState?.amountRaw)
+      ? tokenFeeBalanceError
+      : null)
   const shieldReviewKey = `${routeKey}:${method}:${amount}:${shieldAmountState?.amountRaw ?? ''}`
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
@@ -568,6 +616,7 @@ export function Transfer() {
     eligible &&
     supportedPair &&
     routeState === 'supported' &&
+    !tokenFeeBalanceError &&
     (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
     (!maxSelected ||
       selected.asset.asset.kind !== 'native' ||
@@ -582,6 +631,7 @@ export function Transfer() {
     effective &&
     shieldConnection === 'connected' &&
     shieldSourceRaw !== null &&
+    !tokenFeeBalanceError &&
     (!maxSelected ||
       selected.asset.asset.kind !== 'native' ||
       from === 'shield' ||
@@ -1002,10 +1052,11 @@ export function Transfer() {
 
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
-      <PageHeader title="Transfer" showBack onBack={goBack} />
+      <PageHeader title="Move" showBack onBack={goBack} />
       <div className="page-content flex min-h-0 flex-col !px-4 !pb-2 !pt-3">
-        <div className="flex h-[131px] shrink-0 flex-col items-center gap-[13px] pt-[22px]">
+        <div className="flex h-[122px] shrink-0 flex-col items-center justify-center gap-2 pt-2">
           <input
+            id="transfer-amount"
             aria-label="Transfer amount"
             inputMode="decimal"
             value={amount}
@@ -1022,12 +1073,12 @@ export function Transfer() {
               }
             }}
             placeholder="0"
-            className="h-[38px] w-full bg-transparent text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em] outline-none placeholder:text-muted/45"
+            className="h-14 w-full min-w-0 bg-transparent text-center text-[40px] font-semibold leading-[52px] caret-primary outline-none placeholder:text-muted/45"
           />
           <button
             type="button"
             onClick={() => setAssetPickerOpen(true)}
-            className="flex h-9 max-w-full items-center gap-2 rounded-full bg-card px-2 text-base font-medium leading-[21px]"
+            className="wallet-interactive flex h-9 max-w-full items-center gap-2 rounded-full bg-card px-2 text-base font-medium leading-[21px] hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary"
             aria-label="Select transfer asset"
           >
             {selected ? (
@@ -1051,6 +1102,7 @@ export function Transfer() {
             domain={from}
             address={addressFor(from)}
             balance={sourceBalance}
+            networkName={selected?.chain.chain.displayName ?? ''}
             network={
               from === 'shield'
                 ? selected?.chain.chain.family === 'zcash'
@@ -1058,7 +1110,7 @@ export function Transfer() {
                   : 'near'
                 : networkIcon
             }
-            showNetwork={selected?.chain.chain.family === 'evm'}
+            showNetwork={false}
             shieldProvider={selected ? getAssetShieldProvider(selected.asset) : null}
             onClick={() => openDomainPicker('from')}
             onMax={selected ? handleMax : undefined}
@@ -1071,6 +1123,7 @@ export function Transfer() {
             domain={to}
             address={addressFor(to)}
             balance={targetBalance}
+            networkName={selected?.chain.chain.displayName ?? ''}
             network={
               to === 'shield'
                 ? selected?.chain.chain.family === 'zcash'
@@ -1092,14 +1145,17 @@ export function Transfer() {
               setMaxSelected(false)
             }}
             aria-label="Switch transfer direction"
-            className="absolute left-1/2 top-1/2 z-10 flex size-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-background text-primary"
+            className={cn(
+              'wallet-interactive absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card hover:bg-wallet-selected active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary',
+              walletMode === 'private' ? 'text-private' : 'text-foreground'
+            )}
           >
             <Icon icon="lucide:arrow-up-down" width={18} height={18} />
           </button>
         </div>
-        {(fundingRoute ? shieldAmountState?.error : amountState?.error) && (
+        {transferError && (
           <p role="alert" className="mt-2 text-xs text-warning">
-            {fundingRoute ? shieldAmountState?.error : amountState?.error}
+            {transferError}
           </p>
         )}
         {selected?.chain.chain.family === 'evm' && clusterPair && (
@@ -1225,7 +1281,7 @@ export function Transfer() {
                     {item.chain.chain.displayName}
                   </span>
                 </span>
-                <span className="min-w-0 max-w-[45%] break-all text-right font-mono text-xs">
+                <span className="min-w-0 max-w-[45%] break-all text-right font-sans text-xs tabular-nums">
                   {formatTokenQuantity(
                     formatBaseUnitAmount(item.asset.balance.totalRaw, item.asset.metadata.decimals)
                   )}

@@ -6,8 +6,7 @@ import { getResponseErrorMessage } from '@/lib/errors'
 import type { Network } from '@/types'
 import { DEFAULT_FEE_TIER, type FeeTier } from '@/config/fee'
 import { createWalletSettingsPersistStorage } from '@/lib/wallet-settings-persist-storage'
-import { applyLendingSdkEnv } from '@/core/services/lending-sdk-init'
-import { setNearRpcUrl } from '@/core/services/lending-service'
+import { applyRheaSdkEnv, setNearRpcUrl } from '@/core/services/rhea-sdk-init'
 import {
   DEFAULT_BLOCK_EXPLORER_PREFERENCES,
   type BlockExplorerChain,
@@ -275,7 +274,7 @@ export const useSettingsStore = create<SettingsStore>()(
         if (nearRpcUrl) {
           setNearRpcUrl(nearRpcUrl)
         }
-        applyLendingSdkEnv('prd')
+        applyRheaSdkEnv('prd')
         setActiveBlockExplorerPreferences(blockExplorerPreferences)
         setActiveRpcEndpointPreferences(rpcEndpointPreferences)
         setActiveChainEndpointSettings(chainEndpointSettings)

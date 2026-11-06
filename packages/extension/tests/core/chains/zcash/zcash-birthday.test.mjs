@@ -6,6 +6,8 @@ import {
   getFullZcashRecoveryBirthdayHeight,
   getSafeNewWalletBirthdayHeight,
   getSafeTransactionBirthdayHeight,
+  isValidZcashBirthdayHeight,
+  parseZcashBirthdayHeightInput,
   selectCachedChainTipHeight
 } from '../../../../src/core/wallet/birthday-height.ts'
 import dayjs from '../../../../src/lib/dayjs.ts'
@@ -37,6 +39,19 @@ test.describe('Zcash birthday height', () => {
   test('uses the network Sapling activation for a full recovery', () => {
     expect(getFullZcashRecoveryBirthdayHeight('mainnet')).toBe(419_200)
     expect(getFullZcashRecoveryBirthdayHeight('testnet')).toBe(280_000)
+  })
+
+  test('rejects resync heights that would be truncated or wrapped', () => {
+    expect(parseZcashBirthdayHeightInput('3,000,000')).toBe(3_000_000)
+    expect(parseZcashBirthdayHeightInput('1e6')).toBeNull()
+    expect(parseZcashBirthdayHeightInput('1.5')).toBeNull()
+    expect(parseZcashBirthdayHeightInput('1,2')).toBeNull()
+    expect(parseZcashBirthdayHeightInput('4294967296')).toBeNull()
+    expect(isValidZcashBirthdayHeight(3_000_000)).toBe(true)
+    expect(isValidZcashBirthdayHeight(0xffffffff)).toBe(true)
+    expect(isValidZcashBirthdayHeight(0)).toBe(false)
+    expect(isValidZcashBirthdayHeight(1.5)).toBe(false)
+    expect(isValidZcashBirthdayHeight(0x100000000)).toBe(false)
   })
 
   test('places a detected transaction birthday before the transaction without crossing activation', () => {

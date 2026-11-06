@@ -17,8 +17,14 @@ const { outputText } = typescript.transpileModule(
   }
 )
 
-function createSync({ snapshot = false, pendingJournal = 0, failPersistAt = 0 } = {}) {
+function createSync({
+  snapshot = false,
+  pendingJournal = 0,
+  failPersistAt = 0,
+  chainTip = 3000
+} = {}) {
   const events = []
+  const progressUpdates = []
   const state = {
     snapshot,
     pendingJournal,
@@ -107,7 +113,7 @@ function createSync({ snapshot = false, pendingJournal = 0, failPersistAt = 0 } 
     module.exports
   )
   const runtime = new module.exports.BackgroundZcashWalletRuntime()
-  const summary = () => ({ fully_scanned_height: state.scannedHeight, chain_tip_height: 3000 })
+  const summary = () => ({ fully_scanned_height: state.scannedHeight, chain_tip_height: chainTip })
   const core = {
     hasAccount: () => true,
     getWalletSummary: async () => summary(),
@@ -121,10 +127,11 @@ function createSync({ snapshot = false, pendingJournal = 0, failPersistAt = 0 } 
     async prepareSyncBatchWithJournal() {
       events.push('prepare-batch')
       state.pendingJournal += 1
-      state.scannedHeight = 1099
+      const rangeEnd = Math.min(1100, chainTip)
+      state.scannedHeight = rangeEnd - 1
       // The stop arrives after the very first completed journal batch.
       state.aborted = true
-      return { rangeStart: 100, rangeEnd: 1100, journalSize: 32 }
+      return { rangeStart: 100, rangeEnd, journalSize: 32 }
     },
     async replayJournalEntries(_network, _walletId, options) {
       if (state.aborted && options?.allowAfterAbort !== true) throw new Error('Sync aborted')
@@ -143,19 +150,29 @@ function createSync({ snapshot = false, pendingJournal = 0, failPersistAt = 0 } 
   }
   runtime.currentWalletId = wallet.id
   runtime.walletCores.set(wallet.id, core)
-  runtime.updateSyncProgressForWallet = (_walletId, patch) => Object.assign(state.sync, patch)
+  runtime.updateSyncProgressForWallet = (_walletId, patch) => {
+    progressUpdates.push(patch)
+    Object.assign(state.sync, patch)
+  }
   runtime.readSyncProgressFromWasm = async () => ({
     fullyScanned: state.scannedHeight,
-    chainTip: 3000,
+    chainTip,
     dirty: false
   })
-  runtime.getCachedWalletSummary = async () => ({ summary: summary(), latestHeight: 3000 })
+  runtime.getCachedWalletSummary = async () => ({ summary: summary(), latestHeight: chainTip })
   return {
     state,
     events,
+    progressUpdates,
     run: () => runtime.syncBlocks(() => state.aborted, wallet.id, 'account')
   }
 }
+
+test('a one-batch scan reports active sync while it runs', async () => {
+  const { run, progressUpdates } = createSync({ chainTip: 300 })
+  await run()
+  assert.ok(progressUpdates.some(update => update.isSyncing === true))
+})
 
 test('anchors the first scan and saves its completed journal batch when interrupted', async () => {
   const { state, events, run } = createSync()
