@@ -217,13 +217,15 @@ export class DAppHandler {
   }
 
   /**
-   * Clear permissions cache on wallet lock
+   * Clear the Zcash permission cache and approvals when its runtime is locked.
    */
   clearPermissions(invalidateRequests = true): void {
     this.permissions.clear()
     if (invalidateRequests) {
       invalidatePublicRequestContexts()
-      pendingRequestsManager.cancelAll()
+      // Native accounts can stay unlocked without a Zcash runtime. Global wallet
+      // locking cancels every chain's approvals in performWalletLockState.
+      pendingRequestsManager.cancelAll(action => APPROVAL_ACTION_PREFIXES.zcash.includes(action))
     }
   }
 

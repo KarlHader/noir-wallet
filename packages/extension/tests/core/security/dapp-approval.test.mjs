@@ -84,6 +84,36 @@ function sendApprovalMessage(requestId, message) {
   })
 }
 
+test('clearing Zcash permissions preserves pending approvals for other chains', async () => {
+  const handler = new DAppHandler()
+  const actions = [
+    'connect',
+    'evmConnect',
+    'bitcoinConnect',
+    'solanaConnect',
+    'nearConnect',
+    'multichainConnect'
+  ]
+  const requestIds = actions.map(action =>
+    pendingRequestsManager.create(
+      'https://dapp.example',
+      action,
+      {},
+      'wallet',
+      'account',
+      'mainnet',
+      0
+    )
+  )
+  try {
+    handler.clearPermissions()
+    assert.equal(pendingRequestsManager.get(requestIds[0]), null)
+    for (const id of requestIds.slice(1)) assert.ok(pendingRequestsManager.get(id))
+  } finally {
+    for (const id of requestIds) pendingRequestsManager.cancel(id)
+  }
+})
+
 test('approval cannot complete while its transaction fee review is changing', async () => {
   let completeFeeUpdate
   const feeUpdate = new Promise(resolve => {

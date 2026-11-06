@@ -21,6 +21,13 @@ const SOLANA_PRIVATE_KEY = 'US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx'
 const SOLANA_DEVNET_CHAIN_ID = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
 const NEAR_PRIVATE_KEY = 'ed25519:cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN'
 
+interface PrivateKeyDAppWindow extends Window {
+  noirwallet: {
+    ethereum: { request(input: { method: string; params?: unknown[] }): Promise<unknown> }
+    zcash: { request(input: { method: string }): Promise<unknown> }
+  }
+}
+
 async function importMnemonicWallet(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Import wallet' }).click()
   await page.getByRole('radio', { name: '12 words' }).click()
@@ -154,6 +161,65 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
       walletId: null,
       accountId: null
     })
+
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
+  await popup.reload()
+  await expect(popup.getByRole('heading', { name: 'Enter your password' })).toBeVisible()
+  await popup.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
+  await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
+
+  await context.route('https://private-key-dapp.example/**', route =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>EVM dApp</body></html>' })
+  )
+  const dapp = await context.newPage()
+  await dapp.goto('https://private-key-dapp.example/')
+  await dapp.waitForFunction(() => Boolean((window as PrivateKeyDAppWindow).noirwallet?.ethereum))
+  const approvalOpened = context.waitForEvent('page')
+  const connecting = dapp.evaluate(async () => {
+    try {
+      return await (window as PrivateKeyDAppWindow).noirwallet.ethereum.request({
+        method: 'eth_requestAccounts'
+      })
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+  const approval = await approvalOpened
+  await approval.waitForURL(/#approval\?requestId=/)
+  // A multichain dApp can discover Zcash while the native EVM approval is pending.
+  expect(
+    await dapp.evaluate(() =>
+      (window as PrivateKeyDAppWindow).noirwallet.zcash.request({ method: 'zcash_getAccounts' })
+    )
+  ).toBeNull()
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  expect(await connecting).toEqual([EVM_ADDRESS.toLowerCase()])
+
+  const reconnectOpened = context.waitForEvent('page')
+  const reconnecting = dapp.evaluate(async () => {
+    try {
+      return await (window as PrivateKeyDAppWindow).noirwallet.ethereum.request({
+        method: 'wallet_requestPermissions',
+        params: [{ eth_accounts: {} }]
+      })
+    } catch (error) {
+      return { code: error && typeof error === 'object' ? Reflect.get(error, 'code') : null }
+    }
+  })
+  const reconnectApproval = await reconnectOpened
+  await expect(
+    reconnectApproval.getByRole('button', { name: 'Connect', exact: true })
+  ).toBeVisible()
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }))
+  expect(await reconnecting).toEqual({ code: 4001 })
+  await expect.poll(() => reconnectApproval.isClosed()).toBe(true)
+  await popup.reload()
+  await popup.getByPlaceholder('Enter Password').fill(TEST_PASSWORD)
+  await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
+  await dapp.close()
+
   const staleZcashResync = await popup.evaluate(
     async ({ walletId, accountId }) =>
       chrome.runtime.sendMessage({
