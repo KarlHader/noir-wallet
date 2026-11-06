@@ -18,6 +18,7 @@ import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/numbe
 import { isAddress, zeroAddress } from 'viem'
 import type { AccountNetworkView } from './account-networks-client'
 import type { ExternalShieldDeposit } from './confidential-funding-client'
+import { hasExternalShieldDepositFunding } from '@/core/services/confidential-funding/confidential-external-deposit'
 
 const bundledAssetMappings = getAssetProtocolSourceMappings(
   'mainnet',
@@ -131,10 +132,13 @@ export function depositStatusLabel(record: ExternalShieldDeposit, now: number): 
   }
   if (
     record.phase === 'awaiting-payment' &&
-    record.providerStatus === 'INCOMPLETE_DEPOSIT' &&
-    BigInt(record.depositedAmountRaw ?? '0') === 0n
+    (record.providerStatus === 'INCOMPLETE_DEPOSIT' ||
+      BigInt(record.depositedAmountRaw ?? '0') > 0n)
   ) {
     return 'Partial deposit'
+  }
+  if (record.phase === 'awaiting-payment' && hasExternalShieldDepositFunding(record)) {
+    return 'Deposit detected'
   }
   if (record.phase === 'awaiting-payment' && now >= record.expiresAt) return 'Quote expired'
   switch (record.phase) {

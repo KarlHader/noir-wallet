@@ -36,6 +36,7 @@ export interface ExternalShieldDeposit {
   readonly minimumOutputRaw: string
   readonly settledOutputRaw?: string
   readonly depositedAmountRaw?: string
+  readonly fundingObservedAt?: number
   readonly providerStatus?: string
   readonly balanceRefreshedAt?: number
   readonly slippageBps: number
@@ -61,6 +62,53 @@ export type ExternalShieldDepositScope = Pick<
   ExternalShieldDeposit,
   'network' | 'keyDomainId' | 'accountId'
 >
+
+const UNFUNDED_AUTO_REFRESH_MS = 3 * 60 * 60 * 1000
+const UNFUNDED_AUTO_HIDE_MS = 24 * 60 * 60 * 1000
+
+type ExternalShieldDepositLifecycle = Pick<
+  ExternalShieldDeposit,
+  | 'phase'
+  | 'fundingObservedAt'
+  | 'depositedAmountRaw'
+  | 'providerStatus'
+  | 'updatedAt'
+  | 'createdAt'
+  | 'expiresAt'
+>
+
+export function hasExternalShieldDepositFunding(record: ExternalShieldDepositLifecycle): boolean {
+  return (
+    record.fundingObservedAt !== undefined ||
+    BigInt(record.depositedAmountRaw ?? '0') > 0n ||
+    record.phase !== 'awaiting-payment' ||
+    ['INCOMPLETE_DEPOSIT', 'KNOWN_DEPOSIT_TX', 'PROCESSING', 'PENDING'].includes(
+      record.providerStatus ?? ''
+    )
+  )
+}
+
+export function shouldAutoRefreshExternalShieldDeposit(
+  record: ExternalShieldDepositLifecycle,
+  now = Date.now()
+): boolean {
+  if (record.phase === 'ready' || record.phase === 'refunded') return false
+  // Amounts may be absent while a deposit or refund is already in flight.
+  return (
+    hasExternalShieldDepositFunding(record) || now - record.updatedAt < UNFUNDED_AUTO_REFRESH_MS
+  )
+}
+
+export function isExternalShieldDepositAutoHidden(
+  record: ExternalShieldDepositLifecycle,
+  now = Date.now()
+): boolean {
+  return (
+    !hasExternalShieldDepositFunding(record) &&
+    now >= record.expiresAt &&
+    now - record.createdAt >= UNFUNDED_AUTO_HIDE_MS
+  )
+}
 
 export function createExternalShieldDepositGraph(record: ExternalShieldDeposit): TransactionGraph {
   const transactionId = parseTransactionId(record.transactionId)

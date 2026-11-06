@@ -397,7 +397,7 @@ test('receives an external Shield deposit without spending local funds and resto
   await popup.getByRole('button', { name: 'Check deposit status', exact: true }).click()
   await expect(popup.getByText('Remaining', { exact: true })).toBeVisible()
   await expect(popup.getByText('0.005 ETH', { exact: true }).first()).toBeVisible()
-  await popup.getByText('Awaiting deposit', { exact: true }).first().scrollIntoViewIfNeeded()
+  await popup.getByRole('status').getByText('Partial deposit').scrollIntoViewIfNeeded()
   await captureScreenshot(popup, 'shield-external-deposit-partial.png')
   received = true
   depositedAmount = '10000000000000000'
@@ -419,6 +419,86 @@ test('receives an external Shield deposit without spending local funds and resto
   await popup.locator('[data-activity-kind="shield"]').click()
   await expect(popup.locator('[data-activity-status-value]')).toBeVisible()
   await captureScreenshot(popup, 'shield-external-deposit-details.png')
+
+  await popup.clock.install({ time: new Date() })
+  const staleDepositId = await popup.evaluate(async () => {
+    const values = await chrome.storage.local.get(null)
+    const stored = Object.entries(values).find(([key]) =>
+      key.startsWith('confidential_external_deposit:')
+    )
+    if (!stored) throw new Error('External Shield deposit was not persisted')
+    const [originalKey, original] = stored as [string, Record<string, unknown>]
+    const quote = original.quote as { quote: Record<string, unknown> }
+    const depositId = 'synthetic-stale-unfunded'
+    const createdAt = Date.now() - 24 * 60 * 60 * 1_000 + 10_000
+    const expiresAt = createdAt + 60 * 60 * 1_000
+    const stale: Record<string, unknown> = {
+      ...original,
+      depositId,
+      transactionId: `tx:confidential-external:${depositId}`,
+      phase: 'awaiting-payment',
+      providerStatus: 'PENDING_DEPOSIT',
+      depositedAmountRaw: '0',
+      createdAt,
+      updatedAt: createdAt,
+      expiresAt,
+      quote: { ...quote, quote: { ...quote.quote, deadline: new Date(expiresAt).toISOString() } }
+    }
+    delete stale.settledOutputRaw
+    delete stale.balanceRefreshedAt
+    delete stale.fundingObservedAt
+    await chrome.storage.local.remove(originalKey)
+    await chrome.storage.local.set({ [`confidential_external_deposit:${depositId}`]: stale })
+    return depositId
+  })
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await openNearShieldAction(popup, 'Receive')
+  const history = popup.getByRole('region', { name: 'Deposit history' })
+  await expect(popup.getByRole('dialog', { name: 'Receiving address' })).toBeVisible()
+  await popup.keyboard.press('Escape')
+  await expect(history.getByText('Quote expired')).toBeVisible()
+  await popup.clock.fastForward(20_000)
+  await expect(history.getByRole('button', { name: 'Show all' })).toBeVisible()
+  await expect(history.getByText('Quote expired')).toHaveCount(0)
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await openNearShieldAction(popup, 'Receive')
+  await expect(popup.getByRole('dialog', { name: 'Receiving address' })).toHaveCount(0)
+  await history.getByRole('button', { name: 'Show all' }).click()
+  await expect(history.getByText('Quote expired')).toBeVisible()
+  await history.getByRole('button', { name: /ETH.*Quote expired/ }).click()
+  await expect(
+    popup.getByRole('dialog', { name: 'Receiving address' }).getByRole('button', {
+      name: 'Check deposit status'
+    })
+  ).toBeEnabled()
+  await captureScreenshot(popup, 'shield-external-deposit-stale-history.png')
+
+  received = false
+  depositedAmount = '5000000000000000'
+  await popup.evaluate(async depositId => {
+    const key = `confidential_external_deposit:${depositId}`
+    const stale = (await chrome.storage.local.get(key))[key] as Record<string, unknown>
+    const partialId = 'synthetic-stale-partial'
+    await chrome.storage.local.set({
+      [`confidential_external_deposit:${partialId}`]: {
+        ...stale,
+        depositId: partialId,
+        transactionId: `tx:confidential-external:${partialId}`,
+        depositedAmountRaw: '5000000000000000',
+        fundingObservedAt: Date.now() - 24 * 60 * 60 * 1_000,
+        providerStatus: 'INCOMPLETE_DEPOSIT'
+      }
+    })
+  }, staleDepositId)
+  await popup.keyboard.press('Escape')
+  await expect(history.getByText('Partial deposit')).toBeVisible()
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await openNearShieldAction(popup, 'Receive')
+  const partialDialog = popup.getByRole('dialog', { name: 'Receiving address' })
+  await expect(partialDialog.getByRole('status')).toHaveText('Partial deposit')
+  await expect(partialDialog.getByText('Quote expired', { exact: true })).toBeVisible()
+  await expect(partialDialog.getByText('0.005 ETH', { exact: true }).first()).toBeVisible()
+  await captureScreenshot(popup, 'shield-external-deposit-stale-partial.png')
 })
 
 for (const source of ['Public', 'Private'] as const) {

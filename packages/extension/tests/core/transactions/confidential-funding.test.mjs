@@ -6,6 +6,8 @@ import { InMemoryTransactionRepository } from '../../../src/infrastructure/persi
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import {
   createExternalShieldDepositGraph,
+  isExternalShieldDepositAutoHidden,
+  shouldAutoRefreshExternalShieldDeposit,
   projectExternalShieldDepositActivityGraph
 } from '../../../src/core/services/confidential-funding/confidential-external-deposit.ts'
 
@@ -49,7 +51,10 @@ test.describe('confidential funding safety rules', () => {
     let signingCalls = 0
     let serviceStatus = 'PENDING_DEPOSIT'
     let depositedAmountRaw
-    const coordinator = new ConfidentialFundingCoordinator({
+    let now = 1_000
+    let statusCalls = 0
+    let monitoringCalls = 0
+    const coordinatorOptions = {
       network: 'mainnet',
       api: {
         async quote(request) {
@@ -80,6 +85,7 @@ test.describe('confidential funding safety rules', () => {
           }
         },
         async getOneClickStatus(_address, memo) {
+          statusCalls += 1
           expect(memo).toBe('memo-1')
           return {
             status: serviceStatus,
@@ -114,7 +120,7 @@ test.describe('confidential funding safety rules', () => {
           return operation()
         },
         async getSession() {
-          return { accessToken: 'synthetic', expiresAt: 1_000_000 }
+          return { accessToken: 'synthetic', expiresAt: now + 1_000_000 }
         },
         async putBalances(_network, _domain, _account, balances) {
           cachedBalance = balances
@@ -156,10 +162,13 @@ test.describe('confidential funding safety rules', () => {
         network => network.chainId === source.chainId
       ),
       assetMappings: [{ assetId: source.assetId, protocolAssetId: source.protocolAssetId }],
-      now: () => 1_000,
+      now: () => now,
       createId: () => 'external-one',
-      scheduleMonitoring: async () => {}
-    })
+      scheduleMonitoring: async () => {
+        monitoringCalls += 1
+      }
+    }
+    const coordinator = new ConfidentialFundingCoordinator(coordinatorOptions)
     const request = {
       network: 'mainnet',
       keyDomainId: 'wallet:one',
@@ -230,6 +239,34 @@ test.describe('confidential funding safety rules', () => {
     await expect(
       coordinator.createExternalDeposit({ ...request, refundAddress: address })
     ).rejects.toThrow('request ID was reused')
+    const unfunded = await coordinator.refreshExternalDeposit(created.depositId)
+    now += 3 * 60 * 60 * 1000
+    expect(shouldAutoRefreshExternalShieldDeposit(unfunded, now - 1)).toBe(true)
+    const beforePause = { statusCalls, monitoringCalls }
+    await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()
+    expect({ statusCalls, monitoringCalls }).toEqual(beforePause)
+    expect(await coordinator.getExternalDeposit(created.depositId)).toEqual(unfunded)
+    expect(
+      isExternalShieldDepositAutoHidden(unfunded, created.createdAt + 24 * 60 * 60 * 1000 - 1)
+    ).toBe(false)
+    now = created.createdAt + 24 * 60 * 60 * 1000
+    expect(isExternalShieldDepositAutoHidden(unfunded, now)).toBe(true)
+
+    // A manual refresh can discover late funding even after automatic monitoring stops.
+    serviceStatus = 'INCOMPLETE_DEPOSIT'
+    const fundedWithoutAmount = await coordinator.refreshExternalDeposit(created.depositId)
+    expect(fundedWithoutAmount.fundingObservedAt).toBe(now)
+    expect(monitoringCalls).toBeGreaterThan(beforePause.monitoringCalls)
+    serviceStatus = 'EXPIRED'
+    now += 24 * 60 * 60 * 1000
+    await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()
+    const expiredPartial = await coordinator.getExternalDeposit(created.depositId)
+    expect(expiredPartial.providerStatus).toBe('EXPIRED')
+    expect(expiredPartial.fundingObservedAt).toBe(fundedWithoutAmount.fundingObservedAt)
+    expect(isExternalShieldDepositAutoHidden(expiredPartial, now)).toBe(false)
+    const beforeRecovery = statusCalls
+    await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()
+    expect(statusCalls).toBe(beforeRecovery + 1)
     serviceStatus = 'INCOMPLETE_DEPOSIT'
     depositedAmountRaw = '400'
     expect((await coordinator.refreshExternalDeposit(created.depositId)).depositedAmountRaw).toBe(

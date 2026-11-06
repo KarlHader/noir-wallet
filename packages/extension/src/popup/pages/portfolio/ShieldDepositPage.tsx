@@ -5,6 +5,11 @@ import { QRCodeSVG } from 'qrcode.react'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolveSwapTokenIconUrl } from '@/core/services/intents-api'
+import {
+  hasExternalShieldDepositFunding,
+  isExternalShieldDepositAutoHidden,
+  shouldAutoRefreshExternalShieldDeposit
+} from '@/core/services/confidential-funding/confidential-external-deposit'
 import type { ChainDefinition } from '@/core/chains/registry'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -102,6 +107,7 @@ function ShieldDepositContent() {
   const [provider, setProvider] = useState<ShieldProvider>('near-confidential')
   const [records, setRecords] = useState<readonly ExternalShieldDeposit[]>([])
   const [viewRecordId, setViewRecordId] = useState<string | null>(null)
+  const [showAllHistory, setShowAllHistory] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -172,28 +178,55 @@ function ShieldDepositContent() {
 
   useEffect(() => {
     let active = true
+    let revision = 0
+    let initialSelectionPending = true
     setRecords([])
     setViewRecordId(null)
+    setShowAllHistory(false)
+    setNow(Date.now())
     setHistoryLoading(Boolean(walletId && accountId))
     if (!walletId || !accountId)
       return () => {
         active = false
       }
-    void externalShieldDepositClient
-      .list({ network: currentNetwork, keyDomainId: walletId, accountId })
-      .then(result => {
-        if (!active) return
-        setRecords(result)
-        setViewRecordId(result[0]?.depositId ?? null)
-      })
-      .catch(() => {
-        if (active) setError('Deposit history unavailable')
-      })
-      .finally(() => {
-        if (active) setHistoryLoading(false)
-      })
+    const loadHistory = () => {
+      const requestRevision = ++revision
+      void externalShieldDepositClient
+        .list({ network: currentNetwork, keyDomainId: walletId, accountId })
+        .then(result => {
+          if (!active || requestRevision !== revision) return
+          setRecords(result)
+          if (initialSelectionPending) {
+            setViewRecordId(
+              result.find(record => !isExternalShieldDepositAutoHidden(record))?.depositId ?? null
+            )
+            initialSelectionPending = false
+          }
+        })
+        .catch(() => {
+          if (active && requestRevision === revision && initialSelectionPending)
+            setError('Deposit history unavailable')
+        })
+        .finally(() => {
+          if (active && requestRevision === revision) setHistoryLoading(false)
+        })
+    }
+    const onStorageChanged = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      area: string
+    ) => {
+      if (
+        area === 'local' &&
+        Object.keys(changes).some(key => key.startsWith('confidential_external_deposit:'))
+      ) {
+        loadHistory()
+      }
+    }
+    chrome.storage.onChanged.addListener(onStorageChanged)
+    loadHistory()
     return () => {
       active = false
+      chrome.storage.onChanged.removeListener(onStorageChanged)
     }
   }, [walletId, accountId, currentNetwork])
 
@@ -234,6 +267,11 @@ function ShieldDepositContent() {
       record.keyDomainId === walletId &&
       record.accountId === accountId
   )
+  const recentRecords = scopedRecords.filter(
+    record => !isExternalShieldDepositAutoHidden(record, now)
+  )
+  const historyRecords = showAllHistory ? scopedRecords : recentRecords
+  const hasHiddenHistory = recentRecords.length < scopedRecords.length
   const viewedRecord = scopedRecords.find(record => record.depositId === viewRecordId) ?? null
   const viewedToken = catalog.find(token => token.assetId === viewedRecord?.source.protocolAssetId)
   const viewedNetwork = networks.find(network => network.id === viewedRecord?.source.chainId)
@@ -241,20 +279,28 @@ function ShieldDepositContent() {
   const canPay = payment?.canPay ?? false
 
   useEffect(() => {
-    if (!viewedRecord || viewedRecord.phase !== 'awaiting-payment') return
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    if (records.length === 0) return
+    const timer = window.setInterval(
+      () => setNow(Date.now()),
+      viewedRecord?.phase === 'awaiting-payment' ? 1_000 : 15_000
+    )
     return () => window.clearInterval(timer)
-  }, [viewedRecord?.depositId, viewedRecord?.phase])
+  }, [records.length, viewedRecord?.phase])
 
   useEffect(() => {
     if (
       !viewedRecord ||
-      (viewedRecord.phase !== 'awaiting-payment' && viewedRecord.phase !== 'processing')
+      (viewedRecord.phase !== 'awaiting-payment' && viewedRecord.phase !== 'processing') ||
+      !shouldAutoRefreshExternalShieldDeposit(viewedRecord)
     )
       return
     let active = true
     let inFlight = false
     const timer = window.setInterval(() => {
+      if (!shouldAutoRefreshExternalShieldDeposit(viewedRecord, Date.now())) {
+        window.clearInterval(timer)
+        return
+      }
       if (inFlight) return
       inFlight = true
       void externalShieldDepositClient
@@ -280,7 +326,7 @@ function ShieldDepositContent() {
       active = false
       window.clearInterval(timer)
     }
-  }, [viewedRecord?.depositId, viewedRecord?.phase, currentNetwork, walletId, accountId])
+  }, [viewedRecord, currentNetwork, walletId, accountId])
 
   const openReview = () => {
     setShowAmountError(true)
@@ -471,6 +517,11 @@ function ShieldDepositContent() {
                     New address
                   </button>
                 </div>
+                {viewedRecord.phase === 'awaiting-payment' &&
+                  hasExternalShieldDepositFunding(viewedRecord) &&
+                  now >= viewedRecord.expiresAt && (
+                    <p className="mt-1 text-xs text-warning">Quote expired</p>
+                  )}
                 <div className="mt-5 flex items-center gap-3">
                   <TokenIcon
                     assetId={viewedRecord.source.assetId}
@@ -801,9 +852,22 @@ function ShieldDepositContent() {
         ) : (
           scopedRecords.length > 0 && (
             <section className="mt-7 border-t border-white/10 pt-4" aria-label="Deposit history">
-              <h2 className="mb-2 text-sm font-medium">Recent deposits</h2>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-medium">
+                  {showAllHistory ? 'All deposits' : 'Recent deposits'}
+                </h2>
+                {hasHiddenHistory && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllHistory(current => !current)}
+                    className="wallet-interactive shrink-0 text-xs text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                  >
+                    {showAllHistory ? 'Show recent' : 'Show all'}
+                  </button>
+                )}
+              </div>
               <div className="divide-y divide-white/10">
-                {scopedRecords.map(record => {
+                {historyRecords.map(record => {
                   return (
                     <button
                       key={record.depositId}

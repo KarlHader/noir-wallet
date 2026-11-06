@@ -299,6 +299,9 @@ function parseExternalDeposit(value: unknown): ExternalShieldDeposit {
     !isRawAmount(value.minimumOutputRaw, true) ||
     (value.settledOutputRaw !== undefined && !isRawAmount(value.settledOutputRaw, true)) ||
     (value.depositedAmountRaw !== undefined && !isRawAmount(value.depositedAmountRaw)) ||
+    (value.fundingObservedAt !== undefined &&
+      (!Number.isSafeInteger(value.fundingObservedAt) ||
+        (value.fundingObservedAt as number) < 0)) ||
     (value.providerStatus !== undefined && !isBoundedString(value.providerStatus, 64)) ||
     (value.balanceRefreshedAt !== undefined &&
       (!Number.isSafeInteger(value.balanceRefreshedAt) ||

@@ -1,4 +1,8 @@
 import type { Network } from '@/types'
+import {
+  hasExternalShieldDepositFunding,
+  shouldAutoRefreshExternalShieldDeposit
+} from '@/core/services/confidential-funding/confidential-external-deposit'
 import { isAddress } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import type { PortfolioReadModel } from '@/core/portfolio'
@@ -772,19 +776,32 @@ export class ConfidentialFundingCoordinator {
       status.settledAmountOutRaw !== undefined &&
       isPositiveRaw(status.settledAmountOutRaw) &&
       record.settledOutputRaw === undefined
+    const fundingObservedAt =
+      record.fundingObservedAt ??
+      (hasExternalShieldDepositFunding(record) ||
+      hasExternalShieldDepositFunding({
+        ...record,
+        phase: nextPhase,
+        providerStatus: normalized,
+        depositedAmountRaw
+      })
+        ? this.now()
+        : undefined)
     if (
       nextPhase !== record.phase ||
       status.errorStatus !== record.errorStatus ||
       depositedAmountRaw !== record.depositedAmountRaw ||
       normalized !== record.providerStatus ||
+      fundingObservedAt !== record.fundingObservedAt ||
       newlySettled
     ) {
       record = Object.freeze({
         ...record,
         phase: nextPhase,
         providerStatus: normalized,
+        ...(fundingObservedAt !== undefined ? { fundingObservedAt } : {}),
         ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
-        ...(status.errorStatus ? { errorStatus: status.errorStatus } : {}),
+        errorStatus: status.errorStatus,
         ...(nextPhase === 'ready' &&
         status.settledAmountOutRaw &&
         isPositiveRaw(status.settledAmountOutRaw)
@@ -797,6 +814,7 @@ export class ConfidentialFundingCoordinator {
     await this.updateExternalDepositGraph(record)
     if (record.phase === 'ready') record = await this.refreshExternalDepositBalance(record)
     await this.markExternalDepositGraphReconciled(record)
+    if (shouldAutoRefreshExternalShieldDeposit(record, this.now())) await this.scheduleMonitoring()
     void this.options.onActivityChanged?.(record).catch(() => {})
     return record
   }
@@ -2008,10 +2026,11 @@ export class ConfidentialFundingCoordinator {
     const external = (await this.options.store.listExternalDeposits()).filter(
       record =>
         record.network === this.options.network &&
-        (record.phase === 'failed' ||
+        (shouldAutoRefreshExternalShieldDeposit(record, this.now()) ||
           (record.phase === 'ready' &&
             (record.balanceRefreshedAt === undefined || record.settledOutputRaw === undefined)) ||
-          !this.reconciledTerminalExternalDeposits.has(record.depositId))
+          ((record.phase === 'ready' || record.phase === 'refunded') &&
+            !this.reconciledTerminalExternalDeposits.has(record.depositId)))
     )
     const externalResults = await Promise.allSettled(
       external.map(record => this.refreshExternalDeposit(record.depositId))
@@ -2022,12 +2041,13 @@ export class ConfidentialFundingCoordinator {
     )
       await this.scheduleMonitoring()
     if (
-      external.some(
-        record =>
-          record.phase !== 'refunded' &&
-          (record.phase !== 'ready' ||
-            record.balanceRefreshedAt === undefined ||
-            record.settledOutputRaw === undefined)
+      externalResults.some(
+        result =>
+          result.status === 'fulfilled' &&
+          (shouldAutoRefreshExternalShieldDeposit(result.value, this.now()) ||
+            (result.value.phase === 'ready' &&
+              (result.value.balanceRefreshedAt === undefined ||
+                result.value.settledOutputRaw === undefined)))
       )
     ) {
       await this.scheduleMonitoring()

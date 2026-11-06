@@ -135,6 +135,9 @@ test('persists external Shield deposit quote bindings across a restart', async (
     }
     await store.putExternalDeposit(record)
     expect(await new ChromeConfidentialFundingStore().getExternalDeposit('one')).toEqual(record)
+    const partial = { ...record, fundingObservedAt: 2_000, providerStatus: 'EXPIRED' }
+    await store.putExternalDeposit(partial)
+    expect(await new ChromeConfidentialFundingStore().getExternalDeposit('one')).toEqual(partial)
     const key = [...local.values.keys()].find(value =>
       value.startsWith('confidential_external_deposit:')
     )
@@ -147,6 +150,7 @@ test('persists external Shield deposit quote bindings across a restart', async (
       },
       { slippageBps: 100 },
       { expiresAt: 90_000 },
+      { fundingObservedAt: -1 },
       { destinationAssetId: 'eip155:1/slip44:1' }
     ]) {
       local.values.set(key, { ...record, ...changed })
