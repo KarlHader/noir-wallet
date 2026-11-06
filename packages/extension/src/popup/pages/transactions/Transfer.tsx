@@ -176,7 +176,7 @@ function DomainCard({
         </button>
         <div className="max-w-[43%] min-w-0 text-right">
           <span
-            className="max-w-full break-all text-right text-sm font-medium leading-[18px]"
+            className="block max-w-full truncate text-right text-sm font-medium leading-[18px]"
             title={balance}
           >
             {formatTokenQuantity(balance)}

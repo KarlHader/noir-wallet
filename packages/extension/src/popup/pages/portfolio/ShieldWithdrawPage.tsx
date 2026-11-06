@@ -6,7 +6,11 @@ import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
-import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import {
+  formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount,
+  formatTokenQuantity
+} from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useWalletStore } from '@/store/wallet-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -505,9 +509,20 @@ function ShieldWithdrawForm() {
             {source?.asset.metadata.symbol ?? 'Token'}
             <Icon icon="lucide:chevron-down" width={16} height={16} />
           </button>
-          <div className="mt-2 flex items-center gap-2 text-xs text-muted">
-            <span>
-              {source ? formatBaseUnitAmount(availableRaw, source.asset.metadata.decimals) : '0'}{' '}
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted">
+            <span
+              className="min-w-0 truncate"
+              title={
+                source
+                  ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                  : '0'
+              }
+            >
+              {source
+                ? formatTokenQuantity(
+                    formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                  )
+                : '0'}{' '}
               available
             </span>
             <button
@@ -517,7 +532,7 @@ function ShieldWithdrawForm() {
                 source &&
                 setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
               }
-              className="wallet-interactive rounded bg-wallet-surface px-2 py-0.5 text-foreground enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+              className="wallet-interactive shrink-0 rounded bg-wallet-surface px-2 py-0.5 text-foreground enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
             >
               Max
             </button>

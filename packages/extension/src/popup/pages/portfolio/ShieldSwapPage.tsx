@@ -4,7 +4,11 @@ import { Icon } from '@iconify/react'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
-import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import {
+  formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount,
+  formatTokenQuantity
+} from '@/lib/number-format'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -467,8 +471,11 @@ function ShieldSwapForm() {
           <div className="flex items-center justify-between text-sm text-muted">
             <span>From</span>
             <span className="flex min-w-0 items-center gap-2 text-xs">
-              <span className="max-w-[180px] truncate">
-                Bal. {hidden ? '••••' : (balance ?? '—')}
+              <span
+                className="max-w-[180px] truncate"
+                title={hidden ? undefined : (balance ?? undefined)}
+              >
+                Bal. {hidden ? '••••' : formatTokenQuantity(balance)}
               </span>
               <button
                 type="button"
@@ -654,8 +661,17 @@ function ShieldSwapForm() {
                     {asset.chain.chain.displayName}
                   </span>
                 </span>
-                <span className="max-w-[120px] truncate text-sm">
-                  {hidden ? '••••' : (shieldSwapFormBalance(asset, displayBalances) ?? '—')}
+                <span
+                  className="max-w-[120px] truncate text-sm"
+                  title={
+                    hidden
+                      ? undefined
+                      : (shieldSwapFormBalance(asset, displayBalances) ?? undefined)
+                  }
+                >
+                  {hidden
+                    ? '••••'
+                    : formatTokenQuantity(shieldSwapFormBalance(asset, displayBalances))}
                 </span>
               </button>
             ))}

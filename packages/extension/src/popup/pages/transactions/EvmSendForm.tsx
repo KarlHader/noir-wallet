@@ -18,6 +18,7 @@ import {
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
+  formatTokenQuantity,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
@@ -772,10 +773,10 @@ export function EvmSendForm({
             </button>
             <div className="flex max-w-[38%] min-w-0 flex-col items-end gap-2">
               <span
-                className="max-w-full break-all text-right text-sm font-medium leading-[18px]"
+                className="max-w-full truncate text-right text-sm font-medium leading-[18px]"
                 title={transferAvailability.display}
               >
-                {transferAvailability.display}
+                {formatTokenQuantity(transferAvailability.display)}
               </span>
               <button
                 type="button"

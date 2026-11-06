@@ -565,7 +565,7 @@ export function Send() {
               </button>
               <span className="flex max-w-[38%] shrink-0 flex-col items-end gap-2">
                 <span
-                  className="max-w-full break-all text-right text-sm font-medium leading-[18px]"
+                  className="max-w-full truncate text-right text-sm font-medium leading-[18px]"
                   title={sourceBalance.available}
                 >
                   {formatTokenQuantity(sourceBalance.available)}
