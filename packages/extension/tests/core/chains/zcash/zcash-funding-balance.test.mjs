@@ -12,6 +12,7 @@ import {
   resolveZcashFundingAvailability,
   resolveZcashTransferAvailability
 } from '../../../../src/popup/services/transfer-availability.ts'
+import { resolveZcashSelfMove } from '../../../../src/popup/services/zcash-self-move.ts'
 
 const balance = {
   shielded: '2',
@@ -21,6 +22,32 @@ const balance = {
   confirmed: { shielded: '1', transparent: '2.5' },
   pending: { shielded: '0.5', transparent: '0.5', total: '1' }
 }
+
+test('ZEC Move binds each source to the current account opposite native address', () => {
+  const addresses = {
+    transparent: `t1${'A'.repeat(33)}`,
+    shielded: `u1${'q'.repeat(50)}`
+  }
+  assert.deepEqual(resolveZcashSelfMove(addresses, 'transparent', 'mainnet'), {
+    source: 'transparent',
+    fromAddress: addresses.transparent,
+    toAddress: addresses.shielded
+  })
+  assert.deepEqual(resolveZcashSelfMove(addresses, 'shielded', 'mainnet'), {
+    source: 'shielded',
+    fromAddress: addresses.shielded,
+    toAddress: addresses.transparent
+  })
+  assert.equal(resolveZcashSelfMove(addresses, 'transparent', 'testnet'), null)
+  assert.equal(
+    resolveZcashSelfMove(
+      { ...addresses, shielded: addresses.transparent },
+      'transparent',
+      'mainnet'
+    ),
+    null
+  )
+})
 
 describe('Zcash funding amount validation', () => {
   test('offers confirmed balances for both sources while keeping Keystone transparent funding disabled', () => {

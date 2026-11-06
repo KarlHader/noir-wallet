@@ -21,27 +21,6 @@ export function WalletShieldFundsIcon() {
   )
 }
 
-export function WalletSwapIcon({ className }: { readonly className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      width="20"
-      height="20"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      className={className}
-    >
-      <g transform="translate(1 1)">
-        <path d="M7.5 2H2V7.5M10.5 16H16V10.5" />
-        <circle cx="4.5" cy="13.5" r="3.5" />
-        <circle cx="13.5" cy="4.5" r="3.5" />
-      </g>
-    </svg>
-  )
-}
-
 interface WalletActionButtonProps {
   readonly icon: ReactNode
   readonly label: string

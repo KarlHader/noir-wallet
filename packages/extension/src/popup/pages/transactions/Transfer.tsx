@@ -967,13 +967,7 @@ function TransferForm() {
       <div className="page-container">
         <TransactionReviewView
           variant="figma"
-          title={
-            activeShieldReview.operation === 'deposit'
-              ? 'Deposit to Shield'
-              : activeShieldReview.operation === 'cluster'
-                ? 'Cluster transfer'
-                : 'Withdraw from Shield'
-          }
+          title={activeShieldReview.operation === 'cluster' ? 'Cluster transfer' : 'Confirm Move'}
           asset={{
             assetId: selected.asset.asset.id,
             symbol,
@@ -1044,11 +1038,9 @@ function TransferForm() {
           confirmLabel={
             confirmUncertain
               ? 'Check status'
-              : activeShieldReview.operation === 'deposit'
-                ? 'Deposit'
-                : activeShieldReview.operation === 'cluster'
-                  ? 'Confirm Cluster'
-                  : 'Withdraw'
+              : activeShieldReview.operation === 'cluster'
+                ? 'Confirm Cluster'
+                : 'Move'
           }
           confirming={confirmingShield}
           cancelDisabled={cancellingShield}
@@ -1250,13 +1242,7 @@ function TransferForm() {
           isLoading={preparingShield}
           onClick={fundingRoute ? () => void prepareShield() : review}
         >
-          {clusterSelected
-            ? 'Review Cluster'
-            : shieldPair
-              ? to === 'shield'
-                ? 'Deposit'
-                : 'Withdraw'
-              : 'Transfer'}
+          {clusterSelected ? 'Review Cluster' : shieldPair ? 'Move' : 'Transfer'}
         </Button>
       </div>
 

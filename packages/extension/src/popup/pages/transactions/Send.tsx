@@ -64,14 +64,22 @@ import {
   getActiveAccountScopeKey
 } from '@/popup/lib/active-account-scope'
 import { getZcashChainId } from '@/core/chains/registry'
+import { resolveZcashSelfMove } from '@/popup/services/zcash-self-move'
 
 export function Send() {
   const { goBack, navigate } = useNavigate()
   const location = useLocation()
-  const walletMode =
-    new URLSearchParams(location.search).get('mode') === 'private' ? 'private' : 'public'
+  const routeParams = new URLSearchParams(location.search)
+  const isSelfMove = routeParams.get('move') === '1'
+  const moveSource =
+    routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
+      ? (routeParams.get('from') as FundingSource)
+      : null
+  const walletMode = routeParams.get('mode') === 'private' ? 'private' : 'public'
+  const routeIdentity = JSON.stringify([isSelfMove, routeParams.get('from'), walletMode])
+  const previousRouteIdentity = useRef(routeIdentity)
   const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() => {
-    const source = new URLSearchParams(location.search).get('from')
+    const source = routeParams.get('from')
     return source === 'shielded' || (source !== 'transparent' && walletMode === 'private')
       ? 'shielded'
       : 'transparent'
@@ -115,17 +123,23 @@ export function Send() {
     accountDisplayNames
   )
   const isHardwareWallet = isZcashHardwareKeySource(currentWallet?.keySource)
-  const fundingSource = getFundingSourceUnavailableReason(
-    currentWallet?.keySource,
-    selectedFundingSource
-  )
-    ? 'shielded'
-    : selectedFundingSource
+  const fundingSource = isSelfMove
+    ? (moveSource ?? 'transparent')
+    : getFundingSourceUnavailableReason(currentWallet?.keySource, selectedFundingSource)
+      ? 'shielded'
+      : selectedFundingSource
+  const selfMove = isSelfMove
+    ? resolveZcashSelfMove(currentAccount?.addresses, fundingSource, currentNetwork)
+    : null
+  const moveUnavailable =
+    isSelfMove &&
+    (!selfMove ||
+      Boolean(getFundingSourceUnavailableReason(currentWallet?.keySource, fundingSource)))
 
   const { sendTransaction } = useTransaction()
 
-  const zns = useZnsResolve(toAddress)
-  const effectiveToAddress = zns.address || toAddress
+  const zns = useZnsResolve(isSelfMove ? '' : toAddress)
+  const effectiveToAddress = isSelfMove ? (selfMove?.toAddress ?? '') : zns.address || toAddress
 
   const feeTier = useSettingsStore(state => state.feeTier)
   const setFeeTier = useSettingsStore(state => state.setFeeTier)
@@ -140,7 +154,7 @@ export function Send() {
   const transparentBalance = safeBig(getShieldableTransparentBalance(balance)).toNumber()
 
   const isTransparentRecipient = isTransparentZcashAddress(effectiveToAddress)
-  const effectiveMemo = sanitizeMemoForRecipient(effectiveToAddress, memo)
+  const effectiveMemo = isSelfMove ? '' : sanitizeMemoForRecipient(effectiveToAddress, memo)
 
   const maxTransfer = useMaxTransferEstimate({
     to: effectiveToAddress,
@@ -220,7 +234,8 @@ export function Send() {
     feeTier,
     fundingSource,
     effectiveMemo,
-    maxSelected
+    maxSelected,
+    isSelfMove
   })
   latestFee.current = {
     selectedFeeQuote,
@@ -230,7 +245,8 @@ export function Send() {
     feeTier,
     fundingSource,
     effectiveMemo,
-    maxSelected
+    maxSelected,
+    isSelfMove
   }
 
   useEffect(() => {
@@ -242,6 +258,19 @@ export function Send() {
       setAmount(effectiveMaxStr)
     }
   }, [maxSelected, effectiveMaxStr])
+
+  useEffect(() => {
+    if (previousRouteIdentity.current === routeIdentity) return
+    previousRouteIdentity.current = routeIdentity
+    setShowReview(false)
+    setSourcePickerKind(null)
+    setFundingSource(moveSource ?? (walletMode === 'private' ? 'shielded' : 'transparent'))
+    setToAddress('')
+    setAmount('')
+    setMaxSelected(false)
+    setMemo('')
+    setShowMemo(false)
+  }, [moveSource, routeIdentity, walletMode])
 
   useEffect(() => {
     const activeScope = getActiveAccountScopeKey()
@@ -292,7 +321,14 @@ export function Send() {
   }
 
   const handleContinue = () => {
-    if (toAddress && isValidAmount && !reviewInsufficient && feeReady && !zns.loading) {
+    if (
+      effectiveToAddress &&
+      !moveUnavailable &&
+      isValidAmount &&
+      !reviewInsufficient &&
+      feeReady &&
+      (isSelfMove || !zns.loading)
+    ) {
       setShowReview(true)
     }
   }
@@ -311,7 +347,8 @@ export function Send() {
       !feeReady ||
       !selectedFeeQuote ||
       !fromAddress ||
-      !currentAccount
+      !currentAccount ||
+      moveUnavailable
     )
       return
     const activeScope = getActiveAccountScopeKey()
@@ -331,7 +368,8 @@ export function Send() {
           latest.feeTier !== feeTier ||
           latest.fundingSource !== fundingSource ||
           latest.effectiveMemo !== effectiveMemo ||
-          latest.maxSelected !== maxSelected
+          latest.maxSelected !== maxSelected ||
+          latest.isSelfMove !== isSelfMove
         )
           return
         if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
@@ -345,6 +383,22 @@ export function Send() {
         return
       }
       assertActiveAccountScope(activeScope)
+      if (isSelfMove) {
+        const wallet = useWalletStore.getState()
+        const currentMove = resolveZcashSelfMove(
+          wallet.getCurrentAccount()?.addresses,
+          fundingSource,
+          wallet.currentNetwork
+        )
+        if (
+          wallet.currentNetwork !== currentNetwork ||
+          !currentMove ||
+          currentMove.fromAddress !== fromAddress ||
+          currentMove.toAddress !== effectiveToAddress
+        ) {
+          throw new Error('Active account changed. Review this action again.')
+        }
+      }
       const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
 
       sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
@@ -481,7 +535,7 @@ export function Send() {
   if (!currentAccount) {
     return (
       <div className="page-container">
-        <PageHeader title="Send" showBack />
+        <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack />
         <div className="flex-1 flex items-center justify-center px-5">
           <p className="text-muted text-center">No account available</p>
         </div>
@@ -491,7 +545,7 @@ export function Send() {
 
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
-      <PageHeader title="Send" showBack onBack={goBack} />
+      <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack onBack={goBack} />
       <div className="page-content min-h-0 !px-4 pt-4">
         <div className="space-y-2">
           <div className="pb-1 pt-1 text-center">
@@ -506,37 +560,47 @@ export function Send() {
 
           <div className="space-y-2.5 pt-[21px]">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium leading-[18px] text-muted">Send from</p>
-              <button
-                type="button"
-                role="switch"
-                aria-label="Send privately"
-                aria-checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
-                disabled={
-                  fundingSource === 'shielded' &&
-                  Boolean(
-                    fundingOptions.find(option => option.type === 'transparent')?.disabledReason
-                  )
-                }
-                onClick={() => {
-                  if (fundingSource === 'shielded') handleSelectFundingSource('transparent')
-                  else setSourcePickerKind('privacy')
-                }}
-                className="flex items-center gap-1 text-sm font-normal leading-[18px] text-muted disabled:opacity-40"
-              >
-                <Icon icon="lucide:shield-check" width={15} height={15} className="text-primary" />
-                Send privately
-                <Switch
-                  checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
-                  size="sm"
-                />
-              </button>
+              <p className="text-sm font-medium leading-[18px] text-muted">
+                {isSelfMove ? 'Move from' : 'Send from'}
+              </p>
+              {!isSelfMove && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Send privately"
+                  aria-checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
+                  disabled={
+                    fundingSource === 'shielded' &&
+                    Boolean(
+                      fundingOptions.find(option => option.type === 'transparent')?.disabledReason
+                    )
+                  }
+                  onClick={() => {
+                    if (fundingSource === 'shielded') handleSelectFundingSource('transparent')
+                    else setSourcePickerKind('privacy')
+                  }}
+                  className="flex items-center gap-1 text-sm font-normal leading-[18px] text-muted disabled:opacity-40"
+                >
+                  <Icon
+                    icon="lucide:shield-check"
+                    width={15}
+                    height={15}
+                    className="text-primary"
+                  />
+                  Send privately
+                  <Switch
+                    checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
+                    size="sm"
+                  />
+                </button>
+              )}
             </div>
             <div className="flex min-h-[72px] items-start gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-[11px] pb-2 pt-[14px]">
               <button
                 type="button"
                 aria-label="Choose send source"
                 aria-haspopup="dialog"
+                disabled={isSelfMove}
                 onClick={() => setSourcePickerKind('source')}
                 className="min-w-0 flex-1 text-left"
               >
@@ -552,7 +616,9 @@ export function Send() {
                   >
                     {fundingSource === 'shielded' ? 'Shield' : 'Public'}
                   </span>
-                  <Icon icon="lucide:chevron-down" width={14} height={14} className="shrink-0" />
+                  {!isSelfMove && (
+                    <Icon icon="lucide:chevron-down" width={14} height={14} className="shrink-0" />
+                  )}
                 </span>
                 <span className="mt-[11px] flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
                   {fundingSource === 'shielded' && (
@@ -574,37 +640,56 @@ export function Send() {
             </div>
           </div>
 
-          {fundingSource === 'shielded' && currentWallet?.keySource !== 'keystone' && (
-            <ShieldFundsBanner
-              transparentBalance={transparentBalance}
-              action="send"
-              isShielding={isMigrating}
-              onShield={handleMigrateNow}
-            />
-          )}
+          {!isSelfMove &&
+            fundingSource === 'shielded' &&
+            currentWallet?.keySource !== 'keystone' && (
+              <ShieldFundsBanner
+                transparentBalance={transparentBalance}
+                action="send"
+                isShielding={isMigrating}
+                onShield={handleMigrateNow}
+              />
+            )}
 
           <div className="!mt-[30px]">
-            <SendRecipientInputCard
-              id="zcash-send-recipient"
-              value={toAddress}
-              onChange={setToAddress}
-              placeholder="Enter address"
-              variant="filled"
-              onSelectRecipient={handleSelectMyAddress}
-            />
-            {zns.loading && (
+            {isSelfMove ? (
+              <div className="space-y-3">
+                <p className="text-sm font-medium leading-[18px]">Move to</p>
+                <div className="flex min-h-[54px] items-center rounded-[10px] border border-white/10 bg-wallet-surface px-[15px] text-sm">
+                  <span className="mr-2 shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                    {fundingSource === 'transparent' ? 'Shield' : 'Public'}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-xs" title={effectiveToAddress}>
+                    {effectiveToAddress || 'Address unavailable'}
+                  </span>
+                </div>
+                {moveUnavailable && (
+                  <InlineError message="This account cannot move ZEC between Public and Shield." />
+                )}
+              </div>
+            ) : (
+              <SendRecipientInputCard
+                id="zcash-send-recipient"
+                value={toAddress}
+                onChange={setToAddress}
+                placeholder="Enter address"
+                variant="filled"
+                onSelectRecipient={handleSelectMyAddress}
+              />
+            )}
+            {!isSelfMove && zns.loading && (
               <p className="text-muted text-xs mt-1.5 px-1 flex items-center gap-1.5">
                 <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
                 Resolving name...
               </p>
             )}
-            {zns.address && (
+            {!isSelfMove && zns.address && (
               <p className="text-primary text-xs mt-1.5 px-1 flex items-center gap-1.5">
                 <Icon icon="lucide:check-circle" width={12} height={12} />
                 {formatSortAddress(zns.address)}
               </p>
             )}
-            {zns.error && (
+            {!isSelfMove && zns.error && (
               <InlineError
                 className="mt-1.5 px-1"
                 message={zns.error}
@@ -671,7 +756,7 @@ export function Send() {
             />
           )}
 
-          {showMemo ? (
+          {isSelfMove ? null : showMemo ? (
             <div>
               <label htmlFor="zcash-send-memo" className="mb-1.5 block px-1 text-xs text-muted">
                 Memo (optional)
@@ -725,11 +810,12 @@ export function Send() {
           size="wallet"
           disabled={
             !effectiveToAddress ||
+            moveUnavailable ||
             !amount ||
             !isValidAmount ||
             reviewInsufficient ||
             !feeReady ||
-            zns.loading
+            (!isSelfMove && zns.loading)
           }
           onClick={handleContinue}
           className="w-full h-[45px]"
@@ -739,7 +825,7 @@ export function Send() {
       </div>
 
       <Dialog
-        open={sourcePickerKind !== null}
+        open={!isSelfMove && sourcePickerKind !== null}
         onOpenChange={open => {
           if (!open) setSourcePickerKind(null)
         }}
@@ -832,24 +918,28 @@ export function Send() {
         <DialogContent
           position="bottom"
           showCloseButton={false}
-          aria-label="Review Send"
+          aria-label={isSelfMove ? 'Review Move' : 'Review Send'}
           data-wallet-mode={walletMode}
           className="flex h-dvh max-h-dvh flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
         >
-          <DialogTitle className="sr-only">Review Send</DialogTitle>
+          <DialogTitle className="sr-only">
+            {isSelfMove ? 'Review Move' : 'Review Send'}
+          </DialogTitle>
           <DialogDescription className="sr-only">
-            Review the amount, destination, and fee before sending.
+            Review the amount, destination, and fee before {isSelfMove ? 'moving' : 'sending'}.
           </DialogDescription>
           <div className="relative flex h-14 shrink-0 items-center justify-center">
             <button
               type="button"
-              aria-label="Back to Send"
+              aria-label={isSelfMove ? 'Back to Move' : 'Back to Send'}
               onClick={() => setShowReview(false)}
               className="absolute left-4 flex size-7 items-center justify-center"
             >
               <Icon icon="lucide:chevron-left" width={22} height={22} />
             </button>
-            <span className="text-lg font-medium leading-[23px]">Sending</span>
+            <span className="text-lg font-medium leading-[23px]">
+              {isSelfMove ? 'Moving' : 'Sending'}
+            </span>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
             <div className="flex h-32 flex-col items-center justify-center">
@@ -871,7 +961,7 @@ export function Send() {
             </div>
             <div className="mt-1 divide-y divide-white/10 text-sm font-medium leading-[18px]">
               <div className="flex min-h-16 items-center justify-between gap-3">
-                <span className="text-muted">Send from</span>
+                <span className="text-muted">{isSelfMove ? 'Move from' : 'Send from'}</span>
                 <span className="min-w-0 text-right">
                   <span className="flex items-center justify-end gap-1.5">
                     {accountDisplayName}
@@ -953,7 +1043,13 @@ export function Send() {
             <Button
               size="wallet"
               onClick={handleConfirm}
-              disabled={reviewInsufficient || !feeReady || isHardwareSigning || isConfirming}
+              disabled={
+                moveUnavailable ||
+                reviewInsufficient ||
+                !feeReady ||
+                isHardwareSigning ||
+                isConfirming
+              }
               className="h-[45px] flex-1"
             >
               {isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}

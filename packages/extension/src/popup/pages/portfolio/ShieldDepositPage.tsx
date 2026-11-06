@@ -357,7 +357,7 @@ function ShieldDepositContent() {
         wallet.currentNetwork === currentNetwork &&
         scopeRef.current === scopeKey
       )
-        setError('Deposit address unavailable. Try again.')
+        setError('Receiving address unavailable. Try again.')
     } finally {
       if (mounted.current && scopeRef.current === scopeKey) setBusy(false)
     }
@@ -420,7 +420,7 @@ function ShieldDepositContent() {
 
   return (
     <div className="page-container min-h-0 overflow-hidden">
-      <PageHeader title="Deposit" showBack />
+      <PageHeader title="Receive" showBack />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5">
         {accountUnavailable && (
           <div
@@ -443,171 +443,200 @@ function ShieldDepositContent() {
             </button>
           </div>
         )}
-        {viewedRecord ? (
-          <div className="pt-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-base font-medium" role="status">
-                {depositStatusLabel(viewedRecord, now)}
-              </h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setViewRecordId(null)
-                  setAmount('')
-                  setError(null)
-                  requestIdRef.current = null
-                }}
-                className="wallet-interactive rounded-sm text-sm text-primary hover:bg-primary/10 active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-              >
-                New deposit
-              </button>
-            </div>
-            <div className="mt-5 flex items-center gap-3">
-              <TokenIcon
-                assetId={viewedRecord.source.assetId}
-                symbol={viewedRecord.sourceSymbol}
-                icon={viewedToken ? resolveSwapTokenIconUrl(viewedToken) : undefined}
-                size={32}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{viewedRecord.sourceSymbol}</p>
-                <p className="truncate text-xs text-muted">
-                  {viewedNetwork?.displayName ?? viewedRecord.source.chainName} · NEAR Confidential
-                </p>
-              </div>
-            </div>
-            <div className="mt-5 space-y-3 border-t border-white/10 pt-4 text-sm">
-              <div className="flex items-start justify-between gap-4">
-                <span className="shrink-0 text-muted">{canPay ? 'Send exactly' : 'Amount'}</span>
-                <span className="min-w-0 break-all text-right font-medium">
-                  {formatDepositAmount(
-                    payment?.paymentAmountRaw ?? viewedRecord.amountRaw,
-                    viewedRecord.sourceDecimals
-                  ) ?? '—'}{' '}
-                  {viewedRecord.sourceSymbol}
-                </span>
-              </div>
-              {viewedRecord.phase === 'awaiting-payment' && payment?.hasDeposit && (
-                <>
+        {viewedRecord && (
+          <Dialog open onOpenChange={open => !open && setViewRecordId(null)}>
+            <DialogContent
+              position="bottom"
+              className="max-h-[calc(100%-24px)] overflow-y-auto bg-wallet-surface p-4 pb-6"
+            >
+              <DialogTitle className="text-base font-medium">Receiving address</DialogTitle>
+              <DialogDescription className="sr-only">
+                Receive funds into Shield and check payment status
+              </DialogDescription>
+              <div className="pt-1">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-medium" role="status">
+                    {depositStatusLabel(viewedRecord, now)}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewRecordId(null)
+                      setAmount('')
+                      setError(null)
+                      requestIdRef.current = null
+                    }}
+                    className="wallet-interactive rounded-sm text-sm text-primary hover:bg-primary/10 active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                  >
+                    New address
+                  </button>
+                </div>
+                <div className="mt-5 flex items-center gap-3">
+                  <TokenIcon
+                    assetId={viewedRecord.source.assetId}
+                    symbol={viewedRecord.sourceSymbol}
+                    icon={viewedToken ? resolveSwapTokenIconUrl(viewedToken) : undefined}
+                    size={32}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{viewedRecord.sourceSymbol}</p>
+                    <p className="truncate text-xs text-muted">
+                      {viewedNetwork?.displayName ?? viewedRecord.source.chainName} · NEAR
+                      Confidential
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-5 space-y-3 border-t border-white/10 pt-4 text-sm">
                   <div className="flex items-start justify-between gap-4">
-                    <span className="shrink-0 text-muted">Deposited</span>
-                    <span className="min-w-0 break-all text-right">
+                    <span className="shrink-0 text-muted">
+                      {canPay ? 'Send exactly' : 'Amount'}
+                    </span>
+                    <span className="min-w-0 break-all text-right font-medium">
                       {formatDepositAmount(
-                        viewedRecord.depositedAmountRaw ?? '0',
+                        payment?.paymentAmountRaw ?? viewedRecord.amountRaw,
                         viewedRecord.sourceDecimals
                       ) ?? '—'}{' '}
                       {viewedRecord.sourceSymbol}
                     </span>
                   </div>
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="shrink-0 text-muted">Remaining</span>
-                    <span className="min-w-0 break-all text-right">
-                      {formatDepositAmount(payment.remainingRaw, viewedRecord.sourceDecimals) ??
-                        '—'}{' '}
-                      {viewedRecord.sourceSymbol}
-                    </span>
-                  </div>
-                </>
-              )}
-              <div className="flex items-start justify-between gap-4">
-                <span className="shrink-0 text-muted">Estimated receive</span>
-                <span className="min-w-0 break-all text-right">
-                  {formatDepositAmount(
-                    viewedRecord.expectedOutputRaw,
-                    viewedRecord.sourceDecimals
-                  ) ?? '—'}{' '}
-                  {viewedRecord.sourceSymbol}
-                </span>
-              </div>
-              <div className="flex items-start justify-between gap-4">
-                <span className="shrink-0 text-muted">Minimum receive</span>
-                <span className="min-w-0 break-all text-right">
-                  {formatDepositAmount(
-                    viewedRecord.minimumOutputRaw,
-                    viewedRecord.sourceDecimals
-                  ) ?? '—'}{' '}
-                  {viewedRecord.sourceSymbol}
-                </span>
-              </div>
-              {viewedRecord.settledOutputRaw && (
-                <div className="flex items-start justify-between gap-4">
-                  <span className="shrink-0 text-muted">Received</span>
-                  <span className="min-w-0 break-all text-right font-medium">
-                    {formatDepositAmount(
-                      viewedRecord.settledOutputRaw,
-                      viewedRecord.sourceDecimals
-                    ) ?? '—'}{' '}
-                    {viewedRecord.sourceSymbol}
-                  </span>
+                  {viewedRecord.phase === 'awaiting-payment' && payment?.hasDeposit && (
+                    <>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="shrink-0 text-muted">Deposited</span>
+                        <span className="min-w-0 break-all text-right">
+                          {formatDepositAmount(
+                            viewedRecord.depositedAmountRaw ?? '0',
+                            viewedRecord.sourceDecimals
+                          ) ?? '—'}{' '}
+                          {viewedRecord.sourceSymbol}
+                        </span>
+                      </div>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="shrink-0 text-muted">Remaining</span>
+                        <span className="min-w-0 break-all text-right">
+                          {formatDepositAmount(payment.remainingRaw, viewedRecord.sourceDecimals) ??
+                            '—'}{' '}
+                          {viewedRecord.sourceSymbol}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {!canPay && (
+                    <>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="shrink-0 text-muted">Estimated receive</span>
+                        <span className="min-w-0 break-all text-right">
+                          {formatDepositAmount(
+                            viewedRecord.expectedOutputRaw,
+                            viewedRecord.sourceDecimals
+                          ) ?? '—'}{' '}
+                          {viewedRecord.sourceSymbol}
+                        </span>
+                      </div>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="shrink-0 text-muted">Minimum receive</span>
+                        <span className="min-w-0 break-all text-right">
+                          {formatDepositAmount(
+                            viewedRecord.minimumOutputRaw,
+                            viewedRecord.sourceDecimals
+                          ) ?? '—'}{' '}
+                          {viewedRecord.sourceSymbol}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {viewedRecord.settledOutputRaw && (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="shrink-0 text-muted">Received</span>
+                      <span className="min-w-0 break-all text-right font-medium">
+                        {formatDepositAmount(
+                          viewedRecord.settledOutputRaw,
+                          viewedRecord.sourceDecimals
+                        ) ?? '—'}{' '}
+                        {viewedRecord.sourceSymbol}
+                      </span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            {canPay && (
-              <div className="mt-5 flex flex-col items-center">
-                <div className="rounded-lg bg-white p-3">
-                  <QRCodeSVG value={viewedRecord.depositAddress} size={164} level="M" />
-                </div>
-                <p className="mt-3 text-xs text-muted">
-                  Valid until {new Date(viewedRecord.expiresAt).toLocaleString()}
-                </p>
-                <div className="mt-3 flex min-h-11 w-full items-center gap-2 rounded-lg bg-wallet-surface px-3">
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-xs"
-                    title={viewedRecord.depositAddress}
-                  >
-                    {viewedRecord.depositAddress}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Copy address"
-                    onClick={() => {
-                      if (canPayShieldDeposit(viewedRecord, Date.now()))
-                        void copyToClipboard(viewedRecord.depositAddress)
-                    }}
-                    className="wallet-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 text-xs hover:bg-white/15 active:bg-white/20 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-                  >
-                    <Icon icon="lucide:copy" width={14} height={14} />
-                    Copy
-                  </button>
-                </div>
-                {viewedRecord.depositMemo && (
-                  <div className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg bg-wallet-surface px-3">
-                    <span
-                      className="min-w-0 flex-1 truncate font-mono text-xs"
-                      title={viewedRecord.depositMemo}
-                    >
-                      Memo: {viewedRecord.depositMemo}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="Copy memo"
-                      onClick={() => {
-                        if (canPayShieldDeposit(viewedRecord, Date.now()))
-                          void copyToClipboard(viewedRecord.depositMemo!)
-                      }}
-                      className="wallet-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 text-xs hover:bg-white/15 active:bg-white/20 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-                    >
-                      <Icon icon="lucide:copy" width={14} height={14} />
-                      Copy
-                    </button>
+                {canPay && (
+                  <div className="mt-5 flex flex-col items-center">
+                    <div className="rounded-lg bg-white p-3">
+                      <QRCodeSVG value={viewedRecord.depositAddress} size={164} level="M" />
+                    </div>
+                    <p className="mt-3 text-center text-xs text-muted">
+                      Only send {viewedRecord.sourceSymbol} on{' '}
+                      {viewedNetwork?.displayName ?? viewedRecord.source.chainName}.
+                    </p>
+                    <p className="mt-2 text-xs text-muted">
+                      Valid until {new Date(viewedRecord.expiresAt).toLocaleString()}
+                    </p>
+                    <p className="mt-4 w-full text-sm text-warning">One-time receive address</p>
+                    <div className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg bg-wallet-selected px-3">
+                      <span
+                        className="min-w-0 flex-1 truncate font-mono text-xs"
+                        title={viewedRecord.depositAddress}
+                      >
+                        {viewedRecord.depositAddress}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Copy address"
+                        onClick={() => {
+                          if (canPayShieldDeposit(viewedRecord, Date.now()))
+                            void copyToClipboard(viewedRecord.depositAddress)
+                        }}
+                        className="wallet-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 text-xs hover:bg-white/15 active:bg-white/20 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                      >
+                        <Icon icon="lucide:copy" width={14} height={14} />
+                        Copy
+                      </button>
+                    </div>
+                    {viewedRecord.depositMemo && (
+                      <div className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg bg-wallet-surface px-3">
+                        <span
+                          className="min-w-0 flex-1 truncate font-mono text-xs"
+                          title={viewedRecord.depositMemo}
+                        >
+                          Memo: {viewedRecord.depositMemo}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Copy memo"
+                          onClick={() => {
+                            if (canPayShieldDeposit(viewedRecord, Date.now()))
+                              void copyToClipboard(viewedRecord.depositMemo!)
+                          }}
+                          className="wallet-interactive flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 text-xs hover:bg-white/15 active:bg-white/20 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                        >
+                          <Icon icon="lucide:copy" width={14} height={14} />
+                          Copy
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
+                <div className="mt-5 border-t border-white/10 pt-4">
+                  <p className="text-xs text-muted">Refund address</p>
+                  <p className="mt-1 break-all font-mono text-xs">{viewedRecord.refundAddress}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refreshDeposit()}
+                  disabled={refreshing}
+                  className="wallet-interactive mt-5 h-11 w-full rounded-lg border border-white/15 text-sm enabled:hover:border-white/30 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                >
+                  {refreshing ? 'Checking…' : 'Check deposit status'}
+                </button>
+                {error && (
+                  <p role="alert" className="mt-3 text-xs text-danger">
+                    {error}
+                  </p>
+                )}
               </div>
-            )}
-            <div className="mt-5 border-t border-white/10 pt-4">
-              <p className="text-xs text-muted">Refund address</p>
-              <p className="mt-1 break-all font-mono text-xs">{viewedRecord.refundAddress}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void refreshDeposit()}
-              disabled={refreshing}
-              className="wallet-interactive mt-5 h-11 w-full rounded-lg border border-white/15 text-sm enabled:hover:border-white/30 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
-            >
-              {refreshing ? 'Checking…' : 'Check deposit status'}
-            </button>
-          </div>
-        ) : (
+            </DialogContent>
+          </Dialog>
+        )}
+        {
           <>
             <div className="space-y-2.5 pt-3">
               <button
@@ -686,7 +715,7 @@ function ShieldDepositContent() {
             {selectedToken && (
               <div className="mt-6">
                 <label htmlFor="shield-deposit-amount" className="mb-2 block text-sm">
-                  Deposit amount
+                  Amount to receive
                 </label>
                 <Input
                   id="shield-deposit-amount"
@@ -758,19 +787,11 @@ function ShieldDepositContent() {
               }
               className="wallet-interactive mt-6 h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
             >
-              Review deposit
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/transfer?from=public&to=shield')}
-              disabled={!canManageNear}
-              className="wallet-interactive mt-4 h-10 w-full rounded-lg border border-white/10 text-sm enabled:hover:border-white/25 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
-            >
-              Move from this account
+              Receiving address
             </button>
           </>
-        )}
-        {error && (
+        }
+        {error && !viewedRecord && (
           <p role="alert" className="mt-3 text-center text-xs text-danger">
             {error}
           </p>
@@ -808,8 +829,10 @@ function ShieldDepositContent() {
       </div>
       <Dialog open={reviewOpen} onOpenChange={open => !open && !busy && setReviewOpen(false)}>
         <DialogContent position="bottom" className="gap-0 bg-wallet-surface p-4 pb-6">
-          <DialogTitle className="text-base font-medium">Review deposit</DialogTitle>
-          <DialogDescription className="sr-only">Confirm the deposit details</DialogDescription>
+          <DialogTitle className="text-base font-medium">Review receiving address</DialogTitle>
+          <DialogDescription className="sr-only">
+            Confirm the amount and refund address
+          </DialogDescription>
           <div className="mt-5 space-y-3 text-sm">
             <div className="flex justify-between gap-4">
               <span className="text-muted">Amount</span>
@@ -841,7 +864,7 @@ function ShieldDepositContent() {
             disabled={busy}
             className="wallet-interactive mt-5 h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
           >
-            {busy ? 'Generating…' : 'Generate deposit address'}
+            {busy ? 'Generating…' : 'Generate address'}
           </button>
         </DialogContent>
       </Dialog>

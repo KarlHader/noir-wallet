@@ -287,14 +287,14 @@ function ShieldWithdrawForm() {
       }
       if (!matchesExternalShieldWithdrawReview(review, request)) {
         void confidentialFundingClient.cancel(review.planId).catch(() => {})
-        throw new Error('Withdraw review changed. Try again.')
+        throw new Error('Send review changed. Try again.')
       }
       confirmationAttempt.current = null
       setUncertain(false)
       setPrepared({ review, request, source, destination, amount })
     } catch (cause) {
       if (scopeStillCurrent())
-        setError(cause instanceof Error ? cause.message : 'Withdraw quote unavailable')
+        setError(cause instanceof Error ? cause.message : 'Send quote unavailable')
     } finally {
       if (scopeStillCurrent()) setBusy(false)
     }
@@ -309,7 +309,7 @@ function ShieldWithdrawForm() {
     if (isUnsignedShieldTerminal(plan)) {
       setPrepared(null)
       setUncertain(false)
-      setError('Withdraw was not started. Try again.')
+      setError('Send was not started. Try again.')
       return 'failed'
     }
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
@@ -343,12 +343,12 @@ function ShieldWithdrawForm() {
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError('Withdraw was not started. Review and try again.')
+          setError('Send was not started. Review and try again.')
         }
         return
       }
       if (prepared.review.expiresAt <= Date.now())
-        throw new Error('Withdraw quote expired. Review again.')
+        throw new Error('Send quote expired. Review again.')
       confirmationAttempt.current = prepared.review.planId
       const plan = await confidentialFundingClient.confirm(
         prepared.review.planId,
@@ -362,15 +362,15 @@ function ShieldWithdrawForm() {
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError(cause instanceof Error ? cause.message : 'Withdraw could not start')
+          setError(cause instanceof Error ? cause.message : 'Send could not start')
         } else if (state === 'pending') {
           setUncertain(true)
-          setError('Withdraw status is pending. Check status before trying again.')
+          setError('Send status is pending. Check status before trying again.')
         }
       } catch {
         if (scopeStillCurrent()) {
           setUncertain(true)
-          setError('Withdraw status unavailable. Check status before trying again.')
+          setError('Send status unavailable. Check status before trying again.')
         }
       }
     } finally {
@@ -381,7 +381,7 @@ function ShieldWithdrawForm() {
   if (activeAccount && !canManageNear) {
     return (
       <div className="page-container">
-        <PageHeader title="Withdraw" showBack />
+        <PageHeader title="Send" showBack />
         <p role="alert" className="px-4 py-6 text-center text-sm text-muted">
           Shield unavailable for this account
         </p>
@@ -402,7 +402,7 @@ function ShieldWithdrawForm() {
       <div className="page-container">
         <TransactionReviewView
           variant="figma"
-          title="Confirm Withdraw"
+          title="Confirm Send"
           asset={{
             assetId: prepared.source.asset.asset.id,
             symbol: prepared.source.asset.metadata.symbol,
@@ -477,11 +477,11 @@ function ShieldWithdrawForm() {
 
   return (
     <div className="page-container min-h-0 overflow-hidden">
-      <PageHeader title="Withdraw" showBack />
+      <PageHeader title="Send" showBack />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-6">
         <div className="flex flex-col items-center pb-7">
           <input
-            aria-label="Withdraw amount"
+            aria-label="Send amount"
             disabled={busy}
             inputMode="decimal"
             placeholder="0"
@@ -669,7 +669,7 @@ function ShieldWithdrawForm() {
           }
           onClick={() => void prepare()}
         >
-          Withdraw
+          Send
         </Button>
       </div>
       <Dialog open={picker !== null} onOpenChange={open => !open && setPicker(null)}>

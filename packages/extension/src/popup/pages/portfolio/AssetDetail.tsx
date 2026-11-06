@@ -27,6 +27,7 @@ import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-setting
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -599,14 +600,10 @@ export function AssetDetail() {
         >
           <WalletActionButton
             icon={
-              <Icon
-                icon={
-                  actionDomain === 'private' && chain.chain.family === 'evm'
-                    ? 'lucide:arrow-up-down'
-                    : 'lucide:send'
+              <WalletActionIcon
+                action={
+                  actionDomain === 'private' && chain.chain.family === 'evm' ? 'move' : 'send'
                 }
-                width={20}
-                height={20}
               />
             }
             label={actionDomain === 'private' && chain.chain.family === 'evm' ? 'Move' : 'Send'}
@@ -621,7 +618,7 @@ export function AssetDetail() {
           />
           {(actionDomain !== 'private' || chain.chain.family !== 'evm') && (
             <WalletActionButton
-              icon={<Icon icon="lucide:arrow-down" width={20} height={20} />}
+              icon={<WalletActionIcon action="receive" />}
               label="Receive"
               disabled={!canReceive}
               onClick={handleReceive}
@@ -629,14 +626,14 @@ export function AssetDetail() {
           )}
           {chain.chain.family === 'evm' && actionDomain === 'public' && (
             <WalletActionButton
-              icon={<Icon icon="lucide:arrow-up-down" width={20} height={20} />}
+              icon={<WalletActionIcon action="move" />}
               label="Move"
               disabled={!privateTransferEligible}
               onClick={handleMove}
             />
           )}
           <WalletActionButton
-            icon={<Icon icon="lucide:arrow-left-right" width={20} height={20} />}
+            icon={<WalletActionIcon action="swap" />}
             label="Swap"
             disabled={
               !canSwap ||

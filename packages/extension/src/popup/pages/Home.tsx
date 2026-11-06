@@ -34,9 +34,9 @@ import { hasLegacyOrchardBalance } from '@/lib/legacy-pool-privacy-notice'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import {
   WalletActionButton,
-  WalletShieldFundsIcon,
-  WalletSwapIcon
+  WalletShieldFundsIcon
 } from '@/popup/components/common/WalletActionButton'
+import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { MultichainPortfolioPanel } from '../components/portfolio/MultichainPortfolioPanel'
 import { isPortfolioModelForScope } from '../services/portfolio-cache'
@@ -836,12 +836,12 @@ export function Home() {
           {!privateMode && (
             <>
               <WalletActionButton
-                icon={<Icon icon="lucide:arrow-up-right" width={20} height={20} />}
+                icon={<WalletActionIcon action="send" />}
                 label="Send"
                 onClick={openSend}
               />
               <WalletActionButton
-                icon={<Icon icon="lucide:arrow-down-left" width={20} height={20} />}
+                icon={<WalletActionIcon action="receive" />}
                 label="Receive"
                 onClick={openAddressesList}
                 disabled={!effectiveWalletId || !effectiveAccountId}
@@ -850,7 +850,7 @@ export function Home() {
           )}
           {privateMode && multichainPortfolioEnabled && (
             <WalletActionButton
-              icon={<Icon icon="lucide:arrow-left-right" width={20} height={20} />}
+              icon={<WalletActionIcon action="move" />}
               label="Move"
               onClick={() => openTransfer()}
               disabled={!effectiveWalletId || !effectiveAccountId}
@@ -858,7 +858,7 @@ export function Home() {
           )}
           {!isTestnet && supportsSwap && (
             <WalletActionButton
-              icon={<WalletSwapIcon />}
+              icon={<WalletActionIcon action="swap" />}
               label="Swap"
               onClick={() => navigate.navigate('/swap')}
             />
