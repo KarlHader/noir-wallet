@@ -760,9 +760,6 @@ export function Home() {
                         <span>Shield</span>
                         <span className="tabular-nums">
                           {formatFiatAmount(assetBreakdown.shieldUsd, { showSign: true })}
-                          {assetBreakdown.shieldUsd !== null &&
-                            assetBreakdown.shieldUsdPartial &&
-                            '+'}
                         </span>
                       </div>
                       <div className="flex justify-between gap-4">
@@ -810,7 +807,6 @@ export function Home() {
               <AssetDomainSelector
                 value={assetDomain}
                 totals={domainTotals}
-                shieldPartial={assetBreakdown?.shieldUsdPartial}
                 balancesHidden={balancesHidden}
                 onChange={domain =>
                   domain === 'shield'

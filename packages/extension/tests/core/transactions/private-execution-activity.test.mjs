@@ -6,6 +6,7 @@ import {
   inferPrivateExecutionAddressFromLocalGraphs
 } from '../../../src/core/activity/index.ts'
 import { ActivityCoordinator } from '../../../src/infrastructure/activity/activity-coordinator.ts'
+import { resolveOptionalEvmPrivateHistoryAddress } from '../../../src/background/activity.ts'
 
 const scope = { keyDomainId: 'wallet:private-activity', accountId: 'account:private-activity' }
 const otherScope = { keyDomainId: 'wallet:other', accountId: 'account:other' }
@@ -112,6 +113,32 @@ test('retains signer and recipient ownership when Private derivation is unavaila
   assert.equal(modes['transaction:private'], 'private')
   assert.equal(modes['transaction:main-to-private'], undefined)
   assert.equal(modes['transaction:incoming-private'], 'private')
+})
+
+test('Private history address lookup failure leaves Public history available', async () => {
+  const deriveAddress = async () => {
+    throw new Error('Private address unavailable')
+  }
+  assert.equal(
+    await resolveOptionalEvmPrivateHistoryAddress({
+      includePrivate: true,
+      privateAvailable: true,
+      hasUnlockSession: async () => true,
+      deriveAddress
+    }),
+    null
+  )
+  assert.equal(
+    await resolveOptionalEvmPrivateHistoryAddress({
+      includePrivate: true,
+      privateAvailable: true,
+      hasUnlockSession: async () => {
+        throw new Error('Private session unavailable')
+      },
+      deriveAddress
+    }),
+    null
+  )
 })
 
 test('reconstructs Private Activity from scoped graphs across independent coordinator reads', async () => {

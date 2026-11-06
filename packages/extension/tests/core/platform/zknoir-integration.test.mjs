@@ -11,12 +11,19 @@ const handlerSource = readFileSync(
 )
 
 describe('zkNoir application integration', () => {
-  it('auto-connects only the exact first-party application origin', () => {
-    assert.equal(shouldAutoConnectDApp('https://app.zknoir.com'), true)
-    assert.equal(shouldAutoConnectDApp('http://app.zknoir.com'), false)
-    assert.equal(shouldAutoConnectDApp('https://evil.app.zknoir.com'), false)
-    assert.equal(shouldAutoConnectDApp('https://app.zknoir.com.evil.example'), false)
-    assert.equal(shouldAutoConnectDApp('https://app.zknoir.com/lending'), false)
+  it('auto-connects only the exact first-party application origins', () => {
+    for (const host of ['app.zknoir.com', 'noirdevelop.refburrow.top']) {
+      assert.equal(shouldAutoConnectDApp(`https://${host}`), true)
+      for (const origin of [
+        `http://${host}`,
+        `https://evil.${host}`,
+        `https://${host}.evil.example`,
+        `https://${host}:8443`,
+        `https://${host}/lending`
+      ]) {
+        assert.equal(shouldAutoConnectDApp(origin), false)
+      }
+    }
   })
 
   it('synchronizes every wallet account without bypassing action approvals', () => {

@@ -37,6 +37,7 @@ export type EvmAnkrHistoryResult =
       readonly items: readonly ActivityItem[]
       readonly partial: boolean
       readonly hasMore?: boolean
+      readonly retrySingleChain?: boolean
     }
   | { readonly incomplete: true; readonly retrySingleChain: boolean }
   | { readonly error: unknown }
@@ -413,6 +414,14 @@ export function createEvmAnkrHistoryClient(
     const pageTruncated =
       (native.status === 'fulfilled' && native.value.partial) ||
       (tokens.status === 'fulfilled' && tokens.value.partial)
+    const retrySharedFailure =
+      targets.length > 1 &&
+      [native, tokens].some(
+        branch =>
+          branch.status === 'rejected' &&
+          branch.reason instanceof EvmRpcError &&
+          (branch.reason.code === 'network-unavailable' || branch.reason.code === 'timeout')
+      )
     const partial = branchFailed || pageTruncated
     for (const target of targets) {
       const chain = byChainId.get(target.chainId)!
@@ -443,12 +452,13 @@ export function createEvmAnkrHistoryClient(
         if (items.length === 0 && partial) {
           output.set(target.chainId, {
             incomplete: true,
-            retrySingleChain: pageTruncated && !branchFailed
+            retrySingleChain: (pageTruncated && !branchFailed) || retrySharedFailure
           })
         } else {
           output.set(target.chainId, {
             items,
             partial,
+            retrySingleChain: retrySharedFailure,
             hasMore:
               historyPageCount > 1 && items.length >= EVM_ACTIVITY_ITEM_LIMIT
                 ? false

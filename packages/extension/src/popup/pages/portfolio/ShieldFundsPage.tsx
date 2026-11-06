@@ -126,7 +126,7 @@ function ShieldFundsContent() {
       ? status === 'loading' || (zcash && pricesLoading)
         ? '…'
         : '—'
-      : `${formatFiatAmount(total, { showSign: true })}${shieldTotal?.partial ? '+' : ''}`
+      : formatFiatAmount(total, { showSign: true })
   const canDepositZcash = hasZcash && canShieldTransparentFunds(zcashBalance) && !isShielding
   const canWithdrawZcash =
     hasZcash && Big(getFundingBalance(zcashBalance, 'shielded').available).gt(0)

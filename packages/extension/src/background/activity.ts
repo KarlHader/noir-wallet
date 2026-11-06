@@ -75,6 +75,21 @@ interface EvmExecutionAddresses {
   readonly privateAddress: string | null
 }
 
+export async function resolveOptionalEvmPrivateHistoryAddress(input: {
+  readonly includePrivate: boolean
+  readonly privateAvailable: boolean
+  readonly hasUnlockSession: () => Promise<boolean>
+  readonly deriveAddress: () => Promise<string>
+}): Promise<string | null> {
+  if (!input.includePrivate || !input.privateAvailable) return null
+  try {
+    if (!(await input.hasUnlockSession())) return null
+    return (await input.deriveAddress()).toLowerCase()
+  } catch {
+    return null
+  }
+}
+
 async function resolveEvmMainAddress(
   storageRepository: ActivityStorageRepository,
   scope: ActivityScope
@@ -115,16 +130,13 @@ async function resolveEvmExecutionAddresses(
 ): Promise<EvmExecutionAddresses | null> {
   const account = await resolveEvmMainAddress(storageRepository, scope)
   if (!account) return null
-  if (
-    !includePrivate ||
-    !account.privateAvailable ||
-    !(await credentialSession.hasUnlockSession())
-  ) {
-    return Object.freeze({ main: account.main, privateAddress: null })
-  }
-  const privateAddress = (
-    await signer.deriveGlobalPea(scope.keyDomainId, account.addressIndex)
-  ).address.toLowerCase()
+  const privateAddress = await resolveOptionalEvmPrivateHistoryAddress({
+    includePrivate,
+    privateAvailable: account.privateAvailable,
+    hasUnlockSession: () => credentialSession.hasUnlockSession(),
+    deriveAddress: async () =>
+      (await signer.deriveGlobalPea(scope.keyDomainId, account.addressIndex)).address
+  })
   return Object.freeze({ main: account.main, privateAddress })
 }
 

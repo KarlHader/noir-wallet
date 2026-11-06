@@ -540,27 +540,47 @@ export function createCachedEvmAnkrHistoryBatchSource(options: {
           fresh = new Map(due.map(target => [target.chainId, { error }]))
         }
         const resolved = new Map(fresh)
-        const missingFromSharedPage =
+        const retrySingleChain =
           due.length > 1
             ? due.filter(target => {
                 const result = resolved.get(target.chainId)
-                return result !== undefined && 'incomplete' in result && result.retrySingleChain
+                return (
+                  result !== undefined &&
+                  (('incomplete' in result && result.retrySingleChain) ||
+                    ('items' in result && result.retrySingleChain) ||
+                    ('error' in result &&
+                      result.error instanceof EvmRpcError &&
+                      (result.error.code === 'network-unavailable' ||
+                        result.error.code === 'timeout')))
+                )
               })
             : []
-        for (let index = 0; index < missingFromSharedPage.length; index += 2) {
+        for (let index = 0; index < retrySingleChain.length; index += 2) {
+          if (signal?.aborted) break
           await Promise.all(
-            missingFromSharedPage.slice(index, index + 2).map(async target => {
+            retrySingleChain.slice(index, index + 2).map(async target => {
               try {
                 const single = await options.source.readAddressActivities([target], signal)
-                resolved.set(
-                  target.chainId,
-                  single.get(target.chainId) ?? { incomplete: true, retrySingleChain: false }
-                )
-              } catch (error) {
-                resolved.set(target.chainId, { error })
+                const result = single.get(target.chainId)
+                const shared = resolved.get(target.chainId)
+                if (
+                  result &&
+                  'items' in result &&
+                  (!result.partial || !shared || !('items' in shared))
+                ) {
+                  resolved.set(target.chainId, result)
+                }
+              } catch {
+                // Keep any usable shared result when a narrower retry also fails.
               }
             })
           )
+        }
+        if (signal?.aborted) {
+          for (const target of due) {
+            output.set(target.chainId, normalizeItems(target.previous?.items ?? [], scope))
+          }
+          return output
         }
         await Promise.all(
           due.map(async target => {

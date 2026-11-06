@@ -288,7 +288,126 @@ test('an uncached chain omitted by a partial shared page is fetched automaticall
   expect(second.get('eip155:8453')).toHaveLength(1)
 })
 
-test('a failed history branch does not fan out into single-chain retries', async () => {
+test('a failed shared native branch retries each chain to recover recent transactions', async () => {
+  const requests = []
+  const client = createEvmAnkrHistoryClient(
+    'https://history.example/',
+    chains,
+    async (_url, init) => {
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      if (request.method === 'ankr_getTransactionsByAddress') {
+        return request.params.blockchain.length > 1
+          ? new Response('', { status: 503 })
+          : rpc({ transactions: [tx(request.params.blockchain[0])] })
+      }
+      return rpc({ transfers: [] })
+    }
+  )
+  const cache = memoryCache()
+  const reader = createCachedEvmAnkrHistoryBatchSource({
+    source: client,
+    cache: cache.repository,
+    now: () => 10_000
+  })
+
+  const result = await reader.readAddressActivities(
+    chains.map(chain => ({ chainId: chain.chainId, scope, address: ADDRESS }))
+  )
+  expect(requests).toHaveLength(6)
+  expect(requests.slice(2).map(request => request.params.blockchain)).toEqual([
+    ['eth'],
+    ['eth'],
+    ['base'],
+    ['base']
+  ])
+  for (const chain of chains) {
+    expect(result.get(chain.chainId)).toHaveLength(1)
+    expect(cache.records.get(chain.chainId).successfulSyncAt).toBe(10_000)
+  }
+})
+
+test('a failed shared history request retries chains independently', async () => {
+  const requests = []
+  const client = createEvmAnkrHistoryClient(
+    'https://history.example/',
+    chains,
+    async (_url, init) => {
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      if (request.params.blockchain.length > 1) return new Response('', { status: 503 })
+      return request.method === 'ankr_getTransactionsByAddress'
+        ? rpc({ transactions: [tx(request.params.blockchain[0])] })
+        : rpc({ transfers: [] })
+    }
+  )
+  const cache = memoryCache()
+  const reader = createCachedEvmAnkrHistoryBatchSource({
+    source: client,
+    cache: cache.repository,
+    now: () => 10_000
+  })
+
+  const result = await reader.readAddressActivities(
+    chains.map(chain => ({ chainId: chain.chainId, scope, address: ADDRESS }))
+  )
+  expect(requests).toHaveLength(6)
+  for (const chain of chains) {
+    expect(result.get(chain.chainId)).toHaveLength(1)
+    expect(cache.records.get(chain.chainId).successfulSyncAt).toBe(10_000)
+  }
+})
+
+test('a partial single-chain retry does not erase successful shared token history', async () => {
+  const tokenHash = `0x${'c'.repeat(64)}`
+  const client = createEvmAnkrHistoryClient(
+    'https://history.example/',
+    chains,
+    async (_url, init) => {
+      const request = JSON.parse(init.body)
+      if (request.method === 'ankr_getTransactionsByAddress') {
+        return request.params.blockchain.length > 1
+          ? new Response('', { status: 503 })
+          : rpc({ transactions: [tx(request.params.blockchain[0])] })
+      }
+      if (request.params.blockchain.length === 1) return new Response('', { status: 503 })
+      return rpc({
+        transfers: [
+          {
+            blockchain: 'base',
+            transactionHash: tokenHash,
+            blockHeight: 101,
+            fromAddress: OTHER,
+            toAddress: ADDRESS,
+            contractAddress: CONTRACT,
+            tokenDecimals: 6,
+            timestamp: 1_700_000_000,
+            valueRawInteger: '5000000'
+          }
+        ]
+      })
+    }
+  )
+  const cache = memoryCache()
+  const reader = createCachedEvmAnkrHistoryBatchSource({
+    source: client,
+    cache: cache.repository,
+    now: () => 10_000
+  })
+
+  const result = await reader.readAddressActivities(
+    chains.map(chain => ({ chainId: chain.chainId, scope, address: ADDRESS }))
+  )
+  expect(result.get('eip155:8453').map(item => item.segments[0].evidence.transactionHash)).toEqual([
+    tokenHash
+  ])
+  expect(cache.records.get('eip155:8453')).toMatchObject({
+    successfulSyncAt: 10_000,
+    retryAfter: 40_000
+  })
+})
+
+test('a failed history branch retains failure backoff when single-chain retries also fail', async () => {
   const requests = []
   const client = createEvmAnkrHistoryClient(
     'https://history.example/',
@@ -310,7 +429,7 @@ test('a failed history branch does not fan out into single-chain retries', async
   const result = await reader.readAddressActivities(
     chains.map(chain => ({ chainId: chain.chainId, scope, address: ADDRESS }))
   )
-  expect(requests).toHaveLength(2)
+  expect(requests).toHaveLength(6)
   expect(result.get('eip155:1')).toEqual([])
   expect(result.get('eip155:8453')).toEqual([])
   expect(cache.records.get('eip155:1')).toMatchObject({

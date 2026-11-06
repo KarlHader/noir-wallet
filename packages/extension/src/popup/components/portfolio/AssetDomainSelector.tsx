@@ -22,13 +22,11 @@ export const ASSET_DOMAIN_ICONS: Record<AssetDomain, string> = {
 export function AssetDomainSelector({
   value,
   totals,
-  shieldPartial = false,
   balancesHidden,
   onChange
 }: {
   readonly value: AssetDomain
   readonly totals: Readonly<Record<AssetDomain, string | number | null>>
-  readonly shieldPartial?: boolean
   readonly balancesHidden: boolean
   readonly onChange: (domain: AssetDomain) => void
 }) {
@@ -88,7 +86,7 @@ export function AssetDomainSelector({
                   ? '••••'
                   : totals[domain] === null
                     ? '—'
-                    : `${formatFiatAmount(totals[domain]!, { showSign: true })}${domain === 'shield' && shieldPartial ? '+' : ''}`}
+                    : formatFiatAmount(totals[domain]!, { showSign: true })}
               </span>
             </button>
           ))}
