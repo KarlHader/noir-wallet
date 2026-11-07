@@ -15,6 +15,7 @@ import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import { formatBridgeMinimumAmountError } from '@/popup/services/quote-minimum-error'
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import {
   availableDepositTokens,
@@ -104,6 +105,7 @@ function ShieldDepositContent() {
   const [showRefundError, setShowRefundError] = useState(false)
   const [amount, setAmount] = useState('')
   const [showAmountError, setShowAmountError] = useState(false)
+  const [quoteAmountError, setQuoteAmountError] = useState<string | null>(null)
   const [provider, setProvider] = useState<ShieldProvider>('near-confidential')
   const [records, setRecords] = useState<readonly ExternalShieldDeposit[]>([])
   const [viewRecordId, setViewRecordId] = useState<string | null>(null)
@@ -150,6 +152,7 @@ function ShieldDepositContent() {
     setShowRefundError(false)
     setAmount('')
     setShowAmountError(false)
+    setQuoteAmountError(null)
     setReviewOpen(false)
     setBusy(false)
     setRefreshing(false)
@@ -258,6 +261,7 @@ function ShieldDepositContent() {
   const effectiveRefund = refundEdited ? refundAddress : defaultRefund
   const refundError = depositRefundAddressError(effectiveRefund, selectedNetwork)
   const amountError = depositAmountError(amount, selectedToken)
+  const displayAmountError = amountError ?? quoteAmountError
   const amountRaw = depositAmountRaw(amount, selectedToken)
   const sourceAssetId =
     selectedToken && selectedNetwork ? depositSourceAssetId(selectedToken, selectedNetwork) : null
@@ -332,6 +336,7 @@ function ShieldDepositContent() {
     setShowAmountError(true)
     setShowRefundError(true)
     setError(null)
+    if (quoteAmountError) return
     if (
       historyLoading ||
       !account ||
@@ -395,15 +400,26 @@ function ShieldDepositContent() {
       setViewRecordId(created.depositId)
       setNow(Date.now())
       setReviewOpen(false)
+      setQuoteAmountError(null)
       requestIdRef.current = null
-    } catch {
+    } catch (failure) {
       const wallet = useWalletStore.getState()
       if (
         mounted.current &&
         wallet.currentNetwork === currentNetwork &&
         scopeRef.current === scopeKey
-      )
-        setError('Receiving address unavailable. Try again.')
+      ) {
+        const minimum = formatBridgeMinimumAmountError(
+          failure instanceof Error ? failure.message : undefined,
+          selectedToken
+        )
+        if (minimum) {
+          setQuoteAmountError(minimum)
+          setShowAmountError(true)
+        } else {
+          setError('Receiving address unavailable. Try again.')
+        }
+      }
     } finally {
       if (mounted.current && scopeRef.current === scopeKey) setBusy(false)
     }
@@ -443,6 +459,7 @@ function ShieldDepositContent() {
     setShowRefundError(false)
     setAmount('')
     setShowAmountError(false)
+    setQuoteAmountError(null)
     requestIdRef.current = null
     setPicker(null)
   }
@@ -454,6 +471,7 @@ function ShieldDepositContent() {
     setShowRefundError(false)
     setAmount('')
     setShowAmountError(false)
+    setQuoteAmountError(null)
     requestIdRef.current = null
     setPicker(null)
   }
@@ -509,6 +527,7 @@ function ShieldDepositContent() {
                     onClick={() => {
                       setViewRecordId(null)
                       setAmount('')
+                      setQuoteAmountError(null)
                       setError(null)
                       requestIdRef.current = null
                     }}
@@ -776,6 +795,7 @@ function ShieldDepositContent() {
                   value={amount}
                   onChange={event => {
                     setAmount(event.target.value)
+                    setQuoteAmountError(null)
                     requestIdRef.current = null
                   }}
                   onBlur={() => setShowAmountError(true)}
@@ -789,11 +809,11 @@ function ShieldDepositContent() {
                     </span>
                   }
                   className="min-h-11"
-                  aria-invalid={showAmountError && amountError !== null}
+                  aria-invalid={showAmountError && displayAmountError !== null}
                 />
-                {showAmountError && amountError && (
+                {showAmountError && displayAmountError && (
                   <p role="alert" className="mt-1 text-xs text-danger">
-                    {amountError}
+                    {displayAmountError}
                   </p>
                 )}
               </div>
@@ -904,6 +924,11 @@ function ShieldDepositContent() {
                 {amount} {selectedToken?.symbol}
               </span>
             </div>
+            {quoteAmountError && (
+              <p role="alert" className="text-xs text-danger">
+                {quoteAmountError}
+              </p>
+            )}
             <div className="flex justify-between gap-4">
               <span className="text-muted">Network</span>
               <span className="text-right">{selectedNetwork?.displayName}</span>
@@ -925,7 +950,7 @@ function ShieldDepositContent() {
           <button
             type="button"
             onClick={() => void createDeposit()}
-            disabled={busy}
+            disabled={busy || quoteAmountError !== null}
             className="wallet-interactive mt-5 h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
           >
             {busy ? 'Generating…' : 'Generate address'}

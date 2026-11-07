@@ -36,11 +36,7 @@ export function resolveEvmAccountAvailability(
     ),
     mainDisplay: formatBaseUnitAmount(resolveAccountAvailableRaw(balance, 'main'), decimals),
     privateDisplay:
-      privateRaw === undefined ? undefined : formatBaseUnitAmount(privateRaw, decimals),
-    confidentialDisplay:
-      balance.confidentialRaw === undefined || BigInt(balance.confidentialRaw) === 0n
-        ? undefined
-        : formatBaseUnitAmount(balance.confidentialRaw, decimals)
+      privateRaw === undefined ? undefined : formatBaseUnitAmount(privateRaw, decimals)
   }
 }
 

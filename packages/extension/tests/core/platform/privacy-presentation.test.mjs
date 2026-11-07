@@ -197,6 +197,32 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     shieldUsdPartial: false,
     privateUsd: '60'
   })
+  const withConfidentialZec = {
+    ...independent,
+    confidential: {
+      ...independent.confidential,
+      assets: [
+        ...independent.confidential.assets,
+        {
+          tokenId: 'private-zec',
+          protocolAssetId: 'zec',
+          availableRaw: '2',
+          assetId: zcashAsset.asset.id,
+          decimals: 0
+        }
+      ]
+    }
+  }
+  expect(summarizePortfolioFiat(withConfidentialZec, prices)).toMatchObject({
+    totalUsd: '286',
+    missingAssetCount: 0
+  })
+  expect(summarizeAssetDomainsUsd(withConfidentialZec, prices)).toEqual({
+    publicUsd: '112',
+    shieldUsd: '114',
+    shieldUsdPartial: false,
+    privateUsd: '60'
+  })
   const staleCatalog = {
     ...independent,
     confidential: {

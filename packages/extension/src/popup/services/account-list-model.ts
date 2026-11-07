@@ -59,6 +59,7 @@ export function buildAccountSwitcherGroups(input: {
   readonly currentAccountId: string | null
 }): readonly SwitcherGroup[] {
   const { wallets, catalogAccounts, accountDisplayNames, currentWalletId, currentAccountId } = input
+  const hasRetainedSelection = Boolean(currentWalletId && currentAccountId)
   const groups = new Map<string, { name: string; accounts: SwitcherAccount[] }>()
   const catalogByKey = new Map(
     catalogAccounts.map(account => [accountListKey(account.walletId, account.accountId), account])
@@ -93,7 +94,7 @@ export function buildAccountSwitcherGroups(input: {
         accountDisplayNames
       ),
       networks: account.networks,
-      active: account.active
+      active: account.active && !hasRetainedSelection
     })
     groups.set(account.walletId, group)
   }

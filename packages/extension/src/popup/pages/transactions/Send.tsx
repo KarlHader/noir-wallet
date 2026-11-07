@@ -75,6 +75,7 @@ export function Send() {
     routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
       ? (routeParams.get('from') as FundingSource)
       : null
+  const isWholeBalanceShield = isSelfMove && moveSource === 'transparent'
   const walletMode = routeParams.get('mode') === 'private' ? 'private' : 'public'
   const routeIdentity = JSON.stringify([isSelfMove, routeParams.get('from'), walletMode])
   const previousRouteIdentity = useRef(routeIdentity)
@@ -161,7 +162,7 @@ export function Send() {
     memo: effectiveMemo,
     feeTier,
     fundingSource,
-    enabled: !!effectiveToAddress && !!fromAddress
+    enabled: !isWholeBalanceShield && !!effectiveToAddress && !!fromAddress
   })
   const isMaxTransferAmount =
     !!maxTransfer.maxAmount && safeBig(amount || '0').eq(maxTransfer.maxAmount)
@@ -181,7 +182,11 @@ export function Send() {
       sourceBalance.pending
     ]),
     enabled:
-      safeBig(amount || '0').gt(0) && !!effectiveToAddress && !maxSelected && !isMaxTransferAmount
+      !isWholeBalanceShield &&
+      safeBig(amount || '0').gt(0) &&
+      !!effectiveToAddress &&
+      !maxSelected &&
+      !isMaxTransferAmount
   })
 
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
@@ -539,6 +544,65 @@ export function Send() {
         <div className="flex-1 flex items-center justify-center px-5">
           <p className="text-muted text-center">No account available</p>
         </div>
+      </div>
+    )
+  }
+
+  if (isWholeBalanceShield) {
+    const shieldableBalance = getShieldableTransparentBalance(balance)
+    return (
+      <div className="page-container" data-wallet-mode={walletMode}>
+        <PageHeader title="Move" showBack onBack={goBack} />
+        <div className="page-content flex min-h-0 flex-col !px-4 pt-6">
+          <div className="flex flex-col items-center gap-2 py-6">
+            <TokenIcon symbol="ZEC" nativeChain="zcash" size={40} />
+            <span className="text-sm text-muted">Public balance</span>
+            <AmountDisplay
+              value={shieldableBalance}
+              symbol="ZEC"
+              className="text-3xl font-semibold"
+            />
+          </div>
+          <div className="divide-y divide-white/10 text-sm">
+            <div className="flex min-h-14 items-center justify-between gap-3">
+              <span className="text-muted">From</span>
+              <span className="min-w-0 text-right">
+                <span className="block">{accountDisplayName} · Public</span>
+                <span className="block truncate font-mono text-xs text-muted" title={fromAddress}>
+                  {formatSortAddress(fromAddress)}
+                </span>
+              </span>
+            </div>
+            <div className="flex min-h-14 items-center justify-between gap-3">
+              <span className="text-muted">To</span>
+              <span className="min-w-0 text-right">
+                <span className="block">{accountDisplayName} · Shield</span>
+                <span
+                  className="block truncate font-mono text-xs text-muted"
+                  title={selfMove?.toAddress}
+                >
+                  {selfMove?.toAddress
+                    ? formatSortAddress(selfMove.toAddress)
+                    : 'Address unavailable'}
+                </span>
+              </span>
+            </div>
+          </div>
+          {moveUnavailable && (
+            <InlineError message="This account cannot move ZEC between Public and Shield." />
+          )}
+        </div>
+        <div className="page-footer">
+          <Button
+            size="wallet"
+            className="w-full"
+            disabled={moveUnavailable || !fromAddress || !selfMove?.toAddress || isMigrating}
+            onClick={handleMigrateNow}
+          >
+            Review Shield
+          </Button>
+        </div>
+        {migrateSheet}
       </div>
     )
   }

@@ -4,6 +4,7 @@ import type { SwapToken } from '@/core/services/intents-api'
 import {
   createAssetRegistry,
   createInitialProductChainRegistry,
+  getZcashChainId,
   getBundledInitialProductAssetDefinitions,
   parseAssetId
 } from '@/core/chains/registry'
@@ -116,14 +117,25 @@ export function listShieldFundingAssets(
   const chains = new Map<string, PortfolioChainView>(
     model.chains.map(chain => [chain.chain.id, chain])
   )
+  const productChains = createInitialProductChainRegistry(network)
   const bundled = createAssetRegistry(
-    createInitialProductChainRegistry(network),
+    productChains,
     getBundledInitialProductAssetDefinitions(network)
   )
+  const zcashChainId = getZcashChainId(network)
+  // A Confidential ZEC holding can be spent by an EVM-only account.
+  const zcashRouteChain: PortfolioChainView = Object.freeze({
+    chain: productChains.resolve(zcashChainId),
+    status: 'ready',
+    assets: Object.freeze([]),
+    errorCodes: Object.freeze([])
+  })
   const native = getAssetProtocolSourceMappings(network, bundled).flatMap(mapping => {
     const entry = bundled.get(mapping.assetId)
     const token = catalogTokens.find(candidate => candidate.assetId === mapping.protocolAssetId)
-    return entry?.asset.kind === 'native' && token?.decimals === entry.metadata.decimals
+    return entry?.asset.kind === 'native' &&
+      (entry.asset.chainId.startsWith('eip155:') || entry.asset.chainId === zcashChainId) &&
+      token?.decimals === entry.metadata.decimals
       ? [
           {
             assetId: mapping.assetId,
@@ -141,10 +153,12 @@ export function listShieldFundingAssets(
   const seen = new Set<string>()
   return catalog.flatMap(managed => {
     if (seen.has(managed.protocolAssetId)) return []
-    const chain = chains.get(managed.chainId)
+    const chain =
+      chains.get(managed.chainId) ??
+      (managed.chainId === zcashChainId ? zcashRouteChain : undefined)
     const token = catalogTokens.find(candidate => candidate.assetId === managed.protocolAssetId)
     if (
-      chain?.chain.family !== 'evm' ||
+      (chain?.chain.family !== 'evm' && chain?.chain.id !== zcashChainId) ||
       chain.chain.capabilities.transaction.status !== 'available' ||
       !token ||
       token.decimals !== managed.decimals ||
@@ -157,6 +171,33 @@ export function listShieldFundingAssets(
     seen.add(managed.protocolAssetId)
     return [{ asset, chain, managed }]
   })
+}
+
+export function selectShieldWithdrawDestinationForNetwork(
+  options: readonly ShieldFundingAsset[],
+  destination: ShieldFundingAsset | null,
+  chainId: string
+): ShieldFundingAsset | null {
+  const candidates = options.filter(option => option.chain.chain.id === chainId)
+  if (destination?.chain.chain.id === chainId) {
+    return (
+      candidates.find(option => option.asset.asset.id === destination.asset.asset.id) ??
+      candidates[0] ??
+      null
+    )
+  }
+  return (
+    candidates.find(
+      option =>
+        option.asset.metadata.symbol === destination?.asset.metadata.symbol &&
+        option.asset.metadata.name === destination.asset.metadata.name
+    ) ??
+    candidates.find(
+      option => option.asset.metadata.symbol === destination?.asset.metadata.symbol
+    ) ??
+    candidates[0] ??
+    null
+  )
 }
 
 export function shieldFundingAvailableRaw(
@@ -302,7 +343,8 @@ export function buildExternalShieldWithdrawRequest(
     !isAddress(input.recipient) ||
     /^0x0{40}$/i.test(input.recipient) ||
     !/^[1-9]\d*$/.test(input.amountRaw) ||
-    input.source.chain.chain.family !== 'evm' ||
+    (input.source.chain.chain.family !== 'evm' &&
+      input.source.chain.chain.id !== getZcashChainId(input.network)) ||
     input.destination.chain.chain.family !== 'evm' ||
     input.source.asset.asset.id !== input.source.managed.assetId ||
     input.destination.asset.asset.id !== input.destination.managed.assetId ||

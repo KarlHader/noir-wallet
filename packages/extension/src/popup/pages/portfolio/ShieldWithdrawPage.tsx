@@ -19,6 +19,7 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
@@ -44,6 +45,7 @@ import {
   shieldPortfolioBalances,
   shieldFundingAvailableRaw,
   shieldFundingSources,
+  selectShieldWithdrawDestinationForNetwork,
   type ShieldFundingAsset
 } from '@/popup/services/shield-transfer'
 import {
@@ -191,14 +193,15 @@ function ShieldWithdrawForm() {
     () => listShieldFundingAssets(model, managedAssets, catalogTokens, network),
     [model, managedAssets, catalogTokens, network]
   )
+  const destinations = options.filter(item => item.chain.chain.family === 'evm')
   const currentBalances = balanceScope === scopeKey ? balances : null
   const displayBalances = currentBalances ?? shieldPortfolioBalances(model)
   const sources = shieldFundingSources(options, displayBalances)
   const source = sources.find(item => item.asset.asset.id === sourceId) ?? sources[0] ?? null
   const destination =
-    options.find(item => item.asset.asset.id === destinationId) ??
-    options.find(item => item.asset.asset.id === source?.asset.asset.id) ??
-    options[0] ??
+    destinations.find(item => item.asset.asset.id === destinationId) ??
+    destinations.find(item => item.asset.asset.id === source?.asset.asset.id) ??
+    destinations[0] ??
     null
   const availableRaw = shieldFundingAvailableRaw(source, displayBalances)
   const amountState = source
@@ -448,7 +451,12 @@ function ShieldWithdrawForm() {
             { label: 'Recipient', content: prepared.review.destinationAddress },
             {
               label: 'Minimum receive',
-              content: `${minimum} ${prepared.destination.asset.metadata.symbol}`
+              content: (
+                <AmountDisplay
+                  value={minimum}
+                  symbol={prepared.destination.asset.metadata.symbol}
+                />
+              )
             },
             ...(prepared.review.quoteTimeEstimateSeconds === undefined
               ? []
@@ -697,34 +705,43 @@ function ShieldWithdrawForm() {
               }}
             />
           ) : picker === 'network' ? (
-            [...new Map(options.map(item => [item.chain.chain.id, item])).values()].map(item => (
-              <button
-                key={item.chain.chain.id}
-                type="button"
-                aria-pressed={destination?.chain.chain.id === item.chain.chain.id}
-                onClick={() => {
-                  setDestinationId(item.asset.asset.id)
-                  setRecipient('')
-                  setPicker(null)
-                }}
-                className={`wallet-interactive flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm hover:bg-wallet-selected active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${destination?.chain.chain.id === item.chain.chain.id ? 'bg-wallet-selected' : ''}`}
-              >
-                <ChainIcon
-                  chain={withdrawChainIconAlias(item.chain.chain)}
-                  width={28}
-                  height={28}
-                  className="shrink-0 rounded-md"
-                />
-                <span className="min-w-0 flex-1 truncate">{item.chain.chain.displayName}</span>
-                {destination?.chain.chain.id === item.chain.chain.id && (
-                  <Icon icon="lucide:check" width={17} height={17} className="text-primary" />
-                )}
-              </button>
-            ))
+            [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(
+              item => (
+                <button
+                  key={item.chain.chain.id}
+                  type="button"
+                  aria-pressed={destination?.chain.chain.id === item.chain.chain.id}
+                  onClick={() => {
+                    const next = selectShieldWithdrawDestinationForNetwork(
+                      destinations,
+                      destination,
+                      item.chain.chain.id
+                    )
+                    if (next && next.asset.asset.id !== destination?.asset.asset.id) {
+                      setDestinationId(next.asset.asset.id)
+                      setRecipient('')
+                    }
+                    setPicker(null)
+                  }}
+                  className={`wallet-interactive flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm hover:bg-wallet-selected active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${destination?.chain.chain.id === item.chain.chain.id ? 'bg-wallet-selected' : ''}`}
+                >
+                  <ChainIcon
+                    chain={withdrawChainIconAlias(item.chain.chain)}
+                    width={28}
+                    height={28}
+                    className="shrink-0 rounded-md"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{item.chain.chain.displayName}</span>
+                  {destination?.chain.chain.id === item.chain.chain.id && (
+                    <Icon icon="lucide:check" width={17} height={17} className="text-primary" />
+                  )}
+                </button>
+              )
+            )
           ) : (
             (picker === 'source'
               ? sources
-              : options.filter(item => item.chain.chain.id === destination?.chain.chain.id)
+              : destinations.filter(item => item.chain.chain.id === destination?.chain.chain.id)
             ).map(item => (
               <button
                 key={item.asset.asset.id}

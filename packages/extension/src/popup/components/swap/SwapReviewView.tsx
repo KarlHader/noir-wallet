@@ -62,7 +62,10 @@ interface SwapReviewViewProps {
     readonly network: string
     readonly chainIcon: string
     readonly sender: string
-    readonly depositAddress: string | null
+    readonly executionTarget: {
+      readonly label: 'Deposit address' | 'Contract'
+      readonly address: string
+    } | null
   } | null
   destinationDetails?: { readonly network: string }
   approvalDetails?: {
@@ -280,10 +283,10 @@ export function SwapReviewView({
                   </span>
                 </DetailItem>
               )}
-              {sourceTransferDetails.depositAddress && (
-                <DetailItem label="Deposit address">
-                  <span title={sourceTransferDetails.depositAddress} className="text-xs">
-                    {formatSortAddress(sourceTransferDetails.depositAddress)}
+              {sourceTransferDetails.executionTarget && (
+                <DetailItem label={sourceTransferDetails.executionTarget.label}>
+                  <span title={sourceTransferDetails.executionTarget.address} className="text-xs">
+                    {formatSortAddress(sourceTransferDetails.executionTarget.address)}
                   </span>
                 </DetailItem>
               )}

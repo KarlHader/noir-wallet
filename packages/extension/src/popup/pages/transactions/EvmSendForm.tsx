@@ -11,6 +11,7 @@ import { Switch } from '@/popup/components/ui/switch'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
+  EvmWalletClientError,
   evmWalletClient,
   type EvmTransferReview,
   type EvmTransferSubmission
@@ -200,8 +201,7 @@ export function EvmSendForm({
   const {
     privateSourceAvailable,
     mainDisplay: mainSourceBalance,
-    privateDisplay: privateSourceBalance,
-    confidentialDisplay: privateUnavailableBalance
+    privateDisplay: privateSourceBalance
   } = resolveEvmAccountAvailability(asset.balance, asset.metadata.decimals, privateSourceAddress)
   const evmNative = portfolio.assets.find(
     candidate =>
@@ -671,6 +671,12 @@ export function EvmSendForm({
 
   const handleApprove = async () => {
     if (!review || review.intentKey !== currentIntent.current || updatingFee || approving) return
+    if (Date.now() >= review.value.review.expiresAt) {
+      pendingReview.current = null
+      setReview(null)
+      setError('The review expired. Prepare the transfer again.')
+      return
+    }
     setApproving(true)
     setError(null)
     recordSendSubmission(review.value.graph, selection.asset.metadata.symbol, review.sourceMode)
@@ -699,6 +705,13 @@ export function EvmSendForm({
         selection.asset.metadata.symbol,
         review.sourceMode
       )
+      if (
+        approveError instanceof EvmWalletClientError &&
+        (approveError.code === 'expired' || approveError.code === 'review-unavailable')
+      ) {
+        pendingReview.current = null
+        setReview(null)
+      }
       setError(getEvmSendPrepareError(approveError, review.sourceMode))
     } finally {
       setApproving(false)
@@ -1129,7 +1142,6 @@ export function EvmSendForm({
         privateAddress={privateSourceAddress}
         mainBalance={mainSourceBalance}
         privateBalance={privateSourceBalance}
-        privateUnavailableBalance={privateUnavailableBalance}
         symbol={asset.metadata.symbol}
         onFundPrivate={onFundPrivate}
       />

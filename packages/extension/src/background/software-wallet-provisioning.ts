@@ -66,7 +66,10 @@ async function ensureBackgroundPassword(password: string): Promise<void> {
     return
   }
 
-  const unlocked = await backgroundZcashWalletRuntime.unlock(password, { skipFailCount: true })
+  const unlocked = await backgroundZcashWalletRuntime.unlock(password, {
+    skipFailCount: true,
+    allowMissingCredentialRecovery: true
+  })
   if (!unlocked.success) {
     throw new Error('Wallet provisioning session is invalid')
   }

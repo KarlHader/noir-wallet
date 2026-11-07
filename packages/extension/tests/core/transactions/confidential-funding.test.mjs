@@ -562,13 +562,27 @@ test.describe('confidential funding safety rules', () => {
       providerFee = undefined
       const partnerQuote = await api.quote(withdrawal)
       expect(partnerQuote.quoteRequest.appFees).toEqual([{ recipient: 'platform.near', fee: 50 }])
+      providerFee = { recipient: 'provider.near', fee: 1 }
+      const lowFeeQuote = await api.quote(withdrawal)
+      expect(lowFeeQuote.quoteRequest.appFees).toEqual([
+        { recipient: 'platform.near', fee: 50 },
+        providerFee
+      ])
+      echoedFees = [
+        { recipient: 'platform.near', fee: 50 },
+        { recipient: 'provider.near', fee: 2 }
+      ]
+      await expect(api.quote(withdrawal)).rejects.toThrow('app fees do not match')
+      echoedFees = undefined
+      providerFee = { recipient: 'provider.near', fee: 21 }
+      await expect(api.quote(withdrawal)).rejects.toThrow('provider fee quote is invalid')
       feeConfig = { ...feeConfig, confidentialPlatformFeeBps: 10_001 }
       await expect(
         new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt').quote(
           withdrawal
         )
       ).rejects.toThrow('fee rate is invalid')
-      expect(quoteRequests).toHaveLength(15)
+      expect(quoteRequests).toHaveLength(20)
     } finally {
       globalThis.fetch = originalFetch
     }

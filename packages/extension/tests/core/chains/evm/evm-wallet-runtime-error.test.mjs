@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { mapEvmWalletRuntimeError } from '../../../../src/background/evm-wallet-runtime-error.ts'
+import { KeyringError } from '../../../../src/core/keyring/ports/index.ts'
 import {
   EvmRpcError,
   EvmTransactionError
@@ -58,6 +59,26 @@ test.describe('EVM wallet runtime error mapping', () => {
       code: 'expired',
       message: 'The EVM signing request expired'
     })
+    expect(mapEvmWalletRuntimeError(new KeyringError('SIGNING_COMMAND_EXPIRED'))).toEqual({
+      code: 'expired',
+      message: 'The EVM signing request expired'
+    })
+    for (const code of ['SIGNING_COMMAND_NOT_FOUND', 'SIGNING_COMMAND_CANCELLED']) {
+      expect(mapEvmWalletRuntimeError(new KeyringError(code))).toEqual({
+        code: 'review-unavailable',
+        message: 'The EVM transfer review is no longer available'
+      })
+    }
+    for (const message of [
+      'Pending EVM transfer was not found',
+      'EVM transfer is already signed; resume its broadcast instead',
+      'EVM transfer is already awaiting an external signature'
+    ]) {
+      expect(mapEvmWalletRuntimeError(new Error(message))).toEqual({
+        code: 'review-unavailable',
+        message: 'The EVM transfer review is no longer available'
+      })
+    }
     expect(
       mapEvmWalletRuntimeError(
         new EvmTransactionError('stale-nonce', 'An earlier EVM review expired. Review again')

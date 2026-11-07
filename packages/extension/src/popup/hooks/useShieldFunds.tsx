@@ -45,7 +45,7 @@ interface UseShieldFundsResult {
 export function useShieldFunds(): UseShieldFundsResult {
   const [isShielding, setIsShielding] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [sheetBalance, setSheetBalance] = useState(0)
+  const [sheetBalance, setSheetBalance] = useState('0')
   const [feeRefreshRevision, setFeeRefreshRevision] = useState(0)
   const confirmationInFlight = useRef(false)
   const sheetRevision = useRef(0)
@@ -56,7 +56,7 @@ export function useShieldFunds(): UseShieldFundsResult {
     if (isShielding) return
     sheetRevision.current += 1
     const balance = useAccountDataStore.getState().getCurrentBalance()
-    setSheetBalance(safeBig(getShieldableTransparentBalance(balance)).toNumber())
+    setSheetBalance(getShieldableTransparentBalance(balance))
     setSheetOpen(true)
   }, [isShielding])
 
@@ -127,6 +127,14 @@ export function useShieldFunds(): UseShieldFundsResult {
           }
         } catch {
           if (revision === sheetRevision.current) setFeeRefreshRevision(value => value + 1)
+          return
+        }
+        const currentBalance = getShieldableTransparentBalance(
+          useAccountDataStore.getState().getCurrentBalance()
+        )
+        if (currentBalance !== sheetBalance) {
+          setSheetBalance(currentBalance)
+          setFeeRefreshRevision(value => value + 1)
           return
         }
         setSheetOpen(false)
@@ -361,7 +369,7 @@ export function useShieldFunds(): UseShieldFundsResult {
         setIsShielding(false)
       }
     },
-    [navigate, setResult]
+    [navigate, setResult, sheetBalance]
   )
 
   const shieldSheet = (

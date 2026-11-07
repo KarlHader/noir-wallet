@@ -26,6 +26,7 @@ import {
   createExternalShieldDepositGraph,
   fingerprintConfidentialValue,
   fingerprintDirectConfidentialApproval,
+  filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
   mergeConfidentialWithdrawObservation,
@@ -363,6 +364,14 @@ function reviewFromPlan(
         }
       : {})
   })
+}
+
+function confidentialSigningChainId(sourceChainId: string, destinationChainId: string): ChainId {
+  const destination = parseChainId(destinationChainId)
+  if (destination.namespace === 'eip155') return destination.id
+  const source = parseChainId(sourceChainId)
+  if (source.namespace === 'eip155') return source.id
+  throw new Error('Confidential funding requires an EVM signing chain')
 }
 
 function directApprovalIntent(plan: ConfidentialFundingPlan): unknown {
@@ -1011,8 +1020,16 @@ export class ConfidentialFundingCoordinator {
     value: PrepareConfidentialFundingInput
   ): Promise<ConfidentialFundingReview> {
     const input = this.parseInput(value)
-    const sourceIdentity = await this.options.signer.resolveIdentity(input.source.chainId)
-    const destinationIdentity = await this.options.signer.resolveIdentity(input.destination.chainId)
+    const sourceSigningChain =
+      parseChainId(input.source.chainId).namespace === 'eip155'
+        ? input.source.chainId
+        : input.destination.chainId
+    const destinationSigningChain = confidentialSigningChainId(
+      input.source.chainId,
+      input.destination.chainId
+    )
+    const sourceIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
+    const destinationIdentity = await this.options.signer.resolveIdentity(destinationSigningChain)
     this.assertSameAccount(sourceIdentity, destinationIdentity)
     if (input.operation !== undefined) {
       if (
@@ -1930,10 +1947,14 @@ export class ConfidentialFundingCoordinator {
           return []
         }
       })()
+      const portfolioMappings = filterConfidentialPortfolioMappings(
+        this.options.assetMappings,
+        this.options.network
+      )
       const merged =
         balances === null
           ? model
-          : mergeConfidentialBalancesIntoPortfolio(model, this.options.assetMappings, balances)
+          : mergeConfidentialBalancesIntoPortfolio(model, portfolioMappings, balances)
       const confidential =
         balances === null
           ? Object.freeze({ status: 'unavailable' as const, assets: Object.freeze([]) })
@@ -1941,7 +1962,7 @@ export class ConfidentialFundingCoordinator {
               balances,
               tokens,
               managedAssets,
-              this.options.assetMappings,
+              portfolioMappings,
               this.options.assets
             )
       return Object.freeze({ ...merged, confidential })
@@ -2296,8 +2317,20 @@ export class ConfidentialFundingCoordinator {
   } {
     const sourceChain = parseChainId(value.source.chainId)
     const destinationChain = parseChainId(value.destination.chainId)
-    if (sourceChain.namespace !== 'eip155' || destinationChain.namespace !== 'eip155') {
-      throw new Error('Confidential funding currently requires EVM source and destination chains')
+    const zcashChainId = getZcashChainId(this.options.network)
+    const shieldSpend =
+      value.sourceDomain === 'shield' &&
+      (value.operation === 'withdraw' || value.operation === 'swap')
+    const sourceIsEvm = sourceChain.namespace === 'eip155'
+    const destinationIsEvm = destinationChain.namespace === 'eip155'
+    const sourceAllowed = sourceIsEvm || (shieldSpend && sourceChain.id === zcashChainId)
+    const destinationAllowed =
+      destinationIsEvm ||
+      (value.operation === 'swap' &&
+        value.destinationDomain === 'shield' &&
+        destinationChain.id === zcashChainId)
+    if (!sourceAllowed || !destinationAllowed || (!sourceIsEvm && !destinationIsEvm)) {
+      throw new Error('Confidential funding requires an EVM signing chain')
     }
     if (
       value.operation !== undefined &&
@@ -2838,7 +2871,7 @@ export class ConfidentialFundingCoordinator {
       })
       const signedPayload = await this.options.signer.signMessage({
         identity: await this.requirePlanIdentity(plan),
-        chainId: parseChainId(plan.destination.chainId).id,
+        chainId: confidentialSigningChainId(plan.source.chainId, plan.destination.chainId),
         payload: binding.payload
       })
       row = Object.freeze({
@@ -3702,7 +3735,7 @@ export class ConfidentialFundingCoordinator {
 
   private async requirePlanIdentity(plan: ConfidentialFundingPlan) {
     const identity = await this.options.signer.resolveIdentity(
-      parseChainId(plan.destination.chainId).id
+      confidentialSigningChainId(plan.source.chainId, plan.destination.chainId)
     )
     if (
       identity.context.chainAccount.scope.keyDomainId !== plan.keyDomainId ||

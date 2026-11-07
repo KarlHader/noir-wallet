@@ -13,6 +13,7 @@ import { assertConfidentialQuoteBinding } from '@/core/services/confidential-fun
 
 const REQUEST_TIMEOUT_MS = 30_000
 const APP_FEE_CACHE_MS = 5 * 60_000
+const MAX_CONFIDENTIAL_PROVIDER_FEE_BPS = 20
 const INTENTS_CONTRACT = 'intents.near'
 const VERSIONED_NONCE_PREFIX = new Uint8Array([86, 40, 246, 198])
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -933,7 +934,10 @@ export class ConfidentialFundingApi {
         throw new Error('Confidential provider fee quote is invalid')
       }
       providerFees = readConfidentialQuoteAppFees(baseline)
-      if (providerFees.length > 1 || (providerFees.length === 1 && providerFees[0]?.fee !== 20)) {
+      if (
+        providerFees.length > 1 ||
+        providerFees.some(fee => fee.fee > MAX_CONFIDENTIAL_PROVIDER_FEE_BPS)
+      ) {
         throw new Error('Confidential provider fee quote is invalid')
       }
     }

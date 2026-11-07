@@ -17,6 +17,7 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
+import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import {
   TransactionReviewExchangeSummary,
@@ -392,7 +393,7 @@ function ShieldSwapForm() {
       prepared.to.asset.metadata.decimals
     )
     const fee = prepared.review.quoteWithdrawFeeRaw ?? '0'
-    const feeText = `${formatBaseUnitAmount(fee, prepared.to.asset.metadata.decimals)} ${prepared.to.asset.metadata.symbol}`
+    const feeAmount = formatBaseUnitAmount(fee, prepared.to.asset.metadata.decimals)
     return (
       <div className="page-container">
         <TransactionReviewView
@@ -428,13 +429,22 @@ function ShieldSwapForm() {
           rows={[
             {
               label: 'Minimum receive',
-              content: `${minimum} ${prepared.to.asset.metadata.symbol}`
+              content: <AmountDisplay value={minimum} symbol={prepared.to.asset.metadata.symbol} />
             },
             {
               label: 'Service fee',
               content: `${((prepared.review.quoteAppFeeBps ?? 0) / 100).toString()}%`
             },
-            { label: 'Fees', content: feeText },
+            {
+              label: 'Fees',
+              content: (
+                <AmountDisplay
+                  value={feeAmount}
+                  symbol={prepared.to.asset.metadata.symbol}
+                  profile="fee"
+                />
+              )
+            },
             {
               label: 'Slippage',
               content: `${((prepared.review.slippageBps ?? 0) / 100).toString()}%`

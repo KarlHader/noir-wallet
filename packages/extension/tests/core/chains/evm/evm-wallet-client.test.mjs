@@ -514,6 +514,19 @@ test.describe('Popup EVM wallet client', () => {
     await expect(
       client.approveTransfer(transactionId, fingerprint.toUpperCase())
     ).rejects.toMatchObject({ code: 'invalid-request' })
+
+    const unavailableReview = createEvmWalletClient(async () => ({
+      error: {
+        code: 'review-unavailable',
+        message: 'The EVM transfer review is no longer available'
+      }
+    }))
+    await expect(
+      unavailableReview.approveTransfer(transactionId, fingerprint)
+    ).rejects.toMatchObject({
+      name: 'EvmWalletClientError',
+      code: 'review-unavailable'
+    })
   })
 
   test('strictly binds the Keystone handoff, signing request, and signature submission', async () => {

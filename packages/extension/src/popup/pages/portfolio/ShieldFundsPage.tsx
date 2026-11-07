@@ -8,6 +8,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
+import { getZcashChainId } from '@/core/chains/registry'
 import type { FundingSource } from '@/types/wallet'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
@@ -105,12 +106,18 @@ function ShieldFundsContent() {
     false
   const nearChainIds = getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet')
   const canManageNear = nearChainIds.length > 0
-  const hasSpendableNear = near.entries.some(
+  const hasMovableNear = near.entries.some(
     entry =>
       entry.asset.assetId &&
       nearChainIds.some(chainId => entry.asset.assetId?.startsWith(`${chainId}/`)) &&
       safeBig(entry.asset.availableRaw).gt(0)
   )
+  const zcashAssetId = `${getZcashChainId(currentNetwork)}/slip44:133`
+  const hasSpendableNear =
+    hasMovableNear ||
+    near.entries.some(
+      entry => entry.asset.assetId === zcashAssetId && safeBig(entry.asset.availableRaw).gt(0)
+    )
   const hasNear = canManageNear || near.entries.length > 0
   const shieldTotal = model
     ? summarizeKnownShieldFiat(
@@ -167,7 +174,7 @@ function ShieldFundsContent() {
     }
     if (action === 'move') {
       navigate(
-        hasSpendableNear || near.status !== 'ready'
+        hasMovableNear || near.status !== 'ready'
           ? '/transfer?from=shield&to=private&provider=near-confidential'
           : '/transfer?from=public&to=shield&provider=near-confidential'
       )

@@ -40,6 +40,7 @@ export {
   CONFIDENTIAL_PRIVATE_TREASURY_ACCOUNT_ID,
   confidentialPrivateTokenId,
   buildConfidentialPortfolioView,
+  filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
   type ConfidentialPortfolioAssetMapping,

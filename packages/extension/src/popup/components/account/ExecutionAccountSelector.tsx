@@ -4,7 +4,6 @@ import type { ReactNode } from 'react'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import { formatSortAddress } from '@/lib/format'
 import { formatTokenQuantity } from '@/lib/number-format'
-import Big from '@/lib/big'
 import { cn } from '@/lib/utils'
 import { Tooltip } from '@/popup/components/ui/tooltip'
 import {
@@ -262,7 +261,6 @@ export function ExecutionAccountSelectorDialog({
   privateAddress,
   mainBalance,
   privateBalance,
-  privateUnavailableBalance,
   symbol,
   purpose = 'source',
   onCustomAddress,
@@ -277,7 +275,6 @@ export function ExecutionAccountSelectorDialog({
   readonly privateAddress?: string
   readonly mainBalance?: string
   readonly privateBalance?: string
-  readonly privateUnavailableBalance?: string
   readonly symbol?: string
   readonly purpose?: 'source' | 'destination'
   readonly onCustomAddress?: () => void
@@ -331,16 +328,6 @@ export function ExecutionAccountSelectorDialog({
                       >
                         {formatTokenQuantity(option.balance)} {symbol}
                       </span>
-                      {option.mode === 'private' &&
-                        privateUnavailableBalance !== undefined &&
-                        Big(privateUnavailableBalance).gt(0) && (
-                          <span
-                            className="mt-0.5 block break-all text-[10px] text-muted"
-                            title={privateUnavailableBalance}
-                          >
-                            {formatTokenQuantity(privateUnavailableBalance)} {symbol} unavailable
-                          </span>
-                        )}
                     </span>
                   )
                 }

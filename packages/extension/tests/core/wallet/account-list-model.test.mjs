@@ -9,7 +9,7 @@ const storage = {
 globalThis.chrome = {
   storage: { local: storage, session: storage, onChanged: { addListener: () => {} } }
 }
-const { buildVisibleAccountList, hasAccountMenuAddAction } =
+const { buildAccountSwitcherGroups, buildVisibleAccountList, hasAccountMenuAddAction } =
   await import('../../../src/popup/services/account-list-model.ts')
 
 const wallet = {
@@ -71,6 +71,41 @@ function list(searchQuery, nativeAccounts = [catalogAccount]) {
     searchQuery
   })
 }
+
+test('switcher uses the retained selection until the native account is selected', () => {
+  const native = {
+    ...catalogAccount,
+    walletId: 'native-wallet',
+    accountId: 'native-account',
+    active: true
+  }
+  const input = {
+    wallets: [wallet],
+    catalogAccounts: [native],
+    accountDisplayNames: {},
+    currentWalletId: 'wallet-1',
+    currentAccountId: 'account-1'
+  }
+  const retainedSelected = buildAccountSwitcherGroups(input)
+    .flatMap(group => group.accounts)
+    .filter(account => account.active)
+  assert.deepEqual(
+    retainedSelected.map(account => account.accountId),
+    ['account-1']
+  )
+
+  const nativeSelected = buildAccountSwitcherGroups({
+    ...input,
+    currentWalletId: null,
+    currentAccountId: null
+  })
+    .flatMap(group => group.accounts)
+    .filter(account => account.active)
+  assert.deepEqual(
+    nativeSelected.map(account => account.accountId),
+    ['native-account']
+  )
+})
 
 test('searches current catalog public, private execution, Bitcoin, and Zcash addresses on the retained account', () => {
   for (const query of [

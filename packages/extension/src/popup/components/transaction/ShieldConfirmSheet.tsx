@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { marginalFeeForTier } from '@/core/zcash/fee-policy'
 import type { FeeTier } from '@/config/fee'
 import { AmountDisplay } from '../common/AmountDisplay'
+import { safeBig } from '@/lib/big'
 import {
   hasEnoughTransparentBalanceToShield,
   MIN_SHIELDING_BALANCE_MESSAGE
@@ -15,7 +16,7 @@ import {
 interface ShieldConfirmSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  transparentBalance: number
+  transparentBalance: string
   isShielding?: boolean
   feeRefreshRevision?: number
   onConfirm: (params: {
@@ -48,12 +49,18 @@ export function ShieldConfirmSheet({
     enabled: open && hasEnoughBalance,
     scopeKey: String(feeRefreshRevision ?? 0)
   })
+  const netAmount =
+    estimate.feeZats === null
+      ? null
+      : safeBig(transparentBalance).minus(safeBig(estimate.feeZats).div(1e8))
   const feeReady =
     !!estimate.feeQuote &&
     estimate.feeQuote.expiresAt > Date.now() &&
     estimate.feeZats !== null &&
     !estimate.loading &&
-    !estimate.error
+    !estimate.error &&
+    netAmount !== null &&
+    netAmount.gt(0)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -69,12 +76,10 @@ export function ShieldConfirmSheet({
           <div className="mb-3">
             <TokenIcon symbol="ZEC" nativeChain="zcash" size="xl" />
           </div>
+          <span className="mb-1 text-xs text-muted">Public balance</span>
           <div className="max-w-full text-center text-2xl font-bold">
             <AmountDisplay value={transparentBalance} symbol="ZEC" />
           </div>
-          <p className="text-sm text-muted mt-0.5 px-8 text-center">
-            Move transparent funds into the private pool for enhanced privacy.
-          </p>
         </div>
 
         <div className="mx-5 bg-card rounded-xl p-4">
@@ -88,6 +93,14 @@ export function ShieldConfirmSheet({
             loading={estimate.loading}
             allowFallback={false}
           />
+          <div className="mt-3 flex items-center justify-between gap-3 text-sm">
+            <span className="text-muted">Estimated to Shield</span>
+            {netAmount !== null && netAmount.gt(0) ? (
+              <AmountDisplay value={netAmount.toFixed()} symbol="ZEC" />
+            ) : (
+              <span>—</span>
+            )}
+          </div>
           {estimate.error && (
             <button
               type="button"

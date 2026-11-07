@@ -9,7 +9,9 @@ import {
 import { createInitialProductChainRegistry } from '../../../src/core/chains/registry/index.ts'
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import {
+  buildExternalShieldWithdrawRequest,
   listShieldFundingAssets,
+  selectShieldWithdrawDestinationForNetwork,
   shieldFundingSources,
   shieldPortfolioBalances
 } from '../../../src/popup/services/shield-transfer.ts'
@@ -58,6 +60,29 @@ test('rejects excess precision, exponent notation, and oversized input', () => {
   ).toBe('Enter a valid amount')
   expect(normalizePrivateBalanceTransferInput('1e3')).toBeNull()
   expect(normalizePrivateBalanceTransferInput('1'.repeat(129))).toBeNull()
+})
+
+test('keeps the selected Shield withdrawal token when choosing its network', () => {
+  const option = (chainId, symbol) => ({
+    chain: { chain: { id: chainId } },
+    asset: {
+      asset: { id: `${chainId}/${symbol}` },
+      metadata: { symbol, name: symbol }
+    }
+  })
+  const baseUsdc = option('eip155:8453', 'USDC')
+  const baseEth = option('eip155:8453', 'ETH')
+  const arbitrumUsdc = option('eip155:42161', 'USDC')
+  const polygonEth = option('eip155:137', 'ETH')
+  const options = [baseUsdc, baseEth, arbitrumUsdc, polygonEth]
+
+  expect(selectShieldWithdrawDestinationForNetwork(options, baseUsdc, 'eip155:8453')).toBe(baseUsdc)
+  expect(selectShieldWithdrawDestinationForNetwork(options, baseUsdc, 'eip155:42161')).toBe(
+    arbitrumUsdc
+  )
+  expect(selectShieldWithdrawDestinationForNetwork(options, baseUsdc, 'eip155:137')).toBe(
+    polygonEth
+  )
 })
 
 test('uses independently held Shield tokens without adding them to Public assets', () => {
@@ -164,4 +189,43 @@ test('uses independently held Shield tokens without adding them to Public assets
       'mainnet'
     ).map(item => item.asset.asset.id)
   ).not.toContain(sourceId)
+
+  const zcashAssetId = `${ZCASH_CHAIN_IDS.mainnet}/slip44:133`
+  const zcashProtocolId = 'nep141:zec.omft.near'
+  const withZcash = {
+    ...model,
+    confidential: {
+      status: 'ready',
+      assets: [
+        ...model.confidential.assets,
+        { tokenId: zcashProtocolId, protocolAssetId: zcashProtocolId, availableRaw: '140000' }
+      ]
+    }
+  }
+  const withZcashOptions = listShieldFundingAssets(
+    withZcash,
+    managed,
+    [...tokens, { assetId: zcashProtocolId, blockchain: 'zec', symbol: 'ZEC', decimals: 8 }],
+    'mainnet'
+  )
+  const zcashSource = shieldFundingSources(
+    withZcashOptions,
+    shieldPortfolioBalances(withZcash)
+  ).find(item => item.asset.asset.id === zcashAssetId)
+  expect(zcashSource?.asset.balance.confidentialRaw).toBe('140000')
+  expect(
+    buildExternalShieldWithdrawRequest({
+      network: 'mainnet',
+      keyDomainId: 'wallet',
+      accountId: 'account',
+      amountRaw: '100000',
+      recipient: `0x${'3'.repeat(40)}`,
+      source: zcashSource,
+      destination: withZcashOptions.find(item => item.asset.asset.id === destinationId),
+      slippageBps: 50
+    })
+  ).toMatchObject({
+    source: { assetId: zcashAssetId, protocolAssetId: zcashProtocolId, amountRaw: '100000' },
+    destination: { chainId: 'eip155:1', protocolAssetId: destinationProtocolId }
+  })
 })

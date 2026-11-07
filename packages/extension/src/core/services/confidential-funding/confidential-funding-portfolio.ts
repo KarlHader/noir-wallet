@@ -5,8 +5,10 @@ import type {
   ConfidentialPortfolioView
 } from '@/core/portfolio'
 import type { AssetRegistry } from '@/core/chains/registry'
+import { getZcashChainId } from '@/core/chains/registry'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
+import type { Network } from '@/types'
 
 export interface ConfidentialPortfolioBalance {
   readonly tokenId: string
@@ -16,6 +18,16 @@ export interface ConfidentialPortfolioBalance {
 export interface ConfidentialPortfolioAssetMapping {
   readonly assetId: string
   readonly protocolAssetId: string
+}
+
+export function filterConfidentialPortfolioMappings(
+  mappings: readonly ConfidentialPortfolioAssetMapping[],
+  network: Network
+): readonly ConfidentialPortfolioAssetMapping[] {
+  const zcashAssetId = `${getZcashChainId(network)}/slip44:133`
+  return mappings.filter(
+    mapping => mapping.assetId.startsWith('eip155:') || mapping.assetId === zcashAssetId
+  )
 }
 
 // Mainnet uses this shared treasury namespace; arbitrary IMT suffix matches are not equivalent assets.
@@ -69,11 +81,7 @@ export function buildConfidentialPortfolioView(
 
   const tokenById = new Map(tokens.map(token => [token.assetId, token]))
   const managedById = new Map(managedAssets.map(asset => [asset.protocolAssetId, asset]))
-  const mappedById = new Map(
-    mappings
-      .filter(mapping => mapping.assetId.startsWith('eip155:'))
-      .map(mapping => [mapping.protocolAssetId, mapping.assetId])
-  )
+  const mappedById = new Map(mappings.map(mapping => [mapping.protocolAssetId, mapping.assetId]))
   const entries = [...byProtocolId].flatMap(([protocolAssetId, { balance }]) => {
     if (balance.available === '0') return []
     const token = tokenById.get(protocolAssetId)

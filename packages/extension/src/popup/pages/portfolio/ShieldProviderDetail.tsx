@@ -187,6 +187,7 @@ function ShieldProviderContent() {
     )
     return shieldFundingSources(options, shieldPortfolioBalances(model))
   }, [model, directoryTokens, currentNetwork])
+  const movableNearSource = nearSources.find(source => source.chain.chain.family === 'evm')
   const canAttemptNearSpend = canManageNear && (near.status !== 'ready' || nearSources.length > 0)
   const nearBalanceEmpty =
     provider === 'near-confidential' &&
@@ -195,9 +196,10 @@ function ShieldProviderContent() {
   const selectedNearAssetId = selectedNearEntry?.asset.assetId
   const selectedNearAssetSupported = Boolean(
     selectedNearAssetId &&
-    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').some(chainId =>
+    (getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').some(chainId =>
       selectedNearAssetId.startsWith(`${chainId}/`)
-    )
+    ) ||
+      nearSources.some(source => source.asset.asset.id === selectedNearAssetId))
   )
   const selectedEntry = group?.entries.find(entry => entry.asset.asset.id === selectedAssetId)
   const selectedQuote = selectedEntry ? findAssetPrice(prices, selectedEntry.asset.asset.id) : null
@@ -380,9 +382,9 @@ function ShieldProviderContent() {
                   onClick={() =>
                     navigate(
                       transferPath(
-                        nearSources[0]?.asset.asset.id ?? null,
-                        nearSources.length > 0 || near.status !== 'ready' ? 'shield' : 'public',
-                        nearSources.length > 0 || near.status !== 'ready' ? 'private' : 'shield'
+                        movableNearSource?.asset.asset.id ?? null,
+                        movableNearSource || near.status !== 'ready' ? 'shield' : 'public',
+                        movableNearSource || near.status !== 'ready' ? 'private' : 'shield'
                       )
                     )
                   }

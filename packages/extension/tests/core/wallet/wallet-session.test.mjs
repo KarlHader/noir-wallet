@@ -123,6 +123,80 @@ test('failed first-wallet persistence does not install the session password', as
   }
 })
 
+test('additional software wallet provision succeeds after selecting a native account', async () => {
+  const source = ts.transpileModule(
+    readFileSync(
+      new URL('../../../src/background/software-wallet-provisioning.ts', import.meta.url),
+      'utf8'
+    ),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const state = {
+    wallets: [{ id: 'retained-wallet' }],
+    currentWalletId: null,
+    getWallet: () => null
+  }
+  let credentialLocked = false
+  const runtime = {
+    initialize: async () => {},
+    getSessionPassword: () => null,
+    unlock: async (_password, options) => {
+      if (options?.allowMissingCredentialRecovery === true) {
+        state.currentWalletId = 'retained-wallet'
+      }
+      return { success: state.currentWalletId !== null }
+    },
+    addImportedWallet: async () => 'imported-wallet',
+    lock: async () => {}
+  }
+  const dependencies = {
+    '@/core/wallet/hardware-wallet-data': { isZcashHardwareKeySource: () => false },
+    '@scure/bip39': { validateMnemonic: () => true },
+    '@scure/bip39/wordlists/english': { wordlist: [] },
+    './zcash-wallet-runtime': { backgroundZcashWalletRuntime: runtime },
+    '@/config/wallet': {},
+    '@/store/wallet-store': {
+      rehydrateWalletStore: async () => {},
+      useWalletStore: { getState: () => state }
+    },
+    '@/infrastructure/keyring/multichain/canonical-mnemonic-generator': {},
+    '@/infrastructure/keyring/multichain/background-transport': {},
+    './credential-lifecycle': {
+      credentialLifecycle: { synchronizeRetainedV1: async () => ({ status: 'synchronized' }) }
+    },
+    './credential-session': {
+      credentialSession: {
+        hasUnlockSession: async () => true,
+        getProvisioningPassword: async () => 'synthetic-password',
+        unlock: async () => ({ unlockedCredentials: [] }),
+        bindZcashCredential: async () => true,
+        lock: async () => {
+          credentialLocked = true
+        }
+      }
+    },
+    './sync-scheduler': {
+      syncScheduler: { pauseForTx() {}, abortSync() {}, resumeAfterTx() {}, onRequestSync() {} }
+    },
+    '@/core/wallet/account-name': { normalizeAccountName: name => name }
+  }
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(
+    specifier => dependencies[specifier] ?? {},
+    module,
+    module.exports
+  )
+
+  const result = await module.exports.addSoftwareWallet({
+    mode: 'import',
+    mnemonic: [...Array(11).fill('abandon'), 'about'].join(' '),
+    accountName: 'Imported'
+  })
+
+  assert.equal(result.walletId, 'imported-wallet')
+  assert.equal(credentialLocked, false)
+})
+
 test('same-wallet session restoration preserves an in-flight backup authorization', async () => {
   const originalState = useWalletStore.getState()
   const originalGetBinding = credentialSession.getCredentialBinding

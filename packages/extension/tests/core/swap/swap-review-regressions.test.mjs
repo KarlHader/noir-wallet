@@ -14,6 +14,7 @@ import {
   getRheaSwapMinimumAmountMessage,
   getSafeRheaSwapRuntimeErrorMessage
 } from '../../../src/core/services/rhea-swap/rhea-swap-error.ts'
+import { createRheaSwapFetch } from '../../../src/core/services/rhea-swap/rhea-swap-fetch.ts'
 import { classifyError } from '../../../src/lib/errors.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 
@@ -181,7 +182,7 @@ it('keeps minimum amounts while removing nested provider metadata without changi
     getRheaSwapErrorMessage(
       new RheaSwapClientError('{"message":"Request timed out","path":"/internal"}')
     ),
-    'No route found for this swap.'
+    'Request timed out.'
   )
   assert.equal(
     getRheaSwapErrorMessage(new RheaSwapClientError('Unsupported destination token')),
@@ -193,7 +194,7 @@ it('keeps minimum amounts while removing nested provider metadata without changi
         'No confidential route available: quote failed (400): {"msg":"transport timeout","code":"QUOTE_TIMEOUT","reason":"quote_timeout","retryAfter":6500}'
       )
     ),
-    'No route found for this swap.'
+    'Request timed out.'
   )
   assert.equal(
     getRheaSwapErrorMessage(
@@ -209,7 +210,15 @@ it('keeps minimum amounts while removing nested provider metadata without changi
         'No confidential route available: quote failed (400): {"msg":"No route found","error":{"reason":"quote_timeout"}}'
       )
     ),
-    'No route found for this swap.'
+    'Request timed out.'
+  )
+  assert.equal(
+    getRheaSwapErrorMessage(
+      new RheaSwapClientError(
+        'Cross-chain quote failed: {"code":-1,"errorCode":"QUOTE_TIMEOUT","reason":"quote_timeout","msg":"Cross-chain quote failed: nearintents: quote transport timeout after 6s; preswap: pre-swap route does not yet support fromChain=zcash","retryAfterMs":6500}'
+      )
+    ),
+    'Request timed out.'
   )
   assert.equal(
     getRheaSwapErrorMessage(
@@ -233,6 +242,31 @@ it('keeps minimum amounts while removing nested provider metadata without changi
     ),
     'no route'
   )
+})
+
+it('keeps a quote timeout retryable when a successful HTTP response also mentions an unsupported route', async () => {
+  const fetchQuote = createRheaSwapFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          code: -1,
+          errorCode: 'QUOTE_TIMEOUT',
+          reason: 'quote_timeout',
+          msg: 'Cross-chain quote failed: nearintents: quote transport timeout after 6s; preswap: pre-swap route does not yet support fromChain=zcash',
+          retryAfterMs: 6500
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+  )
+  await assert.rejects(fetchQuote('https://api.rhea.finance/api/swap/quote'), error => {
+    assert.equal(error.code, 'REQUEST_TIMEOUT')
+    const runtimeMessage = getSafeRheaSwapRuntimeErrorMessage(error)
+    assert.equal(runtimeMessage, 'quote_timeout')
+    const popupError = new RheaSwapClientError(runtimeMessage)
+    assert.equal(getRheaSwapErrorMessage(popupError), 'Request timed out.')
+    assert.equal(classifyError(popupError).retryable, true)
+    return true
+  })
 })
 
 it('keeps provider minimums from multiple route failures without returning provider metadata', () => {
@@ -271,7 +305,7 @@ it('keeps provider minimums from multiple route failures without returning provi
   assert.equal(getRheaSwapMinimumAmountMessage('minimum swap amount is $1,000.1234567'), null)
   assert.equal(
     getRheaSwapErrorMessage(new RheaSwapClientError('Request timed out')),
-    'No route found for this swap.'
+    'Request timed out.'
   )
 })
 

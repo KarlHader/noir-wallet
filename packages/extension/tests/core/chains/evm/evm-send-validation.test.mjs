@@ -7,11 +7,13 @@ import {
   buildPrivateEvmTransferPath,
   buildPublicPrivateEvmSendPath,
   buildPrivateGasFundingPath,
+  getEvmSendPrepareError,
   getEvmTokenFeeBalanceError,
   parsePublicPrivateEvmSendDraft,
   parsePublicPrivateEvmSwapRoute,
   resolveEvmNativeMaximumAmount
 } from '../../../../src/popup/pages/transactions/evm-send-validation.ts'
+import { EvmWalletClientError } from '../../../../src/popup/services/evm-wallet-client.ts'
 import { resolveAccountAvailableRaw } from '../../../../src/popup/services/transfer-availability.ts'
 import {
   calculatePrivateFundingSourceAmount,
@@ -19,6 +21,18 @@ import {
 } from '../../../../src/core/transactions/private-funding.ts'
 
 test.describe('EVM send validation', () => {
+  test('requires a fresh review and transaction check when pending approval disappears', () => {
+    expect(
+      getEvmSendPrepareError(
+        new EvmWalletClientError(
+          'review-unavailable',
+          'The EVM transfer review is no longer available'
+        ),
+        'main'
+      )
+    ).toBe('This review is no longer available. Check Activity before preparing another transfer.')
+  })
+
   test('preserves Max intent through both balance transfer directions and private Send', () => {
     const recipient = '0x2222222222222222222222222222222222222222'
     for (const path of [

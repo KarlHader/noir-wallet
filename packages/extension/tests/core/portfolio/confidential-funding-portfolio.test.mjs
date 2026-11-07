@@ -5,13 +5,20 @@ import { ConfidentialFundingCoordinator } from '../../../src/background/confiden
 import {
   buildConfidentialPortfolioView,
   confidentialPrivateTokenId,
+  filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio
 } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
+import { getBitcoinChainId } from '../../../src/core/chains/registry/index.ts'
 
 test('projects Shield-only holdings independently of Public assets and preserves unknown tokens', () => {
   const protocolAssetId = 'nep141:usdc.omft.near'
   const assetId = 'eip155:1/erc20:0x1111111111111111111111111111111111111111'
+  const zcashChainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const zcashAssetId = `${zcashChainId}/slip44:133`
+  const zcashProtocolId = 'nep141:zec.omft.near'
+  const bitcoinAssetId = `${getBitcoinChainId('mainnet')}/slip44:0`
+  const bitcoinProtocolId = 'nep141:btc.omft.near'
   const token = {
     assetId: protocolAssetId,
     blockchain: 'eth',
@@ -25,12 +32,37 @@ test('projects Shield-only holdings independently of Public assets and preserves
     [
       { tokenId: protocolAssetId, available: '9' },
       { tokenId: confidentialPrivateTokenId(protocolAssetId), available: '42' },
+      { tokenId: confidentialPrivateTokenId(zcashProtocolId), available: '140000' },
+      { tokenId: confidentialPrivateTokenId(bitcoinProtocolId), available: '7000' },
       { tokenId: 'unknown:asset', available: '7' }
     ],
-    [token],
+    [
+      token,
+      {
+        assetId: zcashProtocolId,
+        blockchain: 'zec',
+        decimals: 8,
+        symbol: 'ZEC',
+        price: 0
+      }
+    ],
     [{ protocolAssetId, assetId, chainId: 'eip155:1', blockchain: 'eth' }],
-    [{ assetId, protocolAssetId }],
-    { get: () => undefined }
+    filterConfidentialPortfolioMappings(
+      [
+        { assetId, protocolAssetId },
+        { assetId: zcashAssetId, protocolAssetId: zcashProtocolId },
+        { assetId: bitcoinAssetId, protocolAssetId: bitcoinProtocolId }
+      ],
+      'mainnet'
+    ),
+    {
+      get: id =>
+        id === zcashAssetId
+          ? { asset: { id: zcashAssetId, chainId: zcashChainId } }
+          : id === bitcoinAssetId
+            ? { asset: { id: bitcoinAssetId, chainId: getBitcoinChainId('mainnet') } }
+            : undefined
+    }
   )
   expect(view.status).toBe('ready')
   expect(view.assets).toEqual([
@@ -43,8 +75,27 @@ test('projects Shield-only holdings independently of Public assets and preserves
       decimals: 6,
       priceUsd: '1'
     }),
+    expect.objectContaining({
+      tokenId: confidentialPrivateTokenId(zcashProtocolId),
+      protocolAssetId: zcashProtocolId,
+      availableRaw: '140000',
+      assetId: zcashAssetId,
+      chainId: zcashChainId,
+      decimals: 8
+    }),
+    {
+      tokenId: confidentialPrivateTokenId(bitcoinProtocolId),
+      protocolAssetId: bitcoinProtocolId,
+      availableRaw: '7000'
+    },
     { tokenId: 'unknown:asset', protocolAssetId: 'unknown:asset', availableRaw: '7' }
   ])
+  expect(
+    filterConfidentialPortfolioMappings(
+      [{ assetId: zcashAssetId, protocolAssetId: zcashProtocolId }],
+      'testnet'
+    )
+  ).toEqual([])
 })
 
 test('only counts the verified treasury token as Shield balance', () => {
@@ -84,17 +135,45 @@ test('keeps Confidential balances out of directly spendable on-chain balances', 
     freshness: 'fresh',
     updatedAt: 1
   }
+  const zcashAssetId = 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133'
+  const zcashAsset = {
+    ...asset,
+    asset: { id: zcashAssetId },
+    metadata: { decimals: 8, symbol: 'ZEC' },
+    balance: {
+      totalRaw: '120',
+      spendableRaw: '0',
+      availableRaw: '0',
+      pendingRaw: '0',
+      transparentRaw: '80',
+      shieldedRaw: '40'
+    }
+  }
   const model = {
     scope: { keyDomainId: 'wallet:one', accountId: 'account:one' },
     status: 'ready',
-    assets: [asset],
-    chains: [{ chain: { id: 'eip155:1' }, status: 'ready', assets: [asset], errorCodes: [] }],
+    assets: [asset, zcashAsset],
+    chains: [
+      { chain: { id: 'eip155:1' }, status: 'ready', assets: [asset], errorCodes: [] },
+      {
+        chain: { id: 'bip122:00040fe8ec8471911baa1db1266ea15d' },
+        status: 'ready',
+        assets: [zcashAsset],
+        errorCodes: []
+      }
+    ],
     ignoredAssetCount: 0
   }
   const merged = mergeConfidentialBalancesIntoPortfolio(
     model,
-    [{ assetId: asset.asset.id, protocolAssetId: 'nep141:usdc.omft.near' }],
-    [{ tokenId: 'nep141:usdc.omft.near', available: '25' }]
+    [
+      { assetId: asset.asset.id, protocolAssetId: 'nep141:usdc.omft.near' },
+      { assetId: zcashAssetId, protocolAssetId: 'nep141:zec.omft.near' }
+    ],
+    [
+      { tokenId: 'nep141:usdc.omft.near', available: '25' },
+      { tokenId: 'nep141:zec.omft.near', available: '40' }
+    ]
   )
   expect(merged.assets[0].balance).toMatchObject({
     totalRaw: '175',
@@ -105,6 +184,7 @@ test('keeps Confidential balances out of directly spendable on-chain balances', 
     privateOnchainRaw: '50',
     confidentialRaw: '25'
   })
+  expect(merged.assets[1].balance).toEqual(zcashAsset.balance)
 })
 
 test('only projects Confidential zero after a confirmed empty balance read', async () => {

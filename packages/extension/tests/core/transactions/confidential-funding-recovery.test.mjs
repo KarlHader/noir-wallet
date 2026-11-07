@@ -13,6 +13,7 @@ import { InMemoryTransactionRepository } from '../../../src/infrastructure/persi
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import { parseTransactionGraph } from '../../../src/core/transactions/domain/index.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
+import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 
 const scope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
 const signerId = '0x1111111111111111111111111111111111111111'
@@ -362,6 +363,8 @@ function directPreparationHarness(protocolTokens) {
   const state = {
     now: 1_000,
     signatures: 0,
+    identityChains: [],
+    signingChains: [],
     formalQuotes: 0,
     formalQuoteAppFees: undefined,
     lastQuoteAmountRaw: undefined,
@@ -378,6 +381,8 @@ function directPreparationHarness(protocolTokens) {
   const swapDestinationAssetId = 'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
   const swapDestinationProtocolId =
     'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near'
+  const zcashAssetId = `${ZCASH_CHAIN_IDS.mainnet}/slip44:133`
+  const zcashProtocolId = 'nep141:zec.omft.near'
   const store = {
     getPlan: async id => structuredClone(plans.get(id) ?? null),
     listPlans: async () => [...plans.values()].map(value => structuredClone(value)),
@@ -392,14 +397,18 @@ function directPreparationHarness(protocolTokens) {
     putBalances: async () => {}
   }
   const signer = {
-    resolveIdentity: async () => ({
-      address: signerId,
-      peaAddress,
-      addressIndex: 0,
-      context: { chainAccount: { scope: { ...scope, chainId: 'eip155:1' } } }
-    }),
-    signMessage: async () => {
+    resolveIdentity: async chainId => {
+      state.identityChains.push(chainId)
+      return {
+        address: signerId,
+        peaAddress,
+        addressIndex: 0,
+        context: { chainAccount: { scope: { ...scope, chainId } } }
+      }
+    },
+    signMessage: async input => {
       state.signatures += 1
+      state.signingChains.push(input.chainId)
       throw new Error('unexpected signature')
     }
   }
@@ -409,9 +418,15 @@ function directPreparationHarness(protocolTokens) {
         tokenId: confidentialPrivateTokenId(protocolAssetId),
         available: '100',
         source: 'intents'
+      },
+      {
+        tokenId: confidentialPrivateTokenId(zcashProtocolId),
+        available: '140000',
+        source: 'intents'
       }
     ],
     quote: async input => {
+      state.lastQuoteRequest = input
       if (!input.dry) {
         state.formalQuotes += 1
         if (input.recipientType !== 'CONFIDENTIAL_INTENTS' && !state.formalQuoteAppFees) {
@@ -464,7 +479,8 @@ function directPreparationHarness(protocolTokens) {
               intent: 'transfer',
               receiver_id: 'deposit.near',
               tokens: {
-                [confidentialPrivateTokenId(protocolAssetId)]: state.lastQuoteAmountRaw
+                [confidentialPrivateTokenId(state.lastQuoteRequest.originAsset)]:
+                  state.lastQuoteAmountRaw
               }
             }
           ]
@@ -479,12 +495,13 @@ function directPreparationHarness(protocolTokens) {
     store,
     signer,
     repository: new InMemoryTransactionRepository(),
-    assets: { get: () => ({ metadata: { decimals: 18 } }) },
+    assets: { get: id => ({ metadata: { decimals: id === zcashAssetId ? 8 : 18 } }) },
     evmNetworks: [],
     ...(protocolTokens ? { protocolTokens } : {}),
     assetMappings: [
       { assetId, protocolAssetId },
-      { assetId: swapDestinationAssetId, protocolAssetId: swapDestinationProtocolId }
+      { assetId: swapDestinationAssetId, protocolAssetId: swapDestinationProtocolId },
+      { assetId: zcashAssetId, protocolAssetId: zcashProtocolId }
     ],
     now: () => state.now,
     createId: () => `direct-${plans.size}-${state.now}`,
@@ -507,10 +524,122 @@ function directPreparationHarness(protocolTokens) {
     destination: { chainId: 'eip155:1', chainName: 'eth', assetId, protocolAssetId },
     slippageBps: 100
   })
-  return { coordinator, state, plans, request, swapDestinationAssetId, swapDestinationProtocolId }
+  return {
+    coordinator,
+    state,
+    plans,
+    request,
+    swapDestinationAssetId,
+    swapDestinationProtocolId,
+    zcashAssetId,
+    zcashProtocolId
+  }
 }
 
 test.describe('confidential funding persisted recovery', () => {
+  test('spends a mapped Confidential ZEC balance through an EVM signer without enabling Zcash on-chain sends', async () => {
+    const h = directPreparationHarness([
+      { assetId: 'nep141:eth.omft.near', blockchain: 'eth', decimals: 18 },
+      { assetId: 'nep141:zec.omft.near', blockchain: 'zec', decimals: 8 }
+    ])
+    const source = {
+      chainId: ZCASH_CHAIN_IDS.mainnet,
+      chainName: 'zec',
+      assetId: h.zcashAssetId,
+      protocolAssetId: h.zcashProtocolId,
+      amountRaw: '100000'
+    }
+    const recipient = '0x3333333333333333333333333333333333333333'
+    const withdraw = {
+      ...h.request('100000'),
+      source,
+      destinationDomain: 'public',
+      externalRecipient: recipient
+    }
+    const review = await h.coordinator.prepare(withdraw)
+    expect(review).toMatchObject({ sourceAmountRaw: '100000', destinationAddress: recipient })
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      originAsset: h.zcashProtocolId,
+      destinationAsset: 'nep141:eth.omft.near',
+      amountRaw: '100000',
+      signerId,
+      recipient,
+      depositType: 'CONFIDENTIAL_INTENTS'
+    })
+    expect(h.state.identityChains).toEqual(['eip155:1', 'eip155:1'])
+    await expect(
+      h.coordinator.prepare({ ...withdraw, source: { ...source, amountRaw: '50000' } })
+    ).rejects.toThrow('insufficient')
+    await expect(
+      h.coordinator.prepare({
+        ...withdraw,
+        sourceDomain: 'public',
+        source: { ...source, amountRaw: '1000' }
+      })
+    ).rejects.toThrow('EVM signing chain')
+    await expect(
+      h.coordinator.prepare({
+        ...withdraw,
+        destination: { ...withdraw.destination, ...source }
+      })
+    ).rejects.toThrow('EVM signing chain')
+    h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
+    await expect(h.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+      'unexpected signature'
+    )
+    expect(h.state.signingChains).toEqual(['eip155:1'])
+  })
+
+  test('quotes a Confidential ZEC to EVM swap and an EVM to Confidential ZEC swap', async () => {
+    const h = directPreparationHarness([
+      { assetId: 'nep141:eth.omft.near', blockchain: 'eth', decimals: 18 },
+      { assetId: 'nep141:zec.omft.near', blockchain: 'zec', decimals: 8 }
+    ])
+    const zec = {
+      chainId: ZCASH_CHAIN_IDS.mainnet,
+      chainName: 'zec',
+      assetId: h.zcashAssetId,
+      protocolAssetId: h.zcashProtocolId
+    }
+    const outgoing = await h.coordinator.prepare({
+      ...h.request('100000'),
+      operation: 'swap',
+      destinationDomain: 'shield',
+      source: { ...zec, amountRaw: '100000' }
+    })
+    expect(outgoing).toMatchObject({ operation: 'swap', sourceAmountRaw: '100000' })
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      originAsset: h.zcashProtocolId,
+      destinationAsset: 'nep141:eth.omft.near',
+      recipientType: 'CONFIDENTIAL_INTENTS'
+    })
+    const incoming = await h.coordinator.prepare({
+      ...h.request('50'),
+      operation: 'swap',
+      destinationDomain: 'shield',
+      destination: zec
+    })
+    expect(incoming).toMatchObject({ operation: 'swap', sourceAmountRaw: '50' })
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      originAsset: 'nep141:eth.omft.near',
+      destinationAsset: h.zcashProtocolId,
+      recipientType: 'CONFIDENTIAL_INTENTS'
+    })
+    expect(h.state.identityChains).toEqual(Array(4).fill('eip155:1'))
+    await expect(
+      h.coordinator.confirm(incoming.planId, incoming.payloadFingerprint)
+    ).rejects.toThrow('unexpected signature')
+    expect(h.state.signingChains).toEqual(['eip155:1'])
+    await expect(
+      h.coordinator.prepare({
+        ...h.request('10'),
+        operation: 'swap',
+        destinationDomain: 'shield',
+        source: { ...zec, amountRaw: '10' },
+        destination: zec
+      })
+    ).rejects.toThrow('EVM signing chain')
+  })
   test('rejects a Shield source whose catalog precision changed before preparation', async () => {
     const h = directPreparationHarness([
       { assetId: 'nep141:eth.omft.near', blockchain: 'eth', decimals: 6 }

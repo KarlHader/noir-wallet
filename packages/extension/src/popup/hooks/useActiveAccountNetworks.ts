@@ -6,6 +6,7 @@ import {
 } from '../services/account-networks-client'
 import { useWalletStore } from '@/store/wallet-store'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import { resolveEffectiveAccountNetworks } from '@/popup/lib/effective-active-account'
 
 export function useActiveAccountNetworks() {
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
@@ -62,8 +63,9 @@ export function useActiveAccountNetworks() {
   }, [refresh])
 
   const visibleCatalog = loadedScope === scope ? catalog : null
-  const activeAccount: AccountNetworksView | null =
-    visibleCatalog?.accounts.find(account => account.active) ?? null
+  const activeAccount: AccountNetworksView | null = visibleCatalog
+    ? resolveEffectiveAccountNetworks(visibleCatalog.accounts, currentWalletId, currentAccountId)
+    : null
 
   return Object.freeze({ catalog: visibleCatalog, activeAccount, loading, error, refresh })
 }

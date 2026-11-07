@@ -189,6 +189,7 @@ import {
   resolveSwapExecutionSourceMode,
   resolveSwapSelectorBalanceMode,
   resolveSwapReviewAction,
+  resolveSwapSourceExecutionTarget,
   resolveScopedSwapZcashRecipient,
   resolveSwapRecipientChainId,
   resolveManagedSwapRecipient
@@ -4163,7 +4164,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     walletOwnedSource.chain.chain.displayName
                   ),
                   sender: walletOwnedSource.refundAddress,
-                  depositAddress: swap.depositAddress || null
+                  executionTarget: resolveSwapSourceExecutionTarget({
+                    review: rheaReview,
+                    prepared: preparedQuoteTransfer,
+                    tokenIn: swap.tokenIn,
+                    approvalPending: Boolean(pendingRheaEvmAfterApproval)
+                  })
                 }
               : undefined
           }

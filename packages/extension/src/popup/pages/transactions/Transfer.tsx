@@ -15,6 +15,7 @@ import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import nearLogo from '@/images/figma-near-confidential.svg'
@@ -959,9 +960,15 @@ function TransferForm() {
     )
     const quoteFeeRaw = shieldQuoteFeeRaw(activeShieldReview)
     const fee =
-      quoteFeeRaw !== null
-        ? `${formatBaseUnitAmount(quoteFeeRaw, selected.asset.metadata.decimals)} ${symbol}`
-        : 'Included in quote'
+      quoteFeeRaw !== null ? (
+        <AmountDisplay
+          value={formatBaseUnitAmount(quoteFeeRaw, selected.asset.metadata.decimals)}
+          symbol={symbol}
+          profile="fee"
+        />
+      ) : (
+        'Included in quote'
+      )
     const networkFee = activeShieldReview.sourceNetworkFee
     return (
       <div className="page-container">
@@ -1004,8 +1011,14 @@ function TransferForm() {
                   </span>
                 )
             },
-            { label: 'Estimated receive', content: `${output} ${symbol}` },
-            { label: 'Minimum receive', content: `${minimum} ${symbol}` },
+            {
+              label: 'Estimated receive',
+              content: <AmountDisplay value={output} symbol={symbol} />
+            },
+            {
+              label: 'Minimum receive',
+              content: <AmountDisplay value={minimum} symbol={symbol} />
+            },
             ...(activeShieldReview.operation === 'cluster'
               ? [{ label: 'Transfers', content: `${activeShieldReview.withdrawCount}` }]
               : []),
@@ -1023,7 +1036,13 @@ function TransferForm() {
                       activeShieldReview.operation === 'cluster'
                         ? 'Max network fee'
                         : 'Network fee',
-                    content: `${formatBaseUnitAmount(networkFee.raw, networkFee.decimals)} ${networkFee.symbol}`
+                    content: (
+                      <AmountDisplay
+                        value={formatBaseUnitAmount(networkFee.raw, networkFee.decimals)}
+                        symbol={networkFee.symbol}
+                        profile="fee"
+                      />
+                    )
                   }
                 ]
               : [])

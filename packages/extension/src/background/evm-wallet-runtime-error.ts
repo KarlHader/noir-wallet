@@ -1,4 +1,5 @@
 import { createEvmWalletRuntimeError, type EvmWalletRuntimeError } from '@/core/chains/evm'
+import { KeyringError } from '@/core/keyring/ports'
 import { EvmRpcError, EvmTransactionError } from '@/infrastructure/chains/evm'
 
 export function mapEvmWalletRuntimeError(error: unknown): EvmWalletRuntimeError {
@@ -34,8 +35,24 @@ export function mapEvmWalletRuntimeError(error: unknown): EvmWalletRuntimeError 
   if (error instanceof Error && /Wallet (?:is )?locked|credential session/i.test(error.message)) {
     return createEvmWalletRuntimeError('wallet-locked')
   }
+  if (error instanceof KeyringError) {
+    if (error.code === 'SIGNING_COMMAND_EXPIRED') return createEvmWalletRuntimeError('expired')
+    if (error.code === 'SIGNING_COMMAND_NOT_FOUND' || error.code === 'SIGNING_COMMAND_CANCELLED') {
+      return createEvmWalletRuntimeError('review-unavailable')
+    }
+  }
   if (error instanceof Error && /expired/i.test(error.message)) {
     return createEvmWalletRuntimeError('expired')
+  }
+  if (
+    error instanceof Error &&
+    [
+      'Pending EVM transfer was not found',
+      'EVM transfer is already signed; resume its broadcast instead',
+      'EVM transfer is already awaiting an external signature'
+    ].includes(error.message)
+  ) {
+    return createEvmWalletRuntimeError('review-unavailable')
   }
   return createEvmWalletRuntimeError('request-failed')
 }
