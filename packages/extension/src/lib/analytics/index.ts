@@ -9,7 +9,7 @@
  */
 
 import { ANALYTICS_EVENTS, PAGE_IDS, resolvePageId } from './constants'
-import { buildPayload } from './payload'
+import { buildPayload, sanitizeAnalyticsMetadata } from './payload'
 import { enqueueAnalyticsEvent } from './client'
 import { getClientId, sendGaEvent, stopGoogleAnalyticsReporting } from './ga'
 import { getAnalyticsDeviceMetadata } from './device'
@@ -94,7 +94,9 @@ function reportEvent(
       ...options,
       params: withRuntimeMetadata(
         {
-          ...options.params,
+          ...sanitizeAnalyticsMetadata(options.params, options.extra),
+          ...(options.inputSymbol ? { from_token: options.inputSymbol } : {}),
+          ...(options.outputSymbol ? { to_token: options.outputSymbol } : {}),
           ...(foreground && options.pageId ? { page_id: options.pageId } : {})
         },
         foreground

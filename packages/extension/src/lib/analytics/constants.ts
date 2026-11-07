@@ -14,7 +14,7 @@
  *
  * wallet_address semantics:
  * - The collector requires this legacy field, but Noir always fills it with
- *   `anon_<uuid>`, a random per-install analytics id also used by GA.
+ *   `anon_<install-id>`, with a stable numeric GA client ID derived from it.
  * - A real wallet address is never sent.
  */
 

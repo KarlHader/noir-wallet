@@ -11,22 +11,24 @@
 | Request body       | `{ "data": "<encrypted string>" }`; plaintext is a JSON array of event objects                                                                                                                                                                    |
 | Encryption         | AES-128-CBC, PKCS#7, Base64; the key and IV are the first 16 bytes of the password, matching the collector's Go `DecryptStringFast`                                                                                                               |
 | Batching           | The background service worker batches for 2 seconds, up to 20 events per batch and 200 queued events. Failed uploads retry after 15 seconds; the current batch is dropped after the third failure. Collector business rejections are not retried. |
-| Channels           | The same event name goes to Google Analytics (`params` only) and the custom collector (full payload).                                                                                                                                             |
-| User control       | **Share Google Analytics** defaults to on. Turning it off stops Google requests and clears the GA session only. Collector reporting continues and the per-install identifier remains.                                                             |
+| Channels           | GA receives the same event name with filtered params and extra, device fields, and country when available; the collector receives the full payload.                                                                                               |
+| User control       | **Share Google Analytics** defaults to on. Turning it off stops Google requests and country lookups and clears the GA session. Collector reporting continues and the per-install identifier remains.                                              |
 
 ## Shared Fields
 
-| Field                                         | Meaning                                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `project_id`                                  | Fixed value `noir_wallet`                                                                                                                               |
-| `chain`                                       | Fixed value `zcash`                                                                                                                                     |
-| `wallet_address`                              | Required collector compatibility field, always `anon_<uuid>`: a random per-install identifier shared with the GA client ID, never a real wallet address |
-| `page_id`                                     | `noir_<route>`; background events use `noir_background` and dApp RPC events use `noir_dapp`. See `PAGE_IDS` in `constants.ts`.                          |
-| `timestamp`                                   | Event time in milliseconds, assigned at the call site                                                                                                   |
-| `extra`                                       | JSON string with empty fields removed                                                                                                                   |
-| `input_amount`, `output_amount`, `usd_amount` | The collector can receive valid input and output amounts and estimated USD values; absent or invalid values become empty strings.                       |
+| Field                                         | Meaning                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project_id`                                  | Fixed value `noir_wallet`                                                                                                                   |
+| `chain`                                       | Fixed value `zcash`                                                                                                                         |
+| `wallet_address`                              | Required collector field, `anon_<install-id>`, never a real wallet address. GA uses a stable numeric ID derived from the stored install ID. |
+| `page_id`                                     | `noir_<route>`; background events use `noir_background` and dApp RPC events use `noir_dapp`. See `PAGE_IDS` in `constants.ts`.              |
+| `timestamp`                                   | Event time in milliseconds, assigned at the call site                                                                                       |
+| `extra`                                       | JSON string with empty fields removed                                                                                                       |
+| `input_amount`, `output_amount`, `usd_amount` | The collector can receive valid input and output amounts and estimated USD values; absent or invalid values become empty strings.           |
 
 The payload excludes real wallet addresses, transaction hashes, dApp origins, raw errors, recovery phrases, private keys, passwords, UFVKs, memo contents, contact names, and signed dApp messages. The collector can receive the amount fields above, so it must not be described as excluding exact amounts. `extra` uses a bounded allowlist of metadata, including version, build channel, network mode, browser, operating system, language, and event identifier; the filter defines the exact fields.
+
+GA client ID normalization changes GA identity for legacy UUID installations; earlier GA events cannot be joined to later ones. Stored installation IDs and collector identities remain unchanged.
 
 ## Event Catalog
 

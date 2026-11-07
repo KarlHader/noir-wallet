@@ -184,6 +184,13 @@ describe('payload: wire format construction', () => {
   it('applies the same metadata allowlist used by the GA reporter', () => {
     assert.deepEqual(
       sanitizeAnalyticsMetadata({
+        method: 'u1-sensitive-address',
+        page_location: 'https://noir-wallet.extension/send?address=u1-sensitive-address'
+      }),
+      {}
+    )
+    assert.deepEqual(
+      sanitizeAnalyticsMetadata({
         browser: 'Chrome',
         browser_version: '140.0.0.0',
         device_category: 'desktop',
@@ -216,14 +223,25 @@ describe('payload: wire format construction', () => {
 })
 
 describe('Google Analytics preference: default-on and persisted opt-out', () => {
-  it('defaults to enabled and immediately applies an explicit disable', async () => {
+  it('defaults to enabled and cancels country lookup on opt-out', async () => {
     const stored = {}
+    const sessionStored = { ga_country_cache: { country_id: 'CA', expiresAt: 0 } }
     const originalChrome = globalThis.chrome
+    const originalFetch = globalThis.fetch
+    const originalReportingEnabled = globalThis.__ANALYTICS_REPORTING_ENABLED__
+    let stopCountryLookup = () => {}
     globalThis.chrome = {
       storage: {
         local: {
           get: async key => ({ [key]: stored[key] }),
           set: async values => Object.assign(stored, values)
+        },
+        session: {
+          get: async key => ({ [key]: sessionStored[key] }),
+          set: async values => Object.assign(sessionStored, values),
+          remove: async key => {
+            delete sessionStored[key]
+          }
         },
         onChanged: {
           addListener: () => {}
@@ -234,6 +252,10 @@ describe('Google Analytics preference: default-on and persisted opt-out', () => 
     try {
       const { GOOGLE_ANALYTICS_STORAGE_KEY, isGoogleAnalyticsEnabled, setGoogleAnalyticsEnabled } =
         await import('../src/lib/analytics/preferences.ts')
+      const { getAnalyticsCountry, stopAnalyticsCountryLookup } =
+        await import('../src/lib/analytics/geo.ts')
+      stopCountryLookup = stopAnalyticsCountryLookup
+      globalThis.__ANALYTICS_REPORTING_ENABLED__ = true
 
       assert.equal(await isGoogleAnalyticsEnabled(), true)
       await setGoogleAnalyticsEnabled(false)
@@ -242,8 +264,30 @@ describe('Google Analytics preference: default-on and persisted opt-out', () => 
 
       await setGoogleAnalyticsEnabled(true)
       assert.equal(await isGoogleAnalyticsEnabled(), true)
+
+      let resolveLookup
+      let requestSignal
+      globalThis.fetch = (_url, options) => {
+        requestSignal = options.signal
+        return new Promise(resolve => {
+          resolveLookup = resolve
+        })
+      }
+      const pending = getAnalyticsCountry()
+      await new Promise(resolve => setImmediate(resolve))
+      await setGoogleAnalyticsEnabled(false)
+      await stopCountryLookup()
+      assert.equal(requestSignal.aborted, true)
+      resolveLookup(new Response('loc=US\n'))
+      assert.equal(await pending, undefined)
+      assert.deepEqual(sessionStored, {})
+      await setGoogleAnalyticsEnabled(true)
     } finally {
+      await stopCountryLookup()
       globalThis.chrome = originalChrome
+      globalThis.fetch = originalFetch
+      if (originalReportingEnabled === undefined) delete globalThis.__ANALYTICS_REPORTING_ENABLED__
+      else globalThis.__ANALYTICS_REPORTING_ENABLED__ = originalReportingEnabled
     }
   })
 })
@@ -271,7 +315,7 @@ describe('Google Analytics identity', () => {
     }
 
     try {
-      const { getClientId } = await import(
+      const { getClientId, toGaClientId } = await import(
         `../src/lib/analytics/ga.ts?identity-concurrency=${Date.now()}`
       )
       const ids = await Promise.all(Array.from({ length: 20 }, () => getClientId()))
@@ -280,6 +324,10 @@ describe('Google Analytics identity', () => {
       assert.equal(ids[0], storedClientId)
       assert.equal(getCalls, 1)
       assert.equal(setCalls, 1)
+      const gaId = await toGaClientId(ids[0])
+      assert.match(gaId, /^\d+\.\d+$/)
+      assert.equal(await toGaClientId(ids[0]), gaId)
+      assert.equal(await toGaClientId('123.456'), '123.456')
     } finally {
       globalThis.chrome = originalChrome
     }
@@ -335,6 +383,7 @@ describe('Google Analytics identity', () => {
     assert.deepEqual(
       buildGaDevice({
         browser: 'Chrome',
+        browser_major_version: '140',
         device_category: 'desktop',
         language: 'en-US',
         operating_system: 'macOS',
@@ -342,7 +391,9 @@ describe('Google Analytics identity', () => {
       }),
       {
         browser: 'Chrome',
+        browser_version: '140',
         category: 'desktop',
+        model: 'Desktop',
         language: 'en-US',
         operating_system: 'macOS'
       }
@@ -360,6 +411,7 @@ describe('automatic analytics context', () => {
       }),
       {
         browser: 'Chrome',
+        browser_major_version: '140',
         device_category: 'desktop',
         language: 'en-US',
         operating_system: 'macOS'
@@ -372,6 +424,7 @@ describe('automatic analytics context', () => {
       }),
       {
         browser: 'Edge',
+        browser_major_version: '140',
         device_category: 'desktop',
         language: 'und',
         operating_system: 'Windows'
