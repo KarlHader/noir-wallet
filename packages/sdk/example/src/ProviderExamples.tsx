@@ -27,11 +27,11 @@ import {
   getEvmNetworkExample,
   getEvmNetworkExamples,
   getExampleChainIconUrl,
+  parseEvmNetworkChainId,
   parseEvmNetworkRequest,
   type EvmNetworkExample
 } from './evm-network-catalog'
 import { buildExampleMultichainSessionRequest } from './multichain-session-request'
-import { switchToExampleEvmNetwork } from './evm-network-selection'
 
 const NOIR_TEST_BENCH_ABI = [
   {
@@ -77,6 +77,7 @@ export interface ExampleNavigationProps {
   onNetworkModeChange: (mode: EvmNetworkExample['mode']) => void
   selectedEvmNetwork: EvmNetworkExample
   evmSelectionVersion: number
+  evmChainId?: string
   onSelectEvmNetwork: (network: EvmNetworkExample) => void
   onSyncEvmNetwork: (network: EvmNetworkExample) => void
 }
@@ -110,7 +111,8 @@ export function ProviderSwitcher({
   networkMode,
   onNetworkModeChange,
   selectedEvmNetwork,
-  onSelectEvmNetwork
+  onSelectEvmNetwork,
+  evmChainId
 }: ExampleNavigationProps) {
   const [session, setSession] = useState<Caip25Session | null>(null)
   const [sessionLoading, setSessionLoading] = useState(false)
@@ -144,7 +146,9 @@ export function ProviderSwitcher({
         buildExampleMultichainSessionRequest(
           wallet,
           networkMode,
-          selectedEvmNetwork.request.chainId
+          evmChainId && !getEvmNetworkExample(evmChainId)
+            ? evmChainId
+            : selectedEvmNetwork.request.chainId
         )
       )
       setSession(next)
@@ -247,7 +251,11 @@ export function ProviderSwitcher({
       <div className="provider-network-grid">
         {options.map(option => {
           const selected =
-            active === option.id && (option.id !== 'evm' || option.network === selectedEvmNetwork)
+            active === option.id &&
+            (option.id !== 'evm' ||
+              (evmChainId
+                ? option.network.request.chainId === evmChainId
+                : option.network === selectedEvmNetwork))
           return (
             <button
               key={option.id === 'evm' ? option.network.request.chainId : option.id}
@@ -269,6 +277,22 @@ export function ProviderSwitcher({
             </button>
           )
         })}
+        {evmChainId && !getEvmNetworkExample(evmChainId) && (
+          <button
+            type="button"
+            className={`provider-network-button ${active === 'evm' ? 'active' : ''}`}
+            aria-label={`Custom EVM (${evmChainId})`}
+            aria-pressed={active === 'evm'}
+            onClick={() => onChange('evm')}
+          >
+            <ExampleChainIcon
+              className="provider-network-icon-frame"
+              iconUrl={getExampleChainIconUrl('custom-evm')}
+              label="Custom EVM"
+            />
+            <span>{`Custom EVM (${evmChainId})`}</span>
+          </button>
+        )}
       </div>
     </nav>
   )
@@ -546,7 +570,7 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
     if (chainId === targetChainId) return
     void run(async () => {
       try {
-        await switchToExampleEvmNetwork(provider, navigation.selectedEvmNetwork)
+        await switchEvmChain(provider, targetChainId)
       } catch (switchError) {
         const active = getEvmNetworkExample(chainId)
         if (active) navigation.onSyncEvmNetwork(active)
@@ -654,10 +678,10 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
   const switchNetwork = () =>
     run(async () => {
       if (!provider) throw new Error('Noir Wallet EVM provider is unavailable.')
-      const network = parseEvmNetworkRequest(networkRequest)
+      const requestedChainId = parseEvmNetworkChainId(networkRequest)
       lastHandledSelectionVersion.current = navigation.evmSelectionVersion
-      await switchEvmChain(provider, network.chainId)
-      return `Switched to ${network.chainName}.`
+      await switchEvmChain(provider, requestedChainId)
+      return `Switched to ${requestedChainId}.`
     })
 
   const callTestBench = (functionName: 'increment' | 'setValue' | 'deposit' | 'alwaysRevert') =>
@@ -685,20 +709,32 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
       return `${functionName} transaction: ${transactionHash}`
     })
 
+  const activeNetwork = getEvmNetworkExample(chainId)
+  const networkLabel =
+    activeNetwork?.label ??
+    (chainId ? `Custom EVM (${chainId})` : navigation.selectedEvmNetwork.label)
+  const networkIconUrl =
+    activeNetwork?.iconUrl ??
+    (chainId ? getExampleChainIconUrl('custom-evm') : navigation.selectedEvmNetwork.iconUrl)
+
   return (
-    <ExampleLayout navigation={navigation} available={provider !== null} connected={account !== ''}>
+    <ExampleLayout
+      navigation={{ ...navigation, evmChainId: chainId }}
+      available={provider !== null}
+      connected={account !== ''}
+    >
       {!provider && <div className="message warning">EVM provider is not enabled.</div>}
       <section className="provider-summary card">
         <div className="provider-summary-copy">
           <ExampleChainIcon
             className="provider-hero-icon"
-            iconUrl={navigation.selectedEvmNetwork.iconUrl}
-            label={navigation.selectedEvmNetwork.label}
+            iconUrl={networkIconUrl}
+            label={networkLabel}
           />
           <div>
             <p className="section-kicker">Selected provider</p>
             <h2>EVM provider</h2>
-            <p>Discovered through EIP-6963 without replacing another wallet provider.</p>
+            <p>{networkLabel}</p>
           </div>
         </div>
         <div className="provider-actions">

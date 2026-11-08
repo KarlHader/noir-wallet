@@ -54,6 +54,18 @@ export interface EvmNetworkExample {
   readonly request: AddEvmNetworkParameters
 }
 
+export function parseEvmNetworkChainId(input: string): string {
+  const value: unknown = JSON.parse(input)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Enter network parameters with a chainId.')
+  }
+  const chainId: unknown = Reflect.get(value, 'chainId')
+  if (typeof chainId !== 'string') {
+    throw new Error('Enter an EVM chainId.')
+  }
+  return chainId
+}
+
 export function parseEvmNetworkRequest(input: string): AddEvmNetworkParameters {
   const value: unknown = JSON.parse(input)
   const isRecord = (candidate: unknown): candidate is Record<string, unknown> =>
@@ -242,27 +254,8 @@ export const EVM_NETWORK_EXAMPLES = Object.freeze([
   })
 ])
 
-const CUSTOM_EVM_NETWORK_EXAMPLES = Object.freeze([
-  network('mainnet', 'Robinhood', 'custom-evm', {
-    chainId: '0x1237',
-    chainName: 'Robinhood Chain',
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
-    blockExplorerUrls: ['https://robinhoodchain.blockscout.com']
-  }),
-  network('testnet', 'Robinhood Testnet', 'custom-evm', {
-    chainId: '0xb626',
-    chainName: 'Robinhood Chain Testnet',
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://rpc.testnet.chain.robinhood.com'],
-    blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com']
-  })
-])
-
 export function getEvmNetworkExample(chainId: string): EvmNetworkExample | undefined {
-  return [...EVM_NETWORK_EXAMPLES, ...CUSTOM_EVM_NETWORK_EXAMPLES].find(
-    network => network.request.chainId === chainId
-  )
+  return EVM_NETWORK_EXAMPLES.find(network => network.request.chainId === chainId)
 }
 
 export function getEvmNetworkExampleMode(chainId: string): EvmNetworkExample['mode'] | undefined {
@@ -272,7 +265,5 @@ export function getEvmNetworkExampleMode(chainId: string): EvmNetworkExample['mo
 export function getEvmNetworkExamples(
   mode: EvmNetworkExample['mode']
 ): readonly EvmNetworkExample[] {
-  return [...EVM_NETWORK_EXAMPLES, ...CUSTOM_EVM_NETWORK_EXAMPLES].filter(
-    network => network.mode === mode
-  )
+  return EVM_NETWORK_EXAMPLES.filter(network => network.mode === mode)
 }
