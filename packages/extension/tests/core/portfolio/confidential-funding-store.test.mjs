@@ -31,12 +31,40 @@ function storageArea() {
   }
 }
 
+function installWebLocksStub() {
+  const previousLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+  let lockTail = Promise.resolve()
+  Object.defineProperty(globalThis.navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: async (_name, operation) => {
+        const previous = lockTail
+        let release
+        lockTail = new Promise(resolve => {
+          release = resolve
+        })
+        await previous
+        try {
+          return await operation()
+        } finally {
+          release()
+        }
+      }
+    }
+  })
+  return () => {
+    if (previousLocks === undefined) delete globalThis.navigator.locks
+    else Object.defineProperty(globalThis.navigator, 'locks', previousLocks)
+  }
+}
+
 test('expires Confidential balance caches and treats legacy arrays as stale', async () => {
   let now = 10_000
   const local = storageArea()
   const session = storageArea()
   const previousChrome = globalThis.chrome
   globalThis.chrome = { storage: { local, session } }
+  const restoreLocks = installWebLocksStub()
   try {
     const store = new ChromeConfidentialFundingStore(() => now)
     const balances = [{ tokenId: 'nep141:usdc.omft.near', available: '42', source: 'intents' }]
@@ -60,6 +88,7 @@ test('expires Confidential balance caches and treats legacy arrays as stale', as
     expect(await store.getBalances('mainnet', 'wallet:one', 'account:two')).toEqual(balances)
   } finally {
     globalThis.chrome = previousChrome
+    restoreLocks()
   }
 })
 
@@ -67,27 +96,8 @@ test('persists external Shield deposit quote bindings across a restart', async (
   const local = storageArea()
   const session = storageArea()
   const previousChrome = globalThis.chrome
-  const previousLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
-  let lockTail = Promise.resolve()
   globalThis.chrome = { storage: { local, session } }
-  Object.defineProperty(globalThis.navigator, 'locks', {
-    configurable: true,
-    value: {
-      request: async (_name, operation) => {
-        const previous = lockTail
-        let release
-        lockTail = new Promise(resolve => {
-          release = resolve
-        })
-        await previous
-        try {
-          return await operation()
-        } finally {
-          release()
-        }
-      }
-    }
-  })
+  const restoreLocks = installWebLocksStub()
   try {
     const store = new ChromeConfidentialFundingStore()
     const signerId = '0x1111111111111111111111111111111111111111'
@@ -295,7 +305,6 @@ test('persists external Shield deposit quote bindings across a restart', async (
     expect(await store.getSession('mainnet', 'wallet:one', 'account:one')).toBeNull()
   } finally {
     globalThis.chrome = previousChrome
-    if (previousLocks === undefined) delete globalThis.navigator.locks
-    else Object.defineProperty(globalThis.navigator, 'locks', previousLocks)
+    restoreLocks()
   }
 })
