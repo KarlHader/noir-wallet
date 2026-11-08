@@ -404,6 +404,20 @@ function resolveProductionChains(): AddressGatedChainRegistry {
 }
 
 export const accountNetworksClient = Object.freeze({
+  hasWallet: async (): Promise<boolean> => {
+    const response: unknown = await chrome.runtime.sendMessage({
+      type: 'GET_ACTIVE_WALLET_PRESENCE'
+    })
+    if (
+      typeof response !== 'object' ||
+      response === null ||
+      Array.isArray(response) ||
+      typeof (response as { hasWallet?: unknown }).hasWallet !== 'boolean'
+    ) {
+      throw new AccountNetworksClientError('unavailable', 'Wallet status unavailable')
+    }
+    return (response as { hasWallet: boolean }).hasWallet
+  },
   getCatalog: () => {
     const registryKey = JSON.stringify(getActiveChainEndpointSettings())
     if (!productionClient || productionRegistryKey !== registryKey) {

@@ -9,6 +9,7 @@ function setup({
   runtimeUnlocked = session,
   renewSessionOnCleanup = false,
   orphanLockFails = false,
+  lockFails = false,
   now = 2_000
 } = {}) {
   const calls = []
@@ -28,8 +29,10 @@ function setup({
       return 'locked'
     },
     lock: async () => {
+      if (lockFails) throw new Error('Wallet lock cleanup failed')
       runtimeUnlocked = false
       calls.push(['lock'])
+      return 'locked'
     },
     scheduleAlarm: async when => calls.push(['schedule', when]),
     clearAlarm: async () => calls.push(['clear']),
@@ -49,6 +52,27 @@ test.describe('Background auto-lock coordinator', () => {
     const { coordinator, calls } = setup({ autoLockMs: 1_000, now: 2_000 })
     await expect(coordinator.reconcile()).resolves.toBe('locked')
     expect(calls).toEqual([['lock'], ['clear']])
+  })
+
+  test('reschedules when a queued unlock renews the expired session', async () => {
+    let reads = 0
+    const calls = []
+    const coordinator = new AutoLockCoordinator({
+      readAutoLockMs: async () => 1_000,
+      readLastActivityTime: async () => (++reads === 1 ? 1_000 : 6_500),
+      hasUnlockSession: async () => true,
+      hasUnlockedRuntime: () => true,
+      lockOrphanedRuntime: async () => 'locked',
+      lock: async () => {
+        calls.push(['lock-check'])
+        return 'active'
+      },
+      scheduleAlarm: async when => calls.push(['schedule', when]),
+      clearAlarm: async () => calls.push(['clear']),
+      now: () => 7_000
+    })
+    await expect(coordinator.reconcile()).resolves.toBe('scheduled')
+    expect(calls).toEqual([['lock-check'], ['schedule', 7_500]])
   })
 
   test('autoLockMs zero only disables inactivity locking', async () => {
@@ -110,6 +134,12 @@ test.describe('Background auto-lock coordinator', () => {
     expect(calls).toEqual([['schedule', 62_000]])
   })
 
+  test('retries cleanup when an expired session cannot be locked', async () => {
+    const { coordinator, calls } = setup({ autoLockMs: 1_000, now: 2_000, lockFails: true })
+    await expect(coordinator.reconcile()).rejects.toThrow('Wallet lock cleanup failed')
+    expect(calls).toEqual([['schedule', 62_000]])
+  })
+
   test('shares the in-flight promise and drains a concurrent reconciliation request', async () => {
     let resolveFirstSettings
     let reads = 0
@@ -126,7 +156,10 @@ test.describe('Background auto-lock coordinator', () => {
       hasUnlockSession: async () => true,
       hasUnlockedRuntime: () => true,
       lockOrphanedRuntime: async () => 'locked',
-      lock: async () => calls.push(['lock']),
+      lock: async () => {
+        calls.push(['lock'])
+        return 'locked'
+      },
       scheduleAlarm: async when => calls.push(['schedule', when]),
       clearAlarm: async () => calls.push(['clear']),
       now: () => 2_000

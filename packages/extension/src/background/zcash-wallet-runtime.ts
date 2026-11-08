@@ -2252,9 +2252,7 @@ export class BackgroundZcashWalletRuntime {
   async lock(): Promise<void> {
     logger.log(`lock() called, isLocked: ${this.isLocked()}`)
 
-    this.setSessionPassword(null)
-    this.sessionCredentialWalletId = null
-    this.cancelActiveRestore(undefined, true)
+    this.beginLock()
 
     const syncingWalletIds = [...this.activeSyncWalletIds]
     for (const walletId of syncingWalletIds) {
@@ -2286,6 +2284,12 @@ export class BackgroundZcashWalletRuntime {
 
   isLocked(): boolean {
     return this.password === null && this.sessionCredentialWalletId === null
+  }
+
+  beginLock(): void {
+    this.setSessionPassword(null)
+    this.sessionCredentialWalletId = null
+    this.cancelActiveRestore(undefined, true)
   }
 
   getNetwork(): Network {

@@ -1561,29 +1561,49 @@ const evmSigningConformanceClient = __MULTICHAIN_CONFORMANCE_RPC_ENABLED__
   ? new EvmMultichainSigningClient({ credentials: credentialSession })
   : null
 
+let walletLockCleanupPending = false
+const readAutoLockDuration = async () => {
+  const settings = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+  return resolvePersistedAutoLockMs(
+    settings[SETTINGS_STORAGE_KEY],
+    WALLET_CONFIG.SECURITY.AUTO_LOCK.DEFAULT_MS,
+    WALLET_CONFIG.SECURITY.AUTO_LOCK.OPTIONS.map(option => option.value)
+  )
+}
 const backgroundAutoLock = new AutoLockCoordinator({
   readLastActivityTime: () => SecureStorage.getLastActivityTime(),
-  readAutoLockMs: async () => {
-    const settings = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
-    return resolvePersistedAutoLockMs(
-      settings[SETTINGS_STORAGE_KEY],
-      WALLET_CONFIG.SECURITY.AUTO_LOCK.DEFAULT_MS,
-      WALLET_CONFIG.SECURITY.AUTO_LOCK.OPTIONS.map(option => option.value)
-    )
-  },
+  readAutoLockMs: readAutoLockDuration,
   hasUnlockSession: () => credentialSession.hasUnlockSession(),
-  hasUnlockedRuntime: () => !backgroundZcashWalletRuntime.isLocked(),
+  hasUnlockedRuntime: () => !backgroundZcashWalletRuntime.isLocked() || walletLockCleanupPending,
   lockOrphanedRuntime: () =>
     enqueueWalletSessionTransition(async () => {
       // V1 unlock establishes its Zcash runtime before publishing the session.
       // Check again after that transition to avoid locking a completed unlock.
       if (await credentialSession.hasUnlockSession()) return 'active' as const
-      if (!backgroundZcashWalletRuntime.isLocked()) {
+      if (!backgroundZcashWalletRuntime.isLocked() || walletLockCleanupPending) {
         await completeWalletLock(beginWalletLockQuiesce())
       }
       return 'locked' as const
     }),
-  lock: () => handleWalletLock(),
+  lock: () =>
+    enqueueWalletSessionTransition(async () => {
+      const [hasSession, lastActivityTime, autoLockMs] = await Promise.all([
+        credentialSession.hasUnlockSession(),
+        SecureStorage.getLastActivityTime(),
+        readAutoLockDuration()
+      ])
+      if (
+        hasSession &&
+        (autoLockMs === 0 ||
+          (lastActivityTime !== null && lastActivityTime + autoLockMs > Date.now()))
+      ) {
+        return 'active' as const
+      }
+      if (hasSession || !backgroundZcashWalletRuntime.isLocked() || walletLockCleanupPending) {
+        await completeWalletLock(beginWalletLockQuiesce())
+      }
+      return 'locked' as const
+    }),
   scheduleAlarm: async when => {
     await chrome.alarms.create(WALLET_AUTO_LOCK_ALARM, { when })
   },
@@ -2077,7 +2097,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 })
 
-Promise.all([trustedStorageAccessReady, backgroundNetworkServicesReady])
+Promise.all([trustedStorageAccessReady, runtimeNetworkReady])
   .then(([storageRestricted]) => {
     if (!storageRestricted) return
     return chrome.storage.session.get(['session_password', 'session_key_material']).then(legacy => {
@@ -2979,7 +2999,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   if (message.type === 'GET_WALLET_SESSION_STATE') {
     credentialSession
       .hasUnlockSession()
-      .then(active => sendResponse({ active }))
+      .then(active => {
+        sendResponse({ active })
+        if (!active) {
+          void backgroundAutoLock.reconcile().catch(error => {
+            console.warn('[Background] Auto-lock reconciliation failed:', error)
+          })
+        }
+      })
       .catch(() => sendResponse({ active: false }))
     return true
   }
@@ -5507,6 +5534,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (isRuntimeRecord(message) && message.type === 'GET_WALLET_SESSION_STATE') {
     return handleRuntimeMessage(message, sender, sendResponse)
   }
+  if (isRuntimeRecord(message) && message.type === 'GET_ACTIVE_WALLET_PRESENCE') {
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page') {
+      sendResponse({ error: 'Unauthorized runtime message sender' })
+      return true
+    }
+    void credentialLifecycle.hasActiveWalletSet().then(
+      hasWallet => sendResponse({ hasWallet }),
+      () => sendResponse({ error: 'Wallet status unavailable' })
+    )
+    return true
+  }
   if (isRuntimeNetworkInitialized() && multichainRuntimeKey !== '') {
     return handleRuntimeMessage(message, sender, sendResponse)
   }
@@ -6003,6 +6041,9 @@ function handleWalletCreated(
 function beginWalletLockQuiesce(): Promise<
   { readonly success: true } | { readonly success: false; readonly error: unknown }
 > {
+  walletLockCleanupPending = true
+  backgroundZcashWalletRuntime.beginLock()
+  void credentialSession.lock().catch(() => {})
   syncScheduler.pauseForTx()
   syncScheduler.abortSync()
   const walletId = useWalletStore.getState().currentWalletId
@@ -6018,6 +6059,7 @@ async function completeWalletLock(
   try {
     const result = await syncQuiesced
     await accountContextTransition.runActiveOperation(performWalletLockState)
+    walletLockCleanupPending = false
     if (!result.success) {
       console.warn('[Background] Wallet reconcile failed before lock; lock cleanup completed')
     }
@@ -6028,7 +6070,16 @@ async function completeWalletLock(
 
 function handleWalletLock(): Promise<void> {
   const syncQuiesced = beginWalletLockQuiesce()
-  return enqueueWalletSessionTransition(() => completeWalletLock(syncQuiesced))
+  return enqueueWalletSessionTransition(async () => {
+    backgroundZcashWalletRuntime.beginLock()
+    await credentialSession.lock().catch(() => {})
+    await completeWalletLock(syncQuiesced)
+  }).catch(async error => {
+    await chrome.alarms
+      .create(WALLET_AUTO_LOCK_ALARM, { when: Date.now() + 60_000 })
+      .catch(() => {})
+    throw error
+  })
 }
 
 async function performWalletLockState(): Promise<void> {

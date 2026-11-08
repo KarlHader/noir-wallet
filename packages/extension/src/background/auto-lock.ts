@@ -7,7 +7,7 @@ export interface AutoLockCoordinatorOptions {
   readonly hasUnlockSession: () => Promise<boolean>
   readonly hasUnlockedRuntime: () => boolean
   readonly lockOrphanedRuntime: () => Promise<'active' | 'locked'>
-  readonly lock: () => Promise<void>
+  readonly lock: () => Promise<'active' | 'locked'>
   readonly scheduleAlarm: (when: number) => Promise<void>
   readonly clearAlarm: () => Promise<void>
   readonly now?: () => number
@@ -88,7 +88,17 @@ export class AutoLockCoordinator {
       throw new Error('Invalid auto-lock deadline')
     }
     if (deadline <= this.now()) {
-      await this.options.lock()
+      let result: 'active' | 'locked'
+      try {
+        result = await this.options.lock()
+      } catch (error) {
+        await this.options.scheduleAlarm(this.now() + AUTO_LOCK_RETRY_MS)
+        throw error
+      }
+      if (result === 'active') {
+        this.reconcileRequested = true
+        return 'scheduled'
+      }
       await this.options.clearAlarm()
       return 'locked'
     }
