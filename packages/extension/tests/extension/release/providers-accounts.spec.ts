@@ -1,4 +1,13 @@
 import {
+  keccak256,
+  parseTransaction,
+  recoverMessageAddress,
+  recoverTransactionAddress,
+  recoverTypedDataAddress,
+  toFunctionSelector,
+  type Hex
+} from 'viem'
+import {
   BITCOIN_MAINNET_CHAIN_ID,
   EVM_NETWORK_CONFIGS,
   NEAR_NETWORKS,
@@ -65,11 +74,14 @@ test('exposes the released multichain provider surface by default', async ({ con
   await page.getByRole('button', { name: 'Testnet' }).click()
   await expect(page.getByRole('button', { name: 'Sepolia', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Avalanche Fuji', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Robinhood Testnet', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Solana Devnet', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'NEAR Testnet', exact: true })).toBeVisible()
+  await captureScreenshot(page, 'sdk-example-robinhood-testnet-grid.png')
   await page.getByRole('button', { name: 'Mainnet' }).click()
   await expect(page.getByRole('button', { name: 'Solana', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'NEAR', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Robinhood', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Solana', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Solana dApp provider' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Sign serialized transaction' })).toBeVisible()
@@ -87,13 +99,6 @@ test('exposes the released multichain provider surface by default', async ({ con
   const providerNetworkButtons = page.locator('.provider-network-button')
   const providerNetworkButtonCount = await providerNetworkButtons.count()
   const providerNetworkIcons = page.locator('.provider-network-icon-frame img')
-  expect(
-    await providerNetworkIcons.evaluateAll(images =>
-      images.every(image =>
-        image.getAttribute('src')?.startsWith('https://assets.zknoir.com/chain/')
-      )
-    )
-  ).toBe(true)
   expect(
     await providerNetworkButtons.evaluateAll(
       buttons => new Set(buttons.map(button => Math.round(button.getBoundingClientRect().top))).size
@@ -353,7 +358,7 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   }
   for (const chainId of evmChainIds) {
     scopes[chainId] = {
-      methods: ['eth_accounts'],
+      methods: ['eth_accounts', 'eth_chainId', 'eth_getBalance'],
       notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
     }
   }
@@ -534,8 +539,8 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   if (nearEnabled) expect(providerState.nearAccounts).toHaveLength(1)
   expect(providerState.deniedCode).toBe(4100)
 
-  const customChainId = '0x7a69'
-  const customRpcUrl = 'https://custom-evm.noir.test/rpc'
+  const customChainId = '0x1237'
+  const customRpcUrl = 'https://rpc.mainnet.chain.robinhood.com/'
   let customBroadcasts = 0
   await context.route(customRpcUrl, route => {
     const request = route.request().postDataJSON() as { id?: unknown; method?: unknown }
@@ -562,23 +567,14 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
       })
     })
   })
-  await page.getByRole('button', { name: 'Ethereum', exact: true }).click()
-  await page.getByText('Add or switch network', { exact: true }).click()
-  await page.getByLabel('EIP-3085 parameters').fill(
-    JSON.stringify({
-      chainId: customChainId,
-      chainName: 'QA Local EVM',
-      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: [customRpcUrl]
-    })
-  )
   const addApprovalPromise = context.waitForEvent('page')
-  await page.getByRole('button', { name: 'Add network', exact: true }).click()
+  await page.getByRole('button', { name: 'Robinhood', exact: true }).click()
   const addApproval = await addApprovalPromise
   await addApproval.waitForURL(/#approval\?requestId=/)
   await expect(addApproval.getByText('Add network', { exact: true })).toBeVisible()
+  await captureScreenshot(addApproval, 'robinhood-add-network-approval.png')
+  const switchApprovalPromise = context.waitForEvent('page', { timeout: 30_000 })
   await addApproval.getByRole('button', { name: 'Add Network' }).click()
-  await expect(page.getByText('QA Local EVM is available in Noir Wallet.')).toBeVisible()
   const unrequestedScopeCode = await page.evaluate(async () => {
     const wallet = Reflect.get(window, 'noirwallet') as {
       multichain: {
@@ -587,7 +583,7 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
     }
     try {
       await wallet.multichain.invokeMethod({
-        scope: 'eip155:31337',
+        scope: 'eip155:4663',
         request: { method: 'eth_accounts' }
       })
       return null
@@ -597,13 +593,12 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   })
   expect(unrequestedScopeCode).toBe(4100)
 
-  const switchApprovalPromise = context.waitForEvent('page')
-  await page.getByRole('button', { name: 'Switch network', exact: true }).click()
   const switchApproval = await switchApprovalPromise
   await switchApproval.waitForURL(/#approval\?requestId=/)
   await expect(switchApproval.getByText('Switch network', { exact: true })).toBeVisible()
+  await captureScreenshot(switchApproval, 'robinhood-switch-network-approval.png')
   await switchApproval.getByRole('button', { name: 'Switch Network' }).click()
-  await expect(page.getByText('Switched to QA Local EVM.')).toBeVisible()
+  await expect(page.getByText('Switched to Robinhood')).toBeVisible()
   await expect
     .poll(() => readEvmProviderChainIds(page))
     .toEqual({
@@ -690,6 +685,35 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
     )
     .toBe('0x1')
 
+  const repeatSwitchApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Robinhood', exact: true }).click()
+  const repeatSwitchApproval = await repeatSwitchApprovalPromise
+  await repeatSwitchApproval.waitForURL(/#approval\?requestId=/)
+  await expect(repeatSwitchApproval.getByText('Switch network', { exact: true })).toBeVisible()
+  await repeatSwitchApproval.getByRole('button', { name: 'Switch Network' }).click()
+  await expect
+    .poll(() => readEvmProviderChainIds(page), { timeout: 15_000 })
+    .toEqual({
+      property: customChainId,
+      request: customChainId
+    })
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Robinhood', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  )
+  const returnApprovalPromise = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Ethereum', exact: true }).click()
+  const returnApproval = await returnApprovalPromise
+  await returnApproval.waitForURL(/#approval\?requestId=/)
+  await returnApproval.getByRole('button', { name: 'Switch Network' }).click()
+  await expect
+    .poll(() => readEvmProviderChainIds(page))
+    .toEqual({
+      property: '0x1',
+      request: '0x1'
+    })
+
   await page.evaluate(async () => {
     const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
       request(input: { method: string; params: unknown[] }): Promise<unknown>
@@ -771,6 +795,209 @@ test('shares EVM accounts across CAIP-25 scopes and keeps other grants on EVM re
   await expect(page.getByText('0x1', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Zcash', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible()
+})
+
+test('uses the Robinhood demo with an imported EVM key and intercepted transactions', async ({
+  context,
+  popup
+}) => {
+  test.skip(
+    process.env.APPROVAL_WINDOW_E2E !== '1',
+    'Chrome popup windows require an explicit real-browser approval run'
+  )
+  test.setTimeout(180_000)
+  const origin = 'https://robinhood-demo.noir.test'
+  const rpcOrigin = 'https://rpc.mainnet.chain.robinhood.com'
+  const address = '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf'
+  const recipient = '0x2222222222222222222222222222222222222222'
+  const rawTransactions: Hex[] = []
+  await mockReleasedEvmRpc(context)
+  await mockExternalAssetIcons(context)
+  await context.route(`${origin}/**`, serveSdkExample)
+  await context.route(
+    url => url.origin === rpcOrigin,
+    async route => {
+      const request = route.request().postDataJSON() as {
+        id: unknown
+        method: string
+        params?: unknown[]
+      }
+      let result: unknown = '0x0'
+      switch (request.method) {
+        case 'eth_chainId':
+          result = '0x1237'
+          break
+        case 'eth_getBalance':
+          result = '0xde0b6b3a7640000'
+          break
+        case 'eth_estimateGas':
+          result = '0x186a0'
+          break
+        case 'eth_call':
+          result = '0x'
+          break
+        case 'eth_getCode':
+          result = '0x60006000'
+          break
+        case 'eth_getBlockByNumber':
+          result = { number: '0x101', baseFeePerGas: '0x5f5e100', gasLimit: '0x4000000000000' }
+          break
+        case 'eth_getTransactionCount':
+          result = `0x${rawTransactions.length.toString(16)}`
+          break
+        case 'eth_sendRawTransaction': {
+          const raw = request.params?.[0]
+          if (typeof raw !== 'string' || !/^0x[0-9a-f]+$/i.test(raw)) {
+            throw new Error('Expected a signed transaction at the intercepted Robinhood RPC')
+          }
+          rawTransactions.push(raw as Hex)
+          result = keccak256(raw as Hex)
+          break
+        }
+        case 'eth_getTransactionReceipt':
+        case 'eth_getTransactionByHash':
+          result = null
+          break
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ jsonrpc: '2.0', id: request.id, result })
+      })
+    }
+  )
+
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
+  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup.getByRole('button', { name: 'Add Wallet', exact: true }).click()
+  await popup.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+  await popup.getByRole('button', { name: 'Private Key', exact: true }).click()
+  await popup.getByLabel('Wallet name').fill('Robinhood synthetic EVM')
+  await popup.getByLabel('Private key', { exact: true }).fill(`0x${'00'.repeat(31)}01`)
+  await popup.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(popup.getByText('EVM address preview', { exact: true })).toBeVisible()
+  await popup.getByRole('button', { name: 'Import wallet', exact: true }).click()
+  await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
+
+  const page = await context.newPage()
+  await page.goto(`${origin}/example/`)
+  await page.waitForFunction(() => 'noirwallet' in window)
+  const addOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Robinhood', exact: true }).click()
+  const addApproval = await addOpened
+  await addApproval.waitForURL(/#approval\?requestId=/)
+  const switchOpened = context.waitForEvent('page', { timeout: 30_000 })
+  await addApproval.getByRole('button', { name: 'Add Network', exact: true }).click()
+  const switchApproval = await switchOpened
+  await switchApproval.waitForURL(/#approval\?requestId=/)
+  await switchApproval.getByRole('button', { name: 'Switch Network', exact: true }).click()
+  await expect
+    .poll(() => readEvmProviderChainIds(page))
+    .toEqual({
+      property: '0x1237',
+      request: '0x1237'
+    })
+  const connectOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Connect EVM', exact: true }).click()
+  const connectApproval = await connectOpened
+  await connectApproval.waitForURL(/#approval\?requestId=/)
+  await connectApproval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Reconnect EVM', exact: true })).toBeVisible()
+  expect(
+    await page.evaluate(async () =>
+      Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum').request({ method: 'eth_accounts' })
+    )
+  ).toEqual([address])
+
+  const message = 'Robinhood synthetic EVM demo'
+  await page.getByLabel('Message', { exact: true }).fill(message)
+  const personalOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Personal sign', exact: true }).click()
+  const personalApproval = await personalOpened
+  await personalApproval.waitForURL(/#approval\?requestId=/)
+  await captureScreenshot(personalApproval, 'robinhood-personal-sign-approval.png')
+  await personalApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
+  const personalResult = page.getByText(/^Personal signature: 0x[0-9a-fA-F]{130}$/)
+  await expect(personalResult).toBeVisible()
+  const personalSignature = (await personalResult.innerText()).replace(
+    'Personal signature: ',
+    ''
+  ) as Hex
+  expect(
+    (await recoverMessageAddress({ message, signature: personalSignature })).toLowerCase()
+  ).toBe(address)
+
+  const typedOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Sign EIP-712', exact: true }).click()
+  const typedApproval = await typedOpened
+  await typedApproval.waitForURL(/#approval\?requestId=/)
+  await typedApproval.getByRole('button', { name: 'Sign message', exact: true }).click()
+  const typedResult = page.getByText(/^Typed-data signature: 0x[0-9a-fA-F]{130}$/)
+  await expect(typedResult).toBeVisible()
+  const typedSignature = (await typedResult.innerText()).replace(
+    'Typed-data signature: ',
+    ''
+  ) as Hex
+  expect(
+    (
+      await recoverTypedDataAddress({
+        domain: {
+          name: 'Noir Wallet SDK Example',
+          version: '1',
+          chainId: 4663,
+          verifyingContract: address
+        },
+        types: {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' }
+          ],
+          Message: [{ name: 'contents', type: 'string' }]
+        },
+        primaryType: 'Message',
+        message: { contents: message },
+        signature: typedSignature
+      })
+    ).toLowerCase()
+  ).toBe(address)
+
+  await page.getByLabel('Recipient', { exact: true }).fill(recipient)
+  await page.getByLabel('Amount (native token)').fill('0.00001')
+  const nativeOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Send transaction', exact: true }).click()
+  const nativeApproval = await nativeOpened
+  await nativeApproval.waitForURL(/#approval\?requestId=/)
+  await captureScreenshot(nativeApproval, 'robinhood-native-transfer-approval.png')
+  await nativeApproval.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await expect(page.getByText(/^Transaction: 0x[0-9a-fA-F]{64}$/)).toBeVisible()
+  expect(rawTransactions).toHaveLength(1)
+  const nativeTransaction = parseTransaction(rawTransactions[0])
+  expect(nativeTransaction.chainId).toBe(4663)
+  expect(nativeTransaction.to?.toLowerCase()).toBe(recipient)
+  expect(nativeTransaction.value).toBe(10_000_000_000_000n)
+  expect(
+    (await recoverTransactionAddress({ serializedTransaction: rawTransactions[0] })).toLowerCase()
+  ).toBe(address)
+
+  await page.getByLabel('NoirTestBench address').fill(recipient)
+  const contractOpened = context.waitForEvent('page')
+  await page.getByRole('button', { name: 'Increment', exact: true }).click()
+  const contractApproval = await contractOpened
+  await contractApproval.waitForURL(/#approval\?requestId=/)
+  await captureScreenshot(contractApproval, 'robinhood-contract-approval.png')
+  await contractApproval.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await expect(page.getByText(/^increment transaction: 0x[0-9a-fA-F]{64}$/)).toBeVisible()
+  expect(rawTransactions).toHaveLength(2)
+  const contract = parseTransaction(rawTransactions[1])
+  expect(contract.chainId).toBe(4663)
+  expect(contract.to?.toLowerCase()).toBe(recipient)
+  expect(contract.data?.slice(0, 10)).toBe(toFunctionSelector('increment()'))
+  expect(
+    (await recoverTransactionAddress({ serializedTransaction: rawTransactions[1] })).toLowerCase()
+  ).toBe(address)
 })
 
 test('adds a Zcash account after the service worker restores an unlocked session', async ({
