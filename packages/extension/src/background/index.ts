@@ -224,6 +224,7 @@ import {
   createBackgroundConfidentialFundingCoordinator
 } from './confidential-funding'
 import type { ConfidentialFundingCoordinator } from './confidential-funding-coordinator'
+import { getConfidentialFundingMessageHandler } from './confidential-funding-messages'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 import { createEvmWalletRuntimeError } from '@/core/chains/evm'
 import { hidePortfolioAssets } from '@/core/portfolio'
@@ -3900,19 +3901,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
-  if (
-    message.type === 'PREPARE_CONFIDENTIAL_FUNDING' ||
-    message.type === 'PREVIEW_CONFIDENTIAL_FUNDING' ||
-    message.type === 'CREATE_EXTERNAL_SHIELD_DEPOSIT' ||
-    message.type === 'GET_EXTERNAL_SHIELD_DEPOSIT' ||
-    message.type === 'LIST_EXTERNAL_SHIELD_DEPOSITS' ||
-    message.type === 'REFRESH_EXTERNAL_SHIELD_DEPOSIT' ||
-    message.type === 'CONFIRM_CONFIDENTIAL_FUNDING' ||
-    message.type === 'GET_CONFIDENTIAL_FUNDING' ||
-    message.type === 'CHECK_CONFIDENTIAL_FUNDING_SUBMISSION' ||
-    message.type === 'CANCEL_CONFIDENTIAL_FUNDING' ||
-    message.type === 'REFRESH_CONFIDENTIAL_BALANCES'
-  ) {
+  const confidentialFundingHandler = getConfidentialFundingMessageHandler(message.type)
+  if (confidentialFundingHandler) {
     const coordinator = confidentialFundingCoordinator
     if (!coordinator) {
       sendResponse({ error: 'Confidential funding is unavailable in this network' })
@@ -3925,34 +3915,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: 'Unauthorized confidential funding request' })
       return true
     }
-    const operation =
-      message.type === 'REFRESH_CONFIDENTIAL_BALANCES'
-        ? coordinator.refreshBalances(message.scope, message.authorize)
-        : message.type === 'CREATE_EXTERNAL_SHIELD_DEPOSIT'
-          ? coordinator.createExternalDeposit(message.request)
-          : message.type === 'GET_EXTERNAL_SHIELD_DEPOSIT'
-            ? coordinator.getExternalDeposit(message.depositId)
-            : message.type === 'LIST_EXTERNAL_SHIELD_DEPOSITS'
-              ? coordinator.listExternalDeposits(message.scope)
-              : message.type === 'REFRESH_EXTERNAL_SHIELD_DEPOSIT'
-                ? coordinator.refreshExternalDeposit(message.depositId)
-                : message.type === 'PREPARE_CONFIDENTIAL_FUNDING'
-                  ? coordinator.prepare(message.request)
-                  : message.type === 'PREVIEW_CONFIDENTIAL_FUNDING'
-                    ? coordinator.preview(message.request)
-                    : message.type === 'CONFIRM_CONFIDENTIAL_FUNDING'
-                      ? coordinator.confirm(message.planId, message.payloadFingerprint)
-                      : message.type === 'GET_CONFIDENTIAL_FUNDING'
-                        ? coordinator.getPlan(message.planId)
-                        : message.type === 'CHECK_CONFIDENTIAL_FUNDING_SUBMISSION'
-                          ? accountContextTransition.runActiveOperation(() =>
-                              coordinator.checkSubmission(message.planId)
-                            )
-                          : coordinator.cancel(message.planId)
+    const operation = confidentialFundingHandler({ coordinator, accountContextTransition }, message)
     void operation
-      .then(result =>
-        sendResponse({ result: message.type === 'CANCEL_CONFIDENTIAL_FUNDING' ? true : result })
-      )
+      .then(result => sendResponse({ result }))
       .catch(error => {
         console.error('[Confidential Funding] Request failed', {
           operation: message.type,
