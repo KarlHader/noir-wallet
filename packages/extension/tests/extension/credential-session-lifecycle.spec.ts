@@ -74,6 +74,7 @@ async function prepareUnlockedInventorySession(page: Page, extensionId: string, 
 
   await page.goto(`chrome-extension://${extensionId}/index.html`)
   await waitForBackgroundWalletInitialization(page)
+  await expect(page.getByRole('heading', { name: 'Enter your password' })).toBeVisible()
   await expect(
     page.evaluate(
       password => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password }),
@@ -89,8 +90,20 @@ async function selectRetainedAccountThroughPopup(
 ): Promise<void> {
   await expect(page.getByRole('button', { name: 'Choose wallet' })).toBeVisible()
   await page.getByRole('button', { name: 'Choose wallet' }).click()
-  await page.getByPlaceholder('Search Account').fill(target.walletName)
-  await page.getByRole('button', { name: `Switch to ${target.accountName}` }).click({
+  await page.evaluate(() => {
+    document.documentElement.dataset.accountSwitchComplete = 'false'
+    const onMessage = (message: { type?: string }) => {
+      if (message.type !== 'ACCOUNT_CONTEXT_CHANGED') return
+      chrome.runtime.onMessage.removeListener(onMessage)
+      document.documentElement.dataset.accountSwitchComplete = 'true'
+    }
+    chrome.runtime.onMessage.addListener(onMessage)
+  })
+  const walletGroup = page
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByText(target.walletName, { exact: true })
+    .locator('..')
+  await walletGroup.getByRole('button', { name: `Switch to ${target.accountName}` }).click({
     position: { x: 4, y: 4 }
   })
   const chooseWallet = page.getByRole('button', { name: 'Choose wallet' })
@@ -108,16 +121,23 @@ async function selectRetainedAccountThroughPopup(
   if (await syncConfirmation.isVisible()) {
     await syncConfirmation.getByRole('button', { name: 'Switch anyway' }).click()
   }
-  await expect(chooseWallet).toBeVisible({ timeout: 30_000 })
   await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const stored = await chrome.storage.local.get('wallet_state')
-        const { currentWalletId, currentAccountId } = stored.wallet_state.state
-        return { walletId: currentWalletId, accountId: currentAccountId }
-      })
+    .poll(() => page.evaluate(() => document.documentElement.dataset.accountSwitchComplete), {
+      timeout: 30_000
+    })
+    .toBe('true')
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const stored = await chrome.storage.local.get('wallet_state')
+          const { currentWalletId, currentAccountId } = stored.wallet_state.state
+          return { walletId: currentWalletId, accountId: currentAccountId }
+        }),
+      { timeout: 30_000 }
     )
     .toEqual({ walletId: target.walletId, accountId: target.accountId })
+  await expect(chooseWallet).toBeVisible({ timeout: 30_000 })
   await expect(
     page.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
   ).resolves.toEqual({ active: true })
@@ -212,6 +232,7 @@ test('keeps the unlocked session while switching between software wallets', asyn
     accountId: setup.previousAccountId
   })
   await terminateExtensionServiceWorker(context, popup)
+  await waitForBackgroundWalletInitialization(popup)
   await expect
     .poll(() =>
       popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
@@ -289,8 +310,11 @@ test('returns from an active private-key wallet to a retained Zcash wallet', asy
     accountId: setup.previousAccountId
   })
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  await popup.getByPlaceholder('Search Account').fill('Imported EVM Test')
-  await popup.getByRole('button', { name: 'Switch to Account 1' }).click({
+  const importedWalletGroup = popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByText('Imported EVM Test', { exact: true })
+    .locator('..')
+  await importedWalletGroup.getByRole('button', { name: 'Switch to Account 1' }).click({
     position: { x: 4, y: 4 }
   })
   await expect(popup.getByRole('button', { name: 'Choose wallet' })).toBeVisible({

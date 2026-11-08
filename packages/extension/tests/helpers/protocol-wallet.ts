@@ -5,6 +5,7 @@ import { Buffer } from 'buffer'
 import { keccak256, parseTransaction, recoverMessageAddress, type Hex } from 'viem'
 import { DEFAULT_HISTORY_API_ORIGIN } from '../../scripts/lib/extension-build-config'
 import { NEAR_NETWORKS } from '../../src/config/networks'
+import { RPC_DEFAULT_ENDPOINTS, RPC_REGISTRY_URL } from '../../src/config/rpc-endpoints'
 import {
   captureScreenshot,
   e2eEnabledChainFeatureFlags,
@@ -33,20 +34,6 @@ const ZEC_ASSET = 'nep141:zec.omft.near'
 const TRIAL_ASSET = 'nep141:trial-eth.omft.near'
 const TRIAL_CONTRACT = `0x${'7'.repeat(40)}`
 const MAINNET_GENESIS = '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'
-const EVM_RPC_NETWORKS = Object.freeze([
-  Object.freeze({ url: 'https://eth.deltarpc.com/**', chainId: '0x1' }),
-  Object.freeze({ url: 'https://bsc-dataseed.bnbchain.org/**', chainId: '0x38' }),
-  Object.freeze({ url: 'https://arbitrum.drpc.org/**', chainId: '0xa4b1' }),
-  Object.freeze({ url: 'https://mainnet.base.org/**', chainId: '0x2105' }),
-  Object.freeze({ url: 'https://mainnet.optimism.io/**', chainId: '0xa' }),
-  Object.freeze({ url: 'https://polygon.drpc.org/**', chainId: '0x89' }),
-  Object.freeze({ url: 'https://api.avax.network/ext/bc/C/rpc/**', chainId: '0xa86a' }),
-  Object.freeze({ url: 'https://rpc.monad.xyz/**', chainId: '0x8f' }),
-  Object.freeze({ url: 'https://rpc.gnosischain.com/**', chainId: '0x64' }),
-  Object.freeze({ url: 'https://rpc.plasma.to/**', chainId: '0x2611' }),
-  Object.freeze({ url: 'https://rpc.xlayer.tech/**', chainId: '0xc4' }),
-  Object.freeze({ url: 'https://rpc.berachain.com/**', chainId: '0x138de' })
-])
 const EVM_HISTORY_URLS = [
   'https://eth.blockscout.com/api/**',
   'https://arbitrum.blockscout.com/api/**',
@@ -283,6 +270,38 @@ async function mockEvmNetwork(
   const broadcastRawTransactions: string[] = []
   const broadcastValues: bigint[] = []
   const addressBalances = new Map<string, bigint>()
+  const evmRpcNetworks = Object.entries(RPC_DEFAULT_ENDPOINTS.evm.mainnet).map(
+    ([id, endpoint]) => ({ id, endpoint, chainId: `0x${Number(id.split(':')[1]).toString(16)}` })
+  )
+  await context.route(RPC_REGISTRY_URL, route =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        chains: [
+          {
+            id: 'zcash-mainnet',
+            chain: 'zcash',
+            network: 'mainnet',
+            label: 'Zcash',
+            iconChain: 'zec',
+            probe: 'zcash-lightwalletd-grpc-web',
+            endpoints: [RPC_DEFAULT_ENDPOINTS.zcash.mainnet]
+          },
+          ...evmRpcNetworks.map(({ id, endpoint }) => ({
+            id,
+            chain: 'evm',
+            network: 'mainnet',
+            label: id,
+            iconChain: id,
+            probe: 'evm-json-rpc',
+            endpoints: [endpoint]
+          }))
+        ]
+      })
+    })
+  )
   await context.route(
     url => EVM_HISTORY_PROXY_ORIGINS.has(url.origin) && url.pathname === '/',
     route => {
@@ -307,8 +326,8 @@ async function mockEvmNetwork(
       })
     )
   }
-  for (const network of EVM_RPC_NETWORKS) {
-    await context.route(network.url, async route => {
+  for (const network of evmRpcNetworks) {
+    await context.route(`${network.endpoint.url}/**`, async route => {
       rpcRequestCount += 1
       const request = route.request().postDataJSON() as {
         id: number

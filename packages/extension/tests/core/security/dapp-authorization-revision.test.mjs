@@ -7,6 +7,7 @@ import {
   DAppManager,
   parseStoredDAppConnection
 } from '../../../src/core/dapp/dapp-manager.ts'
+import { initializeEvmSiteNetworks } from '../../../src/background/wallet-dapp-evm-networks.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript')
@@ -537,6 +538,33 @@ test('removing a custom chain drops its session scope but retains the shared EVM
     (await manager.getEvmNetworkState(origin))?.approvedChainIds.includes('eip155:31337'),
     false
   )
+})
+
+test('removing the only approved EVM chain does not approve the fallback chain on reload', async () => {
+  const { manager, storage } = managerFixture()
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await manager.setEvmActiveChain(origin, 'eip155:31337', { approve: true })
+  await manager.removeChainAuthorizations(['eip155:31337'])
+
+  const reloaded = new DAppManager(storage)
+  await initializeEvmSiteNetworks(reloaded, 'eip155:1')
+  assert.deepEqual(await reloaded.getEvmAuthorization(origin), {
+    accounts: [account],
+    binding: account
+  })
+  assert.equal(await reloaded.getEvmNetworkState(origin), null)
+  assert.equal(await reloaded.getChainAuthorization(origin, 'eip155:1'), null)
+  await assert.rejects(
+    reloaded.setEvmActiveChain(origin, 'eip155:1', { approve: false }),
+    /network permission/
+  )
+  await reloaded.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await reloaded.setEvmActiveChain(origin, 'eip155:1', { approve: true })
+  assert.deepEqual(await reloaded.getChainAuthorization(origin, 'eip155:1'), {
+    chainId: 'eip155:1',
+    accounts: [account],
+    binding: account
+  })
 })
 
 test('identical legacy EVM grants migrate with their session account snapshot', async () => {

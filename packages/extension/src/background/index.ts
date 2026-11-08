@@ -245,6 +245,7 @@ import { createBackgroundAccountNetworksCoordinator } from './account-networks'
 import { WalletDAppConnectionCoordinator } from './wallet-dapp-connection'
 import {
   CurrentDAppEvmNetworkCoordinator,
+  initializeEvmSiteNetworks,
   type CurrentDAppEvmNetworkSelectionContext,
   type CurrentDAppEvmNetworkState
 } from './wallet-dapp-evm-networks'
@@ -780,30 +781,6 @@ async function notifyEvmSiteChainChanged(origin: string, previousChainId: string
   await handler.notifyAccountsChanged(origin)
 }
 
-async function initializeEvmSiteNetworks(fallbackChainId: string): Promise<void> {
-  const connections = await dappManager.getAllConnections()
-  for (const connection of connections) {
-    if (!connection.evmAuthorization) continue
-    const revision = await dappManager.getAuthorizationRevision(connection.origin)
-    if (await dappManager.getEvmNetworkState(connection.origin)) continue
-    try {
-      // Preserve the legacy provider's current network, not its entire configured catalog.
-      await dappManager.setEvmActiveChain(connection.origin, fallbackChainId, {
-        approve: true,
-        expectedActiveChainId: null,
-        expectedRevision: revision
-      })
-    } catch (error) {
-      if (
-        (await dappManager.getAuthorizationRevision(connection.origin)) !== revision ||
-        (await dappManager.getEvmNetworkState(connection.origin))
-      )
-        continue
-      throw error
-    }
-  }
-}
-
 async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeScope> {
   const account = await accountNetworksCoordinator.readActiveAccount()
   if (!account) throw new Error('No active wallet account')
@@ -1188,6 +1165,7 @@ async function reloadMultichainRuntime(
   const activeEvm = resolveActiveEvmNetworkConfig(DEFAULT_NETWORK, settings)
   const previousEvmChainId = evmDAppHandler?.getCaip2ChainId()
   await initializeEvmSiteNetworks(
+    dappManager,
     previousEvmChainId && catalog.some(network => network.chainId === previousEvmChainId)
       ? previousEvmChainId
       : activeEvm.chainId

@@ -61,7 +61,7 @@ export function homeAssetDomainPath(search: string, domain: AssetDomain): string
   params.delete('mode')
   if (domain === 'all') params.delete('domain')
   else params.set('domain', domain)
-  params.delete('tab')
+  if (params.get('tab') !== 'activity') params.delete('tab')
   const remaining = params.toString()
   return remaining ? `/?${remaining}` : '/'
 }

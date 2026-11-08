@@ -68,10 +68,25 @@ test('persists external Shield deposit quote bindings across a restart', async (
   const session = storageArea()
   const previousChrome = globalThis.chrome
   const previousLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+  let lockTail = Promise.resolve()
   globalThis.chrome = { storage: { local, session } }
   Object.defineProperty(globalThis.navigator, 'locks', {
     configurable: true,
-    value: { request: async (_name, operation) => operation() }
+    value: {
+      request: async (_name, operation) => {
+        const previous = lockTail
+        let release
+        lockTail = new Promise(resolve => {
+          release = resolve
+        })
+        await previous
+        try {
+          return await operation()
+        } finally {
+          release()
+        }
+      }
+    }
   })
   try {
     const store = new ChromeConfidentialFundingStore()
@@ -136,6 +151,33 @@ test('persists external Shield deposit quote bindings across a restart', async (
     await store.putExternalDeposit(record)
     expect(await new ChromeConfidentialFundingStore().getExternalDeposit('one')).toEqual(record)
     const partial = { ...record, fundingObservedAt: 2_000, providerStatus: 'EXPIRED' }
+    const originalSet = local.set
+    let releaseWrite
+    let writeStarted
+    const writeStartedPromise = new Promise(resolve => {
+      writeStarted = resolve
+    })
+    const writeGate = new Promise(resolve => {
+      releaseWrite = resolve
+    })
+    local.set = async entries => {
+      if (
+        Object.keys(entries).some(storageKey =>
+          storageKey.startsWith('confidential_external_deposit:')
+        )
+      ) {
+        writeStarted()
+        await writeGate
+      }
+      return originalSet(entries)
+    }
+    const pendingWrite = store.putExternalDeposit(partial)
+    await writeStartedPromise
+    const pendingClear = store.clearAllWalletData()
+    releaseWrite()
+    await Promise.all([pendingWrite, pendingClear])
+    expect(await store.listExternalDeposits()).toEqual([])
+    local.set = originalSet
     await store.putExternalDeposit(partial)
     expect(await new ChromeConfidentialFundingStore().getExternalDeposit('one')).toEqual(partial)
     const key = [...local.values.keys()].find(value =>
@@ -162,6 +204,7 @@ test('persists external Shield deposit quote bindings across a restart', async (
     await store.putExternalDeposit(record)
     await store.deleteExternalDepositsByAccountScope('wallet:one', 'account:one')
     expect(await store.listExternalDeposits()).toEqual([])
+    await store.putExternalDeposit(record)
     const auth = {
       accessToken: 'access',
       refreshToken: 'refresh',
@@ -175,10 +218,59 @@ test('persists external Shield deposit quote bindings across a restart', async (
     expect(await store.getSession('mainnet', 'wallet:one', 'account:one')).toBeNull()
     expect(await store.getSession('testnet', 'wallet:one', 'account:one')).toBeNull()
     expect(await store.getSession('mainnet', 'wallet:one', 'account:two')).toEqual(auth)
+    await store.putSession('mainnet', 'wallet:one', 'account:one', auth)
+    await store.putBalances('mainnet', 'wallet:one', 'account:one', [
+      { tokenId: 'nep141:usdc.omft.near', available: '42', source: 'intents' }
+    ])
+    const plan = {
+      schemaVersion: 1,
+      planId: 'plan-one',
+      transactionId: 'tx:confidential:plan-one',
+      network: 'mainnet',
+      keyDomainId: 'wallet:one',
+      accountId: 'account:one',
+      phase: 'prepared',
+      operation: 'withdraw',
+      sourceDomain: 'shield',
+      destinationDomain: 'private',
+      source: { ...source, address: signerId },
+      destination: { ...source, address: signerId },
+      signerId,
+      addressIndex: 0,
+      slippageBps: 50,
+      requiresDeposit: false,
+      confidentialBaselineRaw: '1000',
+      expectedOutputRaw: '990',
+      minimumOutputRaw: '980',
+      approvalFingerprint: 'a'.repeat(64),
+      approvalExpiresAt: 60_000,
+      splitSourceAmounts: ['1000'],
+      withdraws: [
+        {
+          sequence: 0,
+          sourceAmountRaw: '1000',
+          amountRaw: '990',
+          depositAddress: 'deposit.near',
+          destinationAddress: signerId,
+          destinationChain: 'eth',
+          token: source.protocolAssetId,
+          deadline: 60_000,
+          status: 'PENDING'
+        }
+      ],
+      createdAt: 1000,
+      updatedAt: 1000
+    }
+    await store.putPlan(plan)
+    expect(await store.listPlans()).toEqual([plan])
     await local.set({ wallet_deleted_ids: ['wallet:one'] })
     await expect(store.putExternalDeposit(record)).rejects.toThrow(
       'Wallet Account metadata is unavailable'
     )
+    await expect(store.putBalances('mainnet', 'wallet:one', 'account:one', [])).rejects.toThrow(
+      'Wallet Account metadata is unavailable'
+    )
+    await expect(store.putPlan(plan)).rejects.toThrow('Wallet Account metadata is unavailable')
     await expect(store.putSession('mainnet', 'wallet:one', 'account:one', auth)).rejects.toThrow(
       'Wallet Account metadata is unavailable'
     )
@@ -196,6 +288,11 @@ test('persists external Shield deposit quote bindings across a restart', async (
     await expect(store.putExternalDeposit(record)).rejects.toThrow(
       'Wallet Account metadata is unavailable'
     )
+    await store.clearAllWalletData()
+    expect(await store.listExternalDeposits()).toEqual([])
+    expect(await store.listPlans()).toEqual([])
+    expect(await store.getBalances('mainnet', 'wallet:one', 'account:one')).toEqual([])
+    expect(await store.getSession('mainnet', 'wallet:one', 'account:one')).toBeNull()
   } finally {
     globalThis.chrome = previousChrome
     if (previousLocks === undefined) delete globalThis.navigator.locks

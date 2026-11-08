@@ -73,13 +73,11 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 }
 
 async function expectTransactionResultContentFits(page: Page): Promise<void> {
-  await expect
-    .poll(() =>
-      page
-        .locator('[data-transaction-status] .overflow-y-auto')
-        .evaluate(element => element.scrollHeight - element.clientHeight)
-    )
-    .toBeLessThanOrEqual(1)
+  const result = page.locator('[data-transaction-status]')
+  const lastDetail = result.locator('.overflow-y-auto .divide-y > :last-child')
+  await lastDetail.scrollIntoViewIfNeeded()
+  await expect(lastDetail).toBeInViewport()
+  await expect(result.getByRole('button', { name: 'Done', exact: true })).toBeInViewport()
 }
 
 interface MockBitcoinNetwork {
@@ -397,10 +395,12 @@ test('discovers, signs, broadcasts, monitors, and records a BIP-84 transfer in r
 
   await popup.getByLabel('Send To').fill(RECIPIENT)
   await expect(popup.getByTestId('send-asset-header')).toContainText('BTC')
-  await expect(popup.getByTestId('send-asset-header')).toContainText('Bitcoin Testnet')
+  await expect(popup.getByTestId('send-asset-header').locator('..')).toContainText(
+    'Bitcoin Testnet'
+  )
   await popup.getByRole('button', { name: 'Max', exact: true }).click()
   expect(Number(await popup.getByLabel('BTC amount').inputValue())).toBeLessThan(0.001)
-  await expect(popup.getByTestId('send-amount-card')).toContainText('Available')
+  await expect(popup.getByTestId('send-amount-card')).toContainText('Bal.')
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled({
     timeout: 30_000
   })
@@ -409,11 +409,17 @@ test('discovers, signs, broadcasts, monitors, and records a BIP-84 transfer in r
     'aria-pressed',
     'true'
   )
-  await expect(popup.getByTestId('send-network-fee')).not.toContainText('—', {
+  await expect(
+    popup.getByRole('button', { name: 'Edit network fee' }).locator('..')
+  ).not.toContainText('—', {
     timeout: 30_000
   })
-  await expect(popup.getByTestId('send-network-fee')).toContainText('Standard')
-  await expect(popup.getByTestId('send-network-fee')).toContainText('BTC')
+  await expect(popup.getByRole('button', { name: 'Edit network fee' }).locator('..')).toContainText(
+    'Standard'
+  )
+  await expect(popup.getByRole('button', { name: 'Edit network fee' }).locator('..')).toContainText(
+    'BTC'
+  )
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled()
   await expectNoHorizontalOverflow(popup)
   await captureScreenshot(popup, 'bitcoin-testnet-send-form.png')
@@ -442,7 +448,7 @@ test('discovers, signs, broadcasts, monitors, and records a BIP-84 transfer in r
   })
   await expect(popup.locator('[data-transaction-status="broadcast"]')).toBeVisible()
   await expect(popup.getByText('Network fee', { exact: true })).toBeVisible()
-  await expect(popup.getByRole('button', { name: 'View Activity', exact: true })).toBeVisible()
+  await expect(popup.getByRole('link', { name: 'View on Explorer', exact: true })).toBeVisible()
   await expectNoHorizontalOverflow(popup)
   await expectTransactionResultContentFits(popup)
   await captureScreenshot(popup, 'bitcoin-testnet-transaction-broadcast.png')
@@ -577,7 +583,7 @@ test('discovers, signs, broadcasts, monitors, and records a BIP-84 transfer in r
   await expect(detail.getByText('To', { exact: true })).toBeVisible()
   await expect(detail.getByText('Network fee', { exact: true })).toBeVisible()
   await expect(detail.getByRole('button', { name: 'More details' })).toHaveCount(0)
-  await expect(detail.locator('a[href^="https://mempool.space/testnet/tx/"]')).toHaveAttribute(
+  await expect(detail.getByRole('link', { name: 'View on explorer' })).toHaveAttribute(
     'href',
     `https://mempool.space/testnet/tx/${network.transactionId()}`
   )

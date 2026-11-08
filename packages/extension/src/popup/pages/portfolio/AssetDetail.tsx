@@ -227,6 +227,11 @@ export function AssetDetail() {
   )
   const requestedDomain = searchParams.get('domain')
   const detailDomain = requestedDomain ?? 'all'
+  const activityFilterDomain =
+    (chain?.chain.family === 'evm' || chain?.chain.family === 'zcash') &&
+    (detailDomain === 'public' || detailDomain === 'shield' || detailDomain === 'private')
+      ? detailDomain
+      : undefined
   const actionDomain =
     detailDomain === 'all'
       ? searchParams.get('mode') === 'private'
@@ -822,7 +827,7 @@ export function AssetDetail() {
                   `/?${new URLSearchParams({
                     tab: 'activity',
                     assetId: asset.asset.id,
-                    domain: chain.chain.family === 'evm' ? (detailDomain ?? 'public') : 'all',
+                    domain: activityFilterDomain ?? 'all',
                     mode: searchParams.get('mode') === 'private' ? 'private' : 'public'
                   })}`
                 )
@@ -840,13 +845,7 @@ export function AssetDetail() {
               portfolio={model}
               accountNetworks={storageV2Account?.networks}
               filterAssetId={asset.asset.id}
-              filterDomain={
-                chain.chain.family === 'evm' && detailDomain === 'private'
-                  ? 'private'
-                  : chain.chain.family === 'evm' && detailDomain === 'public'
-                    ? 'public'
-                    : undefined
-              }
+              filterDomain={activityFilterDomain}
               accountMode={
                 chain.chain.family === 'evm' && actionDomain === 'private' ? 'private' : 'main'
               }

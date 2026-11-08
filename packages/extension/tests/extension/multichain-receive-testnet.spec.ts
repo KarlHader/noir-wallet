@@ -149,7 +149,7 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(publicMode).toBeChecked()
 
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
-  await expect(popup.getByText('Noir Wallet', { exact: true })).toBeVisible()
+  await expect(popup.getByText('Wallet 1', { exact: true })).toBeVisible()
   await popup
     .getByRole('dialog', { name: 'Accounts' })
     .getByRole('button', { name: 'Accounts' })
@@ -200,10 +200,10 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
     EXPECTED_EVM_NETWORK_LABELS.length
   )
   await expect(
-    accountAddresses.locator('section[aria-label="Ethereum Sepolia"]').getByText('Public', {
-      exact: true
-    })
-  ).toBeVisible()
+    accountAddresses
+      .getByRole('group', { name: 'Other chains address mode' })
+      .getByRole('button', { name: 'Public' })
+  ).toHaveAttribute('aria-pressed', 'true')
   await expect(accountAddresses.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
   for (const type of ['Native SegWit', 'Legacy', 'Nested SegWit', 'Taproot']) {
     await expect(accountAddresses.getByText(type, { exact: true })).toBeVisible()
@@ -243,7 +243,7 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
     .click()
   await expect(popup.getByText('Address copied', { exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
-  await expect(popup.getByText('Noir Wallet', { exact: true })).toBeVisible()
+  await expect(popup.getByText('Wallet 1', { exact: true })).toBeVisible()
   await expect(popup.getByText('Account 1', { exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
@@ -252,7 +252,6 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   await expect(popup.getByLabel('Search Network')).toBeVisible()
   const homeReceiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
-  await homeReceiveAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   for (const label of EXPECTED_NETWORK_LABELS) {
     await expect(
       homeReceiveAddresses.getByRole('heading', { name: label, exact: true })
@@ -261,11 +260,6 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
   await expect(homeReceiveAddresses.locator(`[title="${EXPECTED_EVM_ADDRESS}"]`)).toHaveCount(
     EXPECTED_EVM_NETWORK_LABELS.length
   )
-  await expect(
-    homeReceiveAddresses.locator('section[aria-label="Ethereum Sepolia"]').getByText('Public', {
-      exact: true
-    })
-  ).toBeVisible()
   await expect(homeReceiveAddresses.locator(`[title="${EXPECTED_BITCOIN_ADDRESS}"]`)).toBeVisible()
   await expectPopupFits(popup, false)
   await captureScreenshot(popup, 'multichain-receive-addresses.png')
@@ -290,7 +284,11 @@ test('shows verified EVM, Bitcoin, Solana and NEAR addresses without releasing w
     return evmNetwork.privateExecutionAddress
   })
 
-  await popup.getByRole('button', { name: 'Receive', exact: true }).click()
+  await popup.getByRole('button', { name: 'Show account addresses' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Account 1 addresses' })
+    .getByRole('button', { name: 'View all' })
+    .click()
   const privateReceiveAddresses = popup.getByRole('region', {
     name: 'Account network addresses'
   })

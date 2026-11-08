@@ -2395,7 +2395,9 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
   await expect(
     accountAddressMenu.getByRole('button', { name: 'Copy EVM Private address' })
   ).toBeVisible()
-  await captureScreenshot(popup, 'release-default-private-address-menu.png')
+  await captureScreenshot(popup, 'release-default-private-address-menu.png', {
+    preservePointer: true
+  })
   await accountAddressMenu.getByRole('button', { name: 'View all' }).click()
   await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   await popup
@@ -2407,7 +2409,7 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
   await popup.getByRole('button', { name: 'Back' }).click()
 
   await popup.getByRole('button', { name: 'View ETH details on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Send', exact: true }).click()
+  await popup.getByRole('button', { name: 'Move', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Move' })).toBeVisible()
   const privateMoveSource = popup.getByRole('button', { name: 'From: Private. Change account' })
   await expect(privateMoveSource).toBeVisible()
@@ -2447,8 +2449,16 @@ test('shows the global dApp account mode before an EVM dApp connects', async ({
     .first()
   await expect(swapSource).toContainText('Private')
   await expect(swapSource.locator(`span[title="${privateEvmAddress}"]`)).toBeVisible()
-  await expect(
-    popup.getByRole('button', { name: 'Choose source account, current private' })
-  ).toHaveCount(0)
+  const privateSwapSource = popup.getByRole('button', {
+    name: 'Choose source account, current private'
+  })
+  await expect(privateSwapSource).toBeVisible()
+  await privateSwapSource.click()
+  const sourceAccounts = popup.getByRole('dialog', { name: 'Choose source account' })
+  const selectedPrivateAccount = sourceAccounts.getByRole('radio', { name: 'Private account' })
+  await expect(selectedPrivateAccount).toBeChecked()
+  await expect(sourceAccounts.locator(`span[title="${privateEvmAddress}"]`)).toBeVisible()
+  await selectedPrivateAccount.click()
+  await expect(sourceAccounts).toHaveCount(0)
   await captureScreenshot(popup, 'release-default-swap-global-private.png')
 })

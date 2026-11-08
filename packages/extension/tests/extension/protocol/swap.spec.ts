@@ -99,14 +99,21 @@ test('quotes ZEC Shield to the same Account Private ETH while Private mode is se
     }
     return { refund, recipient: evm.privateExecutionAddress as string }
   }, getZcashChainId('mainnet'))
-  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+  const privateReceiveAccount = popup.getByRole('button', { name: 'Choose receive account' })
+  await expect(privateReceiveAccount).toHaveAttribute('title', addresses.recipient)
+  await privateReceiveAccount.click()
+  const receiveAt = popup.getByRole('dialog', { name: 'Receive at' })
+  await expect(receiveAt.getByRole('textbox', { name: 'Address' })).toHaveValue(addresses.recipient)
+  await receiveAt.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current private' })
   ).toHaveCount(0)
 
-  const quoteCount = api.getQuoteRequests().length
+  const matchingQuoteCount = () =>
+    api.getQuoteRequests().filter(request => request.amount === '100000000').length
+  const quoteCount = matchingQuoteCount()
   await popup.getByRole('textbox', { name: 'From amount' }).fill('1')
-  await expect.poll(() => api.getQuoteRequests().length).toBe(quoteCount + 1)
+  await expect.poll(matchingQuoteCount).toBe(quoteCount + 1)
   expect(api.getQuoteRequests().at(-1)).toMatchObject({
     originAsset: 'zec',
     destinationAsset: ETH_ASSET,
@@ -311,6 +318,8 @@ test('uses a selected Zcash wallet recipient for Swap from an EVM-only wallet', 
     .first()
     .click()
   await popup.getByRole('textbox', { name: 'From amount' }).fill('0.01')
+  await expect.poll(() => api.getQuoteRequests().at(-1)?.recipient).toBe(zcashRecipient)
+  const quotesBeforeInvalidRecipient = api.getQuoteRequests().length
   const receiveAt = await openSwapReceiveAt(popup)
   await expect(receiveAt.locator('input[id^="swap-recipient"]')).toBeVisible()
   await receiveAt.locator('input[id^="swap-recipient"]').fill('not-a-zcash-address')
@@ -318,7 +327,7 @@ test('uses a selected Zcash wallet recipient for Swap from an EVM-only wallet', 
   await receiveAt.getByRole('button', { name: 'Done' }).click()
   await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeDisabled()
   await popup.waitForTimeout(1_000)
-  expect(api.getQuoteRequests()).toHaveLength(0)
+  expect(api.getQuoteRequests()).toHaveLength(quotesBeforeInvalidRecipient)
 
   const recipients = await selectSwapWalletRecipient(popup)
   const unavailableAccount = recipients.getByRole('button', {
@@ -429,14 +438,22 @@ for (const sourceMode of ['main', 'private'] as const) {
         .first()
         .click()
     }
-    if (sourceMode === 'private') {
-      await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
-      await popup
-        .getByRole('dialog', { name: 'Choose source account' })
-        .getByRole('radio', { name: /Private account/ })
-        .click()
-    }
-    await expect(popup.getByRole('button', { name: 'To asset' })).toContainText('USDC')
+    const privateProbeSender =
+      sourceMode === 'private'
+        ? await popup.evaluate(async () => {
+            const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
+            const account = response?.result?.accounts?.find(
+              (candidate: { active?: unknown }) => candidate.active === true
+            )
+            const network = account?.networks?.find(
+              (candidate: { chainId?: unknown }) => candidate.chainId === 'eip155:1'
+            )
+            if (typeof network?.privateExecutionAddress !== 'string') {
+              throw new Error('Private ETH source address unavailable')
+            }
+            return network.privateExecutionAddress as string
+          })
+        : null
     const maxButton = popup.getByRole('button', { name: 'Use maximum balance' })
     const maxLabel = await maxButton.getAttribute('aria-label')
     let probeStarted = false
@@ -445,12 +462,34 @@ for (const sourceMode of ['main', 'private'] as const) {
       releaseProbe = resolve
     })
     await context.route(QUOTE_URL, async route => {
-      if (!probeStarted) {
+      const request = route.request().postDataJSON()
+      if (
+        !probeStarted &&
+        String(request.amountIn) === '500000000000000000' &&
+        (privateProbeSender === null ||
+          String(request.sender).toLowerCase() === privateProbeSender.toLowerCase())
+      ) {
         probeStarted = true
         await probePending
       }
       await route.fallback()
     })
+    if (sourceMode === 'private') {
+      await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
+      await popup
+        .getByRole('dialog', { name: 'Choose source account' })
+        .getByRole('radio', { name: /Private account/ })
+        .click()
+      const privateSourceAccount = popup.getByRole('button', {
+        name: 'Choose source account, current private'
+      })
+      await expect(privateSourceAccount.locator('span[title]')).toHaveAttribute(
+        'title',
+        privateProbeSender!
+      )
+    }
+    await expect(popup.getByRole('button', { name: 'To asset' })).toContainText('USDC')
+    const quoteCountBeforeMax = api.getQuoteRequests().length
     await maxButton.click()
     try {
       await expect.poll(() => probeStarted).toBe(true)
@@ -458,7 +497,11 @@ for (const sourceMode of ['main', 'private'] as const) {
       await expect(maxButton).toBeDisabled()
       await expect(maxButton).toHaveAttribute('aria-label', maxLabel!)
       await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeDisabled()
-      await captureScreenshot(popup, `swap-native-max-${sourceMode}-calculating.png`)
+      if (sourceMode === 'main') {
+        await captureScreenshot(popup, 'swap-native-max-main-calculating.png')
+      } else {
+        await captureScreenshot(popup, 'swap-native-max-private-calculating.png')
+      }
     } finally {
       releaseProbe()
     }
@@ -467,11 +510,17 @@ for (const sourceMode of ['main', 'private'] as const) {
     })
     await expect(maxButton).toHaveAttribute('aria-label', maxLabel!)
     await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeEnabled()
-    expect(api.getQuoteRequests().map(request => request.amount)).toEqual([
-      '500000000000000000',
-      '999325000000000000'
-    ])
-    await captureScreenshot(popup, `swap-native-max-${sourceMode}-ready.png`)
+    expect(
+      api
+        .getQuoteRequests()
+        .slice(quoteCountBeforeMax)
+        .map(request => request.amount)
+    ).toEqual(['500000000000000000', '999325000000000000'])
+    if (sourceMode === 'main') {
+      await captureScreenshot(popup, 'swap-native-max-main-ready.png')
+    } else {
+      await captureScreenshot(popup, 'swap-native-max-private-ready.png')
+    }
     await popup.getByRole('button', { name: 'Swap', exact: true }).click()
     await expect(popup.getByRole('heading', { name: 'Confirm Swap', exact: true })).toBeVisible({
       timeout: 60_000
@@ -481,12 +530,11 @@ for (const sourceMode of ['main', 'private'] as const) {
     expect(rpc.getContractGasEstimateCount()).toBeGreaterThanOrEqual(2)
     expect(rpc.getBroadcastCount()).toBe(0)
     await expectNoOverflow(popup)
-    await captureScreenshot(
-      popup,
-      sourceMode === 'main'
-        ? 'swap-native-max-main-contract-gas.png'
-        : 'swap-native-max-private-contract-gas.png'
-    )
+    if (sourceMode === 'main') {
+      await captureScreenshot(popup, 'swap-native-max-main-contract-gas.png')
+    } else {
+      await captureScreenshot(popup, 'swap-native-max-private-contract-gas.png')
+    }
     await popup.getByRole('button', { name: 'Edit network fee' }).click()
     await popup
       .getByRole('dialog', { name: 'Network Fee' })
@@ -498,12 +546,11 @@ for (const sourceMode of ['main', 'private'] as const) {
     await expect(popup.getByText('0.00072 ETH', { exact: true })).toBeVisible({ timeout: 60_000 })
     expect(api.getQuoteRequests().at(-1)?.amount).toBe('999100000000000000')
     expect(rpc.getBroadcastCount()).toBe(0)
-    await captureScreenshot(
-      popup,
-      sourceMode === 'main'
-        ? 'swap-native-max-main-fast-gas.png'
-        : 'swap-native-max-private-fast-gas.png'
-    )
+    if (sourceMode === 'main') {
+      await captureScreenshot(popup, 'swap-native-max-main-fast-gas.png')
+    } else {
+      await captureScreenshot(popup, 'swap-native-max-private-fast-gas.png')
+    }
   })
 }
 
@@ -622,7 +669,9 @@ test('recovers expired Swap review and shows preparation loading in real MV3', a
   await expect(maxButton).toBeEnabled({ timeout: 30_000 })
   await maxButton.click()
   await expect.poll(() => maxQuoteRequests).toBe(1)
-  await expect(popup.getByRole('textbox', { name: 'From amount', exact: true })).toHaveValue('0.95')
+  await expect(popup.getByRole('textbox', { name: 'From amount', exact: true })).toHaveValue('')
+  await expect(popup.getByText('Unable to calculate Max. Try again.')).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeDisabled()
   await expect(maxButton).toHaveAttribute('aria-label', 'Use maximum balance')
   await captureScreenshot(popup, 'swap-max-fallback-balance.png')
   await expect(popup.getByText('Could not calculate Max amount.')).toHaveCount(0)
@@ -839,7 +888,14 @@ test('keeps Private Swap within the Account and Public Swap supports external re
   await expect
     .poll(() => api.getQuoteRequests().at(-1)?.refundTo.toLowerCase())
     .toBe(addresses.private.toLowerCase())
-  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+  const privateReceiveAccount = popup.getByRole('button', { name: 'Choose receive account' })
+  await expect(privateReceiveAccount).toHaveAttribute('title', addresses.private)
+  await privateReceiveAccount.click()
+  const destinationAccounts = popup.getByRole('dialog', { name: 'Choose destination account' })
+  await expect(destinationAccounts.getByRole('radio', { name: /Public account/ })).toBeVisible()
+  await expect(destinationAccounts.getByRole('radio', { name: /Private account/ })).toBeChecked()
+  await expect(destinationAccounts.getByRole('button', { name: 'Custom address' })).toHaveCount(0)
+  await destinationAccounts.getByRole('radio', { name: /Private account/ }).click()
   await expect(popup.locator('input[id^="swap-recipient"]')).toHaveCount(0)
   await expectNoOverflow(popup)
   await captureScreenshot(popup, 'swap-private-account-fixed.png')
@@ -867,8 +923,19 @@ test('keeps Private Swap within the Account and Public Swap supports external re
     }
     const mode = confidential ? 'private' : 'main'
     if (confidential) {
-      await expect(popup.getByRole('button', { name: 'Choose source account' })).toHaveCount(0)
-      await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+      const privateSourceAccount = popup.getByRole('button', {
+        name: 'Choose source account, current private'
+      })
+      await expect(privateSourceAccount).toBeVisible()
+      await expect(privateSourceAccount.locator('span[title]')).toHaveAttribute(
+        'title',
+        addresses.private
+      )
+      await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveAttribute(
+        'title',
+        addresses.private
+      )
+      await expect(popup.locator('input[id^="swap-recipient"]')).toHaveCount(0)
     } else {
       await expect(
         popup.getByRole('button', { name: `Choose source account, current ${mode}` })
@@ -934,7 +1001,8 @@ test('shows account privacy badges in Swap and Confidential labels in address vi
   await expect(privateAddressMode).toHaveAttribute('aria-pressed', 'true')
   await expect(addresses.getByRole('button', { name: 'Copy EVM Private address' })).toBeVisible()
   await captureScreenshot(popup, 'account-address-confidential-label.png')
-  await addresses.getByRole('button', { name: 'View all' }).click()
+  await addresses.getByRole('button', { name: 'View all' }).focus()
+  await popup.keyboard.press('Enter')
   await popup
     .getByRole('group', { name: 'Address mode' })
     .getByRole('button', { name: 'Private' })
@@ -1216,8 +1284,9 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
   const privateSwapSourceButton = popup.getByRole('button', {
     name: 'Choose source account, current private'
   })
-  await expect(privateSwapSourceButton).toHaveCount(0)
-  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toHaveCount(0)
+  await expect(privateSwapSourceButton).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Choose receive account' })).toBeVisible()
+  await expect(popup.locator('input[id^="swap-recipient"]')).toHaveCount(0)
   await captureScreenshot(popup, 'private-defi-swap-account-private.png')
   const privateSwapSourceAddress = await popup.evaluate(async () => {
     const response = await chrome.runtime.sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
@@ -1233,12 +1302,23 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
     }
     return evmNetwork.privateExecutionAddress
   })
+  await expect(privateSwapSourceButton.locator('span[title]')).toHaveAttribute(
+    'title',
+    privateSwapSourceAddress
+  )
   await popup.getByRole('button', { name: 'To asset' }).click()
   await popup.getByPlaceholder('Search tokens').fill('USDC')
   await popup.getByRole('button', { name: /USDC.*Base/i }).click()
-  const privateQuoteCount = protocolApis.getQuoteRequests().length
+  const privateQuoteCount = () =>
+    protocolApis
+      .getQuoteRequests()
+      .filter(
+        request =>
+          request.amount === '10000000000000000' && request.destinationAsset === BASE_USDC_CONTRACT
+      ).length
+  const quotesBeforePrivateAmount = privateQuoteCount()
   await popup.locator('input[placeholder="0"]').fill('0.01')
-  await expect.poll(() => protocolApis.getQuoteRequests().length).toBe(privateQuoteCount + 1)
+  await expect.poll(privateQuoteCount).toBe(quotesBeforePrivateAmount + 1)
   const privateSwapQuote = protocolApis.getQuoteRequests().at(-1)
   expect(privateSwapQuote).toMatchObject({
     originAsset: ETH_ASSET,
@@ -1264,13 +1344,20 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
   await popup.getByRole('button', { name: /USDC.*Polygon/i }).click()
   await expect(popup.getByRole('button', { name: 'To asset' })).toContainText('USDC')
   const swapAmountInput = popup.locator('input[placeholder="0"]')
-  const quoteCountBeforeInsufficientAmount = protocolApis.getQuoteRequests().length
+  const insufficientAmountQuotes = () =>
+    protocolApis
+      .getQuoteRequests()
+      .filter(
+        request =>
+          request.originAsset === ETH_ASSET &&
+          request.destinationAsset === POLYGON_USDC_CONTRACT &&
+          request.amount === '2000000000000000000'
+      ).length
+  const quoteCountBeforeInsufficientAmount = insufficientAmountQuotes()
   await swapAmountInput.fill('2')
   const fromCard = popup.locator('section').filter({ hasText: /^From/ }).first()
   await expect(fromCard.getByText('Insufficient ETH balance', { exact: true })).toBeVisible()
-  await expect
-    .poll(() => protocolApis.getQuoteRequests().length)
-    .toBe(quoteCountBeforeInsufficientAmount + 1)
+  await expect.poll(insufficientAmountQuotes).toBe(quoteCountBeforeInsufficientAmount + 1)
   expect(protocolApis.getQuoteRequests().at(-1)).toMatchObject({
     originAsset: ETH_ASSET,
     destinationAsset: POLYGON_USDC_CONTRACT,
@@ -1278,15 +1365,22 @@ test('prepares and rejects wallet-owned EVM Swap reviews in real MV3', async ({
     dry: false
   })
   await expect(popup.getByRole('button', { name: 'Swap', exact: true })).toBeDisabled()
-  const quoteCountBeforeUntrackedSource = protocolApis.getQuoteRequests().length
+  const untrackedSourceQuotes = () =>
+    protocolApis
+      .getQuoteRequests()
+      .filter(
+        request =>
+          request.originAsset === TRIAL_CONTRACT &&
+          request.destinationAsset === POLYGON_USDC_CONTRACT &&
+          request.amount === '2000000000000000000'
+      ).length
+  const quoteCountBeforeUntrackedSource = untrackedSourceQuotes()
   await popup.getByRole('button', { name: 'From asset' }).click()
   await popup.getByPlaceholder('Search tokens').fill('TRIAL')
   await popup.getByRole('button', { name: /^TRIAL on Ethereum$/ }).click()
   await swapAmountInput.fill('2')
   await expect(fromCard.getByText('Insufficient TRIAL balance', { exact: true })).toBeVisible()
-  await expect
-    .poll(() => protocolApis.getQuoteRequests().length)
-    .toBe(quoteCountBeforeUntrackedSource + 1)
+  await expect.poll(untrackedSourceQuotes).toBe(quoteCountBeforeUntrackedSource + 1)
   expect(protocolApis.getQuoteRequests().at(-1)).toMatchObject({
     originAsset: TRIAL_CONTRACT,
     destinationAsset: POLYGON_USDC_CONTRACT,
@@ -1520,9 +1614,11 @@ test('uses the active Polygon wallet source and POL fees in Swap', async ({ cont
   await expect(popup.getByRole('heading', { name: 'Confirm Swap' })).toBeVisible({
     timeout: 60_000
   })
-  await expect(popup.getByRole('button', { name: 'Show full POL amount' }).first()).toHaveText(
-    '-0.9999055 POL'
-  )
+  const sentPolAmount = popup.getByRole('button', { name: 'Show full POL amount' }).first()
+  await expect(sentPolAmount).toHaveText('-0.9999 POL')
+  await sentPolAmount.click()
+  await expect(popup.getByText('-0.9999055 POL', { exact: true })).toBeVisible()
+  await popup.keyboard.press('Escape')
   await expect(
     popup.getByRole('button', { name: 'Show full POL amount' }).filter({ hasText: '0.0000756 POL' })
   ).toHaveText('0.0000756 POL')

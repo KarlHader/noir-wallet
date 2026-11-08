@@ -105,44 +105,54 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await waitForBackgroundWalletInitialization(popup)
   await importTestWallet(popup)
   await seedFreshAssetPrices(popup)
-  await seedSettledZcashBalance(popup, {
-    total: '0',
-    transparent: '0',
-    shielded: '0',
-    spendable: '0',
-    available: '0'
+  await seedSettledZcashBalance(
+    popup,
+    {
+      total: '0',
+      transparent: '0',
+      shielded: '0',
+      spendable: '0',
+      available: '0'
+    },
+    { hydrateBackground: true }
+  )
+  await expect(popup.getByRole('button', { name: 'View ETH details on Ethereum' })).toBeVisible({
+    timeout: 60_000
+  })
+  const readPortfolioReadiness = () =>
+    popup.evaluate(async () => {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_PORTFOLIO',
+        action: 'read'
+      })
+      const model = response.result?.model
+      const releasedChains =
+        model?.chains.filter(
+          (chain: { chain: { family: string } }) =>
+            chain.chain.family === 'zcash' || chain.chain.family === 'evm'
+        ) ?? []
+      return {
+        releasedChainCount: releasedChains.length,
+        nonReadyChains: releasedChains
+          .filter((chain: { status: string }) => chain.status !== 'ready')
+          .map(
+            (chain: { chain: { id: string }; status: string; errorCodes: readonly string[] }) => ({
+              chainId: chain.chain.id,
+              status: chain.status,
+              errorCodes: chain.errorCodes
+            })
+          )
+      }
+    })
+  await expect.poll(readPortfolioReadiness, { timeout: 30_000 }).toEqual({
+    releasedChainCount: EVM_NETWORK_CONFIGS.mainnet.length + 1,
+    nonReadyChains: []
   })
   await terminateExtensionServiceWorker(context, popup)
   await popup.reload()
   await expect
-    .poll(
-      () =>
-        popup.evaluate(async () => {
-          const response = await chrome.runtime.sendMessage({
-            type: 'GET_PORTFOLIO',
-            action: 'read'
-          })
-          const model = response.result?.model
-          return {
-            status: model?.status,
-            nonReadyChains: model?.chains
-              .filter((chain: { status: string }) => chain.status !== 'ready')
-              .map(
-                (chain: {
-                  chain: { id: string }
-                  status: string
-                  errorCodes: readonly string[]
-                }) => ({
-                  chainId: chain.chain.id,
-                  status: chain.status,
-                  errorCodes: chain.errorCodes
-                })
-              )
-          }
-        }),
-      { timeout: 30_000 }
-    )
-    .toEqual({ status: 'ready', nonReadyChains: [] })
+    .poll(readPortfolioReadiness, { timeout: 30_000 })
+    .toEqual({ releasedChainCount: EVM_NETWORK_CONFIGS.mainnet.length + 1, nonReadyChains: [] })
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 60_000 })
   await expect(popup.getByRole('button', { name: /^Balances incomplete\./ })).toHaveCount(0, {
     timeout: 30_000
@@ -167,9 +177,10 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await popup.mouse.move(0, 0)
 
   const ethereumRpcUrl = new URL(EVM_NETWORK_CONFIGS.mainnet[0].rpcUrl).href
-  let abortedEthereumRpcRequests = 0
+  const abortedEthereumRpcMethods: string[] = []
   const abortEthereumRpc = (route: Route) => {
-    abortedEthereumRpcRequests += 1
+    const request = route.request().postDataJSON() as { method?: unknown }
+    abortedEthereumRpcMethods.push(String(request.method))
     return route.abort()
   }
   let lastRequestCount = -1
@@ -213,7 +224,11 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(popup.getByLabel('Send To')).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Change asset' })).toHaveCount(0)
   await expect(popup.getByRole('button', { name: 'Select send asset' })).toContainText('ETH')
-  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
+  await expect(
+    popup
+      .getByRole('button', { name: 'Select send asset, ETH on Ethereum' })
+      .getByRole('img', { name: 'Ethereum' })
+  ).toBeVisible()
   const sendSourceButton = popup.getByRole('button', {
     name: 'Choose source account, current main'
   })
@@ -222,7 +237,10 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(popup.getByText('Send to', { exact: true })).toBeVisible()
   await expect(popup.getByText('Amount', { exact: true })).toBeVisible()
   await expect(popup.getByLabel('Send To')).toHaveCSS('height', '54px')
-  await expect(popup.getByTestId('send-amount-card')).toHaveCSS('min-height', '92px')
+  await expect(popup.getByTestId('send-amount-card').locator(':scope > div').nth(1)).toHaveCSS(
+    'min-height',
+    '55px'
+  )
   await expect(popup.getByText('Fee', { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'release-default-send-input-cards.png')
   await sendSourceButton.click()
@@ -252,7 +270,7 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(popup.getByText('Ethereum', { exact: true })).toHaveCount(0)
   await popup.waitForTimeout(1_500)
   expect(portfolioRpcRequests.slice(requestCountBeforeReload)).toEqual([])
-  const ethereumRequestsAfterFirstDetail = abortedEthereumRpcRequests
+  const ethereumRequestsAfterFirstDetail = abortedEthereumRpcMethods.length
 
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
@@ -262,7 +280,11 @@ test('serves cached EVM balances across Popup reload without repeating RPC reads
   await expect(popup.getByRole('heading', { name: 'USDC', exact: true })).toBeVisible()
   await popup.waitForTimeout(1_500)
   expect(portfolioRpcRequests.slice(requestCountBeforeReload)).toEqual([])
-  expect(abortedEthereumRpcRequests).toBe(ethereumRequestsAfterFirstDetail)
+  expect(
+    abortedEthereumRpcMethods
+      .slice(ethereumRequestsAfterFirstDetail)
+      .filter(method => method !== 'eth_chainId')
+  ).toEqual([])
   await captureScreenshot(popup, 'release-default-token-chain-badge.png')
 
   await context.unroute(ethereumRpcUrl, abortEthereumRpc)
@@ -335,13 +357,19 @@ test('REF-13211 blocks a Private USDC Move without native gas before preparation
   })
   await popup.getByRole('button', { name: 'Send USDC on Ethereum' }).click()
   await expect(popup.getByRole('button', { name: 'Select send asset' })).toContainText('USDC')
-  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
+  await expect(
+    popup
+      .getByRole('button', { name: 'Select send asset, USDC on Ethereum' })
+      .getByRole('img', { name: 'Ethereum' })
+  ).toBeVisible()
   await expect(
     popup.getByRole('button', { name: 'Choose source account, current main' })
   ).toBeVisible()
-  await popup.getByLabel('Send To').fill('0x9C73842d02D1Fe00000000000000000000000000')
+  await popup
+    .getByRole('textbox', { name: 'Send to' })
+    .fill('0x9C73842d02D1Fe00000000000000000000000000')
   await popup.getByLabel('USDC amount').fill('1')
-  await expect(popup.getByTestId('send-amount-card')).toContainText('Available 1.7647 USDC')
+  await expect(popup.getByTestId('send-amount-card')).toContainText(/Bal\.\s*1\.7647 USDC/)
   const missingGasAlert = popup.getByRole('alert').filter({
     hasText: 'Insufficient ETH balance.'
   })

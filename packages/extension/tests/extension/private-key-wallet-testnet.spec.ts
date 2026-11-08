@@ -48,11 +48,25 @@ async function importMnemonicWallet(page: Page): Promise<void> {
 }
 
 async function openMnemonicPrivateKeyExport(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(page)
   await page.getByRole('button', { name: 'Account actions for Account 1' }).click()
   await page.getByRole('menuitem', { name: 'Account details' }).click()
-  await page.getByText('Export private key', { exact: true }).click()
+  await page.getByRole('button', { name: 'Private Key' }).click()
   await expect(page.getByRole('heading', { name: 'Export private key' })).toBeVisible()
+}
+
+async function openAccountList(page: Page): Promise<void> {
+  const accountListHeading = page.getByRole('heading', { name: 'Accounts' })
+  const chooseWallet = page.getByRole('button', { name: 'Choose wallet' })
+  if (!(await accountListHeading.isVisible())) {
+    await expect(chooseWallet).toBeVisible({ timeout: 30_000 })
+    await chooseWallet.click()
+    await page
+      .getByRole('dialog', { name: 'Accounts' })
+      .getByRole('button', { name: 'Accounts' })
+      .click()
+  }
+  await expect(accountListHeading).toBeVisible()
 }
 
 async function revealSelectedPrivateKey(page: Page): Promise<string> {
@@ -64,8 +78,7 @@ async function revealSelectedPrivateKey(page: Page): Promise<string> {
 }
 
 async function openPrivateKeyImport(page: Page): Promise<void> {
-  const chooseWallet = page.getByRole('button', { name: 'Choose wallet' })
-  if (await chooseWallet.isVisible()) await chooseWallet.click()
+  await openAccountList(page)
   await page.getByRole('button', { name: 'Add Wallet', exact: true }).click()
   await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
   await page.getByRole('button', { name: 'Private Key', exact: true }).click()
@@ -286,13 +299,13 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   const mnemonicEvmKey = await revealSelectedPrivateKey(popup)
   expect(mnemonicEvmKey).toMatch(/^0x[0-9a-f]{64}$/)
   await popup.getByRole('button', { name: 'Back' }).click()
-  await popup.getByText('Export private key', { exact: true }).click()
+  await popup.getByRole('button', { name: 'Private Key' }).click()
   await popup.getByRole('button', { name: 'Bitcoin Testnet', exact: true }).click()
   const mnemonicBitcoinKey = await revealSelectedPrivateKey(popup)
   expect(mnemonicBitcoinKey).toMatch(/^c[1-9A-HJ-NP-Za-km-z]{51}$/)
   await popup.getByRole('button', { name: 'Back' }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
-  await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
 
   await importPrivateKeyWallet(popup, {
@@ -376,7 +389,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   })
   expect(bitcoinAccount.networks[0].addresses).toHaveLength(4)
 
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   const privateKeyGroup = popup.locator('section[aria-label="Wallet group Imported Private Key"]')
   await expect(privateKeyGroup).toBeVisible()
   await expect(privateKeyGroup.locator('[aria-label^="Account actions for "]')).toHaveCount(2)
@@ -386,14 +399,14 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   await expect(privateKeyGroup.getByRole('button', { name: /^Rename wallet / })).toHaveCount(0)
   await privateKeyGroup.scrollIntoViewIfNeeded()
   await captureScreenshot(popup, 'private-key-account-group.png')
-  await popup.getByRole('button', { name: 'Back' }).click()
+  await popup.getByRole('button', { name: 'Close', exact: true }).click()
 
   await terminateExtensionServiceWorker(context, popup)
   await popup.reload()
   // A Service Worker restart does not end the browser-scoped chrome.storage.session unlock.
   // Browser restart, extension reload/update, explicit lock, and network-mode restart do.
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 15_000 })
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await privateKeyGroup
     .getByRole('button', { name: `Account actions for ${bitcoinAccount.accountDisplayName}` })
     .last()
@@ -426,6 +439,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   })
   expect(restoredBitcoinAccount).toMatchObject({ active: true })
 
+  await popup.getByRole('button', { name: 'Open menu' }).click()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
   await popup.getByRole('button', { name: 'Security', exact: true }).click()
   await popup.getByRole('button', { name: 'Change Password', exact: true }).click()
@@ -449,7 +463,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
   await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible({ timeout: 30_000 })
 
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   const importedGroup = popup.locator('section[aria-label="Wallet group Imported Private Key"]')
   await importedGroup
     .getByRole('button', { name: `Account actions for ${evmAccount.accountDisplayName}` })
@@ -472,7 +486,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
     importedGroup.getByRole('button', { name: 'Account actions for EVM Reserve' })
   ).toBeVisible()
   await popup.reload()
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await expect(
     importedGroup.getByRole('button', { name: 'Account actions for EVM Reserve' })
   ).toBeVisible()
@@ -524,7 +538,7 @@ test('imports and exports EVM and Bitcoin private keys in Testnet Mode', async (
     })
     .not.toContain(evmAccount.walletId)
   await popup.reload()
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await expect(importedGroup.locator('[aria-label^="Account actions for "]')).toHaveCount(1)
 })
 
@@ -593,7 +607,7 @@ test('imports Solana and NEAR private-key Wallets behind the Beta chain gates', 
   })
   expect(nearAccount.networks[0].addresses[0].value).toMatch(/^[0-9a-f]{64}$/)
 
-  await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await openAccountList(popup)
   await popup
     .getByRole('button', { name: `Account actions for ${nearAccount.accountDisplayName}` })
     .last()

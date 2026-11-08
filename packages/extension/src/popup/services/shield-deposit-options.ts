@@ -126,6 +126,14 @@ export function formatDepositAmount(raw: string, decimals: number | undefined): 
   }
 }
 
+export function hasDepositSettlementShortfall(record: ExternalShieldDeposit): boolean {
+  return (
+    record.phase === 'ready' &&
+    record.settledOutputRaw !== undefined &&
+    BigInt(record.settledOutputRaw) < BigInt(record.minimumOutputRaw)
+  )
+}
+
 export function depositStatusLabel(record: ExternalShieldDeposit, now: number): string {
   if (record.phase === 'awaiting-payment' && depositRemainingRaw(record) === '0') {
     return 'Awaiting confirmation'
@@ -147,7 +155,7 @@ export function depositStatusLabel(record: ExternalShieldDeposit, now: number): 
     case 'processing':
       return 'Processing'
     case 'ready':
-      return 'Received'
+      return hasDepositSettlementShortfall(record) ? 'Received less than minimum' : 'Received'
     case 'refunded':
       return 'Refunded'
     case 'failed':

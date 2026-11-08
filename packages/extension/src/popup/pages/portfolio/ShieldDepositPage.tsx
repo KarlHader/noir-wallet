@@ -29,6 +29,7 @@ import {
   depositSourceNetworks,
   depositStatusLabel,
   formatDepositAmount,
+  hasDepositSettlementShortfall,
   depositTokenChainId
 } from '@/popup/services/shield-deposit-options'
 import {
@@ -596,7 +597,10 @@ function ShieldDepositContent() {
               </DialogDescription>
               <div className="pt-1">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-medium" role="status">
+                  <h2
+                    className={`text-base font-medium ${hasDepositSettlementShortfall(viewedRecord) ? 'text-warning' : ''}`}
+                    role="status"
+                  >
                     {depositStatusLabel(viewedRecord, now)}
                   </h2>
                   <button
@@ -978,7 +982,11 @@ function ShieldDepositContent() {
                       <span className="min-w-0 truncate">
                         {record.sourceSymbol} · {record.source.chainName}
                       </span>
-                      <span className="shrink-0 text-muted">{depositStatusLabel(record, now)}</span>
+                      <span
+                        className={`shrink-0 ${hasDepositSettlementShortfall(record) ? 'text-warning' : 'text-muted'}`}
+                      >
+                        {depositStatusLabel(record, now)}
+                      </span>
                     </button>
                   )
                 })}

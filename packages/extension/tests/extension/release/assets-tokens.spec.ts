@@ -69,12 +69,13 @@ test('loads Home totals when Token activity opens before the Assets tab', async 
 
   await popup.getByRole('button', { name: 'Asset category: Total assets' }).click()
   await popup.getByRole('radio', { name: /Shield assets/ }).click()
-  await expect(popup.getByRole('heading', { name: 'Shield Funds' })).toBeVisible()
-  await popup.getByRole('button', { name: 'Back' }).click()
+  await expect(popup.getByRole('tab', { name: 'Shield assets' })).toBeVisible()
   await expect(popup.getByRole('tab', { name: 'Activity' })).toHaveAttribute(
     'aria-selected',
     'true'
   )
+  await popup.getByRole('button', { name: 'Asset category: Shield assets' }).click()
+  await popup.getByRole('radio', { name: /Total assets/ }).click()
   await expect(total).toHaveText(initialTotal)
   await captureScreenshot(popup, 'home-shield-total-after-activity.png')
   await popup.getByRole('tab', { name: 'Total assets', exact: true }).click()

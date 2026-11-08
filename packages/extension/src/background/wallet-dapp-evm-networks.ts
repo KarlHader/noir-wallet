@@ -1,3 +1,38 @@
+import type { DAppManager } from '@/core/dapp/dapp-manager'
+
+type EvmNetworkMigrationManager = Pick<
+  DAppManager,
+  'getAllConnections' | 'getAuthorizationRevision' | 'getEvmNetworkState' | 'setEvmActiveChain'
+>
+
+export async function initializeEvmSiteNetworks(
+  manager: EvmNetworkMigrationManager,
+  fallbackChainId: string
+): Promise<void> {
+  const connections = await manager.getAllConnections()
+  for (const connection of connections) {
+    if (!connection.evmAuthorization) continue
+    // A shared Account grant alone does not authorize the fallback network.
+    if (!connection.chainAuthorizations?.some(item => item.chainId === fallbackChainId)) continue
+    const revision = await manager.getAuthorizationRevision(connection.origin)
+    if (await manager.getEvmNetworkState(connection.origin)) continue
+    try {
+      await manager.setEvmActiveChain(connection.origin, fallbackChainId, {
+        approve: true,
+        expectedActiveChainId: null,
+        expectedRevision: revision
+      })
+    } catch (error) {
+      if (
+        (await manager.getAuthorizationRevision(connection.origin)) !== revision ||
+        (await manager.getEvmNetworkState(connection.origin))
+      )
+        continue
+      throw error
+    }
+  }
+}
+
 export interface CurrentDAppEvmNetworkSelectionContext {
   readonly origin: string
   readonly walletId: string

@@ -1,5 +1,5 @@
 import type { Network } from '@/types'
-import { withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
+import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { ExternalShieldDeposit } from '@/core/services/confidential-funding'
 import type {
@@ -573,7 +573,12 @@ export class ChromeConfidentialFundingStore {
 
   async putPlan(plan: ConfidentialFundingPlan): Promise<void> {
     const parsed = serializeConfidentialFundingPlan(plan)
-    await chrome.storage.local.set({ [this.planKey(parsed.planId)]: parsed })
+    await withUndeletedWalletAccountMetadata(
+      parsed.keyDomainId,
+      parsed.accountId,
+      parsed.network,
+      () => chrome.storage.local.set({ [this.planKey(parsed.planId)]: parsed })
+    )
   }
 
   async deletePlan(planId: string): Promise<void> {
@@ -629,6 +634,28 @@ export class ChromeConfidentialFundingStore {
     if (keys.length > 0) await chrome.storage.session.remove(keys)
   }
 
+  async clearAllWalletData(): Promise<void> {
+    await withMetadataLock(async () => {
+      const [local, session] = await Promise.all([
+        chrome.storage.local.get(null),
+        chrome.storage.session.get(null)
+      ])
+      const localKeys = Object.keys(local).filter(
+        key =>
+          key.startsWith(PLAN_PREFIX) ||
+          key.startsWith(EXTERNAL_DEPOSIT_PREFIX) ||
+          key.startsWith(BALANCE_PREFIX)
+      )
+      const sessionKeys = Object.keys(session).filter(
+        key => key.startsWith(SESSION_PREFIX) || key.startsWith(HISTORY_SESSION_PREFIX)
+      )
+      await Promise.all([
+        ...(localKeys.length > 0 ? [chrome.storage.local.remove(localKeys)] : []),
+        ...(sessionKeys.length > 0 ? [chrome.storage.session.remove(sessionKeys)] : [])
+      ])
+    })
+  }
+
   async getBalances(
     network: Network,
     keyDomainId: string,
@@ -669,12 +696,13 @@ export class ChromeConfidentialFundingStore {
     accountId: string,
     balances: readonly ConfidentialBalance[]
   ): Promise<void> {
-    await chrome.storage.local.set({
-      [this.balanceKey(network, keyDomainId, accountId)]: Object.freeze({
-        schemaVersion: 1,
-        balances: parseBalances(balances),
-        updatedAt: this.now()
-      })
+    const snapshot = Object.freeze({
+      schemaVersion: 1,
+      balances: parseBalances(balances),
+      updatedAt: this.now()
     })
+    await withUndeletedWalletAccountMetadata(keyDomainId, accountId, network, () =>
+      chrome.storage.local.set({ [this.balanceKey(network, keyDomainId, accountId)]: snapshot })
+    )
   }
 }

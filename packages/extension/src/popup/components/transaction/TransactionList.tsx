@@ -9,16 +9,18 @@ import { useIntentsProgress } from '../../hooks/useIntentsProgress'
 import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
 import { recheckPendingTransaction } from '@/popup/services/pending-transaction-recheck'
 import { buildTransactionDateGroups } from '@/popup/services/transaction-list-model'
+import type { AssetDomain } from '@/popup/services/asset-domains'
 
 interface TransactionListProps {
   network: 'mainnet' | 'testnet'
+  domain?: AssetDomain
   onItemClick?: (txId: string) => void
 }
 
 /**
  * Displays transaction history grouped by date
  */
-export function TransactionList({ network, onItemClick }: TransactionListProps) {
+export function TransactionList({ network, domain = 'all', onItemClick }: TransactionListProps) {
   const transactions = useAccountDataStore(state => state.getCurrentTransactions())
   const reloadTransactions = useAccountDataStore(state => state.reloadTransactions)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -89,8 +91,8 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
   }, [transactions, network, accountKey])
 
   const groups = useMemo(
-    () => buildTransactionDateGroups(transactions, network, intentsProgress),
-    [transactions, network, intentsProgress]
+    () => buildTransactionDateGroups(transactions, network, intentsProgress, domain),
+    [transactions, network, intentsProgress, domain]
   )
 
   if (!hasTransactionCache && groups.length === 0) {

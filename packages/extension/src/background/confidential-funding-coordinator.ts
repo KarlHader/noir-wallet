@@ -203,6 +203,17 @@ function isPositiveRaw(value: string): boolean {
   return /^[1-9][0-9]*$/.test(value)
 }
 
+function externalDepositSettlementError(
+  settledAmountRaw: string | undefined,
+  minimumOutputRaw: string
+): string | undefined {
+  return settledAmountRaw !== undefined &&
+    isPositiveRaw(settledAmountRaw) &&
+    BigInt(settledAmountRaw) < BigInt(minimumOutputRaw)
+    ? 'DEPOSIT_AMOUNT_TOO_LOW'
+    : undefined
+}
+
 function isBoundedLabel(value: string, maximumLength = 64): boolean {
   return (
     value.length > 0 &&
@@ -731,6 +742,10 @@ export class ConfidentialFundingCoordinator {
           record = Object.freeze({
             ...record,
             settledOutputRaw: status.settledAmountOutRaw,
+            errorStatus:
+              status.errorStatus ??
+              record.errorStatus ??
+              externalDepositSettlementError(status.settledAmountOutRaw, record.minimumOutputRaw),
             updatedAt: this.now()
           })
           await this.options.store.putExternalDeposit(record)
@@ -798,6 +813,11 @@ export class ConfidentialFundingCoordinator {
       status.settledAmountOutRaw !== undefined &&
       isPositiveRaw(status.settledAmountOutRaw) &&
       record.settledOutputRaw === undefined
+    const errorStatus =
+      status.errorStatus ??
+      (nextPhase === 'ready'
+        ? externalDepositSettlementError(status.settledAmountOutRaw, record.minimumOutputRaw)
+        : undefined)
     const fundingObservedAt =
       record.fundingObservedAt ??
       (hasExternalShieldDepositFunding(record) ||
@@ -811,7 +831,7 @@ export class ConfidentialFundingCoordinator {
         : undefined)
     if (
       nextPhase !== record.phase ||
-      status.errorStatus !== record.errorStatus ||
+      errorStatus !== record.errorStatus ||
       depositedAmountRaw !== record.depositedAmountRaw ||
       normalized !== record.providerStatus ||
       fundingObservedAt !== record.fundingObservedAt ||
@@ -823,7 +843,7 @@ export class ConfidentialFundingCoordinator {
         providerStatus: normalized,
         ...(fundingObservedAt !== undefined ? { fundingObservedAt } : {}),
         ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
-        errorStatus: status.errorStatus,
+        errorStatus,
         ...(nextPhase === 'ready' &&
         status.settledAmountOutRaw &&
         isPositiveRaw(status.settledAmountOutRaw)
@@ -884,13 +904,11 @@ export class ConfidentialFundingCoordinator {
       }
       if (!session) return record
       const balances = await this.options.api.getBalances(session.accessToken)
-      await this.options.store.withExternalDepositScope(record, () =>
-        this.options.store.putBalances(
-          record.network,
-          record.keyDomainId,
-          record.accountId,
-          balances
-        )
+      await this.options.store.putBalances(
+        record.network,
+        record.keyDomainId,
+        record.accountId,
+        balances
       )
       const updated: ExternalShieldDeposit = Object.freeze({
         ...record,

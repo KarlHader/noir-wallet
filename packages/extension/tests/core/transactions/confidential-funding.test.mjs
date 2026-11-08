@@ -22,6 +22,7 @@ import {
 } from '../../../src/core/services/confidential-funding/confidential-funding-model.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
+import { depositStatusLabel } from '../../../src/popup/services/shield-deposit-options.ts'
 
 const apiConfig = {
   oneClickApiUrl: 'https://example.test/1click',
@@ -50,6 +51,8 @@ test.describe('confidential funding safety rules', () => {
     let cachedBalance
     let signingCalls = 0
     let serviceStatus = 'PENDING_DEPOSIT'
+    let settledAmountOutRaw = '987'
+    let serviceErrorStatus
     let depositedAmountRaw
     let now = 1_000
     let statusCalls = 0
@@ -90,7 +93,10 @@ test.describe('confidential funding safety rules', () => {
           return {
             status: serviceStatus,
             ...(depositedAmountRaw !== undefined ? { depositedAmountRaw } : {}),
-            ...(serviceStatus === 'SUCCESS' ? { settledAmountOutRaw: '987' } : {})
+            ...(serviceStatus === 'SUCCESS' && settledAmountOutRaw !== undefined
+              ? { settledAmountOutRaw }
+              : {}),
+            ...(serviceErrorStatus !== undefined ? { errorStatus: serviceErrorStatus } : {})
           }
         },
         async getBalances() {
@@ -303,6 +309,62 @@ test.describe('confidential funding safety rules', () => {
     expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('ready')
     expect(balanceReads).toBe(1)
     expect(signingCalls).toBe(0)
+
+    const underMinimum = {
+      ...created,
+      depositId: 'under-minimum',
+      transactionId: 'tx:confidential-external:under-minimum',
+      phase: 'processing'
+    }
+    records.set(underMinimum.depositId, underMinimum)
+    await repository.create(createExternalShieldDepositGraph(underMinimum))
+    settledAmountOutRaw = '979'
+    const shortfall = await coordinator.refreshExternalDeposit(underMinimum.depositId)
+    expect(shortfall.phase).toBe('ready')
+    expect(shortfall.settledOutputRaw).toBe('979')
+    expect(shortfall.errorStatus).toBe('DEPOSIT_AMOUNT_TOO_LOW')
+    expect(depositStatusLabel(shortfall, now)).toBe('Received less than minimum')
+    const shortfallGraph = await repository.get(
+      { keyDomainId: 'wallet:one', accountId: 'account:one' },
+      underMinimum.transactionId
+    )
+    expect(shortfallGraph.root.status).toBe('final')
+    expect(
+      shortfallGraph.segments.find(segment => segment.role === 'destination').evidence
+    ).toMatchObject({ settledAmount: { amountRaw: '979' } })
+
+    for (const providerWarning of [undefined, 'PROVIDER_WARNING']) {
+      const depositId = providerWarning ? 'late-provider-warning' : 'late-settlement'
+      const lateSettlement = {
+        ...created,
+        depositId,
+        transactionId: `tx:confidential-external:${depositId}`,
+        phase: 'processing'
+      }
+      records.set(depositId, lateSettlement)
+      await repository.create(createExternalShieldDepositGraph(lateSettlement))
+      settledAmountOutRaw = undefined
+      serviceErrorStatus = providerWarning
+      const awaitingAmount = await coordinator.refreshExternalDeposit(depositId)
+      expect(awaitingAmount.phase).toBe('ready')
+      expect(awaitingAmount.settledOutputRaw).toBeUndefined()
+      expect(awaitingAmount.errorStatus).toBe(providerWarning)
+      expect(depositStatusLabel(awaitingAmount, now)).toBe('Received')
+      settledAmountOutRaw = '979'
+      serviceErrorStatus = undefined
+      const lateShortfall = await coordinator.refreshExternalDeposit(depositId)
+      expect(lateShortfall.phase).toBe('ready')
+      expect(lateShortfall.settledOutputRaw).toBe('979')
+      expect(lateShortfall.errorStatus).toBe(providerWarning ?? 'DEPOSIT_AMOUNT_TOO_LOW')
+      expect(depositStatusLabel(lateShortfall, now)).toBe('Received less than minimum')
+      serviceStatus = 'REFUNDED'
+      const afterStaleStatus = await coordinator.refreshExternalDeposit(depositId)
+      expect(afterStaleStatus.phase).toBe('ready')
+      expect(afterStaleStatus.settledOutputRaw).toBe('979')
+      expect(afterStaleStatus.errorStatus).toBe(lateShortfall.errorStatus)
+      serviceStatus = 'SUCCESS'
+    }
+    settledAmountOutRaw = '987'
 
     for (const [depositId, phase] of [
       ['refund-recovery', 'refunded'],

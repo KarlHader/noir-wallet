@@ -118,6 +118,26 @@ async function openShieldEthTransfer(
     .getByRole('button', { name: /^To: .* Change account$/ })
     .getAttribute('aria-label')
   expect(initialFrom?.replace('From:', '')).not.toBe(initialTo?.replace('To:', ''))
+  const connectShield = async () => {
+    const connect = page.getByRole('button', { name: 'Connect Shield' })
+    await expect(connect).toBeVisible({ timeout: 30_000 })
+    await connect.click()
+    await expect(page.getByRole('button', { name: 'Refresh Shield balance' })).toBeVisible({
+      timeout: 30_000
+    })
+  }
+  if (from !== 'Shield') {
+    const fromAccount = page.getByRole('button', { name: /^From: .* Change account$/ })
+    await expect(fromAccount).toBeEnabled({ timeout: 30_000 })
+    await fromAccount.click()
+    await page
+      .getByRole('dialog')
+      .filter({ has: page.getByRole('tablist', { name: 'Wallet accounts' }) })
+      .getByRole('button', { name: `Select ${from} account` })
+      .click()
+  } else {
+    await connectShield()
+  }
   await expect(page.getByRole('button', { name: 'Select transfer asset' })).not.toContainText('ZEC')
   await page.getByRole('button', { name: 'Select transfer asset' }).click()
   const picker = page.getByRole('dialog', { name: 'Select asset' })
@@ -129,14 +149,14 @@ async function openShieldEthTransfer(
   await expect(eth).toHaveCount(1, { timeout: 30_000 })
   await expect(eth.getByText('ETH', { exact: true })).toHaveCount(1)
   await eth.click()
-  await page.getByRole('button', { name: /^From: .* Change account$/ }).click()
-  await page
-    .getByRole('dialog')
-    .filter({
-      has: page.getByRole('tablist', { name: 'Wallet accounts' })
-    })
-    .getByRole('button', { name: `Select ${from} ${from === 'Shield' ? 'balance' : 'account'}` })
-    .click()
+  if (from === 'Shield') {
+    await page.getByRole('button', { name: /^From: .* Change account$/ }).click()
+    await page
+      .getByRole('dialog')
+      .filter({ has: page.getByRole('tablist', { name: 'Wallet accounts' }) })
+      .getByRole('button', { name: 'Select Shield balance' })
+      .click()
+  }
   await page.getByRole('button', { name: /^To: .* Change account$/ }).click()
   await page
     .getByRole('dialog')
@@ -146,12 +166,7 @@ async function openShieldEthTransfer(
     .getByRole('button', { name: `Select ${to} ${to === 'Shield' ? 'balance' : 'account'}` })
     .click()
   if (cluster) await page.getByRole('radio', { name: /^Cluster/ }).click()
-  const connect = page.getByRole('button', { name: 'Connect Shield' })
-  await expect(connect).toBeVisible({ timeout: 30_000 })
-  await connect.click()
-  await expect(page.getByRole('button', { name: 'Refresh Shield balance' })).toBeVisible({
-    timeout: 30_000
-  })
+  if (from !== 'Shield') await connectShield()
 }
 
 async function openNearShieldAction(page: Page, action: 'Move' | 'Send' | 'Swap' | 'Receive') {
@@ -401,7 +416,10 @@ test('receives an external Shield deposit without spending local funds and resto
   await popup.getByRole('button', { name: 'Check deposit status', exact: true }).click()
   await expect(popup.getByText('Remaining', { exact: true })).toBeVisible()
   await expect(popup.getByText('0.005 ETH', { exact: true }).first()).toBeVisible()
-  await popup.getByRole('status').getByText('Partial deposit').scrollIntoViewIfNeeded()
+  await popup
+    .getByRole('status')
+    .getByText('Partial deposit', { exact: true })
+    .scrollIntoViewIfNeeded()
   await captureScreenshot(popup, 'shield-external-deposit-partial.png')
   received = true
   depositedAmount = '10000000000000000'
@@ -657,6 +675,10 @@ for (const destination of ['Public', 'Private'] as const) {
       })
       .toBe('ready')
     expect(rpc.getBroadcastCount()).toBe(0)
+    await popup.goto(`chrome-extension://${extensionId}/index.html`)
+    await popup.getByRole('button', { name: 'Shield Funds' }).click()
+    await popup.getByRole('button', { name: /NEAR Confidential/ }).click()
+    await popup.getByRole('button', { name: 'Refresh Shield balance' }).click()
     await expect
       .poll(() => hasStoredShieldBalance(popup, '10000000000000000'), {
         timeout: 30_000
@@ -866,7 +888,11 @@ for (const source of ['Public', 'Shield'] as const) {
       destinationDomain: destination.toLowerCase(),
       requiresDeposit: source !== 'Shield'
     })
-    await captureScreenshot(popup, `cluster-${source.toLowerCase()}-review.png`)
+    if (source === 'Public') {
+      await captureScreenshot(popup, 'cluster-public-review.png')
+    } else {
+      await captureScreenshot(popup, 'cluster-shield-review.png')
+    }
     await popup.getByRole('button', { name: 'Confirm Cluster', exact: true }).click()
     if (source === 'Public') {
       await expect.poll(rpc.getBroadcastCount, { timeout: 30_000 }).toBe(1)
@@ -893,7 +919,11 @@ for (const source of ['Public', 'Shield'] as const) {
       .poll(async () => (await readStoredShieldPlan(popup))?.orderId)
       .toBe('protocol-cluster-1')
     expect((await readStoredShieldPlan(popup))?.phase).not.toBe('ready')
-    await captureScreenshot(popup, `cluster-${source.toLowerCase()}-scheduled.png`)
+    if (source === 'Public') {
+      await captureScreenshot(popup, 'cluster-public-scheduled.png')
+    } else {
+      await captureScreenshot(popup, 'cluster-shield-scheduled.png')
+    }
     await popup.reload()
     expect(api.getConfidentialBatchRequests()).toHaveLength(1)
     api.setConfidentialBalanceRaw(source === 'Shield' ? '10000000000000000' : '0')
@@ -924,7 +954,11 @@ for (const source of ['Public', 'Shield'] as const) {
     await expect(popup.locator('[data-activity-status-value]')).toHaveText('Received', {
       timeout: 30_000
     })
-    await captureScreenshot(popup, `cluster-${source.toLowerCase()}-completed.png`)
+    if (source === 'Public') {
+      await captureScreenshot(popup, 'cluster-public-completed.png')
+    } else {
+      await captureScreenshot(popup, 'cluster-shield-completed.png')
+    }
   })
 }
 
@@ -1168,24 +1202,22 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
       timeout: 30_000
     })
     await expectNoOverflow(popup)
-    await captureScreenshot(
-      popup,
-      direction === 'main-to-private'
-        ? 'transfer-native-max-main-to-private-available.png'
-        : 'transfer-native-max-private-to-main-available.png'
-    )
+    if (direction === 'main-to-private') {
+      await captureScreenshot(popup, 'transfer-native-max-main-to-private-available.png')
+    } else {
+      await captureScreenshot(popup, 'transfer-native-max-private-to-main-available.png')
+    }
     await popup.getByRole('button', { name: 'Transfer', exact: true }).click()
     await expect(popup.getByRole('button', { name: 'Confirm', exact: true })).toBeEnabled({
       timeout: 60_000
     })
     await expect(popup.getByText('0.00054 ETH', { exact: true })).toBeVisible()
     expect(api.getQuoteRequests().at(-1)?.amount).toBe('2301040456329000')
-    await captureScreenshot(
-      popup,
-      direction === 'main-to-private'
-        ? 'transfer-native-max-main-to-private-review.png'
-        : 'transfer-native-max-private-to-main-review.png'
-    )
+    if (direction === 'main-to-private') {
+      await captureScreenshot(popup, 'transfer-native-max-main-to-private-review.png')
+    } else {
+      await captureScreenshot(popup, 'transfer-native-max-private-to-main-review.png')
+    }
     await popup.getByRole('button', { name: 'Edit network fee' }).click()
     await popup
       .getByRole('dialog', { name: 'Network Fee' })
@@ -1197,12 +1229,11 @@ for (const direction of ['main-to-private', 'private-to-main'] as const) {
     await expect(popup.getByText('0.00072 ETH', { exact: true })).toBeVisible({ timeout: 60_000 })
     expect(api.getQuoteRequests().at(-1)?.amount).toBe('2076040456329000')
     expect(rpc.getBroadcastCount()).toBe(0)
-    await captureScreenshot(
-      popup,
-      direction === 'main-to-private'
-        ? 'transfer-native-max-main-to-private-fast.png'
-        : 'transfer-native-max-private-to-main-fast.png'
-    )
+    if (direction === 'main-to-private') {
+      await captureScreenshot(popup, 'transfer-native-max-main-to-private-fast.png')
+    } else {
+      await captureScreenshot(popup, 'transfer-native-max-private-to-main-fast.png')
+    }
   })
 }
 
@@ -1305,7 +1336,8 @@ test('blocks a Public send to the owned Private address and allows cancellation 
   await popup.getByRole('button', { name: 'Send USDC on Ethereum' }).click()
   await popup.getByLabel('Send To').fill(privateAddress)
   await popup.getByLabel('USDC amount').fill('5')
-  await expect(popup.getByText('Use Move to transfer to your Private account.')).toBeVisible()
+  await expect(popup.getByText('This is your Private address.')).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Move', exact: true })).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled()
   expect(rpc.getBroadcastCount()).toBe(0)
   await popup.getByLabel('Send To').fill('0x9C73842d02D1Fe00000000000000000000000000')
@@ -1373,9 +1405,12 @@ test('deducts native gas from Available and Max in Public Send', async ({
     timeout: 30_000
   })
   await amountMax.click()
-  await expect(popup.getByLabel('ETH amount')).toHaveValue('0.002897290456329', {
-    timeout: 30_000
-  })
+  await expect(popup.getByRole('textbox', { name: 'ETH amount' })).toHaveValue(
+    '0.002897290456329',
+    {
+      timeout: 30_000
+    }
+  )
   await expect(popup.getByTestId('send-amount-card')).toContainText('Available 0.002897 ETH')
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled({
     timeout: 30_000
@@ -1476,8 +1511,6 @@ test('reviews and submits Public to Private from AssetDetail Move', async ({
   await expect(popup.getByText('Receive in', { exact: true })).toBeVisible()
   await expect(popup.getByText('Send To', { exact: true })).toBeVisible()
   await expect(popup.getByText('You receive', { exact: true })).toBeVisible()
-  await expect(popup.getByText('Estimated time', { exact: true })).toBeVisible()
-  await expect(popup.getByText('3-5 min', { exact: true })).toBeVisible()
   await expect(popup.getByText('Public', { exact: true })).toBeVisible()
   await expect(popup.getByText('Private', { exact: true })).toBeVisible()
   await expect(popup.getByText('Price Impact', { exact: true })).toHaveCount(0)
@@ -1551,8 +1584,6 @@ test('reviews and submits Private to Public from AssetDetail Move', async ({
   await expect(popup.getByText('Receive in', { exact: true })).toBeVisible()
   await expect(popup.getByText('Send To', { exact: true })).toBeVisible()
   await expect(popup.getByText('You receive', { exact: true })).toBeVisible()
-  await expect(popup.getByText('Estimated time', { exact: true })).toBeVisible()
-  await expect(popup.getByText('3-5 min', { exact: true })).toBeVisible()
   await expect(popup.getByText('Private', { exact: true })).toBeVisible()
   await expect(popup.getByText('Public', { exact: true })).toBeVisible()
   await expect(popup.getByText('Price Impact', { exact: true })).toHaveCount(0)
@@ -1847,7 +1878,7 @@ test('formats long Send balances and reviews without a redundant Confidential ro
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await popup.getByRole('button', { name: 'Send ETH on Ethereum' }).click()
   await popup.getByLabel('Send To').fill('0x2222222222222222222222222222222222222222')
-  await popup.getByLabel('ETH amount').fill('0.001234567890123456')
+  await popup.getByRole('textbox', { name: 'ETH amount' }).fill('0.001234567890123456')
   const amountCard = popup.getByTestId('send-amount-card')
   await expect(amountCard).toContainText('Balance 0.004744 ETH')
   await expect(amountCard.locator('[title^="0.004744096852704854 ETH"]')).toHaveCount(0)
@@ -1866,7 +1897,9 @@ test('formats long Send balances and reviews without a redundant Confidential ro
   await captureScreenshot(popup, 'send-formatted-amount-review.png')
   await popup.keyboard.press('Escape')
   await review.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(popup.getByLabel('ETH amount')).toHaveValue('0.001234567890123456')
+  await expect(popup.getByRole('textbox', { name: 'ETH amount' })).toHaveValue(
+    '0.001234567890123456'
+  )
   await popup.getByRole('button', { name: 'Choose source account, current main' }).click()
   await popup
     .getByRole('dialog', { name: 'Choose source account' })

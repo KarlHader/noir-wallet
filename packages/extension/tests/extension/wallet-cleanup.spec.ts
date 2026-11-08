@@ -755,7 +755,17 @@ test('full reset removes orphaned wallet storage and retained migration data', a
             transactionId: 'orphan-transaction',
             startTime: Date.now()
           }
-        ]
+        ],
+        'confidential_external_deposit:orphan': { keyDomainId: orphanWalletId },
+        'confidential_funding_plan:orphan': { keyDomainId: orphanWalletId },
+        [`confidential_funding_balance:mainnet:${orphanWalletId}:account-1`]: {
+          balances: [{ available: '42' }]
+        }
+      })
+      await chrome.storage.session.set({
+        [`confidential_funding_session:mainnet:${orphanWalletId}:account-1`]: {
+          accessToken: 'orphan'
+        }
       })
 
       const db = await openDb()
@@ -816,6 +826,7 @@ test('full reset removes orphaned wallet storage and retained migration data', a
         type: 'RESET_WALLET_DATA'
       })
       const storage = await chrome.storage.local.get(null)
+      const sessionStorage = await chrome.storage.session.get(null)
       const walletState =
         typeof storage.wallet_state === 'string'
           ? JSON.parse(storage.wallet_state)
@@ -861,6 +872,10 @@ test('full reset removes orphaned wallet storage and retained migration data', a
         migration: storage.legacy_wallet_data_migration_v1,
         pendingTransactions: storage.pending_transactions,
         pendingZcashTransactions: storage.pending_zcash_transactions,
+        confidentialLocalKeys: Object.keys(storage).filter(key => key.startsWith('confidential_')),
+        confidentialSessionKeys: Object.keys(sessionStorage).filter(key =>
+          key.startsWith('confidential_')
+        ),
         counts,
         bitcoinDiscoveryDatabasePresent: databaseNames.includes(
           'noir-wallet-bitcoin-discovery-v1-db'
@@ -879,6 +894,8 @@ test('full reset removes orphaned wallet storage and retained migration data', a
     syncStates: {},
     pendingTransactions: [],
     pendingZcashTransactions: [],
+    confidentialLocalKeys: [],
+    confidentialSessionKeys: [],
     bitcoinDiscoveryDatabasePresent: false,
     bitcoinChangeDatabasePresent: false,
     bitcoinInputDatabasePresent: false,

@@ -497,7 +497,6 @@ test('provisions and operates a pure Storage V2 Multi-Coin Keystone Wallet', asy
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
   await expect(popup.getByRole('heading', { name: 'Address', exact: true })).toBeVisible()
   const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
-  await receiveAddresses.getByRole('button', { name: /Ethereum & EVM/ }).click()
   for (const network of [...MAINNET_EVM_NETWORK_NAMES, 'Bitcoin']) {
     await expect(
       receiveAddresses.getByRole('heading', { name: network, exact: true })

@@ -935,7 +935,7 @@ test('silently migrates production V1 credentials into Storage V2 during unlock'
   await popup.getByPlaceholder('Enter Password').fill(password)
   await popup.getByRole('button', { name: 'Unlock' }).click()
   await expect(popup.getByRole('tab', { name: 'Assets' })).toBeVisible({ timeout: 60_000 })
-  await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('tab', { name: 'Total assets' })).toBeVisible()
   await expect(popup.getByRole('heading', { name: 'Congratulations!' })).toHaveCount(0)
   await expect(popup.getByRole('heading', { name: 'Wallet upgrade failed' })).toHaveCount(0)
 
@@ -1511,12 +1511,16 @@ for (const kind of ['account', 'wallet'] as const) {
     await popup.goto(`chrome-extension://${extensionId}/index.html`)
     let survivorBefore: { chainAccounts: unknown[]; addresses: unknown[] } | null = null
     if (kind === 'wallet') {
+      await expect(popup.getByRole('heading', { name: 'Enter your password' })).toBeVisible()
       await expect(
         popup.evaluate(
           password => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password }),
           password
         )
       ).resolves.toMatchObject({ success: true })
+      await expect(
+        popup.evaluate(() => chrome.runtime.sendMessage({ type: 'GET_WALLET_SESSION_STATE' }))
+      ).resolves.toEqual({ active: true })
       await openIntegrationPage(popup, extensionId)
       const before = await popup.evaluate(
         target => window.credentialRepositoryIntegration!.inspectProductionV2Removal(target),
@@ -1544,7 +1548,9 @@ for (const kind of ['account', 'wallet'] as const) {
             walletId: target.walletId
           })
           if (seed.success !== true || typeof seed.seedPhrase !== 'string') {
-            throw new Error('Removal wallet secret phrase could not be read')
+            throw new Error(
+              `Removal wallet secret phrase could not be read: ${seed.error ?? 'no phrase returned'}`
+            )
           }
           const challenge = await chrome.runtime.sendMessage({
             type: 'GET_WALLET_BACKUP_WORD_INDICES',

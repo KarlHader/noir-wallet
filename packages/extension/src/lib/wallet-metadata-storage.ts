@@ -202,7 +202,7 @@ function preserveRetainedNames(
   }
 }
 
-async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
+export async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
   return navigator.locks.request(METADATA_LOCK, operation)
 }

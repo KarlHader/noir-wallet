@@ -844,21 +844,7 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
   const settingsAfterSwitch = await popup.evaluate(() =>
     chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
   )
-  expect(settingsAfterSwitch).toMatchObject({
-    result: {
-      activeEvmChainId: 'eip155:421614',
-      overrides: [
-        {
-          chainId: 'eip155:11155111',
-          explorer: {
-            label: 'Concurrent Sepolia Explorer',
-            baseUrl: 'https://concurrent-sepolia-explorer.example',
-            transactionPath: 'transaction'
-          }
-        }
-      ]
-    }
-  })
+  expect(settingsAfterSwitch).toEqual(concurrentExplorerUpdate)
 
   await dapp.reload()
   await dapp.waitForFunction(() => {
@@ -890,7 +876,6 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
     connected: [connectedAddress]
   })
 
-  const switchToSepoliaApprovalPromise = context.waitForEvent('page')
   const switchToSepoliaResultPromise = dapp.evaluate(async () => {
     const provider = (
       window as typeof window & {
@@ -942,14 +927,6 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
       selectedAddress: provider.selectedAddress
     }
   })
-  const switchToSepoliaApproval = await switchToSepoliaApprovalPromise
-  await switchToSepoliaApproval.waitForURL(/#approval\?requestId=/)
-  await switchToSepoliaApproval.getByRole('button', { name: 'Switch Network' }).click()
-  await expect
-    .poll(() => switchToSepoliaApproval.isClosed(), {
-      message: 'the approval window should close after the first confirmation click'
-    })
-    .toBe(true)
   await expect(switchToSepoliaResultPromise).resolves.toEqual({
     result: null,
     eventChainId: '0xaa36a7',
@@ -1066,7 +1043,7 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   await popup.getByRole('tab', { name: 'Activity' }).click()
   const contractActivity = popup.getByRole('button', {
-    name: 'View Contract interaction details on Ethereum Sepolia'
+    name: 'View Contract call details on Ethereum Sepolia'
   })
   await expect(contractActivity).toBeVisible({ timeout: 30_000 })
   await expect(popup.getByRole('button', { name: /View Sent ETH details/ })).toBeVisible()
@@ -1076,7 +1053,13 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
   await expect(
     contractActivityDetail.getByRole('heading', { name: 'Contract interaction' })
   ).toBeVisible()
-  await expect(contractActivityDetail.getByText('0x12345678', { exact: true })).toBeVisible()
+  await expect(contractActivityDetail.getByText('0x1111...111111', { exact: true })).toBeVisible()
+  await expect(
+    contractActivityDetail.getByRole('link', { name: 'View on explorer' })
+  ).toHaveAttribute(
+    'href',
+    `https://concurrent-sepolia-explorer.example/transaction/${contractTransactionHash}`
+  )
   await captureScreenshot(popup, 'noir-v2-contract-interaction-activity.png')
 
   const pageCountBeforeRevert = context.pages().length
@@ -1383,7 +1366,10 @@ test('announces an EIP-6963 provider and enforces EVM permissions in real MV3', 
   )
   await popup.goto(`chrome-extension://${extensionId}/index.html`)
   await popup.getByRole('button', { name: 'Show account addresses' }).click()
-  await popup.getByLabel('Account address menu').getByRole('button', { name: 'View all' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Account 1 addresses' })
+    .getByRole('button', { name: 'View all' })
+    .click()
   await popup.getByRole('button', { name: 'Open Zcash settings' }).click()
   await expect(popup.getByRole('heading', { name: 'Zcash settings' })).toBeVisible()
   const rotateAddressButton = popup.getByRole('button', { name: 'Generate new shielded address' })
@@ -1654,8 +1640,13 @@ test('invalidates an EVM approval when the active Account changes in real MV3', 
 
   if (!active.walletId || !active.accountId) throw new Error('Active Account fixture is missing')
   await popup.getByRole('button', { name: 'Choose wallet' }).click()
+  await popup
+    .getByRole('dialog', { name: 'Accounts' })
+    .getByRole('button', { name: 'Accounts', exact: true })
+    .click()
+  await expect(popup.getByRole('heading', { name: 'Accounts' })).toBeVisible()
   const removeZcashHistoryMock = await mockUnknownZcashAccountHistory(context)
-  await popup.getByRole('button', { name: 'Add Account', exact: true }).click()
+  await popup.getByRole('button', { name: 'Add account', exact: true }).click()
   await selectNewZcashAccountHistory(popup)
   await expect(popup.getByText('Account 2', { exact: true })).toBeVisible({ timeout: 60_000 })
   await removeZcashHistoryMock()
@@ -1723,7 +1714,7 @@ test('invalidates an EVM approval when the active Account changes in real MV3', 
       }
     )
   ).resolves.toEqual({
-    error: { code: 'request-failed', message: 'The EVM wallet request failed' }
+    error: { code: 'review-unavailable', message: 'The EVM transfer review is no longer available' }
   })
   await expect
     .poll(async () => {
@@ -1826,14 +1817,14 @@ test('retries the exact signed transaction from Activity after an interrupted br
   const longAmount = '0.123456789012345678'
   await popup.getByLabel('ETH amount').fill(longAmount)
   await popup.getByRole('button', { name: 'Continue', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Review Send' })).toBeVisible({
+  await expect(popup.getByRole('heading', { name: 'Sending' })).toBeVisible({
     timeout: 30_000
   })
-  const reviewDialog = popup.getByRole('dialog', { name: 'Review Send' })
+  const reviewDialog = popup.getByRole('dialog', { name: 'Sending' })
   const reviewAmount = reviewDialog
     .getByRole('button', { name: 'Show full ETH amount' })
-    .filter({ hasText: '0.12345678… ETH' })
-  await expect(reviewAmount).toContainText('0.12345678… ETH')
+    .filter({ hasText: '0.1234 ETH' })
+  await expect(reviewAmount).toContainText('0.1234 ETH')
   await reviewAmount.click()
   await expect(popup.getByText(`${longAmount} ETH`, { exact: true })).toBeVisible()
   await reviewAmount.click()
@@ -1846,10 +1837,14 @@ test('retries the exact signed transaction from Activity after an interrupted br
       }))
     )
     .toEqual({ viewportWidth: 375, contentWidth: 375, dialogOverflow: 0 })
-  await popup.getByRole('button', { name: 'Send', exact: true }).click()
+  await reviewDialog.getByRole('button', { name: 'Send anyway' }).click()
   await expect(popup.getByText('Broadcast Interrupted', { exact: true })).toBeVisible({
     timeout: 30_000
   })
+  await popup
+    .getByRole('button', { name: 'Show full ETH amount' })
+    .filter({ hasText: '0.1234 ETH' })
+    .click()
   await expect(popup.getByText(longAmount, { exact: true })).toBeVisible()
   expect(submittedRawTransactions).toHaveLength(1)
 
@@ -1983,7 +1978,8 @@ test('recovers a missing Sepolia nonce in Activity before allowing another trans
                 transactionHash: hash,
                 blockHash: `0x${'b'.repeat(64)}`,
                 blockNumber: '0x101',
-                status: '0x1'
+                status: '0x1',
+                logs: []
               }
             : null
         break
@@ -2241,7 +2237,8 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
                 transactionHash,
                 blockHash: `0x${'b'.repeat(64)}`,
                 blockNumber: '0x101',
-                status: '0x1'
+                status: '0x1',
+                logs: []
               }
             : null
         break
@@ -2272,20 +2269,20 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   })
   await expect(usdcAsset).toContainText('$2')
   await expect(usdcAsset).not.toContainText(/\d+ Networks?/)
-  await expect(popup.getByText('Total Assets', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Asset category: Total assets' })).toBeVisible()
   await expect(popup.getByText('Known Assets Value', { exact: true })).toHaveCount(0)
   await expect(popup.getByText('Zcash Value', { exact: true })).toHaveCount(0)
   const homeActions = popup.getByTestId('home-actions')
   await expect(homeActions).toHaveAttribute('data-layout', 'centered')
-  const [actionsBounds, sendBounds, receiveBounds] = await Promise.all([
+  const [actionsBounds, sendBounds, shieldFundsBounds] = await Promise.all([
     homeActions.boundingBox(),
     homeActions.getByRole('button', { name: 'Send', exact: true }).boundingBox(),
-    homeActions.getByRole('button', { name: 'Receive', exact: true }).boundingBox()
+    homeActions.getByRole('button', { name: 'Shield Funds', exact: true }).boundingBox()
   ])
-  if (!actionsBounds || !sendBounds || !receiveBounds) {
+  if (!actionsBounds || !sendBounds || !shieldFundsBounds) {
     throw new Error('Testnet action buttons are not visible')
   }
-  const actionsCenter = (sendBounds.x + receiveBounds.x + receiveBounds.width) / 2
+  const actionsCenter = (sendBounds.x + shieldFundsBounds.x + shieldFundsBounds.width) / 2
   const containerCenter = actionsBounds.x + actionsBounds.width / 2
   expect(Math.abs(actionsCenter - containerCenter)).toBeLessThanOrEqual(1)
   await expect(popup.locator('body')).toHaveCSS('width', '375px')
@@ -2299,27 +2296,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
     .toEqual({ viewportWidth: 375, contentWidth: 375 })
   await popup.mouse.move(374, 1)
   await captureScreenshot(popup, 'evm-testnet-portfolio-home.png')
-
-  await popup
-    .getByRole('button', { name: /total assets .*show Public and Confidential totals$/i })
-    .hover()
-  const totalBalanceTooltip = popup.locator(
-    '[data-slot="tooltip-content"]:not([data-state="closed"])'
-  )
-  await expect(totalBalanceTooltip).toContainText('Public')
-  await expect(totalBalanceTooltip).toContainText('Confidential')
-  await popup.mouse.move(374, 1)
-  const usdcBalanceTooltipTrigger = usdcAsset.locator('[data-slot="tooltip-trigger"]')
-  await usdcBalanceTooltipTrigger.hover()
-  const assetBalanceTooltip = popup.locator(
-    '[data-slot="tooltip-content"]:not([data-state="closed"])'
-  )
-  await expect(assetBalanceTooltip).toContainText('Public')
-  await expect(assetBalanceTooltip).toContainText('Confidential')
-  await captureScreenshot(popup, 'private-defi-home-asset-balance-breakdown.png', {
-    preservePointer: true
-  })
-  await popup.mouse.move(374, 1)
+  await expect(popup.getByTestId('home-total-assets')).toContainText('$5,002.00')
 
   await popup.getByRole('tab', { name: 'Activity' }).click()
   await expect(popup.getByRole('region', { name: 'Multichain activity' })).toBeVisible()
@@ -2395,7 +2372,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   }
   await popup.mouse.move(374, 1)
   await captureScreenshot(popup, 'evm-testnet-activity-empty.png')
-  await popup.getByRole('tab', { name: 'Assets' }).click()
+  await popup.getByRole('tab', { name: 'Total assets' }).click()
 
   await usdcAsset.click()
   await expect(popup.getByRole('heading', { name: 'USDC', exact: true })).toBeVisible()
@@ -2425,20 +2402,17 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   })
   await expect(popup.getByText('Copied!', { exact: true })).toBeHidden({ timeout: 5_000 })
   await captureScreenshot(popup, 'evm-testnet-asset-detail.png')
-  const accountBalanceBreakdown = popup.getByRole('region', {
-    name: 'Public and Confidential balance breakdown'
-  })
+  const accountBalanceBreakdown = popup.getByRole('region', { name: 'Account balances' })
   await accountBalanceBreakdown.scrollIntoViewIfNeeded()
-  await expect(accountBalanceBreakdown).toContainText('Total')
   await expect(accountBalanceBreakdown).toContainText('Public')
-  await expect(accountBalanceBreakdown).toContainText('Confidential')
+  await expect(accountBalanceBreakdown).toContainText('Private')
   await captureScreenshot(popup, 'private-defi-token-balance-breakdown.png')
   await assetDetailContent.evaluate(element => {
     element.scrollTop = 0
   })
 
   await popup.getByRole('button', { name: 'Receive', exact: true }).click()
-  await expect(popup.getByRole('heading', { name: 'Addresses' })).toBeVisible()
+  await expect(popup.getByRole('heading', { name: 'Receive' })).toBeVisible()
   await expect(
     popup
       .getByRole('region', { name: 'Account network addresses' })
@@ -2449,8 +2423,6 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
 
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(popup.getByLabel('USDC amount')).toBeVisible()
-  await popup.getByRole('button', { name: 'Back' }).click()
-  await expect(popup.getByLabel('Search your assets')).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'USDC', exact: true })).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
@@ -2486,10 +2458,11 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await captureScreenshot(popup, 'evm-testnet-send-assets.png')
 
   await popup.getByRole('button', { name: 'Send ZEC on Zcash Testnet' }).click()
-  await expect(popup.getByTestId('send-asset-header')).toContainText('Zcash Testnet')
+  await expect(popup.getByTestId('send-asset-header')).toContainText('ZEC')
+  await expect(popup.getByText('Zcash Testnet', { exact: true })).toBeVisible()
   const memoToggle = popup.getByRole('button', { name: 'Memo (optional)' })
   await expect(memoToggle).toBeVisible()
-  await expect(popup.getByTestId('send-network-fee')).toContainText('ZEC')
+  await expect(popup.getByRole('button', { name: 'Show full ZEC amount' })).toContainText('ZEC')
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeVisible()
   await captureScreenshot(popup, 'zcash-testnet-send-form.png')
   await memoToggle.click()
@@ -2499,52 +2472,51 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
 
   await popup.getByRole('button', { name: 'Send USDC on Ethereum Sepolia' }).click()
   await expect(popup.getByTestId('send-asset-header')).toContainText('USDC')
-  await expect(popup.getByTestId('send-asset-header')).toContainText('Ethereum Sepolia')
   await popup.getByLabel('Send To').fill(RECIPIENT)
   await popup.getByLabel('USDC amount').fill('0.5')
-  await expect(popup.getByTestId('send-network-fee')).toContainText('0.0000756 ETH', {
+  const sendNetworkFee = popup.getByRole('button', { name: 'Edit network fee' }).locator('..')
+  await expect(sendNetworkFee).toContainText('0.0000756 ETH', {
     timeout: 30_000
   })
-  await expect(popup.getByTestId('send-network-fee')).toContainText('Standard')
-  await popup
-    .getByTestId('send-network-fee')
-    .getByRole('button', { name: 'Edit network fee' })
-    .click()
+  await expect(sendNetworkFee).toContainText('Standard')
+  await popup.getByRole('button', { name: 'Edit network fee' }).click()
   const feeSettings = popup.getByRole('dialog', { name: 'Network Fee' })
   await feeSettings.getByLabel('Custom priority fee').fill('2.5')
   await captureScreenshot(popup, 'noir-v2-custom-priority-fee.png')
   await feeSettings.getByRole('button', { name: 'Apply', exact: true }).click()
-  await expect(popup.getByTestId('send-network-fee')).toContainText('Custom')
-  await expect(popup.getByTestId('send-network-fee')).not.toContainText('—', {
+  await expect(sendNetworkFee).toContainText('Custom')
+  await expect(sendNetworkFee).not.toContainText('—', {
     timeout: 30_000
   })
   await popup.getByRole('button', { name: 'Continue', exact: true }).click()
-  const reviewDialog = popup.getByRole('dialog', { name: 'Review Send' })
-  await expect(reviewDialog.getByRole('heading', { name: 'Review Send' })).toBeVisible({
+  const reviewDialog = popup.getByRole('dialog', { name: 'Sending' })
+  await expect(reviewDialog.getByRole('heading', { name: 'Sending' })).toBeVisible({
     timeout: 30_000
   })
   await expect(reviewDialog.getByRole('button', { name: 'Show full USDC amount' })).toHaveText(
     '0.5 USDC'
   )
-  await expect(popup.getByText('Token transfer', { exact: true })).toBeVisible()
+  await expect(reviewDialog).toContainText('0x1111...111111')
+  await expect(reviewDialog).toContainText('Ethereum Sepolia')
   await expect(
     popup.getByText('This token transfer calls the bundled USDC contract.', { exact: true })
   ).toHaveCount(0)
-  await expect(reviewDialog.getByText('Max fee per gas', { exact: true })).toBeVisible()
-  await expect(reviewDialog.getByText('4.5 GWEI', { exact: true })).toBeVisible()
-  await expect(reviewDialog.getByText('Priority fee per gas', { exact: true })).toBeVisible()
-  await expect(reviewDialog.getByText('2.5 GWEI', { exact: true })).toBeVisible()
   await waitForDialogAnimations(popup)
   await popup.mouse.move(374, 1)
   await captureScreenshot(popup, 'noir-v2-custom-gwei-review.png')
-  await reviewDialog.getByRole('button', { name: /ETH.*Custom/i }).click()
-  await popup
-    .getByRole('dialog', { name: 'Network Fee' })
-    .getByRole('radio', { name: /Standard/ })
-    .click()
-  await expect(reviewDialog.getByRole('button', { name: /ETH.*Standard/i })).toBeVisible({
-    timeout: 30_000
-  })
+  await reviewDialog.getByRole('button', { name: 'Edit network fee' }).click()
+  const reviewFeeDialog = popup.getByRole('dialog', { name: 'Network Fee' })
+  await expect(reviewFeeDialog.getByText('Max fee per gas', { exact: true })).toBeVisible()
+  await expect(reviewFeeDialog.getByText('4.5 GWEI', { exact: true })).toBeVisible()
+  await expect(reviewFeeDialog.getByText('Priority fee per gas', { exact: true })).toBeVisible()
+  await expect(reviewFeeDialog.getByText('2.5 GWEI', { exact: true })).toBeVisible()
+  await reviewFeeDialog.getByRole('radio', { name: /Standard/ }).click()
+  await expect(reviewDialog.getByRole('button', { name: 'Edit network fee' })).toContainText(
+    'Standard',
+    {
+      timeout: 30_000
+    }
+  )
   await popup.getByRole('button', { name: 'Cancel', exact: true }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByLabel('Search your assets')).toBeVisible()
@@ -2556,7 +2528,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await sendAmountCard.getByRole('button', { name: 'Max' }).click()
   await expect(sendAmountCard).toContainText('Available', { timeout: 30_000 })
   await popup.getByLabel('ETH amount').fill('0.001')
-  await expect(popup.getByTestId('send-network-fee')).toContainText('0.000063 ETH', {
+  await expect(sendNetworkFee).toContainText('0.000063 ETH', {
     timeout: 30_000
   })
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled()
@@ -2564,7 +2536,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await captureScreenshot(popup, 'evm-testnet-send-form.png')
   await popup.getByRole('button', { name: 'Continue', exact: true }).click()
 
-  await expect(reviewDialog.getByRole('heading', { name: 'Review Send' })).toBeVisible({
+  await expect(reviewDialog.getByRole('heading', { name: 'Sending' })).toBeVisible({
     timeout: 30_000
   })
   await expect(sendAmountCard).toContainText('Available')
@@ -2574,14 +2546,14 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
       .filter({ hasText: '0.001 ETH' })
   ).toBeVisible()
   await expect(reviewDialog.getByText('Network fee', { exact: true })).toBeVisible()
-  await expect(popup.getByText('Native transfer', { exact: true })).toBeVisible()
+  await expect(reviewDialog).toContainText('Ethereum Sepolia')
   await expect(popup.getByText(/slippage/i)).toHaveCount(0)
   await expect(popup.getByText(/estimated time/i)).toHaveCount(0)
   await waitForDialogAnimations(popup)
   await popup.mouse.move(374, 1)
   await captureScreenshot(popup, 'evm-testnet-send-review.png')
 
-  await popup.getByRole('button', { name: 'Send', exact: true }).click()
+  await reviewDialog.getByRole('button', { name: 'Send anyway' }).click()
   const approvalOutcome = await Promise.race([
     popup
       .getByText('Transaction Submitted', { exact: true })
@@ -2752,7 +2724,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await popup.getByRole('button', { name: 'Back' }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('heading', { name: 'Portfolio' })).toBeVisible()
-  const assetsTab = popup.getByRole('tab', { name: 'Assets' })
+  const assetsTab = popup.getByRole('tab', { name: 'Total assets' })
   const activityTab = popup.getByRole('tab', { name: 'Activity' })
   await activityTab.click()
   await expect(activityTab).toHaveAttribute('data-state', 'active')
@@ -2767,7 +2739,7 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
             Number.parseFloat(getComputedStyle(tab, '::after').width)
           ])
         )
-        return { assetsHidden: widths.Assets === 0, activityVisible: widths.Activity > 0 }
+        return { assetsHidden: widths['Total assets'] === 0, activityVisible: widths.Activity > 0 }
       })
     )
     .toEqual({ assetsHidden: true, activityVisible: true })
@@ -2816,15 +2788,16 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await expect(activityDetail.getByText('Confirmed', { exact: true })).toBeVisible()
   await expect(activityDetail.getByText('From', { exact: true })).toBeVisible()
   await expect(activityDetail.getByText('To', { exact: true })).toBeVisible()
-  await expect(activityDetail.getByText('Network fee', { exact: true })).toBeVisible()
+  await expect(activityDetail.getByText('Fee limit', { exact: true })).toBeVisible()
   await expect(activityDetail.getByText(/0\.(?:000063|0₄63) ETH/)).toBeVisible()
   await expect(activityDetail.getByRole('button', { name: 'More details' })).toHaveCount(0)
   await expect(activityDetail.getByText('Transaction progress', { exact: true })).toHaveCount(0)
   await expect(activityDetail.locator('[data-activity-segment-status="final"]')).toHaveCount(0)
   if (!transactionHash) throw new Error('Canonical EVM transaction hash was not observed')
-  await expect(
-    activityDetail.locator('a[href^="https://sepolia.etherscan.io/tx/"]')
-  ).toHaveAttribute('href', `https://sepolia.etherscan.io/tx/${transactionHash}`)
+  await expect(activityDetail.getByRole('link', { name: 'View on explorer' })).toHaveAttribute(
+    'href',
+    `https://sepolia.etherscan.io/tx/${transactionHash}`
+  )
   await expect
     .poll(() =>
       popup.getByRole('dialog').evaluate(element => ({
@@ -2840,18 +2813,21 @@ test('prepares, signs, broadcasts, monitors, and records a Sepolia transfer in r
   await popup.getByRole('button', { name: 'Close' }).click()
   await expect(popup.getByRole('dialog')).toHaveCount(0)
 
+  await popup.getByRole('button', { name: 'Open menu' }).click()
   await popup.getByRole('button', { name: 'Settings', exact: true }).click()
   await popup.getByRole('button', { name: 'Address Book' }).click()
   await expect(popup.getByRole('heading', { name: 'Address Book' })).toBeVisible()
   await expect(popup.getByText('Alice Sepolia', { exact: true })).toBeVisible()
-  await expect(popup.getByText('Ethereum Sepolia', { exact: true })).toBeVisible()
+  await expect(popup.getByText(RECIPIENT, { exact: true })).toBeVisible()
   await captureScreenshot(popup, 'evm-testnet-address-book.png')
-  await popup.getByRole('button', { name: 'Rename Alice Sepolia' }).click()
+  await popup.getByRole('button', { name: 'Actions for Alice Sepolia' }).click()
+  await popup.getByRole('menuitem', { name: 'Rename' }).click()
   const renameDialog = popup.getByRole('dialog')
   await renameDialog.getByLabel('Contact name').fill('Alice')
   await renameDialog.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(popup.getByText('Alice', { exact: true })).toBeVisible()
-  await popup.getByRole('button', { name: 'Delete Alice' }).click()
+  await popup.getByRole('button', { name: 'Actions for Alice' }).click()
+  await popup.getByRole('menuitem', { name: 'Delete address' }).click()
   const deleteDialog = popup.getByRole('dialog')
   await expect(deleteDialog.getByRole('heading', { name: 'Delete Contact?' })).toBeVisible()
   const deleteContactButton = deleteDialog.getByRole('button', { name: 'Delete', exact: true })
@@ -2937,8 +2913,11 @@ test('opens the recorded pending transfer on its explorer in real MV3', async ({
   await popup.getByLabel('ETH amount').fill('0.001')
   await expect(popup.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled()
   await popup.getByRole('button', { name: 'Continue', exact: true }).click()
-  await expect(popup.getByRole('dialog', { name: 'Review Send' })).toBeVisible()
-  await popup.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(popup.getByRole('dialog', { name: 'Sending' })).toBeVisible()
+  await popup
+    .getByRole('dialog', { name: 'Sending' })
+    .getByRole('button', { name: 'Send anyway' })
+    .click()
   const viewExplorer = popup.getByRole('link', { name: 'View on Explorer', exact: true })
   await expect(viewExplorer).toBeVisible({ timeout: 30_000 })
   const activity = (await popup.evaluate(() =>
@@ -3067,7 +3046,14 @@ test('shows Main and Confidential indexed history together in Activity', async (
     })
     .toEqual(['main', 'private'])
   expect(observedAddresses.size).toBe(2)
-  await expect(popup.getByRole('button', { name: 'View Received ETH details' })).toHaveCount(2)
+  const receivedEth = popup.getByRole('button', { name: 'View Received ETH details' })
+  await expect(receivedEth).toHaveCount(1)
+  await expect(receivedEth).not.toHaveAttribute('data-activity-account-mode', 'private')
+  const privateMode = popup.getByRole('radio', { name: 'Private mode' })
+  await privateMode.click()
+  await expect(privateMode).toBeChecked()
+  await expect(receivedEth).toHaveCount(1)
+  await expect(receivedEth).toHaveAttribute('data-activity-account-mode', 'private')
 
   const expiredCacheEntries = await popup.evaluate(async () => {
     return new Promise<number>((resolve, reject) => {
@@ -3128,5 +3114,9 @@ test('shows Main and Confidential indexed history together in Activity', async (
   ).toEqual(['main', 'private'])
   await popup.reload()
   await popup.getByRole('tab', { name: 'Activity' }).click()
-  await expect(popup.getByRole('button', { name: 'View Received ETH details' })).toHaveCount(2)
+  await expect(receivedEth).toHaveCount(1)
+  await expect(receivedEth).toHaveAttribute('data-activity-account-mode', 'private')
+  await popup.getByRole('radio', { name: 'Public mode' }).click()
+  await expect(receivedEth).toHaveCount(1)
+  await expect(receivedEth).not.toHaveAttribute('data-activity-account-mode', 'private')
 })

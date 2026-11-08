@@ -760,6 +760,7 @@ export class WalletCleanupCoordinator {
           this.activityHistoryCache.clear(),
           dappExecutionModeCoordinator.clear(),
           clearAllSwapApprovalContinuations(),
+          new ChromeConfidentialFundingStore().clearAllWalletData(),
           new ChromeEvmDAppPrivateTransferStore().clearAll(),
           chrome.storage.local.remove([
             getUserEvmAssetCatalogStorageKey('mainnet'),

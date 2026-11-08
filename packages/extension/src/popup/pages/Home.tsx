@@ -56,8 +56,7 @@ import {
   homeAssetDomainPath,
   legacyShieldHomePath,
   resolveHomeAssetDomain,
-  resolveHomeDefaultTab,
-  type HomeDefaultTab
+  resolveHomeDefaultTab
 } from '../services/home-navigation'
 import { assetPriceClient } from '../services/asset-price-client'
 import { parseAssetId } from '@/core/chains/registry'
@@ -190,9 +189,7 @@ export function Home() {
     storageV2Account?.networks.some(network =>
       ['zcash', 'evm', 'bitcoin'].includes(network.chain.family)
     ) ?? Boolean(currentAccount)
-  const [activeTab, setActiveTab] = useState<HomeDefaultTab>(() =>
-    resolveHomeDefaultTab(location.search)
-  )
+  const activeTab = resolveHomeDefaultTab(location.search)
   const assetDomain = resolveHomeAssetDomain(location.search)
   const privateMode = dappExecutionMode.state?.mode === 'private'
   const actionDomain = assetDomain === 'all' ? (privateMode ? 'private' : 'public') : assetDomain
@@ -313,10 +310,6 @@ export function Home() {
   }
   const openShieldAction = (action: ShieldAction) =>
     navigate.navigate(`/shield-funds?action=${action}`)
-  useEffect(() => {
-    const tab = resolveHomeDefaultTab(location.search)
-    setActiveTab(tab)
-  }, [location.search])
   const storeBalance = getCurrentBalance()
   const { isSyncing, syncProgress, currentHeight, latestHeight, etaMs, syncReason } =
     getCurrentSyncState()
@@ -597,15 +590,29 @@ export function Home() {
   }, [effectiveAccountId, effectiveWalletId, navigate])
 
   const addresses = getAccountAddresses(currentAccount, storeBalance, zecPrice)
+  const legacyZecBalance =
+    assetDomain === 'public'
+      ? (storeBalance?.transparent ?? '0')
+      : assetDomain === 'shield'
+        ? (storeBalance?.shielded ?? '0')
+        : assetDomain === 'private'
+          ? '0'
+          : totalBalance
+  const legacyAddresses = addresses.filter(
+    address =>
+      assetDomain === 'all' ||
+      (assetDomain === 'public' && address.type === 'transparent') ||
+      (assetDomain === 'shield' && address.type === 'shielded')
+  )
 
   const walletData = {
     totalUsd: totalUsd,
     zec: {
-      balance: totalBalance,
+      balance: legacyZecBalance,
       price: zecPrice,
-      value: walletUsd
+      value: assetDomain === 'all' ? walletUsd : selectedDomainTotal
     },
-    addresses
+    addresses: legacyAddresses
   }
 
   const handleTransactionClick = async (id: string) => {
@@ -959,7 +966,6 @@ export function Home() {
           value={activeTab}
           onValueChange={value => {
             if (value === 'assets' || value === 'activity') {
-              setActiveTab(value)
               if (value !== 'activity') setFocusTransactionId(null)
               const path = homeTabPath(location.search, value)
               if (path !== `${location.pathname}${location.search}`) navigate.replace(path)
@@ -1059,6 +1065,8 @@ export function Home() {
                 }
                 onManageTokens={() => navigate.navigate('/manage-tokens')}
               />
+            ) : assetDomain === 'private' ? (
+              <p className="py-10 text-center text-sm text-muted">No assets found</p>
             ) : (
               <>
                 <div className="flex items-center justify-between px-1 py-2 -mx-1">
@@ -1082,7 +1090,9 @@ export function Home() {
                     <p className="text-xs text-muted">
                       {balancesHidden
                         ? '••••'
-                        : formatFiatAmount(walletData.zec.value, { showSign: true })}
+                        : walletData.zec.value === null
+                          ? '—'
+                          : formatFiatAmount(walletData.zec.value, { showSign: true })}
                     </p>
                   </div>
                 </div>
@@ -1190,6 +1200,7 @@ export function Home() {
             ) : (
               <TransactionList
                 network={network as 'mainnet' | 'testnet'}
+                domain={assetDomain}
                 onItemClick={handleTransactionClick}
               />
             )}

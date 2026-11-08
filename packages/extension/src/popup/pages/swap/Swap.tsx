@@ -328,6 +328,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const {
     activeAccount: storageV2Account,
+    loading: accountNetworksLoading,
     error: accountNetworksError,
     refresh: refreshAccountNetworks
   } = useActiveAccountNetworks()
@@ -342,6 +343,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const accountNetworksReady =
+    !accountNetworksLoading &&
+    !accountNetworksError &&
+    storageV2Account?.walletId === effectiveWalletId &&
+    storageV2Account?.accountId === effectiveAccountId
   const isHardwareWallet =
     storageV2Account?.walletSource.kind === 'hardware' || legacyHardwareWallet
   const isLedgerWallet =
@@ -456,6 +462,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [walletSourcesRequestLoading, setWalletSourcesLoading] = useState(true)
   const walletSourcesLoading =
     walletSourcesRequestLoading ||
+    !accountNetworksReady ||
     portfolioSnapshot.scope !== walletSourcesScope ||
     receiveTargetsSnapshot.scope !== walletSourcesScope
   const selectedPortfolioVersion = useRef(0)

@@ -10,6 +10,7 @@ import {
 } from '@/popup/services/account-networks-client'
 import {
   accountNetworkIconChain,
+  accountNetworkLabel,
   evmExecutionAddresses
 } from '@/popup/services/account-network-presentation'
 import {
@@ -129,6 +130,12 @@ function AccountAddressPopover({
   const zcash = account.networks.find(network => network.chain.family === 'zcash')
   const evm = account.networks.filter(network => network.chain.family === 'evm')
   const evmAddresses = evmExecutionAddresses(evm)
+  const otherAddresses = account.networks.flatMap(network => {
+    if (network.chain.family === 'zcash' || network.chain.family === 'evm') return []
+    const address =
+      network.addresses.find(candidate => candidate.preferredForReceive) ?? network.addresses[0]
+    return address ? [{ network, address }] : []
+  })
   const zcashAddresses = [...(zcash?.addresses ?? [])].sort(
     (left, right) => Number(left.privacy === 'shielded') - Number(right.privacy === 'shielded')
   )
@@ -261,6 +268,34 @@ function AccountAddressPopover({
           </div>
         </div>
       )}
+      {otherAddresses.map(({ network, address }) => (
+        <div
+          key={network.chain.id}
+          className="flex min-h-10 items-center gap-2 border-t border-white/10 py-2"
+        >
+          <ChainIcon
+            chain={accountNetworkIconChain(network)}
+            width={22}
+            height={22}
+            className="size-[22px] shrink-0 rounded-[4px]"
+          />
+          <span className="min-w-0 flex-1 text-xs">
+            <span className="block truncate">{accountNetworkLabel(network)}</span>
+            <span className="block truncate font-mono text-muted" title={address.value}>
+              {formatSortAddress(address.value)}
+            </span>
+          </span>
+          <button
+            type="button"
+            aria-label={`Copy ${network.chain.displayName} address`}
+            title="Copy address"
+            onClick={() => onCopy(address.value)}
+            className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-white/8 hover:text-foreground active:bg-white/12 focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            <Icon icon="lucide:copy" width={14} height={14} />
+          </button>
+        </div>
+      ))}
       {account.networks.length === 0 && (
         <p className="py-2 text-center text-xs text-muted">No addresses available</p>
       )}
