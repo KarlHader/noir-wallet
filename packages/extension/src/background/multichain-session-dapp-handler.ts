@@ -136,6 +136,7 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
     | 'getSessionAccounts'
     | 'getCaip2ChainId'
   >
+  readonly getActiveEvmChainId?: (origin: string) => Promise<string>
   readonly bitcoin: SessionHandler
   readonly bitcoinEnabled?: boolean
   readonly solana: Pick<
@@ -163,7 +164,8 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
       readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
     },
     origin: string,
-    tabInfo: MultichainSessionTabInfo
+    tabInfo: MultichainSessionTabInfo,
+    expectedChainId?: string
   ) => Promise<unknown>
 }
 
@@ -637,7 +639,12 @@ export class BackgroundMultichainSessionDAppHandler {
       )
     }
     const supported = this.getSupportedScope(parsed.scope)
-    if (supported.family === 'evm' && this.options.evm.getCaip2ChainId() !== parsed.scope) {
+    if (
+      supported.family === 'evm' &&
+      (this.options.getActiveEvmChainId
+        ? await this.options.getActiveEvmChainId(origin)
+        : this.options.evm.getCaip2ChainId()) !== parsed.scope
+    ) {
       throw new Caip25ProviderError(
         4901,
         `Switch Noir Wallet to ${supported.chainName} before invoking this scope.`
@@ -650,7 +657,8 @@ export class BackgroundMultichainSessionDAppHandler {
         ...(parsed.request.params === undefined ? {} : { params: parsed.request.params })
       },
       origin,
-      tabInfo
+      tabInfo,
+      parsed.scope
     )
   }
 }

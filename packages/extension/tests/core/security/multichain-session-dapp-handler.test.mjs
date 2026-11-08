@@ -166,6 +166,7 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
     )
   ).resolves.toBe('invoked')
   expect(invocations).toHaveLength(1)
+  expect(invocations[0][4]).toBe(ethereum)
 
   await expect(
     handler.request(

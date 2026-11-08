@@ -2,13 +2,127 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { connectionAuthorizesAccount, DAppManager } from '../../../src/core/dapp/dapp-manager.ts'
+import {
+  connectionAuthorizesAccount,
+  DAppManager,
+  parseStoredDAppConnection
+} from '../../../src/core/dapp/dapp-manager.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript')
 
 const origin = 'https://connected.example'
 const account = { walletId: 'wallet-1', accountId: 'account-1' }
+
+test('EVM network consent is origin-scoped, persistent, and cleared by EVM revocation', async () => {
+  const { manager, storage } = managerFixture()
+  const otherOrigin = 'https://other.example'
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await manager.setEvmAuthorizedAccounts(otherOrigin, {}, [account], account)
+  assert.equal(await manager.getEvmNetworkState(origin), null)
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:56', { approve: false, expectedActiveChainId: null }),
+    /network permission/
+  )
+  await manager.setEvmActiveChain(origin, 'eip155:1', {
+    approve: true,
+    expectedActiveChainId: null
+  })
+  await manager.setEvmActiveChain(origin, 'eip155:56', {
+    approve: true,
+    expectedActiveChainId: 'eip155:1'
+  })
+  await manager.setEvmActiveChain(origin, 'eip155:1', {
+    approve: false,
+    expectedActiveChainId: 'eip155:56'
+  })
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:137', {
+      approve: false,
+      expectedActiveChainId: 'eip155:1'
+    }),
+    /network permission/
+  )
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:56', {
+      approve: false,
+      expectedActiveChainId: null
+    }),
+    /network changed/
+  )
+  const reloaded = new DAppManager(storage)
+  assert.deepEqual(await reloaded.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:1',
+    approvedChainIds: ['eip155:1', 'eip155:56']
+  })
+  assert.equal(await reloaded.getEvmNetworkState(otherOrigin), null)
+  await reloaded.removeEvmAuthorization(origin)
+  assert.equal(await new DAppManager(storage).getEvmNetworkState(origin), null)
+  await assert.rejects(
+    reloaded.setEvmActiveChain(origin, 'eip155:56', { approve: false }),
+    /network permission/
+  )
+})
+
+test('a stale EVM network approval cannot survive revoke and reconnect', async () => {
+  const { manager } = managerFixture()
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  const expectedRevision = await manager.getAuthorizationRevision(origin)
+  await manager.removeEvmAuthorization(origin)
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:56', {
+      approve: true,
+      expectedActiveChainId: null,
+      expectedRevision
+    }),
+    /authorization changed/
+  )
+  assert.equal(await manager.getEvmNetworkState(origin), null)
+})
+
+test('legacy grants allow only their explicitly reviewed EVM networks', async () => {
+  const { manager, storage } = managerFixture()
+  await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [account], account)
+  assert.deepEqual(await manager.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:1',
+    approvedChainIds: ['eip155:1']
+  })
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:56', { approve: false }),
+    /network permission/
+  )
+  await manager.setEvmActiveChain(origin, 'eip155:1', { approve: false })
+  await manager.removeChainAuthorization(origin, 'eip155:1')
+  assert.equal(await new DAppManager(storage).getEvmNetworkState(origin), null)
+})
+
+test('stored EVM network consent rejects malformed or widened state', () => {
+  const connection = {
+    id: 'stored',
+    name: 'Stored',
+    host: 'connected.example',
+    origin,
+    favicon: '',
+    connectedAt: 1,
+    lastActiveAt: 1,
+    evmAuthorization: { accounts: [account], binding: account }
+  }
+  for (const evmNetworkState of [
+    { activeChainId: 'eip155:1', approvedChainIds: ['eip155:56'] },
+    { activeChainId: 'eip155:1', approvedChainIds: ['eip155:1', 'eip155:1'] },
+    { activeChainId: 'eip155:01', approvedChainIds: ['eip155:01'] },
+    {
+      activeChainId: 'eip155:1',
+      approvedChainIds: Array.from({ length: 17 }, (_, i) => `eip155:${i + 1}`)
+    }
+  ]) {
+    assert.throws(
+      () => parseStoredDAppConnection({ ...connection, evmNetworkState }),
+      /EVM network state|EVM network chain ID/
+    )
+  }
+})
 
 function managerFixture() {
   const values = new Map()
@@ -259,7 +373,9 @@ test('an existing browser favicon data URL does not erase approved connections o
   assert.deepEqual(await restored.getAuthorizedAccounts(origin), [account])
 
   await storage.set({
-    connectedDApps: [{ ...connectedDApps[0], favicon: `data:image/png;base64,${'a'.repeat(300_000)}` }]
+    connectedDApps: [
+      { ...connectedDApps[0], favicon: `data:image/png;base64,${'a'.repeat(300_000)}` }
+    ]
   })
   const oversizedLegacy = new DAppManager(storage)
   assert.equal((await oversizedLegacy.getAllConnections())[0]?.favicon, `${origin}/favicon.ico`)
@@ -361,8 +477,29 @@ test('ordinary EVM reconnect clears old EVM session scopes', async () => {
   )
 })
 
+test('ordinary EVM reconnect preserves explicitly granted legacy network consent', async () => {
+  const { manager, storage } = managerFixture()
+  const other = { walletId: 'wallet-2', accountId: 'account-2' }
+  await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:56', [account], account)
+  assert.deepEqual(await manager.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:56',
+    approvedChainIds: ['eip155:56']
+  })
+  await manager.setEvmAuthorizedAccounts(origin, {}, [other], other)
+  assert.deepEqual(await new DAppManager(storage).getEvmNetworkState(origin), {
+    activeChainId: 'eip155:56',
+    approvedChainIds: ['eip155:56']
+  })
+  await assert.rejects(
+    manager.setEvmActiveChain(origin, 'eip155:1', { approve: false }),
+    /network permission/
+  )
+})
+
 test('removing a custom chain drops its session scope but retains the shared EVM grant', async () => {
   const { manager } = managerFixture()
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await manager.setEvmActiveChain(origin, 'eip155:56', { approve: true })
   await manager.setCaip25Session(
     origin,
     {},
@@ -377,6 +514,10 @@ test('removing a custom chain drops its session scope but retains the shared EVM
       ]
     }
   )
+  assert.deepEqual(await manager.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:56',
+    approvedChainIds: ['eip155:56', 'eip155:1', 'eip155:31337']
+  })
   const result = await manager.removeChainAuthorizations(['eip155:31337'])
   assert.deepEqual(result.affectedOrigins, [origin])
   assert.deepEqual(
@@ -384,6 +525,18 @@ test('removing a custom chain drops its session scope but retains the shared EVM
     ['eip155:1']
   )
   assert.deepEqual((await manager.getEvmAuthorization(origin))?.accounts, [account])
+  assert.deepEqual(await manager.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:56',
+    approvedChainIds: ['eip155:56', 'eip155:1']
+  })
+
+  await manager.setEvmActiveChain(origin, 'eip155:31337', { approve: true })
+  const consentOnly = await manager.removeChainAuthorizations(['eip155:31337'])
+  assert.deepEqual(consentOnly.affectedOrigins, [origin])
+  assert.equal(
+    (await manager.getEvmNetworkState(origin))?.approvedChainIds.includes('eip155:31337'),
+    false
+  )
 })
 
 test('identical legacy EVM grants migrate with their session account snapshot', async () => {
@@ -414,6 +567,10 @@ test('identical legacy EVM grants migrate with their session account snapshot', 
   assert.deepEqual((await manager.getEvmAuthorization(origin))?.accounts, [account])
   assert.deepEqual(values.get('connectedDApps')[0].caip25Session.scopes[0].accounts, [account])
   assert.deepEqual(values.get('connectedDApps')[0].chainAuthorizations, [])
+  assert.deepEqual(await manager.getEvmNetworkState(origin), {
+    activeChainId: 'eip155:1',
+    approvedChainIds: ['eip155:1', 'eip155:56']
+  })
 })
 
 test('EVM-only revoke advances its revision without consuming Zcash auto-connect', async () => {
@@ -463,6 +620,20 @@ test('account deletion cannot widen a CAIP-25 scope to another shared EVM accoun
   assert.deepEqual((await manager.getCaip25Session(origin))?.scopes[0].accounts, [])
   assert.equal(await manager.getChainAuthorization(origin, 'eip155:1'), null)
   assert.deepEqual((await manager.getChainAuthorization(origin, 'eip155:56'))?.accounts, [other])
+})
+
+test('account deletion retains network consent only for surviving EVM grants', async () => {
+  const { manager, storage } = managerFixture()
+  const other = { walletId: 'wallet-2', accountId: 'account-2' }
+  await manager.setEvmAuthorizedAccounts(origin, {}, [account], account)
+  await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [other], other)
+  await manager.setEvmActiveChain(origin, 'eip155:56', { approve: true })
+  await manager.removeAccountReferences(account.walletId, account.accountId)
+  assert.equal(await manager.getEvmAuthorization(origin), null)
+  assert.deepEqual(await new DAppManager(storage).getEvmNetworkState(origin), {
+    activeChainId: 'eip155:1',
+    approvedChainIds: ['eip155:1']
+  })
 })
 
 test('wallet-side CAIP-25 account authorization stays within approved scopes and commits atomically', async () => {

@@ -407,6 +407,9 @@ alternatives are skipped. HTTPS is required except for local development endpoin
 chain leaves its settings unchanged. Adding a network does not make it active; request a separate
 switch when needed. A switch to an unconfigured chain rejects with code `4902`, and a rejected
 approval returns `4001`. Built-in chains in the other global network mode cannot be added.
+EVM network selection is independent for each connected site. Switching to a network already
+approved for that site does not prompt again; a new network permission requires confirmation.
+Switching cancels that site's pending chain-specific requests and emits `chainChanged` to that site.
 
 For `eth_requestAccounts`, closing the wallet's unlock window cancels the request with `4001`.
 An `eth_sendTransaction` request with insufficient funds returns `-32000` before opening

@@ -90,7 +90,7 @@ import {
   type MnemonicWordCount
 } from '@/config/wallet'
 import { assertNewPassword } from '@/core/wallet/password-policy'
-import { resolveMinedTransactionStatus } from '@/lib/transaction-status'
+import { getZcashConfirmationHeight, resolveMinedTransactionStatus } from '@/lib/transaction-status'
 import { formatAmount } from '@/lib/number-format'
 import type { WasmTransactionEntry } from '@/core/worker/types'
 import {
@@ -2765,10 +2765,9 @@ export class BackgroundZcashWalletRuntime {
       const cacheKey = this.transactionHistoryCacheKey(walletId, accountId)
       this.wasmTxHistoryCache.set(cacheKey, entries)
       const accountKey = buildAccountKey(this.network, walletId, accountId)
-      const chainTip = this.accountDataStore.getWalletSyncState(
-        this.network,
-        walletId
-      ).currentHeight
+      const chainTip = getZcashConfirmationHeight(
+        this.accountDataStore.getWalletSyncState(this.network, walletId)
+      )
       const existingTransactions = await loadTransactions(accountKey)
       const wasmTransactions = entries.map(entry =>
         wasmEntryToTransaction(entry, account, this.network, chainTip)

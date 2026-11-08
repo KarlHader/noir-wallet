@@ -155,6 +155,50 @@ test('re-attests metadata on confirmation, persists the Token, and clears its Po
   await expect(coordinator.list()).resolves.toEqual([])
 })
 
+test('retains stored Tokens promoted to bundled assets without registering them twice', async () => {
+  const { chains, bundledAssets } = createContext()
+  const catalog = createMemoryRepository()
+  const record = (chainId, contractAddress, metadata) =>
+    createUserEvmAssetRecord(
+      chains,
+      createUserEvmAssetCandidate(chains, { chainId, contractAddress, metadata, inspectedAt: NOW }),
+      NOW
+    )
+  const promoted = record('eip155:42161', '0xaf88d065e77c8cc2239327c5edb3a432268e5831', {
+    name: 'Old USDC label',
+    symbol: 'USDC',
+    decimals: 18
+  })
+  const custom = record('eip155:1', CONTRACT, { name: 'Test Token', symbol: 'TEST', decimals: 18 })
+  await catalog.repository.insert(promoted)
+  await catalog.repository.insert(custom)
+  const coordinator = new UserEvmAssetCoordinator({
+    chains,
+    bundledAssets,
+    repository: catalog.repository,
+    resolveRpc: () => {
+      throw new Error('No RPC is needed to load stored assets')
+    }
+  })
+
+  await expect(coordinator.list()).resolves.toEqual([custom])
+  const visible = await coordinator.backfillIcons(
+    new Map([
+      [promoted.assetId, 'https://assets.example/usdc.png'],
+      [custom.assetId, 'https://assets.example/test.png']
+    ])
+  )
+  expect(visible.map(asset => asset.assetId)).toEqual([custom.assetId])
+  expect(visible[0].metadata.iconUrl).toBe('https://assets.example/test.png')
+  const assets = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    ...visible.map(userEvmAssetToDefinition)
+  ])
+  expect(assets.list().filter(entry => entry.asset.id === promoted.assetId)).toHaveLength(1)
+  expect(assets.resolve(promoted.assetId).metadata.decimals).toBe(6)
+  expect(catalog.assets.get(promoted.assetId)).toEqual(promoted)
+})
+
 test('rejects built-in Tokens and metadata changes between review and confirmation', async () => {
   const { chains, bundledAssets } = createContext()
   const catalog = createMemoryRepository()

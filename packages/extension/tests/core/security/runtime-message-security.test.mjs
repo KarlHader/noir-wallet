@@ -20,6 +20,51 @@ import {
 const extensionId = 'abcdefghijklmnopabcdefghijklmnop'
 
 test.describe('Runtime message security', () => {
+  test('site network selection accepts only an extension page with a complete binding', () => {
+    const message = {
+      type: 'SET_CURRENT_DAPP_EVM_NETWORK',
+      chainId: 'eip155:56',
+      selectionContext: {
+        origin: 'https://example.com',
+        walletId: 'wallet-1',
+        accountId: 'account-1',
+        networkMode: 'mainnet',
+        activeChainId: 'eip155:1',
+        authorizationRevision: 1,
+        authorizationSnapshot: 'grant',
+        unlockEpoch: 'epoch-1',
+        runtimeKey: '1ce7f129-1677-4f03-9b28-9df64a503ed7'
+      }
+    }
+    expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: `chrome-extension://${extensionId}/index.html` },
+        extensionId
+      )
+    ).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: 'https://example.com', tab: { id: 1 } },
+        extensionId
+      )
+    ).toBe(false)
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        ...message,
+        selectionContext: { ...message.selectionContext, origin: undefined }
+      })
+    ).toThrow()
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        ...message,
+        selectionContext: { ...message.selectionContext, runtimeKey: 'x'.repeat(4097) }
+      })
+    ).toThrow()
+  })
+
   test('limits confidential funding preview requests to extension pages', () => {
     const message = {
       type: 'PREVIEW_CONFIDENTIAL_FUNDING',

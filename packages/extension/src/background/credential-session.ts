@@ -135,6 +135,10 @@ export class CredentialSessionCoordinator {
     })
   }
 
+  getUnlockEpoch(): Promise<string | null> {
+    return this.enqueue(async () => (await this.attestDescriptor())?.globalUnlockEpoch ?? null)
+  }
+
   getCredentialBinding(
     keyDomainId: string
   ): Promise<Extract<KeyringCommandBinding, { readonly kind: 'credential' }>> {

@@ -459,7 +459,7 @@ test.describe('quote deposit transfer client', () => {
       evm: {
         estimateTransferFee: async (intent, options) => {
           calls.push(['estimate', intent, options])
-          return { maximumFeeWei: '21000' }
+          return { maximumFeeWei: '21000', amountIndependent: true }
         },
         approveTransfer: async () => {
           throw new Error('unexpected approve')
@@ -494,7 +494,7 @@ test.describe('quote deposit transfer client', () => {
       networkFeeSymbol: 'POL',
       networkFeeDecimals: 18,
       expiresAt: expect.any(Number),
-      evmFeeEstimate: { maximumFeeWei: '21000' }
+      evmFeeEstimate: { maximumFeeWei: '21000', amountIndependent: true }
     })
     expect(calls).toEqual([
       [

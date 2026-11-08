@@ -15,6 +15,17 @@ export interface ZcashConfirmation {
   confirmations: number
 }
 
+export function getZcashConfirmationHeight(state: {
+  currentHeight: number
+  latestHeight: number
+}): number {
+  const currentHeight =
+    Number.isSafeInteger(state.currentHeight) && state.currentHeight > 0 ? state.currentHeight : 0
+  const latestHeight =
+    Number.isSafeInteger(state.latestHeight) && state.latestHeight > 0 ? state.latestHeight : 0
+  return Math.max(currentHeight, latestHeight)
+}
+
 export function getRequiredConfirmations(
   type: TransactionType,
   trust: ConfirmationTrust = 'untrusted'

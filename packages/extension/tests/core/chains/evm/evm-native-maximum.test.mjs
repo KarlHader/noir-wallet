@@ -3,6 +3,73 @@ import { test } from 'node:test'
 import { createQuoteDepositTransferClient } from '../../../../src/popup/services/quote-deposit-transfer-client.ts'
 import { resolveSwapMaximumAdjustment } from '../../../../src/popup/services/swap-maximum.ts'
 
+test('native Max checks the candidate amount when a contract changes gas use', async () => {
+  const balanceRaw = 4_455_892_546_887_770n
+  const probeFeeRaw = 63_000_000_000_000n
+  const contractFeeRaw = 82_800_000_000_000n
+  const amounts = []
+  const transfer = createQuoteDepositTransferClient({
+    evm: {
+      estimateTransferFee: async intent => {
+        amounts.push(intent.amountRaw)
+        return {
+          maximumFeeWei: (intent.amountRaw === '1' ? probeFeeRaw : contractFeeRaw).toString(),
+          amountIndependent: false
+        }
+      }
+    }
+  })
+  const maximum = await transfer.estimateMaximum({
+    source: {
+      family: 'evm',
+      chain: { chain: { id: 'eip155:1' } },
+      asset: {
+        asset: { id: 'eip155:1/slip44:60', kind: 'native' },
+        metadata: { decimals: 18 },
+        balance: { availableRaw: balanceRaw.toString() }
+      },
+      networkFeeAsset: { metadata: { symbol: 'ETH', decimals: 18 } }
+    },
+    depositAddress: '0x1111111111111111111111111111111111111111',
+    feeTier: 'standard'
+  })
+  const expectedAmount = balanceRaw - contractFeeRaw - contractFeeRaw / 4n
+  assert.equal(maximum.amountRaw, expectedAmount.toString())
+  assert.equal(maximum.networkFeeRaw, contractFeeRaw.toString())
+  assert.ok(amounts.includes(maximum.amountRaw))
+  assert.notEqual(maximum.networkFeeRaw, probeFeeRaw.toString())
+  assert.ok(BigInt(maximum.amountRaw) + BigInt(maximum.networkFeeRaw) <= balanceRaw)
+})
+
+test('native Max refuses a value-sensitive gas estimate that does not settle', async () => {
+  const balanceRaw = 1_000n
+  const transfer = createQuoteDepositTransferClient({
+    evm: {
+      estimateTransferFee: async intent => ({
+        maximumFeeWei: (BigInt(intent.amountRaw) > 800n ? 200n : 100n).toString(),
+        amountIndependent: false
+      })
+    }
+  })
+  await assert.rejects(
+    transfer.estimateMaximum({
+      source: {
+        family: 'evm',
+        chain: { chain: { id: 'eip155:1' } },
+        asset: {
+          asset: { id: 'eip155:1/slip44:60', kind: 'native' },
+          metadata: { decimals: 18 },
+          balance: { availableRaw: balanceRaw.toString() }
+        },
+        networkFeeAsset: { metadata: { symbol: 'ETH', decimals: 18 } }
+      },
+      depositAddress: '0x1111111111111111111111111111111111111111',
+      feeTier: 'standard'
+    }),
+    /Unable to calculate a spendable EVM maximum/
+  )
+})
+
 test('native RHEA Max keeps fee headroom and accepts a quote after a small fee increase', async () => {
   const balanceRaw = 1_000_000_000_000_000_000n
   const initialFeeRaw = 100_000_000_000_000n

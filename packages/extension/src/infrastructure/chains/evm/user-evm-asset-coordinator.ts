@@ -55,13 +55,18 @@ export class UserEvmAssetCoordinator {
   }
 
   async list(): Promise<readonly UserEvmAssetRecord[]> {
-    return this.options.repository.list()
+    const records = await this.options.repository.list()
+    // A release can bundle a previously user-added Token. Keep its stored record,
+    // but use the bundled definition throughout the active runtime.
+    return Object.freeze(
+      records.filter(record => !this.options.bundledAssets.inspect(record.assetId))
+    )
   }
 
   async backfillIcons(
     iconUrls: ReadonlyMap<string, string>
   ): Promise<readonly UserEvmAssetRecord[]> {
-    const records = await this.options.repository.list()
+    const records = await this.list()
     const updated = await Promise.all(
       records.map(async record => {
         if (record.metadata.iconUrl) return record

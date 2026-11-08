@@ -398,6 +398,36 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   GET_CONNECTED_DAPPS: {},
   GET_CURRENT_TAB_DAPP: {},
+  GET_CURRENT_DAPP_EVM_NETWORKS: {},
+  SET_CURRENT_DAPP_EVM_NETWORK: {
+    required: {
+      chainId: value => typeof value === 'string' && /^eip155:[1-9][0-9]*$/.test(value),
+      selectionContext: value =>
+        isRuntimeRecord(value) &&
+        hasExactRuntimeKeys(value, [
+          'origin',
+          'walletId',
+          'accountId',
+          'networkMode',
+          'activeChainId',
+          'authorizationRevision',
+          'authorizationSnapshot',
+          'unlockEpoch',
+          'runtimeKey'
+        ]) &&
+        isShortString(value.origin) &&
+        isShortString(value.walletId) &&
+        isShortString(value.accountId) &&
+        (value.networkMode === 'mainnet' || value.networkMode === 'testnet') &&
+        typeof value.activeChainId === 'string' &&
+        /^eip155:[1-9][0-9]*$/.test(value.activeChainId) &&
+        Number.isSafeInteger(value.authorizationRevision) &&
+        Number(value.authorizationRevision) >= 0 &&
+        isBoundedString(value.authorizationSnapshot) &&
+        isShortString(value.unlockEpoch) &&
+        isShortString(value.runtimeKey)
+    }
+  },
   GET_DAPP_EXECUTION_MODE: {},
   SET_DAPP_EXECUTION_MODE: {
     required: { mode: isDAppExecutionMode },
@@ -922,6 +952,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     CHANGE_WALLET_PASSWORD: ['extension-page'],
     GET_CONNECTED_DAPPS: ['extension-page'],
     GET_CURRENT_TAB_DAPP: ['extension-page'],
+    GET_CURRENT_DAPP_EVM_NETWORKS: ['extension-page'],
+    SET_CURRENT_DAPP_EVM_NETWORK: ['extension-page'],
     CONNECT_CURRENT_ACCOUNT_TO_DAPP: ['extension-page'],
     DISCONNECT_DAPP: ['extension-page'],
     WALLET_CREATED: ['extension-page'],

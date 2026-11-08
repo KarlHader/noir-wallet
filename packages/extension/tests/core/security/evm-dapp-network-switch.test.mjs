@@ -19,11 +19,12 @@ function harness(overrides = {}) {
   const applied = []
   const reloaded = []
   const commits = []
+  const added = []
   return {
     options: {
       readSettings: async () => settings,
-      commitActiveChain: async (chainId, origin) => {
-        commits.push({ chainId, origin })
+      commitActiveChain: async (chainId, origin, approvedByUser) => {
+        commits.push({ chainId, origin, approvedByUser })
         const next = {
           ...settings,
           activeEvmChainId: chainId
@@ -31,6 +32,10 @@ function harness(overrides = {}) {
         settings = next
         applied.push(next)
         reloaded.push(next)
+      },
+      commitCustomNetwork: async (network, origin) => {
+        added.push({ network, origin })
+        settings = { ...settings, customEvmNetworks: [...settings.customEvmNetworks, network] }
       },
       requestApproval: async (origin, action, data) => {
         approvals.push({ origin, action, data })
@@ -42,6 +47,7 @@ function harness(overrides = {}) {
     applied,
     reloaded,
     commits,
+    added,
     getSettings: () => settings,
     setSettings: next => {
       settings = next
@@ -87,7 +93,9 @@ test.describe('EVM dApp network switch coordinator', () => {
       }
     ])
     expect(state.applied).toHaveLength(1)
-    expect(state.commits).toEqual([{ chainId: 'eip155:56', origin: 'https://dapp.example' }])
+    expect(state.commits).toEqual([
+      { chainId: 'eip155:56', origin: 'https://dapp.example', approvedByUser: true }
+    ])
     expect(state.applied[0]).toMatchObject({
       activeEvmChainId: 'eip155:56',
       overrides: [
@@ -105,10 +113,18 @@ test.describe('EVM dApp network switch coordinator', () => {
   })
 
   test('does not mutate settings for a rejected or unsupported switch', async () => {
-    const rejected = harness({ requestApproval: async () => ({ approved: false }) })
+    let authorizationReads = 0
+    const rejected = harness({
+      isChainAuthorized: async () => {
+        authorizationReads += 1
+        return false
+      },
+      requestApproval: async () => ({ approved: false })
+    })
     await expect(
       handleEvmDAppNetworkSwitch(bscRequest, 'https://dapp.example', 'switch', rejected.options)
     ).rejects.toMatchObject({ code: 4001 })
+    expect(authorizationReads).toBe(1)
     expect(rejected.applied).toEqual([])
     expect(rejected.reloaded).toEqual([])
 
@@ -122,6 +138,92 @@ test.describe('EVM dApp network switch coordinator', () => {
       )
     ).rejects.toMatchObject({ code: 4902 })
     expect(unsupported.approvals).toEqual([])
+  })
+
+  test('silently switches only an already authorized configured chain', async () => {
+    const authorizationReads = []
+    const state = harness({
+      isChainAuthorized: async (chainId, origin) => {
+        authorizationReads.push({ chainId, origin })
+        return true
+      }
+    })
+
+    await handleEvmDAppNetworkSwitch(bscRequest, 'https://dapp.example', 'switch', state.options)
+
+    expect(authorizationReads).toEqual([{ chainId: 'eip155:56', origin: 'https://dapp.example' }])
+    expect(state.approvals).toEqual([])
+    expect(state.commits).toEqual([
+      { chainId: 'eip155:56', origin: 'https://dapp.example', approvedByUser: false }
+    ])
+  })
+
+  test('requires approval when authorization cannot be read', async () => {
+    const state = harness({
+      isChainAuthorized: async () => {
+        throw new Error('Authorization store unavailable')
+      }
+    })
+
+    await handleEvmDAppNetworkSwitch(bscRequest, 'https://dapp.example', 'switch', state.options)
+
+    expect(state.approvals).toHaveLength(1)
+    expect(state.commits).toEqual([
+      { chainId: 'eip155:56', origin: 'https://dapp.example', approvedByUser: true }
+    ])
+  })
+
+  test('does not commit when context changes during authorization lookup', async () => {
+    let contextValid = true
+    const state = harness({
+      validateRequest: async () => {
+        if (!contextValid) throw new Error('Wallet context changed')
+      },
+      isChainAuthorized: async () => {
+        contextValid = false
+        return true
+      }
+    })
+
+    await expect(
+      handleEvmDAppNetworkSwitch(bscRequest, 'https://dapp.example', 'switch', state.options)
+    ).rejects.toThrow('Wallet context changed')
+    expect(state.approvals).toEqual([])
+    expect(state.commits).toEqual([])
+  })
+
+  test('adding a network requires approval and never selects or authorizes it', async () => {
+    let authorizationReads = 0
+    const state = harness({
+      isChainAuthorized: async () => {
+        authorizationReads += 1
+        return true
+      }
+    })
+    await handleEvmDAppNetworkSwitch(
+      {
+        chainId: '0x7a69',
+        numericChainId: 31337,
+        metadata: {
+          chainName: 'Example',
+          nativeCurrency: { name: 'Example', symbol: 'EX', decimals: 18 },
+          rpcUrls: ['https://rpc.example/'],
+          blockExplorerUrls: []
+        }
+      },
+      'https://dapp.example',
+      'add',
+      state.options
+    )
+
+    expect(state.approvals).toHaveLength(1)
+    expect(state.approvals[0].data.action).toBe('add')
+    expect(authorizationReads).toBe(0)
+    expect(state.added).toHaveLength(1)
+    expect(state.commits).toEqual([])
+    expect(state.getSettings().activeEvmChainId).toBe(
+      DEFAULT_CHAIN_ENDPOINT_SETTINGS.activeEvmChainId
+    )
   })
 
   test('shares one pending approval for the same request and permits retry after rejection', async () => {

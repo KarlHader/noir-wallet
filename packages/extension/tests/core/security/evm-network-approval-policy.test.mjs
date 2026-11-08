@@ -158,7 +158,7 @@ test('approved add reviews and saves only the selected endpoint without switchin
     chainName: 'Local EVM',
     iconChain: 'eip155:31337'
   })
-  assert.deepEqual(state.switches, [['eip155:31337', origin]])
+  assert.deepEqual(state.switches, [['eip155:31337', origin, true]])
 })
 
 test('rejection and invalid metadata never save a custom network', async () => {

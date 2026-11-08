@@ -6,6 +6,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { ChainIcon } from '../common/ChainIcon'
 import { toast } from '@/store/toast-store'
+import { DAppNetworkSelector } from './DAppNetworkSelector'
 
 export function ConnectedDAppBar({
   dapp,
@@ -22,6 +23,9 @@ export function ConnectedDAppBar({
   const network = useWalletStore(state => state.currentNetwork)
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const permissions = presentDAppPermissions(dapp, { network, endpointSettings, account })
+  const hasEvm = permissions.some(
+    permission => permission.chainId === 'evm' || permission.chainId.startsWith('eip155:')
+  )
   return (
     <footer
       aria-label="Current dApp connection"
@@ -46,25 +50,27 @@ export function ConnectedDAppBar({
           <span className="block truncate text-xs text-muted">{dapp.host}</span>
         </span>
       </button>
-      {permissions.length > 0 && (
-        <button
-          type="button"
-          aria-label="View connected networks"
-          onClick={onManage}
-          className="wallet-interactive flex h-[30px] min-w-[51px] shrink-0 items-center justify-between gap-1 rounded-lg bg-wallet-selected/80 px-1.5 hover:bg-wallet-selected active:brightness-90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-        >
-          <ChainIcon
-            chain={permissions[0].iconChain}
-            width={20}
-            height={20}
-            showTooltip={false}
-            className="shrink-0 rounded-full"
-          />
-          {permissions.length > 1 && (
-            <span className="text-xs text-muted">+{permissions.length - 1}</span>
-          )}
-          <Icon icon="lucide:chevron-down" width={12} height={12} />
-        </button>
+      {hasEvm ? (
+        <DAppNetworkSelector
+          key={`${dapp.origin}:${account?.walletId}:${account?.accountId}`}
+          origin={dapp.origin}
+          account={account}
+        />
+      ) : (
+        permissions.length > 0 && (
+          <span
+            title={permissions[0].label}
+            className="flex size-[30px] shrink-0 items-center justify-center"
+          >
+            <ChainIcon
+              chain={permissions[0].iconChain}
+              width={20}
+              height={20}
+              showTooltip={false}
+              className="shrink-0 rounded-full"
+            />
+          </span>
+        )
       )}
       <button
         type="button"

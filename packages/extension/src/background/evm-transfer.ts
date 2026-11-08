@@ -51,6 +51,7 @@ export type {
 export interface BackgroundEvmTransferRuntime {
   readonly router: BackgroundEvmTransferRouter | null
   readonly activeController: BackgroundEvmTransferController | null
+  readonly controllers: ReadonlyMap<string, BackgroundEvmTransferController>
 }
 
 export function createBackgroundEvmTransferOrchestrator(
@@ -156,6 +157,7 @@ export function createBackgroundEvmTransferRuntime(
   }
   const activeController = controllers.get(parseChainId(activeNetwork.chainId).id) ?? null
   return Object.freeze({
+    controllers,
     router:
       controllers.size === 0
         ? null

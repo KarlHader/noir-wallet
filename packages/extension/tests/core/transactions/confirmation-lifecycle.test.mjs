@@ -17,6 +17,7 @@ import {
 import { WALLET_CONFIG } from '../../../src/config/wallet.ts'
 import {
   getRequiredConfirmations,
+  getZcashConfirmationHeight,
   mergeTransactionUpdate,
   resolveMinedTransactionStatus
 } from '../../../src/lib/transaction-status.ts'
@@ -115,6 +116,26 @@ test.describe('ZIP-315 confirmation lifecycle', () => {
       confirmations: 3,
       requiredConfirmations: 10
     })
+  })
+
+  test('mined history uses the known chain tip even while wallet scanning lags', () => {
+    const minedHeight = 100
+    const chainTip = getZcashConfirmationHeight({ currentHeight: 101, latestHeight: 106 })
+    expect(resolveMinedTransactionStatus('mined', minedHeight, chainTip, 'receive')).toEqual({
+      status: 'confirming',
+      confirmations: 7,
+      requiredConfirmations: 10
+    })
+    expect(
+      resolveMinedTransactionStatus(
+        'mined',
+        minedHeight,
+        getZcashConfirmationHeight({ currentHeight: 101, latestHeight: 109 }),
+        'receive'
+      )
+    ).toEqual({ status: 'success', confirmations: 10, requiredConfirmations: 10 })
+    expect(getZcashConfirmationHeight({ currentHeight: 110, latestHeight: 109 })).toBe(110)
+    expect(getZcashConfirmationHeight({ currentHeight: 101, latestHeight: Number.NaN })).toBe(101)
   })
 
   test('confirmation progress uses the same label for incoming and outgoing transactions', () => {

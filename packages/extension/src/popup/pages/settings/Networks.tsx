@@ -67,9 +67,10 @@ export function Networks() {
   const operation = useRef(0)
   const options = useMemo(() => buildNetworkSettingsOptions(settings), [settings])
   const detail = options.find(option => option.chainId === detailChainId)
-  const customNetwork = settings.customEvmNetworks.find(
-    network => network.chainId === detail?.chainId
-  )
+  const customNetwork =
+    detail?.source === 'custom'
+      ? settings.customEvmNetworks.find(network => network.chainId === detail.chainId)
+      : undefined
   const evmEnabled = resolveEvmFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled

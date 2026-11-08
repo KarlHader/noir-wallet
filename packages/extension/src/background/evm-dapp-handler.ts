@@ -230,6 +230,7 @@ export class BackgroundEvmDAppHandler {
     origin: string,
     tabInfo: EvmDAppTabInfo
   ): Promise<unknown> {
+    this.assertActiveRuntime()
     const params = Array.isArray(request.params) ? request.params : undefined
     if (request.method === 'eth_getCode') return this.getCode(params)
     if (request.method === 'eth_call' && params !== undefined) return this.call(params, origin)
@@ -347,10 +348,14 @@ export class BackgroundEvmDAppHandler {
     })
   }
 
-  async notifyChainChanged(numericChainId: number): Promise<void> {
+  async notifyChainChanged(numericChainId: number, origin?: string): Promise<void> {
     const chainId = toEip1193ChainId(numericChainId)
     const connections = await this.options.manager.getAllConnections()
-    const evmConnections = connections.filter(connectionHasEvmAuthorization)
+    const evmConnections = connections.filter(
+      connection =>
+        (origin === undefined || connection.origin === origin) &&
+        connectionHasEvmAuthorization(connection)
+    )
     await Promise.all(
       evmConnections.map(connection =>
         this.options.approval

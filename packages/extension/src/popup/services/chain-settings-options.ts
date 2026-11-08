@@ -244,9 +244,10 @@ export function buildExplorerChainOptions(
       : []),
     ...(evmEnabled
       ? resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings).map(network => {
-          const customNetwork = settings.customEvmNetworks.find(
-            custom => custom.chainId === network.chainId
-          )
+          const customNetwork =
+            network.source === 'custom'
+              ? settings.customEvmNetworks.find(custom => custom.chainId === network.chainId)
+              : undefined
           return Object.freeze({
             chainId: network.chainId,
             label: network.displayName,

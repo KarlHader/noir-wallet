@@ -243,9 +243,15 @@ import { accountContextTransition } from './account-context-transition'
 import { createBackgroundAdditionalReceiveTargetsCoordinator } from './receive-targets'
 import { createBackgroundAccountNetworksCoordinator } from './account-networks'
 import { WalletDAppConnectionCoordinator } from './wallet-dapp-connection'
+import {
+  CurrentDAppEvmNetworkCoordinator,
+  type CurrentDAppEvmNetworkSelectionContext,
+  type CurrentDAppEvmNetworkState
+} from './wallet-dapp-evm-networks'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
 import { createBackgroundEvmDAppHandler } from './evm-dapp'
 import { EvmDAppNetworkSwitchCoordinator } from './evm-dapp-network-switch'
+import { EvmDAppOriginRuntime } from './evm-dapp-origin-runtime'
 import {
   type ParsedEip1193ChainRequest,
   Eip1193ProviderError,
@@ -591,6 +597,7 @@ let intentsProtocolAssetRefresh: Promise<void> | null = null
 let intentsProtocolAssetsReady = false
 const swapTokenCatalogCache = new ChromeSwapTokenCatalogCacheRepository()
 let evmDAppHandler!: ReturnType<typeof createBackgroundEvmDAppHandler>
+let evmDAppOrigins: EvmDAppOriginRuntime
 let bitcoinDAppHandler!: ReturnType<typeof createBackgroundBitcoinDAppHandler>
 let solanaDAppHandler: ReturnType<typeof createBackgroundSolanaDAppHandler> | null = null
 let nearDAppHandler: ReturnType<typeof createBackgroundNearDAppHandler> | null = null
@@ -631,23 +638,25 @@ const networkSwitchSolanaPending = new ChromeSessionSolanaPendingTransferStore()
 const networkSwitchNearPending = new ChromeSessionNearPendingTransferStore()
 let networkRestartRequired = false
 const NETWORK_MODE_RESTART_ALARM = 'network-mode-restart'
-let activeEvmNumericChainId = 0
 let multichainRuntimeKey = ''
+let currentDAppEvmRuntimeGeneration = crypto.randomUUID()
 let multichainRuntimeReady: Promise<void> = runtimeNetworkReady.then(() => undefined)
 
 const walletDAppConnection = new WalletDAppConnectionCoordinator({
   getCurrentTabDApp: () => dappManager.getCurrentTabDApp(),
   getConnection: origin => dappManager.getConnection(origin),
   loadActiveAccount: () => accountNetworksCoordinator.readActiveAccount(),
-  getEvmChainId: () => evmDAppHandler.getCaip2ChainId(),
+  getEvmChainId: async dapp => (await evmDAppOrigins.get(dapp.origin)).getCaip2ChainId(),
   getZcashChainId: () => getZcashChainId(DEFAULT_NETWORK),
-  connectEvm: origin => evmDAppHandler.connectCurrentAccountToDApp(origin),
+  connectEvm: async origin =>
+    (await evmDAppOrigins.get(origin)).connectCurrentAccountToDApp(origin),
   connectZcash: origin => dappHandler.connectCurrentAccountToDApp(origin),
   connectSession: (origin, chainIds, account) =>
     dappManager.addCaip25AuthorizedAccount(origin, chainIds, account),
   notifyChainAccountsChanged: async (origin, chainIds) => {
-    if (chainIds.includes(evmDAppHandler.getCaip2ChainId())) {
-      await evmDAppHandler.notifyAccountsChanged(origin)
+    const evm = await evmDAppOrigins.get(origin)
+    if (chainIds.includes(evm.getCaip2ChainId())) {
+      await evm.notifyAccountsChanged(origin)
     }
     if (chainIds.includes(getBitcoinChainId(DEFAULT_NETWORK))) {
       await bitcoinDAppHandler.notifyAccountsChanged(origin)
@@ -675,6 +684,126 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
   }
 })
 
+const currentDAppEvmNetworks = new CurrentDAppEvmNetworkCoordinator({
+  read: async (): Promise<CurrentDAppEvmNetworkState | null> => {
+    await rehydrateWalletStore()
+    const dapp = await dappManager.getCurrentTabDApp()
+    if (!dapp) return null
+    const wallet = useWalletStore.getState()
+    const active = await accountNetworksCoordinator.readActiveAccount()
+    const networkState = await dappManager.getEvmNetworkState(dapp.origin)
+    if (
+      !active ||
+      !networkState ||
+      !wallet.currentWalletId ||
+      !wallet.currentAccountId ||
+      wallet.currentNetwork !== DEFAULT_NETWORK ||
+      active.reference.walletId !== wallet.currentWalletId ||
+      active.reference.accountId !== wallet.currentAccountId
+    )
+      return null
+    const sourceChainId = (await evmDAppOrigins.get(dapp.origin)).getCaip2ChainId()
+    if (!active.chainIds.includes(sourceChainId)) return null
+    const authorization = await dappManager.getChainAuthorization(dapp.origin, sourceChainId)
+    if (
+      !authorization?.accounts.some(
+        ref => ref.walletId === wallet.currentWalletId && ref.accountId === wallet.currentAccountId
+      )
+    )
+      return null
+    const unlockEpoch = await credentialSession.getUnlockEpoch()
+    if (!unlockEpoch) return null
+    const catalog = resolveEvmNetworkCatalog(
+      DEFAULT_NETWORK,
+      await chainEndpointSettingsCoordinator.read()
+    )
+    const options = catalog
+      .filter(network => active.chainIds.includes(network.chainId))
+      .filter(
+        network =>
+          !dapp.caip25Session ||
+          dapp.caip25Session.scopes.some(
+            scope =>
+              scope.chainId === network.chainId &&
+              (scope.accounts === undefined ||
+                scope.accounts.some(
+                  ref =>
+                    ref.walletId === wallet.currentWalletId &&
+                    ref.accountId === wallet.currentAccountId
+                ))
+          )
+      )
+      .map(({ chainId, displayName, iconChain }) => ({ chainId, displayName, iconChain }))
+    return {
+      origin: dapp.origin,
+      activeChainId: sourceChainId,
+      options,
+      selectionContext: {
+        origin: dapp.origin,
+        walletId: wallet.currentWalletId,
+        accountId: wallet.currentAccountId,
+        networkMode: DEFAULT_NETWORK,
+        activeChainId: sourceChainId,
+        authorizationRevision: await dappManager.getAuthorizationRevision(dapp.origin),
+        authorizationSnapshot: JSON.stringify(authorization),
+        unlockEpoch,
+        runtimeKey: currentDAppEvmRuntimeGeneration
+      }
+    }
+  },
+  commit: (chainId, context, validate) =>
+    commitEvmDAppActiveChain(
+      chainId,
+      context.origin,
+      true,
+      context.activeChainId,
+      context.authorizationRevision,
+      validate
+    )
+})
+
+async function notifyEvmAccountsChanged(): Promise<void> {
+  const connections = await dappManager.getAllConnections()
+  await Promise.all(
+    connections.map(async connection => {
+      const handler = await evmDAppOrigins.get(connection.origin)
+      await handler.notifyAccountsChanged(connection.origin)
+    })
+  )
+}
+
+async function notifyEvmSiteChainChanged(origin: string, previousChainId: string): Promise<void> {
+  const handler = await evmDAppOrigins.get(origin)
+  const chainId = handler.getCaip2ChainId()
+  if (chainId === previousChainId) return
+  await handler.notifyChainChanged(Number(parseChainId(chainId).reference), origin)
+  await handler.notifyAccountsChanged(origin)
+}
+
+async function initializeEvmSiteNetworks(fallbackChainId: string): Promise<void> {
+  const connections = await dappManager.getAllConnections()
+  for (const connection of connections) {
+    if (!connection.evmAuthorization) continue
+    const revision = await dappManager.getAuthorizationRevision(connection.origin)
+    if (await dappManager.getEvmNetworkState(connection.origin)) continue
+    try {
+      // Preserve the legacy provider's current network, not its entire configured catalog.
+      await dappManager.setEvmActiveChain(connection.origin, fallbackChainId, {
+        approve: true,
+        expectedActiveChainId: null,
+        expectedRevision: revision
+      })
+    } catch (error) {
+      if (
+        (await dappManager.getAuthorizationRevision(connection.origin)) !== revision ||
+        (await dappManager.getEvmNetworkState(connection.origin))
+      )
+        continue
+      throw error
+    }
+  }
+}
+
 async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeScope> {
   const account = await accountNetworksCoordinator.readActiveAccount()
   if (!account) throw new Error('No active wallet account')
@@ -688,7 +817,7 @@ async function requireActiveDAppExecutionModeScope(): Promise<DAppExecutionModeS
 async function notifyDAppExecutionModeChanged(scope: DAppExecutionModeScope): Promise<void> {
   dappHandler.cancelPendingApprovalsForContext(scope.keyDomainId, scope.accountId, 'evm')
   await multichainRuntimeReady
-  await evmDAppHandler.notifyAccountsChanged()
+  await notifyEvmAccountsChanged()
   await multichainSessionDAppHandler?.notifyAllSessionsChanged()
 }
 
@@ -732,18 +861,39 @@ async function dispatchDAppChainRequest(
     readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
   },
   origin: string,
-  tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
+  tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string },
+  expectedChainId?: string
 ): Promise<unknown> {
-  await assertCaip25MethodPermission(chainId, request.method, origin)
   if (chainId === 'evm') {
-    const result = await evmDAppHandler.request(
+    const result = await evmDAppOrigins.request(
       {
         method: request.method as EvmDAppRuntimeMethod,
         ...(request.params === undefined ? {} : { params: request.params })
       },
       origin,
-      tabInfo
+      tabInfo,
+      async activeChainId => {
+        if (expectedChainId && expectedChainId !== activeChainId) {
+          throw new Eip1193ProviderError(
+            4901,
+            'The site network changed. Review the request again.'
+          )
+        }
+        await assertCaip25MethodPermission(chainId, request.method, origin, activeChainId)
+      }
     )
+    if (
+      request.method === 'eth_requestAccounts' ||
+      request.method === 'wallet_requestPermissions'
+    ) {
+      const evm = await evmDAppOrigins.get(origin)
+      if (!(await dappManager.getEvmNetworkState(origin))) {
+        await dappManager.setEvmActiveChain(origin, evm.getCaip2ChainId(), {
+          approve: true,
+          expectedActiveChainId: null
+        })
+      }
+    }
     if (
       request.method === 'eth_requestAccounts' ||
       request.method === 'wallet_requestPermissions' ||
@@ -751,8 +901,10 @@ async function dispatchDAppChainRequest(
     ) {
       await multichainSessionDAppHandler?.notifySessionChanged(origin)
     }
+    if (request.method === 'wallet_revokePermissions') evmDAppOrigins.invalidate(origin)
     return result
   }
+  await assertCaip25MethodPermission(chainId, request.method, origin)
   const params = Array.isArray(request.params) ? request.params : undefined
   if (chainId === 'bitcoin') {
     return bitcoinDAppHandler.request(
@@ -809,14 +961,15 @@ const CAIP25_CONNECTION_METHODS = new Set([
 async function assertCaip25MethodPermission(
   family: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near',
   method: string,
-  origin: string
+  origin: string,
+  activeEvmChainId?: string
 ): Promise<void> {
   if (CAIP25_CONNECTION_METHODS.has(method)) return
   const chainId =
     family === 'zcash'
       ? getZcashChainId(DEFAULT_NETWORK)
       : family === 'evm'
-        ? evmDAppHandler.getCaip2ChainId()
+        ? (activeEvmChainId ?? (await evmDAppOrigins.get(origin)).getCaip2ChainId())
         : family === 'bitcoin'
           ? getBitcoinChainId(DEFAULT_NETWORK)
           : family === 'solana'
@@ -840,7 +993,8 @@ async function handleEvmDAppNetworkRequest(
   action: 'switch' | 'add',
   tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string }
 ): Promise<void> {
-  const runtime = evmDAppHandler
+  const runtime = await evmDAppOrigins.get(origin)
+  const networkState = await dappManager.getEvmNetworkState(origin)
   const account = useWalletStore.getState()
   const accountIdentity = [
     account.currentWalletId,
@@ -849,9 +1003,25 @@ async function handleEvmDAppNetworkRequest(
   ]
   const sourceChainId = runtime.getCaip2ChainId()
   const sourceRuntimeKey = multichainRuntimeKey
+  const sourceRuntimeGeneration = currentDAppEvmRuntimeGeneration
+  const authorizationRevision = await dappManager.getAuthorizationRevision(origin)
   const authorization = JSON.stringify(
     await dappManager.getChainAuthorization(origin, sourceChainId)
   )
+  if (action === 'switch') {
+    const grant = await dappManager.getChainAuthorization(origin, sourceChainId)
+    if (
+      !grant?.accounts.some(
+        ref =>
+          ref.walletId === account.currentWalletId && ref.accountId === account.currentAccountId
+      )
+    ) {
+      throw new Eip1193ProviderError(
+        4100,
+        'Connect the current EVM account before switching networks.'
+      )
+    }
+  }
   const readUnlockEpoch = async () =>
     account.currentWalletId
       ? (await credentialSession.getCredentialBinding(account.currentWalletId).catch(() => null))
@@ -862,7 +1032,10 @@ async function handleEvmDAppNetworkRequest(
     const current = useWalletStore.getState()
     if (
       sourceRuntimeKey !== multichainRuntimeKey ||
-      sourceChainId !== evmDAppHandler.getCaip2ChainId() ||
+      sourceRuntimeGeneration !== currentDAppEvmRuntimeGeneration ||
+      sourceChainId !== (await evmDAppOrigins.get(origin)).getCaip2ChainId() ||
+      JSON.stringify(networkState) !==
+        JSON.stringify(await dappManager.getEvmNetworkState(origin)) ||
       JSON.stringify(accountIdentity) !==
         JSON.stringify([
           current.currentWalletId,
@@ -871,7 +1044,8 @@ async function handleEvmDAppNetworkRequest(
         ]) ||
       authorization !==
         JSON.stringify(await dappManager.getChainAuthorization(origin, sourceChainId)) ||
-      unlockEpoch !== (await readUnlockEpoch())
+      unlockEpoch !== (await readUnlockEpoch()) ||
+      authorizationRevision !== (await dappManager.getAuthorizationRevision(origin))
     ) {
       throw new Eip1193ProviderError(
         4001,
@@ -887,6 +1061,10 @@ async function handleEvmDAppNetworkRequest(
     JSON.stringify([accountIdentity, sourceChainId, sourceRuntimeKey, authorization, unlockEpoch]),
     {
       readSettings: () => chainEndpointSettingsCoordinator.read(),
+      isChainAuthorized: async chainId => {
+        const state = await dappManager.getEvmNetworkState(origin)
+        return state?.approvedChainIds.includes(chainId) === true
+      },
       validateRequest,
       commitCustomNetwork: async network => {
         await updateChainEndpointSettings(async () => {
@@ -898,7 +1076,15 @@ async function handleEvmDAppNetworkRequest(
           )
         })
       },
-      commitActiveChain: chainId => commitEvmDAppActiveChain(chainId, validateRequest),
+      commitActiveChain: (chainId, site, approvedByUser) =>
+        commitEvmDAppActiveChain(
+          chainId,
+          site,
+          approvedByUser,
+          networkState?.activeChainId ?? null,
+          authorizationRevision,
+          validateRequest
+        ),
       requestApproval: (approvalOrigin, approvalAction, data) =>
         dappHandler.requestExternalApproval(approvalOrigin, approvalAction, {
           ...(typeof data === 'object' && data !== null && !Array.isArray(data) ? data : {}),
@@ -911,29 +1097,26 @@ async function handleEvmDAppNetworkRequest(
 
 function commitEvmDAppActiveChain(
   chainId: string,
+  origin: string,
+  approvedByUser: boolean,
+  expectedActiveChainId: string | null,
+  expectedRevision: number,
   validateRequest: () => Promise<void>
 ): Promise<void> {
-  const previousReadiness = multichainRuntimeReady
-  let reconfiguring = false
-  const operation = previousReadiness
-    .catch(() => {})
-    .then(() =>
-      accountContextTransition.runActiveOperation(async () => {
-        await validateRequest()
-        const saved = await chainEndpointSettingsCoordinator.selectActiveEvmChain(
-          chainId,
-          validateRequest
-        )
-        reconfiguring = true
-        await reloadMultichainRuntime(saved)
-      })
-    )
-  multichainRuntimeReady = operation.catch(error => {
-    if (reconfiguring) throw error
-    return previousReadiness
+  return accountContextTransition.runActiveOperation(async () => {
+    await validateRequest()
+    await dappManager.setEvmActiveChain(origin, chainId, {
+      approve: approvedByUser,
+      expectedActiveChainId,
+      expectedRevision
+    })
+    evmDAppOrigins.invalidate(origin)
+    dappHandler.cancelPendingApprovals(origin, 'evm')
+    const handler = await evmDAppOrigins.get(origin)
+    await handler.notifyChainChanged(Number(parseChainId(chainId).reference), origin)
+    await handler.notifyAccountsChanged(origin)
+    await multichainSessionDAppHandler?.notifySessionChanged(origin)
   })
-  void multichainRuntimeReady.catch(() => {})
-  return operation
 }
 
 function applyChainEndpointSettings(
@@ -955,9 +1138,17 @@ function updateChainEndpointSettings(
     .then(() =>
       accountContextTransition.runActiveOperation(async () => {
         const previous = await chainEndpointSettingsCoordinator.read()
+        const siteChains = new Map<string, string>()
+        for (const connection of await dappManager.getAllConnections()) {
+          const state = await dappManager.getEvmNetworkState(connection.origin)
+          if (state) siteChains.set(connection.origin, state.activeChainId)
+        }
         const result = await update()
         reconfiguring = true
         await reloadMultichainRuntime(result)
+        await Promise.all(
+          [...siteChains].map(([origin, chainId]) => notifyEvmSiteChainChanged(origin, chainId))
+        )
         const previousZcashRpc = previous.overrides.find(
           override => override.chainId === getZcashChainId(DEFAULT_NETWORK)
         )?.rpc?.url
@@ -993,14 +1184,22 @@ async function reloadMultichainRuntime(
   const nearOperationsEnabled = areNearOperationsEnabled()
   const nextKey = getChainEndpointRuntimeKey(settings)
   if (!force && nextKey === multichainRuntimeKey) return
+  const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings)
+  const activeEvm = resolveActiveEvmNetworkConfig(DEFAULT_NETWORK, settings)
+  const previousEvmChainId = evmDAppHandler?.getCaip2ChainId()
+  await initializeEvmSiteNetworks(
+    previousEvmChainId && catalog.some(network => network.chainId === previousEvmChainId)
+      ? previousEvmChainId
+      : activeEvm.chainId
+  )
   const isRuntimeReconfiguration = multichainRuntimeKey !== ''
   const endpointRuntimeChanged = isRuntimeReconfiguration && nextKey !== multichainRuntimeKey
   const shouldCancelAwaitingApprovals = isRuntimeReconfiguration && cancelAwaitingApprovals
   if (endpointRuntimeChanged || shouldCancelAwaitingApprovals) {
+    currentDAppEvmRuntimeGeneration = crypto.randomUUID()
     evmDAppHandler?.deactivate()
+    evmDAppOrigins?.deactivate()
   }
-  const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings)
-  const activeEvm = resolveActiveEvmNetworkConfig(DEFAULT_NETWORK, settings)
   const customEvmNetworks = catalog.filter(network => network.source === 'custom')
   const userAssets = await createBackgroundUserEvmAssetRuntime(catalog, customEvmNetworks)
   userEvmAssetCoordinator = userAssets.coordinator
@@ -1014,7 +1213,6 @@ async function reloadMultichainRuntime(
     )
   }
   const bitcoinRpcUrl = resolveConfiguredBitcoinRpcUrl(settings)
-  const previousNumericChainId = activeEvmNumericChainId
 
   if (shouldCancelAwaitingApprovals) {
     await evmTransferRouter?.cancelAllAwaitingApprovals()
@@ -1139,6 +1337,23 @@ async function reloadMultichainRuntime(
       : undefined
   )
   evmDAppHandler = nextEvmDAppHandler
+  evmDAppOrigins = new EvmDAppOriginRuntime({
+    readChainId: async origin =>
+      (await dappManager.getEvmNetworkState(origin))?.activeChainId ?? activeEvm.chainId,
+    createHandler: chainId => {
+      const network = catalog.find(item => item.chainId === chainId)
+      if (!network)
+        throw new Eip1193ProviderError(4902, 'The site network is no longer configured.')
+      return createBackgroundEvmDAppHandler(
+        evmTransferRuntime?.controllers.get(chainId) ?? null,
+        network,
+        handleEvmDAppNetworkRequest,
+        rheaSwapService && rheaSwapEvmSignatureCoordinator
+          ? { service: rheaSwapService, signatureCoordinator: rheaSwapEvmSignatureCoordinator }
+          : undefined
+      )
+    }
+  })
   bitcoinDAppHandler = createBackgroundBitcoinDAppHandler(bitcoinTransferController, bitcoinRpcUrl)
   solanaDAppHandler = solanaOperationsEnabled ? createBackgroundSolanaDAppHandler(settings) : null
   nearDAppHandler = nearOperationsEnabled ? createBackgroundNearDAppHandler(settings) : null
@@ -1158,6 +1373,7 @@ async function reloadMultichainRuntime(
     approval: dappHandler,
     zcash: dappHandler,
     evm: evmDAppHandler,
+    getActiveEvmChainId: async origin => (await evmDAppOrigins.get(origin)).getCaip2ChainId(),
     bitcoin: bitcoinDAppHandler,
     bitcoinEnabled: bitcoinFeatureRuntimePolicy.newOperationsEnabled,
     solana: solanaDAppHandler,
@@ -1199,7 +1415,6 @@ async function reloadMultichainRuntime(
     nearIntentsTransactionMonitor = null
     await chrome.alarms.clear(NEAR_INTENTS_TRANSACTION_MONITOR_ALARM)
   }
-  activeEvmNumericChainId = activeEvm.numericChainId
   multichainRuntimeKey = nextKey
 
   await Promise.all([
@@ -1209,11 +1424,6 @@ async function reloadMultichainRuntime(
     nearTransactionMonitor?.init(),
     portfolioCoordinator?.readCachedActive()
   ])
-  if (previousNumericChainId !== 0 && previousNumericChainId !== activeEvm.numericChainId) {
-    await evmDAppHandler.notifyChainChanged(activeEvm.numericChainId)
-    await evmDAppHandler.notifyAccountsChanged()
-    await multichainSessionDAppHandler?.notifyAllSessionsChanged()
-  }
 }
 
 function scheduleMultichainRuntimeReload(
@@ -2312,6 +2522,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           if (!multichainSessionDAppHandler) {
             throw new Error('Multichain session runtime is unavailable')
           }
+          const previousChainId =
+            request.method === 'wallet_createSession'
+              ? (await evmDAppOrigins.get(origin)).getCaip2ChainId()
+              : null
           result = await multichainSessionDAppHandler.request(
             {
               method: request.method as Caip25RuntimeMethod,
@@ -2320,6 +2534,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             origin,
             tabInfo
           )
+          if (previousChainId !== null) await notifyEvmSiteChainChanged(origin, previousChainId)
         } else {
           result = await dispatchDAppChainRequest(chainId, request, origin, tabInfo)
           if (
@@ -4360,6 +4575,35 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
+  if (message.type === 'GET_CURRENT_DAPP_EVM_NETWORKS') {
+    void multichainRuntimeReady
+      .then(() => currentDAppEvmNetworks.get())
+      .then(state => sendResponse({ state }))
+      .catch(error =>
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Site networks are unavailable'
+        })
+      )
+    return true
+  }
+
+  if (message.type === 'SET_CURRENT_DAPP_EVM_NETWORK') {
+    void multichainRuntimeReady
+      .then(() =>
+        currentDAppEvmNetworks.set(
+          message.chainId as string,
+          message.selectionContext as unknown as CurrentDAppEvmNetworkSelectionContext
+        )
+      )
+      .then(state => sendResponse({ success: true, state }))
+      .catch(error =>
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Site network could not be selected'
+        })
+      )
+    return true
+  }
+
   if (message.type === 'GET_DAPP_EXECUTION_MODE') {
     accountContextTransition
       .runActiveOperation(async () => {
@@ -5603,7 +5847,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
     .catch(error => {
       console.warn('[Background] Runtime message rejected during initialization:', error)
-      sendResponse({ error: 'Wallet network initialization failed' })
+      sendResponse({
+        error: 'Wallet network initialization failed',
+        failure: 'network_initialization_failed'
+      })
     })
   return true
 })
@@ -5895,7 +6142,7 @@ function restoreZcashDAppPermissionsAfterUnlock(): void {
             shielded: account.addresses.shielded
           })
         }
-        await evmDAppHandler.notifyAccountsChanged()
+        await notifyEvmAccountsChanged()
         await bitcoinDAppHandler.notifyAccountsChanged()
         await solanaDAppHandler?.notifyAccountsChanged()
         await nearDAppHandler?.notifyAccountsChanged()
@@ -5953,7 +6200,7 @@ async function performWalletUnlock(password: string): Promise<any> {
         ])
         await Promise.allSettled([
           dappHandler.notifyAccountsChanged([]),
-          evmDAppHandler.notifyAccountsChanged(),
+          notifyEvmAccountsChanged(),
           bitcoinDAppHandler.notifyAccountsChanged(),
           solanaDAppHandler?.notifyAccountsChanged(),
           nearDAppHandler?.notifyAccountsChanged(),
@@ -6163,7 +6410,7 @@ async function performWalletLockState(): Promise<void> {
 
     dappHandler.clearPermissions()
     await dappHandler.notifyAccountsChanged([])
-    await evmDAppHandler.notifyAccountsChanged()
+    await notifyEvmAccountsChanged()
     await bitcoinDAppHandler.notifyAccountsChanged()
     await solanaDAppHandler?.notifyAccountsChanged()
     await nearDAppHandler?.notifyAccountsChanged()
@@ -6211,7 +6458,7 @@ async function handleAccountSwitched({
     } else {
       await dappHandler.notifyAccountsChanged([])
     }
-    await evmDAppHandler.notifyAccountsChanged()
+    await notifyEvmAccountsChanged()
     await bitcoinDAppHandler.notifyAccountsChanged()
     await solanaDAppHandler?.notifyAccountsChanged()
     await nearDAppHandler?.notifyAccountsChanged()
@@ -6224,7 +6471,7 @@ async function handleAccountSwitched({
   } catch (error) {
     console.warn('[Background] Account switch notification error:', error)
     await dappHandler.notifyAccountsChanged([]).catch(() => {})
-    await evmDAppHandler.notifyAccountsChanged().catch(() => {})
+    await notifyEvmAccountsChanged().catch(() => {})
     await bitcoinDAppHandler.notifyAccountsChanged().catch(() => {})
     await solanaDAppHandler?.notifyAccountsChanged().catch(() => {})
     await nearDAppHandler?.notifyAccountsChanged().catch(() => {})
@@ -6460,7 +6707,7 @@ async function synchronizeNativeActiveAccount(walletId: string, accountId: strin
   pendingRequestsManager.cancelExceptContext(walletId, accountId)
   await Promise.allSettled([
     dappHandler.notifyAccountsChanged([]),
-    evmDAppHandler.notifyAccountsChanged(),
+    notifyEvmAccountsChanged(),
     bitcoinDAppHandler.notifyAccountsChanged(),
     solanaDAppHandler?.notifyAccountsChanged(),
     nearDAppHandler?.notifyAccountsChanged(),

@@ -11,8 +11,13 @@ import { Eip1193ProviderError, type ParsedEip1193ChainRequest } from '@/core/dap
 
 export interface EvmDAppNetworkSwitchOptions {
   readonly readSettings: () => Promise<ChainEndpointSettings>
-  readonly commitActiveChain: (chainId: string, origin: string) => Promise<void>
+  readonly commitActiveChain: (
+    chainId: string,
+    origin: string,
+    approvedByUser: boolean
+  ) => Promise<void>
   readonly commitCustomNetwork: (network: CustomEvmNetwork, origin: string) => Promise<void>
+  readonly isChainAuthorized?: (chainId: string, origin: string) => Promise<boolean>
   readonly validateRequest?: () => Promise<void>
   readonly requestApproval: (
     origin: string,
@@ -131,6 +136,19 @@ export async function handleEvmDAppNetworkSwitch(
     throw new Eip1193ProviderError(4902, 'The requested EVM chain is not configured.')
   }
 
+  await options.validateRequest?.()
+  let authorized = false
+  try {
+    authorized = (await options.isChainAuthorized?.(requestedChainId, origin)) ?? false
+  } catch {
+    // An authorization read failure must require an explicit approval.
+  }
+  await options.validateRequest?.()
+  if (authorized) {
+    await options.commitActiveChain(requestedChainId, origin, false)
+    return
+  }
+
   const decision = await options.requestApproval(origin, 'evmNetwork', {
     action: 'switch',
     chainId: requestedChainId,
@@ -142,5 +160,5 @@ export async function handleEvmDAppNetworkSwitch(
   }
 
   await options.validateRequest?.()
-  await options.commitActiveChain(requestedChainId, origin)
+  await options.commitActiveChain(requestedChainId, origin, true)
 }

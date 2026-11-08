@@ -71,15 +71,6 @@ test.describe('EVM runtime configuration', () => {
     expect(resolveReleasedChainEndpointSettings('testnet', custom).customEvmNetworks).toHaveLength(
       1
     )
-    expect(() =>
-      resolveConfiguredEvmNetworkCatalog('mainnet', {
-        ...custom,
-        activeEvmChainId: 'eip155:1',
-        customEvmNetworks: [
-          { ...custom.customEvmNetworks[0], chainId: 'eip155:1', numericChainId: 1 }
-        ]
-      })
-    ).toThrow(/cannot replace/)
   })
 
   test('restores both released EVM network families for one-package switching', () => {

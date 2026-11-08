@@ -138,7 +138,7 @@ test.describe('Zcash wallet Background client', () => {
     }
   })
 
-  test('distinguishes an invalid password from a blocking upgrade failure', async () => {
+  test('distinguishes invalid passwords and startup failures from a blocking upgrade failure', async () => {
     const originalChrome = globalThis.chrome
     globalThis.chrome = {
       runtime: {
@@ -154,6 +154,15 @@ test.describe('Zcash wallet Background client', () => {
       await expect(zcashWalletRuntimeClient.unlock('wrong-password')).resolves.toEqual({
         success: false,
         remainingAttempts: 4
+      })
+
+      globalThis.chrome.runtime.sendMessage = async () => ({
+        error: 'Wallet network initialization failed',
+        failure: 'network_initialization_failed'
+      })
+      await expect(zcashWalletRuntimeClient.unlock('correct-password')).resolves.toEqual({
+        success: false,
+        failure: 'operation_failed'
       })
 
       globalThis.chrome.runtime.sendMessage = async () => ({

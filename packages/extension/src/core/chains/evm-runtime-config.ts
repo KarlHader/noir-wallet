@@ -61,12 +61,10 @@ export function resolveConfiguredEvmNetworkCatalog(
       config => config.chainId
     )
   )
-  const custom = settings.customEvmNetworks.map(network => {
-    if (builtinIds.has(network.chainId)) {
-      throw new Error('A custom EVM network cannot replace a built-in chain definition')
-    }
-    return applyOverride(customNetworkConfig(networkMode, network), settings)
-  })
+  // A saved custom chain may become built in after an update; keep its metadata dormant.
+  const custom = settings.customEvmNetworks
+    .filter(network => !builtinIds.has(network.chainId))
+    .map(network => applyOverride(customNetworkConfig(networkMode, network), settings))
   return Object.freeze([...builtin, ...custom])
 }
 

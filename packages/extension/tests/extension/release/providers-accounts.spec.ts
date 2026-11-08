@@ -37,6 +37,453 @@ import {
   test,
   waitForBackgroundWalletInitialization
 } from '../../helpers/release-default'
+import type { BrowserContext, Page } from '@playwright/test'
+
+const SITE_NETWORK_A = 'https://site-network-a.noir.test'
+const SITE_NETWORK_B = 'https://site-network-b.noir.test'
+
+async function openEvmSite(context: BrowserContext, origin: string): Promise<Page> {
+  await context.route(`${origin}/**`, route =>
+    route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Network test</title>' })
+  )
+  const page = await context.newPage()
+  await page.goto(`${origin}/`)
+  await page.waitForFunction(() => {
+    const wallet = Reflect.get(window, 'noirwallet')
+    return Boolean(wallet && Reflect.get(wallet, 'ethereum'))
+  })
+  await page.evaluate(() => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      on(event: string, listener: (chainId: string) => void): void
+    }
+    Reflect.set(window, 'chainChanges', [])
+    Reflect.set(window, 'accountChanges', [])
+    provider.on('chainChanged', chainId => {
+      ;(Reflect.get(window, 'chainChanges') as string[]).push(chainId)
+    })
+    provider.on('accountsChanged', accounts => {
+      ;(Reflect.get(window, 'accountChanges') as unknown[]).push(accounts)
+    })
+  })
+  return page
+}
+
+function evmRequest(page: Page, method: string, params?: unknown[]): Promise<unknown> {
+  return page.evaluate(
+    ({ method, params }) => {
+      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+        request(input: { method: string; params?: unknown[] }): Promise<unknown>
+      }
+      return provider.request({ method, params })
+    },
+    { method, params }
+  )
+}
+
+async function connectEvmSite(context: BrowserContext, page: Page): Promise<string> {
+  const approvalPromise = context.waitForEvent('page')
+  const accountsPromise = evmRequest(page, 'eth_requestAccounts')
+  const approval = await approvalPromise
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  const accounts = (await accountsPromise) as string[]
+  expect(accounts).toEqual([expect.stringMatching(/^0x[0-9a-f]{40}$/)])
+  await expect.poll(() => approval.isClosed()).toBe(true)
+  return accounts[0]
+}
+
+async function switchSiteNetwork(
+  page: Page,
+  chainId: string,
+  expectSilent: boolean,
+  context: BrowserContext,
+  beforeApproval?: () => Promise<void>
+): Promise<Page | null> {
+  if (expectSilent) {
+    const opened: Page[] = []
+    const onPage = (next: Page) => opened.push(next)
+    context.on('page', onPage)
+    try {
+      await expect(
+        evmRequest(page, 'wallet_switchEthereumChain', [{ chainId }])
+      ).resolves.toBeNull()
+      expect(opened).toEqual([])
+    } finally {
+      context.off('page', onPage)
+    }
+    return null
+  }
+  const approvalPromise = context.waitForEvent('page')
+  const resultPromise = evmRequest(page, 'wallet_switchEthereumChain', [{ chainId }])
+  const approval = await approvalPromise
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.setViewportSize({ width: 375, height: 600 })
+  await expect(approval.getByText('Switch network', { exact: true })).toBeVisible()
+  await expect(approval.getByTestId('approval-footer')).toBeInViewport()
+  await captureScreenshot(
+    approval,
+    chainId === '0x38'
+      ? 'evm-site-network-switch-375x600.png'
+      : 'evm-site-custom-network-switch-375x600.png'
+  )
+  await beforeApproval?.()
+  await approval.getByRole('button', { name: 'Switch Network' }).click()
+  await expect(resultPromise).resolves.toBeNull()
+  await expect.poll(() => approval.isClosed()).toBe(true)
+  return approval
+}
+
+test('isolates approved EVM networks, RPC reads, events, and pending requests by site', async ({
+  context,
+  popup
+}) => {
+  test.skip(
+    process.env.APPROVAL_WINDOW_E2E !== '1',
+    'Chrome popup windows require an explicit real-browser approval run'
+  )
+  test.setTimeout(180_000)
+  await mockReleasedEvmRpc(context)
+  let heldCatalogResponse: Promise<void> | null = null
+  let heldCatalogRequests = 0
+  await context.route('https://1click.chaindefuser.com/v0/tokens', async route => {
+    if (heldCatalogResponse) {
+      const hold = heldCatalogResponse
+      heldCatalogResponse = null
+      heldCatalogRequests += 1
+      await hold
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          assetId: 'nep141:zec.omft.near',
+          blockchain: 'zec',
+          contractAddress: null,
+          decimals: 8,
+          price: 42,
+          priceUpdatedAt: new Date().toISOString(),
+          symbol: 'ZEC'
+        }
+      ])
+    })
+  })
+  const balanceRoutes: string[] = []
+  for (const [chainId, balance] of [
+    ['eip155:1', '0x1'],
+    ['eip155:56', '0x2']
+  ] as const) {
+    const network = EVM_NETWORK_CONFIGS.mainnet.find(candidate => candidate.chainId === chainId)
+    if (!network) throw new Error(`Missing ${chainId} fixture`)
+    const rpcUrl = new URL(network.rpcUrl).href
+    await context.route(
+      url => url.href === rpcUrl,
+      async route => {
+        const request = route.request().postDataJSON() as { id: unknown; method: string }
+        if (request.method !== 'eth_getBalance') return route.fallback()
+        balanceRoutes.push(chainId)
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ jsonrpc: '2.0', id: request.id, result: balance })
+        })
+      }
+    )
+  }
+  await mockExternalAssetIcons(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
+  await expect(
+    popup.evaluate(() =>
+      chrome.runtime.sendMessage({ type: 'REFRESH_INTENTS_PROTOCOL_ASSETS', force: true })
+    )
+  ).resolves.toEqual({ result: { refreshed: true } })
+
+  const siteA = await openEvmSite(context, SITE_NETWORK_A)
+  const siteB = await openEvmSite(context, SITE_NETWORK_B)
+  const addressA = await connectEvmSite(context, siteA)
+  const addressB = await connectEvmSite(context, siteB)
+  expect(addressB).toBe(addressA)
+  expect(await evmRequest(siteA, 'eth_chainId')).toBe('0x1')
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+
+  let releaseCatalogResponse!: () => void
+  heldCatalogResponse = new Promise<void>(resolve => {
+    releaseCatalogResponse = resolve
+  })
+  const catalogRefresh = popup.evaluate(() =>
+    chrome.runtime.sendMessage({ type: 'REFRESH_INTENTS_PROTOCOL_ASSETS', force: true })
+  )
+  try {
+    await expect.poll(() => heldCatalogRequests, { timeout: 15_000 }).toBe(1)
+    await switchSiteNetwork(siteA, '0x38', false, context, async () => {
+      releaseCatalogResponse()
+      await expect(catalogRefresh).resolves.toEqual({ result: { refreshed: true } })
+    })
+  } finally {
+    releaseCatalogResponse()
+  }
+  expect(await evmRequest(siteA, 'eth_chainId')).toBe('0x38')
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+  await expect
+    .poll(() => siteA.evaluate(() => Reflect.get(window, 'chainChanges')))
+    .toEqual(['0x38'])
+  expect(await siteB.evaluate(() => Reflect.get(window, 'chainChanges'))).toEqual([])
+
+  const beforeA = balanceRoutes.length
+  expect(await evmRequest(siteA, 'eth_getBalance', [addressA, 'latest'])).toBe('0x2')
+  expect(balanceRoutes.slice(beforeA)).toContain('eip155:56')
+  const beforeB = balanceRoutes.length
+  expect(await evmRequest(siteB, 'eth_getBalance', [addressB, 'latest'])).toBe('0x1')
+  expect(balanceRoutes.slice(beforeB)).toContain('eip155:1')
+
+  await switchSiteNetwork(siteA, '0x1', true, context)
+  await switchSiteNetwork(siteA, '0x38', true, context)
+  await expect
+    .poll(() => siteA.evaluate(() => Reflect.get(window, 'chainChanges')))
+    .toEqual(['0x38', '0x1', '0x38'])
+  expect(await siteB.evaluate(() => Reflect.get(window, 'chainChanges'))).toEqual([])
+
+  const bApprovalPromise = context.waitForEvent('page')
+  const bSwitchPromise = siteB.evaluate(async () => {
+    const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+      request(input: { method: string; params: unknown[] }): Promise<unknown>
+    }
+    try {
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x38' }]
+      })
+      return { approved: true }
+    } catch (error) {
+      return { approved: false, code: (error as { code?: number }).code }
+    }
+  })
+  const bApproval = await bApprovalPromise
+  await bApproval.waitForURL(/#approval\?requestId=/)
+  await expect(bApproval.getByText('Switch network', { exact: true })).toBeVisible()
+  await bApproval.getByRole('button', { name: 'Reject', exact: true }).click()
+  expect(await bSwitchPromise).toEqual({ approved: false, code: 4001 })
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+
+  const customChainId = '0x539'
+  const customRpc = 'https://site-network-rpc.noir.test/rpc'
+  await context.route(customRpc, route => {
+    const body = route.request().postDataJSON() as { id: unknown; method: string }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: body.method === 'eth_chainId' ? customChainId : '0x0'
+      })
+    })
+  })
+  const addApprovalPromise = context.waitForEvent('page')
+  const addPromise = evmRequest(siteA, 'wallet_addEthereumChain', [
+    {
+      chainId: customChainId,
+      chainName: 'Site Test Network',
+      nativeCurrency: { name: 'Site Ether', symbol: 'SITE', decimals: 18 },
+      rpcUrls: [customRpc]
+    }
+  ])
+  const addApproval = await addApprovalPromise
+  await addApproval.waitForURL(/#approval\?requestId=/)
+  await expect(addApproval.getByText('Add network', { exact: true })).toBeVisible()
+  await addApproval.getByRole('button', { name: 'Add Network' }).click()
+  await expect(addPromise).resolves.toBeNull()
+  expect(await evmRequest(siteA, 'eth_chainId')).toBe('0x38')
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+  const settings = await popup.evaluate(() =>
+    chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
+  )
+  expect(settings.result.customEvmNetworks).toEqual([
+    expect.objectContaining({ chainId: 'eip155:1337' })
+  ])
+
+  await switchSiteNetwork(siteA, customChainId, false, context)
+  expect(await evmRequest(siteA, 'eth_chainId')).toBe(customChainId)
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+  const globalSelection = await popup.evaluate(() =>
+    chrome.runtime.sendMessage({ type: 'SELECT_ACTIVE_EVM_CHAIN', chainId: 'eip155:1337' })
+  )
+  expect(globalSelection.error).toBeUndefined()
+  const siteC = await openEvmSite(context, 'https://site-network-c.noir.test')
+  await connectEvmSite(context, siteC)
+  expect(await evmRequest(siteC, 'eth_chainId')).toBe(customChainId)
+  const aAccountEventsBeforeRemoval = (await siteA.evaluate(() =>
+    Reflect.get(window, 'accountChanges')
+  )) as unknown[]
+  const bAccountEventsBeforeRemoval = (await siteB.evaluate(() =>
+    Reflect.get(window, 'accountChanges')
+  )) as unknown[]
+  const removal = await popup.evaluate(
+    network => chrome.runtime.sendMessage({ type: 'REMOVE_CUSTOM_EVM_NETWORK', network }),
+    settings.result.customEvmNetworks[0]
+  )
+  expect(removal.error).toBeUndefined()
+  expect(removal.result.customEvmNetworks).toEqual([])
+  await expect.poll(() => evmRequest(siteA, 'eth_chainId')).toBe('0x1')
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+  expect(await evmRequest(siteC, 'eth_chainId')).toBe('0x1')
+  const siteCNetworkState = await popup.evaluate(async () => {
+    const stored = (await chrome.storage.local.get('connectedDApps')).connectedDApps as Array<{
+      origin: string
+      evmNetworkState?: { activeChainId: string; approvedChainIds: string[] }
+    }>
+    return stored.find(connection => connection.origin === 'https://site-network-c.noir.test')
+      ?.evmNetworkState
+  })
+  expect(siteCNetworkState).toEqual({
+    activeChainId: 'eip155:1',
+    approvedChainIds: ['eip155:1']
+  })
+  await expect
+    .poll(() => siteA.evaluate(() => Reflect.get(window, 'chainChanges')))
+    .toEqual(['0x38', '0x1', '0x38', customChainId, '0x1'])
+  expect(await siteB.evaluate(() => Reflect.get(window, 'chainChanges'))).toEqual([])
+  await expect
+    .poll(() => siteA.evaluate(() => (Reflect.get(window, 'accountChanges') as unknown[]).length))
+    .toBe(aAccountEventsBeforeRemoval.length + 1)
+  expect(await siteB.evaluate(() => Reflect.get(window, 'accountChanges'))).toEqual(
+    bAccountEventsBeforeRemoval
+  )
+
+  await siteA.bringToFront()
+  const footer = popup.locator('footer[aria-label="Current dApp connection"]')
+  await expect(footer.getByRole('button', { name: 'Switch site network: Ethereum' })).toBeVisible({
+    timeout: 20_000
+  })
+  await captureScreenshot(popup, 'evm-site-footer-ethereum-375x600.png')
+  const popupUrlBeforeSelection = popup.url()
+  const aChainEventsBeforeSelection = (await siteA.evaluate(() =>
+    Reflect.get(window, 'chainChanges')
+  )) as string[]
+  const bChainEventsBeforeSelection = (await siteB.evaluate(() =>
+    Reflect.get(window, 'chainChanges')
+  )) as string[]
+  await footer.getByRole('button', { name: 'Switch site network: Ethereum' }).click()
+  const siteNetworkMenu = popup.getByRole('radiogroup', { name: 'Site network' })
+  await expect(siteNetworkMenu.getByRole('radio', { name: 'Ethereum' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  )
+  await expect(siteNetworkMenu.getByRole('radio', { name: 'BNB Chain' })).toBeVisible()
+  await captureScreenshot(popup, 'evm-site-footer-network-menu-375x600.png')
+  const openedByWalletSelection: Page[] = []
+  const onWalletSelectionPage = (page: Page) => openedByWalletSelection.push(page)
+  context.on('page', onWalletSelectionPage)
+  try {
+    await siteNetworkMenu.getByRole('radio', { name: 'BNB Chain' }).click()
+    await expect.poll(() => evmRequest(siteA, 'eth_chainId')).toBe('0x38')
+    await expect(
+      footer.getByRole('button', { name: 'Switch site network: BNB Chain' })
+    ).toBeVisible()
+    expect(openedByWalletSelection).toEqual([])
+  } finally {
+    context.off('page', onWalletSelectionPage)
+  }
+  expect(popup.url()).toBe(popupUrlBeforeSelection)
+  expect(await evmRequest(siteB, 'eth_chainId')).toBe('0x1')
+  expect(await siteA.evaluate(() => Reflect.get(window, 'chainChanges'))).toEqual([
+    ...aChainEventsBeforeSelection,
+    '0x38'
+  ])
+  expect(await siteB.evaluate(() => Reflect.get(window, 'chainChanges'))).toEqual(
+    bChainEventsBeforeSelection
+  )
+  await switchSiteNetwork(siteA, '0x1', true, context)
+  await expect(footer.getByRole('button', { name: 'Switch site network: Ethereum' })).toBeVisible()
+
+  const startSign = async (page: Page, address: string) => {
+    await page.evaluate(account => {
+      const provider = Reflect.get(Reflect.get(window, 'noirwallet'), 'ethereum') as {
+        request(input: { method: string; params: string[] }): Promise<unknown>
+      }
+      Reflect.set(window, 'pendingSignResult', null)
+      void provider.request({ method: 'personal_sign', params: ['0x68656c6c6f', account] }).then(
+        () => Reflect.set(window, 'pendingSignResult', { status: 'approved' }),
+        (error: { code?: number }) =>
+          Reflect.set(window, 'pendingSignResult', { status: 'rejected', code: error.code })
+      )
+    }, address)
+  }
+  const aSignApprovalPromise = context.waitForEvent('page')
+  await startSign(siteA, addressA)
+  const aSignApproval = await aSignApprovalPromise
+  await aSignApproval.waitForURL(/#approval\?requestId=/)
+  await expect(aSignApproval.getByText('Sign message', { exact: true }).first()).toBeVisible()
+  const bSignApprovalPromise = context.waitForEvent('page')
+  await startSign(siteB, addressB)
+  const bSignApproval = await bSignApprovalPromise
+  await bSignApproval.waitForURL(/#approval\?requestId=/)
+  await expect(bSignApproval.getByText('Sign message', { exact: true }).first()).toBeVisible()
+
+  await switchSiteNetwork(siteA, '0x38', true, context)
+  await expect
+    .poll(() => siteA.evaluate(() => Reflect.get(window, 'pendingSignResult')))
+    .toMatchObject({ status: 'rejected', code: 4001 })
+  expect(await siteB.evaluate(() => Reflect.get(window, 'pendingSignResult'))).toBeNull()
+  await expect(bSignApproval.getByText('Sign message', { exact: true }).first()).toBeVisible()
+  await bSignApproval.getByRole('button', { name: 'Reject', exact: true }).click()
+  await expect
+    .poll(() => siteB.evaluate(() => Reflect.get(window, 'pendingSignResult')))
+    .toMatchObject({ status: 'rejected', code: 4001 })
+})
+
+test('uses approved CAIP EVM scopes as silent site network permissions', async ({
+  context,
+  popup
+}) => {
+  test.skip(
+    process.env.APPROVAL_WINDOW_E2E !== '1',
+    'Chrome popup windows require an explicit real-browser approval run'
+  )
+  test.setTimeout(120_000)
+  await mockReleasedEvmRpc(context)
+  await waitForBackgroundWalletInitialization(popup)
+  await importTestWallet(popup)
+  await stopImportedZcashSync(popup)
+
+  const page = await openEvmSite(context, 'https://site-network-session.noir.test')
+  expect(await evmRequest(page, 'eth_chainId')).toBe('0x1')
+  const approvalPromise = context.waitForEvent('page')
+  const sessionPromise = page.evaluate(() => {
+    const wallet = Reflect.get(window, 'noirwallet') as {
+      multichain: {
+        createSession(input: { scopes: Record<string, unknown> }): Promise<unknown>
+      }
+    }
+    return wallet.multichain.createSession({
+      scopes: {
+        'eip155:56': {
+          methods: ['eth_accounts', 'eth_chainId'],
+          notifications: ['chainChanged', 'accountsChanged']
+        },
+        'eip155:1': {
+          methods: ['eth_accounts', 'eth_chainId'],
+          notifications: ['chainChanged', 'accountsChanged']
+        }
+      }
+    })
+  })
+  const approval = await approvalPromise
+  await approval.waitForURL(/#approval\?requestId=/)
+  await approval.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(sessionPromise).resolves.toMatchObject({
+    scopes: { 'eip155:56': expect.any(Object), 'eip155:1': expect.any(Object) }
+  })
+  await expect.poll(() => evmRequest(page, 'eth_chainId')).toBe('0x38')
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(window, 'chainChanges')))
+    .toEqual(['0x38'])
+
+  await switchSiteNetwork(page, '0x1', true, context)
+  await switchSiteNetwork(page, '0x38', true, context)
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(window, 'chainChanges')))
+    .toEqual(['0x38', '0x1', '0x38'])
+})
 
 test('exposes the released multichain provider surface by default', async ({ context }) => {
   await context.route('https://provider-release.noir.test/**', serveSdkExample)

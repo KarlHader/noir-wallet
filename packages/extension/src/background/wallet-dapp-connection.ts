@@ -15,7 +15,7 @@ interface WalletDAppConnectionOptions {
   readonly getCurrentTabDApp: () => Promise<ConnectedDApp | null>
   readonly getConnection: (origin: string) => Promise<ConnectedDApp | null>
   readonly loadActiveAccount: () => Promise<WalletDAppActiveAccount | null>
-  readonly getEvmChainId: () => string
+  readonly getEvmChainId: (dapp: ConnectedDApp) => string | Promise<string>
   readonly getZcashChainId: () => string
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
@@ -36,8 +36,8 @@ interface WalletDAppConnectionOptions {
 export class WalletDAppConnectionCoordinator {
   constructor(private readonly options: WalletDAppConnectionOptions) {}
 
-  private targets(dapp: ConnectedDApp, active: WalletDAppActiveAccount) {
-    const evmChainId = this.options.getEvmChainId()
+  private async targets(dapp: ConnectedDApp, active: WalletDAppActiveAccount) {
+    const evmChainId = await this.options.getEvmChainId(dapp)
     return {
       evm: active.chainIds.includes(evmChainId)
         ? getConnectionChainAuthorization(dapp, evmChainId)
@@ -58,7 +58,7 @@ export class WalletDAppConnectionCoordinator {
       if (!active) {
         return { dapp, currentAccountAuthorized: false, canConnectCurrentAccount: false }
       }
-      const targets = this.targets(dapp, active)
+      const targets = await this.targets(dapp, active)
       const sessionChains =
         dapp.caip25Session?.scopes
           .filter(scope => active.chainIds.includes(scope.chainId))
@@ -107,7 +107,7 @@ export class WalletDAppConnectionCoordinator {
         await this.options.notifySessionChanged(origin)
         return
       }
-      const targets = this.targets(dapp, active)
+      const targets = await this.targets(dapp, active)
       if (!targets.evm && !targets.zcash) {
         throw new Error('Reconnect from the site to update this network permission')
       }

@@ -464,7 +464,10 @@ it('prepares native and ERC-20 direct Max probes from PEA without a privacy quot
       evm: {
         estimateTransferFee: async (intent, options) => {
           calls.push({ intent, options })
-          return { maximumFeeWei: '100' }
+          return {
+            maximumFeeWei: '100',
+            ...(definition.kind === 'native' ? { amountIndependent: true } : {})
+          }
         },
         rejectTransfer: async id => calls.push({ rejected: id }),
         approveTransfer: async () => assert.fail('Max cannot submit')

@@ -608,7 +608,7 @@ export function createQuoteDepositTransferClient(options: {
         if (additionalValueRaw < 0n) {
           throw new Error('The EVM maximum plan does not match its native source amount')
         }
-        const estimate =
+        let estimate =
           transaction && transaction.data !== '0x'
             ? await options.evm.estimateContractCallFee(
                 {
@@ -627,6 +627,32 @@ export function createQuoteDepositTransferClient(options: {
                 },
                 prepareOptions
               )
+        if (isNative && !transaction && estimate.amountIndependent !== true) {
+          const initialFee = BigInt(estimate.maximumFeeWei)
+          const initialMaximum = availableRaw - initialFee - (initialFee + 3n) / 4n
+          let candidate = initialMaximum < availableRaw / 2n ? initialMaximum : availableRaw / 2n
+          let settled = false
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            if (candidate <= 0n) break
+            const checked = await options.evm.estimateTransferFee(
+              {
+                assetId: input.source.asset.asset.id,
+                recipient: input.depositAddress,
+                amountRaw: candidate.toString()
+              },
+              prepareOptions
+            )
+            const fee = BigInt(checked.maximumFeeWei)
+            const next = availableRaw - fee - (fee + 3n) / 4n
+            if (next === candidate) {
+              estimate = checked
+              settled = true
+              break
+            }
+            candidate = next
+          }
+          if (!settled) throw new Error('Unable to calculate a spendable EVM maximum')
+        }
         const feeRaw = BigInt(estimate.maximumFeeWei)
         // Max needs room for a fresh RHEA quote and EVM fee calculation before signing.
         const feeHeadroomRaw = (feeRaw + 3n) / 4n

@@ -113,6 +113,9 @@ export const zcashWalletRuntimeClient = Object.freeze({
 
   async unlock(password: string): Promise<UnlockResult> {
     const response = await send({ type: 'WALLET_UNLOCK', password })
+    if (response.failure === 'network_initialization_failed') {
+      return { success: false, failure: 'operation_failed' }
+    }
     if (typeof response.error === 'string' && response.success !== false) {
       return { success: false, upgradeFailed: true }
     }
