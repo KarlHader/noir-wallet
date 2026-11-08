@@ -118,10 +118,7 @@ import {
   canUseEstimatedEvmSwapMaximum
 } from '@/popup/services/swap-maximum'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
-import {
-  estimateRheaRouteMaximum,
-  fallbackTransferMaximum
-} from '@/popup/services/transfer-maximum'
+import { estimateRheaRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   createRheaSwapBinding,
   listWalletSwapSourceTokens,
@@ -1765,10 +1762,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const routeMaximum = useTransferMaximum({
     enabled: canEstimateRouteMaximum,
     requestKey: `${walletSourcesScope}:${swap.tokenIn?.assetId}:${swap.tokenOut?.assetId}:${walletOwnedSource?.refundAddress}:${walletOwnedSource?.asset.balance.availableRaw}:${resolvedRecipientAddress}:${executionSourceMode}:${destinationMode}:${quotePurpose}:${swap.slippage}:${networkFeeTier}`,
-    fallback: () => {
-      if (!walletOwnedSource) throw new Error('No Swap source')
-      return fallbackTransferMaximum(walletOwnedSource)
-    },
     estimate: async () => {
       if (!walletOwnedSource || !swap.tokenIn || !swap.tokenOut)
         throw new Error('Incomplete Swap route')
@@ -1807,11 +1800,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       reviewAfterQuoteRefresh.current = null
       maxQuoteAdjustmentCount.current = 0
     }
+    if (routeMaximum.error) {
+      if (swap.amountIn) swap.updateAmountIn('')
+      return
+    }
     if (routeMaximum.value) {
-      if (reviewAfterQuoteRefresh.current === null)
-        swap.updateAmountIn(
-          formatBaseUnitDecimalAmount(routeMaximum.value.amountRaw, swap.tokenIn?.decimals ?? 18)
-        )
+      const maximumAmount = formatBaseUnitDecimalAmount(
+        routeMaximum.value.amountRaw,
+        swap.tokenIn?.decimals ?? 18
+      )
+      if (reviewAfterQuoteRefresh.current === null && swap.amountIn !== maximumAmount)
+        swap.updateAmountIn(maximumAmount)
       return
     }
     if (
@@ -1826,12 +1825,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     canEstimateRouteMaximum,
     routeMaximum.value,
     routeMaximum.loading,
+    routeMaximum.error,
     viewStep,
     walletOwnedSource?.asset.balance.availableRaw,
     walletOwnedSource?.asset.asset.kind,
+    swap.amountIn,
     swap.updateAmountIn,
     swap.tokenIn?.decimals
   ])
+  const nativeMaxError =
+    maxSelected &&
+    !swap.isZecSource &&
+    walletOwnedSource?.asset.asset.kind === 'native' &&
+    routeMaximum.error
+      ? 'Unable to calculate Max. Try again.'
+      : null
   const walletAvailability = walletOwnedSource
     ? resolvePortfolioTransferAvailability({
         balanceRaw: walletOwnedSource.asset.balance.availableRaw,
@@ -4504,13 +4512,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
           )
         }
-        hasInsufficientFunds={hasInsufficientFunds}
+        hasInsufficientFunds={hasInsufficientFunds || Boolean(nativeMaxError)}
         insufficientMessage={
-          swap.isZecSource
+          nativeMaxError ??
+          (swap.isZecSource
             ? zcashAmountErrorCopy
             : swap.tokenIn
               ? `Insufficient ${swap.tokenIn.symbol} balance`
-              : undefined
+              : undefined)
         }
         walletManagedRefundAddress={resolvedRefundAddress || undefined}
         feeIsApproximate={feeIsApproximate}
@@ -4555,9 +4564,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   reviewAfterQuoteRefresh.current = null
                   setMaxSelected(true)
                   maxQuoteAdjustmentCount.current = 0
-                  if (walletOwnedSource.asset.asset.kind !== 'native') {
-                    swap.updateAmountIn(walletSpendableBalance)
-                  }
+                  if (walletOwnedSource.asset.asset.kind === 'native') {
+                    swap.updateAmountIn('')
+                    void routeMaximum.request()
+                  } else swap.updateAmountIn(walletSpendableBalance)
                 }
               : undefined
         }
