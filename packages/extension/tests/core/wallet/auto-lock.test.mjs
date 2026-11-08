@@ -6,6 +6,9 @@ function setup({
   autoLockMs = 60_000,
   lastActivityTime = 1_000,
   session = true,
+  runtimeUnlocked = session,
+  renewSessionOnCleanup = false,
+  orphanLockFails = false,
   now = 2_000
 } = {}) {
   const calls = []
@@ -13,7 +16,21 @@ function setup({
     readAutoLockMs: async () => autoLockMs,
     readLastActivityTime: async () => lastActivityTime,
     hasUnlockSession: async () => session,
-    lock: async () => calls.push(['lock']),
+    hasUnlockedRuntime: () => runtimeUnlocked,
+    lockOrphanedRuntime: async () => {
+      if (orphanLockFails) throw new Error('Wallet lock cleanup failed')
+      if (renewSessionOnCleanup) {
+        session = true
+        return 'active'
+      }
+      runtimeUnlocked = false
+      calls.push(['lock-orphaned'])
+      return 'locked'
+    },
+    lock: async () => {
+      runtimeUnlocked = false
+      calls.push(['lock'])
+    },
     scheduleAlarm: async when => calls.push(['schedule', when]),
     clearAlarm: async () => calls.push(['clear']),
     now: () => now
@@ -46,6 +63,53 @@ test.describe('Background auto-lock coordinator', () => {
     expect(calls).toEqual([['clear']])
   })
 
+  test('locks an orphaned Zcash runtime even after activity is refreshed', async () => {
+    const { coordinator, calls } = setup({
+      session: false,
+      runtimeUnlocked: true,
+      lastActivityTime: 4_000,
+      now: 4_001
+    })
+    await expect(coordinator.reconcile()).resolves.toBe('locked')
+    expect(calls).toEqual([['lock-orphaned'], ['clear']])
+  })
+
+  test('rechecks a session established by an in-flight unlock', async () => {
+    const { coordinator, calls } = setup({
+      session: false,
+      runtimeUnlocked: true,
+      renewSessionOnCleanup: true
+    })
+    await expect(coordinator.reconcile()).resolves.toBe('scheduled')
+    expect(calls).toEqual([['schedule', 61_000]])
+  })
+
+  test('keeps an active hardware-only session scheduled', async () => {
+    const { coordinator, calls } = setup({ runtimeUnlocked: false })
+    await expect(coordinator.reconcile()).resolves.toBe('scheduled')
+    expect(calls).toEqual([['schedule', 61_000]])
+  })
+
+  test('disabled inactivity locking still clears an orphaned runtime', async () => {
+    const { coordinator, calls } = setup({
+      autoLockMs: 0,
+      session: false,
+      runtimeUnlocked: true
+    })
+    await expect(coordinator.reconcile()).resolves.toBe('locked')
+    expect(calls).toEqual([['lock-orphaned'], ['clear']])
+  })
+
+  test('retries cleanup when an orphaned runtime cannot be locked', async () => {
+    const { coordinator, calls } = setup({
+      session: false,
+      runtimeUnlocked: true,
+      orphanLockFails: true
+    })
+    await expect(coordinator.reconcile()).rejects.toThrow('Wallet lock cleanup failed')
+    expect(calls).toEqual([['schedule', 62_000]])
+  })
+
   test('shares the in-flight promise and drains a concurrent reconciliation request', async () => {
     let resolveFirstSettings
     let reads = 0
@@ -60,6 +124,8 @@ test.describe('Background auto-lock coordinator', () => {
       },
       readLastActivityTime: async () => 1_000,
       hasUnlockSession: async () => true,
+      hasUnlockedRuntime: () => true,
+      lockOrphanedRuntime: async () => 'locked',
       lock: async () => calls.push(['lock']),
       scheduleAlarm: async when => calls.push(['schedule', when]),
       clearAlarm: async () => calls.push(['clear']),

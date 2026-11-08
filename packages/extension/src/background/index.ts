@@ -1571,8 +1571,18 @@ const backgroundAutoLock = new AutoLockCoordinator({
       WALLET_CONFIG.SECURITY.AUTO_LOCK.OPTIONS.map(option => option.value)
     )
   },
-  hasUnlockSession: async () =>
-    !backgroundZcashWalletRuntime.isLocked() || (await credentialSession.hasUnlockSession()),
+  hasUnlockSession: () => credentialSession.hasUnlockSession(),
+  hasUnlockedRuntime: () => !backgroundZcashWalletRuntime.isLocked(),
+  lockOrphanedRuntime: () =>
+    enqueueWalletSessionTransition(async () => {
+      // V1 unlock establishes its Zcash runtime before publishing the session.
+      // Check again after that transition to avoid locking a completed unlock.
+      if (await credentialSession.hasUnlockSession()) return 'active' as const
+      if (!backgroundZcashWalletRuntime.isLocked()) {
+        await completeWalletLock(beginWalletLockQuiesce())
+      }
+      return 'locked' as const
+    }),
   lock: () => handleWalletLock(),
   scheduleAlarm: async when => {
     await chrome.alarms.create(WALLET_AUTO_LOCK_ALARM, { when })
@@ -5990,21 +6000,35 @@ function handleWalletCreated(
  * Handle wallet lock event
  * Preserves dApp connections (EIP-1193 standard: lock ≠ disconnect)
  */
-function handleWalletLock(): Promise<void> {
+function beginWalletLockQuiesce(): Promise<
+  { readonly success: true } | { readonly success: false; readonly error: unknown }
+> {
   syncScheduler.pauseForTx()
   syncScheduler.abortSync()
   const walletId = useWalletStore.getState().currentWalletId
-  const syncQuiesced = (
-    walletId ? getWorkerClient(walletId).reconcileWallet(true) : Promise.resolve(true)
-  ).then(
+  return (walletId ? getWorkerClient(walletId).reconcileWallet(true) : Promise.resolve(true)).then(
     () => ({ success: true as const }),
     (error: unknown) => ({ success: false as const, error })
   )
-  return enqueueWalletSessionTransition(async () => {
+}
+
+async function completeWalletLock(
+  syncQuiesced: ReturnType<typeof beginWalletLockQuiesce>
+): Promise<void> {
+  try {
     const result = await syncQuiesced
-    if (!result.success) throw result.error
     await accountContextTransition.runActiveOperation(performWalletLockState)
-  }).finally(() => syncScheduler.resumeAfterTx())
+    if (!result.success) {
+      console.warn('[Background] Wallet reconcile failed before lock; lock cleanup completed')
+    }
+  } finally {
+    syncScheduler.resumeAfterTx()
+  }
+}
+
+function handleWalletLock(): Promise<void> {
+  const syncQuiesced = beginWalletLockQuiesce()
+  return enqueueWalletSessionTransition(() => completeWalletLock(syncQuiesced))
 }
 
 async function performWalletLockState(): Promise<void> {

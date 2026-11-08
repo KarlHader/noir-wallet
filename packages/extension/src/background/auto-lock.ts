@@ -1,9 +1,12 @@
 export const WALLET_AUTO_LOCK_ALARM = 'wallet-auto-lock'
+const AUTO_LOCK_RETRY_MS = 60_000
 
 export interface AutoLockCoordinatorOptions {
   readonly readLastActivityTime: () => Promise<number | null>
   readonly readAutoLockMs: () => Promise<number>
   readonly hasUnlockSession: () => Promise<boolean>
+  readonly hasUnlockedRuntime: () => boolean
+  readonly lockOrphanedRuntime: () => Promise<'active' | 'locked'>
   readonly lock: () => Promise<void>
   readonly scheduleAlarm: (when: number) => Promise<void>
   readonly clearAlarm: () => Promise<void>
@@ -45,16 +48,34 @@ export class AutoLockCoordinator {
     if (!Number.isSafeInteger(autoLockMs) || autoLockMs < 0) {
       throw new Error('Invalid auto-lock duration')
     }
-    if (autoLockMs === 0) {
-      await this.options.clearAlarm()
-      return 'disabled'
-    }
-
     const [lastActivityTime, hasUnlockSession] = await Promise.all([
       this.options.readLastActivityTime(),
       this.options.hasUnlockSession()
     ])
-    if (!hasUnlockSession || lastActivityTime === null) {
+    if (!hasUnlockSession) {
+      if (this.options.hasUnlockedRuntime()) {
+        let result: 'active' | 'locked'
+        try {
+          result = await this.options.lockOrphanedRuntime()
+        } catch (error) {
+          await this.options.scheduleAlarm(this.now() + AUTO_LOCK_RETRY_MS)
+          throw error
+        }
+        if (result === 'active') {
+          this.reconcileRequested = true
+          return 'no-session'
+        }
+        await this.options.clearAlarm()
+        return 'locked'
+      }
+      await this.options.clearAlarm()
+      return 'no-session'
+    }
+    if (autoLockMs === 0) {
+      await this.options.clearAlarm()
+      return 'disabled'
+    }
+    if (lastActivityTime === null) {
       await this.options.clearAlarm()
       return 'no-session'
     }
