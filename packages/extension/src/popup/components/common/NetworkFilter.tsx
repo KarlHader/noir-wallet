@@ -65,7 +65,11 @@ export function NetworkFilter({
           <span className="flex min-w-0 items-center gap-1.5">
             {selectedOption && (
               <ChainIcon
-                chain={resolveChainIconAlias(selectedOption.family, selectedOption.displayName)}
+                chain={resolveChainIconAlias(
+                  selectedOption.family,
+                  selectedOption.displayName,
+                  selectedOption.id
+                )}
                 width={16}
                 height={16}
                 className="shrink-0 rounded-[4px]"

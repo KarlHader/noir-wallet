@@ -60,25 +60,28 @@ test('dust, unknown values and observed zero remain distinguishable', () => {
   }
 })
 
-test('shortened review values retain full precision for expansion and copying', () => {
+test('review quantities share list formatting and retain exact values for copying', () => {
   assert.deepEqual(formatReviewAmount('1,234.123456789012345678'), {
-    display: '1,234.12345678…',
+    display: '1,234.12',
     full: '1,234.123456789012345678',
     exact: '1234.123456789012345678',
     isRounded: true
   })
   assert.deepEqual(formatReviewAmount('4404.099793'), {
-    display: '4,404.099793',
+    display: '4,404.09',
     full: '4,404.099793',
     exact: '4404.099793',
-    isRounded: false
+    isRounded: true
   })
   const dust = formatReviewAmount('0.000000000000000001')
   assert.equal(dust.display, '<0.00000001')
   assert.equal(dust.exact, '0.000000000000000001')
   assert.equal(dust.isRounded, true)
-  assert.equal(formatReviewAmount('-1.123456789').display, '-1.12345678…')
+  assert.equal(formatReviewAmount('-1.123456789').display, '-1.1234')
   assert.equal(formatReviewAmount('1.100000000').isRounded, false)
+  for (const value of ['1,234.123456789012345678', '4404.099793', '0.000000000000000001']) {
+    assert.equal(formatReviewAmount(value).display, formatTokenQuantity(value))
+  }
 })
 
 test('fiat valuations use cents while unit prices retain meaningful small digits', () => {

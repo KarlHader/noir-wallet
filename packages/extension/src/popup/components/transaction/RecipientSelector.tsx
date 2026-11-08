@@ -11,6 +11,7 @@ import { AddAddressDialog } from '../address-book/AddAddressDialog'
 import { getAddressBookNetworkChoice } from '../address-book/address-book-network'
 import { InlineError } from '../common/InlineError'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { ListSkeleton } from '../ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
@@ -68,7 +69,7 @@ export function RecipientSelector({
   readonly excludeAddresses?: readonly string[]
   readonly includeUnavailableAccounts?: boolean
   readonly includeCurrentAccount?: boolean
-  readonly onSelect: (address: string) => void
+  readonly onSelect: (address: string, displayName?: string) => void
 }) {
   const contacts = useAddressBookStore(state => state.contacts)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
@@ -76,6 +77,7 @@ export function RecipientSelector({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [addingAddress, setAddingAddress] = useState(false)
+  const [query, setQuery] = useState('')
   const addressBookNetwork = useMemo(() => getAddressBookNetworkChoice(chainId), [chainId])
 
   const loadAccounts = async () => {
@@ -126,9 +128,35 @@ export function RecipientSelector({
     () => buildSavedRecipientList(contacts, chainId, excludeAddresses),
     [chainId, contacts, excludeAddresses]
   )
+  const normalizedQuery = query.trim().toLowerCase()
+  const visibleAccountGroups = accountGroups.filter(group => {
+    const displayName = getAccountDisplayName(
+      group.walletId,
+      group.accountId,
+      group.accountDisplayName,
+      accountDisplayNames
+    )
+    return `${displayName} ${group.walletDisplayName} ${group.addresses.map(address => address.value).join(' ')}`
+      .toLowerCase()
+      .includes(normalizedQuery)
+  })
+  const visibleRecipients = savedRecipients.filter(contact =>
+    `${contact.name} ${contact.address}`.toLowerCase().includes(normalizedQuery)
+  )
+  const isEvm = chainId.startsWith('eip155:')
 
   return (
     <Tabs defaultValue="accounts" className="min-h-0 gap-0">
+      <div className="px-1 pb-3">
+        <Input
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          placeholder="Search accounts or addresses"
+          aria-label="Search accounts or addresses"
+          className="h-[46px] rounded-lg text-sm"
+          startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
+        />
+      </div>
       <TabsList className="h-10 w-full justify-start rounded-none border-b border-border bg-transparent p-0">
         <TabsTrigger value="accounts" className={RECIPIENT_TAB_CLASS}>
           My Accounts
@@ -147,21 +175,25 @@ export function RecipientSelector({
             message="Unable to load accounts"
             onRetry={loadAccounts}
           />
-        ) : accountGroups.length === 0 ? (
+        ) : visibleAccountGroups.length === 0 ? (
           <EmptyState
             icon="lucide:wallet"
-            title="No other accounts"
-            description="No other Wallet account has a receive address on this network."
+            title={normalizedQuery ? 'No matching accounts' : 'No other accounts'}
           />
         ) : (
           <div className="space-y-5 pb-1">
-            {accountGroups.map(group => {
+            {visibleAccountGroups.map(group => {
               const displayName = getAccountDisplayName(
                 group.walletId,
                 group.accountId,
                 group.accountDisplayName,
                 accountDisplayNames
               )
+              const accountIndex =
+                catalog?.accounts.find(
+                  account =>
+                    account.walletId === group.walletId && account.accountId === group.accountId
+                )?.accountIndex ?? 0
               if (group.addresses.length === 0) {
                 return (
                   <button
@@ -186,17 +218,25 @@ export function RecipientSelector({
               return (
                 <section key={group.key}>
                   <div className="mb-2 flex min-w-0 items-center gap-2 px-1">
-                    <p className="truncate text-sm font-medium">{displayName}</p>
-                    {group.active && (
-                      <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">
-                        Current
-                      </span>
-                    )}
-                    {group.walletDisplayName && (
-                      <p className="ml-auto max-w-[42%] truncate text-xs text-muted">
-                        {group.walletDisplayName}
-                      </p>
-                    )}
+                    <img
+                      src={
+                        [
+                          '/icons/wallet-avatar-main.png',
+                          '/icons/wallet-avatar-meme.png',
+                          '/icons/wallet-avatar-nft.png'
+                        ][accountIndex % 3]
+                      }
+                      alt=""
+                      aria-hidden="true"
+                      className="size-8 shrink-0 rounded-full object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      {group.walletDisplayName && (
+                        <p className="truncate text-xs text-muted">{group.walletDisplayName}</p>
+                      )}
+                      <p className="truncate text-sm font-medium">{displayName}</p>
+                    </div>
+                    {group.active && <span className="shrink-0 text-xs text-muted">Current</span>}
                   </div>
                   <div className="space-y-2">
                     {group.addresses.map(address => {
@@ -206,7 +246,7 @@ export function RecipientSelector({
                           key={`${group.key}:${address.scheme}:${address.value}`}
                           type="button"
                           aria-label={`Send to ${displayName}${address.executionMode ? ` ${address.executionMode === 'private' ? 'Confidential' : 'Public'}` : schemeLabel ? ` ${schemeLabel}` : ''}`}
-                          onClick={() => onSelect(address.value)}
+                          onClick={() => onSelect(address.value, displayName)}
                           className="flex w-full items-center gap-3 rounded-lg border border-transparent bg-card px-3 py-2.5 text-left transition-colors hover:border-primary/20 hover:bg-white/5"
                         >
                           {schemeLabel && (
@@ -214,8 +254,20 @@ export function RecipientSelector({
                               {schemeLabel}
                             </span>
                           )}
-                          {address.executionMode === 'private' && (
-                            <ExecutionAccountBadge mode="private" iconOnly />
+                          {isEvm && address.executionMode && (
+                            <span className="flex shrink-0 items-center gap-1.5 text-sm">
+                              {address.executionMode === 'private' ? (
+                                <ExecutionAccountBadge mode="private" iconOnly />
+                              ) : (
+                                <Icon
+                                  icon="lucide:eye"
+                                  width={16}
+                                  height={16}
+                                  className="text-muted"
+                                />
+                              )}
+                              {address.executionMode === 'private' ? 'Private' : 'Public'}
+                            </span>
                           )}
                           <p
                             className="min-w-0 flex-1 truncate font-mono text-xs text-foreground"
@@ -223,12 +275,14 @@ export function RecipientSelector({
                           >
                             {formatSortAddress(address.value)}
                           </p>
-                          <Icon
-                            icon="lucide:arrow-right"
-                            width={14}
-                            height={14}
-                            className="shrink-0 text-muted"
-                          />
+                          {!isEvm && (
+                            <Icon
+                              icon="lucide:arrow-right"
+                              width={14}
+                              height={14}
+                              className="shrink-0 text-muted"
+                            />
+                          )}
                         </button>
                       )
                     })}
@@ -241,10 +295,10 @@ export function RecipientSelector({
       </TabsContent>
 
       <TabsContent value="address-book" className="max-h-[360px] overflow-y-auto px-1 py-4">
-        {savedRecipients.length === 0 ? (
+        {visibleRecipients.length === 0 ? (
           <EmptyState
             icon="lucide:book-user"
-            title="No saved recipients"
+            title={normalizedQuery ? 'No matching recipients' : 'No saved recipients'}
             action={
               addressBookNetwork && (
                 <Button
@@ -270,12 +324,12 @@ export function RecipientSelector({
                 Add address
               </button>
             )}
-            {savedRecipients.map(contact => (
+            {visibleRecipients.map(contact => (
               <button
                 key={contact.id}
                 type="button"
                 aria-label={`Send to ${contact.name}`}
-                onClick={() => onSelect(contact.address)}
+                onClick={() => onSelect(contact.address, contact.name)}
                 className="flex w-full items-center gap-3 rounded-lg border border-transparent bg-card px-3 py-2.5 text-left transition-colors hover:border-primary/20 hover:bg-white/5"
               >
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/12 text-sm font-semibold text-primary">

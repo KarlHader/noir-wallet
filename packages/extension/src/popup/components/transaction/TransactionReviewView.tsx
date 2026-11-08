@@ -34,6 +34,7 @@ interface TransactionReviewViewProps {
   readonly variant?: 'default' | 'figma'
   readonly asset: TransactionReviewAsset | null
   readonly amount: string
+  readonly fiatValue?: string | null
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
   readonly summary?: ReactNode
@@ -55,6 +56,7 @@ export function TransactionReviewView({
   variant = 'default',
   asset,
   amount,
+  fiatValue,
   network,
   rows,
   summary,
@@ -142,6 +144,7 @@ export function TransactionReviewView({
                 <Skeleton className="h-7 w-36" />
               )}
             </div>
+            {fiatValue && <p className="mt-2 text-sm text-muted">≈{fiatValue}</p>}
             {!figma &&
               (network ? (
                 <p className="mt-1 text-xs text-muted">{network}</p>
@@ -198,7 +201,7 @@ export function TransactionReviewView({
         <Button
           variant="outline"
           size={figma ? 'wallet' : 'default'}
-          className="h-[45px] flex-1"
+          className={figma ? 'h-[45px] flex-1 border-white/10 bg-card' : 'h-[45px] flex-1'}
           disabled={cancelDisabled || confirming}
           onClick={onCancel}
         >
@@ -206,7 +209,7 @@ export function TransactionReviewView({
         </Button>
         <Button
           size={figma ? 'wallet' : 'default'}
-          className="h-[45px] flex-1"
+          className={figma ? 'h-[45px] flex-[2]' : 'h-[45px] flex-1'}
           disabled={confirmDisabled || preparing}
           isLoading={confirming}
           onClick={onConfirm}

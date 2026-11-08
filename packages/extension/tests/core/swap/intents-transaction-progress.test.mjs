@@ -118,6 +118,7 @@ test('RHEA signed orders and relay use the same progress language in Activity', 
   const steps = getActivityProgressSteps(
     {
       status: 'confirming',
+      snapshot: { protocol: { provider: 'rhea-cross-chain-dex', router: 'nearintents' } },
       segments: [
         {
           id: 'origin',
@@ -175,7 +176,11 @@ test('Activity hides an unused refund branch but shows a refund that actually st
       status: 'created'
     }
   ]
-  const item = { status: 'final', segments }
+  const item = {
+    status: 'final',
+    snapshot: { protocol: { provider: 'rhea-cross-chain-dex', router: 'nearintents' } },
+    segments
+  }
   const chainName = chainId => (chainId === 'eip155:1' ? 'Ethereum' : 'Arbitrum')
 
   expect(getActivityProgressSteps(item, chainName).map(step => step.label)).toEqual([

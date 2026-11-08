@@ -84,7 +84,7 @@ export function DAppConnectionModal() {
                       title={`Disconnect ${dapp.name}`}
                       onClick={() => void handleDisconnect(dapp.origin)}
                       disabled={disconnecting !== null}
-                      className="wallet-interactive flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-wallet-surface text-muted enabled:hover:bg-wallet-selected enabled:hover:text-foreground enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+                      className="wallet-interactive flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-wallet-surface text-danger enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
                     >
                       <Icon
                         icon={

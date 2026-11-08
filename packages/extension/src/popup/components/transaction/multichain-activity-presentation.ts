@@ -14,7 +14,7 @@ import type {
   ActivityChainMetadata
 } from '@/popup/services/activity-presentation-catalog'
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
-import { formatBaseUnitAmount } from '@/lib/number-format'
+import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { formatActivityTokenAmount } from '../portfolio/portfolio-format'
 import type {
   ConfidentialFundingPlan,
@@ -63,6 +63,7 @@ export interface ActivityDisplayAmount {
   readonly assetId: string
   readonly symbol: string
   readonly formatted: string
+  readonly exact: string
   readonly iconUrl?: string
 }
 
@@ -359,7 +360,8 @@ export function getActivityDisplayChanges(
         ...(display ?? {
           assetId: change.assetId,
           symbol: formatSortAddress(parseAssetId(change.assetId).reference),
-          formatted: formatActivityTokenAmount(change.amountRaw, 0)
+          formatted: formatActivityTokenAmount(change.amountRaw, 0),
+          exact: change.amountRaw
         }),
         direction: change.direction,
         value: metadata
@@ -388,11 +390,12 @@ export function resolveActivityDisplayAmount(
     assetId: amount.assetId,
     symbol: metadata.symbol,
     formatted: formatActivityTokenAmount(amount.amountRaw, metadata.decimals),
+    exact: formatBaseUnitDecimalAmount(amount.amountRaw, metadata.decimals),
     ...(metadata.iconUrl ? { iconUrl: metadata.iconUrl } : {})
   })
 }
 
-export function getActivitySegmentLabel(segment: ActivitySegment): string {
+export function getActivitySegmentLabel(segment: ActivitySegment, item?: ActivityItem): string {
   if (segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents') {
     if (segment.role === 'origin') return 'Shield authorization'
     if (segment.role === 'relay') return 'Shield processing'
@@ -401,7 +404,7 @@ export function getActivitySegmentLabel(segment: ActivitySegment): string {
     case 'origin':
       return isSignedOrderOrigin(segment) ? 'Order submitted' : 'Origin transaction'
     case 'relay': {
-      return isIntentsRelaySegment(segment) ? 'Intents processing' : 'Cross-chain relay'
+      return isIntentsRelaySegment(segment, item) ? 'Intents processing' : 'Cross-chain relay'
     }
     case 'destination':
       return segment.target.kind === 'protocol' ? 'Protocol position' : 'Destination transaction'
@@ -410,13 +413,14 @@ export function getActivitySegmentLabel(segment: ActivitySegment): string {
   }
 }
 
-function isIntentsRelaySegment(segment: ActivitySegment): boolean {
+function isIntentsRelaySegment(segment: ActivitySegment, item?: ActivityItem): boolean {
+  if (segment.role !== 'relay' || segment.target.kind === 'onchain') return false
+  if (segment.target.provider.toLowerCase().includes('intents')) return true
+  const binding = item?.snapshot?.protocol
   return (
-    segment.role === 'relay' &&
-    (segment.target.kind === 'relay' ||
-      (segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents')) &&
-    (segment.target.provider.toLowerCase().includes('intents') ||
-      segment.target.provider === 'RHEA CrossChainDex')
+    segment.target.provider === 'RHEA CrossChainDex' &&
+    binding?.provider === 'rhea-cross-chain-dex' &&
+    /near[-_ ]?intents/i.test(binding.router)
   )
 }
 
@@ -666,16 +670,22 @@ function findLatestOnchainEvidence(item: ActivityItem): TransactionSegmentEviden
 
 export function getActivityStatusPresentation(item: ActivityItem): ActivityStatusPresentation {
   if (isPartiallyCompleted(item)) return { label: 'Partially completed', tone: 'warning' }
-  const relay = item.segments.find(isIntentsRelaySegment)
+  const relay = item.segments.find(
+    segment =>
+      segment.role === 'relay' &&
+      (segment.target.kind === 'relay' || segment.target.kind === 'protocol')
+  )
   if (relay && item.status !== 'final' && item.status !== 'failed' && !item.reconfirming) {
+    const intentsRelay = isIntentsRelaySegment(relay, item)
+    const waitingLabel = intentsRelay ? 'Waiting for Intents' : 'Waiting for relay'
     const origin = item.segments.find(segment => segment.role === 'origin')
     const destination = item.segments.find(segment => segment.role === 'destination')
-    if (item.source === 'zcash-v1') {
+    if (item.source === 'zcash-v1' && intentsRelay) {
       if (destination?.status === 'confirming' && destination.evidence?.transactionHash) {
         return { label: 'Destination confirming', tone: 'neutral' }
       }
-      if (relay.status === 'confirming') return { label: 'Waiting for Intents', tone: 'neutral' }
-      if (origin?.status === 'final') return { label: 'Waiting for Intents', tone: 'neutral' }
+      if (relay.status === 'confirming') return { label: waitingLabel, tone: 'neutral' }
+      if (origin?.status === 'final') return { label: waitingLabel, tone: 'neutral' }
       if (origin?.status === 'broadcast') return { label: 'Source submitted', tone: 'neutral' }
       return getLifecycleStatusPresentation({ status: item.status })
     }
@@ -687,12 +697,15 @@ export function getActivityStatusPresentation(item: ActivityItem): ActivityStatu
     }
     if (relay.status === 'final') return { label: 'Finalizing', tone: 'neutral' }
     if (relay.status === 'confirming' || relay.status === 'broadcast') {
-      return { label: 'Intents processing', tone: 'neutral' }
+      return {
+        label: intentsRelay ? 'Intents processing' : 'Cross-chain processing',
+        tone: 'neutral'
+      }
     }
     if (origin?.status === 'confirming') {
       return { label: 'Deposit confirming', tone: 'neutral' }
     }
-    if (origin?.status === 'final') return { label: 'Waiting for Intents', tone: 'neutral' }
+    if (origin?.status === 'final') return { label: waitingLabel, tone: 'neutral' }
     if (origin && isSignedOrderOrigin(origin) && origin.status === 'broadcast') {
       return { label: 'Order submitted', tone: 'neutral' }
     }
@@ -744,12 +757,12 @@ export function getActivityProgressSteps(
           segment.status === 'confirming' ||
           segment.status === 'final')
       const waitingForIntents =
-        isIntentsRelaySegment(segment) &&
+        isIntentsRelaySegment(segment, item) &&
         segment.status === 'created' &&
         (origin?.status === 'final' || (origin && isSignedOrderOrigin(origin)))
       const legacyRelayUnverified =
         item.source === 'zcash-v1' &&
-        isIntentsRelaySegment(segment) &&
+        isIntentsRelaySegment(segment, item) &&
         segment.status === 'confirming'
       const state =
         segment.status === 'final' || signedOrderSubmitted
@@ -761,7 +774,7 @@ export function getActivityProgressSteps(
               : 'pending'
       return {
         id: segment.id,
-        label: getActivitySegmentLabel(segment),
+        label: getActivitySegmentLabel(segment, item),
         detail:
           segment.target.kind === 'onchain'
             ? chainName(segment.target.chainId)
@@ -775,11 +788,11 @@ export function getActivityProgressSteps(
               ? 'Waiting for Intents'
               : legacyRelayUnverified
                 ? 'Waiting for Intents'
-                : isIntentsRelaySegment(segment) &&
+                : isIntentsRelaySegment(segment, item) &&
                     segment.status === 'created' &&
                     (origin?.status === 'broadcast' || origin?.status === 'confirming')
                   ? 'Waiting for deposit'
-                  : isIntentsRelaySegment(segment) && segment.status === 'confirming'
+                  : isIntentsRelaySegment(segment, item) && segment.status === 'confirming'
                     ? 'Processing'
                     : presentation.label
       }

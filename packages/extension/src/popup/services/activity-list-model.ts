@@ -29,13 +29,41 @@ export function filterActivityItems(input: {
   readonly selectedChainIds: readonly string[]
   readonly assetId?: string
   readonly domain?: 'public' | 'private'
+  readonly accountMode?: 'main' | 'private'
+  readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
 }): readonly ActivityItem[] {
   const selectedChainIdSet = new Set(input.selectedChainIds)
   return input.items.filter(item => {
     const chainId = resolveActivityChainId(item)
+    const shield = item.snapshot?.shield
+    const senderMode = item.snapshot?.sender?.address
+      ? input.executionAddressModes?.get(item.snapshot.sender.address.toLowerCase())
+      : undefined
+    const recipientMode = item.snapshot?.recipient?.address
+      ? input.executionAddressModes?.get(item.snapshot.recipient.address.toLowerCase())
+      : undefined
+    const crossModeMove =
+      (shield?.sourceDomain === 'public' && shield.destinationDomain === 'private') ||
+      (shield?.sourceDomain === 'private' && shield.destinationDomain === 'public') ||
+      (item.kind === 'transfer' &&
+        senderMode !== undefined &&
+        recipientMode !== undefined &&
+        senderMode !== recipientMode)
+    const shieldActivity =
+      shield?.sourceDomain === 'shield' || shield?.destinationDomain === 'shield'
+    // Shield activity belongs to a separate asset domain, independent of EVM execution mode.
+    const modeMatches =
+      input.accountMode === undefined ||
+      !chainId?.startsWith('eip155:') ||
+      shieldActivity ||
+      (input.accountMode === 'private'
+        ? item.accountMode === 'private'
+        : item.accountMode !== 'private') ||
+      crossModeMove
     return (
       chainId !== undefined &&
       selectedChainIdSet.has(chainId) &&
+      (input.domain !== undefined || modeMatches) &&
       (input.domain === undefined ||
         (input.domain === 'private'
           ? item.accountMode === 'private'

@@ -1,5 +1,6 @@
 import { Icon } from '@iconify/react'
 import type { ReactNode } from 'react'
+import { formatSortAddress } from '@/lib/format'
 import { formatTokenQuantity } from '@/lib/number-format'
 import { formatSendFiatValue } from './send-input-model'
 import { cn } from '@/lib/utils'
@@ -18,6 +19,7 @@ export function SendRecipientInputCard({
   variant = 'outline',
   invalid = false,
   autoFocus = false,
+  selectedName,
   onSelectRecipient
 }: {
   readonly id: string
@@ -28,19 +30,27 @@ export function SendRecipientInputCard({
   readonly variant?: 'outline' | 'filled'
   readonly invalid?: boolean
   readonly autoFocus?: boolean
+  readonly selectedName?: string
   readonly onSelectRecipient?: () => void
 }) {
   return (
     <div className={cn('space-y-1.5', variant === 'filled' && 'space-y-3')}>
-      <label
-        htmlFor={id}
-        className={cn(
-          'block px-1 text-xs font-medium text-foreground/80',
-          variant === 'filled' && 'px-0 text-sm leading-[18px]'
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <label
+          htmlFor={id}
+          className={cn(
+            'block px-1 text-xs font-medium text-foreground/80',
+            variant === 'filled' && 'px-0 text-sm leading-[18px]'
+          )}
+        >
+          {label}
+        </label>
+        {selectedName && (
+          <span className="min-w-0 truncate text-xs text-muted" title={selectedName}>
+            {selectedName}
+          </span>
         )}
-      >
-        {label}
-      </label>
+      </div>
       <Input
         id={id}
         aria-label={label}
@@ -80,6 +90,27 @@ export function SendRecipientInputCard({
   )
 }
 
+export function SendRecipientAddress({
+  address,
+  name
+}: {
+  readonly address: string
+  readonly name?: string
+}) {
+  return (
+    <span className="block min-w-0 text-right">
+      {name && (
+        <span className="block truncate font-sans text-foreground" title={name}>
+          {name}
+        </span>
+      )}
+      <span className="block truncate font-mono text-xs text-muted" title={address}>
+        {formatSortAddress(address)}
+      </span>
+    </span>
+  )
+}
+
 export function SendAmountInputCard({
   ariaLabel,
   value,
@@ -99,6 +130,7 @@ export function SendAmountInputCard({
   showBalanceHelp = false,
   headerAction,
   hero = false,
+  variant = 'outline',
   title,
   testId
 }: {
@@ -120,11 +152,13 @@ export function SendAmountInputCard({
   readonly showBalanceHelp?: boolean
   readonly headerAction?: ReactNode
   readonly hero?: boolean
+  readonly variant?: 'outline' | 'filled'
   readonly title?: string
   readonly testId?: string
 }) {
   const amountFiat = formatSendFiatValue(value, priceUsd)
   const availableFiat = formatSendFiatValue(available, priceUsd)
+  const filled = variant === 'filled' && !hero
   const maxButton = onMax ? (
     <button
       type="button"
@@ -134,6 +168,7 @@ export function SendAmountInputCard({
       disabled={maxDisabled || Boolean(maxDisabledReason) || maxLoading}
       className={cn(
         'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
+        filled && 'h-7 min-w-10 rounded-md bg-white/10 px-2 text-xs text-muted',
         maxSelected && 'bg-primary/15 text-primary'
       )}
     >
@@ -146,24 +181,61 @@ export function SendAmountInputCard({
   ) : null
 
   return (
-    <div className={cn('space-y-1.5', hero && 'space-y-0')}>
-      <div className={cn('flex items-center justify-between gap-2 px-1', hero && 'sr-only')}>
-        <span className="text-xs font-medium text-foreground/80">Amount</span>
-        {headerAction}
+    <div
+      data-testid={filled ? (testId ?? 'send-amount-card') : undefined}
+      className={cn('space-y-1.5', filled && 'space-y-3', hero && 'space-y-0')}
+    >
+      <div
+        className={cn(
+          'flex items-center justify-between gap-2 px-1',
+          filled && 'px-0',
+          hero && 'sr-only'
+        )}
+      >
+        <span
+          className={cn(
+            'text-xs font-medium text-foreground/80',
+            filled && 'text-sm leading-[18px] text-muted'
+          )}
+        >
+          Amount
+        </span>
+        {filled ? (
+          <span className="min-w-0 truncate text-right text-xs text-muted" title={available}>
+            {availableLabel === 'Available' ? 'Bal.' : availableLabel}{' '}
+            <strong className="font-medium text-foreground">
+              {formatTokenQuantity(available)} {symbol}
+            </strong>
+            {showBalanceHelp && <BalanceHelp kind="available" />}
+          </span>
+        ) : (
+          headerAction
+        )}
       </div>
       <div
-        data-testid={testId ?? 'send-amount-card'}
+        data-testid={filled ? undefined : (testId ?? 'send-amount-card')}
         title={title}
         className={cn(
           'min-h-[92px] rounded-2xl border px-4 py-3 transition-colors focus-within:border-white/60',
           hero
             ? 'min-h-10 rounded-none border-transparent px-0 py-0 focus-within:border-transparent'
-            : invalid
-              ? 'border-warning'
-              : 'border-white/35'
+            : filled
+              ? cn(
+                  'flex min-h-[55px] items-center rounded-[10px] border-white/10 bg-wallet-surface px-[15px] py-0',
+                  invalid && 'border-warning'
+                )
+              : invalid
+                ? 'border-warning'
+                : 'border-white/35'
         )}
       >
-        <div className={cn('flex min-h-8 items-center justify-between gap-3', hero && 'relative')}>
+        <div
+          className={cn(
+            'flex min-h-8 items-center justify-between gap-3',
+            hero && 'relative',
+            filled && 'w-full'
+          )}
+        >
           <input
             aria-label={ariaLabel}
             inputMode="decimal"
@@ -182,6 +254,7 @@ export function SendAmountInputCard({
             placeholder="0"
             className={cn(
               'min-w-0 flex-1 bg-transparent font-sans text-2xl tabular-nums text-foreground outline-none placeholder:text-muted/45',
+              filled && 'h-[53px] text-base font-medium',
               hero &&
                 'h-10 px-2 text-center text-[40px] font-semibold leading-[37.4px] tracking-[-0.015em]'
             )}
@@ -207,7 +280,7 @@ export function SendAmountInputCard({
         <div
           className={cn(
             'mt-3 flex min-w-0 items-center justify-between gap-3 text-xs leading-4',
-            hero && 'hidden'
+            (hero || filled) && 'hidden'
           )}
         >
           <span className="shrink-0 text-muted">{amountFiat ? `~${amountFiat}` : '—'}</span>
@@ -234,6 +307,14 @@ export function SendAmountInputCard({
           </div>
         </div>
       </div>
+      {filled && pending != null && safeBig(pending).gt(0) && (
+        <div className="flex min-w-0 items-center justify-end gap-1 text-[11px] text-muted">
+          <span className="min-w-0 break-all" title={pending}>
+            {formatTokenQuantity(pending)} {symbol} pending
+          </span>
+          <BalanceHelp kind="pending" />
+        </div>
+      )}
       {error && (
         <p
           id={`${testId ?? 'send-amount-card'}-error`}
@@ -253,7 +334,9 @@ export function SendAssetHeader({
   icon,
   networkName,
   nativeChain,
-  blockchain
+  blockchain,
+  onSelectAsset,
+  variant = 'default'
 }: {
   readonly assetId?: string
   readonly symbol: string
@@ -261,7 +344,43 @@ export function SendAssetHeader({
   readonly networkName: string
   readonly nativeChain?: 'zcash' | 'bitcoin' | 'solana' | 'near'
   readonly blockchain?: string
+  readonly onSelectAsset?: () => void
+  readonly variant?: 'default' | 'compact'
 }) {
+  if (variant === 'compact') {
+    const content = (
+      <>
+        <TokenIcon
+          assetId={assetId}
+          symbol={symbol}
+          icon={icon}
+          nativeChain={nativeChain}
+          blockchain={blockchain ?? nativeChain}
+          size={42}
+        />
+        <span className="flex max-w-full items-center gap-1.5 text-base font-medium leading-5">
+          <span className="max-w-32 truncate">{symbol}</span>
+          {onSelectAsset && <Icon icon="lucide:chevron-down" width={15} height={15} />}
+        </span>
+      </>
+    )
+    return (
+      <div data-testid="send-asset-header" className="flex justify-center py-1">
+        {onSelectAsset ? (
+          <button
+            type="button"
+            onClick={onSelectAsset}
+            aria-label={`Select send asset, ${symbol} on ${networkName}`}
+            className="flex min-w-0 flex-col items-center gap-2 text-center"
+          >
+            {content}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-col items-center gap-2 text-center">{content}</div>
+        )}
+      </div>
+    )
+  }
   return (
     <div
       data-testid="send-asset-header"
@@ -272,7 +391,7 @@ export function SendAssetHeader({
         symbol={symbol}
         icon={icon}
         nativeChain={nativeChain}
-        blockchain={blockchain}
+        blockchain={blockchain ?? nativeChain}
         size={48}
       />
       <p className="mt-2 text-base font-semibold leading-5">{symbol}</p>

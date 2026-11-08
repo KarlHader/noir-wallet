@@ -419,7 +419,7 @@ export function Home() {
   const multichainTotalUsd = multichainFiat.totalUsd
   const displayedChainSelection = resolvePortfolioChainSelection(
     multichainPortfolio,
-    !privateMode && activeTab === 'assets' ? persistedChainSelection : null,
+    activeTab === 'assets' ? persistedChainSelection : null,
     __ENABLED_CHAIN_FEATURE_FLAGS__
   )
   const displayedPortfolio = projectPortfolioForChains(multichainPortfolio, displayedChainSelection)
@@ -519,7 +519,8 @@ export function Home() {
     if (!effectiveWalletId || !effectiveAccountId) return
     const search = new URLSearchParams({
       walletId: effectiveWalletId,
-      accountId: effectiveAccountId
+      accountId: effectiveAccountId,
+      source: 'receive'
     })
     navigate.navigate(`/addresses-list?${search.toString()}`)
   }, [effectiveAccountId, effectiveWalletId, navigate])
@@ -941,7 +942,6 @@ export function Home() {
           >
             {multichainPortfolioEnabled ? (
               <MultichainPortfolioPanel
-                hideToolbar={privateMode}
                 mode={privateMode ? 'private' : 'public'}
                 domain={assetDomain === 'shield' ? 'all' : assetDomain}
                 walletId={effectiveWalletId}

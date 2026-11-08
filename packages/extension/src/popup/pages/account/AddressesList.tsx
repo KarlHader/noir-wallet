@@ -25,6 +25,7 @@ import {
   DialogTitle
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
+import { Tooltip } from '../../components/ui/tooltip'
 import type { AddressType } from '@/types/wallet'
 import {
   accountNetworksClient,
@@ -41,6 +42,23 @@ interface AddressQrTarget {
   readonly address: AccountNetworkAddressView
   readonly displayName?: string
   readonly confidential?: boolean
+}
+
+const PRIVATE_ADDRESS_RISK =
+  'Direct on-chain transfers can publicly link this private execution address to the funding address and reduce your privacy.'
+
+function PrivateAddressRisk() {
+  return (
+    <Tooltip content={PRIVATE_ADDRESS_RISK} side="bottom">
+      <button
+        type="button"
+        aria-label="Private address privacy risk"
+        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        <Icon icon="lucide:info" width={15} height={15} />
+      </button>
+    </Tooltip>
+  )
 }
 
 function AddressValue({
@@ -252,6 +270,7 @@ function AddressNetworkGroup({
             <span className="shrink-0 rounded bg-private/15 px-1.5 py-0.5 text-xs text-private">
               Private
             </span>
+            <PrivateAddressRisk />
           </h2>
           <AddressValue
             value={privateExecutionAddress}
@@ -369,6 +388,7 @@ export function AddressesList() {
   const accountId = searchParams.get('accountId')
   const scopedChainId = searchParams.get('chainId')
   const scopedReceive = searchParams.has('chainId')
+  const receiveView = searchParams.get('source') === 'receive'
   const requestedMode = searchParams.get('mode') === 'private' ? 'private' : 'public'
   const requestedPrivacy = searchParams.get('privacy')
   const shieldedZcashOnly =
@@ -580,41 +600,45 @@ export function AddressesList() {
             {scopedReceive && filteredNetworks.map(renderNetwork)}
             {!scopedReceive &&
               otherNetworks.filter(network => network.chain.family === 'zcash').map(renderNetwork)}
-            {!scopedReceive && showOtherChains && (
+            {!scopedReceive && !receiveView && showOtherChains && (
               <div className="mt-3 flex min-h-10 min-w-0 items-center justify-between gap-2 border-t border-border/40 pt-2">
                 <h2 className="min-w-0 text-sm text-wallet-secondary">Other chains</h2>
-                <div
-                  role="group"
-                  aria-label="Other chains address mode"
-                  className="flex h-8 shrink-0 gap-0.5 rounded-md bg-card p-0.5"
-                >
-                  <button
-                    type="button"
-                    aria-pressed={mode === 'public'}
-                    onClick={() => setMode('public')}
-                    className={cn(
-                      'wallet-interactive min-w-[55px] rounded px-1.5 text-xs font-medium hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
-                      mode === 'public' ? 'bg-foreground/15 text-foreground' : 'text-muted'
-                    )}
+                <div className="flex shrink-0 items-center gap-1">
+                  <div
+                    role="group"
+                    aria-label="Other chains address mode"
+                    className="flex h-8 shrink-0 gap-0.5 rounded-md bg-card p-0.5"
                   >
-                    Public
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={mode === 'private'}
-                    disabled={!hasPrivateAddresses}
-                    onClick={() => setMode('private')}
-                    className={cn(
-                      'wallet-interactive min-w-[55px] rounded px-1.5 text-xs font-medium enabled:hover:bg-white/10 enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-40',
-                      mode === 'private' ? 'bg-wallet-mode text-white' : 'text-muted'
-                    )}
-                  >
-                    Private
-                  </button>
+                    <button
+                      type="button"
+                      aria-pressed={mode === 'public'}
+                      onClick={() => setMode('public')}
+                      className={cn(
+                        'wallet-interactive min-w-[55px] rounded px-1.5 text-xs font-medium hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
+                        mode === 'public' ? 'bg-foreground/15 text-foreground' : 'text-muted'
+                      )}
+                    >
+                      Public
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={mode === 'private'}
+                      disabled={!hasPrivateAddresses}
+                      onClick={() => setMode('private')}
+                      className={cn(
+                        'wallet-interactive min-w-[55px] rounded px-1.5 text-xs font-medium enabled:hover:bg-white/10 enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-40',
+                        mode === 'private' ? 'bg-wallet-mode text-white' : 'text-muted'
+                      )}
+                    >
+                      Private
+                    </button>
+                  </div>
+                  {mode === 'private' && <PrivateAddressRisk />}
                 </div>
               </div>
             )}
-            {!scopedReceive && firstEvm && (
+            {!scopedReceive && receiveView && evmNetworks.map(renderNetwork)}
+            {!scopedReceive && !receiveView && firstEvm && (
               <div className="mt-2">
                 {evmExpanded ? (
                   <button
@@ -829,8 +853,7 @@ export function AddressesList() {
               {privateAddressAction?.qrTarget ? 'Show' : 'Copy'} private execution address?
             </DialogTitle>
             <DialogDescription className="leading-relaxed">
-              Direct transfers are not recommended. An on-chain transfer can publicly link the
-              funding address to this private execution address and reduce your privacy.
+              {PRIVATE_ADDRESS_RISK}
             </DialogDescription>
           </DialogHeader>
           {privateAddressAction && (

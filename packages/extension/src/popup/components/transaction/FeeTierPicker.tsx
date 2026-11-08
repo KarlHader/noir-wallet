@@ -82,7 +82,7 @@ export function FeeTierPicker({
           fast: feeByTier.fast ?? staticFeeFallbackZats('fast')
         }
 
-  const trailingIcon = <Icon icon="lucide:pencil" className="text-muted" />
+  const trailingIcon = <Icon icon="lucide:chevron-down" className="text-muted" />
   const feeAmount = loading ? (
     <div role="status" aria-label="Estimating network fee" className="inline-flex items-center">
       <Skeleton className="h-4 w-24" />

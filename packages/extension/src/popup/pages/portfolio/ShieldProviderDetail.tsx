@@ -281,7 +281,12 @@ function ShieldProviderContent() {
   return (
     <div className="page-container relative overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto pb-5">
-        <header className="relative bg-[radial-gradient(ellipse_75%_120px_at_50%_0%,#07574666,transparent)] px-4 pb-5 pt-[63px] text-center">
+        <header
+          className="relative px-4 pb-5 pt-[63px] text-center"
+          style={{
+            backgroundImage: `radial-gradient(ellipse 75% 120px at 50% 0%, ${info.tint}66, transparent)`
+          }}
+        >
           <button
             type="button"
             aria-label="Back"
@@ -345,7 +350,11 @@ function ShieldProviderContent() {
                 {networks.map(chain => (
                   <ChainIcon
                     key={chain.chain.id}
-                    chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName)}
+                    chain={resolveChainIconAlias(
+                      chain.chain.family,
+                      chain.chain.displayName,
+                      chain.chain.id
+                    )}
                     width={16}
                     height={16}
                     className="shrink-0"
@@ -456,7 +465,7 @@ function ShieldProviderContent() {
               {displayFiat}
             </p>
             <div className="mt-0.5 flex items-center justify-center gap-1.5 text-sm text-[var(--color-wallet-secondary)]">
-              <span>Total balance</span>
+              <span>Shield balance</span>
               {provider === 'near-confidential' && near.status === 'ready' && canManageNear && (
                 <button
                   type="button"

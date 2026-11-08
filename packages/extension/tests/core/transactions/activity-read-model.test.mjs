@@ -277,6 +277,63 @@ test.describe('Activity read model', () => {
         .map(item => item.id)
         .sort()
     ).toEqual([incomingPrivate.root.id, privateToMain.root.id].sort())
+
+    const executionAddressModes = new Map([
+      [mainToPrivate.root.intent.sender.address.toLowerCase(), 'Public'],
+      [peaAddress.toLowerCase(), 'Confidential']
+    ])
+    expect(
+      filterActivityItems({ ...selection, accountMode: 'main', executionAddressModes })
+        .map(item => item.id)
+        .sort()
+    ).toEqual([mainContractCall.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+    expect(
+      filterActivityItems({ ...selection, accountMode: 'private', executionAddressModes })
+        .map(item => item.id)
+        .sort()
+    ).toEqual([incomingPrivate.root.id, mainToPrivate.root.id, privateToMain.root.id].sort())
+  })
+
+  test('keeps Shield withdrawals visible across execution modes while preserving explicit filters', () => {
+    const withdrawal = graph({ id: 'transaction:shield-withdrawal' })
+    withdrawal.root.intent.shield = {
+      schemaVersion: 1,
+      operation: 'withdraw',
+      sourceDomain: 'shield',
+      destinationDomain: 'public'
+    }
+    const ordinaryPublic = graph({
+      id: 'transaction:ordinary-public',
+      hash: `0x${'8'.repeat(64)}`
+    })
+    const ordinaryPrivate = graph({
+      id: 'transaction:ordinary-private',
+      hash: `0x${'7'.repeat(64)}`
+    })
+    ordinaryPrivate.root.intent.sender = { chainId: evmChainId, address: peaAddress }
+    const model = buildActivityReadModel({
+      scope,
+      localGraphs: [withdrawal, ordinaryPublic, ordinaryPrivate],
+      privateExecutionAddresses: [peaAddress]
+    })
+    const selection = { items: model.items, selectedChainIds: [evmChainId] }
+    for (const [accountMode, ordinaryId] of [
+      ['main', ordinaryPublic.root.id],
+      ['private', ordinaryPrivate.root.id]
+    ]) {
+      expect(
+        filterActivityItems({ ...selection, accountMode })
+          .map(item => item.id)
+          .sort()
+      ).toEqual([withdrawal.root.id, ordinaryId].sort())
+    }
+    expect(
+      filterActivityItems({ ...selection, accountMode: 'private', domain: 'private' }).map(
+        item => item.id
+      )
+    ).toEqual([ordinaryPrivate.root.id])
+    expect(filterActivityItems({ ...selection, assetId: usdcAssetId })).toEqual([])
+    expect(filterActivityItems({ ...selection, selectedChainIds: [arbitrumChainId] })).toEqual([])
   })
 
   test('preserves a persisted pre-finality reorg through the strict Activity boundary', () => {
@@ -351,6 +408,15 @@ test.describe('Activity read model', () => {
 
     expect(model.items.map(item => item.id)).toEqual(['rpc:evm:external', 'zcash-v1:ABCDEF'])
     expect(model.items.find(item => item.id === 'zcash-v1:ABCDEF')?.source).toBe('zcash-v1')
+    for (const accountMode of ['main', 'private']) {
+      expect(
+        filterActivityItems({
+          items: model.items,
+          selectedChainIds: [zcashChainId],
+          accountMode
+        }).map(item => item.id)
+      ).toEqual(['zcash-v1:ABCDEF'])
+    }
   })
 
   test('keeps a wallet-created non-Zcash transaction ahead of its RPC duplicate', () => {

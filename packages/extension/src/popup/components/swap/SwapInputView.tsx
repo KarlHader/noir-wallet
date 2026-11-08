@@ -720,14 +720,15 @@ export function SwapInputView({
         onOpenChange={setRecipientSelectorOpen}
       >
         <DialogContent
-          className="w-[calc(100%-2rem)] max-w-[343px] gap-5 rounded-lg p-4"
+          position="bottom"
+          className="flex max-h-[calc(100dvh-56px)] flex-col gap-0 p-0"
           showCloseButton
         >
-          <DialogHeader className="text-left">
+          <DialogHeader className="shrink-0 px-5 pb-4 pt-5 text-left">
             <DialogTitle className="text-sm">Receive at</DialogTitle>
           </DialogHeader>
           {tokenOut && (
-            <div>
+            <div className="min-h-0 overflow-y-auto px-5">
               <SendRecipientInputCard
                 id="swap-recipient"
                 label="Address"
@@ -749,13 +750,15 @@ export function SwapInputView({
               {recipientError && <InlineError message={recipientError} className="mt-2" />}
             </div>
           )}
-          <Button
-            type="button"
-            onClick={() => setRecipientSelectorOpen(false)}
-            className="h-10 w-full"
-          >
-            Done
-          </Button>
+          <div className="shrink-0 p-5">
+            <Button
+              type="button"
+              onClick={() => setRecipientSelectorOpen(false)}
+              className="h-10 w-full"
+            >
+              Done
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </>

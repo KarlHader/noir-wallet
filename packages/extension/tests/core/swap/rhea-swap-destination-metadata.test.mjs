@@ -80,7 +80,8 @@ test('RHEA destination quote metadata survives binding and graph recovery for Ac
   assert.deepEqual(resolveActivityDisplayAmount(recovered.root.intent.counterAmount, new Map()), {
     assetId: destinationAssetId,
     symbol: 'USDC',
-    formatted: '1.2345'
+    formatted: '1.2345',
+    exact: '1.2345'
   })
 })
 

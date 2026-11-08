@@ -163,14 +163,14 @@ test.describe('Multichain Activity presentation', () => {
         schemaVersion: 1,
         direction: 'outgoing',
         primaryAmount: { assetId: sourceId, amountRaw: '1000000000000000000' },
-        counterAmount: { assetId: destinationId, amountRaw: '2500000' }
+        counterAmount: { assetId: destinationId, amountRaw: '2500001' }
       }
     }
 
     const route = getActivitySwapPresentation(item, assetMetadata, chainMetadata)
     expect(route).toEqual({
-      source: { assetId: sourceId, symbol: 'ETH', formatted: '1' },
-      destination: { assetId: destinationId, symbol: 'USDC', formatted: '2.5' },
+      source: { assetId: sourceId, symbol: 'ETH', formatted: '1', exact: '1' },
+      destination: { assetId: destinationId, symbol: 'USDC', formatted: '2.5', exact: '2.500001' },
       sourceNetwork: 'Ethereum',
       destinationNetwork: 'Arbitrum',
       sourceChainIconAlias: 'ethereum',

@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { getLifecycleStatusPresentation } from '../../../src/lib/transaction-status-presentation.ts'
-import { getActivityStatusPresentation } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
+import {
+  getActivityProgressSteps,
+  getActivityStatusPresentation
+} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
 import { getOnchainTransactionStatusPresentation } from '../../../src/popup/services/onchain-transaction-result.ts'
 import {
   getIntentsStatusCopy,
@@ -69,6 +72,7 @@ test('Intents Activity identifies the observed cross-chain stage', () => {
     source: 'wallet-v2',
     kind: 'swap',
     status: 'broadcast',
+    snapshot: { protocol: { provider: 'rhea-cross-chain-dex', router: 'nearintents' } },
     segments: [origin, relay, destination]
   }
   const cases = [
@@ -110,6 +114,19 @@ test('Intents Activity identifies the observed cross-chain stage', () => {
       segments: [origin, { ...relay, status: 'confirming' }, destination]
     })
   ).toMatchObject({ label: 'Waiting for Intents' })
+
+  const otherRouter = {
+    ...item,
+    status: 'confirming',
+    snapshot: { protocol: { provider: 'rhea-cross-chain-dex', router: 'lifi' } },
+    segments: [{ ...origin, status: 'final' }, { ...relay, status: 'confirming' }, destination]
+  }
+  expect(getActivityStatusPresentation(otherRouter)).toMatchObject({
+    label: 'Cross-chain processing'
+  })
+  expect(getActivityProgressSteps(otherRouter, chainId => chainId).map(step => step.label)).toEqual(
+    ['Origin transaction', 'Cross-chain relay', 'Destination transaction']
+  )
 })
 
 test('only exceptional states use warning or error, while cancellation stays neutral', () => {

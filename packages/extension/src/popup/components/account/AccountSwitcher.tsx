@@ -296,6 +296,25 @@ export function AccountSwitcher({
   const previewAnchor = useRef<HTMLButtonElement | null>(null)
   const accountList = useRef<HTMLDivElement>(null)
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addressesCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addressesCloseOnLeave = useRef(false)
+
+  const cancelAddressesClose = useCallback(() => {
+    if (addressesCloseTimer.current !== null) {
+      clearTimeout(addressesCloseTimer.current)
+      addressesCloseTimer.current = null
+    }
+  }, [])
+  const scheduleAddressesClose = useCallback(() => {
+    if (!addressesCloseOnLeave.current) return
+    cancelAddressesClose()
+    addressesCloseTimer.current = setTimeout(() => {
+      addressesCloseTimer.current = null
+      setAddressesOpen(false)
+    }, 180)
+  }, [cancelAddressesClose])
+
+  useEffect(() => cancelAddressesClose, [cancelAddressesClose])
 
   const cancelPreviewTimer = useCallback(() => {
     if (previewTimer.current !== null) {
@@ -426,6 +445,7 @@ export function AccountSwitcher({
   )
 
   const viewAddresses = (account: SwitcherAccount) => {
+    cancelAddressesClose()
     setAddressesOpen(false)
     setDrawerOpen(false)
     navigate(
@@ -600,6 +620,8 @@ export function AccountSwitcher({
       <Popover
         open={addressesOpen}
         onOpenChange={open => {
+          cancelAddressesClose()
+          if (!open) addressesCloseOnLeave.current = false
           setAddressesOpen(open)
           if (open) setDrawerOpen(false)
         }}
@@ -609,6 +631,23 @@ export function AccountSwitcher({
             type="button"
             aria-label="Show account addresses"
             title="Show account addresses"
+            onPointerEnter={event => {
+              if (event.pointerType === 'mouse' && !addressesOpen) {
+                cancelAddressesClose()
+                addressesCloseOnLeave.current = true
+                setAddressesOpen(true)
+              }
+            }}
+            onPointerLeave={event => {
+              if (event.pointerType === 'mouse') scheduleAddressesClose()
+            }}
+            onClick={event => {
+              if (addressesOpen && addressesCloseOnLeave.current) {
+                addressesCloseOnLeave.current = false
+                cancelAddressesClose()
+                event.preventDefault()
+              }
+            }}
             className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             <span className="min-w-0 truncate">{activeName}</span>
@@ -625,6 +664,15 @@ export function AccountSwitcher({
           alignOffset={-38}
           sideOffset={6}
           aria-label={`${activeName} addresses`}
+          onOpenAutoFocus={event => {
+            if (addressesCloseOnLeave.current) event.preventDefault()
+          }}
+          onPointerEnter={event => {
+            if (event.pointerType === 'mouse') cancelAddressesClose()
+          }}
+          onPointerLeave={event => {
+            if (event.pointerType === 'mouse') scheduleAddressesClose()
+          }}
           className="!z-[70] !w-[281px] !rounded-md !border-0 !bg-wallet-surface !p-0 !shadow-2xl"
         >
           {activeAccount && (

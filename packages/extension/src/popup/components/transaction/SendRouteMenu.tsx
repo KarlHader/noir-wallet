@@ -16,7 +16,7 @@ export function SendRouteMenu({
   route: SendRoute
   onChange: (route: SendRoute) => void
 }) {
-  const label = route === 'onchain' ? 'On-chain' : 'Cross-chain'
+  const label = route === 'onchain' ? 'Same-chain' : 'Cross-chain'
 
   return (
     <DropdownMenu>
@@ -39,7 +39,7 @@ export function SendRouteMenu({
             if (value === 'onchain' || value === 'cross-chain') onChange(value)
           }}
         >
-          <DropdownMenuRadioItem value="onchain">On-chain</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="onchain">Same-chain</DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="cross-chain">Cross-chain</DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>

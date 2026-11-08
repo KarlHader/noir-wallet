@@ -132,6 +132,11 @@ function significantFractionDigits(value: Big, maximum: number): number {
   return Math.min(maximum, Math.max(0, 3 - value.abs().e))
 }
 
+function tokenQuantityFractionDigits(value: Big): number {
+  const magnitude = value.abs()
+  return magnitude.gte(1_000) ? 2 : magnitude.gte(1) ? 4 : significantFractionDigits(value, 8)
+}
+
 /** Shared decimal rendering for explicit precision, without a Number conversion. */
 export function formatDecimalAmount(
   value: NumericValue,
@@ -157,28 +162,18 @@ export function formatDecimalAmount(
 export function formatTokenQuantity(value: NumericValue): string {
   const parsed = parseNumericValue(value)
   if (!parsed) return UNKNOWN
-  const magnitude = parsed.abs()
-  const decimals = magnitude.gte(1_000)
-    ? 2
-    : magnitude.gte(1)
-      ? 4
-      : significantFractionDigits(parsed, 8)
-  return formatDecimalAmount(value, { maximumFractionDigits: decimals })
+  return formatDecimalAmount(value, { maximumFractionDigits: tokenQuantityFractionDigits(parsed) })
 }
 
-/** A shortened review is always paired with the exact, copyable decimal value. */
+/** Review summaries share the quantity profile and retain the exact copyable value. */
 export function formatReviewAmount(value: NumericValue): FormattedReviewAmount {
   const parsed = parseNumericValue(value)
   if (!parsed) return { display: UNKNOWN, exact: null, full: UNKNOWN, isRounded: false }
   const exact = parsed.toFixed()
   const full = groupDecimal(exact)
-  const rounded = parsed.round(8, Big.roundDown)
-  const isRounded = !parsed.eq(rounded)
-  const display = isRounded
-    ? parsed.abs().lt('0.00000001')
-      ? belowMinimum(parsed, 8)
-      : `${groupDecimal(rounded.toFixed())}…`
-    : full
+  const decimals = tokenQuantityFractionDigits(parsed)
+  const isRounded = !parsed.eq(parsed.round(decimals, Big.roundDown))
+  const display = formatTokenQuantity(value)
   return { display, exact, full, isRounded }
 }
 

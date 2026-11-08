@@ -31,6 +31,7 @@ import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import { AccountDomainBadge } from '@/popup/components/account/AccountDomainBadge'
 
 import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
 import {
@@ -383,7 +384,7 @@ export function AssetDetail() {
     if (chain.chain.family === 'evm') {
       if (domain === 'public') query.set('sourceMode', 'main')
     }
-    navigate(`/send?${query.toString()}`)
+    navigate(`/send?${query.toString()}`, { state: { sendEntry: 'asset-detail' } })
   }
 
   const handleReceive = () => {
@@ -514,7 +515,11 @@ export function AssetDetail() {
     )
   }
 
-  const chainAlias = resolveChainIconAlias(chain.chain.family, chain.chain.displayName)
+  const chainAlias = resolveChainIconAlias(
+    chain.chain.family,
+    chain.chain.displayName,
+    chain.chain.id
+  )
   if (chain.chain.family === 'evm' && requestedDomain === 'shield') {
     return <Navigate to="/shield-provider?provider=near-confidential" replace />
   }
@@ -546,7 +551,10 @@ export function AssetDetail() {
     ? storageV2Account.walletSource.kind === 'hardware'
     : isZcashHardwareKeySource(currentWallet?.keySource)
   return (
-    <div className="page-container">
+    <div
+      className="page-container"
+      data-wallet-mode={searchParams.get('mode') === 'private' ? 'private' : 'public'}
+    >
       <CopyToast show={showToast} />
       <PageHeader title={asset.metadata.symbol} showBack onBack={goBack} />
 
@@ -571,6 +579,13 @@ export function AssetDetail() {
           >
             {detailAmount} {asset.metadata.symbol}
           </p>
+          {(detailDomain === 'public' ||
+            detailDomain === 'private' ||
+            detailDomain === 'shield') && (
+            <div className="mt-2">
+              <AccountDomainBadge domain={detailDomain} />
+            </div>
+          )}
           {priceStatus === 'loading' && detailFiat === null ? (
             <Skeleton className="mt-2 h-4 w-20" />
           ) : (
@@ -653,7 +668,7 @@ export function AssetDetail() {
               const raw = getAssetDomainRaw(asset, domain)
               return (
                 <div key={domain} className="flex items-center justify-between gap-4 text-sm">
-                  <span>{domain === 'public' ? 'Public' : 'Private'}</span>
+                  <AccountDomainBadge domain={domain} />
                   <span
                     className="min-w-0 truncate text-right"
                     title={
@@ -713,7 +728,7 @@ export function AssetDetail() {
           >
             <h2 className="text-sm font-semibold">Account balances</h2>
             <div className="flex items-center justify-between gap-4 text-sm">
-              <span>Shield</span>
+              <AccountDomainBadge domain="shield" />
               {zcashDisplay ? (
                 <span
                   className="min-w-0 break-all text-right text-sm"
@@ -731,7 +746,7 @@ export function AssetDetail() {
               )}
             </div>
             <div className="flex items-center justify-between gap-4 text-sm">
-              <span>Public</span>
+              <AccountDomainBadge domain="public" />
               {zcashDisplay ? (
                 <span
                   className="min-w-0 break-all text-right text-sm"

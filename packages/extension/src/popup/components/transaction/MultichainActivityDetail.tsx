@@ -45,6 +45,7 @@ import { DetailRow } from '../common/DetailRow'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { ChainIcon } from '../common/ChainIcon'
+import { AccountDomainBadge } from '../account/AccountDomainBadge'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
@@ -61,7 +62,6 @@ import {
 } from '@/popup/services/activity-transaction-references'
 import {
   getActivityDetailTitle,
-  getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getClusterBatchStatusLabel,
   getClusterChildStatusLabel,
@@ -84,6 +84,7 @@ import { resolveScopedZcashActivityTransaction } from '@/popup/services/zcash-ac
 import { InlineError } from '../common/InlineError'
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 
 interface MultichainActivityDetailProps {
   readonly item: ActivityItem
@@ -169,6 +170,13 @@ export function MultichainActivityDetail({
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const effectiveAccount = resolveEffectiveActiveAccountIdentity({
+    currentWalletId,
+    currentAccountId,
+    nativeAccount: activeSwapAccount
+  })
+  const effectiveWalletId = effectiveAccount?.walletId ?? null
+  const effectiveAccountId = effectiveAccount?.accountId ?? null
   const scopedZcashRecord =
     item.scope.keyDomainId === currentWalletId &&
     item.scope.accountId === currentAccountId &&
@@ -275,7 +283,16 @@ export function MultichainActivityDetail({
           const next = model?.items.find(
             candidate => candidate.id === item.id && candidate.source === item.source
           )
-          if (!cancelled && next && next.scope.accountId === item.scope.accountId) {
+          if (
+            !cancelled &&
+            effectiveWalletId === item.scope.keyDomainId &&
+            effectiveAccountId === item.scope.accountId &&
+            currentNetwork === network &&
+            model?.scope.keyDomainId === item.scope.keyDomainId &&
+            model.scope.accountId === item.scope.accountId &&
+            next?.scope.keyDomainId === item.scope.keyDomainId &&
+            next.scope.accountId === item.scope.accountId
+          ) {
             setVisibleItem(current => (next.updatedAt >= current.updatedAt ? next : current))
           }
         })
@@ -287,7 +304,92 @@ export function MultichainActivityDetail({
       cancelled = true
       chrome.runtime.onMessage.removeListener(listener)
     }
-  }, [item.id, item.scope.accountId, item.source])
+  }, [
+    effectiveAccountId,
+    currentNetwork,
+    effectiveWalletId,
+    item.id,
+    item.scope.accountId,
+    item.scope.keyDomainId,
+    item.source,
+    network
+  ])
+
+  const pendingEvmOrigin =
+    visibleItem.source === 'wallet-v2' &&
+    visibleItem.segments.some(
+      segment =>
+        segment.role === 'origin' &&
+        segment.target.kind === 'onchain' &&
+        segment.target.chainId.startsWith('eip155:') &&
+        (segment.status === 'signed' ||
+          segment.status === 'broadcast' ||
+          segment.status === 'confirming')
+    )
+  const pendingConfidentialActivity =
+    getConfidentialFundingPlanId(visibleItem.id) !== null &&
+    visibleItem.status !== 'final' &&
+    visibleItem.status !== 'failed'
+
+  useEffect(() => {
+    if (
+      (!pendingEvmOrigin && !pendingConfidentialActivity) ||
+      effectiveWalletId !== item.scope.keyDomainId ||
+      effectiveAccountId !== item.scope.accountId ||
+      currentNetwork !== network
+    )
+      return
+
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let recheckInFlight = false
+    const refreshActivity = async () => {
+      try {
+        const model = await evmWalletClient.getActivity('read')
+        const next = model?.items.find(
+          candidate => candidate.id === item.id && candidate.source === item.source
+        )
+        if (
+          active &&
+          model?.scope.keyDomainId === item.scope.keyDomainId &&
+          model.scope.accountId === item.scope.accountId &&
+          next?.scope.keyDomainId === item.scope.keyDomainId &&
+          next.scope.accountId === item.scope.accountId
+        ) {
+          setVisibleItem(current => (next.updatedAt >= current.updatedAt ? next : current))
+        }
+      } catch {
+        // Retry while the transaction is still pending.
+      } finally {
+        if (active) timer = setTimeout(() => void refreshActivity(), 3_000)
+      }
+      if (active && pendingEvmOrigin && !recheckInFlight) {
+        recheckInFlight = true
+        void chrome.runtime
+          .sendMessage({ type: 'RECHECK_FAST_PENDING_TRANSACTIONS', family: 'evm' })
+          .catch(() => {})
+          .finally(() => {
+            recheckInFlight = false
+          })
+      }
+    }
+    void refreshActivity()
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [
+    effectiveAccountId,
+    currentNetwork,
+    effectiveWalletId,
+    item.id,
+    item.scope.accountId,
+    item.scope.keyDomainId,
+    item.source,
+    network,
+    pendingEvmOrigin,
+    pendingConfidentialActivity
+  ])
   const { assetMetadata, chainMetadata, evmChainIds } = useMemo(
     () =>
       buildActivityPresentationCatalog({
@@ -339,6 +441,19 @@ export function MultichainActivityDetail({
     segment => segment.target.kind === 'onchain'
   )
   const primaryChainId = asset?.asset.chainId ?? resolveActivityChainId(visibleItem)
+  const senderMode = visibleItem.snapshot?.sender?.address
+    ? executionAddressModes.get(visibleItem.snapshot.sender.address.toLowerCase())
+    : undefined
+  const recipientMode = visibleItem.snapshot?.recipient?.address
+    ? executionAddressModes.get(visibleItem.snapshot.recipient.address.toLowerCase())
+    : undefined
+  const accountRoute =
+    visibleItem.kind === 'transfer' && senderMode && recipientMode && senderMode !== recipientMode
+      ? ([
+          senderMode === 'Confidential' ? 'private' : 'public',
+          recipientMode === 'Confidential' ? 'private' : 'public'
+        ] as const)
+      : null
   const interaction = getActivityInteractionPresentation(visibleItem, primaryChainId)
   const approval = getActivityApprovalDetails(visibleItem, assetMetadata)
   const title = swap
@@ -386,8 +501,8 @@ export function MultichainActivityDetail({
     activeConfidentialPlan !== null && needsConfidentialSubmissionCheck(activeConfidentialPlan)
   const canCheckSubmission =
     needsSubmissionCheck &&
-    activeConfidentialPlan.keyDomainId === currentWalletId &&
-    activeConfidentialPlan.accountId === currentAccountId &&
+    activeConfidentialPlan.keyDomainId === effectiveWalletId &&
+    activeConfidentialPlan.accountId === effectiveAccountId &&
     activeConfidentialPlan.network === currentNetwork
   const canRetrySubmission =
     activeConfidentialPlan !== null && canRetryConfidentialSubmission(activeConfidentialPlan)
@@ -700,7 +815,7 @@ export function MultichainActivityDetail({
               >
                 {swap.destination ? (
                   <AmountDisplay
-                    value={swap.destination.formatted}
+                    value={swap.destination.exact}
                     prefix="+"
                     symbol={swap.destination.symbol}
                   />
@@ -726,7 +841,7 @@ export function MultichainActivityDetail({
                 <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
                   {swap.destinationIsSettled ? 'Received' : 'Expected'}{' '}
                   <AmountDisplay
-                    value={swap.destination.formatted}
+                    value={swap.destination.exact}
                     prefix="+"
                     symbol={swap.destination.symbol}
                   />
@@ -818,14 +933,62 @@ export function MultichainActivityDetail({
               swap.destinationAccountMode &&
               swap.sourceAccountMode !== swap.destinationAccountMode && (
                 <DetailRow label="Account">
-                  <span className="text-sm">{getActivityAccountRouteLabel(swap)}</span>
+                  <span className="flex items-center gap-1.5">
+                    {swap.sourceAccountMode === 'External' ? (
+                      <span className="text-sm">External</span>
+                    ) : (
+                      <AccountDomainBadge
+                        domain={
+                          swap.sourceAccountMode === 'Confidential'
+                            ? 'private'
+                            : swap.sourceAccountMode === 'Shield'
+                              ? 'shield'
+                              : 'public'
+                        }
+                      />
+                    )}
+                    <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+                    <AccountDomainBadge
+                      domain={
+                        swap.destinationAccountMode === 'Confidential'
+                          ? 'private'
+                          : swap.destinationAccountMode === 'Shield'
+                            ? 'shield'
+                            : 'public'
+                      }
+                    />
+                  </span>
                 </DetailRow>
               )}
           </>
         ) : (
-          <DetailRow label="Network">
-            <span className="max-w-[220px] text-right text-sm">{primaryNetworkName}</span>
-          </DetailRow>
+          <>
+            <DetailRow label="Network">
+              <span className="max-w-[220px] text-right text-sm">{primaryNetworkName}</span>
+            </DetailRow>
+            {primaryChainId?.startsWith('eip155:') && (
+              <DetailRow label="Account">
+                <span className="flex items-center gap-1.5">
+                  {accountRoute ? (
+                    <>
+                      <AccountDomainBadge domain={accountRoute[0]} />
+                      <Icon
+                        icon="lucide:arrow-right"
+                        width={13}
+                        height={13}
+                        className="text-muted"
+                      />
+                      <AccountDomainBadge domain={accountRoute[1]} />
+                    </>
+                  ) : (
+                    <AccountDomainBadge
+                      domain={visibleItem.accountMode === 'private' ? 'private' : 'public'}
+                    />
+                  )}
+                </span>
+              </DetailRow>
+            )}
+          </>
         )}
         <DetailRow label="Date">
           <span className="max-w-[220px] text-right text-sm">
@@ -874,7 +1037,11 @@ export function MultichainActivityDetail({
         )}
         {visibleItem.kind === 'shield' && !visibleItem.snapshot?.shield && (
           <DetailRow label="Privacy">
-            <span className="text-sm">Transparent → Shielded</span>
+            <span className="flex items-center gap-1.5">
+              <AccountDomainBadge domain="public" />
+              <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+              <AccountDomainBadge domain="shield" />
+            </span>
           </DetailRow>
         )}
         {(visibleItem.kind !== 'shield' || visibleItem.snapshot?.shield) &&

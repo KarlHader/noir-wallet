@@ -80,7 +80,7 @@ export function AddAddressDialog({
           <DialogDescription className="sr-only">Save a recipient address</DialogDescription>
         </DialogHeader>
         <div className={cn('space-y-4 px-5', fullHeight && 'min-h-0 overflow-y-auto')}>
-          <label className="block space-y-2 text-sm">
+          <label className="flex flex-col gap-2 text-sm">
             <span>Name</span>
             <Input
               aria-label="Contact name"
@@ -95,7 +95,7 @@ export function AddAddressDialog({
             />
           </label>
           {networks.length > 1 ? (
-            <label className="block space-y-2 text-sm">
+            <label className="flex flex-col gap-2 text-sm">
               <span>Network</span>
               <select
                 aria-label="Network"
@@ -115,7 +115,7 @@ export function AddAddressDialog({
               </select>
             </label>
           ) : null}
-          <label className="block space-y-2 text-sm">
+          <label className="flex flex-col gap-2 text-sm">
             <span>Address</span>
             <Input
               aria-label="Address"

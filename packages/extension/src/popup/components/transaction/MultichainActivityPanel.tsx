@@ -279,7 +279,7 @@ export function MultichainActivityPanel({
     setVisibleLimit(ACTIVITY_DISPLAY_PAGE_SIZE)
     setOlderStatus('ready')
     olderRequestSequence.current += 1
-  }, [walletId, accountId, network, selectedChainKey, filterAssetId, filterDomain])
+  }, [walletId, accountId, network, selectedChainKey, filterAssetId, filterDomain, accountMode])
   const selectedAddress = selectedNetwork?.addresses.find(address => address.preferredForReceive)
   const selectedHistoryAddress =
     (filterDomain === 'private' || (!filterDomain && accountMode === 'private')) &&
@@ -296,9 +296,18 @@ export function MultichainActivityPanel({
         items: visibleModel?.items ?? [],
         selectedChainIds,
         assetId: filterAssetId,
-        domain: filterDomain
+        domain: filterDomain,
+        accountMode: filterAssetId ? undefined : accountMode,
+        executionAddressModes
       }),
-    [filterAssetId, filterDomain, selectedChainIds, visibleModel]
+    [
+      accountMode,
+      executionAddressModes,
+      filterAssetId,
+      filterDomain,
+      selectedChainIds,
+      visibleModel
+    ]
   )
   useEffect(() => {
     if (!focusTransactionId || !onItemClick) return
