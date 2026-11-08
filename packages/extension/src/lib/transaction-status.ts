@@ -58,7 +58,8 @@ export function resolveMinedTransactionStatus(
   minedHeight: number | null | undefined,
   chainTip: number,
   type: TransactionType,
-  trust: ConfirmationTrust = 'untrusted'
+  trust: ConfirmationTrust = 'untrusted',
+  scannedHeight: number = chainTip
 ): ConfirmationState {
   if (status === 'expired') return { status: 'failed' }
   if (status !== 'mined') return { status: 'pending' }
@@ -70,7 +71,10 @@ export function resolveMinedTransactionStatus(
 
   const confirmations = Math.max(0, chainTip - minedHeight + 1)
   return {
-    status: confirmations >= requiredConfirmations ? 'success' : 'confirming',
+    status:
+      confirmations >= requiredConfirmations && scannedHeight >= chainTip
+        ? 'success'
+        : 'confirming',
     confirmations,
     requiredConfirmations
   }
@@ -129,6 +133,7 @@ export function synchronizeInternalTransferConfirmations(
   transactions: Transaction[]
 ): Transaction[] {
   const sendConfirmationsByHash = new Map<string, number>()
+  const unsettledSendHashes = new Set<string>()
 
   for (const transaction of transactions) {
     if (
@@ -141,6 +146,7 @@ export function synchronizeInternalTransferConfirmations(
 
     const txHash = normalizeTxHash(transaction.txHash)
     if (!txHash) continue
+    if (transaction.status === 'confirming') unsettledSendHashes.add(txHash)
 
     const confirmations = Math.max(
       transaction.confirmations ?? 0,
@@ -164,7 +170,7 @@ export function synchronizeInternalTransferConfirmations(
     if (transaction.type === 'send' && !transaction.id.startsWith('wasm_')) {
       const requiredConfirmations = getRequiredConfirmations(transaction.type)
       return mergeTransactionUpdate(transaction, {
-        status: confirmationHint >= requiredConfirmations ? 'success' : 'confirming',
+        status: transaction.status === 'success' ? 'success' : 'confirming',
         confirmations: confirmationHint,
         requiredConfirmations
       })
@@ -176,7 +182,10 @@ export function synchronizeInternalTransferConfirmations(
     const confirmations = Math.max(transaction.confirmations ?? 0, confirmationHint)
 
     return mergeTransactionUpdate(transaction, {
-      status: confirmations >= requiredConfirmations ? 'success' : 'confirming',
+      status:
+        !unsettledSendHashes.has(txHash) && confirmations >= requiredConfirmations
+          ? 'success'
+          : 'confirming',
       confirmations,
       requiredConfirmations
     })

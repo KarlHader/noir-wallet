@@ -16,7 +16,7 @@ import { useAddressBookStore } from '@/store/address-book-store'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import type { WasmTransactionEntry } from '@/core/worker/types'
 import type { Transaction } from '@/types/wallet'
-import { resolveMinedTransactionStatus } from '@/lib/transaction-status'
+import { getZcashConfirmationHeight, resolveMinedTransactionStatus } from '@/lib/transaction-status'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { getZcashChainId } from '@/core/chains/registry'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
@@ -78,8 +78,11 @@ function useWasmTransaction(transactionId?: string) {
   const [wasmTx, setWasmTx] = useState<WasmTransactionEntry | null>(null)
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
 
   useEffect(() => {
+    let cancelled = false
+    setWasmTx(null)
     if (!transactionId?.startsWith('wasm_')) return
     const txidHex = transactionId.slice(5)
     chrome.runtime
@@ -87,10 +90,13 @@ function useWasmTransaction(transactionId?: string) {
       .then((resp: WasmTransactionEntry[] | undefined) => {
         if (!Array.isArray(resp)) return
         const found = resp.find(e => wasmTxidToHex(e.txid) === txidHex)
-        if (found) setWasmTx(found)
+        if (!cancelled) setWasmTx(found ?? null)
       })
       .catch(() => {})
-  }, [transactionId, walletId, accountId])
+    return () => {
+      cancelled = true
+    }
+  }, [transactionId, walletId, accountId, network])
 
   return wasmTx
 }
@@ -106,6 +112,12 @@ export function TransactionDetailContent({
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
+  const chainTip = useAccountDataStore(state =>
+    getZcashConfirmationHeight(state.getWalletSyncState(network, walletId ?? ''))
+  )
+  const scannedHeight = useAccountDataStore(
+    state => state.getWalletSyncState(network, walletId ?? '').currentHeight
+  )
   const accountKey =
     walletId && accountId ? buildAccountKey(network, walletId, accountId) : undefined
   const intentsProgress = useIntentsProgress(accountKey).find(
@@ -140,7 +152,6 @@ export function TransactionDetailContent({
       ts = Date.now()
     }
     const dateStr = new Date(ts).toLocaleString()
-    const chainTip = useAccountDataStore.getState().getCurrentSyncState().currentHeight
     const wasmType = isIncoming ? 'receive' : wasmTx.kind === 'shield' ? 'shield' : 'send'
     const receiveTrust =
       isIncoming && (wasmTx.kind === 'send' || wasmTx.kind === 'shield') ? 'trusted' : 'untrusted'
@@ -149,7 +160,8 @@ export function TransactionDetailContent({
       wasmTx.mined_height,
       chainTip,
       wasmType,
-      receiveTrust
+      receiveTrust,
+      scannedHeight
     )
     const statusCopy = getOnChainStatusCopy(
       confirmationState.status,

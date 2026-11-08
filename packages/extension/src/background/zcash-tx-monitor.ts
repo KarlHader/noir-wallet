@@ -478,32 +478,28 @@ export class ZcashTxMonitor {
   }
 
   private async updateConfirmingStatus(tx: PendingZcashTx, confirmations: number) {
-    try {
-      const txs = await loadTransactions(tx.accountKey)
-      const record = txs.find(t => t.id === tx.transactionId)
-      if (!record || record.status === 'success' || record.status === 'failed') return
+    const txs = await loadTransactions(tx.accountKey)
+    const record = txs.find(t => t.id === tx.transactionId)
+    if (!record || record.status === 'success' || record.status === 'failed') return
+    if (
+      record.status === 'confirming' ||
+      record.status === 'relay_confirmed' ||
+      record.status === 'pending'
+    ) {
+      const required = getRequiredConfirmations(tx.type ?? 'send')
       if (
-        record.status === 'confirming' ||
-        record.status === 'relay_confirmed' ||
-        record.status === 'pending'
+        record.status === 'confirming' &&
+        record.confirmations === confirmations &&
+        record.requiredConfirmations === required
       ) {
-        const required = getRequiredConfirmations(tx.type ?? 'send')
-        if (
-          record.status === 'confirming' &&
-          record.confirmations === confirmations &&
-          record.requiredConfirmations === required
-        ) {
-          return
-        }
-        await transactionRecorder.updateTransaction(tx.accountKey, tx.transactionId, {
-          status: 'confirming',
-          confirmations,
-          requiredConfirmations: required
-        })
-        console.log(TAG, `Tx ${tx.txHash} confirming (${confirmations}/${required})`)
+        return
       }
-    } catch (error) {
-      console.error(TAG, 'Failed to update confirming status:', error)
+      await transactionRecorder.updateTransaction(tx.accountKey, tx.transactionId, {
+        status: 'confirming',
+        confirmations,
+        requiredConfirmations: required
+      })
+      console.log(TAG, `Tx ${tx.txHash} confirming (${confirmations}/${required})`)
     }
   }
 
@@ -548,6 +544,9 @@ export class ZcashTxMonitor {
     this.finalizing.add(tx.txHash)
     try {
       if (status === 'success' && !tx.notificationPending && !alreadyTerminal) {
+        if (confirmations != null) {
+          await this.updateConfirmingStatus(tx, confirmations)
+        }
         if (!tx.settlementPending) {
           tx.settlementPending = true
           tx.requiredScanHeight = requiredScanHeight

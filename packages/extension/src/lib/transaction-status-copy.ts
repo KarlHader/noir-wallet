@@ -254,7 +254,13 @@ function getConfirmingStatusCopy(
   confirmations?: number,
   requiredConfirmations?: number
 ): TransactionStatusCopy {
-  const label = formatConfirmingStatus(type, confirmations, requiredConfirmations)
+  const label =
+    confirmations != null &&
+    requiredConfirmations != null &&
+    requiredConfirmations > 0 &&
+    confirmations >= requiredConfirmations
+      ? `Finalizing · ${confirmations} confirmations`
+      : formatConfirmingStatus(type, confirmations, requiredConfirmations)
   return { label, compactLabel: label, tone: 'neutral' }
 }
 

@@ -282,7 +282,8 @@ function wasmEntryToTransaction(
   entry: WasmTransactionEntry,
   account: AccountData,
   network: Network,
-  chainTip: number
+  chainTip: number,
+  scannedHeight: number
 ): Transaction {
   const txHash = wasmTxidToHex(entry.txid)
   const transparentReceive = Number(entry.transparent_received_zatoshis ?? 0) > 0
@@ -294,7 +295,8 @@ function wasmEntryToTransaction(
     entry.mined_height,
     chainTip,
     type,
-    receiveTrust
+    receiveTrust,
+    scannedHeight
   )
   const fromType: AddressType = transparentReceive ? 'transparent' : 'shielded'
   const zatoshis = safeBig(
@@ -2765,12 +2767,11 @@ export class BackgroundZcashWalletRuntime {
       const cacheKey = this.transactionHistoryCacheKey(walletId, accountId)
       this.wasmTxHistoryCache.set(cacheKey, entries)
       const accountKey = buildAccountKey(this.network, walletId, accountId)
-      const chainTip = getZcashConfirmationHeight(
-        this.accountDataStore.getWalletSyncState(this.network, walletId)
-      )
+      const syncState = this.accountDataStore.getWalletSyncState(this.network, walletId)
+      const chainTip = getZcashConfirmationHeight(syncState)
       const existingTransactions = await loadTransactions(accountKey)
       const wasmTransactions = entries.map(entry =>
-        wasmEntryToTransaction(entry, account, this.network, chainTip)
+        wasmEntryToTransaction(entry, account, this.network, chainTip, syncState.currentHeight)
       )
       const walletCreatedTxids = new Set(
         entries

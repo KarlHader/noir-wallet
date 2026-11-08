@@ -670,6 +670,18 @@ function findLatestOnchainEvidence(item: ActivityItem): TransactionSegmentEviden
 
 export function getActivityStatusPresentation(item: ActivityItem): ActivityStatusPresentation {
   if (isPartiallyCompleted(item)) return { label: 'Partially completed', tone: 'warning' }
+  const evidence = findLatestOnchainEvidence(item)
+  if (
+    item.source === 'zcash-v1' &&
+    item.status === 'confirming' &&
+    !item.reconfirming &&
+    evidence?.confirmations !== undefined &&
+    evidence.requiredConfirmations !== undefined &&
+    evidence.requiredConfirmations > 0 &&
+    evidence.confirmations >= evidence.requiredConfirmations
+  ) {
+    return { label: `Finalizing · ${evidence.confirmations} confirmations`, tone: 'neutral' }
+  }
   const relay = item.segments.find(
     segment =>
       segment.role === 'relay' &&
@@ -713,7 +725,7 @@ export function getActivityStatusPresentation(item: ActivityItem): ActivityStatu
   }
   return getLifecycleStatusPresentation({
     status: item.status,
-    evidence: findLatestOnchainEvidence(item),
+    evidence,
     failureCode: item.failureCode,
     reconfirming: item.reconfirming
   })

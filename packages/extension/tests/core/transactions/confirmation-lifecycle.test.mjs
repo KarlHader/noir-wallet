@@ -19,7 +19,8 @@ import {
   getRequiredConfirmations,
   getZcashConfirmationHeight,
   mergeTransactionUpdate,
-  resolveMinedTransactionStatus
+  resolveMinedTransactionStatus,
+  synchronizeInternalTransferConfirmations
 } from '../../../src/lib/transaction-status.ts'
 import {
   formatConfirmingStatus,
@@ -121,7 +122,16 @@ test.describe('ZIP-315 confirmation lifecycle', () => {
   test('mined history uses the known chain tip even while wallet scanning lags', () => {
     const minedHeight = 100
     const chainTip = getZcashConfirmationHeight({ currentHeight: 101, latestHeight: 106 })
-    expect(resolveMinedTransactionStatus('mined', minedHeight, chainTip, 'receive')).toEqual({
+    expect(
+      resolveMinedTransactionStatus('mined', minedHeight, chainTip, 'send', 'untrusted', 101)
+    ).toEqual({
+      status: 'confirming',
+      confirmations: 7,
+      requiredConfirmations: 3
+    })
+    expect(
+      resolveMinedTransactionStatus('mined', minedHeight, chainTip, 'receive', 'untrusted', 101)
+    ).toEqual({
       status: 'confirming',
       confirmations: 7,
       requiredConfirmations: 10
@@ -131,9 +141,18 @@ test.describe('ZIP-315 confirmation lifecycle', () => {
         'mined',
         minedHeight,
         getZcashConfirmationHeight({ currentHeight: 101, latestHeight: 109 }),
-        'receive'
+        'receive',
+        'untrusted',
+        101
       )
-    ).toEqual({ status: 'success', confirmations: 10, requiredConfirmations: 10 })
+    ).toEqual({ status: 'confirming', confirmations: 10, requiredConfirmations: 10 })
+    expect(
+      resolveMinedTransactionStatus('mined', minedHeight, 109, 'receive', 'untrusted', 109)
+    ).toEqual({
+      status: 'success',
+      confirmations: 10,
+      requiredConfirmations: 10
+    })
     expect(getZcashConfirmationHeight({ currentHeight: 110, latestHeight: 109 })).toBe(110)
     expect(getZcashConfirmationHeight({ currentHeight: 101, latestHeight: Number.NaN })).toBe(101)
   })
@@ -160,6 +179,29 @@ test.describe('ZIP-315 confirmation lifecycle', () => {
 })
 
 test.describe('Transaction status monotonicity', () => {
+  test('internal transfer confirmations do not finalize before the sending wallet settles', () => {
+    const send = tx({ status: 'confirming', confirmations: 7, requiredConfirmations: 3 })
+    const receive = tx({
+      id: 'rpc_treceive_abc123',
+      type: 'receive',
+      fromType: 'transparent',
+      status: 'confirming',
+      confirmations: 2,
+      requiredConfirmations: 3
+    })
+
+    expect(synchronizeInternalTransferConfirmations([send, receive])).toMatchObject([
+      { status: 'confirming', confirmations: 7 },
+      { status: 'confirming', confirmations: 7 }
+    ])
+    expect(
+      synchronizeInternalTransferConfirmations([{ ...send, status: 'success' }, receive])
+    ).toMatchObject([
+      { status: 'success', confirmations: 7 },
+      { status: 'success', confirmations: 7 }
+    ])
+  })
+
   test('stale relay updates cannot downgrade a successful transaction', () => {
     const successful = tx({ status: 'success', notified: true })
     expect(
