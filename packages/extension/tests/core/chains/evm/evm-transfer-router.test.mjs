@@ -12,6 +12,14 @@ const scope = Object.freeze({
 
 function controller(chainId, calls) {
   return {
+    estimateTransferFee: async intent => {
+      calls.push(['estimate-transfer', chainId, intent.assetId])
+      return { chainId, maximumFeeWei: '63000' }
+    },
+    estimateContractCallFee: async intent => {
+      calls.push(['estimate-call', chainId, intent.chainId])
+      return { chainId, maximumFeeWei: '63000' }
+    },
     prepare: async (intent, nearIntents, feeTier, executionMode) => {
       calls.push(['prepare', chainId, intent.assetId, nearIntents, feeTier, executionMode])
       return {
@@ -112,6 +120,31 @@ test('routes wallet transfers by the exact CAIP-2 chain in the AssetId', async (
       recipient: '0x2222222222222222222222222222222222222222',
       amountRaw: '1'
     })
+  ).rejects.toThrow(/network is unavailable/i)
+})
+
+test('routes read-only fee requests only to the requested network', async () => {
+  const { router, calls } = createRouter(new Map())
+  const intent = {
+    assetId: `${base}/slip44:60`,
+    recipient: '0x2222222222222222222222222222222222222222',
+    amountRaw: '1'
+  }
+  await expect(router.estimateTransferFee(intent)).resolves.toMatchObject({ chainId: base })
+  await expect(
+    router.estimateContractCallFee({
+      chainId: ethereum,
+      contractAddress: intent.recipient,
+      valueRaw: '0',
+      calldata: '0x1234'
+    })
+  ).resolves.toMatchObject({ chainId: ethereum })
+  expect(calls).toEqual([
+    ['estimate-transfer', base, intent.assetId],
+    ['estimate-call', ethereum, ethereum]
+  ])
+  await expect(
+    router.estimateTransferFee({ ...intent, assetId: 'eip155:999/slip44:60' })
   ).rejects.toThrow(/network is unavailable/i)
 })
 

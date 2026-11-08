@@ -3,23 +3,11 @@ import { expect } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
 import { BUILTIN_EVM_NETWORKS } from '../../../src/config/networks.ts'
-
-const sdkExampleCatalogUrl = new URL(
-  '../../../../sdk/example/src/evm-network-catalog.ts',
-  import.meta.url
-)
+import { EVM_NETWORK_EXAMPLES } from '../../../../sdk/example/src/evm-network-catalog.ts'
 const sdkProviderExamplesUrl = new URL(
   '../../../../sdk/example/src/ProviderExamples.tsx',
   import.meta.url
 )
-
-function extractExampleChainIds(source, mode) {
-  return [
-    ...source.matchAll(new RegExp(`network\\('${mode}',[\\s\\S]*?chainId: '(0x[0-9a-f]+)'`, 'g'))
-  ]
-    .map(match => match[1])
-    .sort()
-}
 
 function toHexChainIds(networks) {
   return networks
@@ -27,11 +15,13 @@ function toHexChainIds(networks) {
     .sort()
 }
 
-test('keeps the SDK Example EVM networks aligned with the wallet catalog', async () => {
-  const source = await readFile(sdkExampleCatalogUrl, 'utf8')
-
+test('keeps the SDK Example EVM networks aligned with the wallet catalog', () => {
   for (const mode of ['mainnet', 'testnet']) {
-    expect(extractExampleChainIds(source, mode)).toEqual(toHexChainIds(BUILTIN_EVM_NETWORKS[mode]))
+    expect(
+      EVM_NETWORK_EXAMPLES.filter(network => network.mode === mode)
+        .map(network => network.request.chainId)
+        .sort()
+    ).toEqual(toHexChainIds(BUILTIN_EVM_NETWORKS[mode]))
   }
 })
 

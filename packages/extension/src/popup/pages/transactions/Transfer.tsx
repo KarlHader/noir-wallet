@@ -659,6 +659,7 @@ function TransferForm() {
   const nativeMaximumRequired =
     maxSelected && selected?.asset.asset.kind === 'native' && from !== 'shield'
   const maximum = useTransferMaximum({
+    prefetch: selected?.chain.chain.family === 'evm',
     enabled: nativeMaximumEnabled,
     requestKey: `${scopeKey}:${selected?.asset.asset.id ?? ''}:${direction}:${source?.availableRaw ?? '0'}`,
     fallback: () =>

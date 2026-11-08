@@ -243,6 +243,68 @@ function activity(status = 'confirming') {
 }
 
 test.describe('Popup EVM wallet client', () => {
+  test('validates read-only fee estimates against the requested chain and fee arithmetic', async () => {
+    const calls = []
+    const estimate = {
+      chainId,
+      maximumFeeWei: '63000',
+      maxFeePerGasWei: '3',
+      maxPriorityFeePerGasWei: '1',
+      gasLimit: '21000'
+    }
+    const client = createEvmWalletClient(async message => {
+      calls.push(message)
+      return { result: estimate }
+    })
+    const intent = { assetId: `${chainId}/slip44:60`, recipient, amountRaw: '1' }
+    await expect(client.estimateTransferFee(intent, { feeTier: 'fast' })).resolves.toEqual(estimate)
+    const trusted = createEvmWalletClient(async () => ({
+      result: { ...estimate, amountIndependent: true }
+    }))
+    await expect(trusted.estimateTransferFee(intent)).resolves.toMatchObject({
+      amountIndependent: true
+    })
+    const malformedFlag = createEvmWalletClient(async () => ({
+      result: { ...estimate, amountIndependent: 'true' }
+    }))
+    await expect(malformedFlag.estimateTransferFee(intent)).rejects.toMatchObject({
+      code: 'invalid-response'
+    })
+    const wrongGas = createEvmWalletClient(async () => ({
+      result: { ...estimate, gasLimit: '21001', maximumFeeWei: '63003', amountIndependent: true }
+    }))
+    await expect(wrongGas.estimateTransferFee(intent)).rejects.toMatchObject({
+      code: 'invalid-response'
+    })
+    await expect(
+      trusted.estimateContractCallFee({
+        chainId,
+        contractAddress: recipient,
+        valueRaw: '1',
+        calldata: '0x1234'
+      })
+    ).rejects.toMatchObject({ code: 'invalid-response' })
+    expect(calls).toEqual([
+      {
+        type: 'ESTIMATE_EVM_TRANSFER_FEE',
+        intent,
+        feeSelection: { kind: 'tier', tier: 'fast' },
+        executionMode: 'main'
+      }
+    ])
+    const wrongChain = createEvmWalletClient(async () => ({
+      result: { ...estimate, chainId: 'eip155:8453' }
+    }))
+    await expect(wrongChain.estimateTransferFee(intent)).rejects.toMatchObject({
+      code: 'invalid-response'
+    })
+    const wrongFee = createEvmWalletClient(async () => ({
+      result: { ...estimate, maximumFeeWei: '1' }
+    }))
+    await expect(wrongFee.estimateTransferFee(intent)).rejects.toMatchObject({
+      code: 'invalid-response'
+    })
+  })
   test('binds an allowance read to its chain and selected owner and rejects malformed values', async () => {
     const messages = []
     const client = createEvmWalletClient(async message => {

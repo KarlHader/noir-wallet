@@ -1760,6 +1760,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     BigInt(walletOwnedSource.asset.balance.availableRaw) > 0n
   )
   const routeMaximum = useTransferMaximum({
+    prefetch: walletOwnedSource?.family === 'evm',
     enabled: canEstimateRouteMaximum,
     requestKey: `${walletSourcesScope}:${swap.tokenIn?.assetId}:${swap.tokenOut?.assetId}:${walletOwnedSource?.refundAddress}:${walletOwnedSource?.asset.balance.availableRaw}:${resolvedRecipientAddress}:${executionSourceMode}:${destinationMode}:${quotePurpose}:${swap.slippage}:${networkFeeTier}`,
     estimate: async () => {
@@ -2156,43 +2157,46 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     const tokenOut = swap.tokenOut
     swap.setIsQuoting(true)
 
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const result = await rheaSwapClient.quote(liveQuoteRequest.request, quotePurpose)
-          if (requestSequence !== quoteRequestSequence.current) return
-          setQuoteResult(result)
-          setLiveQuoteKey(liveQuoteRequest.key)
-          setQuoteReceivedAt(result.receivedAt)
-          swap.setAmountOut(formatBaseUnitDecimalAmount(result.estimatedOut, tokenOut.decimals))
-          swap.setDepositAddress('')
-        } catch (error) {
-          if (requestSequence !== quoteRequestSequence.current) return
-          const classified = classifyError(error)
-          console.error('[Private Transfer] Quote failed', {
-            flow: isPrivateFunding
-              ? 'main-to-private'
-              : privateTransferRequested
-                ? 'private-transfer'
-                : 'swap',
-            sourceAsset: tokenIn.assetId,
-            destinationAsset: tokenOut.assetId,
-            errorName: error instanceof Error ? error.name : 'UnknownError',
-            errorMessage: classified.technicalMessage
-          })
-          reviewAfterQuoteRefresh.current = null
-          setQuoteResult(null)
-          setLiveQuoteKey(null)
-          setQuoteReceivedAt(null)
-          swap.setAmountOut('')
-          swap.setDepositAddress('')
-          swap.setQuoteError(getRheaSwapErrorMessage(error))
-          setQuoteRetryable(classified.retryable)
-        } finally {
-          if (requestSequence === quoteRequestSequence.current) swap.setIsQuoting(false)
-        }
-      })()
-    }, LIVE_QUOTE_DEBOUNCE_MS)
+    const timer = window.setTimeout(
+      () => {
+        void (async () => {
+          try {
+            const result = await rheaSwapClient.quote(liveQuoteRequest.request, quotePurpose)
+            if (requestSequence !== quoteRequestSequence.current) return
+            setQuoteResult(result)
+            setLiveQuoteKey(liveQuoteRequest.key)
+            setQuoteReceivedAt(result.receivedAt)
+            swap.setAmountOut(formatBaseUnitDecimalAmount(result.estimatedOut, tokenOut.decimals))
+            swap.setDepositAddress('')
+          } catch (error) {
+            if (requestSequence !== quoteRequestSequence.current) return
+            const classified = classifyError(error)
+            console.error('[Private Transfer] Quote failed', {
+              flow: isPrivateFunding
+                ? 'main-to-private'
+                : privateTransferRequested
+                  ? 'private-transfer'
+                  : 'swap',
+              sourceAsset: tokenIn.assetId,
+              destinationAsset: tokenOut.assetId,
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+              errorMessage: classified.technicalMessage
+            })
+            reviewAfterQuoteRefresh.current = null
+            setQuoteResult(null)
+            setLiveQuoteKey(null)
+            setQuoteReceivedAt(null)
+            swap.setAmountOut('')
+            swap.setDepositAddress('')
+            swap.setQuoteError(getRheaSwapErrorMessage(error))
+            setQuoteRetryable(classified.retryable)
+          } finally {
+            if (requestSequence === quoteRequestSequence.current) swap.setIsQuoting(false)
+          }
+        })()
+      },
+      maxSelected ? 0 : LIVE_QUOTE_DEBOUNCE_MS
+    )
 
     return () => {
       window.clearTimeout(timer)
@@ -2200,6 +2204,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   }, [
     viewStep,
     quoteRefreshTick,
+    maxSelected,
     liveQuoteRequest,
     resolvedRefundAddress,
     resolvedRecipientAddress,
@@ -2350,19 +2355,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
 
           const transferTarget = review.execution.target
-          const feeQuote = await zcashWalletRuntimeClient.getFeeQuote()
+          const maximumEstimate = maxSelected
+            ? await measure('zcash-estimate-maximum', () =>
+                maxTransfer.estimateForTarget(transferTarget)
+              )
+            : null
+          if (requestSequence !== quoteRequestSequence.current) return
+          const feeQuote =
+            maximumEstimate?.feeQuote ?? (await zcashWalletRuntimeClient.getFeeQuote())
           const marginalFeeZats = marginalFeeForTier(feeTier, feeQuote.standardMarginalFeeZats)
           if (maxSelected) {
-            const estimate = await measure('zcash-estimate-maximum', () =>
-              zcashWalletRuntimeClient.estimateMaxTransfer({
-                to: transferTarget,
-                fundingSource,
-                marginalFeeZats,
-                feeQuoteId: feeQuote.id,
-                debugRequestId: requestId
-              })
-            ).catch(() => null)
-            if (requestSequence !== quoteRequestSequence.current) return
+            const estimate = maximumEstimate
             const exactMax = estimate
               ? formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS)
               : null
@@ -2758,6 +2761,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       routeMaximum.value,
       routeMaximum.fallbackUsed,
       maxTransfer.update,
+      maxTransfer.estimateForTarget,
       zcashMaximumScope
     ]
   )
@@ -3074,12 +3078,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             currentQuote.id !== reviewedFeeQuote.id ||
             reviewedFeeQuote.expiresAt <= Date.now()
           ) {
-            if (isMaxFeeMode) void maxTransfer.request()
+            if (isMaxFeeMode) void maxTransfer.request(true)
             else feeEstimate.retry()
             return
           }
         } catch {
-          if (isMaxFeeMode) void maxTransfer.request()
+          if (isMaxFeeMode) void maxTransfer.request(true)
           else feeEstimate.retry()
           return
         }

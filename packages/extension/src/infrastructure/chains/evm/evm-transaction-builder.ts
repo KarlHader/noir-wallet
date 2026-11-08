@@ -145,6 +145,15 @@ export interface BuildEvmContractCallInput {
   readonly now?: () => number
 }
 
+export interface EvmFeeEstimate {
+  readonly chainId: ChainId
+  readonly maximumFeeWei: string
+  readonly maxFeePerGasWei: string
+  readonly maxPriorityFeePerGasWei: string
+  readonly gasLimit: string
+  readonly amountIndependent?: boolean
+}
+
 export interface BuildEvmCancelInput {
   readonly chainId: ChainId
   readonly chainAccount: ChainAccount
@@ -748,6 +757,23 @@ interface PreparedEvmCall {
   readonly transactionInput: string
 }
 
+function resolveExecutionAccount(
+  input: Pick<BuildEvmTransferInput, 'chainId' | 'chainAccount' | 'executionAccount'>
+) {
+  if (input.executionAccount === undefined) {
+    return parseEvmAccountBinding(input.chainAccount, input.chainId)
+  }
+  if (
+    !/^0x[0-9a-fA-F]{40}$/.test(input.executionAccount.address) ||
+    !Number.isSafeInteger(input.executionAccount.addressIndex) ||
+    input.executionAccount.addressIndex < 0 ||
+    input.executionAccount.addressIndex > 0x7fffffff
+  ) {
+    throw new Error('Invalid PEA execution account')
+  }
+  return input.executionAccount
+}
+
 function createContractCall(input: BuildEvmContractCallInput, from: string): PreparedEvmCall {
   const intent = parseEvmContractCallIntent(input.intent)
   if (intent.chainId !== input.chainId) invalidIntent('EVM contract call is on another chain')
@@ -772,48 +798,18 @@ function createContractCall(input: BuildEvmContractCallInput, from: string): Pre
   })
 }
 
-async function buildPreparedEvmTransaction(
+async function estimatePreparedCallFee(
   input: Pick<
     BuildEvmTransferInput,
-    | 'chainId'
-    | 'chainAccount'
-    | 'executionAccount'
-    | 'rpc'
-    | 'feeSelection'
-    | 'feeTier'
-    | 'nonceFloor'
-    | 'signal'
-    | 'now'
+    'chainId' | 'executionAccount' | 'rpc' | 'feeSelection' | 'feeTier' | 'signal'
   >,
-  preparedCall: (from: string) => PreparedEvmCall
-): Promise<PreparedEvmTransfer> {
-  const account =
-    input.executionAccount === undefined
-      ? parseEvmAccountBinding(input.chainAccount, input.chainId)
-      : (() => {
-          if (
-            !/^0x[0-9a-fA-F]{40}$/.test(input.executionAccount.address) ||
-            !Number.isSafeInteger(input.executionAccount.addressIndex) ||
-            input.executionAccount.addressIndex < 0 ||
-            input.executionAccount.addressIndex > 0x7fffffff
-          ) {
-            throw new Error('Invalid PEA execution account')
-          }
-          return input.executionAccount
-        })()
-  const transactionCall = preparedCall(account.address)
-  await input.rpc.assertExpectedChain(input.signal)
-
-  const [pendingNonceRaw, nativeBalanceRaw] = await Promise.all([
-    input.rpc.getPendingNonce(account.address, input.signal),
-    input.rpc.getNativeBalance(account.address, input.signal)
+  transactionCall: PreparedEvmCall
+) {
+  const [nativeBalanceRaw, priorityFeeRaw, blockFee] = await Promise.all([
+    input.rpc.getNativeBalance(transactionCall.call.from, input.signal),
+    input.rpc.getMaximumPriorityFeePerGas(input.signal),
+    input.rpc.getLatestBlockFee(input.signal)
   ])
-  const rpcNonce = parseRpcUint64(pendingNonceRaw, 'EVM pending nonce')
-  const nonceFloor =
-    input.nonceFloor === undefined
-      ? rpcNonce
-      : parseRpcUint64(input.nonceFloor, 'EVM local nonce floor')
-  const nonce = rpcNonce > nonceFloor ? rpcNonce : nonceFloor
   const nativeBalance = parseRpcUint256(nativeBalanceRaw, 'EVM native balance')
   const transactionValue = BigInt(transactionCall.transactionValue)
   if (
@@ -822,10 +818,7 @@ async function buildPreparedEvmTransaction(
   ) {
     insufficientFunds(minimumFundingDetails(nativeBalance, transactionValue))
   }
-  let simulationResult: string
-  try {
-    simulationResult = await input.rpc.simulateCall(transactionCall.call, input.signal)
-  } catch (error) {
+  const simulation = input.rpc.simulateCall(transactionCall.call, input.signal).catch(error => {
     if (isInsufficientFundsRpcError(error)) insufficientFunds()
     if (error instanceof EvmRpcError && error.code !== 'rpc-error') throw error
     throw new EvmTransactionError(
@@ -834,37 +827,27 @@ async function buildPreparedEvmTransaction(
       undefined,
       error instanceof EvmRpcError ? { code: error.rpcCode, method: error.rpcMethod } : undefined
     )
-  }
-  assertSimulationResult(transactionCall.kind, simulationResult)
-
-  let gasEstimate: string
-  try {
-    gasEstimate = await input.rpc.estimateGas(transactionCall.call, input.signal)
-  } catch (error) {
+  })
+  const gas = input.rpc.estimateGas(transactionCall.call, input.signal).catch(error => {
     if (isInsufficientFundsRpcError(error)) insufficientFunds()
     if (error instanceof EvmRpcError && error.code === 'rpc-error') {
       throw new EvmTransactionError(
         'simulation-failed',
         'EVM gas estimation rejected the call',
         undefined,
-        {
-          code: error.rpcCode,
-          method: error.rpcMethod
-        }
+        { code: error.rpcCode, method: error.rpcMethod }
       )
     }
     throw error
-  }
+  })
+  const [simulationResult, gasEstimate] = await Promise.all([simulation, gas])
+  assertSimulationResult(transactionCall.kind, simulationResult)
   const estimatedGas = parseRpcUint64(gasEstimate, 'EVM gas estimate')
   if (estimatedGas === 0n) {
     throw new EvmRpcError('invalid-response', 'EVM gas estimate must be positive')
   }
   const gasLimit = gasLimitWithMargin(estimatedGas, transactionCall.kind)
-  const priorityFee = parseRpcUint64(
-    await input.rpc.getMaximumPriorityFeePerGas(input.signal),
-    'EVM maximum priority fee per gas'
-  )
-  const blockFee = await input.rpc.getLatestBlockFee(input.signal)
+  const priorityFee = parseRpcUint64(priorityFeeRaw, 'EVM maximum priority fee per gas')
   const baseFee = parseRpcUint64(blockFee.baseFeePerGas, 'EVM base fee per gas')
   const blockNumber = parseRpcUint64(blockFee.blockNumber, 'EVM block number')
   const feeQuote = deriveEvmFeeTierQuote({
@@ -896,6 +879,87 @@ async function buildPreparedEvmTransaction(
       })
     )
   }
+  return { gasLimit, feeQuote, blockNumber }
+}
+
+async function estimateEvmCall(
+  input: BuildEvmTransferInput | BuildEvmContractCallInput,
+  preparedCall: (from: string) => PreparedEvmCall
+): Promise<EvmFeeEstimate> {
+  const account = resolveExecutionAccount(input)
+  const call = preparedCall(account.address)
+  await input.rpc.assertExpectedChain(input.signal)
+  const codeIsEmpty =
+    call.kind === 'native-transfer' && input.rpc.getCode
+      ? input.rpc.getCode(call.transactionTo, input.signal).then(
+          code => code === '0x',
+          () => false
+        )
+      : Promise.resolve(false)
+  const [fee, recipientHasNoCode] = await Promise.all([
+    estimatePreparedCallFee(input, call),
+    codeIsEmpty
+  ])
+  const { gasLimit, feeQuote } = fee
+  return Object.freeze({
+    chainId: input.chainId,
+    maximumFeeWei: (gasLimit * feeQuote.maxFeePerGas).toString(),
+    maxFeePerGasWei: feeQuote.maxFeePerGas.toString(),
+    maxPriorityFeePerGasWei: feeQuote.maxPriorityFeePerGas.toString(),
+    gasLimit: gasLimit.toString(),
+    ...(call.kind === 'native-transfer' &&
+    gasLimit === EVM_SIMPLE_TRANSFER_GAS &&
+    recipientHasNoCode
+      ? { amountIndependent: true }
+      : {})
+  })
+}
+
+export function estimateEvmTransferFee(input: BuildEvmTransferInput): Promise<EvmFeeEstimate> {
+  return estimateEvmCall(input, from => ({
+    ...createTransferCall(input, from),
+    recipient: input.intent.recipient,
+    amountRaw: input.intent.amountRaw
+  }))
+}
+
+export function estimateEvmContractCallFee(
+  input: BuildEvmContractCallInput
+): Promise<EvmFeeEstimate> {
+  return estimateEvmCall(input, from => createContractCall(input, from))
+}
+
+async function buildPreparedEvmTransaction(
+  input: Pick<
+    BuildEvmTransferInput,
+    | 'chainId'
+    | 'chainAccount'
+    | 'executionAccount'
+    | 'rpc'
+    | 'feeSelection'
+    | 'feeTier'
+    | 'nonceFloor'
+    | 'signal'
+    | 'now'
+  >,
+  preparedCall: (from: string) => PreparedEvmCall
+): Promise<PreparedEvmTransfer> {
+  const account = resolveExecutionAccount(input)
+  const transactionCall = preparedCall(account.address)
+  await input.rpc.assertExpectedChain(input.signal)
+
+  const [pendingNonceRaw, fee] = await Promise.all([
+    input.rpc.getPendingNonce(account.address, input.signal),
+    estimatePreparedCallFee(input, transactionCall)
+  ])
+  const rpcNonce = parseRpcUint64(pendingNonceRaw, 'EVM pending nonce')
+  const nonceFloor =
+    input.nonceFloor === undefined
+      ? rpcNonce
+      : parseRpcUint64(input.nonceFloor, 'EVM local nonce floor')
+  const nonce = rpcNonce > nonceFloor ? rpcNonce : nonceFloor
+  const { gasLimit, feeQuote, blockNumber } = fee
+  const maximumFee = feeQuote.maxFeePerGas
 
   return Object.freeze({
     kind: transactionCall.kind,

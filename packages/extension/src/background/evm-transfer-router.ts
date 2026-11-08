@@ -10,6 +10,7 @@ import {
   parseEvmContractCallIntent,
   parseEvmTransferIntent,
   type EvmPendingTransferStore,
+  type EvmFeeEstimate,
   type EvmNonceRecoveryState,
   type PeaEvmExecutionAccount,
   type EvmTransferApprovalResult,
@@ -23,6 +24,16 @@ import type {
 } from './evm-transfer-controller'
 
 export interface BackgroundEvmTransferRouteController {
+  readonly estimateTransferFee: (
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionModeValue?: unknown
+  ) => Promise<EvmFeeEstimate>
+  readonly estimateContractCallFee: (
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionModeValue?: unknown
+  ) => Promise<EvmFeeEstimate>
   readonly prepare: (
     intentValue: unknown,
     nearIntentsBindingValue?: unknown,
@@ -141,6 +152,39 @@ export class BackgroundEvmTransferRouter {
     }
     this.controllers = new Map(options.controllers)
     this.maintenanceController = this.controllers.values().next().value as MaintenanceController
+  }
+
+  async estimateTransferFee(
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionMode: EvmTransferExecutionMode = 'main'
+  ): Promise<EvmFeeEstimate> {
+    const intent = parseEvmTransferIntent(intentValue)
+    const chainId = parseAssetId(intent.assetId).chainId
+    const result = await this.requireController(chainId).estimateTransferFee(
+      intent,
+      feeSelectionValue,
+      executionMode
+    )
+    if (result.chainId !== chainId)
+      throw new Error('EVM fee estimate was returned by the wrong network controller')
+    return result
+  }
+
+  async estimateContractCallFee(
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionMode: EvmTransferExecutionMode = 'main'
+  ): Promise<EvmFeeEstimate> {
+    const intent = parseEvmContractCallIntent(intentValue)
+    const result = await this.requireController(intent.chainId).estimateContractCallFee(
+      intent,
+      feeSelectionValue,
+      executionMode
+    )
+    if (result.chainId !== intent.chainId)
+      throw new Error('EVM fee estimate was returned by the wrong network controller')
+    return result
   }
 
   async prepare(

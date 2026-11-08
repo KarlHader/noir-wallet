@@ -103,6 +103,7 @@ export interface EvmLatestBlockFee {
 
 export interface EvmTransactionRpc {
   readonly assertExpectedChain: (signal?: AbortSignal) => Promise<void>
+  readonly getCode?: (address: string, signal?: AbortSignal) => Promise<string>
   readonly getNativeBalance: (address: string, signal?: AbortSignal) => Promise<string>
   readonly getPendingNonce: (address: string, signal?: AbortSignal) => Promise<string>
   readonly simulateCall: (call: EvmRpcCall, signal?: AbortSignal) => Promise<string>

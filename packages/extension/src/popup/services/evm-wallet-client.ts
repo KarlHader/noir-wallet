@@ -7,6 +7,7 @@ import {
   createAssetRegistry,
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions,
+  parseAssetId,
   parseAssetDisplayMetadata,
   parseChainId,
   type AssetDefinitionInput,
@@ -35,6 +36,7 @@ import {
   parseEvmTransferIntent,
   type EvmContractCallIntent,
   type EvmFeeSelection,
+  type EvmFeeEstimate,
   type EvmNonceRecoveryState,
   type EvmTransferIntent
 } from '@/infrastructure/chains/evm'
@@ -51,6 +53,7 @@ import {
 } from '@/core/chains/user-assets'
 
 export type { EvmTransferActivity } from './evm-transfer-activity'
+export type { EvmFeeEstimate } from '@/infrastructure/chains/evm'
 
 export type EvmWalletClientErrorCode = EvmWalletRuntimeErrorCode | 'invalid-response'
 
@@ -130,6 +133,14 @@ export interface EvmExternalSigningRequest {
 }
 
 export interface EvmWalletClient {
+  readonly estimateTransferFee: (
+    intent: EvmTransferIntent,
+    options?: Pick<EvmTransferPrepareOptions, 'feeTier' | 'feeSelection' | 'executionMode'>
+  ) => Promise<EvmFeeEstimate>
+  readonly estimateContractCallFee: (
+    intent: EvmContractCallIntent,
+    options?: Pick<EvmContractCallPrepareOptions, 'feeTier' | 'feeSelection' | 'executionMode'>
+  ) => Promise<EvmFeeEstimate>
   readonly getConfirmationEstimate: (request: {
     readonly chainId: string
     readonly maxFeePerGasWei: string
@@ -224,6 +235,59 @@ function readRecord(value: unknown, label: string): Record<string, unknown> {
     throw new EvmWalletClientError('invalid-response', `${label} must be a plain object`)
   }
   return value as Record<string, unknown>
+}
+
+function parseFeeEstimate(
+  value: unknown,
+  expectedChainId: string,
+  nativeTransfer: boolean
+): EvmFeeEstimate {
+  const record = readRecord(value, 'EVM fee estimate')
+  const expectedKeys = [
+    'chainId',
+    'maximumFeeWei',
+    'maxFeePerGasWei',
+    'maxPriorityFeePerGasWei',
+    'gasLimit'
+  ]
+  const hasAmountIndependent = Object.prototype.hasOwnProperty.call(record, 'amountIndependent')
+  assertExactKeys(
+    record,
+    hasAmountIndependent ? [...expectedKeys, 'amountIndependent'] : expectedKeys,
+    'EVM fee estimate'
+  )
+  if (hasAmountIndependent && typeof record.amountIndependent !== 'boolean') {
+    throw new Error('Invalid EVM amount-independent estimate')
+  }
+  if (record.chainId !== expectedChainId)
+    throw new Error('EVM fee estimate chain does not match the request')
+  const values = [
+    'maximumFeeWei',
+    'maxFeePerGasWei',
+    'maxPriorityFeePerGasWei',
+    'gasLimit'
+  ] as const
+  for (const key of values) {
+    if (typeof record[key] !== 'string' || !/^(0|[1-9][0-9]{0,77})$/.test(record[key])) {
+      throw new Error(`Invalid EVM fee estimate ${key}`)
+    }
+  }
+  const gasLimit = BigInt(record.gasLimit as string)
+  const maxFeePerGas = BigInt(record.maxFeePerGasWei as string)
+  if (
+    gasLimit === 0n ||
+    maxFeePerGas === 0n ||
+    gasLimit * maxFeePerGas !== BigInt(record.maximumFeeWei as string)
+  ) {
+    throw new Error('Invalid EVM maximum fee estimate')
+  }
+  if (BigInt(record.maxPriorityFeePerGasWei as string) > maxFeePerGas) {
+    throw new Error('Invalid EVM priority fee estimate')
+  }
+  if (record.amountIndependent === true && (!nativeTransfer || gasLimit !== 21_000n)) {
+    throw new Error('Invalid EVM amount-independent estimate')
+  }
+  return Object.freeze(record) as unknown as EvmFeeEstimate
 }
 
 function assertExactKeys(
@@ -856,6 +920,69 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           ...(historyPageCount === undefined ? {} : { historyPageCount })
         },
         value => (value === null ? null : parseActivityReadModel(value))
+      )
+    },
+    estimateTransferFee: async (
+      intent: EvmTransferIntent,
+      options?: Pick<EvmTransferPrepareOptions, 'feeTier' | 'feeSelection' | 'executionMode'>
+    ) => {
+      const parsedIntent = parseClientInput(() => parseEvmTransferIntent(intent))
+      if (options?.feeTier !== undefined && options.feeSelection !== undefined) {
+        throw new EvmWalletClientError('invalid-response', 'EVM fee selection is ambiguous')
+      }
+      const feeSelection = options?.feeSelection ?? options?.feeTier
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      const executionMode = options?.executionMode ?? 'main'
+      if (executionMode !== 'main' && executionMode !== 'private') {
+        throw new EvmWalletClientError('invalid-response', 'Invalid EVM transfer execution mode')
+      }
+      const chainId = parseAssetId(parsedIntent.assetId).chainId
+      return send(
+        {
+          type: 'ESTIMATE_EVM_TRANSFER_FEE',
+          intent: parsedIntent,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection }),
+          executionMode
+        },
+        value =>
+          parseFeeEstimate(
+            value,
+            chainId,
+            parseAssetId(parsedIntent.assetId).namespace === 'slip44'
+          )
+      )
+    },
+    estimateContractCallFee: async (
+      intent: EvmContractCallIntent,
+      options?: Pick<EvmContractCallPrepareOptions, 'feeTier' | 'feeSelection' | 'executionMode'>
+    ) => {
+      const parsedIntent = parseClientInput(() => parseEvmContractCallIntent(intent))
+      if (options?.feeTier !== undefined && options.feeSelection !== undefined) {
+        throw new EvmWalletClientError('invalid-response', 'EVM fee selection is ambiguous')
+      }
+      const feeSelection = options?.feeSelection ?? options?.feeTier
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      const executionMode = options?.executionMode ?? 'main'
+      if (executionMode !== 'main' && executionMode !== 'private') {
+        throw new EvmWalletClientError(
+          'invalid-response',
+          'Invalid EVM contract call execution mode'
+        )
+      }
+      return send(
+        {
+          type: 'ESTIMATE_EVM_CONTRACT_CALL_FEE',
+          intent: parsedIntent,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection }),
+          executionMode
+        },
+        value => parseFeeEstimate(value, parsedIntent.chainId, false)
       )
     },
     prepareTransfer: async (intent: EvmTransferIntent, options?: EvmTransferPrepareOptions) => {

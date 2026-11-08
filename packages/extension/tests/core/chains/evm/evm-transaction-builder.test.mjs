@@ -108,6 +108,10 @@ test.describe('EVM transfer builder', () => {
       intent: { assetId: 'eip155:1/slip44:60', recipient, amountRaw: '123' },
       rpc: transactionRpc({
         assertExpectedChain: async () => calls.push('chain'),
+        getNativeBalance: async from => {
+          calls.push(['balance', from])
+          return '1000000000000000000000'
+        },
         getPendingNonce: async from => {
           calls.push(['nonce', from])
           return '7'
@@ -155,14 +159,18 @@ test.describe('EVM transfer builder', () => {
       },
       createdAt: 1_800_000_000_000
     })
-    expect(calls).toEqual([
-      'chain',
-      ['nonce', address],
-      ['simulate', { from: address, to: recipient, valueRaw: '123', data: '0x' }],
-      ['estimate', { from: address, to: recipient, valueRaw: '123', data: '0x' }],
-      'priority',
-      'block'
-    ])
+    expect(calls[0]).toBe('chain')
+    expect(calls.slice(1)).toHaveLength(6)
+    expect(calls.slice(1)).toEqual(
+      expect.arrayContaining([
+        ['nonce', address],
+        ['balance', address],
+        ['simulate', { from: address, to: recipient, valueRaw: '123', data: '0x' }],
+        ['estimate', { from: address, to: recipient, valueRaw: '123', data: '0x' }],
+        'priority',
+        'block'
+      ])
+    )
     expect(createEvmSigningPreparePayload(prepared)).toEqual({
       kind: 'evm-transaction',
       chainId: 'eip155:1',

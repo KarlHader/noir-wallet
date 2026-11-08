@@ -1,5 +1,5 @@
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
-import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
+import type { EvmFeeEstimate, EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { NetworkFeeTier, TransactionGraph } from '@/core/transactions/domain'
 import {
   parseNearIntentsTransactionBinding,
@@ -114,6 +114,8 @@ export interface QuoteDepositMaximum {
   readonly networkFeeRaw: string
   readonly networkFeeSymbol: string
   readonly networkFeeDecimals: number
+  readonly expiresAt?: number
+  readonly evmFeeEstimate?: EvmFeeEstimate
 }
 
 export interface QuoteDepositTransferClient {
@@ -556,7 +558,12 @@ function assertAmountRaw(value: string): string {
 export function createQuoteDepositTransferClient(options: {
   readonly evm: Pick<
     EvmWalletClient,
-    'prepareTransfer' | 'prepareContractCall' | 'approveTransfer' | 'rejectTransfer'
+    | 'estimateTransferFee'
+    | 'estimateContractCallFee'
+    | 'prepareTransfer'
+    | 'prepareContractCall'
+    | 'approveTransfer'
+    | 'rejectTransfer'
   >
   readonly bitcoin: Pick<
     BitcoinWalletClient,
@@ -601,9 +608,9 @@ export function createQuoteDepositTransferClient(options: {
         if (additionalValueRaw < 0n) {
           throw new Error('The EVM maximum plan does not match its native source amount')
         }
-        const review =
+        const estimate =
           transaction && transaction.data !== '0x'
-            ? await options.evm.prepareContractCall(
+            ? await options.evm.estimateContractCallFee(
                 {
                   chainId: input.source.chain.chain.id,
                   contractAddress: transaction.to,
@@ -612,7 +619,7 @@ export function createQuoteDepositTransferClient(options: {
                 },
                 prepareOptions
               )
-            : await options.evm.prepareTransfer(
+            : await options.evm.estimateTransferFee(
                 {
                   assetId: input.source.asset.asset.id,
                   recipient: transaction?.to ?? input.depositAddress,
@@ -620,29 +627,23 @@ export function createQuoteDepositTransferClient(options: {
                 },
                 prepareOptions
               )
-        try {
-          const summary = review.review.summary
-          if (summary.schema !== 'evm.transaction.v1') {
-            throw new Error('The EVM maximum estimate has an invalid signing summary')
-          }
-          const feeRaw = BigInt(summary.fields.maximumFeeWei)
-          // Max needs room for a fresh RHEA quote and EVM fee calculation before signing.
-          const feeHeadroomRaw = (feeRaw + 3n) / 4n
-          const amountRaw = isNative
-            ? availableRaw - feeRaw - feeHeadroomRaw - additionalValueRaw
-            : availableRaw
-          if (amountRaw <= 0n) {
-            throw new Error('The source wallet balance does not cover the network fee')
-          }
-          return Object.freeze({
-            amountRaw: amountRaw.toString(),
-            networkFeeRaw: feeRaw.toString(),
-            networkFeeSymbol: input.source.networkFeeAsset.metadata.symbol,
-            networkFeeDecimals: input.source.networkFeeAsset.metadata.decimals
-          })
-        } finally {
-          await options.evm.rejectTransfer(review.graph.root.id)
+        const feeRaw = BigInt(estimate.maximumFeeWei)
+        // Max needs room for a fresh RHEA quote and EVM fee calculation before signing.
+        const feeHeadroomRaw = (feeRaw + 3n) / 4n
+        const amountRaw = isNative
+          ? availableRaw - feeRaw - feeHeadroomRaw - additionalValueRaw
+          : availableRaw
+        if (amountRaw <= 0n) {
+          throw new Error('The source wallet balance does not cover the network fee')
         }
+        return Object.freeze({
+          amountRaw: amountRaw.toString(),
+          networkFeeRaw: feeRaw.toString(),
+          networkFeeSymbol: input.source.networkFeeAsset.metadata.symbol,
+          networkFeeDecimals: input.source.networkFeeAsset.metadata.decimals,
+          expiresAt: Date.now() + 30_000,
+          evmFeeEstimate: estimate
+        })
       }
 
       if (input.source.family === 'solana' || input.source.family === 'near') {

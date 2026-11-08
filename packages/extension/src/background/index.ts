@@ -3971,6 +3971,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   }
 
   if (
+    message.type === 'ESTIMATE_EVM_TRANSFER_FEE' ||
+    message.type === 'ESTIMATE_EVM_CONTRACT_CALL_FEE' ||
     message.type === 'PREPARE_EVM_TRANSFER' ||
     message.type === 'PREPARE_EVM_CONTRACT_CALL' ||
     message.type === 'GET_EVM_TOKEN_ALLOWANCE' ||
@@ -4004,87 +4006,102 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         : undefined
     const operationStartedAt = performance.now()
     const operation =
-      message.type === 'PREPARE_EVM_TRANSFER'
-        ? (async () => {
-            if (
-              message.executionMode === 'private' &&
-              !message.nearIntentsBinding &&
-              !message.rheaSwapBinding
-            ) {
-              throw new Error('Use Move for transfers from your Private account.')
-            }
-            if (
-              message.executionMode !== 'private' &&
-              !message.nearIntentsBinding &&
-              !message.rheaSwapBinding
-            ) {
-              const intent = parseEvmTransferIntent(message.intent)
-              const catalog = await accountNetworksCoordinator.readCatalog()
-              if (!catalog) throw new Error('Wallet accounts are unavailable')
-              if (
-                resolveEvmAddressRole(
-                  intent.recipient,
-                  parseAssetId(intent.assetId).chainId,
-                  catalog.accounts
-                ) === 'confidential'
-              ) {
-                throw new Error('Use Move to transfer to your Private account.')
-              }
-            }
-            return evmTransferRouter.prepare(
+      message.type === 'ESTIMATE_EVM_TRANSFER_FEE'
+        ? evmTransferRouter.estimateTransferFee(
+            message.intent,
+            message.feeSelection,
+            message.executionMode
+          )
+        : message.type === 'ESTIMATE_EVM_CONTRACT_CALL_FEE'
+          ? evmTransferRouter.estimateContractCallFee(
               message.intent,
-              message.nearIntentsBinding,
-              message.feeSelection ?? message.feeTier,
-              message.executionMode,
-              message.rheaSwapBinding,
-              debugRequestId
+              message.feeSelection,
+              message.executionMode
             )
-          })()
-        : message.type === 'PREPARE_EVM_CONTRACT_CALL'
-          ? evmTransferRouter.prepareContractCall(
-              message.intent,
-              message.feeSelection ?? message.feeTier,
-              message.rheaSwapBinding,
-              message.executionMode,
-              debugRequestId
-            )
-          : message.type === 'PREPARE_EVM_CANCEL'
-            ? evmTransferRouter.prepareCancel(
-                message.chainId,
-                message.originalTransactionId,
-                message.executionMode
-              )
-            : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
-              ? evmTransferRouter.getTokenAllowance(
-                  message.chainId,
-                  message.token,
-                  message.spender,
-                  message.expectedOwner,
-                  message.executionMode
+          : message.type === 'PREPARE_EVM_TRANSFER'
+            ? (async () => {
+                if (
+                  message.executionMode === 'private' &&
+                  !message.nearIntentsBinding &&
+                  !message.rheaSwapBinding
+                ) {
+                  throw new Error('Use Move for transfers from your Private account.')
+                }
+                if (
+                  message.executionMode !== 'private' &&
+                  !message.nearIntentsBinding &&
+                  !message.rheaSwapBinding
+                ) {
+                  const intent = parseEvmTransferIntent(message.intent)
+                  const catalog = await accountNetworksCoordinator.readCatalog()
+                  if (!catalog) throw new Error('Wallet accounts are unavailable')
+                  if (
+                    resolveEvmAddressRole(
+                      intent.recipient,
+                      parseAssetId(intent.assetId).chainId,
+                      catalog.accounts
+                    ) === 'confidential'
+                  ) {
+                    throw new Error('Use Move to transfer to your Private account.')
+                  }
+                }
+                return evmTransferRouter.prepare(
+                  message.intent,
+                  message.nearIntentsBinding,
+                  message.feeSelection ?? message.feeTier,
+                  message.executionMode,
+                  message.rheaSwapBinding,
+                  debugRequestId
                 )
-              : message.type === 'GET_EVM_NONCE_RECOVERY'
-                ? evmTransferRouter.getNonceRecovery(message.chainId, message.executionMode)
-                : message.type === 'PREPARE_EVM_NONCE_RECOVERY'
-                  ? evmTransferRouter.prepareNonceRecovery(
+              })()
+            : message.type === 'PREPARE_EVM_CONTRACT_CALL'
+              ? evmTransferRouter.prepareContractCall(
+                  message.intent,
+                  message.feeSelection ?? message.feeTier,
+                  message.rheaSwapBinding,
+                  message.executionMode,
+                  debugRequestId
+                )
+              : message.type === 'PREPARE_EVM_CANCEL'
+                ? evmTransferRouter.prepareCancel(
+                    message.chainId,
+                    message.originalTransactionId,
+                    message.executionMode
+                  )
+                : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
+                  ? evmTransferRouter.getTokenAllowance(
                       message.chainId,
-                      message.executionMode,
-                      message.feeSelection
+                      message.token,
+                      message.spender,
+                      message.expectedOwner,
+                      message.executionMode
                     )
-                  : message.type === 'GET_PENDING_EVM_TRANSFER'
-                    ? evmTransferRouter.getPendingApproval(message.transactionId)
-                    : message.type === 'APPROVE_EVM_TRANSFER'
-                      ? evmTransferRouter.approve(message.transactionId, message.payloadFingerprint)
-                      : message.type === 'GET_KEYSTONE_EVM_SIGNING_REQUEST'
-                        ? evmTransferRouter.getExternalSigningRequest(message.transactionId)
-                        : message.type === 'SUBMIT_KEYSTONE_EVM_SIGNATURE'
-                          ? evmTransferRouter.submitExternalSignature(
+                  : message.type === 'GET_EVM_NONCE_RECOVERY'
+                    ? evmTransferRouter.getNonceRecovery(message.chainId, message.executionMode)
+                    : message.type === 'PREPARE_EVM_NONCE_RECOVERY'
+                      ? evmTransferRouter.prepareNonceRecovery(
+                          message.chainId,
+                          message.executionMode,
+                          message.feeSelection
+                        )
+                      : message.type === 'GET_PENDING_EVM_TRANSFER'
+                        ? evmTransferRouter.getPendingApproval(message.transactionId)
+                        : message.type === 'APPROVE_EVM_TRANSFER'
+                          ? evmTransferRouter.approve(
                               message.transactionId,
-                              message.payloadFingerprint,
-                              message.signatureCborBase64
+                              message.payloadFingerprint
                             )
-                          : message.type === 'REJECT_EVM_TRANSFER'
-                            ? evmTransferRouter.reject(message.transactionId)
-                            : evmTransferRouter.resumeBroadcast(message.transactionId)
+                          : message.type === 'GET_KEYSTONE_EVM_SIGNING_REQUEST'
+                            ? evmTransferRouter.getExternalSigningRequest(message.transactionId)
+                            : message.type === 'SUBMIT_KEYSTONE_EVM_SIGNATURE'
+                              ? evmTransferRouter.submitExternalSignature(
+                                  message.transactionId,
+                                  message.payloadFingerprint,
+                                  message.signatureCborBase64
+                                )
+                              : message.type === 'REJECT_EVM_TRANSFER'
+                                ? evmTransferRouter.reject(message.transactionId)
+                                : evmTransferRouter.resumeBroadcast(message.transactionId)
     void operation
       .then(result => {
         if (debugRequestId) {

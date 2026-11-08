@@ -462,14 +462,9 @@ it('prepares native and ERC-20 direct Max probes from PEA without a privacy quot
     })
     const client = createQuoteDepositTransferClient({
       evm: {
-        prepareTransfer: async (intent, options) => {
+        estimateTransferFee: async (intent, options) => {
           calls.push({ intent, options })
-          return {
-            graph: { root: { id: 'tx:probe' } },
-            review: {
-              summary: { schema: 'evm.transaction.v1', fields: { from: pea, maximumFeeWei: '100' } }
-            }
-          }
+          return { maximumFeeWei: '100' }
         },
         rejectTransfer: async id => calls.push({ rejected: id }),
         approveTransfer: async () => assert.fail('Max cannot submit')
@@ -484,7 +479,7 @@ it('prepares native and ERC-20 direct Max probes from PEA without a privacy quot
     assert.equal(calls[0].intent.assetId, definition.id)
     assert.equal(calls[0].intent.recipient, recipient)
     assert.equal(result.amountRaw, definition.kind === 'native' ? '875' : '1000')
-    assert.equal(calls.length, 2)
+    assert.equal(calls.length, 1)
   }
 })
 

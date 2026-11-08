@@ -681,6 +681,20 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       debugRequestId: isShortString
     }
   },
+  ESTIMATE_EVM_TRANSFER_FEE: {
+    required: { intent: isRecord },
+    optional: {
+      feeSelection: isEvmFeeSelection,
+      executionMode: value => value === 'main' || value === 'private'
+    }
+  },
+  ESTIMATE_EVM_CONTRACT_CALL_FEE: {
+    required: { intent: isRecord },
+    optional: {
+      feeSelection: isEvmFeeSelection,
+      executionMode: value => value === 'main' || value === 'private'
+    }
+  },
   PREPARE_EVM_CONTRACT_CALL: {
     required: { intent: isRecord },
     optional: {
@@ -1009,6 +1023,8 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_EVM_CONFIRMATION_ESTIMATE: ['extension-page'],
     GET_EVM_TOKEN_ALLOWANCE: ['extension-page'],
     PREPARE_EVM_TRANSFER: ['extension-page'],
+    ESTIMATE_EVM_TRANSFER_FEE: ['extension-page'],
+    ESTIMATE_EVM_CONTRACT_CALL_FEE: ['extension-page'],
     PREPARE_EVM_CONTRACT_CALL: ['extension-page'],
     PREPARE_EVM_CANCEL: ['extension-page'],
     GET_EVM_NONCE_RECOVERY: ['extension-page'],

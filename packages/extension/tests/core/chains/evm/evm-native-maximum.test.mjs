@@ -21,17 +21,9 @@ test('native RHEA Max keeps fee headroom and accepts a quote after a small fee i
   }
   const transfer = createQuoteDepositTransferClient({
     evm: {
-      prepareContractCall: async intent => {
+      estimateContractCallFee: async intent => {
         assert.ok(BigInt(intent.valueRaw) + currentFeeRaw <= balanceRaw)
-        return {
-          graph: { root: { id: 'fee-probe' } },
-          review: {
-            summary: {
-              schema: 'evm.transaction.v1',
-              fields: { maximumFeeWei: currentFeeRaw.toString() }
-            }
-          }
-        }
+        return { maximumFeeWei: currentFeeRaw.toString() }
       },
       rejectTransfer: async () => {}
     }
@@ -94,7 +86,10 @@ test('native RHEA Max keeps fee headroom and accepts a quote after a small fee i
     },
     dependencies
   )
-  assert.deepEqual(bufferedQuote, { amount: '0.999874', adjustmentCount: 1, maximum })
+  assert.equal(bufferedQuote.amount, '0.999874')
+  assert.equal(bufferedQuote.adjustmentCount, 1)
+  assert.equal(bufferedQuote.maximum.amountRaw, maximum.amountRaw)
+  assert.ok(bufferedQuote.maximum.expiresAt >= maximum.expiresAt)
 
   currentFeeRaw = laterFeeRaw
   const adjustment = await resolveSwapMaximumAdjustment(

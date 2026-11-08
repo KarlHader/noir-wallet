@@ -298,6 +298,12 @@ test.describe('Runtime message security', () => {
     expect(isTrustedRuntimeMessageSender('PREPARE_EVM_TRANSFER', popupSender, extensionId)).toBe(
       true
     )
+    expect(
+      isTrustedRuntimeMessageSender('ESTIMATE_EVM_TRANSFER_FEE', popupSender, extensionId)
+    ).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender('ESTIMATE_EVM_TRANSFER_FEE', contentScriptSender, extensionId)
+    ).toBe(false)
     expect(isTrustedRuntimeMessageSender('PREPARE_SOLANA_TRANSFER', popupSender, extensionId)).toBe(
       true
     )
@@ -1237,6 +1243,26 @@ test.describe('Runtime message security', () => {
       recipient: '0x2222222222222222222222222222222222222222',
       amountRaw: '1'
     }
+    expect(
+      parseTrustedExtensionRuntimeMessage({
+        type: 'ESTIMATE_EVM_TRANSFER_FEE',
+        intent: transferIntent,
+        feeSelection: { kind: 'tier', tier: 'fast' },
+        executionMode: 'main'
+      })
+    ).toEqual({
+      type: 'ESTIMATE_EVM_TRANSFER_FEE',
+      intent: transferIntent,
+      feeSelection: { kind: 'tier', tier: 'fast' },
+      executionMode: 'main'
+    })
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        type: 'ESTIMATE_EVM_TRANSFER_FEE',
+        intent: transferIntent,
+        nearIntentsBinding: {}
+      })
+    ).toThrow(/schema/i)
     const nearIntentsBinding = {
       schemaVersion: 1,
       provider: 'near-intents',

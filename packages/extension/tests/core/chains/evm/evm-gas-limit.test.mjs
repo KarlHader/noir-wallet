@@ -8,6 +8,8 @@ import {
 import {
   buildEvmContractCall,
   buildEvmTransfer,
+  estimateEvmContractCallFee,
+  estimateEvmTransferFee,
   createEvmSigningPreparePayload,
   createEvmSigningSummary
 } from '../../../../src/infrastructure/chains/evm/evm-transaction-builder.ts'
@@ -127,5 +129,164 @@ it('checks funds against the padded maximum and rejects gas limits beyond the si
       rpc: rpc({ estimateGas: async () => ((1n << 64n) - 1n).toString() })
     }),
     error => error.code === 'fee-overflow'
+  )
+})
+
+it('quotes the same fee as transaction preparation without reading nonce or creating signing state', async () => {
+  const calls = []
+  const rpcClient = rpc({
+    getPendingNonce: async () => {
+      throw new Error('read-only estimate must not request nonce')
+    },
+    simulateCall: async call => {
+      calls.push(['simulate', call])
+      return '0x'
+    },
+    estimateGas: async call => {
+      calls.push(['gas', call])
+      return '223082'
+    }
+  })
+  const estimate = await estimateEvmContractCallFee({
+    chainId,
+    chainAccount,
+    assets,
+    intent: aaveWithdrawal,
+    rpc: rpcClient
+  })
+  const prepared = await buildEvmContractCall({
+    chainId,
+    chainAccount,
+    assets,
+    intent: aaveWithdrawal,
+    rpc: rpc()
+  })
+  assert.equal(
+    estimate.maximumFeeWei,
+    (BigInt(prepared.transaction.gasLimit) * BigInt(prepared.transaction.maxFeePerGas)).toString()
+  )
+  assert.equal(estimate.gasLimit, prepared.transaction.gasLimit)
+  assert.equal(estimate.maxFeePerGasWei, prepared.transaction.maxFeePerGas)
+  assert.equal(estimate.maxPriorityFeePerGasWei, prepared.transaction.maxPriorityFeePerGas)
+  assert.equal(calls.length, 2)
+  for (const [, call] of calls) {
+    assert.equal(call.from, address)
+    assert.equal(call.to, aaveWithdrawal.contractAddress)
+    assert.equal(call.valueRaw, aaveWithdrawal.valueRaw)
+    assert.equal(call.data, aaveWithdrawal.calldata)
+  }
+  const transfer = await estimateEvmTransferFee({
+    chainId,
+    chainAccount,
+    assets,
+    intent: { assetId: 'eip155:1/slip44:60', recipient, amountRaw: '1' },
+    rpc: rpc({
+      getPendingNonce: async () => {
+        throw new Error('unexpected nonce')
+      },
+      estimateGas: async () => '21000'
+    })
+  })
+  assert.equal(transfer.gasLimit, '21000')
+  assert.equal(transfer.amountIndependent, undefined)
+})
+
+it('reuses a native Max fee only after chain attestation and an empty-code recipient check', async () => {
+  const intent = { assetId: 'eip155:1/slip44:60', recipient, amountRaw: '1' }
+  let attested = false
+  const baseRpc = rpc({
+    assertExpectedChain: async () => {
+      attested = true
+    },
+    estimateGas: async () => '21000',
+    getPendingNonce: async () => {
+      throw new Error('read-only estimate requested nonce')
+    }
+  })
+  const estimateWithCode = getCode =>
+    estimateEvmTransferFee({
+      chainId,
+      chainAccount,
+      assets,
+      intent,
+      rpc: {
+        ...baseRpc,
+        getCode: async address => {
+          assert.equal(attested, true)
+          assert.equal(address, recipient)
+          return getCode()
+        }
+      }
+    })
+  assert.equal((await estimateWithCode(() => '0x')).amountIndependent, true)
+  assert.equal((await estimateWithCode(() => '0x6000')).amountIndependent, undefined)
+  assert.equal(
+    (
+      await estimateWithCode(() => {
+        throw new Error('code RPC offline')
+      })
+    ).amountIndependent,
+    undefined
+  )
+  assert.equal(
+    (await estimateEvmTransferFee({ chainId, chainAccount, assets, intent, rpc: baseRpc }))
+      .amountIndependent,
+    undefined
+  )
+  assert.equal(
+    (
+      await estimateEvmTransferFee({
+        chainId,
+        chainAccount,
+        assets,
+        intent,
+        rpc: { ...baseRpc, getCode: async () => '0x', estimateGas: async () => '21001' }
+      })
+    ).amountIndependent,
+    undefined
+  )
+  assert.equal(
+    (
+      await estimateEvmContractCallFee({
+        chainId,
+        chainAccount,
+        assets,
+        intent: { chainId, contractAddress: recipient, valueRaw: '1', calldata: '0x1234' },
+        rpc: {
+          ...baseRpc,
+          getCode: async () => {
+            throw new Error('contract calls must not be classified as amount independent')
+          }
+        }
+      })
+    ).amountIndependent,
+    undefined
+  )
+})
+
+it('rejects RPC failures and unfunded calls during read-only estimation', async () => {
+  await assert.rejects(
+    estimateEvmContractCallFee({
+      chainId,
+      chainAccount,
+      assets,
+      intent: aaveWithdrawal,
+      rpc: rpc({
+        estimateGas: async () => {
+          throw new Error('RPC offline')
+        }
+      })
+    }),
+    /RPC offline/
+  )
+  await assert.rejects(
+    estimateEvmContractCallFee({
+      chainId,
+      chainAccount,
+      assets,
+      intent: { ...aaveWithdrawal, valueRaw: '1000000000000000001' },
+      rpc: rpc()
+    }),
+    error => error.code === 'insufficient-funds'
   )
 })

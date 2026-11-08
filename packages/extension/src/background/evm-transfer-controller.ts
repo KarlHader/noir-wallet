@@ -14,6 +14,7 @@ import {
   parseEvmFeeSelection,
   parseEvmTransferIntent,
   type EvmFeeSelection,
+  type EvmFeeEstimate,
   type EvmNonceRecoveryState,
   type ActiveEvmPortfolioContext,
   type EvmExternalSigningRequest,
@@ -221,6 +222,65 @@ export class BackgroundEvmTransferController {
           })
         )
       )
+    })
+  }
+
+  async estimateTransferFee(
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionModeValue: unknown = 'main'
+  ): Promise<EvmFeeEstimate> {
+    const intent = parseEvmTransferIntent(intentValue)
+    const feeSelection =
+      feeSelectionValue === undefined ? undefined : parseEvmFeeSelection(feeSelectionValue)
+    if (executionModeValue !== 'main' && executionModeValue !== 'private') {
+      throw new Error('Invalid EVM transfer execution mode')
+    }
+    return accountContextTransition.runActiveOperation(async () => {
+      const context = await this.requireActiveContext()
+      if (!intent.assetId.startsWith(`${context.chainAccount.scope.chainId}/`)) {
+        throw new Error('EVM transfer asset does not match the active network')
+      }
+      const executionAccount =
+        executionModeValue === 'private'
+          ? await this.requirePrivateExecutionAccount(context)
+          : undefined
+      return this.orchestrator.estimateFee({
+        chainAccount: context.chainAccount,
+        intent,
+        ...(executionAccount === undefined ? {} : { executionAccount }),
+        ...(feeSelection === undefined ? {} : { feeSelection })
+      })
+    })
+  }
+
+  async estimateContractCallFee(
+    intentValue: unknown,
+    feeSelectionValue?: unknown,
+    executionModeValue: unknown = 'main'
+  ): Promise<EvmFeeEstimate> {
+    const intent = parseEvmContractCallIntent(intentValue)
+    const feeSelection = parseEvmFeeSelection(
+      feeSelectionValue ?? { kind: 'tier', tier: 'standard' }
+    )
+    if (executionModeValue !== 'main' && executionModeValue !== 'private') {
+      throw new Error('Invalid EVM contract call execution mode')
+    }
+    return accountContextTransition.runActiveOperation(async () => {
+      const context = await this.requireActiveContext()
+      if (intent.chainId !== context.chainAccount.scope.chainId) {
+        throw new Error('EVM contract call does not match the active network')
+      }
+      const executionAccount =
+        executionModeValue === 'private'
+          ? await this.requirePrivateExecutionAccount(context)
+          : undefined
+      return this.orchestrator.estimateFee({
+        chainAccount: context.chainAccount,
+        intent,
+        ...(executionAccount === undefined ? {} : { executionAccount }),
+        feeSelection
+      })
     })
   }
 

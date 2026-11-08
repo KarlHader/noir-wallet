@@ -386,12 +386,12 @@ export function Send() {
         )
           return
         if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
-          if (isMaxFeeMode) void maxTransfer.request()
+          if (isMaxFeeMode) void maxTransfer.request(true)
           else feeEstimate.retry()
           return
         }
       } catch {
-        if (isMaxFeeMode) void maxTransfer.request()
+        if (isMaxFeeMode) void maxTransfer.request(true)
         else feeEstimate.retry()
         return
       }

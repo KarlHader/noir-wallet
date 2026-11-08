@@ -45,7 +45,10 @@ import {
   createEvmSigningPreparePayload,
   createEvmSigningSummary,
   EvmTransactionError,
+  estimateEvmContractCallFee,
+  estimateEvmTransferFee,
   type EvmContractCallIntent,
+  type EvmFeeEstimate,
   type PeaEvmExecutionAccount,
   type EvmTransferIntent
 } from './evm-transaction-builder'
@@ -262,6 +265,27 @@ export class EvmTransferOrchestrator {
     ).address.toLowerCase()
     const key = this.senderKey(input.chainAccount.scope.chainId, sender)
     return this.runSenderPreparationExclusive(key, () => this.prepareExclusive(input, sender))
+  }
+
+  async estimateFee(
+    input: Pick<
+      PrepareEvmTransferInput,
+      'chainAccount' | 'intent' | 'executionAccount' | 'feeSelection' | 'feeTier' | 'signal'
+    >
+  ): Promise<EvmFeeEstimate> {
+    const buildInput = {
+      chainId: input.chainAccount.scope.chainId,
+      chainAccount: input.chainAccount,
+      assets: this.assets,
+      rpc: this.rpc,
+      ...(input.executionAccount === undefined ? {} : { executionAccount: input.executionAccount }),
+      ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
+      ...(input.feeTier === undefined ? {} : { feeTier: input.feeTier }),
+      signal: input.signal
+    }
+    return 'calldata' in input.intent
+      ? estimateEvmContractCallFee({ ...buildInput, intent: input.intent })
+      : estimateEvmTransferFee({ ...buildInput, intent: input.intent })
   }
 
   async prepareCancel(input: PrepareEvmCancelInput): Promise<PreparedEvmTransferApproval> {

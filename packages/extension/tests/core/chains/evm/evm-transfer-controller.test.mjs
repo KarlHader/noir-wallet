@@ -65,6 +65,16 @@ function setup(active = activeContext) {
     })
   }
   const orchestrator = {
+    estimateFee: async input => {
+      calls.push(['estimate', input])
+      return {
+        chainId: 'eip155:1',
+        maximumFeeWei: '63000',
+        gasLimit: '21000',
+        maxFeePerGasWei: '3',
+        maxPriorityFeePerGasWei: '1'
+      }
+    },
     prepare: async input => {
       calls.push(['prepare', input])
       return results.prepare
@@ -108,6 +118,41 @@ function setup(active = activeContext) {
 }
 
 test.describe('Background EVM transfer controller', () => {
+  test('estimates only for the active chain and selected execution account without preparing a review', async () => {
+    const { calls, controller } = setup()
+    const intent = {
+      assetId: 'eip155:1/slip44:60',
+      recipient: '0x2222222222222222222222222222222222222222',
+      amountRaw: '1'
+    }
+    await expect(controller.estimateTransferFee(intent, 'fast', 'private')).resolves.toMatchObject({
+      maximumFeeWei: '63000'
+    })
+    expect(calls).toEqual([
+      ['resolve-private', activeContext],
+      [
+        'estimate',
+        {
+          chainAccount,
+          intent,
+          executionAccount: privateExecutionAccount,
+          feeSelection: { kind: 'tier', tier: 'fast' }
+        }
+      ]
+    ])
+    await expect(
+      controller.estimateTransferFee({ ...intent, assetId: 'eip155:8453/slip44:60' })
+    ).rejects.toThrow(/active network/)
+    await expect(
+      controller.estimateContractCallFee({
+        chainId: 'eip155:8453',
+        contractAddress: intent.recipient,
+        valueRaw: '0',
+        calldata: '0x1234'
+      })
+    ).rejects.toThrow(/active network/)
+    expect(calls).toHaveLength(2)
+  })
   test('reads allowance only for the selected active execution account', async () => {
     const { calls, controller } = setup()
     const token = '0x2222222222222222222222222222222222222222'

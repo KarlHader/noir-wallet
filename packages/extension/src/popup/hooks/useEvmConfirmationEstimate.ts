@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react'
-import type { SigningSummary } from '@/core/keyring/domain'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { formatConfirmationTime } from '@/popup/services/confirmation-time-format'
 
 export function useEvmConfirmationEstimate({
   enabled,
   requestKey,
-  summary
+  feeEstimate
 }: {
   readonly enabled: boolean
   readonly requestKey: string
-  readonly summary: SigningSummary | null
+  readonly feeEstimate: {
+    readonly chainId: string
+    readonly maxFeePerGasWei: string | null
+    readonly maxPriorityFeePerGasWei: string | null
+  } | null
 }): string {
-  const fields = summary?.schema === 'evm.transaction.v1' ? summary.fields : null
-  const chainId = summary?.chainId
-  const maxFeePerGasWei = fields?.maxFeePerGasWei
-  const maxPriorityFeePerGasWei = fields?.maxPriorityFeePerGasWei
+  const chainId = feeEstimate?.chainId
+  const maxFeePerGasWei = feeEstimate?.maxFeePerGasWei
+  const maxPriorityFeePerGasWei = feeEstimate?.maxPriorityFeePerGasWei
   const key = JSON.stringify([requestKey, chainId, maxFeePerGasWei, maxPriorityFeePerGasWei])
   const [state, setState] = useState({ key: '', value: '—' })
 

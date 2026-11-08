@@ -2,13 +2,186 @@ import { test as it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolveZcashSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
+import { MaxTransferEstimateCache } from '../../../src/popup/services/max-transfer-estimate-cache.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
 
 const describe = it.describe
 const readSource = relativePath =>
   readFileSync(new URL(`../../../${relativePath}`, import.meta.url), 'utf-8')
 
+const maxContext = overrides => ({
+  fundingSource: 'shielded',
+  enabled: true,
+  walletId: 'wallet-a',
+  accountId: 'account-a',
+  network: 'mainnet',
+  available: '1',
+  pending: '0',
+  rpcPreference: null,
+  rpcScope: 'rpc-a',
+  ...overrides
+})
+
+const maxEstimate = (quote, maxAmountZats = '90000000') => ({
+  maxAmountZats,
+  feeZats: '10000',
+  marginalFeeZats: '5000',
+  feeQuote: quote
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise(done => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 describe('dynamic maximum transfer regressions', () => {
+  it('shares in-flight Max and fee quote, then refreshes after quote expiry', async () => {
+    let now = 1000
+    let quoteCalls = 0
+    let estimateCalls = 0
+    const client = {
+      getFeeQuote: async () => ({
+        id: `quote-${++quoteCalls}`,
+        standardMarginalFeeZats: 5000,
+        expiresAt: now + 1000
+      }),
+      estimateMaxTransfer: async input => {
+        estimateCalls += 1
+        return {
+          ...maxEstimate({
+            id: `quote-${quoteCalls}`,
+            standardMarginalFeeZats: 5000,
+            expiresAt: now + 1000
+          }),
+          marginalFeeZats: String(input.marginalFeeZats)
+        }
+      }
+    }
+    const cache = new MaxTransferEstimateCache(maxContext(), undefined, client, () => now)
+    const first = cache.get('recipient-a', 'standard')
+    const concurrent = cache.get('recipient-a', 'standard')
+    assert.deepEqual(await first, await concurrent)
+    assert.equal(quoteCalls, 1)
+    assert.equal(estimateCalls, 1)
+    assert.ok(cache.peek('recipient-a', 'standard').estimate)
+    assert.ok(await cache.get('recipient-a', 'fast'))
+    assert.equal(quoteCalls, 1)
+    assert.equal(estimateCalls, 2)
+
+    now = 2001
+    assert.equal(cache.peek('recipient-a', 'standard').estimate, null)
+    await cache.get('recipient-a', 'standard')
+    assert.equal(quoteCalls, 2)
+    assert.equal(estimateCalls, 3)
+    assert.equal(cache.peek('recipient-a', 'standard').estimate.feeQuote.id, 'quote-2')
+  })
+
+  it('discards a pending Max after account scope changes', async () => {
+    const started = deferred()
+    const oldResult = deferred()
+    let quoteCalls = 0
+    let estimateCalls = 0
+    const client = {
+      getFeeQuote: async () => ({
+        id: `quote-${++quoteCalls}`,
+        standardMarginalFeeZats: 5000,
+        expiresAt: Date.now() + 60_000
+      }),
+      estimateMaxTransfer: async () => {
+        estimateCalls += 1
+        if (estimateCalls === 1) {
+          started.resolve()
+          return oldResult.promise
+        }
+        return maxEstimate(
+          { id: 'quote-2', standardMarginalFeeZats: 5000, expiresAt: Date.now() + 60_000 },
+          '80000000'
+        )
+      }
+    }
+    const cache = new MaxTransferEstimateCache(maxContext(), undefined, client)
+    const oldRequest = cache.get('recipient-a', 'standard')
+    await started.promise
+    cache.setContext(maxContext({ accountId: 'account-b' }))
+    oldResult.resolve(
+      maxEstimate({ id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: Date.now() + 60_000 })
+    )
+    assert.equal(await oldRequest, null)
+    assert.equal(cache.peek('recipient-a', 'standard').estimate, null)
+    assert.equal((await cache.get('recipient-a', 'standard')).maxAmountZats, '80000000')
+    assert.equal(quoteCalls, 2)
+  })
+
+  it('refreshes an unexpired Max when the reviewed quote has changed', async () => {
+    let quoteCalls = 0
+    const client = {
+      getFeeQuote: async () => ({
+        id: `quote-${++quoteCalls}`,
+        standardMarginalFeeZats: 5000,
+        expiresAt: Date.now() + 60_000
+      }),
+      estimateMaxTransfer: async input => ({
+        ...maxEstimate({
+          id: input.feeQuoteId,
+          standardMarginalFeeZats: 5000,
+          expiresAt: Date.now() + 60_000
+        }),
+        marginalFeeZats: String(input.marginalFeeZats)
+      })
+    }
+    const cache = new MaxTransferEstimateCache(maxContext(), undefined, client)
+    assert.equal((await cache.get('recipient-a', 'standard')).feeQuote.id, 'quote-1')
+    assert.equal((await cache.get('recipient-a', 'fast')).feeQuote.id, 'quote-1')
+    assert.equal((await cache.get('recipient-a', 'standard')).feeQuote.id, 'quote-1')
+    assert.equal((await cache.get('recipient-a', 'standard', true, true)).feeQuote.id, 'quote-2')
+    assert.equal(cache.peek('recipient-a', 'fast').estimate, null)
+    assert.equal((await cache.get('recipient-a', 'fast')).feeQuote.id, 'quote-2')
+    assert.equal(cache.peek('recipient-a', 'standard').estimate.feeQuote.id, 'quote-2')
+    assert.equal(quoteCalls, 2)
+  })
+
+  it('keeps an externally updated Max when an older request returns late', async () => {
+    const started = deferred()
+    const oldResult = deferred()
+    const quote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: Date.now() + 60_000 }
+    const client = {
+      getFeeQuote: async () => quote,
+      estimateMaxTransfer: async () => {
+        started.resolve()
+        return oldResult.promise
+      }
+    }
+    const cache = new MaxTransferEstimateCache(maxContext(), undefined, client)
+    const pending = cache.get('recipient-a', 'standard')
+    await started.promise
+    cache.update('recipient-a', 'standard', maxEstimate(quote, '70000000'))
+    oldResult.resolve(maxEstimate(quote, '90000000'))
+    assert.equal((await pending).maxAmountZats, '70000000')
+    assert.equal(cache.peek('recipient-a', 'standard').estimate.maxAmountZats, '70000000')
+  })
+
+  it('does not automatically repeat a failed estimate', async () => {
+    const quote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: Date.now() + 60_000 }
+    let calls = 0
+    const client = {
+      getFeeQuote: async () => quote,
+      estimateMaxTransfer: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('RPC unavailable')
+        return maxEstimate(quote)
+      }
+    }
+    const cache = new MaxTransferEstimateCache(maxContext(), undefined, client)
+    assert.equal(await cache.get('recipient-a', 'standard'), null)
+    assert.equal(await cache.get('recipient-a', 'standard'), null)
+    assert.equal(calls, 1)
+    assert.ok(await cache.get('recipient-a', 'standard', true))
+    assert.equal(calls, 2)
+  })
+
   it('does not run an ordinary fee proposal for an exact Max transfer', () => {
     const send = readSource('src/popup/pages/transactions/Send.tsx')
     const swap = readSource('src/popup/pages/swap/Swap.tsx')

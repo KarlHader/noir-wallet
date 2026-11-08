@@ -377,6 +377,7 @@ export function EvmSendForm({
   }, [intentKey, review])
   const maximumRequestKey = `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`
   const maximum = useTransferMaximum({
+    prefetch: true,
     enabled:
       route !== 'pending' &&
       asset.asset.kind === 'native' &&
@@ -677,20 +678,11 @@ export function EvmSendForm({
     if (route !== 'onchain' || !amountRaw || !validAmount || !validRecipient) {
       throw new Error('Incomplete EVM transfer')
     }
-    let value: EvmTransferReview | null = null
-    try {
-      value = await evmWalletClient.prepareTransfer(
-        { assetId: asset.asset.id, recipient, amountRaw },
-        { feeSelection, executionMode: sourceMode }
-      )
-      const feeLimit = value.graph.root.intent?.feeLimit
-      if (!feeLimit || !/^(?:0|[1-9][0-9]*)$/.test(feeLimit.amountRaw)) {
-        throw new Error('Invalid EVM fee estimate')
-      }
-      return { amountRaw: feeLimit.amountRaw, details: value.review.summary }
-    } finally {
-      if (value) await evmWalletClient.rejectTransfer(value.graph.root.id).catch(() => {})
-    }
+    const estimate = await evmWalletClient.estimateTransferFee(
+      { assetId: asset.asset.id, recipient, amountRaw },
+      { feeSelection, executionMode: sourceMode }
+    )
+    return { amountRaw: estimate.maximumFeeWei, details: estimate }
   }, [
     amountRaw,
     asset.asset.id,
@@ -701,8 +693,17 @@ export function EvmSendForm({
     validAmount,
     validRecipient
   ])
-  const feePreview = useTransferFeePreview({
+  const maximumFeeEstimate =
+    route === 'onchain' &&
+    maxSelected &&
+    !maximum.fallbackUsed &&
+    maximum.value?.evmFeeEstimate?.amountIndependent === true &&
+    maximum.value?.amountRaw === amountRaw
+      ? maximum.value.evmFeeEstimate
+      : undefined
+  const calculatedFeePreview = useTransferFeePreview({
     enabled:
+      !maximumFeeEstimate &&
       route === 'onchain' &&
       Boolean(sourceAddress) &&
       validAmount &&
@@ -714,9 +715,25 @@ export function EvmSendForm({
     requestKey: `${intentKey}:${JSON.stringify(feeSelection)}`,
     estimate: estimateFee
   })
+  const feePreview = maximumFeeEstimate
+    ? {
+        amountRaw: maximumFeeEstimate.maximumFeeWei,
+        details: maximumFeeEstimate,
+        loading: false
+      }
+    : calculatedFeePreview
   const previewFee = feePreview.amountRaw
     ? formatBaseUnitAmount(feePreview.amountRaw, nativeDecimals)
     : '—'
+  const reviewedSummary = review?.value.review.summary
+  const reviewedFeeEstimate =
+    reviewedSummary?.schema === 'evm.transaction.v1'
+      ? {
+          chainId: reviewedSummary.chainId,
+          maxFeePerGasWei: reviewedSummary.fields.maxFeePerGasWei,
+          maxPriorityFeePerGasWei: reviewedSummary.fields.maxPriorityFeePerGasWei
+        }
+      : null
   const confirmationTime = useEvmConfirmationEstimate({
     enabled:
       route === 'onchain' &&
@@ -724,7 +741,7 @@ export function EvmSendForm({
         ? review.intentKey === intentKey && !updatingFee
         : !feePreview.loading && feePreview.details !== null),
     requestKey: `${accountContextKey}:${intentKey}:${JSON.stringify(feeSelection)}:${review?.value.graph.root.id ?? 'preview'}`,
-    summary: review?.value.review.summary ?? feePreview.details
+    feeEstimate: review ? reviewedFeeEstimate : feePreview.details
   })
   const maximumError =
     route === 'confidential' && maximum.error ? getRheaSwapErrorMessage(maximum.error) : null
