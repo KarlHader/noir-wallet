@@ -157,6 +157,7 @@ export interface ConfidentialFundingPlan {
   readonly confidentialBaselineRaw: string
   readonly depositQuote?: ConfidentialQuote
   readonly swapQuote?: ConfidentialQuote
+  readonly quoteTimeEstimateSeconds?: number
   readonly reviewedAppFeesFingerprint?: string
   readonly preparedDeposit?: Readonly<{
     commandId: string
@@ -234,6 +235,14 @@ export interface ConfidentialFundingReview {
     symbol: string
     decimals: number
   }>
+}
+
+export interface ConfidentialFundingPreview {
+  readonly amountOutRaw: string
+  readonly minimumOutputRaw: string
+  readonly expiresAt: number
+  readonly appFeeBps?: number
+  readonly timeEstimateSeconds?: number
 }
 
 export interface ConfidentialFundingProgress {

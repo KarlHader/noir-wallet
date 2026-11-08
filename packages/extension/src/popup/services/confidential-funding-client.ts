@@ -1,6 +1,7 @@
 import type {
   ConfidentialFundingPhase,
   ConfidentialFundingPlan,
+  ConfidentialFundingPreview,
   ConfidentialFundingReview
 } from '@/core/services/confidential-funding'
 import type {
@@ -16,6 +17,8 @@ type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
 export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'>
 export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
+
+export const CONFIDENTIAL_PREVIEW_CONNECTION_ERROR = 'Connect Shield before requesting a quote'
 
 export interface PrepareConfidentialFundingRequest {
   readonly network: Network
@@ -114,6 +117,39 @@ function unwrap(value: unknown): unknown {
     throw new Error('Confidential funding returned an invalid response')
   }
   return value.result
+}
+
+function parsePreview(value: unknown): ConfidentialFundingPreview {
+  if (
+    !isRecord(value) ||
+    typeof value.amountOutRaw !== 'string' ||
+    !/^\d+$/.test(value.amountOutRaw) ||
+    typeof value.minimumOutputRaw !== 'string' ||
+    !/^\d+$/.test(value.minimumOutputRaw) ||
+    typeof value.expiresAt !== 'number' ||
+    !Number.isSafeInteger(value.expiresAt) ||
+    value.expiresAt <= Date.now() ||
+    (value.appFeeBps !== undefined &&
+      (typeof value.appFeeBps !== 'number' ||
+        !Number.isInteger(value.appFeeBps) ||
+        value.appFeeBps < 0 ||
+        value.appFeeBps > 10_000)) ||
+    (value.timeEstimateSeconds !== undefined &&
+      (typeof value.timeEstimateSeconds !== 'number' ||
+        !Number.isSafeInteger(value.timeEstimateSeconds) ||
+        value.timeEstimateSeconds <= 0))
+  ) {
+    throw new Error('Confidential funding preview is invalid')
+  }
+  return Object.freeze({
+    amountOutRaw: value.amountOutRaw,
+    minimumOutputRaw: value.minimumOutputRaw,
+    expiresAt: value.expiresAt,
+    ...(value.appFeeBps === undefined ? {} : { appFeeBps: value.appFeeBps }),
+    ...(value.timeEstimateSeconds === undefined
+      ? {}
+      : { timeEstimateSeconds: value.timeEstimateSeconds })
+  })
 }
 
 function parseReview(value: unknown): ConfidentialFundingReview {
@@ -266,6 +302,10 @@ export function createConfidentialFundingClient(
   send: RuntimeMessenger = message => chrome.runtime.sendMessage(message)
 ) {
   return Object.freeze({
+    preview: async (
+      request: PrepareConfidentialFundingRequest
+    ): Promise<ConfidentialFundingPreview> =>
+      parsePreview(unwrap(await send({ type: 'PREVIEW_CONFIDENTIAL_FUNDING', request }))),
     prepare: async (
       request: PrepareConfidentialFundingRequest
     ): Promise<ConfidentialFundingReview> =>

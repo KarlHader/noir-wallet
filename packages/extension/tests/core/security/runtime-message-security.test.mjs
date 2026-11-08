@@ -20,6 +20,29 @@ import {
 const extensionId = 'abcdefghijklmnopabcdefghijklmnop'
 
 test.describe('Runtime message security', () => {
+  test('limits confidential funding preview requests to extension pages', () => {
+    const message = {
+      type: 'PREVIEW_CONFIDENTIAL_FUNDING',
+      request: { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
+    }
+    expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: `chrome-extension://${extensionId}/index.html` },
+        extensionId
+      )
+    ).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: 'https://dapp.example/' },
+        extensionId
+      )
+    ).toBe(false)
+    expect(() => parseTrustedExtensionRuntimeMessage({ ...message, request: null })).toThrow()
+  })
+
   test('keeps backup verification inside extension pages and bounds its word payload', () => {
     const verification = { wordIndices: [0, 11], words: ['abandon', 'about'] }
     const message = { type: 'CONFIRM_WALLET_BACKUP', walletId: 'wallet:1', verification }

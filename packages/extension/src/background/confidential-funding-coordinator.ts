@@ -34,6 +34,7 @@ import {
   normalizeConfidentialWithdrawRequest,
   splitConfidentialFundingAmount,
   type ConfidentialFundingPlan,
+  type ConfidentialFundingPreview,
   type ConfidentialFundingReview,
   type ConfidentialPortfolioAssetMapping,
   type ConfidentialQuote,
@@ -293,6 +294,10 @@ function phaseForSettlement(
   }
 }
 
+function validQuoteTimeEstimateSeconds(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
 function reviewFromPlan(
   plan: ConfidentialFundingPlan,
   assets: AssetRegistry
@@ -303,6 +308,14 @@ function reviewFromPlan(
   const sourceFeeAsset = prepared
     ? assets.list(parseChainId(plan.source.chainId).id).find(entry => entry.asset.kind === 'native')
     : undefined
+  const quoteTimeEstimateSeconds =
+    plan.operation === 'deposit'
+      ? plan.depositQuote?.quote.timeEstimate
+      : plan.operation === 'swap'
+        ? plan.swapQuote?.quote.timeEstimate
+        : plan.operation === 'withdraw'
+          ? plan.quoteTimeEstimateSeconds
+          : undefined
   return Object.freeze({
     planId: plan.planId,
     ...(plan.operation ? { operation: plan.operation } : {}),
@@ -326,6 +339,9 @@ function reviewFromPlan(
     destinationAddress: plan.destination.address,
     ...(plan.externalRecipient ? { externalRecipient: plan.externalRecipient } : {}),
     withdrawCount: plan.withdraws.length,
+    ...(validQuoteTimeEstimateSeconds(quoteTimeEstimateSeconds)
+      ? { quoteTimeEstimateSeconds }
+      : {}),
     ...(plan.operation === 'swap'
       ? {
           slippageBps: plan.slippageBps,
@@ -334,9 +350,6 @@ function reviewFromPlan(
             : {}),
           ...(plan.swapQuote?.quote.refundFee !== undefined
             ? { quoteRefundFeeRaw: plan.swapQuote.quote.refundFee }
-            : {}),
-          ...(plan.swapQuote?.quote.timeEstimate !== undefined
-            ? { quoteTimeEstimateSeconds: plan.swapQuote.quote.timeEstimate }
             : {}),
           quoteAppFeeBps: Array.isArray(plan.swapQuote?.quoteRequest.appFees)
             ? plan.swapQuote.quoteRequest.appFees.reduce(
@@ -1002,6 +1015,79 @@ export class ConfidentialFundingCoordinator {
     }
   }
 
+  async preview(value: PrepareConfidentialFundingInput): Promise<ConfidentialFundingPreview> {
+    const input = this.parseInput(value)
+    if (input.operation !== 'withdraw' && input.operation !== 'swap') {
+      throw new Error('Confidential preview route is invalid')
+    }
+    const sourceSigningChain =
+      parseChainId(input.source.chainId).namespace === 'eip155'
+        ? input.source.chainId
+        : input.destination.chainId
+    const destinationSigningChain = confidentialSigningChainId(
+      input.source.chainId,
+      input.destination.chainId
+    )
+    const sourceIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
+    const destinationIdentity = await this.options.signer.resolveIdentity(destinationSigningChain)
+    this.assertSameAccount(sourceIdentity, destinationIdentity)
+    if (
+      input.network !== this.options.network ||
+      input.keyDomainId !== sourceIdentity.context.chainAccount.scope.keyDomainId ||
+      input.accountId !== sourceIdentity.context.chainAccount.scope.accountId
+    ) {
+      throw new Error('Confidential funding account or network changed')
+    }
+    const session = await this.options.store.getSession(
+      input.network,
+      input.keyDomainId,
+      input.accountId
+    )
+    if (!session || session.expiresAt <= this.now() + SESSION_REFRESH_BUFFER_MS) {
+      throw new Error('Connect Shield before requesting a quote')
+    }
+    const recipient =
+      input.externalRecipient ??
+      (input.destinationDomain === 'private'
+        ? destinationIdentity.peaAddress
+        : destinationIdentity.address)
+    const binding = {
+      originAsset: input.source.protocolAssetId,
+      destinationAsset: input.destination.protocolAssetId,
+      amountRaw: input.source.amountRaw,
+      signerId: sourceIdentity.address,
+      recipient,
+      depositType: 'CONFIDENTIAL_INTENTS' as const,
+      refundType: 'CONFIDENTIAL_INTENTS' as const,
+      recipientType:
+        input.operation === 'swap'
+          ? ('CONFIDENTIAL_INTENTS' as const)
+          : ('DESTINATION_CHAIN' as const),
+      slippageBps: input.slippageBps
+    }
+    const quote = await this.options.api.quote({ ...binding, dry: true })
+    assertConfidentialQuoteBinding(quote, binding, this.now())
+    const currentIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
+    this.assertSameAccount(sourceIdentity, currentIdentity)
+    const requestDeadline = Date.parse(String(quote.quoteRequest.deadline ?? ''))
+    const expiresAt = Number.isSafeInteger(requestDeadline)
+      ? Math.min(quoteDeadline(quote), requestDeadline)
+      : quoteDeadline(quote)
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now()) {
+      throw new Error('Confidential quote has expired')
+    }
+    const appFeeBps = readConfidentialQuoteAppFees(quote).reduce((sum, fee) => sum + fee.fee, 0)
+    return Object.freeze({
+      amountOutRaw: quote.quote.amountOut,
+      minimumOutputRaw: quote.quote.minAmountOut,
+      expiresAt,
+      ...(appFeeBps === 0 ? {} : { appFeeBps }),
+      ...(validQuoteTimeEstimateSeconds(quote.quote.timeEstimate)
+        ? { timeEstimateSeconds: quote.quote.timeEstimate }
+        : {})
+    })
+  }
+
   async prepare(value: PrepareConfidentialFundingInput): Promise<ConfidentialFundingReview> {
     const previous = this.prepareQueue.catch(() => {})
     let release!: () => void
@@ -1448,6 +1534,9 @@ export class ConfidentialFundingCoordinator {
       confidentialBaselineRaw: baseline,
       ...(isDeposit ? { depositQuote: quote, preparedDeposit } : {}),
       ...(isSwap ? { swapQuote: quote } : {}),
+      ...(!isDeposit && !isSwap && validQuoteTimeEstimateSeconds(quote.quote.timeEstimate)
+        ? { quoteTimeEstimateSeconds: quote.quote.timeEstimate }
+        : {}),
       ...(!isDeposit && !isSwap
         ? {
             reviewedAppFeesFingerprint: await fingerprintDirectConfidentialApproval([

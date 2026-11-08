@@ -18,6 +18,7 @@ export {
   type ConfidentialChildSettlement,
   type ConfidentialFundingPhase,
   type ConfidentialFundingPlan,
+  type ConfidentialFundingPreview,
   type ConfidentialFundingProgress,
   type ConfidentialFundingReview,
   type ConfidentialQuote,

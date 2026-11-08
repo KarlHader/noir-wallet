@@ -3902,6 +3902,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (
     message.type === 'PREPARE_CONFIDENTIAL_FUNDING' ||
+    message.type === 'PREVIEW_CONFIDENTIAL_FUNDING' ||
     message.type === 'CREATE_EXTERNAL_SHIELD_DEPOSIT' ||
     message.type === 'GET_EXTERNAL_SHIELD_DEPOSIT' ||
     message.type === 'LIST_EXTERNAL_SHIELD_DEPOSITS' ||
@@ -3937,15 +3938,17 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 ? coordinator.refreshExternalDeposit(message.depositId)
                 : message.type === 'PREPARE_CONFIDENTIAL_FUNDING'
                   ? coordinator.prepare(message.request)
-                  : message.type === 'CONFIRM_CONFIDENTIAL_FUNDING'
-                    ? coordinator.confirm(message.planId, message.payloadFingerprint)
-                    : message.type === 'GET_CONFIDENTIAL_FUNDING'
-                      ? coordinator.getPlan(message.planId)
-                      : message.type === 'CHECK_CONFIDENTIAL_FUNDING_SUBMISSION'
-                        ? accountContextTransition.runActiveOperation(() =>
-                            coordinator.checkSubmission(message.planId)
-                          )
-                        : coordinator.cancel(message.planId)
+                  : message.type === 'PREVIEW_CONFIDENTIAL_FUNDING'
+                    ? coordinator.preview(message.request)
+                    : message.type === 'CONFIRM_CONFIDENTIAL_FUNDING'
+                      ? coordinator.confirm(message.planId, message.payloadFingerprint)
+                      : message.type === 'GET_CONFIDENTIAL_FUNDING'
+                        ? coordinator.getPlan(message.planId)
+                        : message.type === 'CHECK_CONFIDENTIAL_FUNDING_SUBMISSION'
+                          ? accountContextTransition.runActiveOperation(() =>
+                              coordinator.checkSubmission(message.planId)
+                            )
+                          : coordinator.cancel(message.planId)
     void operation
       .then(result =>
         sendResponse({ result: message.type === 'CANCEL_CONFIDENTIAL_FUNDING' ? true : result })

@@ -649,6 +649,52 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.plans.size).toBe(0)
   })
 
+  test('previews Shield sends and swaps without creating plans, reserving balances, or signing', async () => {
+    const h = directPreparationHarness()
+    const send = h.request('60')
+    const sendPreview = await h.coordinator.preview(send)
+    expect(sendPreview).toMatchObject({
+      amountOutRaw: '60',
+      minimumOutputRaw: '60',
+      appFeeBps: 50,
+      expiresAt: h.state.now + 60_000
+    })
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      dry: true,
+      recipientType: 'DESTINATION_CHAIN'
+    })
+
+    const swap = {
+      ...send,
+      operation: 'swap',
+      destinationDomain: 'shield',
+      destination: {
+        chainId: 'eip155:1',
+        chainName: 'eth',
+        assetId: h.swapDestinationAssetId,
+        protocolAssetId: h.swapDestinationProtocolId
+      }
+    }
+    await h.coordinator.preview(swap)
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      dry: true,
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      recipient: signerId
+    })
+    expect(h.plans.size).toBe(0)
+    expect(h.state.formalQuotes).toBe(0)
+    expect(h.state.signatures).toBe(0)
+
+    await expect(h.coordinator.preview(h.request('60', 'account:other'))).rejects.toThrow(
+      'account or network changed'
+    )
+    h.state.session.expiresAt = h.state.now + 60_000
+    await expect(h.coordinator.preview(send)).rejects.toThrow('Connect Shield')
+    expect(h.plans.size).toBe(0)
+    expect(h.state.formalQuotes).toBe(0)
+    expect(h.state.signatures).toBe(0)
+  })
+
   test('binds a Shield swap preview and reserves its source balance', async () => {
     const h = directPreparationHarness()
     const request = {
