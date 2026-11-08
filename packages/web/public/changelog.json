@@ -1,6 +1,15 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "1.0.41": {
+      "notifyUpdate": true,
+      "changes": [
+        "Updated for the Zcash NU7 network upgrade.",
+        "More accurate fee estimates and Swap Max amounts.",
+        "Smoother wallet loading and more reliable syncing and transaction updates.",
+        "Connected apps can no longer access your transaction history."
+      ]
+    },
     "1.0.40": {
       "changes": [
         "Review Quote now shows the full recipient address before you confirm a swap.",
