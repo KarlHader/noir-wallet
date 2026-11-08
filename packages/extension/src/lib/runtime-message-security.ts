@@ -186,6 +186,10 @@ const isWalletBackupVerification: RuntimeFieldValidator = value => {
 }
 const isEvmAddress: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value)
+const isEvmWeiFeeCap: RuntimeFieldValidator = value =>
+  typeof value === 'string' &&
+  /^(?:0|[1-9][0-9]{0,77})$/.test(value) &&
+  BigInt(value) <= (1n << 256n) - 1n
 const isBoundedString: RuntimeFieldValidator = value =>
   typeof value === 'string' && value.length <= 4_096
 const isLegacyPasswordString: RuntimeFieldValidator = value =>
@@ -650,6 +654,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     optional: { forceDiscovery: isBoolean, chainIds: isChainIdArray }
   },
   GET_EVM_PORTFOLIO: { required: { action: isPortfolioAction } },
+  GET_EVM_CONFIRMATION_ESTIMATE: {
+    required: {
+      chainId: isShortString,
+      maxFeePerGasWei: isEvmWeiFeeCap,
+      maxPriorityFeePerGasWei: isEvmWeiFeeCap
+    }
+  },
   GET_EVM_TOKEN_ALLOWANCE: {
     required: {
       chainId: isShortString,
@@ -995,6 +1006,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     REFRESH_INTENTS_PROTOCOL_ASSETS: ['extension-page'],
     GET_PORTFOLIO: ['extension-page'],
     GET_EVM_PORTFOLIO: ['extension-page'],
+    GET_EVM_CONFIRMATION_ESTIMATE: ['extension-page'],
     GET_EVM_TOKEN_ALLOWANCE: ['extension-page'],
     PREPARE_EVM_TRANSFER: ['extension-page'],
     PREPARE_EVM_CONTRACT_CALL: ['extension-page'],

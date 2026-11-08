@@ -85,6 +85,11 @@ export interface EvmTransferSubmission {
   readonly graph: TransactionGraph
 }
 
+export interface EvmConfirmationEstimate {
+  readonly minimumSeconds: number
+  readonly maximumSeconds: number
+}
+
 export interface EvmExternalSignatureRequired {
   readonly status: 'external-signature-required'
   readonly graph: TransactionGraph
@@ -125,6 +130,11 @@ export interface EvmExternalSigningRequest {
 }
 
 export interface EvmWalletClient {
+  readonly getConfirmationEstimate: (request: {
+    readonly chainId: string
+    readonly maxFeePerGasWei: string
+    readonly maxPriorityFeePerGasWei: string
+  }) => Promise<EvmConfirmationEstimate | null>
   readonly getPortfolio: (
     action: 'read' | 'refresh',
     options?: {
@@ -712,6 +722,45 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
   ): Promise<T> => parseRuntimeResult(await sendMessage(message), parseResult)
 
   return Object.freeze({
+    getConfirmationEstimate: async (request: {
+      readonly chainId: string
+      readonly maxFeePerGasWei: string
+      readonly maxPriorityFeePerGasWei: string
+    }) => {
+      const chainId = parseClientInput(() => parseChainId(request.chainId))
+      if (
+        chainId.namespace !== 'eip155' ||
+        !/^(?:0|[1-9][0-9]{0,77})$/.test(request.maxFeePerGasWei) ||
+        !/^(?:0|[1-9][0-9]{0,77})$/.test(request.maxPriorityFeePerGasWei) ||
+        BigInt(request.maxFeePerGasWei) > (1n << 256n) - 1n ||
+        BigInt(request.maxPriorityFeePerGasWei) > BigInt(request.maxFeePerGasWei)
+      ) {
+        throw new EvmWalletClientError(
+          'invalid-request',
+          'Invalid EVM confirmation estimate request'
+        )
+      }
+      return send(
+        { type: 'GET_EVM_CONFIRMATION_ESTIMATE', ...request, chainId: chainId.id },
+        value => {
+          if (value === null) return null
+          const result = readRecord(value, 'EVM confirmation estimate')
+          assertExactKeys(result, ['minimumSeconds', 'maximumSeconds'], 'EVM confirmation estimate')
+          if (
+            !Number.isSafeInteger(result.minimumSeconds) ||
+            !Number.isSafeInteger(result.maximumSeconds) ||
+            (result.minimumSeconds as number) < 1 ||
+            (result.maximumSeconds as number) < (result.minimumSeconds as number)
+          ) {
+            throw new EvmWalletClientError('invalid-response', 'Invalid EVM confirmation estimate')
+          }
+          return Object.freeze({
+            minimumSeconds: result.minimumSeconds as number,
+            maximumSeconds: result.maximumSeconds as number
+          })
+        }
+      )
+    },
     getPortfolio: async (
       action: 'read' | 'refresh',
       options: {

@@ -41,6 +41,7 @@ import {
   type EvmFeeSelection
 } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
+import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
   createNativeTransferSource,
@@ -686,7 +687,7 @@ export function EvmSendForm({
       if (!feeLimit || !/^(?:0|[1-9][0-9]*)$/.test(feeLimit.amountRaw)) {
         throw new Error('Invalid EVM fee estimate')
       }
-      return feeLimit.amountRaw
+      return { amountRaw: feeLimit.amountRaw, details: value.review.summary }
     } finally {
       if (value) await evmWalletClient.rejectTransfer(value.graph.root.id).catch(() => {})
     }
@@ -716,6 +717,15 @@ export function EvmSendForm({
   const previewFee = feePreview.amountRaw
     ? formatBaseUnitAmount(feePreview.amountRaw, nativeDecimals)
     : '—'
+  const confirmationTime = useEvmConfirmationEstimate({
+    enabled:
+      route === 'onchain' &&
+      (review !== null
+        ? review.intentKey === intentKey && !updatingFee
+        : !feePreview.loading && feePreview.details !== null),
+    requestKey: `${accountContextKey}:${intentKey}:${JSON.stringify(feeSelection)}:${review?.value.graph.root.id ?? 'preview'}`,
+    summary: review?.value.review.summary ?? feePreview.details
+  })
   const maximumError =
     route === 'confidential' && maximum.error ? getRheaSwapErrorMessage(maximum.error) : null
   const displayedError = error ?? tokenFeeBalanceError ?? maximumError
@@ -1190,19 +1200,27 @@ export function EvmSendForm({
         )}
 
         {route === 'onchain' && (
-          <div className="flex min-h-6 items-center justify-between gap-2 text-xs">
-            <span className="text-muted">Fee</span>
-            <NetworkFeeTierPicker
-              chainFamily="evm"
-              tier={feeSelection.kind === 'tier' ? feeSelection.tier : 'standard'}
-              selection={feeSelection}
-              amount={previewFee}
-              symbol={nativeSymbol}
-              layout="inline"
-              onTierChange={tier => handleFormFeeSelectionChange({ kind: 'tier', tier })}
-              onSelectionChange={handleFormFeeSelectionChange}
-            />
-          </div>
+          <>
+            <div className="flex min-h-6 items-center justify-between gap-2 text-xs">
+              <span className="text-muted">Fee</span>
+              <NetworkFeeTierPicker
+                chainFamily="evm"
+                tier={feeSelection.kind === 'tier' ? feeSelection.tier : 'standard'}
+                selection={feeSelection}
+                amount={previewFee}
+                symbol={nativeSymbol}
+                layout="inline"
+                onTierChange={tier => handleFormFeeSelectionChange({ kind: 'tier', tier })}
+                onSelectionChange={handleFormFeeSelectionChange}
+              />
+            </div>
+            <div className="flex min-h-6 items-center justify-between gap-2 text-xs">
+              <span className="text-muted">Est. confirmation</span>
+              <span title="Estimated first confirmation based on recent blocks.">
+                {confirmationTime}
+              </span>
+            </div>
+          </>
         )}
 
         {amountRaw !== null && BigInt(amountRaw) > BigInt(availableRaw) && (
@@ -1382,6 +1400,14 @@ export function EvmSendForm({
                         </div>
                       }
                     />
+                  )
+                },
+                {
+                  label: 'Est. confirmation',
+                  content: (
+                    <span title="Estimated first confirmation based on recent blocks.">
+                      {confirmationTime}
+                    </span>
                   )
                 },
                 ...(maximumTotal

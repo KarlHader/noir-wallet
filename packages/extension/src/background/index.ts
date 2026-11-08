@@ -128,6 +128,7 @@ import {
 } from '@/lib/wallet-settings-storage'
 import {
   getChainEndpointRuntimeKey,
+  getActiveChainEndpointSettings,
   type ChainEndpointSettings
 } from '@/core/chains/chain-endpoint-settings'
 import {
@@ -204,6 +205,7 @@ import {
 
 import {
   computeEvmSigningPayloadFingerprint,
+  createConfiguredEvmRpcClient,
   EvmRpcError,
   EvmTransactionError,
   type EvmSigningPreparePayload,
@@ -212,6 +214,7 @@ import {
   type DetectedEvmAssetCoordinator,
   type UserEvmAssetCoordinator
 } from '@/infrastructure/chains/evm'
+import { estimateEvmFirstConfirmation } from './evm-confirmation-estimate'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import {
   createBackgroundEvmTransferRuntime,
@@ -4116,6 +4119,35 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         })
         sendResponse({ error: mapEvmWalletRuntimeError(error) })
       })
+    return true
+  }
+
+  if (message.type === 'GET_EVM_CONFIRMATION_ESTIMATE') {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 2_500)
+    void (async () => {
+      if (!evmFeatureRuntimePolicy.newOperationsEnabled) return null
+      const chainId = parseChainId(message.chainId)
+      if (chainId.namespace !== 'eip155') return null
+      const network = resolveEvmNetworkCatalog(
+        DEFAULT_NETWORK,
+        getActiveChainEndpointSettings()
+      ).find(candidate => candidate.chainId === chainId.id)
+      if (!network || !hasBackgroundEvmTransferCapability(network)) return null
+      const rpc = createConfiguredEvmRpcClient(DEFAULT_NETWORK, network)
+      return estimateEvmFirstConfirmation(
+        rpc,
+        {
+          chainId: chainId.id,
+          maxFeePerGasWei: message.maxFeePerGasWei as string,
+          maxPriorityFeePerGasWei: message.maxPriorityFeePerGasWei as string
+        },
+        controller.signal
+      )
+    })()
+      .then(result => sendResponse({ result }))
+      .catch(() => sendResponse({ result: null }))
+      .finally(() => clearTimeout(timeout))
     return true
   }
 
