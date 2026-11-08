@@ -31,6 +31,7 @@ import {
   type EvmNetworkExample
 } from './evm-network-catalog'
 import { buildExampleMultichainSessionRequest } from './multichain-session-request'
+import { switchToExampleEvmNetwork } from './evm-network-selection'
 
 const NOIR_TEST_BENCH_ABI = [
   {
@@ -545,7 +546,7 @@ export function EvmExample({ navigation }: { navigation: ExampleNavigationProps 
     if (chainId === targetChainId) return
     void run(async () => {
       try {
-        await switchEvmChain(provider, targetChainId)
+        await switchToExampleEvmNetwork(provider, navigation.selectedEvmNetwork)
       } catch (switchError) {
         const active = getEvmNetworkExample(chainId)
         if (active) navigation.onSyncEvmNetwork(active)

@@ -9,6 +9,7 @@ export type ExampleChainIcon =
   | 'berachain'
   | 'bitcoin'
   | 'bsc'
+  | 'custom-evm'
   | 'ethereum'
   | 'gnosis'
   | 'monad'
@@ -29,6 +30,7 @@ const EXAMPLE_CHAIN_ICON_URLS: Readonly<Record<ExampleChainIcon, string>> = Obje
   berachain: chainIconUrl('berachain'),
   bitcoin: chainIconUrl('bitcoin'),
   bsc: chainIconUrl('bsc'),
+  'custom-evm': new URL('./network.svg', import.meta.url).href,
   ethereum: chainIconUrl('ethereum'),
   gnosis: chainIconUrl('gnosis'),
   monad: chainIconUrl('monad'),
@@ -240,8 +242,27 @@ export const EVM_NETWORK_EXAMPLES = Object.freeze([
   })
 ])
 
+const CUSTOM_EVM_NETWORK_EXAMPLES = Object.freeze([
+  network('mainnet', 'Robinhood', 'custom-evm', {
+    chainId: '0x1237',
+    chainName: 'Robinhood Chain',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
+    blockExplorerUrls: ['https://robinhoodchain.blockscout.com']
+  }),
+  network('testnet', 'Robinhood Testnet', 'custom-evm', {
+    chainId: '0xb626',
+    chainName: 'Robinhood Chain Testnet',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: ['https://rpc.testnet.chain.robinhood.com'],
+    blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com']
+  })
+])
+
 export function getEvmNetworkExample(chainId: string): EvmNetworkExample | undefined {
-  return EVM_NETWORK_EXAMPLES.find(network => network.request.chainId === chainId)
+  return [...EVM_NETWORK_EXAMPLES, ...CUSTOM_EVM_NETWORK_EXAMPLES].find(
+    network => network.request.chainId === chainId
+  )
 }
 
 export function getEvmNetworkExampleMode(chainId: string): EvmNetworkExample['mode'] | undefined {
@@ -251,5 +272,7 @@ export function getEvmNetworkExampleMode(chainId: string): EvmNetworkExample['mo
 export function getEvmNetworkExamples(
   mode: EvmNetworkExample['mode']
 ): readonly EvmNetworkExample[] {
-  return EVM_NETWORK_EXAMPLES.filter(network => network.mode === mode)
+  return [...EVM_NETWORK_EXAMPLES, ...CUSTOM_EVM_NETWORK_EXAMPLES].filter(
+    network => network.mode === mode
+  )
 }
