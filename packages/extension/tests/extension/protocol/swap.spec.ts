@@ -950,8 +950,11 @@ test('shows Swap asset icons, sent amount, and route clearly in Activity', async
   popup,
   extensionId
 }) => {
-  test.setTimeout(150_000)
-  const evmNetwork = await mockEvmNetwork(context, { allowBroadcast: true })
+  test.setTimeout(180_000)
+  const evmNetwork = await mockEvmNetwork(context, {
+    allowBroadcast: true,
+    pendingBroadcast: true
+  })
   await mockBitcoinNetwork(context)
   const protocolApis = await mockProtocolApis(context, { orderStatus: 'pending' })
   await waitForBackgroundWalletInitialization(popup)
@@ -1027,8 +1030,9 @@ test('shows Swap asset icons, sent amount, and route clearly in Activity', async
   await captureScreenshot(popup, 'swap-activity-route-detail.png')
 
   const swapActivityId = await row.getAttribute('data-activity-id')
+  protocolApis.setOrderStatus('completed')
   await popup.evaluate(async () => {
-    await chrome.alarms.create('evm-transaction-monitor-alarm', { when: Date.now() + 100 })
+    await chrome.alarms.create('rhea-swap-transaction-monitor-alarm', { when: Date.now() + 100 })
   })
   await expect
     .poll(
@@ -1042,15 +1046,21 @@ test('shows Swap asset icons, sent amount, and route clearly in Activity', async
         }
         return response.result?.items
           ?.find(item => item.id === swapActivityId)
-          ?.segments.find(segment => segment.role === 'origin')?.status
+          ?.segments.find(segment => segment.role === 'destination')?.status
       },
       { timeout: 30_000 }
     )
     .toBe('final')
-  protocolApis.setOrderStatus('completed')
+  const originStep = popup.locator('[data-progress-step]').first()
+  await expect(originStep).toContainText('Origin transaction')
+  await expect(originStep).toHaveAttribute('data-progress-state', 'active')
+  await expect(popup.locator('[data-activity-status-value]')).toHaveText('Finalizing')
+
+  evmNetwork.setReceiptPending(false)
   await popup.evaluate(async () => {
-    await chrome.alarms.create('rhea-swap-transaction-monitor-alarm', { when: Date.now() + 100 })
+    await chrome.alarms.create('evm-transaction-monitor-alarm', { when: Date.now() + 100 })
   })
+  await expect(originStep).toHaveAttribute('data-progress-state', 'complete', { timeout: 60_000 })
   await expect(popup.locator('[data-activity-status-value]')).toHaveText('Confirmed', {
     timeout: 30_000
   })
@@ -1708,7 +1718,7 @@ test('retries a failed quote below the destination asset card in real MV3', asyn
     .click()
   await popup.getByRole('textbox', { name: 'From amount', exact: true }).fill('0.01')
   const error = popup.getByRole('alert')
-  await expect(error.getByText('No route found for this swap.', { exact: true })).toBeVisible({
+  await expect(error.getByText('Request timed out.', { exact: true })).toBeVisible({
     timeout: 30_000
   })
   await expect(error.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()

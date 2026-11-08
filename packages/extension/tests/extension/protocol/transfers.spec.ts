@@ -242,15 +242,19 @@ test('ZEC Move locks the current account as the destination in real MV3', async 
     await captureScreenshot(popup, 'shield-zec-move-source-picker.png')
     await sources.getByRole('button', { name: source }).click()
     await expect(popup.getByRole('heading', { name: 'Move', exact: true })).toBeVisible()
-    await expect(popup.getByRole('button', { name: 'Choose send source' })).toBeDisabled()
     await expect(popup.locator('#zcash-send-recipient')).toHaveCount(0)
     await expect(popup.locator(`[title="${destination}"]`)).toBeVisible()
-    await captureScreenshot(
-      popup,
-      source === 'Move to Shield'
-        ? 'shield-zec-move-to-shield.png'
-        : 'shield-zec-move-to-public.png'
-    )
+    if (source === 'Move to Shield') {
+      await expect(popup.getByText('Public balance').first().locator('..')).toContainText('2 ZEC')
+      await expect(popup.getByRole('textbox', { name: 'Amount' })).toHaveCount(0)
+      await captureScreenshot(popup, 'shield-zec-move-to-shield.png')
+      await popup.getByRole('button', { name: 'Review Shield' }).click()
+      await expect(popup.getByRole('dialog', { name: 'Shield Funds' })).toBeVisible()
+      await expect(popup.getByRole('button', { name: 'Shield Now' })).toBeVisible()
+    } else {
+      await expect(popup.getByRole('button', { name: 'Choose send source' })).toBeDisabled()
+      await captureScreenshot(popup, 'shield-zec-move-to-public.png')
+    }
   }
 })
 
@@ -687,6 +691,12 @@ test('withdraws Shield ETH to an external EVM recipient and restores the settled
   const recipient = '0x3333333333333333333333333333333333333333'
   await openNearShieldAction(popup, 'Send')
   await popup.getByRole('button', { name: 'Connect Shield' }).click()
+  await expect(popup.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  await popup.getByRole('button', { name: 'Network Select network', exact: true }).click()
+  await popup
+    .getByRole('dialog')
+    .getByRole('button', { name: /Ethereum/ })
+    .click()
   await popup.getByRole('textbox', { name: 'Send amount' }).fill('0.01')
   await popup.getByRole('textbox', { name: 'Recipient address' }).fill(recipient)
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
@@ -1638,9 +1648,11 @@ test('reviews a same-token cross-chain Send with the destination address in real
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await popup.getByRole('button', { name: 'Send USDC on Ethereum' }).click()
   await expect(popup.getByRole('group', { name: 'Send mode' })).toHaveCount(0)
-  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'Select send asset, USDC on Ethereum' })
+  ).toBeVisible()
   await captureScreenshot(popup, 'cross-chain-send-network-entry.png')
-  await popup.getByRole('button', { name: 'Send route, current On-chain' }).click()
+  await popup.getByRole('button', { name: 'Send route, current Same-chain' }).click()
   await popup.getByRole('menuitemradio', { name: 'Cross-chain' }).click()
   await expect(popup.getByRole('heading', { name: 'Send', exact: true })).toBeVisible()
   await expect(popup.getByRole('button', { name: 'Send route, current Cross-chain' })).toBeVisible()
@@ -1687,10 +1699,12 @@ test('reviews a same-token cross-chain Send with the destination address in real
 
   await popup.getByRole('button', { name: 'Back' }).click()
   await popup.getByRole('button', { name: 'Send route, current Cross-chain' }).click()
-  await popup.getByRole('menuitemradio', { name: 'On-chain' }).click()
+  await popup.getByRole('menuitemradio', { name: 'Same-chain' }).click()
   await expect(popup.getByRole('heading', { name: 'Send', exact: true })).toBeVisible()
-  await expect(popup.getByRole('button', { name: 'Send route, current On-chain' })).toBeVisible()
-  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Send route, current Same-chain' })).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'Select send asset, USDC on Ethereum' })
+  ).toBeVisible()
   await expect(popup.getByRole('group', { name: 'Send mode' })).toHaveCount(0)
 })
 
@@ -1713,7 +1727,7 @@ test('shows cross-chain Send result for an imported EVM private-key wallet', asy
 
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await popup.getByRole('button', { name: 'Send USDC on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Send route, current On-chain' }).click()
+  await popup.getByRole('button', { name: 'Send route, current Same-chain' }).click()
   await popup.getByRole('menuitemradio', { name: 'Cross-chain' }).click()
   await popup.getByRole('button', { name: 'To asset' }).click()
   const destinations = popup.getByRole('dialog', { name: 'Select network' })
@@ -1765,11 +1779,13 @@ test('returns to the selected Send asset after switching to the cross-chain rout
 
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await popup.getByRole('button', { name: 'Send ETH on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Send route, current On-chain' }).click()
+  await popup.getByRole('button', { name: 'Send route, current Same-chain' }).click()
   await popup.getByRole('menuitemradio', { name: 'Cross-chain' }).click()
   await popup.getByRole('button', { name: 'Back' }).click()
-  await expect(popup.getByRole('button', { name: 'Send route, current On-chain' })).toBeVisible()
-  await expect(popup.getByText('Ethereum', { exact: true })).toBeVisible()
+  await expect(popup.getByRole('button', { name: 'Send route, current Same-chain' })).toBeVisible()
+  await expect(
+    popup.getByRole('button', { name: 'Select send asset, ETH on Ethereum' })
+  ).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
   await expect(popup.getByRole('button', { name: 'Send ETH on Ethereum' })).toBeVisible()
   await popup.getByRole('button', { name: 'Back' }).click()
@@ -1802,7 +1818,7 @@ test('shows the provider quote error on cross-chain Send', async ({
 
   await popup.getByRole('button', { name: 'Send', exact: true }).click()
   await popup.getByRole('button', { name: 'Send USDC on Ethereum' }).click()
-  await popup.getByRole('button', { name: 'Send route, current On-chain' }).click()
+  await popup.getByRole('button', { name: 'Send route, current Same-chain' }).click()
   await popup.getByRole('menuitemradio', { name: 'Cross-chain' }).click()
   await popup.getByRole('button', { name: 'To asset' }).click()
   const destinations = popup.getByRole('dialog', { name: 'Select network' })

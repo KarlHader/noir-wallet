@@ -1,6 +1,5 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
-import { getConfidentialTransferEstimate } from '../../../src/config/intents.ts'
 import { summarizePortfolioFiat } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
 import { getActivityTransactionReferences } from '../../../src/popup/services/activity-transaction-references.ts'
 import {
@@ -297,12 +296,6 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     shieldUsdPartial: false,
     privateUsd: '0'
   })
-})
-
-test('confidential transfer timing is configured by chain family', () => {
-  expect(getConfidentialTransferEstimate('eip155:1')).toBe('3-5 min')
-  expect(getConfidentialTransferEstimate('eip155:42161')).toBe('3-5 min')
-  expect(getConfidentialTransferEstimate('bip122:example')).toBeNull()
 })
 
 test('Activity details show the outgoing hash before destination settlement', () => {

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import {
+  canUseEstimatedEvmSwapMaximum,
   isSwapMaximumQuotePending,
   resolveEvmSwapMaximumInsufficientFundsAdjustment,
   resolveSwapMaximumAdjustment
@@ -47,6 +48,39 @@ test('native Max waits for its route estimate before allowing an inherited trans
   expect(isSwapMaximumQuotePending({ ...initial, selected: false })).toBe(false)
   expect(isSwapMaximumQuotePending({ ...initial, nativeSource: false })).toBe(false)
   expect(isSwapMaximumQuotePending({ ...initial, nativeSource: false, loading: true })).toBe(true)
+})
+
+test('reuses a measured EVM Max only for the exact prepared amount and fee tier', () => {
+  const base = {
+    source: input().source,
+    review: input().review,
+    currentAmount: '0.5',
+    maximum: { amountRaw: '500000', networkFeeRaw: '100000' },
+    fallbackUsed: false,
+    refreshingFees: false
+  }
+  expect(canUseEstimatedEvmSwapMaximum(base)).toBe(true)
+  expect(canUseEstimatedEvmSwapMaximum({ ...base, fallbackUsed: true })).toBe(false)
+  expect(canUseEstimatedEvmSwapMaximum({ ...base, refreshingFees: true })).toBe(false)
+  expect(canUseEstimatedEvmSwapMaximum({ ...base, currentAmount: '0.6' })).toBe(false)
+  expect(
+    canUseEstimatedEvmSwapMaximum({
+      ...base,
+      maximum: { ...base.maximum, amountRaw: '600000' }
+    })
+  ).toBe(false)
+  expect(
+    canUseEstimatedEvmSwapMaximum({
+      ...base,
+      review: { ...base.review, amountIn: '400000' }
+    })
+  ).toBe(false)
+  expect(
+    canUseEstimatedEvmSwapMaximum({
+      ...base,
+      review: { ...base.review, execution: { kind: 'evm-signature', target: '0xcontract' } }
+    })
+  ).toBe(false)
 })
 
 test('quotes a smaller real native amount before estimating Max or a changed fee tier', async () => {

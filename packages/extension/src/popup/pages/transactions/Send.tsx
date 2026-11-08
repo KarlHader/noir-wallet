@@ -9,6 +9,8 @@ import { RecipientSelector } from '../../components/transaction/RecipientSelecto
 import { InlineError } from '@/popup/components/common/InlineError'
 import {
   SendAmountInputCard,
+  SendAssetHeader,
+  SendRecipientAddress,
   SendRecipientInputCard
 } from '../../components/transaction/SendInputCards'
 import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab'
@@ -31,7 +33,6 @@ import {
 import { cn } from '@/lib/utils'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '../../components/tokens/TokenIcon'
-import { Switch } from '../../components/ui/switch'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
 import { useTransaction } from '../../hooks/useTransaction'
@@ -85,8 +86,12 @@ export function Send() {
       ? 'shielded'
       : 'transparent'
   })
-  const [sourcePickerKind, setSourcePickerKind] = useState<'source' | 'privacy' | null>(null)
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
   const [toAddress, setToAddress] = useState('')
+  const [selectedRecipient, setSelectedRecipient] = useState<{
+    address: string
+    name: string
+  } | null>(null)
   const [amount, setAmount] = useState('')
   const [maxSelected, setMaxSelected] = useState(false)
   const [memo, setMemo] = useState('')
@@ -268,9 +273,10 @@ export function Send() {
     if (previousRouteIdentity.current === routeIdentity) return
     previousRouteIdentity.current = routeIdentity
     setShowReview(false)
-    setSourcePickerKind(null)
+    setSourcePickerOpen(false)
     setFundingSource(moveSource ?? (walletMode === 'private' ? 'shielded' : 'transparent'))
     setToAddress('')
+    setSelectedRecipient(null)
     setAmount('')
     setMaxSelected(false)
     setMemo('')
@@ -284,8 +290,9 @@ export function Send() {
     if (previousScope === undefined || previousScope === activeScope) return
 
     setShowReview(false)
-    setSourcePickerKind(null)
+    setSourcePickerOpen(false)
     setToAddress('')
+    setSelectedRecipient(null)
     setAmount('')
     setMaxSelected(false)
     setMemo('')
@@ -301,7 +308,7 @@ export function Send() {
     )
       return
     setFundingSource(source)
-    setSourcePickerKind(null)
+    setSourcePickerOpen(false)
     setAmount('')
     setMaxSelected(false)
     setShowReview(false)
@@ -315,8 +322,9 @@ export function Send() {
         <RecipientSelector
           chainId={getZcashChainId(currentNetwork)}
           excludeAddresses={fromAddress ? [fromAddress] : []}
-          onSelect={address => {
+          onSelect={(address, name) => {
             setToAddress(address)
+            setSelectedRecipient(name ? { address, name } : null)
             close()
             resolve(address)
           }}
@@ -611,98 +619,100 @@ export function Send() {
     <div className="page-container" data-wallet-mode={walletMode}>
       <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack onBack={goBack} />
       <div className="page-content min-h-0 !px-4 pt-4">
-        <div className="space-y-2">
-          <div className="pb-1 pt-1 text-center">
-            <span className="mt-2 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2 text-base font-medium leading-[21px]">
-              <TokenIcon symbol="ZEC" nativeChain="zcash" size={26} />
-              ZEC
-            </span>
-            {currentNetwork === 'testnet' && (
-              <p className="mt-1 text-xs text-muted">Zcash Testnet</p>
-            )}
-          </div>
-
-          <div className="space-y-2.5 pt-[21px]">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium leading-[18px] text-muted">
-                {isSelfMove ? 'Move from' : 'Send from'}
-              </p>
-              {!isSelfMove && (
+        <div className={cn('space-y-2', !isSelfMove && 'space-y-4')}>
+          {isSelfMove ? (
+            <>
+              <div className="pb-1 pt-1 text-center">
+                <span className="mt-2 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2 text-base font-medium leading-[21px]">
+                  <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={26} />
+                  ZEC
+                </span>
+                {currentNetwork === 'testnet' && (
+                  <p className="mt-1 text-xs text-muted">Zcash Testnet</p>
+                )}
+              </div>
+              <div className="space-y-2.5 pt-[21px]">
+                <p className="text-sm font-medium leading-[18px] text-muted">Move from</p>
+                <div className="flex min-h-[72px] items-start gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-[11px] pb-2 pt-[14px]">
+                  <button
+                    type="button"
+                    aria-label="Choose send source"
+                    aria-haspopup="dialog"
+                    disabled
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium leading-[18px]">
+                      <span className="truncate">{accountDisplayName}</span>
+                      <span
+                        className={cn(
+                          'shrink-0 rounded px-1.5 py-px text-[11px] leading-4',
+                          fundingSource === 'shielded'
+                            ? 'bg-primary/10 text-primary'
+                            : 'bg-white/10 text-muted'
+                        )}
+                      >
+                        {fundingSource === 'shielded' ? 'Shield' : 'Public'}
+                      </span>
+                    </span>
+                    <span className="mt-[11px] flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
+                      {fundingSource === 'shielded' && (
+                        <img src={zcashShieldLogo} alt="" className="size-4 shrink-0 rounded" />
+                      )}
+                      <span className="truncate" title={fromAddress}>
+                        {fundingSource === 'shielded'
+                          ? 'Zcash shield'
+                          : formatSortAddress(fromAddress)}
+                      </span>
+                    </span>
+                  </button>
+                  <span className="flex max-w-[38%] shrink-0 flex-col items-end gap-2">
+                    <span
+                      className="max-w-full truncate text-right text-sm font-medium leading-[18px]"
+                      title={sourceBalance.available}
+                    >
+                      {formatTokenQuantity(sourceBalance.available)}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <SendAssetHeader
+                  symbol="ZEC"
+                  networkName={currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
+                  nativeChain="zcash"
+                  blockchain="zec"
+                  variant="compact"
+                />
+                {currentNetwork === 'testnet' && (
+                  <p className="mt-1 text-center text-xs text-muted">Zcash Testnet</p>
+                )}
+              </div>
+              <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
+                <span className="shrink-0 text-muted">From</span>
                 <button
                   type="button"
-                  role="switch"
-                  aria-label="Send privately"
-                  aria-checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
-                  disabled={
-                    fundingSource === 'shielded' &&
-                    Boolean(
-                      fundingOptions.find(option => option.type === 'transparent')?.disabledReason
-                    )
-                  }
-                  onClick={() => {
-                    if (fundingSource === 'shielded') handleSelectFundingSource('transparent')
-                    else setSourcePickerKind('privacy')
-                  }}
-                  className="flex items-center gap-1 text-sm font-normal leading-[18px] text-muted disabled:opacity-40"
+                  aria-label="Choose send source"
+                  aria-haspopup="dialog"
+                  title={fromAddress}
+                  onClick={() => setSourcePickerOpen(true)}
+                  className="flex min-w-0 items-center gap-1.5 text-right text-foreground"
                 >
-                  <Icon
-                    icon="lucide:shield-check"
-                    width={15}
-                    height={15}
-                    className="text-primary"
-                  />
-                  Send privately
-                  <Switch
-                    checked={fundingSource === 'shielded' || sourcePickerKind === 'privacy'}
-                    size="sm"
-                  />
-                </button>
-              )}
-            </div>
-            <div className="flex min-h-[72px] items-start gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-[11px] pb-2 pt-[14px]">
-              <button
-                type="button"
-                aria-label="Choose send source"
-                aria-haspopup="dialog"
-                disabled={isSelfMove}
-                onClick={() => setSourcePickerKind('source')}
-                className="min-w-0 flex-1 text-left"
-              >
-                <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium leading-[18px]">
-                  <span className="truncate">{accountDisplayName}</span>
+                  <span className="min-w-0 truncate">{accountDisplayName}</span>
                   <span
-                    className={cn(
-                      'shrink-0 rounded px-1.5 py-px text-[11px] leading-4',
-                      fundingSource === 'shielded'
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-white/10 text-muted'
-                    )}
+                    className={
+                      fundingSource === 'shielded' ? 'shrink-0 text-primary' : 'shrink-0 text-muted'
+                    }
                   >
                     {fundingSource === 'shielded' ? 'Shield' : 'Public'}
                   </span>
-                  {!isSelfMove && (
-                    <Icon icon="lucide:chevron-down" width={14} height={14} className="shrink-0" />
-                  )}
-                </span>
-                <span className="mt-[11px] flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
-                  {fundingSource === 'shielded' && (
-                    <img src={zcashShieldLogo} alt="" className="size-4 shrink-0 rounded" />
-                  )}
-                  <span className="truncate" title={fromAddress}>
-                    {fundingSource === 'shielded' ? 'Zcash shield' : formatSortAddress(fromAddress)}
-                  </span>
-                </span>
-              </button>
-              <span className="flex max-w-[38%] shrink-0 flex-col items-end gap-2">
-                <span
-                  className="max-w-full truncate text-right text-sm font-medium leading-[18px]"
-                  title={sourceBalance.available}
-                >
-                  {formatTokenQuantity(sourceBalance.available)}
-                </span>
-              </span>
-            </div>
-          </div>
+                  <Icon icon="lucide:chevron-down" width={14} height={14} className="shrink-0" />
+                </button>
+              </div>
+            </>
+          )}
 
           {!isSelfMove &&
             fundingSource === 'shielded' &&
@@ -715,7 +725,7 @@ export function Send() {
               />
             )}
 
-          <div className="!mt-[30px]">
+          <div className={isSelfMove ? '!mt-[30px]' : undefined}>
             {isSelfMove ? (
               <div className="space-y-3">
                 <p className="text-sm font-medium leading-[18px]">Move to</p>
@@ -735,7 +745,13 @@ export function Send() {
               <SendRecipientInputCard
                 id="zcash-send-recipient"
                 value={toAddress}
-                onChange={setToAddress}
+                selectedName={
+                  selectedRecipient?.address === toAddress ? selectedRecipient.name : undefined
+                }
+                onChange={value => {
+                  setToAddress(value)
+                  setSelectedRecipient(null)
+                }}
                 placeholder="Enter address"
                 variant="filled"
                 onSelectRecipient={handleSelectMyAddress}
@@ -794,6 +810,7 @@ export function Send() {
             maxLoading={maxTransfer.loading}
             invalid={reviewInsufficient}
             error={amountErrorCopy}
+            variant={isSelfMove ? 'outline' : 'filled'}
           />
 
           <div className="flex min-h-5 items-center justify-between gap-2 text-xs">
@@ -807,10 +824,6 @@ export function Send() {
               allowFallback={!feeRequired}
               hideLabel
             />
-          </div>
-          <div className="flex min-h-5 items-center justify-between text-xs">
-            <span className="text-muted">Est. time</span>
-            <span>—</span>
           </div>
           {feeError && (
             <InlineError
@@ -889,9 +902,9 @@ export function Send() {
       </div>
 
       <Dialog
-        open={!isSelfMove && sourcePickerKind !== null}
+        open={!isSelfMove && sourcePickerOpen}
         onOpenChange={open => {
-          if (!open) setSourcePickerKind(null)
+          if (!open) setSourcePickerOpen(false)
         }}
       >
         <DialogContent
@@ -908,7 +921,7 @@ export function Send() {
             <button
               type="button"
               aria-label="Close"
-              onClick={() => setSourcePickerKind(null)}
+              onClick={() => setSourcePickerOpen(false)}
               className="flex size-8 items-center justify-center"
             >
               <Icon icon="lucide:x" width={18} height={18} />
@@ -919,29 +932,28 @@ export function Send() {
             <span className="mt-1 text-base font-medium">ZEC</span>
           </div>
           <div className="space-y-2 px-4 pb-8">
-            {sourcePickerKind === 'source' &&
-              fundingOptions
-                .filter(option => option.type === 'transparent')
-                .map(option => (
-                  <button
-                    key={option.type}
-                    type="button"
-                    disabled={Boolean(option.disabledReason)}
-                    onClick={() => handleSelectFundingSource('transparent')}
-                    className={cn(
-                      'flex min-h-[60px] w-full items-center gap-3 rounded-lg border px-3 text-left text-sm disabled:opacity-40',
-                      fundingSource === 'transparent'
-                        ? 'border-primary bg-[var(--color-wallet-selected)]'
-                        : 'border-white/10 bg-[var(--color-wallet-selected)]'
-                    )}
-                  >
-                    <Icon icon="lucide:eye" width={18} height={18} />
-                    <span className="flex-1">Public</span>
-                    <span className="max-w-[35%] break-all text-right">
-                      {formatTokenQuantity(option.available)}
-                    </span>
-                  </button>
-                ))}
+            {fundingOptions
+              .filter(option => option.type === 'transparent')
+              .map(option => (
+                <button
+                  key={option.type}
+                  type="button"
+                  disabled={Boolean(option.disabledReason)}
+                  onClick={() => handleSelectFundingSource('transparent')}
+                  className={cn(
+                    'flex min-h-[60px] w-full items-center gap-3 rounded-lg border px-3 text-left text-sm disabled:opacity-40',
+                    fundingSource === 'transparent'
+                      ? 'border-primary bg-[var(--color-wallet-selected)]'
+                      : 'border-white/10 bg-[var(--color-wallet-selected)]'
+                  )}
+                >
+                  <Icon icon="lucide:eye" width={18} height={18} />
+                  <span className="flex-1">Public</span>
+                  <span className="max-w-[35%] break-all text-right">
+                    {formatTokenQuantity(option.available)}
+                  </span>
+                </button>
+              ))}
             <button
               type="button"
               disabled
@@ -1051,13 +1063,15 @@ export function Send() {
               <div className="flex min-h-16 items-center justify-between gap-3">
                 <span className="text-muted">To</span>
                 <span className="min-w-0 max-w-[70%] text-right">
-                  {zns.name && <span className="block text-sm">{zns.name}</span>}
-                  <span
-                    className="block truncate text-xs font-normal leading-4 text-muted"
-                    title={effectiveToAddress}
-                  >
-                    {formatSortAddress(effectiveToAddress)}
-                  </span>
+                  <SendRecipientAddress
+                    address={effectiveToAddress}
+                    name={
+                      zns.name ||
+                      (selectedRecipient?.address === toAddress
+                        ? selectedRecipient.name
+                        : undefined)
+                    }
+                  />
                 </span>
               </div>
               <div className="flex min-h-12 items-center justify-between">
@@ -1081,10 +1095,6 @@ export function Send() {
                   allowFallback={false}
                   hideLabel
                 />
-              </div>
-              <div className="flex min-h-12 items-center justify-between">
-                <span className="text-muted">Est. time</span>
-                <span>—</span>
               </div>
             </div>
             {feeError && (

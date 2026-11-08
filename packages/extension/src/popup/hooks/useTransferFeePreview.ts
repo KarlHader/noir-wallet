@@ -19,8 +19,11 @@ export function useTransferFeePreview({
   delayMs = 450
 }: TransferFeePreviewOptions): TransferFeePreview {
   const estimateRef = useRef(estimate)
-  const [amountRaw, setAmountRaw] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [state, setState] = useState<{
+    key: string
+    amountRaw: string | null
+    loading: boolean
+  }>({ key: '', amountRaw: null, loading: false })
 
   useEffect(() => {
     estimateRef.current = estimate
@@ -28,23 +31,22 @@ export function useTransferFeePreview({
 
   useEffect(() => {
     let active = true
-    setAmountRaw(null)
-    setLoading(false)
+    setState({ key: requestKey, amountRaw: null, loading: false })
     if (!enabled) return () => undefined
-    setLoading(true)
+    setState({ key: requestKey, amountRaw: null, loading: true })
 
     const timer = window.setTimeout(() => {
       if (!active) return
       void estimateRef
         .current()
         .then(value => {
-          if (active) setAmountRaw(value)
+          if (active) setState(current => ({ ...current, amountRaw: value }))
         })
         .catch(() => {
-          if (active) setAmountRaw(null)
+          if (active) setState(current => ({ ...current, amountRaw: null }))
         })
         .finally(() => {
-          if (active) setLoading(false)
+          if (active) setState(current => ({ ...current, loading: false }))
         })
     }, delayMs)
 
@@ -54,5 +56,7 @@ export function useTransferFeePreview({
     }
   }, [delayMs, enabled, requestKey])
 
-  return { amountRaw, loading }
+  return state.key === requestKey && enabled
+    ? { amountRaw: state.amountRaw, loading: state.loading }
+    : { amountRaw: null, loading: false }
 }

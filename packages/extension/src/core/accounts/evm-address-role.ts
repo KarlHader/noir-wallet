@@ -28,3 +28,17 @@ export function resolveEvmAddressRole(
     ? 'public'
     : 'unknown'
 }
+
+export function isCurrentAccountPrivateEvmAddress(
+  address: string,
+  chainId: string,
+  account: LocalAccountAddresses | null
+): boolean {
+  if (!account || !/^0x[0-9a-f]{40}$/i.test(address)) return false
+  const normalized = address.toLowerCase()
+  return account.networks.some(
+    network =>
+      (network.chain?.id ?? network.chainId) === chainId &&
+      network.privateExecutionAddress?.toLowerCase() === normalized
+  )
+}

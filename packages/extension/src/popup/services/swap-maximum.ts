@@ -41,6 +41,30 @@ export function isSwapMaximumQuotePending(input: {
   return input.selected && (input.loading || (input.nativeSource && input.maximum === null))
 }
 
+export function canUseEstimatedEvmSwapMaximum(input: {
+  readonly source: WalletOwnedQuoteAsset
+  readonly review: RheaSwapReviewView
+  readonly currentAmount: string
+  readonly maximum: QuoteDepositMaximum | null
+  readonly fallbackUsed: boolean
+  readonly refreshingFees: boolean
+}): boolean {
+  if (
+    input.source.family !== 'evm' ||
+    input.source.asset.asset.kind !== 'native' ||
+    input.review.execution.kind !== 'evm-transaction' ||
+    input.maximum === null ||
+    input.fallbackUsed ||
+    input.refreshingFees
+  )
+    return false
+  const amountRaw = parseDisplayUnitAmount(
+    input.currentAmount,
+    input.source.asset.metadata.decimals
+  )
+  return amountRaw === input.review.amountIn && amountRaw === input.maximum.amountRaw
+}
+
 export function resolveSelectedSwapMaximum(input: {
   readonly selected: boolean
   readonly currentAmount: string

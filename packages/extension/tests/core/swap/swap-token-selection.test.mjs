@@ -64,6 +64,21 @@ test.describe('account-scoped Swap token selection', () => {
       tokenOut: ETH
     })
   })
+
+  test('keeps the selected source when Private destination eligibility filters the same-chain catalog', () => {
+    expect(
+      resolveSwapTokenSelection({
+        tokens: [ETH, ETH_USDC, ZEC],
+        sourceTokens: [ETH, ETH_USDC],
+        sameChainDestinationTokens: [ETH_USDC],
+        crossChainDestinationTokens: [],
+        walletSourceTokens: [ETH_USDC, ETH],
+        selectedSourceAssetId: ETH.assetId,
+        savedSelection: { tokenInId: ETH.assetId, tokenOutId: ZEC.assetId },
+        enabledChains: [ethereumChain, zcashChain]
+      })
+    ).toEqual({ tokenIn: ETH, tokenOut: ETH_USDC })
+  })
   test('fuzzy-matches symbols but requires a complete contract address', () => {
     expect(matchesSwapTokenSearch(ETH_USDC, 'usd')).toBe(true)
     expect(matchesSwapTokenSearch(ETH_USDC, 'sDc')).toBe(true)

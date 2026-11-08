@@ -14,6 +14,7 @@ import {
 import { parseAssetId } from '../../../src/core/chains/registry/asset-id.ts'
 import {
   isPreparedSwapFeeUnaffordable,
+  isPrivateSwapDestinationSupported,
   resolveConfidentialFundingDestinationToken,
   resolveLockedWalletSwapSourceToken,
   resolveSwapReviewAction
@@ -948,6 +949,27 @@ test.describe('quote deposit transfer client', () => {
       address: 'alice.near',
       chain: { id: NEAR_CHAIN_ID }
     })
+  })
+
+  test('allows Private swap destinations only when an EVM receive target has its own PEA', () => {
+    const evm = { ...token('nep141:eth.omft.near', 'eth', 18), sources: ['nearintents'] }
+    const zec = { ...token('nep141:zec.omft.near', 'zec', 8), sources: ['nearintents'] }
+    const privateAddresses = new Map([[EVM_CHAIN_ID, '0x3333333333333333333333333333333333333333']])
+
+    expect(
+      isPrivateSwapDestinationSupported(evm, portfolio(), receiveTargets, privateAddresses)
+    ).toBe(true)
+    expect(
+      isPrivateSwapDestinationSupported(zec, portfolio(), receiveTargets, privateAddresses)
+    ).toBe(false)
+    expect(
+      isPrivateSwapDestinationSupported(
+        evm,
+        portfolio(),
+        receiveTargets,
+        new Map([[EVM_CHAIN_ID, '0x1111111111111111111111111111111111111111']])
+      )
+    ).toBe(false)
   })
 
   test('maps an Asset details wallet ID back to its Intents Swap source', () => {

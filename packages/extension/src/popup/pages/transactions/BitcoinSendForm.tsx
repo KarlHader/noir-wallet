@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import {
   parseSupportedBitcoinAddress,
@@ -50,7 +51,7 @@ import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeT
 import {
   SendAssetHeader,
   SendAmountInputCard,
-  SendNetworkFeeCard,
+  SendRecipientAddress,
   SendRecipientInputCard
 } from '@/popup/components/transaction/SendInputCards'
 import { DEFAULT_NETWORK_FEE_TIER, type NetworkFeeTier } from '@/core/transactions/domain'
@@ -98,6 +99,10 @@ export function BitcoinSendForm({
 }) {
   const [amount, setAmount] = useState('')
   const [recipient, setRecipient] = useState('')
+  const [selectedRecipient, setSelectedRecipient] = useState<{
+    address: string
+    name: string
+  } | null>(null)
   const [feeTier, setFeeTier] = useState<NetworkFeeTier>(DEFAULT_NETWORK_FEE_TIER)
   const [sendMaximum, setSendMaximum] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -277,8 +282,9 @@ export function BitcoinSendForm({
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
-          onSelect={address => {
+          onSelect={(address, name) => {
             setRecipient(address)
+            setSelectedRecipient(name ? { address, name } : null)
             resolve(address)
           }}
         />
@@ -453,23 +459,37 @@ export function BitcoinSendForm({
   return (
     <>
       <div className="page-content space-y-4">
-        <SendAssetHeader
-          assetId={asset.asset.id}
-          symbol="BTC"
-          icon={asset.metadata.iconUrl}
-          networkName={`${formatPortfolioNetworkName(chain)} · ${bitcoinAccountTypeDescription(bitcoinAddressType)}`}
-          nativeChain="bitcoin"
-        />
+        <div>
+          <SendAssetHeader
+            assetId={asset.asset.id}
+            symbol="BTC"
+            icon={asset.metadata.iconUrl}
+            networkName={formatPortfolioNetworkName(chain)}
+            nativeChain="bitcoin"
+            variant="compact"
+          />
+          <p className="mt-1 text-center text-xs text-muted">
+            {formatPortfolioNetworkName(chain)} ·{' '}
+            {bitcoinAccountTypeDescription(bitcoinAddressType)}
+          </p>
+        </div>
 
         <div>
           <SendRecipientInputCard
             id="bitcoin-send-recipient"
             value={recipient}
-            onChange={value => setRecipient(value.trim())}
+            selectedName={
+              selectedRecipient?.address === recipient ? selectedRecipient.name : undefined
+            }
+            onChange={value => {
+              setRecipient(value.trim())
+              setSelectedRecipient(null)
+            }}
             placeholder={
               chain.chain.network.kind === 'testnet' ? 'Bitcoin testnet address' : 'Bitcoin address'
             }
             autoFocus
+            variant="filled"
             onSelectRecipient={() => void handleSelectRecipient()}
           />
           {recipient && !parsedRecipient && (
@@ -509,23 +529,36 @@ export function BitcoinSendForm({
             setSendMaximum(true)
             void maximum.request()
           }}
+          variant="filled"
         />
 
-        <SendNetworkFeeCard loading={feePreview.loading}>
-          <NetworkFeeTierPicker
-            chainFamily="bitcoin"
-            tier={feeTier}
-            amount={previewFee}
-            symbol="BTC"
-            onTierChange={nextTier => {
-              setFeeTier(nextTier)
-              if (sendMaximum) {
-                setSendMaximum(false)
-                setAmount('')
-              }
-            }}
-          />
-        </SendNetworkFeeCard>
+        <div className="flex min-h-6 items-center justify-between gap-2 text-xs">
+          <span className="text-muted">Fee</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            {feePreview.loading && (
+              <Icon
+                icon="lucide:loader-circle"
+                width={14}
+                height={14}
+                className="animate-spin text-muted"
+              />
+            )}
+            <NetworkFeeTierPicker
+              chainFamily="bitcoin"
+              tier={feeTier}
+              amount={previewFee}
+              symbol="BTC"
+              layout="inline"
+              onTierChange={nextTier => {
+                setFeeTier(nextTier)
+                if (sendMaximum) {
+                  setSendMaximum(false)
+                  setAmount('')
+                }
+              }}
+            />
+          </div>
+        </div>
 
         {balanceKnown &&
           !sendMaximum &&
@@ -583,9 +616,14 @@ export function BitcoinSendForm({
 
               <div className="mx-5 rounded-xl border border-border/60 bg-card/60 px-4">
                 <ReviewLine label="Send To">
-                  <span className="font-mono text-muted" title={review.recipient}>
-                    {formatSortAddress(review.recipient)}
-                  </span>
+                  <SendRecipientAddress
+                    address={review.recipient}
+                    name={
+                      selectedRecipient?.address === review.recipient
+                        ? selectedRecipient.name
+                        : undefined
+                    }
+                  />
                 </ReviewLine>
                 <ReviewLine label="Network">{formatPortfolioNetworkName(chain)}</ReviewLine>
                 <ReviewLine label="From">

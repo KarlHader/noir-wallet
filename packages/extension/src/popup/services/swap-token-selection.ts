@@ -101,6 +101,7 @@ export function resolveSwapTokenSelection(input: {
   readonly tokens: readonly SwapToken[]
   readonly walletSourceTokens: readonly SwapToken[]
   readonly sourceTokens?: readonly SwapToken[]
+  readonly sameChainDestinationTokens?: readonly SwapToken[]
   readonly crossChainDestinationTokens?: readonly SwapToken[]
   readonly savedSelection?: SavedSwapTokenSelection
   readonly requestedSourceAssetId?: string | null
@@ -132,7 +133,7 @@ export function resolveSwapTokenSelection(input: {
     walletSourceTokens[0]
   const destinations = getSwapDestinationTokens(
     tokenIn,
-    input.sourceTokens ?? input.tokens,
+    input.sameChainDestinationTokens ?? input.sourceTokens ?? input.tokens,
     input.crossChainDestinationTokens ?? input.tokens
   )
   const tokenOut =

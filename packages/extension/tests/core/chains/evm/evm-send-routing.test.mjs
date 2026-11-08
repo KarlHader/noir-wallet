@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import { resolveConfidentialEvmAssetSupport } from '../../../../src/core/services/rhea-swap/rhea-confidential-support.ts'
-import { resolveEvmAddressRole } from '../../../../src/core/accounts/evm-address-role.ts'
+import {
+  isCurrentAccountPrivateEvmAddress,
+  resolveEvmAddressRole
+} from '../../../../src/core/accounts/evm-address-role.ts'
 import {
   createEvmSendIntentKey,
   getEvmSendRecipientError,
@@ -110,10 +113,21 @@ it('retains usable rows while marking a malformed catalog as partial', async () 
 })
 
 it('derives address roles from chain-scoped local identities and gives PEA precedence', () => {
+  const otherPrivateAddress = `0x${'4'.repeat(40)}`
+  const otherPublicAddress = `0x${'5'.repeat(40)}`
   const accounts = [
     {
       networks: [
         { chain, addresses: [{ value: main }, { value: pea }], privateExecutionAddress: pea }
+      ]
+    },
+    {
+      networks: [
+        {
+          chain,
+          addresses: [{ value: otherPublicAddress }],
+          privateExecutionAddress: otherPrivateAddress
+        }
       ]
     }
   ]
@@ -122,10 +136,22 @@ it('derives address roles from chain-scoped local identities and gives PEA prece
     'public'
   )
   assert.equal(resolveEvmAddressRole(pea, chain.id, accounts), 'confidential')
+  assert.equal(resolveEvmAddressRole(otherPrivateAddress, chain.id, accounts), 'confidential')
+  assert.equal(resolveEvmAddressRole(otherPublicAddress, chain.id, accounts), 'public')
   assert.equal(resolveEvmAddressRole(recipient, chain.id, accounts), 'unknown')
   assert.equal(resolveEvmAddressRole(main, 'eip155:56', accounts), 'unknown')
   assert.equal(resolveEvmAddressRole(main, chain.id), 'unknown')
-  assert.match(getEvmSendRecipientError('main', 'confidential'), /Use Move/)
+  assert.equal(isCurrentAccountPrivateEvmAddress(pea, chain.id, accounts[0]), true)
+  assert.equal(
+    isCurrentAccountPrivateEvmAddress(pea.toUpperCase().replace('0X', '0x'), chain.id, accounts[0]),
+    true
+  )
+  assert.equal(isCurrentAccountPrivateEvmAddress(otherPrivateAddress, chain.id, accounts[0]), false)
+  assert.equal(isCurrentAccountPrivateEvmAddress(recipient, chain.id, accounts[0]), false)
+  assert.equal(isCurrentAccountPrivateEvmAddress(pea, 'eip155:56', accounts[0]), false)
+  assert.equal(isCurrentAccountPrivateEvmAddress(pea, chain.id, null), false)
+  assert.match(getEvmSendRecipientError('main', 'confidential', false, true), /your Private/)
+  assert.match(getEvmSendRecipientError('main', 'confidential'), /Send privately/)
   assert.equal(getEvmSendRecipientError('main', 'unknown'), null)
   assert.equal(getEvmSendPrivacyWarning('main', 'public'), null)
   for (const role of ['confidential', 'unknown']) assert.ok(getEvmSendPrivacyWarning('main', role))

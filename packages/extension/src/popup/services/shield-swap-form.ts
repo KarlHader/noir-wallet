@@ -1,6 +1,11 @@
 import type { Network } from '@/types'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
-import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
+import Big from '@/lib/big'
+import {
+  formatBaseUnitDecimalAmount,
+  formatTokenQuantity,
+  parseDisplayUnitAmount
+} from '@/lib/number-format'
 import type { PrepareConfidentialFundingRequest } from './confidential-funding-client'
 import { shieldFundingAvailableRaw, type ShieldFundingAsset } from './shield-transfer'
 
@@ -14,6 +19,15 @@ export function shieldSwapFormBalance(
         asset.asset.metadata.decimals
       )
     : null
+}
+
+export function formatShieldSwapPreviewRate(
+  amount: string,
+  amountOutRaw: string,
+  outputDecimals: number
+): string {
+  const output = formatBaseUnitDecimalAmount(amountOutRaw, outputDecimals)
+  return formatTokenQuantity(new Big(output).div(amount).toString())
 }
 
 export function shieldSwapFormAmountError(

@@ -16,6 +16,39 @@ import {
   shieldPortfolioBalances
 } from '../../../src/popup/services/shield-transfer.ts'
 import { buildShieldSwapRequest } from '../../../src/popup/services/shield-swap-form.ts'
+import { initialMoveDraft } from '../../../src/popup/pages/transactions/move-draft.ts'
+
+test('restores a Move draft only for its wallet account and network', () => {
+  const scope = 'mainnet:wallet-1:account-1:rpc-1'
+  const draft = {
+    scope,
+    assetId: 'eip155:8453/slip44:60',
+    from: 'private',
+    to: 'public',
+    amount: '0.00001',
+    method: 'directly',
+    maxSelected: false
+  }
+  const input = {
+    state: { moveDraft: draft },
+    mode: 'private',
+    routeFrom: null,
+    routeTo: null,
+    routeAssetId: null
+  }
+
+  expect(initialMoveDraft({ ...input, scope })).toEqual(draft)
+  for (const otherScope of [
+    'mainnet:wallet-1:account-2:rpc-1',
+    'testnet:wallet-1:account-1:rpc-1'
+  ]) {
+    expect(initialMoveDraft({ ...input, scope: otherScope })).toMatchObject({
+      assetId: null,
+      amount: '',
+      maxSelected: false
+    })
+  }
+})
 
 test('validates a bidirectional transfer amount against the selected source balance', () => {
   expect(

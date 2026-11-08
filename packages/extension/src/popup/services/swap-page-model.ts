@@ -19,6 +19,7 @@ import {
 
 import {
   resolveWalletOwnedQuoteAsset,
+  resolveWalletQuoteReceiveTarget,
   type PreparedQuoteDepositTransfer,
   type WalletOwnedQuoteAsset
 } from '@/popup/services/quote-deposit-transfer-client'
@@ -305,6 +306,23 @@ export function filterSwapDestinationTokens(
   return confidentiality === 'basic'
     ? tokens.filter(isConfidentialSwapDestinationSupported)
     : tokens
+}
+
+export function isPrivateSwapDestinationSupported(
+  token: RheaSwapToken,
+  portfolio: PortfolioReadModel | null,
+  receiveTargets: AdditionalReceiveTargetsView | null,
+  privateExecutionAddresses: ReadonlyMap<string, string>
+): boolean {
+  if (!portfolio || !isConfidentialSwapDestinationSupported(token)) return false
+  const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
+  if (target?.kind !== 'evm') return false
+  const privateAddress = privateExecutionAddresses.get(target.chain.id)
+  return Boolean(
+    privateAddress &&
+    /^0x[0-9a-fA-F]{40}$/.test(privateAddress) &&
+    privateAddress.toLowerCase() !== target.address.toLowerCase()
+  )
 }
 
 export function filterSelectableSwapDestinationTokens(input: {

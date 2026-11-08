@@ -13,8 +13,10 @@ import {
 } from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
+import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFundingPreview'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { useNavigate } from '@/popup/provider/Router'
@@ -30,6 +32,7 @@ import {
 import { Button } from '@/popup/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
+  CONFIDENTIAL_PREVIEW_CONNECTION_ERROR,
   confidentialFundingClient,
   type ConfidentialBalance,
   type PrepareConfidentialFundingRequest
@@ -39,6 +42,7 @@ import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-clie
 import {
   buildExternalShieldWithdrawRequest,
   hasShieldTransferStarted,
+  formatShieldQuoteTime,
   isUnsignedShieldTerminal,
   matchesExternalShieldWithdrawReview,
   listShieldFundingAssets,
@@ -74,6 +78,7 @@ function ShieldWithdrawForm() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
+  const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const { activeAccount } = useActiveAccountNetworks()
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
@@ -197,12 +202,14 @@ function ShieldWithdrawForm() {
   const currentBalances = balanceScope === scopeKey ? balances : null
   const displayBalances = currentBalances ?? shieldPortfolioBalances(model)
   const sources = shieldFundingSources(options, displayBalances)
-  const source = sources.find(item => item.asset.asset.id === sourceId) ?? sources[0] ?? null
-  const destination =
-    destinations.find(item => item.asset.asset.id === destinationId) ??
-    destinations.find(item => item.asset.asset.id === source?.asset.asset.id) ??
-    destinations[0] ??
-    null
+  const source = sourceId
+    ? (sources.find(item => item.asset.asset.id === sourceId) ?? null)
+    : (sources[0] ?? null)
+  const destination = destinationId
+    ? (destinations.find(item => item.asset.asset.id === destinationId) ?? null)
+    : (destinations.find(
+        item => item.managed.protocolAssetId === source?.managed.protocolAssetId
+      ) ?? null)
   const availableRaw = shieldFundingAvailableRaw(source, displayBalances)
   const amountState = source
     ? resolvePrivateBalanceTransferAmount({
@@ -213,6 +220,46 @@ function ShieldWithdrawForm() {
       })
     : null
   const recipientValid = isAddress(recipient.trim()) && !/^0x0{40}$/i.test(recipient.trim())
+  const previewRequest = useMemo(() => {
+    if (
+      !account ||
+      !canManageNear ||
+      !currentBalances ||
+      !source ||
+      !destination ||
+      !amountState?.amountRaw ||
+      !recipientValid
+    )
+      return null
+    return buildExternalShieldWithdrawRequest({
+      network,
+      keyDomainId: account.walletId,
+      accountId: account.accountId,
+      amountRaw: amountState.amountRaw,
+      recipient: recipient.trim(),
+      source,
+      destination,
+      slippageBps
+    })
+  }, [
+    network,
+    account?.walletId,
+    account?.accountId,
+    canManageNear,
+    currentBalances,
+    source,
+    destination,
+    amountState?.amountRaw,
+    recipient,
+    recipientValid,
+    slippageBps
+  ])
+  const {
+    preview,
+    loading: previewLoading,
+    error: previewError,
+    retry: retryPreview
+  } = useConfidentialFundingPreview(previewRequest, scopeKey)
 
   const scopeStillCurrent = () => {
     const wallet = useWalletStore.getState()
@@ -244,6 +291,7 @@ function ShieldWithdrawForm() {
       if (scopeStillCurrent()) {
         setBalances(value)
         setBalanceScope(scopeKey)
+        if (previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR) retryPreview()
         void refresh(true)
       }
     } catch (cause) {
@@ -261,6 +309,9 @@ function ShieldWithdrawForm() {
       !destination ||
       !amountState?.amountRaw ||
       !recipientValid ||
+      !previewRequest ||
+      !preview ||
+      preview.expiresAt <= Date.now() + 5_000 ||
       busy ||
       !scopeStillCurrent()
     )
@@ -268,16 +319,7 @@ function ShieldWithdrawForm() {
     setBusy(true)
     setError(null)
     try {
-      const request = buildExternalShieldWithdrawRequest({
-        network,
-        keyDomainId: account.walletId,
-        accountId: account.accountId,
-        amountRaw: amountState.amountRaw,
-        recipient: recipient.trim(),
-        source,
-        destination,
-        slippageBps
-      })
+      const request = previewRequest
       const review = await confidentialFundingClient.prepare(request)
       if (!scopeStillCurrent()) {
         if (review.phase === 'prepared')
@@ -463,7 +505,7 @@ function ShieldWithdrawForm() {
               : [
                   {
                     label: 'Estimated time',
-                    content: `${prepared.review.quoteTimeEstimateSeconds} sec`
+                    content: formatShieldQuoteTime(prepared.review.quoteTimeEstimateSeconds)
                   }
                 ])
           ]}
@@ -496,7 +538,10 @@ function ShieldWithdrawForm() {
             value={amount}
             onChange={event => {
               const next = normalizePrivateBalanceTransferInput(event.target.value)
-              if (next !== null) setAmount(next)
+              if (next !== null) {
+                if (!sourceId && source) setSourceId(source.asset.asset.id)
+                setAmount(next)
+              }
             }}
             className="w-full bg-transparent text-center text-[38px] font-semibold outline-none placeholder:text-muted"
           />
@@ -521,26 +566,29 @@ function ShieldWithdrawForm() {
             <span
               className="min-w-0 truncate"
               title={
-                source
+                source && !balancesHidden
                   ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                  : '0'
+                  : undefined
               }
             >
-              {source
-                ? formatTokenQuantity(
-                    formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                  )
-                : '0'}{' '}
+              {balancesHidden
+                ? '••••'
+                : source
+                  ? formatTokenQuantity(
+                      formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                    )
+                  : '—'}{' '}
               available
             </span>
             <button
               type="button"
               disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
               title={!currentBalances ? 'Connect Shield to use Max' : 'Use maximum balance'}
-              onClick={() =>
-                source &&
+              onClick={() => {
+                if (!source) return
+                if (!sourceId) setSourceId(source.asset.asset.id)
                 setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
-              }
+              }}
               className="wallet-interactive shrink-0 rounded bg-wallet-surface px-2 py-0.5 text-foreground enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
             >
               Max
@@ -548,28 +596,50 @@ function ShieldWithdrawForm() {
           </div>
         </div>
 
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => setPicker('destination')}
-          className="wallet-interactive mb-3 flex w-full items-center gap-3 rounded-lg bg-wallet-surface p-3 text-left enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-        >
-          {destination && (
-            <TokenIcon
-              assetId={destination.asset.asset.id}
-              symbol={destination.asset.metadata.symbol}
-              icon={destination.asset.metadata.iconUrl}
-              size={32}
-            />
-          )}
-          <span className="min-w-0 flex-1">
-            <span className="block text-xs text-muted">Token</span>
-            <span className="block truncate text-sm">
-              {destination?.asset.metadata.symbol ?? 'Select token'}
+        <div className="mb-3 flex min-h-[62px] w-full items-center gap-3 rounded-lg bg-wallet-surface px-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setPicker('destination')}
+            className="wallet-interactive flex min-w-0 flex-1 items-center gap-3 text-left enabled:hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+            aria-label="Select destination token"
+          >
+            {destination && (
+              <TokenIcon
+                assetId={destination.asset.asset.id}
+                symbol={destination.asset.metadata.symbol}
+                icon={destination.asset.metadata.iconUrl}
+                size={32}
+              />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs text-muted">Token</span>
+              <span className="block truncate text-sm">
+                {destination?.asset.metadata.symbol ?? 'Select token'}
+              </span>
             </span>
-          </span>
-          <Icon icon="lucide:chevron-down" width={17} height={17} />
-        </button>
+          </button>
+          {preview && destination && (
+            <span className="min-w-0 max-w-[42%] text-right text-sm">
+              <span className="block text-xs text-muted">Est. receive</span>
+              <AmountDisplay
+                value={formatBaseUnitDecimalAmount(
+                  preview.amountOutRaw,
+                  destination.asset.metadata.decimals
+                )}
+              />
+            </span>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setPicker('destination')}
+            aria-label="Select destination token"
+            className="wallet-interactive shrink-0 enabled:hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+          >
+            <Icon icon="lucide:chevron-down" width={17} height={17} />
+          </button>
+        </div>
         <button
           type="button"
           disabled={busy}
@@ -600,7 +670,7 @@ function ShieldWithdrawForm() {
             <span className="block text-xs text-muted">Recipient</span>
             <input
               aria-label="Recipient address"
-              disabled={busy}
+              disabled={busy || !destination}
               value={recipient}
               onChange={event => setRecipient(event.target.value)}
               placeholder="Enter address"
@@ -633,7 +703,49 @@ function ShieldWithdrawForm() {
               <option value={100}>1%</option>
             </select>
           </label>
+          {preview && destination && (
+            <>
+              <div className="flex items-center justify-between gap-3 py-2.5">
+                <span className="text-muted">Minimum receive</span>
+                <span className="min-w-0 text-right">
+                  <AmountDisplay
+                    value={formatBaseUnitDecimalAmount(
+                      preview.minimumOutputRaw,
+                      destination.asset.metadata.decimals
+                    )}
+                    symbol={destination.asset.metadata.symbol}
+                  />
+                </span>
+              </div>
+              {preview.timeEstimateSeconds !== undefined && (
+                <div className="flex items-center justify-between gap-3 py-2.5">
+                  <span className="text-muted">Est. time</span>
+                  <span>{formatShieldQuoteTime(preview.timeEstimateSeconds)}</span>
+                </div>
+              )}
+            </>
+          )}
         </div>
+        {previewError && (
+          <div
+            role="alert"
+            className="mt-3 flex items-center justify-between gap-2 text-xs text-warning"
+          >
+            <span>{previewError}</span>
+            <button
+              type="button"
+              disabled={connecting}
+              onClick={
+                previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                  ? () => void refreshBalances()
+                  : retryPreview
+              }
+              className="shrink-0 text-primary disabled:opacity-45"
+            >
+              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Connect Shield' : 'Retry'}
+            </button>
+          </div>
+        )}
         {amountState?.error && (
           <p role="alert" className="mt-3 text-xs text-warning">
             {amountState.error}
@@ -673,7 +785,9 @@ function ShieldWithdrawForm() {
             !source ||
             !destination ||
             !amountState?.amountRaw ||
-            !recipientValid
+            !recipientValid ||
+            !preview ||
+            previewLoading
           }
           onClick={() => void prepare()}
         >
@@ -695,6 +809,11 @@ function ShieldWithdrawForm() {
                   : 'Recipient'}
           </DialogTitle>
           <DialogDescription className="sr-only">Choose a withdrawal {picker}</DialogDescription>
+          {picker === 'source' && sources.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted">
+              {currentBalances ? 'No Shield tokens available' : 'Connect Shield to view tokens'}
+            </p>
+          )}
           {picker === 'recipient' && destination ? (
             <RecipientSelector
               chainId={destination.chain.chain.id}
@@ -717,7 +836,7 @@ function ShieldWithdrawForm() {
                       destination,
                       item.chain.chain.id
                     )
-                    if (next && next.asset.asset.id !== destination?.asset.asset.id) {
+                    if (next && next.asset.asset.id !== destinationId) {
                       setDestinationId(next.asset.asset.id)
                       setRecipient('')
                     }
@@ -741,7 +860,9 @@ function ShieldWithdrawForm() {
           ) : (
             (picker === 'source'
               ? sources
-              : destinations.filter(item => item.chain.chain.id === destination?.chain.chain.id)
+              : destinations.filter(
+                  item => !destination || item.chain.chain.id === destination.chain.chain.id
+                )
             ).map(item => (
               <button
                 key={item.asset.asset.id}
@@ -761,12 +882,37 @@ function ShieldWithdrawForm() {
                   icon={item.asset.metadata.iconUrl}
                   size={30}
                 />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  {item.asset.metadata.symbol}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm">{item.asset.metadata.symbol}</span>
+                  <span className="block truncate text-xs text-muted">
+                    {item.chain.chain.displayName}
+                  </span>
                 </span>
-                <span className="max-w-[45%] truncate text-xs text-muted">
-                  {item.chain.chain.displayName}
-                </span>
+                {picker === 'source' && (
+                  <span
+                    className="max-w-[42%] min-w-0 shrink-0 text-right"
+                    title={
+                      balancesHidden
+                        ? undefined
+                        : formatBaseUnitDecimalAmount(
+                            shieldFundingAvailableRaw(item, displayBalances),
+                            item.asset.metadata.decimals
+                          )
+                    }
+                  >
+                    <span className="block truncate text-sm tabular-nums">
+                      {balancesHidden
+                        ? '••••'
+                        : formatTokenQuantity(
+                            formatBaseUnitDecimalAmount(
+                              shieldFundingAvailableRaw(item, displayBalances),
+                              item.asset.metadata.decimals
+                            )
+                          )}
+                    </span>
+                    <span className="block text-xs text-muted">Available</span>
+                  </span>
+                )}
               </button>
             ))
           )}

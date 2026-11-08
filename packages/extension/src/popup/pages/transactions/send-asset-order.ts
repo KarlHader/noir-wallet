@@ -116,7 +116,11 @@ export function buildSendAssetSelectionModel(input: {
   for (const entry of selectableAssets) {
     networkOptions.set(entry.chain.chain.id, {
       label: entry.chain.chain.displayName,
-      iconAlias: resolveChainIconAlias(entry.chain.chain.family, entry.chain.chain.displayName)
+      iconAlias: resolveChainIconAlias(
+        entry.chain.chain.family,
+        entry.chain.chain.displayName,
+        entry.chain.chain.id
+      )
     })
   }
   const selectableOptions = [...networkOptions].map(([id, option]) => ({ id, ...option }))

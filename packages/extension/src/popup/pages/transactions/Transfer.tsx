@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate as useRouterNavigate, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
+import type { AssetPriceReadModel } from '@/core/prices'
 import { formatBaseUnitAmount, formatTokenQuantity } from '@/lib/number-format'
 import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
@@ -18,6 +19,7 @@ import { InlineError } from '@/popup/components/common/InlineError'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
+import { ExecutionAccountIcon } from '@/popup/components/account/ExecutionAccountSelector'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import { Button } from '@/popup/components/ui/button'
 import {
@@ -32,6 +34,8 @@ import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
+import { assetPriceClient } from '@/popup/services/asset-price-client'
+import { listMoveAssetPickerRows } from '@/popup/services/move-asset-picker'
 import {
   confidentialFundingClient,
   type ConfidentialBalance
@@ -69,7 +73,6 @@ import {
   getTransferDomainBalanceRaw,
   resolvePrivateBalanceTransferAmount,
   resolvePrivateBalanceTransferSource,
-  resolveTransferDomains,
   selectDefaultTransferAssetId,
   type PrivateBalanceTransferDirection,
   type TransferDomain
@@ -79,6 +82,7 @@ import {
   buildMoveToMainEvmPath,
   getEvmTokenFeeBalanceError
 } from './evm-send-validation'
+import { initialMoveDraft } from './move-draft'
 
 type TransferAsset = { asset: PortfolioAssetView; chain: PortfolioChainView }
 
@@ -94,8 +98,8 @@ function DomainCard({
   balance,
   network,
   networkName,
-  showNetwork,
-  onClick,
+  onNetworkClick,
+  onAccountClick,
   onMax,
   maxDisabled,
   maxLoading,
@@ -108,8 +112,8 @@ function DomainCard({
   balance: string
   network: string
   networkName: string
-  showNetwork: boolean
-  onClick: () => void
+  onNetworkClick: () => void
+  onAccountClick: () => void
   onMax?: () => void
   maxDisabled?: boolean
   maxLoading?: boolean
@@ -119,43 +123,41 @@ function DomainCard({
     <div className="flex min-h-[104px] w-full flex-col justify-between rounded-lg border border-white/10 bg-wallet-surface px-3 py-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium leading-[18px] text-muted">{label}</span>
-        {(showNetwork || domain === 'shield') && (
-          <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            aria-label={`Select ${label.toLowerCase()} account and network`}
-            className="wallet-interactive flex min-w-0 max-w-[60%] items-center gap-1 rounded text-xs text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            {domain === 'shield' ? (
-              <img
-                src={nearLogo}
-                alt=""
-                aria-hidden="true"
-                className="size-4 shrink-0 rounded-[3px]"
-              />
-            ) : (
-              <ChainIcon
-                chain={network}
-                width={16}
-                height={16}
-                showTooltip={false}
-                alt=""
-                aria-hidden="true"
-                className="shrink-0 rounded-[4px]"
-              />
-            )}
-            <span className="truncate">
-              {domain === 'shield' ? 'NEAR Confidential' : networkName}
-            </span>
-            <Icon icon="lucide:chevron-down" width={13} height={13} />
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onNetworkClick}
+          disabled={disabled}
+          aria-label={`Select ${label.toLowerCase()} asset and network`}
+          className="wallet-interactive flex min-w-0 max-w-[60%] items-center gap-1 rounded text-xs text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          {domain === 'shield' ? (
+            <img
+              src={nearLogo}
+              alt=""
+              aria-hidden="true"
+              className="size-4 shrink-0 rounded-[3px]"
+            />
+          ) : (
+            <ChainIcon
+              chain={network}
+              width={16}
+              height={16}
+              showTooltip={false}
+              alt=""
+              aria-hidden="true"
+              className="shrink-0 rounded-[4px]"
+            />
+          )}
+          <span className="truncate">
+            {domain === 'shield' ? 'NEAR Confidential' : networkName || 'Select network'}
+          </span>
+          <Icon icon="lucide:chevron-down" width={13} height={13} />
+        </button>
       </div>
       <div className="mt-1.5 flex min-w-0 items-center justify-between gap-2">
         <button
           type="button"
-          onClick={onClick}
+          onClick={onAccountClick}
           disabled={disabled}
           aria-label={`${label}: ${domainLabel(domain)}. Change account`}
           className="wallet-interactive flex min-w-0 items-center gap-1.5 rounded text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-primary"
@@ -256,6 +258,8 @@ export function Transfer() {
 
 function TransferForm() {
   const [params] = useSearchParams()
+  const location = useLocation()
+  const routerNavigate = useRouterNavigate()
   const walletMode = params.get('mode') === 'private' ? 'private' : 'public'
   const routeFrom = params.get('from')
   const routeTo = params.get('to')
@@ -274,6 +278,14 @@ function TransferForm() {
     nativeAccount: activeAccount
   })
   const scopeKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}:${endpointRuntimeKey}`
+  const initialDraft = initialMoveDraft({
+    state: location.state,
+    scope: scopeKey,
+    mode: walletMode,
+    routeFrom,
+    routeTo,
+    routeAssetId: params.get('assetId')
+  })
   const latestScopeKey = useRef(scopeKey)
   latestScopeKey.current = scopeKey
   const mounted = useRef(true)
@@ -290,18 +302,16 @@ function TransferForm() {
   } = useHomePortfolio(effective?.walletId ?? null, effective?.accountId ?? null)
   const [retry, setRetry] = useState(0)
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
+  const [assetPrices, setAssetPrices] = useState<AssetPriceReadModel | null>(null)
   const [domainPicker, setDomainPicker] = useState<'from' | 'to' | null>(null)
   const [pickerAccountId, setPickerAccountId] = useState<string | null>(null)
-  const [selectedAssetId, setSelectedAssetId] = useState(params.get('assetId'))
-  const [from, setFrom] = useState<TransferDomain>(
-    () => resolveTransferDomains({ mode: walletMode, from: routeFrom, to: routeTo }).from
-  )
-  const [to, setTo] = useState<TransferDomain>(
-    () => resolveTransferDomains({ mode: walletMode, from: routeFrom, to: routeTo }).to
-  )
-  const [amount, setAmount] = useState('')
-  const [method, setMethod] = useState<'cluster' | 'directly'>('directly')
-  const [maxSelected, setMaxSelected] = useState(false)
+  const [draftScope, setDraftScope] = useState(scopeKey)
+  const [selectedAssetId, setSelectedAssetId] = useState(initialDraft.assetId)
+  const [from, setFrom] = useState<TransferDomain>(initialDraft.from)
+  const [to, setTo] = useState<TransferDomain>(initialDraft.to)
+  const [amount, setAmount] = useState(initialDraft.amount)
+  const [method, setMethod] = useState<'cluster' | 'directly'>(initialDraft.method)
+  const [maxSelected, setMaxSelected] = useState(initialDraft.maxSelected)
   const [routeSnapshot, setRouteSnapshot] = useState<{
     key: string
     status: 'supported' | 'unsupported' | 'error'
@@ -353,6 +363,25 @@ function TransferForm() {
   }, [currentNetwork, endpointRuntimeKey])
 
   useEffect(() => {
+    if (!assetPickerOpen) return
+    let cancelled = false
+    const apply = (prices: AssetPriceReadModel | null) => {
+      if (!cancelled && prices) setAssetPrices(prices)
+    }
+    void (async () => {
+      try {
+        apply(await assetPriceClient.getPrices('read'))
+      } catch {}
+      try {
+        apply(await assetPriceClient.getPrices('refresh'))
+      } catch {}
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [assetPickerOpen, currentNetwork])
+
+  useEffect(() => {
     let cancelled = false
     setShieldSnapshot(null)
     setShieldConnection('checking')
@@ -379,13 +408,21 @@ function TransferForm() {
   }, [scopeKey])
 
   useEffect(() => {
-    const domains = resolveTransferDomains({ mode: walletMode, from: routeFrom, to: routeTo })
-    setFrom(domains.from)
-    setTo(domains.to)
-    setSelectedAssetId(params.get('assetId'))
-    setAmount('')
-    setMethod('directly')
-    setMaxSelected(false)
+    const draft = initialMoveDraft({
+      state: location.state,
+      scope: scopeKey,
+      mode: walletMode,
+      routeFrom,
+      routeTo,
+      routeAssetId: params.get('assetId')
+    })
+    setDraftScope(scopeKey)
+    setFrom(draft.from)
+    setTo(draft.to)
+    setSelectedAssetId(draft.assetId)
+    setAmount(draft.amount)
+    setMethod(draft.method)
+    setMaxSelected(draft.maxSelected)
     setPreparingShield(false)
     setConfirmingShield(false)
     setCancellingShield(false)
@@ -395,6 +432,43 @@ function TransferForm() {
     setDomainPicker(null)
     setPickerAccountId(null)
   }, [scopeKey])
+
+  useEffect(() => {
+    if (!effective || draftScope !== scopeKey) return
+    const previousState =
+      location.state && typeof location.state === 'object' && !Array.isArray(location.state)
+        ? location.state
+        : {}
+    routerNavigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: {
+        ...previousState,
+        moveDraft: {
+          scope: scopeKey,
+          assetId: selectedAssetId,
+          from,
+          to,
+          amount,
+          method,
+          maxSelected
+        }
+      }
+    })
+  }, [
+    effective?.walletId,
+    effective?.accountId,
+    draftScope,
+    scopeKey,
+    selectedAssetId,
+    from,
+    to,
+    amount,
+    method,
+    maxSelected,
+    location.pathname,
+    location.search,
+    routerNavigate
+  ])
 
   const eligibleChainIds = useMemo(
     () => getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet'),
@@ -444,6 +518,33 @@ function TransferForm() {
   )
   const selected =
     assets.find(item => item.asset.asset.id === (selectedAssetId ?? defaultAssetId)) ?? null
+  const pickerRows = useMemo(
+    () =>
+      listMoveAssetPickerRows({
+        assets,
+        from,
+        network: currentNetwork,
+        prices: assetPrices,
+        portfolio,
+        shieldBalances:
+          shieldSnapshot?.key === scopeKey
+            ? shieldSnapshot.balances
+            : shieldPortfolioBalances(portfolio),
+        managedAssets,
+        catalogTokens
+      }),
+    [
+      assets,
+      from,
+      currentNetwork,
+      assetPrices,
+      portfolio,
+      shieldSnapshot,
+      scopeKey,
+      managedAssets,
+      catalogTokens
+    ]
+  )
   const accountNetwork = activeAccount?.networks.find(
     item => item.chain.id === selected?.chain.chain.id
   )
@@ -542,20 +643,23 @@ function TransferForm() {
     }
   }, [routeKey, selected?.chain.chain.id, eligible, supportedPair, retry])
 
+  const nativeMaximumEnabled = Boolean(
+    selected &&
+    source &&
+    eligible &&
+    (clusterSelected
+      ? Boolean(managedAsset)
+      : supportedPair
+        ? routeState === 'supported'
+        : fundingRoute && from !== 'shield' && Boolean(managedAsset)) &&
+    (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
+    selected.asset.asset.kind === 'native' &&
+    BigInt(source.availableRaw) > 0n
+  )
+  const nativeMaximumRequired =
+    maxSelected && selected?.asset.asset.kind === 'native' && from !== 'shield'
   const maximum = useTransferMaximum({
-    enabled: Boolean(
-      selected &&
-      source &&
-      eligible &&
-      (clusterSelected
-        ? Boolean(managedAsset)
-        : supportedPair
-          ? routeState === 'supported'
-          : fundingRoute && from !== 'shield' && Boolean(managedAsset)) &&
-      (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
-      selected.asset.asset.kind === 'native' &&
-      BigInt(source.availableRaw) > 0n
-    ),
+    enabled: nativeMaximumEnabled,
     requestKey: `${scopeKey}:${selected?.asset.asset.id ?? ''}:${direction}:${source?.availableRaw ?? '0'}`,
     fallback: () =>
       fallbackTransferMaximum(
@@ -576,6 +680,24 @@ function TransferForm() {
         executionMode: source!.executionMode
       })
   })
+  useEffect(() => {
+    if (
+      nativeMaximumRequired &&
+      nativeMaximumEnabled &&
+      !maximum.value &&
+      !maximum.loading &&
+      !maximum.error
+    )
+      void maximum.request()
+  }, [
+    nativeMaximumRequired,
+    nativeMaximumEnabled,
+    maximum.value,
+    maximum.loading,
+    maximum.error,
+    routeKey,
+    source?.availableRaw
+  ])
   const available =
     selected && source
       ? resolvePortfolioTransferAvailability({
@@ -594,14 +716,32 @@ function TransferForm() {
           maximumRaw: from === 'shield' ? shieldSourceRaw : (maximum.value?.amountRaw ?? null)
         })
       : null
+  const currentAmount = maxSelected
+    ? nativeMaximumRequired && (!maximum.value || maximum.loading)
+      ? ''
+      : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
+    : amount
   useEffect(() => {
+    if (!maxSelected) return
+    if (nativeMaximumRequired && (!maximum.value || maximum.loading)) {
+      setAmount('')
+      return
+    }
     const value = fundingRoute ? shieldAvailable : available
-    if (maxSelected && value) setAmount(value.display)
-  }, [maxSelected, fundingRoute, shieldAvailable?.display, available?.display])
+    if (value) setAmount(value.display)
+  }, [
+    maxSelected,
+    nativeMaximumRequired,
+    maximum.value,
+    maximum.loading,
+    fundingRoute,
+    shieldAvailable?.display,
+    available?.display
+  ])
   const amountState =
     selected && available && source && supportedPair
       ? resolvePrivateBalanceTransferAmount({
-          amount,
+          amount: currentAmount,
           decimals: selected.asset.metadata.decimals,
           availableRaw: available.amountRaw,
           sourceLabel: source.sourceLabel
@@ -610,7 +750,7 @@ function TransferForm() {
   const shieldAmountState =
     selected && shieldAvailable
       ? resolvePrivateBalanceTransferAmount({
-          amount,
+          amount: currentAmount,
           decimals: selected.asset.metadata.decimals,
           availableRaw: shieldAvailable.amountRaw,
           sourceLabel: from === 'public' ? 'Public' : from === 'private' ? 'Private' : 'Shield'
@@ -622,7 +762,7 @@ function TransferForm() {
     ((fundingRoute ? shieldAmountState?.amountRaw : amountState?.amountRaw)
       ? tokenFeeBalanceError
       : null)
-  const shieldReviewKey = `${routeKey}:${method}:${amount}:${shieldAmountState?.amountRaw ?? ''}`
+  const shieldReviewKey = `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}`
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
   const activeShieldReview = preparedShield?.key === shieldReviewKey ? preparedShield.review : null
@@ -633,18 +773,21 @@ function TransferForm() {
     setPreparedShield(null)
   }, [shieldReviewKey, preparedShield])
   const canReview = Boolean(
+    draftScope === scopeKey &&
     selected &&
     eligible &&
     supportedPair &&
     routeState === 'supported' &&
     !tokenFeeBalanceError &&
     (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
+    (!maxSelected || (available?.display === currentAmount && amount === currentAmount)) &&
     (!maxSelected ||
       selected.asset.asset.kind !== 'native' ||
       (maximum.value && !maximum.loading)) &&
     amountState?.amountRaw
   )
   const canReviewShield = Boolean(
+    draftScope === scopeKey &&
     fundingRoute &&
     selected &&
     eligible &&
@@ -653,6 +796,7 @@ function TransferForm() {
     shieldConnection === 'connected' &&
     shieldSourceRaw !== null &&
     !tokenFeeBalanceError &&
+    (!maxSelected || (shieldAvailable?.display === currentAmount && amount === currentAmount)) &&
     (!maxSelected ||
       selected.asset.asset.kind !== 'native' ||
       from === 'shield' ||
@@ -691,13 +835,13 @@ function TransferForm() {
         ? buildAddToPrivateEvmPath({
             assetId: selected.asset.asset.id,
             chainId: selected.chain.chain.id,
-            amount,
+            amount: currentAmount,
             maximum: maxSelected
           })
         : buildMoveToMainEvmPath({
             assetId: selected.asset.asset.id,
             mainAddress,
-            amount,
+            amount: currentAmount,
             maximum: maxSelected
           })
     )
@@ -726,7 +870,11 @@ function TransferForm() {
       )
     : 'Account'
   const networkIcon = selected
-    ? resolveChainIconAlias(selected.chain.chain.family, selected.chain.chain.displayName)
+    ? resolveChainIconAlias(
+        selected.chain.chain.family,
+        selected.chain.chain.displayName,
+        selected.chain.chain.id
+      )
     : 'evm'
   const walletAccounts =
     catalog?.accounts
@@ -980,7 +1128,7 @@ function TransferForm() {
             symbol,
             icon: selected.asset.metadata.iconUrl
           }}
-          amount={amount}
+          amount={currentAmount}
           network={selected.chain.chain.displayName}
           rows={[
             {
@@ -1019,8 +1167,17 @@ function TransferForm() {
               label: 'Minimum receive',
               content: <AmountDisplay value={minimum} symbol={symbol} />
             },
+            ...(Number.isSafeInteger(activeShieldReview.quoteTimeEstimateSeconds) &&
+            (activeShieldReview.quoteTimeEstimateSeconds ?? 0) > 0
+              ? [
+                  {
+                    label: 'Estimated time',
+                    content: `${activeShieldReview.quoteTimeEstimateSeconds} sec`
+                  }
+                ]
+              : []),
             ...(activeShieldReview.operation === 'cluster'
-              ? [{ label: 'Transfers', content: `${activeShieldReview.withdrawCount}` }]
+              ? [{ label: 'Split transfers', content: `${activeShieldReview.withdrawCount}` }]
               : []),
             {
               label:
@@ -1110,11 +1267,11 @@ function TransferForm() {
             id="transfer-amount"
             aria-label="Transfer amount"
             inputMode="decimal"
-            value={amount}
+            value={currentAmount}
             disabled={!selected}
-            title={amount || undefined}
+            title={currentAmount || undefined}
             style={{
-              fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, amount.length))))}px`
+              fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, currentAmount.length))))}px`
             }}
             onChange={event => {
               const next = normalizePrivateBalanceTransferInput(event.target.value)
@@ -1156,8 +1313,8 @@ function TransferForm() {
             balance={sourceBalance}
             networkName={selected?.chain.chain.displayName ?? ''}
             network={from === 'shield' ? 'near' : networkIcon}
-            showNetwork={false}
-            onClick={() => openDomainPicker('from')}
+            onNetworkClick={() => setAssetPickerOpen(true)}
+            onAccountClick={() => openDomainPicker('from')}
             disabled={!selected}
             onMax={selected ? handleMax : undefined}
             maxDisabled={maxDisabled}
@@ -1171,8 +1328,8 @@ function TransferForm() {
             balance={targetBalance}
             networkName={selected?.chain.chain.displayName ?? ''}
             network={to === 'shield' ? 'near' : networkIcon}
-            showNetwork={selected?.chain.chain.family === 'evm'}
-            onClick={() => openDomainPicker('to')}
+            onNetworkClick={() => setAssetPickerOpen(true)}
+            onAccountClick={() => openDomainPicker('to')}
             disabled={!selected}
           />
           <button
@@ -1242,11 +1399,6 @@ function TransferForm() {
             onRetry={() => void refreshPortfolio(true)}
           />
         )}
-        {fundingRoute && shieldConnection === 'required' && (
-          <Button size="wallet" variant="outline" onClick={() => void refreshShield()}>
-            Connect Shield
-          </Button>
-        )}
         {shieldError && !activeShieldReview && (
           <p role="alert" className="text-xs text-warning">
             {shieldError}
@@ -1257,11 +1409,32 @@ function TransferForm() {
         <Button
           size="wallet"
           className="w-full"
-          disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
-          isLoading={preparingShield}
-          onClick={fundingRoute ? () => void prepareShield() : review}
+          disabled={
+            fundingRoute && shieldConnection !== 'connected'
+              ? shieldConnection !== 'required'
+              : fundingRoute
+                ? !canReviewShield || preparingShield
+                : !canReview
+          }
+          isLoading={
+            preparingShield ||
+            (fundingRoute && (shieldConnection === 'checking' || shieldConnection === 'busy'))
+          }
+          onClick={
+            fundingRoute && shieldConnection !== 'connected'
+              ? () => void refreshShield()
+              : fundingRoute
+                ? () => void prepareShield()
+                : review
+          }
         >
-          {clusterSelected ? 'Review Cluster' : shieldPair ? 'Move' : 'Transfer'}
+          {fundingRoute && shieldConnection !== 'connected'
+            ? 'Connect Shield'
+            : clusterSelected
+              ? 'Review Cluster'
+              : shieldPair
+                ? 'Move'
+                : 'Transfer'}
         </Button>
       </div>
 
@@ -1276,7 +1449,7 @@ function TransferForm() {
             <DialogDescription className="sr-only">Choose an asset to transfer.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1">
-            {assets.map(item => (
+            {pickerRows.map(item => (
               <button
                 key={item.asset.asset.id}
                 type="button"
@@ -1302,14 +1475,16 @@ function TransferForm() {
                 </span>
                 <span className="min-w-0 max-w-[45%] break-all text-right font-sans text-xs tabular-nums">
                   {formatTokenQuantity(
-                    formatBaseUnitAmount(item.asset.balance.totalRaw, item.asset.metadata.decimals)
+                    formatBaseUnitAmount(item.sourceRaw, item.asset.metadata.decimals)
                   )}
                 </span>
               </button>
             ))}
-            {assets.length === 0 && (
+            {pickerRows.length === 0 && (
               <p className="py-4 text-center text-sm text-muted">
-                {loadState === 'loading' ? 'Loading assets…' : 'No transferable assets'}
+                {loadState === 'loading' || (from === 'shield' && shieldConnection === 'checking')
+                  ? 'Loading assets…'
+                  : 'No assets available'}
               </p>
             )}
           </div>
@@ -1328,12 +1503,15 @@ function TransferForm() {
         >
           <DialogHeader className="text-left">
             <DialogTitle className="text-sm font-medium leading-[18px]">
-              {activeAccount?.walletDisplayName ?? 'Wallet'}
+              Move {domainPicker === 'from' ? 'from' : 'to'}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Select an account and balance.
             </DialogDescription>
           </DialogHeader>
+          <p className="text-xs text-muted">
+            {activeAccount?.walletDisplayName ?? 'Wallet'} · {pickerAccountName}
+          </p>
           <div
             role="tablist"
             aria-label="Wallet accounts"
@@ -1393,7 +1571,11 @@ function TransferForm() {
                   )}
                 >
                   <span className="min-w-0">
-                    <span className="block text-base font-medium leading-[21px]">
+                    <span className="flex items-center gap-2 text-base font-medium leading-[21px]">
+                      <ExecutionAccountIcon
+                        mode={domain === 'private' ? 'private' : 'main'}
+                        size={16}
+                      />
                       {domainLabel(domain)} account
                     </span>
                     <span
@@ -1404,7 +1586,10 @@ function TransferForm() {
                     </span>
                   </span>
                   <span
-                    className="max-w-[38%] break-all text-right text-base font-medium leading-[21px]"
+                    className={cn(
+                      'max-w-[38%] break-all text-right text-base font-medium leading-[21px]',
+                      raw === '0' && 'text-muted'
+                    )}
                     title={raw ?? undefined}
                   >
                     {raw !== null && selected
@@ -1433,7 +1618,10 @@ function TransferForm() {
               )}
             >
               <span className="min-w-0">
-                <span className="block text-base font-medium leading-[21px]">Shield</span>
+                <span className="flex items-center gap-2 text-base font-medium leading-[21px]">
+                  <Icon icon="lucide:shield-check" width={16} height={16} />
+                  Shield
+                </span>
                 <span className="mt-1 flex min-w-0 items-center gap-1.5 text-xs font-medium leading-4 text-muted">
                   <img
                     src={nearLogo}
@@ -1444,7 +1632,12 @@ function TransferForm() {
                   <span className="truncate">NEAR Confidential</span>
                 </span>
               </span>
-              <span className="max-w-[38%] break-all text-right text-base font-medium leading-[21px]">
+              <span
+                className={cn(
+                  'max-w-[38%] break-all text-right text-base font-medium leading-[21px]',
+                  pickerShieldRaw === '0' && 'text-muted'
+                )}
+              >
                 {pickerShieldRaw !== null && selected
                   ? formatTokenQuantity(
                       formatBaseUnitAmount(pickerShieldRaw, selected.asset.metadata.decimals)

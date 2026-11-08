@@ -49,11 +49,13 @@ export function resolveEvmSendRoute(
 export function getEvmSendRecipientError(
   sourceMode: 'main' | 'private',
   recipientRole: EvmAddressRole,
-  sendPrivately = false
+  sendPrivately = false,
+  canMove = false
 ): string | null {
-  return sourceMode === 'main' && recipientRole === 'confidential' && !sendPrivately
-    ? 'Use Move to transfer to your Private account.'
-    : null
+  if (sourceMode !== 'main' || recipientRole !== 'confidential' || sendPrivately) return null
+  return canMove
+    ? 'This is your Private address.'
+    : 'Turn on Send privately to send to this Private address.'
 }
 
 export function getEvmSendPrivacyWarning(

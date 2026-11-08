@@ -15,6 +15,7 @@ import {
   SendAssetHeader,
   SendAmountInputCard,
   SendNetworkFeeCard,
+  SendRecipientAddress,
   SendRecipientInputCard
 } from '@/popup/components/transaction/SendInputCards'
 import { Button } from '@/popup/components/ui/button'
@@ -78,6 +79,10 @@ export function NearSendForm({
 }) {
   const [amount, setAmount] = useState('')
   const [recipient, setRecipient] = useState('')
+  const [selectedRecipient, setSelectedRecipient] = useState<{
+    address: string
+    name: string
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [preparing, setPreparing] = useState(false)
   const [approving, setApproving] = useState(false)
@@ -174,10 +179,11 @@ export function NearSendForm({
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
-          onSelect={address => {
+          onSelect={(address, name) => {
             invalidateMaximum()
             if (maxSelected) setAmount('')
             setRecipient(address)
+            setSelectedRecipient(name ? { address, name } : null)
             resolve(address)
           }}
         />
@@ -325,10 +331,14 @@ export function NearSendForm({
           <SendRecipientInputCard
             id="near-send-recipient"
             value={recipient}
+            selectedName={
+              selectedRecipient?.address === recipient ? selectedRecipient.name : undefined
+            }
             onChange={value => {
               invalidateMaximum()
               if (maxSelected) setAmount('')
               setRecipient(value.trim())
+              setSelectedRecipient(null)
             }}
             placeholder={recipientPlaceholder}
             autoFocus
@@ -430,9 +440,14 @@ export function NearSendForm({
 
               <div className="mx-5 rounded-xl border border-border/60 bg-card/60 px-4">
                 <ReviewLine label="Send To">
-                  <span className="font-mono text-muted" title={review.recipient}>
-                    {formatSortAddress(review.recipient)}
-                  </span>
+                  <SendRecipientAddress
+                    address={review.recipient}
+                    name={
+                      selectedRecipient?.address === review.recipient
+                        ? selectedRecipient.name
+                        : undefined
+                    }
+                  />
                 </ReviewLine>
                 <ReviewLine label="From">
                   <span className="font-mono text-muted" title={summary.fields.signerId}>

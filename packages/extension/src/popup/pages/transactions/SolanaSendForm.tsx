@@ -17,6 +17,7 @@ import {
   SendAssetHeader,
   SendAmountInputCard,
   SendNetworkFeeCard,
+  SendRecipientAddress,
   SendRecipientInputCard
 } from '@/popup/components/transaction/SendInputCards'
 import { openModal } from '@/popup/provider/ModalManager'
@@ -78,6 +79,10 @@ export function SolanaSendForm({
 }) {
   const [amount, setAmount] = useState('')
   const [recipient, setRecipient] = useState('')
+  const [selectedRecipient, setSelectedRecipient] = useState<{
+    address: string
+    name: string
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [preparing, setPreparing] = useState(false)
   const [maxSelected, setMaxSelected] = useState(false)
@@ -170,10 +175,11 @@ export function SolanaSendForm({
       body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
-          onSelect={address => {
+          onSelect={(address, name) => {
             invalidateMaximum()
             if (maxSelected) setAmount('')
             setRecipient(address)
+            setSelectedRecipient(name ? { address, name } : null)
             resolve(address)
           }}
         />
@@ -339,10 +345,14 @@ export function SolanaSendForm({
           <SendRecipientInputCard
             id="solana-send-recipient"
             value={recipient}
+            selectedName={
+              selectedRecipient?.address === recipient ? selectedRecipient.name : undefined
+            }
             onChange={value => {
               invalidateMaximum()
               if (maxSelected) setAmount('')
               setRecipient(value.trim())
+              setSelectedRecipient(null)
             }}
             placeholder={`${networkName} address`}
             autoFocus
@@ -444,9 +454,14 @@ export function SolanaSendForm({
 
               <div className="mx-5 rounded-xl border border-border/60 bg-card/60 px-4">
                 <ReviewLine label="Send To">
-                  <span className="font-mono text-muted" title={review.recipient}>
-                    {formatSortAddress(review.recipient)}
-                  </span>
+                  <SendRecipientAddress
+                    address={review.recipient}
+                    name={
+                      selectedRecipient?.address === review.recipient
+                        ? selectedRecipient.name
+                        : undefined
+                    }
+                  />
                 </ReviewLine>
                 <ReviewLine label="From">
                   <span className="font-mono text-muted" title={summary.fields.feePayer}>

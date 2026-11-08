@@ -191,7 +191,13 @@ function AssetSelection({
                 className="flex min-h-[55px] w-full items-center justify-between gap-3 py-2.5 text-left transition-colors hover:bg-card/60"
               >
                 <div className="flex min-w-0 items-center gap-3">
-                  <TokenIcon symbol="ZEC" nativeChain="zcash" size={32} className="shrink-0" />
+                  <TokenIcon
+                    symbol="ZEC"
+                    nativeChain="zcash"
+                    blockchain="zec"
+                    size={32}
+                    className="shrink-0"
+                  />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">ZEC</p>
                     <p className="truncate text-xs text-muted">
@@ -215,10 +221,11 @@ function AssetSelection({
             entry.asset.asset.kind === 'token' && entry.asset.source === 'user-added'
           const networkName = entry.chain.chain.displayName
           const priceUsd = row.priceUsd
-          const chainBadge =
-            entry.chain.chain.family === 'evm'
-              ? resolveChainIconAlias(entry.chain.chain.family, entry.chain.chain.displayName)
-              : undefined
+          const chainBadge = resolveChainIconAlias(
+            entry.chain.chain.family,
+            entry.chain.chain.displayName,
+            entry.chain.chain.id
+          )
           return (
             <button
               key={row.key}
@@ -351,7 +358,10 @@ export function MultichainSend() {
     accountId?: string | null
     network?: string
     endpointRuntimeKey?: string
+    sendEntry?: 'asset-detail'
   } | null
+  const sendEntry = navigationSnapshot?.sendEntry === 'asset-detail' ? 'asset-detail' : null
+  const returnToEntry = sendEntry === 'asset-detail' ? goBack : () => setSelection(null)
   const initialPortfolio =
     navigationSnapshot?.walletId === effectiveWalletId &&
     navigationSnapshot?.accountId === effectiveAccountId &&
@@ -672,7 +682,7 @@ export function MultichainSend() {
       <PageHeader
         title="Send"
         showBack
-        onBack={selection ? () => setSelection(null) : goBack}
+        onBack={selection ? returnToEntry : goBack}
         rightContent={
           crossChainSourceAssetId ? (
             <SendRouteMenu
@@ -688,7 +698,7 @@ export function MultichainSend() {
                     })}`,
                     {
                       replace: true,
-                      state: { returnToSendAssetId: crossChainSourceAssetId }
+                      state: { returnToSendAssetId: crossChainSourceAssetId, sendEntry }
                     }
                   )
                 }

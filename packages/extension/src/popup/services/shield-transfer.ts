@@ -30,6 +30,14 @@ export type ShieldFundingAsset = Readonly<{
   managed: ShieldTransferAsset
 }>
 
+export function formatShieldQuoteTime(seconds: number): string {
+  if (seconds < 60) return `${seconds} sec`
+  const minutes = Math.ceil(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.ceil(minutes / 60)
+  return `${hours} hr`
+}
+
 function confidentialHolding(
   model: PortfolioReadModel,
   protocolAssetId: string

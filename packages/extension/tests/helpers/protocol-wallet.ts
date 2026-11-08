@@ -261,6 +261,7 @@ interface MockEvmNetworkState {
   readonly getBroadcastRawTransactions: () => readonly string[]
   readonly getBroadcastValues: () => readonly bigint[]
   readonly setAddressBalanceRaw: (address: string, balanceRaw: bigint) => void
+  readonly setReceiptPending: (pending: boolean) => void
   readonly getContractGasEstimateCount: () => number
 }
 
@@ -277,6 +278,7 @@ async function mockEvmNetwork(
   let broadcastCount = 0
   let rpcRequestCount = 0
   let contractGasEstimateCount = 0
+  let receiptPending = options.pendingBroadcast ?? false
   const broadcastHashes: string[] = []
   const broadcastRawTransactions: string[] = []
   const broadcastValues: bigint[] = []
@@ -385,7 +387,7 @@ async function mockEvmNetwork(
                         : request.method === 'eth_getTransactionReceipt'
                           ? typeof request.params?.[0] === 'string' &&
                             broadcastHashes.includes(request.params[0]) &&
-                            !options.pendingBroadcast
+                            !receiptPending
                             ? {
                                 transactionHash: request.params[0],
                                 blockHash: `0x${'2'.repeat(64)}`,
@@ -399,10 +401,8 @@ async function mockEvmNetwork(
                               broadcastHashes.includes(request.params[0])
                               ? {
                                   hash: request.params[0],
-                                  blockHash: options.pendingBroadcast
-                                    ? null
-                                    : `0x${'2'.repeat(64)}`,
-                                  blockNumber: options.pendingBroadcast ? null : '0x100'
+                                  blockHash: receiptPending ? null : `0x${'2'.repeat(64)}`,
+                                  blockNumber: receiptPending ? null : '0x100'
                                 }
                               : null
                             : null
@@ -419,6 +419,9 @@ async function mockEvmNetwork(
     getBroadcastHashes: () => [...broadcastHashes],
     getBroadcastRawTransactions: () => [...broadcastRawTransactions],
     getBroadcastValues: () => [...broadcastValues],
+    setReceiptPending: pending => {
+      receiptPending = pending
+    },
     setAddressBalanceRaw: (address: string, balanceRaw: bigint) => {
       addressBalances.set(address.toLowerCase(), balanceRaw)
     }

@@ -57,11 +57,3 @@ export interface IntentsAppFee {
 /** Swap app fee: 0.35% (35 bps), collected to noir's swap account. */
 export const NOIR_SWAP_APP_FEES: IntentsAppFee[] = [{ recipient: 'noir_swap.near', fee: 35 }]
 export const NOIR_SWAP_REFERRAL = 'noir_swap'
-
-const CONFIDENTIAL_TRANSFER_ESTIMATES: Readonly<Record<string, string>> = Object.freeze({
-  eip155: '3-5 min'
-})
-
-export function getConfidentialTransferEstimate(chainId: string): string | null {
-  return CONFIDENTIAL_TRANSFER_ESTIMATES[chainId.split(':', 1)[0]] ?? null
-}

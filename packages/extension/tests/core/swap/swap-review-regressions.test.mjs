@@ -17,6 +17,11 @@ import {
 import { createRheaSwapFetch } from '../../../src/core/services/rhea-swap/rhea-swap-fetch.ts'
 import { classifyError } from '../../../src/lib/errors.ts'
 import { selectSwapFeeEstimate } from '../../../src/lib/swap-fee.ts'
+import {
+  buildPublicPrivateSendPreviewRequest,
+  createPublicPrivateSendPreviewKey,
+  getPublicPrivateSendRouteCost
+} from '../../../src/popup/services/public-private-send-preview.ts'
 
 it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
   const feeQuote = { id: 'quote-1', standardMarginalFeeZats: 5000, expiresAt: 2000 }
@@ -144,6 +149,82 @@ it('retains the reviewed sender, recipient, amount and privacy mode when a quote
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.0000001' }), null)
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.5000001' }), null)
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.000001' }).request.amountIn, '1')
+})
+
+it('binds the Public to Private preview to its account, quote inputs and fee context', () => {
+  const token = {
+    assetId: 'eip155:56/native',
+    rheaChainId: '56',
+    rheaAddress: 'native',
+    blockchain: 'bsc',
+    symbol: 'BNB',
+    decimals: 6,
+    isNative: true,
+    sources: ['nearIntents']
+  }
+  const input = {
+    network: 'mainnet',
+    walletId: 'wallet-a',
+    accountId: 'account-a',
+    endpointKey: 'rpc-a',
+    portfolioWalletId: 'wallet-a',
+    portfolioAccountId: 'account-a',
+    assetId: token.assetId,
+    assetReference: 'native',
+    assetDecimals: 6,
+    chainId: 'eip155:56',
+    sender: `0x${'1'.repeat(40)}`,
+    recipient: `0x${'2'.repeat(40)}`,
+    amount: '0.5',
+    amountRaw: '500000',
+    slippage: 1,
+    feeSelectionKey: 'standard',
+    sourceToken: token,
+    destinationToken: token
+  }
+  const preview = buildPublicPrivateSendPreviewRequest(input)
+  assert.equal(preview.key, createPublicPrivateSendPreviewKey(input))
+  assert.equal(preview.request.confidentiality, 'basic')
+  assert.equal(preview.request.amountIn, '500000')
+  for (const changed of [
+    { walletId: 'wallet-b' },
+    { accountId: 'account-b' },
+    { portfolioWalletId: 'wallet-b' },
+    { endpointKey: 'rpc-b' },
+    { assetReference: 'another-asset' },
+    { assetDecimals: 18 },
+    { chainId: 'eip155:1' },
+    { recipient: `0x${'3'.repeat(40)}` },
+    { amount: '0.6', amountRaw: '600000' },
+    { slippage: 2 },
+    { feeSelectionKey: 'fast' }
+  ]) {
+    assert.notEqual(createPublicPrivateSendPreviewKey({ ...input, ...changed }), preview.key)
+  }
+  assert.equal(buildPublicPrivateSendPreviewRequest({ ...input, network: 'testnet' }), null)
+  assert.equal(
+    buildPublicPrivateSendPreviewRequest({
+      ...input,
+      destinationToken: { ...token, decimals: 18 }
+    }),
+    null
+  )
+  assert.equal(
+    getPublicPrivateSendRouteCost({
+      amountInRaw: '500000',
+      estimatedOutRaw: '490000',
+      decimals: 6
+    }),
+    '0.01'
+  )
+  assert.equal(
+    getPublicPrivateSendRouteCost({
+      amountInRaw: '500000',
+      estimatedOutRaw: '510000',
+      decimals: 6
+    }),
+    null
+  )
 })
 
 it('accepts a Zcash recipient only for its selected account scope and network', () => {

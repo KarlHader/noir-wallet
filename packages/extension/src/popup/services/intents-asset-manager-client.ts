@@ -102,6 +102,13 @@ async function refreshProtocolAssets(force = false): Promise<void> {
 }
 
 export const intentsAssetManagerClient = Object.freeze({
+  ensureSelectedEvmAsset: async (asset: IntentsManagedAsset): Promise<void> => {
+    if (asset.management !== 'evm') return
+    const record = (await enableEvmAssets([asset], false))[0]
+    if (!record || record.assetId !== asset.assetId) {
+      throw new Error('Selected token registration failed')
+    }
+  },
   ensureDefaults: async (
     tokens: readonly SwapToken[],
     options: Readonly<{ forceProtocolRefresh?: boolean }> = {}

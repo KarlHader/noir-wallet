@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { QRCodeSVG } from 'qrcode.react'
@@ -49,6 +49,7 @@ import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import { Input } from '@/popup/components/ui/input'
 import { CopyToast, useCopyToClipboard } from '@/popup/components/common/CopyToast'
+import { InlineError } from '@/popup/components/common/InlineError'
 
 type Picker = 'token' | 'network' | 'provider' | null
 
@@ -109,14 +110,31 @@ function ShieldDepositContent() {
   const [provider, setProvider] = useState<ShieldProvider>('near-confidential')
   const [records, setRecords] = useState<readonly ExternalShieldDeposit[]>([])
   const [viewRecordId, setViewRecordId] = useState<string | null>(null)
+  const viewRecordIdRef = useRef(viewRecordId)
+  viewRecordIdRef.current = viewRecordId
   const [showAllHistory, setShowAllHistory] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [checkResult, setCheckResult] = useState<{ scope: string; depositId: string } | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const requestIdRef = useRef<string | null>(null)
+  const checkAttemptRef = useRef(0)
+  const checkInFlightRef = useRef(false)
+  const refreshRequests = useRef(new Map<string, Promise<ExternalShieldDeposit>>())
+  const refreshDepositRecord = useCallback((depositId: string, scope: string) => {
+    const key = `${scope}:${depositId}`
+    const existing = refreshRequests.current.get(key)
+    if (existing) return existing
+    const request = externalShieldDepositClient.refresh(depositId).finally(() => {
+      if (refreshRequests.current.get(key) === request) refreshRequests.current.delete(key)
+    })
+    refreshRequests.current.set(key, request)
+    return request
+  }, [])
 
   useEffect(() => {
     mounted.current = true
@@ -156,9 +174,21 @@ function ShieldDepositContent() {
     setReviewOpen(false)
     setBusy(false)
     setRefreshing(false)
+    setCheckResult(null)
+    setCheckError(null)
+    checkAttemptRef.current += 1
+    checkInFlightRef.current = false
     setError(null)
     requestIdRef.current = null
   }, [walletId, accountId, currentNetwork])
+
+  useEffect(() => {
+    checkAttemptRef.current += 1
+    checkInFlightRef.current = false
+    setRefreshing(false)
+    setCheckResult(null)
+    setCheckError(null)
+  }, [viewRecordId])
 
   useEffect(() => {
     let active = true
@@ -197,7 +227,13 @@ function ShieldDepositContent() {
       void externalShieldDepositClient
         .list({ network: currentNetwork, keyDomainId: walletId, accountId })
         .then(result => {
-          if (!active || requestRevision !== revision) return
+          if (
+            !active ||
+            requestRevision !== revision ||
+            !mounted.current ||
+            scopeRef.current !== scopeKey
+          )
+            return
           setRecords(result)
           if (initialSelectionPending) {
             setViewRecordId(
@@ -207,11 +243,23 @@ function ShieldDepositContent() {
           }
         })
         .catch(() => {
-          if (active && requestRevision === revision && initialSelectionPending)
+          if (
+            active &&
+            requestRevision === revision &&
+            mounted.current &&
+            scopeRef.current === scopeKey &&
+            initialSelectionPending
+          )
             setError('Deposit history unavailable')
         })
         .finally(() => {
-          if (active && requestRevision === revision) setHistoryLoading(false)
+          if (
+            active &&
+            requestRevision === revision &&
+            mounted.current &&
+            scopeRef.current === scopeKey
+          )
+            setHistoryLoading(false)
         })
     }
     const onStorageChanged = (
@@ -307,18 +355,32 @@ function ShieldDepositContent() {
       }
       if (inFlight) return
       inFlight = true
-      void externalShieldDepositClient
-        .refresh(viewedRecord.depositId)
+      const checkAttemptAtStart = checkAttemptRef.current
+      const manualCheckInFlightAtStart = checkInFlightRef.current
+      void refreshDepositRecord(viewedRecord.depositId, scopeKey)
         .then(updated => {
           if (
             active &&
+            mounted.current &&
+            scopeRef.current === scopeKey &&
             updated.network === currentNetwork &&
             updated.keyDomainId === walletId &&
-            updated.accountId === accountId
+            updated.accountId === accountId &&
+            updated.depositId === viewedRecord.depositId
           ) {
             setRecords(current =>
-              current.map(item => (item.depositId === updated.depositId ? updated : item))
+              current.map(item =>
+                item.depositId === updated.depositId && item.updatedAt <= updated.updatedAt
+                  ? updated
+                  : item
+              )
             )
+            if (!manualCheckInFlightAtStart && checkAttemptRef.current === checkAttemptAtStart)
+              setCheckResult(current =>
+                current?.scope === scopeKey && current.depositId === updated.depositId
+                  ? null
+                  : current
+              )
           }
         })
         .catch(() => {})
@@ -330,7 +392,7 @@ function ShieldDepositContent() {
       active = false
       window.clearInterval(timer)
     }
-  }, [viewedRecord, currentNetwork, walletId, accountId])
+  }, [viewedRecord, currentNetwork, walletId, accountId, scopeKey, refreshDepositRecord])
 
   const openReview = () => {
     setShowAmountError(true)
@@ -426,27 +488,42 @@ function ShieldDepositContent() {
   }
 
   const refreshDeposit = async () => {
-    if (!viewedRecord || refreshing || !mounted.current) return
+    if (!viewedRecord || checkInFlightRef.current || !mounted.current) return
+    const depositId = viewedRecord.depositId
+    const requestScope = scopeKey
+    const attempt = ++checkAttemptRef.current
+    const isCurrentCheck = () =>
+      attempt === checkAttemptRef.current &&
+      mounted.current &&
+      useWalletStore.getState().currentNetwork === currentNetwork &&
+      scopeRef.current === requestScope &&
+      viewRecordIdRef.current === depositId
+    checkInFlightRef.current = true
     setRefreshing(true)
-    setError(null)
+    setCheckResult(null)
+    setCheckError(null)
     try {
-      const updated = await externalShieldDepositClient.refresh(viewedRecord.depositId)
-      const wallet = useWalletStore.getState()
+      const updated = await refreshDepositRecord(depositId, requestScope)
+      if (!isCurrentCheck()) return
       if (
-        !mounted.current ||
-        wallet.currentNetwork !== updated.network ||
-        scopeRef.current !== `${updated.network}:${updated.keyDomainId}:${updated.accountId}`
+        updated.depositId !== depositId ||
+        `${updated.network}:${updated.keyDomainId}:${updated.accountId}` !== requestScope
       )
-        return
+        throw new Error('Deposit status response scope mismatch')
       setRecords(current =>
-        current.map(record => (record.depositId === updated.depositId ? updated : record))
+        current.map(record =>
+          record.depositId === depositId && record.updatedAt <= updated.updatedAt ? updated : record
+        )
       )
       setNow(Date.now())
+      setCheckResult({ scope: requestScope, depositId })
     } catch {
-      if (mounted.current && scopeRef.current === scopeKey)
-        setError('Could not check deposit status')
+      if (isCurrentCheck()) setCheckError('Could not check deposit status')
     } finally {
-      if (mounted.current && scopeRef.current === scopeKey) setRefreshing(false)
+      if (isCurrentCheck()) {
+        checkInFlightRef.current = false
+        setRefreshing(false)
+      }
     }
   }
 
@@ -689,19 +766,35 @@ function ShieldDepositContent() {
                   <p className="text-xs text-muted">Refund address</p>
                   <p className="mt-1 break-all font-mono text-xs">{viewedRecord.refundAddress}</p>
                 </div>
+                {checkResult?.scope === scopeKey &&
+                  checkResult.depositId === viewedRecord.depositId && (
+                    <p role="status" className="mt-3 text-xs text-muted">
+                      Checked · {depositStatusLabel(viewedRecord, now)}
+                    </p>
+                  )}
+                <InlineError
+                  message={checkError ?? error}
+                  onRetry={checkError ? () => void refreshDeposit() : undefined}
+                  retrying={refreshing}
+                  className="mt-3"
+                />
                 <button
                   type="button"
                   onClick={() => void refreshDeposit()}
                   disabled={refreshing}
-                  className="wallet-interactive mt-5 h-11 w-full rounded-lg border border-white/15 text-sm enabled:hover:border-white/30 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+                  aria-busy={refreshing || undefined}
+                  className="wallet-interactive mt-4 h-11 w-full rounded-lg border border-white/15 text-sm enabled:hover:border-white/30 enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
                 >
+                  {refreshing && (
+                    <Icon
+                      icon="lucide:loader-circle"
+                      width={14}
+                      height={14}
+                      className="mr-2 inline animate-spin"
+                    />
+                  )}
                   {refreshing ? 'Checking…' : 'Check deposit status'}
                 </button>
-                {error && (
-                  <p role="alert" className="mt-3 text-xs text-danger">
-                    {error}
-                  </p>
-                )}
               </div>
             </DialogContent>
           </Dialog>
@@ -843,23 +936,6 @@ function ShieldDepositContent() {
                 )}
               </div>
             )}
-            <button
-              type="button"
-              onClick={openReview}
-              disabled={
-                loading ||
-                !account ||
-                !canManageNear ||
-                historyLoading ||
-                busy ||
-                !selectedToken ||
-                !selectedNetwork ||
-                !sourceAssetId
-              }
-              className="wallet-interactive mt-6 h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
-            >
-              Receiving address
-            </button>
           </>
         }
         {error && !viewedRecord && (
@@ -911,6 +987,27 @@ function ShieldDepositContent() {
           )
         )}
       </div>
+      {!viewedRecord && (
+        <div className="page-footer">
+          <button
+            type="button"
+            onClick={openReview}
+            disabled={
+              loading ||
+              !account ||
+              !canManageNear ||
+              historyLoading ||
+              busy ||
+              !selectedToken ||
+              !selectedNetwork ||
+              !sourceAssetId
+            }
+            className="wallet-interactive h-11 w-full rounded-lg bg-primary text-sm font-medium text-background enabled:hover:brightness-110 enabled:active:brightness-95 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
+          >
+            Receiving address
+          </button>
+        </div>
+      )}
       <Dialog open={reviewOpen} onOpenChange={open => !open && !busy && setReviewOpen(false)}>
         <DialogContent position="bottom" className="gap-0 bg-wallet-surface p-4 pb-6">
           <DialogTitle className="text-base font-medium">Review receiving address</DialogTitle>

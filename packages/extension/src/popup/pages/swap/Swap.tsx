@@ -13,7 +13,6 @@ import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
-import { getConfidentialTransferEstimate } from '@/config/intents'
 import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
 import { selectSwapFeeEstimate } from '@/lib/swap-fee'
 import { isZecToken } from '@/core/services/intents-api'
@@ -25,7 +24,13 @@ import type {
   RheaSwapToken,
   RheaSwapSolanaTransactionReview
 } from '@/core/services/rhea-swap'
-import { formatChainName, formatSortAddress, formatSymbol, getChainFromAssetId } from '@/lib/format'
+import {
+  detectAddressType,
+  formatChainName,
+  formatSortAddress,
+  formatSymbol,
+  getChainFromAssetId
+} from '@/lib/format'
 import { useSwapPreferences } from '@/store/swap-store'
 import { toast } from '@/store/toast-store'
 import { useTransaction } from '../../hooks/useTransaction'
@@ -109,7 +114,8 @@ import {
   resolveEvmSwapMaximumInsufficientFundsAdjustment,
   isSwapMaximumQuotePending,
   resolveSelectedSwapMaximum,
-  resolveZcashSwapMaximumAdjustment
+  resolveZcashSwapMaximumAdjustment,
+  canUseEstimatedEvmSwapMaximum
 } from '@/popup/services/swap-maximum'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import {
@@ -154,6 +160,10 @@ import {
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getRheaSwapErrorMessage, rheaSwapClient } from '@/popup/services/rhea-swap-client'
 import {
+  intentsAssetManagerClient,
+  resolveManagedIntentsCatalogAsset
+} from '@/popup/services/intents-asset-manager-client'
+import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSwapRoute
 } from '@/popup/pages/transactions/evm-send-validation'
@@ -176,6 +186,7 @@ import {
   filterSwapDestinationTokens,
   filterSelectableSwapDestinationTokens,
   isConfidentialSwapDestinationSupported,
+  isPrivateSwapDestinationSupported,
   getPreparedSwapNetworkFee,
   isPreparedSwapFeeUnaffordable,
   isRheaSwapQuoteFresh,
@@ -255,12 +266,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     location.state.returnToSendAssetId === requestedSourceAssetId
       ? requestedSourceAssetId
       : null
+  const sendEntry =
+    location.state &&
+    typeof location.state === 'object' &&
+    'sendEntry' in location.state &&
+    location.state.sendEntry === 'asset-detail'
+      ? 'asset-detail'
+      : null
   const requestedCrossChainSourceMode = searchParams.get('sourceMode')
   const returnFromCrossChainSend = () => {
     if (returnToSendAssetId) {
       navigate(
         `/send?assetId=${encodeURIComponent(returnToSendAssetId)}&sourceMode=${sourceMode}`,
-        { replace: true }
+        { replace: true, state: { sendEntry } }
       )
     } else {
       goBack()
@@ -339,7 +357,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const walletSourcesScope =
     effectiveWalletId && effectiveAccountId
-      ? `${effectiveWalletId}:${effectiveAccountId}:${chainEndpointRuntimeKey}`
+      ? `${currentNetwork}:${effectiveWalletId}:${effectiveAccountId}:${chainEndpointRuntimeKey}`
       : null
   const publicPrivacySendRoute =
     publicPrivacySendRequested && effectiveWalletId && effectiveAccountId && requestedSourceAssetId
@@ -427,6 +445,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const receiveTargets =
     receiveTargetsSnapshot.scope === walletSourcesScope ? receiveTargetsSnapshot.value : null
   const [walletSourcesTraceId] = useState(() => createDebugRequestId('swap-wallet-sources'))
+  const selectedAssetRegistrationKey = useRef<string | null>(null)
+  const selectedAssetRegistrationAttempts = useRef<{ key: string; count: number } | null>(null)
+  const selectedAssetRegistrationTimer = useRef<number | null>(null)
+  const [assetRegistrationRetry, setAssetRegistrationRetry] = useState(0)
+  useEffect(
+    () => () => {
+      if (selectedAssetRegistrationTimer.current !== null)
+        window.clearTimeout(selectedAssetRegistrationTimer.current)
+    },
+    []
+  )
   const [walletSourcesRequestLoading, setWalletSourcesLoading] = useState(true)
   const walletSourcesLoading =
     walletSourcesRequestLoading ||
@@ -502,11 +531,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     : sourceModeSelection?.scope === walletSourcesScope
       ? sourceModeSelection.mode
       : (routeSourceMode ?? walletActionMode.mode)
-  const privateSwapRequested =
-    !crossChainSendRequested &&
-    !privateTransferRequested &&
-    !isPrivateFunding &&
-    sourceMode === 'private'
   const setSourceMode = useCallback(
     (mode: QuoteDepositExecutionMode) => {
       walletActionMode.setMode(mode)
@@ -749,14 +773,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const executionSourceMode: QuoteDepositExecutionMode = publicPrivacySendRequested
     ? 'main'
-    : privateTransferRequested || (privateSwapRequested && walletOwnedSourceBase?.family === 'evm')
+    : privateTransferRequested
       ? 'private'
-      : resolveSwapExecutionSourceMode({
-          requestedMode: sourceMode,
-          isPrivateFunding,
-          sourceFamily: walletOwnedSourceBase?.family ?? null,
-          privateSourceAvailable: Boolean(privateWalletOwnedSource)
-        })
+      : !isPrivateFunding && sourceMode === 'private' && walletOwnedSourceBase?.family === 'evm'
+        ? 'private'
+        : resolveSwapExecutionSourceMode({
+            requestedMode: sourceMode,
+            isPrivateFunding,
+            sourceFamily: walletOwnedSourceBase?.family ?? null,
+            privateSourceAvailable: Boolean(privateWalletOwnedSource)
+          })
+  const privateSwapRequested =
+    !crossChainSendRequested &&
+    !privateTransferRequested &&
+    !isPrivateFunding &&
+    executionSourceMode === 'private'
   const quotePurpose = publicPrivacySendRequested
     ? 'public-private-send'
     : privateSwapRequested && executionSourceMode === 'private'
@@ -831,11 +862,153 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     [portfolio, receiveTargets, walletSwapSourceTokens]
   )
   const isZecDestination = isZecToken(swap.tokenOut)
+  const privateExecutionAddresses = useMemo(
+    () =>
+      new Map(
+        storageV2Account?.networks.flatMap(network =>
+          network.privateExecutionAddress
+            ? [[network.chain.id, network.privateExecutionAddress] as const]
+            : []
+        ) ?? []
+      ),
+    [storageV2Account?.networks]
+  )
+  const supportsPrivateDestination = useCallback(
+    (token: RheaSwapToken) =>
+      isPrivateSwapDestinationSupported(
+        token,
+        portfolio,
+        receiveTargets,
+        privateExecutionAddresses
+      ),
+    [portfolio, receiveTargets, privateExecutionAddresses]
+  )
+  const isSelectablePrivateSource = useCallback(
+    (token: RheaSwapToken) => {
+      if (!portfolio) return false
+      const source = resolveWalletOwnedQuoteAsset(token, portfolio, receiveTargets)
+      const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
+      const privateAddress =
+        target?.kind === 'evm' ? privateExecutionAddresses.get(target.chain.id) : undefined
+      if (
+        target?.kind !== 'evm' ||
+        !privateAddress ||
+        !/^0x[0-9a-fA-F]{40}$/.test(privateAddress) ||
+        privateAddress.toLowerCase() === target.address.toLowerCase()
+      )
+        return false
+      if (source)
+        return Boolean(selectWalletOwnedQuoteAssetExecution(source, 'private', privateAddress))
+      // Selection may register this token; execution still requires its refreshed private balance.
+      const managed = resolveManagedIntentsCatalogAsset([token], token.assetId)
+      return managed?.management === 'evm' && managed.chainId === target.chain.id
+    },
+    [portfolio, receiveTargets, privateExecutionAddresses]
+  )
+  const selectedEvmAsset = useMemo(
+    () =>
+      swap.tokenIn ? resolveManagedIntentsCatalogAsset([swap.tokenIn], swap.tokenIn.assetId) : null,
+    [swap.tokenIn]
+  )
+  useEffect(() => {
+    if (
+      !selectedEvmAsset ||
+      selectedEvmAsset.management !== 'evm' ||
+      !portfolio ||
+      portfolio.assets.some(asset => asset.asset.id === selectedEvmAsset.assetId) ||
+      !effectiveWalletId ||
+      !effectiveAccountId ||
+      !walletSourcesScope
+    ) {
+      selectedAssetRegistrationKey.current = null
+      selectedAssetRegistrationAttempts.current = null
+      if (selectedAssetRegistrationTimer.current !== null) {
+        window.clearTimeout(selectedAssetRegistrationTimer.current)
+        selectedAssetRegistrationTimer.current = null
+      }
+      return
+    }
+    const registrationKey = `${walletSourcesScope}:${selectedEvmAsset.assetId}`
+    if (selectedAssetRegistrationAttempts.current?.key !== registrationKey) {
+      if (selectedAssetRegistrationTimer.current !== null) {
+        window.clearTimeout(selectedAssetRegistrationTimer.current)
+        selectedAssetRegistrationTimer.current = null
+      }
+      selectedAssetRegistrationAttempts.current = { key: registrationKey, count: 0 }
+    }
+    if (selectedAssetRegistrationKey.current === registrationKey) return
+    selectedAssetRegistrationKey.current = registrationKey
+    selectedAssetRegistrationAttempts.current.count += 1
+    const portfolioVersion = selectedPortfolioVersion.current
+    const scope = {
+      walletId: effectiveWalletId,
+      accountId: effectiveAccountId,
+      endpointRuntimeKey: chainEndpointRuntimeKey
+    }
+    void intentsAssetManagerClient
+      .ensureSelectedEvmAsset(selectedEvmAsset)
+      .then(() => {
+        if (
+          selectedAssetRegistrationKey.current !== registrationKey ||
+          activeScopeRef.current !== walletSourcesScope ||
+          useWalletStore.getState().currentNetwork !== currentNetwork
+        )
+          return null
+        return refreshPortfolioFromCache(scope, portfolio, {
+          forceRefresh: true,
+          refreshChainIds: [selectedEvmAsset.chainId]
+        })
+      })
+      .then(refreshed => {
+        if (
+          selectedAssetRegistrationKey.current !== registrationKey ||
+          portfolioVersion !== selectedPortfolioVersion.current ||
+          activeScopeRef.current !== walletSourcesScope ||
+          useWalletStore.getState().currentNetwork !== currentNetwork ||
+          !isPortfolioModelForScope(refreshed, effectiveWalletId, effectiveAccountId)
+        )
+          return
+        if (!refreshed.assets.some(asset => asset.asset.id === selectedEvmAsset.assetId)) {
+          throw new Error('Selected token balance is temporarily unavailable')
+        }
+        updatedPortfolioVersion.current += 1
+        setPortfolioSnapshot({ scope: walletSourcesScope, value: refreshed })
+        cacheSwapWalletSources(walletSourcesScope, { portfolio: refreshed, receiveTargets })
+      })
+      .catch(error => {
+        if (selectedAssetRegistrationKey.current !== registrationKey) return
+        toast.error(getRheaSwapErrorMessage(error))
+        const attempts = selectedAssetRegistrationAttempts.current
+        if (attempts?.key !== registrationKey || attempts.count >= 3) return
+        selectedAssetRegistrationTimer.current = window.setTimeout(() => {
+          selectedAssetRegistrationTimer.current = null
+          if (
+            selectedAssetRegistrationKey.current !== registrationKey ||
+            activeScopeRef.current !== walletSourcesScope ||
+            useWalletStore.getState().currentNetwork !== currentNetwork
+          )
+            return
+          selectedAssetRegistrationKey.current = null
+          setAssetRegistrationRetry(value => value + 1)
+        }, attempts.count * 1500)
+      })
+  }, [
+    selectedEvmAsset,
+    portfolio,
+    effectiveWalletId,
+    effectiveAccountId,
+    walletSourcesScope,
+    chainEndpointRuntimeKey,
+    currentNetwork,
+    receiveTargets,
+    assetRegistrationRetry
+  ])
   const swapRefreshChainId = resolveSwapRefreshChainId(swap.tokenIn, receiveTargets)
   useEffect(() => {
     if (!swapRefreshChainId || !effectiveWalletId || !effectiveAccountId) return
     let cancelled = false
     const portfolioVersion = selectedPortfolioVersion.current
+    const updatedVersion = updatedPortfolioVersion.current
     const scope = {
       walletId: effectiveWalletId,
       accountId: effectiveAccountId,
@@ -864,6 +1037,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         if (
           cancelled ||
           portfolioVersion !== selectedPortfolioVersion.current ||
+          updatedVersion !== updatedPortfolioVersion.current ||
           activeScopeRef.current !== walletSourcesScope ||
           !isPortfolioModelForScope(refreshed, effectiveWalletId, effectiveAccountId)
         )
@@ -902,9 +1076,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : undefined,
     [storageV2Account, walletDestinationTarget]
   )
-  const destinationMode: QuoteDepositExecutionMode = destinationPrivateExecutionAddress
-    ? destinationWalletActionMode.mode
-    : 'main'
+  const destinationMode: QuoteDepositExecutionMode =
+    destinationPrivateExecutionAddress && swap.tokenOut && supportsPrivateDestination(swap.tokenOut)
+      ? privateSwapRequested
+        ? 'private'
+        : destinationWalletActionMode.mode
+      : 'main'
   const privateFundingDestinationToken = useMemo(
     () =>
       isPrivateFunding
@@ -944,10 +1121,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     (isZecDestination
       ? !hasManagedZcashDestination || useCustomRecipient
       : !walletDestinationTarget || useCustomRecipient)
+  const unsupportedPrivateDestination = Boolean(
+    swap.tokenOut &&
+    (privateSwapRequested ||
+      (!useCustomRecipient &&
+        destinationWalletActionMode.mode === 'private' &&
+        destinationPrivateExecutionAddress)) &&
+    !supportsPrivateDestination(swap.tokenOut)
+  )
   const privateDestinationSelectionRequested =
     isPrivateFunding ||
     executionSourceMode === 'private' ||
-    (!useCustomRecipient && destinationWalletActionMode.mode === 'private')
+    (!useCustomRecipient && destinationMode === 'private') ||
+    unsupportedPrivateDestination
   const scopedZecRecipient = resolveScopedSwapZcashRecipient(
     zecRecipientSelection,
     walletSourcesScope,
@@ -988,6 +1174,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     (destinationMode !== 'private' || Boolean(destinationPrivateExecutionAddress)) &&
     (!isZecDestination ||
       !getFundingSourceUnavailableReason(currentWallet?.keySource, swap.addressType)) &&
+    !unsupportedPrivateDestination &&
     canReverseSwapPair(swap.tokenIn, swap.tokenOut, enabledSwapChains)
   )
   const reverseContext = JSON.stringify([
@@ -1165,7 +1352,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   useEffect(() => {
     const activeScope =
       effectiveWalletId && effectiveAccountId
-        ? `${effectiveWalletId}:${effectiveAccountId}:${chainEndpointRuntimeKey}`
+        ? `${currentNetwork}:${effectiveWalletId}:${effectiveAccountId}:${chainEndpointRuntimeKey}`
         : null
     const previousScope = activeScopeRef.current
     activeScopeRef.current = activeScope
@@ -1193,6 +1380,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     effectiveWalletId,
     effectiveAccountId,
     chainEndpointRuntimeKey,
+    currentNetwork,
     discardPreparedQuoteTransfer,
     swap.resetSwap
   ])
@@ -1325,16 +1513,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       }
       return
     }
+    const eligibleDestinations = (tokens: readonly RheaSwapToken[]) =>
+      filterSwapDestinationTokens(
+        tokens,
+        privateDestinationSelectionRequested ? 'basic' : undefined
+      ).filter(token => !privateSwapRequested || supportsPrivateDestination(token))
     const resolved = resolveSwapTokenSelection({
       tokens: swap.tokens,
-      sourceTokens: filterSwapDestinationTokens(
-        swap.sourceTokens,
-        privateDestinationSelectionRequested ? 'basic' : undefined
-      ),
-      crossChainDestinationTokens: filterSwapDestinationTokens(
-        swap.crossChainDestinationTokens,
-        privateDestinationSelectionRequested ? 'basic' : undefined
-      ),
+      sourceTokens: swap.sourceTokens,
+      sameChainDestinationTokens: eligibleDestinations(swap.sourceTokens),
+      crossChainDestinationTokens: eligibleDestinations(swap.crossChainDestinationTokens),
       walletSourceTokens: walletSwapSourceTokens,
       savedSelection: savedTokenSelection,
       requestedSourceAssetId: requestedSourceToken?.assetId,
@@ -1360,7 +1548,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           token =>
             token.assetId === resolved.tokenOut?.assetId &&
             token.blockchain === resolved.tokenOut.blockchain &&
-            (!privateDestinationSelectionRequested || isConfidentialSwapDestinationSupported(token))
+            (!privateDestinationSelectionRequested ||
+              isConfidentialSwapDestinationSupported(token)) &&
+            (!privateSwapRequested || supportsPrivateDestination(token))
         ) ?? null)
       : null
     if (
@@ -1408,6 +1598,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     swap.crossChainDestinationTokens,
     swap.destinationTokens,
     privateDestinationSelectionRequested,
+    privateSwapRequested,
+    supportsPrivateDestination,
     swap.tokenIn?.assetId,
     swap.selectedSourceAssetId,
     swap.tokenIn?.decimals,
@@ -1572,7 +1764,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const routeMaximum = useTransferMaximum({
     enabled: canEstimateRouteMaximum,
-    requestKey: `${walletSourcesScope}:${swap.tokenIn?.assetId}:${swap.tokenOut?.assetId}:${walletOwnedSource?.refundAddress}:${walletOwnedSource?.asset.balance.availableRaw}:${resolvedRecipientAddress}:${executionSourceMode}:${destinationMode}:${swap.slippage}:${networkFeeTier}`,
+    requestKey: `${walletSourcesScope}:${swap.tokenIn?.assetId}:${swap.tokenOut?.assetId}:${walletOwnedSource?.refundAddress}:${walletOwnedSource?.asset.balance.availableRaw}:${resolvedRecipientAddress}:${executionSourceMode}:${destinationMode}:${quotePurpose}:${swap.slippage}:${networkFeeTier}`,
     fallback: () => {
       if (!walletOwnedSource) throw new Error('No Swap source')
       return fallbackTransferMaximum(walletOwnedSource)
@@ -1593,7 +1785,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         purpose: quotePurpose,
         executionMode: executionSourceMode,
         feeTier: networkFeeTier,
-        slippageBps: swap.slippage
+        slippageBps: Math.round(swap.slippage * 100)
       })
     }
   })
@@ -1779,6 +1971,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       !publicPrivacySendRouteReady ||
       !publicPrivacySendRecipientReady ||
       !publicPrivacySendFundingReady ||
+      unsupportedPrivateDestination ||
       (isPrivateFunding && !privateFundingDestinationToken) ||
       recipientError !== null ||
       hasInvalidWalletAmount ||
@@ -1796,6 +1989,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     resolvedRecipientAddress,
     executionSourceMode,
     destinationMode,
+    unsupportedPrivateDestination,
     requiresRecipientAddress,
     walletActionMode.loading,
     destinationWalletActionMode.loading,
@@ -2092,7 +2286,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         )
         if (requestSequence !== quoteRequestSequence.current) return
         let preparedBalanceTransferReview: PrivateBalanceTransferReview | null = null
-        if (maxSelected && !swap.isZecSource && walletOwnedSource) {
+        if (
+          maxSelected &&
+          !swap.isZecSource &&
+          walletOwnedSource &&
+          !canUseEstimatedEvmSwapMaximum({
+            source: walletOwnedSource,
+            review,
+            currentAmount: swap.amountIn,
+            maximum: routeMaximum.value,
+            fallbackUsed: routeMaximum.fallbackUsed,
+            refreshingFees: feeTierOverride !== undefined
+          })
+        ) {
           const adjustment = await measure('resolve-maximum', () =>
             resolveSwapMaximumAdjustment(
               {
@@ -2541,6 +2747,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       effectiveAccountId,
       lockedAssetFlowRequested,
       routeMaximum.update,
+      routeMaximum.value,
+      routeMaximum.fallbackUsed,
       maxTransfer.update,
       zcashMaximumScope
     ]
@@ -3420,7 +3628,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       const selectorBalanceMode = resolveSwapSelectorBalanceMode({
         purpose: type,
         sourceMode: executionSourceMode,
-        destinationMode,
+        destinationMode: privateDestinationSelectionRequested ? 'private' : destinationMode,
         isPrivateFunding,
         externalRecipient: requiresRecipientAddress
       })
@@ -3431,7 +3639,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           crossChainSendRequested,
           sourceToken: swap.tokenIn,
           capabilities: CROSS_CHAIN_SEND_CAPABILITIES
-        })
+        }).filter(token => !privateSwapRequested || supportsPrivateDestination(token))
+      const filterSources = (tokens: readonly RheaSwapToken[]) =>
+        privateSwapRequested ? tokens.filter(isSelectablePrivateSource) : tokens
       await openModal({
         title: crossChainSendRequested ? 'Select network' : 'Select Token',
         position: 'center',
@@ -3453,16 +3663,23 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 fullHeight
                 unavailableNetworks={getUnavailableSwapNetworks(enabledSwapChains)}
                 initialTokens={
-                  type === 'in' ? swap.sourceTokens : filterDestinations(swap.destinationTokens)
+                  type === 'in'
+                    ? filterSources(swap.sourceTokens)
+                    : filterDestinations(swap.destinationTokens)
                 }
                 loadTokens={(onTokens, isCancelled) =>
                   swap
                     .loadSelectorTokens(
                       type === 'in' ? 'from' : 'cross-chain-to',
-                      tokens => onTokens(type === 'out' ? filterDestinations(tokens) : tokens),
+                      tokens =>
+                        onTokens(
+                          type === 'out' ? filterDestinations(tokens) : filterSources(tokens)
+                        ),
                       isCancelled
                     )
-                    .then(tokens => (type === 'out' ? filterDestinations(tokens) : tokens))
+                    .then(tokens =>
+                      type === 'out' ? filterDestinations(tokens) : filterSources(tokens)
+                    )
                 }
                 balanceScope={
                   walletSourcesScope &&
@@ -3566,6 +3783,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       requiresRecipientAddress,
       crossChainSendRequested,
       privateDestinationSelectionRequested,
+      privateSwapRequested,
+      supportsPrivateDestination,
+      isSelectablePrivateSource,
       enabledSwapChains
     ]
   )
@@ -3952,14 +4172,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               />
             )
           },
-          ...(getConfidentialTransferEstimate(walletOwnedSource.chain.chain.id)
-            ? [
-                {
-                  label: 'Estimated time',
-                  content: getConfidentialTransferEstimate(walletOwnedSource.chain.chain.id)
-                }
-              ]
-            : []),
           ...(sourceNetworkFee
             ? [
                 {
@@ -4080,7 +4292,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             badge: privateSwapRequested
               ? 'Private'
               : requiresRecipientAddress
-                ? undefined
+                ? isZecDestination &&
+                  isValidSwapZcashRecipient(reviewedQuote.recipient, currentNetwork)
+                  ? detectAddressType(reviewedQuote.recipient) === 'shielded'
+                    ? 'Shield'
+                    : 'Transparent'
+                  : undefined
                 : isZecDestination
                   ? swap.addressType === 'shielded'
                     ? 'Shield'
@@ -4100,11 +4317,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               : undefined
           }
           recipient={reviewedQuote.recipient}
-          arrivalEstimate={
-            (isPrivateFunding || privateTransferRequested) && walletOwnedSource
-              ? (getConfidentialTransferEstimate(walletOwnedSource.chain.chain.id) ?? undefined)
-              : undefined
-          }
           tokenIn={swap.tokenIn}
           tokenOut={swap.tokenOut}
           amountIn={swap.amountIn}
@@ -4161,7 +4373,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   network: walletOwnedSource.chain.chain.displayName,
                   chainIcon: resolveChainIconAlias(
                     walletOwnedSource.chain.chain.family,
-                    walletOwnedSource.chain.chain.displayName
+                    walletOwnedSource.chain.chain.displayName,
+                    walletOwnedSource.chain.chain.id
                   ),
                   sender: walletOwnedSource.refundAddress,
                   executionTarget: resolveSwapSourceExecutionTarget({
@@ -4219,12 +4432,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         canSwitchTokens={canSwitchTokens}
         switchingTokens={swap.isSwitchingTokens}
         amountIn={swap.amountIn}
-        estimatedOut={swap.displayOut}
+        estimatedOut={unsupportedPrivateDestination ? '' : swap.displayOut}
         isEstimatedOut={swap.isEstimatedOut}
         fromFiat={swap.fromFiat}
-        toFiat={swap.toFiat}
-        rate={swap.rate}
-        providerName={quoteResult?.router}
+        toFiat={unsupportedPrivateDestination ? '' : swap.toFiat}
+        rate={unsupportedPrivateDestination ? '' : swap.rate}
+        providerName={liveQuoteRequest?.key === liveQuoteKey ? quoteResult?.router : undefined}
         addressType={swap.addressType}
         destinationAddress={resolvedRecipientAddress}
         spendableBalance={spendableBalance}
@@ -4237,22 +4450,24 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         quoteError={
           crossChainPrivateSourceUnavailable
             ? 'Confidential source is unavailable for this asset.'
-            : crossChainSendRequested &&
-                swap.tokenOut &&
-                resolvedRecipientAddress &&
-                !crossChainSendRecipientReady
-              ? 'Enter a valid address on the destination network.'
-              : isPrivateFunding &&
-                  !swap.destinationTokensLoading &&
-                  !privateFundingDestinationToken
-                ? 'This asset is not available for Confidential funding.'
+            : unsupportedPrivateDestination
+              ? 'Select a supported destination asset.'
+              : crossChainSendRequested &&
+                  swap.tokenOut &&
+                  resolvedRecipientAddress &&
+                  !crossChainSendRecipientReady
+                ? 'Enter a valid address on the destination network.'
                 : isPrivateFunding &&
-                    quoteResult &&
-                    privateFundingMinimumRaw &&
-                    /^\d+$/.test(privateFundingMinimumRaw) &&
-                    BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
-                  ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
-                  : swap.quoteError
+                    !swap.destinationTokensLoading &&
+                    !privateFundingDestinationToken
+                  ? 'This asset is not available for Confidential funding.'
+                  : isPrivateFunding &&
+                      quoteResult &&
+                      privateFundingMinimumRaw &&
+                      /^\d+$/.test(privateFundingMinimumRaw) &&
+                      BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
+                    ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
+                    : swap.quoteError
         }
         maxLoading={routeMaximum.loading || maxTransfer.loading}
         maxDisabled={
@@ -4378,7 +4593,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }}
         sourceAccountAction={sourceAccountAction}
         destinationBadge={
-          privateSwapRequested
+          privateSwapRequested && !unsupportedPrivateDestination
             ? 'Private'
             : isPrivateFunding
               ? 'Private'
@@ -4395,7 +4610,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         destinationAssetLocked={isPrivateFunding || privateTransferRequested}
         sourceAssetLocked={privateTransferRequested || crossChainSendRequested}
         hideSwitchAssets={isPrivateFunding || privateTransferRequested || crossChainSendRequested}
-        hideReceiveAddress={isPrivateFunding || privateSwapRequested}
+        hideReceiveAddress={
+          isPrivateFunding || (privateSwapRequested && !unsupportedPrivateDestination)
+        }
         actionLabel={
           isPrivateFunding
             ? privateFundingRequestId
@@ -4451,7 +4668,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     : null
 
   return (
-    <div className="page-container">
+    <div
+      className="page-container"
+      data-wallet-mode={
+        privateSwapRequested || executionSourceMode === 'private' ? 'private' : undefined
+      }
+    >
       <PageHeader
         title={
           viewStep === 'approval-pending'
@@ -4570,15 +4792,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 )
             },
             { label: 'You receive', content: <Skeleton className="h-4 w-24" /> },
-            ...(walletOwnedSource &&
-            getConfidentialTransferEstimate(walletOwnedSource.chain.chain.id)
-              ? [
-                  {
-                    label: 'Estimated time',
-                    content: getConfidentialTransferEstimate(walletOwnedSource.chain.chain.id)
-                  }
-                ]
-              : []),
             { label: 'Network fee', content: <Skeleton className="h-8 w-28" /> }
           ]}
           error={
