@@ -34,7 +34,7 @@ import {
   MIN_SHIELDING_BALANCE_MESSAGE
 } from '@/core/zcash/shielding'
 import type { TransactionStatusUpdatedMessage } from '@/types/transaction-messages'
-import { initializeExtensionUpdates } from './extension-update'
+import { initializeExtensionUpdates, refreshExtensionUpdateNotice } from './extension-update'
 import { normalizeSyncTrigger, type FundingSource, type TransactionType } from '@/types'
 import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { getActionFailureNotificationCopy } from '@/lib/transaction-status-copy'
@@ -562,6 +562,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (sender.id !== chrome.runtime.id) {
     return false
+  }
+
+  if (message.type === 'REFRESH_EXTENSION_UPDATE') {
+    if (
+      !__EXTENSION_UPDATES_ENABLED__ ||
+      !sender.url?.startsWith(chrome.runtime.getURL('index.html'))
+    ) {
+      sendResponse({ success: false })
+      return false
+    }
+    refreshExtensionUpdateNotice()
+      .then(() => sendResponse({ success: true }))
+      .catch(() => sendResponse({ success: false }))
+    return true
   }
 
   if (message.type === 'SET_EXTENSION_DISPLAY_MODE') {
