@@ -50,6 +50,24 @@ export function getAssetDomainRaw(asset: PortfolioAssetView, domain: AssetDomain
   return domain === 'public' ? balance.totalRaw : '0'
 }
 
+export function selectHomeActionSource(
+  model: PortfolioReadModel | null,
+  domain: 'public' | 'private',
+  action: 'send' | 'swap'
+): Readonly<{ asset: PortfolioAssetView; chain: PortfolioChainView }> | null {
+  if (!model) return null
+  const candidates = model.assets.flatMap(asset => {
+    const chain = model.chains.find(item => item.chain.id === asset.asset.chainId)
+    if (!chain || (domain === 'private' && chain.chain.family !== 'evm')) return []
+    if (chain.chain.capabilities.transaction.status !== 'available') return []
+    if (action === 'swap' && !['evm', 'zcash', 'bitcoin'].includes(chain.chain.family)) return []
+    const raw = getAssetDomainRaw(asset, domain)
+    return raw === null ? [] : [{ asset, chain, raw }]
+  })
+  const selected = candidates.find(item => BigInt(item.raw) > 0n) ?? candidates[0]
+  return selected ? { asset: selected.asset, chain: selected.chain } : null
+}
+
 export function selectNearShieldActionAssetId(
   model: PortfolioReadModel,
   from: 'public' | 'shield'

@@ -10,9 +10,54 @@ import {
 import {
   getAssetDomainRaw,
   projectPortfolioForDomain,
+  selectHomeActionSource,
   summarizeAssetDomainsUsd,
   summarizeKnownShieldFiat
 } from '../../../src/popup/services/asset-domains.ts'
+import { projectPortfolioForChains } from '../../../src/popup/services/portfolio-presentation.ts'
+
+test('Home action source follows the selected balance domain', () => {
+  const evm = {
+    asset: { id: 'eip155:1/slip44:60', chainId: 'eip155:1' },
+    balance: {
+      totalRaw: '100',
+      mainRaw: '0',
+      privateRaw: '100',
+      privateOnchainRaw: '80',
+      confidentialRaw: '20'
+    }
+  }
+  const zcash = {
+    asset: {
+      id: 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133',
+      chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d'
+    },
+    balance: { totalRaw: '10', transparentRaw: '4', shieldedRaw: '6' }
+  }
+  const model = {
+    assets: [evm, zcash],
+    chains: [
+      {
+        chain: {
+          id: evm.asset.chainId,
+          family: 'evm',
+          capabilities: { transaction: { status: 'available' } }
+        }
+      },
+      {
+        chain: {
+          id: zcash.asset.chainId,
+          family: 'zcash',
+          capabilities: { transaction: { status: 'available' } }
+        }
+      }
+    ]
+  }
+  expect(selectHomeActionSource(model, 'public', 'send')?.asset.asset.id).toBe(zcash.asset.id)
+  expect(selectHomeActionSource(model, 'public', 'swap')?.asset.asset.id).toBe(zcash.asset.id)
+  expect(selectHomeActionSource(model, 'private', 'swap')?.asset.asset.id).toBe(evm.asset.id)
+  expect(selectHomeActionSource({ ...model, assets: [zcash] }, 'private', 'swap')).toBeNull()
+})
 
 test('Home total requires a complete current-account Portfolio and ready prices', () => {
   const model = { scope: { keyDomainId: 'wallet-a', accountId: 'account-a' }, status: 'ready' }
@@ -222,6 +267,38 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     shieldUsdPartial: false,
     privateUsd: '60'
   })
+  const chainScoped = {
+    ...withConfidentialZec,
+    confidential: {
+      ...withConfidentialZec.confidential,
+      assets: withConfidentialZec.confidential.assets.map(asset =>
+        asset.protocolAssetId === 'usdc' ? { ...asset, chainId: 'eip155:42161' } : asset
+      )
+    }
+  }
+  expect(
+    projectPortfolioForChains(
+      chainScoped,
+      model.chains.map(chain => chain.chain.id)
+    )
+  ).toBe(chainScoped)
+  const ethereum = projectPortfolioForChains(chainScoped, [evmAsset.asset.chainId])
+  expect(summarizePortfolioFiat(ethereum, prices).totalUsd).toBe('200')
+  expect(summarizeAssetDomainsUsd(ethereum, prices)).toEqual({
+    publicUsd: '100',
+    shieldUsd: '40',
+    shieldUsdPartial: false,
+    privateUsd: '60'
+  })
+  const zcash = projectPortfolioForChains(chainScoped, [zcashAsset.asset.chainId])
+  expect(summarizePortfolioFiat(zcash, prices).totalUsd).toBe('36')
+  expect(summarizeAssetDomainsUsd(zcash, prices)).toEqual({
+    publicUsd: '12',
+    shieldUsd: '24',
+    shieldUsdPartial: false,
+    privateUsd: '0'
+  })
+  expect(summarizePortfolioFiat(chainScoped, prices).totalUsd).toBe('286')
   const staleCatalog = {
     ...independent,
     confidential: {

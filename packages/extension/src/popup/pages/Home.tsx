@@ -81,6 +81,9 @@ import {
   projectPortfolioForChains,
   resolvePortfolioChainSelection
 } from '../services/portfolio-presentation'
+import { selectHomeActionSource } from '../services/asset-domains'
+import { selectShieldActions, type ShieldAction } from '../services/shield-action-selection'
+import { getPrivateTransferChainIds } from '../services/private-balance-transfer'
 
 const evmOperationsEnabled = resolveEvmFeatureRuntimePolicy(
   __ENABLED_CHAIN_FEATURE_FLAGS__
@@ -162,19 +165,6 @@ export function Home() {
     multichainPortfolioEnabled ? effectiveWalletId : null,
     multichainPortfolioEnabled ? effectiveAccountId : null
   )
-  const openSend = () =>
-    navigate.navigate('/send?mode=public', {
-      state: {
-        initialPortfolio: multichainPortfolio,
-        initialPrices: assetPrices,
-        walletId: effectiveWalletId,
-        accountId: effectiveAccountId,
-        network: currentNetwork,
-        endpointRuntimeKey: getChainEndpointRuntimeKey(
-          useSettingsStore.getState().chainEndpointSettings
-        )
-      }
-    })
   const supportsEvmDAppExecutionMode =
     storageV2Account?.networks.some(network => network.chain.family === 'evm') ??
     Boolean(evmOperationsEnabled && currentAccount)
@@ -205,15 +195,82 @@ export function Home() {
   )
   const assetDomain = resolveHomeAssetDomain(location.search)
   const privateMode = dappExecutionMode.state?.mode === 'private'
+  const actionDomain = assetDomain === 'all' ? (privateMode ? 'private' : 'public') : assetDomain
+  const publicSendSource =
+    assetDomain === 'public' ? selectHomeActionSource(multichainPortfolio, 'public', 'send') : null
+  const swapSource =
+    assetDomain === 'public' || assetDomain === 'private'
+      ? selectHomeActionSource(multichainPortfolio, assetDomain, 'swap')
+      : null
+  const canOpenSwapSource =
+    swapSource !== null &&
+    (swapSource.chain.chain.family !== 'evm' || Boolean(effectiveWalletId && effectiveAccountId))
+  const shieldActions = selectShieldActions({
+    model: multichainPortfolio,
+    prices: assetPrices,
+    account: storageV2Account,
+    network: currentNetwork,
+    zcashAddresses: currentAccount?.addresses,
+    zcashBalance: getCurrentBalance(),
+    zcashKeySource: currentWallet?.keySource
+  })
+  const canMoveEvm =
+    multichainPortfolioEnabled &&
+    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
+  const showMove =
+    assetDomain === 'all'
+      ? privateMode && multichainPortfolioEnabled
+      : (assetDomain === 'public' || assetDomain === 'private') && canMoveEvm
+  const openSend = () => {
+    const sendPath =
+      assetDomain === 'public' && publicSendSource
+        ? publicSendSource.chain.chain.family === 'zcash'
+          ? '/send/zcash?from=transparent'
+          : `/send?${new URLSearchParams({
+              mode: 'public',
+              assetId: publicSendSource.asset.asset.id,
+              ...(publicSendSource.chain.chain.family === 'evm' ? { sourceMode: 'main' } : {})
+            })}`
+        : '/send?mode=public'
+    navigate.navigate(sendPath, {
+      state: {
+        initialPortfolio: multichainPortfolio,
+        initialPrices: assetPrices,
+        walletId: effectiveWalletId,
+        accountId: effectiveAccountId,
+        network: currentNetwork,
+        endpointRuntimeKey: getChainEndpointRuntimeKey(
+          useSettingsStore.getState().chainEndpointSettings
+        )
+      }
+    })
+  }
+  const openSwap = () => {
+    if (assetDomain === 'all') {
+      navigate.navigate('/swap')
+      return
+    }
+    if (assetDomain === 'shield') {
+      navigate.navigate('/shield-funds?action=swap')
+      return
+    }
+    if (!swapSource || !canOpenSwapSource) return
+    const query = new URLSearchParams({ source: swapSource.asset.asset.id })
+    if (swapSource.chain.chain.family === 'evm' && effectiveWalletId && effectiveAccountId) {
+      query.set('sourceMode', assetDomain === 'private' ? 'private' : 'main')
+      query.set('sourceWalletId', effectiveWalletId)
+      query.set('sourceAccountId', effectiveAccountId)
+    }
+    if (swapSource.chain.chain.family === 'zcash') {
+      query.set('fundingSource', 'transparent')
+    }
+    navigate.navigate(`/swap?${query.toString()}`)
+  }
   const activityFilterAssetId = new URLSearchParams(location.search).get('assetId') || null
   const activityFilterAsset = activityFilterAssetId
     ? multichainPortfolio?.assets.find(asset => asset.asset.id === activityFilterAssetId)
     : undefined
-  const activityFilterDomain =
-    activityFilterAssetId?.startsWith('eip155:') &&
-    (assetDomain === 'public' || assetDomain === 'private')
-      ? assetDomain
-      : undefined
+  const activityFilterDomain = assetDomain === 'all' ? undefined : assetDomain
   const activityFilterLabel = activityFilterAsset?.metadata.symbol ?? 'Asset'
   const activityFilterScope =
     effectiveWalletId && effectiveAccountId
@@ -241,7 +298,21 @@ export function Home() {
         activityExecutionMode ?? (previous?.scope === activityFilterScope ? previous.mode : null)
     }
   }, [activityExecutionMode, activityFilterAssetId, activityFilterScope, location.search, navigate])
-  const openTransfer = () => navigate.navigate('/transfer?mode=private')
+  const openTransfer = () => {
+    if (assetDomain === 'all') {
+      navigate.navigate('/transfer?mode=private')
+      return
+    }
+    navigate.navigate(
+      `/transfer?${new URLSearchParams({
+        mode: privateMode ? 'private' : 'public',
+        from: actionDomain === 'private' ? 'private' : 'public',
+        to: actionDomain === 'private' ? 'public' : 'private'
+      })}`
+    )
+  }
+  const openShieldAction = (action: ShieldAction) =>
+    navigate.navigate(`/shield-funds?action=${action}`)
   useEffect(() => {
     const tab = resolveHomeDefaultTab(location.search)
     setActiveTab(tab)
@@ -809,11 +880,7 @@ export function Home() {
                 value={assetDomain}
                 totals={domainTotals}
                 balancesHidden={balancesHidden}
-                onChange={domain =>
-                  domain === 'shield'
-                    ? navigate.navigate('/shield-funds')
-                    : navigate.replace(homeAssetDomainPath(location.search, domain))
-                }
+                onChange={domain => navigate.replace(homeAssetDomainPath(location.search, domain))}
               />
             </div>
           </div>
@@ -834,12 +901,13 @@ export function Home() {
           data-layout={isTestnet ? 'centered' : 'distributed'}
           className="mb-5 flex justify-evenly gap-[13px] px-4"
         >
-          {!privateMode && (
+          {actionDomain === 'public' && (
             <>
               <WalletActionButton
                 icon={<WalletActionIcon action="send" />}
                 label="Send"
                 onClick={openSend}
+                disabled={assetDomain === 'public' && !publicSendSource}
               />
               <WalletActionButton
                 icon={<WalletActionIcon action="receive" />}
@@ -849,7 +917,7 @@ export function Home() {
               />
             </>
           )}
-          {privateMode && multichainPortfolioEnabled && (
+          {showMove && (
             <WalletActionButton
               icon={<WalletActionIcon action="move" />}
               label="Move"
@@ -857,11 +925,26 @@ export function Home() {
               disabled={!effectiveWalletId || !effectiveAccountId}
             />
           )}
+          {actionDomain === 'shield' &&
+            (['send', 'receive', 'move'] as const).map(action => (
+              <WalletActionButton
+                key={action}
+                icon={<WalletActionIcon action={action} />}
+                label={action[0].toUpperCase() + action.slice(1)}
+                onClick={() => openShieldAction(action)}
+                disabled={shieldActions.providersFor(action).length === 0}
+              />
+            ))}
           {!isTestnet && supportsSwap && (
             <WalletActionButton
               icon={<WalletActionIcon action="swap" />}
               label="Swap"
-              onClick={() => navigate.navigate('/swap')}
+              onClick={openSwap}
+              disabled={
+                assetDomain === 'shield'
+                  ? shieldActions.providersFor('swap').length === 0
+                  : assetDomain !== 'all' && !canOpenSwapSource
+              }
             />
           )}
           <WalletActionButton
@@ -889,7 +972,7 @@ export function Home() {
               value="assets"
               className="tab-trigger-custom h-full flex-0 rounded-none px-0 py-0 text-base font-normal text-wallet-secondary data-[state=active]:text-white after:max-w-11"
             >
-              {assetDomain === 'shield' ? 'Assets' : ASSET_DOMAIN_LABELS[assetDomain]}
+              {ASSET_DOMAIN_LABELS[assetDomain]}
             </TabsTrigger>
             <TabsTrigger
               value="activity"
@@ -942,8 +1025,7 @@ export function Home() {
           >
             {multichainPortfolioEnabled ? (
               <MultichainPortfolioPanel
-                mode={privateMode ? 'private' : 'public'}
-                domain={assetDomain === 'shield' ? 'all' : assetDomain}
+                domain={assetDomain}
                 walletId={effectiveWalletId}
                 accountId={effectiveAccountId}
                 model={multichainPortfolio}
@@ -958,9 +1040,21 @@ export function Home() {
                 }
                 onRefresh={refreshPortfolio}
                 onRetryPrices={refreshAssetPrices}
-                onSelectAsset={assetId =>
+                onSelectAsset={assetId => {
+                  const asset = multichainPortfolio?.assets.find(item => item.asset.id === assetId)
+                  if (assetDomain === 'shield' && asset?.asset.chainId.startsWith('eip155:')) {
+                    navigate.navigate(
+                      `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(assetId)}&mode=${privateMode ? 'private' : 'public'}`
+                    )
+                    return
+                  }
                   navigate.navigate(
                     `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${privateMode ? 'private' : 'public'}`
+                  )
+                }}
+                onSelectConfidentialAsset={tokenId =>
+                  navigate.navigate(
+                    `/shield-provider?provider=near-confidential&assetId=${encodeURIComponent(tokenId)}&mode=${privateMode ? 'private' : 'public'}`
                   )
                 }
                 onManageTokens={() => navigate.navigate('/manage-tokens')}
@@ -1059,7 +1153,7 @@ export function Home() {
                 <span className="min-w-0 truncate text-sm text-wallet-secondary">
                   {activityFilterLabel}
                   {activityFilterDomain
-                    ? ` · ${activityFilterDomain === 'private' ? 'Private' : 'Public'}`
+                    ? ` · ${activityFilterDomain === 'private' ? 'Private' : activityFilterDomain === 'shield' ? 'Shield' : 'Public'}`
                     : ''}
                 </span>
                 <button

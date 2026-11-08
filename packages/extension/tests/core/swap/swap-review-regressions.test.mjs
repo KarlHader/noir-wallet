@@ -126,20 +126,21 @@ it('retains the reviewed sender, recipient, amount and privacy mode when a quote
     amountIn: '0.5',
     slippage: 1,
     refundAddress: 'sender',
-    recipientAddress: 'recipient',
+    recipientAddress: `0x${'2'.repeat(40)}`,
     confidentiality: 'basic',
     blocked: false
   }
   const quote = buildLiveSwapQuoteRequest(input)
   assert.equal(quote.request.amountIn, '500000')
   assert.equal(quote.request.sender, 'sender')
-  assert.equal(quote.request.recipient, 'recipient')
+  assert.equal(quote.request.recipient, input.recipientAddress)
   const changedRecipient = buildLiveSwapQuoteRequest({
     ...input,
-    recipientAddress: 'other-recipient'
+    recipientAddress: `0x${'6'.repeat(40)}`
   })
-  assert.equal(changedRecipient.request.recipient, 'other-recipient')
+  assert.equal(changedRecipient.request.recipient, `0x${'6'.repeat(40)}`)
   assert.notEqual(changedRecipient.key, quote.key)
+  assert.notEqual(changedRecipient.scopeKey, quote.scopeKey)
   assert.equal(
     buildLiveSwapQuoteRequest({ ...input, privateRecipientAddress: 'different-private-address' }),
     null

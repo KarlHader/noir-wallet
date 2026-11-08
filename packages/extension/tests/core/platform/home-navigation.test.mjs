@@ -18,8 +18,8 @@ test.describe('Home navigation', () => {
 
   test('opens legacy Shield targets on the standalone page', () => {
     expect(legacyShieldHomePath('?tab=shield')).toBe('/shield-funds')
-    expect(legacyShieldHomePath('?domain=shield&mode=private')).toBe('/shield-funds?mode=private')
+    expect(legacyShieldHomePath('?domain=shield&mode=private')).toBeNull()
     expect(legacyShieldHomePath('?tab=activity')).toBeNull()
-    expect(homeAssetDomainPath('', 'shield')).toBe('/shield-funds')
+    expect(homeAssetDomainPath('', 'shield')).toBe('/?domain=shield')
   })
 })

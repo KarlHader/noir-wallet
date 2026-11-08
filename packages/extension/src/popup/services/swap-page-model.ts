@@ -312,11 +312,13 @@ export function isPrivateSwapDestinationSupported(
   token: RheaSwapToken,
   portfolio: PortfolioReadModel | null,
   receiveTargets: AdditionalReceiveTargetsView | null,
-  privateExecutionAddresses: ReadonlyMap<string, string>
+  privateExecutionAddresses: ReadonlyMap<string, string>,
+  mode: 'main' | 'private' = 'private'
 ): boolean {
   if (!portfolio || !isConfidentialSwapDestinationSupported(token)) return false
   const target = resolveWalletQuoteReceiveTarget(token, portfolio, receiveTargets)
   if (target?.kind !== 'evm') return false
+  if (mode === 'main') return /^0x[0-9a-fA-F]{40}$/.test(target.address)
   const privateAddress = privateExecutionAddresses.get(target.chain.id)
   return Boolean(
     privateAddress &&

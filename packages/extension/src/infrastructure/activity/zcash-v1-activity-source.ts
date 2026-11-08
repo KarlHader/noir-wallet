@@ -55,6 +55,15 @@ function direction(type: TransactionType): 'incoming' | 'outgoing' | 'self' {
   return 'outgoing'
 }
 
+function assetDomains(transaction: Transaction): readonly ('public' | 'shield')[] | undefined {
+  if (transaction.type === 'shield' || transaction.type === 'unshield') {
+    return Object.freeze(['public', 'shield'] as const)
+  }
+  if (transaction.fromType === 'transparent') return Object.freeze(['public'] as const)
+  if (transaction.fromType === 'shielded') return Object.freeze(['shield'] as const)
+  return undefined
+}
+
 function isCrossChain(type: TransactionType): type is 'swap' | 'supply' | 'withdraw' | 'claim' {
   return type === 'swap' || type === 'supply' || type === 'withdraw' || type === 'claim'
 }
@@ -312,9 +321,11 @@ export function mapZcashV1TransactionToActivityItem(
           ...(failureCode ? { failureCode } : {})
         })
       ])
+  const domains = assetDomains(transaction)
   return Object.freeze({
     id: transaction.id,
     source: 'zcash-v1',
+    ...(domains ? { assetDomains: domains } : {}),
     scope: Object.freeze({
       keyDomainId: scope.keyDomainId,
       accountId: scope.accountId

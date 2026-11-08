@@ -81,7 +81,7 @@ test('quote request parser forwards only supported confidential routing', () => 
   )
 })
 
-test('Private Swap quote remains bound to the same Account and its Private addresses', () => {
+test('Private Swap quote remains bound to the same Account and its managed destinations', () => {
   const source = `0x${'1'.repeat(40)}`
   const destination = `0x${'2'.repeat(40)}`
   const account = {
@@ -93,7 +93,11 @@ test('Private Swap quote remains bound to the same Account and its Private addre
         privateExecutionAddress: source,
         addresses: [{ value: `0x${'4'.repeat(40)}` }]
       },
-      { chainId: 'eip155:56', privateExecutionAddress: destination }
+      {
+        chainId: 'eip155:56',
+        privateExecutionAddress: destination,
+        addresses: [{ value: `0x${'6'.repeat(40)}` }]
+      }
     ]
   }
   const route = {
@@ -106,6 +110,26 @@ test('Private Swap quote remains bound to the same Account and its Private addre
     tokenOut: { address: 'native' }
   }
   expect(() => assertPrivateSwapAccountRoute(route, account, account)).not.toThrow()
+  const publicDestination = account.networks[1].addresses[0].value
+  expect(() =>
+    assertPrivateSwapAccountRoute({ ...route, recipient: publicDestination }, account, account)
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateSwapAccountRoute(
+      { ...route, recipient: publicDestination },
+      {
+        ...account,
+        networks: [
+          account.networks[0],
+          { chainId: 'eip155:56', addresses: [{ value: publicDestination }] }
+        ]
+      },
+      account
+    )
+  ).not.toThrow()
+  expect(() => assertPrivateSwapAccountRoute({ ...route, recipient: undefined }, account)).toThrow(
+    /this Account/
+  )
   expect(() =>
     assertPrivateSwapAccountRoute({ ...route, recipient: `0x${'3'.repeat(40)}` }, account)
   ).toThrow(/this Account/)

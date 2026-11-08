@@ -2,9 +2,13 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { parseAccountId } from '../../../../src/core/accounts/domain/index.ts'
-import { buildActivityReadModel } from '../../../../src/core/activity/index.ts'
+import {
+  buildActivityReadModel,
+  parseActivityReadModel
+} from '../../../../src/core/activity/index.ts'
 import { parseKeyDomainId } from '../../../../src/core/keyring/domain/index.ts'
 import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastructure/activity/index.ts'
+import { filterActivityItems } from '../../../../src/popup/services/activity-list-model.ts'
 
 const scope = {
   keyDomainId: parseKeyDomainId('key-domain:zcash-v1'),
@@ -81,6 +85,59 @@ test.describe('Zcash V1 Activity source', () => {
         scope
       )
     ).toMatchObject({ status: 'failed', failureCode: 'unknown' })
+  })
+
+  test('uses known Zcash pools for domain activity without assigning unknown pools', () => {
+    const records = [
+      transaction({ id: 'zcash-v1:shielded-send', txHash: 'hash-1' }),
+      transaction({
+        id: 'zcash-v1:transparent-receive',
+        txHash: 'hash-2',
+        type: 'receive',
+        fromType: 'transparent'
+      }),
+      transaction({ id: 'zcash-v1:shielded-receive', txHash: 'hash-3', type: 'receive' }),
+      transaction({
+        id: 'zcash-v1:shield',
+        txHash: 'hash-4',
+        type: 'shield',
+        fromType: 'transparent'
+      }),
+      transaction({ id: 'zcash-v1:unshield', txHash: 'hash-5', type: 'unshield' }),
+      transaction({ id: 'zcash-v1:unknown-pool', txHash: 'hash-6', fromType: undefined })
+    ]
+    const model = buildActivityReadModel({
+      scope,
+      localGraphs: [],
+      supplementalItems: records.map(record => mapZcashV1TransactionToActivityItem(record, scope))
+    })
+    const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+    const visible = domain =>
+      filterActivityItems({ items: model.items, selectedChainIds: [chainId], domain })
+        .map(item => item.id)
+        .sort()
+
+    expect(visible('shield')).toEqual(
+      [
+        'zcash-v1:shielded-send',
+        'zcash-v1:shielded-receive',
+        'zcash-v1:shield',
+        'zcash-v1:unshield'
+      ].sort()
+    )
+    expect(visible('public')).toEqual(
+      ['zcash-v1:transparent-receive', 'zcash-v1:shield', 'zcash-v1:unshield'].sort()
+    )
+    expect(visible(undefined)).toHaveLength(records.length)
+    expect(parseActivityReadModel(structuredClone(model))).toEqual(model)
+    expect(
+      filterActivityItems({
+        items: model.items,
+        selectedChainIds: [chainId],
+        domain: 'shield',
+        confidentialIntentsOnly: true
+      })
+    ).toEqual([])
   })
 
   test('rejects non-canonical or over-precision V1 amounts', () => {

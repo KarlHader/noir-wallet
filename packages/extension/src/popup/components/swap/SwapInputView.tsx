@@ -55,6 +55,7 @@ interface SwapInputViewProps {
   sourceBadge?: string
   destinationBadge?: string
   sourceAccountAction?: ReactNode
+  onSelectDestinationAccount?: () => void
   destinationAssetLocked?: boolean
   sourceAssetLocked?: boolean
   hideSwitchAssets?: boolean
@@ -436,6 +437,7 @@ export function SwapInputView({
   sourceBadge,
   destinationBadge: destinationBadgeOverride,
   sourceAccountAction,
+  onSelectDestinationAccount,
   destinationAssetLocked = false,
   sourceAssetLocked = false,
   hideSwitchAssets = false,
@@ -547,7 +549,11 @@ export function SwapInputView({
                 !hideReceiveAddress && tokenOut && !destinationAssetsLoading ? (
                   <button
                     type="button"
-                    onClick={() => setRecipientSelectorOpen(true)}
+                    onClick={() =>
+                      onSelectDestinationAccount
+                        ? onSelectDestinationAccount()
+                        : setRecipientSelectorOpen(true)
+                    }
                     aria-label="Choose receive account"
                     title={destinationAddress || 'Choose receive account'}
                     className="flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-primary"
@@ -716,7 +722,7 @@ export function SwapInputView({
       </div>
 
       <Dialog
-        open={recipientSelectorOpen && !hideReceiveAddress}
+        open={recipientSelectorOpen && !hideReceiveAddress && !onSelectDestinationAccount}
         onOpenChange={setRecipientSelectorOpen}
       >
         <DialogContent

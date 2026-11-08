@@ -1,18 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import zamaLogo from '@/images/figma-zama.png'
 import privacyPoolsLogo from '@/images/figma-privacy-pools.png'
-import Big, { safeBig } from '@/lib/big'
 import { formatFiatAmount } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
-import { getFundingBalance } from '@/core/wallet/funding-balance'
-import { getZcashChainId } from '@/core/chains/registry'
 import type { FundingSource } from '@/types/wallet'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
-import { getAvailableZcashSelfMoveSources } from '@/popup/services/zcash-self-move'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import {
@@ -20,9 +16,8 @@ import {
   summarizeKnownShieldFiat,
   type ShieldProvider
 } from '@/popup/services/asset-domains'
-import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
-import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
-import { useNavigate } from '@/popup/provider/Router'
+import { selectShieldActions, type ShieldAction } from '@/popup/services/shield-action-selection'
+import { useLocation, useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { WalletActionIcon } from '@/popup/components/common/WalletActionIcon'
 import {
@@ -32,8 +27,6 @@ import {
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 
-type ShieldAction = 'send' | 'receive' | 'move'
-
 export function ShieldFundsPage() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
@@ -42,13 +35,14 @@ export function ShieldFundsPage() {
 }
 
 function ShieldFundsContent() {
-  const { navigate } = useNavigate()
+  const { navigate, replace } = useNavigate()
+  const location = useLocation()
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
-  const { activeAccount } = useActiveAccountNetworks()
+  const { activeAccount, loading: accountLoading } = useActiveAccountNetworks()
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -64,6 +58,7 @@ function ShieldFundsContent() {
   const [pricesLoading, setPricesLoading] = useState(true)
   const [pendingAction, setPendingAction] = useState<ShieldAction | null>(null)
   const [zcashMoveOpen, setZcashMoveOpen] = useState(false)
+  const handledActionQuery = useRef<string | null>(null)
 
   useEffect(() => {
     setPendingAction(null)
@@ -92,7 +87,17 @@ function ShieldFundsContent() {
     }
   }, [])
 
-  const near = useMemo(() => summarizeNearConfidentialHoldings(model, prices), [model, prices])
+  const shieldActions = selectShieldActions({
+    model,
+    prices,
+    account: activeAccount,
+    network: currentNetwork,
+    zcashAddresses: zcashAccount?.addresses,
+    zcashBalance,
+    zcashKeySource
+  })
+  const { near, canManageNear, hasMovableNear, hasZcash, zcashMoveSources, providersFor } =
+    shieldActions
   const zcash = useMemo(
     () =>
       model
@@ -100,24 +105,6 @@ function ShieldFundsContent() {
         : undefined,
     [model, prices]
   )
-  const hasZcash =
-    activeAccount?.networks.some(network => network.chain.family === 'zcash') ??
-    model?.chains.some(chain => chain.chain.family === 'zcash') ??
-    false
-  const nearChainIds = getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet')
-  const canManageNear = nearChainIds.length > 0
-  const hasMovableNear = near.entries.some(
-    entry =>
-      entry.asset.assetId &&
-      nearChainIds.some(chainId => entry.asset.assetId?.startsWith(`${chainId}/`)) &&
-      safeBig(entry.asset.availableRaw).gt(0)
-  )
-  const zcashAssetId = `${getZcashChainId(currentNetwork)}/slip44:133`
-  const hasSpendableNear =
-    hasMovableNear ||
-    near.entries.some(
-      entry => entry.asset.assetId === zcashAssetId && safeBig(entry.asset.availableRaw).gt(0)
-    )
   const hasNear = canManageNear || near.entries.length > 0
   const shieldTotal = model
     ? summarizeKnownShieldFiat(
@@ -133,53 +120,38 @@ function ShieldFundsContent() {
         ? '…'
         : '—'
       : formatFiatAmount(total, { showSign: true })
-  const zcashMoveSources = hasZcash
-    ? getAvailableZcashSelfMoveSources({
-        addresses: zcashAccount?.addresses,
-        balance: zcashBalance,
-        keySource: zcashKeySource,
-        network: currentNetwork
-      })
-    : []
-  const canSendZcash = hasZcash && Big(getFundingBalance(zcashBalance, 'shielded').available).gt(0)
-  const availableProviders = (action: ShieldAction): ShieldProvider[] => {
-    const nearProviders =
-      canManageNear && (action !== 'send' || near.status !== 'ready' || hasSpendableNear)
-        ? ['near-confidential' as const]
-        : []
-    const zcashAvailable =
-      action === 'send'
-        ? canSendZcash
-        : action === 'receive'
-          ? hasZcash
-          : zcashMoveSources.length > 0
-    return zcashAvailable ? [...nearProviders, 'zcash-shield'] : nearProviders
-  }
-  const runAction = (provider: ShieldProvider, action: ShieldAction) => {
+  const availableProviders = providersFor
+  const runAction = (provider: ShieldProvider, action: ShieldAction, auto = false) => {
     setPendingAction(null)
+    const go = auto ? replace : navigate
+    if (action === 'swap') {
+      go('/shield-swap?provider=near-confidential')
+      return
+    }
     if (provider === 'zcash-shield') {
       if (action === 'move') {
         if (zcashMoveSources.length === 1) {
-          navigate(`/send/zcash?move=1&from=${zcashMoveSources[0]}`)
+          go(`/send/zcash?move=1&from=${zcashMoveSources[0]}`)
         } else if (zcashMoveSources.length > 1) {
+          if (auto) replace('/shield-funds')
           setZcashMoveOpen(true)
         }
-      } else if (action === 'send') navigate('/send/zcash?from=shielded')
+      } else if (action === 'send') go('/send/zcash?from=shielded')
       else if (account) {
-        navigate(
+        go(
           `/addresses-list?walletId=${encodeURIComponent(account.walletId)}&accountId=${encodeURIComponent(account.accountId)}&chain=zcash&privacy=shielded`
         )
       }
       return
     }
     if (action === 'move') {
-      navigate(
+      go(
         hasMovableNear || near.status !== 'ready'
           ? '/transfer?from=shield&to=private&provider=near-confidential'
           : '/transfer?from=public&to=shield&provider=near-confidential'
       )
     } else {
-      navigate(
+      go(
         action === 'send'
           ? '/shield-withdraw?provider=near-confidential'
           : '/shield-deposit?provider=near-confidential'
@@ -191,6 +163,31 @@ function ShieldFundsContent() {
     if (providers.length === 1) runAction(providers[0], action)
     else if (providers.length > 1) setPendingAction(action)
   }
+  const requestedAction = new URLSearchParams(location.search).get('action')
+  useEffect(() => {
+    if (!requestedAction) {
+      handledActionQuery.current = null
+      return
+    }
+    if (
+      (requestedAction !== 'send' &&
+        requestedAction !== 'receive' &&
+        requestedAction !== 'move' &&
+        requestedAction !== 'swap') ||
+      !model ||
+      status === 'loading' ||
+      accountLoading ||
+      handledActionQuery.current === location.search
+    )
+      return
+    handledActionQuery.current = location.search
+    const providers = availableProviders(requestedAction)
+    if (providers.length === 1) runAction(providers[0]!, requestedAction, true)
+    else {
+      replace('/shield-funds')
+      if (providers.length > 1) setPendingAction(requestedAction)
+    }
+  }, [requestedAction, model, status, accountLoading, location.search, replace])
 
   return (
     <div className="page-container min-h-0 overflow-hidden">

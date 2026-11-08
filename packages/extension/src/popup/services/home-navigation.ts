@@ -4,7 +4,7 @@ export type HomeDefaultTab = 'assets' | 'activity'
 
 export function legacyShieldHomePath(search: string): string | null {
   const params = new URLSearchParams(search)
-  if (params.get('tab') !== 'shield' && params.get('domain') !== 'shield') return null
+  if (params.get('tab') !== 'shield') return null
   params.delete('tab')
   params.delete('domain')
   params.delete('transactionId')
@@ -55,7 +55,6 @@ export function resolveHomeAssetDomain(search: string): AssetDomain {
 }
 
 export function homeAssetDomainPath(search: string, domain: AssetDomain): string {
-  if (domain === 'shield') return '/shield-funds'
   const params = new URLSearchParams(search)
   params.delete('transactionId')
   params.delete('assetId')

@@ -109,8 +109,13 @@ export function assertPrivateQuoteRoute(
     network => network.chainId === `eip155:${request.toChain}`
   )
   if (
-    !destination?.privateExecutionAddress ||
-    destination.privateExecutionAddress.toLowerCase() !== request.recipient?.toLowerCase()
+    !destination ||
+    !/^0x[0-9a-fA-F]{40}$/.test(request.recipient ?? '') ||
+    /^0x0{40}$/i.test(request.recipient ?? '') ||
+    ![
+      destination.privateExecutionAddress,
+      ...(destination.addresses?.map(address => address.value) ?? [])
+    ].some(address => address?.toLowerCase() === request.recipient?.toLowerCase())
   ) {
     throw new Error('Private Swap must stay in this Account.')
   }

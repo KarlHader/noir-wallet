@@ -19,7 +19,6 @@ const FAST_TRANSACTION_RECHECK_INTERVAL_MS = 5_000
 
 interface MultichainPortfolioPanelProps {
   domain?: AssetDomain
-  mode?: 'public' | 'private'
   hideToolbar?: boolean
   walletId: string | null
   accountId: string | null
@@ -32,6 +31,7 @@ interface MultichainPortfolioPanelProps {
   onRefresh: (forceDiscovery?: boolean) => Promise<void>
   onRetryPrices?: () => Promise<void>
   onSelectAsset?: (assetId: string) => void
+  onSelectConfidentialAsset?: (tokenId: string) => void
   onManageTokens?: () => void
 }
 
@@ -57,7 +57,6 @@ function PortfolioState({
 
 export function MultichainPortfolioPanel({
   domain = 'all',
-  mode = 'public',
   hideToolbar = false,
   walletId,
   accountId,
@@ -70,6 +69,7 @@ export function MultichainPortfolioPanel({
   onRefresh: load,
   onRetryPrices,
   onSelectAsset,
+  onSelectConfidentialAsset,
   onManageTokens
 }: MultichainPortfolioPanelProps) {
   const scopeKey = JSON.stringify([walletId ?? '', accountId ?? ''])
@@ -108,7 +108,7 @@ export function MultichainPortfolioPanel({
   )
   const selectedChainIds = resolvePortfolioChainSelection(
     visibleModel,
-    hideToolbar || domain === 'shield' ? null : persistedChainSelection,
+    hideToolbar ? null : persistedChainSelection,
     __ENABLED_CHAIN_FEATURE_FLAGS__
   )
   const balanceRecoveryNeeded =
@@ -184,7 +184,6 @@ export function MultichainPortfolioPanel({
       model={projectPortfolioForDomain(visibleModel, domain)}
       sourceModel={visibleModel}
       domain={domain}
-      mode={mode}
       hideToolbar={hideToolbar}
       prices={prices}
       priceStatus={priceStatus}
@@ -202,6 +201,7 @@ export function MultichainPortfolioPanel({
         )
       }
       onSelectAsset={onSelectAsset}
+      onSelectConfidentialAsset={onSelectConfidentialAsset}
       onRefresh={() => void load(true)}
       onManageTokens={onManageTokens}
     />

@@ -1,4 +1,5 @@
-import type { PortfolioReadModel } from '@/core/portfolio'
+import type { PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
+import { parseAssetId } from '@/core/chains/registry'
 import { ASSET_PRICE_FRESH_MS, findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import Big from '@/lib/big'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
@@ -18,6 +19,57 @@ export interface NearConfidentialSummary {
   readonly status: 'ready' | 'unavailable'
   readonly entries: readonly NearConfidentialHolding[]
   readonly fiat: string | null
+}
+
+export interface StandaloneNearConfidentialHolding {
+  readonly entry: NearConfidentialHolding
+  readonly chain: PortfolioChainView | undefined
+}
+
+export function getNearConfidentialChainId(asset: ConfidentialAsset): string | null {
+  if (asset.chainId) return asset.chainId
+  if (!asset.assetId) return null
+  try {
+    return parseAssetId(asset.assetId).chainId
+  } catch {
+    return null
+  }
+}
+
+export function listStandaloneNearConfidentialHoldings(
+  displayedModel: PortfolioReadModel,
+  sourceModel: PortfolioReadModel,
+  prices: AssetPriceReadModel | null
+): readonly StandaloneNearConfidentialHolding[] {
+  const mergedAssets = new Map<string, string>(
+    displayedModel.assets.flatMap(asset =>
+      asset.asset.chainId.startsWith('eip155:') && BigInt(asset.balance.confidentialRaw ?? '0') > 0n
+        ? [[asset.asset.id, asset.balance.confidentialRaw ?? '0'] as const]
+        : []
+    )
+  )
+  const chains = new Map<string, PortfolioChainView>(
+    sourceModel.chains.map(chain => [chain.chain.id, chain])
+  )
+  return summarizeNearConfidentialHoldings(sourceModel, prices).entries.flatMap(entry => {
+    if (entry.asset.assetId && mergedAssets.get(entry.asset.assetId) === entry.asset.availableRaw) {
+      mergedAssets.delete(entry.asset.assetId)
+      return []
+    }
+    const chainId = getNearConfidentialChainId(entry.asset)
+    return [{ entry, chain: chainId ? chains.get(chainId) : undefined }]
+  })
+}
+
+export function sumNearConfidentialChainFiat(
+  chainFiat: string | null,
+  entries: readonly StandaloneNearConfidentialHolding[]
+): string | null {
+  if (entries.length === 0) return chainFiat
+  if (entries.some(({ entry }) => entry.fiat === null)) return null
+  return entries
+    .reduce((sum, { entry }) => sum.plus(entry.fiat ?? '0'), new Big(chainFiat ?? '0'))
+    .toFixed()
 }
 
 function valueHolding(

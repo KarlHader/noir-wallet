@@ -26,7 +26,11 @@ import {
 } from '@/popup/components/common/ZcashSyncProgress'
 import { resolveLowValueUsdThreshold } from './portfolio-prices'
 import { PortfolioAssetGroupCard, PortfolioChainAssetRow } from './PortfolioAssetGroupCard'
-import { ShieldPortfolioView } from './ShieldPortfolioView'
+import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
+import {
+  listStandaloneNearConfidentialHoldings,
+  sumNearConfidentialChainFiat
+} from '@/popup/services/near-confidential-holdings'
 import {
   buildPortfolioAssetGroups,
   getPortfolioChainUsdValue,
@@ -42,7 +46,6 @@ export type PortfolioViewMode = 'assets' | 'chains'
 
 interface PortfolioShellProps {
   readonly domain?: AssetDomain
-  readonly mode?: 'public' | 'private'
   readonly hideToolbar?: boolean
   readonly model: PortfolioReadModel
   readonly sourceModel?: PortfolioReadModel
@@ -58,6 +61,7 @@ interface PortfolioShellProps {
   readonly selectedChainIds?: readonly string[]
   readonly onSelectedChainIdsChange?: (chainIds: readonly string[]) => void
   readonly onSelectAsset?: (assetId: string) => void
+  readonly onSelectConfidentialAsset?: (tokenId: string) => void
   readonly onRefresh?: () => void
   readonly onManageTokens?: () => void
 }
@@ -162,7 +166,6 @@ export function PortfolioShell({
   model,
   sourceModel,
   domain = 'all',
-  mode = 'public',
   hideToolbar = false,
   prices,
   priceStatus = 'ready',
@@ -176,6 +179,7 @@ export function PortfolioShell({
   selectedChainIds: controlledSelectedChainIds,
   onSelectedChainIdsChange,
   onSelectAsset,
+  onSelectConfidentialAsset,
   onRefresh,
   onManageTokens
 }: PortfolioShellProps) {
@@ -203,6 +207,18 @@ export function PortfolioShell({
     availableChainIdSet.has(chainId)
   )
   const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
+  const standaloneConfidential =
+    domain === 'all' || domain === 'shield'
+      ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
+      : []
+  const visibleConfidential = standaloneConfidential.filter(
+    item =>
+      (item.chain && selectedChainIds.includes(item.chain.chain.id)) ||
+      (!item.chain && selectedChainIds.length === availableChainIds.length)
+  )
+  const standaloneChainIds = new Set(
+    visibleConfidential.flatMap(item => (item.chain ? [item.chain.chain.id] : []))
+  )
   const [expandedChainIds, setExpandedChainIds] = useState<ReadonlySet<string>>(() => new Set())
   const [lowValueExpanded, setLowValueExpanded] = useState(false)
   const [expandedLowValueChainIds, setExpandedLowValueChainIds] = useState<ReadonlySet<string>>(
@@ -217,7 +233,10 @@ export function PortfolioShell({
     domain === 'all'
       ? filteredChains
       : filteredChains.filter(
-          chain => chain.assets.length > 0 || getPortfolioChainBalanceStatus(chain) !== 'ready'
+          chain =>
+            chain.assets.length > 0 ||
+            standaloneChainIds.has(chain.chain.id) ||
+            getPortfolioChainBalanceStatus(chain) !== 'ready'
         )
   const assetGroups = useMemo(
     () =>
@@ -269,23 +288,11 @@ export function PortfolioShell({
     )
   }
 
-  if (domain === 'shield') {
-    return (
-      <section aria-label="Shield assets" className="min-h-0 flex-1 overflow-y-auto">
-        <ShieldPortfolioView
-          model={sourceModel ?? model}
-          mode={mode}
-          prices={prices}
-          balancesHidden={balancesHidden}
-          pricesLoading={pricesLoading}
-          onSelectAsset={onSelectAsset}
-        />
-      </section>
-    )
-  }
-
   return (
-    <section aria-label="Portfolio" className="flex min-h-0 flex-1 flex-col">
+    <section
+      aria-label={domain === 'shield' ? 'Shield assets' : 'Portfolio'}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <h2 className="sr-only">Portfolio</h2>
       {!hideToolbar && (
         <div className="flex h-[46px] shrink-0 items-center justify-between px-4 pb-1 pt-2.5">
@@ -395,6 +402,7 @@ export function PortfolioShell({
         ) : showContent &&
           view === 'assets' &&
           assetGroups.length === 0 &&
+          visibleConfidential.length === 0 &&
           unloadedChains.length === 0 ? (
           <StatePanel
             icon="lucide:wallet-cards"
@@ -403,6 +411,16 @@ export function PortfolioShell({
         ) : view === 'assets' ? (
           <div className="pb-2">
             {primaryAssetGroups.map(group => renderAssetGroup(group, 'assets:all'))}
+            {visibleConfidential.map(({ entry, chain }) => (
+              <NearConfidentialHoldingRow
+                key={entry.asset.tokenId}
+                entry={entry}
+                chain={chain?.chain}
+                showProvider
+                balancesHidden={balancesHidden}
+                onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
+              />
+            ))}
             {unloadedChains.map(chain => (
               <UnloadedChainBalance key={chain.chain.id} chain={chain} />
             ))}
@@ -440,7 +458,13 @@ export function PortfolioShell({
           <div className="divide-y divide-white/[0.08] pb-2">
             {sortedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
-              const chainFiat = getPortfolioChainUsdValue(chain, prices)
+              const confidentialEntries = visibleConfidential.filter(
+                item => item.chain?.chain.id === chain.chain.id
+              )
+              const chainFiat = sumNearConfidentialChainFiat(
+                getPortfolioChainUsdValue(chain, prices),
+                confidentialEntries
+              )
               const sortedAssets = sortPortfolioAssets(chain.assets, prices)
               const { primaryAssets, lowValueAssets } = partitionPortfolioAssets(
                 sortedAssets,
@@ -509,7 +533,7 @@ export function PortfolioShell({
                     getPortfolioChainBalanceStatus(chain) !== 'ready' && (
                       <UnloadedChainBalance chain={chain} />
                     )}
-                  {expanded && chain.assets.length > 0 && (
+                  {expanded && (chain.assets.length > 0 || confidentialEntries.length > 0) && (
                     <div
                       role="region"
                       aria-label={`${chain.chain.displayName} token balances`}
@@ -524,6 +548,16 @@ export function PortfolioShell({
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
                           onSelectAsset={onSelectAsset}
+                        />
+                      ))}
+                      {confidentialEntries.map(({ entry }) => (
+                        <NearConfidentialHoldingRow
+                          key={entry.asset.tokenId}
+                          entry={entry}
+                          chain={chain.chain}
+                          showProvider
+                          balancesHidden={balancesHidden}
+                          onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
                         />
                       ))}
                       {lowValueAssets.length > 0 && (
@@ -572,6 +606,17 @@ export function PortfolioShell({
                 </section>
               )
             })}
+            {visibleConfidential
+              .filter(item => !item.chain)
+              .map(({ entry }) => (
+                <NearConfidentialHoldingRow
+                  key={entry.asset.tokenId}
+                  entry={entry}
+                  showProvider
+                  balancesHidden={balancesHidden}
+                  onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
+                />
+              ))}
           </div>
         )}
       </div>

@@ -97,6 +97,21 @@ function parseScope(value: unknown): ActivityScope {
   })
 }
 
+function parseAssetDomains(value: unknown, source: ActivitySource): ActivityItem['assetDomains'] {
+  if (value === undefined) return undefined
+  if (
+    source !== 'zcash-v1' ||
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 2 ||
+    value.some(domain => domain !== 'public' && domain !== 'shield') ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error('Invalid Activity asset domains')
+  }
+  return Object.freeze([...value] as ('public' | 'shield')[])
+}
+
 function scopesMatch(left: ActivityScope, right: ActivityScope): boolean {
   return left.keyDomainId === right.keyDomainId && left.accountId === right.accountId
 }
@@ -323,6 +338,7 @@ function assertItem(item: ActivityItem, scope: ActivityScope): void {
   if (!scopesMatch(item.scope, scope)) {
     throw new Error('Activity item does not match the requested Account scope')
   }
+  parseAssetDomains(item.assetDomains, item.source)
   if (
     !Number.isSafeInteger(item.createdAt) ||
     item.createdAt < 0 ||
@@ -425,7 +441,7 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
         'createdAt',
         'updatedAt'
       ],
-      ['snapshot', 'failureCode', 'reconfirming', 'accountMode']
+      ['snapshot', 'failureCode', 'reconfirming', 'accountMode', 'assetDomains']
     ) ||
     typeof value.source !== 'string' ||
     !ACTIVITY_SOURCES.includes(value.source as ActivitySource) ||
@@ -449,7 +465,9 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
     throw new Error('Activity item does not match the read model scope')
   }
   const status = value.status as TransactionLifecycleStatus
+  const source = value.source as ActivitySource
   const completeness = value.completeness as ActivityCompleteness
+  const assetDomains = parseAssetDomains(value.assetDomains, source)
   const snapshot =
     value.snapshot === undefined ? undefined : parseTransactionIntentSnapshot(value.snapshot)
   if (completeness === 'complete' && snapshot === undefined) {
@@ -471,8 +489,9 @@ function parseActivityItem(value: unknown, scope: ActivityScope): ActivityItem {
   }
   const item = Object.freeze({
     id: parseBoundedString(value.id, 'Activity item ID'),
-    source: value.source as ActivitySource,
+    source,
     ...(value.accountMode === 'private' ? { accountMode: 'private' as const } : {}),
+    ...(assetDomains === undefined ? {} : { assetDomains }),
     scope: itemScope,
     kind: value.kind as TransactionKind,
     status,

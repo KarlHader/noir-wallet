@@ -6,6 +6,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
 import { getAssetDomainRaw, getAssetShieldProvider } from './asset-domains'
+import { getNearConfidentialChainId } from './near-confidential-holdings'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
 
@@ -36,6 +37,17 @@ export function projectPortfolioForChains(
     ...model,
     chains,
     assets: chains.flatMap(chain => chain.assets),
+    ...(model.confidential
+      ? {
+          confidential: {
+            ...model.confidential,
+            assets: model.confidential.assets.filter(asset => {
+              const chainId = getNearConfidentialChainId(asset)
+              return chainId !== null && selected.has(chainId)
+            })
+          }
+        }
+      : {}),
     status: chains.length === 0 ? 'empty' : chains.length === 1 ? chains[0]!.status : model.status
   }
 }

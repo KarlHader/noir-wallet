@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
+import type { ActivityItem } from '@/core/activity'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import {
@@ -50,6 +51,9 @@ import {
 } from '@/popup/components/portfolio/ShieldPortfolioView'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
+import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
+import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
+import { openModal } from '@/popup/provider/ModalManager'
 
 export function ShieldProviderDetail() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -61,6 +65,7 @@ export function ShieldProviderDetail() {
 function ShieldProviderContent() {
   const [searchParams] = useSearchParams()
   const requestedProvider = searchParams.get('provider')
+  const requestedAssetId = searchParams.get('assetId')
   const provider: ShieldProvider | null =
     requestedProvider === 'near-confidential' || requestedProvider === 'zcash-shield'
       ? requestedProvider
@@ -92,6 +97,7 @@ function ShieldProviderContent() {
   const [pricesLoading, setPricesLoading] = useState(true)
   const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
+  const appliedAssetSelection = useRef<string | null>(null)
   const [zcashMoveOpen, setZcashMoveOpen] = useState(false)
 
   useEffect(() => {
@@ -178,6 +184,18 @@ function ShieldProviderContent() {
     [model, prices, provider]
   )
   const selectedNearEntry = near.entries.find(entry => entry.asset.tokenId === selectedAssetId)
+  useEffect(() => {
+    if (provider !== 'near-confidential' || !requestedAssetId) return
+    const selectionKey = `${scopeKey}:${requestedAssetId}`
+    if (appliedAssetSelection.current === selectionKey) return
+    const entry = near.entries.find(
+      holding =>
+        holding.asset.tokenId === requestedAssetId || holding.asset.assetId === requestedAssetId
+    )
+    if (!entry) return
+    appliedAssetSelection.current = selectionKey
+    setSelectedAssetId(entry.asset.tokenId)
+  }, [near.entries, provider, requestedAssetId, scopeKey])
   const nearSources = useMemo(() => {
     const options = listShieldFundingAssets(
       model,
@@ -260,6 +278,28 @@ function ShieldProviderContent() {
     if (assetId) query.set('assetId', assetId)
     if (mode === 'public' || mode === 'private') query.set('mode', mode)
     return `/transfer?${query.toString()}`
+  }
+
+  const handleActivityClick = async (item: ActivityItem) => {
+    await openModal({
+      showCloseButton: true,
+      className: 'max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain',
+      body: (resolve: (value: unknown) => void, close: () => void) => (
+        <MultichainActivityDetail
+          item={item}
+          network={currentNetwork}
+          portfolio={model}
+          accountNetworks={activeAccount?.networks}
+          onClose={() => {
+            close()
+            resolve(undefined)
+          }}
+          onContinueSwap={transactionId =>
+            navigate(`/swap?resumeApproval=${encodeURIComponent(transactionId)}`)
+          }
+        />
+      )
+    })
   }
 
   if (!provider || (activeAccount && !providerAvailable)) {
@@ -506,6 +546,7 @@ function ShieldProviderContent() {
                 <NearConfidentialHoldingRow
                   key={entry.asset.tokenId}
                   entry={entry}
+                  chain={model?.chains.find(chain => chain.chain.id === entry.asset.chainId)?.chain}
                   balancesHidden={balancesHidden}
                   onClick={() => setSelectedAssetId(entry.asset.tokenId)}
                 />
@@ -554,6 +595,24 @@ function ShieldProviderContent() {
             <p className="px-4 py-5 text-center text-sm text-muted">Balance unavailable</p>
           )}
         </section>
+        {provider === 'near-confidential' && account && (
+          <section className="border-t border-white/[0.08] pt-4" aria-label="Shield activity">
+            <h2 className="px-4 text-sm font-semibold">Activity</h2>
+            <MultichainActivityPanel
+              walletId={account.walletId}
+              accountId={account.accountId}
+              network={currentNetwork}
+              portfolio={model}
+              accountNetworks={activeAccount?.networks}
+              filterDomain="shield"
+              confidentialIntentsOnly
+              showToolbar={false}
+              maxItems={5}
+              compact
+              onItemClick={item => void handleActivityClick(item)}
+            />
+          </section>
+        )}
       </div>
 
       {provider === 'near-confidential' && selectedNearEntry && (

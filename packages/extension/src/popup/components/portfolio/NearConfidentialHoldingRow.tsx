@@ -1,14 +1,20 @@
 import { formatFiatAmount, formatTokenPrice, formatTokenQuantity } from '@/lib/number-format'
 import type { NearConfidentialHolding } from '@/popup/services/near-confidential-holdings'
+import type { PortfolioChainView } from '@/core/portfolio'
+import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 
 export function NearConfidentialHoldingRow({
   entry,
   balancesHidden,
+  chain,
+  showProvider = false,
   onClick
 }: {
   readonly entry: NearConfidentialHolding
   readonly balancesHidden: boolean
+  readonly chain?: PortfolioChainView['chain']
+  readonly showProvider?: boolean
   readonly onClick?: () => void
 }) {
   const { asset } = entry
@@ -20,11 +26,14 @@ export function NearConfidentialHoldingRow({
         assetId={asset.assetId}
         symbol={asset.symbol ?? '?'}
         icon={asset.iconUrl}
-        size={32}
+        blockchain={
+          chain ? resolveChainIconAlias(chain.family, chain.displayName, chain.id) : undefined
+        }
+        size={36}
         className="shrink-0"
       />
       <span className="min-w-0 flex-1 text-left">
-        <span className="block truncate text-sm font-medium" title={symbol}>
+        <span className="block truncate text-base font-medium" title={symbol}>
           {symbol}
         </span>
         <span
@@ -33,12 +42,16 @@ export function NearConfidentialHoldingRow({
             entry.identityLabel ? asset.protocolAssetId : asset.symbol ? undefined : asset.tokenId
           }
         >
-          {asset.symbol ? (entry.identityLabel ?? price) : asset.tokenId}
+          {asset.symbol
+            ? showProvider
+              ? `${price} · NEAR Confidential`
+              : (entry.identityLabel ?? price)
+            : asset.tokenId}
         </span>
       </span>
       <span className="min-w-0 max-w-[45%] text-right">
         <span
-          className="block truncate text-sm font-medium"
+          className="block break-all text-base font-medium"
           title={balancesHidden ? undefined : (entry.fiat ?? undefined)}
         >
           {balancesHidden
@@ -48,19 +61,19 @@ export function NearConfidentialHoldingRow({
               : formatFiatAmount(entry.fiat, { showSign: true })}
         </span>
         <span
-          className="block truncate text-xs text-muted"
+          className="block break-all text-xs text-muted"
           title={balancesHidden ? undefined : (entry.amount ?? undefined)}
         >
           {balancesHidden
             ? '••••'
             : entry.amount === null
               ? '—'
-              : formatTokenQuantity(entry.amount)}
+              : `${formatTokenQuantity(entry.amount)} ${symbol}`}
         </span>
       </span>
     </>
   )
-  const className = 'flex min-h-[72px] w-full items-center gap-3 px-4 py-2'
+  const className = 'flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5'
   return onClick ? (
     <button
       type="button"

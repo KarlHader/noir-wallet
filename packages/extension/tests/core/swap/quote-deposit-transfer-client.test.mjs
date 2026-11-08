@@ -923,7 +923,7 @@ test.describe('quote deposit transfer client', () => {
     })
   })
 
-  test('allows Private swap destinations only when an EVM receive target has its own PEA', () => {
+  test('allows Private swap destinations at the Account EVM Main or PEA address', () => {
     const evm = { ...token('nep141:eth.omft.near', 'eth', 18), sources: ['nearintents'] }
     const zec = { ...token('nep141:zec.omft.near', 'zec', 8), sources: ['nearintents'] }
     const privateAddresses = new Map([[EVM_CHAIN_ID, '0x3333333333333333333333333333333333333333']])
@@ -932,7 +932,13 @@ test.describe('quote deposit transfer client', () => {
       isPrivateSwapDestinationSupported(evm, portfolio(), receiveTargets, privateAddresses)
     ).toBe(true)
     expect(
+      isPrivateSwapDestinationSupported(evm, portfolio(), receiveTargets, new Map(), 'main')
+    ).toBe(true)
+    expect(
       isPrivateSwapDestinationSupported(zec, portfolio(), receiveTargets, privateAddresses)
+    ).toBe(false)
+    expect(
+      isPrivateSwapDestinationSupported(zec, portfolio(), receiveTargets, privateAddresses, 'main')
     ).toBe(false)
     expect(
       isPrivateSwapDestinationSupported(

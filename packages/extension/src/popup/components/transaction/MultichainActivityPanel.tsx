@@ -37,7 +37,8 @@ interface MultichainActivityPanelProps {
   readonly accountNetworks?: readonly AccountNetworkView[]
   readonly onItemClick?: (item: ActivityItem) => void
   readonly filterAssetId?: string
-  readonly filterDomain?: 'public' | 'private'
+  readonly filterDomain?: 'public' | 'private' | 'shield'
+  readonly confidentialIntentsOnly?: boolean
   readonly showToolbar?: boolean
   readonly maxItems?: number
   readonly compact?: boolean
@@ -95,6 +96,7 @@ export function MultichainActivityPanel({
   onItemClick,
   filterAssetId,
   filterDomain,
+  confidentialIntentsOnly = false,
   showToolbar = true,
   maxItems,
   compact = false,
@@ -297,11 +299,13 @@ export function MultichainActivityPanel({
         selectedChainIds,
         assetId: filterAssetId,
         domain: filterDomain,
+        confidentialIntentsOnly,
         accountMode: filterAssetId ? undefined : accountMode,
         executionAddressModes
       }),
     [
       accountMode,
+      confidentialIntentsOnly,
       executionAddressModes,
       filterAssetId,
       filterDomain,

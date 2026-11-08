@@ -332,6 +332,22 @@ test.describe('Activity read model', () => {
         item => item.id
       )
     ).toEqual([ordinaryPrivate.root.id])
+    expect(filterActivityItems({ ...selection, domain: 'shield' }).map(item => item.id)).toEqual([
+      withdrawal.root.id
+    ])
+    expect(
+      filterActivityItems({ ...selection, domain: 'public' })
+        .map(item => item.id)
+        .sort()
+    ).toEqual([ordinaryPublic.root.id, withdrawal.root.id].sort())
+    expect(filterActivityItems({ ...selection, assetId: 'invalid-asset' })).toEqual([])
+    expect(
+      filterActivityItems({
+        ...selection,
+        domain: 'shield',
+        confidentialIntentsOnly: true
+      })
+    ).toEqual([])
     expect(filterActivityItems({ ...selection, assetId: usdcAssetId })).toEqual([])
     expect(filterActivityItems({ ...selection, selectedChainIds: [arbitrumChainId] })).toEqual([])
   })
