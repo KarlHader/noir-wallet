@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 2,
+  "engine": "multichain",
+  "packageVersion": "0.1.0",
+  "abiVersion": "wallet-engine-522b719-v10",
+  "sourceCommit": "522b71919f6ac2ee97f696bd490024f115dce088",
+  "artifacts": [
+    {
+      "path": "package.json",
+      "role": "metadata",
+      "bytes": 385,
+      "sha256": "8f0d8695f080ced8533cecc7694d16268dd6c02c698ff7a218c660ed96c91a3d"
+    },
+    {
+      "path": "wallet_wasm.d.ts",
+      "role": "types",
+      "bytes": 20293,
+      "sha256": "b58213103f7c69fd8acbed096bb9a86fff82742208ebba8e19d2e82c61b9e8a6"
+    },
+    {
+      "path": "wallet_wasm.js",
+      "role": "loader",
+      "bytes": 101489,
+      "sha256": "67fc347748cdefc630a330187611226af9ece7dfa2e1c264e1e41f6deabbf9bb"
+    },
+    {
+      "path": "wallet_wasm_bg.wasm",
+      "role": "binary",
+      "bytes": 4400914,
+      "sha256": "ed94cd07a2a4194060e2d84e1a495275d618b9bc85794105357aeacecb999804"
+    },
+    {
+      "path": "wallet_wasm_bg.wasm.d.ts",
+      "role": "binary-types",
+      "bytes": 11326,
+      "sha256": "ed4984929d4375faaceda0fcd44e9c65420cd70889a98962e60de868f2c89b33"
+    }
+  ],
+  "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",
+  "build": {
+    "rustToolchain": "1.96.1",
+    "wasmPack": "0.14.0",
+    "wasmBindgen": "0.2.126",
+    "llvm": "22.1.4",
+    "target": "web"
+  },
+  "capabilities": [
+    "account.bitcoin.batch-derive",
+    "account.bitcoin.derive",
+    "account.bitcoin.imported",
+    "account.evm.derive",
+    "account.evm.imported",
+    "account.near.derive",
+    "account.near.imported",
+    "account.pea-v1.derive",
+    "account.pearl.batch-derive",
+    "account.pearl.derive",
+    "account.pearl.imported",
+    "account.solana.derive",
+    "account.solana.imported",
+    "bitcoin.bip322.full.sign",
+    "bitcoin.bip322.full.verify",
+    "bitcoin.bip322.sign",
+    "bitcoin.bip322.verify",
+    "bitcoin.psbt-v0.sign",
+    "credential.create-12",
+    "credential.create-24",
+    "credential.export-private-key",
+    "credential.import-12",
+    "credential.import-24",
+    "credential.import-private-key-bip122",
+    "credential.import-private-key-eip155",
+    "credential.import-private-key-near",
+    "credential.import-private-key-pearl",
+    "credential.import-private-key-solana",
+    "credential.passphrase-empty-only",
+    "evm.eip191.sign",
+    "evm.eip712.sign",
+    "evm.pea-v1.eip191.sign",
+    "evm.pea-v1.eip712.sign",
+    "evm.pea-v1.transaction.sign",
+    "evm.transaction.sign",
+    "near.nep413.sign",
+    "near.nep413.verify",
+    "near.transaction.sign",
+    "pearl.bip322.sign",
+    "pearl.bip322.verify",
+    "pearl.psbt-v0.sign",
+    "solana.message.sign",
+    "solana.message.verify",
+    "solana.transaction.sign",
+    "vault.argon2id-xchacha20poly1305",
+    "vault.private-key-v2"
+  ]
+}
