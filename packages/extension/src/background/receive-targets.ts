@@ -4,6 +4,7 @@ import {
   parseSupportedBitcoinAddress,
   type BitcoinSupportedAddressType
 } from '@/core/chains/bitcoin'
+import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
@@ -38,7 +39,7 @@ export type AdditionalReceiveTarget =
     }>
   | Readonly<{
       chainId: string
-      kind: 'solana' | 'near'
+      kind: 'solana' | 'near' | 'pearl'
       address: string
     }>
 
@@ -178,6 +179,20 @@ export class AdditionalReceiveTargetsCoordinator {
             chainId: available.chain.id,
             kind: 'near' as const,
             address: parseNearAccountId(address.value)
+          })
+        )
+        continue
+      }
+
+      if (available.chain.family === 'pearl') {
+        if (address.scheme !== 'pearl_p2tr') {
+          throw new Error('Active Pearl receive scheme is unavailable')
+        }
+        targets.push(
+          Object.freeze({
+            chainId: available.chain.id,
+            kind: 'pearl' as const,
+            address: parseSupportedPearlAddress(address.value, available.chain.id)
           })
         )
         continue

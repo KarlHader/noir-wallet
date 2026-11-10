@@ -5,7 +5,7 @@ import {
   mapTransactionGraphToActivityItem,
   type ActivityItem
 } from '@/core/activity'
-import { getBitcoinNetworkConfig } from '@/config/networks'
+import { getBitcoinNetworkConfig, getPearlNetworkConfig } from '@/config/networks'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { getZcashChainId } from '@/core/chains/registry'
 import { formatSortAddress } from '@/lib/format'
@@ -22,6 +22,7 @@ import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { bitcoinWalletClient } from '@/popup/services/bitcoin-wallet-client'
+import { pearlWalletClient } from '@/popup/services/pearl-wallet-client'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
@@ -348,7 +349,8 @@ export function MultichainActivityDetail({
   const recoveryAction = getActivityRecoveryAction(
     visibleItem,
     evmChainIds,
-    getBitcoinNetworkConfig(network).chainId
+    getBitcoinNetworkConfig(network).chainId,
+    getPearlNetworkConfig(network).chainId
   )
   const cancelAvailable = canCancelEvmActivity(visibleItem, evmChainIds)
   const isCrossChain = visibleItem.segments.length > 1
@@ -387,14 +389,17 @@ export function MultichainActivityDetail({
       const submission =
         recoveryAction === 'retry-bitcoin-broadcast'
           ? await bitcoinWalletClient.resumeTransfer(transactionId)
-          : await evmWalletClient.resumeTransfer(transactionId)
+          : recoveryAction === 'retry-pearl-broadcast'
+            ? await pearlWalletClient.resumeTransfer(transactionId)
+            : await evmWalletClient.resumeTransfer(transactionId)
       const nextItem = mapTransactionGraphToActivityItem(submission.graph)
       if (
         !isActivityRecoveryTransition(
           visibleItem,
           nextItem,
           evmChainIds,
-          getBitcoinNetworkConfig(network).chainId
+          getBitcoinNetworkConfig(network).chainId,
+          getPearlNetworkConfig(network).chainId
         )
       ) {
         throw new Error('Invalid Activity recovery transition')

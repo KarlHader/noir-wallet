@@ -20,6 +20,7 @@ import {
   ExampleChainIcon,
   EvmExample,
   NativeTransferExample,
+  PearlExample,
   ProviderSwitcher,
   type ExampleNavigationProps,
   type ExampleProviderId
@@ -744,6 +745,9 @@ function App() {
   }
   if (activeProvider === 'bitcoin') {
     return <BitcoinExample navigation={exampleNavigation} />
+  }
+  if (activeProvider === 'pearl') {
+    return <PearlExample navigation={exampleNavigation} />
   }
   if (activeProvider === 'solana' || activeProvider === 'near') {
     return (

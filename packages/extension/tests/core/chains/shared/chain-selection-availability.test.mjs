@@ -66,7 +66,7 @@ describe('Chain selection availability', () => {
       privateKeyImportFamilyOptions(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS)
         .filter(option => option.enabled)
         .map(option => option.family),
-      ['eip155']
+      ['eip155', 'pearl']
     )
     assert.deepEqual(
       buildAddTokenNetworks('mainnet', [], DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).map(network => ({

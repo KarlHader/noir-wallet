@@ -5,6 +5,8 @@ const CHAIN_ENDPOINT_SETTINGS_SCHEMA_VERSION = 1 as const
 export type ChainRpcProtocol =
   | 'evm-json-rpc'
   | 'bitcoin-esplora'
+  | 'pearl-blockbook'
+  | 'pearl-json-rpc'
   | 'zcash-lightwalletd'
   | 'solana-json-rpc'
   | 'tron-http-api'
@@ -233,7 +235,9 @@ function parseChainEndpointOverride(value: unknown): ChainEndpointOverride {
     if (
       chainId.startsWith('bip122:') &&
       rpc.protocol !== 'bitcoin-esplora' &&
-      rpc.protocol !== 'zcash-lightwalletd'
+      rpc.protocol !== 'zcash-lightwalletd' &&
+      rpc.protocol !== 'pearl-blockbook' &&
+      rpc.protocol !== 'pearl-json-rpc'
     ) {
       throw new Error('Invalid BIP-122 RPC protocol')
     }

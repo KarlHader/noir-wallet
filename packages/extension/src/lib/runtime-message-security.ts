@@ -3,6 +3,7 @@ import {
   BITCOIN_DAPP_RUNTIME_METHODS,
   type BitcoinDAppRuntimeMethod
 } from '@/core/dapp/bitcoin-provider'
+import { PEARL_DAPP_RUNTIME_METHODS, type PearlDAppRuntimeMethod } from '@/core/dapp/pearl-provider'
 import {
   NEAR_DAPP_RUNTIME_METHODS,
   SOLANA_DAPP_RUNTIME_METHODS,
@@ -55,6 +56,7 @@ export const DAPP_RUNTIME_METHODS = Object.freeze([
   ...ZCASH_DAPP_RUNTIME_METHODS,
   ...EVM_DAPP_RUNTIME_METHODS,
   ...BITCOIN_DAPP_RUNTIME_METHODS,
+  ...PEARL_DAPP_RUNTIME_METHODS,
   ...SOLANA_DAPP_RUNTIME_METHODS,
   ...NEAR_DAPP_RUNTIME_METHODS,
   ...CAIP25_RUNTIME_METHODS
@@ -65,6 +67,7 @@ export type DAppRuntimeMethod =
   | ZcashDAppRuntimeMethod
   | EvmDAppRuntimeMethod
   | BitcoinDAppRuntimeMethod
+  | PearlDAppRuntimeMethod
   | NativeTransferDAppRuntimeMethod
   | SolanaDAppRuntimeMethod
   | NearDAppRuntimeMethod
@@ -73,7 +76,7 @@ export type DAppRuntimeMethod =
 export interface DAppRuntimeRequestMessage {
   readonly type: 'DAPP_REQUEST'
   readonly requestId: string
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
+  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
   readonly siteMetadata?: {
     readonly faviconUrl: string
   }
@@ -98,7 +101,7 @@ export interface KeyringWorkerRpcRuntimeMessage {
 
 export interface NoirRuntimeEventMessage {
   readonly type: 'NOIR_EVENT'
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
+  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
   readonly eventName:
     | 'accountsChanged'
     | 'accountCapabilitiesChanged'
@@ -302,7 +305,11 @@ const isMnemonicPhrase: RuntimeFieldValidator = value =>
 const isPrivateKey: RuntimeFieldValidator = value =>
   typeof value === 'string' && value.length > 0 && value.length <= 512
 const isPrivateKeyChainFamily: RuntimeFieldValidator = value =>
-  value === 'eip155' || value === 'bip122' || value === 'solana' || value === 'near'
+  value === 'eip155' ||
+  value === 'bip122' ||
+  value === 'pearl' ||
+  value === 'solana' ||
+  value === 'near'
 const isBitcoinAddressType: RuntimeFieldValidator = value =>
   value === 'p2pkh' || value === 'p2sh-p2wpkh' || value === 'p2wpkh' || value === 'p2tr'
 const isBirthdayHeight: RuntimeFieldValidator = value =>
@@ -534,6 +541,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   GET_BITCOIN_ACTIVITY: { optional: { action: isPortfolioAction } },
+  GET_PEARL_ACTIVITY: { optional: { action: isPortfolioAction } },
   GET_BITCOIN_WALLET_IDENTITY: {},
   GET_ZCASH_LENDING_PUBLIC_KEY: {
     required: {
@@ -742,6 +750,20 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   REJECT_BITCOIN_TRANSFER: { required: { transactionId: isShortString } },
   RESUME_BITCOIN_TRANSFER: { required: { transactionId: isShortString } },
+  PREPARE_PEARL_TRANSFER: {
+    required: { intent: isRecord },
+    optional: {
+      nearIntentsBinding: isRecord,
+      rheaSwapBinding: isRecord,
+      feeTier: isNetworkFeeTier
+    }
+  },
+  GET_PENDING_PEARL_TRANSFER: { required: { transactionId: isShortString } },
+  APPROVE_PEARL_TRANSFER: {
+    required: { transactionId: isShortString, payloadFingerprint: isEvmPayloadFingerprint }
+  },
+  REJECT_PEARL_TRANSFER: { required: { transactionId: isShortString } },
+  RESUME_PEARL_TRANSFER: { required: { transactionId: isShortString } },
   INSPECT_NEXT_ZCASH_ACCOUNT_HISTORY: {
     required: { walletId: isShortString }
   },
@@ -920,6 +942,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     SWITCH_NETWORK_MODE: ['extension-page'],
     GET_ACTIVITY: ['extension-page'],
     GET_BITCOIN_ACTIVITY: ['extension-page'],
+    GET_PEARL_ACTIVITY: ['extension-page'],
     GET_BITCOIN_WALLET_IDENTITY: ['extension-page'],
     GET_ZCASH_LENDING_PUBLIC_KEY: ['extension-page'],
     GET_ASSET_PRICES: ['extension-page'],
@@ -995,6 +1018,11 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     SUBMIT_KEYSTONE_BITCOIN_SIGNATURE: ['extension-page'],
     REJECT_BITCOIN_TRANSFER: ['extension-page'],
     RESUME_BITCOIN_TRANSFER: ['extension-page'],
+    PREPARE_PEARL_TRANSFER: ['extension-page'],
+    GET_PENDING_PEARL_TRANSFER: ['extension-page'],
+    APPROVE_PEARL_TRANSFER: ['extension-page'],
+    REJECT_PEARL_TRANSFER: ['extension-page'],
+    RESUME_PEARL_TRANSFER: ['extension-page'],
     INSPECT_NEXT_ZCASH_ACCOUNT_HISTORY: ['extension-page'],
     ADD_ACCOUNT: ['extension-page'],
     SWITCH_ACCOUNT: ['extension-page'],
@@ -1043,6 +1071,7 @@ const dappMethodSet = new Set<string>(DAPP_RUNTIME_METHODS)
 const zcashDappMethodSet = new Set<string>(ZCASH_DAPP_RUNTIME_METHODS)
 const evmDappMethodSet = new Set<string>(EVM_DAPP_RUNTIME_METHODS)
 const bitcoinDappMethodSet = new Set<string>(BITCOIN_DAPP_RUNTIME_METHODS)
+const pearlDappMethodSet = new Set<string>(PEARL_DAPP_RUNTIME_METHODS)
 const solanaDappMethodSet = new Set<string>(SOLANA_DAPP_RUNTIME_METHODS)
 const nearDappMethodSet = new Set<string>(NEAR_DAPP_RUNTIME_METHODS)
 const caip25DappMethodSet = new Set<string>(CAIP25_RUNTIME_METHODS)
@@ -1318,12 +1347,14 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId === 'zcash' && !zcashDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'evm' && !evmDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'bitcoin' && !bitcoinDappMethodSet.has(value.request.method)) ||
+    (value.chainId === 'pearl' && !pearlDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'solana' && !solanaDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'near' && !nearDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'multichain' && !caip25DappMethodSet.has(value.request.method)) ||
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
+      value.chainId !== 'pearl' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
       value.chainId !== 'multichain')
@@ -1383,6 +1414,7 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
+      value.chainId !== 'pearl' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
       value.chainId !== 'multichain') ||

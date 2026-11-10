@@ -185,6 +185,7 @@ import { isAssetMarketHistoryRange } from '@/core/prices'
 import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
   getBitcoinChainId,
+  getPearlChainId,
   getZcashChainId,
   parseAssetId,
   parseChainId,
@@ -221,6 +222,7 @@ import {
   resolveBitcoinFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
+  resolvePearlFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import { accountContextTransition } from './account-context-transition'
@@ -237,6 +239,10 @@ import {
   type EvmDAppRuntimeMethod
 } from '@/core/dapp/eip1193'
 import { createBackgroundBitcoinDAppHandler } from './bitcoin-dapp'
+import {
+  createBackgroundPearlDAppHandler,
+  createEnsureActiveSoftwarePearlAccount
+} from './pearl-dapp'
 import { fetchCachedIdentity, type IdentitySigningMode } from '@/core/wallet/identity-cache'
 import type { LendingSigningMode } from '@/core/services/lending-service'
 import {
@@ -244,6 +250,11 @@ import {
   toBitcoinProviderErrorShape,
   type BitcoinDAppRuntimeMethod
 } from '@/core/dapp/bitcoin-provider'
+import {
+  PearlProviderError,
+  toPearlProviderErrorShape,
+  type PearlDAppRuntimeMethod
+} from '@/core/dapp/pearl-provider'
 import {
   NativeTransferProviderError,
   toNativeTransferProviderErrorShape,
@@ -288,8 +299,20 @@ import {
   hasBackgroundBitcoinTransferCapability,
   reloadBackgroundBitcoinRuntime
 } from './bitcoin-transfer'
+import {
+  BackgroundPearlTransactionMonitor,
+  PEARL_TRANSACTION_MONITOR_ALARM
+} from './pearl-transaction-monitor'
+import {
+  createBackgroundPearlTransferController,
+  hasBackgroundPearlTransferCapability,
+  recoverPendingPearlTransfers,
+  reloadBackgroundPearlRuntime
+} from './pearl-transfer'
 import { createBitcoinWalletRuntimeError } from '@/core/chains/bitcoin'
+import { createPearlWalletRuntimeError } from '@/core/chains/pearl'
 import { mapBitcoinWalletRuntimeError } from './bitcoin-wallet-runtime-error'
+import { mapPearlWalletRuntimeError } from './pearl-wallet-runtime-error'
 import { PortfolioCoordinatorError } from '@/infrastructure/portfolio'
 import {
   BitcoinDiscoveryReadError,
@@ -298,7 +321,8 @@ import {
 } from '@/infrastructure/chains/bitcoin'
 import {
   ChainEndpointSettingsCoordinator,
-  resolveConfiguredBitcoinRpcUrl
+  resolveConfiguredBitcoinRpcUrl,
+  resolveConfiguredPearlRpcUrl
 } from './chain-endpoint-settings'
 
 import { ChromeSessionSolanaPendingTransferStore } from '@/infrastructure/chains/solana'
@@ -307,9 +331,11 @@ import { ChromeSessionNearPendingTransferStore } from '@/infrastructure/chains/n
 import { validateVotingDecisions } from '@/lib/voting'
 
 import { BitcoinMultichainDerivationClient } from '@/infrastructure/keyring/multichain/bitcoin-derivation-client'
+import { PearlMultichainDerivationClient } from '@/infrastructure/keyring/multichain/pearl-derivation-client'
 import type { NetworkAccountMetadataInput } from '@/infrastructure/keyring/network-account-metadata-coordinator'
 import {
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import { deriveSoftwareEd25519NetworkMetadata } from './software-ed25519-metadata'
@@ -393,8 +419,10 @@ const evmFeatureRuntimePolicy = resolveEvmFeatureRuntimePolicy(__ENABLED_CHAIN_F
 const bitcoinFeatureRuntimePolicy = resolveBitcoinFeatureRuntimePolicy(
   __ENABLED_CHAIN_FEATURE_FLAGS__
 )
+const pearlFeatureRuntimePolicy = resolvePearlFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__)
 const solanaBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(SOLANA_CHAIN_FEATURE_FLAG)
 const nearBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(NEAR_CHAIN_FEATURE_FLAG)
+const pearlBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(PEARL_CHAIN_FEATURE_FLAG)
 
 function areSolanaOperationsEnabled(): boolean {
   return resolveSolanaFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled
@@ -406,15 +434,20 @@ function areNearOperationsEnabled(): boolean {
 
 let evmTransactionMonitor: BackgroundEvmTransactionMonitor | null = null
 let bitcoinTransactionMonitor: BackgroundBitcoinTransactionMonitor | null = null
+let pearlTransactionMonitor: BackgroundPearlTransactionMonitor | null = null
 let nearIntentsTransactionMonitor: BackgroundNearIntentsTransactionMonitor | null = null
 let solanaTransactionMonitor: BackgroundSolanaTransactionMonitor | null = null
 let nearTransactionMonitor: BackgroundNearTransactionMonitor | null = null
 
-type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near'
+type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
 
 function resolveEnabledPrivateKeyChainFamily(value: unknown): EnabledPrivateKeyChainFamily {
   if (
-    (value === 'eip155' || value === 'bip122' || value === 'solana' || value === 'near') &&
+    (value === 'eip155' ||
+      value === 'bip122' ||
+      value === 'pearl' ||
+      value === 'solana' ||
+      value === 'near') &&
     isNewWalletFamilyEnabled(value, __ENABLED_CHAIN_FEATURE_FLAGS__)
   )
     return value
@@ -425,6 +458,12 @@ function resolveEnabledPrivateKeyExportChainId(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Private-key export chain is invalid')
   if (value.startsWith('solana:')) resolveEnabledPrivateKeyChainFamily('solana')
   if (value.startsWith('near:')) resolveEnabledPrivateKeyChainFamily('near')
+  if (
+    value === 'bip122:a18d3093b7ff618f0cdd073fa3d10374' ||
+    value === 'bip122:b0c86d0cd8825f4d72260d2de46f4704'
+  ) {
+    resolveEnabledPrivateKeyChainFamily('pearl')
+  }
   return value
 }
 let evmPortfolioConformanceCoordinator: ReturnType<
@@ -507,6 +546,8 @@ let confidentialFundingCoordinator: ConfidentialFundingCoordinator | null = null
 const confidentialFundingStore = new ChromeConfidentialFundingStore()
 let bitcoinTransferController: ReturnType<typeof createBackgroundBitcoinTransferController> | null =
   null
+let pearlTransferController: ReturnType<typeof createBackgroundPearlTransferController> | null =
+  null
 let solanaTransferController: ReturnType<typeof createBackgroundSolanaTransferController> | null =
   null
 let rheaSwapSolanaCoordinator: RheaSwapSolanaCoordinator | null = null
@@ -520,6 +561,7 @@ let intentsProtocolAssetsReady = false
 const swapTokenCatalogCache = new ChromeSwapTokenCatalogCacheRepository()
 let evmDAppHandler!: ReturnType<typeof createBackgroundEvmDAppHandler>
 let bitcoinDAppHandler!: ReturnType<typeof createBackgroundBitcoinDAppHandler>
+let pearlDAppHandler!: ReturnType<typeof createBackgroundPearlDAppHandler>
 let solanaDAppHandler: ReturnType<typeof createBackgroundSolanaDAppHandler> | null = null
 let nearDAppHandler: ReturnType<typeof createBackgroundNearDAppHandler> | null = null
 let multichainSessionDAppHandler: BackgroundMultichainSessionDAppHandler | null = null
@@ -547,6 +589,9 @@ function refreshAssetPrices(assetId?: string) {
   return operation
 }
 const networkSwitchBitcoinDerivation = new BitcoinMultichainDerivationClient({
+  credentials: credentialSession
+})
+const networkSwitchPearlDerivation = new PearlMultichainDerivationClient({
   credentials: credentialSession
 })
 const accountNetworksPeaDerivation = new EvmMultichainSigningClient({
@@ -627,7 +672,7 @@ const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCo
 )
 
 async function dispatchDAppChainRequest(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near',
   request: {
     readonly method: string
     readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
@@ -651,6 +696,16 @@ async function dispatchDAppChainRequest(
     return bitcoinDAppHandler.request(
       {
         method: request.method as BitcoinDAppRuntimeMethod,
+        ...(params === undefined ? {} : { params })
+      },
+      origin,
+      tabInfo
+    )
+  }
+  if (chainId === 'pearl') {
+    return pearlDAppHandler.request(
+      {
+        method: request.method as PearlDAppRuntimeMethod,
         ...(params === undefined ? {} : { params })
       },
       origin,
@@ -700,7 +755,7 @@ const CAIP25_CONNECTION_METHODS = new Set([
 ])
 
 async function assertCaip25MethodPermission(
-  family: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near',
+  family: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near',
   method: string,
   origin: string
 ): Promise<void> {
@@ -712,15 +767,18 @@ async function assertCaip25MethodPermission(
         ? evmDAppHandler.getCaip2ChainId()
         : family === 'bitcoin'
           ? getBitcoinChainId(DEFAULT_NETWORK)
-          : family === 'solana'
-            ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
-            : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+          : family === 'pearl'
+            ? getPearlChainId(DEFAULT_NETWORK)
+            : family === 'solana'
+              ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+              : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
   const session = await dappManager.getCaip25Session(origin)
   const scope = session?.scopes.find(candidate => candidate.chainId === chainId)
   if (!scope || caip25SessionAllowsMethod(session, chainId, method)) return
   const message = `${method} is not authorized for CAIP-25 scope ${chainId}.`
   if (family === 'evm') throw new Eip1193ProviderError(4100, message)
   if (family === 'bitcoin') throw new BitcoinProviderError(4100, message)
+  if (family === 'pearl') throw new PearlProviderError(4100, message)
   if (family === 'solana' || family === 'near') {
     throw new NativeTransferProviderError(4100, message)
   }
@@ -903,6 +961,7 @@ async function reloadMultichainRuntime(
     )
   }
   const bitcoinRpcUrl = resolveConfiguredBitcoinRpcUrl(settings)
+  const pearlRpcUrl = resolveConfiguredPearlRpcUrl(settings)
   const previousNumericChainId = activeEvmNumericChainId
 
   if (shouldCancelAwaitingApprovals) {
@@ -911,6 +970,7 @@ async function reloadMultichainRuntime(
     await nearTransferController?.cancelAllAwaitingApprovals()
   }
   await reloadBackgroundBitcoinRuntime(bitcoinRpcUrl, shouldCancelAwaitingApprovals)
+  await reloadBackgroundPearlRuntime(pearlRpcUrl, shouldCancelAwaitingApprovals)
 
   evmTransactionMonitor = evmFeatureRuntimePolicy.transactionRecoveryEnabled
     ? new BackgroundEvmTransactionMonitor(catalog)
@@ -918,14 +978,19 @@ async function reloadMultichainRuntime(
   bitcoinTransactionMonitor = bitcoinFeatureRuntimePolicy.transactionRecoveryEnabled
     ? new BackgroundBitcoinTransactionMonitor(bitcoinRpcUrl)
     : null
+  pearlTransactionMonitor = pearlFeatureRuntimePolicy.transactionRecoveryEnabled
+    ? new BackgroundPearlTransactionMonitor(pearlRpcUrl)
+    : null
   evmPortfolioConformanceCoordinator = __MULTICHAIN_CONFORMANCE_RPC_ENABLED__
     ? createBackgroundEvmPortfolioCoordinator(activeEvm)
     : null
   portfolioCoordinator =
     evmFeatureRuntimePolicy.newOperationsEnabled ||
     bitcoinFeatureRuntimePolicy.newOperationsEnabled ||
+    pearlFeatureRuntimePolicy.newOperationsEnabled ||
     solanaBetaEnabled ||
-    nearBetaEnabled
+    nearBetaEnabled ||
+    pearlBetaEnabled
       ? createBackgroundPortfolioCoordinator(
           catalog,
           customEvmNetworks,
@@ -934,7 +999,7 @@ async function reloadMultichainRuntime(
           settings
         )
       : null
-  activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings)
+  activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings, pearlRpcUrl)
   additionalReceiveTargetsCoordinator =
     createBackgroundAdditionalReceiveTargetsCoordinator(customEvmNetworks)
   accountNetworksCoordinator = createBackgroundAccountNetworksCoordinator(
@@ -991,6 +1056,10 @@ async function reloadMultichainRuntime(
     bitcoinFeatureRuntimePolicy.newOperationsEnabled && hasBackgroundBitcoinTransferCapability()
       ? createBackgroundBitcoinTransferController()
       : null
+  pearlTransferController =
+    pearlFeatureRuntimePolicy.newOperationsEnabled && hasBackgroundPearlTransferCapability()
+      ? createBackgroundPearlTransferController()
+      : null
   solanaTransferController = solanaOperationsEnabled
     ? createBackgroundSolanaTransferController(intentsProtocolAssets, settings)
     : null
@@ -1024,6 +1093,23 @@ async function reloadMultichainRuntime(
   )
   evmDAppHandler = nextEvmDAppHandler
   bitcoinDAppHandler = createBackgroundBitcoinDAppHandler(bitcoinTransferController, bitcoinRpcUrl)
+  pearlDAppHandler = createBackgroundPearlDAppHandler(pearlTransferController, pearlRpcUrl, {
+    ensureSoftwarePearlAccount: createEnsureActiveSoftwarePearlAccount({
+      synchronizeSoftwareWalletNetworkMetadata: synchronizeCurrentSoftwareWalletNetworkMetadata,
+      synchronizeNetworkAccountMetadata: values =>
+        credentialLifecycle.synchronizeNetworkAccountMetadata(values),
+      deriveBitcoinAddress: (keyDomainId, input) =>
+        networkSwitchBitcoinDerivation.deriveAddress(parseKeyDomainId(keyDomainId), {
+          ...input,
+          chainId: parseChainId(input.chainId).id
+        }),
+      derivePearlAddress: (keyDomainId, input) =>
+        networkSwitchPearlDerivation.deriveAddress(parseKeyDomainId(keyDomainId), {
+          ...input,
+          chainId: parseChainId(input.chainId).id
+        })
+    })
+  })
   solanaDAppHandler = solanaOperationsEnabled ? createBackgroundSolanaDAppHandler(settings) : null
   nearDAppHandler = nearOperationsEnabled ? createBackgroundNearDAppHandler(settings) : null
   const solanaScope = solanaOperationsEnabled
@@ -1087,6 +1173,7 @@ async function reloadMultichainRuntime(
   await Promise.all([
     evmTransactionMonitor?.init(),
     bitcoinTransactionMonitor?.init(),
+    pearlTransactionMonitor?.init(),
     solanaTransactionMonitor?.init(),
     nearTransactionMonitor?.init(),
     portfolioCoordinator?.readCachedActive()
@@ -1232,6 +1319,14 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
           addressIndex: 0
         }
       )
+      const pearl = pearlBetaEnabled
+        ? await networkSwitchPearlDerivation.deriveAddress(parseKeyDomainId(wallet.id), {
+            chainId: parseChainId(getPearlChainId(target)).id,
+            accountIndex: account.derivationIndex,
+            change: false,
+            addressIndex: 0
+          })
+        : undefined
       const ed25519 = await deriveSoftwareEd25519NetworkMetadata({
         keyDomainId: wallet.id,
         accountIndex: account.derivationIndex,
@@ -1247,6 +1342,7 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
         zcashChainId: getZcashChainId(target),
         zcashAddresses: zcash,
         bitcoin,
+        ...(pearl === undefined ? {} : { pearl }),
         ...ed25519
       })
       useWalletStore.getState().updateAccountInWallets(wallet.id, account.id, {
@@ -1269,7 +1365,7 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
 }
 
 async function synchronizeCurrentSoftwareWalletNetworkMetadata(): Promise<void> {
-  if (!solanaBetaEnabled && !nearBetaEnabled) return
+  if (!solanaBetaEnabled && !nearBetaEnabled && !pearlBetaEnabled) return
   await prepareSoftwareWalletNetworkMetadata(DEFAULT_NETWORK)
   const currentWalletId = useWalletStore.getState().currentWalletId
   const currentWallet = currentWalletId
@@ -1343,6 +1439,7 @@ async function switchGlobalNetworkMode(target: Network): Promise<{ restartRequir
       await Promise.all([
         evmTransferRouter?.cancelAllAwaitingApprovals(),
         bitcoinTransferController?.cancelAllAwaitingApprovals(),
+        pearlTransferController?.cancelAllAwaitingApprovals(),
         solanaTransferController?.cancelAllAwaitingApprovals(),
         nearTransferController?.cancelAllAwaitingApprovals()
       ])
@@ -1862,6 +1959,19 @@ chrome.alarms.onAlarm.addListener(alarm => {
           )
         })
       }
+      if (alarm.name === PEARL_TRANSACTION_MONITOR_ALARM) {
+        pearlTransactionMonitor?.handleAlarm().catch(error => {
+          const { currentWalletId, currentAccountId } = useWalletStore.getState()
+          logger.warn(
+            `Pearl transaction monitor failed: ${formatLogError(error)}`,
+            currentWalletId ?? undefined,
+            currentAccountId ?? undefined
+          )
+        })
+        recoverPendingPearlTransfers().catch(error => {
+          logger.warn(`Pearl transfer recovery failed: ${formatLogError(error)}`)
+        })
+      }
       if (alarm.name === SOLANA_TRANSACTION_MONITOR_ALARM) {
         solanaTransactionMonitor?.handleAlarm().catch(error => {
           console.warn('[Solana Transaction Monitor] Poll failed:', error)
@@ -1963,6 +2073,7 @@ const walletCleanupCoordinator = new WalletCleanupCoordinator(
   async () => {
     await evmTransferRouter?.clearPendingTransfers()
     await bitcoinTransferController?.clearPendingTransfers()
+    await pearlTransferController?.clearPendingTransfers()
     await solanaTransferController?.clearPendingTransfers()
     await nearTransferController?.clearPendingTransfers()
     await rheaSwapTransactionMonitor?.clear()
@@ -2076,6 +2187,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         if (
           chainId === 'evm' ||
           chainId === 'bitcoin' ||
+          chainId === 'pearl' ||
           chainId === 'solana' ||
           chainId === 'near' ||
           chainId === 'multichain'
@@ -2094,6 +2206,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             error: {
               code: 4200,
               message: 'The Bitcoin provider is unavailable in this wallet build.'
+            }
+          })
+          return
+        }
+        if (chainId === 'pearl' && !pearlFeatureRuntimePolicy.newOperationsEnabled) {
+          respond({
+            error: {
+              code: 4200,
+              message: 'The Pearl provider is unavailable in this wallet build.'
             }
           })
           return
@@ -2179,11 +2300,13 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 ? toEip1193ErrorShape(error)
                 : parsedMessage.chainId === 'bitcoin'
                   ? toBitcoinProviderErrorShape(error)
-                  : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
-                    ? toNativeTransferProviderErrorShape(error)
-                    : error instanceof Error
-                      ? error.message
-                      : 'dApp request failed'
+                  : parsedMessage.chainId === 'pearl'
+                    ? toPearlProviderErrorShape(error)
+                    : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
+                      ? toNativeTransferProviderErrorShape(error)
+                      : error instanceof Error
+                        ? error.message
+                        : 'dApp request failed'
         })
       }
     })
@@ -3383,6 +3506,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
+  if (message.type === 'GET_PEARL_ACTIVITY') {
+    void activityCoordinator
+      .readActive({ includeSupplemental: message.action !== 'read', accountMode: 'main' })
+      .then(result => sendResponse({ result }))
+      .catch(error => {
+        console.warn(
+          '[Background] Pearl Activity request failed:',
+          error instanceof Error ? error.name : 'UnknownError'
+        )
+        sendResponse({
+          error: createPearlWalletRuntimeError('request-failed')
+        })
+      })
+    return true
+  }
+
   if (message.type === 'GET_BITCOIN_WALLET_IDENTITY') {
     if (!bitcoinFeatureRuntimePolicy.newOperationsEnabled) {
       sendResponse({ error: createBitcoinWalletRuntimeError('unavailable') })
@@ -3707,6 +3846,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           addressType: message.addressType
         })
         await bitcoinDAppHandler.notifyAccountsChanged()
+        await pearlDAppHandler.notifyAccountsChanged()
         await multichainSessionDAppHandler?.notifyAllSessionsChanged()
         await chrome.runtime
           .sendMessage({
@@ -4029,6 +4169,47 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       })
       .catch(error => {
         sendResponse({ error: mapBitcoinWalletRuntimeError(error) })
+      })
+    return true
+  }
+
+  if (
+    message.type === 'PREPARE_PEARL_TRANSFER' ||
+    message.type === 'GET_PENDING_PEARL_TRANSFER' ||
+    message.type === 'APPROVE_PEARL_TRANSFER' ||
+    message.type === 'REJECT_PEARL_TRANSFER' ||
+    message.type === 'RESUME_PEARL_TRANSFER'
+  ) {
+    if (!pearlTransferController) {
+      sendResponse({ error: createPearlWalletRuntimeError('unavailable') })
+      return true
+    }
+    const operation =
+      message.type === 'PREPARE_PEARL_TRANSFER'
+        ? pearlTransferController.prepare(
+            message.intent,
+            message.nearIntentsBinding,
+            message.feeTier,
+            undefined,
+            undefined,
+            message.rheaSwapBinding
+          )
+        : message.type === 'GET_PENDING_PEARL_TRANSFER'
+          ? pearlTransferController.getPendingApproval(message.transactionId)
+          : message.type === 'APPROVE_PEARL_TRANSFER'
+            ? pearlTransferController.approve(message.transactionId, message.payloadFingerprint)
+            : message.type === 'REJECT_PEARL_TRANSFER'
+              ? pearlTransferController.reject(message.transactionId)
+              : pearlTransferController.resumeBroadcast(message.transactionId)
+    void operation
+      .then(result => {
+        if (['APPROVE_PEARL_TRANSFER', 'RESUME_PEARL_TRANSFER'].includes(message.type)) {
+          void chrome.alarms.create(PEARL_TRANSACTION_MONITOR_ALARM, { when: Date.now() + 100 })
+        }
+        sendResponse({ result })
+      })
+      .catch(error => {
+        sendResponse({ error: mapPearlWalletRuntimeError(error) })
       })
     return true
   }
@@ -5549,6 +5730,7 @@ function restoreZcashDAppPermissionsAfterUnlock(): void {
         }
         await evmDAppHandler.notifyAccountsChanged()
         await bitcoinDAppHandler.notifyAccountsChanged()
+        await pearlDAppHandler.notifyAccountsChanged()
         await solanaDAppHandler?.notifyAccountsChanged()
         await nearDAppHandler?.notifyAccountsChanged()
         await multichainSessionDAppHandler?.notifyAllSessionsChanged()
@@ -5599,6 +5781,7 @@ async function performWalletUnlock(password: string): Promise<any> {
         }
         const descriptor = await credentialSession.unlock(password, Date.now())
         if (!descriptor) throw new Error('No active Wallet credential was found')
+        await synchronizeCurrentSoftwareWalletNetworkMetadata()
         await Promise.all([
           SecureStorage.resetLoginAttempts(),
           SecureStorage.saveLastActivityTime()
@@ -5607,6 +5790,7 @@ async function performWalletUnlock(password: string): Promise<any> {
           dappHandler.notifyAccountsChanged([]),
           evmDAppHandler.notifyAccountsChanged(),
           bitcoinDAppHandler.notifyAccountsChanged(),
+          pearlDAppHandler.notifyAccountsChanged(),
           solanaDAppHandler?.notifyAccountsChanged(),
           nearDAppHandler?.notifyAccountsChanged(),
           multichainSessionDAppHandler?.notifyAllSessionsChanged()
@@ -6084,7 +6268,7 @@ async function synchronizeNativeActiveAccount(walletId: string, accountId: strin
 
 async function handleImportPrivateKeyWallet(input: {
   readonly privateKey: string
-  readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
   readonly displayName: string
 }) {
   syncScheduler.pauseForTx()

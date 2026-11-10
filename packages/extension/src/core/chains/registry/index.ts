@@ -52,6 +52,7 @@ export {
   createEvmBitcoinChainRegistry,
   createInitialProductChainRegistry,
   getBitcoinChainId,
+  getPearlChainId,
   getBundledBitcoinAssetDefinitions,
   getBundledInitialProductAssetDefinitions,
   getBundledEvmAssetDefinitions,

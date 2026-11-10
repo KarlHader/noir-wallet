@@ -382,7 +382,11 @@ interface ActivityRowTextPresentation {
   readonly subtitle: string
 }
 
-type ActivityRecoveryAction = 'retry-evm-broadcast' | 'retry-bitcoin-broadcast' | 'none'
+type ActivityRecoveryAction =
+  | 'retry-evm-broadcast'
+  | 'retry-bitcoin-broadcast'
+  | 'retry-pearl-broadcast'
+  | 'none'
 
 function hasSameAssetAmount(
   left: TransactionAssetAmount | undefined,
@@ -448,7 +452,8 @@ function hasSameSegmentTarget(
 export function getActivityRecoveryAction(
   item: ActivityItem,
   evmChainIds: readonly string[],
-  bitcoinChainId?: string
+  bitcoinChainId?: string,
+  pearlChainId?: string
 ): ActivityRecoveryAction {
   const segment = item.segments[0]
   const eligible =
@@ -480,6 +485,14 @@ export function getActivityRecoveryAction(
   ) {
     return 'retry-bitcoin-broadcast'
   }
+  if (
+    pearlChainId !== undefined &&
+    segment.target.chainId === pearlChainId &&
+    item.snapshot?.primaryAmount?.assetId.startsWith(`${pearlChainId}/`) === true &&
+    /^[0-9a-f]{64}$/.test(segment.evidence?.transactionHash ?? '')
+  ) {
+    return 'retry-pearl-broadcast'
+  }
   return 'none'
 }
 
@@ -507,13 +520,14 @@ export function isActivityRecoveryTransition(
   source: ActivityItem,
   next: ActivityItem,
   evmChainIds: readonly string[],
-  bitcoinChainId?: string
+  bitcoinChainId?: string,
+  pearlChainId?: string
 ): boolean {
   const sourceSegment = source.segments[0]
   const nextSegment = next.segments[0]
 
   return (
-    getActivityRecoveryAction(source, evmChainIds, bitcoinChainId) !== 'none' &&
+    getActivityRecoveryAction(source, evmChainIds, bitcoinChainId, pearlChainId) !== 'none' &&
     next.source === 'wallet-v2' &&
     next.id === source.id &&
     next.scope.keyDomainId === source.scope.keyDomainId &&

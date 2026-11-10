@@ -10,6 +10,8 @@ import {
   type EvmTypedDataSummary,
   type NearNep413MessageSummary,
   type NearTransactionSummary,
+  type PearlBip322MessageSummary,
+  type PearlPsbtSummary,
   type SolanaMessageSummary,
   type SolanaTransactionSummary
 } from '@/core/keyring/domain'
@@ -206,6 +208,30 @@ export function parseBitcoinSigningSummary(
     })
     if (operation === 'transaction' && summary.schema === 'bitcoin.psbt.v1') return summary
     if (operation === 'message' && summary.schema === 'bitcoin.bip322-message.v1') return summary
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function parsePearlSigningSummary(
+  value: unknown,
+  operation: 'transaction' | 'message'
+): PearlPsbtSummary | PearlBip322MessageSummary | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const chainId = Reflect.get(value, 'chainId')
+  if (typeof chainId !== 'string') return null
+
+  try {
+    const parsedChainId = parseChainId(chainId)
+    if (parsedChainId.namespace !== 'bip122') return null
+    const summary = parseSigningSummary(value, {
+      family: 'pearl',
+      chainId: parsedChainId.id,
+      operation
+    })
+    if (operation === 'transaction' && summary.schema === 'pearl.psbt.v1') return summary
+    if (operation === 'message' && summary.schema === 'pearl.bip322-message.v1') return summary
     return null
   } catch {
     return null

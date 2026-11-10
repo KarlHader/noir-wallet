@@ -6,6 +6,7 @@ Chain availability comes from the product registry, enabled feature flags, and r
 
 ## Reference Guides
 
+- [Pearl integration status and completion plan](pearl-integration.md): current implementation, blocking gaps, and verification gates.
 - [Transaction lifecycle and Activity](architecture/transaction-lifecycle.md): local transaction ownership, lifecycle transitions, remote history, cache fallback, and reconstruction.
 - [Confidential DeFi development](operations/private-defi-development.md): Main, private execution, abstract balances, configuration, and recovery.
 - [UI design conventions](design/ui-design-system.md): production tokens, components, viewport sizes, and design-to-code review.

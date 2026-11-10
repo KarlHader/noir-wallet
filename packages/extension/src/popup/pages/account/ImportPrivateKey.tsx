@@ -2,6 +2,7 @@ import { ANALYTICS_EVENTS, sendAnalyticsEvent } from '@/lib/analytics'
 import { getResponseErrorMessage } from '@/lib/errors'
 import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '@iconify/react'
+import { ChainIcon } from '../../components/common/ChainIcon'
 import { PageHeader } from '../../components/common/PageHeader'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -30,6 +31,13 @@ const FAMILY_PRESENTATION = Object.freeze({
     icon: 'token-branded:bitcoin',
     defaultName: 'Imported Bitcoin Wallet'
   },
+  pearl: {
+    label: 'Pearl',
+    description: 'Current Pearl network mode',
+    icon: 'pearl',
+    iconKind: 'chain',
+    defaultName: 'Imported Pearl Wallet'
+  },
   solana: {
     label: 'Solana',
     description: 'Solana Devnet in Testnet Mode',
@@ -42,7 +50,7 @@ const FAMILY_PRESENTATION = Object.freeze({
     icon: 'token-branded:near',
     defaultName: 'Imported NEAR Wallet'
   }
-} satisfies Record<PrivateKeyImportChainFamily, Record<string, string>>)
+} as const)
 
 const FAMILY_OPTIONS = privateKeyImportFamilyOptions(__ENABLED_CHAIN_FEATURE_FLAGS__)
 const AVAILABLE_FAMILIES = FAMILY_OPTIONS.filter(option => option.enabled).map(
@@ -211,7 +219,15 @@ export function ImportPrivateKey() {
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/5">
-                <Icon icon={presentation?.icon ?? 'lucide:circle-help'} width={24} height={24} />
+                {presentation && 'iconKind' in presentation && presentation.iconKind === 'chain' ? (
+                  <ChainIcon
+                    chain={presentation.icon}
+                    className="size-6 rounded-full"
+                    showTooltip={false}
+                  />
+                ) : (
+                  <Icon icon={presentation?.icon ?? 'lucide:circle-help'} width={24} height={24} />
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-muted">
@@ -232,7 +248,9 @@ export function ImportPrivateKey() {
             </div>
             {detection?.ambiguous && !familyOverride && (
               <p className="mt-3 text-xs leading-4 text-muted">
-                A 32-byte hex key can be used by multiple networks. Noir Wallet defaults it to EVM.
+                {detection.format === 'bitcoin-wif'
+                  ? 'This WIF encoding is shared by Bitcoin and Pearl. Choose the network this key came from.'
+                  : 'A 32-byte hex key can be used by multiple networks. Noir Wallet defaults it to EVM.'}
               </p>
             )}
             {showFamilyPicker && (

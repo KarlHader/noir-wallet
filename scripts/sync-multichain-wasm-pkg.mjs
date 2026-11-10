@@ -14,12 +14,12 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/multichain-wallet-wasm.git'
-const SOURCE_COMMIT = 'cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a'
-const ABI_VERSION = 'wallet-engine-cbd8ffb-v5'
+const SOURCE_COMMIT = 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
+const ABI_VERSION = 'wallet-engine-cb993e0-v11'
 const RUST_TOOLCHAIN = '1.96.1'
 const WASM_PACK_VERSION = '0.14.0'
 const WASM_BINDGEN_VERSION = '0.2.126'
-const LLVM_VERSION = '22.1.4'
+const LLVM_VERSION = '22.1.8'
 const CAPABILITIES = Object.freeze(
   [
     'account.bitcoin.batch-derive',
@@ -29,6 +29,10 @@ const CAPABILITIES = Object.freeze(
     'account.evm.imported',
     'account.near.derive',
     'account.near.imported',
+    'account.pea-v1.derive',
+    'account.pearl.batch-derive',
+    'account.pearl.derive',
+    'account.pearl.imported',
     'account.solana.derive',
     'account.solana.imported',
     'bitcoin.bip322.full.sign',
@@ -44,6 +48,7 @@ const CAPABILITIES = Object.freeze(
     'credential.import-private-key-bip122',
     'credential.import-private-key-eip155',
     'credential.import-private-key-near',
+    'credential.import-private-key-pearl',
     'credential.import-private-key-solana',
     'credential.passphrase-empty-only',
     'evm.eip191.sign',
@@ -55,6 +60,9 @@ const CAPABILITIES = Object.freeze(
     'near.nep413.sign',
     'near.nep413.verify',
     'near.transaction.sign',
+    'pearl.bip322.sign',
+    'pearl.bip322.verify',
+    'pearl.psbt-v0.sign',
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',

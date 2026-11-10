@@ -6,6 +6,7 @@ import {
   BITCOIN_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG
 } from '../../../../src/config/multichain-feature-flags.ts'
@@ -179,6 +180,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:196',
       'eip155:80094',
       'bip122:000000000019d6689c085ae165831e93',
+      'bip122:a18d3093b7ff618f0cdd073fa3d10374',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       'near:mainnet'
     ])
@@ -192,6 +194,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:80002',
       'eip155:43113',
       'bip122:000000000933ea01ad0ee984209779ba',
+      'bip122:b0c86d0cd8825f4d72260d2de46f4704',
       'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
       'near:testnet'
     ])
@@ -199,9 +202,19 @@ test.describe('initial multichain product definitions', () => {
       ZCASH_CHAIN_FEATURE_FLAG,
       ...Array(12).fill(EVM_CHAIN_FEATURE_FLAG),
       BITCOIN_CHAIN_FEATURE_FLAG,
+      PEARL_CHAIN_FEATURE_FLAG,
       SOLANA_CHAIN_FEATURE_FLAG,
       NEAR_CHAIN_FEATURE_FLAG
     ])
+    expect(mainnet.resolve('bip122:a18d3093b7ff618f0cdd073fa3d10374')).toMatchObject({
+      family: 'pearl',
+      namespace: 'bip122',
+      featureFlag: PEARL_CHAIN_FEATURE_FLAG,
+      capabilities: {
+        address: { status: 'available', addressSchemes: ['pearl_p2tr'] },
+        transaction: { status: 'available', model: 'utxo', actions: ['native-transfer'] }
+      }
+    })
     expect(mainnet.resolve('bip122:00040fe8ec8471911baa1db1266ea15d').capabilities).toMatchObject({
       address: { status: 'available', derivationSchemes: ['zip32-unified'] },
       transaction: { status: 'available', model: 'hybrid-utxo' }
@@ -289,6 +302,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:196/slip44:60',
       'eip155:80094/slip44:8008',
       'bip122:000000000019d6689c085ae165831e93/slip44:0',
+      'bip122:a18d3093b7ff618f0cdd073fa3d10374/slip44:808276',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/slip44:501',
       'near:mainnet/slip44:397'
     ])

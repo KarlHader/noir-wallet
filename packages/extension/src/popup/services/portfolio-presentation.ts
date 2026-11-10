@@ -95,13 +95,14 @@ function getChainFallbackRank(chain: PortfolioChainView): number {
   const label = `${chain.chain.family} ${chain.chain.displayName}`.toLowerCase()
   if (label.includes('zcash')) return 0
   if (label.includes('bitcoin')) return 1
-  if (label.includes('ethereum')) return 2
-  if (label.includes('solana')) return 3
-  if (label.includes('near')) return 4
-  if (label.includes('bnb') || label.includes('binance')) return 5
-  if (label.includes('arbitrum')) return 6
-  if (label.includes('optimism')) return 7
-  return 8
+  if (label.includes('pearl')) return 2
+  if (label.includes('ethereum')) return 3
+  if (label.includes('solana')) return 4
+  if (label.includes('near')) return 5
+  if (label.includes('bnb') || label.includes('binance')) return 6
+  if (label.includes('arbitrum')) return 7
+  if (label.includes('optimism')) return 8
+  return 9
 }
 
 export function getPortfolioChainUsdValue(

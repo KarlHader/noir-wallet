@@ -121,6 +121,11 @@ export default defineConfig({
       ]
     },
     {
+      name: 'pearl-testnet',
+      outputDir: '../../e2e-output/pearl-testnet',
+      testMatch: ['extension/pearl-dapp-provider-testnet.spec.ts']
+    },
+    {
       name: 'bitcoin-testnet-live',
       outputDir: '../../e2e-output/bitcoin-testnet-live',
       testMatch: ['live/extension/bitcoin-transfer-live-testnet.spec.ts'],

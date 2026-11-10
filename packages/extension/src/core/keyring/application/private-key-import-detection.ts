@@ -1,4 +1,4 @@
-export type PrivateKeyImportChainFamily = 'eip155' | 'bip122' | 'solana' | 'near'
+export type PrivateKeyImportChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
 
 export interface PrivateKeyImportDetection {
   readonly chainFamily: PrivateKeyImportChainFamily
@@ -39,7 +39,8 @@ export function detectPrivateKeyImport(value: string): PrivateKeyImportDetection
     return Object.freeze({
       chainFamily: 'bip122',
       format: 'bitcoin-wif',
-      ambiguous: false
+      // Pearl reuses Bitcoin WIF encoding; the importer must choose the network family.
+      ambiguous: true
     })
   }
   if (NEAR_PRIVATE_KEY.test(candidate)) {

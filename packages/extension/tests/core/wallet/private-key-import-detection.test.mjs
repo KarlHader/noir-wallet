@@ -6,11 +6,11 @@ import { detectPrivateKeyImport } from '../../../src/core/keyring/application/pr
 const HEX_KEY = '00'.repeat(31) + '01'
 
 test.describe('private-key import detection', () => {
-  test('detects Bitcoin compressed WIF without asking for a network', () => {
+  test('requires a chain-family choice for compressed WIF shared by Bitcoin and Pearl', () => {
     expect(detectPrivateKeyImport('KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn')).toEqual({
       chainFamily: 'bip122',
       format: 'bitcoin-wif',
-      ambiguous: false
+      ambiguous: true
     })
   })
 

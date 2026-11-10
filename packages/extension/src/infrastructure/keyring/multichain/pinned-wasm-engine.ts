@@ -1,8 +1,8 @@
 import init, { WalletEngine } from '../../generated/wasm/multichain/wallet_wasm.js'
 import manifest from '../../generated/wasm/multichain/wasm-integrity.json'
 
-export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-cbd8ffb-v5'
-export const PINNED_MULTICHAIN_SOURCE_COMMIT = 'cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a'
+export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-cb993e0-v11'
+export const PINNED_MULTICHAIN_SOURCE_COMMIT = 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
 export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
   [
     'account.bitcoin.batch-derive',
@@ -13,6 +13,9 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'account.near.derive',
     'account.near.imported',
     'account.pea-v1.derive',
+    'account.pearl.batch-derive',
+    'account.pearl.derive',
+    'account.pearl.imported',
     'account.solana.derive',
     'account.solana.imported',
     'bitcoin.bip322.full.sign',
@@ -28,6 +31,7 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'credential.import-private-key-bip122',
     'credential.import-private-key-eip155',
     'credential.import-private-key-near',
+    'credential.import-private-key-pearl',
     'credential.import-private-key-solana',
     'credential.passphrase-empty-only',
     'evm.eip191.sign',
@@ -39,6 +43,9 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'near.nep413.sign',
     'near.nep413.verify',
     'near.transaction.sign',
+    'pearl.bip322.sign',
+    'pearl.bip322.verify',
+    'pearl.psbt-v0.sign',
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',

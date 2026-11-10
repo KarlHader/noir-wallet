@@ -14,6 +14,7 @@ import {
 } from './signing-summary'
 import { parseBitcoinSummary } from './signing-summary-validation-bitcoin'
 import { parseNearSummary } from './signing-summary-validation-near'
+import { parsePearlSummary } from './signing-summary-validation-pearl'
 import { parseSolanaSummary } from './signing-summary-validation-solana'
 import { parseTronSummary } from './signing-summary-validation-tron'
 import { parseEvmSummary, parseZcashSummary } from './signing-summary-validation-zcash-evm'
@@ -30,6 +31,7 @@ const FAMILY_NAMESPACES: Readonly<Record<SigningSummaryFamily, string>> = Object
   zcash: 'bip122',
   evm: 'eip155',
   bitcoin: 'bip122',
+  pearl: 'bip122',
   solana: 'solana',
   tron: 'tron',
   near: 'near'
@@ -65,6 +67,8 @@ export const SCHEMA_EXPECTATIONS: Readonly<
   'evm.typed-data.v1': Object.freeze({ family: 'evm', operation: 'message' }),
   'bitcoin.psbt.v1': Object.freeze({ family: 'bitcoin', operation: 'transaction' }),
   'bitcoin.bip322-message.v1': Object.freeze({ family: 'bitcoin', operation: 'message' }),
+  'pearl.psbt.v1': Object.freeze({ family: 'pearl', operation: 'transaction' }),
+  'pearl.bip322-message.v1': Object.freeze({ family: 'pearl', operation: 'message' }),
   'solana.transaction.v1': Object.freeze({ family: 'solana', operation: 'transaction' }),
   'solana.message.v1': Object.freeze({ family: 'solana', operation: 'message' }),
   'tron.transaction.v1': Object.freeze({ family: 'tron', operation: 'transaction' }),
@@ -414,6 +418,8 @@ export function parseSigningSummary(
       return parseEvmSummary(envelope)
     case 'bitcoin':
       return parseBitcoinSummary(envelope)
+    case 'pearl':
+      return parsePearlSummary(envelope)
     case 'solana':
       return parseSolanaSummary(envelope)
     case 'tron':

@@ -31,7 +31,7 @@ function envelope(schema, chainId, operation, fields, review = { level: 'standar
 test.describe('Chain-specific signing summaries', () => {
   test('freezes the versioned schema registry', () => {
     expect(Object.isFrozen(SIGNING_SUMMARY_SCHEMAS)).toBe(true)
-    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(13)
+    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(15)
   })
 
   test('rejects schema, chain, operation, and unknown-field mismatches', () => {

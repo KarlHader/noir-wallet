@@ -1,4 +1,4 @@
-type DAppFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain'
+type DAppFamily = 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
 
 export const BETA_INVITE_REQUIRED_MESSAGE = 'Activate Noir Wallet Beta before using this wallet.'
 
@@ -20,7 +20,8 @@ export function resolveUnactivatedBetaDAppRequest(
   }
   if (
     (family === 'evm' && method === 'eth_accounts') ||
-    ((family === 'bitcoin' || family === 'solana' || family === 'near') && method === 'getAccounts')
+    ((family === 'bitcoin' || family === 'pearl' || family === 'solana' || family === 'near') &&
+      method === 'getAccounts')
   ) {
     return { kind: 'silent', result: [] }
   }

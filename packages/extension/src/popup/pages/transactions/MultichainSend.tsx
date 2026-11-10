@@ -42,6 +42,9 @@ import type { SolanaTransferSubmission } from '@/popup/services/solana-wallet-cl
 import { NearSendForm } from './NearSendForm'
 import { NearTransactionResult } from './NearTransactionResult'
 import type { NearTransferSubmission } from '@/popup/services/near-wallet-client'
+import { PearlSendForm } from './PearlSendForm'
+import { PearlTransactionResult } from './PearlTransactionResult'
+import type { PearlTransferSubmission } from '@/popup/services/pearl-wallet-client'
 import {
   isPortfolioModelForScope,
   readCachedPortfolio,
@@ -56,6 +59,7 @@ import { prefetchEvmSendCatalogs } from '@/popup/services/evm-send-catalog'
 type SendSubmission =
   | Readonly<{ family: 'evm'; value: EvmTransferSubmission }>
   | Readonly<{ family: 'bitcoin'; value: BitcoinTransferSubmission }>
+  | Readonly<{ family: 'pearl'; value: PearlTransferSubmission }>
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
 
@@ -491,6 +495,7 @@ export function MultichainSend() {
         isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
         (chain.chain.family === 'evm' ||
           chain.chain.family === 'bitcoin' ||
+          chain.chain.family === 'pearl' ||
           chain.chain.family === 'solana' ||
           chain.chain.family === 'near') &&
         chain.chain.capabilities.transaction.status === 'available'
@@ -592,6 +597,23 @@ export function MultichainSend() {
   if (submission?.family === 'bitcoin' && selection?.chain.chain.family === 'bitcoin') {
     return (
       <BitcoinTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
+
+  if (submission?.family === 'pearl' && selection?.chain.chain.family === 'pearl') {
+    return (
+      <PearlTransactionResult
         asset={selection.asset}
         chain={selection.chain}
         submission={submission.value}
@@ -711,6 +733,12 @@ export function MultichainSend() {
           selection={selection}
           priceUsd={availableUsdPrice(selection.asset, assetPrices)}
           onSubmitted={value => setSubmission({ family: 'bitcoin', value })}
+        />
+      ) : selection?.chain.chain.family === 'pearl' ? (
+        <PearlSendForm
+          selection={selection}
+          priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+          onSubmitted={value => setSubmission({ family: 'pearl', value })}
         />
       ) : selection?.chain.chain.family === 'solana' ? (
         <SolanaSendForm

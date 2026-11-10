@@ -85,6 +85,19 @@ const input = {
     publicKey: `0x02${'11'.repeat(32)}`,
     masterFingerprint: '0x12345678'
   },
+  pearl: {
+    chainId: 'bip122:b0c86d0cd8825f4d72260d2de46f4704',
+    address: 'tprl1ptestfixture0001',
+    accountIndex: 0,
+    change: false,
+    addressIndex: 0,
+    derivationPath: "m/86'/1'/0'/0/0",
+    publicKey: `0x02${'22'.repeat(32)}`,
+    masterFingerprint: '0x12345678',
+    scriptPubKey: `0x5120${'33'.repeat(32)}`,
+    addressScheme: 'pearl_p2tr',
+    derivationScheme: 'bip86'
+  },
   solana: {
     chainId: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
     address: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk',
@@ -105,7 +118,7 @@ const input = {
 }
 
 test.describe('Network Account metadata coordinator', () => {
-  test('adds target Zcash, Bitcoin, Solana and NEAR ChainAccounts atomically and idempotently', async () => {
+  test('adds target Zcash, Bitcoin, Pearl, Solana and NEAR ChainAccounts atomically and idempotently', async () => {
     const repository = repositories()
     const coordinator = new NetworkAccountMetadataCoordinator({
       storageRepository: repository.storage,
@@ -116,19 +129,30 @@ test.describe('Network Account metadata coordinator', () => {
     })
     await expect(coordinator.synchronize([input])).resolves.toMatchObject({
       status: 'synchronized',
-      addedChainAccounts: 4
+      addedChainAccounts: 5
     })
     const active = repository.readActive()
     expect(active.chainAccounts.map(account => account.scope.chainId).sort()).toEqual([
       'bip122:000000000933ea01ad0ee984209779ba',
       'bip122:05a60a92d99d85997cce3b87616c089f',
+      'bip122:b0c86d0cd8825f4d72260d2de46f4704',
       'near:testnet',
       'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
     ])
-    expect(active.addresses).toHaveLength(7)
+    expect(active.addresses).toHaveLength(8)
     expect(
-      active.addresses.filter(address => address.scheme === 'solana' || address.scheme === 'near')
+      active.addresses.filter(
+        address =>
+          address.scheme === 'pearl_p2tr' ||
+          address.scheme === 'solana' ||
+          address.scheme === 'near'
+      )
     ).toEqual([
+      expect.objectContaining({
+        scheme: 'pearl_p2tr',
+        value: input.pearl.address,
+        preferredForReceive: true
+      }),
       expect.objectContaining({
         scheme: 'solana',
         value: input.solana.address,
@@ -202,5 +226,10 @@ test.describe('Network Account metadata coordinator', () => {
         { ...input, solana: { ...input.solana, derivationPath: "m/44'/501'/1'/0'" } }
       ])
     ).rejects.toThrow('solana derivation index mismatch')
+    await expect(
+      coordinator.synchronize([
+        { ...input, pearl: { ...input.pearl, derivationPath: "m/86'/1'/1'/0/0" } }
+      ])
+    ).rejects.toThrow('Pearl derivation index mismatch')
   })
 })

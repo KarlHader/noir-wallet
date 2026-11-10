@@ -56,6 +56,7 @@ import { getEvmNetworkConfig } from '@/config/networks'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   getBitcoinChainId,
+  getPearlChainId,
   getZcashChainId,
   parseChainId,
   type ChainDefinition
@@ -760,6 +761,7 @@ export class CredentialLifecycleCoordinator {
       if (
         (scope.chainFamily === 'eip155' && !chainId.startsWith('eip155:')) ||
         (scope.chainFamily === 'bip122' && chainId !== getBitcoinChainId(scope.bitcoinNetwork)) ||
+        (scope.chainFamily === 'pearl' && chainId !== getPearlChainId(scope.pearlNetwork)) ||
         (scope.chainFamily === 'solana' && !chainId.startsWith('solana:')) ||
         (scope.chainFamily === 'near' && !chainId.startsWith('near:'))
       ) {
@@ -800,30 +802,39 @@ export class CredentialLifecycleCoordinator {
             chainId,
             addressIndex: account.accountIndex
           }
-        : chainId.startsWith('bip122:')
+        : chainId === getPearlChainId('mainnet') || chainId === getPearlChainId('testnet')
           ? {
               vault: parsedVault,
               password: input.password,
               chainId,
-              addressType:
-                input.bitcoinAddressType === 'p2sh-p2wpkh'
-                  ? 'p2sh_p2wpkh'
-                  : (input.bitcoinAddressType ?? 'p2wpkh'),
               accountIndex: account.accountIndex,
               change: false,
               addressIndex: 0
             }
-          : chainId.startsWith('solana:') || chainId.startsWith('near:')
+          : chainId.startsWith('bip122:')
             ? {
                 vault: parsedVault,
                 password: input.password,
                 chainId,
+                addressType:
+                  input.bitcoinAddressType === 'p2sh-p2wpkh'
+                    ? 'p2sh_p2wpkh'
+                    : (input.bitcoinAddressType ?? 'p2wpkh'),
                 accountIndex: account.accountIndex,
+                change: false,
                 addressIndex: 0
               }
-            : (() => {
-                throw new Error('Private-key export does not support this chain')
-              })()
+            : chainId.startsWith('solana:') || chainId.startsWith('near:')
+              ? {
+                  vault: parsedVault,
+                  password: input.password,
+                  chainId,
+                  accountIndex: account.accountIndex,
+                  addressIndex: 0
+                }
+              : (() => {
+                  throw new Error('Private-key export does not support this chain')
+                })()
       return await commandClient.execute(
         {
           operation: 'credential.export-private-key',

@@ -20,7 +20,14 @@ export const ANALYTICS_PROJECT_ID = 'noir_wallet'
 
 /** Legacy default for call sites without a chain family. */
 export const ANALYTICS_CHAIN = 'zcash'
-export const ANALYTICS_CHAIN_FAMILIES = ['zcash', 'evm', 'bitcoin', 'solana', 'near'] as const
+export const ANALYTICS_CHAIN_FAMILIES = [
+  'zcash',
+  'evm',
+  'bitcoin',
+  'pearl',
+  'solana',
+  'near'
+] as const
 export type AnalyticsChainFamily = (typeof ANALYTICS_CHAIN_FAMILIES)[number]
 export type AnalyticsChain = AnalyticsChainFamily
 

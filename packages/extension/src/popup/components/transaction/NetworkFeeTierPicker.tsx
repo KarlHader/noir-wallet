@@ -15,7 +15,7 @@ import { classifyError } from '@/lib/errors'
 import { InlineError } from '@/popup/components/common/InlineError'
 
 interface NetworkFeeTierPickerProps {
-  readonly chainFamily: 'bitcoin' | 'evm'
+  readonly chainFamily: 'bitcoin' | 'pearl' | 'evm'
   readonly tier: NetworkFeeTier
   readonly selection?: EvmFeeSelection
   readonly amount: string
@@ -84,7 +84,7 @@ function NetworkFeeTierEditContent({
   onSelect,
   close
 }: {
-  readonly chainFamily: 'bitcoin' | 'evm'
+  readonly chainFamily: 'bitcoin' | 'pearl' | 'evm'
   readonly selection: EvmFeeSelection
   readonly allowCustom: boolean
   readonly onSelect: (selection: EvmFeeSelection) => void | Promise<void>

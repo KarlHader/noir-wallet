@@ -57,6 +57,7 @@ import {
   parseEvmPrivateTransferApproval,
   parseEvmTransactionSummary,
   parseNativeSigningSummary,
+  parsePearlSigningSummary,
   resolveDAppFaviconPageUrl
 } from '@/popup/services/dapp-approval-summary'
 
@@ -87,6 +88,7 @@ const MULTI_ACCOUNT_CONNECT_ACTIONS = new Set([
   'connect',
   'evmConnect',
   'bitcoinConnect',
+  'pearlConnect',
   'solanaConnect',
   'nearConnect'
 ])
@@ -221,6 +223,9 @@ export function ApprovalPage() {
   const isBitcoinConnect = action === 'bitcoinConnect'
   const isBitcoinTransaction = action === 'bitcoinTransaction'
   const isBitcoinMessage = action === 'bitcoinMessage'
+  const isPearlConnect = action === 'pearlConnect'
+  const isPearlTransaction = action === 'pearlTransaction'
+  const isPearlMessage = action === 'pearlMessage'
   const isSolanaConnect = action === 'solanaConnect'
   const isSolanaTransaction = action === 'solanaTransaction'
   const isSolanaMessage = action === 'solanaMessage'
@@ -246,6 +251,11 @@ export function ApprovalPage() {
     ? parseBitcoinSigningSummary(data.review?.summary, 'transaction')
     : isBitcoinMessage
       ? parseBitcoinSigningSummary(data.review?.summary, 'message')
+      : null
+  const pearlSigningSummary = isPearlTransaction
+    ? parsePearlSigningSummary(data.review?.summary, 'transaction')
+    : isPearlMessage
+      ? parsePearlSigningSummary(data.review?.summary, 'message')
       : null
   const nativeSigningSummary =
     isSolanaTransaction || isSolanaMessage
@@ -828,6 +838,7 @@ export function ApprovalPage() {
       }
 
       case 'bitcoinConnect':
+      case 'pearlConnect':
       case 'solanaConnect':
       case 'nearConnect':
       case 'evmConnect': {
@@ -1004,6 +1015,13 @@ export function ApprovalPage() {
         return renderInvalidSigningRequest(
           'The request did not include a valid, immutable Bitcoin signing summary.',
           action === 'bitcoinMessage'
+        )
+
+      case 'pearlTransaction':
+      case 'pearlMessage':
+        return renderInvalidSigningRequest(
+          'The request did not include a valid, immutable Pearl signing summary.',
+          action === 'pearlMessage'
         )
 
       case 'connect': {
@@ -1528,6 +1546,41 @@ export function ApprovalPage() {
     )
   }
 
+  if (pearlSigningSummary) {
+    const address =
+      pearlSigningSummary.schema === 'pearl.psbt.v1'
+        ? pearlSigningSummary.fields.signer
+        : pearlSigningSummary.fields.address
+    return (
+      <SigningSummaryReview
+        summary={pearlSigningSummary}
+        chainName="Pearl"
+        iconChain="pearl"
+        networkName={typeof data.chainName === 'string' ? data.chainName : 'Unknown network'}
+        accountName={accountDisplayName}
+        accountAddress={address}
+        source={{ kind: 'dapp', domain: dappDomain, pageUrl: dappPageUrl }}
+        isSubmitting={isLoading}
+        feeControl={
+          isPearlTransaction &&
+          pearlSigningSummary.schema === 'pearl.psbt.v1' &&
+          data.feeEditingAvailable ? (
+            <NetworkFeeTierPicker
+              chainFamily="pearl"
+              tier={dappNetworkFeeTier}
+              amount={formatBaseUnitDecimalAmount(pearlSigningSummary.fields.feeSats, 8)}
+              symbol="PRL"
+              onTierChange={handleNetworkFeeTierChange}
+              disabled={isLoading}
+            />
+          ) : undefined
+        }
+        onReject={() => void handleDecision(false)}
+        onConfirm={() => void handleDecision(true)}
+      />
+    )
+  }
+
   if (nativeSigningSummary) {
     const solana = nativeSigningSummary.schema.startsWith('solana.')
     const address =
@@ -1575,6 +1628,7 @@ export function ApprovalPage() {
               (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
+              ((isPearlTransaction || isPearlMessage) && pearlSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&
                 nativeSigningSummary === null) ||
               (MULTI_ACCOUNT_CONNECT_ACTIONS.has(action) &&
@@ -1604,19 +1658,23 @@ export function ApprovalPage() {
                         : 'Switch Network'
                       : isBitcoinConnect
                         ? 'Connect'
-                        : isSolanaConnect || isNearConnect
+                        : isPearlConnect
                           ? 'Connect'
-                          : isEvmTransaction
-                            ? 'Confirm'
-                            : isEvmMessage
-                              ? 'Sign message'
-                              : isSolanaMessage || isNearMessage
+                          : isSolanaConnect || isNearConnect
+                            ? 'Connect'
+                            : isEvmTransaction
+                              ? 'Confirm'
+                              : isEvmMessage
                                 ? 'Sign message'
-                                : action === 'signMessage'
+                                : isSolanaMessage || isNearMessage
                                   ? 'Sign message'
-                                  : action === 'sendTransaction' || action === 'shieldFunds'
-                                    ? 'Confirm'
-                                    : 'Approve'}
+                                  : isPearlMessage
+                                    ? 'Sign message'
+                                    : action === 'signMessage'
+                                      ? 'Sign message'
+                                      : action === 'sendTransaction' || action === 'shieldFunds'
+                                        ? 'Confirm'
+                                        : 'Approve'}
           </Button>
         </div>
       }

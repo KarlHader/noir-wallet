@@ -1,10 +1,20 @@
+import { getBitcoinChainId, getPearlChainId } from '@/core/chains/registry'
 import type { TransactionGraph } from './domain'
 
-export type TransactionAnalyticsFamily = 'evm' | 'bitcoin' | 'solana' | 'near'
+export type TransactionAnalyticsFamily = 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near'
 
 export function transactionAnalyticsFamily(chainId: string): TransactionAnalyticsFamily | null {
   if (chainId.startsWith('eip155:')) return 'evm'
-  if (chainId.startsWith('bip122:')) return 'bitcoin'
+  if (chainId === getPearlChainId('mainnet') || chainId === getPearlChainId('testnet')) {
+    return 'pearl'
+  }
+  if (
+    chainId === getBitcoinChainId('mainnet') ||
+    chainId === getBitcoinChainId('testnet') ||
+    chainId.startsWith('bip122:')
+  ) {
+    return 'bitcoin'
+  }
   if (chainId.startsWith('solana:')) return 'solana'
   if (chainId.startsWith('near:')) return 'near'
   return null

@@ -148,7 +148,9 @@ function AddressRow({
   const zcashType: AddressType | null =
     network.chain.family === 'zcash' && address.privacy !== 'mixed' ? address.privacy : null
   const bitcoinType =
-    network.chain.family === 'bitcoin' ? accountNetworkAddressLabel(network, address) : null
+    network.chain.family === 'bitcoin' || network.chain.family === 'pearl'
+      ? accountNetworkAddressLabel(network, address)
+      : null
 
   return (
     <div className="flex min-h-8 min-w-0 items-center gap-2">

@@ -9,14 +9,15 @@ import {
 import { bytesToHex } from '@/lib/bytes'
 import { commitCredentialBoundStorageV2Pointer } from '@/core/keyring/application'
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
-import { parseChainId } from '@/core/chains/registry'
 import type { DerivedBitcoinAddress } from '@/core/chains/bitcoin'
 import {
   nearImplicitAccountIdFromPublicKey,
   parseNearAccountId,
   parseNearPublicKey
 } from '@/core/chains/near'
+import { parseSupportedPearlAddress, type DerivedPearlAddress } from '@/core/chains/pearl'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
+import { getPearlChainId, parseChainId } from '@/core/chains/registry'
 import type { AccountAddresses, Network } from '@/types'
 import {
   parseStorageV2GenerationId,
@@ -38,6 +39,7 @@ export interface NetworkAccountMetadataInput {
   readonly zcashChainId: string
   readonly zcashAddresses: AccountAddresses
   readonly bitcoin: DerivedBitcoinAddress
+  readonly pearl?: DerivedPearlAddress
   readonly solana?: DerivedEd25519NetworkAccount
   readonly near?: DerivedEd25519NetworkAccount
 }
@@ -124,6 +126,8 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
   ) {
     throw new Error('Network Account metadata contains incomplete default receive addresses')
   }
+  const pearl =
+    value.pearl === undefined ? undefined : normalizePearlAccount(value.pearl, accountIndex)
   const solana =
     value.solana === undefined
       ? undefined
@@ -137,8 +141,54 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
     accountIndex,
     zcashChainId,
     bitcoin: Object.freeze({ ...value.bitcoin, chainId: bitcoinChainId }),
+    ...(pearl === undefined ? {} : { pearl }),
     ...(solana === undefined ? {} : { solana }),
     ...(near === undefined ? {} : { near })
+  })
+}
+
+function normalizePearlAccount(
+  value: DerivedPearlAddress,
+  accountIndex: number
+): DerivedPearlAddress {
+  const chainId = parseChainId(value.chainId).id
+  if (chainId !== getPearlChainId('mainnet') && chainId !== getPearlChainId('testnet')) {
+    throw new Error('Network Account metadata requires a Pearl chain')
+  }
+  const coinType = chainId === getPearlChainId('mainnet') ? 808276 : 1
+  const expectedPath = `m/86'/${coinType}'/${accountIndex}'/0/0`
+  if (
+    value.accountIndex !== accountIndex ||
+    value.change ||
+    value.addressIndex !== 0 ||
+    value.addressScheme !== 'pearl_p2tr' ||
+    value.derivationScheme !== 'bip86' ||
+    value.derivationPath !== expectedPath
+  ) {
+    throw new Error('Network Account metadata Pearl derivation index mismatch')
+  }
+  const address = parseSupportedPearlAddress(value.address, chainId)
+  if (!/^0x0[23][0-9a-f]{64}$/.test(value.publicKey)) {
+    throw new Error('Network Account metadata Pearl public key is invalid')
+  }
+  if (!/^0x[0-9a-f]{8}$/.test(value.masterFingerprint)) {
+    throw new Error('Network Account metadata Pearl fingerprint is invalid')
+  }
+  if (!/^0x[0-9a-f]+$/.test(value.scriptPubKey) || value.scriptPubKey.length < 4) {
+    throw new Error('Network Account metadata Pearl scriptPubKey is invalid')
+  }
+  return Object.freeze({
+    chainId,
+    address,
+    accountIndex,
+    change: false,
+    addressIndex: 0,
+    derivationPath: expectedPath,
+    publicKey: value.publicKey,
+    masterFingerprint: value.masterFingerprint,
+    scriptPubKey: value.scriptPubKey,
+    addressScheme: 'pearl_p2tr' as const,
+    derivationScheme: 'bip86' as const
   })
 }
 
@@ -351,6 +401,35 @@ export class NetworkAccountMetadataCoordinator {
               }
             ]
           },
+          ...(input.pearl === undefined
+            ? []
+            : [
+                {
+                  chainId: input.pearl.chainId,
+                  role: `pearl:${input.pearl.chainId}`,
+                  derivation: {
+                    scheme: input.pearl.derivationScheme,
+                    path: input.pearl.derivationPath
+                  },
+                  identity: input.pearl.address,
+                  addresses: [
+                    {
+                      role: 'receive-0',
+                      value: input.pearl.address,
+                      scheme: input.pearl.addressScheme,
+                      purpose: 'receive' as const,
+                      derivation: {
+                        scheme: input.pearl.derivationScheme,
+                        path: input.pearl.derivationPath
+                      },
+                      rotatable: true,
+                      preferredForReceive: true,
+                      privacy: 'transparent' as const,
+                      walletCompatibility: 'broad' as const
+                    }
+                  ]
+                }
+              ]),
           ...(input.solana === undefined
             ? []
             : [

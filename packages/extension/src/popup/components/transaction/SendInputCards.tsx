@@ -210,7 +210,7 @@ export function SendAssetHeader({
   readonly symbol: string
   readonly icon?: string
   readonly networkName: string
-  readonly nativeChain?: 'zcash' | 'bitcoin' | 'solana' | 'near'
+  readonly nativeChain?: 'zcash' | 'bitcoin' | 'pearl' | 'solana' | 'near'
   readonly blockchain?: string
 }) {
   return (

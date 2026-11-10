@@ -11,6 +11,7 @@ import {
 } from '@/core/portfolio'
 import type { ActiveEvmPortfolioSource } from '@/infrastructure/chains/evm'
 import type { ActiveBitcoinPortfolioSource } from '@/infrastructure/chains/bitcoin'
+import type { ActivePearlPortfolioSource } from '@/infrastructure/chains/pearl'
 import type { ActiveSingleChainPortfolioSource } from './single-chain-portfolio-coordinator'
 import { readZcashPortfolioSource } from '@/infrastructure/chains/zcash'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
@@ -45,6 +46,11 @@ export interface BitcoinPortfolioSourceReader {
   readonly refreshActiveSource: () => Promise<ActiveBitcoinPortfolioSource | null>
 }
 
+export interface PearlPortfolioSourceReader {
+  readonly readCachedActiveSource: () => Promise<ActivePearlPortfolioSource | null>
+  readonly refreshActiveSource: () => Promise<ActivePearlPortfolioSource | null>
+}
+
 export interface SingleChainPortfolioSourceReader {
   readonly readCachedActiveSource: () => Promise<ActiveSingleChainPortfolioSource | null>
   readonly refreshActiveSource: () => Promise<ActiveSingleChainPortfolioSource | null>
@@ -56,10 +62,13 @@ export interface UnifiedPortfolioCoordinatorOptions {
   readonly assets: AssetRegistry
   readonly evmPortfolios?: readonly EvmPortfolioSourceRegistration[]
   readonly bitcoinPortfolio?: BitcoinPortfolioSourceReader
+  readonly pearlPortfolio?: PearlPortfolioSourceReader
   readonly solanaPortfolio?: SingleChainPortfolioSourceReader
   readonly nearPortfolio?: SingleChainPortfolioSourceReader
   readonly onBackgroundBitcoinRefreshError?: (error: unknown) => void
   readonly onBackgroundBitcoinRefreshSettled?: (source: ActiveBitcoinPortfolioSource | null) => void
+  readonly onBackgroundPearlRefreshError?: (error: unknown) => void
+  readonly onBackgroundPearlRefreshSettled?: (source: ActivePearlPortfolioSource | null) => void
   readonly readZcashState: (scope: {
     readonly keyDomainId: KeyDomainId
     readonly accountId: AccountId
@@ -71,6 +80,7 @@ export const PORTFOLIO_COORDINATOR_STAGES = Object.freeze([
   'zcash-source',
   'evm-source',
   'bitcoin-source',
+  'pearl-source',
   'solana-source',
   'near-source',
   'read-model'
@@ -127,7 +137,9 @@ function sameActiveScope(
   )
 }
 
-function sourceUpdatedAt(source: ActiveBitcoinPortfolioSource): number {
+function sourceUpdatedAt(
+  source: ActiveBitcoinPortfolioSource | ActivePearlPortfolioSource
+): number {
   return source.source.balances.reduce((latest, balance) => Math.max(latest, balance.updatedAt), 0)
 }
 
@@ -158,6 +170,7 @@ async function mapWithConcurrency<T, R>(
 export class UnifiedPortfolioCoordinator {
   private readonly options: UnifiedPortfolioCoordinatorOptions
   private backgroundBitcoinSource: ActiveBitcoinPortfolioSource | null = null
+  private backgroundPearlSource: ActivePearlPortfolioSource | null = null
 
   constructor(options: UnifiedPortfolioCoordinatorOptions) {
     this.options = options
@@ -271,6 +284,33 @@ export class UnifiedPortfolioCoordinator {
       }
     }
 
+    const pearlAccount = active.availableChainAccounts.find(item => item.chain.family === 'pearl')
+    if (pearlAccount) {
+      const pearlPortfolio = this.options.pearlPortfolio
+      if (!pearlPortfolio) {
+        throw new Error('Enabled Pearl Portfolio source is unavailable')
+      }
+      const pearlSource = await atStage('pearl-source', () =>
+        shouldRefreshChain(pearlAccount.chain.id)
+          ? this.refreshPearlInBackground(pearlPortfolio)
+          : this.readPearlSource(pearlPortfolio)
+      )
+      if (!pearlSource) {
+        if (action !== 'read') return null
+        sources.push(uncachedSource(pearlAccount.chainAccount))
+      } else {
+        if (
+          !sameActiveScope(pearlSource, active.generationId, scope.keyDomainId, scope.accountId)
+        ) {
+          return null
+        }
+        if (pearlSource.chainAccount.id !== pearlAccount.chainAccount.id) {
+          throw new Error('Pearl Portfolio source does not match the active ChainAccount')
+        }
+        sources.push(pearlSource.source)
+      }
+    }
+
     const solanaAccount = active.availableChainAccounts.find(item => item.chain.family === 'solana')
     const nearAccount = active.availableChainAccounts.find(item => item.chain.family === 'near')
     const [solanaSource, nearSource] = await Promise.all([
@@ -361,5 +401,38 @@ export class UnifiedPortfolioCoordinator {
         this.options.onBackgroundBitcoinRefreshError?.(error)
       })
     return this.readBitcoinSource(bitcoinPortfolio)
+  }
+
+  private async readPearlSource(
+    pearlPortfolio: PearlPortfolioSourceReader
+  ): Promise<ActivePearlPortfolioSource | null> {
+    const cached = await pearlPortfolio.readCachedActiveSource()
+    const background = this.backgroundPearlSource
+    const useBackground = Boolean(
+      cached &&
+      background &&
+      background.generationId === cached.generationId &&
+      background.chainAccount.id === cached.chainAccount.id &&
+      sourceUpdatedAt(background) >= sourceUpdatedAt(cached)
+    )
+    if (useBackground && background) {
+      return background
+    }
+    return cached
+  }
+
+  private refreshPearlInBackground(
+    pearlPortfolio: PearlPortfolioSourceReader
+  ): Promise<ActivePearlPortfolioSource | null> {
+    void pearlPortfolio
+      .refreshActiveSource()
+      .then(source => {
+        this.backgroundPearlSource = source
+        this.options.onBackgroundPearlRefreshSettled?.(source)
+      })
+      .catch(error => {
+        this.options.onBackgroundPearlRefreshError?.(error)
+      })
+    return this.readPearlSource(pearlPortfolio)
   }
 }

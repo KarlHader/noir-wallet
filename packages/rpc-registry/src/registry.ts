@@ -6,6 +6,7 @@ export type RpcProbeKind =
   | 'zcash-lightwalletd-grpc-web'
   | 'evm-json-rpc'
   | 'bitcoin-esplora'
+  | 'pearl-blockbook'
   | 'solana-json-rpc'
   | 'near-json-rpc'
 
@@ -237,6 +238,17 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
         ['mempool-space', 'mempool.space', 'https://mempool.space/testnet/api/'],
         ['blockstream-info', 'Blockstream', 'https://blockstream.info/testnet/api/']
       ]
+    ),
+    chain('bip122:a18d3093b7ff618f0cdd073fa3d10374', MAINNET, 'Pearl', 'pearl', 'pearl-blockbook', [
+      ['blockbook', 'Blockbook', 'https://blockbook.pearlresearch.ai/api/v2']
+    ]),
+    chain(
+      'bip122:b0c86d0cd8825f4d72260d2de46f4704',
+      TESTNET,
+      'Pearl Testnet',
+      'pearl',
+      'pearl-blockbook',
+      [['blockbook', 'Blockbook', 'https://blockbook.testnet.pearlresearch.ai/api/v2']]
     ),
     chain('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', MAINNET, 'Solana', 'sol', 'solana-json-rpc', [
       ['delta', 'Delta', 'https://solana.deltarpc.com/'],

@@ -347,16 +347,32 @@ test.describe('dApp account reference cleanup', () => {
       now: connectedAt + 4
     })
     expect(getConnectionChainAuthorization(withNear, 'near:testnet')?.binding).toEqual(evmAccount)
+    const pearlAccount = { walletId: 'wallet-pearl', accountId: 'account-pearl' }
+    const withPearl = replaceDAppChainAuthorization(withNear, {
+      origin: withNear.origin,
+      id: 'unused-for-existing',
+      chainId: 'bip122:b0c86d0cd8825f4d72260d2de46f4704',
+      accounts: [pearlAccount],
+      binding: pearlAccount,
+      now: connectedAt + 5
+    })
+    expect(
+      getConnectionChainAuthorization(withPearl, 'bip122:b0c86d0cd8825f4d72260d2de46f4704')
+    ).toEqual({
+      chainId: 'bip122:b0c86d0cd8825f4d72260d2de46f4704',
+      accounts: [pearlAccount],
+      binding: pearlAccount
+    })
     expect(
       getConnectionChainAuthorization(withNear, 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1')?.binding
     ).toEqual(evmAccount)
-    const withSolanaMainnet = replaceDAppChainAuthorization(withNear, {
-      origin: withNear.origin,
+    const withSolanaMainnet = replaceDAppChainAuthorization(withPearl, {
+      origin: withPearl.origin,
       id: 'unused-for-existing',
       chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       accounts: [evmAccount],
       binding: evmAccount,
-      now: connectedAt + 5
+      now: connectedAt + 6
     })
     const withNearMainnet = replaceDAppChainAuthorization(withSolanaMainnet, {
       origin: withSolanaMainnet.origin,
@@ -364,7 +380,7 @@ test.describe('dApp account reference cleanup', () => {
       chainId: 'near:mainnet',
       accounts: [evmAccount],
       binding: evmAccount,
-      now: connectedAt + 6
+      now: connectedAt + 7
     })
     expect(getConnectionChainAuthorization(withNearMainnet, 'near:mainnet')?.binding).toEqual(
       evmAccount

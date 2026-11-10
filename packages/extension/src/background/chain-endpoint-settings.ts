@@ -17,7 +17,12 @@ import {
   resolveEvmNetworkCatalog,
   resolveReleasedChainEndpointSettings
 } from '@/core/chains/evm-runtime-config'
-import { getBitcoinChainId, getZcashChainId, parseChainId } from '@/core/chains/registry'
+import {
+  getBitcoinChainId,
+  getPearlChainId,
+  getZcashChainId,
+  parseChainId
+} from '@/core/chains/registry'
 import { assertDisabledChainEndpointsUnchanged } from '@/core/chains/disabled-chain-endpoint-policy'
 import {
   findBuiltinEvmNetworkConfig,
@@ -27,6 +32,7 @@ import {
 import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near'
+import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
 import { attestSolanaRpcEndpoint } from '@/infrastructure/chains/solana'
 import { attestZcashLightwalletdEndpoint } from '@/infrastructure/chains/zcash/zcash-network-attestation'
 import {
@@ -266,6 +272,15 @@ export class ChainEndpointSettingsCoordinator {
         continue
       }
       if (
+        override.chainId === getPearlChainId(DEFAULT_NETWORK) &&
+        (rpc.protocol === 'pearl-blockbook' || rpc.protocol === 'pearl-json-rpc')
+      ) {
+        attestations.set(`pearl:${rpc.url}`, () =>
+          attestPearlBlockbookEndpoint(override.chainId, rpc.url)
+        )
+        continue
+      }
+      if (
         solanaEnabled &&
         override.chainId === solanaNetwork.chainId &&
         rpc.protocol === 'solana-json-rpc'
@@ -383,4 +398,12 @@ export function resolveConfiguredBitcoinRpcUrl(
 ): string | undefined {
   const override = findChainEndpointOverride(settings, getBitcoinChainId(DEFAULT_NETWORK))
   return override?.rpc?.protocol === 'bitcoin-esplora' ? override.rpc.url : undefined
+}
+
+export function resolveConfiguredPearlRpcUrl(settings: ChainEndpointSettings): string | undefined {
+  const override = findChainEndpointOverride(settings, getPearlChainId(DEFAULT_NETWORK))
+  return override?.rpc?.protocol === 'pearl-blockbook' ||
+    override?.rpc?.protocol === 'pearl-json-rpc'
+    ? override.rpc.url
+    : undefined
 }

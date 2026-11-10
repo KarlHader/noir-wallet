@@ -107,6 +107,7 @@ export function ExportPrivateKey() {
             network =>
               network.chain.family === 'evm' ||
               network.chain.family === 'bitcoin' ||
+              network.chain.family === 'pearl' ||
               network.chain.family === 'solana' ||
               network.chain.family === 'near'
           ) ?? []

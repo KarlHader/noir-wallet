@@ -11,6 +11,7 @@ export function isValidPrivateKeyExport(
     case 'evm':
       return value.format === 'hex' && /^0x[0-9a-f]{64}$/.test(value.privateKey)
     case 'bitcoin':
+    case 'pearl':
       return value.format === 'wif' && /^[1-9A-HJ-NP-Za-km-z]{51,52}$/.test(value.privateKey)
     case 'solana':
       return value.format === 'base58' && /^[1-9A-HJ-NP-Za-km-z]{87,88}$/.test(value.privateKey)

@@ -41,6 +41,7 @@ import {
   type RawDerivedAccount,
   type RawDerivedBitcoinAccount,
   type RawDerivedEd25519Account,
+  type RawDerivedPearlAccount,
   type RawDerivedPeaAccount,
   type RawPeaExecutionAccount,
   type UnknownRecord
@@ -51,6 +52,12 @@ import {
   parseNearSigningPreparePayload,
   type NearSigningPreparePayload
 } from './signing-adapter-near'
+import {
+  adaptPearlPreparedSigning,
+  adaptPearlSignedResult,
+  parsePearlSigningPreparePayload,
+  type PearlSigningPreparePayload
+} from './signing-adapter-pearl'
 import {
   adaptSolanaPreparedSigning,
   adaptSolanaSignedResult,
@@ -106,6 +113,7 @@ type EvmTransaction =
 export type ParsedSigningPreparePayload =
   | SolanaSigningPreparePayload
   | NearSigningPreparePayload
+  | PearlSigningPreparePayload
   | {
       readonly kind: 'pea-evm-transaction'
       readonly chainId: ChainId
@@ -167,6 +175,7 @@ export interface AdaptedPreparedSigning {
   readonly account:
     | RawDerivedAccount
     | RawDerivedBitcoinAccount
+    | RawDerivedPearlAccount
     | RawDerivedEd25519Account
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
@@ -297,6 +306,9 @@ export function parseSigningPreparePayload(value: unknown): ParsedSigningPrepare
   }
   if (record.kind === 'near-transaction' || record.kind === 'near-nep413-message') {
     return parseNearSigningPreparePayload(record)
+  }
+  if (record.kind === 'pearl-psbt' || record.kind === 'pearl-bip322-message') {
+    return parsePearlSigningPreparePayload(record)
   }
   const kind = readLiteral(
     record.kind,
@@ -1109,7 +1121,8 @@ export async function adaptPreparedSigning(
   signingCommandId: SigningCommandId,
   expiresAt: number,
   bitcoinAccount?: RawDerivedBitcoinAccount,
-  imported = false
+  imported = false,
+  pearlAccount?: RawDerivedPearlAccount
 ): Promise<AdaptedPreparedSigning> {
   switch (payload.kind) {
     case 'evm-transaction':
@@ -1126,6 +1139,16 @@ export async function adaptPreparedSigning(
       return adaptBitcoinPsbt(raw, payload, bitcoinAccount, signingCommandId, expiresAt)
     case 'bitcoin-bip322-message':
       return adaptBitcoinMessage(raw, payload, signingCommandId, expiresAt, imported)
+    case 'pearl-psbt':
+    case 'pearl-bip322-message':
+      return adaptPearlPreparedSigning(
+        raw,
+        payload,
+        signingCommandId,
+        expiresAt,
+        pearlAccount,
+        imported
+      )
     case 'solana-transaction':
     case 'solana-message':
       return adaptSolanaPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
@@ -1141,6 +1164,7 @@ export function adaptSignedResult(
   account:
     | RawDerivedAccount
     | RawDerivedBitcoinAccount
+    | RawDerivedPearlAccount
     | RawDerivedEd25519Account
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
@@ -1187,6 +1211,12 @@ export function adaptSignedResult(
         address: account.address
       })
     }
+    case 'pearl-psbt':
+    case 'pearl-bip322-message':
+      if (!('addressScheme' in account) || account.addressScheme !== 'pearl_p2tr') {
+        throw new Error('Pearl signing account is missing')
+      }
+      return adaptPearlSignedResult(kind, raw, account)
     case 'solana-transaction':
     case 'solana-message':
       if (account.curve !== 'ed25519') throw new Error('Ed25519 signing account is missing')

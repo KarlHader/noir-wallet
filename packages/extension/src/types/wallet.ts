@@ -94,6 +94,7 @@ export interface WalletItem {
   privateKeyScope?:
     | { chainFamily: 'eip155' | 'solana' | 'near' }
     | { chainFamily: 'bip122'; bitcoinNetwork: Network }
+    | { chainFamily: 'pearl'; pearlNetwork: Network }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { parseAccountId, type AccountId } from '@/core/accounts/domain'
 import { parseSupportedBitcoinAddress } from '@/core/chains/bitcoin'
+import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
@@ -44,8 +45,9 @@ export interface AccountNetworksView {
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
         readonly kind: 'private-key'
-        readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
         readonly bitcoinNetwork?: 'mainnet' | 'testnet'
+        readonly pearlNetwork?: 'mainnet' | 'testnet'
       }>
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
@@ -154,6 +156,11 @@ function parseAddress(value: unknown, chain: ChainDefinition): AccountNetworkAdd
       throw new Error('Invalid NEAR Account network Address scheme')
     }
     parseNearAccountId(address.value)
+  } else if (chain.family === 'pearl') {
+    if (address.scheme !== 'pearl_p2tr') {
+      throw new Error('Invalid Pearl Account network Address scheme')
+    }
+    parseSupportedPearlAddress(address.value, chain.id)
   } else {
     throw new Error('Unsupported Account network family')
   }
@@ -314,6 +321,20 @@ function parseCatalog(
           walletSource = Object.freeze({
             kind: 'private-key',
             chainFamily: source.chainFamily
+          })
+        } else if (source.chainFamily === 'pearl') {
+          assertExactKeys(
+            source,
+            ['kind', 'chainFamily', 'pearlNetwork'],
+            'Account network Wallet source'
+          )
+          if (source.pearlNetwork !== 'mainnet' && source.pearlNetwork !== 'testnet') {
+            throw new Error('Invalid Pearl private-key Wallet source')
+          }
+          walletSource = Object.freeze({
+            kind: 'private-key',
+            chainFamily: 'pearl',
+            pearlNetwork: source.pearlNetwork
           })
         } else {
           assertExactKeys(

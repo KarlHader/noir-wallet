@@ -39,6 +39,7 @@ import { logger } from '@/lib/logger'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { createBackgroundBitcoinPortfolioCoordinator } from './bitcoin-transfer'
+import { createBackgroundPearlPortfolioCoordinator } from './pearl-transfer'
 import { credentialSession } from './credential-session'
 
 export function createBackgroundPortfolioCoordinator(
@@ -95,6 +96,9 @@ export function createBackgroundPortfolioCoordinator(
   const bitcoinPortfolio = chains.list().some(chain => chain.family === 'bitcoin')
     ? createBackgroundBitcoinPortfolioCoordinator()
     : undefined
+  const pearlPortfolio = chains.list().some(chain => chain.family === 'pearl')
+    ? createBackgroundPearlPortfolioCoordinator()
+    : undefined
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK, endpointSettings)
   const solanaRpc = createConfiguredSolanaRpcClient({
     chainId: solanaNetwork.chainId,
@@ -136,6 +140,7 @@ export function createBackgroundPortfolioCoordinator(
     assets,
     evmPortfolios,
     bitcoinPortfolio,
+    pearlPortfolio,
     solanaPortfolio,
     nearPortfolio,
     onBackgroundBitcoinRefreshError: error => {
@@ -147,6 +152,24 @@ export function createBackgroundPortfolioCoordinator(
       )
     },
     onBackgroundBitcoinRefreshSettled: source => {
+      if (!source) return
+      void chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: source.chainAccount.scope.keyDomainId,
+          accountId: source.chainAccount.scope.accountId
+        })
+        .catch(() => {})
+    },
+    onBackgroundPearlRefreshError: error => {
+      const { currentWalletId, currentAccountId } = useWalletStore.getState()
+      logger.warn(
+        `Pearl portfolio refresh failed: ${formatLogError(error)}`,
+        currentWalletId ?? undefined,
+        currentAccountId ?? undefined
+      )
+    },
+    onBackgroundPearlRefreshSettled: source => {
       if (!source) return
       void chrome.runtime
         .sendMessage({

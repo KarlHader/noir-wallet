@@ -5,6 +5,7 @@ import { isSelectableChainFamily } from './chain-selection-availability'
 const IMPORT_FAMILY_CHAINS = Object.freeze({
   eip155: 'evm',
   bip122: 'bitcoin',
+  pearl: 'pearl',
   solana: 'solana',
   near: 'near'
 } as const)

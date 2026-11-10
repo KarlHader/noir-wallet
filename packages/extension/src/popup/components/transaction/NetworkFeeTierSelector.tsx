@@ -5,19 +5,25 @@ import {
 } from '@/core/transactions/domain'
 import { cn } from '@/lib/utils'
 
-const descriptions: Readonly<Record<'bitcoin' | 'evm', Readonly<Record<NetworkFeeTier, string>>>> =
-  Object.freeze({
-    bitcoin: Object.freeze({
-      low: '~24 blocks',
-      standard: '~6 blocks',
-      fast: '~2 blocks'
-    }),
-    evm: Object.freeze({
-      low: 'Lower fee',
-      standard: 'Recommended',
-      fast: 'Priority'
-    })
+const descriptions: Readonly<
+  Record<'bitcoin' | 'pearl' | 'evm', Readonly<Record<NetworkFeeTier, string>>>
+> = Object.freeze({
+  bitcoin: Object.freeze({
+    low: '~24 blocks',
+    standard: '~6 blocks',
+    fast: '~2 blocks'
+  }),
+  pearl: Object.freeze({
+    low: '~24 blocks',
+    standard: '~6 blocks',
+    fast: '~2 blocks'
+  }),
+  evm: Object.freeze({
+    low: 'Lower fee',
+    standard: 'Recommended',
+    fast: 'Priority'
   })
+})
 
 export function NetworkFeeTierSelector({
   chainFamily,
@@ -26,7 +32,7 @@ export function NetworkFeeTierSelector({
   hideLabel = false,
   disabled = false
 }: {
-  readonly chainFamily: 'bitcoin' | 'evm'
+  readonly chainFamily: 'bitcoin' | 'pearl' | 'evm'
   readonly value: NetworkFeeTier
   readonly onChange: (tier: NetworkFeeTier) => void
   readonly hideLabel?: boolean

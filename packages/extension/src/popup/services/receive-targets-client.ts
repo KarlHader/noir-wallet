@@ -3,6 +3,7 @@ import {
   parseSupportedBitcoinAddress,
   type BitcoinSupportedAddressType
 } from '@/core/chains/bitcoin'
+import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseBitcoinAddressType } from '@/infrastructure/chains/bitcoin'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
@@ -25,7 +26,7 @@ export type AdditionalReceiveTargetView =
       address: string
       addressType: BitcoinSupportedAddressType
     }>
-  | Readonly<{ chain: ChainDefinition; kind: 'solana' | 'near'; address: string }>
+  | Readonly<{ chain: ChainDefinition; kind: 'solana' | 'near' | 'pearl'; address: string }>
 
 export interface AdditionalReceiveTargetsView {
   readonly generationId: StorageV2GenerationId
@@ -108,6 +109,15 @@ function parseTarget(
     assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')
     if (chain.family !== 'near') throw new Error('Invalid NEAR receive target chain')
     return Object.freeze({ chain, kind: 'near', address: parseNearAccountId(target.address) })
+  }
+  if (target.kind === 'pearl') {
+    assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')
+    if (chain.family !== 'pearl') throw new Error('Invalid Pearl receive target chain')
+    return Object.freeze({
+      chain,
+      kind: 'pearl',
+      address: parseSupportedPearlAddress(target.address, chain.id)
+    })
   }
   throw new Error('Unsupported receive target kind')
 }

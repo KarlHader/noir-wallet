@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const extensionDirectory = fileURLToPath(new URL('..', import.meta.url))
-const allChains = 'chain.evm,chain.bitcoin,chain.solana,chain.near'
+const allChains = 'chain.evm,chain.bitcoin,chain.pearl,chain.solana,chain.near'
 const testReleaseEnvironment = {
   EVM_HISTORY_API_ORIGIN: 'https://evm-history.test',
   RHEA_SWAP_ACCESS_TOKEN: 'test-rhea-access-token',
@@ -46,6 +46,9 @@ const projects = {
   'bitcoin-testnet': isolated('testnet-bitcoin', 'chain.bitcoin', {
     env: { APPROVAL_WINDOW_E2E: '1' }
   }),
+  'pearl-testnet': isolated('testnet-pearl', 'chain.pearl', {
+    env: { APPROVAL_WINDOW_E2E: '1' }
+  }),
   'protocol-mainnet': isolated('mainnet-protocol', 'chain.evm,chain.bitcoin', {
     env: {
       RHEA_SWAP_ACCESS_TOKEN: 'test-rhea-access-token',
@@ -76,6 +79,7 @@ const rcProjects = [
   'private-key-testnet',
   'evm-testnet',
   'bitcoin-testnet',
+  'pearl-testnet',
   'protocol-mainnet'
 ]
 

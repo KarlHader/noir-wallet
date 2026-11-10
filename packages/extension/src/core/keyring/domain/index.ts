@@ -45,6 +45,8 @@ export {
   type BitcoinInputSummary,
   type BitcoinOutputSummary,
   type BitcoinPsbtSummary,
+  type PearlBip322MessageSummary,
+  type PearlPsbtSummary,
   type CanonicalContent,
   type EvmAccessListEntrySummary,
   type EvmPersonalMessageSummary,

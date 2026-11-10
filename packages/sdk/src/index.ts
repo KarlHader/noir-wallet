@@ -7,6 +7,7 @@ export {
   switchEvmChain
 } from './chains/evm'
 export { detectBitcoinProvider, getBitcoinProvider } from './chains/bitcoin'
+export { detectPearlProvider, getPearlProvider } from './chains/pearl'
 export { detectSolanaProvider, getSolanaProvider } from './chains/solana'
 export { detectNearProvider, getNearProvider } from './chains/near'
 export type {
@@ -51,6 +52,20 @@ export type {
   BitcoinSignPsbtOptions,
   DetectBitcoinProviderOptions
 } from './chains/bitcoin'
+
+export type {
+  DetectPearlProviderOptions,
+  PearlBalance,
+  PearlChain,
+  PearlChainInfo,
+  PearlConnectResult,
+  PearlNetwork,
+  PearlProvider,
+  PearlProviderListener,
+  PearlRequestArguments,
+  PearlSendOptions,
+  PearlSignPsbtOptions
+} from './chains/pearl'
 
 export type {
   DetectSolanaProviderOptions,

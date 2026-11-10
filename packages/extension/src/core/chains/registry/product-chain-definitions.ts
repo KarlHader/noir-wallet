@@ -3,6 +3,7 @@ import {
   BITCOIN_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
@@ -10,6 +11,7 @@ import {
   getEvmNetworkConfigs,
   getNearNetworkConfig,
   getNearNetworkConfigs,
+  getPearlNetworkConfig,
   getSolanaNetworkConfig,
   getSolanaNetworkConfigs,
   type EvmNetworkConfig,
@@ -21,7 +23,7 @@ import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import type { AssetDefinitionInput } from './asset-registry'
 import type { ChainDefinitionInput } from './chain-registry'
 import { createChainRegistry, type ChainRegistry } from './chain-registry'
-import { BITCOIN_CHAIN_IDS, ZCASH_CHAIN_IDS } from './chain-ids'
+import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS, ZCASH_CHAIN_IDS } from './chain-ids'
 
 function zcashDefinition(network: Network): ChainDefinitionInput {
   return {
@@ -101,6 +103,36 @@ function bitcoinDefinition(network: Network): ChainDefinitionInput {
         status: 'available',
         transactionFormats: ['psbt-v0'],
         messageFormats: ['bip322']
+      },
+      transaction: {
+        status: 'available',
+        model: 'utxo',
+        actions: ['native-transfer']
+      }
+    }
+  }
+}
+
+function pearlDefinition(network: Network): ChainDefinitionInput {
+  const config = getPearlNetworkConfig(network)
+  return {
+    id: PEARL_CHAIN_IDS[network],
+    family: 'pearl',
+    network: { kind: network, name: config.networkName },
+    displayName: config.displayName,
+    featureFlag: PEARL_CHAIN_FEATURE_FLAG,
+    capabilities: {
+      address: {
+        status: 'available',
+        addressSchemes: ['pearl_p2tr'],
+        derivationSchemes: ['bip86', 'imported'],
+        supportsRotation: true,
+        supportsChange: true
+      },
+      signing: {
+        status: 'available',
+        transactionFormats: ['psbt-v0'],
+        messageFormats: ['bip322_simple']
       },
       transaction: {
         status: 'available',
@@ -219,6 +251,7 @@ export function getInitialProductChainDefinitions(
     ...getEvmNetworkConfigs(network).map(getEvmChainDefinition),
     ...additionalEvmNetworks.map(getEvmChainDefinition),
     bitcoinDefinition(network),
+    pearlDefinition(network),
     getSolanaBetaChainDefinition(
       getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet')
     ),
@@ -243,6 +276,10 @@ export function getZcashChainId(network: Network): string {
 
 export function getBitcoinChainId(network: Network): string {
   return BITCOIN_CHAIN_IDS[network]
+}
+
+export function getPearlChainId(network: Network): string {
+  return PEARL_CHAIN_IDS[network]
 }
 
 export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly AssetDefinitionInput[] {
@@ -303,6 +340,25 @@ export function getBundledBitcoinAssetDefinitions(
   ])
 }
 
+export function getBundledPearlAssetDefinitions(network: Network): readonly AssetDefinitionInput[] {
+  return Object.freeze([
+    {
+      chainId: PEARL_CHAIN_IDS[network],
+      namespace: 'slip44',
+      reference: '808276',
+      kind: 'native',
+      metadata: {
+        name: 'Pearl',
+        symbol: 'PRL',
+        decimals: 8,
+        iconUrl: formatNativeTokenIconUrl('pearl')
+      },
+      source: 'bundled',
+      verification: 'trusted'
+    }
+  ])
+}
+
 export function getBundledInitialProductAssetDefinitions(
   network: Network,
   additionalEvmNetworks: readonly EvmNetworkConfig[] = []
@@ -325,6 +381,7 @@ export function getBundledInitialProductAssetDefinitions(
     ...getBundledEvmAssetDefinitions(network),
     ...additionalEvmNetworks.flatMap(getEvmAssetDefinitions),
     ...getBundledBitcoinAssetDefinitions(network),
+    ...getBundledPearlAssetDefinitions(network),
     {
       chainId:
         network === 'mainnet'

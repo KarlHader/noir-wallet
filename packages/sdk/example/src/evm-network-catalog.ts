@@ -13,6 +13,7 @@ export type ExampleChainIcon =
   | 'gnosis'
   | 'monad'
   | 'optimism'
+  | 'pearl'
   | 'plasma'
   | 'polygon'
   | 'solana'
@@ -33,6 +34,7 @@ const EXAMPLE_CHAIN_ICON_URLS: Readonly<Record<ExampleChainIcon, string>> = Obje
   gnosis: chainIconUrl('gnosis'),
   monad: chainIconUrl('monad'),
   optimism: chainIconUrl('optimism'),
+  pearl: `${import.meta.env.BASE_URL}pearl.svg`,
   plasma: chainIconUrl('plasma'),
   polygon: chainIconUrl('polygon'),
   solana: chainIconUrl('solana'),

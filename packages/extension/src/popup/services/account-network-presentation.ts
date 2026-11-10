@@ -7,6 +7,7 @@ import type {
 export function accountNetworkLabel(network: AccountNetworkView): string {
   if (network.chain.family === 'zcash') return 'Zcash'
   if (network.chain.family === 'bitcoin') return 'Bitcoin'
+  if (network.chain.family === 'pearl') return 'Pearl'
   return network.chain.displayName
 }
 
@@ -46,6 +47,9 @@ export function accountNetworkAddressLabel(
       case 'bitcoin-p2tr':
         return 'Taproot'
     }
+  }
+  if (network.chain.family === 'pearl') {
+    return 'Taproot'
   }
   if (address.privacy === 'shielded') return 'shielded'
   if (address.privacy === 'transparent') return 'transparent'

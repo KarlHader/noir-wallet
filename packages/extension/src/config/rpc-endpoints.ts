@@ -101,6 +101,18 @@ export const RPC_DEFAULT_ENDPOINTS = {
   near: {
     mainnet: { id: 'fastnear', label: 'Fastnear', url: 'https://free.rpc.fastnear.com' },
     testnet: { id: 'official', label: 'Official', url: 'https://rpc.testnet.near.org' }
+  },
+  pearl: {
+    mainnet: {
+      id: 'pearlresearch',
+      label: 'Pearl Research',
+      url: 'https://blockbook.pearlresearch.ai/api/v2'
+    },
+    testnet: {
+      id: 'pearlresearch',
+      label: 'Pearl Research',
+      url: 'https://blockbook.testnet.pearlresearch.ai/api/v2'
+    }
   }
 } as const
 

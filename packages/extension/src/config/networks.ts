@@ -1,5 +1,5 @@
 import { Network } from '@/types'
-import { BITCOIN_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { getDefaultEvmRpcEndpoint, RPC_DEFAULT_ENDPOINTS } from './rpc-endpoints'
 
 export interface NetworkConfig {
@@ -72,6 +72,41 @@ export const BITCOIN_NETWORKS: Readonly<Record<Network, BitcoinNetworkConfig>> =
 
 export function getBitcoinNetworkConfig(network: Network): BitcoinNetworkConfig {
   return BITCOIN_NETWORKS[network]
+}
+
+export interface PearlNetworkConfig {
+  readonly networkMode: Network
+  readonly chainId: string
+  readonly networkName: 'mainnet' | 'testnet'
+  readonly displayName: string
+  readonly explorerUrl: string
+  readonly blockbookApiUrl: string
+  readonly requiredConfirmations: number
+}
+
+export const PEARL_NETWORKS: Readonly<Record<Network, PearlNetworkConfig>> = Object.freeze({
+  mainnet: Object.freeze({
+    networkMode: 'mainnet',
+    chainId: PEARL_CHAIN_IDS.mainnet,
+    networkName: 'mainnet',
+    displayName: 'Pearl',
+    explorerUrl: 'https://blockbook.pearlresearch.ai',
+    blockbookApiUrl: 'https://blockbook.pearlresearch.ai/api/v2',
+    requiredConfirmations: 6
+  }),
+  testnet: Object.freeze({
+    networkMode: 'testnet',
+    chainId: PEARL_CHAIN_IDS.testnet,
+    networkName: 'testnet',
+    displayName: 'Pearl Testnet',
+    explorerUrl: 'https://blockbook.testnet.pearlresearch.ai',
+    blockbookApiUrl: 'https://blockbook.testnet.pearlresearch.ai/api/v2',
+    requiredConfirmations: 6
+  })
+} as const satisfies Record<Network, PearlNetworkConfig>)
+
+export function getPearlNetworkConfig(network: Network): PearlNetworkConfig {
+  return PEARL_NETWORKS[network]
 }
 
 export type SolanaCluster = 'mainnet' | 'devnet' | 'testnet'

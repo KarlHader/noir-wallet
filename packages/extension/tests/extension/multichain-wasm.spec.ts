@@ -890,8 +890,8 @@ test.describe('pinned Multichain WASM in the real MV3 extension', () => {
       await execute<CapabilitiesValue>(popup, 'capabilities.get', {}, { kind: 'unbound' })
     )
     expect(capabilities).toMatchObject({
-      abiVersion: 'wallet-engine-cbd8ffb-v5',
-      sourceCommit: 'cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a'
+      abiVersion: 'wallet-engine-cb993e0-v11',
+      sourceCommit: 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
     })
     expect(capabilities.capabilities).toEqual(
       expect.arrayContaining([
@@ -900,16 +900,22 @@ test.describe('pinned Multichain WASM in the real MV3 extension', () => {
         'account.near.derive',
         'account.bitcoin.batch-derive',
         'account.bitcoin.derive',
+        'account.pearl.batch-derive',
+        'account.pearl.derive',
         'bitcoin.bip322.full.sign',
         'bitcoin.bip322.full.verify',
         'evm.transaction.sign',
         'evm.pea-v1.transaction.sign',
         'bitcoin.psbt-v0.sign',
+        'pearl.psbt-v0.sign',
+        'pearl.bip322.sign',
+        'pearl.bip322.verify',
         'credential.export-private-key',
         'credential.import-private-key-bip122',
         'credential.import-private-key-eip155',
         'credential.import-private-key-solana',
         'credential.import-private-key-near',
+        'credential.import-private-key-pearl',
         'vault.private-key-v2'
       ])
     )

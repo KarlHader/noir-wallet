@@ -2,6 +2,7 @@ import {
   BITCOIN_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG,
   type ChainFeatureFlagValue
@@ -59,6 +60,20 @@ export function resolveNearFeatureRuntimePolicy(
   })
 }
 
+export interface PearlFeatureRuntimePolicy {
+  readonly newOperationsEnabled: boolean
+  readonly transactionRecoveryEnabled: true
+}
+
+export function resolvePearlFeatureRuntimePolicy(
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): PearlFeatureRuntimePolicy {
+  return Object.freeze({
+    newOperationsEnabled: enabledFlags.includes(PEARL_CHAIN_FEATURE_FLAG),
+    transactionRecoveryEnabled: true
+  })
+}
+
 export function isNewWalletFamilyEnabled(
   family: string,
   enabledFlags: readonly ChainFeatureFlagValue[]
@@ -71,7 +86,10 @@ export function isNewWalletFamilyEnabled(
       return resolveEvmFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'bitcoin':
     case 'bip122':
+      // bip122 remains the Bitcoin private-key family tag; Pearl uses family "pearl".
       return resolveBitcoinFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
+    case 'pearl':
+      return resolvePearlFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'solana':
       return resolveSolanaFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'near':

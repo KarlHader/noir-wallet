@@ -1,6 +1,7 @@
 import {
   getBitcoinNetworkConfig,
   getNearNetworkConfig,
+  getPearlNetworkConfig,
   getSolanaNetworkConfig
 } from '@/config/networks'
 import { CHAIN_BLOCK_EXPLORER_ALTERNATIVES } from '@/config/block-explorers'
@@ -14,7 +15,7 @@ import {
 } from '@/core/chains/chain-endpoint-settings'
 import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { getNetworkConfig } from '@/lib/runtime-network'
-import { getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId, getZcashChainId } from '@/core/chains/registry'
 import type { Network } from '@/types'
 import { isSameExplorer } from './explorer-settings-model'
 
@@ -57,6 +58,12 @@ export function resolveChainExplorerTarget(
   if (chainId === getBitcoinChainId(network)) {
     return Object.freeze({
       baseUrl: getBitcoinNetworkConfig(network).explorerUrl,
+      transactionPath: 'tx'
+    })
+  }
+  if (chainId === getPearlChainId(network)) {
+    return Object.freeze({
+      baseUrl: getPearlNetworkConfig(network).explorerUrl,
       transactionPath: 'tx'
     })
   }

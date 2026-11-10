@@ -93,6 +93,25 @@ const baseSummaries = [
     address: 'bc1qsigner',
     message: content()
   }),
+  summary('pearl.psbt.v1', 'bip122:pearl', 'transaction', {
+    psbtVersion: 0,
+    signer: 'pr1psigner',
+    inputs: [{
+      index: 0, transactionId: digest, outputIndex: 0, amountSats: '1000',
+      sequence: 0xffffffff, scriptType: 'p2tr', sighashType: 'SIGHASH_DEFAULT',
+      ownership: 'signing-account'
+    }],
+    outputs: [{
+      index: 0, address: 'pr1precipient', scriptPubKeyHex: '5120',
+      amountSats: '900', classification: 'recipient'
+    }],
+    signingInputIndexes: [0],
+    totalInputSats: '1000', totalOutputSats: '900', feeSats: '100'
+  }),
+  summary('pearl.bip322-message.v1', 'bip122:pearl', 'message', {
+    address: 'pr1psigner',
+    message: content()
+  }),
   summary('solana.transaction.v1', 'solana:mainnet', 'transaction', {
     messageVersion: 'legacy',
     feePayer: 'FeePayer111111111111111111111111111111111',
@@ -362,15 +381,20 @@ test.describe('Signing summary review model', () => {
   test('renders every frozen schema with explicit request and chain rows after the action details', () => {
     const summaries = [
       baseSummaries[0],
-      ...baseSummaries.slice(1, 9),
+      ...baseSummaries.slice(1, 11),
       tronTransaction(tronContracts[0]),
-      ...baseSummaries.slice(9)
+      ...baseSummaries.slice(11)
     ]
     expect(summaries.map(item => item.schema).sort()).toEqual([...SIGNING_SUMMARY_SCHEMAS].sort())
 
     for (const item of summaries) {
       const model = buildSigningSummaryReviewModel(item)
       expect(model.title.length).toBeGreaterThan(0)
+      if (item.schema.startsWith('pearl.')) {
+        expect(model.title).toContain('Pearl')
+        expect(model.title).not.toContain('Bitcoin')
+        if (item.operation === 'message') expect(model.description).toContain('Pearl address')
+      }
       expect(model.operation).toBe(item.operation)
       expect(model.sections.at(-1)?.rows).toEqual([
         { label: 'Schema', value: item.schema, code: true, breakAll: true },
@@ -425,7 +449,7 @@ test.describe('Signing summary review model', () => {
   })
 
   test('shows Solana total fee, compute unit price, and maximum priority fee', () => {
-    const solana = structuredClone(baseSummaries[7])
+    const solana = structuredClone(baseSummaries.find(item => item.schema === 'solana.transaction.v1'))
     solana.fields.feeLamports = '5050'
     solana.fields.computeUnitLimit = '200000'
     solana.fields.computeUnitPriceMicroLamports = '250'

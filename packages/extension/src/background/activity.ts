@@ -20,6 +20,12 @@ import {
   loadActiveBitcoinDiscoveryContext,
   type BitcoinDiscoveryState
 } from '@/infrastructure/chains/bitcoin'
+import {
+  PEARL_ACTIVITY_HISTORY_LIMITS,
+  IndexedDbPearlDiscoveryRepository,
+  loadActivePearlDiscoveryContext,
+  type PearlDiscoveryState
+} from '@/infrastructure/chains/pearl'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import { listEvmHistoryCacheByScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
 import { filterTrackedEvmTokenActivity } from '@/infrastructure/chains/evm/evm-indexed-activity'
@@ -221,7 +227,8 @@ function solanaSignature(item: ActivityItem): string | null {
 
 export function createBackgroundActivityCoordinator(
   bitcoinCustomRpcUrl?: string,
-  endpointSettings?: ChainEndpointSettings
+  endpointSettings?: ChainEndpointSettings,
+  pearlCustomRpcUrl?: string
 ): ActivityCoordinator {
   const storageRepository = new IndexedDbStorageV2Repository()
   const peaSigner = new EvmMultichainSigningClient({ credentials: credentialSession })
@@ -230,6 +237,8 @@ export function createBackgroundActivityCoordinator(
   const {
     bitcoinNetwork,
     bitcoinHistory,
+    pearlNetwork,
+    pearlHistory,
     evmBatchHistory,
     evmHistorySources,
     solanaNetwork,
@@ -240,12 +249,14 @@ export function createBackgroundActivityCoordinator(
     network: DEFAULT_NETWORK,
     enabledChainFeatureFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
     bitcoinCustomRpcUrl,
+    pearlCustomRpcUrl,
     endpointSettings
   })
   const trackedEvmTokenAssetIds = new Set(
     evmHistorySources.flatMap(source => source.trackedErc20AssetIds)
   )
   const bitcoinDiscovery = bitcoinHistory ? new IndexedDbBitcoinDiscoveryRepository() : undefined
+  const pearlDiscovery = pearlHistory ? new IndexedDbPearlDiscoveryRepository() : undefined
 
   const loadBitcoinItems = async (
     scope: ActivityScope,
@@ -559,6 +570,49 @@ export function createBackgroundActivityCoordinator(
     }
   }
 
+  const loadPearlItems = async (
+    scope: ActivityScope,
+    fallbackItems: readonly ActivityItem[]
+  ): Promise<readonly ActivityItem[]> => {
+    if (!pearlDiscovery || !pearlHistory) return Object.freeze([])
+    try {
+      const context = await loadActivePearlDiscoveryContext(storageRepository, pearlNetwork.chainId)
+      if (
+        !context ||
+        context.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
+        context.chainAccount.scope.accountId !== scope.accountId
+      ) {
+        return Object.freeze([])
+      }
+      const state: PearlDiscoveryState | null = await pearlDiscovery.get({
+        chainAccount: context.chainAccount,
+        accountIndex: context.accountIndex
+      })
+      if (!state) return Object.freeze([])
+      const observations = [...state.observations].sort(
+        (left, right) =>
+          right.derived.addressIndex - left.derived.addressIndex ||
+          Number(right.derived.change) - Number(left.derived.change)
+      )
+      const fresh = await pearlHistory.readAddressActivity({
+        scope,
+        ownedAddresses: observations.map(observation => observation.derived.address),
+        historyAddresses: observations
+          .filter(observation => observation.activity.used)
+          .slice(0, PEARL_ACTIVITY_HISTORY_LIMITS.addresses)
+          .map(observation => observation.derived.address)
+      })
+      return mergeBoundedActivityItems(fallbackItems, fresh)
+    } catch (error) {
+      logger.warn(
+        `Pearl activity refresh failed: ${formatLogError(error)}`,
+        scope.keyDomainId,
+        scope.accountId
+      )
+      return fallbackItems
+    }
+  }
+
   const supplementalRefreshes = new Map<string, Promise<readonly ActivityItem[]>>()
   const supplementalCacheWrites = new Map<string, Promise<void>>()
 
@@ -593,6 +647,7 @@ export function createBackgroundActivityCoordinator(
     const currentTime = Date.now()
     const supportedChainIds = Object.freeze([
       ...(bitcoinHistory ? [bitcoinNetwork.chainId] : []),
+      ...(pearlHistory ? [pearlNetwork.chainId] : []),
       ...evmHistorySources.map(source => source.chainId),
       ...(solanaHistory ? [solanaNetwork.chainId] : []),
       ...(nearHistory ? [nearNetwork.chainId] : [])
@@ -638,11 +693,15 @@ export function createBackgroundActivityCoordinator(
 
     const refresh = (async () => {
       const cachedBitcoinItems = filterItemsForChain(activeItems, bitcoinNetwork.chainId)
+      const cachedPearlItems = filterItemsForChain(activeItems, pearlNetwork.chainId)
       const cachedSolanaItems = filterItemsForChainFamily(activeItems, 'solana')
       const cachedNearItems = filterItemsForChainFamily(activeItems, 'near')
-      const [bitcoinItems, evmItems, solanaItems, nearItems] = await Promise.all([
+      const [bitcoinItems, pearlItems, evmItems, solanaItems, nearItems] = await Promise.all([
         staleChainIdSet.has(bitcoinNetwork.chainId)
           ? loadBitcoinItems(scope, cachedBitcoinItems, addressType)
+          : Object.freeze([]),
+        staleChainIdSet.has(pearlNetwork.chainId)
+          ? loadPearlItems(scope, cachedPearlItems)
           : Object.freeze([]),
         loadEvmItems(
           scope,
@@ -661,6 +720,7 @@ export function createBackgroundActivityCoordinator(
       ])
       const refreshedItems = Object.freeze([
         ...bitcoinItems,
+        ...pearlItems,
         ...evmItems,
         ...solanaItems,
         ...nearItems

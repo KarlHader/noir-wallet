@@ -3,6 +3,7 @@ import {
   getBitcoinNetworkConfig,
   getEvmNetworkConfigs,
   getNearNetworkConfig,
+  getPearlNetworkConfig,
   NETWORKS,
   getSolanaNetworkConfig
 } from '@/config/networks'
@@ -15,6 +16,7 @@ import {
   resolveBitcoinFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
+  resolvePearlFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import type { ChainEndpointSettings, ChainRpcProtocol } from '@/core/chains/chain-endpoint-settings'
@@ -24,9 +26,10 @@ import {
   getEvmRpcEndpointOptions,
   resolveBitcoinRpcEndpointOptions,
   resolveNearRpcEndpointOptions,
+  resolvePearlRpcEndpointOptions,
   resolveSolanaRpcEndpointOptions
 } from '@/infrastructure/chains/managed-rpc-endpoints'
-import { getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId, getZcashChainId } from '@/core/chains/registry'
 import type { RpcEndpointGroup } from '@/config/rpc-endpoints'
 
 interface RpcEndpointPreset {
@@ -109,12 +112,16 @@ export function buildZcashRpcChainOption(groups: readonly RpcEndpointGroup[]): R
 
 export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly RpcChainOption[] {
   const bitcoin = getBitcoinNetworkConfig(DEFAULT_NETWORK)
+  const pearl = getPearlNetworkConfig(DEFAULT_NETWORK)
   const solana = getSolanaNetworkConfig(DEFAULT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet')
   const near = getNearNetworkConfig(DEFAULT_NETWORK)
   const evmEnabled = resolveEvmFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
   const bitcoinEnabled = resolveBitcoinFeatureRuntimePolicy(
+    __ENABLED_CHAIN_FEATURE_FLAGS__
+  ).newOperationsEnabled
+  const pearlEnabled = resolvePearlFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
   const solanaEnabled = resolveSolanaFeatureRuntimePolicy(
@@ -137,6 +144,24 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
               Object.freeze({
                 id: endpoint.id,
                 label: endpoint.id === 'mempool-space' ? 'mempool.space' : 'Blockstream',
+                url: endpoint.baseUrl
+              })
+            )
+          })
+        ]
+      : []),
+    ...(pearlEnabled
+      ? [
+          Object.freeze({
+            chainId: getPearlChainId(DEFAULT_NETWORK),
+            label: pearl.displayName,
+            iconChain: 'pearl',
+            protocol: 'pearl-blockbook' as const,
+            defaultUrl: resolvePearlRpcEndpointOptions(DEFAULT_NETWORK)[0].baseUrl,
+            presets: resolvePearlRpcEndpointOptions(DEFAULT_NETWORK).map(endpoint =>
+              Object.freeze({
+                id: endpoint.id,
+                label: endpoint.id === 'pearlresearch' ? 'Pearl Research' : endpoint.id,
                 url: endpoint.baseUrl
               })
             )
@@ -202,6 +227,7 @@ export function buildExplorerChainOptions(
 ): readonly ExplorerChainOption[] {
   const zcash = NETWORKS[DEFAULT_NETWORK]
   const bitcoin = getBitcoinNetworkConfig(DEFAULT_NETWORK)
+  const pearl = getPearlNetworkConfig(DEFAULT_NETWORK)
   const solana = getSolanaNetworkConfig(DEFAULT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet')
   const near = getNearNetworkConfig(DEFAULT_NETWORK)
   const builtinEvm = getEvmNetworkConfigs(DEFAULT_NETWORK)
@@ -209,6 +235,9 @@ export function buildExplorerChainOptions(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
   const bitcoinEnabled = resolveBitcoinFeatureRuntimePolicy(
+    __ENABLED_CHAIN_FEATURE_FLAGS__
+  ).newOperationsEnabled
+  const pearlEnabled = resolvePearlFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
   const solanaEnabled = resolveSolanaFeatureRuntimePolicy(
@@ -238,6 +267,17 @@ export function buildExplorerChainOptions(
             label: bitcoin.displayName,
             iconChain: 'btc',
             defaultUrl: bitcoin.explorerUrl,
+            defaultTransactionPath: 'tx'
+          })
+        ]
+      : []),
+    ...(pearlEnabled
+      ? [
+          Object.freeze({
+            chainId: getPearlChainId(DEFAULT_NETWORK),
+            label: pearl.displayName,
+            iconChain: 'pearl',
+            defaultUrl: pearl.explorerUrl,
             defaultTransactionPath: 'tx'
           })
         ]

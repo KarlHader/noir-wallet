@@ -35,7 +35,9 @@ export function groupAccountNetworksForDisplay(
               ? 'Zcash'
               : network.chain.family === 'bitcoin'
                 ? 'Bitcoin'
-                : network.chain.displayName,
+                : network.chain.family === 'pearl'
+                  ? 'Pearl'
+                  : network.chain.displayName,
           networks: Object.freeze([network]),
           addresses: network.addresses
         })

@@ -9,16 +9,19 @@ import {
   resolveBitcoinFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
+  resolvePearlFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '../../../../src/core/chains/feature-runtime-policy.ts'
 
 describe('Chain feature runtime policy', () => {
-  it('defaults to EVM and Zcash while keeping deferred chain operations closed', () => {
+  it('defaults to Zcash, EVM and Pearl while keeping deferred chain operations closed', () => {
     const enabled = parseEnabledChainFeatureFlags(undefined, ALL_CHAIN_FEATURE_FLAGS)
-    assert.deepEqual(enabled, ['chain.zcash', 'chain.evm'])
+    assert.deepEqual(enabled, ['chain.zcash', 'chain.evm', 'chain.pearl'])
     assert.equal(resolveEvmFeatureRuntimePolicy(enabled).newOperationsEnabled, true)
     assert.equal(resolveBitcoinFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
     assert.equal(resolveBitcoinFeatureRuntimePolicy(enabled).transactionRecoveryEnabled, true)
+    assert.equal(resolvePearlFeatureRuntimePolicy(enabled).newOperationsEnabled, true)
+    assert.equal(resolvePearlFeatureRuntimePolicy(enabled).transactionRecoveryEnabled, true)
     assert.equal(resolveSolanaFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
     assert.equal(resolveNearFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
   })
@@ -55,6 +58,17 @@ describe('Chain feature runtime policy', () => {
       transactionRecoveryEnabled: true
     })
     assert.deepEqual(resolveBitcoinFeatureRuntimePolicy(['chain.zcash', 'chain.bitcoin']), {
+      newOperationsEnabled: true,
+      transactionRecoveryEnabled: true
+    })
+  })
+
+  it('keeps Pearl recovery enabled while gating new operations independently', () => {
+    assert.deepEqual(resolvePearlFeatureRuntimePolicy(['chain.zcash']), {
+      newOperationsEnabled: false,
+      transactionRecoveryEnabled: true
+    })
+    assert.deepEqual(resolvePearlFeatureRuntimePolicy(['chain.zcash', 'chain.pearl']), {
       newOperationsEnabled: true,
       transactionRecoveryEnabled: true
     })

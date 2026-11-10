@@ -4,6 +4,7 @@ import type { RpcEndpointGroup } from '@/config/rpc-endpoints'
 import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near/near-network-attestation'
+import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
 import { attestSolanaRpcEndpoint } from '@/infrastructure/chains/solana/solana-network-attestation'
 import { attestZcashLightwalletdEndpoint } from '@/infrastructure/chains/zcash/zcash-network-attestation'
 import type { RpcChainOption } from './chain-settings-options'
@@ -73,6 +74,10 @@ export async function probeChainRpcEndpoint(
         break
       case 'bitcoin-esplora':
         await attestBitcoinEsploraEndpoint(option.chainId, url, controller.signal)
+        break
+      case 'pearl-blockbook':
+      case 'pearl-json-rpc':
+        await attestPearlBlockbookEndpoint(option.chainId, url, controller.signal)
         break
       case 'solana-json-rpc':
         await attestSolanaRpcEndpoint({

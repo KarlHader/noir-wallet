@@ -144,7 +144,7 @@ test.describe('WASM package integrity', () => {
         rustToolchain: '1.96.1',
         wasmPack: '0.14.0',
         wasmBindgen: '0.2.126',
-        llvm: '22.1.4',
+        llvm: '22.1.8',
         target: 'web'
       },
       capabilities: ['account.bitcoin.derive', 'account.evm.derive'],
@@ -227,8 +227,8 @@ test.describe('WASM package integrity', () => {
     ).resolves.toMatchObject({
       schemaVersion: 2,
       engine: 'multichain',
-      abiVersion: 'wallet-engine-cbd8ffb-v5',
-      sourceCommit: 'cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a'
+      abiVersion: 'wallet-engine-cb993e0-v11',
+      sourceCommit: 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
     })
   })
 
@@ -281,7 +281,7 @@ test.describe('WASM package integrity', () => {
     expect(migrationWorker).toContain('await initZcash({ module_or_path: zcashWasmBytes })')
     expect(buildGate).toContain("engine: 'zcash'")
     expect(buildGate).toContain("engine: 'multichain'")
-    expect(buildGate).toContain("sourceCommit: 'cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a'")
+    expect(buildGate).toContain("sourceCommit: 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'")
     expect(buildGate).toContain('verifyWasmPackageIntegrity(directory, manifest)')
   })
 

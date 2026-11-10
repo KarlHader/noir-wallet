@@ -45,8 +45,9 @@ export interface AccountNetworksSummary {
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
         readonly kind: 'private-key'
-        readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
         readonly bitcoinNetwork?: 'mainnet' | 'testnet'
+        readonly pearlNetwork?: 'mainnet' | 'testnet'
       }>
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
@@ -280,7 +281,10 @@ export class AccountNetworksCoordinator {
                     chainFamily: keyDomain.source.chainFamily,
                     ...(keyDomain.source.bitcoinNetwork === undefined
                       ? {}
-                      : { bitcoinNetwork: keyDomain.source.bitcoinNetwork })
+                      : { bitcoinNetwork: keyDomain.source.bitcoinNetwork }),
+                    ...(keyDomain.source.pearlNetwork === undefined
+                      ? {}
+                      : { pearlNetwork: keyDomain.source.pearlNetwork })
                   })
                 : Object.freeze({
                     kind: 'hardware' as const,

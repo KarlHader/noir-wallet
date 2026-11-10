@@ -1,7 +1,13 @@
 import type { Network } from '@/types'
 import type { ChainFamily } from '@/core/chains/registry'
-import { parseChainId, getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
+import {
+  parseChainId,
+  getBitcoinChainId,
+  getPearlChainId,
+  getZcashChainId
+} from '@/core/chains/registry'
 import { parseSupportedBitcoinAddress } from '@/core/chains/bitcoin'
+import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { findBuiltinEvmNetworkConfig } from '@/config/networks'
 
 export const ADDRESS_BOOK_SCHEMA_VERSION = 2 as const
@@ -12,7 +18,7 @@ export interface AddressBookContact {
   readonly id: string
   readonly schemaVersion: typeof ADDRESS_BOOK_SCHEMA_VERSION
   readonly chainId: string
-  readonly chainFamily: Extract<ChainFamily, 'zcash' | 'evm' | 'bitcoin'>
+  readonly chainFamily: Extract<ChainFamily, 'zcash' | 'evm' | 'bitcoin' | 'pearl'>
   readonly network: Network
   readonly networkName: string
   readonly address: string
@@ -157,6 +163,13 @@ export function createAddressBookContact(
     address = parseSupportedBitcoinAddress(input.address, parsedChain.id)
     addressScheme = bitcoinAddressScheme(address)
     expectedNetworkName = input.network === 'mainnet' ? 'Bitcoin' : 'Bitcoin Testnet'
+  } else if (input.chainFamily === 'pearl') {
+    if (input.chainId !== getPearlChainId(input.network)) {
+      throw new Error('Pearl contact network does not match its chain')
+    }
+    address = parseSupportedPearlAddress(input.address, parsedChain.id)
+    addressScheme = 'pearl_p2tr'
+    expectedNetworkName = input.network === 'mainnet' ? 'Pearl' : 'Pearl Testnet'
   } else {
     if (input.chainId !== getZcashChainId(input.network)) {
       throw new Error('Zcash contact network does not match its chain')
@@ -204,7 +217,8 @@ export function parseAddressBookContact(value: unknown): AddressBookContact {
     typeof contact.chainId !== 'string' ||
     (contact.chainFamily !== 'zcash' &&
       contact.chainFamily !== 'evm' &&
-      contact.chainFamily !== 'bitcoin') ||
+      contact.chainFamily !== 'bitcoin' &&
+      contact.chainFamily !== 'pearl') ||
     (contact.network !== 'mainnet' && contact.network !== 'testnet') ||
     typeof contact.address !== 'string'
   ) {

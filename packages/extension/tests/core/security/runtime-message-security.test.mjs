@@ -423,6 +423,22 @@ test.describe('Runtime message security', () => {
     expect(
       parseDAppRuntimeRequestMessage({
         type: 'DAPP_REQUEST',
+        requestId: 'request-3p',
+        chainId: 'pearl',
+        request: { method: 'signMessage', params: ['hello', 'bip322-simple'] }
+      })
+    ).toMatchObject({ chainId: 'pearl', request: { method: 'signMessage' } })
+    expect(() =>
+      parseDAppRuntimeRequestMessage({
+        type: 'DAPP_REQUEST',
+        requestId: 'request-3q',
+        chainId: 'pearl',
+        request: { method: 'signPsbt', params: ['70736274ff'] }
+      })
+    ).toThrow(/provider/i)
+    expect(
+      parseDAppRuntimeRequestMessage({
+        type: 'DAPP_REQUEST',
         requestId: 'request-4',
         chainId: 'solana',
         request: { method: 'signMessage', params: ['aGVsbG8='] }

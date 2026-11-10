@@ -17,7 +17,7 @@ import {
   parseNearAccountId,
   parseNearPublicKey
 } from '@/core/chains/near'
-import { getBitcoinChainId, parseChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId, parseChainId } from '@/core/chains/registry'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
   buildChainAccountVerificationAnchorRef,
@@ -68,7 +68,7 @@ import { BackgroundMultichainTransport } from './multichain/background-transport
 
 export interface PrivateKeyProvisioningInput {
   readonly privateKey: string
-  readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
   readonly displayName: string
   readonly password: string
   readonly network: Network
@@ -78,7 +78,7 @@ export interface PrivateKeyProvisioningInput {
 export type PrivateKeyPreviewInput = Omit<PrivateKeyProvisioningInput, 'displayName'>
 
 export interface PrivateKeyPreviewResult {
-  readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
   readonly addresses: readonly Readonly<{
     chainId: string
     address: string
@@ -111,6 +111,7 @@ interface DerivedPublicAccount {
     | 'bitcoin-p2sh-p2wpkh'
     | 'bitcoin-p2wpkh'
     | 'bitcoin-p2tr'
+    | 'pearl_p2tr'
     | 'solana'
     | 'near'
   readonly publicKey: string
@@ -169,12 +170,15 @@ function privateKeyScopeMatches(
   candidate: {
     readonly chainFamily: PrivateKeyCredentialScope['chainFamily']
     readonly bitcoinNetwork?: Network
+    readonly pearlNetwork?: Network
   },
   scope: PrivateKeyCredentialScope
 ): boolean {
   return (
     candidate.chainFamily === scope.chainFamily &&
-    candidate.bitcoinNetwork === (scope.chainFamily === 'bip122' ? scope.bitcoinNetwork : undefined)
+    candidate.bitcoinNetwork ===
+      (scope.chainFamily === 'bip122' ? scope.bitcoinNetwork : undefined) &&
+    candidate.pearlNetwork === (scope.chainFamily === 'pearl' ? scope.pearlNetwork : undefined)
   )
 }
 
@@ -216,6 +220,84 @@ function bitcoinAddressScheme(addressType: BitcoinSupportedAddressType) {
     case 'p2tr':
       return 'bitcoin-p2tr' as const
   }
+}
+
+function parseDerivedPearlPublicAccount(value: unknown, chainId: string): DerivedPublicAccount {
+  const record = readRecord(value, 'Imported Pearl private-key public account')
+  assertExactKeys(
+    record,
+    ['chainId', 'derivation', 'identity', 'addresses', 'publicKey'],
+    ['masterFingerprint', 'scriptPubKey'],
+    'Imported Pearl private-key public account'
+  )
+  if (
+    record.chainId !== chainId ||
+    !Array.isArray(record.addresses) ||
+    record.addresses.length !== 1
+  ) {
+    throw new Error('Imported Pearl private-key public account does not match its request')
+  }
+  const derivation = readRecord(record.derivation, 'Imported Pearl private-key derivation')
+  const identity = readRecord(record.identity, 'Imported Pearl private-key identity')
+  const address = readRecord(record.addresses[0], 'Imported Pearl private-key address')
+  const addressDerivation = readRecord(
+    address.derivation,
+    'Imported Pearl private-key address derivation'
+  )
+  assertExactKeys(derivation, ['scheme', 'path'], [], 'Imported Pearl private-key derivation')
+  assertExactKeys(identity, ['kind', 'value'], [], 'Imported Pearl private-key identity')
+  assertExactKeys(
+    address,
+    ['value', 'scheme', 'purpose', 'derivation'],
+    [],
+    'Imported Pearl private-key address'
+  )
+  assertExactKeys(
+    addressDerivation,
+    ['scheme', 'path'],
+    [],
+    'Imported Pearl private-key address derivation'
+  )
+  readLiteral(identity.kind, ['account-identifier'], 'Imported Pearl private-key identity kind')
+  readLiteral(derivation.scheme, ['imported'], 'Imported Pearl private-key derivation scheme')
+  readLiteral(
+    addressDerivation.scheme,
+    ['imported'],
+    'Imported Pearl private-key address derivation scheme'
+  )
+  if (derivation.path !== 'm' || addressDerivation.path !== 'm') {
+    throw new Error('Imported Pearl private-key derivation path is invalid')
+  }
+  const addressValue = readString(address.value, 'Imported Pearl private-key address', 128)
+  if (identity.value !== addressValue) {
+    throw new Error('Imported Pearl private-key identity does not match its address')
+  }
+  if (address.scheme !== 'pearl_p2tr' || address.purpose !== 'receive') {
+    throw new Error('Imported Pearl private-key account is invalid')
+  }
+  const expectedPrefix =
+    chainId === getPearlChainId('mainnet')
+      ? 'prl1p'
+      : chainId === getPearlChainId('testnet')
+        ? 'tprl1p'
+        : null
+  if (expectedPrefix === null || !addressValue.startsWith(expectedPrefix)) {
+    throw new Error('Imported Pearl private-key address is invalid')
+  }
+  const publicKey = readHex(record.publicKey, 'Imported Pearl private-key public key')
+  if (!/^0x0[23][0-9a-f]{64}$/.test(publicKey)) {
+    throw new Error('Imported Pearl private-key public key is invalid')
+  }
+  return Object.freeze({
+    chainId,
+    address: addressValue,
+    addressScheme: 'pearl_p2tr',
+    publicKey,
+    masterFingerprint: readHex(record.masterFingerprint, 'Imported Pearl fingerprint', {
+      bytes: 4
+    }),
+    scriptPubKey: readHex(record.scriptPubKey, 'Imported Pearl scriptPubKey')
+  })
 }
 
 function parseDerivedPublicAccount(
@@ -454,6 +536,7 @@ export class PrivateKeyProvisioningCoordinator {
                   item.addressScheme === 'evm' ||
                   item.addressScheme === 'solana' ||
                   item.addressScheme === 'near' ||
+                  item.addressScheme === 'pearl_p2tr' ||
                   item.addressScheme === 'bitcoin-p2wpkh'
               })
             )
@@ -496,7 +579,9 @@ export class PrivateKeyProvisioningCoordinator {
         ? Object.freeze({ chainFamily: 'eip155' })
         : input.chainFamily === 'bip122'
           ? Object.freeze({ chainFamily: 'bip122', bitcoinNetwork: input.network })
-          : Object.freeze({ chainFamily: input.chainFamily })
+          : input.chainFamily === 'pearl'
+            ? Object.freeze({ chainFamily: 'pearl', pearlNetwork: input.network })
+            : Object.freeze({ chainFamily: input.chainFamily })
     const provisionalHash = await sha256(
       JSON.stringify([
         'private-key-provision-v2',
@@ -543,7 +628,8 @@ export class PrivateKeyProvisioningCoordinator {
             privateKey: input.privateKey,
             password: input.password,
             chainFamily: input.chainFamily,
-            ...(input.chainFamily === 'bip122' ? { bitcoinNetwork: input.network } : {})
+            ...(input.chainFamily === 'bip122' ? { bitcoinNetwork: input.network } : {}),
+            ...(input.chainFamily === 'pearl' ? { pearlNetwork: input.network } : {})
           } as KeyringCommandPayload
         },
         parseRawEncryptedVault
@@ -591,6 +677,24 @@ export class PrivateKeyProvisioningCoordinator {
             )
           )
         )
+      } else if (input.chainFamily === 'pearl') {
+        const pearlChainId = parseChainId(getPearlChainId(input.network)).id
+        derived = Object.freeze([
+          await commandClient.execute(
+            {
+              operation: 'account.derive-public',
+              binding,
+              payload: {
+                family: 'pearl',
+                chainId: pearlChainId,
+                accountIndex: 0,
+                change: false,
+                addressIndex: 0
+              }
+            },
+            value => parseDerivedPearlPublicAccount(value, pearlChainId)
+          )
+        ])
       } else {
         const chainId = parseChainId(
           input.chainFamily === 'solana'

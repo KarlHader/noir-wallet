@@ -43,6 +43,39 @@ interface EarlyEthereumProviderRegistration {
   readonly attach: (provider: EthereumProvider) => void
 }
 
+interface PearlProvider {
+  request: (args: ProviderRequestArguments) => Promise<unknown>
+  connect: () => Promise<{ readonly address: string; readonly publicKey: string }>
+  requestAccounts: () => Promise<readonly string[]>
+  getAccounts: () => Promise<readonly string[]>
+  getNetwork: () => Promise<'mainnet' | 'testnet'>
+  getChain: () => Promise<Readonly<Record<string, unknown>>>
+  getPublicKey: () => Promise<string>
+  getBalance: () => Promise<{
+    readonly confirmed: number
+    readonly unconfirmed: number
+    readonly total: number
+  }>
+  sendPearl: (
+    recipient: string,
+    satoshis: number,
+    options?: { readonly feeRate?: number }
+  ) => Promise<string>
+  signMessage: (message: string, type?: 'bip322-simple') => Promise<string>
+  signPsbt: (psbtHex: string, options?: { readonly autoFinalized?: boolean }) => Promise<string>
+  signPsbts: (
+    psbtHexes: readonly string[],
+    options?: readonly ({ readonly autoFinalized?: boolean } | undefined)[]
+  ) => Promise<readonly string[]>
+  pushPsbt: (psbtHex: string) => Promise<string>
+  pushTx: (options: { readonly rawtx: string }) => Promise<string>
+  switchNetwork: (network: 'mainnet' | 'testnet') => Promise<null>
+  switchChain: (chain: { readonly enum: 'PEARL_MAINNET' | 'PEARL_TESTNET' }) => Promise<null>
+  on: (event: string, handler: ProviderListener) => PearlProvider
+  removeListener: (event: string, handler: ProviderListener) => PearlProvider
+  disconnect: () => Promise<void>
+}
+
 interface BitcoinProvider {
   request: (args: ProviderRequestArguments) => Promise<unknown>
   connect: () => Promise<{ readonly address: string; readonly publicKey: string }>
@@ -151,6 +184,7 @@ interface NoirWalletProvider {
   readonly zcash: ChainProvider
   readonly ethereum?: EthereumProvider
   readonly bitcoin?: BitcoinProvider
+  readonly pearl?: PearlProvider
   readonly solana?: SolanaProvider
   readonly near?: NearProvider
 }
@@ -177,6 +211,7 @@ const networkMode = import.meta.env.NOIR_NETWORK_MODE
 const enabledChainFeatureFlags = import.meta.env.NOIR_ENABLED_CHAIN_FEATURE_FLAGS
 const evmProviderEnabled = enabledChainFeatureFlags.includes('chain.evm')
 const bitcoinProviderEnabled = enabledChainFeatureFlags.includes('chain.bitcoin')
+const pearlProviderEnabled = enabledChainFeatureFlags.includes('chain.pearl')
 const solanaProviderEnabled = enabledChainFeatureFlags.includes('chain.solana')
 const nearProviderEnabled = enabledChainFeatureFlags.includes('chain.near')
 const REQUEST_TIMEOUT_MS = 300_000
@@ -240,7 +275,7 @@ function removeProviderListener(chainId: string, event: string, handler: Provide
 }
 
 async function requestProvider(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'multichain',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain',
   args: ProviderRequestArguments
 ) {
   if (
@@ -492,6 +527,60 @@ function createBitcoinProvider(): BitcoinProvider {
     },
     removeListener(event, handler) {
       removeProviderListener('bitcoin', event, handler)
+      return provider
+    },
+    async disconnect() {
+      await request('disconnect')
+    }
+  }
+  return Object.freeze(provider)
+}
+
+function createPearlProvider(): PearlProvider {
+  const request = (method: string, params: readonly unknown[] = []) =>
+    requestProvider('pearl', { method, params })
+  const provider: PearlProvider = {
+    request: args => requestProvider('pearl', args),
+    connect: () =>
+      request('connect') as Promise<{ readonly address: string; readonly publicKey: string }>,
+    requestAccounts: () => request('requestAccounts') as Promise<readonly string[]>,
+    getAccounts: () => request('getAccounts') as Promise<readonly string[]>,
+    getNetwork: () => request('getNetwork') as Promise<'mainnet' | 'testnet'>,
+    getChain: () => request('getChain') as Promise<Readonly<Record<string, unknown>>>,
+    getPublicKey: () => request('getPublicKey') as Promise<string>,
+    getBalance: () =>
+      request('getBalance') as Promise<{
+        readonly confirmed: number
+        readonly unconfirmed: number
+        readonly total: number
+      }>,
+    sendPearl: (recipient, satoshis, options) =>
+      request('sendPearl', [
+        recipient,
+        satoshis,
+        ...(options === undefined ? [] : [options])
+      ]) as Promise<string>,
+    signMessage: (message, type) =>
+      request('signMessage', [message, ...(type === undefined ? [] : [type])]) as Promise<string>,
+    signPsbt: (psbtHex, options) =>
+      request('signPsbt', [
+        psbtHex,
+        ...(options === undefined ? [] : [options])
+      ]) as Promise<string>,
+    signPsbts: (psbtHexes, options) =>
+      request('signPsbts', [psbtHexes, ...(options === undefined ? [] : [options])]) as Promise<
+        readonly string[]
+      >,
+    pushPsbt: psbtHex => request('pushPsbt', [psbtHex]) as Promise<string>,
+    pushTx: options => request('pushTx', [options]) as Promise<string>,
+    switchNetwork: network => request('switchNetwork', [network]) as Promise<null>,
+    switchChain: chain => request('switchChain', [chain]) as Promise<null>,
+    on(event, handler) {
+      addProviderListener('pearl', event, handler)
+      return provider
+    },
+    removeListener(event, handler) {
+      removeProviderListener('pearl', event, handler)
       return provider
     },
     async disconnect() {
@@ -784,6 +873,7 @@ const ethereumProvider = underlyingEthereumProvider
   ? (earlyEthereumProvider?.provider ?? underlyingEthereumProvider)
   : null
 const bitcoinProvider = bitcoinProviderEnabled ? createBitcoinProvider() : null
+const pearlProvider = pearlProviderEnabled ? createPearlProvider() : null
 const solanaProvider = solanaProviderEnabled ? createSolanaProvider() : null
 const nearProvider = nearProviderEnabled ? createNearProvider() : null
 const multichainProvider = createMultichainProvider()
@@ -795,6 +885,7 @@ const noirWalletProvider: NoirWalletProvider = Object.freeze({
   zcash: createZcashProvider(),
   ...(ethereumProvider ? { ethereum: ethereumProvider } : {}),
   ...(bitcoinProvider ? { bitcoin: bitcoinProvider } : {}),
+  ...(pearlProvider ? { pearl: pearlProvider } : {}),
   ...(solanaProvider ? { solana: solanaProvider } : {}),
   ...(nearProvider ? { near: nearProvider } : {})
 })
@@ -807,6 +898,7 @@ window.addEventListener('message', event => {
     event.data.chainId !== 'zcash' &&
     event.data.chainId !== 'evm' &&
     event.data.chainId !== 'bitcoin' &&
+    event.data.chainId !== 'pearl' &&
     event.data.chainId !== 'solana' &&
     event.data.chainId !== 'near' &&
     event.data.chainId !== 'multichain'

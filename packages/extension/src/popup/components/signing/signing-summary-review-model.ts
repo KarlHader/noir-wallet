@@ -1,4 +1,10 @@
-import type { SigningSummary } from '@/core/keyring/domain'
+import type {
+  BitcoinBip322MessageSummary,
+  BitcoinPsbtSummary,
+  PearlBip322MessageSummary,
+  PearlPsbtSummary,
+  SigningSummary
+} from '@/core/keyring/domain'
 import {
   bitcoinMessageReview,
   bitcoinPsbtReview,
@@ -20,6 +26,36 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported signing summary schema: ${JSON.stringify(value)}`)
 }
 
+function pearlReview(
+  summary: PearlPsbtSummary | PearlBip322MessageSummary
+): SigningSummaryReviewModel {
+  const bitcoinReview =
+    summary.schema === 'pearl.psbt.v1'
+      ? bitcoinPsbtReview({ ...summary, schema: 'bitcoin.psbt.v1' } as BitcoinPsbtSummary)
+      : bitcoinMessageReview({
+          ...summary,
+          schema: 'bitcoin.bip322-message.v1'
+        } as BitcoinBip322MessageSummary)
+  const request = bitcoinReview.sections.at(-1)
+  if (!request) throw new Error('Missing signing request review')
+  return {
+    ...bitcoinReview,
+    title: summary.schema === 'pearl.psbt.v1' ? 'Sign Pearl transaction' : 'Sign Pearl message',
+    ...(summary.schema === 'pearl.bip322-message.v1'
+      ? { description: 'BIP-322 proves control of the selected Pearl address.' }
+      : {}),
+    sections: [
+      ...bitcoinReview.sections.slice(0, -1),
+      {
+        ...request,
+        rows: request.rows.map(row =>
+          row.label === 'Schema' ? { ...row, value: summary.schema } : row
+        )
+      }
+    ]
+  }
+}
+
 export function buildSigningSummaryReviewModel(
   summary: SigningSummary,
   evmOptions: EvmReviewPresentationOptions = {}
@@ -39,6 +75,9 @@ export function buildSigningSummaryReviewModel(
       return bitcoinPsbtReview(summary)
     case 'bitcoin.bip322-message.v1':
       return bitcoinMessageReview(summary)
+    case 'pearl.psbt.v1':
+    case 'pearl.bip322-message.v1':
+      return pearlReview(summary)
     case 'solana.transaction.v1':
       return solanaTransactionReview(summary)
     case 'solana.message.v1':

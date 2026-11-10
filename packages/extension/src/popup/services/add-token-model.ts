@@ -58,13 +58,15 @@ export function buildAddTokenNetworks(
           }
         ]
       : []),
-    ...deferredChainChoices(enabledFlags).map(choice => ({
-      chainId: `coming-soon:${choice.family}`,
-      displayName: choice.label,
-      iconChain: choice.iconAlias,
-      family: choice.family,
-      disabled: true as const
-    }))
+    ...deferredChainChoices(enabledFlags)
+      .filter(choice => choice.family !== 'pearl')
+      .map(choice => ({
+        chainId: `coming-soon:${choice.family}`,
+        displayName: choice.label,
+        iconChain: choice.iconAlias,
+        family: choice.family,
+        disabled: true as const
+      }))
   ])
 }
 

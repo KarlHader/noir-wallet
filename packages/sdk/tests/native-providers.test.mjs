@@ -4,6 +4,7 @@ import test from 'node:test'
 import { getNearProvider } from '../dist/chains/near/index.mjs'
 import { getSolanaProvider } from '../dist/chains/solana/index.mjs'
 import { getBitcoinProvider } from '../dist/chains/bitcoin/index.mjs'
+import { getPearlProvider } from '../dist/chains/pearl/index.mjs'
 
 function solanaProvider() {
   return {
@@ -70,6 +71,43 @@ function bitcoinProvider() {
     disconnect: async () => {}
   }
 }
+
+function pearlProvider() {
+  return {
+    request: async () => null,
+    connect: async () => ({ address: 'prl1pexample', publicKey: '02'.padEnd(66, '0') }),
+    requestAccounts: async () => [],
+    getAccounts: async () => [],
+    getNetwork: async () => 'mainnet',
+    getChain: async () => ({ enum: 'PEARL_MAINNET', name: 'Pearl', network: 'mainnet' }),
+    getPublicKey: async () => '02',
+    getBalance: async () => ({ confirmed: 0, unconfirmed: 0, total: 0 }),
+    signMessage: async () => 'c2lnbmF0dXJl',
+    switchNetwork: async () => null,
+    switchChain: async () => null,
+    on() {
+      return this
+    },
+    removeListener() {
+      return this
+    },
+    disconnect: async () => {}
+  }
+}
+
+test('discovers an enabled Pearl provider without PSBT or send entry points', () => {
+  const pearl = pearlProvider()
+  globalThis.window = { noirwallet: { pearl } }
+  try {
+    assert.equal(getPearlProvider(), pearl)
+    assert.equal(pearl.signPsbt, undefined)
+    assert.equal(pearl.sendBitcoin, undefined)
+    delete pearl.signMessage
+    assert.equal(getPearlProvider(), null)
+  } finally {
+    delete globalThis.window
+  }
+})
 
 test('discovers independently enabled Solana and NEAR providers', () => {
   const solana = solanaProvider()

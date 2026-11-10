@@ -2319,10 +2319,6 @@ export class BackgroundZcashWalletRuntime {
     if (!credential || credential.kind === 'hardware') {
       throw new Error('Wallet credential is unavailable')
     }
-    if (credential.kind === 'session' && network === this.network) {
-      throw new Error('Cross-network public derivation requires a distinct network')
-    }
-
     const derived: Record<string, AccountAddresses> = {}
     for (const account of wallet.accounts) {
       if (credential.kind === 'seed') {
@@ -2332,6 +2328,16 @@ export class BackgroundZcashWalletRuntime {
           account.derivationIndex
         )
       } else {
+        const cached = account.networkAddresses?.[network]
+        if (
+          network === this.network &&
+          cached &&
+          cached.transparent.length > 0 &&
+          cached.shielded.length > 0
+        ) {
+          derived[account.id] = cached
+          continue
+        }
         const addresses = await getWorkerClient(walletId).getSessionAddresses(
           account.derivationIndex,
           network

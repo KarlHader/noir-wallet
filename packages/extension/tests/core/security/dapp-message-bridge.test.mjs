@@ -295,6 +295,33 @@ describe('dApp message bridge', () => {
     ])
   })
 
+  it('routes enabled Pearl requests and closes the provider when disabled', async () => {
+    const enabled = createBridgeHarness(
+      [{ requestId: 'request-1', result: ['prl1paccount'] }],
+      ['chain.evm', 'chain.pearl']
+    )
+    await enabled.request('getAccounts', 'request-1', 'pearl')
+    assert.deepEqual(plain(enabled.sentMessages), [
+      {
+        type: 'DAPP_REQUEST',
+        requestId: 'request-1',
+        chainId: 'pearl',
+        request: { method: 'getAccounts' }
+      }
+    ])
+
+    const disabled = createBridgeHarness([], ['chain.evm'])
+    await disabled.request('getAccounts', 'request-2', 'pearl')
+    assert.equal(disabled.sentMessages.length, 0)
+    assert.deepEqual(plain(disabled.postedMessages), [
+      {
+        target: 'noir-provider',
+        requestId: 'request-2',
+        error: { code: 4200, message: 'The Pearl provider is unavailable in this wallet build.' }
+      }
+    ])
+  })
+
   it('correlates every background response with the provider request ID', () => {
     assert.match(
       backgroundSource,
@@ -308,6 +335,10 @@ describe('dApp message bridge', () => {
     assert.match(
       backgroundSource,
       /chainId === 'bitcoin' && !bitcoinFeatureRuntimePolicy\.newOperationsEnabled/
+    )
+    assert.match(
+      backgroundSource,
+      /chainId === 'pearl' && !pearlFeatureRuntimePolicy\.newOperationsEnabled/
     )
   })
 })

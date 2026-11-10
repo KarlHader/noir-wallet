@@ -2,9 +2,14 @@ import {
   BITCOIN_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
-import { getBitcoinNetworkConfig, getEvmNetworkConfigs } from '@/config/networks'
+import {
+  getBitcoinNetworkConfig,
+  getEvmNetworkConfigs,
+  getPearlNetworkConfig
+} from '@/config/networks'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import {
   resolveNearRuntimeNetworkConfig,
@@ -15,6 +20,10 @@ import {
   createBitcoinActivityHistorySource,
   createConfiguredBitcoinEsploraClient
 } from '../chains/bitcoin'
+import {
+  createConfiguredPearlBlockbookClient,
+  createPearlActivityHistorySource
+} from '../chains/pearl'
 import {
   buildTrackedErc20Assets,
   createEvmActivityHistoryBatchReader,
@@ -30,10 +39,12 @@ export function createConfiguredActivityHistorySources(input: {
   readonly network: Network
   readonly enabledChainFeatureFlags: readonly string[]
   readonly bitcoinCustomRpcUrl?: string
+  readonly pearlCustomRpcUrl?: string
   readonly endpointSettings?: ChainEndpointSettings
 }) {
   const enabled = new Set(input.enabledChainFeatureFlags)
   const bitcoinNetwork = getBitcoinNetworkConfig(input.network)
+  const pearlNetwork = getPearlNetworkConfig(input.network)
   const evmNetworks = enabled.has(EVM_CHAIN_FEATURE_FLAG) ? getEvmNetworkConfigs(input.network) : []
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(input.network, input.endpointSettings)
   const nearNetwork = resolveNearRuntimeNetworkConfig(input.network, input.endpointSettings)
@@ -46,6 +57,15 @@ export function createConfiguredActivityHistorySources(input: {
           assetId: `${bitcoinNetwork.chainId}/slip44:0`,
           requiredConfirmations: bitcoinNetwork.requiredConfirmations,
           rpc: createConfiguredBitcoinEsploraClient(input.network, input.bitcoinCustomRpcUrl)
+        })
+      : undefined,
+    pearlNetwork,
+    pearlHistory: enabled.has(PEARL_CHAIN_FEATURE_FLAG)
+      ? createPearlActivityHistorySource({
+          chainId: pearlNetwork.chainId,
+          assetId: `${pearlNetwork.chainId}/slip44:808276`,
+          requiredConfirmations: pearlNetwork.requiredConfirmations,
+          rpc: createConfiguredPearlBlockbookClient(input.network, input.pearlCustomRpcUrl)
         })
       : undefined,
     evmHistorySources: Object.freeze(

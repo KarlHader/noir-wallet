@@ -21,14 +21,19 @@ export type CredentialEngine = 'zcash' | 'multichain'
 export type CredentialSetSource = 'software' | 'private-key' | 'hardware'
 export type MnemonicWordCount = 12 | 24
 export type ZcashSeedPolicy = 'direct-bip39-v1'
-export type PrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near'
+export type PrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
 export type PrivateKeyBitcoinNetwork = 'mainnet' | 'testnet'
+export type PrivateKeyPearlNetwork = 'mainnet' | 'testnet'
 
 export type PrivateKeyCredentialScope =
   | Readonly<{ readonly chainFamily: 'eip155' }>
   | Readonly<{
       readonly chainFamily: 'bip122'
       readonly bitcoinNetwork: PrivateKeyBitcoinNetwork
+    }>
+  | Readonly<{
+      readonly chainFamily: 'pearl'
+      readonly pearlNetwork: PrivateKeyPearlNetwork
     }>
   | Readonly<{ readonly chainFamily: 'solana' | 'near' }>
 
@@ -276,6 +281,21 @@ export function parseCredentialSetManifest(value: unknown): CredentialSetManifes
         ...base,
         source: 'private-key',
         privateKey: Object.freeze({ chainFamily }),
+        engines: Object.freeze({ multichain })
+      })
+    }
+    if (
+      chainFamily === 'pearl' &&
+      hasExactKeys(value.privateKey, ['chainFamily', 'pearlNetwork']) &&
+      (value.privateKey.pearlNetwork === 'mainnet' || value.privateKey.pearlNetwork === 'testnet')
+    ) {
+      return Object.freeze({
+        ...base,
+        source: 'private-key',
+        privateKey: Object.freeze({
+          chainFamily,
+          pearlNetwork: value.privateKey.pearlNetwork
+        }),
         engines: Object.freeze({ multichain })
       })
     }

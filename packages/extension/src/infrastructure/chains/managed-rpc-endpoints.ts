@@ -10,10 +10,15 @@ import {
   RPC_DEFAULT_ENDPOINTS,
   type RpcEndpointOption
 } from '@/config/rpc-endpoints'
-import { getBitcoinChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId } from '@/core/chains/registry'
 import { getManagedRpcEndpointOptions } from './rpc-registry-client'
 
 interface BitcoinEsploraEndpointConfig {
+  readonly id: string
+  readonly baseUrl: string
+}
+
+interface PearlBlockbookEndpointConfig {
   readonly id: string
   readonly baseUrl: string
 }
@@ -45,6 +50,16 @@ export function resolveBitcoinRpcEndpointOptions(
     'bitcoin-esplora'
   )
   return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.bitcoin[network]).map(endpoint => ({
+    id: endpoint.id,
+    baseUrl: endpoint.url
+  }))
+}
+
+export function resolvePearlRpcEndpointOptions(
+  network: Network
+): readonly PearlBlockbookEndpointConfig[] {
+  const managed = getManagedRpcEndpointOptions(getPearlChainId(network), network, 'pearl-blockbook')
+  return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.pearl[network]).map(endpoint => ({
     id: endpoint.id,
     baseUrl: endpoint.url
   }))

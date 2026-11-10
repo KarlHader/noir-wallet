@@ -5,8 +5,10 @@ export const RAW_BITCOIN_ADDRESS_TYPES = Object.freeze([
   'p2tr'
 ] as const)
 export type RawBitcoinAddressType = (typeof RAW_BITCOIN_ADDRESS_TYPES)[number]
-export type RawPrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near'
+export type RawPrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
 export type RawBitcoinNetwork = 'mainnet' | 'testnet'
+export type RawPearlNetwork = 'mainnet' | 'testnet2' | 'regtest'
+export type RawPearlKeyNetwork = 'mainnet' | 'testnet2'
 export const MAX_BIP32_INDEX = 0x7fffffff
 export const MAX_UINT64 = (1n << 64n) - 1n
 export const MAX_UINT256 = (1n << 256n) - 1n
@@ -37,6 +39,21 @@ export interface RawWalletEngine {
     sessionId: number,
     chainId: string,
     addressType: RawBitcoinAddressType,
+    accountIndex: number,
+    change: boolean,
+    startAddressIndex: number,
+    count: number
+  ): unknown
+  derivePearlAccount(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    change: boolean,
+    addressIndex: number
+  ): unknown
+  derivePearlAccounts(
+    sessionId: number,
+    chainId: string,
     accountIndex: number,
     change: boolean,
     startAddressIndex: number,
@@ -86,6 +103,16 @@ export interface RawWalletEngine {
   confirmBitcoinPsbt(sessionId: number, requestId: number): unknown
   prepareBitcoinMessage(sessionId: number, request: unknown): unknown
   confirmBitcoinMessage(sessionId: number, requestId: number): unknown
+  preparePearlPsbt(sessionId: number, chainId: string, accountIndex: number, psbt: string): unknown
+  confirmPearlPsbt(sessionId: number, requestId: number): unknown
+  preparePearlMessage(sessionId: number, request: unknown): unknown
+  confirmPearlMessage(sessionId: number, requestId: number): unknown
+  verifyPearlMessage(
+    chainId: string,
+    address: string,
+    message: Uint8Array,
+    signature: string
+  ): boolean
   prepareSolanaTransaction(
     sessionId: number,
     chainId: string,
@@ -331,32 +358,59 @@ export interface RawSessionInfo {
   readonly kind: 'mnemonic' | 'private_key'
   readonly chainFamily?: RawPrivateKeyChainFamily
   readonly bitcoinNetwork?: RawBitcoinNetwork
+  readonly pearlNetwork?: RawPearlKeyNetwork
+}
+
+function parseRawPearlKeyNetwork(value: unknown, label: string): RawPearlKeyNetwork {
+  return readLiteral(value, ['mainnet', 'testnet2'], label)
 }
 
 export function parseRawSessionInfo(value: unknown): RawSessionInfo {
   const record = readRecord(value, 'Session')
-  assertExactKeys(record, ['sessionId', 'kind'], ['chainFamily', 'bitcoinNetwork'], 'Session')
+  assertExactKeys(
+    record,
+    ['sessionId', 'kind'],
+    [
+      'chainFamily',
+      'bitcoinNetwork',
+      'pearlNetwork',
+      'dashNetwork',
+      'quantusScheme',
+      'starknetAccountAddress'
+    ],
+    'Session'
+  )
   const sessionId = readSafeInteger(record.sessionId, 'Session.sessionId')
   if (sessionId === 0) throw new Error('Session.sessionId must be positive')
   const kind = readLiteral(record.kind, ['mnemonic', 'private_key'], 'Session.kind')
   if (kind === 'mnemonic') {
-    if (record.chainFamily !== undefined || record.bitcoinNetwork !== undefined) {
+    if (
+      record.chainFamily !== undefined ||
+      record.bitcoinNetwork !== undefined ||
+      record.pearlNetwork !== undefined
+    ) {
       throw new Error('Mnemonic Session must not expose a private-key scope')
     }
     return Object.freeze({ sessionId, kind })
   }
   const chainFamily = readLiteral(
     record.chainFamily,
-    ['eip155', 'bip122', 'solana', 'near'],
+    ['eip155', 'bip122', 'solana', 'near', 'pearl'],
     'Session.chainFamily'
   )
   const bitcoinNetwork =
     record.bitcoinNetwork === undefined
       ? undefined
       : readLiteral(record.bitcoinNetwork, ['mainnet', 'testnet'], 'Session.bitcoinNetwork')
+  const pearlNetwork =
+    record.pearlNetwork === undefined
+      ? undefined
+      : parseRawPearlKeyNetwork(record.pearlNetwork, 'Session.pearlNetwork')
   if (
     (chainFamily !== 'bip122' && bitcoinNetwork !== undefined) ||
-    (chainFamily === 'bip122' && bitcoinNetwork === undefined)
+    (chainFamily === 'bip122' && bitcoinNetwork === undefined) ||
+    (chainFamily !== 'pearl' && pearlNetwork !== undefined) ||
+    (chainFamily === 'pearl' && pearlNetwork === undefined)
   ) {
     throw new Error('Private-key Session scope is invalid')
   }
@@ -364,7 +418,8 @@ export function parseRawSessionInfo(value: unknown): RawSessionInfo {
     sessionId,
     kind,
     chainFamily,
-    ...(bitcoinNetwork === undefined ? {} : { bitcoinNetwork })
+    ...(bitcoinNetwork === undefined ? {} : { bitcoinNetwork }),
+    ...(pearlNetwork === undefined ? {} : { pearlNetwork })
   })
 }
 
@@ -756,6 +811,114 @@ export function assertRawBitcoinAccountMatches(
   }
 }
 
+export interface RawDerivedPearlAccount extends Omit<
+  RawDerivedAccount,
+  'addressScheme' | 'derivationScheme'
+> {
+  readonly addressScheme: 'pearl_p2tr'
+  readonly derivationScheme: 'bip86' | 'imported'
+  readonly masterFingerprint: string
+  readonly network: RawPearlNetwork
+  readonly scriptPubKey: string
+}
+
+const PEARL_MAINNET_CHAIN_ID = 'bip122:a18d3093b7ff618f0cdd073fa3d10374'
+const PEARL_TESTNET_CHAIN_ID = 'bip122:b0c86d0cd8825f4d72260d2de46f4704'
+
+export function parseRawPearlAccount(value: unknown): RawDerivedPearlAccount {
+  const record = readRecord(value, 'DerivedPearlAccount')
+  assertExactKeys(
+    record,
+    [
+      'accountId',
+      'address',
+      'derivationPath',
+      'publicKey',
+      'curve',
+      'addressScheme',
+      'derivationScheme',
+      'masterFingerprint',
+      'network',
+      'scriptPubKey'
+    ],
+    [],
+    'DerivedPearlAccount'
+  )
+  const publicKey = readHex(record.publicKey, 'DerivedPearlAccount.publicKey')
+  if (!/^0x0[23][0-9a-f]{64}$/.test(publicKey)) {
+    throw new Error('Derived Pearl public key is invalid')
+  }
+  const account = Object.freeze({
+    accountId: readString(record.accountId, 'DerivedPearlAccount.accountId', 256),
+    address: readString(record.address, 'DerivedPearlAccount.address', 128),
+    derivationPath: readString(record.derivationPath, 'DerivedPearlAccount.derivationPath', 128),
+    publicKey,
+    curve: readLiteral(record.curve, ['secp256k1'], 'DerivedPearlAccount.curve'),
+    addressScheme: readLiteral(
+      record.addressScheme,
+      ['pearl_p2tr'],
+      'DerivedPearlAccount.addressScheme'
+    ),
+    derivationScheme: readLiteral(
+      record.derivationScheme,
+      ['bip86', 'imported'],
+      'DerivedPearlAccount.derivationScheme'
+    ),
+    masterFingerprint: readHex(record.masterFingerprint, 'DerivedPearlAccount.masterFingerprint', {
+      bytes: 4
+    }),
+    network: readLiteral(
+      record.network,
+      ['mainnet', 'testnet2', 'regtest'],
+      'DerivedPearlAccount.network'
+    ),
+    scriptPubKey: readHex(record.scriptPubKey, 'DerivedPearlAccount.scriptPubKey')
+  })
+  const validAddress =
+    account.network === 'mainnet'
+      ? account.address.startsWith('prl1p')
+      : account.network === 'testnet2'
+        ? account.address.startsWith('tprl1p')
+        : account.address.startsWith('rprl1p')
+  if (!validAddress || !/^0x5120[0-9a-f]{64}$/.test(account.scriptPubKey)) {
+    throw new Error('Derived Pearl address or script is invalid')
+  }
+  return account
+}
+
+export function assertRawPearlAccountMatches(
+  account: RawDerivedPearlAccount,
+  chainId: string,
+  accountIndex: number,
+  change: boolean,
+  addressIndex: number,
+  imported = false
+): void {
+  const expectedNetwork =
+    chainId === PEARL_MAINNET_CHAIN_ID
+      ? 'mainnet'
+      : chainId === PEARL_TESTNET_CHAIN_ID
+        ? 'testnet2'
+        : null
+  if (expectedNetwork === null) {
+    throw new Error('Unsupported Pearl chain ID')
+  }
+  const coinType = expectedNetwork === 'mainnet' ? 808276 : 1
+  const expectedPath = imported
+    ? 'm'
+    : `m/86'/${coinType}'/${accountIndex}'/${change ? 1 : 0}/${addressIndex}`
+  if (
+    account.accountId !== `${chainId}:${account.address}` ||
+    account.network !== expectedNetwork ||
+    account.addressScheme !== 'pearl_p2tr' ||
+    account.derivationScheme !== (imported ? 'imported' : 'bip86') ||
+    account.derivationPath !== expectedPath ||
+    (imported && (accountIndex !== 0 || change || addressIndex !== 0))
+  ) {
+    throw new Error('Derived Pearl account does not match its request')
+  }
+}
+
 export interface RawExportedPrivateKey {
   readonly chainId: string
   readonly format: 'hex' | 'wif' | 'base58' | 'near_ed25519'
@@ -888,6 +1051,52 @@ export function parseRawSignedBitcoinMessage(value: unknown) {
     ...(witnessBase64 === undefined ? {} : { witnessBase64 }),
     address: readString(record.address, 'SignedBitcoinMessage.address', 128),
     messageHash: readHex(record.messageHash, 'SignedBitcoinMessage.messageHash', { bytes: 32 })
+  })
+}
+
+export function parseRawSignedPearlPsbt(value: unknown) {
+  const record = readRecord(value, 'SignedPearlPsbt')
+  assertExactKeys(record, ['psbt', 'unsignedTxid', 'signedInputIndexes'], [], 'SignedPearlPsbt')
+  const unsignedTxid = readString(record.unsignedTxid, 'SignedPearlPsbt.unsignedTxid', 64)
+  if (!/^[0-9a-f]{64}$/.test(unsignedTxid)) {
+    throw new Error('SignedPearlPsbt.unsignedTxid is invalid')
+  }
+  const signedInputIndexes = readArray(
+    record.signedInputIndexes,
+    'SignedPearlPsbt.signedInputIndexes',
+    (item, index) => readSafeInteger(item, `SignedPearlPsbt.signedInputIndexes[${index}]`, 511)
+  )
+  if (
+    signedInputIndexes.length === 0 ||
+    new Set(signedInputIndexes).size !== signedInputIndexes.length
+  ) {
+    throw new Error('SignedPearlPsbt.signedInputIndexes is invalid')
+  }
+  return Object.freeze({
+    psbt: readBase64(record.psbt, 'SignedPearlPsbt.psbt'),
+    unsignedTxid,
+    signedInputIndexes
+  })
+}
+
+export function parseRawSignedPearlMessage(value: unknown) {
+  const record = readRecord(value, 'SignedPearlMessage')
+  assertExactKeys(
+    record,
+    ['signature', 'payloadBase64', 'address', 'messageHash'],
+    [],
+    'SignedPearlMessage'
+  )
+  const signature = readBase64(record.signature, 'SignedPearlMessage.signature')
+  const payloadBase64 = readBase64(record.payloadBase64, 'SignedPearlMessage.payloadBase64')
+  if (signature !== payloadBase64) {
+    throw new Error('SignedPearlMessage signature and payload do not match')
+  }
+  return Object.freeze({
+    signature,
+    payloadBase64,
+    address: readString(record.address, 'SignedPearlMessage.address', 128),
+    messageHash: readHex(record.messageHash, 'SignedPearlMessage.messageHash', { bytes: 32 })
   })
 }
 

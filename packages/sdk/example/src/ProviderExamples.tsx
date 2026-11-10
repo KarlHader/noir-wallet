@@ -4,6 +4,7 @@ import {
   detectBitcoinProvider,
   detectEvmProvider,
   detectNearProvider,
+  detectPearlProvider,
   detectSolanaProvider,
   getNoirWallet,
   switchEvmChain,
@@ -14,6 +15,10 @@ import {
   type Caip25Session,
   type EvmProvider,
   type NearProvider,
+  type PearlBalance,
+  type PearlChainInfo,
+  type PearlNetwork,
+  type PearlProvider,
   type SolanaProvider
 } from '@noir-wallet/sdk'
 import {
@@ -30,6 +35,7 @@ import {
   type EvmNetworkExample
 } from './evm-network-catalog'
 import { buildExampleMultichainSessionRequest } from './multichain-session-request'
+import { createPearlTestPsbtHex } from './pearl-test-psbt'
 
 const NOIR_TEST_BENCH_ABI = [
   {
@@ -66,7 +72,7 @@ const TEST_BENCH_DEPLOYMENTS = testContractDeployments as Readonly<
   Record<string, { readonly NoirTestBench?: string }>
 >
 
-export type ExampleProviderId = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near'
+export type ExampleProviderId = 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near'
 
 export interface ExampleNavigationProps {
   active: ExampleProviderId
@@ -180,6 +186,7 @@ export function ProviderSwitcher({
       network
     })),
     { id: 'bitcoin' as const, label: 'Bitcoin', iconUrl: getExampleChainIconUrl('bitcoin') },
+    { id: 'pearl' as const, label: 'Pearl', iconUrl: getExampleChainIconUrl('pearl') },
     {
       id: 'solana' as const,
       label: networkMode === 'mainnet' ? 'Solana' : 'Solana Devnet',
@@ -329,7 +336,10 @@ function ExampleLayout({
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
+  if (error instanceof Error && error.message) {
+    const code = Reflect.get(error, 'code')
+    return typeof code === 'number' ? `${code}: ${error.message}` : error.message
+  }
   return 'The wallet request failed.'
 }
 
@@ -1184,6 +1194,377 @@ export function BitcoinExample({ navigation }: { navigation: ExampleNavigationPr
       </div>
       {result && <div className="message success provider-result">{result}</div>}
       {error && <div className="message error provider-result">{error}</div>}
+    </ExampleLayout>
+  )
+}
+
+export function PearlExample({ navigation }: { navigation: ExampleNavigationProps }) {
+  const [provider, setProvider] = useState<PearlProvider | null>(
+    () => getNoirWallet()?.pearl ?? null
+  )
+  const [network, setNetwork] = useState<PearlNetwork | ''>('')
+  const [chain, setChain] = useState<PearlChainInfo | null>(null)
+  const [account, setAccount] = useState('')
+  const [accounts, setAccounts] = useState<readonly string[]>([])
+  const [publicKey, setPublicKey] = useState('')
+  const [balance, setBalance] = useState<PearlBalance | null>(null)
+  const [recipient, setRecipient] = useState('')
+  const [satoshis, setSatoshis] = useState('1000')
+  const [feeRate, setFeeRate] = useState('')
+  const [message, setMessage] = useState('Hello Noir Pearl')
+  const [psbt, setPsbt] = useState('')
+  const [result, setResult] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (provider) return
+    const controller = new AbortController()
+    detectPearlProvider({ timeoutMs: 3000, signal: controller.signal })
+      .then(setProvider)
+      .catch(discoveryError => {
+        if ((discoveryError as Error).name !== 'AbortError') setError(formatError(discoveryError))
+      })
+    return () => controller.abort()
+  }, [provider])
+
+  const refresh = useCallback(async (current: PearlProvider) => {
+    const [nextNetwork, nextChain, authorized] = await Promise.all([
+      current.getNetwork(),
+      current.getChain(),
+      current.getAccounts()
+    ])
+    const nextAccount = authorized[0] ?? ''
+    setAccounts(authorized)
+    setNetwork(nextNetwork)
+    setChain(nextChain)
+    setAccount(nextAccount)
+    if (!nextAccount) {
+      setPublicKey('')
+      setBalance(null)
+      return
+    }
+    const [nextPublicKey, nextBalance] = await Promise.all([
+      current.getPublicKey(),
+      current.getBalance()
+    ])
+    setPublicKey(nextPublicKey)
+    setBalance(nextBalance)
+  }, [])
+
+  useEffect(() => {
+    if (!provider) return
+    const onAccountsChanged = () => {
+      void refresh(provider).catch(refreshError => setError(formatError(refreshError)))
+    }
+    provider.on('accountsChanged', onAccountsChanged)
+    void refresh(provider).catch(refreshError => setError(formatError(refreshError)))
+    return () => {
+      provider.removeListener('accountsChanged', onAccountsChanged)
+    }
+  }, [provider, refresh])
+
+  const run = async (operation: () => Promise<string | void>) => {
+    setBusy(true)
+    setError('')
+    setResult('')
+    try {
+      const nextResult = await operation()
+      if (nextResult) setResult(nextResult)
+      if (provider) await refresh(provider)
+    } catch (operationError) {
+      setError(formatError(operationError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const connect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Pearl provider is unavailable.')
+      const connected = await provider.connect()
+      setPublicKey(connected.publicKey)
+      return `Connected ${connected.address}`
+    })
+
+  const disconnect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Pearl provider is unavailable.')
+      await provider.disconnect()
+      return 'Pearl permission revoked.'
+    })
+
+  const validateNetwork = () =>
+    run(async () => {
+      if (!provider || !network) throw new Error('Connect a Pearl account first.')
+      await provider.switchNetwork(network)
+      return `${network} matches Noir Wallet global mode.`
+    })
+
+  const validateChain = () =>
+    run(async () => {
+      if (!provider || !chain) throw new Error('Connect a Pearl account first.')
+      await provider.switchChain({ enum: chain.enum })
+      return `${chain.name} matches Noir Wallet global mode.`
+    })
+
+  const sendPearl = (event: FormEvent) => {
+    event.preventDefault()
+    void run(async () => {
+      if (!provider || !account) throw new Error('Connect a Pearl account first.')
+      if (!/^\d+$/.test(satoshis)) throw new Error('Satoshis must be a positive integer.')
+      const amount = Number(satoshis)
+      if (!Number.isSafeInteger(amount) || amount <= 0) {
+        throw new Error('Satoshis must be a positive safe integer.')
+      }
+      if (amount < 330) {
+        throw new Error('Amount must be at least 330 satoshis (Pearl P2TR dust limit).')
+      }
+      const parsedFeeRate = feeRate === '' ? undefined : Number(feeRate)
+      if (
+        parsedFeeRate !== undefined &&
+        (!Number.isSafeInteger(parsedFeeRate) || parsedFeeRate <= 0)
+      ) {
+        throw new Error('Fee rate must be a positive integer in sat/vB.')
+      }
+      const transactionId = await provider.sendPearl(
+        recipient.trim(),
+        amount,
+        parsedFeeRate === undefined ? undefined : { feeRate: parsedFeeRate }
+      )
+      return `Transaction: ${transactionId}`
+    })
+  }
+
+  const signMessage = (event: FormEvent) => {
+    event.preventDefault()
+    void run(async () => {
+      if (!provider || !account) throw new Error('Connect a Pearl account first.')
+      return `BIP-322 signature: ${await provider.signMessage(message, 'bip322-simple')}`
+    })
+  }
+
+  const createTestPsbt = () =>
+    run(async () => {
+      if (!provider || !account || !network || !publicKey) {
+        throw new Error('Connect a Pearl account first.')
+      }
+      if (!/^\d+$/.test(satoshis)) throw new Error('Satoshis must be a positive integer.')
+      const amount = Number(satoshis)
+      if (!Number.isSafeInteger(amount) || amount < 330) {
+        throw new Error('Amount must be at least 330 satoshis (Pearl P2TR dust limit).')
+      }
+      const parsedFeeRate = feeRate === '' ? undefined : Number(feeRate)
+      if (
+        parsedFeeRate !== undefined &&
+        (!Number.isSafeInteger(parsedFeeRate) || parsedFeeRate <= 0)
+      ) {
+        throw new Error('Fee rate must be a positive integer in sat/vB.')
+      }
+      const nextPsbt = await createPearlTestPsbtHex({
+        network,
+        account,
+        publicKey,
+        recipient: recipient.trim() || account,
+        amountSats: amount,
+        ...(parsedFeeRate === undefined ? {} : { feeRateSatsPerVbyte: parsedFeeRate })
+      })
+      setPsbt(nextPsbt)
+      return `Draft PSBT ready (${nextPsbt.length / 2} bytes). Sign PSBT, then Broadcast PSBT.`
+    })
+
+  const signPsbt = () =>
+    run(async () => {
+      if (!provider || !account) throw new Error('Connect a Pearl account first.')
+      if (!/^(?:[0-9a-f]{2})+$/i.test(psbt.trim())) throw new Error('Enter a PSBT as hex bytes.')
+      // Default autoFinalized=true so Broadcast can extract without re-finalizing.
+      const signed = await provider.signPsbt(psbt.trim())
+      setPsbt(signed)
+      return `Signed PSBT ready. Click Broadcast PSBT to submit it.`
+    })
+
+  const pushPsbt = () =>
+    run(async () => {
+      if (!provider || !account) throw new Error('Connect a Pearl account first.')
+      if (!/^(?:[0-9a-f]{2})+$/i.test(psbt.trim())) throw new Error('Enter a PSBT as hex bytes.')
+      const transactionId = await provider.pushPsbt(psbt.trim())
+      return `Broadcast transaction: ${transactionId}`
+    })
+
+  return (
+    <ExampleLayout navigation={navigation} available={provider !== null} connected={account !== ''}>
+      {!provider && <div className="message warning">Pearl provider is not enabled.</div>}
+      <section className="provider-summary card">
+        <div className="provider-summary-copy">
+          <ExampleChainIcon
+            className="provider-hero-icon"
+            iconUrl={getExampleChainIconUrl('pearl')}
+            label="Pearl"
+          />
+          <div>
+            <p className="section-kicker">Selected provider</p>
+            <h2>Pearl provider</h2>
+            <p>Typed access to accounts, BIP-322 signatures, PSBTs, and transactions.</p>
+          </div>
+        </div>
+        <div className="provider-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => void connect()}
+            disabled={!provider || busy}
+          >
+            {busy ? 'Connecting…' : account ? 'Reconnect Pearl' : 'Connect Pearl'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void disconnect()}
+            disabled={!account || busy}
+          >
+            Disconnect
+          </button>
+        </div>
+      </section>
+      {result && <div className="message success provider-result">{result}</div>}
+      {error && <div className="message error provider-result">{error}</div>}
+      <div className="tab-panel grid-2">
+        <section className="card card-compact">
+          <h2>Account &amp; network</h2>
+          <Result label="Network" value={network || 'Unavailable'} />
+          <Result label="Chain" value={chain?.name ?? 'Unavailable'} />
+          <Result label="Address" value={account || 'Not connected'} />
+          <Result label="Public key" value={publicKey || 'Unavailable'} />
+          <Result
+            label="Balance"
+            value={
+              balance ? `${balance.total} sats (${balance.unconfirmed} unconfirmed)` : 'Unavailable'
+            }
+          />
+          <div className="button-row compact-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void validateNetwork()}
+              disabled={!account || busy}
+            >
+              Validate network
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void validateChain()}
+              disabled={!account || busy}
+            >
+              Validate chain
+            </button>
+          </div>
+          <p className="field-help">
+            These compatibility methods validate the active mode. Change Mainnet/Testnet Mode in
+            Noir Wallet settings.
+          </p>
+        </section>
+        <AuthorizedAccountsExample
+          accounts={accounts}
+          busy={busy}
+          onReview={() => void connect()}
+        />
+        <section className="card card-compact">
+          <h2>Send Pearl</h2>
+          <form className="form-stack" onSubmit={sendPearl}>
+            <label className="label" htmlFor="pearl-recipient">
+              Recipient
+            </label>
+            <input
+              id="pearl-recipient"
+              className="input input-sm"
+              value={recipient}
+              onChange={event => setRecipient(event.target.value)}
+              placeholder="prl1… / tprl1…"
+              required
+            />
+            <label className="label" htmlFor="pearl-fee-rate">
+              Fee rate (sat/vB, optional)
+            </label>
+            <input
+              id="pearl-fee-rate"
+              className="input input-sm"
+              value={feeRate}
+              onChange={event => setFeeRate(event.target.value)}
+              inputMode="numeric"
+              placeholder="Wallet estimate"
+            />
+            <label className="label" htmlFor="pearl-satoshis">
+              Amount (satoshis)
+            </label>
+            <input
+              id="pearl-satoshis"
+              className="input input-sm"
+              value={satoshis}
+              onChange={event => setSatoshis(event.target.value)}
+              inputMode="numeric"
+              placeholder="1000"
+              required
+            />
+            <p className="field-help">
+              Minimum 330 satoshis. Amount is in satoshis, not whole PRL.
+            </p>
+            <button className="btn btn-primary btn-full" disabled={!account || busy} type="submit">
+              {busy ? 'Sending…' : 'Send Pearl'}
+            </button>
+            {error && <div className="message error provider-result">{error}</div>}
+            {result && <div className="message success provider-result">{result}</div>}
+          </form>
+        </section>
+        <section className="card card-compact">
+          <h2>Sign BIP-322 message</h2>
+          <form className="form-stack" onSubmit={signMessage}>
+            <textarea
+              className="input textarea"
+              value={message}
+              onChange={event => setMessage(event.target.value)}
+              rows={3}
+              required
+            />
+            <button className="btn btn-primary btn-full" disabled={!account || busy}>
+              Sign message
+            </button>
+          </form>
+        </section>
+        <section className="card card-compact">
+          <h2>Sign / Broadcast PSBT</h2>
+          <p className="field-help">
+            Uses Send Pearl recipient/amount/fee rate. Create draft → Sign PSBT (approve) →
+            Broadcast PSBT.
+          </p>
+          <textarea
+            className="input textarea"
+            value={psbt}
+            onChange={event => setPsbt(event.target.value)}
+            rows={4}
+            placeholder="PSBT hex"
+          />
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={() => void createTestPsbt()}
+            disabled={!account || !network || !publicKey || busy}
+          >
+            Create test PSBT
+          </button>
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={() => void signPsbt()}
+            disabled={!account || !psbt || busy}
+          >
+            Sign PSBT
+          </button>
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={() => void pushPsbt()}
+            disabled={!account || !psbt || busy}
+          >
+            Broadcast PSBT
+          </button>
+        </section>
+      </div>
     </ExampleLayout>
   )
 }

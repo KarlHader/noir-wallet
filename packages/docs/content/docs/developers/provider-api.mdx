@@ -392,6 +392,41 @@ The typed SDK is recommended. These are the raw method names used internally:
   </Accordion>
 </Accordions>
 
+## Pearl provider
+
+`wallet.pearl` is present when the installed extension enables Pearl. Software accounts can connect,
+read balances, send native PRL, sign BIP-322 simple messages, sign PSBTs, and broadcast finalized
+transactions. Hardware Pearl signing remains unsupported.
+
+```ts
+const pearl = wallet.pearl
+if (pearl) {
+  const { address, publicKey } = await pearl.connect()
+  const signatureBase64 = await pearl.signMessage('Sign in to Example', 'bip322-simple')
+  const txid = await pearl.sendPearl(address, 1000)
+  const signedPsbtHex = await pearl.signPsbt(psbtHex, { autoFinalized: false })
+}
+```
+
+| Method                                           | Behavior                                                                                |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `connect()`                                      | Opens connection approval and returns the selected `address` and `publicKey`.           |
+| `requestAccounts()` / `getAccounts()`            | Returns authorized Pearl addresses; `getAccounts()` never opens approval.               |
+| `getNetwork()` / `getChain()`                    | Reports `mainnet` / `testnet` and `PEARL_MAINNET` / `PEARL_TESTNET` for the global mode. |
+| `getPublicKey()` / `getBalance()`                | Returns the active account key and confirmed, unconfirmed, and total satoshi amounts.   |
+| `sendPearl(recipient, satoshis, options?)`       | Opens transfer approval, signs, broadcasts, and returns the transaction ID.             |
+| `signMessage(message, 'bip322-simple')`          | Opens signature approval and resolves to the canonical base64 BIP-322 signature.        |
+| `signPsbt(psbtHex, options?)` / `signPsbts(...)` | Opens PSBT approval and returns signed hexadecimal PSBT data.                           |
+| `pushPsbt(psbtHex)` / `pushTx({ rawtx })`        | Broadcasts a finalized PSBT or raw transaction and returns the transaction ID.          |
+| `switchNetwork(network)` / `switchChain(chain)`  | Validates the requested network or chain; mode changes stay in wallet settings.         |
+| `on('accountsChanged', handler)`                 | Fires after authorization or active-account changes; re-read `getAccounts()`.           |
+| `disconnect()`                                   | Revokes the Pearl authorization for the calling origin.                                 |
+
+<Callout type="warn">
+  Pearl dApp transfers and signing are not available for hardware accounts. A request rejected by
+  the user rejects with code `4001`.
+</Callout>
+
 ## EVM network requests
 
 When multiple EVM wallets are installed, users can select **Ask every time**, **Use Noir Wallet**,

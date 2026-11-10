@@ -17,6 +17,7 @@ export interface RpcRegistryChain {
     | 'zcash-lightwalletd-grpc-web'
     | 'evm-json-rpc'
     | 'bitcoin-esplora'
+    | 'pearl-blockbook'
     | 'solana-json-rpc'
     | 'near-json-rpc'
   endpoints: RpcEndpointOption[]
@@ -466,6 +467,7 @@ function isSupportedProbe(value: unknown): value is RpcRegistryChain['probe'] {
     value === 'zcash-lightwalletd-grpc-web' ||
     value === 'evm-json-rpc' ||
     value === 'bitcoin-esplora' ||
+    value === 'pearl-blockbook' ||
     value === 'solana-json-rpc' ||
     value === 'near-json-rpc'
   )

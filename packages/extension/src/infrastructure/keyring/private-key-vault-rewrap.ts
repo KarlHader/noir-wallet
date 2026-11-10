@@ -42,7 +42,8 @@ export async function rewrapPrivateKeyVault(
           chainFamily: input.scope.chainFamily,
           ...(input.scope.chainFamily === 'bip122'
             ? { bitcoinNetwork: input.scope.bitcoinNetwork }
-            : {})
+            : {}),
+          ...(input.scope.chainFamily === 'pearl' ? { pearlNetwork: input.scope.pearlNetwork } : {})
         } as KeyringCommandPayload
       },
       parseRawEncryptedVault

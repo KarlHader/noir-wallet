@@ -8,6 +8,8 @@ export const SIGNING_SUMMARY_SCHEMAS = Object.freeze([
   'evm.typed-data.v1',
   'bitcoin.psbt.v1',
   'bitcoin.bip322-message.v1',
+  'pearl.psbt.v1',
+  'pearl.bip322-message.v1',
   'solana.transaction.v1',
   'solana.message.v1',
   'tron.transaction.v1',
@@ -17,7 +19,14 @@ export const SIGNING_SUMMARY_SCHEMAS = Object.freeze([
 ] as const)
 
 export type SigningSummarySchema = (typeof SIGNING_SUMMARY_SCHEMAS)[number]
-export type SigningSummaryFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'tron' | 'near'
+export type SigningSummaryFamily =
+  | 'zcash'
+  | 'evm'
+  | 'bitcoin'
+  | 'pearl'
+  | 'solana'
+  | 'tron'
+  | 'near'
 export type SigningOperation = 'transaction' | 'message'
 export type SigningReviewLevel = 'standard' | 'caution' | 'blocked'
 export type SigningReviewIssueCode =
@@ -204,6 +213,30 @@ export type BitcoinPsbtSummary = SigningSummaryEnvelope<
 
 export type BitcoinBip322MessageSummary = SigningSummaryEnvelope<
   'bitcoin.bip322-message.v1',
+  'message',
+  {
+    readonly address: string
+    readonly message: CanonicalContent
+  }
+>
+
+export type PearlPsbtSummary = SigningSummaryEnvelope<
+  'pearl.psbt.v1',
+  'transaction',
+  {
+    readonly psbtVersion: 0
+    readonly signer: string
+    readonly inputs: readonly BitcoinInputSummary[]
+    readonly outputs: readonly BitcoinOutputSummary[]
+    readonly signingInputIndexes: readonly number[]
+    readonly totalInputSats: string
+    readonly totalOutputSats: string
+    readonly feeSats: string
+  }
+>
+
+export type PearlBip322MessageSummary = SigningSummaryEnvelope<
+  'pearl.bip322-message.v1',
   'message',
   {
     readonly address: string
@@ -518,6 +551,8 @@ export type SigningSummary =
   | EvmTypedDataSummary
   | BitcoinPsbtSummary
   | BitcoinBip322MessageSummary
+  | PearlPsbtSummary
+  | PearlBip322MessageSummary
   | SolanaTransactionSummary
   | SolanaMessageSummary
   | TronTransactionSummary

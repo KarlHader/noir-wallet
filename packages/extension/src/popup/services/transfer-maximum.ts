@@ -31,7 +31,8 @@ export function createNativeTransferSource(input: {
   const family = input.chain.chain.family
   if (family === 'bitcoin')
     return { ...base, family, bitcoinAddressType: input.bitcoinAddressType ?? 'p2wpkh' }
-  if (family === 'evm' || family === 'solana' || family === 'near') return { ...base, family }
+  if (family === 'evm' || family === 'solana' || family === 'near' || family === 'pearl')
+    return { ...base, family }
   throw new Error('Unsupported transfer source')
 }
 

@@ -2,6 +2,7 @@ import {
   BITCOIN_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  PEARL_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG,
   type ChainFeatureFlagValue
@@ -9,20 +10,22 @@ import {
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { resolveIntentsEvmChainId } from '@/core/services/intents-evm-assets'
 
-export type SelectableChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near'
+export type SelectableChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near' | 'pearl'
 
 const FAMILY_FLAGS: Readonly<Record<SelectableChainFamily, ChainFeatureFlagValue>> = {
   zcash: ZCASH_CHAIN_FEATURE_FLAG,
   evm: EVM_CHAIN_FEATURE_FLAG,
   bitcoin: BITCOIN_CHAIN_FEATURE_FLAG,
   solana: SOLANA_CHAIN_FEATURE_FLAG,
-  near: NEAR_CHAIN_FEATURE_FLAG
+  near: NEAR_CHAIN_FEATURE_FLAG,
+  pearl: PEARL_CHAIN_FEATURE_FLAG
 }
 
 export const DEFERRED_CHAIN_CHOICES = Object.freeze([
   { family: 'bitcoin', label: 'Bitcoin', iconAlias: 'bitcoin' },
   { family: 'solana', label: 'Solana', iconAlias: 'solana' },
-  { family: 'near', label: 'NEAR', iconAlias: 'near' }
+  { family: 'near', label: 'NEAR', iconAlias: 'near' },
+  { family: 'pearl', label: 'Pearl', iconAlias: 'pearl' }
 ] as const)
 
 export function isSelectableChainFamily(

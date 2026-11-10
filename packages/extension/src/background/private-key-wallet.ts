@@ -6,7 +6,7 @@ import { credentialSession } from './credential-session'
 
 export interface ImportPrivateKeyWalletInput {
   readonly privateKey: string
-  readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
   readonly displayName: string
 }
 

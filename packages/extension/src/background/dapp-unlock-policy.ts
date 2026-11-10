@@ -8,6 +8,7 @@ export function isExplicitMultichainConnectRequest(message: DAppRuntimeRequestMe
         message.request.method === 'wallet_requestPermissions'
       )
     case 'bitcoin':
+    case 'pearl':
     case 'solana':
     case 'near':
       return message.request.method === 'connect' || message.request.method === 'requestAccounts'

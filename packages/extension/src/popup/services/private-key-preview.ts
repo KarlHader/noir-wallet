@@ -18,6 +18,7 @@ export function parsePrivateKeyPreview(value: unknown): PrivateKeyAddressPreview
   if (
     (record.chainFamily !== 'eip155' &&
       record.chainFamily !== 'bip122' &&
+      record.chainFamily !== 'pearl' &&
       record.chainFamily !== 'solana' &&
       record.chainFamily !== 'near') ||
     !Array.isArray(record.addresses) ||
