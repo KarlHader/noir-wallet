@@ -254,4 +254,132 @@ test.describe('Account networks Popup client', () => {
       createAccountNetworksClient(async () => result(), zcashOnly).getCatalog()
     ).rejects.toMatchObject({ code: 'invalid-response' })
   })
+
+  test('reads a transparent Dash P2PKH projection and keeps legacy bip122 scopes', async () => {
+    const dashChains = createAddressGatedChainRegistry(
+      createInitialProductChainRegistry('testnet'),
+      ['chain.zcash', 'chain.evm', 'chain.bitcoin', 'chain.dash', 'chain.solana', 'chain.near']
+    )
+    const dashClient = createAccountNetworksClient(
+      async () => ({
+        result: {
+          generationId: 'storage-v2:generation:account-networks-client',
+          accounts: [
+            {
+              walletId,
+              walletDisplayName: 'Dash key',
+              walletCreatedAt: 123,
+              walletSource: { kind: 'private-key', chainFamily: 'dash', dashNetwork: 'testnet' },
+              accountId,
+              accountDisplayName: 'Account 1',
+              accountIndex: 0,
+              active: true,
+              networks: [
+                {
+                  chainId: 'bip122:00000bafbc94add76cb75e2ec9289483',
+                  addresses: [
+                    address('yRd4FhXfVGHXpsuZXPNkMrfD9GVj46pnjt', 'dash_p2pkh', 'transparent')
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      dashChains
+    )
+    const dashAccount = (await dashClient.getCatalog()).accounts[0]
+    expect(dashAccount.walletSource).toEqual({
+      kind: 'private-key',
+      chainFamily: 'dash',
+      dashNetwork: 'testnet'
+    })
+    expect(dashAccount.networks[0].chain.family).toBe('dash')
+    expect(dashAccount.networks[0].addresses[0]).toMatchObject({
+      scheme: 'dash_p2pkh',
+      privacy: 'transparent'
+    })
+
+    const legacyClient = createAccountNetworksClient(
+      async () =>
+        result({
+          accounts: [
+            {
+              ...result().result.accounts[0],
+              walletSource: { kind: 'private-key', chainFamily: 'bip122', bitcoinNetwork: 'testnet' }
+            }
+          ]
+        }),
+      chains
+    )
+    expect((await legacyClient.getCatalog()).accounts[0].walletSource).toEqual({
+      kind: 'private-key',
+      chainFamily: 'bip122',
+      bitcoinNetwork: 'testnet'
+    })
+
+    const shieldedDash = createAccountNetworksClient(
+      async () => ({
+        result: {
+          generationId: 'storage-v2:generation:account-networks-client',
+          accounts: [
+            {
+              walletId,
+              walletDisplayName: 'Dash key',
+              walletCreatedAt: 123,
+              walletSource: { kind: 'software' },
+              accountId,
+              accountDisplayName: 'Account 1',
+              accountIndex: 0,
+              active: true,
+              networks: [
+                {
+                  chainId: 'bip122:00000bafbc94add76cb75e2ec9289483',
+                  addresses: [
+                    address('yRd4FhXfVGHXpsuZXPNkMrfD9GVj46pnjt', 'dash_p2pkh', 'shielded')
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      dashChains
+    )
+    const shieldedCatalog = await shieldedDash.getCatalog()
+    expect(shieldedCatalog.accounts[0].networks).toEqual([])
+
+    const mixedClient = createAccountNetworksClient(
+      async () => ({
+        result: {
+          generationId: 'storage-v2:generation:account-networks-client',
+          accounts: [
+            {
+              walletId,
+              walletDisplayName: 'Wallet 1',
+              walletCreatedAt: 123,
+              walletSource: { kind: 'software' },
+              accountId,
+              accountDisplayName: 'Account 1',
+              accountIndex: 0,
+              active: true,
+              networks: [
+                {
+                  chainId: 'eip155:11155111',
+                  addresses: [address(evmAddress, 'evm')]
+                },
+                {
+                  chainId: 'bip122:00000bafbc94add76cb75e2ec9289483',
+                  addresses: [address('not-a-dash-address', 'dash_p2pkh')]
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      dashChains
+    )
+    const mixed = (await mixedClient.getCatalog()).accounts[0]
+    expect(mixed.networks.map(network => network.chain.id)).toEqual(['eip155:11155111'])
+  })
 })

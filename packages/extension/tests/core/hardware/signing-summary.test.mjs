@@ -31,7 +31,16 @@ function envelope(schema, chainId, operation, fields, review = { level: 'standar
 test.describe('Chain-specific signing summaries', () => {
   test('freezes the versioned schema registry', () => {
     expect(Object.isFrozen(SIGNING_SUMMARY_SCHEMAS)).toBe(true)
-    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(16)
+    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(18)
+    expect(SIGNING_SUMMARY_SCHEMAS).toEqual(
+      expect.arrayContaining([
+        'dash.psbt.v1',
+        'dash.message.v1',
+        'pearl.psbt.v1',
+        'pearl.bip322-message.v1',
+        'quantus.transfer.v1'
+      ])
+    )
   })
 
   test('rejects schema, chain, operation, and unknown-field mismatches', () => {

@@ -13,9 +13,11 @@ import {
   createInitialProductChainRegistry,
   type AddressGatedChainRegistry
 } from '@/core/chains/registry'
+import { isBitcoinChainId, isDashChainId } from '@/core/chains/registry/chain-ids'
 import type { KeyDomainId } from '@/core/keyring/domain'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { EvmNetworkConfig } from '@/config/networks'
+import { parseDashP2pkhAddress } from '@/infrastructure/chains/dash/dash-discovery-model'
 import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
@@ -43,6 +45,11 @@ export type AdditionalReceiveTarget =
       kind: 'solana' | 'near' | 'pearl' | 'quantus'
       address: string
     }>
+  | Readonly<{
+      chainId: string
+      kind: 'dash'
+      address: string
+    }>
 
 export interface AdditionalReceiveTargetsSnapshot {
   readonly generationId: StorageV2GenerationId
@@ -60,6 +67,11 @@ export interface AdditionalReceiveTargetsCoordinatorOptions {
     readonly chainId: string
     readonly nativeSegwitAddress?: string
   }) => Promise<Readonly<{ address: string; addressType: BitcoinSupportedAddressType }> | null>
+  readonly getDashReceiveTarget?: (scope: {
+    readonly keyDomainId: KeyDomainId
+    readonly accountId: AccountId
+    readonly chainId: string
+  }) => Promise<Readonly<{ address: string; privacy: 'transparent' }> | null>
 }
 
 function parseEvmReceiveAddress(value: string): string {
@@ -116,7 +128,38 @@ export class AdditionalReceiveTargetsCoordinator {
         throw new Error('Active receive targets contain a duplicate chain')
       }
       chainIds.add(available.chain.id)
-      if (available.chain.family === 'bitcoin') {
+      if (available.chain.family === 'dash') {
+        if (!isDashChainId(available.chain.id)) {
+          throw new Error('Dash receive target chain is invalid')
+        }
+        const discovered = this.options.getDashReceiveTarget
+          ? await this.options.getDashReceiveTarget({
+              keyDomainId: active.activeAccount.keyDomainId,
+              accountId: active.activeAccount.id,
+              chainId: available.chain.id
+            })
+          : null
+        if (discovered && discovered.privacy !== 'transparent') {
+          throw new Error('Dash receive address must stay transparent')
+        }
+        const fallback = available.addresses.find(
+          candidate => candidate.scheme === 'dash_p2pkh' && candidate.preferredForReceive
+        )
+        if (fallback && fallback.privacy !== 'transparent') {
+          throw new Error('Dash receive address must stay transparent')
+        }
+        const address = discovered?.address ?? fallback?.value
+        if (!address) throw new Error('Active Dash receive address is unavailable')
+        targets.push(
+          Object.freeze({
+            chainId: available.chain.id,
+            kind: 'dash' as const,
+            address: parseDashP2pkhAddress(address, available.chain.id)
+          })
+        )
+        continue
+      }
+      if (available.chain.family === 'bitcoin' && isBitcoinChainId(available.chain.id)) {
         const nativeSegwitAddress = available.addresses.find(
           candidate => candidate.scheme === 'bitcoin-p2wpkh' && candidate.preferredForReceive
         )?.value
@@ -235,6 +278,10 @@ export function createBackgroundAdditionalReceiveTargetsCoordinator(
     chains: createBuildAddressGatedChainRegistry(
       createInitialProductChainRegistry(DEFAULT_NETWORK, customEvmNetworks)
     ),
+    getDashReceiveTarget: async scope => {
+      const { readBackgroundDashReceiveAddress } = await import('./dash-wallet')
+      return readBackgroundDashReceiveAddress(scope)
+    },
     getBitcoinReceiveTarget: async scope => {
       const activeAddressType = await bitcoinPreferences.get({
         network: DEFAULT_NETWORK,

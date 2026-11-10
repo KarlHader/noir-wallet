@@ -67,7 +67,8 @@ const CHAIN_NAMES: Record<LedgerChainFamily, string> = {
   evm: 'EVM',
   bitcoin: 'Bitcoin',
   solana: 'Solana',
-  near: 'NEAR'
+  near: 'NEAR',
+  dash: 'Dash'
 }
 export function LedgerConnectPage() {
   const { replace } = useNavigate()
@@ -538,53 +539,55 @@ export function LedgerConnectPage() {
                   wallets.length > 0 ? 'max-h-40' : 'max-h-56'
                 )}
               >
-                {familyChoices.map(({ family, enabled }) => {
-                  const registered = registeredFamilies.includes(family)
-                  const selected = enabled && (!!registered || selectedFamilies.includes(family))
-                  return (
-                    <button
-                      key={family}
-                      type="button"
-                      disabled={!enabled || !!registered || (family === 'zcash' && !canAddZcash)}
-                      aria-pressed={selected}
-                      className={cn(
-                        'flex h-16 w-full flex-col items-center justify-center gap-1 rounded-xl border px-2 text-center text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 disabled:cursor-default',
-                        selected
-                          ? 'border-primary bg-primary/5 text-foreground'
-                          : enabled
-                            ? 'border-border bg-card text-muted hover:text-foreground'
-                            : 'border-border bg-card text-muted',
-                        enabled ? 'disabled:opacity-50' : 'disabled:opacity-100'
-                      )}
-                      onClick={() =>
-                        setFamilies(current =>
-                          current.includes(family)
-                            ? current.filter(item => item !== family)
-                            : [...current, family]
-                        )
-                      }
-                    >
-                      <ChainIcon
-                        chain={family}
-                        showTooltip={false}
-                        aria-hidden="true"
-                        className="size-6 shrink-0 rounded-full"
-                      />
-                      <span className="min-w-0">
-                        <span className="block font-medium leading-4">{CHAIN_NAMES[family]}</span>
-                        {!enabled ? (
-                          <span className="block text-[10px] leading-3 text-muted">
-                            Coming soon
-                          </span>
-                        ) : (
-                          registered && (
-                            <span className="block text-[10px] leading-3 text-muted">Added</span>
-                          )
+                {familyChoices
+                  .filter(({ family, enabled }) => family !== 'dash' || enabled)
+                  .map(({ family, enabled }) => {
+                    const registered = registeredFamilies.includes(family)
+                    const selected = enabled && (!!registered || selectedFamilies.includes(family))
+                    return (
+                      <button
+                        key={family}
+                        type="button"
+                        disabled={!enabled || !!registered || (family === 'zcash' && !canAddZcash)}
+                        aria-pressed={selected}
+                        className={cn(
+                          'flex h-16 w-full flex-col items-center justify-center gap-1 rounded-xl border px-2 text-center text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 disabled:cursor-default',
+                          selected
+                            ? 'border-primary bg-primary/5 text-foreground'
+                            : enabled
+                              ? 'border-border bg-card text-muted hover:text-foreground'
+                              : 'border-border bg-card text-muted',
+                          enabled ? 'disabled:opacity-50' : 'disabled:opacity-100'
                         )}
-                      </span>
-                    </button>
-                  )
-                })}
+                        onClick={() =>
+                          setFamilies(current =>
+                            current.includes(family)
+                              ? current.filter(item => item !== family)
+                              : [...current, family]
+                          )
+                        }
+                      >
+                        <ChainIcon
+                          chain={family}
+                          showTooltip={false}
+                          aria-hidden="true"
+                          className="size-6 shrink-0 rounded-full"
+                        />
+                        <span className="min-w-0">
+                          <span className="block font-medium leading-4">{CHAIN_NAMES[family]}</span>
+                          {!enabled ? (
+                            <span className="block text-[10px] leading-3 text-muted">
+                              Coming soon
+                            </span>
+                          ) : (
+                            registered && (
+                              <span className="block text-[10px] leading-3 text-muted">Added</span>
+                            )
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
               </div>
             </fieldset>
             <details className="text-sm text-muted">

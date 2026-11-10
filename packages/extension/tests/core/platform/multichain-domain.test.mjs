@@ -8,7 +8,11 @@ import {
   parseAddressId,
   parseChainAccountId
 } from '../../../src/core/accounts/domain/index.ts'
-import { parseCredentialRef, parseKeyDomainId } from '../../../src/core/keyring/domain/index.ts'
+import {
+  parseCredentialRef,
+  parseKeyDomain,
+  parseKeyDomainId
+} from '../../../src/core/keyring/domain/index.ts'
 
 const domainSources = [
   '../../../src/core/keyring/domain/key-domain.ts',
@@ -42,6 +46,34 @@ test.describe('Multichain domain foundations', () => {
     expect(() => parseAccountIndex(-1)).toThrow(/AccountIndex/)
     expect(() => parseAccountIndex(1.5)).toThrow(/AccountIndex/)
     expect(() => parseAccountIndex(Number.MAX_SAFE_INTEGER + 1)).toThrow(/AccountIndex/)
+  })
+
+  test('persists a Dash private-key source and still reads Bitcoin bip122 records', () => {
+    const base = {
+      id: 'wallet:dash',
+      credentialRef: 'credential-set:dash',
+      displayName: 'Imported key',
+      createdAt: 1
+    }
+    expect(
+      parseKeyDomain({
+        ...base,
+        source: { kind: 'private-key', chainFamily: 'dash', dashNetwork: 'testnet' }
+      }).source
+    ).toEqual({ kind: 'private-key', chainFamily: 'dash', dashNetwork: 'testnet' })
+    expect(
+      parseKeyDomain({
+        ...base,
+        id: 'wallet:bitcoin',
+        source: { kind: 'private-key', chainFamily: 'bip122', bitcoinNetwork: 'mainnet' }
+      }).source
+    ).toEqual({ kind: 'private-key', chainFamily: 'bip122', bitcoinNetwork: 'mainnet' })
+    expect(() =>
+      parseKeyDomain({
+        ...base,
+        source: { kind: 'private-key', chainFamily: 'dash' }
+      })
+    ).toThrow(/private-key/)
   })
 
   test('keeps domain modules independent from runtime frameworks and wallet engines', () => {

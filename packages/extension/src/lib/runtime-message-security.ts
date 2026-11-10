@@ -4,6 +4,7 @@ import {
   type BitcoinDAppRuntimeMethod
 } from '@/core/dapp/bitcoin-provider'
 import { PEARL_DAPP_RUNTIME_METHODS, type PearlDAppRuntimeMethod } from '@/core/dapp/pearl-provider'
+import { DASH_DAPP_RUNTIME_METHODS, type DashDAppRuntimeMethod } from '@/core/dapp/dash-provider'
 import {
   QUANTUS_DAPP_RUNTIME_METHODS,
   type QuantusDAppRuntimeMethod
@@ -60,6 +61,7 @@ export const DAPP_RUNTIME_METHODS = Object.freeze([
   ...ZCASH_DAPP_RUNTIME_METHODS,
   ...EVM_DAPP_RUNTIME_METHODS,
   ...BITCOIN_DAPP_RUNTIME_METHODS,
+  ...DASH_DAPP_RUNTIME_METHODS,
   ...PEARL_DAPP_RUNTIME_METHODS,
   ...QUANTUS_DAPP_RUNTIME_METHODS,
   ...SOLANA_DAPP_RUNTIME_METHODS,
@@ -72,6 +74,7 @@ export type DAppRuntimeMethod =
   | ZcashDAppRuntimeMethod
   | EvmDAppRuntimeMethod
   | BitcoinDAppRuntimeMethod
+  | DashDAppRuntimeMethod
   | PearlDAppRuntimeMethod
   | QuantusDAppRuntimeMethod
   | NativeTransferDAppRuntimeMethod
@@ -86,6 +89,7 @@ export interface DAppRuntimeRequestMessage {
     | 'zcash'
     | 'evm'
     | 'bitcoin'
+    | 'dash'
     | 'pearl'
     | 'quantus'
     | 'solana'
@@ -119,6 +123,7 @@ export interface NoirRuntimeEventMessage {
     | 'zcash'
     | 'evm'
     | 'bitcoin'
+    | 'dash'
     | 'pearl'
     | 'quantus'
     | 'solana'
@@ -331,7 +336,8 @@ const isPrivateKeyChainFamily: RuntimeFieldValidator = value =>
   value === 'bip122' ||
   value === 'pearl' ||
   value === 'solana' ||
-  value === 'near'
+  value === 'near' ||
+  value === 'dash'
 const isBitcoinAddressType: RuntimeFieldValidator = value =>
   value === 'p2pkh' || value === 'p2sh-p2wpkh' || value === 'p2wpkh' || value === 'p2tr'
 const isBirthdayHeight: RuntimeFieldValidator = value =>
@@ -531,7 +537,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_LEDGER_PROVISIONING_CREDENTIAL: { required: { walletId: isShortString } },
   GET_LEDGER_SIGNING_REQUEST: { required: { requestId: isShortString } },
   SUBMIT_LEDGER_SIGNING_RESPONSE: { required: { requestId: isShortString, response: isRecord } },
-  CANCEL_LEDGER_SIGNING_REQUEST: { required: { requestId: isShortString } },
+  CANCEL_LEDGER_SIGNING_REQUEST: {
+    required: { requestId: isShortString },
+    optional: { reason: isShortString }
+  },
   GET_HARDWARE_TRANSFER_VENDOR: {
     required: {
       transactionId: isShortString,
@@ -794,6 +803,14 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   REJECT_PEARL_TRANSFER: { required: { transactionId: isShortString } },
   RESUME_PEARL_TRANSFER: { required: { transactionId: isShortString } },
+  PREPARE_DASH_TRANSFER: { required: { intent: isRecord } },
+  GET_PENDING_DASH_TRANSFER: { required: { transactionId: isShortString } },
+  APPROVE_DASH_TRANSFER: {
+    required: { transactionId: isShortString, payloadFingerprint: isEvmPayloadFingerprint }
+  },
+  REJECT_DASH_TRANSFER: { required: { transactionId: isShortString } },
+  RESUME_DASH_TRANSFER: { required: { transactionId: isShortString } },
+  REFRESH_DASH_TRANSFER_STATUS: { required: { transactionId: isShortString } },
   INSPECT_NEXT_ZCASH_ACCOUNT_HISTORY: {
     required: { walletId: isShortString }
   },
@@ -1059,6 +1076,12 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     APPROVE_PEARL_TRANSFER: ['extension-page'],
     REJECT_PEARL_TRANSFER: ['extension-page'],
     RESUME_PEARL_TRANSFER: ['extension-page'],
+    PREPARE_DASH_TRANSFER: ['extension-page'],
+    GET_PENDING_DASH_TRANSFER: ['extension-page'],
+    APPROVE_DASH_TRANSFER: ['extension-page'],
+    REJECT_DASH_TRANSFER: ['extension-page'],
+    RESUME_DASH_TRANSFER: ['extension-page'],
+    REFRESH_DASH_TRANSFER_STATUS: ['extension-page'],
     INSPECT_NEXT_ZCASH_ACCOUNT_HISTORY: ['extension-page'],
     ADD_ACCOUNT: ['extension-page'],
     SWITCH_ACCOUNT: ['extension-page'],
@@ -1107,6 +1130,7 @@ const dappMethodSet = new Set<string>(DAPP_RUNTIME_METHODS)
 const zcashDappMethodSet = new Set<string>(ZCASH_DAPP_RUNTIME_METHODS)
 const evmDappMethodSet = new Set<string>(EVM_DAPP_RUNTIME_METHODS)
 const bitcoinDappMethodSet = new Set<string>(BITCOIN_DAPP_RUNTIME_METHODS)
+const dashDappMethodSet = new Set<string>(DASH_DAPP_RUNTIME_METHODS)
 const pearlDappMethodSet = new Set<string>(PEARL_DAPP_RUNTIME_METHODS)
 const quantusDappMethodSet = new Set<string>(QUANTUS_DAPP_RUNTIME_METHODS)
 const solanaDappMethodSet = new Set<string>(SOLANA_DAPP_RUNTIME_METHODS)
@@ -1384,6 +1408,7 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId === 'zcash' && !zcashDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'evm' && !evmDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'bitcoin' && !bitcoinDappMethodSet.has(value.request.method)) ||
+    (value.chainId === 'dash' && !dashDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'pearl' && !pearlDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'quantus' && !quantusDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'solana' && !solanaDappMethodSet.has(value.request.method)) ||
@@ -1392,6 +1417,7 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
+      value.chainId !== 'dash' &&
       value.chainId !== 'pearl' &&
       value.chainId !== 'quantus' &&
       value.chainId !== 'solana' &&
@@ -1453,6 +1479,7 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
     (value.chainId !== 'zcash' &&
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
+      value.chainId !== 'dash' &&
       value.chainId !== 'pearl' &&
       value.chainId !== 'quantus' &&
       value.chainId !== 'solana' &&

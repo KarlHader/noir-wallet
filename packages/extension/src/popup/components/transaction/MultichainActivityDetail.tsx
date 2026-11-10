@@ -5,7 +5,12 @@ import {
   mapTransactionGraphToActivityItem,
   type ActivityItem
 } from '@/core/activity'
-import { getBitcoinNetworkConfig, getPearlNetworkConfig } from '@/config/networks'
+import { DASH_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import {
+  getBitcoinNetworkConfig,
+  getDashNetworkConfig,
+  getPearlNetworkConfig
+} from '@/config/networks'
 import { parseTransactionId } from '@/core/transactions/domain'
 import { getZcashChainId } from '@/core/chains/registry'
 import { formatSortAddress } from '@/lib/format'
@@ -23,6 +28,7 @@ import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { bitcoinWalletClient } from '@/popup/services/bitcoin-wallet-client'
 import { pearlWalletClient } from '@/popup/services/pearl-wallet-client'
+import { dashWalletClient } from '@/popup/services/dash-wallet-client'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
@@ -346,11 +352,15 @@ export function MultichainActivityDetail({
     : interaction?.fallbackChainIconAlias
   const fee = visibleItem.snapshot?.feeLimit
   const feeAsset = fee ? assetMetadata.get(fee.assetId) : undefined
+  const dashChainId = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(DASH_CHAIN_FEATURE_FLAG)
+    ? getDashNetworkConfig(network).chainId
+    : undefined
   const recoveryAction = getActivityRecoveryAction(
     visibleItem,
     evmChainIds,
     getBitcoinNetworkConfig(network).chainId,
-    getPearlNetworkConfig(network).chainId
+    getPearlNetworkConfig(network).chainId,
+    dashChainId
   )
   const cancelAvailable = canCancelEvmActivity(visibleItem, evmChainIds)
   const isCrossChain = visibleItem.segments.length > 1
@@ -391,7 +401,9 @@ export function MultichainActivityDetail({
           ? await bitcoinWalletClient.resumeTransfer(transactionId)
           : recoveryAction === 'retry-pearl-broadcast'
             ? await pearlWalletClient.resumeTransfer(transactionId)
-            : await evmWalletClient.resumeTransfer(transactionId)
+            : recoveryAction === 'retry-dash-broadcast'
+              ? await dashWalletClient.resumeTransfer(transactionId)
+              : await evmWalletClient.resumeTransfer(transactionId)
       const nextItem = mapTransactionGraphToActivityItem(submission.graph)
       if (
         !isActivityRecoveryTransition(
@@ -399,7 +411,8 @@ export function MultichainActivityDetail({
           nextItem,
           evmChainIds,
           getBitcoinNetworkConfig(network).chainId,
-          getPearlNetworkConfig(network).chainId
+          getPearlNetworkConfig(network).chainId,
+          dashChainId
         )
       ) {
         throw new Error('Invalid Activity recovery transition')

@@ -24,6 +24,7 @@ export const ANALYTICS_CHAIN_FAMILIES = [
   'zcash',
   'evm',
   'bitcoin',
+  'dash',
   'pearl',
   'quantus',
   'solana',

@@ -3,14 +3,19 @@ import { expect } from '@playwright/test'
 
 import { getEvmNetworkConfig, getEvmNetworkConfigs } from '../../../../src/config/networks.ts'
 import {
+  ALL_CHAIN_FEATURE_FLAGS,
   BITCOIN_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
+  DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
   QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
-  ZCASH_CHAIN_FEATURE_FLAG
+  ZCASH_CHAIN_FEATURE_FLAG,
+  parseEnabledChainFeatureFlags
 } from '../../../../src/config/multichain-feature-flags.ts'
+import { getDashNetworkConfig } from '../../../../src/config/networks.ts'
 import {
   createAssetRegistry,
   createEvmBitcoinChainRegistry,
@@ -181,6 +186,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:196',
       'eip155:80094',
       'bip122:000000000019d6689c085ae165831e93',
+      'bip122:00000ffd590b1485b3caadc19b22e637',
       'bip122:a18d3093b7ff618f0cdd073fa3d10374',
       'quantus:mainnet',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
@@ -196,6 +202,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:80002',
       'eip155:43113',
       'bip122:000000000933ea01ad0ee984209779ba',
+      'bip122:00000bafbc94add76cb75e2ec9289483',
       'bip122:b0c86d0cd8825f4d72260d2de46f4704',
       'quantus:planck',
       'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
@@ -205,6 +212,7 @@ test.describe('initial multichain product definitions', () => {
       ZCASH_CHAIN_FEATURE_FLAG,
       ...Array(12).fill(EVM_CHAIN_FEATURE_FLAG),
       BITCOIN_CHAIN_FEATURE_FLAG,
+      DASH_CHAIN_FEATURE_FLAG,
       PEARL_CHAIN_FEATURE_FLAG,
       QUANTUS_CHAIN_FEATURE_FLAG,
       SOLANA_CHAIN_FEATURE_FLAG,
@@ -324,10 +332,71 @@ test.describe('initial multichain product definitions', () => {
       'eip155:196/slip44:60',
       'eip155:80094/slip44:8008',
       'bip122:000000000019d6689c085ae165831e93/slip44:0',
+      'bip122:00000ffd590b1485b3caadc19b22e637/slip44:5',
       'bip122:a18d3093b7ff618f0cdd073fa3d10374/slip44:808276',
       'quantus:mainnet/slip44:189189',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/slip44:501',
       'near:mainnet/slip44:397'
     ])
+  })
+
+  test('registers public Dash without enabling it by default', () => {
+    const enabled = parseEnabledChainFeatureFlags(undefined, ALL_CHAIN_FEATURE_FLAGS)
+    expect(ALL_CHAIN_FEATURE_FLAGS).toContain(DASH_CHAIN_FEATURE_FLAG)
+    expect(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).not.toContain(DASH_CHAIN_FEATURE_FLAG)
+    expect(ALL_CHAIN_FEATURE_FLAGS).toContain(PEARL_CHAIN_FEATURE_FLAG)
+    expect(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).toContain(PEARL_CHAIN_FEATURE_FLAG)
+    expect(enabled).toEqual(['chain.zcash', 'chain.evm', 'chain.pearl'])
+    expect(enabled).toContain(PEARL_CHAIN_FEATURE_FLAG)
+    expect(enabled).not.toContain(DASH_CHAIN_FEATURE_FLAG)
+
+    for (const network of ['mainnet', 'testnet']) {
+      const registry = createInitialProductChainRegistry(network)
+      const config = getDashNetworkConfig(network)
+      const dash = registry.resolve(config.chainId)
+      expect(dash).toMatchObject({
+        family: 'dash',
+        featureFlag: DASH_CHAIN_FEATURE_FLAG,
+        displayName: config.displayName,
+        capabilities: {
+          address: {
+            status: 'available',
+            addressSchemes: ['dash_p2pkh'],
+            derivationSchemes: ['bip44', 'imported'],
+            supportsRotation: false,
+            supportsChange: true
+          },
+          signing: {
+            status: 'available',
+            transactionFormats: ['psbt-v0'],
+            messageFormats: ['dash-core-compact']
+          },
+          transaction: {
+            status: 'available',
+            model: 'utxo',
+            actions: ['native-transfer']
+          }
+        }
+      })
+      expect(config.coinType).toBe(network === 'mainnet' ? 5 : 1)
+      expect(config.assetSlip44).toBe('5')
+      expect(config.privacy).toBe('public')
+      expect(config.requiredConfirmations).toBe(6)
+      expect(config.transactionExplorerTemplate).toBe(
+        `https://blockexplorer.one/dash/${network}/tx/{txid}`
+      )
+      expect(config.addressExplorerTemplate).toBe(
+        `https://blockexplorer.one/dash/${network}/address/{address}`
+      )
+      const assets = createAssetRegistry(
+        registry,
+        getBundledInitialProductAssetDefinitions(network)
+      )
+      expect(assets.resolve(`${config.chainId}/slip44:5`)).toMatchObject({
+        metadata: { name: 'Dash', symbol: 'DASH', decimals: 8 },
+        verification: 'trusted'
+      })
+      expect(assets.resolve(`${config.chainId}/slip44:5`).asset.reference).toBe('5')
+    }
   })
 })

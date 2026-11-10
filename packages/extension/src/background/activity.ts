@@ -26,6 +26,10 @@ import {
   loadActivePearlDiscoveryContext,
   type PearlDiscoveryState
 } from '@/infrastructure/chains/pearl'
+import {
+  IndexedDbDashDiscoveryRepository,
+  loadActiveDashDiscoveryContext
+} from '@/infrastructure/chains/dash'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import { listEvmHistoryCacheByScope } from '@/infrastructure/chains/evm/evm-activity-history-cache'
 import { filterTrackedEvmTokenActivity } from '@/infrastructure/chains/evm/evm-indexed-activity'
@@ -244,7 +248,9 @@ export function createBackgroundActivityCoordinator(
     solanaNetwork,
     solanaHistory,
     nearNetwork,
-    nearHistory
+    nearHistory,
+    dashNetwork,
+    dashHistory
   } = createConfiguredActivityHistorySources({
     network: DEFAULT_NETWORK,
     enabledChainFeatureFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
@@ -257,6 +263,7 @@ export function createBackgroundActivityCoordinator(
   )
   const bitcoinDiscovery = bitcoinHistory ? new IndexedDbBitcoinDiscoveryRepository() : undefined
   const pearlDiscovery = pearlHistory ? new IndexedDbPearlDiscoveryRepository() : undefined
+  const dashDiscovery = dashHistory ? new IndexedDbDashDiscoveryRepository() : undefined
 
   const loadBitcoinItems = async (
     scope: ActivityScope,
@@ -302,6 +309,37 @@ export function createBackgroundActivityCoordinator(
     } catch (error) {
       logger.warn(
         `Bitcoin activity refresh failed: ${formatLogError(error)}`,
+        scope.keyDomainId,
+        scope.accountId
+      )
+      return fallbackItems
+    }
+  }
+
+  const loadDashItems = async (
+    scope: ActivityScope,
+    fallbackItems: readonly ActivityItem[]
+  ): Promise<readonly ActivityItem[]> => {
+    if (!dashDiscovery || !dashHistory) return Object.freeze([])
+    try {
+      const context = await loadActiveDashDiscoveryContext(storageRepository, dashNetwork.chainId)
+      if (
+        !context ||
+        context.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
+        context.chainAccount.scope.accountId !== scope.accountId
+      ) {
+        return Object.freeze([])
+      }
+      const state = await dashDiscovery.get(context.scope)
+      if (!state) return Object.freeze([])
+      const fresh = await dashHistory.readAddressActivity({
+        scope,
+        addresses: state.observations.map(observation => observation.derived.address)
+      })
+      return mergeBoundedActivityItems(fallbackItems, fresh)
+    } catch (error) {
+      logger.warn(
+        `Dash activity refresh failed: ${formatLogError(error)}`,
         scope.keyDomainId,
         scope.accountId
       )
@@ -650,7 +688,8 @@ export function createBackgroundActivityCoordinator(
       ...(pearlHistory ? [pearlNetwork.chainId] : []),
       ...evmHistorySources.map(source => source.chainId),
       ...(solanaHistory ? [solanaNetwork.chainId] : []),
-      ...(nearHistory ? [nearNetwork.chainId] : [])
+      ...(nearHistory ? [nearNetwork.chainId] : []),
+      ...(dashHistory ? [dashNetwork.chainId] : [])
     ])
     const requestedChainIdSet = chainIds ? new Set(chainIds) : null
     const staleChainIds = supportedChainIds.filter(chainId => {
@@ -696,34 +735,40 @@ export function createBackgroundActivityCoordinator(
       const cachedPearlItems = filterItemsForChain(activeItems, pearlNetwork.chainId)
       const cachedSolanaItems = filterItemsForChainFamily(activeItems, 'solana')
       const cachedNearItems = filterItemsForChainFamily(activeItems, 'near')
-      const [bitcoinItems, pearlItems, evmItems, solanaItems, nearItems] = await Promise.all([
-        staleChainIdSet.has(bitcoinNetwork.chainId)
-          ? loadBitcoinItems(scope, cachedBitcoinItems, addressType)
-          : Object.freeze([]),
-        staleChainIdSet.has(pearlNetwork.chainId)
-          ? loadPearlItems(scope, cachedPearlItems)
-          : Object.freeze([]),
-        loadEvmItems(
-          scope,
-          accountMode,
-          staleChainIdSet,
-          cachedEvm.items,
-          historyPageCount,
-          cachedEvm.hasMoreKeys
-        ),
-        staleChainIdSet.has(solanaNetwork.chainId)
-          ? loadSolanaItems(scope, cachedSolanaItems)
-          : Object.freeze([]),
-        staleChainIdSet.has(nearNetwork.chainId)
-          ? loadNearItems(scope, cachedNearItems)
-          : Object.freeze([])
-      ])
+      const cachedDashItems = filterItemsForChain(activeItems, dashNetwork.chainId)
+      const [bitcoinItems, pearlItems, evmItems, solanaItems, nearItems, dashItems] =
+        await Promise.all([
+          staleChainIdSet.has(bitcoinNetwork.chainId)
+            ? loadBitcoinItems(scope, cachedBitcoinItems, addressType)
+            : Object.freeze([]),
+          staleChainIdSet.has(pearlNetwork.chainId)
+            ? loadPearlItems(scope, cachedPearlItems)
+            : Object.freeze([]),
+          loadEvmItems(
+            scope,
+            accountMode,
+            staleChainIdSet,
+            cachedEvm.items,
+            historyPageCount,
+            cachedEvm.hasMoreKeys
+          ),
+          staleChainIdSet.has(solanaNetwork.chainId)
+            ? loadSolanaItems(scope, cachedSolanaItems)
+            : Object.freeze([]),
+          staleChainIdSet.has(nearNetwork.chainId)
+            ? loadNearItems(scope, cachedNearItems)
+            : Object.freeze([]),
+          staleChainIdSet.has(dashNetwork.chainId)
+            ? loadDashItems(scope, cachedDashItems)
+            : Object.freeze([])
+        ])
       const refreshedItems = Object.freeze([
         ...bitcoinItems,
         ...pearlItems,
         ...evmItems,
         ...solanaItems,
-        ...nearItems
+        ...nearItems,
+        ...dashItems
       ])
       const refreshedAt = Date.now()
       const cacheWriteKey = `${scope.keyDomainId}:${scope.accountId}:${cachePartition}`

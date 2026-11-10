@@ -6,6 +6,7 @@ import {
 import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseQuantusAddress } from '@/core/chains/quantus'
 import { parseBitcoinAddressType } from '@/infrastructure/chains/bitcoin'
+import { parseDashP2pkhAddress } from '@/infrastructure/chains/dash/dash-discovery-model'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
@@ -27,6 +28,7 @@ export type AdditionalReceiveTargetView =
       address: string
       addressType: BitcoinSupportedAddressType
     }>
+  | Readonly<{ chain: ChainDefinition; kind: 'dash'; address: string }>
   | Readonly<{
       chain: ChainDefinition
       kind: 'solana' | 'near' | 'pearl' | 'quantus'
@@ -114,6 +116,15 @@ function parseTarget(
     assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')
     if (chain.family !== 'near') throw new Error('Invalid NEAR receive target chain')
     return Object.freeze({ chain, kind: 'near', address: parseNearAccountId(target.address) })
+  }
+  if (target.kind === 'dash') {
+    assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')
+    if (chain.family !== 'dash') throw new Error('Invalid Dash receive target chain')
+    return Object.freeze({
+      chain,
+      kind: 'dash',
+      address: parseDashP2pkhAddress(target.address, chain.id)
+    })
   }
   if (target.kind === 'pearl') {
     assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')

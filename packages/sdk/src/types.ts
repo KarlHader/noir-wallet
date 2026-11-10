@@ -1,5 +1,6 @@
 import type { ZcashClient } from './chains/zcash/api'
 import type { BitcoinProvider } from './chains/bitcoin/types'
+import type { DashProvider } from './chains/dash/types'
 import type { PearlProvider } from './chains/pearl/types'
 import type { QuantusProvider } from './chains/quantus/types'
 import type { EvmProvider } from './chains/evm/types'
@@ -20,6 +21,8 @@ export interface NoirWalletProvider {
   ethereum?: EvmProvider
   /** Available when the installed extension enables Bitcoin support. */
   bitcoin?: BitcoinProvider
+  /** Available when the installed extension enables Dash support. */
+  dash?: DashProvider
   /** Available when the installed extension enables Pearl support. */
   pearl?: PearlProvider
   /** Available when the installed extension enables Quantus support. */

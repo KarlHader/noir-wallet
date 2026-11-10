@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer'
 import { HDKey } from '@scure/bip32'
+import { deriveLedgerDashP2pkh } from '@/lib/ledger/dash-model'
 import { networks, payments } from 'bitcoinjs-lib'
 import {
   parseAccountId,
@@ -8,6 +9,8 @@ import {
   parseChainAccountId
 } from '@/core/accounts/domain'
 import { getBitcoinChainId, getZcashChainId, parseChainId } from '@/core/chains/registry'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { hardwareCapabilitiesForNetwork } from '@/core/keyring/domain/hardware-credential'
 import {
   buildChainAccountVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer
@@ -108,8 +111,15 @@ async function hash(value: string): Promise<string> {
   return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value))))
 }
 
-function metadata(credential: LedgerMultichainHardwareCredential): HardwareCredentialMetadata {
-  return { vendor: 'ledger', firmwareProfile: 'multi-app', capabilities: credential.capabilities }
+function metadata(
+  credential: LedgerMultichainHardwareCredential,
+  network: Network
+): HardwareCredentialMetadata {
+  return {
+    vendor: 'ledger',
+    firmwareProfile: 'multi-app',
+    capabilities: hardwareCapabilitiesForNetwork(credential.capabilities, network)
+  }
 }
 
 function publicInventory(credential: LedgerMultichainHardwareCredential): string {
@@ -157,6 +167,12 @@ function chainIdsFor(
   if (account.family === 'solana')
     return [getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet').chainId]
   if (account.family === 'near') return [getNearNetworkConfig(network).chainId]
+  if (account.family === 'dash') {
+    if (network !== 'mainnet' || account.network !== 'mainnet') {
+      throw new Error('Dash hardware wallets support mainnet only')
+    }
+    return [DASH_CHAIN_IDS.mainnet]
+  }
   return evmChainIds
 }
 
@@ -174,6 +190,14 @@ function bitcoinIdentity(account: Extract<LedgerPublicAccount, { family: 'bitcoi
   if (address !== account.address)
     throw new Error('Ledger Bitcoin receive address does not match xpub')
   return address
+}
+
+function deriveDashIdentity(account: Extract<LedgerPublicAccount, { family: 'dash' }>): string {
+  const derived = deriveLedgerDashP2pkh(account.xpub, false, 0)
+  if (derived.address !== account.address || `0x${derived.publicKey}` !== account.publicKey) {
+    throw new Error('Ledger Dash receive address does not match xpub')
+  }
+  return derived.address
 }
 
 function verifyPriorAccounts(
@@ -331,9 +355,16 @@ function buildSnapshot(
       }
       continue
     }
-    const address = account.family === 'bitcoin' ? bitcoinIdentity(account) : account.address
+    const address =
+      account.family === 'bitcoin'
+        ? bitcoinIdentity(account)
+        : account.family === 'dash'
+          ? deriveDashIdentity(account)
+          : account.address
     const projectedPath =
-      account.family === 'bitcoin' ? `${account.derivationPath}/0/0` : account.derivationPath
+      account.family === 'bitcoin' || account.family === 'dash'
+        ? `${account.derivationPath}/0/0`
+        : account.derivationPath
     for (const rawChainId of chainIdsFor(account, network, evmChainIds)) {
       const chainId = parseChainId(rawChainId).id
       const prior = chainAccounts.find(
@@ -368,7 +399,12 @@ function buildSnapshot(
         id: parseAddressId(`address:ledger-v3:${suffix}:${tag}`),
         chainAccountId,
         value: address,
-        scheme: account.family === 'bitcoin' ? 'bitcoin-p2wpkh' : account.family,
+        scheme:
+          account.family === 'bitcoin'
+            ? 'bitcoin-p2wpkh'
+            : account.family === 'dash'
+              ? 'dash_p2pkh'
+              : account.family,
         purpose: account.family === 'evm' ? 'identity' : 'receive',
         derivation: { scheme, path: projectedPath },
         rotatable: account.family === 'bitcoin',
@@ -382,12 +418,12 @@ function buildSnapshot(
     ? {
         ...sourceDomain,
         credentialRef: identity.credentialSetRef,
-        source: { kind: 'hardware' as const, ...metadata(credential) }
+        source: { kind: 'hardware' as const, ...metadata(credential, network) }
       }
     : {
         id: identity.keyDomainId,
         credentialRef: identity.credentialSetRef,
-        source: { kind: 'hardware' as const, ...metadata(credential) },
+        source: { kind: 'hardware' as const, ...metadata(credential, network) },
         displayName,
         createdAt: timestamp
       }
@@ -603,7 +639,7 @@ export class LedgerHardwareProvisioningCoordinator {
           credentialGenerationId: identity.credentialGenerationId,
           keyDomainId,
           source: 'hardware' as const,
-          hardware: metadata(credential),
+          hardware: metadata(credential, input.network),
           engines: {
             multichain: {
               credentialRef: identity.engineCredentialRef,
@@ -664,7 +700,7 @@ export class LedgerHardwareProvisioningCoordinator {
     if (!(await this.options.storageRepository.getSnapshot(generationId))) {
       await this.options.storageRepository.stage(target)
     }
-    await this.verifyCredential(identity, credential, input.password, transactionId)
+    await this.verifyCredential(identity, credential, input.password, transactionId, input.network)
     if (journal.phase === 'staging') {
       const next = nextJournal(journal, 'verified', this.now())
       advanced(
@@ -749,7 +785,8 @@ export class LedgerHardwareProvisioningCoordinator {
     identity: CredentialIdentity,
     expected: LedgerMultichainHardwareCredential,
     password: string,
-    transactionId: ReturnType<typeof parseCredentialTransactionId>
+    transactionId: ReturnType<typeof parseCredentialTransactionId>,
+    network: Network
   ): Promise<void> {
     const set = await this.options.credentialRepository.getCredentialSet(identity.credentialSetRef)
     if (
@@ -759,7 +796,8 @@ export class LedgerHardwareProvisioningCoordinator {
       set.manifest.source !== 'hardware' ||
       set.manifest.hardware?.vendor !== 'ledger' ||
       set.manifest.hardware.firmwareProfile !== 'multi-app' ||
-      JSON.stringify(set.manifest.hardware.capabilities) !== JSON.stringify(expected.capabilities)
+      JSON.stringify(set.manifest.hardware.capabilities) !==
+        JSON.stringify(hardwareCapabilitiesForNetwork(expected.capabilities, network))
     ) {
       throw new Error('Staged Ledger CredentialSet does not match')
     }

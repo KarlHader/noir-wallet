@@ -1,6 +1,7 @@
 import type { LedgerChainFamily } from '@/core/wallet/hardware-wallet-data'
 import type { Network } from '@/types'
 import { ledgerBitcoinAppName } from '@/lib/ledger/bitcoin-model'
+import { LEDGER_DASH_APP_NAME, ledgerDashDeviceSupported } from '@/lib/ledger/dash-model'
 
 export function ledgerAppName(family: LedgerChainFamily, network: Network): string {
   switch (family) {
@@ -14,6 +15,16 @@ export function ledgerAppName(family: LedgerChainFamily, network: Network): stri
       return 'Solana'
     case 'near':
       return 'NEAR'
+    case 'dash':
+      return LEDGER_DASH_APP_NAME
+  }
+}
+
+export function ledgerDashModelStatus(deviceModel: string): LedgerDeviceStatus | null {
+  if (ledgerDashDeviceSupported(deviceModel)) return null
+  return {
+    message: 'This Ledger model is not supported for the Dash app.',
+    awaitingDevice: false
   }
 }
 

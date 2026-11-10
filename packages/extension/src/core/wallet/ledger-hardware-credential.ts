@@ -9,7 +9,9 @@ import {
   nearImplicitAccountIdFromPublicKey,
   parseNearPublicKey
 } from '@/core/chains/near/identifiers'
+import { deriveLedgerDashP2pkh } from '@/lib/ledger/dash-model'
 import {
+  validateLedgerDashDerivationPath,
   validateLedgerEvmDerivationPath,
   validateLedgerNearDerivationPath,
   validateLedgerSolanaDerivationPath
@@ -21,7 +23,8 @@ export const LEDGER_CHAIN_FAMILIES = Object.freeze([
   'bitcoin',
   'evm',
   'solana',
-  'near'
+  'near',
+  'dash'
 ] as const)
 export type LedgerChainFamily = (typeof LEDGER_CHAIN_FAMILIES)[number]
 interface LedgerAccountBase {
@@ -41,6 +44,13 @@ export type LedgerPublicAccount = LedgerAccountBase &
       }
     | { readonly family: 'solana'; readonly publicKey: string; readonly address: string }
     | { readonly family: 'near'; readonly publicKey: string; readonly address: string }
+    | {
+        readonly family: 'dash'
+        readonly network: 'mainnet'
+        readonly xpub: string
+        readonly publicKey: string
+        readonly address: string
+      }
     | {
         readonly family: 'zcash'
         readonly network: 'mainnet' | 'testnet'
@@ -197,6 +207,39 @@ function parseAccount(value: unknown): LedgerPublicAccount {
       masterFingerprintHex,
       publicKey,
       address
+    })
+  }
+  if (value.family === 'dash') {
+    keys(value, [...common, 'network', 'xpub', 'publicKey', 'address'])
+    if (network(value.network) !== 'mainnet') {
+      throw new Error('Dash hardware wallets support mainnet only')
+    }
+    const derivationPath = validateLedgerDashDerivationPath(
+      path(value.derivationPath, /^m\/44'\/5'\/[0-9]+'$/)
+    )
+    const xpub = text(value.xpub, 'Dash xpub')
+    const root = HDKey.fromExtendedKey(xpub)
+    const accountIndexFromPath = Number(derivationPath.split('/')[3].slice(0, -1))
+    if (root.privateKey || root.depth !== 3 || root.index !== accountIndexFromPath + 0x80000000) {
+      throw new Error('Ledger Dash xpub does not match its account path')
+    }
+    const derived = deriveLedgerDashP2pkh(xpub, false, 0)
+    const publicKey = `0x${derived.publicKey}`
+    if (
+      value.address !== derived.address ||
+      typeof value.publicKey !== 'string' ||
+      value.publicKey.toLowerCase() !== publicKey
+    ) {
+      throw new Error('Ledger Dash receive address does not match xpub')
+    }
+    return Object.freeze({
+      family: 'dash',
+      accountIndex,
+      derivationPath,
+      network: 'mainnet',
+      xpub,
+      publicKey,
+      address: derived.address
     })
   }
   if (value.family === 'solana' || value.family === 'near') {

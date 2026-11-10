@@ -1,4 +1,5 @@
 import { parseChainId } from '@/core/chains/registry'
+import { isDashChainId } from '@/core/chains/registry/chain-ids'
 import { resolveEvmChainIconAlias } from '@/config/icons'
 import { parseCustomServiceUrl } from '@/core/chains/chain-endpoint-settings'
 import {
@@ -16,6 +17,7 @@ import {
   type SolanaMessageSummary,
   type SolanaTransactionSummary
 } from '@/core/keyring/domain'
+import type { DashMessageSummary, DashPsbtSummary } from '@/core/keyring/domain/signing-summary'
 
 export interface EvmPrivateTransferApprovalSummary {
   readonly chainId: number
@@ -209,6 +211,29 @@ export function parseBitcoinSigningSummary(
     })
     if (operation === 'transaction' && summary.schema === 'bitcoin.psbt.v1') return summary
     if (operation === 'message' && summary.schema === 'bitcoin.bip322-message.v1') return summary
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function parseDashSigningSummary(
+  value: unknown,
+  operation: 'transaction' | 'message'
+): DashPsbtSummary | DashMessageSummary | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const chainId = Reflect.get(value, 'chainId')
+  if (typeof chainId !== 'string') return null
+  try {
+    const parsedChainId = parseChainId(chainId)
+    if (!isDashChainId(parsedChainId.id)) return null
+    const summary = parseSigningSummary(value, {
+      family: 'dash',
+      chainId: parsedChainId.id,
+      operation
+    })
+    if (operation === 'transaction' && summary.schema === 'dash.psbt.v1') return summary
+    if (operation === 'message' && summary.schema === 'dash.message.v1') return summary
     return null
   } catch {
     return null

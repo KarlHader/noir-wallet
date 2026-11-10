@@ -8,6 +8,8 @@ export const SIGNING_SUMMARY_SCHEMAS = Object.freeze([
   'evm.typed-data.v1',
   'bitcoin.psbt.v1',
   'bitcoin.bip322-message.v1',
+  'dash.psbt.v1',
+  'dash.message.v1',
   'pearl.psbt.v1',
   'pearl.bip322-message.v1',
   'solana.transaction.v1',
@@ -24,6 +26,7 @@ export type SigningSummaryFamily =
   | 'zcash'
   | 'evm'
   | 'bitcoin'
+  | 'dash'
   | 'pearl'
   | 'solana'
   | 'tron'
@@ -219,6 +222,53 @@ export type BitcoinBip322MessageSummary = SigningSummaryEnvelope<
   {
     readonly address: string
     readonly message: CanonicalContent
+  }
+>
+
+export interface DashInputSummary {
+  readonly index: number
+  readonly transactionId: string
+  readonly outputIndex: number
+  readonly amountDuffs: string
+  readonly sequence: number
+  readonly scriptType: 'p2pkh'
+  readonly sighashType: string
+  readonly ownership: 'signing-account' | 'external'
+  readonly derivationPath: string | null
+}
+
+export interface DashOutputSummary {
+  readonly index: number
+  readonly address: string | null
+  readonly scriptPubKeyHex: string
+  readonly amountDuffs: string
+  readonly classification: 'recipient' | 'change' | 'unknown'
+  readonly derivationPath: string | null
+}
+
+export type DashPsbtSummary = SigningSummaryEnvelope<
+  'dash.psbt.v1',
+  'transaction',
+  {
+    readonly psbtVersion: 0
+    readonly signer: string
+    readonly accountIndex: number
+    readonly inputs: readonly DashInputSummary[]
+    readonly outputs: readonly DashOutputSummary[]
+    readonly signingInputIndexes: readonly number[]
+    readonly totalInputDuffs: string
+    readonly totalOutputDuffs: string
+    readonly feeDuffs: string
+  }
+>
+
+export type DashMessageSummary = SigningSummaryEnvelope<
+  'dash.message.v1',
+  'message',
+  {
+    readonly signer: string
+    readonly message: CanonicalContent
+    readonly messageHash: string
   }
 >
 
@@ -575,6 +625,8 @@ export type SigningSummary =
   | EvmTypedDataSummary
   | BitcoinPsbtSummary
   | BitcoinBip322MessageSummary
+  | DashPsbtSummary
+  | DashMessageSummary
   | PearlPsbtSummary
   | PearlBip322MessageSummary
   | SolanaTransactionSummary

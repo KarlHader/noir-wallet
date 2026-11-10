@@ -1,10 +1,13 @@
 import { Network } from '@/types'
 import {
   BITCOIN_CHAIN_IDS,
+  DASH_CHAIN_IDS,
   PEARL_CHAIN_IDS,
   QUANTUS_CHAIN_IDS
 } from '@/core/chains/registry/chain-ids'
 import { getDefaultEvmRpcEndpoint, RPC_DEFAULT_ENDPOINTS } from './rpc-endpoints'
+
+export { DASH_CHAIN_IDS }
 
 export interface NetworkConfig {
   id: Network
@@ -76,6 +79,116 @@ export const BITCOIN_NETWORKS: Readonly<Record<Network, BitcoinNetworkConfig>> =
 
 export function getBitcoinNetworkConfig(network: Network): BitcoinNetworkConfig {
   return BITCOIN_NETWORKS[network]
+}
+
+export interface DashNetworkConfig {
+  readonly networkMode: Network
+  readonly chainId: (typeof DASH_CHAIN_IDS)[Network]
+  readonly genesisHash: string
+  /** BIP44 derivation coin type. Product asset identity stays slip44 `5` on both networks. */
+  readonly coinType: 5 | 1
+  readonly assetSlip44: '5'
+  readonly nativeSymbol: 'DASH'
+  readonly nativeDecimals: 8
+  readonly minorUnit: 'duff'
+  readonly p2pkhVersion: number
+  readonly p2shVersion: number
+  readonly wifVersion: number
+  readonly displayName: string
+  readonly privacy: 'public'
+  readonly explorerBaseUrl: string
+  readonly transactionExplorerPath: 'tx'
+  readonly addressExplorerPath: 'address'
+  readonly transactionExplorerTemplate: string
+  readonly addressExplorerTemplate: string
+  readonly requiredConfirmations: 6
+}
+
+function dashExplorer(
+  network: Network
+): Pick<
+  DashNetworkConfig,
+  | 'explorerBaseUrl'
+  | 'transactionExplorerPath'
+  | 'addressExplorerPath'
+  | 'transactionExplorerTemplate'
+  | 'addressExplorerTemplate'
+> {
+  const explorerBaseUrl = `https://blockexplorer.one/dash/${network}`
+  return Object.freeze({
+    explorerBaseUrl,
+    transactionExplorerPath: 'tx',
+    addressExplorerPath: 'address',
+    transactionExplorerTemplate: `${explorerBaseUrl}/tx/{txid}`,
+    addressExplorerTemplate: `${explorerBaseUrl}/address/{address}`
+  })
+}
+
+function applyDashExplorerTemplate(
+  template: string,
+  placeholder: '{txid}' | '{address}',
+  value: string
+): string {
+  const index = template.indexOf(placeholder)
+  if (index < 0) throw new Error('Dash explorer template is invalid')
+  return `${template.slice(0, index)}${encodeURIComponent(value)}${template.slice(index + placeholder.length)}`
+}
+
+export const DASH_NETWORKS: Readonly<Record<Network, DashNetworkConfig>> = Object.freeze({
+  mainnet: Object.freeze({
+    networkMode: 'mainnet',
+    chainId: DASH_CHAIN_IDS.mainnet,
+    genesisHash: '00000ffd590b1485b3caadc19b22e6379c733355108f107a430458cdf3407ab6',
+    coinType: 5,
+    assetSlip44: '5',
+    nativeSymbol: 'DASH',
+    nativeDecimals: 8,
+    minorUnit: 'duff',
+    p2pkhVersion: 76,
+    p2shVersion: 16,
+    wifVersion: 204,
+    displayName: 'Dash',
+    privacy: 'public',
+    ...dashExplorer('mainnet'),
+    requiredConfirmations: 6
+  }),
+  testnet: Object.freeze({
+    networkMode: 'testnet',
+    chainId: DASH_CHAIN_IDS.testnet,
+    genesisHash: '00000bafbc94add76cb75e2ec92894837288a481e5c005f6563d91623bf8bc2c',
+    coinType: 1,
+    assetSlip44: '5',
+    nativeSymbol: 'DASH',
+    nativeDecimals: 8,
+    minorUnit: 'duff',
+    p2pkhVersion: 140,
+    p2shVersion: 19,
+    wifVersion: 239,
+    displayName: 'Dash Testnet',
+    privacy: 'public',
+    ...dashExplorer('testnet'),
+    requiredConfirmations: 6
+  })
+} as const satisfies Record<Network, DashNetworkConfig>)
+
+export function getDashNetworkConfig(network: Network): DashNetworkConfig {
+  return DASH_NETWORKS[network]
+}
+
+export function formatDashTransactionExplorerUrl(network: Network, txid: string): string {
+  return applyDashExplorerTemplate(
+    getDashNetworkConfig(network).transactionExplorerTemplate,
+    '{txid}',
+    txid
+  )
+}
+
+export function formatDashAddressExplorerUrl(network: Network, address: string): string {
+  return applyDashExplorerTemplate(
+    getDashNetworkConfig(network).addressExplorerTemplate,
+    '{address}',
+    address
+  )
 }
 
 export interface PearlNetworkConfig {

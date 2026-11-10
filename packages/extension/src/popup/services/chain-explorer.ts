@@ -1,5 +1,6 @@
 import {
   getBitcoinNetworkConfig,
+  getDashNetworkConfig,
   getNearNetworkConfig,
   getPearlNetworkConfig,
   getSolanaNetworkConfig
@@ -59,6 +60,14 @@ export function resolveChainExplorerTarget(
     return Object.freeze({
       baseUrl: getBitcoinNetworkConfig(network).explorerUrl,
       transactionPath: 'tx'
+    })
+  }
+  const dash = getDashNetworkConfig(network)
+  if (chainId === dash.chainId) {
+    return Object.freeze({
+      baseUrl: dash.explorerBaseUrl,
+      transactionPath: dash.transactionExplorerPath,
+      addressPath: dash.addressExplorerPath
     })
   }
   if (chainId === getPearlChainId(network)) {

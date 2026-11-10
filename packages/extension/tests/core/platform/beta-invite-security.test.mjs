@@ -41,6 +41,7 @@ test('unactivated saved dApp connections expose neither accounts nor sessions', 
     ['zcash', 'zcash_getAccounts', null],
     ['evm', 'eth_accounts', []],
     ['bitcoin', 'getAccounts', []],
+    ['dash', 'getAccounts', []],
     ['solana', 'getAccounts', []],
     ['near', 'getAccounts', []],
     ['multichain', 'wallet_getSession', null]
@@ -55,6 +56,7 @@ test('connect requests wait for activation and wallet operations cannot use exis
     ['evm', 'eth_requestAccounts'],
     ['evm', 'wallet_requestPermissions'],
     ['bitcoin', 'connect'],
+    ['dash', 'connect'],
     ['solana', 'connect'],
     ['near', 'requestAccounts'],
     ['multichain', 'wallet_createSession']
@@ -67,6 +69,7 @@ test('connect requests wait for activation and wallet operations cannot use exis
     ['evm', 'eth_sendTransaction'],
     ['evm', 'personal_sign'],
     ['bitcoin', 'signPsbt'],
+    ['dash', 'sendDash'],
     ['solana', 'signAndSendTransaction'],
     ['near', 'signMessage'],
     ['multichain', 'wallet_invokeMethod']

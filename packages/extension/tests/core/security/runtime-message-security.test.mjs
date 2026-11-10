@@ -968,6 +968,21 @@ test.describe('Runtime message security', () => {
         displayName: 'Imported NEAR Wallet'
       })
     ).toMatchObject({ type: 'IMPORT_PRIVATE_KEY_WALLET', chainFamily: 'near' })
+    expect(
+      parseTrustedExtensionRuntimeMessage({
+        type: 'IMPORT_PRIVATE_KEY_WALLET',
+        privateKey: 'X' + '1'.repeat(51),
+        chainFamily: 'dash',
+        displayName: 'Imported Dash Wallet'
+      })
+    ).toMatchObject({ type: 'IMPORT_PRIVATE_KEY_WALLET', chainFamily: 'dash' })
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        type: 'PREVIEW_PRIVATE_KEY_WALLET',
+        privateKey: '1'.repeat(64),
+        chainFamily: 'tron'
+      })
+    ).toThrow(/schema/i)
     expect(() =>
       parseTrustedExtensionRuntimeMessage({
         type: 'PREVIEW_PRIVATE_KEY_WALLET',

@@ -13,7 +13,7 @@ Typed TypeScript SDK for connecting web apps to Noir Wallet's Zcash and optional
 
 ## What the SDK does
 
-`@noir-wallet/sdk` wraps the providers injected at `window.noirwallet`. The V2 SDK retains the V1 Zcash entry point and adds optional EVM, Bitcoin, Pearl, Solana, NEAR, and multichain-session providers. Check for each provider before using it; availability depends on the installed extension, enabled capabilities, and selected network mode.
+`@noir-wallet/sdk` wraps the providers injected at `window.noirwallet`. The V2 SDK retains the V1 Zcash entry point and adds optional EVM, Bitcoin, Dash, Pearl, Solana, NEAR, and multichain-session providers. Check for each provider before using it; availability depends on the installed extension, enabled capabilities, and selected network mode.
 
 The Zcash client lets your app:
 
@@ -57,6 +57,7 @@ npm install @noir-wallet/sdk@beta --save-exact
 | `zcash`      | Zcash client, including the V1 connection API             |
 | `ethereum`   | EIP-1193 provider with EIP-6963 discovery                 |
 | `bitcoin`    | Bitcoin accounts, transactions, and PSBTs                 |
+| `dash`       | Dash accounts, transactions, and PSBTs                    |
 | `pearl`      | Pearl accounts, balances, BIP-322, PSBT, and native sends |
 | `solana`     | Solana accounts, transactions, and messages               |
 | `near`       | NEAR sign-in, transactions, and messages                  |
@@ -77,7 +78,7 @@ async function connectEvmWallet() {
 }
 ```
 
-The package also exports `getBitcoinProvider()` / `detectBitcoinProvider()`, `getPearlProvider()` / `detectPearlProvider()`, `getSolanaProvider()` / `detectSolanaProvider()`, and `getNearProvider()` / `detectNearProvider()`. Synchronous getters return `null` when unavailable; asynchronous discovery rejects if no provider appears before its timeout. Use `addEvmNetwork()` and `switchEvmChain()` for the [EVM network requests](https://github.com/NoirWallet/noir-wallet/blob/v2/packages/docs/content/docs/developers/provider-api.mdx#evm-network-requests) supported by the installed wallet; they do not change the global Mainnet/Testnet Mode.
+The package also exports `getBitcoinProvider()` / `detectBitcoinProvider()`, `getDashProvider()` / `detectDashProvider()`, `getPearlProvider()` / `detectPearlProvider()`, `getSolanaProvider()` / `detectSolanaProvider()`, and `getNearProvider()` / `detectNearProvider()`. Synchronous getters return `null` when unavailable; asynchronous discovery rejects if no provider appears before its timeout. Use `addEvmNetwork()` and `switchEvmChain()` for the [EVM network requests](https://github.com/NoirWallet/noir-wallet/blob/v2/packages/docs/content/docs/developers/provider-api.mdx#evm-network-requests) supported by the installed wallet; they do not change the global Mainnet/Testnet Mode.
 
 ## Zcash quick start
 

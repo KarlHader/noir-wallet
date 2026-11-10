@@ -6,6 +6,7 @@ export type RpcProbeKind =
   | 'zcash-lightwalletd-grpc-web'
   | 'evm-json-rpc'
   | 'bitcoin-esplora'
+  | 'dash-insight'
   | 'pearl-blockbook'
   | 'solana-json-rpc'
   | 'near-json-rpc'
@@ -64,7 +65,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-10-27T08:30:27.000Z',
+  updatedAt: '2026-11-09T10:00:00.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -239,6 +240,17 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
         ['mempool-space', 'mempool.space', 'https://mempool.space/testnet/api/'],
         ['blockstream-info', 'Blockstream', 'https://blockstream.info/testnet/api/']
       ]
+    ),
+    chain('bip122:00000ffd590b1485b3caadc19b22e637', MAINNET, 'Dash', 'dash', 'dash-insight', [
+      ['insight', 'Insight', 'https://insight.dash.org/insight-api']
+    ]),
+    chain(
+      'bip122:00000bafbc94add76cb75e2ec9289483',
+      TESTNET,
+      'Dash Testnet',
+      'dash',
+      'dash-insight',
+      [['insight', 'Insight', 'https://insight.testnet.networks.dash.org/insight-api']]
     ),
     chain('bip122:a18d3093b7ff618f0cdd073fa3d10374', MAINNET, 'Pearl', 'pearl', 'pearl-blockbook', [
       ['blockbook', 'Blockbook', 'https://blockbook.pearlresearch.ai/api/v2']

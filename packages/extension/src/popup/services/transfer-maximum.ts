@@ -85,6 +85,36 @@ export function isTransferAmountSpendable(
   )
 }
 
+export async function estimateDashTransferMaximum(recipient: string): Promise<QuoteDepositMaximum> {
+  const { dashWalletClient } = await import('./dash-wallet-client')
+  const review = await dashWalletClient.prepareTransfer({
+    recipient,
+    amount: { mode: 'max' }
+  })
+  try {
+    const amountRaw = review.graph.root.intent?.primaryAmount?.amountRaw
+    const networkFeeRaw = review.graph.root.intent?.feeLimit?.amountRaw
+    if (
+      amountRaw === undefined ||
+      networkFeeRaw === undefined ||
+      !/^(0|[1-9][0-9]*)$/.test(amountRaw) ||
+      !/^(0|[1-9][0-9]*)$/.test(networkFeeRaw) ||
+      BigInt(amountRaw) <= 0n ||
+      BigInt(networkFeeRaw) <= 0n
+    ) {
+      throw new Error('Dash Max quote is incomplete')
+    }
+    return {
+      amountRaw,
+      networkFeeRaw,
+      networkFeeSymbol: 'DASH',
+      networkFeeDecimals: 8
+    }
+  } finally {
+    await dashWalletClient.rejectTransfer(review.graph.root.id).catch(() => undefined)
+  }
+}
+
 export async function estimateNativeTransferMaximum(
   input: {
     readonly source: WalletOwnedQuoteAsset

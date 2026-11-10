@@ -35,6 +35,14 @@ const chains = createAddressGatedChainRegistry(createInitialProductChainRegistry
   'chain.evm',
   'chain.bitcoin'
 ])
+const dashChains = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
+  'chain.zcash',
+  'chain.evm',
+  'chain.bitcoin',
+  'chain.dash'
+])
+const dashChainId = 'bip122:00000bafbc94add76cb75e2ec9289483'
+const dashAddress = 'yRd4FhXfVGHXpsuZXPNkMrfD9GVj46pnjt'
 
 function snapshot(overrides = {}) {
   const base = {
@@ -476,5 +484,79 @@ test.describe('Account networks coordinator', () => {
     expect(
       (await multiCoin.readCatalog()).accounts[0].networks.map(network => network.chainId)
     ).toEqual([evmChainId, bitcoinChainId])
+  })
+
+  test('omits Dash when derivation or the stored address cannot be displayed', async () => {
+    const stored = snapshot()
+    const withDash = {
+      ...stored,
+      chainAccounts: [
+        ...stored.chainAccounts,
+        {
+          id: 'chain-account:networks:dash',
+          scope: { keyDomainId: walletId, accountId, chainId: dashChainId },
+          derivation: { scheme: 'bip44', path: "m/44'/1'/0'/0/0" },
+          identity: { kind: 'account-identifier', value: dashAddress },
+          createdAt: 1
+        }
+      ]
+    }
+    const chainIds = async coordinator =>
+      (await coordinator.readCatalog()).accounts[0].networks.map(network => network.chainId)
+
+    const failed = new AccountNetworksCoordinator({
+      repository: repository(withDash),
+      chains: dashChains,
+      dashDerivation: {
+        deriveAddress: async () => {
+          throw new Error('Dash derivation failed')
+        }
+      }
+    })
+    expect(await chainIds(failed)).toEqual(
+      expect.arrayContaining([zcashChainId, evmChainId, bitcoinChainId])
+    )
+    expect(await chainIds(failed)).not.toContain(dashChainId)
+
+    const invalid = new AccountNetworksCoordinator({
+      repository: repository(withDash),
+      chains: dashChains,
+      dashDerivation: {
+        async deriveAddress() {
+          return { address: 'not-a-dash-address', addressScheme: 'dash_p2pkh' }
+        }
+      }
+    })
+    expect(await chainIds(invalid)).not.toContain(dashChainId)
+
+    const missing = new AccountNetworksCoordinator({
+      repository: repository(withDash),
+      chains: dashChains
+    })
+    expect(await chainIds(missing)).not.toContain(dashChainId)
+
+    const derived = new AccountNetworksCoordinator({
+      repository: repository(withDash),
+      chains: dashChains,
+      dashDerivation: {
+        async deriveAddress() {
+          return { address: dashAddress, addressScheme: 'dash_p2pkh' }
+        }
+      }
+    })
+    const dash = (await derived.readCatalog()).accounts[0].networks.find(
+      network => network.chainId === dashChainId
+    )
+    expect(dash.addresses).toEqual([
+      {
+        value: dashAddress,
+        scheme: 'dash_p2pkh',
+        privacy: 'transparent',
+        preferredForReceive: true
+      }
+    ])
+    expect((await derived.readCatalog()).accounts[0].networks.map(network => network.chainId)).toEqual(
+      expect.arrayContaining([zcashChainId, evmChainId, bitcoinChainId, dashChainId])
+    )
   })
 })

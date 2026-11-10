@@ -45,7 +45,6 @@ import {
   parseRawExportedPrivateKey,
   parseRawPearlAccount,
   parseRawQuantusAccount,
-  parseRawSessionInfo,
   RAW_BITCOIN_ADDRESS_TYPES,
   RAW_QUANTUS_SCHEMES,
   readArray,
@@ -68,6 +67,25 @@ import {
   type RawWalletEngine
 } from './raw-wallet-engine'
 import { bindMultichainVaultPassword } from './password-binding'
+import { BITCOIN_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import type { RawDashAccount } from './dash-codecs'
+import { parseDashOrRawSession } from './dash-codecs'
+import {
+  assertDashDerivationSession,
+  assertDashSigningSession,
+  confirmDashSigningRaw,
+  dashChainIdForNetwork,
+  dashExportRequest,
+  deriveDashAccountsRaw,
+  parseDashAccountDerivation,
+  parseDashExportedPrivateKey,
+  parseDerivedDashAccount,
+  parseDerivedDashAccountBatch,
+  prepareDashSigningRaw,
+  verifyDashMessageRaw,
+  type DashAccountDerivation,
+  type DashSigningPreparePayload
+} from './worker-dash-runtime'
 
 const DEFAULT_MAX_PENDING_SIGNING = 64
 const DEFAULT_SIGNING_TTL_MS = 5 * 60_000
@@ -102,9 +120,10 @@ interface CredentialSession {
   readonly globalUnlockEpoch: string
   readonly rawSessionId: number
   readonly kind: 'mnemonic' | 'private_key'
-  readonly chainFamily?: RawPrivateKeyChainFamily
+  readonly chainFamily?: RawPrivateKeyChainFamily | 'dash'
   readonly bitcoinNetwork?: RawBitcoinNetwork
   readonly pearlNetwork?: ProductPearlNetwork
+  readonly dashNetwork?: 'mainnet' | 'testnet'
 }
 
 interface PendingSigning {
@@ -123,6 +142,7 @@ interface PendingSigning {
     | RawDerivedQuantusAccount
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
+    | RawDashAccount
   readonly expiresAt: number
 }
 
@@ -259,6 +279,15 @@ function callRaw<T>(
   }
 }
 
+function requireDashNetwork(value: 'mainnet' | 'testnet' | undefined): 'mainnet' | 'testnet' {
+  if (value !== 'mainnet' && value !== 'testnet') throw new KeyringError('INVALID_CREDENTIAL')
+  return value
+}
+
+function isExactBitcoinChainId(chainId: string): boolean {
+  return chainId === BITCOIN_CHAIN_IDS.mainnet || chainId === BITCOIN_CHAIN_IDS.testnet
+}
+
 function parseAccountDerivation(value: unknown):
   | {
       readonly family: 'pea'
@@ -333,11 +362,12 @@ function parseAccountDerivation(value: unknown):
       readonly family: 'near'
       readonly chainId: string
       readonly accountIndex: number
-    } {
+    }
+  | DashAccountDerivation {
   const record = readRecord(value, 'account.derive-public payload')
   const family = readLiteral(
     record.family,
-    ['evm', 'pea', 'bitcoin', 'pearl', 'quantus', 'solana', 'near'],
+    ['evm', 'pea', 'bitcoin', 'dash', 'pearl', 'quantus', 'solana', 'near'],
     'account family'
   )
   if (family === 'quantus') {
@@ -466,6 +496,8 @@ function parseAccountDerivation(value: unknown):
       addressIndex: readSafeInteger(record.addressIndex, 'addressIndex', MAX_BIP32_INDEX)
     })
   }
+  if (family === 'dash') return parseDashAccountDerivation(record)
+  if (family !== 'bitcoin') throw new KeyringError('UNSUPPORTED_CHAIN')
   const batch = !Object.prototype.hasOwnProperty.call(record, 'addressIndex')
   assertExactKeys(
     record,
@@ -476,10 +508,7 @@ function parseAccountDerivation(value: unknown):
     'derive payload'
   )
   const chainId = readString(record.chainId, 'chainId', 64)
-  if (
-    chainId !== 'bip122:000000000019d6689c085ae165831e93' &&
-    chainId !== 'bip122:000000000933ea01ad0ee984209779ba'
-  ) {
+  if (!isExactBitcoinChainId(chainId)) {
     throw new KeyringError('UNSUPPORTED_CHAIN')
   }
   const common = {
@@ -515,7 +544,8 @@ function publicAccount(
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
     | RawDerivedQuantusAccount
-    | RawDerivedEd25519Account,
+    | RawDerivedEd25519Account
+    | RawDashAccount,
   purpose: 'identity' | 'receive' | 'change'
 ) {
   return Object.freeze({
@@ -701,12 +731,12 @@ export class MultichainWorkerRuntime {
       assertExactKeys(
         value,
         ['privateKey', 'password', 'chainFamily'],
-        ['bitcoinNetwork', 'pearlNetwork'],
+        ['bitcoinNetwork', 'pearlNetwork', 'dashNetwork'],
         'credential.import-private-key payload'
       )
       const chainFamily = readLiteral(
         value.chainFamily,
-        ['eip155', 'bip122', 'solana', 'near', 'pearl'],
+        ['eip155', 'bip122', 'solana', 'near', 'pearl', 'dash'],
         'chainFamily'
       )
       const bitcoinNetwork =
@@ -717,11 +747,17 @@ export class MultichainWorkerRuntime {
         value.pearlNetwork === undefined
           ? undefined
           : readLiteral(value.pearlNetwork, ['mainnet', 'testnet'], 'pearlNetwork')
+      const dashNetwork =
+        value.dashNetwork === undefined
+          ? undefined
+          : readLiteral(value.dashNetwork, ['mainnet', 'testnet'], 'dashNetwork')
       if (
         (chainFamily !== 'bip122' && bitcoinNetwork !== undefined) ||
         (chainFamily === 'bip122' && bitcoinNetwork === undefined) ||
         (chainFamily !== 'pearl' && pearlNetwork !== undefined) ||
-        (chainFamily === 'pearl' && pearlNetwork === undefined)
+        (chainFamily === 'pearl' && pearlNetwork === undefined) ||
+        (chainFamily !== 'dash' && dashNetwork !== undefined) ||
+        (chainFamily === 'dash' && dashNetwork === undefined)
       ) {
         throw new KeyringError('INVALID_CREDENTIAL')
       }
@@ -730,7 +766,8 @@ export class MultichainWorkerRuntime {
         password: parseSecret(value.password),
         chainFamily,
         ...(bitcoinNetwork === undefined ? {} : { bitcoinNetwork }),
-        ...(pearlNetwork === undefined ? {} : { pearlNetwork })
+        ...(pearlNetwork === undefined ? {} : { pearlNetwork }),
+        ...(dashNetwork === undefined ? {} : { dashNetwork })
       })
     }, 'INVALID_CREDENTIAL')
     const vaultPassword = await bindMultichainVaultPassword(payload.password)
@@ -746,7 +783,8 @@ export class MultichainWorkerRuntime {
               : { bitcoinNetwork: payload.bitcoinNetwork }),
             ...(payload.pearlNetwork === undefined
               ? {}
-              : { pearlNetwork: toWasmPearlNetwork(payload.pearlNetwork) })
+              : { pearlNetwork: toWasmPearlNetwork(payload.pearlNetwork) }),
+            ...(payload.dashNetwork === undefined ? {} : { dashNetwork: payload.dashNetwork })
           },
           vaultPassword
         ),
@@ -810,7 +848,22 @@ export class MultichainWorkerRuntime {
           })
         })
       }
-      if (!chainId.startsWith('bip122:')) throw new KeyringError('UNSUPPORTED_CHAIN')
+      if (
+        chainId === dashChainIdForNetwork('mainnet') ||
+        chainId === dashChainIdForNetwork('testnet')
+      ) {
+        if (value.addressType !== undefined) throw new KeyringError('INVALID_COMMAND')
+        const accountIndex = readSafeInteger(value.accountIndex, 'accountIndex', MAX_BIP32_INDEX)
+        const change = readBoolean(value.change, 'change')
+        if (change || addressIndex !== 0) throw new KeyringError('INVALID_COMMAND')
+        return Object.freeze({
+          vault: parseRawEncryptedVault(value.vault),
+          password: parseSecret(value.password),
+          request: dashExportRequest(chainId, accountIndex),
+          dash: true as const
+        })
+      }
+      if (!isExactBitcoinChainId(chainId)) throw new KeyringError('UNSUPPORTED_CHAIN')
       return Object.freeze({
         vault: parseRawEncryptedVault(value.vault),
         password: parseSecret(value.password),
@@ -833,7 +886,8 @@ export class MultichainWorkerRuntime {
           vaultPassword,
           payload.request
         ),
-      parseRawExportedPrivateKey
+      value =>
+        'dash' in payload ? parseDashExportedPrivateKey(value) : parseRawExportedPrivateKey(value)
     )
   }
 
@@ -844,12 +898,12 @@ export class MultichainWorkerRuntime {
       assertExactKeys(
         value,
         ['vault', 'currentPassword', 'newPassword', 'chainFamily'],
-        ['bitcoinNetwork', 'pearlNetwork'],
+        ['bitcoinNetwork', 'pearlNetwork', 'dashNetwork'],
         'credential.rewrap-private-key payload'
       )
       const chainFamily = readLiteral(
         value.chainFamily,
-        ['eip155', 'bip122', 'solana', 'near', 'pearl'],
+        ['eip155', 'bip122', 'solana', 'near', 'pearl', 'dash'],
         'chainFamily'
       )
       const bitcoinNetwork =
@@ -860,11 +914,17 @@ export class MultichainWorkerRuntime {
         value.pearlNetwork === undefined
           ? undefined
           : readLiteral(value.pearlNetwork, ['mainnet', 'testnet'], 'pearlNetwork')
+      const dashNetwork =
+        value.dashNetwork === undefined
+          ? undefined
+          : readLiteral(value.dashNetwork, ['mainnet', 'testnet'], 'dashNetwork')
       if (
         (chainFamily !== 'bip122' && bitcoinNetwork !== undefined) ||
         (chainFamily === 'bip122' && bitcoinNetwork === undefined) ||
         (chainFamily !== 'pearl' && pearlNetwork !== undefined) ||
-        (chainFamily === 'pearl' && pearlNetwork === undefined)
+        (chainFamily === 'pearl' && pearlNetwork === undefined) ||
+        (chainFamily !== 'dash' && dashNetwork !== undefined) ||
+        (chainFamily === 'dash' && dashNetwork === undefined)
       ) {
         throw new KeyringError('INVALID_CREDENTIAL')
       }
@@ -874,7 +934,8 @@ export class MultichainWorkerRuntime {
         newPassword: parseSecret(value.newPassword),
         chainFamily,
         ...(bitcoinNetwork === undefined ? {} : { bitcoinNetwork }),
-        ...(pearlNetwork === undefined ? {} : { pearlNetwork })
+        ...(pearlNetwork === undefined ? {} : { pearlNetwork }),
+        ...(dashNetwork === undefined ? {} : { dashNetwork })
       })
     }, 'INVALID_CREDENTIAL')
     const currentVaultPassword = await bindMultichainVaultPassword(payload.currentPassword)
@@ -884,20 +945,25 @@ export class MultichainWorkerRuntime {
       const session = callRaw(
         command,
         () => this.engine.unlock(payload.vault, currentVaultPassword),
-        parseRawSessionInfo
+        parseDashOrRawSession
       )
       rawSessionId = session.sessionId
+      const sessionBitcoinNetwork = 'bitcoinNetwork' in session ? session.bitcoinNetwork : undefined
+      const sessionDashNetwork = 'dashNetwork' in session ? session.dashNetwork : undefined
+      const sessionPearlNetwork = 'pearlNetwork' in session ? session.pearlNetwork : undefined
       if (
         session.kind !== 'private_key' ||
         session.chainFamily !== payload.chainFamily ||
-        session.bitcoinNetwork !== payload.bitcoinNetwork ||
-        (session.pearlNetwork === undefined
+        sessionBitcoinNetwork !== payload.bitcoinNetwork ||
+        (sessionPearlNetwork === undefined
           ? payload.pearlNetwork !== undefined
           : payload.pearlNetwork === undefined ||
-            fromWasmPearlNetwork(session.pearlNetwork) !== payload.pearlNetwork)
+            fromWasmPearlNetwork(sessionPearlNetwork) !== payload.pearlNetwork) ||
+        sessionDashNetwork !== payload.dashNetwork
       ) {
         throw new KeyringError('INVALID_CREDENTIAL')
       }
+      const dashNetwork = payload.dashNetwork
       const chainId =
         payload.chainFamily === 'eip155'
           ? 'eip155:1'
@@ -909,9 +975,11 @@ export class MultichainWorkerRuntime {
                 ? payload.pearlNetwork === 'mainnet'
                   ? 'bip122:a18d3093b7ff618f0cdd073fa3d10374'
                   : 'bip122:b0c86d0cd8825f4d72260d2de46f4704'
-                : payload.bitcoinNetwork === 'mainnet'
-                  ? 'bip122:000000000019d6689c085ae165831e93'
-                  : 'bip122:000000000933ea01ad0ee984209779ba'
+                : payload.chainFamily === 'dash'
+                  ? dashChainIdForNetwork(requireDashNetwork(dashNetwork))
+                  : payload.bitcoinNetwork === 'mainnet'
+                    ? BITCOIN_CHAIN_IDS.mainnet
+                    : BITCOIN_CHAIN_IDS.testnet
       const exported = callRaw(
         command,
         () =>
@@ -930,15 +998,17 @@ export class MultichainWorkerRuntime {
                       change: false,
                       addressIndex: 0
                     }
-                  : {
-                      chainId,
-                      addressType: 'p2wpkh',
-                      accountIndex: 0,
-                      change: false,
-                      addressIndex: 0
-                    }
+                  : payload.chainFamily === 'dash'
+                    ? dashExportRequest(chainId, 0)
+                    : {
+                        chainId,
+                        addressType: 'p2wpkh' as const,
+                        accountIndex: 0,
+                        change: false,
+                        addressIndex: 0
+                      }
           ),
-        parseRawExportedPrivateKey
+        payload.chainFamily === 'dash' ? parseDashExportedPrivateKey : parseRawExportedPrivateKey
       )
       return callRaw(
         command,
@@ -952,7 +1022,8 @@ export class MultichainWorkerRuntime {
                 : { bitcoinNetwork: payload.bitcoinNetwork }),
               ...(payload.pearlNetwork === undefined
                 ? {}
-                : { pearlNetwork: toWasmPearlNetwork(payload.pearlNetwork) })
+                : { pearlNetwork: toWasmPearlNetwork(payload.pearlNetwork) }),
+              ...(payload.dashNetwork === undefined ? {} : { dashNetwork: payload.dashNetwork })
             },
             newVaultPassword
           ),
@@ -988,7 +1059,7 @@ export class MultichainWorkerRuntime {
     const rawSession = callRaw(
       command,
       () => this.engine.unlock(vault, vaultPassword),
-      parseRawSessionInfo
+      parseDashOrRawSession
     )
     this.sessions.set(
       binding.keyDomainId,
@@ -999,12 +1070,13 @@ export class MultichainWorkerRuntime {
         rawSessionId: rawSession.sessionId,
         kind: rawSession.kind,
         ...(rawSession.chainFamily === undefined ? {} : { chainFamily: rawSession.chainFamily }),
-        ...(rawSession.bitcoinNetwork === undefined
-          ? {}
-          : { bitcoinNetwork: rawSession.bitcoinNetwork }),
-        ...(rawSession.pearlNetwork === undefined
-          ? {}
-          : { pearlNetwork: fromWasmPearlNetwork(rawSession.pearlNetwork) })
+        ...('bitcoinNetwork' in rawSession && rawSession.bitcoinNetwork !== undefined
+          ? { bitcoinNetwork: rawSession.bitcoinNetwork }
+          : {}),
+        ...('pearlNetwork' in rawSession && rawSession.pearlNetwork !== undefined
+          ? { pearlNetwork: fromWasmPearlNetwork(rawSession.pearlNetwork) }
+          : {}),
+        ...('dashNetwork' in rawSession ? { dashNetwork: rawSession.dashNetwork } : {})
       })
     )
     return Object.freeze({ state: 'unlocked' })
@@ -1239,6 +1311,29 @@ export class MultichainWorkerRuntime {
       )
       return publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
     }
+    if (derivation.family === 'dash') {
+      assertDashDerivationSession(session.kind, derivation)
+      const imported = session.kind === 'private_key'
+      if (derivation.batch) {
+        const accounts = callRaw(
+          command,
+          () => deriveDashAccountsRaw(this.engine, session.rawSessionId, derivation),
+          value => parseDerivedDashAccountBatch(value, derivation, imported)
+        )
+        return Object.freeze(
+          accounts.map(account =>
+            publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
+          )
+        )
+      }
+      const account = callRaw(
+        command,
+        () => deriveDashAccountsRaw(this.engine, session.rawSessionId, derivation),
+        value => parseDerivedDashAccount(value, derivation, imported)
+      )
+      return publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
+    }
+    if (derivation.family !== 'bitcoin') throw new KeyringError('UNSUPPORTED_CHAIN')
     if (derivation.batch) {
       const accounts = callRaw(
         command,
@@ -1323,7 +1418,7 @@ export class MultichainWorkerRuntime {
     if (!Number.isSafeInteger(expiresAt)) throw new KeyringError('INTERNAL_ERROR')
 
     let raw: unknown
-    let bitcoinAccount: RawDerivedBitcoinAccount | undefined
+    let bitcoinAccount: RawDerivedBitcoinAccount | RawDashAccount | undefined
     let pearlAccount: RawDerivedPearlAccount | undefined
     try {
       if (payload.kind === 'evm-transaction') {
@@ -1438,6 +1533,35 @@ export class MultichainWorkerRuntime {
           addressIndex: payload.addressIndex,
           message: payload.message
         })
+      } else if (payload.kind === 'dash-psbt' || payload.kind === 'dash-message') {
+        const dashPayload: DashSigningPreparePayload = payload
+        assertDashSigningSession(session.kind, dashPayload)
+        const imported = session.kind === 'private_key'
+        bitcoinAccount = callRaw(
+          command,
+          () =>
+            this.engine.deriveDashAccount(
+              session.rawSessionId,
+              dashPayload.chainId,
+              dashPayload.accountIndex,
+              dashPayload.kind === 'dash-message' ? dashPayload.change : false,
+              dashPayload.kind === 'dash-message' ? dashPayload.addressIndex : 0
+            ),
+          value =>
+            parseDerivedDashAccount(
+              value,
+              {
+                family: 'dash',
+                batch: false,
+                chainId: dashPayload.chainId,
+                accountIndex: dashPayload.accountIndex,
+                change: dashPayload.kind === 'dash-message' ? dashPayload.change : false,
+                addressIndex: dashPayload.kind === 'dash-message' ? dashPayload.addressIndex : 0
+              },
+              imported
+            )
+        )
+        raw = prepareDashSigningRaw(this.engine, session.rawSessionId, dashPayload)
       } else if (payload.kind === 'solana-transaction') {
         raw = this.engine.prepareSolanaTransaction(
           session.rawSessionId,
@@ -1558,6 +1682,15 @@ export class MultichainWorkerRuntime {
         case 'pearl-bip322-message':
           raw = this.engine.confirmPearlMessage(pending.rawSessionId, pending.rawRequestId)
           break
+        case 'dash-psbt':
+        case 'dash-message':
+          raw = confirmDashSigningRaw(
+            this.engine,
+            pending.rawSessionId,
+            pending.rawRequestId,
+            pending.kind
+          )
+          break
         case 'solana-transaction':
           raw = this.engine.confirmSolanaTransaction(pending.rawSessionId, pending.rawRequestId)
           break
@@ -1611,6 +1744,32 @@ export class MultichainWorkerRuntime {
       )
       return value
     }, 'UNSUPPORTED_PAYLOAD')
+    if (payload.kind === 'dash-message') {
+      const chainId = readString(payload.chainId, 'chainId', 64)
+      if (
+        !(payload.message instanceof Uint8Array) ||
+        payload.message.byteLength === 0 ||
+        payload.message.byteLength > 4 * 1024
+      ) {
+        throw new KeyringError('UNSUPPORTED_PAYLOAD')
+      }
+      const address = readString(payload.address, 'address', 128)
+      const signature = readString(payload.signature, 'signature', 16_384)
+      let verified: boolean
+      try {
+        verified = verifyDashMessageRaw(
+          this.engine,
+          chainId,
+          address,
+          new Uint8Array(payload.message),
+          signature
+        )
+      } catch (error) {
+        if (error instanceof KeyringError) throw error
+        throw mapRawError(error, command.operation)
+      }
+      return Object.freeze({ verified })
+    }
     if (payload.kind !== 'bitcoin-bip322-message' && payload.kind !== 'pearl-bip322-message') {
       throw new KeyringError('UNSUPPORTED_PAYLOAD')
     }
@@ -1623,10 +1782,7 @@ export class MultichainWorkerRuntime {
       ) {
         throw new KeyringError('UNSUPPORTED_CHAIN')
       }
-    } else if (
-      chainId !== 'bip122:000000000019d6689c085ae165831e93' &&
-      chainId !== 'bip122:000000000933ea01ad0ee984209779ba'
-    ) {
+    } else if (!isExactBitcoinChainId(chainId)) {
       throw new KeyringError('UNSUPPORTED_CHAIN')
     }
     const maximumMessageBytes = isPearl ? 80 : 4 * 1024

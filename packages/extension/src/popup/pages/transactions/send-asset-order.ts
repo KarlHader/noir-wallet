@@ -10,6 +10,7 @@ import {
   DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS,
   type ChainFeatureFlagValue
 } from '@/config/multichain-feature-flags'
+import { isBitcoinChainId, isDashChainId } from '@/core/chains/registry/chain-ids'
 import {
   deferredChainChoices,
   isSelectableChainFamily
@@ -53,6 +54,25 @@ interface RankedSendAsset<T extends SendAssetOrderCandidate> {
   readonly index: number
   readonly tier: number
   readonly fiatValue: ReturnType<typeof parseTokenBalanceDecimal>
+}
+
+export function isUnifiedSendPortfolioChain(
+  chain: {
+    readonly family: string
+    readonly id: string
+    readonly capabilities: { readonly transaction: { readonly status: string } }
+  },
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): boolean {
+  return (
+    isSelectableChainFamily(chain.family, enabledFlags) &&
+    (chain.family === 'evm' ||
+      (chain.family === 'bitcoin' && isBitcoinChainId(chain.id)) ||
+      (chain.family === 'dash' && isDashChainId(chain.id)) ||
+      chain.family === 'solana' ||
+      chain.family === 'near') &&
+    chain.capabilities.transaction.status === 'available'
+  )
 }
 
 /** Orders sendable assets by spendable USD value while keeping unknown values stable. */

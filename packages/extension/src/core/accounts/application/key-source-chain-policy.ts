@@ -2,26 +2,38 @@ import type { AccountId, ChainAccount } from '@/core/accounts/domain'
 import type { ChainDefinition } from '@/core/chains/registry'
 import type { KeyDomain, KeyDomainId, KeyDomainSource } from '@/core/keyring/domain'
 
+function hardwareDeclaresDash(capabilities: readonly string[]): boolean {
+  return capabilities.includes('dash')
+}
+
+function privateKeySupportsFamily(
+  source: Extract<KeyDomainSource, { readonly kind: 'private-key' }>,
+  family: ChainDefinition['family']
+): boolean {
+  return (
+    (source.chainFamily === 'eip155' && family === 'evm') ||
+    (source.chainFamily === 'bip122' && family === 'bitcoin') ||
+    (source.chainFamily === 'dash' && family === 'dash') ||
+    source.chainFamily === family
+  )
+}
+
 export function keySourceSupportsChainFamily(
   source: KeyDomainSource,
   family: ChainDefinition['family']
 ): boolean {
   if (source.kind === 'software') return true
-  if (source.kind === 'private-key') {
-    return (
-      (source.chainFamily === 'eip155' && family === 'evm') ||
-      (source.chainFamily === 'bip122' && family === 'bitcoin') ||
-      source.chainFamily === family
-    )
-  }
+  if (source.kind === 'private-key') return privateKeySupportsFamily(source, family)
   // Quantus and Pearl software ML-DSA / BIP-86 paths have no hardware vendor contract yet.
   if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
+    if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
     return family !== 'tron' && source.capabilities.includes(family)
   }
   if (source.vendor !== 'keystone') return false
   if (family === 'zcash') return source.capabilities.includes('zcash')
   if (family === 'bitcoin') return source.capabilities.includes('bitcoin')
+  if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
   return family === 'evm' && source.capabilities.includes('evm')
 }
 
@@ -30,18 +42,14 @@ export function keySourceSupportsAddressFamily(
   family: ChainDefinition['family']
 ): boolean {
   if (source.kind === 'software') return true
-  if (source.kind === 'private-key') {
-    return (
-      (source.chainFamily === 'eip155' && family === 'evm') ||
-      (source.chainFamily === 'bip122' && family === 'bitcoin') ||
-      source.chainFamily === family
-    )
-  }
+  if (source.kind === 'private-key') return privateKeySupportsFamily(source, family)
   if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
+    if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
     return family !== 'tron' && source.capabilities.includes(family)
   }
   if (source.vendor !== 'keystone') return false
+  if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
   const capability = family === 'evm' ? 'evm' : family === 'bitcoin' ? 'bitcoin' : family
   return source.capabilities.includes(capability)
 }

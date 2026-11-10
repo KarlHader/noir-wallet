@@ -112,7 +112,8 @@ const PRODUCT_CHAIN_ORDER: readonly KeystoneProductChain[] = Object.freeze([
   'evm',
   'solana',
   'tron',
-  'near'
+  'near',
+  'dash'
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -184,6 +185,7 @@ export function productChainForPath(path: string): KeystoneProductChain | null {
   if (/^m\/44'\/501'\/[0-9]+'(?:\/0')?$/.test(path)) return 'solana'
   if (/^m\/44'\/195'\/[0-9]+'(?:\/0\/[0-9]+)?$/.test(path)) return 'tron'
   if (/^m\/44'\/397'\/[0-9]+'$/.test(path)) return 'near'
+  if (/^m\/44'\/5'\/[0-9]+'(?:\/[01]\/[0-9]+)?$/.test(path)) return 'dash'
   return null
 }
 

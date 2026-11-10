@@ -1,20 +1,31 @@
 export type PrivateKeyImportChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
+export type DetectedPrivateKeyFamily = PrivateKeyImportChainFamily | 'dash'
 
-export interface PrivateKeyImportDetection {
-  readonly chainFamily: PrivateKeyImportChainFamily
-  readonly format:
-    | 'evm-prefixed-hex'
-    | 'ambiguous-hex'
-    | 'bitcoin-wif'
-    | 'solana-base58'
-    | 'solana-json'
-    | 'near-ed25519'
-  readonly ambiguous: boolean
-}
+export type PrivateKeyImportDetection =
+  | {
+      readonly chainFamily: DetectedPrivateKeyFamily
+      readonly format:
+        | 'evm-prefixed-hex'
+        | 'ambiguous-hex'
+        | 'bitcoin-wif'
+        | 'dash-wif'
+        | 'solana-base58'
+        | 'solana-json'
+        | 'near-ed25519'
+      readonly ambiguous: boolean
+    }
+  | {
+      readonly chainFamily: null
+      readonly format: 'ambiguous-testnet-wif'
+      readonly ambiguous: true
+      readonly candidates: readonly ['bip122', 'dash']
+    }
 
 const HEX_PRIVATE_KEY = /^[0-9a-fA-F]{64}$/
 const PREFIXED_HEX_PRIVATE_KEY = /^0x[0-9a-fA-F]{64}$/
-const COMPRESSED_BITCOIN_WIF = /^(?:[KLc][1-9A-HJ-NP-Za-km-z]{51})$/
+const COMPRESSED_BITCOIN_WIF = /^(?:[KL][1-9A-HJ-NP-Za-km-z]{51})$/
+const COMPRESSED_DASH_WIF = /^(?:X[1-9A-HJ-NP-Za-km-z]{51})$/
+const AMBIGUOUS_TESTNET_WIF = /^(?:c[1-9A-HJ-NP-Za-km-z]{51})$/
 const SOLANA_BASE58_PRIVATE_KEY = /^[1-9A-HJ-NP-Za-km-z]{43,44}$|^[1-9A-HJ-NP-Za-km-z]{87,88}$/
 const NEAR_PRIVATE_KEY =
   /^ed25519:[1-9A-HJ-NP-Za-km-z]{43,44}$|^ed25519:[1-9A-HJ-NP-Za-km-z]{87,88}$/
@@ -41,6 +52,21 @@ export function detectPrivateKeyImport(value: string): PrivateKeyImportDetection
       format: 'bitcoin-wif',
       // Pearl reuses Bitcoin WIF encoding; the importer must choose the network family.
       ambiguous: true
+    })
+  }
+  if (COMPRESSED_DASH_WIF.test(candidate)) {
+    return Object.freeze({
+      chainFamily: 'dash',
+      format: 'dash-wif',
+      ambiguous: false
+    })
+  }
+  if (AMBIGUOUS_TESTNET_WIF.test(candidate)) {
+    return Object.freeze({
+      chainFamily: null,
+      format: 'ambiguous-testnet-wif',
+      ambiguous: true,
+      candidates: ['bip122', 'dash'] as const
     })
   }
   if (NEAR_PRIVATE_KEY.test(candidate)) {

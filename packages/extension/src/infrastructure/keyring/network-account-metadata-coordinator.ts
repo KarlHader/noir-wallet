@@ -10,6 +10,8 @@ import { bytesToHex } from '@/lib/bytes'
 import { commitCredentialBoundStorageV2Pointer } from '@/core/keyring/application'
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
 import type { DerivedBitcoinAddress } from '@/core/chains/bitcoin'
+import type { DerivedDashAddress } from '@/infrastructure/keyring/multichain/dash-derivation-client'
+import { readDashNetworkParams } from '@/infrastructure/keyring/multichain/dash-codecs'
 import {
   decodeQuantusAccountId,
   parseQuantusAddress,
@@ -45,6 +47,7 @@ export interface NetworkAccountMetadataInput {
   readonly zcashChainId: string
   readonly zcashAddresses: AccountAddresses
   readonly bitcoin: DerivedBitcoinAddress
+  readonly dash?: DerivedDashAddress
   readonly pearl?: DerivedPearlAddress
   readonly quantus?: DerivedQuantusNetworkAccount
   readonly solana?: DerivedEd25519NetworkAccount
@@ -144,6 +147,7 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
   ) {
     throw new Error('Network Account metadata contains incomplete default receive addresses')
   }
+  const dash = value.dash === undefined ? undefined : normalizeDashAccount(value.dash, accountIndex)
   const pearl =
     value.pearl === undefined ? undefined : normalizePearlAccount(value.pearl, accountIndex)
   const quantus =
@@ -161,6 +165,7 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
     accountIndex,
     zcashChainId,
     bitcoin: Object.freeze({ ...value.bitcoin, chainId: bitcoinChainId }),
+    ...(dash === undefined ? {} : { dash }),
     ...(pearl === undefined ? {} : { pearl }),
     ...(quantus === undefined ? {} : { quantus }),
     ...(solana === undefined ? {} : { solana }),
@@ -211,6 +216,25 @@ function normalizePearlAccount(
     addressScheme: 'pearl_p2tr' as const,
     derivationScheme: 'bip86' as const
   })
+}
+
+function normalizeDashAccount(value: DerivedDashAddress, accountIndex: number): DerivedDashAddress {
+  const params = readDashNetworkParams(parseChainId(value.chainId).id)
+  const path = `m/44'/${params.coinType}'/${accountIndex}'/0/0`
+  if (
+    value.addressScheme !== 'dash_p2pkh' ||
+    value.derivationScheme !== 'bip44' ||
+    value.change ||
+    value.addressIndex !== 0 ||
+    value.accountIndex !== accountIndex ||
+    value.derivationPath !== path ||
+    value.network !== params.network ||
+    value.address.length === 0 ||
+    !value.address.startsWith(params.network === 'mainnet' ? 'X' : 'y')
+  ) {
+    throw new Error('Network Account metadata Dash derivation index mismatch')
+  }
+  return Object.freeze({ ...value, chainId: params.chainId, derivationPath: path })
 }
 
 function normalizeQuantusAccount(
@@ -456,6 +480,35 @@ export class NetworkAccountMetadataCoordinator {
               }
             ]
           },
+          ...(input.dash === undefined
+            ? []
+            : [
+                {
+                  chainId: input.dash.chainId,
+                  role: `dash:${input.dash.chainId}`,
+                  derivation: {
+                    scheme: input.dash.derivationScheme,
+                    path: input.dash.derivationPath
+                  },
+                  identity: input.dash.address,
+                  addresses: [
+                    {
+                      role: 'receive-0',
+                      value: input.dash.address,
+                      scheme: input.dash.addressScheme,
+                      purpose: 'receive' as const,
+                      derivation: {
+                        scheme: input.dash.derivationScheme,
+                        path: input.dash.derivationPath
+                      },
+                      rotatable: true,
+                      preferredForReceive: true,
+                      privacy: 'transparent' as const,
+                      walletCompatibility: 'broad' as const
+                    }
+                  ]
+                }
+              ]),
           ...(input.pearl === undefined
             ? []
             : [

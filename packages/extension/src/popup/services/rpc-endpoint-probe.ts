@@ -2,6 +2,7 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import type { RpcEndpointGroup } from '@/config/rpc-endpoints'
 import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
+import { attestDashInsightEndpoint } from '@/infrastructure/chains/dash'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near/near-network-attestation'
 import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
@@ -75,6 +76,9 @@ export async function probeChainRpcEndpoint(
         break
       case 'bitcoin-esplora':
         await attestBitcoinEsploraEndpoint(option.chainId, url, controller.signal)
+        break
+      case 'dash-insight':
+        await attestDashInsightEndpoint(option.chainId, url, controller.signal)
         break
       case 'pearl-blockbook':
       case 'pearl-json-rpc':

@@ -24,6 +24,7 @@ import {
   getZcashChainId,
   parseChainId
 } from '@/core/chains/registry'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { assertDisabledChainEndpointsUnchanged } from '@/core/chains/disabled-chain-endpoint-policy'
 import {
   findBuiltinEvmNetworkConfig,
@@ -31,6 +32,7 @@ import {
   getSolanaNetworkConfig
 } from '@/config/networks'
 import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
+import { attestDashInsightEndpoint } from '@/infrastructure/chains/dash'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near'
 import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
@@ -54,6 +56,7 @@ import { credentialLifecycle } from './credential-lifecycle'
 import { dappManager } from '@/core/dapp/dapp-manager'
 import {
   resolveBitcoinFeatureRuntimePolicy,
+  resolveDashFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolveQuantusFeatureRuntimePolicy,
@@ -179,12 +182,17 @@ export class ChainEndpointSettingsCoordinator {
     const bitcoinEnabled = resolveBitcoinFeatureRuntimePolicy(
       __ENABLED_CHAIN_FEATURE_FLAGS__
     ).newOperationsEnabled
+    const dashEnabled = resolveDashFeatureRuntimePolicy(
+      __ENABLED_CHAIN_FEATURE_FLAGS__
+    ).newOperationsEnabled
+    const dashChainId = DASH_CHAIN_IDS[DEFAULT_NETWORK]
     const quantusChainId = getQuantusChainId(DEFAULT_NETWORK)
     const quantusEnabled = resolveQuantusFeatureRuntimePolicy(
       __ENABLED_CHAIN_FEATURE_FLAGS__
     ).newOperationsEnabled
     assertDisabledChainEndpointsUnchanged(currentSettings, settings, [
       ...(!bitcoinEnabled ? [getBitcoinChainId(DEFAULT_NETWORK)] : []),
+      ...(!dashEnabled ? [dashChainId] : []),
       ...(!solanaEnabled ? [solanaNetwork.chainId] : []),
       ...(!nearEnabled ? [nearNetwork.chainId] : []),
       ...(!quantusEnabled ? [quantusChainId] : [])
@@ -192,6 +200,7 @@ export class ChainEndpointSettingsCoordinator {
     const supportedChainIds = new Set([
       getZcashChainId(DEFAULT_NETWORK),
       getBitcoinChainId(DEFAULT_NETWORK),
+      dashChainId,
       solanaNetwork.chainId,
       nearNetwork.chainId,
       ...(quantusEnabled ? [quantusChainId] : []),
@@ -277,6 +286,12 @@ export class ChainEndpointSettingsCoordinator {
       ) {
         attestations.set(`bitcoin:${rpc.url}`, () =>
           attestBitcoinEsploraEndpoint(override.chainId, rpc.url)
+        )
+        continue
+      }
+      if (override.chainId === dashChainId && rpc.protocol === 'dash-insight') {
+        attestations.set(`dash:${rpc.url}`, () =>
+          attestDashInsightEndpoint(override.chainId, rpc.url)
         )
         continue
       }

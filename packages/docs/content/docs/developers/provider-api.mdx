@@ -1,11 +1,12 @@
 ---
 title: Provider API
-description: Typed reference for Noir Wallet's Zcash API and EVM network requests.
+description: Typed reference for Noir Wallet's Zcash API, Dash provider, and EVM network requests.
 icon: Braces
 ---
 
 The Zcash methods below are available on `wallet.zcash`. Detecting the provider does not connect an
-account or open the wallet. EVM network requests are covered at the end of this guide.
+account or open the wallet. EVM network requests and the Dash provider are covered at the end of
+this guide.
 
 ```ts
 import { getNoirWallet } from '@noir-wallet/sdk'
@@ -471,3 +472,25 @@ transaction approval; the error identifies insufficient funds for the transactio
 For Chainlist compatibility, `wallet_addEthereumChain` also accepts an optional account address
 as the second positional parameter. This hint is ignored and never grants account permissions.
 `wallet_switchEthereumChain` still accepts exactly one chain parameter.
+
+## Dash
+
+`wallet.dash` exposes Dash accounts, balances, messages, and PSBTs. Discover it with
+`getDashProvider()` or `detectDashProvider()`.
+
+Its methods are `connect`, `requestAccounts`, `getAccounts`, `getNetwork`, `getChain`,
+`getPublicKey`, `getBalance`, `sendDash`, `signMessage`, `signPsbt`, `signPsbts`, `pushPsbt`,
+`pushTx`, and `disconnect`. Account and network changes use the same events as the Bitcoin
+provider: `accountsChanged` and `networkChanged`.
+
+Send amounts are integer duffs as a canonical base-10 string with no decimal point, such as
+`"1200000"`. A fractional amount is rejected. `getBalance` returns confirmed, unconfirmed, and
+total duff counts as safe integers. There is no `switchNetwork` or `switchChain`. Mainnet is
+`bip122:00000ffd590b1485b3caadc19b22e637` and testnet is
+`bip122:00000bafbc94add76cb75e2ec9289483`. Another `bip122` chain id is not Dash.
+
+`signMessage` returns a base64 compact signature for a software account and for Ledger on
+mainnet. Decode it to 65 bytes: the first byte is the recovery header, then 32-byte `r` and
+`s`. Keystone rejects with provider error code `4200` and does not return a signature.
+
+Ordinary Dash is public. It is not shielded.

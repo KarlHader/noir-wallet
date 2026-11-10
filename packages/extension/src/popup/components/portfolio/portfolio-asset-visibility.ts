@@ -21,6 +21,7 @@ export function isAssetVisibleInAssetView(
   const symbol = asset.metadata.symbol.toUpperCase()
   if (chain.family === 'zcash' && symbol === 'ZEC') return true
   if (chain.family === 'bitcoin' && symbol === 'BTC') return true
+  if (chain.family === 'dash' && symbol === 'DASH') return true
   if (chain.family === 'pearl' && symbol === 'PRL') return true
   if (chain.family === 'quantus' && (symbol === 'QTC' || symbol === 'PLK')) return true
   return ETHEREUM_CHAIN_IDS.has(chain.id) && symbol === 'ETH'

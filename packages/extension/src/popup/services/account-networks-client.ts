@@ -4,6 +4,7 @@ import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseQuantusAddress } from '@/core/chains/quantus'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
+import { isDashChainId } from '@/core/chains/registry/chain-ids'
 import {
   createBuildAddressGatedChainRegistry,
   createInitialProductChainRegistry,
@@ -46,9 +47,10 @@ export interface AccountNetworksView {
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
         readonly kind: 'private-key'
-        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
         readonly bitcoinNetwork?: 'mainnet' | 'testnet'
         readonly pearlNetwork?: 'mainnet' | 'testnet'
+        readonly dashNetwork?: 'mainnet' | 'testnet'
       }>
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
@@ -157,6 +159,15 @@ function parseAddress(value: unknown, chain: ChainDefinition): AccountNetworkAdd
       throw new Error('Invalid NEAR Account network Address scheme')
     }
     parseNearAccountId(address.value)
+  } else if (chain.family === 'dash') {
+    const prefix = chain.network.kind === 'mainnet' ? 'X' : 'y'
+    if (
+      address.scheme !== 'dash_p2pkh' ||
+      address.privacy !== 'transparent' ||
+      !new RegExp(`^${prefix}[1-9A-HJ-NP-Za-km-z]{25,40}$`).test(address.value)
+    ) {
+      throw new Error('Invalid Dash Account network Address')
+    }
   } else if (chain.family === 'pearl') {
     if (address.scheme !== 'pearl_p2tr') {
       throw new Error('Invalid Pearl Account network Address scheme')
@@ -328,6 +339,20 @@ function parseCatalog(
             kind: 'private-key',
             chainFamily: source.chainFamily
           })
+        } else if (source.chainFamily === 'dash') {
+          assertExactKeys(
+            source,
+            ['kind', 'chainFamily', 'dashNetwork'],
+            'Account network Wallet source'
+          )
+          if (source.dashNetwork !== 'mainnet' && source.dashNetwork !== 'testnet') {
+            throw new Error('Invalid private-key Wallet source')
+          }
+          walletSource = Object.freeze({
+            kind: 'private-key',
+            chainFamily: 'dash',
+            dashNetwork: source.dashNetwork
+          })
         } else if (source.chainFamily === 'pearl') {
           assertExactKeys(
             source,
@@ -373,7 +398,21 @@ function parseCatalog(
       if (accountKeys.has(key)) throw new Error('Duplicate Account networks entry')
       accountKeys.add(key)
 
-      const networks = account.networks.map(network => parseNetwork(network, chains))
+      const networks = account.networks.flatMap(network => {
+        try {
+          return [parseNetwork(network, chains)]
+        } catch (error) {
+          const chainId =
+            typeof network === 'object' &&
+            network !== null &&
+            'chainId' in network &&
+            typeof network.chainId === 'string'
+              ? network.chainId
+              : null
+          if (chainId !== null && isDashChainId(chainId)) return []
+          throw error
+        }
+      })
       if (new Set(networks.map(network => network.chain.id)).size !== networks.length) {
         throw new Error('Duplicate Account network chain')
       }

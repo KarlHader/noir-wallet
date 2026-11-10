@@ -110,6 +110,23 @@ export function validateLedgerSolanaDerivationPath(path: string): string {
   return path
 }
 
+export function ledgerDashDerivationPath(accountIndex: number): string {
+  return `m/44'/5'/${index(accountIndex)}'`
+}
+
+export function validateLedgerDashDerivationPath(path: string): string {
+  const parts = components(path, 'Dash')
+  if (
+    parts.length !== 3 ||
+    parts[0] !== "44'" ||
+    parts[1] !== "5'" ||
+    !/^(?:0|[1-9][0-9]*)'$/.test(parts[2])
+  ) {
+    throw new Error('Unsupported Ledger Dash derivation path')
+  }
+  return path
+}
+
 export function validateLedgerNearDerivationPath(path: string): string {
   const parts = components(path, 'NEAR')
   if (

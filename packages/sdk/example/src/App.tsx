@@ -17,6 +17,7 @@ import {
 } from '@noir-wallet/sdk'
 import {
   BitcoinExample,
+  DashExample,
   ExampleChainIcon,
   EvmExample,
   NativeTransferExample,
@@ -247,6 +248,7 @@ function App() {
       const saved = window.sessionStorage.getItem('noir-example-active-provider')
       return saved === 'evm' ||
         saved === 'bitcoin' ||
+        saved === 'dash' ||
         saved === 'pearl' ||
         saved === 'quantus' ||
         saved === 'solana' ||
@@ -751,6 +753,9 @@ function App() {
   }
   if (activeProvider === 'bitcoin') {
     return <BitcoinExample navigation={exampleNavigation} />
+  }
+  if (activeProvider === 'dash') {
+    return <DashExample navigation={exampleNavigation} />
   }
   if (activeProvider === 'pearl') {
     return <PearlExample navigation={exampleNavigation} />

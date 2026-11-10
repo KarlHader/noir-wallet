@@ -46,6 +46,15 @@ test('every chain uses the same Activity and result labels for normal finality',
   }
 })
 
+test('result confirmation progress shows the observed count', () => {
+  const result = getOnchainTransactionStatusPresentation('confirming', false, {
+    evidence: { confirmations: 2, requiredConfirmations: 6 }
+  })
+  expect(result.title).toBe('Confirming Transaction')
+  expect(result.description).toBe('Confirming · 2/6')
+  expect(getOnchainTransactionStatusPresentation('final', false).title).toBe('Transaction Confirmed')
+})
+
 test('Intents Activity identifies the observed cross-chain stage', () => {
   const origin = {
     id: 'origin',

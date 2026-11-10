@@ -1,5 +1,6 @@
 import {
   BITCOIN_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
@@ -7,6 +8,7 @@ import {
 } from '@/config/multichain-feature-flags'
 import {
   getBitcoinNetworkConfig,
+  getDashNetworkConfig,
   getEvmNetworkConfigs,
   getPearlNetworkConfig
 } from '@/config/networks'
@@ -29,6 +31,7 @@ import {
   createEvmActivityHistoryBatchReader,
   createEvmActivityHistoryReader
 } from '../chains/evm'
+import { createDashActivityHistorySource, createConfiguredDashInsightClient } from '../chains/dash'
 import { createNearActivityHistorySource } from '../chains/near'
 import {
   createConfiguredSolanaRpcClient,
@@ -45,6 +48,7 @@ export function createConfiguredActivityHistorySources(input: {
   const enabled = new Set(input.enabledChainFeatureFlags)
   const bitcoinNetwork = getBitcoinNetworkConfig(input.network)
   const pearlNetwork = getPearlNetworkConfig(input.network)
+  const dashNetwork = getDashNetworkConfig(input.network)
   const evmNetworks = enabled.has(EVM_CHAIN_FEATURE_FLAG) ? getEvmNetworkConfigs(input.network) : []
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(input.network, input.endpointSettings)
   const nearNetwork = resolveNearRuntimeNetworkConfig(input.network, input.endpointSettings)
@@ -92,6 +96,13 @@ export function createConfiguredActivityHistorySources(input: {
     nearHistory:
       enabled.has(NEAR_CHAIN_FEATURE_FLAG) && input.network === 'mainnet'
         ? createNearActivityHistorySource({ chainId: nearNetwork.chainId })
-        : undefined
+        : undefined,
+    dashNetwork,
+    dashHistory: enabled.has(DASH_CHAIN_FEATURE_FLAG)
+      ? createDashActivityHistorySource({
+          chainId: dashNetwork.chainId,
+          rpc: createConfiguredDashInsightClient(input.network)
+        })
+      : undefined
   })
 }

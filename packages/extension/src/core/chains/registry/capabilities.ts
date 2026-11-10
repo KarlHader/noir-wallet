@@ -3,6 +3,7 @@ export type ChainFamily =
   | 'zcash'
   | 'evm'
   | 'bitcoin'
+  | 'dash'
   | 'solana'
   | 'tron'
   | 'near'

@@ -190,6 +190,38 @@ export interface RawWalletEngine {
     message: Uint8Array,
     signature: string
   ): boolean
+  deriveDashAccount(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    change: boolean,
+    addressIndex: number
+  ): unknown
+  deriveDashAccounts(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    change: boolean,
+    startAddressIndex: number,
+    count: number
+  ): unknown
+  prepareDashPsbt(sessionId: number, chainId: string, accountIndex: number, psbt: string): unknown
+  confirmDashPsbt(sessionId: number, requestId: number): unknown
+  prepareDashMessage(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    change: boolean,
+    addressIndex: number,
+    message: Uint8Array
+  ): unknown
+  confirmDashMessage(sessionId: number, requestId: number): unknown
+  verifyDashMessage(
+    chainId: string,
+    address: string,
+    message: Uint8Array,
+    signature: string
+  ): boolean
   rejectSigningRequest(sessionId: number, requestId: number): boolean
   free(): void
 }

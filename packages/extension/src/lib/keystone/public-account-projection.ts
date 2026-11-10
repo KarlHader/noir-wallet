@@ -2,6 +2,8 @@ import { secp256k1 } from '@noble/curves/secp256k1'
 import { HDKey, publicKeyToAddress } from 'viem/accounts'
 import { keccak256, toHex } from 'viem'
 import { networks, payments } from 'bitcoinjs-lib'
+import { getDashNetworkConfig } from '@/config/networks'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import bs58check from 'bs58check'
 import { Buffer } from 'buffer'
 import type {
@@ -21,6 +23,13 @@ export type KeystoneMultiCoinPublicAccount = Readonly<
   | { family: 'solana'; accountIndex: number; derivationPath: string; identity: string }
   | { family: 'tron'; accountIndex: number; derivationPath: string; identity: string }
   | { family: 'near'; accountIndex: number; derivationPath: string; identity: string }
+  | {
+      family: 'dash'
+      accountIndex: number
+      derivationPath: string
+      identity: string
+      publicKeyHex: string
+    }
 >
 
 export interface KeystoneBitcoinPublicAccount {
@@ -226,6 +235,9 @@ export function projectKeystoneMultiCoinAccounts(
     if (/^m\/44'\/397'\/[0-9]+'$/.test(key.derivationPath)) {
       return project(() => nearAccount(key))
     }
+    if (network === 'mainnet' && /^m\/44'\/5'\/[0-9]+'$/.test(key.derivationPath)) {
+      return project(() => dashAccount(key))
+    }
     return []
   })
   if (accounts.length === 0) {
@@ -236,6 +248,38 @@ export function projectKeystoneMultiCoinAccounts(
     throw new Error('Keystone account export contains duplicate product Accounts')
   }
   return Object.freeze(accounts)
+}
+
+function dashAccount(key: KeystoneHdPublicKey): KeystoneMultiCoinPublicAccount {
+  const config = getDashNetworkConfig('mainnet')
+  if (config.chainId !== DASH_CHAIN_IDS.mainnet) {
+    throw new Error('Dash hardware wallets support mainnet only')
+  }
+  const accountIndex = parseAccountIndex(
+    key.derivationPath,
+    /^m\/44'\/5'\/([0-9]+)'$/,
+    'Keystone Dash path'
+  )
+  const receivePublicKey = derivePublicKey(key, [0, 0], 'Keystone Dash account')
+  const identity = payments.p2pkh({
+    pubkey: Buffer.from(receivePublicKey),
+    network: {
+      messagePrefix: '\x19Dash Signed Message:\n',
+      bech32: 'dash',
+      bip32: { public: 0x0488b21e, private: 0x0488ade4 },
+      pubKeyHash: config.p2pkhVersion,
+      scriptHash: config.p2shVersion,
+      wif: config.wifVersion
+    }
+  }).address
+  if (!identity) throw new Error('Keystone Dash address derivation failed')
+  return Object.freeze({
+    family: 'dash',
+    accountIndex,
+    derivationPath: `${key.derivationPath}/0/0`,
+    identity,
+    publicKeyHex: Buffer.from(receivePublicKey).toString('hex')
+  })
 }
 
 function bitcoinNetwork(network: 'mainnet' | 'testnet') {

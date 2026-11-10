@@ -7,6 +7,16 @@ export {
   switchEvmChain
 } from './chains/evm'
 export { detectBitcoinProvider, getBitcoinProvider } from './chains/bitcoin'
+export {
+  DASH_CHAIN_IDS,
+  DASH_UNSUPPORTED_SIGN_MESSAGE,
+  detectDashProvider,
+  getDashProvider,
+  isDashChainId,
+  isDashProviderError,
+  isUnsupportedDashSignMessageError,
+  parseDashDuffs
+} from './chains/dash'
 export { detectPearlProvider, getPearlProvider } from './chains/pearl'
 export { detectQuantusProvider, getQuantusProvider } from './chains/quantus'
 export { detectSolanaProvider, getSolanaProvider } from './chains/solana'
@@ -53,6 +63,25 @@ export type {
   BitcoinSignPsbtOptions,
   DetectBitcoinProviderOptions
 } from './chains/bitcoin'
+
+export type {
+  DashBalance,
+  DashChainId,
+  DashChainInfo,
+  DashConnectResult,
+  DashDuffString,
+  DashNetwork,
+  DashProvider,
+  DashProviderError,
+  DashProviderErrorCode,
+  DashProviderEvent,
+  DashProviderListener,
+  DashRequestArguments,
+  DashSendOptions,
+  DashSignPsbtOptions,
+  DashUnsupportedSignMessageError,
+  DetectDashProviderOptions
+} from './chains/dash'
 
 export type {
   DetectPearlProviderOptions,

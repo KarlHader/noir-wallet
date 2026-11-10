@@ -1,7 +1,12 @@
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
 import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
 import type { EvmNetworkConfig } from '@/config/networks'
-import { getBitcoinChainId, getZcashChainId, parseChainId } from '@/core/chains/registry'
+import {
+  getBitcoinChainId,
+  getDashChainId,
+  getZcashChainId,
+  parseChainId
+} from '@/core/chains/registry'
 import {
   Caip25ProviderError,
   parseCaip25CreateSessionRequest,
@@ -13,6 +18,7 @@ import {
   type Caip25StoredScope
 } from '@/core/dapp/caip25'
 import { BITCOIN_DAPP_RUNTIME_METHODS } from '@/core/dapp/bitcoin-provider'
+import { DASH_DAPP_RUNTIME_METHODS } from '@/core/dapp/dash-provider'
 import { EVM_DAPP_RUNTIME_METHODS } from '@/core/dapp/eip1193'
 import {
   NEAR_DAPP_RUNTIME_METHODS,
@@ -42,7 +48,7 @@ export interface MultichainSessionTabInfo {
   readonly pageUrl?: string
 }
 
-type ChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'near'
+type ChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'dash' | 'solana' | 'near'
 
 interface SupportedScope {
   readonly family: ChainFamily
@@ -89,6 +95,8 @@ export interface BackgroundMultichainSessionDAppHandlerOptions {
   >
   readonly bitcoin: SessionHandler
   readonly bitcoinEnabled?: boolean
+  readonly dash?: SessionHandler | null
+  readonly dashEnabled?: boolean
   readonly solana: Pick<
     BackgroundSolanaDAppHandler,
     'prepareSessionAccountSelection' | 'resolveSessionAccountSelection' | 'getSessionAccounts'
@@ -148,6 +156,11 @@ const BITCOIN_SESSION_METHODS = invocableMethods(BITCOIN_DAPP_RUNTIME_METHODS, [
   'disconnect',
   'switchNetwork',
   'switchChain'
+])
+const DASH_SESSION_METHODS = invocableMethods(DASH_DAPP_RUNTIME_METHODS, [
+  'connect',
+  'requestAccounts',
+  'disconnect'
 ])
 const SOLANA_SESSION_METHODS = invocableMethods(SOLANA_DAPP_RUNTIME_METHODS, [
   'connect',
@@ -268,6 +281,18 @@ export class BackgroundMultichainSessionDAppHandler {
             }
           ]
         : []),
+      ...(options.dashEnabled !== false && options.dash
+        ? [
+            {
+              family: 'dash' as const,
+              chainId: getDashChainId(options.network),
+              chainName: options.network === 'mainnet' ? 'Dash' : 'Dash Testnet',
+              iconChain: 'dash',
+              methods: DASH_SESSION_METHODS,
+              notifications: SESSION_NOTIFICATIONS
+            }
+          ]
+        : []),
       ...(options.solana && options.solanaScope
         ? [
             {
@@ -363,6 +388,11 @@ export class BackgroundMultichainSessionDAppHandler {
           throw new Caip25ProviderError(5100, 'Bitcoin is unavailable.')
         proposal = await this.options.bitcoin.prepareSessionAccountSelection(origin)
         break
+      case 'dash':
+        if (this.options.dashEnabled === false || !this.options.dash)
+          throw new Caip25ProviderError(5100, 'Dash is unavailable.')
+        proposal = await this.options.dash.prepareSessionAccountSelection(origin)
+        break
       case 'solana':
         if (!this.options.solana) throw new Caip25ProviderError(5100, 'Solana is unavailable.')
         proposal = await this.options.solana.prepareSessionAccountSelection(origin)
@@ -392,6 +422,10 @@ export class BackgroundMultichainSessionDAppHandler {
         if (this.options.bitcoinEnabled === false)
           throw new Caip25ProviderError(5100, 'Bitcoin is unavailable.')
         return this.options.bitcoin.resolveSessionAccountSelection(prepared.proposal, selectedIds)
+      case 'dash':
+        if (this.options.dashEnabled === false || !this.options.dash)
+          throw new Caip25ProviderError(5100, 'Dash is unavailable.')
+        return this.options.dash.resolveSessionAccountSelection(prepared.proposal, selectedIds)
       case 'solana':
         if (!this.options.solana) throw new Caip25ProviderError(5100, 'Solana is unavailable.')
         return this.options.solana.resolveSessionAccountSelection(prepared.proposal, selectedIds)
@@ -526,6 +560,10 @@ export class BackgroundMultichainSessionDAppHandler {
         return this.options.bitcoinEnabled === false
           ? Object.freeze([])
           : this.options.bitcoin.getSessionAccounts(origin)
+      case 'dash':
+        return this.options.dashEnabled === false || !this.options.dash
+          ? Object.freeze([])
+          : this.options.dash.getSessionAccounts(origin)
       case 'solana':
         return this.options.solana?.getSessionAccounts(origin) ?? Object.freeze([])
       case 'near':

@@ -4,7 +4,8 @@ export const HARDWARE_CHAIN_CAPABILITIES = Object.freeze([
   'evm',
   'solana',
   'tron',
-  'near'
+  'near',
+  'dash'
 ] as const)
 
 export const KEYSTONE_FIRMWARE_PROFILES = Object.freeze([
@@ -101,6 +102,18 @@ export function parseHardwareCredentialMetadata(value: unknown): HardwareCredent
     firmwareProfile,
     capabilities: Object.freeze(capabilities)
   })
+}
+
+export function hardwareCapabilitiesForNetwork<T extends string>(
+  capabilities: readonly T[],
+  network: 'mainnet' | 'testnet'
+): readonly T[] {
+  const next =
+    network === 'mainnet'
+      ? [...capabilities]
+      : capabilities.filter(capability => capability !== 'dash')
+  if (next.length === 0) throw new Error('Dash hardware wallets support mainnet only')
+  return Object.freeze(next)
 }
 
 export function hardwareCredentialMetadataEquals(

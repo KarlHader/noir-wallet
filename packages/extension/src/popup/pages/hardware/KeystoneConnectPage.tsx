@@ -51,7 +51,8 @@ const chainLabels = Object.freeze({
   evm: 'EVM',
   solana: 'SOL',
   tron: 'TRON',
-  near: 'NEAR'
+  near: 'NEAR',
+  dash: 'DASH'
 }) satisfies Readonly<Record<KeystoneChainSelection, string>>
 
 const chainIconAliases = Object.freeze({
@@ -60,7 +61,8 @@ const chainIconAliases = Object.freeze({
   evm: 'ethereum',
   solana: 'solana',
   tron: 'tron',
-  near: 'near'
+  near: 'near',
+  dash: 'dash'
 }) satisfies Readonly<Record<KeystoneChainSelection, string>>
 
 const networkBundles = buildKeystoneNetworkBundles(__ENABLED_CHAIN_FEATURE_FLAGS__)

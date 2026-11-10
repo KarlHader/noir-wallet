@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import { getResponseErrorMessage } from '@/lib/errors'
+import { DASH_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
+import { getDashNetworkConfig } from '@/config/networks'
+import { useWalletStore } from '@/store/wallet-store'
 import { PageHeader } from '../../components/common/PageHeader'
 import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'
@@ -32,6 +35,8 @@ const BITCOIN_TYPES = Object.freeze([
   ['p2sh-p2wpkh', 'Nested SegWit'],
   ['p2tr', 'Taproot']
 ] as const)
+
+const DASH_EXPORT_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(DASH_CHAIN_FEATURE_FLAG)
 
 function ExportNetworkIcon({ group }: { readonly group: AccountNetworkDisplayGroup }) {
   if (group.family === 'evm') {
@@ -75,6 +80,8 @@ export function ExportPrivateKey() {
   const [searchParams] = useSearchParams()
   const walletId = searchParams.get('walletId') ?? ''
   const accountId = searchParams.get('accountId') ?? ''
+  const networkMode = useWalletStore(state => state.currentNetwork)
+  const [testnetChoice, setTestnetChoice] = useState<'bitcoin' | 'dash' | null>(null)
   const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
   const [chainId, setChainId] = useState('')
   const [bitcoinAddressType, setBitcoinAddressType] = useState<BitcoinAddressType>('p2wpkh')
@@ -112,11 +119,14 @@ export function ExportPrivateKey() {
               network.chain.family === 'near'
           ) ?? []
         setNetworks(supported)
-        setChainId(current =>
-          supported.some(network => network.chain.id === current)
-            ? current
-            : (supported[0]?.chain.id ?? '')
-        )
+        setTestnetChoice(null)
+        setChainId(current => {
+          if (supported.some(network => network.chain.id === current)) return current
+          const fallback = supported.find(
+            network => networkMode !== 'testnet' || network.chain.family !== 'bitcoin'
+          )
+          return fallback?.chain.id ?? ''
+        })
       })
       .catch(reason => {
         if (!cancelled) {
@@ -130,7 +140,7 @@ export function ExportPrivateKey() {
     return () => {
       cancelled = true
     }
-  }, [accountId, walletId, loadAttempt])
+  }, [accountId, loadAttempt, networkMode, walletId])
 
   const networkGroups = useMemo(() => groupAccountNetworksForDisplay(networks), [networks])
   const selectedGroup = useMemo(
@@ -141,8 +151,16 @@ export function ExportPrivateKey() {
   const selectedLabel =
     selectedGroup?.family === 'evm' ? 'EVM' : selectedGroup?.networks[0]?.chain.displayName
 
+  const dashExportSelected = networkMode === 'testnet' && testnetChoice === 'dash'
   const exportKey = async () => {
-    if (!selected) return
+    if (
+      networkMode === 'testnet' &&
+      testnetChoice === null &&
+      selected?.chain.family === 'bitcoin'
+    ) {
+      return
+    }
+    if (!dashExportSelected && !selected) return
     setExporting(true)
     setError(null)
     try {
@@ -150,9 +168,11 @@ export function ExportPrivateKey() {
         type: 'EXPORT_PRIVATE_KEY',
         walletId,
         accountId,
-        chainId: selected.chain.id,
+        chainId: dashExportSelected ? getDashNetworkConfig('testnet').chainId : selected!.chain.id,
         password,
-        ...(selected.chain.family === 'bitcoin' ? { bitcoinAddressType } : {})
+        ...(!dashExportSelected && selected?.chain.family === 'bitcoin'
+          ? { bitcoinAddressType }
+          : {})
       })
       if (
         typeof response !== 'object' ||
@@ -167,11 +187,20 @@ export function ExportPrivateKey() {
         throw new Error('Private-key export response is invalid')
       }
       const value = result as { privateKey?: unknown; format?: unknown }
-      if (!isValidPrivateKeyExport(selected.chain.family, value)) {
+      const dashExport =
+        dashExportSelected &&
+        value.format === 'wif' &&
+        typeof value.privateKey === 'string' &&
+        /^[Xc][1-9A-HJ-NP-Za-km-z]{51}$/.test(value.privateKey)
+      if (dashExport && typeof value.privateKey === 'string' && value.format === 'wif') {
+        setPrivateKey(value.privateKey)
+        setFormat('wif')
+      } else if (selected && isValidPrivateKeyExport(selected.chain.family, value)) {
+        setPrivateKey(value.privateKey)
+        setFormat(value.format)
+      } else {
         throw new Error('Private-key export response is invalid')
       }
-      setPrivateKey(value.privateKey)
-      setFormat(value.format)
       setPassword('')
       setVisible(false)
     } catch (reason) {
@@ -237,15 +266,61 @@ export function ExportPrivateKey() {
             <div className="h-[46px] animate-pulse rounded-xl bg-card" />
           ) : (
             <div className="space-y-2">
+              {networkMode === 'testnet' && DASH_EXPORT_ENABLED && (
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <p className="text-sm font-medium">Bitcoin or Dash</p>
+                  <p className="mt-1 text-xs leading-4 text-muted">
+                    Testnet private keys share a WIF prefix. Choose Bitcoin or Dash.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bitcoin = networks.find(network => network.chain.family === 'bitcoin')
+                        setTestnetChoice('bitcoin')
+                        setChainId(bitcoin?.chain.id ?? '')
+                        setPrivateKey('')
+                      }}
+                      className={`rounded-xl border px-3 py-2.5 text-sm ${
+                        testnetChoice === 'bitcoin'
+                          ? 'border-primary/70 bg-primary/10'
+                          : 'border-border bg-background'
+                      }`}
+                    >
+                      Bitcoin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTestnetChoice('dash')
+                        setChainId(getDashNetworkConfig('testnet').chainId)
+                        setPrivateKey('')
+                      }}
+                      className={`rounded-xl border px-3 py-2.5 text-sm ${
+                        testnetChoice === 'dash'
+                          ? 'border-primary/70 bg-primary/10'
+                          : 'border-border bg-background'
+                      }`}
+                    >
+                      Dash
+                    </button>
+                  </div>
+                </div>
+              )}
               {networkGroups.map(group => {
                 const network = group.networks[0]
-                const isSelected = selectedGroup?.id === group.id
+                if (networkMode === 'testnet' && DASH_EXPORT_ENABLED && group.family === 'bitcoin')
+                  return null
+                const isSelected = testnetChoice !== 'dash' && selectedGroup?.id === group.id
                 const label = group.family === 'evm' ? 'EVM' : network.chain.displayName
                 return (
                   <button
                     key={group.id}
                     type="button"
-                    onClick={() => setChainId(network.chain.id)}
+                    onClick={() => {
+                      setTestnetChoice(null)
+                      setChainId(network.chain.id)
+                    }}
                     className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left ${
                       isSelected ? 'border-primary/70 bg-primary/10' : 'border-border bg-card'
                     }`}
@@ -266,7 +341,7 @@ export function ExportPrivateKey() {
           )}
         </div>
 
-        {selected?.chain.family === 'bitcoin' && (
+        {selected?.chain.family === 'bitcoin' && testnetChoice !== 'dash' && (
           <div>
             <p className="mb-2 text-sm text-muted">Address type</p>
             <div className="grid grid-cols-2 gap-2">
@@ -320,7 +395,7 @@ export function ExportPrivateKey() {
       <div className="page-footer">
         <Button
           className="h-[45px] w-full"
-          disabled={!selected || !password || exporting}
+          disabled={(!dashExportSelected && !selected) || !password || exporting}
           isLoading={exporting}
           onClick={exportKey}
         >

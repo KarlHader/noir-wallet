@@ -10,8 +10,10 @@ import { WarningBox } from '../../components/ui/WarningBox'
 import { useNavigate } from '../../provider/Router'
 import {
   detectPrivateKeyImport,
+  type DetectedPrivateKeyFamily,
   type PrivateKeyImportChainFamily
 } from '@/core/keyring/application/private-key-import-detection'
+import { DASH_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
 import { privateKeyImportFamilyOptions } from '@/popup/services/private-key-import-options'
 import {
   parsePrivateKeyPreview,
@@ -49,9 +51,32 @@ const FAMILY_PRESENTATION = Object.freeze({
     description: 'NEAR Testnet in Testnet Mode',
     icon: 'token-branded:near',
     defaultName: 'Imported NEAR Wallet'
+  },
+  dash: {
+    label: 'Dash',
+    description: 'P2PKH on the current Dash network',
+    icon: 'token-branded:dash',
+    defaultName: 'Imported Dash Wallet'
   }
-} as const)
+} as const satisfies Record<
+  DetectedPrivateKeyFamily,
+  {
+    readonly label: string
+    readonly description: string
+    readonly icon: string
+    readonly defaultName: string
+    readonly iconKind?: 'chain'
+  }
+>)
 
+function unknownRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value)) record[key] = entry
+  return record
+}
+
+const DASH_IMPORT_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(DASH_CHAIN_FEATURE_FLAG)
 const FAMILY_OPTIONS = privateKeyImportFamilyOptions(__ENABLED_CHAIN_FEATURE_FLAGS__)
 const AVAILABLE_FAMILIES = FAMILY_OPTIONS.filter(option => option.enabled).map(
   option => option.family
@@ -72,35 +97,47 @@ export function ImportPrivateKey() {
   const [privateKey, setPrivateKey] = useState('')
   const [displayName, setDisplayName] = useState('Imported EVM Wallet')
   const [nameEdited, setNameEdited] = useState(false)
-  const [familyOverride, setFamilyOverride] = useState<PrivateKeyImportChainFamily | null>(null)
+  const [familyOverride, setFamilyOverride] = useState<DetectedPrivateKeyFamily | null>(null)
   const [showFamilyPicker, setShowFamilyPicker] = useState(false)
   const [visible, setVisible] = useState(false)
   const [preview, setPreview] = useState<PrivateKeyAddressPreview | null>(null)
+  const [dashPreviewAddress, setDashPreviewAddress] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const detection = useMemo(() => {
-    const detected = detectPrivateKeyImport(privateKey)
-    return detected && AVAILABLE_FAMILY_SET.has(detected.chainFamily) ? detected : null
-  }, [privateKey])
-  const chainFamily = familyOverride ?? detection?.chainFamily ?? null
+  const rawDetection = useMemo(() => detectPrivateKeyImport(privateKey), [privateKey])
+  const testnetWifChoice = rawDetection?.format === 'ambiguous-testnet-wif'
+  const detection =
+    rawDetection &&
+    rawDetection.chainFamily !== null &&
+    (rawDetection.chainFamily === 'dash'
+      ? DASH_IMPORT_ENABLED
+      : AVAILABLE_FAMILY_SET.has(rawDetection.chainFamily))
+      ? rawDetection
+      : null
+  const chainFamily = familyOverride ?? (testnetWifChoice ? null : (detection?.chainFamily ?? null))
   const presentation = chainFamily ? FAMILY_PRESENTATION[chainFamily] : null
+  const familyAllowed = (family: DetectedPrivateKeyFamily) =>
+    family === 'dash'
+      ? DASH_IMPORT_ENABLED
+      : AVAILABLE_FAMILY_SET.has(family) || (testnetWifChoice && family === 'bip122')
 
   useEffect(() => {
     if (!nameEdited && presentation) setDisplayName(presentation.defaultName)
   }, [nameEdited, presentation])
 
-  const chooseFamily = (family: PrivateKeyImportChainFamily) => {
-    if (!AVAILABLE_FAMILY_SET.has(family)) return
+  const chooseFamily = (family: DetectedPrivateKeyFamily) => {
+    if (!familyAllowed(family)) return
     setFamilyOverride(family)
     setPreview(null)
+    setDashPreviewAddress(null)
     setShowFamilyPicker(false)
     setError(null)
   }
 
   const previewKey = async () => {
-    if (!chainFamily || !AVAILABLE_FAMILY_SET.has(chainFamily)) return
+    if (!chainFamily || !familyAllowed(chainFamily)) return
     setPreviewing(true)
     setError(null)
     try {
@@ -117,10 +154,30 @@ export function ImportPrivateKey() {
       ) {
         throw new Error(getResponseErrorMessage(response) ?? 'Private-key preview failed')
       }
-      const nextPreview = parsePrivateKeyPreview((response as { result?: unknown }).result)
+      const result = unknownRecord((unknownRecord(response) ?? {}).result)
+      if (chainFamily === 'dash') {
+        const address = unknownRecord(
+          Array.isArray(result?.addresses) && result.addresses.length === 1
+            ? result.addresses[0]
+            : null
+        )
+        if (
+          result?.chainFamily !== 'dash' ||
+          address?.addressScheme !== 'dash_p2pkh' ||
+          typeof address.address !== 'string' ||
+          address.address.length === 0
+        ) {
+          throw new Error('Private-key preview does not match the selected network')
+        }
+        setDashPreviewAddress(address.address)
+        setPreview(null)
+        return
+      }
+      const nextPreview = parsePrivateKeyPreview(result)
       if (nextPreview.chainFamily !== chainFamily) {
         throw new Error('Private-key preview does not match the selected network')
       }
+      setDashPreviewAddress(null)
       setPreview(nextPreview)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Private-key preview failed')
@@ -130,7 +187,7 @@ export function ImportPrivateKey() {
   }
 
   const submit = async () => {
-    if (!chainFamily || !AVAILABLE_FAMILY_SET.has(chainFamily)) return
+    if (!chainFamily || !familyAllowed(chainFamily)) return
     setSubmitting(true)
     setError(null)
     try {
@@ -148,11 +205,20 @@ export function ImportPrivateKey() {
       ) {
         throw new Error(getResponseErrorMessage(response) ?? 'Private-key Wallet import failed')
       }
-      sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, {
-        chain:
-          chainFamily === 'eip155' ? 'evm' : chainFamily === 'bip122' ? 'bitcoin' : chainFamily,
-        params: { method: 'private_key' }
-      })
+      const analyticsChain =
+        chainFamily === 'eip155'
+          ? 'evm'
+          : chainFamily === 'bip122'
+            ? 'bitcoin'
+            : chainFamily === 'solana' || chainFamily === 'near'
+              ? chainFamily
+              : null
+      if (analyticsChain) {
+        sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, {
+          chain: analyticsChain,
+          params: { method: 'private_key' }
+        })
+      }
       setPrivateKey('')
       replace('/')
     } catch (reason) {
@@ -198,6 +264,7 @@ export function ImportPrivateKey() {
               setFamilyOverride(null)
               setShowFamilyPicker(false)
               setPreview(null)
+              setDashPreviewAddress(null)
               setError(null)
             }}
             placeholder={PRIVATE_KEY_PLACEHOLDER}
@@ -246,12 +313,39 @@ export function ImportPrivateKey() {
                 Change
               </button>
             </div>
-            {detection?.ambiguous && !familyOverride && (
+            {detection?.format === 'ambiguous-hex' && !familyOverride && (
               <p className="mt-3 text-xs leading-4 text-muted">
                 {detection.format === 'bitcoin-wif'
                   ? 'This WIF encoding is shared by Bitcoin and Pearl. Choose the network this key came from.'
                   : 'A 32-byte hex key can be used by multiple networks. Noir Wallet defaults it to EVM.'}
               </p>
+            )}
+            {testnetWifChoice && (
+              <div className="mt-3 border-t border-border pt-3">
+                <p className="text-xs leading-4 text-muted">
+                  {DASH_IMPORT_ENABLED
+                    ? 'This testnet WIF prefix is shared by Bitcoin and Dash. Choose Bitcoin or Dash.'
+                    : 'This testnet WIF prefix is shared with Dash. This build imports it as Bitcoin.'}
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {(['bip122', 'dash'] as const)
+                    .filter(family => family !== 'dash' || DASH_IMPORT_ENABLED)
+                    .map(family => (
+                      <button
+                        key={family}
+                        type="button"
+                        onClick={() => chooseFamily(family)}
+                        className={`rounded-xl border px-3 py-2.5 text-sm ${
+                          chainFamily === family
+                            ? 'border-primary/70 bg-primary/10'
+                            : 'border-border bg-background'
+                        }`}
+                      >
+                        {FAMILY_PRESENTATION[family].label}
+                      </button>
+                    ))}
+                </div>
+              </div>
             )}
             {showFamilyPicker && (
               <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-3">
@@ -276,7 +370,7 @@ export function ImportPrivateKey() {
           </div>
         )}
 
-        {preview && (
+        {(preview || dashPreviewAddress) && (
           <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted">{presentation?.label} address preview</p>
@@ -284,6 +378,7 @@ export function ImportPrivateKey() {
                 type="button"
                 onClick={() => {
                   setPreview(null)
+                  setDashPreviewAddress(null)
                   setShowFamilyPicker(true)
                 }}
                 className="text-sm font-medium text-primary"
@@ -292,19 +387,20 @@ export function ImportPrivateKey() {
               </button>
             </div>
             <p className="mt-2 break-all font-mono text-sm leading-5">
-              {
+              {dashPreviewAddress ??
                 (
-                  preview.addresses.find(address => address.preferredForReceive) ??
-                  preview.addresses[0]
-                ).address
-              }
+                  preview?.addresses.find(address => address.preferredForReceive) ??
+                  preview?.addresses[0]
+                )?.address}
             </p>
             <p className="mt-2 text-xs text-muted">
-              {preview.chainFamily === 'eip155'
-                ? `Available on ${preview.addresses.length} EVM networks`
-                : preview.chainFamily === 'bip122'
-                  ? `Native SegWit · ${preview.addresses.length - 1} additional Bitcoin address formats`
-                  : `Available on the active ${presentation?.label} network`}
+              {chainFamily === 'dash'
+                ? 'P2PKH on the active Dash network'
+                : preview?.chainFamily === 'eip155'
+                  ? `Available on ${preview.addresses.length} EVM networks`
+                  : preview?.chainFamily === 'bip122'
+                    ? `Native SegWit · ${preview.addresses.length - 1} additional Bitcoin address formats`
+                    : `Available on the active ${presentation?.label} network`}
             </p>
           </div>
         )}
@@ -324,9 +420,9 @@ export function ImportPrivateKey() {
             !privateKey.trim() || !displayName.trim() || !chainFamily || previewing || submitting
           }
           isLoading={previewing || submitting}
-          onClick={preview ? submit : previewKey}
+          onClick={preview || dashPreviewAddress ? submit : previewKey}
         >
-          {preview ? 'Import wallet' : 'Continue'}
+          {preview || dashPreviewAddress ? 'Import wallet' : 'Continue'}
         </Button>
       </div>
     </div>

@@ -19,14 +19,14 @@ export function ledgerAvailableFamilies(network: Network): readonly LedgerChainF
       .list()
       .map(chain => chain.family)
   )
-  return (['zcash', 'bitcoin', 'evm', 'solana', 'near'] as const).filter(family =>
-    families.has(family)
+  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash'] as const).filter(
+    family => families.has(family) && (family !== 'dash' || network === 'mainnet')
   )
 }
 
 export function ledgerFamilyChoices(availableFamilies: readonly LedgerChainFamily[]) {
   const available = new Set(availableFamilies)
-  return (['zcash', 'bitcoin', 'evm', 'solana', 'near'] as const).map(family => ({
+  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash'] as const).map(family => ({
     family,
     enabled: available.has(family)
   }))

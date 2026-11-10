@@ -2,6 +2,7 @@ import type { NoirWalletProvider } from './types'
 import { ZcashClient } from './chains/zcash/api'
 import type { ZcashProvider } from './chains/zcash/types'
 import type { BitcoinProvider } from './chains/bitcoin/types'
+import type { DashProvider } from './chains/dash/types'
 import type { PearlProvider } from './chains/pearl/types'
 import type { QuantusProvider } from './chains/quantus/types'
 import type { EvmProvider } from './chains/evm/types'
@@ -17,6 +18,7 @@ interface RawNoirWallet {
   zcash: ZcashProvider
   ethereum?: EvmProvider
   bitcoin?: BitcoinProvider
+  dash?: DashProvider
   pearl?: PearlProvider
   quantus?: QuantusProvider
   solana?: SolanaProvider
@@ -48,6 +50,7 @@ export function getNoirWallet(): NoirWalletProvider | null {
     zcash: new ZcashClient(rawWallet.zcash),
     ...(rawWallet.ethereum ? { ethereum: rawWallet.ethereum } : {}),
     ...(rawWallet.bitcoin ? { bitcoin: rawWallet.bitcoin } : {}),
+    ...(rawWallet.dash ? { dash: rawWallet.dash } : {}),
     ...(rawWallet.pearl ? { pearl: rawWallet.pearl } : {}),
     ...(rawWallet.quantus ? { quantus: rawWallet.quantus } : {}),
     ...(rawWallet.solana ? { solana: rawWallet.solana } : {}),

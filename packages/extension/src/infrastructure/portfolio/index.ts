@@ -4,6 +4,7 @@ export {
   UnifiedPortfolioCoordinator,
   type EvmPortfolioSourceReader,
   type BitcoinPortfolioSourceReader,
+  type DashPortfolioSourceReader,
   type SingleChainPortfolioSourceReader,
   type PortfolioCoordinatorStage,
   type UnifiedPortfolioCoordinatorOptions,

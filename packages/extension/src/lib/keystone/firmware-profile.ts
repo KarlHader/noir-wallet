@@ -1,4 +1,11 @@
-export type KeystoneChainSelection = 'zcash' | 'bitcoin' | 'evm' | 'solana' | 'tron' | 'near'
+export type KeystoneChainSelection =
+  | 'zcash'
+  | 'bitcoin'
+  | 'evm'
+  | 'solana'
+  | 'tron'
+  | 'near'
+  | 'dash'
 
 export type KeystoneFirmwareProfile = 'cypherpunk' | 'multi-coin' | 'bitcoin-only'
 
@@ -15,12 +22,13 @@ export const KEYSTONE_CHAIN_FIRMWARE_PROFILES = Object.freeze({
   evm: Object.freeze(['multi-coin'] as const),
   solana: Object.freeze(['multi-coin'] as const),
   tron: Object.freeze(['multi-coin'] as const),
-  near: Object.freeze(['multi-coin'] as const)
+  near: Object.freeze(['multi-coin'] as const),
+  dash: Object.freeze(['multi-coin'] as const)
 }) satisfies Readonly<Record<KeystoneChainSelection, readonly KeystoneFirmwareProfile[]>>
 
 export const KEYSTONE_PRODUCT_CHAINS_BY_PROFILE = Object.freeze({
   cypherpunk: Object.freeze(['zcash', 'bitcoin'] as const),
-  'multi-coin': Object.freeze(['evm', 'bitcoin', 'solana', 'tron', 'near'] as const),
+  'multi-coin': Object.freeze(['evm', 'bitcoin', 'solana', 'tron', 'near', 'dash'] as const),
   'bitcoin-only': Object.freeze(['bitcoin'] as const)
 }) satisfies Readonly<Record<KeystoneFirmwareProfile, readonly KeystoneChainSelection[]>>
 

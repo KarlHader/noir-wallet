@@ -13,6 +13,10 @@ export function buildExampleMultichainSessionRequest(
     networkMode === 'mainnet'
       ? 'bip122:000000000019d6689c085ae165831e93'
       : 'bip122:000000000933ea01ad0ee984209779ba'
+  const dashChainId =
+    networkMode === 'mainnet'
+      ? 'bip122:00000ffd590b1485b3caadc19b22e637'
+      : 'bip122:00000bafbc94add76cb75e2ec9289483'
   const solanaChainId =
     networkMode === 'mainnet'
       ? 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
@@ -48,6 +52,24 @@ export function buildExampleMultichainSessionRequest(
         ? {
             [bitcoinChainId]: {
               methods: ['getAccounts', 'getBalance', 'sendBitcoin', 'signMessage', 'signPsbt'],
+              notifications: ['wallet_sessionChanged', 'accountsChanged', 'networkChanged']
+            }
+          }
+        : {}),
+      ...(wallet.dash
+        ? {
+            [dashChainId]: {
+              methods: [
+                'getAccounts',
+                'getNetwork',
+                'getChain',
+                'getPublicKey',
+                'getBalance',
+                'sendDash',
+                'signMessage',
+                'signPsbt',
+                'pushPsbt'
+              ],
               notifications: ['wallet_sessionChanged', 'accountsChanged', 'networkChanged']
             }
           }

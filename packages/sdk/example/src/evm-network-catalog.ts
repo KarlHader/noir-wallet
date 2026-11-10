@@ -9,6 +9,7 @@ export type ExampleChainIcon =
   | 'berachain'
   | 'bitcoin'
   | 'bsc'
+  | 'dash'
   | 'ethereum'
   | 'gnosis'
   | 'monad'
@@ -31,6 +32,7 @@ const EXAMPLE_CHAIN_ICON_URLS: Readonly<Record<ExampleChainIcon, string>> = Obje
   berachain: chainIconUrl('berachain'),
   bitcoin: chainIconUrl('bitcoin'),
   bsc: chainIconUrl('bsc'),
+  dash: chainIconUrl('dash'),
   ethereum: chainIconUrl('ethereum'),
   gnosis: chainIconUrl('gnosis'),
   monad: chainIconUrl('monad'),

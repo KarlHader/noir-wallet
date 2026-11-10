@@ -6,7 +6,9 @@ import {
 } from '../../../../src/config/multichain-feature-flags.ts'
 
 import {
+  isNewWalletFamilyEnabled,
   resolveBitcoinFeatureRuntimePolicy,
+  resolveDashFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
@@ -24,6 +26,9 @@ describe('Chain feature runtime policy', () => {
     assert.equal(resolvePearlFeatureRuntimePolicy(enabled).transactionRecoveryEnabled, true)
     assert.equal(resolveSolanaFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
     assert.equal(resolveNearFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
+    assert.equal(resolveDashFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
+    assert.equal(isNewWalletFamilyEnabled('dash', enabled), false)
+    assert.equal(enabled.includes('chain.dash'), false)
   })
 
   it('permits an explicit deferred-chain verification profile without changing the default', () => {
@@ -81,6 +86,22 @@ describe('Chain feature runtime policy', () => {
     assert.deepEqual(resolveSolanaFeatureRuntimePolicy(['chain.zcash', 'chain.solana']), {
       newOperationsEnabled: true
     })
+  })
+
+  it('keeps Dash closed unless its own release flag is present', () => {
+    assert.deepEqual(resolveDashFeatureRuntimePolicy(['chain.zcash']), {
+      newOperationsEnabled: false
+    })
+    assert.equal(
+      resolveDashFeatureRuntimePolicy(['chain.zcash', 'chain.bitcoin']).newOperationsEnabled,
+      false
+    )
+    assert.deepEqual(resolveDashFeatureRuntimePolicy(['chain.zcash', 'chain.dash']), {
+      newOperationsEnabled: true
+    })
+    assert.equal(isNewWalletFamilyEnabled('dash', ['chain.zcash', 'chain.bitcoin']), false)
+    assert.equal(isNewWalletFamilyEnabled('dash', ['chain.zcash', 'chain.dash']), true)
+    assert.equal(isNewWalletFamilyEnabled('bitcoin', ['chain.zcash', 'chain.dash']), false)
   })
 
   it('enables NEAR operations when the release flag is present', () => {

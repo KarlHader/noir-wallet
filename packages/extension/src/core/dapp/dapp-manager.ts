@@ -1,5 +1,5 @@
 import { parseChainId } from '@/core/chains/registry'
-import { PEARL_CHAIN_IDS, QUANTUS_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { DASH_CHAIN_IDS, PEARL_CHAIN_IDS, QUANTUS_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { parseStoredCaip25Session, type Caip25StoredSession } from './caip25'
 
 /** Reference to a specific account within a specific wallet. */
@@ -118,6 +118,10 @@ const BITCOIN_DAPP_CHAIN_IDS = new Set([
   'bip122:000000000019d6689c085ae165831e93',
   'bip122:000000000933ea01ad0ee984209779ba'
 ])
+const DASH_DAPP_CHAIN_IDS: ReadonlySet<string> = new Set([
+  DASH_CHAIN_IDS.mainnet,
+  DASH_CHAIN_IDS.testnet
+])
 const PEARL_DAPP_CHAIN_IDS: ReadonlySet<string> = new Set([
   PEARL_CHAIN_IDS.mainnet,
   PEARL_CHAIN_IDS.testnet
@@ -142,6 +146,7 @@ function normalizeDAppChainId(value: string): string {
   if (
     chain.namespace !== 'eip155' &&
     !BITCOIN_DAPP_CHAIN_IDS.has(chain.id) &&
+    !DASH_DAPP_CHAIN_IDS.has(chain.id) &&
     !PEARL_DAPP_CHAIN_IDS.has(chain.id) &&
     !QUANTUS_DAPP_CHAIN_IDS.has(chain.id) &&
     !ZCASH_DAPP_CHAIN_IDS.has(chain.id) &&

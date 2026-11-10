@@ -22,17 +22,29 @@ test('SDK example requests only the scopes exposed by a two-chain wallet', () =>
 
 test('SDK example preserves all available scopes and the selected testnet EVM chain', () => {
   const request = buildExampleMultichainSessionRequest(
-    { zcash, ethereum: evm, bitcoin: {}, solana: {}, near: {} },
+    { zcash, ethereum: evm, bitcoin: {}, dash: {}, solana: {}, near: {} },
     'testnet',
     '0xaa36a7'
   )
 
   assert.deepEqual(Object.keys(request.scopes).sort(), [
     'bip122:000000000933ea01ad0ee984209779ba',
+    'bip122:00000bafbc94add76cb75e2ec9289483',
     'bip122:05a60a92d99d85997cce3b87616c089f',
     'eip155:11155111',
     'near:testnet',
     'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
+  ])
+  assert.deepEqual(request.scopes['bip122:00000bafbc94add76cb75e2ec9289483'].methods, [
+    'getAccounts',
+    'getNetwork',
+    'getChain',
+    'getPublicKey',
+    'getBalance',
+    'sendDash',
+    'signMessage',
+    'signPsbt',
+    'pushPsbt'
   ])
 })
 

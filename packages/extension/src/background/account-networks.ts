@@ -18,10 +18,23 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { EvmNetworkConfig } from '@/config/networks'
 import { IndexedDbStorageV2Repository } from '@/infrastructure/persistence/repositories'
 import type { BitcoinAddressDerivationPort } from '@/infrastructure/keyring/multichain/bitcoin-derivation-client'
+import type { DashAddressDerivationPort } from '@/infrastructure/keyring/multichain/dash-derivation-client'
+import { isDashChainId } from '@/infrastructure/keyring/multichain/dash-codecs'
+import { parseDashP2pkhAddress } from '@/infrastructure/chains/dash'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
 
 type AccountNetworksRepository = Pick<StorageV2ReadRepository, 'getActivePointer' | 'getSnapshot'>
+
+function isDisplayableDashAddress(chainId: string, address: AccountNetworkAddressSummary): boolean {
+  if (address.scheme !== 'dash_p2pkh' || address.privacy !== 'transparent') return false
+  try {
+    parseDashP2pkhAddress(address.value, chainId)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export interface AccountNetworkAddressSummary {
   readonly value: string
@@ -45,9 +58,10 @@ export interface AccountNetworksSummary {
     | Readonly<{ readonly kind: 'software' }>
     | Readonly<{
         readonly kind: 'private-key'
-        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+        readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
         readonly bitcoinNetwork?: 'mainnet' | 'testnet'
         readonly pearlNetwork?: 'mainnet' | 'testnet'
+        readonly dashNetwork?: 'mainnet' | 'testnet'
       }>
     | Readonly<{ readonly kind: 'hardware'; readonly hardware: HardwareCredentialMetadata }>
   readonly accountId: AccountId
@@ -71,6 +85,7 @@ export interface AccountNetworksCoordinatorOptions {
     readonly chainId: string
   }) => string | null
   readonly bitcoinDerivation?: BitcoinAddressDerivationPort
+  readonly dashDerivation?: DashAddressDerivationPort
   readonly evmPeaDerivation?: Readonly<{
     deriveGlobalPea(
       keyDomainId: KeyDomainId,
@@ -216,6 +231,34 @@ export class AccountNetworksCoordinator {
                   }
                 }
 
+                const dashDerivation = this.options.dashDerivation
+                if (
+                  isDashChainId(chain.id) &&
+                  keyDomain.source.kind === 'software' &&
+                  dashDerivation &&
+                  !addresses.some(address => isDisplayableDashAddress(chain.id, address))
+                ) {
+                  try {
+                    const derived = await dashDerivation.deriveAddress(account.keyDomainId, {
+                      chainId: chain.id,
+                      accountIndex: account.accountIndex,
+                      change: false,
+                      addressIndex: 0
+                    })
+                    const derivedAddress = Object.freeze({
+                      value: derived.address,
+                      scheme: derived.addressScheme,
+                      privacy: 'transparent' as const,
+                      preferredForReceive: addresses.length === 0
+                    })
+                    if (isDisplayableDashAddress(chain.id, derivedAddress)) {
+                      addresses = Object.freeze([...addresses, derivedAddress])
+                    }
+                  } catch {
+                    // A Dash derivation failure must not make the rest of the account unreadable.
+                  }
+                }
+
                 let privateExecutionAddress: string | undefined
                 const evmPeaDerivation = this.options.evmPeaDerivation
                 if (
@@ -243,6 +286,23 @@ export class AccountNetworksCoordinator {
                     }
                     // Public account metadata stays readable while the credential session is locked.
                   }
+                }
+
+                if (isDashChainId(chain.id)) {
+                  const dashAddresses = addresses.filter(address =>
+                    isDisplayableDashAddress(chain.id, address)
+                  )
+                  if (dashAddresses.length === 0) return []
+                  const hasPreferred = dashAddresses.some(address => address.preferredForReceive)
+                  addresses = Object.freeze(
+                    hasPreferred
+                      ? dashAddresses
+                      : dashAddresses.map((address, index) =>
+                          index === 0
+                            ? Object.freeze({ ...address, preferredForReceive: true })
+                            : address
+                        )
+                  )
                 }
 
                 if (addresses.length === 0) {
@@ -284,7 +344,10 @@ export class AccountNetworksCoordinator {
                       : { bitcoinNetwork: keyDomain.source.bitcoinNetwork }),
                     ...(keyDomain.source.pearlNetwork === undefined
                       ? {}
-                      : { pearlNetwork: keyDomain.source.pearlNetwork })
+                      : { pearlNetwork: keyDomain.source.pearlNetwork }),
+                    ...(keyDomain.source.dashNetwork === undefined
+                      ? {}
+                      : { dashNetwork: keyDomain.source.dashNetwork })
                   })
                 : Object.freeze({
                     kind: 'hardware' as const,
@@ -316,7 +379,8 @@ export function createBackgroundAccountNetworksCoordinator(
   customEvmNetworks: readonly EvmNetworkConfig[] = [],
   bitcoinDerivation?: BitcoinAddressDerivationPort,
   evmPeaDerivation?: AccountNetworksCoordinatorOptions['evmPeaDerivation'],
-  getZcashShieldedReceiveAddress?: AccountNetworksCoordinatorOptions['getZcashShieldedReceiveAddress']
+  getZcashShieldedReceiveAddress?: AccountNetworksCoordinatorOptions['getZcashShieldedReceiveAddress'],
+  dashDerivation?: DashAddressDerivationPort
 ): AccountNetworksCoordinator {
   return new AccountNetworksCoordinator({
     repository: new IndexedDbStorageV2Repository(),
@@ -325,6 +389,7 @@ export function createBackgroundAccountNetworksCoordinator(
     ),
     bitcoinDerivation,
     evmPeaDerivation,
-    getZcashShieldedReceiveAddress
+    getZcashShieldedReceiveAddress,
+    dashDerivation
   })
 }

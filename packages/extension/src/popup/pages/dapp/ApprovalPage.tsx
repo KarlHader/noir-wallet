@@ -52,6 +52,7 @@ import { useNavigate } from '@/popup/provider/Router'
 import {
   formatDAppHost,
   parseBitcoinSigningSummary,
+  parseDashSigningSummary,
   parseEvmAddNetworkApproval,
   parseEvmMessageSummary,
   parseEvmPrivateTransferApproval,
@@ -90,6 +91,7 @@ const MULTI_ACCOUNT_CONNECT_ACTIONS = new Set([
   'evmConnect',
   'bitcoinConnect',
   'pearlConnect',
+  'dashConnect',
   'quantusConnect',
   'solanaConnect',
   'nearConnect'
@@ -228,6 +230,9 @@ export function ApprovalPage() {
   const isPearlConnect = action === 'pearlConnect'
   const isPearlTransaction = action === 'pearlTransaction'
   const isPearlMessage = action === 'pearlMessage'
+  const isDashConnect = action === 'dashConnect'
+  const isDashTransaction = action === 'dashTransaction'
+  const isDashMessage = action === 'dashMessage'
   const isQuantusConnect = action === 'quantusConnect'
   const isQuantusTransaction = action === 'quantusTransaction'
   const isQuantusSignTransfer = action === 'quantusSignTransfer'
@@ -261,6 +266,11 @@ export function ApprovalPage() {
     ? parsePearlSigningSummary(data.review?.summary, 'transaction')
     : isPearlMessage
       ? parsePearlSigningSummary(data.review?.summary, 'message')
+      : null
+  const dashSigningSummary = isDashTransaction
+    ? parseDashSigningSummary(data.review?.summary, 'transaction')
+    : isDashMessage
+      ? parseDashSigningSummary(data.review?.summary, 'message')
       : null
   const quantusSigningSummary =
     isQuantusTransaction || isQuantusSignTransfer
@@ -848,6 +858,7 @@ export function ApprovalPage() {
 
       case 'bitcoinConnect':
       case 'pearlConnect':
+      case 'dashConnect':
       case 'quantusConnect':
       case 'solanaConnect':
       case 'nearConnect':
@@ -1032,6 +1043,13 @@ export function ApprovalPage() {
         return renderInvalidSigningRequest(
           'The request did not include a valid, immutable Pearl signing summary.',
           action === 'pearlMessage'
+        )
+
+      case 'dashTransaction':
+      case 'dashMessage':
+        return renderInvalidSigningRequest(
+          'The request did not include a valid, immutable Dash signing summary.',
+          action === 'dashMessage'
         )
 
       case 'quantusTransaction':
@@ -1598,6 +1616,23 @@ export function ApprovalPage() {
     )
   }
 
+  if (dashSigningSummary) {
+    const address = dashSigningSummary.fields.signer
+    return (
+      <SigningSummaryReview
+        summary={dashSigningSummary}
+        chainName="Dash"
+        networkName={typeof data.chainName === 'string' ? data.chainName : 'Unknown network'}
+        accountName={accountDisplayName}
+        accountAddress={address}
+        source={{ kind: 'dapp', domain: dappDomain, pageUrl: dappPageUrl }}
+        isSubmitting={isLoading}
+        onReject={() => void handleDecision(false)}
+        onConfirm={() => void handleDecision(true)}
+      />
+    )
+  }
+
   if (quantusSigningSummary) {
     return (
       <SigningSummaryReview
@@ -1672,6 +1707,7 @@ export function ApprovalPage() {
               (isEvmMessage && evmMessageSummary === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
               ((isPearlTransaction || isPearlMessage) && pearlSigningSummary === null) ||
+              ((isDashTransaction || isDashMessage) && dashSigningSummary === null) ||
               (isQuantusTransaction && quantusSigningSummary === null) ||
               (isQuantusSignTransfer && quantusSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&
@@ -1701,7 +1737,7 @@ export function ApprovalPage() {
                       ? data.action === 'add'
                         ? 'Add Network'
                         : 'Switch Network'
-                      : isBitcoinConnect
+                      : isBitcoinConnect || isDashConnect
                         ? 'Connect'
                         : isPearlConnect
                           ? 'Connect'

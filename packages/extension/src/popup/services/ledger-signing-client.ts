@@ -10,6 +10,8 @@ import { signLedgerBitcoinRequest } from '@/lib/ledger/bitcoin'
 import { ledgerBitcoinAppName } from '@/lib/ledger/bitcoin-model'
 import { signLedgerSolanaRequest } from '@/lib/ledger/solana'
 import { signLedgerNearRequest } from '@/lib/ledger/near'
+import { signLedgerDashRequest } from '@/lib/ledger/dash'
+import { LEDGER_DASH_APP_NAME } from '@/lib/ledger/dash-model'
 import type { LedgerSessionOptions } from '@/lib/ledger/device'
 import type { LedgerSigningView } from './ledger-signing-view'
 
@@ -32,6 +34,8 @@ export function signLedgerDeviceRequest(
   if (request.kind === 'solana-transaction') return signLedgerSolanaRequest(request, options)
   if (request.kind === 'near-transaction' || request.kind === 'near-nep413-message')
     return signLedgerNearRequest(request, options)
+  if (request.kind === 'dash-psbt' || request.kind === 'dash-message')
+    return signLedgerDashRequest(request, options)
   if ('derivationPath' in request) return signLedgerEvmRequest(request, options)
   throw new Error('Unsupported Ledger signing request')
 }
@@ -53,6 +57,9 @@ export async function submitLedgerSigningView(
     )
     return
   }
+  if ('kind' in response && response.kind === 'dash-psbt') {
+    throw new Error('Dash hardware response cannot be broadcast')
+  }
   if (view.family === 'bitcoin' && 'signedPsbtBase64' in response) {
     await bitcoinWalletClient.submitExternalSignature(
       transactionId,
@@ -63,9 +70,16 @@ export async function submitLedgerSigningView(
   }
   throw new Error('Ledger response does not match chain')
 }
-export async function cancelLedgerSigningView(view: LedgerSigningView): Promise<void> {
+export async function cancelLedgerSigningView(
+  view: LedgerSigningView,
+  reason?: string
+): Promise<void> {
   if (view.requestId) {
-    await send({ type: 'CANCEL_LEDGER_SIGNING_REQUEST', requestId: view.requestId })
+    await send({
+      type: 'CANCEL_LEDGER_SIGNING_REQUEST',
+      requestId: view.requestId,
+      ...(reason ? { reason } : {})
+    })
     return
   }
   if (view.transactionId)
@@ -78,6 +92,7 @@ export function ledgerRequestDeviceApp(request: LedgerDeviceSigningRequest): str
     return ledgerBitcoinAppName(request.network)
   if (request.kind === 'solana-transaction') return 'Solana'
   if (request.kind === 'near-transaction' || request.kind === 'near-nep413-message') return 'NEAR'
+  if (request.kind === 'dash-psbt' || request.kind === 'dash-message') return LEDGER_DASH_APP_NAME
   return 'Ethereum'
 }
 export function ledgerRequestAddress(request: LedgerDeviceSigningRequest): string {

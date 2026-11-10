@@ -10,6 +10,7 @@ import {
   resolveNearRuntimeNetworkConfig
 } from '@/core/chains/solana-near-runtime-config'
 import { getBitcoinChainId } from '@/core/chains/registry'
+import { getDashNetworkConfig } from '@/config/networks'
 import { createConfiguredEvmRpcClient } from '@/infrastructure/chains/evm'
 import { createConfiguredSolanaRpcClient } from '@/infrastructure/chains/solana'
 import { createConfiguredNearRpcClient } from '@/infrastructure/chains/near'
@@ -109,6 +110,14 @@ export async function readLedgerAccountPreview(
         used: snapshot !== null,
         accountName:
           discovered.primaryAccountId !== account.address ? discovered.primaryAccountId : undefined
+      }
+    }
+    if (account.family === 'dash') {
+      if (account.network !== 'mainnet' || network !== 'mainnet') return { status: 'unavailable' }
+      return {
+        status: 'available',
+        networkName: getDashNetworkConfig('mainnet').displayName,
+        used: false
       }
     }
     if (account.family === 'bitcoin') {

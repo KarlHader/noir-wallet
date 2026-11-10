@@ -5,6 +5,7 @@ import {
   resolveSolanaRuntimeNetworkConfig
 } from '@/core/chains/solana-near-runtime-config'
 import type { ChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
+import { isBitcoinChainId, isDashChainId } from '@/core/chains/registry/chain-ids'
 import {
   createAssetRegistry,
   createBuildAddressGatedChainRegistry,
@@ -44,6 +45,7 @@ import { logger } from '@/lib/logger'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { createBackgroundBitcoinPortfolioCoordinator } from './bitcoin-transfer'
+import { createBackgroundDashPortfolioCoordinator } from './dash-wallet'
 import { createBackgroundPearlPortfolioCoordinator } from './pearl-transfer'
 import { credentialSession } from './credential-session'
 
@@ -98,11 +100,18 @@ export function createBackgroundPortfolioCoordinator(
       })
     ]
   })
-  const bitcoinPortfolio = chains.list().some(chain => chain.family === 'bitcoin')
+  const bitcoinPortfolio = chains
+    .list()
+    .some(chain => chain.family === 'bitcoin' && isBitcoinChainId(chain.id))
     ? createBackgroundBitcoinPortfolioCoordinator()
     : undefined
   const pearlPortfolio = chains.list().some(chain => chain.family === 'pearl')
     ? createBackgroundPearlPortfolioCoordinator()
+    : undefined
+  const dashPortfolio = chains
+    .list()
+    .some(chain => chain.family === 'dash' && isDashChainId(chain.id))
+    ? createBackgroundDashPortfolioCoordinator()
     : undefined
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK, endpointSettings)
   const solanaRpc = createConfiguredSolanaRpcClient({
@@ -159,6 +168,7 @@ export function createBackgroundPortfolioCoordinator(
     evmPortfolios,
     bitcoinPortfolio,
     pearlPortfolio,
+    dashPortfolio,
     solanaPortfolio,
     nearPortfolio,
     quantusPortfolio,
@@ -188,7 +198,25 @@ export function createBackgroundPortfolioCoordinator(
         currentAccountId ?? undefined
       )
     },
+    onBackgroundDashRefreshError: error => {
+      const { currentWalletId, currentAccountId } = useWalletStore.getState()
+      logger.warn(
+        `Dash portfolio refresh failed: ${formatLogError(error)}`,
+        currentWalletId ?? undefined,
+        currentAccountId ?? undefined
+      )
+    },
     onBackgroundPearlRefreshSettled: source => {
+      if (!source) return
+      void chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: source.chainAccount.scope.keyDomainId,
+          accountId: source.chainAccount.scope.accountId
+        })
+        .catch(() => {})
+    },
+    onBackgroundDashRefreshSettled: source => {
       if (!source) return
       void chrome.runtime
         .sendMessage({

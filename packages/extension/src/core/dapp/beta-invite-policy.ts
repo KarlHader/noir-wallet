@@ -2,6 +2,7 @@ type DAppFamily =
   | 'zcash'
   | 'evm'
   | 'bitcoin'
+  | 'dash'
   | 'pearl'
   | 'quantus'
   | 'solana'
@@ -29,6 +30,7 @@ export function resolveUnactivatedBetaDAppRequest(
   if (
     (family === 'evm' && method === 'eth_accounts') ||
     ((family === 'bitcoin' ||
+      family === 'dash' ||
       family === 'pearl' ||
       family === 'quantus' ||
       family === 'solana' ||

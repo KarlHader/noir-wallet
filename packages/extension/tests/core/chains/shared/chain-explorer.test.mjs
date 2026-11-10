@@ -5,7 +5,11 @@ import {
   setActiveChainEndpointSettings
 } from '../../../../src/core/chains/chain-endpoint-settings.ts'
 import { setActiveBlockExplorerPreferences } from '../../../../src/lib/block-explorer-preferences.ts'
-import { getBitcoinChainId, getZcashChainId } from '../../../../src/core/chains/registry/index.ts'
+import {
+  getBitcoinChainId,
+  getDashChainId,
+  getZcashChainId
+} from '../../../../src/core/chains/registry/index.ts'
 import {
   formatChainAddressExplorerUrl,
   formatChainAssetExplorerUrl,
@@ -148,6 +152,40 @@ test.describe('chain explorer resolution', () => {
         'mainnet'
       )
     ).toBe('https://bscscan.com/token/0x1234')
+  })
+
+  test('builds Dash Activity explorer links for both global modes', () => {
+    const hash = 'fc17ff3f48faa9454a964868c2156687c2fa678ab1300706d946d45f135f3398'
+    expect(formatChainTransactionExplorerUrl(getDashChainId('mainnet'), hash, 'mainnet')).toBe(
+      `https://blockexplorer.one/dash/mainnet/tx/${hash}`
+    )
+    expect(formatChainAddressExplorerUrl(getDashChainId('mainnet'), 'Xaddr', 'mainnet')).toBe(
+      'https://blockexplorer.one/dash/mainnet/address/Xaddr'
+    )
+    expect(formatChainTransactionExplorerUrl(getDashChainId('testnet'), hash, 'testnet')).toBe(
+      `https://blockexplorer.one/dash/testnet/tx/${hash}`
+    )
+    expect(formatChainAddressExplorerUrl(getDashChainId('testnet'), 'yaddr', 'testnet')).toBe(
+      'https://blockexplorer.one/dash/testnet/address/yaddr'
+    )
+
+    setActiveChainEndpointSettings({
+      schemaVersion: 1,
+      customEvmNetworks: [],
+      overrides: [
+        {
+          chainId: getDashChainId('mainnet'),
+          explorer: {
+            label: 'Private Dash explorer',
+            baseUrl: 'https://dash-explorer.example',
+            transactionPath: 'transaction'
+          }
+        }
+      ]
+    })
+    expect(formatChainTransactionExplorerUrl(getDashChainId('mainnet'), hash, 'mainnet')).toBe(
+      `https://dash-explorer.example/transaction/${hash}`
+    )
   })
 
   test('builds Solana and NEAR Activity explorer links for both global modes', () => {

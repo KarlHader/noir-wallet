@@ -34,7 +34,7 @@ test.describe('Portfolio asset-mode visibility', () => {
     ).toBe(false)
   })
 
-  test('keeps zero-balance native ZEC, BTC and Ethereum ETH as empty-state actions', () => {
+  test('keeps zero-balance native ZEC, BTC, DASH and Ethereum ETH as empty-state actions', () => {
     expect(
       isAssetVisibleInAssetView(
         chain('bip122:zcash-mainnet', 'zcash', 'Zcash'),
@@ -51,6 +51,12 @@ test.describe('Portfolio asset-mode visibility', () => {
       isAssetVisibleInAssetView(
         chain('bip122:mainnet', 'bitcoin', 'Bitcoin'),
         asset({ symbol: 'BTC' })
+      )
+    ).toBe(true)
+    expect(
+      isAssetVisibleInAssetView(
+        chain('bip122:dash-mainnet', 'dash', 'Dash'),
+        asset({ symbol: 'DASH' })
       )
     ).toBe(true)
     expect(

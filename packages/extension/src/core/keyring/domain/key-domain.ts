@@ -20,9 +20,10 @@ export type KeyDomainSource =
     }
   | {
       readonly kind: 'private-key'
-      readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
+      readonly chainFamily: 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl' | 'dash'
       readonly bitcoinNetwork?: 'mainnet' | 'testnet'
       readonly pearlNetwork?: 'mainnet' | 'testnet'
+      readonly dashNetwork?: 'mainnet' | 'testnet'
     }
   | {
       readonly kind: 'hardware'
@@ -147,6 +148,16 @@ export function parseKeyDomain(value: unknown): KeyDomain {
         kind: 'private-key',
         chainFamily: 'bip122',
         bitcoinNetwork: value.source.bitcoinNetwork
+      })
+    } else if (
+      value.source.chainFamily === 'dash' &&
+      hasExactKeys(value.source, ['kind', 'chainFamily', 'dashNetwork']) &&
+      (value.source.dashNetwork === 'mainnet' || value.source.dashNetwork === 'testnet')
+    ) {
+      source = Object.freeze({
+        kind: 'private-key',
+        chainFamily: 'dash',
+        dashNetwork: value.source.dashNetwork
       })
     } else if (
       value.source.chainFamily === 'pearl' &&

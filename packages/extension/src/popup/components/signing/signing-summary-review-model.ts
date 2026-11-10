@@ -7,6 +7,11 @@ import type {
   QuantusTransferSummary,
   SigningSummary
 } from '@/core/keyring/domain'
+import type {
+  DashMessageSummary,
+  DashOutputSummary,
+  DashPsbtSummary
+} from '@/core/keyring/domain/signing-summary'
 import {
   bitcoinMessageReview,
   bitcoinPsbtReview,
@@ -23,8 +28,11 @@ import {
 } from './signing-summary-review-model-other'
 import { tronMessageReview, tronTransactionReview } from './signing-summary-review-model-tron'
 import {
+  canonicalContentRows,
+  completeReviewModel,
   reviewRow,
   type SigningSummaryReviewModel,
+  type SigningSummaryReviewRow,
   type SigningSummaryReviewSection
 } from './signing-summary-review-model-types'
 
@@ -60,6 +68,61 @@ function pearlReview(
       }
     ]
   }
+}
+
+function dashAmount(duffs: string): string {
+  return `${duffs} duffs`
+}
+
+function dashOutputRows(
+  label: 'Recipient' | 'Change' | 'Unclassified output',
+  output: DashOutputSummary
+): readonly SigningSummaryReviewRow[] {
+  return [
+    reviewRow(label, output.address ?? 'Unknown', { code: true, breakAll: true }),
+    reviewRow(label === 'Change' ? 'Change amount' : 'Amount', dashAmount(output.amountDuffs), {
+      code: true
+    })
+  ]
+}
+
+function dashPsbtReview(summary: DashPsbtSummary): SigningSummaryReviewModel {
+  const recipients = summary.fields.outputs.filter(output => output.classification === 'recipient')
+  const change = summary.fields.outputs.filter(output => output.classification === 'change')
+  const unclassified = summary.fields.outputs.filter(output => output.classification === 'unknown')
+  return completeReviewModel(summary, {
+    title: 'Sign Dash transaction',
+    description:
+      'Review the recipient, amount, fee, and change. Dash transfers are visible on-chain.',
+    sections: [
+      {
+        title: 'Transaction',
+        rows: [
+          reviewRow('Signer', summary.fields.signer, { code: true, breakAll: true }),
+          ...recipients.flatMap(output => dashOutputRows('Recipient', output)),
+          reviewRow('Total fee', dashAmount(summary.fields.feeDuffs), { code: true }),
+          ...change.flatMap(output => dashOutputRows('Change', output)),
+          ...unclassified.flatMap(output => dashOutputRows('Unclassified output', output))
+        ]
+      }
+    ]
+  })
+}
+
+function dashMessageReview(summary: DashMessageSummary): SigningSummaryReviewModel {
+  return completeReviewModel(summary, {
+    title: 'Sign Dash message',
+    description: 'This signature proves control of the selected Dash address.',
+    sections: [
+      {
+        title: 'Message',
+        rows: [
+          reviewRow('Address', summary.fields.signer, { code: true, breakAll: true }),
+          ...canonicalContentRows('Content', summary.fields.message)
+        ]
+      }
+    ]
+  })
 }
 
 function issueDescription(code: string): { title: string; description: string } {
@@ -164,6 +227,10 @@ export function buildSigningSummaryReviewModel(
     case 'pearl.psbt.v1':
     case 'pearl.bip322-message.v1':
       return pearlReview(summary)
+    case 'dash.psbt.v1':
+      return dashPsbtReview(summary)
+    case 'dash.message.v1':
+      return dashMessageReview(summary)
     case 'solana.transaction.v1':
       return solanaTransactionReview(summary)
     case 'solana.message.v1':

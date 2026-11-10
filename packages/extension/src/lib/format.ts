@@ -4,6 +4,7 @@ import {
   getBlockExplorerBaseUrl,
   getBlockExplorerTransactionPath
 } from './block-explorer-preferences'
+import { formatDashTransactionExplorerUrl, formatDashAddressExplorerUrl } from '@/config/networks'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { detectZcashAddressType } from './zcash-memo'
 
@@ -67,6 +68,7 @@ export function formatChainName(blockchain: string): string {
     solana: 'Solana',
     btc: 'Bitcoin',
     bitcoin: 'Bitcoin',
+    dash: 'Dash',
     bera: 'Berachain',
     berachain: 'Berachain',
     gnosis: 'Gnosis',
@@ -195,6 +197,12 @@ export function formatExplorerUrl(
   val: string,
   type: 'transaction' | 'account' | 'token' = 'transaction'
 ) {
+  if (chain === 'dash') {
+    if (type === 'account') return formatDashAddressExplorerUrl(DEFAULT_NETWORK, val)
+    if (type === 'transaction') return formatDashTransactionExplorerUrl(DEFAULT_NETWORK, val)
+    return ''
+  }
+
   if (chain === 'zcash' && DEFAULT_NETWORK === 'testnet') {
     const testnetPath = type === 'transaction' ? 'tx' : type === 'account' ? 'address' : 'token'
     return `${getNetworkConfig('testnet').explorerUrl}/${testnetPath}/${val}`
@@ -222,6 +230,7 @@ const assetChainMap: Record<string, string> = {
   eth: 'ethereum',
   sol: 'solana',
   btc: 'bitcoin',
+  dash: 'dash',
   bsc: 'bsc',
   arb: 'arbitrum',
   base: 'base',

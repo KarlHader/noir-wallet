@@ -132,6 +132,37 @@ interface BitcoinProvider {
   disconnect: () => Promise<void>
 }
 
+interface DashProvider {
+  request: (args: ProviderRequestArguments) => Promise<unknown>
+  connect: () => Promise<{ readonly address: string; readonly publicKey: string }>
+  requestAccounts: () => Promise<readonly string[]>
+  getAccounts: () => Promise<readonly string[]>
+  getNetwork: () => Promise<'mainnet' | 'testnet'>
+  getChain: () => Promise<Readonly<Record<string, unknown>>>
+  getPublicKey: () => Promise<string>
+  getBalance: () => Promise<{
+    readonly confirmed: number
+    readonly unconfirmed: number
+    readonly total: number
+  }>
+  sendDash: (
+    recipient: string,
+    duffs: string,
+    options?: { readonly feeRate?: string }
+  ) => Promise<string>
+  signMessage: (message: string) => Promise<string>
+  signPsbt: (psbtHex: string, options?: { readonly autoFinalized?: boolean }) => Promise<string>
+  signPsbts: (
+    psbtHexes: readonly string[],
+    options?: readonly ({ readonly autoFinalized?: boolean } | undefined)[]
+  ) => Promise<readonly string[]>
+  pushPsbt: (psbtHex: string) => Promise<string>
+  pushTx: (options: { readonly rawtx: string }) => Promise<string>
+  on: (event: string, handler: ProviderListener) => DashProvider
+  removeListener: (event: string, handler: ProviderListener) => DashProvider
+  disconnect: () => Promise<void>
+}
+
 interface SolanaPublicKey {
   readonly toBytes: () => Uint8Array
   readonly toBuffer: () => Uint8Array
@@ -207,6 +238,7 @@ interface NoirWalletProvider {
   readonly zcash: ChainProvider
   readonly ethereum?: EthereumProvider
   readonly bitcoin?: BitcoinProvider
+  readonly dash?: DashProvider
   readonly pearl?: PearlProvider
   readonly quantus?: QuantusProvider
   readonly solana?: SolanaProvider
@@ -235,6 +267,7 @@ const networkMode = import.meta.env.NOIR_NETWORK_MODE
 const enabledChainFeatureFlags = import.meta.env.NOIR_ENABLED_CHAIN_FEATURE_FLAGS
 const evmProviderEnabled = enabledChainFeatureFlags.includes('chain.evm')
 const bitcoinProviderEnabled = enabledChainFeatureFlags.includes('chain.bitcoin')
+const dashProviderEnabled = enabledChainFeatureFlags.includes('chain.dash')
 const pearlProviderEnabled = enabledChainFeatureFlags.includes('chain.pearl')
 const quantusProviderEnabled = enabledChainFeatureFlags.includes('chain.quantus')
 const solanaProviderEnabled = enabledChainFeatureFlags.includes('chain.solana')
@@ -300,7 +333,16 @@ function removeProviderListener(chainId: string, event: string, handler: Provide
 }
 
 async function requestProvider(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near' | 'multichain',
+  chainId:
+    | 'zcash'
+    | 'evm'
+    | 'bitcoin'
+    | 'dash'
+    | 'pearl'
+    | 'quantus'
+    | 'solana'
+    | 'near'
+    | 'multichain',
   args: ProviderRequestArguments
 ) {
   if (
@@ -606,6 +648,57 @@ function createPearlProvider(): PearlProvider {
     },
     removeListener(event, handler) {
       removeProviderListener('pearl', event, handler)
+      return provider
+    },
+    async disconnect() {
+      await request('disconnect')
+    }
+  }
+  return Object.freeze(provider)
+}
+
+function createDashProvider(): DashProvider {
+  const request = (method: string, params: readonly unknown[] = []) =>
+    requestProvider('dash', { method, params })
+  const provider: DashProvider = {
+    request: args => requestProvider('dash', args),
+    connect: () =>
+      request('connect') as Promise<{ readonly address: string; readonly publicKey: string }>,
+    requestAccounts: () => request('requestAccounts') as Promise<readonly string[]>,
+    getAccounts: () => request('getAccounts') as Promise<readonly string[]>,
+    getNetwork: () => request('getNetwork') as Promise<'mainnet' | 'testnet'>,
+    getChain: () => request('getChain') as Promise<Readonly<Record<string, unknown>>>,
+    getPublicKey: () => request('getPublicKey') as Promise<string>,
+    getBalance: () =>
+      request('getBalance') as Promise<{
+        readonly confirmed: number
+        readonly unconfirmed: number
+        readonly total: number
+      }>,
+    sendDash: (recipient, duffs, options) =>
+      request('sendDash', [
+        recipient,
+        duffs,
+        ...(options === undefined ? [] : [options])
+      ]) as Promise<string>,
+    signMessage: message => request('signMessage', [message]) as Promise<string>,
+    signPsbt: (psbtHex, options) =>
+      request('signPsbt', [
+        psbtHex,
+        ...(options === undefined ? [] : [options])
+      ]) as Promise<string>,
+    signPsbts: (psbtHexes, options) =>
+      request('signPsbts', [psbtHexes, ...(options === undefined ? [] : [options])]) as Promise<
+        readonly string[]
+      >,
+    pushPsbt: psbtHex => request('pushPsbt', [psbtHex]) as Promise<string>,
+    pushTx: options => request('pushTx', [options]) as Promise<string>,
+    on(event, handler) {
+      addProviderListener('dash', event, handler)
+      return provider
+    },
+    removeListener(event, handler) {
+      removeProviderListener('dash', event, handler)
       return provider
     },
     async disconnect() {
@@ -939,6 +1032,7 @@ const ethereumProvider = underlyingEthereumProvider
   ? (earlyEthereumProvider?.provider ?? underlyingEthereumProvider)
   : null
 const bitcoinProvider = bitcoinProviderEnabled ? createBitcoinProvider() : null
+const dashProvider = dashProviderEnabled ? createDashProvider() : null
 const pearlProvider = pearlProviderEnabled ? createPearlProvider() : null
 const quantusProvider = quantusProviderEnabled ? createQuantusProvider() : null
 const solanaProvider = solanaProviderEnabled ? createSolanaProvider() : null
@@ -952,6 +1046,7 @@ const noirWalletProvider: NoirWalletProvider = Object.freeze({
   zcash: createZcashProvider(),
   ...(ethereumProvider ? { ethereum: ethereumProvider } : {}),
   ...(bitcoinProvider ? { bitcoin: bitcoinProvider } : {}),
+  ...(dashProvider ? { dash: dashProvider } : {}),
   ...(pearlProvider ? { pearl: pearlProvider } : {}),
   ...(quantusProvider ? { quantus: quantusProvider } : {}),
   ...(solanaProvider ? { solana: solanaProvider } : {}),
@@ -966,6 +1061,7 @@ window.addEventListener('message', event => {
     event.data.chainId !== 'zcash' &&
     event.data.chainId !== 'evm' &&
     event.data.chainId !== 'bitcoin' &&
+    event.data.chainId !== 'dash' &&
     event.data.chainId !== 'pearl' &&
     event.data.chainId !== 'quantus' &&
     event.data.chainId !== 'solana' &&

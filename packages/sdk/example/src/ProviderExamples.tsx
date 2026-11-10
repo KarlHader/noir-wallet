@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import {
   addEvmNetwork,
   detectBitcoinProvider,
+  detectDashProvider,
   detectEvmProvider,
   detectNearProvider,
   detectPearlProvider,
@@ -14,6 +15,10 @@ import {
   type BitcoinNetwork,
   type BitcoinProvider,
   type Caip25Session,
+  type DashBalance,
+  type DashChainInfo,
+  type DashNetwork,
+  type DashProvider,
   type EvmProvider,
   type NearProvider,
   type PearlBalance,
@@ -81,6 +86,7 @@ export type ExampleProviderId =
   | 'zcash'
   | 'evm'
   | 'bitcoin'
+  | 'dash'
   | 'pearl'
   | 'quantus'
   | 'solana'
@@ -198,6 +204,7 @@ export function ProviderSwitcher({
       network
     })),
     { id: 'bitcoin' as const, label: 'Bitcoin', iconUrl: getExampleChainIconUrl('bitcoin') },
+    { id: 'dash' as const, label: 'Dash', iconUrl: getExampleChainIconUrl('dash') },
     { id: 'pearl' as const, label: 'Pearl', iconUrl: getExampleChainIconUrl('pearl') },
     { id: 'quantus' as const, label: 'Quantus', iconUrl: getExampleChainIconUrl('quantus') },
     {
@@ -1182,6 +1189,298 @@ export function BitcoinExample({ navigation }: { navigation: ExampleNavigationPr
         </section>
         <section className="card card-compact">
           <h2>Sign PSBT</h2>
+          <textarea
+            className="input textarea"
+            value={psbt}
+            onChange={event => setPsbt(event.target.value)}
+            rows={4}
+            placeholder="PSBT hex"
+          />
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={() => void signPsbt()}
+            disabled={!account || !psbt || busy}
+          >
+            Sign PSBT
+          </button>
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={() => void pushPsbt()}
+            disabled={!account || !psbt || busy}
+          >
+            Broadcast PSBT
+          </button>
+        </section>
+      </div>
+      {result && <div className="message success provider-result">{result}</div>}
+      {error && <div className="message error provider-result">{error}</div>}
+    </ExampleLayout>
+  )
+}
+
+function formatDashError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    const code = (error as { code?: unknown }).code
+    return typeof code === 'number' ? `${error.message} (${code})` : error.message
+  }
+  return formatError(error)
+}
+
+export function DashExample({ navigation }: { navigation: ExampleNavigationProps }) {
+  const [provider, setProvider] = useState<DashProvider | null>(() => getNoirWallet()?.dash ?? null)
+  const [network, setNetwork] = useState<DashNetwork | ''>('')
+  const [chain, setChain] = useState<DashChainInfo | null>(null)
+  const [account, setAccount] = useState('')
+  const [accounts, setAccounts] = useState<readonly string[]>([])
+  const [publicKey, setPublicKey] = useState('')
+  const [balance, setBalance] = useState<DashBalance | null>(null)
+  const [recipient, setRecipient] = useState('')
+  const [duffs, setDuffs] = useState('')
+  const [message, setMessage] = useState('Hello Noir Dash')
+  const [psbt, setPsbt] = useState('')
+  const [result, setResult] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (provider) return
+    const controller = new AbortController()
+    detectDashProvider({ timeoutMs: 3000, signal: controller.signal })
+      .then(setProvider)
+      .catch(discoveryError => {
+        if ((discoveryError as Error).name !== 'AbortError')
+          setError(formatDashError(discoveryError))
+      })
+    return () => controller.abort()
+  }, [provider])
+
+  const refresh = useCallback(async (current: DashProvider) => {
+    const [nextNetwork, nextChain, authorized] = await Promise.all([
+      current.getNetwork(),
+      current.getChain(),
+      current.getAccounts()
+    ])
+    const nextAccount = authorized[0] ?? ''
+    setAccounts(authorized)
+    setNetwork(nextNetwork)
+    setChain(nextChain)
+    setAccount(nextAccount)
+    if (!nextAccount) {
+      setPublicKey('')
+      setBalance(null)
+      return
+    }
+    setPublicKey(await current.getPublicKey())
+    try {
+      setBalance(await current.getBalance())
+      setError('')
+    } catch (balanceError) {
+      setBalance(null)
+      setError(formatDashError(balanceError))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!provider) return
+    const onAccountsChanged = () => {
+      void refresh(provider).catch(refreshError => setError(formatDashError(refreshError)))
+    }
+    provider.on('accountsChanged', onAccountsChanged)
+    void refresh(provider).catch(refreshError => setError(formatDashError(refreshError)))
+    return () => {
+      provider.removeListener('accountsChanged', onAccountsChanged)
+    }
+  }, [provider, refresh])
+
+  const run = async (operation: () => Promise<string | void>) => {
+    setBusy(true)
+    setError('')
+    setResult('')
+    try {
+      const nextResult = await operation()
+      if (nextResult) setResult(nextResult)
+      if (provider) await refresh(provider)
+    } catch (operationError) {
+      setError(formatDashError(operationError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const connect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Dash provider is unavailable.')
+      const connected = await provider.connect()
+      setAccount(connected.address)
+      setPublicKey(connected.publicKey)
+      return `Connected ${connected.address}`
+    })
+
+  const disconnect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Dash provider is unavailable.')
+      await provider.disconnect()
+      return 'Dash permission revoked.'
+    })
+
+  const refreshAccount = () => {
+    if (!provider || busy) return
+    setBusy(true)
+    setError('')
+    void refresh(provider)
+      .catch(refreshError => setError(formatDashError(refreshError)))
+      .finally(() => setBusy(false))
+  }
+
+  const sendDash = (event: FormEvent) => {
+    event.preventDefault()
+    void run(async () => {
+      if (!provider || !account) throw new Error('Connect a Dash account first.')
+      if (!/^(?:0|[1-9][0-9]*)$/.test(duffs) || duffs === '0') {
+        throw new Error('Duffs must be a positive integer with no decimal point.')
+      }
+      const transactionId = await provider.sendDash(recipient.trim(), duffs as `${bigint}`)
+      return `Transaction: ${transactionId}`
+    })
+  }
+
+  const signMessage = (event: FormEvent) => {
+    event.preventDefault()
+    void run(async () => {
+      if (!provider || !account) throw new Error('Connect a Dash account first.')
+      return `Signature: ${await provider.signMessage(message)}`
+    })
+  }
+
+  const signPsbt = () =>
+    run(async () => {
+      if (!provider || !account) throw new Error('Connect a Dash account first.')
+      if (!/^(?:[0-9a-f]{2})+$/i.test(psbt.trim())) throw new Error('Enter a PSBT as hex bytes.')
+      return `Signed PSBT: ${await provider.signPsbt(psbt.trim())}`
+    })
+
+  const pushPsbt = () =>
+    run(async () => {
+      if (!provider || !account) throw new Error('Connect a Dash account first.')
+      if (!/^(?:[0-9a-f]{2})+$/i.test(psbt.trim())) throw new Error('Enter a PSBT as hex bytes.')
+      return `Broadcast transaction: ${await provider.pushPsbt(psbt.trim())}`
+    })
+
+  return (
+    <ExampleLayout navigation={navigation} available={provider !== null} connected={account !== ''}>
+      {!provider && <div className="message warning">Dash provider is not enabled.</div>}
+      <section className="provider-summary card">
+        <div className="provider-summary-copy">
+          <ExampleChainIcon
+            className="provider-hero-icon"
+            iconUrl={getExampleChainIconUrl('dash')}
+            label="Dash"
+          />
+          <div>
+            <p className="section-kicker">Selected provider</p>
+            <h2>Dash provider</h2>
+            <p>Typed access to accounts, messages, PSBTs, and transactions.</p>
+          </div>
+        </div>
+        <div className="provider-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => void connect()}
+            disabled={!provider || busy}
+          >
+            {account ? 'Reconnect Dash' : 'Connect Dash'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void disconnect()}
+            disabled={!account || busy}
+          >
+            Disconnect
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={refreshAccount}
+            disabled={!provider || busy}
+          >
+            Refresh account
+          </button>
+        </div>
+      </section>
+      <div className="tab-panel grid-2">
+        <section className="card card-compact">
+          <h2>Account &amp; network</h2>
+          <Result label="Network" value={network || 'Unavailable'} />
+          <Result label="Chain ID" value={chain?.chainId ?? 'Unavailable'} />
+          <Result label="Chain" value={chain?.name ?? 'Unavailable'} />
+          <Result label="Address" value={account || 'Not connected'} />
+          <Result label="Public key" value={publicKey || 'Unavailable'} />
+          <Result
+            label="Balance"
+            value={
+              balance
+                ? `${balance.total} duffs (${balance.unconfirmed} unconfirmed)`
+                : 'Unavailable'
+            }
+          />
+        </section>
+        <AuthorizedAccountsExample
+          accounts={accounts}
+          busy={busy}
+          onReview={() => void connect()}
+        />
+        <section className="card card-compact">
+          <h2>Send Dash</h2>
+          <form className="form-stack" onSubmit={sendDash}>
+            <label className="label" htmlFor="dash-recipient">
+              Recipient
+            </label>
+            <input
+              id="dash-recipient"
+              className="input input-sm"
+              value={recipient}
+              onChange={event => setRecipient(event.target.value)}
+              placeholder="X… / y…"
+              required
+            />
+            <label className="label" htmlFor="dash-duffs">
+              Amount (duffs)
+            </label>
+            <input
+              id="dash-duffs"
+              className="input input-sm"
+              value={duffs}
+              onChange={event => setDuffs(event.target.value)}
+              inputMode="numeric"
+              placeholder="100000000"
+              required
+            />
+            <p className="field-help">Integer duffs only. The wallet estimates the fee.</p>
+            <button className="btn btn-primary btn-full" disabled={!account || busy}>
+              Send Dash
+            </button>
+          </form>
+        </section>
+        <section className="card card-compact">
+          <h2>Sign message</h2>
+          <form className="form-stack" onSubmit={signMessage}>
+            <textarea
+              className="input textarea"
+              value={message}
+              onChange={event => setMessage(event.target.value)}
+              rows={3}
+              required
+            />
+            <button className="btn btn-primary btn-full" disabled={!account || busy}>
+              Sign message
+            </button>
+          </form>
+        </section>
+        <section className="card card-compact">
+          <h2>Sign PSBT</h2>
+          <p className="field-help">
+            A PSBT is an unfinished transaction. It must start with 70736274ff and spend an unspent
+            output owned by this account.
+          </p>
           <textarea
             className="input textarea"
             value={psbt}

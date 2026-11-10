@@ -123,7 +123,16 @@ export function LedgerSignPage() {
       }
       setStep('success')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Ledger signing failed')
+      const message = cause instanceof Error ? cause.message : 'Ledger signing failed'
+      if (view.request.kind === 'dash-message' || view.request.kind === 'dash-psbt') {
+        await cancelLedgerSigningView(view, message).then(
+          () => {
+            terminal.current = true
+          },
+          () => {}
+        )
+      }
+      setError(message)
       setStep('error')
     } finally {
       signing.current = false

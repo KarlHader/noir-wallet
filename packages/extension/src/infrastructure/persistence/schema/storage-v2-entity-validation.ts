@@ -21,6 +21,37 @@ const ADDRESS_PURPOSES = new Set(['identity', 'receive', 'change'])
 const ADDRESS_PRIVACY = new Set(['transparent', 'shielded', 'mixed'])
 const ADDRESS_COMPATIBILITY = new Set(['broad', 'limited'])
 const IDENTITY_KINDS = new Set(['public-key', 'account-identifier'])
+const MAX_BIP32_INDEX = 2 ** 31 - 1
+
+function assertDashP2pkhAddress(
+  scheme: string,
+  purpose: string,
+  derivation: Readonly<{ scheme: string; path: string }> | undefined
+): void {
+  if (scheme === 'dash-p2pkh') throw new Error('Invalid Storage V2 Dash address')
+  if (scheme !== 'dash_p2pkh') return
+  if (derivation?.scheme === 'imported') {
+    if (derivation.path !== 'm' || purpose !== 'receive') {
+      throw new Error('Invalid Storage V2 Dash address')
+    }
+    return
+  }
+  if (derivation?.scheme !== 'bip44') throw new Error('Invalid Storage V2 Dash address')
+  const match = /^m\/44'\/(5|1)'\/(\d+)'\/([01])\/(\d+)$/.exec(derivation.path)
+  if (!match) throw new Error('Invalid Storage V2 Dash address')
+  const accountIndex = Number(match[2])
+  const addressIndex = Number(match[4])
+  if (
+    !Number.isSafeInteger(accountIndex) ||
+    accountIndex > MAX_BIP32_INDEX ||
+    !Number.isSafeInteger(addressIndex) ||
+    addressIndex > MAX_BIP32_INDEX ||
+    (match[3] === '1' && purpose !== 'change') ||
+    (match[3] === '0' && purpose !== 'receive')
+  ) {
+    throw new Error('Invalid Storage V2 Dash address')
+  }
+}
 
 export function parseStorageV2KeyDomain(value: unknown): KeyDomain {
   return parseKeyDomain(value)
@@ -95,17 +126,19 @@ export function parseStorageV2Address(value: unknown): Address {
   ) {
     throw new Error('Invalid Storage V2 Address classification')
   }
+  const scheme = parseStorageV2String(value.scheme, 'Address.scheme', 128)
+  const derivation =
+    value.derivation === undefined ? undefined : parseStorageV2Derivation(value.derivation)
+  assertDashP2pkhAddress(scheme, value.purpose, derivation)
   return Object.freeze({
     id: parseAddressId(parseStorageV2String(value.id, 'Address.id', 512)),
     chainAccountId: parseChainAccountId(
       parseStorageV2String(value.chainAccountId, 'Address.chainAccountId', 512)
     ),
     value: parseStorageV2String(value.value, 'Address.value', 4_096),
-    scheme: parseStorageV2String(value.scheme, 'Address.scheme', 128),
+    scheme,
     purpose: value.purpose as Address['purpose'],
-    ...(value.derivation === undefined
-      ? {}
-      : { derivation: parseStorageV2Derivation(value.derivation) }),
+    ...(derivation === undefined ? {} : { derivation }),
     rotatable: value.rotatable,
     preferredForReceive: value.preferredForReceive,
     privacy: value.privacy as Address['privacy'],

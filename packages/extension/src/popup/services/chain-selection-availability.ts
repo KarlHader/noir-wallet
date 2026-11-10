@@ -1,5 +1,6 @@
 import {
   BITCOIN_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
@@ -15,6 +16,7 @@ export type SelectableChainFamily =
   | 'zcash'
   | 'evm'
   | 'bitcoin'
+  | 'dash'
   | 'solana'
   | 'near'
   | 'pearl'
@@ -24,6 +26,7 @@ const FAMILY_FLAGS: Readonly<Record<SelectableChainFamily, ChainFeatureFlagValue
   zcash: ZCASH_CHAIN_FEATURE_FLAG,
   evm: EVM_CHAIN_FEATURE_FLAG,
   bitcoin: BITCOIN_CHAIN_FEATURE_FLAG,
+  dash: DASH_CHAIN_FEATURE_FLAG,
   solana: SOLANA_CHAIN_FEATURE_FLAG,
   near: NEAR_CHAIN_FEATURE_FLAG,
   pearl: PEARL_CHAIN_FEATURE_FLAG,
@@ -75,6 +78,7 @@ export function isSelectableSwapBlockchain(
     return isSelectableChainFamily('solana', enabledFlags)
   }
   if (normalized === 'near') return isSelectableChainFamily('near', enabledFlags)
+  if (normalized === 'dash') return false
   return (
     isSelectableChainFamily('evm', enabledFlags) &&
     resolveIntentsEvmChainId(normalized, getEvmNetworkConfigs('mainnet')) !== null

@@ -45,9 +45,19 @@ test('V2 pages and chain families resolve to bounded analytics values', () => {
   for (const route of routes) {
     assert.ok(Object.values(PAGE_IDS).includes(resolvePageId(route)), route)
   }
-  for (const chain of ['zcash', 'evm', 'bitcoin', 'solana', 'near']) {
+  for (const chain of ['zcash', 'evm', 'bitcoin', 'dash', 'solana', 'near']) {
     assert.equal(resolveAnalyticsChain(chain), chain)
   }
+  assert.deepEqual(
+    sanitizeAnalyticsMetadata({
+      chain: 'dash',
+      mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+      privateKey: 'secret-key',
+      address: 'XoJA8qE3N2Y3jMLEtZ3vcN42qseZ8LvFf5',
+      amount: '1.5'
+    }),
+    { chain: 'dash' }
+  )
   assert.equal(resolveAnalyticsChain('tron'), undefined)
   assert.deepEqual(sanitizeAnalyticsMetadata({ chain: 'tron', sourceFamily: 'tron' }), {})
   assert.equal(buildPayload('test_event', { chain: 'tron' }).chain, 'zcash')

@@ -8,6 +8,7 @@ import { exportLedgerEvmAccounts } from '@/lib/ledger/evm'
 import { exportLedgerBitcoinAccounts } from '@/lib/ledger/bitcoin'
 import { exportLedgerSolanaAccounts } from '@/lib/ledger/solana'
 import { exportLedgerNearAccounts } from '@/lib/ledger/near'
+import { exportLedgerDashAccounts } from '@/lib/ledger/dash'
 import type { LedgerSessionOptions } from '@/lib/ledger/device'
 import type { Network } from '@/types'
 import {
@@ -33,6 +34,9 @@ export async function loadLedgerAccountCandidates(
   }
 ): Promise<readonly LedgerAccountCandidate[]> {
   const paths = ledgerCandidatePaths(input.family, input.mode, input.start, input.network)
+  if (input.family === 'dash' && input.network !== 'mainnet') {
+    throw new Error('Dash hardware wallets support mainnet only')
+  }
   const results =
     input.family === 'evm'
       ? await exportLedgerEvmAccounts(paths, input)
@@ -40,22 +44,57 @@ export async function loadLedgerAccountCandidates(
         ? await exportLedgerBitcoinAccounts(paths, input)
         : input.family === 'solana'
           ? await exportLedgerSolanaAccounts(paths, input)
-          : await exportLedgerNearAccounts(paths, input)
+          : input.family === 'dash'
+            ? await exportLedgerDashAccounts(paths, input)
+            : await exportLedgerNearAccounts(paths, input)
   input.signal?.throwIfAborted()
   if (results.length !== paths.length) throw new Error('Ledger account export is incomplete')
   return results.map((result, offset) => {
     let publicAccount: LedgerPublicAccount
     if (input.family === 'bitcoin') {
-      if (!('xpub' in result)) throw new Error('Invalid Ledger Bitcoin account export')
+      const xpub = 'xpub' in result ? result.xpub : undefined
+      const masterFingerprintHex =
+        'masterFingerprintHex' in result ? result.masterFingerprintHex : undefined
+      const publicKey = 'publicKey' in result ? result.publicKey : undefined
+      const address = 'address' in result ? result.address : undefined
+      if (
+        typeof xpub !== 'string' ||
+        typeof masterFingerprintHex !== 'string' ||
+        typeof publicKey !== 'string' ||
+        typeof address !== 'string'
+      ) {
+        throw new Error('Invalid Ledger Bitcoin account export')
+      }
       publicAccount = {
         family: 'bitcoin' as const,
         accountIndex: input.logicalAccountIndex,
         derivationPath: paths[offset],
         network: input.network,
-        xpub: result.xpub,
-        masterFingerprintHex: result.masterFingerprintHex,
-        publicKey: result.publicKey,
-        address: result.address
+        xpub,
+        masterFingerprintHex,
+        publicKey,
+        address
+      }
+    } else if (input.family === 'dash') {
+      const xpub = 'xpub' in result ? result.xpub : undefined
+      const publicKey = 'publicKey' in result ? result.publicKey : undefined
+      const address = 'address' in result ? result.address : undefined
+      if (
+        typeof xpub !== 'string' ||
+        typeof publicKey !== 'string' ||
+        typeof address !== 'string' ||
+        input.network !== 'mainnet'
+      ) {
+        throw new Error('Invalid Ledger Dash account export')
+      }
+      publicAccount = {
+        family: 'dash' as const,
+        accountIndex: input.logicalAccountIndex,
+        derivationPath: paths[offset],
+        network: 'mainnet',
+        xpub,
+        publicKey,
+        address
       }
     } else {
       publicAccount = {

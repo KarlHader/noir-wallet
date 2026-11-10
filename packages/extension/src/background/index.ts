@@ -179,12 +179,14 @@ import {
   createBackgroundRheaSwapNearCoordinator,
   type RheaSwapNearCoordinator
 } from './rhea-swap-near'
+import { DASH_CHAIN_IDS, isBitcoinChainId, isDashChainId } from '@/core/chains/registry/chain-ids'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { isAssetMarketHistoryRange } from '@/core/prices'
 import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
   getBitcoinChainId,
+  getDashChainId,
   getPearlChainId,
   getQuantusChainId,
   getZcashChainId,
@@ -221,6 +223,7 @@ import { mapEvmWalletRuntimeError } from './evm-wallet-runtime-error'
 import {
   isNewWalletFamilyEnabled,
   resolveBitcoinFeatureRuntimePolicy,
+  resolveDashFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
@@ -245,6 +248,7 @@ import {
   createBackgroundPearlDAppHandler,
   createEnsureActiveSoftwarePearlAccount
 } from './pearl-dapp'
+import { createBackgroundDashDAppHandler } from './dash-dapp'
 import { createBackgroundQuantusDAppHandler } from './quantus-dapp'
 import { fetchCachedIdentity, type IdentitySigningMode } from '@/core/wallet/identity-cache'
 import type { LendingSigningMode } from '@/core/services/lending-service'
@@ -258,6 +262,11 @@ import {
   toPearlProviderErrorShape,
   type PearlDAppRuntimeMethod
 } from '@/core/dapp/pearl-provider'
+import {
+  DashProviderError,
+  toDashProviderErrorShape,
+  type DashDAppRuntimeMethod
+} from '@/core/dapp/dash-provider'
 import {
   QuantusProviderError,
   toQuantusProviderErrorShape,
@@ -317,6 +326,16 @@ import {
   recoverPendingPearlTransfers,
   reloadBackgroundPearlRuntime
 } from './pearl-transfer'
+import {
+  createBackgroundDashTransferController,
+  recoverBackgroundDashTransfers
+} from './dash-wallet'
+import { beginDashLedgerWalletSignature } from './dash-ledger-wallet'
+import { isDashExternalSignatureRequired } from './dash-transfer-controller'
+import {
+  BackgroundDashTransactionMonitor,
+  DASH_TRANSACTION_MONITOR_ALARM
+} from './dash-transaction-monitor'
 import { createBitcoinWalletRuntimeError } from '@/core/chains/bitcoin'
 import { createPearlWalletRuntimeError } from '@/core/chains/pearl'
 import { mapBitcoinWalletRuntimeError } from './bitcoin-wallet-runtime-error'
@@ -341,6 +360,7 @@ import { validateVotingDecisions } from '@/lib/voting'
 
 import { BitcoinMultichainDerivationClient } from '@/infrastructure/keyring/multichain/bitcoin-derivation-client'
 import { PearlMultichainDerivationClient } from '@/infrastructure/keyring/multichain/pearl-derivation-client'
+import { DashMultichainDerivationClient } from '@/infrastructure/keyring/multichain/dash-derivation-client'
 import type { NetworkAccountMetadataInput } from '@/infrastructure/keyring/network-account-metadata-coordinator'
 import {
   NEAR_CHAIN_FEATURE_FLAG,
@@ -443,6 +463,7 @@ const quantusFeatureRuntimePolicy = resolveQuantusFeatureRuntimePolicy(
 const solanaBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(SOLANA_CHAIN_FEATURE_FLAG)
 const nearBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(NEAR_CHAIN_FEATURE_FLAG)
 const pearlBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(PEARL_CHAIN_FEATURE_FLAG)
+const dashFeatureRuntimePolicy = resolveDashFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__)
 const quantusBetaEnabled = quantusFeatureRuntimePolicy.newOperationsEnabled
 
 function areSolanaOperationsEnabled(): boolean {
@@ -456,12 +477,18 @@ function areNearOperationsEnabled(): boolean {
 let evmTransactionMonitor: BackgroundEvmTransactionMonitor | null = null
 let bitcoinTransactionMonitor: BackgroundBitcoinTransactionMonitor | null = null
 let pearlTransactionMonitor: BackgroundPearlTransactionMonitor | null = null
+let dashTransactionMonitor: BackgroundDashTransactionMonitor | null = null
+let dashTransferController: ReturnType<typeof createBackgroundDashTransferController> | null = null
 let nearIntentsTransactionMonitor: BackgroundNearIntentsTransactionMonitor | null = null
 let solanaTransactionMonitor: BackgroundSolanaTransactionMonitor | null = null
 let quantusTransactionMonitor: BackgroundQuantusTransactionMonitor | null = null
 let nearTransactionMonitor: BackgroundNearTransactionMonitor | null = null
 
-type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
+
+function isDashExportChainId(value: string): boolean {
+  return value === DASH_CHAIN_IDS.mainnet || value === DASH_CHAIN_IDS.testnet
+}
 
 function resolveEnabledPrivateKeyChainFamily(value: unknown): EnabledPrivateKeyChainFamily {
   if (
@@ -469,7 +496,8 @@ function resolveEnabledPrivateKeyChainFamily(value: unknown): EnabledPrivateKeyC
       value === 'bip122' ||
       value === 'pearl' ||
       value === 'solana' ||
-      value === 'near') &&
+      value === 'near' ||
+      value === 'dash') &&
     isNewWalletFamilyEnabled(value, __ENABLED_CHAIN_FEATURE_FLAGS__)
   )
     return value
@@ -486,6 +514,7 @@ function resolveEnabledPrivateKeyExportChainId(value: unknown): string {
   ) {
     resolveEnabledPrivateKeyChainFamily('pearl')
   }
+  if (isDashExportChainId(value)) resolveEnabledPrivateKeyChainFamily('dash')
   return value
 }
 let evmPortfolioConformanceCoordinator: ReturnType<
@@ -586,6 +615,7 @@ const swapTokenCatalogCache = new ChromeSwapTokenCatalogCacheRepository()
 let evmDAppHandler!: ReturnType<typeof createBackgroundEvmDAppHandler>
 let bitcoinDAppHandler!: ReturnType<typeof createBackgroundBitcoinDAppHandler>
 let pearlDAppHandler!: ReturnType<typeof createBackgroundPearlDAppHandler>
+let dashDAppHandler: ReturnType<typeof createBackgroundDashDAppHandler> | null = null
 let quantusDAppHandler!: ReturnType<typeof createBackgroundQuantusDAppHandler>
 let solanaDAppHandler: ReturnType<typeof createBackgroundSolanaDAppHandler> | null = null
 let nearDAppHandler: ReturnType<typeof createBackgroundNearDAppHandler> | null = null
@@ -617,6 +647,9 @@ const networkSwitchBitcoinDerivation = new BitcoinMultichainDerivationClient({
   credentials: credentialSession
 })
 const networkSwitchPearlDerivation = new PearlMultichainDerivationClient({
+  credentials: credentialSession
+})
+const networkSwitchDashDerivation = new DashMultichainDerivationClient({
   credentials: credentialSession
 })
 const accountNetworksPeaDerivation = new EvmMultichainSigningClient({
@@ -697,7 +730,7 @@ const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCo
 )
 
 async function dispatchDAppChainRequest(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'dash' | 'pearl' | 'quantus' | 'solana' | 'near',
   request: {
     readonly method: string
     readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
@@ -721,6 +754,19 @@ async function dispatchDAppChainRequest(
     return bitcoinDAppHandler.request(
       {
         method: request.method as BitcoinDAppRuntimeMethod,
+        ...(params === undefined ? {} : { params })
+      },
+      origin,
+      tabInfo
+    )
+  }
+  if (chainId === 'dash') {
+    if (!dashDAppHandler) {
+      throw new DashProviderError(4901, 'The Dash chain is not enabled in this wallet build.')
+    }
+    return dashDAppHandler.request(
+      {
+        method: request.method as DashDAppRuntimeMethod,
         ...(params === undefined ? {} : { params })
       },
       origin,
@@ -790,7 +836,7 @@ const CAIP25_CONNECTION_METHODS = new Set([
 ])
 
 async function assertCaip25MethodPermission(
-  family: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near',
+  family: 'zcash' | 'evm' | 'bitcoin' | 'dash' | 'pearl' | 'quantus' | 'solana' | 'near',
   method: string,
   origin: string
 ): Promise<void> {
@@ -802,19 +848,22 @@ async function assertCaip25MethodPermission(
         ? evmDAppHandler.getCaip2ChainId()
         : family === 'bitcoin'
           ? getBitcoinChainId(DEFAULT_NETWORK)
-          : family === 'pearl'
-            ? getPearlChainId(DEFAULT_NETWORK)
-            : family === 'quantus'
-              ? getQuantusChainId(DEFAULT_NETWORK)
-              : family === 'solana'
-                ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
-                : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+          : family === 'dash'
+            ? getDashChainId(DEFAULT_NETWORK)
+            : family === 'pearl'
+              ? getPearlChainId(DEFAULT_NETWORK)
+              : family === 'quantus'
+                ? getQuantusChainId(DEFAULT_NETWORK)
+                : family === 'solana'
+                  ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+                  : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
   const session = await dappManager.getCaip25Session(origin)
   const scope = session?.scopes.find(candidate => candidate.chainId === chainId)
   if (!scope || caip25SessionAllowsMethod(session, chainId, method)) return
   const message = `${method} is not authorized for CAIP-25 scope ${chainId}.`
   if (family === 'evm') throw new Eip1193ProviderError(4100, message)
   if (family === 'bitcoin') throw new BitcoinProviderError(4100, message)
+  if (family === 'dash') throw new DashProviderError(4100, message)
   if (family === 'pearl') throw new PearlProviderError(4100, message)
   if (family === 'quantus') throw new QuantusProviderError(4100, message)
   if (family === 'solana' || family === 'near') {
@@ -1021,6 +1070,9 @@ async function reloadMultichainRuntime(
   pearlTransactionMonitor = pearlFeatureRuntimePolicy.transactionRecoveryEnabled
     ? new BackgroundPearlTransactionMonitor(pearlRpcUrl)
     : null
+  dashTransactionMonitor = dashFeatureRuntimePolicy.newOperationsEnabled
+    ? new BackgroundDashTransactionMonitor()
+    : null
   evmPortfolioConformanceCoordinator = __MULTICHAIN_CONFORMANCE_RPC_ENABLED__
     ? createBackgroundEvmPortfolioCoordinator(activeEvm)
     : null
@@ -1028,6 +1080,7 @@ async function reloadMultichainRuntime(
     evmFeatureRuntimePolicy.newOperationsEnabled ||
     bitcoinFeatureRuntimePolicy.newOperationsEnabled ||
     pearlFeatureRuntimePolicy.newOperationsEnabled ||
+    dashFeatureRuntimePolicy.newOperationsEnabled ||
     solanaBetaEnabled ||
     nearBetaEnabled ||
     pearlBetaEnabled ||
@@ -1053,7 +1106,8 @@ async function reloadMultichainRuntime(
         useWalletStore.getState().getAccount(scope.keyDomainId, scope.accountId)
           ?.networkAddresses?.[DEFAULT_NETWORK]?.shielded || null
       )
-    }
+    },
+    networkSwitchDashDerivation
   )
   const evmTransferRuntime =
     evmFeatureRuntimePolicy.newOperationsEnabled && hasBackgroundEvmTransferCapability(activeEvm)
@@ -1101,6 +1155,20 @@ async function reloadMultichainRuntime(
     pearlFeatureRuntimePolicy.newOperationsEnabled && hasBackgroundPearlTransferCapability()
       ? createBackgroundPearlTransferController()
       : null
+  if (shouldCancelAwaitingApprovals) {
+    await dashTransferController?.cancelAllAwaitingApprovals()
+  }
+  dashTransferController = dashFeatureRuntimePolicy.newOperationsEnabled
+    ? createBackgroundDashTransferController()
+    : null
+  if (dashFeatureRuntimePolicy.newOperationsEnabled && !isRuntimeReconfiguration) {
+    void recoverBackgroundDashTransfers().catch(error => {
+      console.warn(
+        '[Dash Transfer] Startup recovery failed:',
+        error instanceof Error ? error.name : 'UnknownError'
+      )
+    })
+  }
   quantusTransferController = quantusBetaEnabled
     ? createBackgroundQuantusTransferController(intentsProtocolAssets, settings)
     : null
@@ -1157,6 +1225,9 @@ async function reloadMultichainRuntime(
         })
     })
   })
+  dashDAppHandler = dashFeatureRuntimePolicy.newOperationsEnabled
+    ? createBackgroundDashDAppHandler(dashTransferController)
+    : null
   solanaDAppHandler = solanaOperationsEnabled ? createBackgroundSolanaDAppHandler(settings) : null
   nearDAppHandler = nearOperationsEnabled ? createBackgroundNearDAppHandler(settings) : null
   quantusDAppHandler = createBackgroundQuantusDAppHandler(
@@ -1179,6 +1250,8 @@ async function reloadMultichainRuntime(
     evm: evmDAppHandler,
     bitcoin: bitcoinDAppHandler,
     bitcoinEnabled: bitcoinFeatureRuntimePolicy.newOperationsEnabled,
+    dash: dashDAppHandler,
+    dashEnabled: dashFeatureRuntimePolicy.newOperationsEnabled,
     solana: solanaDAppHandler,
     near: nearDAppHandler,
     ...(solanaScope === undefined
@@ -1225,6 +1298,7 @@ async function reloadMultichainRuntime(
     evmTransactionMonitor?.init(),
     bitcoinTransactionMonitor?.init(),
     pearlTransactionMonitor?.init(),
+    dashTransactionMonitor?.init(),
     solanaTransactionMonitor?.init(),
     quantusTransactionMonitor?.init(),
     nearTransactionMonitor?.init(),
@@ -1379,6 +1453,14 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
             addressIndex: 0
           })
         : undefined
+      const dash = dashFeatureRuntimePolicy.newOperationsEnabled
+        ? await networkSwitchDashDerivation.deriveAddress(parseKeyDomainId(wallet.id), {
+            chainId: parseChainId(getDashChainId(target)).id,
+            accountIndex: account.derivationIndex,
+            change: false,
+            addressIndex: 0
+          })
+        : undefined
       const ed25519 = await deriveSoftwareEd25519NetworkMetadata({
         keyDomainId: wallet.id,
         accountIndex: account.derivationIndex,
@@ -1401,6 +1483,7 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
         zcashAddresses: zcash,
         bitcoin,
         ...(pearl === undefined ? {} : { pearl }),
+        ...(dash === undefined ? {} : { dash }),
         ...ed25519,
         ...quantus
       })
@@ -1417,14 +1500,26 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
     }
   }
   if (metadata.length > 0) {
-    await credentialLifecycle.synchronizeNetworkAccountMetadata(metadata)
+    const result = await credentialLifecycle.synchronizeNetworkAccountMetadata(metadata)
+    if (result.status === 'synchronized') {
+      await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+    }
   }
   useWalletStore.getState().setCurrentNetwork(target)
   await flushWalletStore()
 }
 
 async function synchronizeCurrentSoftwareWalletNetworkMetadata(): Promise<void> {
-  if (!solanaBetaEnabled && !nearBetaEnabled && !pearlBetaEnabled && !quantusBetaEnabled) return
+  if (
+    !solanaBetaEnabled &&
+    !nearBetaEnabled &&
+    !pearlBetaEnabled &&
+    !dashFeatureRuntimePolicy.newOperationsEnabled &&
+    !quantusBetaEnabled
+  ) {
+    return
+  }
+  if (!(await credentialSession.hasUnlockSession())) return
   await prepareSoftwareWalletNetworkMetadata(DEFAULT_NETWORK)
   const currentWalletId = useWalletStore.getState().currentWalletId
   const currentWallet = currentWalletId
@@ -1499,6 +1594,7 @@ async function switchGlobalNetworkMode(target: Network): Promise<{ restartRequir
         evmTransferRouter?.cancelAllAwaitingApprovals(),
         bitcoinTransferController?.cancelAllAwaitingApprovals(),
         pearlTransferController?.cancelAllAwaitingApprovals(),
+        dashTransferController?.cancelAllAwaitingApprovals(),
         solanaTransferController?.cancelAllAwaitingApprovals(),
         quantusTransferController?.cancelAllAwaitingApprovals(),
         nearTransferController?.cancelAllAwaitingApprovals()
@@ -1641,17 +1737,19 @@ logger.configureDiagnostics(appendDiagnosticLog)
 configureLedgerSigningCoordinator(async scope => {
   if (networkRestartRequired || !(await credentialSession.hasUnlockSession()))
     throw new Error('Wallet is locked or restarting')
-  const namespace = parseChainId(scope.chainId).namespace
+  const parsed = parseChainId(scope.chainId)
   const family =
-    namespace === 'eip155'
+    parsed.namespace === 'eip155'
       ? 'evm'
-      : namespace === 'solana'
+      : parsed.namespace === 'solana'
         ? 'solana'
-        : namespace === 'near'
+        : parsed.namespace === 'near'
           ? 'near'
-          : namespace === 'bip122'
+          : isBitcoinChainId(parsed.id)
             ? 'bitcoin'
-            : null
+            : isDashChainId(parsed.id)
+              ? 'dash'
+              : null
   if (!family) throw new Error('Unsupported Ledger chain')
   await credentialLifecycle.assertActiveAccountSupportsChain(
     scope.keyDomainId,
@@ -1817,6 +1915,18 @@ async function performSilentWasmInitialization(): Promise<void> {
     })
 
     await backgroundZcashWalletRuntime.initialize()
+    void (async () => {
+      if (!(await credentialSession.hasUnlockSession())) return
+      if (
+        backgroundZcashWalletRuntime.isLocked() &&
+        !(await restoreBackgroundZcashRuntimeFromSession())
+      ) {
+        return
+      }
+      await synchronizeCurrentSoftwareWalletNetworkMetadata()
+    })().catch(error => {
+      console.warn('[Background] Software network metadata sync failed:', error)
+    })
     await walletCleanupCoordinator.resumePendingCleanup()
 
     const initialRpcEndpointId = getPreferredRpcEndpointOption('zcash').id
@@ -2020,6 +2130,11 @@ chrome.alarms.onAlarm.addListener(alarm => {
       if (alarm.name === EVM_TRANSACTION_MONITOR_ALARM) {
         evmTransactionMonitor?.handleAlarm().catch(error => {
           console.warn('[EVM Transaction Monitor] Poll failed:', error)
+        })
+      }
+      if (alarm.name === DASH_TRANSACTION_MONITOR_ALARM) {
+        dashTransactionMonitor?.handleAlarm().catch(error => {
+          console.warn('[Dash Transaction Monitor] Poll failed:', error)
         })
       }
       if (alarm.name === BITCOIN_TRANSACTION_MONITOR_ALARM) {
@@ -2266,6 +2381,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         if (
           chainId === 'evm' ||
           chainId === 'bitcoin' ||
+          chainId === 'dash' ||
           chainId === 'pearl' ||
           chainId === 'quantus' ||
           chainId === 'solana' ||
@@ -2286,6 +2402,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             error: {
               code: 4200,
               message: 'The Bitcoin provider is unavailable in this wallet build.'
+            }
+          })
+          return
+        }
+        if (chainId === 'dash' && !dashFeatureRuntimePolicy.newOperationsEnabled) {
+          respond({
+            error: {
+              code: 4901,
+              message: 'The Dash chain is not enabled in this wallet build.'
             }
           })
           return
@@ -2391,13 +2516,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   ? toBitcoinProviderErrorShape(error)
                   : parsedMessage.chainId === 'pearl'
                     ? toPearlProviderErrorShape(error)
-                    : parsedMessage.chainId === 'quantus'
-                      ? toQuantusProviderErrorShape(error)
-                      : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
-                        ? toNativeTransferProviderErrorShape(error)
-                        : error instanceof Error
-                          ? error.message
-                          : 'dApp request failed'
+                    : parsedMessage.chainId === 'dash'
+                      ? toDashProviderErrorShape(error)
+                      : parsedMessage.chainId === 'quantus'
+                        ? toQuantusProviderErrorShape(error)
+                        : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
+                          ? toNativeTransferProviderErrorShape(error)
+                          : error instanceof Error
+                            ? error.message
+                            : 'dApp request failed'
         })
       }
     })
@@ -2603,7 +2730,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         : message.type === 'SUBMIT_LEDGER_SIGNING_RESPONSE'
           ? submitLedgerSigningResponse(message.requestId, message.response, sender.tab?.id)
           : getLedgerSigningRequest(message.requestId, sender.tab?.id).then(() =>
-              cancelLedgerSigning(message.requestId)
+              cancelLedgerSigning(
+                message.requestId,
+                typeof message.reason === 'string' ? message.reason : undefined
+              )
             )
     void operation
       .then(result => sendResponse({ result: result ?? true }))
@@ -3674,6 +3804,11 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'DISCARD_RHEA_SWAP'
   ) {
     if (!rheaSwapService || !rheaSwapEvmSignatureCoordinator) {
+      console.error('[RHEA Swap] Request failed', {
+        operation: message.type,
+        errorName: 'UnavailableError',
+        errorMessage: 'RHEA Swap is unavailable in this build or network'
+      })
       sendResponse({ error: 'RHEA Swap is unavailable in this build or network' })
       return true
     }
@@ -3938,6 +4073,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         })
         await bitcoinDAppHandler.notifyAccountsChanged()
         await pearlDAppHandler.notifyAccountsChanged()
+        await dashDAppHandler?.notifyAccountsChanged()
         await quantusDAppHandler.notifyAccountsChanged()
         await multichainSessionDAppHandler?.notifyAllSessionsChanged()
         await chrome.runtime
@@ -4345,6 +4481,82 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     return true
   }
 
+  if (
+    message.type === 'PREPARE_DASH_TRANSFER' ||
+    message.type === 'GET_PENDING_DASH_TRANSFER' ||
+    message.type === 'APPROVE_DASH_TRANSFER' ||
+    message.type === 'REJECT_DASH_TRANSFER' ||
+    message.type === 'RESUME_DASH_TRANSFER'
+  ) {
+    if (!dashTransferController) {
+      sendResponse({ error: 'Dash transfers are unavailable' })
+      return true
+    }
+    const controller = dashTransferController
+    const operation =
+      message.type === 'PREPARE_DASH_TRANSFER'
+        ? controller.prepare(message.intent)
+        : message.type === 'GET_PENDING_DASH_TRANSFER'
+          ? controller.getPendingApproval(message.transactionId)
+          : message.type === 'APPROVE_DASH_TRANSFER'
+            ? controller.approve(message.transactionId, message.payloadFingerprint)
+            : message.type === 'REJECT_DASH_TRANSFER'
+              ? controller.reject(message.transactionId)
+              : controller.resumeBroadcast(message.transactionId)
+    void operation
+      .then(async result => {
+        if (message.type === 'APPROVE_DASH_TRANSFER' && isDashExternalSignatureRequired(result)) {
+          const handoff = beginDashLedgerWalletSignature(controller, result)
+          try {
+            await handoff.tabReady
+          } catch (error) {
+            try {
+              sendResponse({
+                error: error instanceof Error ? error.message : 'Dash transfer failed'
+              })
+            } catch {
+              // The popup can close when focus moves to the Ledger tab.
+            }
+            return
+          }
+          try {
+            sendResponse({ result })
+          } catch {
+            // The Ledger tab is already open. Submission continues after the popup closes.
+          }
+          void handoff.done.then(broadcast => {
+            if (!broadcast) return
+            void chrome.alarms.create(DASH_TRANSACTION_MONITOR_ALARM, { when: Date.now() + 100 })
+          })
+          return
+        }
+        if (message.type === 'APPROVE_DASH_TRANSFER' || message.type === 'RESUME_DASH_TRANSFER') {
+          void chrome.alarms.create(DASH_TRANSACTION_MONITOR_ALARM, { when: Date.now() + 100 })
+        }
+        sendResponse({ result })
+      })
+      .catch(error => {
+        sendResponse({ error: error instanceof Error ? error.message : 'Dash transfer failed' })
+      })
+    return true
+  }
+
+  if (message.type === 'REFRESH_DASH_TRANSFER_STATUS') {
+    if (!dashTransactionMonitor) {
+      sendResponse({ error: 'Dash transfers are unavailable' })
+      return true
+    }
+    void dashTransactionMonitor
+      .refreshTransaction(String(message.transactionId))
+      .then(result => sendResponse({ result }))
+      .catch(error => {
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Dash confirmation request failed'
+        })
+      })
+    return true
+  }
+
   if (message.type === 'CHANGE_WALLET_PASSWORD') {
     let credentialsChanged = false
     accountContextTransition
@@ -4618,7 +4830,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       accountId: message.accountId as string,
       chainId,
       password: message.password as string,
-      ...(message.bitcoinAddressType === undefined
+      ...(isDashExportChainId(chainId) || message.bitcoinAddressType === undefined
         ? {}
         : {
             bitcoinAddressType: message.bitcoinAddressType as
@@ -5863,6 +6075,7 @@ function restoreZcashDAppPermissionsAfterUnlock(): void {
         await evmDAppHandler.notifyAccountsChanged()
         await bitcoinDAppHandler.notifyAccountsChanged()
         await pearlDAppHandler.notifyAccountsChanged()
+        await dashDAppHandler?.notifyAccountsChanged()
         await quantusDAppHandler.notifyAccountsChanged()
         await solanaDAppHandler?.notifyAccountsChanged()
         await nearDAppHandler?.notifyAccountsChanged()
@@ -5924,6 +6137,7 @@ async function performWalletUnlock(password: string): Promise<any> {
           evmDAppHandler.notifyAccountsChanged(),
           bitcoinDAppHandler.notifyAccountsChanged(),
           pearlDAppHandler.notifyAccountsChanged(),
+          dashDAppHandler?.notifyAccountsChanged(),
           quantusDAppHandler.notifyAccountsChanged(),
           solanaDAppHandler?.notifyAccountsChanged(),
           nearDAppHandler?.notifyAccountsChanged(),
@@ -6095,6 +6309,7 @@ async function performWalletLockState(): Promise<void> {
     await dappHandler.notifyAccountsChanged([])
     await evmDAppHandler.notifyAccountsChanged()
     await bitcoinDAppHandler.notifyAccountsChanged()
+    await dashDAppHandler?.notifyAccountsChanged()
     await solanaDAppHandler?.notifyAccountsChanged()
     await nearDAppHandler?.notifyAccountsChanged()
     await multichainSessionDAppHandler?.notifyAllSessionsChanged()
@@ -6143,6 +6358,7 @@ async function handleAccountSwitched({
     }
     await evmDAppHandler.notifyAccountsChanged()
     await bitcoinDAppHandler.notifyAccountsChanged()
+    await dashDAppHandler?.notifyAccountsChanged()
     await solanaDAppHandler?.notifyAccountsChanged()
     await nearDAppHandler?.notifyAccountsChanged()
     await multichainSessionDAppHandler?.notifyAllSessionsChanged()
@@ -6156,6 +6372,7 @@ async function handleAccountSwitched({
     await dappHandler.notifyAccountsChanged([]).catch(() => {})
     await evmDAppHandler.notifyAccountsChanged().catch(() => {})
     await bitcoinDAppHandler.notifyAccountsChanged().catch(() => {})
+    await dashDAppHandler?.notifyAccountsChanged().catch(() => {})
     await solanaDAppHandler?.notifyAccountsChanged().catch(() => {})
     await nearDAppHandler?.notifyAccountsChanged().catch(() => {})
     await multichainSessionDAppHandler?.notifyAllSessionsChanged().catch(() => {})
@@ -6392,6 +6609,7 @@ async function synchronizeNativeActiveAccount(walletId: string, accountId: strin
     dappHandler.notifyAccountsChanged([]),
     evmDAppHandler.notifyAccountsChanged(),
     bitcoinDAppHandler.notifyAccountsChanged(),
+    dashDAppHandler?.notifyAccountsChanged(),
     solanaDAppHandler?.notifyAccountsChanged(),
     nearDAppHandler?.notifyAccountsChanged(),
     multichainSessionDAppHandler?.notifyAllSessionsChanged(),
@@ -6402,7 +6620,7 @@ async function synchronizeNativeActiveAccount(walletId: string, accountId: strin
 
 async function handleImportPrivateKeyWallet(input: {
   readonly privateKey: string
-  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
   readonly displayName: string
 }) {
   syncScheduler.pauseForTx()

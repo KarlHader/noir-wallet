@@ -28,12 +28,12 @@ test.describe('Keystone chain-first firmware planning', () => {
       status: 'compatible',
       requestedChains: ['evm', 'bitcoin', 'solana', 'tron', 'near'],
       firmwareProfile: 'multi-coin',
-      firmwareChains: ['evm', 'bitcoin', 'solana', 'tron', 'near']
+      firmwareChains: ['evm', 'bitcoin', 'solana', 'tron', 'near', 'dash']
     })
   })
 
   test('maps every non-Zcash product chain to Multi-Coin firmware', () => {
-    for (const chain of ['evm', 'solana', 'tron', 'near']) {
+    for (const chain of ['evm', 'solana', 'tron', 'near', 'dash']) {
       assert.equal(resolveKeystoneSetupPlan([chain]).firmwareProfile, 'multi-coin')
     }
   })
@@ -41,6 +41,7 @@ test.describe('Keystone chain-first firmware planning', () => {
   test('keeps every supported product chain assigned to an explicit firmware profile', () => {
     assert.deepEqual(Object.keys(KEYSTONE_CHAIN_FIRMWARE_PROFILES).sort(), [
       'bitcoin',
+      'dash',
       'evm',
       'near',
       'solana',

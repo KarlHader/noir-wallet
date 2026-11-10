@@ -1,4 +1,6 @@
 import { parseChainId, getBitcoinChainId } from '@/core/chains/registry'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { validateLedgerDashDerivationPath } from '@/core/wallet/ledger-derivation-path'
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId, parseSigningSummary, type SigningSummary } from '@/core/keyring/domain'
 import { validateLedgerEvmDerivationPath } from '@/core/wallet/ledger-derivation-path'
@@ -73,16 +75,44 @@ export type LedgerNearSigningResponse = Readonly<{
   publicKey: string
 }>
 
+export type LedgerDashSigningRequest =
+  | Readonly<{
+      kind: 'dash-psbt'
+      chainId: (typeof DASH_CHAIN_IDS)['mainnet']
+      accountPath: string
+      xpub: string
+      expectedAddress: string
+      psbtBase64: string
+    }>
+  | Readonly<{
+      kind: 'dash-message'
+      chainId: (typeof DASH_CHAIN_IDS)['mainnet']
+      accountPath: string
+      expectedAddress: string
+      message: string
+    }>
+export type LedgerDashSigningResponse =
+  | Readonly<{
+      kind: 'dash-psbt'
+      signedTransactionHex: string
+    }>
+  | Readonly<{
+      kind: 'dash-message'
+      signature: string
+    }>
+
 export type LedgerDeviceSigningRequest =
   | LedgerEvmSigningRequest
   | LedgerBitcoinSigningRequest
   | LedgerSolanaSigningRequest
   | LedgerNearSigningRequest
+  | LedgerDashSigningRequest
 export type LedgerDeviceSigningResponse =
   | LedgerEvmSigningResponse
   | LedgerBitcoinSigningResponse
   | LedgerSolanaSigningResponse
   | LedgerNearSigningResponse
+  | LedgerDashSigningResponse
 
 export interface LedgerPendingSigning {
   readonly requestId: string
@@ -212,6 +242,41 @@ function request(value: unknown, chainId: string): LedgerDeviceSigningRequest {
       expectedPublicKey: bounded(item.expectedPublicKey, 'Ledger NEAR key', 128)
     }
   }
+  if (item.kind === 'dash-psbt' || item.kind === 'dash-message') {
+    const field = item.kind === 'dash-psbt' ? 'psbtBase64' : 'message'
+    assertExactKeys(
+      item,
+      item.kind === 'dash-psbt'
+        ? ['kind', 'chainId', 'accountPath', 'xpub', 'expectedAddress', field]
+        : ['kind', 'chainId', 'accountPath', 'expectedAddress', field],
+      [],
+      'Ledger Dash request'
+    )
+    if (item.chainId !== chainId || chainId !== DASH_CHAIN_IDS.mainnet) {
+      throw new Error('Dash hardware wallets support mainnet only')
+    }
+    const accountPath = validateLedgerDashDerivationPath(
+      bounded(item.accountPath, 'Ledger Dash account path', 128)
+    )
+    const expectedAddress = bounded(item.expectedAddress, 'Ledger Dash address', 128)
+    if (item.kind === 'dash-message') {
+      return {
+        kind: item.kind,
+        chainId,
+        accountPath,
+        expectedAddress,
+        message: readBoundedString(item.message, 'Ledger Dash message', 1_500_000)
+      }
+    }
+    return {
+      kind: item.kind,
+      chainId,
+      accountPath,
+      xpub: bounded(item.xpub, 'Ledger Dash xpub', 256),
+      expectedAddress,
+      psbtBase64: bounded(item.psbtBase64, 'Ledger Dash PSBT')
+    }
+  }
   throw new Error('Unsupported Ledger signing request')
 }
 
@@ -223,7 +288,9 @@ const summarySchema: Readonly<Record<LedgerDeviceSigningRequest['kind'], string>
   'bip322-simple': 'bitcoin.bip322-message.v1',
   'solana-transaction': 'solana.transaction.v1',
   'near-transaction': 'near.transaction.v1',
-  'near-nep413-message': 'near.nep413-message.v1'
+  'near-nep413-message': 'near.nep413-message.v1',
+  'dash-psbt': 'dash.psbt.v1',
+  'dash-message': 'dash.message.v1'
 }
 
 export function parseLedgerPendingSigning(value: unknown, now = Date.now()): LedgerPendingSigning {
@@ -276,12 +343,15 @@ export function parseLedgerPendingSigning(value: unknown, now = Date.now()): Led
           ? 'bitcoin'
           : parsedRequest.kind === 'solana-transaction'
             ? 'solana'
-            : 'near',
+            : parsedRequest.kind === 'dash-psbt' || parsedRequest.kind === 'dash-message'
+              ? 'dash'
+              : 'near',
     operation:
       parsedRequest.kind === 'personal-sign' ||
       parsedRequest.kind === 'typed-data' ||
       parsedRequest.kind === 'bip322-simple' ||
-      parsedRequest.kind === 'near-nep413-message'
+      parsedRequest.kind === 'near-nep413-message' ||
+      parsedRequest.kind === 'dash-message'
         ? 'message'
         : 'transaction'
   })

@@ -1,5 +1,6 @@
 import {
   BITCOIN_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
@@ -61,6 +62,18 @@ export function resolveNearFeatureRuntimePolicy(
   })
 }
 
+export interface DashFeatureRuntimePolicy {
+  readonly newOperationsEnabled: boolean
+}
+
+export function resolveDashFeatureRuntimePolicy(
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): DashFeatureRuntimePolicy {
+  return Object.freeze({
+    newOperationsEnabled: enabledFlags.includes(DASH_CHAIN_FEATURE_FLAG)
+  })
+}
+
 export interface PearlFeatureRuntimePolicy {
   readonly newOperationsEnabled: boolean
   readonly transactionRecoveryEnabled: true
@@ -98,9 +111,12 @@ export function isNewWalletFamilyEnabled(
     case 'eip155':
       return resolveEvmFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'bitcoin':
+    // Private-key credentials use this family token for Bitcoin. It is not every BIP-122 chain.
     case 'bip122':
       // bip122 remains the Bitcoin private-key family tag; Pearl uses family "pearl".
       return resolveBitcoinFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
+    case 'dash':
+      return resolveDashFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'pearl':
       return resolvePearlFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'quantus':

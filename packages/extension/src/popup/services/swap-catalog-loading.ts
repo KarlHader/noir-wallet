@@ -1,3 +1,4 @@
+import { isBitcoinChainId } from '@/core/chains/registry/chain-ids'
 import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
 import type { ChainDefinition } from '@/core/chains/registry'
 import { rheaSwapClient } from './rhea-swap-client'
@@ -78,7 +79,8 @@ function assetChain(assetId?: string | null) {
   const numericChain =
     /^nep245:[^:]+:([0-9]+)_/.exec(assetId)?.[1] ?? /^eip155:([0-9]+)(?:\/|$)/.exec(assetId)?.[1]
   if (numericChain) return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === numericChain)
-  if (assetId.startsWith('bip122:'))
+  const caipChainId = assetId.split('/')[0]
+  if (caipChainId && isBitcoinChainId(caipChainId))
     return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === 'btc')
   const blockchain = getChainFromAssetId(assetId)
   const aliases: Readonly<Record<string, string>> = {

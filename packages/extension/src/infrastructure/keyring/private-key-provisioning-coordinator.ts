@@ -33,6 +33,7 @@ import {
   type PrivateKeyCredentialScope
 } from '@/core/keyring/domain'
 import {
+  getDashNetworkConfig,
   getEvmNetworkConfig,
   getNearNetworkConfig,
   getSolanaNetworkConfig
@@ -68,7 +69,7 @@ import { BackgroundMultichainTransport } from './multichain/background-transport
 
 export interface PrivateKeyProvisioningInput {
   readonly privateKey: string
-  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
   readonly displayName: string
   readonly password: string
   readonly network: Network
@@ -78,7 +79,7 @@ export interface PrivateKeyProvisioningInput {
 export type PrivateKeyPreviewInput = Omit<PrivateKeyProvisioningInput, 'displayName'>
 
 export interface PrivateKeyPreviewResult {
-  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
+  readonly chainFamily: 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near' | 'dash'
   readonly addresses: readonly Readonly<{
     chainId: string
     address: string
@@ -114,6 +115,7 @@ interface DerivedPublicAccount {
     | 'pearl_p2tr'
     | 'solana'
     | 'near'
+    | 'dash_p2pkh'
   readonly publicKey: string
   readonly masterFingerprint?: string
   readonly scriptPubKey?: string
@@ -171,6 +173,7 @@ function privateKeyScopeMatches(
     readonly chainFamily: PrivateKeyCredentialScope['chainFamily']
     readonly bitcoinNetwork?: Network
     readonly pearlNetwork?: Network
+    readonly dashNetwork?: Network
   },
   scope: PrivateKeyCredentialScope
 ): boolean {
@@ -178,7 +181,8 @@ function privateKeyScopeMatches(
     candidate.chainFamily === scope.chainFamily &&
     candidate.bitcoinNetwork ===
       (scope.chainFamily === 'bip122' ? scope.bitcoinNetwork : undefined) &&
-    candidate.pearlNetwork === (scope.chainFamily === 'pearl' ? scope.pearlNetwork : undefined)
+    candidate.pearlNetwork === (scope.chainFamily === 'pearl' ? scope.pearlNetwork : undefined) &&
+    candidate.dashNetwork === (scope.chainFamily === 'dash' ? scope.dashNetwork : undefined)
   )
 }
 
@@ -303,13 +307,16 @@ function parseDerivedPearlPublicAccount(value: unknown, chainId: string): Derive
 function parseDerivedPublicAccount(
   value: unknown,
   chainId: string,
-  addressType?: BitcoinSupportedAddressType
+  addressType?: BitcoinSupportedAddressType,
+  family?: 'dash'
 ): DerivedPublicAccount {
   const record = readRecord(value, 'Imported private-key public account')
   assertExactKeys(
     record,
     ['chainId', 'derivation', 'identity', 'addresses', 'publicKey'],
-    addressType === undefined ? [] : ['masterFingerprint', 'scriptPubKey', 'redeemScript'],
+    addressType === undefined && family !== 'dash'
+      ? []
+      : ['masterFingerprint', 'scriptPubKey', 'redeemScript'],
     'Imported private-key public account'
   )
   if (
@@ -355,6 +362,32 @@ function parseDerivedPublicAccount(
     throw new Error('Imported private-key identity does not match its address')
   }
   const publicKey = readString(record.publicKey, 'Imported private-key public key', 128)
+  if (family === 'dash') {
+    const publicKey = readHex(record.publicKey, 'Imported Dash private-key public key')
+    if (!/^0x0[23][0-9a-f]{64}$/.test(publicKey)) {
+      throw new Error('Imported Dash private-key account is invalid')
+    }
+    if (address.scheme !== 'dash_p2pkh' || address.purpose !== 'receive') {
+      throw new Error('Imported Dash private-key account is invalid')
+    }
+    const network = chainId === getDashNetworkConfig('mainnet').chainId ? 'mainnet' : 'testnet'
+    if (chainId !== getDashNetworkConfig(network).chainId) {
+      throw new Error('Imported Dash private-key chain is unsupported')
+    }
+    if (network === 'mainnet' ? !addressValue.startsWith('X') : !addressValue.startsWith('y')) {
+      throw new Error('Imported Dash private-key address is invalid')
+    }
+    return Object.freeze({
+      chainId,
+      address: addressValue,
+      addressScheme: 'dash_p2pkh',
+      publicKey,
+      masterFingerprint: readHex(record.masterFingerprint, 'Imported Dash fingerprint', {
+        bytes: 4
+      }),
+      scriptPubKey: readHex(record.scriptPubKey, 'Imported Dash script')
+    })
+  }
   if (addressType === undefined) {
     const addressScheme = chainId.startsWith('eip155:')
       ? ('evm' as const)
@@ -537,7 +570,8 @@ export class PrivateKeyProvisioningCoordinator {
                   item.addressScheme === 'solana' ||
                   item.addressScheme === 'near' ||
                   item.addressScheme === 'pearl_p2tr' ||
-                  item.addressScheme === 'bitcoin-p2wpkh'
+                  item.addressScheme === 'bitcoin-p2wpkh' ||
+                  item.addressScheme === 'dash_p2pkh'
               })
             )
           )
@@ -581,7 +615,9 @@ export class PrivateKeyProvisioningCoordinator {
           ? Object.freeze({ chainFamily: 'bip122', bitcoinNetwork: input.network })
           : input.chainFamily === 'pearl'
             ? Object.freeze({ chainFamily: 'pearl', pearlNetwork: input.network })
-            : Object.freeze({ chainFamily: input.chainFamily })
+            : input.chainFamily === 'dash'
+              ? Object.freeze({ chainFamily: 'dash', dashNetwork: input.network })
+              : Object.freeze({ chainFamily: input.chainFamily })
     const provisionalHash = await sha256(
       JSON.stringify([
         'private-key-provision-v2',
@@ -629,7 +665,8 @@ export class PrivateKeyProvisioningCoordinator {
             password: input.password,
             chainFamily: input.chainFamily,
             ...(input.chainFamily === 'bip122' ? { bitcoinNetwork: input.network } : {}),
-            ...(input.chainFamily === 'pearl' ? { pearlNetwork: input.network } : {})
+            ...(input.chainFamily === 'pearl' ? { pearlNetwork: input.network } : {}),
+            ...(input.chainFamily === 'dash' ? { dashNetwork: input.network } : {})
           } as KeyringCommandPayload
         },
         parseRawEncryptedVault
@@ -654,6 +691,24 @@ export class PrivateKeyProvisioningCoordinator {
             )
           )
         )
+      } else if (input.chainFamily === 'dash') {
+        const chainId = parseChainId(getDashNetworkConfig(input.network).chainId).id
+        derived = Object.freeze([
+          await commandClient.execute(
+            {
+              operation: 'account.derive-public',
+              binding,
+              payload: {
+                family: 'dash',
+                chainId,
+                accountIndex: 0,
+                change: false,
+                addressIndex: 0
+              }
+            },
+            value => parseDerivedPublicAccount(value, chainId, undefined, 'dash')
+          )
+        ])
       } else if (input.chainFamily === 'bip122') {
         const bitcoinChainId = parseChainId(getBitcoinChainId(input.network)).id
         derived = Object.freeze(

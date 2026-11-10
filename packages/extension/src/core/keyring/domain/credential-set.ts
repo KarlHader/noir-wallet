@@ -21,9 +21,10 @@ export type CredentialEngine = 'zcash' | 'multichain'
 export type CredentialSetSource = 'software' | 'private-key' | 'hardware'
 export type MnemonicWordCount = 12 | 24
 export type ZcashSeedPolicy = 'direct-bip39-v1'
-export type PrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl'
+export type PrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' | 'pearl' | 'dash'
 export type PrivateKeyBitcoinNetwork = 'mainnet' | 'testnet'
 export type PrivateKeyPearlNetwork = 'mainnet' | 'testnet'
+export type PrivateKeyDashNetwork = 'mainnet' | 'testnet'
 
 export type PrivateKeyCredentialScope =
   | Readonly<{ readonly chainFamily: 'eip155' }>
@@ -34,6 +35,10 @@ export type PrivateKeyCredentialScope =
   | Readonly<{
       readonly chainFamily: 'pearl'
       readonly pearlNetwork: PrivateKeyPearlNetwork
+    }>
+  | Readonly<{
+      readonly chainFamily: 'dash'
+      readonly dashNetwork: PrivateKeyDashNetwork
     }>
   | Readonly<{ readonly chainFamily: 'solana' | 'near' }>
 
@@ -281,6 +286,23 @@ export function parseCredentialSetManifest(value: unknown): CredentialSetManifes
         ...base,
         source: 'private-key',
         privateKey: Object.freeze({ chainFamily }),
+        engines: Object.freeze({ multichain })
+      })
+    }
+    if (chainFamily === 'dash') {
+      if (
+        !hasExactKeys(value.privateKey, ['chainFamily', 'dashNetwork']) ||
+        (value.privateKey.dashNetwork !== 'mainnet' && value.privateKey.dashNetwork !== 'testnet')
+      ) {
+        throw new Error('Invalid Dash private-key scope')
+      }
+      return Object.freeze({
+        ...base,
+        source: 'private-key',
+        privateKey: Object.freeze({
+          chainFamily,
+          dashNetwork: value.privateKey.dashNetwork
+        }),
         engines: Object.freeze({ multichain })
       })
     }

@@ -121,10 +121,15 @@ export function getOnchainTransactionStatusPresentation(
     }
   }
   if (status === 'confirming') {
+    const confirmations = failure?.evidence?.confirmations
+    const requiredConfirmations = failure?.evidence?.requiredConfirmations
     return {
       title: 'Confirming Transaction',
       label: presentation.label,
-      description: 'Your transfer is on-chain and waiting for finality.',
+      description:
+        confirmations !== undefined && requiredConfirmations !== undefined
+          ? `Confirming · ${confirmations}/${requiredConfirmations}`
+          : 'Your transfer is on-chain and waiting for finality.',
       resultStatus: 'loading',
       tone: presentation.tone
     }

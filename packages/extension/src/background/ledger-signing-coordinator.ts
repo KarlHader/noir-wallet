@@ -9,6 +9,10 @@ import type {
 import type { LedgerSolanaSigningRequest, LedgerSolanaSigningResponse } from '@/lib/ledger/solana'
 import type { LedgerNearSigningRequest, LedgerNearSigningResponse } from '@/lib/ledger/near'
 import type {
+  LedgerDashSigningRequest,
+  LedgerDashSigningResponse
+} from '@/core/keyring/protocol/ledger-signing'
+import type {
   LedgerDeviceSigningRequest,
   LedgerDeviceSigningResponse,
   LedgerPendingSigning
@@ -22,6 +26,7 @@ export interface LedgerSigningBinding {
   readonly summary: LedgerPendingSigning['summary']
   readonly validate: () => Promise<void>
   readonly signal?: AbortSignal
+  readonly onTabOpened?: () => void
 }
 interface WaitingRequest {
   record: LedgerPendingSigning
@@ -105,6 +110,10 @@ export function requestLedgerSignature(
   request: LedgerNearSigningRequest,
   binding: LedgerSigningBinding
 ): Promise<LedgerNearSigningResponse>
+export function requestLedgerSignature(
+  request: LedgerDashSigningRequest,
+  binding: LedgerSigningBinding
+): Promise<LedgerDashSigningResponse>
 export async function requestLedgerSignature(
   request: LedgerDeviceSigningRequest,
   binding: LedgerSigningBinding
@@ -169,6 +178,12 @@ export async function requestLedgerSignature(
     }
     item.record = Object.freeze({ ...record, tabId: tab.id })
     await chrome.storage.session.set({ [storageKey(requestId)]: item.record })
+    if (!waiting.has(requestId)) {
+      await chrome.tabs.remove(tab.id).catch(() => {})
+      return result
+    }
+    // The wallet popup resolves once this tab exists. The returned promise still waits for the device.
+    binding.onTabOpened?.()
   } catch (error) {
     await cancelLedgerSigning(
       requestId,

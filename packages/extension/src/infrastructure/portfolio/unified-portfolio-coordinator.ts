@@ -12,6 +12,7 @@ import {
 import type { ActiveEvmPortfolioSource } from '@/infrastructure/chains/evm'
 import type { ActiveBitcoinPortfolioSource } from '@/infrastructure/chains/bitcoin'
 import type { ActivePearlPortfolioSource } from '@/infrastructure/chains/pearl'
+import type { ActiveDashPortfolioSource } from '@/infrastructure/chains/dash'
 import type { ActiveSingleChainPortfolioSource } from './single-chain-portfolio-coordinator'
 import { readZcashPortfolioSource } from '@/infrastructure/chains/zcash'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
@@ -51,6 +52,11 @@ export interface PearlPortfolioSourceReader {
   readonly refreshActiveSource: () => Promise<ActivePearlPortfolioSource | null>
 }
 
+export interface DashPortfolioSourceReader {
+  readonly readCachedActiveSource: () => Promise<ActiveDashPortfolioSource | null>
+  readonly refreshActiveSource: () => Promise<ActiveDashPortfolioSource | null>
+}
+
 export interface SingleChainPortfolioSourceReader {
   readonly readCachedActiveSource: () => Promise<ActiveSingleChainPortfolioSource | null>
   readonly refreshActiveSource: () => Promise<ActiveSingleChainPortfolioSource | null>
@@ -63,6 +69,7 @@ export interface UnifiedPortfolioCoordinatorOptions {
   readonly evmPortfolios?: readonly EvmPortfolioSourceRegistration[]
   readonly bitcoinPortfolio?: BitcoinPortfolioSourceReader
   readonly pearlPortfolio?: PearlPortfolioSourceReader
+  readonly dashPortfolio?: DashPortfolioSourceReader
   readonly solanaPortfolio?: SingleChainPortfolioSourceReader
   readonly nearPortfolio?: SingleChainPortfolioSourceReader
   readonly quantusPortfolio?: SingleChainPortfolioSourceReader
@@ -70,6 +77,8 @@ export interface UnifiedPortfolioCoordinatorOptions {
   readonly onBackgroundBitcoinRefreshSettled?: (source: ActiveBitcoinPortfolioSource | null) => void
   readonly onBackgroundPearlRefreshError?: (error: unknown) => void
   readonly onBackgroundPearlRefreshSettled?: (source: ActivePearlPortfolioSource | null) => void
+  readonly onBackgroundDashRefreshError?: (error: unknown) => void
+  readonly onBackgroundDashRefreshSettled?: (source: ActiveDashPortfolioSource | null) => void
   readonly readZcashState: (scope: {
     readonly keyDomainId: KeyDomainId
     readonly accountId: AccountId
@@ -81,6 +90,7 @@ export const PORTFOLIO_COORDINATOR_STAGES = Object.freeze([
   'zcash-source',
   'evm-source',
   'bitcoin-source',
+  'dash-source',
   'pearl-source',
   'solana-source',
   'near-source',
@@ -158,6 +168,8 @@ function sameActiveScope(
   source:
     | ActiveEvmPortfolioSource
     | ActiveBitcoinPortfolioSource
+    | ActivePearlPortfolioSource
+    | ActiveDashPortfolioSource
     | ActiveSingleChainPortfolioSource,
   generationId: StorageV2GenerationId,
   keyDomainId: KeyDomainId,
@@ -171,7 +183,10 @@ function sameActiveScope(
 }
 
 function sourceUpdatedAt(
-  source: ActiveBitcoinPortfolioSource | ActivePearlPortfolioSource
+  source:
+    | ActiveBitcoinPortfolioSource
+    | ActivePearlPortfolioSource
+    | ActiveDashPortfolioSource
 ): number {
   return source.source.balances.reduce((latest, balance) => Math.max(latest, balance.updatedAt), 0)
 }
@@ -204,6 +219,7 @@ export class UnifiedPortfolioCoordinator {
   private readonly options: UnifiedPortfolioCoordinatorOptions
   private backgroundBitcoinSource: ActiveBitcoinPortfolioSource | null = null
   private backgroundPearlSource: ActivePearlPortfolioSource | null = null
+  private backgroundDashSource: ActiveDashPortfolioSource | null = null
 
   constructor(options: UnifiedPortfolioCoordinatorOptions) {
     this.options = options
@@ -378,6 +394,29 @@ export class UnifiedPortfolioCoordinator {
       sources.push(entry.source.source)
     }
 
+    const dashAccount = active.availableChainAccounts.find(item => item.chain.family === 'dash')
+    if (dashAccount) {
+      const dashPortfolio = this.options.dashPortfolio
+      if (!dashPortfolio) throw new Error('Enabled Dash Portfolio source is unavailable')
+      const dashSource = await atStage('dash-source', () =>
+        shouldRefreshChain(dashAccount.chain.id)
+          ? this.refreshDashInBackground(dashPortfolio)
+          : this.readDashSource(dashPortfolio)
+      )
+      if (!dashSource) {
+        if (action !== 'read') return null
+        sources.push(uncachedSource(dashAccount.chainAccount))
+      } else {
+        if (!sameActiveScope(dashSource, active.generationId, scope.keyDomainId, scope.accountId)) {
+          return null
+        }
+        if (dashSource.chainAccount.id !== dashAccount.chainAccount.id) {
+          throw new Error('Dash Portfolio source does not match the active ChainAccount')
+        }
+        sources.push(dashSource.source)
+      }
+    }
+
     return atSynchronousStage('read-model', () =>
       buildPortfolioReadModel(scope, sources, this.options.chains, this.options.assets)
     )
@@ -434,6 +473,24 @@ export class UnifiedPortfolioCoordinator {
     return cached
   }
 
+  private async readDashSource(
+    dashPortfolio: DashPortfolioSourceReader
+  ): Promise<ActiveDashPortfolioSource | null> {
+    const cached = await dashPortfolio.readCachedActiveSource()
+    const background = this.backgroundDashSource
+    const useBackground = Boolean(
+      cached &&
+      background &&
+      background.generationId === cached.generationId &&
+      background.chainAccount.id === cached.chainAccount.id &&
+      sourceUpdatedAt(background) >= sourceUpdatedAt(cached)
+    )
+    if (useBackground && background) {
+      return background
+    }
+    return cached
+  }
+
   private refreshPearlInBackground(
     pearlPortfolio: PearlPortfolioSourceReader
   ): Promise<ActivePearlPortfolioSource | null> {
@@ -447,5 +504,20 @@ export class UnifiedPortfolioCoordinator {
         this.options.onBackgroundPearlRefreshError?.(error)
       })
     return this.readPearlSource(pearlPortfolio)
+  }
+
+  private refreshDashInBackground(
+    dashPortfolio: DashPortfolioSourceReader
+  ): Promise<ActiveDashPortfolioSource | null> {
+    void dashPortfolio
+      .refreshActiveSource()
+      .then(source => {
+        this.backgroundDashSource = source
+        this.options.onBackgroundDashRefreshSettled?.(source)
+      })
+      .catch(error => {
+        this.options.onBackgroundDashRefreshError?.(error)
+      })
+    return this.readDashSource(dashPortfolio)
   }
 }

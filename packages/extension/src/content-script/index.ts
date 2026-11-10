@@ -3,6 +3,7 @@
  * Forwards messages from inject-provider to background service worker
  */
 
+import { DASH_CHAIN_DISABLED_CODE } from '@/core/dapp/dash-provider'
 import {
   DAPP_RUNTIME_METHODS,
   getOwnExtensionSenderContext,
@@ -49,6 +50,7 @@ function consumeToken(chainId: string, method: string): boolean {
 const ALLOWED_METHODS = new Set<string>(DAPP_RUNTIME_METHODS)
 const EVM_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.evm')
 const BITCOIN_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.bitcoin')
+const DASH_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.dash')
 const PEARL_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.pearl')
 const QUANTUS_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.quantus')
 const SOLANA_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.solana')
@@ -216,6 +218,21 @@ function setupMessageBridge() {
       return
     }
 
+    if (chainId === 'dash' && !DASH_PROVIDER_ENABLED) {
+      window.postMessage(
+        {
+          target: 'noir-provider',
+          requestId,
+          error: {
+            code: DASH_CHAIN_DISABLED_CODE,
+            message: 'The Dash chain is not enabled in this wallet build.'
+          }
+        },
+        window.location.origin
+      )
+      return
+    }
+
     if (chainId === 'pearl' && !PEARL_PROVIDER_ENABLED) {
       window.postMessage(
         {
@@ -280,6 +297,7 @@ function setupMessageBridge() {
           error:
             (chainId === 'evm' ||
               chainId === 'bitcoin' ||
+              chainId === 'dash' ||
               chainId === 'pearl' ||
               chainId === 'quantus' ||
               chainId === 'solana' ||
@@ -287,7 +305,7 @@ function setupMessageBridge() {
             typeof payload?.method === 'string'
               ? {
                   code: 4200,
-                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'pearl' ? 'Pearl' : chainId === 'quantus' ? 'Quantus' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
+                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'dash' ? 'Dash' : chainId === 'pearl' ? 'Pearl' : chainId === 'quantus' ? 'Quantus' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
                 }
               : 'Invalid or unsupported method'
         },
@@ -308,7 +326,8 @@ function setupMessageBridge() {
         ...(faviconUrl === undefined ? {} : { siteMetadata: { faviconUrl } }),
         request: payload
       })
-    } catch {
+    } catch (err) {
+      console.log('sendDAppRequestToBackground error: %o', err)
       window.postMessage(
         { target: 'noir-provider', requestId, error: 'Invalid request params' },
         window.location.origin

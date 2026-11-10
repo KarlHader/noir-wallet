@@ -59,6 +59,7 @@ export function formatChainIconUrl(chain: string): string {
 export function resolveChainIconAlias(family: string, displayName: string): string {
   if (family === 'zcash') return 'zec'
   if (family === 'bitcoin') return 'btc'
+  if (family === 'dash') return 'dash'
   if (family !== 'evm') return family
 
   const normalized = displayName.toLowerCase()

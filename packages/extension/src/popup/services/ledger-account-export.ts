@@ -14,8 +14,10 @@ import { exportLedgerEvmAccount } from '@/lib/ledger/evm'
 import { exportLedgerBitcoinAccount } from '@/lib/ledger/bitcoin'
 import { exportLedgerSolanaAccount } from '@/lib/ledger/solana'
 import { exportLedgerNearAccount } from '@/lib/ledger/near'
+import { exportLedgerDashAccount } from '@/lib/ledger/dash'
 import type { Network } from '@/types'
-import { ledgerAppName } from './ledger-device-status'
+import { ledgerAppName, ledgerDashModelStatus } from './ledger-device-status'
+import { assertLedgerDashFeature } from '@/core/wallet/ledger-feature-policy'
 
 export function ledgerCredentialAccounts(
   credential: LedgerHardwareCredential
@@ -47,7 +49,16 @@ export function ledgerAccountIdentity(account: LedgerPublicAccount): string {
             account.address,
             account.publicKey
           ]
-        : [account.family, account.derivationPath, account.address, account.publicKey]
+        : account.family === 'dash'
+          ? [
+              account.family,
+              account.derivationPath,
+              account.network,
+              account.xpub,
+              account.address,
+              account.publicKey
+            ]
+          : [account.family, account.derivationPath, account.address, account.publicKey]
   )
 }
 export async function exportLedgerWalletAccounts(input: {
@@ -110,6 +121,27 @@ export async function exportLedgerWalletAccounts(input: {
         network,
         xpub: result.xpub,
         masterFingerprintHex: result.masterFingerprintHex,
+        publicKey: result.publicKey,
+        address: result.address
+      }
+    }
+    if (family === 'dash') {
+      const unsupported = ledgerDashModelStatus(device.deviceModel.model)
+      if (unsupported) throw new Error(unsupported.message)
+      assertLedgerDashFeature(device.deviceModel.model, network)
+      const result = await exportLedgerDashAccount({
+        ...options,
+        network,
+        accountIndex: input.deviceAccountIndex,
+        ...(path ? { derivationPath: path } : {})
+      })
+      metadata = result
+      return {
+        family,
+        accountIndex: input.accountIndex,
+        derivationPath: result.accountPath,
+        network: 'mainnet',
+        xpub: result.xpub,
         publicKey: result.publicKey,
         address: result.address
       }

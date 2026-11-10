@@ -105,6 +105,7 @@ const APPROVAL_ACTION_PREFIXES = Object.freeze({
     'evmNetwork'
   ]),
   bitcoin: Object.freeze(['bitcoinConnect', 'bitcoinTransaction', 'bitcoinMessage']),
+  dash: Object.freeze(['dashConnect', 'dashTransaction', 'dashMessage']),
   pearl: Object.freeze(['pearlConnect', 'pearlTransaction', 'pearlMessage']),
   quantus: Object.freeze(['quantusConnect', 'quantusTransaction', 'quantusSignTransfer']),
   solana: Object.freeze(['solanaConnect', 'solanaTransaction', 'solanaMessage']),
@@ -1923,7 +1924,16 @@ export class DAppHandler {
 
   cancelPendingApprovals(
     origin: string,
-    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near' | 'multichain'
+    chainId:
+      | 'zcash'
+      | 'evm'
+      | 'bitcoin'
+      | 'dash'
+      | 'pearl'
+      | 'quantus'
+      | 'solana'
+      | 'near'
+      | 'multichain'
   ): number {
     const actions = APPROVAL_ACTION_PREFIXES[chainId]
     return pendingRequestsManager.cancelOrigin(origin, action => actions.includes(action))
@@ -2245,7 +2255,10 @@ export class DAppHandler {
     await Promise.allSettled([
       this.broadcastEvent(origin, 'accountsChanged', null),
       this.broadcastEvent(origin, 'accountsChanged', [], 'evm'),
-      this.broadcastEvent(origin, 'accountsChanged', [], 'bitcoin')
+      this.broadcastEvent(origin, 'accountsChanged', [], 'bitcoin'),
+      this.broadcastEvent(origin, 'accountsChanged', [], 'dash'),
+      this.broadcastEvent(origin, 'accountsChanged', [], 'solana'),
+      this.broadcastEvent(origin, 'accountsChanged', [], 'near')
     ])
     this.trackDisconnected()
   }

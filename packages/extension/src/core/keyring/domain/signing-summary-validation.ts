@@ -14,6 +14,7 @@ import {
   type QuantusTransferSummary
 } from './signing-summary'
 import { parseBitcoinSummary } from './signing-summary-validation-bitcoin'
+import { parseDashSummary } from './signing-summary-validation-dash'
 import { parseNearSummary } from './signing-summary-validation-near'
 import { parsePearlSummary } from './signing-summary-validation-pearl'
 import { parseSolanaSummary } from './signing-summary-validation-solana'
@@ -32,6 +33,7 @@ const FAMILY_NAMESPACES: Readonly<Record<SigningSummaryFamily, string>> = Object
   zcash: 'bip122',
   evm: 'eip155',
   bitcoin: 'bip122',
+  dash: 'bip122',
   pearl: 'bip122',
   solana: 'solana',
   tron: 'tron',
@@ -69,6 +71,8 @@ export const SCHEMA_EXPECTATIONS: Readonly<
   'evm.typed-data.v1': Object.freeze({ family: 'evm', operation: 'message' }),
   'bitcoin.psbt.v1': Object.freeze({ family: 'bitcoin', operation: 'transaction' }),
   'bitcoin.bip322-message.v1': Object.freeze({ family: 'bitcoin', operation: 'message' }),
+  'dash.psbt.v1': Object.freeze({ family: 'dash', operation: 'transaction' }),
+  'dash.message.v1': Object.freeze({ family: 'dash', operation: 'message' }),
   'pearl.psbt.v1': Object.freeze({ family: 'pearl', operation: 'transaction' }),
   'pearl.bip322-message.v1': Object.freeze({ family: 'pearl', operation: 'message' }),
   'solana.transaction.v1': Object.freeze({ family: 'solana', operation: 'transaction' }),
@@ -421,6 +425,8 @@ export function parseSigningSummary(
       return parseEvmSummary(envelope)
     case 'bitcoin':
       return parseBitcoinSummary(envelope)
+    case 'dash':
+      return parseDashSummary(envelope)
     case 'pearl':
       return parsePearlSummary(envelope)
     case 'solana':

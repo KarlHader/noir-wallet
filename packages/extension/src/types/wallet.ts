@@ -95,6 +95,7 @@ export interface WalletItem {
     | { chainFamily: 'eip155' | 'solana' | 'near' }
     | { chainFamily: 'bip122'; bitcoinNetwork: Network }
     | { chainFamily: 'pearl'; pearlNetwork: Network }
+    | { chainFamily: 'dash'; dashNetwork: Network }
 }
 
 /**

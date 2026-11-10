@@ -5,6 +5,7 @@ export const EVM_CHAIN_FEATURE_FLAG = 'chain.evm' as const
 export const BITCOIN_CHAIN_FEATURE_FLAG = 'chain.bitcoin' as const
 export const SOLANA_CHAIN_FEATURE_FLAG = 'chain.solana' as const
 export const NEAR_CHAIN_FEATURE_FLAG = 'chain.near' as const
+export const DASH_CHAIN_FEATURE_FLAG = 'chain.dash' as const
 export const PEARL_CHAIN_FEATURE_FLAG = 'chain.pearl' as const
 export const QUANTUS_CHAIN_FEATURE_FLAG = 'chain.quantus' as const
 export const ALL_CHAIN_FEATURE_FLAGS = Object.freeze([
@@ -13,6 +14,7 @@ export const ALL_CHAIN_FEATURE_FLAGS = Object.freeze([
   BITCOIN_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
   QUANTUS_CHAIN_FEATURE_FLAG
 ] as const)

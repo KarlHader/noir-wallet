@@ -1,10 +1,31 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
+import { DASH_CHAIN_IDS, BITCOIN_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import {
   buildSendAssetSelectionModel,
+  isUnifiedSendPortfolioChain,
   sortSendAssetsByBalanceValue
 } from '../../../src/popup/pages/transactions/send-asset-order.ts'
+
+function sendChain(family, id, status = 'available') {
+  return { family, id, capabilities: { transaction: { status } } }
+}
+
+test('includes Dash in unified send only when its flag and transaction capability are available', () => {
+  const enabled = ['chain.zcash', 'chain.dash']
+  expect(isUnifiedSendPortfolioChain(sendChain('dash', DASH_CHAIN_IDS.testnet), enabled)).toBe(true)
+  expect(
+    isUnifiedSendPortfolioChain(sendChain('dash', DASH_CHAIN_IDS.testnet), ['chain.zcash', 'chain.evm'])
+  ).toBe(false)
+  expect(
+    isUnifiedSendPortfolioChain(sendChain('dash', DASH_CHAIN_IDS.testnet, 'waiting'), enabled)
+  ).toBe(false)
+  expect(
+    isUnifiedSendPortfolioChain(sendChain('dash', BITCOIN_CHAIN_IDS.testnet), enabled)
+  ).toBe(false)
+  expect(isUnifiedSendPortfolioChain(sendChain('evm', 'eip155:1'), ['chain.evm'])).toBe(true)
+})
 
 function candidate(key, amount, priceUsd) {
   return Object.freeze({ key, amount, priceUsd })

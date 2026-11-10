@@ -1,6 +1,8 @@
 import { parseAccountId, parseAddressId, parseChainAccountId } from '@/core/accounts/domain'
 import { bytesToHex } from '@/lib/bytes'
 import { getBitcoinChainId, parseChainId } from '@/core/chains/registry'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import { hardwareCapabilitiesForNetwork } from '@/core/keyring/domain/hardware-credential'
 import {
   buildChainAccountVerificationAnchorRef,
   commitCredentialBoundStorageV2Pointer
@@ -80,7 +82,7 @@ export interface KeystoneHardwareProvisioningCoordinatorOptions {
 
 type SupportedPublicAccount = Extract<
   KeystoneMultiCoinPublicAccount,
-  { readonly family: 'evm' | 'bitcoin' }
+  { readonly family: 'evm' | 'bitcoin' | 'dash' }
 >
 
 interface ProvisioningIdentity {
@@ -99,11 +101,14 @@ async function sha256(value: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest))
 }
 
-function hardwareMetadata(credential: KeystoneHardwareCredential): HardwareCredentialMetadata {
+function hardwareMetadata(
+  credential: KeystoneHardwareCredential,
+  network: Network
+): HardwareCredentialMetadata {
   return Object.freeze({
     vendor: credential.vendor,
     firmwareProfile: credential.firmwareProfile,
-    capabilities: credential.capabilities
+    capabilities: hardwareCapabilitiesForNetwork(credential.capabilities, network)
   })
 }
 
@@ -218,7 +223,9 @@ function projectPublicAccounts(
 
   const supported = projected.filter(
     (account): account is SupportedPublicAccount =>
-      account.family === 'evm' || account.family === 'bitcoin'
+      account.family === 'evm' ||
+      account.family === 'bitcoin' ||
+      (account.family === 'dash' && network === 'mainnet')
   )
   if (supported.length === 0 || !supported.some(account => account.accountIndex === 0)) {
     throw new Error('Keystone export has no supported Account 0 for this build')
@@ -227,7 +234,8 @@ function projectPublicAccounts(
     [...supported].sort(
       (left, right) =>
         left.accountIndex - right.accountIndex ||
-        (left.family === right.family ? 0 : left.family === 'evm' ? -1 : 1)
+        (left.family === 'evm' ? 0 : left.family === 'bitcoin' ? 1 : 2) -
+          (right.family === 'evm' ? 0 : right.family === 'bitcoin' ? 1 : 2)
     )
   )
 }
@@ -268,9 +276,15 @@ function buildSnapshot(
     const accountId = accountIdByIndex.get(projectedAccount.accountIndex)
     if (!accountId) throw new Error('Projected Keystone Account is missing')
     const isBitcoin = projectedAccount.family === 'bitcoin'
+    const isDash = projectedAccount.family === 'dash'
+    if (isDash && network !== 'mainnet') {
+      throw new Error('Dash hardware wallets support mainnet only')
+    }
     const targetChainIds = isBitcoin
       ? [bitcoinChainId]
-      : evmChainIds.map(value => parseChainId(value).id)
+      : isDash
+        ? [parseChainId(DASH_CHAIN_IDS.mainnet).id]
+        : evmChainIds.map(value => parseChainId(value).id)
     for (const [networkIndex, chainId] of targetChainIds.entries()) {
       const entityScope =
         networkIndex === 0
@@ -295,8 +309,8 @@ function buildSnapshot(
         id: parseAddressId(entityId(identity, 'address', entityScope)),
         chainAccountId,
         value: projectedAccount.identity,
-        scheme: isBitcoin ? 'bitcoin-p2wpkh' : 'evm',
-        purpose: isBitcoin ? 'receive' : 'identity',
+        scheme: isBitcoin ? 'bitcoin-p2wpkh' : isDash ? 'dash_p2pkh' : 'evm',
+        purpose: isBitcoin || isDash ? 'receive' : 'identity',
         derivation: {
           scheme: isBitcoin ? 'bip84' : 'bip44',
           path: projectedAccount.derivationPath
@@ -476,7 +490,7 @@ export class KeystoneHardwareProvisioningCoordinator {
     let journal = await this.options.credentialRepository.getJournal(transactionId)
     if (journal?.phase === 'failed') throw new Error('Keystone provisioning is terminally failed')
     const createdAt = journal?.createdAt ?? this.now()
-    const metadata = hardwareMetadata(credential)
+    const metadata = hardwareMetadata(credential, input.network)
     const anchor = projected.find(account => account.accountIndex === 0)
     if (!anchor) throw new Error('Keystone verification anchor is missing')
     const anchorId = parseChainAccountId(entityId(identity, 'chain-account', `0:${anchor.family}`))

@@ -1,6 +1,7 @@
 import {
   findBuiltinEvmNetworkConfig,
   getBitcoinNetworkConfig,
+  getDashNetworkConfig,
   getEvmNetworkConfigs,
   getNearNetworkConfig,
   getPearlNetworkConfig,
@@ -15,6 +16,7 @@ import {
 import { BLOCK_EXPLORER_GROUPS } from '@/config/block-explorers'
 import {
   resolveBitcoinFeatureRuntimePolicy,
+  resolveDashFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
@@ -27,11 +29,13 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   getEvmRpcEndpointOptions,
   resolveBitcoinRpcEndpointOptions,
+  resolveDashRpcEndpointOptions,
   resolveNearRpcEndpointOptions,
   resolvePearlRpcEndpointOptions,
   resolveQuantusRpcEndpointOptions,
   resolveSolanaRpcEndpointOptions
 } from '@/infrastructure/chains/managed-rpc-endpoints'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { getBitcoinChainId, getPearlChainId, getZcashChainId } from '@/core/chains/registry'
 import type { RpcEndpointGroup } from '@/config/rpc-endpoints'
 
@@ -125,6 +129,9 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
   const bitcoinEnabled = resolveBitcoinFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
+  const dashEnabled = resolveDashFeatureRuntimePolicy(
+    __ENABLED_CHAIN_FEATURE_FLAGS__
+  ).newOperationsEnabled
   const pearlEnabled = resolvePearlFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
@@ -151,6 +158,24 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
               Object.freeze({
                 id: endpoint.id,
                 label: endpoint.id === 'mempool-space' ? 'mempool.space' : 'Blockstream',
+                url: endpoint.baseUrl
+              })
+            )
+          })
+        ]
+      : []),
+    ...(dashEnabled
+      ? [
+          Object.freeze({
+            chainId: DASH_CHAIN_IDS[DEFAULT_NETWORK],
+            label: getDashNetworkConfig(DEFAULT_NETWORK).displayName,
+            iconChain: 'dash',
+            protocol: 'dash-insight' as const,
+            defaultUrl: resolveDashRpcEndpointOptions(DEFAULT_NETWORK)[0].baseUrl,
+            presets: resolveDashRpcEndpointOptions(DEFAULT_NETWORK).map(endpoint =>
+              Object.freeze({
+                id: endpoint.id,
+                label: endpoint.label,
                 url: endpoint.baseUrl
               })
             )

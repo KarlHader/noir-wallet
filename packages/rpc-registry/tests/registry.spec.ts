@@ -89,6 +89,22 @@ test('derives monitor targets from the same registry across chain namespaces', (
   })
 })
 
+test('publishes Dash Insight endpoints without monitoring them', () => {
+  const dash = RPC_REGISTRY.chains.filter(chain => chain.probe === 'dash-insight')
+  expect(dash.map(chain => [chain.id, chain.network, chain.endpoints[0]?.url])).toEqual([
+    ['bip122:00000ffd590b1485b3caadc19b22e637', 'mainnet', 'https://insight.dash.org/insight-api'],
+    [
+      'bip122:00000bafbc94add76cb75e2ec9289483',
+      'testnet',
+      'https://insight.testnet.networks.dash.org/insight-api'
+    ]
+  ])
+  const monitored = getMonitorTargets(RPC_REGISTRY)
+  expect(monitored.every(target => target.probe === 'zcash-lightwalletd-grpc-web')).toBe(true)
+  expect(monitored.some(target => target.url.includes('insight.dash.org'))).toBe(false)
+  expect(monitored.some(target => target.chainId.startsWith('bip122:00000'))).toBe(false)
+})
+
 test('rejects unknown routes and supports CORS preflight', async () => {
   const notFound = handleRegistryRequest(new Request('https://rpc.zknoir.com/'))
   const preflight = handleRegistryRequest(

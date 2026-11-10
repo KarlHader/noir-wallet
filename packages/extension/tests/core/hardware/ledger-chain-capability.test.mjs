@@ -14,8 +14,46 @@ test('Ledger Zcash credentials can use Zcash accounts without claiming other cha
   }
   expect(keySourceSupportsChainFamily(source, 'zcash')).toBe(true)
   expect(keySourceSupportsAddressFamily(source, 'zcash')).toBe(true)
-  for (const family of ['evm', 'bitcoin', 'solana', 'tron', 'near']) {
+  for (const family of ['evm', 'bitcoin', 'solana', 'tron', 'near', 'dash']) {
     expect(keySourceSupportsChainFamily(source, family)).toBe(false)
     expect(keySourceSupportsAddressFamily(source, family)).toBe(false)
   }
+})
+
+test('Dash stays unavailable until a hardware account declares the dash capability', () => {
+  const ledger = {
+    kind: 'hardware',
+    vendor: 'ledger',
+    firmwareProfile: 'multi-coin',
+    capabilities: ['bitcoin', 'evm']
+  }
+  const keystone = {
+    kind: 'hardware',
+    vendor: 'keystone',
+    firmwareProfile: 'multi-coin',
+    capabilities: ['zcash', 'bitcoin', 'evm']
+  }
+  expect(keySourceSupportsChainFamily(ledger, 'dash')).toBe(false)
+  expect(keySourceSupportsAddressFamily(ledger, 'dash')).toBe(false)
+  expect(keySourceSupportsChainFamily(keystone, 'dash')).toBe(false)
+  expect(keySourceSupportsAddressFamily(keystone, 'dash')).toBe(false)
+  expect(keySourceSupportsChainFamily({ ...ledger, vendor: 'other' }, 'dash')).toBe(false)
+
+  const declared = { ...ledger, capabilities: ['bitcoin', 'dash'] }
+  expect(keySourceSupportsChainFamily(declared, 'dash')).toBe(true)
+  expect(keySourceSupportsAddressFamily(declared, 'dash')).toBe(true)
+  expect(keySourceSupportsChainFamily({ ...keystone, capabilities: ['dash'] }, 'dash')).toBe(true)
+  expect(keySourceSupportsChainFamily({ kind: 'software' }, 'dash')).toBe(true)
+  expect(
+    keySourceSupportsChainFamily({ kind: 'private-key', chainFamily: 'dash' }, 'dash')
+  ).toBe(true)
+  expect(
+    keySourceSupportsChainFamily({ kind: 'private-key', chainFamily: 'dash' }, 'bitcoin')
+  ).toBe(false)
+  expect(
+    keySourceSupportsChainFamily(
+      { kind: 'private-key', chainFamily: 'bip122', bitcoinNetwork: 'mainnet' },
+      'dash'
+    )
+  ).toBe(false)
 })

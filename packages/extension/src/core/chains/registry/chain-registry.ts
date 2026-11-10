@@ -47,6 +47,7 @@ const CHAIN_FAMILIES = new Set([
   'zcash',
   'evm',
   'bitcoin',
+  'dash',
   'pearl',
   'quantus',
   'solana',

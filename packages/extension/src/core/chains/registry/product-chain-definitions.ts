@@ -1,6 +1,7 @@
 import type { Network } from '@/types'
 import {
   BITCOIN_CHAIN_FEATURE_FLAG,
+  DASH_CHAIN_FEATURE_FLAG,
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
@@ -9,6 +10,7 @@ import {
   ZCASH_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import {
+  getDashNetworkConfig,
   getEvmNetworkConfigs,
   getNearNetworkConfig,
   getNearNetworkConfigs,
@@ -25,7 +27,13 @@ import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import type { AssetDefinitionInput } from './asset-registry'
 import type { ChainDefinitionInput } from './chain-registry'
 import { createChainRegistry, type ChainRegistry } from './chain-registry'
-import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS, QUANTUS_CHAIN_IDS, ZCASH_CHAIN_IDS } from './chain-ids'
+import {
+  BITCOIN_CHAIN_IDS,
+  DASH_CHAIN_IDS,
+  PEARL_CHAIN_IDS,
+  QUANTUS_CHAIN_IDS,
+  ZCASH_CHAIN_IDS
+} from './chain-ids'
 
 function zcashDefinition(network: Network): ChainDefinitionInput {
   return {
@@ -105,6 +113,36 @@ function bitcoinDefinition(network: Network): ChainDefinitionInput {
         status: 'available',
         transactionFormats: ['psbt-v0'],
         messageFormats: ['bip322']
+      },
+      transaction: {
+        status: 'available',
+        model: 'utxo',
+        actions: ['native-transfer']
+      }
+    }
+  }
+}
+
+function dashDefinition(network: Network): ChainDefinitionInput {
+  const config = getDashNetworkConfig(network)
+  return {
+    id: config.chainId,
+    family: 'dash',
+    network: { kind: network, name: network },
+    displayName: config.displayName,
+    featureFlag: DASH_CHAIN_FEATURE_FLAG,
+    capabilities: {
+      address: {
+        status: 'available',
+        addressSchemes: ['dash_p2pkh'],
+        derivationSchemes: ['bip44', 'imported'],
+        supportsRotation: false,
+        supportsChange: true
+      },
+      signing: {
+        status: 'available',
+        transactionFormats: ['psbt-v0'],
+        messageFormats: ['dash-core-compact']
       },
       transaction: {
         status: 'available',
@@ -287,6 +325,7 @@ export function getInitialProductChainDefinitions(
     ...getEvmNetworkConfigs(network).map(getEvmChainDefinition),
     ...additionalEvmNetworks.map(getEvmChainDefinition),
     bitcoinDefinition(network),
+    dashDefinition(network),
     pearlDefinition(network),
     quantusDefinition(network),
     getSolanaBetaChainDefinition(
@@ -313,6 +352,10 @@ export function getZcashChainId(network: Network): string {
 
 export function getBitcoinChainId(network: Network): string {
   return BITCOIN_CHAIN_IDS[network]
+}
+
+export function getDashChainId(network: Network): string {
+  return DASH_CHAIN_IDS[network]
 }
 
 export function getPearlChainId(network: Network): string {
@@ -374,6 +417,27 @@ export function getBundledBitcoinAssetDefinitions(
         symbol: 'BTC',
         decimals: 8,
         iconUrl: formatNativeTokenIconUrl('bitcoin')
+      },
+      source: 'bundled',
+      verification: 'trusted'
+    }
+  ])
+}
+
+export function getBundledDashAssetDefinitions(network: Network): readonly AssetDefinitionInput[] {
+  const config = getDashNetworkConfig(network)
+  const iconUrl = formatNativeTokenIconUrl('dash')
+  return Object.freeze([
+    {
+      chainId: config.chainId,
+      namespace: 'slip44',
+      reference: config.assetSlip44,
+      kind: 'native',
+      metadata: {
+        name: 'Dash',
+        symbol: config.nativeSymbol,
+        decimals: config.nativeDecimals,
+        ...(iconUrl ? { iconUrl } : {})
       },
       source: 'bundled',
       verification: 'trusted'
@@ -444,6 +508,7 @@ export function getBundledInitialProductAssetDefinitions(
     ...getBundledEvmAssetDefinitions(network),
     ...additionalEvmNetworks.flatMap(getEvmAssetDefinitions),
     ...getBundledBitcoinAssetDefinitions(network),
+    ...getBundledDashAssetDefinitions(network),
     ...getBundledPearlAssetDefinitions(network),
     ...getBundledQuantusAssetDefinitions(network),
     {

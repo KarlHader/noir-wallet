@@ -18,6 +18,7 @@ export interface RpcRegistryChain {
     | 'evm-json-rpc'
     | 'bitcoin-esplora'
     | 'pearl-blockbook'
+    | 'dash-insight'
     | 'solana-json-rpc'
     | 'near-json-rpc'
     | 'quantus-json-rpc'
@@ -469,6 +470,7 @@ function isSupportedProbe(value: unknown): value is RpcRegistryChain['probe'] {
     value === 'evm-json-rpc' ||
     value === 'bitcoin-esplora' ||
     value === 'pearl-blockbook' ||
+    value === 'dash-insight' ||
     value === 'solana-json-rpc' ||
     value === 'near-json-rpc' ||
     value === 'quantus-json-rpc'

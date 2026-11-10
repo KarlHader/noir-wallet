@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
 import type { PortfolioReadModel } from '@/core/portfolio'
+import { DASH_CHAIN_FEATURE_FLAG } from '@/config/multichain-feature-flags'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActivityItem } from '@/core/activity'
 import {
@@ -303,15 +304,18 @@ export function AssetDetail() {
   const fiatValue = asset ? getPortfolioAssetUsdValue(asset, prices) : null
   const explorerUrl =
     asset && chain ? formatChainAssetExplorerUrl(chain.chain.id, asset.asset, currentNetwork) : ''
+  const dashActionsEnabled =
+    __ENABLED_CHAIN_FEATURE_FLAGS__.includes(DASH_CHAIN_FEATURE_FLAG) &&
+    chain?.chain.family === 'dash'
   const canSend = Boolean(
     chain &&
     chain.chain.capabilities.transaction.status === 'available' &&
-    ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
+    (['zcash', 'evm', 'bitcoin'].includes(chain.chain.family) || dashActionsEnabled)
   )
   const canReceive = Boolean(
     chain &&
     chain.chain.capabilities.address.status === 'available' &&
-    ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
+    (['zcash', 'evm', 'bitcoin'].includes(chain.chain.family) || dashActionsEnabled)
   )
   const canSwap = Boolean(
     asset && chain && ['zcash', 'evm', 'bitcoin'].includes(chain.chain.family)
