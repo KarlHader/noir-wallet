@@ -313,13 +313,14 @@ export function ImportPrivateKey() {
                 Change
               </button>
             </div>
-            {detection?.format === 'ambiguous-hex' && !familyOverride && (
-              <p className="mt-3 text-xs leading-4 text-muted">
-                {detection.format === 'bitcoin-wif'
-                  ? 'This WIF encoding is shared by Bitcoin and Pearl. Choose the network this key came from.'
-                  : 'A 32-byte hex key can be used by multiple networks. Noir Wallet defaults it to EVM.'}
-              </p>
-            )}
+            {(detection?.format === 'bitcoin-wif' || detection?.format === 'ambiguous-hex') &&
+              !familyOverride && (
+                <p className="mt-3 text-xs leading-4 text-muted">
+                  {detection.format === 'bitcoin-wif'
+                    ? 'This WIF encoding is shared by Bitcoin and Pearl. Choose the network this key came from.'
+                    : 'A 32-byte hex key can be used by multiple networks. Noir Wallet defaults it to EVM.'}
+                </p>
+              )}
             {testnetWifChoice && (
               <div className="mt-3 border-t border-border pt-3">
                 <p className="text-xs leading-4 text-muted">

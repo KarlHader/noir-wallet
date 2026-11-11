@@ -4,4 +4,5 @@
  */
 import { Buffer } from 'buffer'
 
-globalThis.Buffer = Buffer
+const scope = globalThis as typeof globalThis & { Buffer: typeof Buffer }
+scope.Buffer = Buffer
