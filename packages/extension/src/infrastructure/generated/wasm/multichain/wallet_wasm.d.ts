@@ -1,14 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
 
-// Symbol.dispose ships with ESNext.Disposable. Declare it here so this
-// generated file typechecks against the ES2022 lib used by the wallet SDK.
-declare global {
-    interface SymbolConstructor {
-        readonly dispose: unique symbol;
-    }
-}
-
 export class WalletEngine {
     free(): void;
     [Symbol.dispose](): void;

@@ -14,8 +14,8 @@
     {
       "path": "wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 20293,
-      "sha256": "b58213103f7c69fd8acbed096bb9a86fff82742208ebba8e19d2e82c61b9e8a6"
+      "bytes": 20044,
+      "sha256": "38fc7e7b015730135379508c8acc7613278a4f6f781569e48f3c4985d0e0fb92"
     },
     {
       "path": "wallet_wasm.js",
@@ -26,8 +26,8 @@
     {
       "path": "wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 4401421,
-      "sha256": "0fc1f35097c3d1a49a63320bf52c1d9b5802e8370bcfde82329799d5ee7fd7f8"
+      "bytes": 4401385,
+      "sha256": "5550ac21530fe94c8802c30fd651bed349466784abf8e3c9697f022104ba2deb"
     },
     {
       "path": "wallet_wasm_bg.wasm.d.ts",
