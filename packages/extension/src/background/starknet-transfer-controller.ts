@@ -1,6 +1,7 @@
 import type { Account, ChainAccount } from '@/core/accounts/domain'
 import { parseAssetId } from '@/core/chains/registry'
 import { normalizeStarknetFelt } from '@/core/chains/starknet/identifiers'
+import { StarknetProviderError, STARKNET_ERROR } from '@/core/dapp/starknet-provider'
 import type { KeyDomainSource } from '@/core/keyring/domain'
 import type { TransactionGraph, TransactionId } from '@/core/transactions/domain'
 import type {
@@ -12,6 +13,7 @@ import {
   STARKNET_ARGENT_V04_CLASS_HASH,
   STARKNET_ARGENT_V05_CLASS_HASH
 } from '@/infrastructure/chains/starknet/starknet-primitives'
+import { StarknetUndeployedAccountError } from '@/infrastructure/chains/starknet/starknet-transfer-preparer'
 
 export interface ActiveStarknetTransferContext {
   readonly chainAccount: ChainAccount
@@ -75,14 +77,36 @@ export class BackgroundStarknetTransferController {
       ) {
         throw new Error('Starknet account changed')
       }
-      return this.options.orchestrator.quoteInvoke({
-        account: {
-          chainId: input.chainId,
-          address: input.accountAddress,
-          publicKey: account.publicKey,
-          classHash: account.classHash
-        },
-        calls: input.calls
+      const reference = {
+        chainId: input.chainId,
+        address: input.accountAddress,
+        publicKey: account.publicKey,
+        classHash: account.classHash
+      }
+      const ledger =
+        account.keyDomainSource.kind === 'hardware' && account.keyDomainSource.vendor === 'ledger'
+      const quote = ledger
+        ? this.options.orchestrator
+            .quoteLedgerInvoke({ account: reference, calls: input.calls })
+            .then(quoted => ({
+              nonce: quoted.nonce,
+              resourceBounds: quoted.resourceBounds,
+              ...(quoted.deploy ? { deploy: quoted.deploy } : {})
+            }))
+        : this.options.orchestrator
+            .quoteInvoke({ account: reference, calls: input.calls })
+            .then(quoted => ({
+              nonce: quoted.nonce,
+              resourceBounds: quoted.resourceBounds
+            }))
+      return quote.catch(error => {
+        if (error instanceof StarknetUndeployedAccountError) {
+          throw new StarknetProviderError(
+            STARKNET_ERROR.unknown,
+            'Starknet hardware deploy is not enabled'
+          )
+        }
+        throw error
       })
     })
   }

@@ -1413,6 +1413,17 @@ export function ApprovalPage() {
                 </div>
               )}
             </ApprovalDetailCard>
+            {action === 'starknetTransaction' && data.deploysAccount === true && (
+              <WarningBox>
+                <div className="flex-1">
+                  <span className="font-medium">Account deployment:</span>
+                  <p className="mt-1 text-xs">
+                    This account has not been deployed yet. The wallet will sign and broadcast a
+                    deploy first, then the transfer.
+                  </p>
+                </div>
+              </WarningBox>
+            )}
             <DAppNetworkCard
               chain="Starknet"
               network={typeof data.networkName === 'string' ? data.networkName : 'Starknet'}

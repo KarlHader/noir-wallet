@@ -40,6 +40,7 @@ import {
 import {
   parseUnsignedBuild,
   prepareStarknetTransfer,
+  quoteStarknetDAppInvoke,
   quoteStarknetInvoke,
   quoteStarknetMaximum,
   type StarknetAccountRef,
@@ -131,6 +132,40 @@ export class StarknetTransferOrchestrator {
       ...(input.signal === undefined ? {} : { signal: input.signal })
     })
     return { nonce: quoted.nonce, resourceBounds: quoted.resourceBounds }
+  }
+
+  async quoteLedgerInvoke(input: {
+    readonly account: StarknetAccountRef
+    readonly calls: readonly StarknetCall[]
+    readonly signal?: AbortSignal
+  }): Promise<{
+    readonly nonce: string
+    readonly resourceBounds: StarknetPreparedTransfer['invoke']['resourceBounds']
+    readonly deploy: {
+      readonly nonce: string
+      readonly resourceBounds: StarknetPreparedTransfer['invoke']['resourceBounds']
+    } | null
+  }> {
+    this.assertChain(input.account.chainId)
+    const quoted = await quoteStarknetDAppInvoke({
+      rpc: this.options.rpc,
+      builder: this.options.builder,
+      account: input.account,
+      calls: input.calls,
+      ...(input.signal === undefined ? {} : { signal: input.signal })
+    })
+    return {
+      nonce: quoted.invoke.nonce,
+      resourceBounds: quoted.invoke.resourceBounds,
+      ...(quoted.deploy
+        ? {
+            deploy: {
+              nonce: quoted.deploy.nonce,
+              resourceBounds: quoted.deploy.resourceBounds
+            }
+          }
+        : { deploy: null })
+    }
   }
 
   async quoteMaximum(input: {

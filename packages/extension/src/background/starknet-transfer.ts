@@ -476,10 +476,39 @@ export function createStarknetLedgerDappSigner(
       ) {
         throw new Error('Starknet Ledger account is not selected')
       }
-      if (
-        normalizeStarknetFelt(context.classHash) ===
-        normalizeStarknetFelt(STARKNET_ARGENT_V05_CLASS_HASH)
-      ) {
+      const classHash = normalizeStarknetFelt(context.classHash)
+      if (input.quote.deploy) {
+        const constructorCalldata =
+          classHash === normalizeStarknetFelt(STARKNET_ARGENT_V04_CLASS_HASH)
+            ? ['0x0', input.account.publicKey, '0x1']
+            : []
+        const builtDeploy = parseUnsignedBuild(
+          await signer.buildUnsignedDeployAccount({
+            chainId: input.chainId,
+            senderAddress: input.account.address,
+            publicKey: input.account.publicKey,
+            classHash: input.account.classHash,
+            nonce: input.quote.deploy.nonce,
+            resourceBounds: input.quote.deploy.resourceBounds,
+            paymasterData: [],
+            constructorCalldata,
+            query: false
+          }),
+          false
+        )
+        const signedDeploy = await signStarknetLedgerTransaction(signer, {
+          account: context,
+          kind: 'starknet-deploy-account',
+          transactionHash: builtDeploy.transactionHash,
+          transaction: builtDeploy.transaction,
+          resourceBounds: input.quote.deploy.resourceBounds,
+          constructorCalldata
+        })
+        const deployHash = await rpc.addDeployAccountTransaction(signedDeploy)
+        if (deployHash !== builtDeploy.transactionHash) {
+          throw new Error('Starknet deploy hash does not match the review')
+        }
+      } else if (classHash === normalizeStarknetFelt(STARKNET_ARGENT_V05_CLASS_HASH)) {
         const deployment = await readStarknetAccountDeployment(rpc, input.account.address)
         if (!deployment.deployed) throw new Error('Starknet hardware deploy is not enabled')
       }

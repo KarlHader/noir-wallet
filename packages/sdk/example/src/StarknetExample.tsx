@@ -14,7 +14,7 @@ const STARKNET_BALANCE_SELECTORS = [
   '0x35a73cd311a05d46deda634c5ee045db92f811b4e74bca4437fcb5302b7af33'
 ] as const
 const STRK_DECIMALS = 18
-const FELT_PRIME = 1n << 251n
+const FELT_PRIME = 0x800000000000011000000000000000000000000000000000000000000000001n
 const FELT_CHAIN_IDS = {
   mainnet: '0x534e5f4d41494e',
   testnet: '0x534e5f5345504f4c4941'
@@ -142,7 +142,9 @@ class StarknetCallError extends Error {
 function isMissingEntrypoint(error: unknown): boolean {
   return (
     error instanceof StarknetCallError &&
-    (error.code === 40 || /ENTRYPOINT_NOT_FOUND|Entry point not found/i.test(error.message))
+    (error.code === 40 ||
+      error.code === 21 ||
+      /ENTRYPOINT_NOT_FOUND|Entry point not found|does not exist/i.test(error.message))
   )
 }
 
@@ -227,6 +229,7 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
   const [accounts, setAccounts] = useState<readonly string[]>([])
   const [chainId, setChainId] = useState('')
   const [balance, setBalance] = useState('')
+  const [balanceError, setBalanceError] = useState<string | null>(null)
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
   const [message, setMessage] = useState('Hello Noir Wallet')
@@ -241,6 +244,10 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
   const networkMode = navigation.networkMode
   const onNetworkModeChange = navigation.onNetworkModeChange
   const balanceGeneration = useRef(0)
+  const networkModeRef = useRef(networkMode)
+  networkModeRef.current = networkMode
+  const onNetworkModeChangeRef = useRef(onNetworkModeChange)
+  onNetworkModeChangeRef.current = onNetworkModeChange
 
   useEffect(() => {
     if (!provider) return
@@ -279,12 +286,16 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
       const network = describeStarknetNetwork(nextChainId)
       if (!network) throw new Error('Noir Wallet returned an unsupported Starknet chain.')
       setChainId(nextChainId)
-      if (network.mode !== networkMode) onNetworkModeChange(network.mode)
+      if (network.mode !== networkModeRef.current) onNetworkModeChangeRef.current(network.mode)
       const nextBalance = await readStrkBalance(network.mode, address, signal)
       if (signal?.aborted || balanceGeneration.current !== generation) return
       setBalance(nextBalance)
-    } catch {
-      if (!signal?.aborted && balanceGeneration.current === generation) setBalance('')
+      setBalanceError(null)
+    } catch (error) {
+      if (!signal?.aborted && balanceGeneration.current === generation) {
+        setBalance('')
+        setBalanceError(formatError(error))
+      }
     }
   }
 
@@ -292,6 +303,7 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
     if (!provider || !account) {
       balanceGeneration.current += 1
       setBalance('')
+      setBalanceError(null)
       return
     }
     const controller = new AbortController()
@@ -300,7 +312,7 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
       balanceGeneration.current += 1
       controller.abort()
     }
-  }, [account, provider, networkMode, onNetworkModeChange])
+  }, [account, provider])
 
   const run = async (action: () => Promise<string>) => {
     setError(null)
@@ -481,7 +493,7 @@ export function StarknetExample({ navigation }: { navigation: ExampleNavigationP
           <Result label="Address" value={account || 'Not connected'} />
           <Result
             label="Native balance"
-            value={balance ? `${balance} native units` : 'Unavailable'}
+            value={balance ? `${balance} native units` : (balanceError ?? 'Unavailable')}
           />
           <details className="network-method-example">
             <summary>Starknet chain example</summary>

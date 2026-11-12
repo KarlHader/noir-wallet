@@ -179,7 +179,7 @@ import {
   createBackgroundRheaSwapNearCoordinator,
   type RheaSwapNearCoordinator
 } from './rhea-swap-near'
-import { DASH_CHAIN_IDS, isBitcoinChainId, isDashChainId } from '@/core/chains/registry/chain-ids'
+import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { isAssetMarketHistoryRange } from '@/core/prices'
@@ -431,6 +431,7 @@ import {
   cancelLedgerSigning,
   cancelAllLedgerSigning
 } from './ledger-signing-coordinator'
+import { ledgerSigningChainFamily } from './ledger-chain-family'
 import { readLedgerProvisioningCredential } from './ledger-signing-bridge'
 
 import type { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
@@ -1880,19 +1881,7 @@ logger.configureDiagnostics(appendDiagnosticLog)
 configureLedgerSigningCoordinator(async scope => {
   if (networkRestartRequired || !(await credentialSession.hasUnlockSession()))
     throw new Error('Wallet is locked or restarting')
-  const parsed = parseChainId(scope.chainId)
-  const family =
-    parsed.namespace === 'eip155'
-      ? 'evm'
-      : parsed.namespace === 'solana'
-        ? 'solana'
-        : parsed.namespace === 'near'
-          ? 'near'
-          : isBitcoinChainId(parsed.id)
-            ? 'bitcoin'
-            : isDashChainId(parsed.id)
-              ? 'dash'
-              : null
+  const family = ledgerSigningChainFamily(scope.chainId)
   if (!family) throw new Error('Unsupported Ledger chain')
   await credentialLifecycle.assertActiveAccountSupportsChain(
     scope.keyDomainId,

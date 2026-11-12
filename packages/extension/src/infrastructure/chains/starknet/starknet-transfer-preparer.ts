@@ -105,6 +105,60 @@ export async function quoteStarknetInvoke(input: {
   )
 }
 
+export class StarknetUndeployedAccountError extends Error {
+  constructor() {
+    super('Starknet hardware deploy is not enabled')
+    this.name = 'StarknetUndeployedAccountError'
+  }
+}
+
+/**
+ * Quotes a dApp invoke for a Ledger account. Deployed accounts are quoted as a
+ * single invoke. Undeployed Argent v0.4 accounts are quoted as a deploy (nonce 0)
+ * plus an invoke (nonce 1) so the approval flow can sign and broadcast both.
+ * Undeployed accounts that cannot be deployed raise a typed error so the dApp
+ * handler can reject the request before opening the approval popup.
+ */
+export async function quoteStarknetDAppInvoke(input: {
+  readonly rpc: Pick<StarknetReadRpc, 'estimateFees' | 'getNonce' | 'getClassHashAt'>
+  readonly builder: StarknetUnsignedBuilder
+  readonly account: StarknetAccountRef
+  readonly calls: readonly StarknetCall[]
+  readonly signal?: AbortSignal
+}): Promise<{
+  readonly deploy: StarknetPreparedFee | null
+  readonly invoke: StarknetPreparedFee
+}> {
+  const deployment = await readStarknetAccountDeployment(
+    input.rpc,
+    input.account.address,
+    input.signal
+  )
+  if (!deployment.deployed) {
+    if (!canDeployStarknetAccount(input.account.classHash)) {
+      throw new StarknetUndeployedAccountError()
+    }
+    return quoteUndeployedTransfer(
+      input.rpc,
+      input.builder,
+      input.account,
+      input.calls,
+      input.signal
+    )
+  }
+  return {
+    deploy: null,
+    invoke: await quoteInvokeAtNonce(
+      input.rpc,
+      input.builder,
+      input.account,
+      input.calls,
+      deployment.nonce,
+      input.signal
+    )
+  }
+}
+
 export async function prepareStarknetTransfer(input: {
   readonly rpc: Pick<StarknetReadRpc, 'estimateFees' | 'getNonce' | 'getClassHashAt' | 'call'>
   readonly builder: StarknetUnsignedBuilder

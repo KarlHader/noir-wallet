@@ -49,6 +49,15 @@ export interface StarknetResourceBound {
   readonly maxPricePerUnit: string
 }
 
+export interface StarknetDeployQuote {
+  readonly nonce: string
+  readonly resourceBounds: {
+    readonly l1Gas: StarknetResourceBound
+    readonly l2Gas: StarknetResourceBound
+    readonly l1DataGas: StarknetResourceBound
+  }
+}
+
 export interface StarknetInvokeQuote {
   readonly nonce: string
   readonly resourceBounds: {
@@ -57,6 +66,7 @@ export interface StarknetInvokeQuote {
     readonly l1DataGas: StarknetResourceBound
   }
   readonly tip?: string
+  readonly deploy?: StarknetDeployQuote
 }
 
 export interface StarknetInvokeQuoter {
@@ -440,7 +450,8 @@ export class StarknetDAppHandler {
         calldata: [...call.calldata]
       })),
       nonce: quote.nonce,
-      resourceBounds: quote.resourceBounds
+      resourceBounds: quote.resourceBounds,
+      ...(quote.deploy ? { deploysAccount: true } : {})
     })
     if (!decision.approved) {
       throw new StarknetProviderError(
