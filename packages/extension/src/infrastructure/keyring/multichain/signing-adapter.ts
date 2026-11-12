@@ -54,6 +54,12 @@ import {
   type NearSigningPreparePayload
 } from './signing-adapter-near'
 import {
+  adaptStarknetPreparedSigning,
+  adaptStarknetSignedResult,
+  parseStarknetSigningPreparePayload,
+  type StarknetSigningPreparePayload
+} from './signing-adapter-starknet'
+import {
   adaptPearlPreparedSigning,
   adaptPearlSignedResult,
   parsePearlSigningPreparePayload,
@@ -66,6 +72,7 @@ import {
   type DashSigningPreparePayload
 } from './signing-adapter-dash'
 import type { RawDashAccount } from './dash-codecs'
+import type { RawDerivedStarknetAccount } from './starknet-codecs'
 import {
   adaptQuantusPreparedSigning,
   adaptQuantusSignedResult,
@@ -127,6 +134,7 @@ type EvmTransaction =
 export type ParsedSigningPreparePayload =
   | SolanaSigningPreparePayload
   | NearSigningPreparePayload
+  | StarknetSigningPreparePayload
   | PearlSigningPreparePayload
   | DashSigningPreparePayload
   | QuantusSigningPreparePayload
@@ -197,6 +205,7 @@ export interface AdaptedPreparedSigning {
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
     | RawDashAccount
+    | RawDerivedStarknetAccount
   readonly prepared: PreparedSigningCommand
 }
 
@@ -324,6 +333,13 @@ export function parseSigningPreparePayload(value: unknown): ParsedSigningPrepare
   }
   if (record.kind === 'near-transaction' || record.kind === 'near-nep413-message') {
     return parseNearSigningPreparePayload(record)
+  }
+  if (
+    record.kind === 'starknet-invoke' ||
+    record.kind === 'starknet-deploy-account' ||
+    record.kind === 'starknet-typed-data'
+  ) {
+    return parseStarknetSigningPreparePayload(record)
   }
   if (record.kind === 'pearl-psbt' || record.kind === 'pearl-bip322-message') {
     return parsePearlSigningPreparePayload(record)
@@ -1148,6 +1164,7 @@ function isRawDashAccount(
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
     | RawDashAccount
+    | RawDerivedStarknetAccount
 ): account is RawDashAccount {
   return 'addressScheme' in account && account.addressScheme === 'dash_p2pkh'
 }
@@ -1213,6 +1230,10 @@ export async function adaptPreparedSigning(
       return adaptNearPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
     case 'quantus-transfer':
       return adaptQuantusPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
+    case 'starknet-invoke':
+    case 'starknet-deploy-account':
+    case 'starknet-typed-data':
+      return adaptStarknetPreparedSigning(raw, payload, signingCommandId, expiresAt)
   }
 }
 
@@ -1228,6 +1249,7 @@ export function adaptSignedResult(
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
     | RawDashAccount
+    | RawDerivedStarknetAccount
 ): SigningResult {
   switch (kind) {
     case 'evm-transaction':
@@ -1296,5 +1318,12 @@ export function adaptSignedResult(
         throw new Error('Quantus signing account is missing')
       }
       return adaptQuantusSignedResult(raw, account)
+    case 'starknet-invoke':
+    case 'starknet-deploy-account':
+    case 'starknet-typed-data':
+      if (!('addressScheme' in account) || account.addressScheme !== 'starknet') {
+        throw new Error('Starknet signing account is missing')
+      }
+      return adaptStarknetSignedResult(kind, raw, account)
   }
 }

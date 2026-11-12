@@ -27,6 +27,7 @@ import {
   type ExampleNavigationProps,
   type ExampleProviderId
 } from './ProviderExamples'
+import { StarknetExample, starknetExampleNetworkMode } from './StarknetExample'
 import {
   EVM_NETWORK_EXAMPLES,
   getEvmNetworkExamples,
@@ -252,7 +253,8 @@ function App() {
         saved === 'pearl' ||
         saved === 'quantus' ||
         saved === 'solana' ||
-        saved === 'near'
+        saved === 'near' ||
+        saved === 'starknet'
         ? saved
         : 'zcash'
     } catch {
@@ -302,6 +304,24 @@ function App() {
     window.addEventListener('noirwallet#initialized', onReady)
     return () => window.removeEventListener('noirwallet#initialized', onReady)
   }, [noirWallet])
+  useEffect(() => {
+    const starknet = noirWallet?.starknet
+    if (!starknet) return
+    let cancelled = false
+    void starknet
+      .request<string>({ type: 'wallet_requestChainId' })
+      .then(chainId => {
+        if (cancelled) return
+        const mode = starknetExampleNetworkMode(chainId)
+        if (mode) handleExampleNetworkModeChange(mode)
+      })
+      .catch(() => {
+        // Keep the current chain list when the wallet cannot report its Starknet chain.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [noirWallet, handleExampleNetworkModeChange])
   const [connected, setConnected] = useState(false)
   const [addresses, setAddresses] = useState<ZcashAddress | null>(null)
   const [balance, setBalance] = useState<Balance | null>(null)
@@ -771,6 +791,9 @@ function App() {
         chain={activeProvider}
       />
     )
+  }
+  if (activeProvider === 'starknet') {
+    return <StarknetExample navigation={exampleNavigation} />
   }
 
   return (

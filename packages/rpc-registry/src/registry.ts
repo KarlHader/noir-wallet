@@ -11,6 +11,7 @@ export type RpcProbeKind =
   | 'solana-json-rpc'
   | 'near-json-rpc'
   | 'quantus-json-rpc'
+  | 'starknet-json-rpc'
 
 export interface RpcRegistryEndpoint {
   id: string
@@ -65,7 +66,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-11-09T10:00:00.000Z',
+  updatedAt: '2026-11-12T07:40:00.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -291,6 +292,13 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
     chain('near:testnet', TESTNET, 'NEAR Testnet', 'near', 'near-json-rpc', [
       ['official', 'NEAR', 'https://rpc.testnet.near.org'],
       ['fastnear', 'Fastnear', 'https://test.rpc.fastnear.com']
+    ]),
+    chain('starknet:SN_MAIN', MAINNET, 'Starknet', 'starknet', 'starknet-json-rpc', [
+      ['publicnode', 'PublicNode', 'https://starknet-rpc.publicnode.com']
+    ]),
+    chain('starknet:SN_SEPOLIA', TESTNET, 'Starknet Sepolia', 'starknet', 'starknet-json-rpc', [
+      ['publicnode', 'PublicNode', 'https://starknet-sepolia-rpc.publicnode.com'],
+      ['drpc', 'dRPC', 'https://starknet-sepolia.drpc.org']
     ])
   ]
 }

@@ -84,7 +84,7 @@ await Promise.all([
     moduleName: 'wallet_wasm',
     engine: 'multichain',
     schemaVersion: 2,
-    sourceCommit: '8103f125404272ae1181bbe7b887f8b05732f051'
+    sourceCommit: '1659f959ca34f07072c0fe75c8c07b12eebe348c'
   })
 ])
 

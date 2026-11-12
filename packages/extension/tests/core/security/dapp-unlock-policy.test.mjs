@@ -17,10 +17,20 @@ test.describe('dApp unlock policy', () => {
       ['solana', 'connect'],
       ['solana', 'requestAccounts'],
       ['near', 'connect'],
-      ['near', 'requestAccounts']
+      ['near', 'requestAccounts'],
+      ['starknet', 'wallet_requestAccounts']
     ]) {
       expect(isExplicitMultichainConnectRequest(request(chainId, method))).toBe(true)
     }
+
+    expect(
+      isExplicitMultichainConnectRequest({
+        type: 'DAPP_REQUEST',
+        requestId: 'request-1',
+        chainId: 'starknet',
+        request: { method: 'wallet_requestAccounts', params: { silent_mode: true } }
+      })
+    ).toBe(false)
 
     for (const [chainId, method] of [
       ['evm', 'eth_accounts'],

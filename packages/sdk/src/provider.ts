@@ -8,6 +8,7 @@ import type { QuantusProvider } from './chains/quantus/types'
 import type { EvmProvider } from './chains/evm/types'
 import type { SolanaProvider } from './chains/solana/types'
 import type { NearProvider } from './chains/near/types'
+import type { StarknetProvider } from './chains/starknet/types'
 import type { MultichainProvider, MultichainRequestArguments } from './chains/multichain/types'
 
 interface RawNoirWallet {
@@ -23,6 +24,7 @@ interface RawNoirWallet {
   quantus?: QuantusProvider
   solana?: SolanaProvider
   near?: NearProvider
+  starknet?: StarknetProvider
 }
 
 function isRawNoirWallet(value: unknown): value is RawNoirWallet {
@@ -54,7 +56,8 @@ export function getNoirWallet(): NoirWalletProvider | null {
     ...(rawWallet.pearl ? { pearl: rawWallet.pearl } : {}),
     ...(rawWallet.quantus ? { quantus: rawWallet.quantus } : {}),
     ...(rawWallet.solana ? { solana: rawWallet.solana } : {}),
-    ...(rawWallet.near ? { near: rawWallet.near } : {})
+    ...(rawWallet.near ? { near: rawWallet.near } : {}),
+    ...(rawWallet.starknet ? { starknet: rawWallet.starknet } : {})
   }
 }
 

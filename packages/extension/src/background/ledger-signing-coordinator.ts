@@ -10,7 +10,9 @@ import type { LedgerSolanaSigningRequest, LedgerSolanaSigningResponse } from '@/
 import type { LedgerNearSigningRequest, LedgerNearSigningResponse } from '@/lib/ledger/near'
 import type {
   LedgerDashSigningRequest,
-  LedgerDashSigningResponse
+  LedgerDashSigningResponse,
+  LedgerStarknetSigningRequest,
+  LedgerStarknetSigningResponse
 } from '@/core/keyring/protocol/ledger-signing'
 import type {
   LedgerDeviceSigningRequest,
@@ -114,6 +116,10 @@ export function requestLedgerSignature(
   request: LedgerDashSigningRequest,
   binding: LedgerSigningBinding
 ): Promise<LedgerDashSigningResponse>
+export function requestLedgerSignature(
+  request: LedgerStarknetSigningRequest,
+  binding: LedgerSigningBinding
+): Promise<LedgerStarknetSigningResponse>
 export async function requestLedgerSignature(
   request: LedgerDeviceSigningRequest,
   binding: LedgerSigningBinding

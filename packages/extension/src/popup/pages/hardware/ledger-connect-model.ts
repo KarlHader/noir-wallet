@@ -19,17 +19,19 @@ export function ledgerAvailableFamilies(network: Network): readonly LedgerChainF
       .list()
       .map(chain => chain.family)
   )
-  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash'] as const).filter(
+  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash', 'starknet'] as const).filter(
     family => families.has(family) && (family !== 'dash' || network === 'mainnet')
   )
 }
 
 export function ledgerFamilyChoices(availableFamilies: readonly LedgerChainFamily[]) {
   const available = new Set(availableFamilies)
-  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash'] as const).map(family => ({
-    family,
-    enabled: available.has(family)
-  }))
+  return (['zcash', 'bitcoin', 'evm', 'solana', 'near', 'dash', 'starknet'] as const).map(
+    family => ({
+      family,
+      enabled: available.has(family)
+    })
+  )
 }
 
 export function ledgerSelectedPaths(accounts: readonly LedgerPublicAccount[]) {
@@ -79,6 +81,34 @@ export function ledgerLogicalAccountIndex(
     ? parseLedgerAccountIndex(String(Math.max(-1, ...accounts.map(account => account.index)) + 1))
     : parseLedgerAccountIndex(selection)
 }
+export function ledgerAccountCoversRequest(
+  account: LedgerPublicAccount,
+  family: LedgerChainFamily,
+  accountIndex: number,
+  network: Network
+): boolean {
+  if (account.family !== family || account.accountIndex !== accountIndex) return false
+  if (account.family === 'starknet') return true
+  return !('network' in account) || account.network === network
+}
+
+export function resolveStarknetLedgerSelection(
+  accounts: readonly LedgerPublicAccount[] | undefined,
+  network: Network,
+  path?: string
+): Extract<LedgerPublicAccount, { family: 'starknet' }> {
+  const expected = accounts?.find(
+    account =>
+      account.family === 'starknet' && (path === undefined || account.derivationPath === path)
+  )
+  if (!expected || expected.family !== 'starknet') {
+    throw new Error('Select a Starknet Ledger account from the account list')
+  }
+  if (expected.network === network) return expected
+  if (path !== undefined && expected.derivationPath === path) return { ...expected, network }
+  throw new Error('Select a Starknet Ledger account from the account list')
+}
+
 export function ledgerRegisteredFamilies(
   credential: LedgerHardwareCredential | undefined,
   accountIndex: number | null,
@@ -90,13 +120,19 @@ export function ledgerRegisteredFamilies(
       credential.accountExport.ufvk.startsWith(network === 'mainnet' ? 'uview1' : 'uviewtest1')
       ? ['zcash']
       : []
-  return credential.accountExport.accounts
-    .filter(
-      account =>
-        account.accountIndex === accountIndex &&
-        (!('network' in account) || account.network === network)
+  return [
+    ...new Set(
+      credential.accountExport.accounts
+        .filter(
+          account =>
+            account.accountIndex === accountIndex &&
+            (account.family === 'starknet' ||
+              !('network' in account) ||
+              account.network === network)
+        )
+        .map(account => account.family)
     )
-    .map(account => account.family)
+  ]
 }
 export function ledgerCanAddZcashAccount(
   credential: LedgerHardwareCredential | undefined,

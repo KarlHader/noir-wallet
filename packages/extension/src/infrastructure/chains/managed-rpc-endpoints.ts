@@ -2,8 +2,10 @@ import type { Network } from '@/types'
 import {
   findBuiltinEvmNetworkConfig,
   getSolanaNetworkConfig,
+  getStarknetNetworkConfig,
   type NearNetwork,
-  type SolanaCluster
+  type SolanaCluster,
+  type StarknetNetwork
 } from '@/config/networks'
 import {
   getDefaultEvmRpcEndpoint,
@@ -106,4 +108,15 @@ export function resolveQuantusRpcEndpointOptions(network: Network): readonly Rpc
     'quantus-json-rpc'
   )
   return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.quantus[network])
+}
+
+export function resolveStarknetRpcEndpointOptions(
+  network: StarknetNetwork
+): readonly RpcEndpointOption[] {
+  const managed = getManagedRpcEndpointOptions(
+    getStarknetNetworkConfig(network).chainId,
+    network,
+    'starknet-json-rpc'
+  )
+  return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.starknet[network])
 }

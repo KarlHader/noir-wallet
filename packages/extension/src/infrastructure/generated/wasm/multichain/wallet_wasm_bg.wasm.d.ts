@@ -2,8 +2,9 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_walletengine_free: (a: number, b: number) => void;
-export const walletengine_assembleStarknetDeployAccountExternal: (a: number, b: number, c: number, d: number) => void;
-export const walletengine_assembleStarknetInvokeExternal: (a: number, b: number, c: number, d: number) => void;
+export const walletengine_attachStarknetSignature: (a: number, b: number, c: number, d: number) => void;
+export const walletengine_buildStarknetUnsignedDeployAccount: (a: number, b: number, c: number, d: number) => void;
+export const walletengine_buildStarknetUnsignedInvoke: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_computeStarknetAccountAddress: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_confirmBitcoinMessage: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_confirmBitcoinPsbt: (a: number, b: number, c: number, d: number) => void;
@@ -31,7 +32,6 @@ export const walletengine_deriveBitcoinAccount: (a: number, b: number, c: number
 export const walletengine_deriveBitcoinAccounts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const walletengine_deriveDashAccount: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const walletengine_deriveDashAccounts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
-export const walletengine_deriveDashCoinJoinGap: (a: number, b: number, c: number, d: number, e: number) => void;
 export const walletengine_deriveEvmAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const walletengine_deriveNearAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const walletengine_derivePeaAccount: (a: number, b: number, c: number, d: number) => void;
@@ -46,12 +46,10 @@ export const walletengine_deriveStarknetAccounts: (a: number, b: number, c: numb
 export const walletengine_deriveTronAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const walletengine_exportPrivateKey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const walletengine_getDashCoinJoinStatus: (a: number, b: number, c: number) => void;
-export const walletengine_getDashCoinJoinWatchList: (a: number, b: number, c: number) => void;
 export const walletengine_hashStarknetTypedData: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_importPrivateKey: (a: number, b: number, c: number, d: number, e: number) => void;
 export const walletengine_importStarknetAccount: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const walletengine_importWallet: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
-export const walletengine_listDashCoinJoinCoins: (a: number, b: number, c: number) => void;
 export const walletengine_loadDashCoinJoinState: (a: number, b: number, c: number, d: number, e: number) => void;
 export const walletengine_lock: (a: number, b: number) => number;
 export const walletengine_lockAll: (a: number) => void;
@@ -77,14 +75,11 @@ export const walletengine_prepareQuantusTransfer: (a: number, b: number, c: numb
 export const walletengine_prepareSolanaMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const walletengine_prepareSolanaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const walletengine_prepareStarknetDeployAccount: (a: number, b: number, c: number, d: number, e: number) => void;
-export const walletengine_prepareStarknetDeployAccountExternal: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_prepareStarknetInvoke: (a: number, b: number, c: number, d: number, e: number) => void;
-export const walletengine_prepareStarknetInvokeExternal: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_prepareStarknetTypedData: (a: number, b: number, c: number, d: number, e: number) => void;
 export const walletengine_prepareTronMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const walletengine_prepareTronTransaction: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_processDashCoinJoinEvent: (a: number, b: number, c: number, d: number, e: number) => void;
-export const walletengine_recoverDashCoinJoinAddresses: (a: number, b: number, c: number, d: number, e: number) => void;
 export const walletengine_registerQuantusNetwork: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const walletengine_rejectSigningRequest: (a: number, b: number, c: number) => number;
 export const walletengine_requestDashCoinJoinFundingAddresses: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -98,7 +93,6 @@ export const walletengine_verifyDashMessage: (a: number, b: number, c: number, d
 export const walletengine_verifyNearMessage: (a: number, b: number, c: number) => void;
 export const walletengine_verifyPearlMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const walletengine_verifySolanaMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
-export const walletengine_verifyStarknetSignature: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_verifyStarknetTypedData: (a: number, b: number, c: number, d: number) => void;
 export const walletengine_verifyTronMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const rustsecp256k1_v0_10_0_context_create: (a: number) => number;

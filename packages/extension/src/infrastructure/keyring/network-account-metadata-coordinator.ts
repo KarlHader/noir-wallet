@@ -52,6 +52,15 @@ export interface NetworkAccountMetadataInput {
   readonly quantus?: DerivedQuantusNetworkAccount
   readonly solana?: DerivedEd25519NetworkAccount
   readonly near?: DerivedEd25519NetworkAccount
+  readonly starknet?: DerivedStarknetNetworkAccount
+}
+
+export interface DerivedStarknetNetworkAccount {
+  readonly chainId: string
+  readonly address: string
+  readonly publicKey: string
+  readonly classHash: string
+  readonly derivationPath: string
 }
 
 export interface DerivedQuantusNetworkAccount {
@@ -158,6 +167,10 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
       : normalizeEd25519Account(value.solana, 'solana', accountIndex)
   const near =
     value.near === undefined ? undefined : normalizeEd25519Account(value.near, 'near', accountIndex)
+  const starknet =
+    value.starknet === undefined
+      ? undefined
+      : normalizeStarknetAccount(value.starknet, accountIndex)
   return Object.freeze({
     ...value,
     keyDomainId,
@@ -169,7 +182,35 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
     ...(pearl === undefined ? {} : { pearl }),
     ...(quantus === undefined ? {} : { quantus }),
     ...(solana === undefined ? {} : { solana }),
-    ...(near === undefined ? {} : { near })
+    ...(near === undefined ? {} : { near }),
+    ...(starknet === undefined ? {} : { starknet })
+  })
+}
+
+function normalizeStarknetAccount(
+  value: DerivedStarknetNetworkAccount,
+  accountIndex: number
+): DerivedStarknetNetworkAccount {
+  const chainId = parseChainId(value.chainId).id
+  if (chainId !== 'starknet:SN_MAIN' && chainId !== 'starknet:SN_SEPOLIA') {
+    throw new Error('Network Account metadata requires a Starknet chain')
+  }
+  const expectedPath = `m/44'/9004'/${accountIndex}'/0/0`
+  if (value.derivationPath !== expectedPath) {
+    throw new Error('Network Account metadata Starknet derivation index mismatch')
+  }
+  if (!/^0x[0-9a-f]{1,64}$/.test(value.address) || !/^0x[0-9a-f]{1,64}$/.test(value.publicKey)) {
+    throw new Error('Network Account metadata Starknet address is invalid')
+  }
+  if (!/^0x[0-9a-f]{1,64}$/.test(value.classHash)) {
+    throw new Error('Network Account metadata Starknet class hash is invalid')
+  }
+  return Object.freeze({
+    chainId,
+    address: value.address,
+    publicKey: value.publicKey,
+    classHash: value.classHash,
+    derivationPath: expectedPath
   })
 }
 
@@ -617,6 +658,32 @@ export class NetworkAccountMetadataCoordinator {
                     walletCompatibility: 'broad' as const
                   })),
                   reconcileExisting: true
+                }
+              ]),
+          ...(input.starknet === undefined
+            ? []
+            : [
+                {
+                  chainId: input.starknet.chainId,
+                  role: `starknet:${input.starknet.chainId}`,
+                  derivation: { scheme: 'bip44' as const, path: input.starknet.derivationPath },
+                  identity: input.starknet.address,
+                  addresses: [
+                    {
+                      role: 'receive-0',
+                      value: input.starknet.address,
+                      scheme: 'starknet' as const,
+                      purpose: 'identity' as const,
+                      derivation: {
+                        scheme: 'bip44' as const,
+                        path: input.starknet.derivationPath
+                      },
+                      rotatable: false,
+                      preferredForReceive: true,
+                      privacy: 'transparent' as const,
+                      walletCompatibility: 'broad' as const
+                    }
+                  ]
                 }
               ])
         ]

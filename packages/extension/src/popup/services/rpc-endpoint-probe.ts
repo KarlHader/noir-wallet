@@ -5,6 +5,7 @@ import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
 import { attestDashInsightEndpoint } from '@/infrastructure/chains/dash'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near/near-network-attestation'
+import { attestStarknetRpcEndpoint } from '@/infrastructure/chains/starknet/starknet-network-attestation'
 import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
 import { attestQuantusRpcEndpoint } from '@/infrastructure/chains/quantus'
 import { attestSolanaRpcEndpoint } from '@/infrastructure/chains/solana/solana-network-attestation'
@@ -100,6 +101,13 @@ export async function probeChainRpcEndpoint(
         break
       case 'quantus-json-rpc':
         await attestQuantusRpcEndpoint({
+          chainId: option.chainId,
+          rpcUrl: url,
+          signal: controller.signal
+        })
+        break
+      case 'starknet-json-rpc':
+        await attestStarknetRpcEndpoint({
           chainId: option.chainId,
           rpcUrl: url,
           signal: controller.signal

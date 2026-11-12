@@ -94,6 +94,8 @@ export const CHAIN_BLOCK_EXPLORER_ALTERNATIVES: Readonly<
       addressPath: 'account'
     }
   ],
+  [STARKNET_NETWORKS.mainnet.chainId]: STARKNET_NETWORKS.mainnet.alternateExplorers,
+  [STARKNET_NETWORKS.testnet.chainId]: STARKNET_NETWORKS.testnet.alternateExplorers,
   'eip155:1': [
     { label: 'Blockscout', baseUrl: 'https://eth.blockscout.com', transactionPath: 'tx' }
   ],
@@ -132,4 +134,4 @@ export const CHAIN_BLOCK_EXPLORER_ALTERNATIVES: Readonly<
   ]
 }
 import { BITCOIN_CHAIN_IDS, DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
-import { DASH_NETWORKS, SOLANA_NETWORKS } from './networks'
+import { DASH_NETWORKS, SOLANA_NETWORKS, STARKNET_NETWORKS } from './networks'

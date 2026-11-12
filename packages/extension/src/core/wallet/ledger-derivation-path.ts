@@ -139,3 +139,28 @@ export function validateLedgerNearDerivationPath(path: string): string {
   }
   return path
 }
+
+export function validateLedgerStarknetDerivationPath(path: string): string {
+  const parts = components(path, 'Starknet')
+  const index = parts[5]
+  if (
+    parts.length !== 6 ||
+    parts[0] !== "2645'" ||
+    parts[1] !== "1195502025'" ||
+    parts[2] !== "1148870696'" ||
+    parts[3] !== "0'" ||
+    parts[4] !== "0'" ||
+    index === undefined ||
+    !/^(?:0|[1-9][0-9]*)$/.test(index)
+  ) {
+    throw new Error('Invalid Ledger Starknet derivation path')
+  }
+  return path
+}
+
+export function ledgerStarknetDerivationPath(index: number): string {
+  if (!Number.isSafeInteger(index) || index < 0 || index > MAX_INDEX) {
+    throw new Error('Invalid Ledger derivation index')
+  }
+  return `m/2645'/1195502025'/1148870696'/0'/0'/${index}`
+}

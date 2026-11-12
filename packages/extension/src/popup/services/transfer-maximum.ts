@@ -10,6 +10,10 @@ import {
 import { rheaSwapClient } from './rhea-swap-client'
 import { EvmWalletClientError } from './evm-wallet-client'
 
+import { resolveStarknetMaxAmount } from '@/infrastructure/chains/starknet'
+
+export { resolveStarknetMaxAmount }
+
 export function createNativeTransferSource(input: {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
@@ -33,6 +37,7 @@ export function createNativeTransferSource(input: {
     return { ...base, family, bitcoinAddressType: input.bitcoinAddressType ?? 'p2wpkh' }
   if (family === 'evm' || family === 'solana' || family === 'near' || family === 'pearl')
     return { ...base, family }
+  if (family === 'starknet') throw new Error('Starknet transfers use the Starknet send form')
   throw new Error('Unsupported transfer source')
 }
 

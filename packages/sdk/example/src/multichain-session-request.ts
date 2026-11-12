@@ -22,6 +22,7 @@ export function buildExampleMultichainSessionRequest(
       ? 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
       : 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
   const nearChainId = networkMode === 'mainnet' ? 'near:mainnet' : 'near:testnet'
+  const starknetChainId = networkMode === 'mainnet' ? 'starknet:SN_MAIN' : 'starknet:SN_SEPOLIA'
   const evmChainId = `eip155:${Number.parseInt(evmChainIdHex, 16)}`
 
   return {
@@ -93,6 +94,24 @@ export function buildExampleMultichainSessionRequest(
             [nearChainId]: {
               methods: ['getAccounts', 'signTransaction', 'requestSignTransactions', 'signMessage'],
               notifications: ['wallet_sessionChanged', 'accountsChanged']
+            }
+          }
+        : {}),
+      ...(wallet.starknet
+        ? {
+            [starknetChainId]: {
+              methods: [
+                'wallet_requestAccounts',
+                'wallet_getPermissions',
+                'wallet_requestChainId',
+                'wallet_deploymentData',
+                'wallet_addInvokeTransaction',
+                'wallet_signTypedData',
+                'wallet_switchStarknetChain',
+                'wallet_watchAsset',
+                'wallet_disconnect'
+              ],
+              notifications: ['wallet_sessionChanged', 'accountsChanged', 'networkChanged']
             }
           }
         : {})

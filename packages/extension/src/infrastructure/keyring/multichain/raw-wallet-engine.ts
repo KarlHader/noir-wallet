@@ -184,6 +184,24 @@ export interface RawWalletEngine {
   prepareQuantusCall(sessionId: number, request: unknown): unknown
   prepareQuantusTransfer(sessionId: number, request: unknown): unknown
   confirmQuantusCall(sessionId: number, requestId: number): unknown
+  deriveStarknetAccount(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    addressIndex: number,
+    classHash: string
+  ): unknown
+  prepareStarknetInvoke(sessionId: number, requestJson: string): unknown
+  confirmStarknetInvoke(sessionId: number, requestId: number): unknown
+  prepareStarknetDeployAccount(sessionId: number, requestJson: string): unknown
+  confirmStarknetDeployAccount(sessionId: number, requestId: number): unknown
+  prepareStarknetTypedData(sessionId: number, requestJson: string): unknown
+  confirmStarknetTypedData(sessionId: number, requestId: number): unknown
+  computeStarknetAccountAddress(requestJson: string): unknown
+  buildStarknetUnsignedInvoke(requestJson: string): unknown
+  buildStarknetUnsignedDeployAccount(requestJson: string): unknown
+  attachStarknetSignature(requestJson: string): unknown
+  hashStarknetTypedData(requestJson: string): unknown
   verifyBitcoinMessage(
     chainId: string,
     address: string,

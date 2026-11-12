@@ -5,7 +5,12 @@ import type {
   PearlBip322MessageSummary,
   PearlPsbtSummary,
   QuantusTransferSummary,
-  SigningSummary
+  SigningSummary,
+  StarknetCallSummary,
+  StarknetDeployAccountSummary,
+  StarknetInvokeSummary,
+  StarknetResourceBoundsSummary,
+  StarknetTypedDataSummary
 } from '@/core/keyring/domain'
 import type {
   DashMessageSummary,
@@ -245,9 +250,104 @@ export function buildSigningSummaryReviewModel(
       return nearMessageReview(summary)
     case 'quantus.transfer.v1':
       return quantusTransactionReview(summary)
+    case 'starknet.invoke.v1':
+      return starknetInvokeReview(summary)
+    case 'starknet.deploy-account.v1':
+      return starknetDeployAccountReview(summary)
+    case 'starknet.typed-data.v1':
+      return starknetTypedDataReview(summary)
     default:
       return assertNever(summary)
   }
+}
+
+function starknetBoundRows(
+  bounds: StarknetResourceBoundsSummary
+): readonly SigningSummaryReviewRow[] {
+  return (['l1Gas', 'l2Gas', 'l1DataGas'] as const).flatMap(name => [
+    reviewRow(`${name} max amount`, bounds[name].maxAmount, { code: true }),
+    reviewRow(`${name} max price`, bounds[name].maxPricePerUnit, { code: true })
+  ])
+}
+
+function starknetCallRows(
+  calls: readonly StarknetCallSummary[]
+): readonly SigningSummaryReviewRow[] {
+  return calls.flatMap((call, index) => [
+    reviewRow(`Call ${index + 1} contract`, call.to, { code: true, breakAll: true }),
+    reviewRow(`Call ${index + 1} selector`, call.selector, { code: true, breakAll: true }),
+    reviewRow(`Call ${index + 1} calldata count`, String(call.calldata.length), { code: true })
+  ])
+}
+
+function starknetInvokeReview(summary: StarknetInvokeSummary): SigningSummaryReviewModel {
+  return completeReviewModel(summary, {
+    title: 'Sign Starknet transaction',
+    description:
+      'Each call is unrecognized. Verify the destination and calldata before continuing.',
+    sections: [
+      {
+        title: 'Transaction',
+        rows: [
+          reviewRow('Sender', summary.fields.senderAddress, { code: true, breakAll: true }),
+          reviewRow('Nonce', summary.fields.nonce, { code: true, breakAll: true }),
+          reviewRow('Tip', summary.fields.tip, { code: true }),
+          reviewRow('Nonce data', summary.fields.nonceDataAvailabilityMode),
+          reviewRow('Fee data', summary.fields.feeDataAvailabilityMode),
+          ...starknetBoundRows(summary.fields.resourceBounds)
+        ]
+      },
+      {
+        title: `Calls (${summary.fields.calls.length})`,
+        rows: starknetCallRows(summary.fields.calls)
+      }
+    ]
+  })
+}
+
+function starknetDeployAccountReview(
+  summary: StarknetDeployAccountSummary
+): SigningSummaryReviewModel {
+  return completeReviewModel(summary, {
+    title: 'Deploy Starknet account',
+    description: 'This creates a new account contract. Verify the class hash and constructor data.',
+    sections: [
+      {
+        title: 'Account',
+        rows: [
+          reviewRow('Contract', summary.fields.contractAddress, { code: true, breakAll: true }),
+          reviewRow('Class hash', summary.fields.classHash, { code: true, breakAll: true }),
+          reviewRow('Salt', summary.fields.salt, { code: true, breakAll: true }),
+          reviewRow('Constructor calldata', summary.fields.constructorCalldata.join(', '), {
+            code: true,
+            breakAll: true
+          }),
+          reviewRow('Nonce', summary.fields.nonce, { code: true, breakAll: true }),
+          reviewRow('Tip', summary.fields.tip, { code: true }),
+          reviewRow('Nonce data', summary.fields.nonceDataAvailabilityMode),
+          reviewRow('Fee data', summary.fields.feeDataAvailabilityMode),
+          ...starknetBoundRows(summary.fields.resourceBounds)
+        ]
+      }
+    ]
+  })
+}
+
+function starknetTypedDataReview(summary: StarknetTypedDataSummary): SigningSummaryReviewModel {
+  return completeReviewModel(summary, {
+    title: 'Sign Starknet typed data',
+    description: 'The message contents are opaque. Read the full typed data before continuing.',
+    sections: [
+      {
+        title: 'Typed data',
+        rows: [
+          reviewRow('Account', summary.fields.accountAddress, { code: true, breakAll: true }),
+          reviewRow('Public key', summary.fields.publicKey, { code: true, breakAll: true }),
+          ...canonicalContentRows('Content', summary.fields.typedData)
+        ]
+      }
+    ]
+  })
 }
 
 export type {

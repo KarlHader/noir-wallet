@@ -14,8 +14,8 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/multichain-wallet-wasm.git'
-const SOURCE_COMMIT = '8103f125404272ae1181bbe7b887f8b05732f051'
-const ABI_VERSION = 'wallet-engine-8103f12-v12'
+const SOURCE_COMMIT = '1659f959ca34f07072c0fe75c8c07b12eebe348c'
+const ABI_VERSION = 'wallet-engine-1659f95-v11'
 const RUST_TOOLCHAIN = '1.96.1'
 const WASM_PACK_VERSION = '0.14.0'
 const WASM_BINDGEN_VERSION = '0.2.126'
@@ -40,6 +40,7 @@ const CAPABILITIES = Object.freeze(
     'account.pearl.imported',
     'account.solana.derive',
     'account.solana.imported',
+    'account.starknet.derive',
     'bitcoin.bip322.full.sign',
     'bitcoin.bip322.full.verify',
     'bitcoin.bip322.sign',
@@ -76,6 +77,9 @@ const CAPABILITIES = Object.freeze(
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',
+    'starknet.deploy-account.sign',
+    'starknet.invoke.sign',
+    'starknet.typed-data.sign',
     'vault.argon2id-xchacha20poly1305',
     'vault.private-key-v2'
   ].sort()

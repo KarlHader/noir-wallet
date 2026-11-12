@@ -14,6 +14,9 @@ import { getDashNetworkConfig } from '@/config/networks'
 import { createConfiguredEvmRpcClient } from '@/infrastructure/chains/evm'
 import { createConfiguredSolanaRpcClient } from '@/infrastructure/chains/solana'
 import { createConfiguredNearRpcClient } from '@/infrastructure/chains/near'
+import { createStarknetRpcClient } from '@/infrastructure/chains/starknet/starknet-rpc-client'
+import { readStarknetTokenBalance } from '@/infrastructure/chains/starknet/starknet-balance-reader'
+import { getStarknetNetworkConfig } from '@/core/chains/starknet/network-config'
 import { discoverNearAccounts } from '@/infrastructure/chains/near/near-account-discovery'
 import { createConfiguredBitcoinEsploraClient } from '@/infrastructure/chains/bitcoin'
 import type { Network } from '@/types'
@@ -110,6 +113,26 @@ export async function readLedgerAccountPreview(
         used: snapshot !== null,
         accountName:
           discovered.primaryAccountId !== account.address ? discovered.primaryAccountId : undefined
+      }
+    }
+    if (account.family === 'starknet') {
+      if (account.network !== network) return { status: 'unavailable' }
+      const config = getStarknetNetworkConfig(network === 'mainnet' ? 'mainnet' : 'testnet')
+      const rpc = createStarknetRpcClient({ chainId: config.chainId, rpcUrl: config.rpcUrl })
+      const balance = await readStarknetTokenBalance(
+        rpc,
+        config.feeTokenReference,
+        account.address,
+        signal
+      )
+      const fee = config.tokens.find(token => token.reference === config.feeTokenReference)
+      return {
+        status: 'available',
+        balanceRaw: balance.toString(),
+        decimals: fee?.decimals ?? 18,
+        symbol: fee?.symbol ?? 'STRK',
+        networkName: config.displayName,
+        used: balance > 0n
       }
     }
     if (account.family === 'dash') {

@@ -129,6 +129,8 @@ function chainDisplayName(
   metadata: ReadonlyMap<string, ActivityChainMetadata>
 ): string {
   if (chainId === 'near:mainnet') return 'NEAR'
+  if (chainId === 'starknet:SN_MAIN') return 'Starknet'
+  if (chainId === 'starknet:SN_SEPOLIA') return 'Starknet Sepolia'
   return resolveActivityChainMetadata(chainId, metadata)?.displayName ?? 'Unknown network'
 }
 

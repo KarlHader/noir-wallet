@@ -1,7 +1,9 @@
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { getNearNetworkConfig, getSolanaNetworkConfig } from '@/config/networks'
+import { getStarknetNetworkConfig } from '@/core/chains/starknet/network-config'
 import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { assertLedgerDashDeviceSupported } from '@/lib/ledger/dash-model'
+import { assertLedgerStarknetDeviceSupported } from '@/lib/ledger/starknet-model'
 import { isNewWalletFamilyEnabled } from '@/core/chains/feature-runtime-policy'
 import { getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
 import type { StorageV2Snapshot } from '@/ports/repositories'
@@ -15,6 +17,16 @@ import {
 export function assertLedgerDashFeature(deviceModel: string, network: Network): void {
   if (network !== 'mainnet') throw new Error('Dash hardware wallets support mainnet only')
   assertLedgerDashDeviceSupported(deviceModel)
+}
+
+export function assertLedgerStarknetFeature(
+  deviceModel: string,
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): void {
+  if (!isNewWalletFamilyEnabled('starknet', enabledFlags)) {
+    throw new Error('Starknet Ledger is disabled')
+  }
+  assertLedgerStarknetDeviceSupported(deviceModel)
 }
 
 export function assertRetainedDisabledLedgerAccounts(
@@ -67,9 +79,11 @@ export function assertRetainedDisabledLedgerProjections(
               ? network === 'mainnet'
                 ? DASH_CHAIN_IDS.mainnet
                 : null
-              : account.family === 'zcash'
-                ? getZcashChainId(network)
-                : null
+              : account.family === 'starknet'
+                ? getStarknetNetworkConfig(network === 'mainnet' ? 'mainnet' : 'testnet').chainId
+                : account.family === 'zcash'
+                  ? getZcashChainId(network)
+                  : null
     const owner = snapshot.accounts.find(
       item => item.keyDomainId === keyDomainId && item.accountIndex === account.accountIndex
     )

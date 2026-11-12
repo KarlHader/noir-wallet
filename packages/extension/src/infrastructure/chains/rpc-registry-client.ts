@@ -22,6 +22,7 @@ export interface RpcRegistryChain {
     | 'solana-json-rpc'
     | 'near-json-rpc'
     | 'quantus-json-rpc'
+    | 'starknet-json-rpc'
   endpoints: RpcEndpointOption[]
 }
 
@@ -473,7 +474,8 @@ function isSupportedProbe(value: unknown): value is RpcRegistryChain['probe'] {
     value === 'dash-insight' ||
     value === 'solana-json-rpc' ||
     value === 'near-json-rpc' ||
-    value === 'quantus-json-rpc'
+    value === 'quantus-json-rpc' ||
+    value === 'starknet-json-rpc'
   )
 }
 

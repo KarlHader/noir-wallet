@@ -20,6 +20,7 @@ export type ExampleChainIcon =
   | 'quantus'
   | 'solana'
   | 'near'
+  | 'starknet'
   | 'xlayer'
   | 'zcash'
 
@@ -43,6 +44,7 @@ const EXAMPLE_CHAIN_ICON_URLS: Readonly<Record<ExampleChainIcon, string>> = Obje
   quantus: `${import.meta.env.BASE_URL}quantus.svg`,
   solana: chainIconUrl('solana'),
   near: chainIconUrl('near'),
+  starknet: `${import.meta.env.BASE_URL}starknet.svg`,
   xlayer: chainIconUrl('xlayer'),
   zcash: chainIconUrl('zcash')
 })

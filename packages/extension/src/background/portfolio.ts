@@ -22,6 +22,12 @@ import {
   readNearPortfolioSource
 } from '@/infrastructure/chains/near'
 import {
+  createStarknetRpcClient,
+  readStarknetPortfolioSource
+} from '@/infrastructure/chains/starknet'
+import { getStarknetNetworkConfig } from '@/core/chains/starknet/network-config'
+import { findChainEndpointOverride } from '@/core/chains/chain-endpoint-settings'
+import {
   createConfiguredSolanaRpcClient,
   readSolanaPortfolioSource
 } from '@/infrastructure/chains/solana'
@@ -160,6 +166,32 @@ export function createBackgroundPortfolioCoordinator(
         readSource: input => readQuantusPortfolioSource({ ...input, rpc: quantusRpc })
       })
     : undefined
+  const starknetConfig = getStarknetNetworkConfig(DEFAULT_NETWORK)
+  const starknetOverride = endpointSettings
+    ? findChainEndpointOverride(endpointSettings, starknetConfig.chainId)?.rpc
+    : undefined
+  const starknetPortfolio = chains.get(parseChainId(starknetConfig.chainId).id)
+    ? new SingleChainPortfolioCoordinator({
+        storageRepository,
+        cacheRepository,
+        chains,
+        assets,
+        chainId: starknetConfig.chainId,
+        family: 'starknet',
+        readSource: input =>
+          readStarknetPortfolioSource({
+            ...input,
+            network: DEFAULT_NETWORK,
+            rpc: createStarknetRpcClient({
+              chainId: starknetConfig.chainId,
+              rpcUrl:
+                starknetOverride?.protocol === 'starknet-json-rpc'
+                  ? starknetOverride.url
+                  : starknetConfig.rpcUrl
+            })
+          })
+      })
+    : undefined
 
   return new UnifiedPortfolioCoordinator({
     storageRepository,
@@ -172,6 +204,7 @@ export function createBackgroundPortfolioCoordinator(
     solanaPortfolio,
     nearPortfolio,
     quantusPortfolio,
+    starknetPortfolio,
     onBackgroundBitcoinRefreshError: error => {
       const { currentWalletId, currentAccountId } = useWalletStore.getState()
       logger.warn(

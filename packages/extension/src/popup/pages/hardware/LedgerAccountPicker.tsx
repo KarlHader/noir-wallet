@@ -79,7 +79,7 @@ export function LedgerAccountPicker(props: {
             <button
               key={account.derivationPath}
               type="button"
-              disabled={props.busy || candidate.registered}
+              disabled={props.busy || candidate.registered || Boolean(candidate.blockedReason)}
               aria-pressed={props.selectedPath === account.derivationPath}
               className={cn(
                 'w-full rounded-xl border px-3 py-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50',
@@ -102,6 +102,9 @@ export function LedgerAccountPicker(props: {
               <span className="mt-0.5 block font-mono text-xs text-muted" title={address}>
                 {address.slice(0, 12)}…{address.slice(-10)}
               </span>
+              {candidate.detail && (
+                <span className="mt-0.5 block text-xs text-muted">{candidate.detail}</span>
+              )}
             </button>
           )
         })}

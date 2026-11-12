@@ -18,7 +18,10 @@ export const SIGNING_SUMMARY_SCHEMAS = Object.freeze([
   'tron.sign-message-v2.v1',
   'near.transaction.v1',
   'near.nep413-message.v1',
-  'quantus.transfer.v1'
+  'quantus.transfer.v1',
+  'starknet.invoke.v1',
+  'starknet.deploy-account.v1',
+  'starknet.typed-data.v1'
 ] as const)
 
 export type SigningSummarySchema = (typeof SIGNING_SUMMARY_SCHEMAS)[number]
@@ -32,6 +35,7 @@ export type SigningSummaryFamily =
   | 'tron'
   | 'near'
   | 'quantus'
+  | 'starknet'
 export type SigningOperation = 'transaction' | 'message'
 export type SigningReviewLevel = 'standard' | 'caution' | 'blocked'
 export type SigningReviewIssueCode =
@@ -617,6 +621,64 @@ export type QuantusTransferSummary = SigningSummaryEnvelope<
   }
 >
 
+export interface StarknetResourceBoundSummary {
+  readonly maxAmount: string
+  readonly maxPricePerUnit: string
+}
+
+export interface StarknetResourceBoundsSummary {
+  readonly l1Gas: StarknetResourceBoundSummary
+  readonly l2Gas: StarknetResourceBoundSummary
+  readonly l1DataGas: StarknetResourceBoundSummary
+}
+
+export interface StarknetCallSummary {
+  readonly to: string
+  readonly selector: string
+  readonly entrypoint: null
+  readonly calldata: readonly string[]
+}
+
+export type StarknetInvokeSummary = SigningSummaryEnvelope<
+  'starknet.invoke.v1',
+  'transaction',
+  {
+    readonly senderAddress: string
+    readonly nonce: string
+    readonly tip: string
+    readonly resourceBounds: StarknetResourceBoundsSummary
+    readonly calls: readonly StarknetCallSummary[]
+    readonly nonceDataAvailabilityMode: 'l1' | 'l2'
+    readonly feeDataAvailabilityMode: 'l1' | 'l2'
+  }
+>
+
+export type StarknetDeployAccountSummary = SigningSummaryEnvelope<
+  'starknet.deploy-account.v1',
+  'transaction',
+  {
+    readonly contractAddress: string
+    readonly classHash: string
+    readonly salt: string
+    readonly constructorCalldata: readonly string[]
+    readonly nonce: string
+    readonly tip: string
+    readonly resourceBounds: StarknetResourceBoundsSummary
+    readonly nonceDataAvailabilityMode: 'l1' | 'l2'
+    readonly feeDataAvailabilityMode: 'l1' | 'l2'
+  }
+>
+
+export type StarknetTypedDataSummary = SigningSummaryEnvelope<
+  'starknet.typed-data.v1',
+  'message',
+  {
+    readonly accountAddress: string
+    readonly publicKey: string
+    readonly typedData: CanonicalContent
+  }
+>
+
 export type SigningSummary =
   | ZcashTransactionSummary
   | ZcashMessageSummary
@@ -636,6 +698,9 @@ export type SigningSummary =
   | NearTransactionSummary
   | NearNep413MessageSummary
   | QuantusTransferSummary
+  | StarknetInvokeSummary
+  | StarknetDeployAccountSummary
+  | StarknetTypedDataSummary
 
 export interface SigningSummaryExpectation {
   readonly chainId: ChainId

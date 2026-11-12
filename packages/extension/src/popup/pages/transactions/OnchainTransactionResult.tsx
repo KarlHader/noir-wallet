@@ -139,13 +139,29 @@ export function OnchainTransactionResult({
     () => getOnchainResultTotal(amountRaw, feeRaw, asset.metadata.decimals, showTotal),
     [amountRaw, asset.metadata.decimals, feeRaw, showTotal]
   )
-  const transactionHash = activity?.transactionHash ?? segmentEvidence?.transactionHash
+  const starknetSegmentHashes =
+    chain.chain.family === 'starknet'
+      ? graph.segments.flatMap(segment => {
+          const hash = segment.evidence?.transactionHash
+          return typeof hash === 'string' ? [hash] : []
+        })
+      : []
+  const deployTransactionHash =
+    starknetSegmentHashes.length > 1 ? starknetSegmentHashes[0] : undefined
+  const transactionHash =
+    starknetSegmentHashes.length > 1
+      ? starknetSegmentHashes[starknetSegmentHashes.length - 1]
+      : (activity?.transactionHash ?? segmentEvidence?.transactionHash)
   const replacementTransactionHash =
     activity?.replacementTransactionHash ?? segmentEvidence?.replacementTransactionHash
   const recipient = graph.root.intent?.recipient?.address
   const explorerUrl =
     transactionHash && explorerBaseUrl
       ? `${explorerBaseUrl}/${explorerTransactionPath}/${transactionHash}`
+      : null
+  const deployExplorerUrl =
+    deployTransactionHash && explorerBaseUrl
+      ? `${explorerBaseUrl}/${explorerTransactionPath}/${deployTransactionHash}`
       : null
   const replacementExplorerUrl =
     replacementTransactionHash && explorerBaseUrl
@@ -222,6 +238,20 @@ export function OnchainTransactionResult({
                 <span className="font-mono text-muted" title={recipient}>
                   {formatSortAddress(recipient)}
                 </span>
+              </DetailLine>
+            )}
+            {deployTransactionHash && (
+              <DetailLine label="Deploy transaction">
+                <a
+                  href={deployExplorerUrl ?? undefined}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 font-mono text-primary hover:underline"
+                  title={deployTransactionHash}
+                >
+                  {formatSortAddress(deployTransactionHash)}
+                  <Icon icon="lucide:external-link" width={12} height={12} />
+                </a>
               </DetailLine>
             )}
             {transactionHash && (

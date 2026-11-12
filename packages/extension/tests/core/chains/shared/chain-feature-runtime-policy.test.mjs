@@ -12,7 +12,8 @@ import {
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
-  resolveSolanaFeatureRuntimePolicy
+  resolveSolanaFeatureRuntimePolicy,
+  resolveStarknetFeatureRuntimePolicy
 } from '../../../../src/core/chains/feature-runtime-policy.ts'
 
 describe('Chain feature runtime policy', () => {
@@ -29,6 +30,9 @@ describe('Chain feature runtime policy', () => {
     assert.equal(resolveDashFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
     assert.equal(isNewWalletFamilyEnabled('dash', enabled), false)
     assert.equal(enabled.includes('chain.dash'), false)
+    assert.equal(resolveStarknetFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
+    assert.equal(isNewWalletFamilyEnabled('starknet', enabled), false)
+    assert.equal(enabled.includes('chain.starknet'), false)
   })
 
   it('permits an explicit deferred-chain verification profile without changing the default', () => {
@@ -111,5 +115,20 @@ describe('Chain feature runtime policy', () => {
     assert.deepEqual(resolveNearFeatureRuntimePolicy(['chain.zcash', 'chain.near']), {
       newOperationsEnabled: true
     })
+  })
+
+  it('keeps Starknet closed unless its own release flag is present', () => {
+    assert.deepEqual(resolveStarknetFeatureRuntimePolicy(['chain.zcash']), {
+      newOperationsEnabled: false
+    })
+    assert.equal(
+      resolveStarknetFeatureRuntimePolicy(['chain.zcash', 'chain.near']).newOperationsEnabled,
+      false
+    )
+    assert.deepEqual(resolveStarknetFeatureRuntimePolicy(['chain.zcash', 'chain.starknet']), {
+      newOperationsEnabled: true
+    })
+    assert.equal(isNewWalletFamilyEnabled('starknet', ['chain.zcash', 'chain.near']), false)
+    assert.equal(isNewWalletFamilyEnabled('starknet', ['chain.zcash', 'chain.starknet']), true)
   })
 })

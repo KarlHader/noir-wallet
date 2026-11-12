@@ -240,6 +240,39 @@ const baseSummaries = [
     blockNumber: 1024,
     callHash: `0x${'44'.repeat(32)}`,
     callLength: 13
+  }),
+  summary('starknet.invoke.v1', 'starknet:SN_MAIN', 'transaction', {
+    senderAddress: '0x1',
+    nonce: '0x2',
+    tip: '0',
+    resourceBounds: {
+      l1Gas: { maxAmount: '1', maxPricePerUnit: '2' },
+      l2Gas: { maxAmount: '3', maxPricePerUnit: '4' },
+      l1DataGas: { maxAmount: '5', maxPricePerUnit: '6' }
+    },
+    calls: [{ to: '0x3', selector: '0x4', entrypoint: null, calldata: ['0x5'] }],
+    nonceDataAvailabilityMode: 'l1',
+    feeDataAvailabilityMode: 'l2'
+  }),
+  summary('starknet.deploy-account.v1', 'starknet:SN_MAIN', 'transaction', {
+    contractAddress: '0x6',
+    classHash: '0x7',
+    salt: '0x8',
+    constructorCalldata: ['0x9'],
+    nonce: '0x1',
+    tip: '0',
+    resourceBounds: {
+      l1Gas: { maxAmount: '1', maxPricePerUnit: '2' },
+      l2Gas: { maxAmount: '3', maxPricePerUnit: '4' },
+      l1DataGas: { maxAmount: '5', maxPricePerUnit: '6' }
+    },
+    nonceDataAvailabilityMode: 'l1',
+    feeDataAvailabilityMode: 'l1'
+  }),
+  summary('starknet.typed-data.v1', 'starknet:SN_MAIN', 'message', {
+    accountAddress: '0x1',
+    publicKey: '0x2',
+    typedData: content()
   })
 ]
 

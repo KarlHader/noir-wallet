@@ -55,6 +55,7 @@ const PEARL_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.p
 const QUANTUS_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.quantus')
 const SOLANA_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.solana')
 const NEAR_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.near')
+const STARKNET_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.starknet')
 
 const BACKGROUND_RESPONSE_ERROR =
   'No response from Noir Wallet background. Reload the page and try again.'
@@ -62,6 +63,7 @@ const CONNECTION_METHODS = new Set([
   'zcash_requestAccounts',
   'eth_requestAccounts',
   'wallet_requestPermissions',
+  'wallet_requestAccounts',
   'connect',
   'requestAccounts',
   'wallet_createSession'
@@ -265,9 +267,10 @@ function setupMessageBridge() {
 
     if (
       (chainId === 'solana' && !SOLANA_PROVIDER_ENABLED) ||
-      (chainId === 'near' && !NEAR_PROVIDER_ENABLED)
+      (chainId === 'near' && !NEAR_PROVIDER_ENABLED) ||
+      (chainId === 'starknet' && !STARKNET_PROVIDER_ENABLED)
     ) {
-      const chainName = chainId === 'solana' ? 'Solana' : 'NEAR'
+      const chainName = chainId === 'solana' ? 'Solana' : chainId === 'near' ? 'NEAR' : 'Starknet'
       window.postMessage(
         {
           target: 'noir-provider',
@@ -301,11 +304,12 @@ function setupMessageBridge() {
               chainId === 'pearl' ||
               chainId === 'quantus' ||
               chainId === 'solana' ||
-              chainId === 'near') &&
+              chainId === 'near' ||
+              chainId === 'starknet') &&
             typeof payload?.method === 'string'
               ? {
                   code: 4200,
-                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'dash' ? 'Dash' : chainId === 'pearl' ? 'Pearl' : chainId === 'quantus' ? 'Quantus' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
+                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'dash' ? 'Dash' : chainId === 'solana' ? 'Solana' : chainId === 'near' ? 'NEAR' : chainId === 'pearl' ? 'Pearl' : chainId === 'quantus' ? 'Quantus' : chainId === 'starknet' ? 'Starknet' : 'wallet'} method is not supported.`
                 }
               : 'Invalid or unsupported method'
         },

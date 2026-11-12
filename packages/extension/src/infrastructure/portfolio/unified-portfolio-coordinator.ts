@@ -73,6 +73,7 @@ export interface UnifiedPortfolioCoordinatorOptions {
   readonly solanaPortfolio?: SingleChainPortfolioSourceReader
   readonly nearPortfolio?: SingleChainPortfolioSourceReader
   readonly quantusPortfolio?: SingleChainPortfolioSourceReader
+  readonly starknetPortfolio?: SingleChainPortfolioSourceReader
   readonly onBackgroundBitcoinRefreshError?: (error: unknown) => void
   readonly onBackgroundBitcoinRefreshSettled?: (source: ActiveBitcoinPortfolioSource | null) => void
   readonly onBackgroundPearlRefreshError?: (error: unknown) => void
@@ -95,6 +96,7 @@ export const PORTFOLIO_COORDINATOR_STAGES = Object.freeze([
   'solana-source',
   'near-source',
   'quantus-source',
+  'starknet-source',
   'read-model'
 ] as const)
 
@@ -183,10 +185,7 @@ function sameActiveScope(
 }
 
 function sourceUpdatedAt(
-  source:
-    | ActiveBitcoinPortfolioSource
-    | ActivePearlPortfolioSource
-    | ActiveDashPortfolioSource
+  source: ActiveBitcoinPortfolioSource | ActivePearlPortfolioSource | ActiveDashPortfolioSource
 ): number {
   return source.source.balances.reduce((latest, balance) => Math.max(latest, balance.updatedAt), 0)
 }
@@ -392,6 +391,33 @@ export class UnifiedPortfolioCoordinator {
         throw new Error(`${entry.label} Portfolio source does not match the active ChainAccount`)
       }
       sources.push(entry.source.source)
+    }
+
+    const starknetAccount = active.availableChainAccounts.find(
+      item => item.chain.family === 'starknet'
+    )
+    if (starknetAccount) {
+      const portfolio = this.options.starknetPortfolio
+      if (!portfolio) throw new Error('Enabled Starknet Portfolio source is unavailable')
+      const starknetSource = await atStage('starknet-source', () =>
+        shouldRefreshChain(starknetAccount.chain.id)
+          ? portfolio.refreshActiveSource()
+          : portfolio.readCachedActiveSource()
+      )
+      if (!starknetSource) {
+        if (action !== 'read') return null
+        sources.push(uncachedSource(starknetAccount.chainAccount))
+      } else {
+        if (
+          !sameActiveScope(starknetSource, active.generationId, scope.keyDomainId, scope.accountId)
+        ) {
+          return null
+        }
+        if (starknetSource.chainAccount.id !== starknetAccount.chainAccount.id) {
+          throw new Error('Starknet Portfolio source does not match the active ChainAccount')
+        }
+        sources.push(starknetSource.source)
+      }
     }
 
     const dashAccount = active.availableChainAccounts.find(item => item.chain.family === 'dash')

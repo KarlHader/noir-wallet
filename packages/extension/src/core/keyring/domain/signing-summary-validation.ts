@@ -16,6 +16,7 @@ import {
 import { parseBitcoinSummary } from './signing-summary-validation-bitcoin'
 import { parseDashSummary } from './signing-summary-validation-dash'
 import { parseNearSummary } from './signing-summary-validation-near'
+import { parseStarknetSummary } from './signing-summary-validation-starknet'
 import { parsePearlSummary } from './signing-summary-validation-pearl'
 import { parseSolanaSummary } from './signing-summary-validation-solana'
 import { parseTronSummary } from './signing-summary-validation-tron'
@@ -38,7 +39,8 @@ const FAMILY_NAMESPACES: Readonly<Record<SigningSummaryFamily, string>> = Object
   solana: 'solana',
   tron: 'tron',
   near: 'near',
-  quantus: 'quantus'
+  quantus: 'quantus',
+  starknet: 'starknet'
 })
 const ISSUE_CODES = new Set<SigningReviewIssueCode>([
   'contract-creation',
@@ -81,7 +83,10 @@ export const SCHEMA_EXPECTATIONS: Readonly<
   'tron.sign-message-v2.v1': Object.freeze({ family: 'tron', operation: 'message' }),
   'near.transaction.v1': Object.freeze({ family: 'near', operation: 'transaction' }),
   'near.nep413-message.v1': Object.freeze({ family: 'near', operation: 'message' }),
-  'quantus.transfer.v1': Object.freeze({ family: 'quantus', operation: 'transaction' })
+  'quantus.transfer.v1': Object.freeze({ family: 'quantus', operation: 'transaction' }),
+  'starknet.invoke.v1': Object.freeze({ family: 'starknet', operation: 'transaction' }),
+  'starknet.deploy-account.v1': Object.freeze({ family: 'starknet', operation: 'transaction' }),
+  'starknet.typed-data.v1': Object.freeze({ family: 'starknet', operation: 'message' })
 })
 
 export type UnknownRecord = Record<string, unknown>
@@ -437,6 +442,8 @@ export function parseSigningSummary(
       return parseNearSummary(envelope)
     case 'quantus':
       return parseQuantusSummary(envelope)
+    case 'starknet':
+      return parseStarknetSummary(envelope)
   }
 }
 

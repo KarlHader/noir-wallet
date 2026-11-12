@@ -17,6 +17,8 @@ export function ledgerAppName(family: LedgerChainFamily, network: Network): stri
       return 'NEAR'
     case 'dash':
       return LEDGER_DASH_APP_NAME
+    case 'starknet':
+      return 'Starknet'
   }
 }
 

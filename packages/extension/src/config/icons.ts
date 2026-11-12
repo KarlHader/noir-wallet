@@ -53,6 +53,7 @@ const CHAIN_ICONS: Readonly<Record<string, ChainIconConfig>> = Object.freeze({
   scroll: { native: 'scroll', token: 'scroll', evmAddress: true },
   sol: { file: 'solana.svg', native: 'solana', token: 'solana' },
   solana: { file: 'solana.svg', native: 'solana', token: 'solana' },
+  starknet: { url: '/icons/chains/starknet.svg' },
   stellar: { native: 'stellar', token: 'stellar' },
   sui: { file: 'sui.svg', native: 'sui', token: 'sui' },
   ton: { native: 'ton', token: 'ton' },

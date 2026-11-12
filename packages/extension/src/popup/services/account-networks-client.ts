@@ -2,6 +2,7 @@ import { parseAccountId, type AccountId } from '@/core/accounts/domain'
 import { parseSupportedBitcoinAddress } from '@/core/chains/bitcoin'
 import { parseSupportedPearlAddress } from '@/core/chains/pearl'
 import { parseQuantusAddress } from '@/core/chains/quantus'
+import { normalizeStarknetFelt } from '@/core/chains/starknet/identifiers'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import { isDashChainId } from '@/core/chains/registry/chain-ids'
@@ -178,6 +179,11 @@ function parseAddress(value: unknown, chain: ChainDefinition): AccountNetworkAdd
       throw new Error('Invalid Quantus Account network Address scheme')
     }
     parseQuantusAddress(address.value)
+  } else if (chain.family === 'starknet') {
+    if (address.scheme !== 'starknet' || address.privacy !== 'transparent') {
+      throw new Error('Invalid Starknet Account network Address')
+    }
+    normalizeStarknetFelt(address.value)
   } else {
     throw new Error('Unsupported Account network family')
   }

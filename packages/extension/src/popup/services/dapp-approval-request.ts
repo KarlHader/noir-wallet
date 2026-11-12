@@ -35,7 +35,10 @@ const SUPPORTED_APPROVAL_ACTIONS = [
   'solanaMessage',
   'nearConnect',
   'nearTransaction',
-  'nearMessage'
+  'nearMessage',
+  'starknetConnect',
+  'starknetTransaction',
+  'starknetMessage'
 ] as const
 
 export type DAppApprovalAction = (typeof SUPPORTED_APPROVAL_ACTIONS)[number]

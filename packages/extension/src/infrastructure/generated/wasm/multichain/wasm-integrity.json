@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "engine": "multichain",
   "packageVersion": "0.1.0",
-  "abiVersion": "wallet-engine-8103f12-v12",
-  "sourceCommit": "8103f125404272ae1181bbe7b887f8b05732f051",
+  "abiVersion": "wallet-engine-1659f95-v11",
+  "sourceCommit": "1659f959ca34f07072c0fe75c8c07b12eebe348c",
   "artifacts": [
     {
       "path": "package.json",
@@ -14,26 +14,26 @@
     {
       "path": "wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 22143,
-      "sha256": "64aca4a22d8fbe06879910d34556e2aa57a5742cc03f34e7fd74fcafa59f6d09"
+      "bytes": 21087,
+      "sha256": "48be874f5cd799fbd8104fda24b4c43dac6ff63c754fc90d405eabe806e24045"
     },
     {
       "path": "wallet_wasm.js",
       "role": "loader",
-      "bytes": 112180,
-      "sha256": "294a6bcafbaa2cdc1fcb9a91aab2ec1db20903cad166e954aed81bf83b257204"
+      "bytes": 106771,
+      "sha256": "3d6067bf9f73a3502013ccbbfdcc15dd4e59afde8f58117842633d03111e9eec"
     },
     {
       "path": "wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 4524039,
-      "sha256": "729d6fb1e05b989b19048ed13704d973335d398107647959e974d219f7cd35a0"
+      "bytes": 4485101,
+      "sha256": "1b061ba6d26343e97fa6f11698c835128cc9c1b5b26a87cb47c8fa96fe2ca623"
     },
     {
       "path": "wallet_wasm_bg.wasm.d.ts",
       "role": "binary-types",
-      "bytes": 12653,
-      "sha256": "a0e226374d7b03c814801b7db96cd4e0d2b5991b35fed1e3c3233dcae446190d"
+      "bytes": 11996,
+      "sha256": "d303e6d76f60b47e7734ae2b9dbdb150ccbfebdaad77fc30a046fbbd143317c4"
     }
   ],
   "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",
@@ -63,6 +63,7 @@
     "account.quantus.derive",
     "account.solana.derive",
     "account.solana.imported",
+    "account.starknet.derive",
     "bitcoin.bip322.full.sign",
     "bitcoin.bip322.full.verify",
     "bitcoin.bip322.sign",
@@ -99,6 +100,9 @@
     "solana.message.sign",
     "solana.message.verify",
     "solana.transaction.sign",
+    "starknet.deploy-account.sign",
+    "starknet.invoke.sign",
+    "starknet.typed-data.sign",
     "vault.argon2id-xchacha20poly1305",
     "vault.private-key-v2"
   ]

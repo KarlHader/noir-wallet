@@ -1,4 +1,5 @@
 import type { Asset, AssetDisplayMetadata, AssetId, AssetKind, ChainId } from '@/core/chains/domain'
+import { normalizeStarknetFelt } from '@/core/chains/starknet/identifiers'
 import type { ChainDefinition, ChainRegistry } from './chain-registry'
 import type { ChainFamily } from './capabilities'
 import { assertAssetNamespace, assertAssetReference, createAssetId, parseAssetId } from './asset-id'
@@ -96,6 +97,12 @@ export const SOLANA_TOKEN_REFERENCE_VALIDATOR = Object.freeze<AssetReferenceVali
     if (!isBase58PublicKey(reference)) throw new Error('Invalid Solana token mint')
     return reference
   }
+})
+
+export const STARKNET_SNIP2_REFERENCE_VALIDATOR = Object.freeze<AssetReferenceValidator>({
+  chainFamily: 'starknet',
+  namespace: 'snip2',
+  normalize: reference => normalizeStarknetFelt(reference)
 })
 
 export const NEAR_NEP141_REFERENCE_VALIDATOR = Object.freeze<AssetReferenceValidator>({
@@ -341,7 +348,8 @@ export function createAssetRegistry(
   referenceValidators: readonly AssetReferenceValidator[] = [
     EVM_ERC20_REFERENCE_VALIDATOR,
     SOLANA_TOKEN_REFERENCE_VALIDATOR,
-    NEAR_NEP141_REFERENCE_VALIDATOR
+    NEAR_NEP141_REFERENCE_VALIDATOR,
+    STARKNET_SNIP2_REFERENCE_VALIDATOR
   ]
 ): AssetRegistry {
   const validators = createValidatorMap(referenceValidators)

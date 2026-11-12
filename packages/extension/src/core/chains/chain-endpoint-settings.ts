@@ -1,4 +1,9 @@
-import { isBitcoinChainId, isDashChainId, isPearlChainId, isZcashChainId } from './registry/chain-ids'
+import {
+  isBitcoinChainId,
+  isDashChainId,
+  isPearlChainId,
+  isZcashChainId
+} from './registry/chain-ids'
 import { parseChainId } from './registry'
 
 const CHAIN_ENDPOINT_SETTINGS_SCHEMA_VERSION = 1 as const
@@ -14,6 +19,7 @@ export type ChainRpcProtocol =
   | 'tron-http-api'
   | 'near-json-rpc'
   | 'quantus-json-rpc'
+  | 'starknet-json-rpc'
 
 export interface CustomChainRpcEndpoint {
   readonly protocol: ChainRpcProtocol
@@ -101,7 +107,8 @@ const RPC_PROTOCOLS = new Set<ChainRpcProtocol>([
   'solana-json-rpc',
   'tron-http-api',
   'near-json-rpc',
-  'quantus-json-rpc'
+  'quantus-json-rpc',
+  'starknet-json-rpc'
 ])
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/
 
@@ -224,6 +231,8 @@ function protocolForChainId(chainId: string): ChainRpcProtocol {
       return 'near-json-rpc'
     case 'quantus':
       return 'quantus-json-rpc'
+    case 'starknet':
+      return 'starknet-json-rpc'
     default:
       throw new Error('Unsupported custom RPC chain namespace')
   }

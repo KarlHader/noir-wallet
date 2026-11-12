@@ -5,7 +5,8 @@ export const HARDWARE_CHAIN_CAPABILITIES = Object.freeze([
   'solana',
   'tron',
   'near',
-  'dash'
+  'dash',
+  'starknet'
 ] as const)
 
 export const KEYSTONE_FIRMWARE_PROFILES = Object.freeze([

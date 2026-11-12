@@ -6,6 +6,7 @@ import {
   PEARL_CHAIN_FEATURE_FLAG,
   QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
+  STARKNET_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG,
   type ChainFeatureFlagValue
 } from '@/config/multichain-feature-flags'
@@ -100,6 +101,18 @@ export function resolveQuantusFeatureRuntimePolicy(
   })
 }
 
+export interface StarknetFeatureRuntimePolicy {
+  readonly newOperationsEnabled: boolean
+}
+
+export function resolveStarknetFeatureRuntimePolicy(
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): StarknetFeatureRuntimePolicy {
+  return Object.freeze({
+    newOperationsEnabled: enabledFlags.includes(STARKNET_CHAIN_FEATURE_FLAG)
+  })
+}
+
 export function isNewWalletFamilyEnabled(
   family: string,
   enabledFlags: readonly ChainFeatureFlagValue[]
@@ -125,6 +138,8 @@ export function isNewWalletFamilyEnabled(
       return resolveSolanaFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'near':
       return resolveNearFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
+    case 'starknet':
+      return resolveStarknetFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     default:
       return false
   }

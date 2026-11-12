@@ -13,6 +13,7 @@
   "dependencies": {
     "@bitcoinerlab/secp256k1": "1.2.0",
     "@noir-wallet/sdk": "workspace:*",
+    "@starknet-io/get-starknet-core": "^6.1.0",
     "bitcoinjs-lib": "6.1.7",
     "buffer": "6.0.3",
     "react": "^19.2.3",

@@ -4,7 +4,8 @@ import {
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
-  SOLANA_CHAIN_FEATURE_FLAG
+  SOLANA_CHAIN_FEATURE_FLAG,
+  STARKNET_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import {
   getBitcoinNetworkConfig,
@@ -34,6 +35,14 @@ import {
 import { createDashActivityHistorySource, createConfiguredDashInsightClient } from '../chains/dash'
 import { createNearActivityHistorySource } from '../chains/near'
 import {
+  createStarknetActivityHistorySource,
+  createStarknetRpcClient,
+  parseStarknetActivityCursor,
+  type StarknetActivityCursorStore
+} from '../chains/starknet'
+import { getStarknetNetworkConfig } from '@/core/chains/starknet/network-config'
+import { findChainEndpointOverride } from '@/core/chains/chain-endpoint-settings'
+import {
   createConfiguredSolanaRpcClient,
   createSolanaActivityHistorySource
 } from '../chains/solana'
@@ -52,6 +61,19 @@ export function createConfiguredActivityHistorySources(input: {
   const evmNetworks = enabled.has(EVM_CHAIN_FEATURE_FLAG) ? getEvmNetworkConfigs(input.network) : []
   const solanaNetwork = resolveSolanaRuntimeNetworkConfig(input.network, input.endpointSettings)
   const nearNetwork = resolveNearRuntimeNetworkConfig(input.network, input.endpointSettings)
+  const starknetNetwork = getStarknetNetworkConfig(input.network)
+  const starknetOverride = input.endpointSettings
+    ? findChainEndpointOverride(input.endpointSettings, starknetNetwork.chainId)?.rpc
+    : undefined
+  const starknetCursors: StarknetActivityCursorStore = {
+    async get(key) {
+      const stored = await chrome.storage.local.get(key)
+      return parseStarknetActivityCursor(stored[key])
+    },
+    async set(key, cursor) {
+      await chrome.storage.local.set({ [key]: cursor })
+    }
+  }
 
   return Object.freeze({
     bitcoinNetwork,
@@ -102,6 +124,24 @@ export function createConfiguredActivityHistorySources(input: {
       ? createDashActivityHistorySource({
           chainId: dashNetwork.chainId,
           rpc: createConfiguredDashInsightClient(input.network)
+        })
+      : undefined,
+    starknetNetwork,
+    starknetHistory: enabled.has(STARKNET_CHAIN_FEATURE_FLAG)
+      ? createStarknetActivityHistorySource({
+          chainId: starknetNetwork.chainId,
+          tokens: starknetNetwork.tokens.map(token => ({
+            reference: token.reference,
+            assetId: `${starknetNetwork.chainId}/snip2:${token.reference}`
+          })),
+          rpc: createStarknetRpcClient({
+            chainId: starknetNetwork.chainId,
+            rpcUrl:
+              starknetOverride?.protocol === 'starknet-json-rpc'
+                ? starknetOverride.url
+                : starknetNetwork.rpcUrl
+          }),
+          cursors: starknetCursors
         })
       : undefined
   })

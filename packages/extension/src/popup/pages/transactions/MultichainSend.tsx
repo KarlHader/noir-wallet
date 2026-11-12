@@ -46,6 +46,9 @@ import { SolanaSendForm } from './SolanaSendForm'
 import { SolanaTransactionResult } from './SolanaTransactionResult'
 import type { SolanaTransferSubmission } from '@/popup/services/solana-wallet-client'
 import { NearSendForm } from './NearSendForm'
+import { StarknetSendForm } from './StarknetSendForm'
+import { StarknetTransactionResult } from './StarknetTransactionResult'
+import type { StarknetTransferSubmission } from '@/popup/services/starknet-wallet-client'
 import { NearTransactionResult } from './NearTransactionResult'
 import type { NearTransferSubmission } from '@/popup/services/near-wallet-client'
 import { QuantusSendForm } from './QuantusSendForm'
@@ -76,6 +79,7 @@ type SendSubmission =
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
   | Readonly<{ family: 'quantus'; value: QuantusTransferSubmission }>
+  | Readonly<{ family: 'starknet'; value: StarknetTransferSubmission }>
 
 function availableUsdPrice(
   asset: PortfolioReadModel['assets'][number],
@@ -721,6 +725,23 @@ export function MultichainSend() {
     )
   }
 
+  if (submission?.family === 'starknet' && selection?.chain.chain.family === 'starknet') {
+    return (
+      <StarknetTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
+
   const crossChainSourceAssetId =
     selection && currentNetwork === 'mainnet' && getCrossChainSendAssetGroup(selection.asset.asset)
       ? selection.asset.asset.id
@@ -825,6 +846,12 @@ export function MultichainSend() {
           selection={selection}
           priceUsd={availableUsdPrice(selection.asset, assetPrices)}
           onSubmitted={value => setSubmission({ family: 'quantus', value })}
+        />
+      ) : selection?.chain.chain.family === 'starknet' ? (
+        <StarknetSendForm
+          selection={selection}
+          priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+          onSubmitted={value => setSubmission({ family: 'starknet', value })}
         />
       ) : (
         <AssetSelection

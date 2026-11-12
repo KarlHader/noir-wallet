@@ -764,3 +764,13 @@ export function findBuiltinEvmNetworkConfig(
 export function getEvmNetworkConfig(network: Network): DefaultEvmNetworkConfig {
   return EVM_NETWORKS[network]
 }
+
+export {
+  getStarknetNetworkConfig,
+  getStarknetNetworkConfigs,
+  STARKNET_NETWORKS,
+  type StarknetBundledToken,
+  type StarknetExplorer,
+  type StarknetNetwork,
+  type StarknetNetworkConfig
+} from '@/core/chains/starknet/network-config'

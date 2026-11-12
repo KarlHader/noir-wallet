@@ -1,8 +1,8 @@
 import init, { WalletEngine } from '../../generated/wasm/multichain/wallet_wasm.js'
 import manifest from '../../generated/wasm/multichain/wasm-integrity.json'
 
-export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-8103f12-v12'
-export const PINNED_MULTICHAIN_SOURCE_COMMIT = '8103f125404272ae1181bbe7b887f8b05732f051'
+export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-1659f95-v11'
+export const PINNED_MULTICHAIN_SOURCE_COMMIT = '1659f959ca34f07072c0fe75c8c07b12eebe348c'
 export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
   [
     'account.bitcoin.batch-derive',
@@ -23,6 +23,7 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'account.pearl.imported',
     'account.solana.derive',
     'account.solana.imported',
+    'account.starknet.derive',
     'bitcoin.bip322.full.sign',
     'bitcoin.bip322.full.verify',
     'bitcoin.bip322.sign',
@@ -59,6 +60,9 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',
+    'starknet.deploy-account.sign',
+    'starknet.invoke.sign',
+    'starknet.typed-data.sign',
     'vault.argon2id-xchacha20poly1305',
     'vault.private-key-v2'
   ].sort()

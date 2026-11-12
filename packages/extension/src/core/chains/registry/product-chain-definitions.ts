@@ -7,6 +7,7 @@ import {
   PEARL_CHAIN_FEATURE_FLAG,
   QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
+  STARKNET_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import {
@@ -18,10 +19,13 @@ import {
   getQuantusNetworkConfig,
   getSolanaNetworkConfig,
   getSolanaNetworkConfigs,
+  getStarknetNetworkConfig,
   type EvmNetworkConfig,
   type NearNetworkConfig,
-  type SolanaNetworkConfig
+  type SolanaNetworkConfig,
+  type StarknetNetworkConfig
 } from '@/config/networks'
+import { STARKNET_TOKEN_NAMESPACE } from '@/core/chains/starknet/identifiers'
 import { formatNativeTokenIconUrl } from '@/config/icons'
 import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import type { AssetDefinitionInput } from './asset-registry'
@@ -288,6 +292,36 @@ export function getNearWaitingChainDefinitions(): readonly ChainDefinitionInput[
   return Object.freeze(getNearNetworkConfigs().map(getNearWaitingChainDefinition))
 }
 
+export function getStarknetChainDefinition(config: StarknetNetworkConfig): ChainDefinitionInput {
+  return {
+    id: config.chainId,
+    family: 'starknet',
+    network: { kind: config.networkMode, name: config.networkName },
+    displayName: config.displayName,
+    featureFlag: STARKNET_CHAIN_FEATURE_FLAG,
+    // Software derive, balances, token transfer, and activity are wired behind chain.starknet.
+    capabilities: {
+      address: {
+        status: 'available',
+        addressSchemes: ['starknet'],
+        derivationSchemes: ['bip44', 'eip2645'],
+        supportsRotation: false,
+        supportsChange: false
+      },
+      signing: {
+        status: 'available',
+        transactionFormats: ['invoke-v3', 'deploy-account-v3'],
+        messageFormats: ['snip12']
+      },
+      transaction: {
+        status: 'available',
+        model: 'account',
+        actions: ['token-transfer']
+      }
+    }
+  }
+}
+
 export function getNearBetaChainDefinition(config: NearNetworkConfig): ChainDefinitionInput {
   return {
     ...getNearWaitingChainDefinition(config),
@@ -331,7 +365,8 @@ export function getInitialProductChainDefinitions(
     getSolanaBetaChainDefinition(
       getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet')
     ),
-    getNearBetaChainDefinition(getNearNetworkConfig(network))
+    getNearBetaChainDefinition(getNearNetworkConfig(network)),
+    getStarknetChainDefinition(getStarknetNetworkConfig(network))
   ])
 }
 
@@ -486,6 +521,29 @@ export function getBundledQuantusAssetDefinitions(
   ])
 }
 
+export function getBundledStarknetAssetDefinitions(
+  network: Network
+): readonly AssetDefinitionInput[] {
+  const config = getStarknetNetworkConfig(network)
+  return Object.freeze(
+    config.tokens.map(token =>
+      Object.freeze({
+        chainId: config.chainId,
+        namespace: STARKNET_TOKEN_NAMESPACE,
+        reference: token.reference,
+        kind: 'token' as const,
+        metadata: Object.freeze({
+          name: token.name,
+          symbol: token.symbol,
+          decimals: token.decimals
+        }),
+        source: 'bundled' as const,
+        verification: 'trusted' as const
+      })
+    )
+  )
+}
+
 export function getBundledInitialProductAssetDefinitions(
   network: Network,
   additionalEvmNetworks: readonly EvmNetworkConfig[] = []
@@ -541,6 +599,7 @@ export function getBundledInitialProductAssetDefinitions(
       },
       source: 'bundled',
       verification: 'trusted'
-    }
+    },
+    ...getBundledStarknetAssetDefinitions(network)
   ])
 }

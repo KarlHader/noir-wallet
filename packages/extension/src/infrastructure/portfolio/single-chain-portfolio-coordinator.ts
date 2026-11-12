@@ -18,7 +18,7 @@ type SingleChainPortfolioStorageRepository = Pick<
   'getActivePointer' | 'getSnapshot'
 >
 
-export type AddressOnlyPortfolioFamily = 'solana' | 'near' | 'quantus'
+export type AddressOnlyPortfolioFamily = 'solana' | 'near' | 'quantus' | 'starknet'
 
 export interface ActiveSingleChainPortfolioSource {
   readonly generationId: StorageV2GenerationId

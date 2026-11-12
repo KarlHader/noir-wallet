@@ -68,7 +68,8 @@ const CHAIN_NAMES: Record<LedgerChainFamily, string> = {
   bitcoin: 'Bitcoin',
   solana: 'Solana',
   near: 'NEAR',
-  dash: 'Dash'
+  dash: 'Dash',
+  starknet: 'Starknet'
 }
 export function LedgerConnectPage() {
   const { replace } = useNavigate()
@@ -442,13 +443,16 @@ export function LedgerConnectPage() {
           : {}),
         ...(firstWallet ? { password } : {})
       })
+      const analyticsChain = selectedFamilies.find(
+        (family): family is Exclude<typeof family, 'starknet'> => family !== 'starknet'
+      )
       sendAnalyticsEvent(ANALYTICS_EVENTS.HW_CONNECTED, {
-        chain: selectedFamilies[0] ?? 'zcash',
+        ...(analyticsChain ? { chain: analyticsChain } : {}),
         extra: { is_existing_wallet: Boolean(targetWalletId), hardware: 'ledger' }
       })
       if (!targetWalletId) {
         sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, {
-          chain: selectedFamilies[0] ?? 'zcash',
+          ...(analyticsChain ? { chain: analyticsChain } : {}),
           params: { method: 'hardware' },
           extra: { hardware: 'ledger' }
         })

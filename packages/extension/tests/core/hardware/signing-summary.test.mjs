@@ -31,14 +31,17 @@ function envelope(schema, chainId, operation, fields, review = { level: 'standar
 test.describe('Chain-specific signing summaries', () => {
   test('freezes the versioned schema registry', () => {
     expect(Object.isFrozen(SIGNING_SUMMARY_SCHEMAS)).toBe(true)
-    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(18)
+    expect(SIGNING_SUMMARY_SCHEMAS).toHaveLength(21)
     expect(SIGNING_SUMMARY_SCHEMAS).toEqual(
       expect.arrayContaining([
         'dash.psbt.v1',
         'dash.message.v1',
         'pearl.psbt.v1',
         'pearl.bip322-message.v1',
-        'quantus.transfer.v1'
+        'quantus.transfer.v1',
+        'starknet.invoke.v1',
+        'starknet.deploy-account.v1',
+        'starknet.typed-data.v1'
       ])
     )
   })
@@ -482,7 +485,8 @@ test.describe('Chain-specific signing summaries', () => {
       'signing-summary-validation-solana.ts',
       'signing-summary-validation-tron.ts',
       'signing-summary-validation-tron-contract.ts',
-      'signing-summary-validation-near.ts'
+      'signing-summary-validation-near.ts',
+      'signing-summary-validation-starknet.ts'
     ]
       .map(file =>
         readFileSync(new URL(`../../../src/core/keyring/domain/${file}`, import.meta.url), 'utf8')
@@ -492,5 +496,81 @@ test.describe('Chain-specific signing summaries', () => {
     expect(source).not.toMatch(/chrome\.|postMessage|WORKER_RPC|wasm-pkg/i)
     expect(source).not.toMatch(/from ['"](?:react|zustand|@\/store)/)
     expect(source).not.toMatch(/console\.(?:log|warn|error)/)
+  })
+})
+
+const starknetChainId = parseChainId('starknet:SN_MAIN').id
+const feltBounds = {
+  l1Gas: { maxAmount: '1', maxPricePerUnit: '2' },
+  l2Gas: { maxAmount: '3', maxPricePerUnit: '4' },
+  l1DataGas: { maxAmount: '5', maxPricePerUnit: '6' }
+}
+
+test.describe('Starknet signing summaries', () => {
+  test('requires one caution issue for each invoke call and rejects a standard review', () => {
+    const fields = {
+      senderAddress: '0x1',
+      nonce: '0x2',
+      tip: '0',
+      resourceBounds: feltBounds,
+      calls: [{ to: '0x3', selector: '0x4', entrypoint: null, calldata: ['0x5'] }],
+      nonceDataAvailabilityMode: 'l1',
+      feeDataAvailabilityMode: 'l2'
+    }
+    const parsed = parseSigningSummary(
+      envelope('starknet.invoke.v1', starknetChainId, 'transaction', fields, {
+        level: 'caution',
+        issues: [{ code: 'unrecognized-call', subjectIndex: 0 }]
+      }),
+      expectation(starknetChainId, 'starknet', 'transaction')
+    )
+    expect(parsed.schema).toBe('starknet.invoke.v1')
+    expect(parsed.fields.calls).toHaveLength(1)
+    expect(() =>
+      parseSigningSummary(
+        envelope('starknet.invoke.v1', starknetChainId, 'transaction', fields),
+        expectation(starknetChainId, 'starknet', 'transaction')
+      )
+    ).toThrow(/unrecognized-call/)
+  })
+
+  test('accepts a software deploy account and utf8 typed data', () => {
+    const deploy = parseSigningSummary(
+      envelope(
+        'starknet.deploy-account.v1',
+        starknetChainId,
+        'transaction',
+        {
+          contractAddress: '0x6',
+          classHash: '0x7',
+          salt: '0x8',
+          constructorCalldata: ['0x9'],
+          nonce: '0x1',
+          tip: '0',
+          resourceBounds: feltBounds,
+          nonceDataAvailabilityMode: 'l1',
+          feeDataAvailabilityMode: 'l1'
+        },
+        { level: 'caution', issues: [{ code: 'contract-creation', subjectIndex: 0 }] }
+      ),
+      expectation(starknetChainId, 'starknet', 'transaction')
+    )
+    expect(deploy.fields.constructorCalldata).toEqual(['0x9'])
+
+    const typed = parseSigningSummary(
+      envelope(
+        'starknet.typed-data.v1',
+        starknetChainId,
+        'message',
+        {
+          accountAddress: '0x1',
+          publicKey: '0x2',
+          typedData: content('utf8', 'hello', 5)
+        },
+        { level: 'caution', issues: [{ code: 'opaque-message', subjectIndex: 0 }] }
+      ),
+      expectation(starknetChainId, 'starknet', 'message')
+    )
+    expect(typed.fields.typedData.encoding).toBe('utf8')
   })
 })

@@ -110,6 +110,14 @@ export const RPC_DEFAULT_ENDPOINTS = {
     mainnet: { id: 'fastnear', label: 'Fastnear', url: 'https://free.rpc.fastnear.com' },
     testnet: { id: 'official', label: 'Official', url: 'https://rpc.testnet.near.org' }
   },
+  starknet: {
+    mainnet: { id: 'publicnode', label: 'PublicNode', url: 'https://starknet-rpc.publicnode.com' },
+    testnet: {
+      id: 'publicnode',
+      label: 'PublicNode',
+      url: 'https://starknet-sepolia-rpc.publicnode.com'
+    }
+  },
   pearl: {
     mainnet: {
       id: 'pearlresearch',

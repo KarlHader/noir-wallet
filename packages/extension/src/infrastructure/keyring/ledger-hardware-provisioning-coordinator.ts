@@ -37,6 +37,7 @@ import {
   getNearNetworkConfig,
   getSolanaNetworkConfig
 } from '@/config/networks'
+import { getStarknetNetworkConfig } from '@/core/chains/starknet/network-config'
 import type { Network } from '@/types'
 import type { AccountAddresses } from '@/types'
 import { bytesToHex } from '@/lib/bytes'
@@ -152,9 +153,22 @@ function selectedAccounts(
   credential: LedgerMultichainHardwareCredential,
   network: Network
 ): readonly LedgerPublicAccount[] {
-  return credential.accountExport.accounts.filter(
-    account => !('network' in account) || account.network === network
+  const accounts = credential.accountExport.accounts.filter(
+    account =>
+      account.family === 'starknet' || !('network' in account) || account.network === network
   )
+  const preferredStarknet = new Map<number, Extract<LedgerPublicAccount, { family: 'starknet' }>>()
+  for (const account of accounts) {
+    if (account.family !== 'starknet') continue
+    const current = preferredStarknet.get(account.accountIndex)
+    if (!current || (account.network === network && current.network !== network)) {
+      preferredStarknet.set(account.accountIndex, account)
+    }
+  }
+  return accounts.filter(account => {
+    if (account.family !== 'starknet') return true
+    return preferredStarknet.get(account.accountIndex) === account
+  })
 }
 
 function chainIdsFor(
@@ -167,6 +181,9 @@ function chainIdsFor(
   if (account.family === 'solana')
     return [getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet').chainId]
   if (account.family === 'near') return [getNearNetworkConfig(network).chainId]
+  if (account.family === 'starknet') {
+    return [getStarknetNetworkConfig(network === 'mainnet' ? 'mainnet' : 'testnet').chainId]
+  }
   if (account.family === 'dash') {
     if (network !== 'mainnet' || account.network !== 'mainnet') {
       throw new Error('Dash hardware wallets support mainnet only')
@@ -387,7 +404,9 @@ function buildSnapshot(
           ? 'bip84'
           : account.family === 'solana' || account.family === 'near'
             ? 'slip10'
-            : 'bip44'
+            : account.family === 'starknet'
+              ? 'eip2645'
+              : 'bip44'
       chainAccounts.push({
         id: chainAccountId,
         scope: { keyDomainId: identity.keyDomainId, accountId: owner.id, chainId },

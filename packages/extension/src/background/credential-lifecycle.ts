@@ -17,6 +17,7 @@ import {
   IndexedDbStorageV2Repository
 } from '@/infrastructure/persistence/repositories'
 import type { StorageV2Snapshot } from '@/ports/repositories'
+import type { Network } from '@/types'
 import { parseAccountId } from '@/core/accounts/domain'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import { parseKeyDomainId, type CredentialSetManifest } from '@/core/keyring/domain'
@@ -31,6 +32,7 @@ import {
   type LedgerHardwareProvisioningInput,
   type LedgerHardwareProvisioningResult
 } from '@/infrastructure/keyring/ledger-hardware-provisioning-coordinator'
+import { LedgerStarknetNetworkProjectionCoordinator } from '@/infrastructure/keyring/ledger-starknet-network-projection'
 import { isNativeHardwareWalletId } from '@/core/wallet/native-hardware-identity'
 import type { ActiveWalletSetMode } from '@/core/wallet/wallet-unlock-path'
 import {
@@ -269,6 +271,10 @@ export class CredentialLifecycleCoordinator {
     credentialRepository: this.credentialRepository,
     storageRepository: this.storageRepository
   })
+  private readonly ledgerStarknetProjection = new LedgerStarknetNetworkProjectionCoordinator({
+    credentialRepository: this.credentialRepository,
+    storageRepository: this.storageRepository
+  })
   private readonly privateKeyProvisioning = new PrivateKeyProvisioningCoordinator({
     credentialRepository: this.credentialRepository,
     storageRepository: this.storageRepository
@@ -337,6 +343,17 @@ export class CredentialLifecycleCoordinator {
           resolveEvmNetworkCatalog(DEFAULT_NETWORK, settings).map(network => network.chainId)
         )
       )
+    this.synchronizationQueue = operation.then(
+      () => undefined,
+      () => undefined
+    )
+    return operation
+  }
+
+  projectLedgerStarknetNetwork(network: Network) {
+    const operation = this.synchronizationQueue
+      .catch(() => {})
+      .then(() => this.ledgerStarknetProjection.synchronize(network))
     this.synchronizationQueue = operation.then(
       () => undefined,
       () => undefined

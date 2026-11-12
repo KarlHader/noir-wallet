@@ -10,6 +10,8 @@ import { signLedgerBitcoinRequest } from '@/lib/ledger/bitcoin'
 import { ledgerBitcoinAppName } from '@/lib/ledger/bitcoin-model'
 import { signLedgerSolanaRequest } from '@/lib/ledger/solana'
 import { signLedgerNearRequest } from '@/lib/ledger/near'
+import { signLedgerStarknetRequest } from '@/lib/ledger/starknet'
+import { LEDGER_STARKNET_APP_NAME } from '@/lib/ledger/starknet-model'
 import { signLedgerDashRequest } from '@/lib/ledger/dash'
 import { LEDGER_DASH_APP_NAME } from '@/lib/ledger/dash-model'
 import type { LedgerSessionOptions } from '@/lib/ledger/device'
@@ -34,6 +36,13 @@ export function signLedgerDeviceRequest(
   if (request.kind === 'solana-transaction') return signLedgerSolanaRequest(request, options)
   if (request.kind === 'near-transaction' || request.kind === 'near-nep413-message')
     return signLedgerNearRequest(request, options)
+  if (
+    request.kind === 'starknet-invoke' ||
+    request.kind === 'starknet-deploy-account' ||
+    request.kind === 'starknet-typed-data'
+  ) {
+    return signLedgerStarknetRequest(request, options)
+  }
   if (request.kind === 'dash-psbt' || request.kind === 'dash-message')
     return signLedgerDashRequest(request, options)
   if ('derivationPath' in request) return signLedgerEvmRequest(request, options)
@@ -92,9 +101,23 @@ export function ledgerRequestDeviceApp(request: LedgerDeviceSigningRequest): str
     return ledgerBitcoinAppName(request.network)
   if (request.kind === 'solana-transaction') return 'Solana'
   if (request.kind === 'near-transaction' || request.kind === 'near-nep413-message') return 'NEAR'
+  if (
+    request.kind === 'starknet-invoke' ||
+    request.kind === 'starknet-deploy-account' ||
+    request.kind === 'starknet-typed-data'
+  ) {
+    return LEDGER_STARKNET_APP_NAME
+  }
   if (request.kind === 'dash-psbt' || request.kind === 'dash-message') return LEDGER_DASH_APP_NAME
   return 'Ethereum'
 }
 export function ledgerRequestAddress(request: LedgerDeviceSigningRequest): string {
+  if (
+    request.kind === 'starknet-invoke' ||
+    request.kind === 'starknet-deploy-account' ||
+    request.kind === 'starknet-typed-data'
+  ) {
+    return request.address
+  }
   return 'expectedAddress' in request ? request.expectedAddress : request.expectedPublicKey
 }

@@ -44,6 +44,24 @@ export function resolveEvmAccountAvailability(
   }
 }
 
+export function resolveStarknetTransferAvailability(input: {
+  readonly balanceRaw: string
+  readonly decimals: number
+  readonly maximumRaw: string | null
+}): Readonly<{ amountRaw: string; display: string; label: 'Available' }> {
+  const amountRaw =
+    input.maximumRaw !== null &&
+    /^(0|[1-9][0-9]*)$/.test(input.maximumRaw) &&
+    BigInt(input.maximumRaw) <= BigInt(input.balanceRaw)
+      ? input.maximumRaw
+      : input.balanceRaw
+  return {
+    amountRaw,
+    display: formatBaseUnitDecimalAmount(amountRaw, input.decimals),
+    label: 'Available'
+  }
+}
+
 export function resolvePortfolioTransferAvailability(input: {
   readonly balanceRaw: string
   readonly decimals: number

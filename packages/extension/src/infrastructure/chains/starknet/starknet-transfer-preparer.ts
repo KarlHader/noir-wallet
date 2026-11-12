@@ -1,0 +1,384 @@
+import { normalizeStarknetFelt } from '@/core/chains/starknet/identifiers'
+
+import { readStarknetAccountDeployment } from './starknet-account-state'
+import { readStarknetTokenBalance } from './starknet-balance-reader'
+import {
+  assertStarknetFelt,
+  encodeStarknetU256,
+  feltFromBigint,
+  inflateStarknetFeeEstimate,
+  isStarknetQueryVersion,
+  resolveStarknetMaxAmount,
+  STARKNET_ARGENT_V04_CLASS_HASH,
+  STARKNET_EXECUTION_VERSION,
+  STARKNET_OZ_CLASS_HASH,
+  STARKNET_QUERY_VERSION,
+  STARKNET_TRANSFER_SELECTOR,
+  starknetBoundsMaxFee,
+  type StarknetFeeEstimate,
+  type StarknetResourceBounds
+} from './starknet-primitives'
+import type { StarknetReadRpc } from './starknet-rpc-types'
+
+const PLACEHOLDER_BOUNDS: StarknetResourceBounds = {
+  l1Gas: { maxAmount: '1000000', maxPricePerUnit: '1000000000000000' },
+  l2Gas: { maxAmount: '5000000', maxPricePerUnit: '1000000000000000' },
+  l1DataGas: { maxAmount: '1000000', maxPricePerUnit: '1000000000000000' }
+}
+
+export interface StarknetCall {
+  readonly to: string
+  readonly selector?: string
+  readonly entrypoint?: string
+  readonly calldata: readonly string[]
+}
+
+export interface StarknetAccountRef {
+  readonly chainId: string
+  readonly address: string
+  readonly publicKey: string
+  readonly classHash: string
+}
+
+export interface StarknetUnsignedBuild {
+  readonly transactionHash: string
+  readonly transaction: Readonly<Record<string, unknown>>
+  readonly query: boolean
+}
+
+export interface StarknetUnsignedBuilder {
+  buildUnsignedInvoke(payload: Readonly<Record<string, unknown>>): Promise<unknown>
+  buildUnsignedDeployAccount(payload: Readonly<Record<string, unknown>>): Promise<unknown>
+}
+
+export interface StarknetPreparedFee {
+  readonly nonce: string
+  readonly resourceBounds: StarknetResourceBounds
+  readonly maxFee: bigint
+  readonly estimate: StarknetFeeEstimate
+  readonly unsigned: StarknetUnsignedBuild
+}
+
+export interface StarknetPreparedTransfer {
+  readonly account: StarknetAccountRef
+  readonly assetReference: string
+  readonly feeToken: boolean
+  readonly recipient: string
+  readonly amount: bigint
+  readonly deployed: boolean
+  readonly deploy: StarknetPreparedFee | null
+  readonly invoke: StarknetPreparedFee
+  readonly maxFee: bigint
+}
+
+export function starknetTransferCall(
+  token: string,
+  recipient: string,
+  amount: bigint
+): StarknetCall {
+  const [low, high] = encodeStarknetU256(amount)
+  return {
+    to: normalizeStarknetFelt(token),
+    selector: STARKNET_TRANSFER_SELECTOR,
+    calldata: [normalizeStarknetFelt(recipient), low, high]
+  }
+}
+
+export async function quoteStarknetInvoke(input: {
+  readonly rpc: Pick<StarknetReadRpc, 'estimateFees' | 'getNonce' | 'getClassHashAt'>
+  readonly builder: StarknetUnsignedBuilder
+  readonly account: StarknetAccountRef
+  readonly calls: readonly StarknetCall[]
+  readonly nonce?: bigint
+  readonly signal?: AbortSignal
+}): Promise<StarknetPreparedFee> {
+  const nonce =
+    input.nonce ??
+    (await readStarknetAccountDeployment(input.rpc, input.account.address, input.signal)).nonce
+  return quoteInvokeAtNonce(
+    input.rpc,
+    input.builder,
+    input.account,
+    input.calls,
+    nonce,
+    input.signal
+  )
+}
+
+export async function prepareStarknetTransfer(input: {
+  readonly rpc: Pick<StarknetReadRpc, 'estimateFees' | 'getNonce' | 'getClassHashAt' | 'call'>
+  readonly builder: StarknetUnsignedBuilder
+  readonly account: StarknetAccountRef
+  readonly tokenReference: string
+  readonly feeTokenReference: string
+  readonly recipient: string
+  readonly amount: bigint
+  readonly signal?: AbortSignal
+}): Promise<StarknetPreparedTransfer> {
+  if (input.amount <= 0n) throw new Error('Starknet transfer amount must be positive')
+  const deployment = await readStarknetAccountDeployment(
+    input.rpc,
+    input.account.address,
+    input.signal
+  )
+  if (
+    deployment.deployed &&
+    deployment.classHash !== normalizeStarknetFelt(input.account.classHash)
+  ) {
+    throw new Error('Starknet account class does not match the wallet')
+  }
+  if (!deployment.deployed && !canDeployStarknetAccount(input.account.classHash)) {
+    throw new Error('Starknet hardware deploy is not enabled')
+  }
+  const call = starknetTransferCall(input.tokenReference, input.recipient, input.amount)
+  const quoted = deployment.deployed
+    ? {
+        deploy: null,
+        invoke: await quoteInvokeAtNonce(
+          input.rpc,
+          input.builder,
+          input.account,
+          [call],
+          deployment.nonce,
+          input.signal
+        )
+      }
+    : await quoteUndeployedTransfer(input.rpc, input.builder, input.account, [call], input.signal)
+  const invoke = quoted.invoke
+  const deploy = quoted.deploy
+  const balance = await readStarknetTokenBalance(
+    input.rpc,
+    input.tokenReference,
+    input.account.address,
+    input.signal
+  )
+  const feeBalance =
+    normalizeStarknetFelt(input.tokenReference) === normalizeStarknetFelt(input.feeTokenReference)
+      ? balance
+      : await readStarknetTokenBalance(
+          input.rpc,
+          input.feeTokenReference,
+          input.account.address,
+          input.signal
+        )
+  const maxFee = invoke.maxFee + (deploy?.maxFee ?? 0n)
+  const feeToken =
+    normalizeStarknetFelt(input.tokenReference) === normalizeStarknetFelt(input.feeTokenReference)
+  if (feeToken) {
+    if (balance < input.amount + maxFee)
+      throw new Error('Starknet balance cannot cover the amount and max fee')
+  } else if (feeBalance < maxFee || balance < input.amount) {
+    throw new Error('Starknet balance cannot cover the amount and max fee')
+  }
+  return {
+    account: input.account,
+    assetReference: normalizeStarknetFelt(input.tokenReference),
+    feeToken,
+    recipient: normalizeStarknetFelt(input.recipient),
+    amount: input.amount,
+    deployed: deployment.deployed,
+    deploy,
+    invoke,
+    maxFee
+  }
+}
+
+export async function quoteStarknetMaximum(input: {
+  readonly rpc: Pick<StarknetReadRpc, 'estimateFees' | 'getNonce' | 'getClassHashAt' | 'call'>
+  readonly builder: StarknetUnsignedBuilder
+  readonly account: StarknetAccountRef
+  readonly tokenReference: string
+  readonly feeTokenReference: string
+  readonly signal?: AbortSignal
+}): Promise<bigint | null> {
+  const tokenBalance = await readStarknetTokenBalance(
+    input.rpc,
+    input.tokenReference,
+    input.account.address,
+    input.signal
+  )
+  const feeToken =
+    normalizeStarknetFelt(input.tokenReference) === normalizeStarknetFelt(input.feeTokenReference)
+  const strkBalance = feeToken
+    ? tokenBalance
+    : await readStarknetTokenBalance(
+        input.rpc,
+        input.feeTokenReference,
+        input.account.address,
+        input.signal
+      )
+  if (tokenBalance === 0n) return feeToken ? 0n : null
+  const probe = await prepareStarknetTransfer({
+    rpc: input.rpc,
+    builder: input.builder,
+    account: input.account,
+    tokenReference: input.tokenReference,
+    feeTokenReference: input.feeTokenReference,
+    recipient: input.account.address,
+    amount: 1n,
+    signal: input.signal
+  }).catch(() => null)
+  if (!probe) return feeToken ? 0n : null
+  return resolveStarknetMaxAmount({
+    tokenBalance,
+    strkBalance,
+    invokeMaxFee: probe.invoke.maxFee,
+    ...(probe.deploy ? { deployMaxFee: probe.deploy.maxFee } : {}),
+    feeToken
+  })
+}
+
+async function quoteInvokeAtNonce(
+  rpc: Pick<StarknetReadRpc, 'estimateFees'>,
+  builder: StarknetUnsignedBuilder,
+  account: StarknetAccountRef,
+  calls: readonly StarknetCall[],
+  nonce: bigint,
+  signal?: AbortSignal
+): Promise<StarknetPreparedFee> {
+  const query = await buildInvoke(builder, account, calls, nonce, PLACEHOLDER_BOUNDS, true)
+  const [estimate] = await rpc.estimateFees([query.transaction], signal)
+  if (!estimate) throw new Error('Starknet fee estimate is missing')
+  const resourceBounds = inflateStarknetFeeEstimate(estimate)
+  const unsigned = await buildInvoke(builder, account, calls, nonce, resourceBounds, false)
+  return {
+    nonce: feltFromBigint(nonce),
+    resourceBounds,
+    maxFee: starknetBoundsMaxFee(resourceBounds),
+    estimate,
+    unsigned
+  }
+}
+
+async function quoteUndeployedTransfer(
+  rpc: Pick<StarknetReadRpc, 'estimateFees'>,
+  builder: StarknetUnsignedBuilder,
+  account: StarknetAccountRef,
+  calls: readonly StarknetCall[],
+  signal?: AbortSignal
+): Promise<{ readonly deploy: StarknetPreparedFee; readonly invoke: StarknetPreparedFee }> {
+  const deployQuery = await buildDeploy(builder, account, PLACEHOLDER_BOUNDS, true)
+  const invokeQuery = await buildInvoke(builder, account, calls, 1n, PLACEHOLDER_BOUNDS, true)
+  const estimates = await rpc.estimateFees(
+    [deployQuery.transaction, invokeQuery.transaction],
+    signal
+  )
+  const deployEstimate = estimates[0]
+  const invokeEstimate = estimates[1]
+  if (!deployEstimate || !invokeEstimate) throw new Error('Starknet fee estimate is missing')
+  const deployBounds = inflateStarknetFeeEstimate(deployEstimate)
+  const invokeBounds = inflateStarknetFeeEstimate(invokeEstimate)
+  return {
+    deploy: {
+      nonce: feltFromBigint(0n),
+      resourceBounds: deployBounds,
+      maxFee: starknetBoundsMaxFee(deployBounds),
+      estimate: deployEstimate,
+      unsigned: await buildDeploy(builder, account, deployBounds, false)
+    },
+    invoke: {
+      nonce: feltFromBigint(1n),
+      resourceBounds: invokeBounds,
+      maxFee: starknetBoundsMaxFee(invokeBounds),
+      estimate: invokeEstimate,
+      unsigned: await buildInvoke(builder, account, calls, 1n, invokeBounds, false)
+    }
+  }
+}
+
+async function buildInvoke(
+  builder: StarknetUnsignedBuilder,
+  account: StarknetAccountRef,
+  calls: readonly StarknetCall[],
+  nonce: bigint,
+  resourceBounds: StarknetResourceBounds,
+  query: boolean
+): Promise<StarknetUnsignedBuild> {
+  return parseUnsignedBuild(
+    await builder.buildUnsignedInvoke({
+      chainId: account.chainId,
+      senderAddress: account.address,
+      publicKey: account.publicKey,
+      classHash: account.classHash,
+      calls: calls.map(call => ({
+        to: call.to,
+        ...(call.selector === undefined ? {} : { selector: call.selector }),
+        ...(call.entrypoint === undefined ? {} : { entrypoint: call.entrypoint }),
+        calldata: [...call.calldata]
+      })),
+      nonce: feltFromBigint(nonce),
+      resourceBounds,
+      paymasterData: [],
+      accountDeploymentData: [],
+      query
+    }),
+    query
+  )
+}
+
+async function buildDeploy(
+  builder: StarknetUnsignedBuilder,
+  account: StarknetAccountRef,
+  resourceBounds: StarknetResourceBounds,
+  query: boolean
+): Promise<StarknetUnsignedBuild> {
+  return parseUnsignedBuild(
+    await builder.buildUnsignedDeployAccount({
+      chainId: account.chainId,
+      senderAddress: account.address,
+      publicKey: account.publicKey,
+      classHash: account.classHash,
+      nonce: feltFromBigint(0n),
+      resourceBounds,
+      paymasterData: [],
+      ...deployConstructor(account),
+      query
+    }),
+    query
+  )
+}
+
+function canDeployStarknetAccount(classHash: string): boolean {
+  const normalized = normalizeStarknetFelt(classHash)
+  return (
+    normalized === normalizeStarknetFelt(STARKNET_OZ_CLASS_HASH) ||
+    normalized === normalizeStarknetFelt(STARKNET_ARGENT_V04_CLASS_HASH)
+  )
+}
+
+function deployConstructor(
+  account: StarknetAccountRef
+): { readonly constructorCalldata: readonly string[] } | Record<string, never> {
+  if (
+    normalizeStarknetFelt(account.classHash) !==
+    normalizeStarknetFelt(STARKNET_ARGENT_V04_CLASS_HASH)
+  ) {
+    return {}
+  }
+  return { constructorCalldata: ['0x0', account.publicKey, '0x1'] }
+}
+
+export function parseUnsignedBuild(value: unknown, query: boolean): StarknetUnsignedBuild {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Starknet unsigned transaction is invalid')
+  }
+  const record = value as Record<string, unknown>
+  const transaction = record.transaction
+  if (typeof transaction !== 'object' || transaction === null || Array.isArray(transaction)) {
+    throw new Error('Starknet unsigned transaction is invalid')
+  }
+  const tx = transaction as Record<string, unknown>
+  const expectedVersion = query ? STARKNET_QUERY_VERSION : STARKNET_EXECUTION_VERSION
+  if (
+    record.query !== query ||
+    tx.version !== expectedVersion ||
+    isStarknetQueryVersion(tx.version) !== query
+  ) {
+    throw new Error('Starknet unsigned transaction version does not match the request')
+  }
+  return {
+    transactionHash: assertStarknetFelt(String(record.transactionHash), 'transaction hash'),
+    transaction: tx,
+    query
+  }
+}

@@ -160,7 +160,8 @@ export class AccountNetworksCoordinator {
                       address.chainAccountId === chainAccount.id &&
                       address.purpose !== 'change' &&
                       (address.purpose === 'receive' || address.preferredForReceive) &&
-                      chain.capabilities.address.addressSchemes.includes(address.scheme)
+                      (chain.capabilities.address.addressSchemes.includes(address.scheme) ||
+                        (chain.family === 'starknet' && address.scheme === 'starknet'))
                   )
                   .sort(
                     (left, right) =>

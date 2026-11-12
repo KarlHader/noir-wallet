@@ -21,6 +21,7 @@ export { detectPearlProvider, getPearlProvider } from './chains/pearl'
 export { detectQuantusProvider, getQuantusProvider } from './chains/quantus'
 export { detectSolanaProvider, getSolanaProvider } from './chains/solana'
 export { detectNearProvider, getNearProvider } from './chains/near'
+export { detectStarknetProvider, getStarknetProvider } from './chains/starknet'
 export type {
   Caip25CreateSessionRequest,
   Caip25ScopeRequest,
@@ -138,6 +139,17 @@ export type {
   NearTransferAction,
   NearWalletSelectorFunctionCallAction
 } from './chains/near'
+
+export type {
+  DetectStarknetProviderOptions,
+  StarknetAccountDeploymentData,
+  StarknetChainId,
+  StarknetFeltChainId,
+  StarknetProvider,
+  StarknetProviderRequest,
+  StarknetTypedData,
+  StarknetWalletStandardChainId
+} from './chains/starknet'
 
 export {
   getZcashProvider,

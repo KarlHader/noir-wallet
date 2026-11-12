@@ -43,7 +43,7 @@ test.describe('Dash WASM contract', () => {
     const info = new WalletEngine().coreInfo()
 
     expect(info).toMatchObject({
-      apiVersion: 10,
+      apiVersion: 11,
       vaultVersions: [1, 2]
     })
     expect(info.capabilities).toEqual(
@@ -81,7 +81,7 @@ test.describe('Dash WASM contract', () => {
     for (const rawCapability of info.capabilities) {
       expect(manifest.capabilities).not.toContain(rawCapability)
     }
-    expect(manifest.capabilities.join('\n')).not.toMatch(/starknet|quantus|coinjoin/i)
+    expect(manifest.capabilities.join('\n')).not.toMatch(/strk20|quantus|coinjoin/i)
   })
 
   test('returns the engine account, PSBT, and message objects for the public mnemonic', () => {

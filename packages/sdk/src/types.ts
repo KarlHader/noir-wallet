@@ -6,6 +6,7 @@ import type { QuantusProvider } from './chains/quantus/types'
 import type { EvmProvider } from './chains/evm/types'
 import type { SolanaProvider } from './chains/solana/types'
 import type { NearProvider } from './chains/near/types'
+import type { StarknetProvider } from './chains/starknet/types'
 import type { MultichainProvider, MultichainRequestArguments } from './chains/multichain/types'
 
 export interface NoirWalletProvider {
@@ -31,6 +32,8 @@ export interface NoirWalletProvider {
   solana?: SolanaProvider
   /** Available in Testnet Mode when the NEAR Beta is enabled. */
   near?: NearProvider
+  /** Available when the installed extension enables Starknet. The flag is off by default. */
+  starknet?: StarknetProvider
 }
 
 export interface ProviderConnectInfo {

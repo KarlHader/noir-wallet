@@ -7,9 +7,11 @@ import {
 import {
   discoverLedger,
   exportLedgerAccount,
+  getLedgerDeviceName,
   type LedgerSessionOptions,
   type LedgerTransport
 } from '@/lib/ledger/device'
+import { assertLedgerStarknetDeviceSupported } from '@/lib/ledger/starknet-model'
 import { exportLedgerEvmAccount } from '@/lib/ledger/evm'
 import { exportLedgerBitcoinAccount } from '@/lib/ledger/bitcoin'
 import { exportLedgerSolanaAccount } from '@/lib/ledger/solana'
@@ -17,6 +19,10 @@ import { exportLedgerNearAccount } from '@/lib/ledger/near'
 import { exportLedgerDashAccount } from '@/lib/ledger/dash'
 import type { Network } from '@/types'
 import { ledgerAppName, ledgerDashModelStatus } from './ledger-device-status'
+import {
+  ledgerAccountCoversRequest,
+  resolveStarknetLedgerSelection
+} from '../pages/hardware/ledger-connect-model'
 import { assertLedgerDashFeature } from '@/core/wallet/ledger-feature-policy'
 
 export function ledgerCredentialAccounts(
@@ -174,6 +180,14 @@ export async function exportLedgerWalletAccounts(input: {
         address: result.address
       }
     }
+    if (family === 'starknet') {
+      assertLedgerStarknetDeviceSupported(device.deviceModel.model)
+      metadata ??= {
+        deviceModel: device.deviceModel.model,
+        deviceName: getLedgerDeviceName(device.deviceModel.model, device.name)
+      }
+      return resolveStarknetLedgerSelection(input.expectedAccounts, network, path)
+    }
     const hdIndex = path
       ? Number(path.split('/').at(-1)?.replace("'", ''))
       : input.deviceAccountIndex
@@ -210,11 +224,8 @@ export async function exportLedgerWalletAccounts(input: {
   for (const family of input.families) {
     input.signal.throwIfAborted()
     if (
-      existing.some(
-        account =>
-          account.family === family &&
-          account.accountIndex === input.accountIndex &&
-          (!('network' in account) || account.network === input.network)
+      existing.some(account =>
+        ledgerAccountCoversRequest(account, family, input.accountIndex, input.network)
       )
     )
       continue

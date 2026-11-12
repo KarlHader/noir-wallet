@@ -1,6 +1,7 @@
 import { parseChainId, getBitcoinChainId } from '@/core/chains/registry'
 import { DASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import { validateLedgerDashDerivationPath } from '@/core/wallet/ledger-derivation-path'
+import { validateLedgerStarknetDerivationPath } from '@/core/wallet/ledger-derivation-path'
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId, parseSigningSummary, type SigningSummary } from '@/core/keyring/domain'
 import { validateLedgerEvmDerivationPath } from '@/core/wallet/ledger-derivation-path'
@@ -91,6 +92,39 @@ export type LedgerDashSigningRequest =
       expectedAddress: string
       message: string
     }>
+export type LedgerStarknetChainId = 'starknet:SN_MAIN' | 'starknet:SN_SEPOLIA'
+interface LedgerStarknetAccountBinding {
+  readonly chainId: LedgerStarknetChainId
+  readonly derivationPath: string
+  readonly publicKey: string
+  readonly address: string
+  readonly classHash: string
+  readonly blindSigning: boolean
+}
+export type LedgerStarknetSigningRequest =
+  | (LedgerStarknetAccountBinding &
+      Readonly<{
+        kind: 'starknet-invoke'
+        transactionHash: string
+        transaction: Readonly<Record<string, unknown>>
+      }>)
+  | (LedgerStarknetAccountBinding &
+      Readonly<{
+        kind: 'starknet-deploy-account'
+        transactionHash: string
+        transaction: Readonly<Record<string, unknown>>
+      }>)
+  | (LedgerStarknetAccountBinding &
+      Readonly<{
+        kind: 'starknet-typed-data'
+        messageHash: string
+      }>)
+export type LedgerStarknetSigningResponse = Readonly<{
+  kind: LedgerStarknetSigningRequest['kind']
+  publicKey: string
+  signature: readonly [string, string]
+}>
+
 export type LedgerDashSigningResponse =
   | Readonly<{
       kind: 'dash-psbt'
@@ -107,12 +141,14 @@ export type LedgerDeviceSigningRequest =
   | LedgerSolanaSigningRequest
   | LedgerNearSigningRequest
   | LedgerDashSigningRequest
+  | LedgerStarknetSigningRequest
 export type LedgerDeviceSigningResponse =
   | LedgerEvmSigningResponse
   | LedgerBitcoinSigningResponse
   | LedgerSolanaSigningResponse
   | LedgerNearSigningResponse
   | LedgerDashSigningResponse
+  | LedgerStarknetSigningResponse
 
 export interface LedgerPendingSigning {
   readonly requestId: string
@@ -277,7 +313,70 @@ function request(value: unknown, chainId: string): LedgerDeviceSigningRequest {
       psbtBase64: bounded(item.psbtBase64, 'Ledger Dash PSBT')
     }
   }
+  if (
+    item.kind === 'starknet-invoke' ||
+    item.kind === 'starknet-deploy-account' ||
+    item.kind === 'starknet-typed-data'
+  ) {
+    const common = [
+      'kind',
+      'chainId',
+      'derivationPath',
+      'publicKey',
+      'address',
+      'classHash',
+      'blindSigning'
+    ]
+    const extra =
+      item.kind === 'starknet-typed-data' ? ['messageHash'] : ['transactionHash', 'transaction']
+    assertExactKeys(item, [...common, ...extra], [], 'Ledger Starknet request')
+    if (chainId !== 'starknet:SN_MAIN' && chainId !== 'starknet:SN_SEPOLIA') {
+      throw new Error('Ledger Starknet chain does not match request')
+    }
+    if (item.chainId !== chainId) throw new Error('Ledger Starknet chain does not match request')
+    const starknetChainId: LedgerStarknetChainId =
+      chainId === 'starknet:SN_MAIN' ? 'starknet:SN_MAIN' : 'starknet:SN_SEPOLIA'
+    if (typeof item.blindSigning !== 'boolean') {
+      throw new Error('Invalid Ledger Starknet blind-signing flag')
+    }
+    const derivationPath = validateLedgerStarknetDerivationPath(
+      bounded(item.derivationPath, 'Ledger Starknet path', 128)
+    )
+    const publicKey = starknetFelt(item.publicKey, 'public key')
+    const address = starknetFelt(item.address, 'address')
+    const classHash = starknetFelt(item.classHash, 'class hash')
+    const binding = {
+      chainId: starknetChainId,
+      derivationPath,
+      publicKey,
+      address,
+      classHash,
+      blindSigning: item.blindSigning
+    }
+    if (item.kind === 'starknet-typed-data') {
+      return {
+        kind: 'starknet-typed-data',
+        ...binding,
+        messageHash: starknetFelt(item.messageHash, 'message hash')
+      }
+    }
+    const transaction = readRecord(item.transaction, 'Ledger Starknet transaction')
+    if (JSON.stringify(transaction).length > 200_000) {
+      throw new Error('Ledger Starknet transaction is too large')
+    }
+    const transactionHash = starknetFelt(item.transactionHash, 'transaction hash')
+    if (item.kind === 'starknet-invoke') {
+      return { kind: 'starknet-invoke', ...binding, transactionHash, transaction }
+    }
+    return { kind: 'starknet-deploy-account', ...binding, transactionHash, transaction }
+  }
   throw new Error('Unsupported Ledger signing request')
+}
+
+function starknetFelt(value: unknown, label: string): string {
+  const felt = bounded(value, `Ledger Starknet ${label}`, 66)
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(felt)) throw new Error(`Invalid Ledger Starknet ${label}`)
+  return felt
 }
 
 const summarySchema: Readonly<Record<LedgerDeviceSigningRequest['kind'], string>> = {
@@ -290,7 +389,10 @@ const summarySchema: Readonly<Record<LedgerDeviceSigningRequest['kind'], string>
   'near-transaction': 'near.transaction.v1',
   'near-nep413-message': 'near.nep413-message.v1',
   'dash-psbt': 'dash.psbt.v1',
-  'dash-message': 'dash.message.v1'
+  'dash-message': 'dash.message.v1',
+  'starknet-invoke': 'starknet.invoke.v1',
+  'starknet-deploy-account': 'starknet.deploy-account.v1',
+  'starknet-typed-data': 'starknet.typed-data.v1'
 }
 
 export function parseLedgerPendingSigning(value: unknown, now = Date.now()): LedgerPendingSigning {
@@ -345,13 +447,18 @@ export function parseLedgerPendingSigning(value: unknown, now = Date.now()): Led
             ? 'solana'
             : parsedRequest.kind === 'dash-psbt' || parsedRequest.kind === 'dash-message'
               ? 'dash'
-              : 'near',
+              : parsedRequest.kind === 'starknet-invoke' ||
+                  parsedRequest.kind === 'starknet-deploy-account' ||
+                  parsedRequest.kind === 'starknet-typed-data'
+                ? 'starknet'
+                : 'near',
     operation:
       parsedRequest.kind === 'personal-sign' ||
       parsedRequest.kind === 'typed-data' ||
       parsedRequest.kind === 'bip322-simple' ||
       parsedRequest.kind === 'near-nep413-message' ||
-      parsedRequest.kind === 'dash-message'
+      parsedRequest.kind === 'dash-message' ||
+      parsedRequest.kind === 'starknet-typed-data'
         ? 'message'
         : 'transaction'
   })

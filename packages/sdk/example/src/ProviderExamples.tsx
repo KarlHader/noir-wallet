@@ -91,6 +91,7 @@ export type ExampleProviderId =
   | 'quantus'
   | 'solana'
   | 'near'
+  | 'starknet'
 
 export interface ExampleNavigationProps {
   active: ExampleProviderId
@@ -216,6 +217,11 @@ export function ProviderSwitcher({
       id: 'near' as const,
       label: networkMode === 'mainnet' ? 'NEAR' : 'NEAR Testnet',
       iconUrl: getExampleChainIconUrl('near')
+    },
+    {
+      id: 'starknet' as const,
+      label: networkMode === 'mainnet' ? 'Starknet' : 'Starknet Sepolia',
+      iconUrl: getExampleChainIconUrl('starknet')
     }
   ]
   return (
@@ -299,7 +305,7 @@ export function ProviderSwitcher({
   )
 }
 
-function ExampleLayout({
+export function ExampleLayout({
   navigation,
   available,
   connected,
@@ -403,7 +409,7 @@ function Result({ label, value }: { label: string; value: string }) {
   )
 }
 
-function AuthorizedAccountsExample({
+export function AuthorizedAccountsExample({
   accounts,
   busy,
   onReview

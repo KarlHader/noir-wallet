@@ -14,6 +14,10 @@ import {
   createConfiguredActivityHistorySources
 } from '@/infrastructure/activity'
 import {
+  ChromeSessionStarknetPendingTransferStore,
+  StarknetActivityScanError
+} from '@/infrastructure/chains/starknet'
+import {
   BITCOIN_ACTIVITY_HISTORY_LIMITS,
   IndexedDbBitcoinDiscoveryRepository,
   isActiveBitcoinAddressObservation,
@@ -139,7 +143,7 @@ async function resolveEvmExecutionAddresses(
 async function resolveChainAddress(
   storageRepository: ActivityStorageRepository,
   scope: ActivityScope,
-  family: 'solana' | 'near',
+  family: 'solana' | 'near' | 'starknet',
   chainId: string
 ): Promise<string | null> {
   const pointer = await storageRepository.getActivePointer()
@@ -250,7 +254,9 @@ export function createBackgroundActivityCoordinator(
     nearNetwork,
     nearHistory,
     dashNetwork,
-    dashHistory
+    dashHistory,
+    starknetNetwork,
+    starknetHistory
   } = createConfiguredActivityHistorySources({
     network: DEFAULT_NETWORK,
     enabledChainFeatureFlags: __ENABLED_CHAIN_FEATURE_FLAGS__,
@@ -608,6 +614,37 @@ export function createBackgroundActivityCoordinator(
     }
   }
 
+  const loadStarknetItems = async (
+    scope: ActivityScope,
+    fallbackItems: readonly ActivityItem[]
+  ): Promise<readonly ActivityItem[]> => {
+    if (!starknetHistory) return Object.freeze([])
+    const address = await resolveChainAddress(
+      storageRepository,
+      scope,
+      'starknet',
+      starknetNetwork.chainId
+    )
+    if (!address) return fallbackItems
+    const localPending = await new ChromeSessionStarknetPendingTransferStore(chrome.storage.session)
+      .list()
+      .catch(() => [])
+    try {
+      const fresh = await starknetHistory.readAddressActivity({ scope, address, localPending })
+      return mergeBoundedActivityItems(fallbackItems, fresh)
+    } catch (error) {
+      if (error instanceof StarknetActivityScanError && error.items.length > 0) {
+        return mergeBoundedActivityItems(fallbackItems, error.items)
+      }
+      logger.warn(
+        `Starknet activity refresh failed: ${formatLogError(error)}`,
+        scope.keyDomainId,
+        scope.accountId
+      )
+      return fallbackItems
+    }
+  }
+
   const loadPearlItems = async (
     scope: ActivityScope,
     fallbackItems: readonly ActivityItem[]
@@ -689,6 +726,7 @@ export function createBackgroundActivityCoordinator(
       ...evmHistorySources.map(source => source.chainId),
       ...(solanaHistory ? [solanaNetwork.chainId] : []),
       ...(nearHistory ? [nearNetwork.chainId] : []),
+      ...(starknetHistory ? [starknetNetwork.chainId] : []),
       ...(dashHistory ? [dashNetwork.chainId] : [])
     ])
     const requestedChainIdSet = chainIds ? new Set(chainIds) : null
@@ -735,8 +773,9 @@ export function createBackgroundActivityCoordinator(
       const cachedPearlItems = filterItemsForChain(activeItems, pearlNetwork.chainId)
       const cachedSolanaItems = filterItemsForChainFamily(activeItems, 'solana')
       const cachedNearItems = filterItemsForChainFamily(activeItems, 'near')
+      const cachedStarknetItems = filterItemsForChainFamily(activeItems, 'starknet')
       const cachedDashItems = filterItemsForChain(activeItems, dashNetwork.chainId)
-      const [bitcoinItems, pearlItems, evmItems, solanaItems, nearItems, dashItems] =
+      const [bitcoinItems, pearlItems, evmItems, solanaItems, nearItems, starknetItems, dashItems] =
         await Promise.all([
           staleChainIdSet.has(bitcoinNetwork.chainId)
             ? loadBitcoinItems(scope, cachedBitcoinItems, addressType)
@@ -758,6 +797,9 @@ export function createBackgroundActivityCoordinator(
           staleChainIdSet.has(nearNetwork.chainId)
             ? loadNearItems(scope, cachedNearItems)
             : Object.freeze([]),
+          staleChainIdSet.has(starknetNetwork.chainId)
+            ? loadStarknetItems(scope, cachedStarknetItems)
+            : Object.freeze([]),
           staleChainIdSet.has(dashNetwork.chainId)
             ? loadDashItems(scope, cachedDashItems)
             : Object.freeze([])
@@ -768,6 +810,7 @@ export function createBackgroundActivityCoordinator(
         ...evmItems,
         ...solanaItems,
         ...nearItems,
+        ...starknetItems,
         ...dashItems
       ])
       const refreshedAt = Date.now()

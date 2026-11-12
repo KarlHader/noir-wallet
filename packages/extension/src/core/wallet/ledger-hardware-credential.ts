@@ -14,7 +14,8 @@ import {
   validateLedgerDashDerivationPath,
   validateLedgerEvmDerivationPath,
   validateLedgerNearDerivationPath,
-  validateLedgerSolanaDerivationPath
+  validateLedgerSolanaDerivationPath,
+  validateLedgerStarknetDerivationPath
 } from './ledger-derivation-path'
 
 export const LEDGER_MULTICHAIN_HARDWARE_CREDENTIAL_SCHEMA_VERSION = 3 as const
@@ -24,7 +25,8 @@ export const LEDGER_CHAIN_FAMILIES = Object.freeze([
   'evm',
   'solana',
   'near',
-  'dash'
+  'dash',
+  'starknet'
 ] as const)
 export type LedgerChainFamily = (typeof LEDGER_CHAIN_FAMILIES)[number]
 interface LedgerAccountBase {
@@ -57,6 +59,15 @@ export type LedgerPublicAccount = LedgerAccountBase &
         readonly ufvk: string
         readonly accountHdIndex: number
         readonly birthdayHeight?: number
+      }
+    | {
+        readonly family: 'starknet'
+        readonly network: 'mainnet' | 'testnet'
+        readonly publicKey: string
+        readonly address: string
+        readonly classHash: string
+        readonly accountType: 'argent'
+        readonly appVersion: string
       }
   )
 
@@ -142,6 +153,12 @@ function secpKey(value: unknown): string {
     throw new Error('Invalid Ledger secp256k1 public key')
   return `0x${secp256k1.ProjectivePoint.fromHex(key.slice(2)).toHex(false)}`
 }
+function starknetFelt(value: unknown): string {
+  const felt = text(value, 'Starknet felt', 66)
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(felt)) throw new Error('Invalid Ledger Starknet felt')
+  return felt
+}
+
 function parseAccount(value: unknown): LedgerPublicAccount {
   if (!record(value)) throw new Error('Invalid Ledger public account')
   const accountIndex = index(value.accountIndex)
@@ -279,6 +296,38 @@ function parseAccount(value: unknown): LedgerPublicAccount {
       ufvk,
       accountHdIndex,
       ...(birthdayHeight === undefined ? {} : { birthdayHeight })
+    })
+  }
+  if (value.family === 'starknet') {
+    keys(value, [
+      ...common,
+      'network',
+      'publicKey',
+      'address',
+      'classHash',
+      'accountType',
+      'appVersion'
+    ])
+    if (value.accountType !== 'argent') throw new Error('Ledger Starknet account must be Argent')
+    if (value.appVersion !== '2.4.3') throw new Error('Unsupported Ledger Starknet app version')
+    const net = network(value.network)
+    const derivationPath = validateLedgerStarknetDerivationPath(
+      path(value.derivationPath, /^m\/2645'\/1195502025'\/1148870696'\/0'\/0'\/[0-9]+$/)
+    )
+    const publicKey = starknetFelt(value.publicKey)
+    const address = starknetFelt(value.address)
+    const classHash = starknetFelt(value.classHash)
+    if (publicKey === '0x0') throw new Error('Ledger Starknet public key is empty')
+    return Object.freeze({
+      family: 'starknet',
+      accountIndex,
+      derivationPath,
+      network: net,
+      publicKey,
+      address,
+      classHash,
+      accountType: 'argent',
+      appVersion: '2.4.3'
     })
   }
   throw new Error('Unsupported Ledger chain family')

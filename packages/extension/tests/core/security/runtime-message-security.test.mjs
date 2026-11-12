@@ -1772,4 +1772,36 @@ test.describe('Runtime message security', () => {
       })
     ).toThrow(/schema/i)
   })
+
+  test('accepts a Starknet Ledger address request only from an extension page', () => {
+    const message = {
+      type: 'COMPUTE_STARKNET_LEDGER_ADDRESS',
+      publicKey: '0x1'
+    }
+    const connectUrl = `chrome-extension://${extensionId}/index.html#/hardware/ledger-connect`
+    expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...message, publicKey: 'not-a-felt' })
+    ).toThrow(/schema/i)
+    expect(() => parseTrustedExtensionRuntimeMessage({ ...message, seed: 'secret' })).toThrow(
+      /schema/i
+    )
+    expect(
+      isTrustedRuntimeMessageSender(message.type, { id: extensionId, url: connectUrl }, extensionId)
+    ).toBe(true)
+    expect(
+      isOwnExtensionRouteSender(
+        { id: extensionId, url: connectUrl },
+        extensionId,
+        '/hardware/ledger-connect'
+      )
+    ).toBe(true)
+    expect(
+      isTrustedRuntimeMessageSender(
+        message.type,
+        { id: extensionId, url: 'https://dapp.example/' },
+        extensionId
+      )
+    ).toBe(false)
+  })
 })

@@ -494,3 +494,31 @@ mainnet. Decode it to 65 bytes: the first byte is the recovery header, then 32-b
 `s`. Keystone rejects with provider error code `4200` and does not return a signature.
 
 Ordinary Dash is public. It is not shielded.
+
+## Starknet
+
+`wallet.starknet` is present only when the extension build enables `chain.starknet`. That flag is off
+by default. The same object is also exposed as `window.starknet_noirwallet` with `id` `noirwallet`.
+Discover the SDK object with `getStarknetProvider()` or `detectStarknetProvider()`.
+
+The provider speaks Starknet Wallet API 0.10.4. `wallet_requestAccounts` connects the active account.
+`wallet_requestChainId` returns the felt chain id for the wallet's current network mode:
+`0x534e5f4d41494e` on mainnet and `0x534e5f5345504f4c4941` on Sepolia. `wallet_switchStarknetChain`
+succeeds only when the requested felt matches that mode. `wallet_addStarknetChain`,
+`wallet_addDeclareTransaction`, and every `wallet_strk20*` method are unsupported.
+
+`wallet_addInvokeTransaction` opens a review of every call and rejects a `proof` field.
+`wallet_signTypedData` reviews and signs one SNIP-12 typed-data object. `wallet_watchAsset` accepts
+only an ERC20 the wallet already registers for the current mode. Permission is the calling origin,
+the current network, and the active account. It is revoked on lock, network-mode switch, and
+disconnect. `accountsChanged` and `networkChanged` are the provider events.
+
+```ts
+const starknet = wallet.starknet
+if (starknet) {
+  const [address] = await starknet.request<string[]>({ type: 'wallet_requestAccounts' })
+  const chainId = await starknet.request<string>({ type: 'wallet_requestChainId' })
+  await starknet.request({ type: 'wallet_disconnect' })
+}
+```
+

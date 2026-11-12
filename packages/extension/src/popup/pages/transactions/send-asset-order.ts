@@ -70,7 +70,8 @@ export function isUnifiedSendPortfolioChain(
       (chain.family === 'bitcoin' && isBitcoinChainId(chain.id)) ||
       (chain.family === 'dash' && isDashChainId(chain.id)) ||
       chain.family === 'solana' ||
-      chain.family === 'near') &&
+      chain.family === 'near' ||
+      chain.family === 'starknet') &&
     chain.capabilities.transaction.status === 'available'
   )
 }

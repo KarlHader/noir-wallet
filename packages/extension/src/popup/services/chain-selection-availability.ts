@@ -6,6 +6,7 @@ import {
   PEARL_CHAIN_FEATURE_FLAG,
   QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
+  STARKNET_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG,
   type ChainFeatureFlagValue
 } from '@/config/multichain-feature-flags'
@@ -21,6 +22,7 @@ export type SelectableChainFamily =
   | 'near'
   | 'pearl'
   | 'quantus'
+  | 'starknet'
 
 const FAMILY_FLAGS: Readonly<Record<SelectableChainFamily, ChainFeatureFlagValue>> = {
   zcash: ZCASH_CHAIN_FEATURE_FLAG,
@@ -30,7 +32,8 @@ const FAMILY_FLAGS: Readonly<Record<SelectableChainFamily, ChainFeatureFlagValue
   solana: SOLANA_CHAIN_FEATURE_FLAG,
   near: NEAR_CHAIN_FEATURE_FLAG,
   pearl: PEARL_CHAIN_FEATURE_FLAG,
-  quantus: QUANTUS_CHAIN_FEATURE_FLAG
+  quantus: QUANTUS_CHAIN_FEATURE_FLAG,
+  starknet: STARKNET_CHAIN_FEATURE_FLAG
 }
 
 export const DEFERRED_CHAIN_CHOICES = Object.freeze([

@@ -12,6 +12,7 @@ import {
   type SolanaTransactionOptions
 } from './solana-wallet-standard'
 import { registerNearConnectWallet } from './near-connect-wallet'
+import { registerStarknetWalletStandard } from './starknet-wallet-standard'
 import { NOIR_WALLET_PROVIDER_ICON, NOIR_WALLET_PROVIDER_NAME } from './provider-brand'
 
 interface ProviderRequestArguments {
@@ -220,6 +221,19 @@ interface NearProvider {
   removeListener: (event: string, handler: ProviderListener) => NearProvider
 }
 
+interface StarknetWindowProvider {
+  readonly id: 'noirwallet'
+  readonly name: string
+  readonly version: string
+  readonly icon: string
+  request(args: {
+    readonly type: string
+    readonly params?: Readonly<Record<string, unknown>>
+  }): Promise<unknown>
+  on(event: string, handler: ProviderListener): void
+  off(event: string, handler: ProviderListener): void
+}
+
 interface MultichainProvider {
   request: (args: ProviderRequestArguments) => Promise<unknown>
   createSession: (params: Readonly<Record<string, unknown>>) => Promise<unknown>
@@ -243,6 +257,7 @@ interface NoirWalletProvider {
   readonly quantus?: QuantusProvider
   readonly solana?: SolanaProvider
   readonly near?: NearProvider
+  readonly starknet?: StarknetWindowProvider
 }
 
 interface ProviderErrorValue {
@@ -272,6 +287,7 @@ const pearlProviderEnabled = enabledChainFeatureFlags.includes('chain.pearl')
 const quantusProviderEnabled = enabledChainFeatureFlags.includes('chain.quantus')
 const solanaProviderEnabled = enabledChainFeatureFlags.includes('chain.solana')
 const nearProviderEnabled = enabledChainFeatureFlags.includes('chain.near')
+const starknetProviderEnabled = enabledChainFeatureFlags.includes('chain.starknet')
 const REQUEST_TIMEOUT_MS = 300_000
 const bridgeReady = new Promise<void>(resolve => {
   window.addEventListener('noirwallet#bridgeReady', () => resolve(), { once: true })
@@ -338,10 +354,11 @@ async function requestProvider(
     | 'evm'
     | 'bitcoin'
     | 'dash'
-    | 'pearl'
-    | 'quantus'
     | 'solana'
     | 'near'
+    | 'pearl'
+    | 'quantus'
+    | 'starknet'
     | 'multichain',
   args: ProviderRequestArguments
 ) {
@@ -1022,6 +1039,33 @@ function createNearProvider(): NearProvider {
   return Object.freeze(provider)
 }
 
+function createStarknetProvider(): StarknetWindowProvider {
+  const provider: StarknetWindowProvider = {
+    id: 'noirwallet',
+    name: NOIR_WALLET_PROVIDER_NAME,
+    version: appVersion,
+    icon: NOIR_WALLET_PROVIDER_ICON,
+    request: args => {
+      if (!args || typeof args.type !== 'string' || args.type.length === 0) {
+        return Promise.reject(
+          new ProviderRpcError({ code: -32602, message: 'Invalid provider request.' })
+        )
+      }
+      return requestProvider('starknet', {
+        method: args.type,
+        ...(args.params === undefined ? {} : { params: args.params })
+      })
+    },
+    on(event, handler) {
+      addProviderListener('starknet', event, handler)
+    },
+    off(event, handler) {
+      removeProviderListener('starknet', event, handler)
+    }
+  }
+  return Object.freeze(provider)
+}
+
 const earlyEthereumProvider = evmProviderEnabled
   ? (window as Window & { __noirEarlyEvmProvider?: EarlyEthereumProviderRegistration })
       .__noirEarlyEvmProvider
@@ -1037,6 +1081,7 @@ const pearlProvider = pearlProviderEnabled ? createPearlProvider() : null
 const quantusProvider = quantusProviderEnabled ? createQuantusProvider() : null
 const solanaProvider = solanaProviderEnabled ? createSolanaProvider() : null
 const nearProvider = nearProviderEnabled ? createNearProvider() : null
+const starknetProvider = starknetProviderEnabled ? createStarknetProvider() : null
 const multichainProvider = createMultichainProvider()
 const noirWalletProvider: NoirWalletProvider = Object.freeze({
   isNoirWallet: true,
@@ -1050,7 +1095,8 @@ const noirWalletProvider: NoirWalletProvider = Object.freeze({
   ...(pearlProvider ? { pearl: pearlProvider } : {}),
   ...(quantusProvider ? { quantus: quantusProvider } : {}),
   ...(solanaProvider ? { solana: solanaProvider } : {}),
-  ...(nearProvider ? { near: nearProvider } : {})
+  ...(nearProvider ? { near: nearProvider } : {}),
+  ...(starknetProvider ? { starknet: starknetProvider } : {})
 })
 
 window.addEventListener('message', event => {
@@ -1066,6 +1112,7 @@ window.addEventListener('message', event => {
     event.data.chainId !== 'quantus' &&
     event.data.chainId !== 'solana' &&
     event.data.chainId !== 'near' &&
+    event.data.chainId !== 'starknet' &&
     event.data.chainId !== 'multichain'
   ) {
     return
@@ -1124,6 +1171,28 @@ if (nearProvider) {
     signAndSendTransaction: input => nearProvider.signAndSendTransaction(input),
     signAndSendTransactions: input => nearProvider.signAndSendTransactions(input),
     signMessage: input => nearProvider.signMessage(input)
+  })
+}
+
+if (starknetProvider) {
+  Object.defineProperty(window, 'starknet_noirwallet', {
+    value: starknetProvider,
+    writable: false,
+    configurable: false,
+    enumerable: true
+  })
+  registerStarknetWalletStandard({
+    version: appVersion,
+    request: (method, params) =>
+      requestProvider('starknet', {
+        method,
+        ...(params === undefined ? {} : { params })
+      }),
+    onAccountsChanged: listener => {
+      addProviderListener('starknet', 'accountsChanged', value => {
+        listener(Array.isArray(value) ? value.filter(item => typeof item === 'string') : [])
+      })
+    }
   })
 }
 

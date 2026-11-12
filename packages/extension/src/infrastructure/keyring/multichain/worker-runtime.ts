@@ -86,6 +86,18 @@ import {
   type DashAccountDerivation,
   type DashSigningPreparePayload
 } from './worker-dash-runtime'
+import {
+  assertStarknetPublicResult,
+  parseRawStarknetAccount,
+  readQueryFlag,
+  readStarknetCalls,
+  readStarknetChainId,
+  readStarknetFelt,
+  readStarknetResourceBounds,
+  assertStarknetComputableClassHash,
+  type RawDerivedStarknetAccount
+} from './starknet-codecs'
+import { starknetSessionRequestJson } from './signing-adapter-starknet'
 
 const DEFAULT_MAX_PENDING_SIGNING = 64
 const DEFAULT_SIGNING_TTL_MS = 5 * 60_000
@@ -143,6 +155,7 @@ interface PendingSigning {
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
     | RawDashAccount
+    | RawDerivedStarknetAccount
   readonly expiresAt: number
 }
 
@@ -363,11 +376,18 @@ function parseAccountDerivation(value: unknown):
       readonly chainId: string
       readonly accountIndex: number
     }
+  | {
+      readonly family: 'starknet'
+      readonly chainId: string
+      readonly accountIndex: number
+      readonly addressIndex: number
+      readonly classHash: string
+    }
   | DashAccountDerivation {
   const record = readRecord(value, 'account.derive-public payload')
   const family = readLiteral(
     record.family,
-    ['evm', 'pea', 'bitcoin', 'dash', 'pearl', 'quantus', 'solana', 'near'],
+    ['evm', 'pea', 'bitcoin', 'dash', 'solana', 'near', 'pearl', 'quantus', 'starknet'],
     'account family'
   )
   if (family === 'quantus') {
@@ -446,6 +466,25 @@ function parseAccountDerivation(value: unknown):
       family,
       chainId,
       accountIndex: readSafeInteger(record.accountIndex, 'accountIndex', MAX_BIP32_INDEX)
+    })
+  }
+  if (family === 'starknet') {
+    assertExactKeys(
+      record,
+      ['family', 'chainId', 'accountIndex', 'addressIndex', 'classHash'],
+      [],
+      'derive payload'
+    )
+    const chainId = readString(record.chainId, 'chainId', 64)
+    if (chainId !== 'starknet:SN_MAIN' && chainId !== 'starknet:SN_SEPOLIA') {
+      throw new KeyringError('UNSUPPORTED_CHAIN')
+    }
+    return Object.freeze({
+      family,
+      chainId,
+      accountIndex: readSafeInteger(record.accountIndex, 'accountIndex', MAX_BIP32_INDEX),
+      addressIndex: readSafeInteger(record.addressIndex, 'addressIndex', MAX_BIP32_INDEX),
+      classHash: readStarknetFelt(record.classHash, 'classHash')
     })
   }
   if (family === 'pea') {
@@ -545,7 +584,8 @@ function publicAccount(
     | RawDerivedPearlAccount
     | RawDerivedQuantusAccount
     | RawDerivedEd25519Account
-    | RawDashAccount,
+    | RawDashAccount
+    | RawDerivedStarknetAccount,
   purpose: 'identity' | 'receive' | 'change'
 ) {
   return Object.freeze({
@@ -575,6 +615,9 @@ function publicAccount(
             ? { redeemScript: account.redeemScript }
             : {})
         }
+      : {}),
+    ...('classHash' in account
+      ? { classHash: account.classHash, implementation: account.implementation }
       : {})
   })
 }
@@ -683,9 +726,150 @@ export class MultichainWorkerRuntime {
         return this.cancelAllSigning(command)
       case 'command.cancel':
         return this.cancelProductCommand(command)
+      case 'starknet.compute-address':
+      case 'starknet.build-unsigned-invoke':
+      case 'starknet.build-unsigned-deploy-account':
+      case 'starknet.attach-signature':
+      case 'starknet.hash-typed-data':
+        return this.executeStarknetPublic(command)
       case 'identity.get-public':
         throw new KeyringError('UNSUPPORTED_OPERATION')
     }
+  }
+
+  private executeStarknetPublic(command: KeyringCommand) {
+    if (command.binding.kind !== 'unbound') throw new KeyringError('INVALID_COMMAND')
+    const requestJson = parseInput(() => {
+      const payload = readRecord(command.payload, 'Starknet public payload')
+      for (const key of Object.keys(payload)) {
+        if (key === 'sessionId' || key === 'privateKey' || key === 'seed' || key === 'mnemonic') {
+          throw new Error('Starknet public payload contains a secret field')
+        }
+      }
+      if (command.operation === 'starknet.compute-address') {
+        if (payload.preset === undefined) {
+          assertExactKeys(
+            payload,
+            ['classHash', 'salt', 'constructorCalldata'],
+            [],
+            'compute address'
+          )
+          const classHash = readStarknetFelt(payload.classHash, 'classHash')
+          assertStarknetComputableClassHash(classHash)
+          readStarknetFelt(payload.salt, 'salt')
+          readStarknetCalls([
+            { to: payload.salt, selector: payload.salt, calldata: payload.constructorCalldata }
+          ])
+        } else {
+          assertExactKeys(payload, ['preset', 'publicKey'], [], 'compute address')
+          readLiteral(payload.preset, ['open_zeppelin', 'argent_v0_4'], 'preset')
+          readStarknetFelt(payload.publicKey, 'publicKey')
+        }
+      } else if (command.operation === 'starknet.build-unsigned-invoke') {
+        assertExactKeys(
+          payload,
+          ['chainId', 'senderAddress', 'publicKey', 'calls', 'nonce', 'resourceBounds'],
+          [
+            'classHash',
+            'tip',
+            'nonceDataAvailabilityMode',
+            'feeDataAvailabilityMode',
+            'paymasterData',
+            'accountDeploymentData',
+            'proofFacts',
+            'proof',
+            'query'
+          ],
+          'unsigned invoke'
+        )
+        readStarknetChainId(payload.chainId)
+        readStarknetFelt(payload.senderAddress, 'senderAddress')
+        readStarknetFelt(payload.publicKey, 'publicKey')
+        readStarknetCalls(payload.calls)
+        readStarknetFelt(payload.nonce, 'nonce')
+        readStarknetResourceBounds(payload.resourceBounds)
+        readQueryFlag(payload.query)
+      } else if (command.operation === 'starknet.build-unsigned-deploy-account') {
+        assertExactKeys(
+          payload,
+          ['chainId', 'senderAddress', 'publicKey', 'nonce', 'resourceBounds'],
+          [
+            'classHash',
+            'salt',
+            'constructorCalldata',
+            'tip',
+            'nonceDataAvailabilityMode',
+            'feeDataAvailabilityMode',
+            'paymasterData',
+            'query'
+          ],
+          'unsigned deploy'
+        )
+        readStarknetChainId(payload.chainId)
+        readStarknetFelt(payload.senderAddress, 'senderAddress')
+        readStarknetFelt(payload.publicKey, 'publicKey')
+        readStarknetResourceBounds(payload.resourceBounds)
+        readQueryFlag(payload.query)
+      } else if (command.operation === 'starknet.attach-signature') {
+        assertExactKeys(
+          payload,
+          ['chainId', 'transaction', 'signature', 'publicKey'],
+          [],
+          'attach signature'
+        )
+        readStarknetChainId(payload.chainId)
+        readRecord(payload.transaction, 'transaction')
+        readStarknetFelt(payload.publicKey, 'publicKey')
+        const signature = readArray(
+          payload.signature,
+          'signature',
+          item => readStarknetFelt(item, 'signature'),
+          2
+        )
+        if (signature.length !== 2) throw new Error('Starknet signature must be [r, s]')
+      } else {
+        assertExactKeys(
+          payload,
+          ['chainId', 'typedData', 'accountAddress'],
+          ['publicKey'],
+          'typed data hash'
+        )
+        readStarknetChainId(payload.chainId)
+        readStarknetFelt(payload.accountAddress, 'accountAddress')
+        readString(payload.typedData, 'typedData', 65_536)
+        if (payload.publicKey !== undefined) readStarknetFelt(payload.publicKey, 'publicKey')
+      }
+      return JSON.stringify(payload)
+    }, 'INVALID_COMMAND')
+    return callRaw(
+      command,
+      () => {
+        switch (command.operation) {
+          case 'starknet.compute-address':
+            return this.engine.computeStarknetAccountAddress(requestJson)
+          case 'starknet.build-unsigned-invoke':
+            return this.engine.buildStarknetUnsignedInvoke(requestJson)
+          case 'starknet.build-unsigned-deploy-account':
+            return this.engine.buildStarknetUnsignedDeployAccount(requestJson)
+          case 'starknet.attach-signature':
+            return this.engine.attachStarknetSignature(requestJson)
+          case 'starknet.hash-typed-data':
+            return this.engine.hashStarknetTypedData(requestJson)
+          default:
+            throw new KeyringError('UNSUPPORTED_OPERATION')
+        }
+      },
+      value => {
+        const result = assertStarknetPublicResult(value)
+        if (result.query === true && result.transaction !== undefined) {
+          const transaction = readRecord(result.transaction, 'transaction')
+          if (transaction.version === '0x3') {
+            throw new Error('Query Starknet transaction must not use the execution version')
+          }
+        }
+        return result
+      }
+    )
   }
 
   private async createCredential(command: KeyringCommand) {
@@ -1166,6 +1350,32 @@ export class MultichainWorkerRuntime {
       )
       return publicAccount(derivation.chainId, account, 'identity')
     }
+    if (derivation.family === 'starknet') {
+      if (session.kind === 'private_key') throw new KeyringError('UNSUPPORTED_CHAIN')
+      const account = callRaw(
+        command,
+        () =>
+          this.engine.deriveStarknetAccount(
+            session.rawSessionId,
+            derivation.chainId,
+            derivation.accountIndex,
+            derivation.addressIndex,
+            derivation.classHash
+          ),
+        value => {
+          const derived = parseRawStarknetAccount(value)
+          const expectedPath = `m/44'/9004'/${derivation.accountIndex}'/0/${derivation.addressIndex}`
+          if (
+            derived.derivationPath !== expectedPath ||
+            derived.implementation !== 'open_zeppelin'
+          ) {
+            throw new Error('Starknet account does not match the software derivation')
+          }
+          return derived
+        }
+      )
+      return publicAccount(derivation.chainId, account, 'identity')
+    }
     if (derivation.family === 'pea') {
       return callRaw(
         command,
@@ -1586,9 +1796,25 @@ export class MultichainWorkerRuntime {
         // The binding is immutable per reference, so an endpoint that later reports
         // a different chain fails closed instead of signing on the wrong network.
         if (requiresQuantusGenesisBinding(payload.transfer.chainId)) {
-          this.engine.registerQuantusNetwork(payload.transfer.chainId, payload.transfer.genesisHash)
+          this.engine.registerQuantusNetwork(
+            payload.transfer.chainId,
+            payload.transfer.genesisHash
+          )
         }
         raw = this.engine.prepareQuantusTransfer(session.rawSessionId, payload.transfer)
+      } else if (
+        payload.kind === 'starknet-invoke' ||
+        payload.kind === 'starknet-deploy-account' ||
+        payload.kind === 'starknet-typed-data'
+      ) {
+        if (session.kind === 'private_key') throw new KeyringError('UNSUPPORTED_CHAIN')
+        const requestJson = starknetSessionRequestJson(payload)
+        raw =
+          payload.kind === 'starknet-invoke'
+            ? this.engine.prepareStarknetInvoke(session.rawSessionId, requestJson)
+            : payload.kind === 'starknet-deploy-account'
+              ? this.engine.prepareStarknetDeployAccount(session.rawSessionId, requestJson)
+              : this.engine.prepareStarknetTypedData(session.rawSessionId, requestJson)
       } else {
         raw = this.engine.prepareBitcoinMessage(session.rawSessionId, {
           chainId: payload.chainId,
@@ -1707,6 +1933,15 @@ export class MultichainWorkerRuntime {
           // Both Quantus prepare entry points store a `QuantusCall` request and
           // only `confirmQuantusCall` exists upstream.
           raw = this.engine.confirmQuantusCall(pending.rawSessionId, pending.rawRequestId)
+          break
+        case 'starknet-invoke':
+          raw = this.engine.confirmStarknetInvoke(pending.rawSessionId, pending.rawRequestId)
+          break
+        case 'starknet-deploy-account':
+          raw = this.engine.confirmStarknetDeployAccount(pending.rawSessionId, pending.rawRequestId)
+          break
+        case 'starknet-typed-data':
+          raw = this.engine.confirmStarknetTypedData(pending.rawSessionId, pending.rawRequestId)
           break
       }
     } catch (error) {

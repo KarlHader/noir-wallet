@@ -37,7 +37,12 @@ export const KEYRING_OPERATION_ENGINES = Object.freeze({
   'signing.verify': engines('multichain'),
   'signing.cancel': engines('zcash', 'multichain'),
   'signing.cancel-all': engines('zcash', 'multichain'),
-  'command.cancel': engines('zcash', 'multichain')
+  'command.cancel': engines('zcash', 'multichain'),
+  'starknet.compute-address': engines('multichain'),
+  'starknet.build-unsigned-invoke': engines('multichain'),
+  'starknet.build-unsigned-deploy-account': engines('multichain'),
+  'starknet.attach-signature': engines('multichain'),
+  'starknet.hash-typed-data': engines('multichain')
 }) satisfies Readonly<Record<string, readonly KeyringEngine[]>>
 
 export type KeyringOperation = keyof typeof KEYRING_OPERATION_ENGINES
@@ -69,7 +74,12 @@ export const KEYRING_OPERATION_BINDING_KINDS = Object.freeze({
   'signing.verify': bindingKinds('unbound'),
   'signing.cancel': bindingKinds('credential'),
   'signing.cancel-all': bindingKinds('credential'),
-  'command.cancel': bindingKinds('unbound', 'global', 'credential')
+  'command.cancel': bindingKinds('unbound', 'global', 'credential'),
+  'starknet.compute-address': bindingKinds('unbound'),
+  'starknet.build-unsigned-invoke': bindingKinds('unbound'),
+  'starknet.build-unsigned-deploy-account': bindingKinds('unbound'),
+  'starknet.attach-signature': bindingKinds('unbound'),
+  'starknet.hash-typed-data': bindingKinds('unbound')
 }) satisfies Readonly<Record<KeyringOperation, readonly KeyringCommandBindingKind[]>>
 
 export interface KeyringCommand<TPayload extends KeyringCommandPayload = KeyringCommandPayload> {

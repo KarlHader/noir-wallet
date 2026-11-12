@@ -23,7 +23,10 @@ export function keySourceSupportsChainFamily(
   family: ChainDefinition['family']
 ): boolean {
   if (source.kind === 'software') return true
-  if (source.kind === 'private-key') return privateKeySupportsFamily(source, family)
+  if (source.kind === 'private-key') {
+    if (family === 'starknet') return false
+    return privateKeySupportsFamily(source, family)
+  }
   // Quantus and Pearl software ML-DSA / BIP-86 paths have no hardware vendor contract yet.
   if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
@@ -42,7 +45,10 @@ export function keySourceSupportsAddressFamily(
   family: ChainDefinition['family']
 ): boolean {
   if (source.kind === 'software') return true
-  if (source.kind === 'private-key') return privateKeySupportsFamily(source, family)
+  if (source.kind === 'private-key') {
+    if (family === 'starknet') return false
+    return privateKeySupportsFamily(source, family)
+  }
   if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
     if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
@@ -50,6 +56,7 @@ export function keySourceSupportsAddressFamily(
   }
   if (source.vendor !== 'keystone') return false
   if (family === 'dash') return hardwareDeclaresDash(source.capabilities)
+  if (family === 'starknet') return false
   const capability = family === 'evm' ? 'evm' : family === 'bitcoin' ? 'bitcoin' : family
   return source.capabilities.includes(capability)
 }

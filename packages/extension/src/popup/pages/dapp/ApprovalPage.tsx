@@ -94,7 +94,8 @@ const MULTI_ACCOUNT_CONNECT_ACTIONS = new Set([
   'dashConnect',
   'quantusConnect',
   'solanaConnect',
-  'nearConnect'
+  'nearConnect',
+  'starknetConnect'
 ])
 
 function ApprovalCheckIcon() {
@@ -418,7 +419,14 @@ export function ApprovalPage() {
         })
         setWalletReady(true)
       }
-      setSelectedIds(preselectedIds)
+      const requiredAccountIds = Array.isArray(requestData.accounts)
+        ? requestData.accounts.flatMap(item => {
+            if (typeof item !== 'object' || item === null) return []
+            const id = Reflect.get(item, 'id')
+            return Reflect.get(item, 'required') === true && typeof id === 'string' ? [id] : []
+          })
+        : []
+      setSelectedIds(preselectedIds.length > 0 ? preselectedIds : requiredAccountIds)
       const scopeSelections: Record<string, string[]> = Object.create(null)
       if (Array.isArray(requestData.scopes)) {
         for (const scope of requestData.scopes) {
@@ -862,6 +870,7 @@ export function ApprovalPage() {
       case 'quantusConnect':
       case 'solanaConnect':
       case 'nearConnect':
+      case 'starknetConnect':
       case 'evmConnect': {
         const address = typeof data.address === 'string' ? data.address : 'Unavailable'
         const accounts: ChainAccountOption[] = Array.isArray(data.accounts)
@@ -1358,6 +1367,59 @@ export function ApprovalPage() {
           'The request did not include a valid, immutable signing summary.',
           action === 'solanaMessage' || action === 'nearMessage'
         )
+
+      case 'starknetTransaction':
+      case 'starknetMessage': {
+        const calls = Array.isArray(data.calls) ? data.calls : []
+        return (
+          <div className="space-y-5">
+            <DAppRequestHeader
+              domain={dappDomain}
+              pageUrl={dappPageUrl}
+              action={action === 'starknetMessage' ? 'Sign typed data' : 'Review Starknet calls'}
+            />
+            <ApprovalDetailCard title={action === 'starknetMessage' ? 'Typed data' : 'Calls'}>
+              {action === 'starknetMessage' ? (
+                <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-sm leading-6 text-foreground">
+                  {typeof data.message === 'string'
+                    ? data.message
+                    : typeof data.primaryType === 'string'
+                      ? data.primaryType
+                      : 'Typed data'}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {calls.map((call: unknown, index: number) => {
+                    const record =
+                      call && typeof call === 'object' ? (call as Record<string, unknown>) : {}
+                    const calldata = Array.isArray(record.calldata) ? record.calldata.length : 0
+                    return (
+                      <div
+                        key={index}
+                        className="min-w-0 space-y-1 break-all font-mono text-[11px] leading-4 text-foreground/90"
+                      >
+                        <div>
+                          {typeof record.contract_address === 'string'
+                            ? record.contract_address
+                            : 'Unknown contract'}
+                        </div>
+                        <div className="text-muted">
+                          {typeof record.entry_point === 'string' ? record.entry_point : 'call'} ·{' '}
+                          {calldata} felts
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </ApprovalDetailCard>
+            <DAppNetworkCard
+              chain="Starknet"
+              network={typeof data.networkName === 'string' ? data.networkName : 'Starknet'}
+            />
+          </div>
+        )
+      }
 
       default:
         return (

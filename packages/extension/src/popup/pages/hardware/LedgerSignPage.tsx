@@ -193,6 +193,15 @@ export function LedgerSignPage() {
                   Your Ledger will display a zero-amount transaction for this message signature.
                 </p>
               )}
+              {(view.request.kind === 'starknet-invoke' ||
+                view.request.kind === 'starknet-deploy-account' ||
+                view.request.kind === 'starknet-typed-data') && (
+                <p className="text-sm text-muted">
+                  {view.request.blindSigning
+                    ? 'This request needs blind signing on the Starknet app. Arbitrary calls, USDC transfers, and SNIP-12 signatures are not clear-signed. A single STRK, ETH, or USDT transfer does not need blind signing.'
+                    : 'This STRK, ETH, or USDT transfer is clear-signed. Arbitrary calls, USDC transfers, and SNIP-12 signatures need blind signing on the device.'}
+                </p>
+              )}
             </>
           )}
           {step === 'signing' && <p>{interaction}</p>}
