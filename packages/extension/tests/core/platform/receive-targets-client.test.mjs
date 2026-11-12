@@ -12,6 +12,7 @@ const accountId = 'account:receive-client:0'
 const bitcoinAddress = 'tb1qtk89me2ae95dmlp3yfl4q9ynpux8mxjujuf2fr'
 const solanaAddress = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk'
 const nearAddress = '5510e2b44cae6eb807e3e0e45d579dda058c274abcba15e5cb84636f5d1ee412'
+const quantusAddress = 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2'
 const chains = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
   'chain.zcash',
   'chain.evm',
@@ -138,6 +139,35 @@ test.describe('Receive targets Popup client', () => {
         })
       ])
     )
+  })
+
+  test('accepts a flagged Quantus target and rejects an invalid SS58 address', async () => {
+    const enabled = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
+      'chain.zcash',
+      'chain.quantus'
+    ])
+    const target = { chainId: 'quantus:planck', kind: 'quantus', address: quantusAddress }
+    const client = createReceiveTargetsClient(async () => result({ targets: [target] }), enabled)
+    await expect(client.getAdditionalTargets({ keyDomainId, accountId })).resolves.toMatchObject({
+      targets: [{ chain: { family: 'quantus' }, kind: 'quantus', address: quantusAddress }]
+    })
+    for (const invalid of [
+      { ...target, address: `${quantusAddress.slice(0, -1)}1` },
+      { ...target, kind: 'near' },
+      { ...target, extra: true }
+    ]) {
+      const invalidClient = createReceiveTargetsClient(
+        async () => result({ targets: [invalid] }),
+        enabled
+      )
+      await expect(invalidClient.getAdditionalTargets({ keyDomainId, accountId })).rejects.toMatchObject({
+        code: 'invalid-response'
+      })
+    }
+    await expect(
+      createReceiveTargetsClient(async () => result({ targets: [target] }), chains)
+        .getAdditionalTargets({ keyDomainId, accountId })
+    ).rejects.toMatchObject({ code: 'invalid-response' })
   })
 
   test('maps only the canonical Background error to unavailable', async () => {

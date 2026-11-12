@@ -58,6 +58,7 @@ import {
   parseEvmTransactionSummary,
   parseNativeSigningSummary,
   parsePearlSigningSummary,
+  parseQuantusSigningSummary,
   resolveDAppFaviconPageUrl
 } from '@/popup/services/dapp-approval-summary'
 
@@ -89,6 +90,7 @@ const MULTI_ACCOUNT_CONNECT_ACTIONS = new Set([
   'evmConnect',
   'bitcoinConnect',
   'pearlConnect',
+  'quantusConnect',
   'solanaConnect',
   'nearConnect'
 ])
@@ -226,6 +228,9 @@ export function ApprovalPage() {
   const isPearlConnect = action === 'pearlConnect'
   const isPearlTransaction = action === 'pearlTransaction'
   const isPearlMessage = action === 'pearlMessage'
+  const isQuantusConnect = action === 'quantusConnect'
+  const isQuantusTransaction = action === 'quantusTransaction'
+  const isQuantusSignTransfer = action === 'quantusSignTransfer'
   const isSolanaConnect = action === 'solanaConnect'
   const isSolanaTransaction = action === 'solanaTransaction'
   const isSolanaMessage = action === 'solanaMessage'
@@ -256,6 +261,10 @@ export function ApprovalPage() {
     ? parsePearlSigningSummary(data.review?.summary, 'transaction')
     : isPearlMessage
       ? parsePearlSigningSummary(data.review?.summary, 'message')
+      : null
+  const quantusSigningSummary =
+    isQuantusTransaction || isQuantusSignTransfer
+      ? parseQuantusSigningSummary(data.review?.summary)
       : null
   const nativeSigningSummary =
     isSolanaTransaction || isSolanaMessage
@@ -839,6 +848,7 @@ export function ApprovalPage() {
 
       case 'bitcoinConnect':
       case 'pearlConnect':
+      case 'quantusConnect':
       case 'solanaConnect':
       case 'nearConnect':
       case 'evmConnect': {
@@ -1022,6 +1032,13 @@ export function ApprovalPage() {
         return renderInvalidSigningRequest(
           'The request did not include a valid, immutable Pearl signing summary.',
           action === 'pearlMessage'
+        )
+
+      case 'quantusTransaction':
+      case 'quantusSignTransfer':
+        return renderInvalidSigningRequest(
+          'The request did not include a valid, immutable Quantus transfer summary.',
+          false
         )
 
       case 'connect': {
@@ -1581,6 +1598,32 @@ export function ApprovalPage() {
     )
   }
 
+  if (quantusSigningSummary) {
+    return (
+      <SigningSummaryReview
+        summary={quantusSigningSummary}
+        chainName="Quantus"
+        iconChain="quantus"
+        networkName={typeof data.chainName === 'string' ? data.chainName : 'Unknown network'}
+        accountName={accountDisplayName}
+        accountAddress={quantusSigningSummary.fields.signerAddress}
+        source={{ kind: 'dapp', domain: dappDomain, pageUrl: dappPageUrl }}
+        isSubmitting={isLoading}
+        notice={
+          isQuantusSignTransfer ? (
+            <WarningBox>
+              Noir Wallet signs this transfer but does not send it. The site can submit the signed
+              transfer later without another approval, so these funds may leave this account without
+              a further review.
+            </WarningBox>
+          ) : undefined
+        }
+        onReject={() => void handleDecision(false)}
+        onConfirm={() => void handleDecision(true)}
+      />
+    )
+  }
+
   if (nativeSigningSummary) {
     const solana = nativeSigningSummary.schema.startsWith('solana.')
     const address =
@@ -1629,6 +1672,8 @@ export function ApprovalPage() {
               (isEvmMessage && evmMessageSummary === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
               ((isPearlTransaction || isPearlMessage) && pearlSigningSummary === null) ||
+              (isQuantusTransaction && quantusSigningSummary === null) ||
+              (isQuantusSignTransfer && quantusSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&
                 nativeSigningSummary === null) ||
               (MULTI_ACCOUNT_CONNECT_ACTIONS.has(action) &&
@@ -1660,21 +1705,25 @@ export function ApprovalPage() {
                         ? 'Connect'
                         : isPearlConnect
                           ? 'Connect'
-                          : isSolanaConnect || isNearConnect
+                          : isSolanaConnect || isNearConnect || isQuantusConnect
                             ? 'Connect'
                             : isEvmTransaction
                               ? 'Confirm'
-                              : isEvmMessage
-                                ? 'Sign message'
-                                : isSolanaMessage || isNearMessage
-                                  ? 'Sign message'
-                                  : isPearlMessage
+                              : isQuantusTransaction
+                                ? 'Confirm'
+                                : isQuantusSignTransfer
+                                  ? 'Sign only'
+                                  : isEvmMessage
                                     ? 'Sign message'
-                                    : action === 'signMessage'
+                                    : isSolanaMessage || isNearMessage
                                       ? 'Sign message'
-                                      : action === 'sendTransaction' || action === 'shieldFunds'
-                                        ? 'Confirm'
-                                        : 'Approve'}
+                                      : isPearlMessage
+                                        ? 'Sign message'
+                                        : action === 'signMessage'
+                                          ? 'Sign message'
+                                          : action === 'sendTransaction' || action === 'shieldFunds'
+                                            ? 'Confirm'
+                                            : 'Approve'}
           </Button>
         </div>
       }

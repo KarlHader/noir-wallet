@@ -65,6 +65,7 @@ export {
   type SigningReviewLevel,
   type SigningSummary,
   type SigningSummaryExpectation,
+  type QuantusTransferSummary,
   type SigningSummaryFamily,
   type SigningSummarySchema,
   type SolanaAddressTableLookupSummary,

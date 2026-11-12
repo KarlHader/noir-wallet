@@ -59,7 +59,7 @@ export function buildAddTokenNetworks(
         ]
       : []),
     ...deferredChainChoices(enabledFlags)
-      .filter(choice => choice.family !== 'pearl')
+      .filter(choice => choice.family !== 'pearl' && choice.family !== 'quantus')
       .map(choice => ({
         chainId: `coming-soon:${choice.family}`,
         displayName: choice.label,

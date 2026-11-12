@@ -1,8 +1,8 @@
 import init, { WalletEngine } from '../../generated/wasm/multichain/wallet_wasm.js'
 import manifest from '../../generated/wasm/multichain/wasm-integrity.json'
 
-export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-cb993e0-v11'
-export const PINNED_MULTICHAIN_SOURCE_COMMIT = 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
+export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-8103f12-v12'
+export const PINNED_MULTICHAIN_SOURCE_COMMIT = '8103f125404272ae1181bbe7b887f8b05732f051'
 export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
   [
     'account.bitcoin.batch-derive',
@@ -13,6 +13,8 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'account.near.derive',
     'account.near.imported',
     'account.pea-v1.derive',
+    'account.quantus.batch-derive',
+    'account.quantus.derive',
     'account.pearl.batch-derive',
     'account.pearl.derive',
     'account.pearl.imported',
@@ -46,6 +48,7 @@ export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
     'pearl.bip322.sign',
     'pearl.bip322.verify',
     'pearl.psbt-v0.sign',
+    'quantus.extrinsic.sign',
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',

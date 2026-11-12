@@ -11,6 +11,9 @@ import {
   type RawWalletEngine
 } from '../../../src/infrastructure/keyring/multichain/raw-wallet-engine'
 import { MultichainWorkerRuntime } from '../../../src/infrastructure/keyring/multichain/worker-runtime'
+import { decodeQuantusAccountId } from '../../../src/core/chains/quantus/identifiers'
+import { bytesToHex, hexToBytes } from '../../../src/lib/bytes'
+import { blake2b } from '@noble/hashes/blake2b'
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
@@ -67,6 +70,34 @@ const NEAR_ACCOUNT = Object.freeze({
   addressScheme: 'near',
   derivationScheme: 'slip10'
 })
+const QUANTUS_ADDRESS = 'qzna4bUiEiZdXQpwvSQDmM2y9rBPyJRS9iNm85jPgicM76kA8'
+// balances.transfer_keep_alive shape the engine encodes for a native transfer.
+const QUANTUS_CALL = `0x020300${'ef'.repeat(32)}070010a5d4e8`
+const QUANTUS_CALL_BYTES = hexToBytes(QUANTUS_CALL)
+const QUANTUS_CALL_HASH = `0x${bytesToHex(blake2b(QUANTUS_CALL_BYTES, { dkLen: 32 }))}`
+const QUANTUS_RECIPIENT = 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2'
+function quantusPublicKey(scheme: 'ml-dsa-87' | 'ml-dsa-65'): string {
+  return `0x${'ab'.repeat(scheme === 'ml-dsa-87' ? 2592 : 1952)}`
+}
+function quantusAccount(
+  scheme: 'ml-dsa-87' | 'ml-dsa-65',
+  accountIndex: number,
+  change: boolean,
+  addressIndex: number,
+  network: 'mainnet' | 'dev'
+) {
+  return {
+    accountId: `0x${'cd'.repeat(32)}`,
+    address: QUANTUS_ADDRESS,
+    derivationPath: `m/44'/189189'/${accountIndex}'/${change ? 1 : 0}'/${addressIndex}'`,
+    publicKey: quantusPublicKey(scheme),
+    curve: scheme === 'ml-dsa-87' ? ('ml_dsa87' as const) : ('ml_dsa65' as const),
+    addressScheme: 'quantus' as const,
+    derivationScheme: 'bip44' as const,
+    scheme,
+    network
+  }
+}
 const BINDING = Object.freeze({
   kind: 'credential',
   keyDomainId: 'key-domain:test',
@@ -160,6 +191,129 @@ class FakeWalletEngine implements RawWalletEngine {
 
   deriveNearAccount(): unknown {
     return NEAR_ACCOUNT
+  }
+
+  readonly quantusChainIds: string[] = []
+  quantusAccountFor: ((chainId: string) => unknown) | null = null
+
+  deriveQuantusAccount(
+    _sessionId: number,
+    chainId: string,
+    scheme: 'ml-dsa-87' | 'ml-dsa-65',
+    accountIndex: number,
+    change: boolean,
+    addressIndex: number
+  ): unknown {
+    this.quantusChainIds.push(chainId)
+    if (this.quantusAccountFor) return this.quantusAccountFor(chainId)
+    return quantusAccount(
+      scheme,
+      accountIndex,
+      change,
+      addressIndex,
+      chainId === 'quantus:mainnet' ? 'mainnet' : 'dev'
+    )
+  }
+
+  deriveQuantusAccounts(
+    _sessionId: number,
+    chainId: string,
+    scheme: 'ml-dsa-87' | 'ml-dsa-65',
+    accountIndex: number,
+    change: boolean,
+    startAddressIndex: number,
+    count: number
+  ): unknown {
+    this.quantusChainIds.push(chainId)
+    return Array.from({ length: count }, (_, offset) =>
+      quantusAccount(
+        scheme,
+        accountIndex,
+        change,
+        startAddressIndex + offset,
+        chainId === 'quantus:mainnet' ? 'mainnet' : 'dev'
+      )
+    )
+  }
+
+  deriveQuantusWormhole(): never {
+    throw new Error('Unexpected Quantus wormhole derivation')
+  }
+
+  prepareQuantusCall(): never {
+    throw new Error('Unexpected Quantus call prepare')
+  }
+
+  readonly quantusTransferRequests: unknown[] = []
+  readonly quantusConfirmRequests: number[] = []
+  quantusSummaryOverrides: Record<string, unknown> | null = null
+  quantusSignedOverrides: Record<string, unknown> | null = null
+
+  readonly quantusNetworkRegistrations: Array<{ chainId: string; genesisHash: string }> = []
+  quantusTransferOverrides: Record<string, unknown> | null = null
+
+  registerQuantusNetwork(chainId: string, genesisHash: string): void {
+    this.quantusNetworkRegistrations.push({ chainId, genesisHash })
+  }
+
+  prepareQuantusTransfer(_sessionId: number, request: unknown): unknown {
+    this.quantusTransferRequests.push(request)
+    const transfer = request as {
+      chainId: string
+      scheme: 'ml-dsa-87' | 'ml-dsa-65'
+      accountIndex: number
+      recipient: string
+      amount: string
+      keepAlive: boolean
+      nonce: number
+      tip: string
+      period: number
+      blockNumber: number
+      allowImmortal: boolean
+    }
+    const network = transfer.chainId === 'quantus:mainnet' ? 'mainnet' : 'dev'
+    const call = QUANTUS_CALL
+    return {
+      requestId: this.nextRequestId++,
+      account: quantusAccount(transfer.scheme, transfer.accountIndex, false, 0, network),
+      call,
+      transfer: {
+        recipient: `0x${bytesToHex(decodeQuantusAccountId(transfer.recipient))}`,
+        amount: transfer.amount,
+        keepAlive: transfer.keepAlive,
+        ...(this.quantusTransferOverrides ?? {})
+      },
+      summary: {
+        chainId: transfer.chainId,
+        network,
+        genesisHash: transfer.genesisHash,
+        address: QUANTUS_ADDRESS,
+        accountId: `0x${'cd'.repeat(32)}`,
+        scheme: transfer.scheme,
+        nonce: transfer.nonce,
+        tip: transfer.tip,
+        period: transfer.period,
+        blockNumber: transfer.blockNumber,
+        callHash: QUANTUS_CALL_HASH,
+        callLength: QUANTUS_CALL_BYTES.byteLength,
+        allowImmortal: transfer.allowImmortal,
+        ...(this.quantusSummaryOverrides ?? {})
+      }
+    }
+  }
+
+  confirmQuantusCall(_sessionId: number, requestId: number): unknown {
+    this.quantusConfirmRequests.push(requestId)
+    return {
+      extrinsic: '0x8400',
+      extrinsicHash: `0x${'55'.repeat(32)}`,
+      callHash: `0x${'44'.repeat(32)}`,
+      address: QUANTUS_ADDRESS,
+      accountId: `0x${'cd'.repeat(32)}`,
+      scheme: 'ml-dsa-87',
+      nonce: 7,
+      ...(this.quantusSignedOverrides ?? {})
+    }
   }
 
   deriveBitcoinAccount(): never {
@@ -287,6 +441,29 @@ function command(
   }
 }
 
+function quantusPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: 'quantus-transfer',
+    chainId: 'quantus:mainnet',
+    scheme: 'ml-dsa-87',
+    accountIndex: 0,
+    toAddress: QUANTUS_RECIPIENT,
+    amountRaw: '1000000000000',
+    feeLimitRaw: '10000000000',
+    keepAlive: true,
+    nonce: 7,
+    tip: '0',
+    period: 64,
+    blockNumber: 128,
+    genesisHash: `0x${'11'.repeat(32)}`,
+    blockHash: `0x${'22'.repeat(32)}`,
+    specVersion: 153,
+    transactionVersion: 1,
+    allowImmortal: false,
+    ...overrides
+  }
+}
+
 function expectSuccess(result: Awaited<ReturnType<MultichainWorkerRuntime['execute']>>) {
   expect(result).toMatchObject({ ok: true })
   if (!result.ok) throw new Error('Expected a successful keyring result')
@@ -322,6 +499,13 @@ function expectedVaultPassword(password: string): string {
 test.describe('Multichain Worker runtime boundaries', () => {
   test('accepts only the WASM hex vault representation', () => {
     expect(parseRawEncryptedVault(VAULT)).toEqual(VAULT)
+    const currentVault = {
+      ...VAULT,
+      version: 2,
+      kdfParams: { memoryKib: 64 * 1024, iterations: 3, parallelism: 1 }
+    }
+    expect(parseRawEncryptedVault(currentVault)).toEqual(currentVault)
+    expect(() => parseRawEncryptedVault({ ...currentVault, version: 1 })).toThrow()
     expect(() => parseRawEncryptedVault({ ...VAULT, salt: 'EREREREREREREREREREREQ==' })).toThrow()
     expect(() => parseRawEncryptedVault({ ...VAULT, nonce: 'AA'.repeat(24) })).toThrow()
     expect(() =>
@@ -665,5 +849,230 @@ test.describe('Multichain Worker runtime boundaries', () => {
       'SIGNING_COMMAND_EXPIRED'
     )
     expect(engine.rejectedRequests).toEqual([1])
+  })
+
+  test('routes Quantus derivation through identifiers the packaged engine accepts', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine)
+    const vault = expectSuccess(
+      await runtime.execute(
+        command('credential.import', { mnemonic: MNEMONIC, password: 'password' })
+      )
+    )
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault, password: 'password' }))
+    )
+
+    const mainnet = expectSuccess(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:mainnet',
+          scheme: 'ml-dsa-87',
+          accountIndex: 0,
+          change: false,
+          addressIndex: 0
+        })
+      )
+    )
+    expect(mainnet).toMatchObject({
+      chainId: 'quantus:mainnet',
+      derivation: { scheme: 'bip44', path: "m/44'/189189'/0'/0'/0'" },
+      identity: { kind: 'account-identifier', value: QUANTUS_ADDRESS },
+      addresses: [{ scheme: 'quantus', purpose: 'receive' }]
+    })
+
+    // The CAIP-2 testnet reference is mapped to the only live testnet identifier
+    // the WASM accepts; the response keeps the host chain ID.
+    const planck = expectSuccess(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:planck',
+          scheme: 'ml-dsa-87',
+          accountIndex: 0,
+          change: false,
+          addressIndex: 0
+        })
+      )
+    )
+    expect(planck).toMatchObject({ chainId: 'quantus:planck' })
+    expect(engine.quantusChainIds).toEqual(['quantus:mainnet', 'quantus:dev'])
+
+    const batch = expectSuccess(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:mainnet',
+          scheme: 'ml-dsa-65',
+          accountIndex: 2,
+          change: false,
+          startAddressIndex: 1,
+          count: 2
+        })
+      )
+    )
+    expect(batch).toHaveLength(2)
+
+    expectFailure(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:dev',
+          scheme: 'ml-dsa-87',
+          accountIndex: 0,
+          change: false,
+          addressIndex: 0
+        })
+      ),
+      'UNSUPPORTED_CHAIN'
+    )
+    expectFailure(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:mainnet',
+          scheme: 'sr25519',
+          accountIndex: 0,
+          change: false,
+          addressIndex: 0
+        })
+      ),
+      'INVALID_COMMAND'
+    )
+
+    engine.quantusAccountFor = () => ({
+      ...quantusAccount('ml-dsa-87', 0, false, 1, 'mainnet')
+    })
+    expectFailure(
+      await runtime.execute(
+        command('account.derive-public', {
+          family: 'quantus',
+          chainId: 'quantus:mainnet',
+          scheme: 'ml-dsa-87',
+          accountIndex: 0,
+          change: false,
+          addressIndex: 0
+        })
+      ),
+      'INVALID_RESPONSE'
+    )
+  })
+
+  test('routes Quantus native transfers through prepare and confirmQuantusCall', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine, {
+      createSigningCommandId: () => 'signing-command:quantus'
+    })
+    const vault = expectSuccess(
+      await runtime.execute(
+        command('credential.import', { mnemonic: MNEMONIC, password: 'password' })
+      )
+    )
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault, password: 'password' }))
+    )
+
+    const prepared = expectSuccess(
+      await runtime.execute(command('signing.prepare', quantusPayload()))
+    ) as { commandId: string; summary: { schema: string; fields: Record<string, unknown> } }
+
+    expect(engine.quantusTransferRequests).toHaveLength(1)
+    // Mainnet pins its genesis hash in the engine, so nothing is registered.
+    expect(engine.quantusNetworkRegistrations).toEqual([])
+    expect(engine.quantusTransferRequests[0]).toMatchObject({
+      chainId: 'quantus:mainnet',
+      recipient: QUANTUS_RECIPIENT,
+      amount: '1000000000000'
+    })
+    expect(prepared.summary).toMatchObject({
+      schema: 'quantus.transfer.v1',
+      fields: { signerAddress: QUANTUS_ADDRESS, recipient: QUANTUS_RECIPIENT, nonce: '7' }
+    })
+
+    const signed = expectSuccess(
+      await runtime.execute(command('signing.confirm', { signingCommandId: prepared.commandId }))
+    )
+    expect(signed).toMatchObject({
+      kind: 'signed-payload',
+      payload: { encoding: 'hex', value: '0x8400' },
+      transactionId: `0x${'55'.repeat(32)}`
+    })
+  })
+
+  test('keeps the host Planck chain ID across Quantus prepare and confirm', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine, {
+      createSigningCommandId: () => 'signing-command:quantus-planck'
+    })
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault: VAULT, password: 'password' }))
+    )
+
+    const prepared = expectSuccess(
+      await runtime.execute(
+        command('signing.prepare', quantusPayload({ chainId: 'quantus:planck' }))
+      )
+    ) as { commandId: string; summary: { chainId: string } }
+
+    // Only the engine boundary sees the WASM identifier.
+    expect(engine.quantusTransferRequests[0]).toMatchObject({ chainId: 'quantus:dev' })
+    // The engine refuses to sign through a non-mainnet reference until the host
+    // binds it to the configured genesis hash.
+    expect(engine.quantusNetworkRegistrations).toEqual([
+      { chainId: 'quantus:dev', genesisHash: `0x${'11'.repeat(32)}` }
+    ])
+    expect(prepared.summary.chainId).toBe('quantus:planck')
+
+    expectSuccess(
+      await runtime.execute(command('signing.confirm', { signingCommandId: prepared.commandId }))
+    )
+    expect(engine.quantusConfirmRequests).toEqual([1])
+  })
+
+  test('rejects unsolicited Quantus signing coordinates the engine would ignore', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine)
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault: VAULT, password: 'password' }))
+    )
+
+    expectFailure(
+      await runtime.execute(command('signing.prepare', quantusPayload({ addressIndex: 0 }))),
+      'UNSUPPORTED_PAYLOAD'
+    )
+    expectFailure(
+      await runtime.execute(command('signing.prepare', quantusPayload({ change: false }))),
+      'UNSUPPORTED_PAYLOAD'
+    )
+    expect(engine.quantusTransferRequests).toEqual([])
+  })
+
+  test('rejects a Quantus prepared or signed result that does not match the reviewed request', async () => {
+    const engine = new FakeWalletEngine()
+    const runtime = createRuntime(engine, {
+      createSigningCommandId: () => 'signing-command:quantus-mismatch'
+    })
+    expectSuccess(
+      await runtime.execute(command('credential.unlock', { vault: VAULT, password: 'password' }))
+    )
+
+    engine.quantusSummaryOverrides = { nonce: 8 }
+    expectFailure(
+      await runtime.execute(command('signing.prepare', quantusPayload())),
+      'INVALID_RESPONSE'
+    )
+    // A rejected prepare cancels the WASM request instead of leaving it pending.
+    expect(engine.rejectedRequests).toEqual([1])
+
+    engine.quantusSummaryOverrides = null
+    engine.quantusSignedOverrides = { address: QUANTUS_RECIPIENT }
+    const prepared = expectSuccess(
+      await runtime.execute(command('signing.prepare', quantusPayload()))
+    ) as { commandId: string }
+    expectFailure(
+      await runtime.execute(command('signing.confirm', { signingCommandId: prepared.commandId })),
+      'INVALID_RESPONSE'
+    )
   })
 })

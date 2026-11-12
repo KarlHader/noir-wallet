@@ -186,6 +186,7 @@ import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
   getBitcoinChainId,
   getPearlChainId,
+  getQuantusChainId,
   getZcashChainId,
   parseAssetId,
   parseChainId,
@@ -223,6 +224,7 @@ import {
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
+  resolveQuantusFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import { accountContextTransition } from './account-context-transition'
@@ -243,6 +245,7 @@ import {
   createBackgroundPearlDAppHandler,
   createEnsureActiveSoftwarePearlAccount
 } from './pearl-dapp'
+import { createBackgroundQuantusDAppHandler } from './quantus-dapp'
 import { fetchCachedIdentity, type IdentitySigningMode } from '@/core/wallet/identity-cache'
 import type { LendingSigningMode } from '@/core/services/lending-service'
 import {
@@ -255,6 +258,11 @@ import {
   toPearlProviderErrorShape,
   type PearlDAppRuntimeMethod
 } from '@/core/dapp/pearl-provider'
+import {
+  QuantusProviderError,
+  toQuantusProviderErrorShape,
+  type QuantusDAppRuntimeMethod
+} from '@/core/dapp/quantus-provider'
 import {
   NativeTransferProviderError,
   toNativeTransferProviderErrorShape,
@@ -322,7 +330,8 @@ import {
 import {
   ChainEndpointSettingsCoordinator,
   resolveConfiguredBitcoinRpcUrl,
-  resolveConfiguredPearlRpcUrl
+  resolveConfiguredPearlRpcUrl,
+  resolveConfiguredQuantusRpcUrl
 } from './chain-endpoint-settings'
 
 import { ChromeSessionSolanaPendingTransferStore } from '@/infrastructure/chains/solana'
@@ -339,6 +348,7 @@ import {
   SOLANA_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
 import { deriveSoftwareEd25519NetworkMetadata } from './software-ed25519-metadata'
+import { deriveSoftwareQuantusMetadata } from './software-quantus-metadata'
 import { dappManager } from '@/core/dapp/dapp-manager'
 import {
   DAppExecutionModeConfirmationRequiredError,
@@ -349,6 +359,13 @@ import {
 import { dappExecutionModeCoordinator, dappExecutionModeRequestGate } from './dapp-execution-mode'
 import { createSolanaWalletRuntimeError } from '@/core/chains/solana'
 import { mapSolanaWalletRuntimeError } from './solana-wallet-runtime-error'
+import { createQuantusWalletRuntimeError } from '@/core/chains/quantus'
+import { mapQuantusWalletRuntimeError } from './quantus-wallet-runtime-error'
+import { createBackgroundQuantusTransferController } from './quantus-transfer'
+import {
+  BackgroundQuantusTransactionMonitor,
+  QUANTUS_TRANSACTION_MONITOR_ALARM
+} from './quantus-transaction-monitor'
 import { createBackgroundSolanaTransferController } from './solana-transfer'
 import {
   BackgroundSolanaTransactionMonitor,
@@ -420,9 +437,13 @@ const bitcoinFeatureRuntimePolicy = resolveBitcoinFeatureRuntimePolicy(
   __ENABLED_CHAIN_FEATURE_FLAGS__
 )
 const pearlFeatureRuntimePolicy = resolvePearlFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__)
+const quantusFeatureRuntimePolicy = resolveQuantusFeatureRuntimePolicy(
+  __ENABLED_CHAIN_FEATURE_FLAGS__
+)
 const solanaBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(SOLANA_CHAIN_FEATURE_FLAG)
 const nearBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(NEAR_CHAIN_FEATURE_FLAG)
 const pearlBetaEnabled = __ENABLED_CHAIN_FEATURE_FLAGS__.includes(PEARL_CHAIN_FEATURE_FLAG)
+const quantusBetaEnabled = quantusFeatureRuntimePolicy.newOperationsEnabled
 
 function areSolanaOperationsEnabled(): boolean {
   return resolveSolanaFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled
@@ -437,6 +458,7 @@ let bitcoinTransactionMonitor: BackgroundBitcoinTransactionMonitor | null = null
 let pearlTransactionMonitor: BackgroundPearlTransactionMonitor | null = null
 let nearIntentsTransactionMonitor: BackgroundNearIntentsTransactionMonitor | null = null
 let solanaTransactionMonitor: BackgroundSolanaTransactionMonitor | null = null
+let quantusTransactionMonitor: BackgroundQuantusTransactionMonitor | null = null
 let nearTransactionMonitor: BackgroundNearTransactionMonitor | null = null
 
 type EnabledPrivateKeyChainFamily = 'eip155' | 'bip122' | 'pearl' | 'solana' | 'near'
@@ -550,6 +572,8 @@ let pearlTransferController: ReturnType<typeof createBackgroundPearlTransferCont
   null
 let solanaTransferController: ReturnType<typeof createBackgroundSolanaTransferController> | null =
   null
+let quantusTransferController: ReturnType<typeof createBackgroundQuantusTransferController> | null =
+  null
 let rheaSwapSolanaCoordinator: RheaSwapSolanaCoordinator | null = null
 let nearTransferController: ReturnType<typeof createBackgroundNearTransferController> | null = null
 let rheaSwapNearCoordinator: RheaSwapNearCoordinator | null = null
@@ -562,6 +586,7 @@ const swapTokenCatalogCache = new ChromeSwapTokenCatalogCacheRepository()
 let evmDAppHandler!: ReturnType<typeof createBackgroundEvmDAppHandler>
 let bitcoinDAppHandler!: ReturnType<typeof createBackgroundBitcoinDAppHandler>
 let pearlDAppHandler!: ReturnType<typeof createBackgroundPearlDAppHandler>
+let quantusDAppHandler!: ReturnType<typeof createBackgroundQuantusDAppHandler>
 let solanaDAppHandler: ReturnType<typeof createBackgroundSolanaDAppHandler> | null = null
 let nearDAppHandler: ReturnType<typeof createBackgroundNearDAppHandler> | null = null
 let multichainSessionDAppHandler: BackgroundMultichainSessionDAppHandler | null = null
@@ -672,7 +697,7 @@ const dappExecutionModeTransitionCoordinator = new DAppExecutionModeTransitionCo
 )
 
 async function dispatchDAppChainRequest(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near',
   request: {
     readonly method: string
     readonly params?: readonly unknown[] | Readonly<Record<string, unknown>>
@@ -706,6 +731,16 @@ async function dispatchDAppChainRequest(
     return pearlDAppHandler.request(
       {
         method: request.method as PearlDAppRuntimeMethod,
+        ...(params === undefined ? {} : { params })
+      },
+      origin,
+      tabInfo
+    )
+  }
+  if (chainId === 'quantus') {
+    return quantusDAppHandler.request(
+      {
+        method: request.method as QuantusDAppRuntimeMethod,
         ...(params === undefined ? {} : { params })
       },
       origin,
@@ -755,7 +790,7 @@ const CAIP25_CONNECTION_METHODS = new Set([
 ])
 
 async function assertCaip25MethodPermission(
-  family: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near',
+  family: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near',
   method: string,
   origin: string
 ): Promise<void> {
@@ -769,9 +804,11 @@ async function assertCaip25MethodPermission(
           ? getBitcoinChainId(DEFAULT_NETWORK)
           : family === 'pearl'
             ? getPearlChainId(DEFAULT_NETWORK)
-            : family === 'solana'
-              ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
-              : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+            : family === 'quantus'
+              ? getQuantusChainId(DEFAULT_NETWORK)
+              : family === 'solana'
+                ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
+                : resolveNearRuntimeNetworkConfig(DEFAULT_NETWORK).chainId
   const session = await dappManager.getCaip25Session(origin)
   const scope = session?.scopes.find(candidate => candidate.chainId === chainId)
   if (!scope || caip25SessionAllowsMethod(session, chainId, method)) return
@@ -779,6 +816,7 @@ async function assertCaip25MethodPermission(
   if (family === 'evm') throw new Eip1193ProviderError(4100, message)
   if (family === 'bitcoin') throw new BitcoinProviderError(4100, message)
   if (family === 'pearl') throw new PearlProviderError(4100, message)
+  if (family === 'quantus') throw new QuantusProviderError(4100, message)
   if (family === 'solana' || family === 'near') {
     throw new NativeTransferProviderError(4100, message)
   }
@@ -962,11 +1000,13 @@ async function reloadMultichainRuntime(
   }
   const bitcoinRpcUrl = resolveConfiguredBitcoinRpcUrl(settings)
   const pearlRpcUrl = resolveConfiguredPearlRpcUrl(settings)
+  const quantusRpcUrl = resolveConfiguredQuantusRpcUrl(settings)
   const previousNumericChainId = activeEvmNumericChainId
 
   if (shouldCancelAwaitingApprovals) {
     await evmTransferRouter?.cancelAllAwaitingApprovals()
     await solanaTransferController?.cancelAllAwaitingApprovals()
+    await quantusTransferController?.cancelAllAwaitingApprovals()
     await nearTransferController?.cancelAllAwaitingApprovals()
   }
   await reloadBackgroundBitcoinRuntime(bitcoinRpcUrl, shouldCancelAwaitingApprovals)
@@ -990,7 +1030,8 @@ async function reloadMultichainRuntime(
     pearlFeatureRuntimePolicy.newOperationsEnabled ||
     solanaBetaEnabled ||
     nearBetaEnabled ||
-    pearlBetaEnabled
+    pearlBetaEnabled ||
+    quantusBetaEnabled
       ? createBackgroundPortfolioCoordinator(
           catalog,
           customEvmNetworks,
@@ -1060,6 +1101,12 @@ async function reloadMultichainRuntime(
     pearlFeatureRuntimePolicy.newOperationsEnabled && hasBackgroundPearlTransferCapability()
       ? createBackgroundPearlTransferController()
       : null
+  quantusTransferController = quantusBetaEnabled
+    ? createBackgroundQuantusTransferController(intentsProtocolAssets, settings)
+    : null
+  quantusTransactionMonitor = quantusTransferController
+    ? new BackgroundQuantusTransactionMonitor(quantusTransferController, settings)
+    : null
   solanaTransferController = solanaOperationsEnabled
     ? createBackgroundSolanaTransferController(intentsProtocolAssets, settings)
     : null
@@ -1112,6 +1159,10 @@ async function reloadMultichainRuntime(
   })
   solanaDAppHandler = solanaOperationsEnabled ? createBackgroundSolanaDAppHandler(settings) : null
   nearDAppHandler = nearOperationsEnabled ? createBackgroundNearDAppHandler(settings) : null
+  quantusDAppHandler = createBackgroundQuantusDAppHandler(
+    quantusRpcUrl,
+    quantusTransferController ?? undefined
+  )
   const solanaScope = solanaOperationsEnabled
     ? resolveSolanaRuntimeNetworkConfig(DEFAULT_NETWORK, settings)
     : undefined
@@ -1175,6 +1226,7 @@ async function reloadMultichainRuntime(
     bitcoinTransactionMonitor?.init(),
     pearlTransactionMonitor?.init(),
     solanaTransactionMonitor?.init(),
+    quantusTransactionMonitor?.init(),
     nearTransactionMonitor?.init(),
     portfolioCoordinator?.readCachedActive()
   ])
@@ -1334,6 +1386,12 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
         solanaEnabled: solanaBetaEnabled,
         nearEnabled: nearBetaEnabled
       })
+      const quantus = await deriveSoftwareQuantusMetadata({
+        keyDomainId: wallet.id,
+        accountIndex: account.derivationIndex,
+        network: target,
+        quantusEnabled: quantusBetaEnabled
+      })
       metadata.push({
         keyDomainId: parseKeyDomainId(wallet.id),
         accountId: parseAccountId(account.id),
@@ -1343,7 +1401,8 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
         zcashAddresses: zcash,
         bitcoin,
         ...(pearl === undefined ? {} : { pearl }),
-        ...ed25519
+        ...ed25519,
+        ...quantus
       })
       useWalletStore.getState().updateAccountInWallets(wallet.id, account.id, {
         networkAddresses: {
@@ -1365,7 +1424,7 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
 }
 
 async function synchronizeCurrentSoftwareWalletNetworkMetadata(): Promise<void> {
-  if (!solanaBetaEnabled && !nearBetaEnabled && !pearlBetaEnabled) return
+  if (!solanaBetaEnabled && !nearBetaEnabled && !pearlBetaEnabled && !quantusBetaEnabled) return
   await prepareSoftwareWalletNetworkMetadata(DEFAULT_NETWORK)
   const currentWalletId = useWalletStore.getState().currentWalletId
   const currentWallet = currentWalletId
@@ -1441,6 +1500,7 @@ async function switchGlobalNetworkMode(target: Network): Promise<{ restartRequir
         bitcoinTransferController?.cancelAllAwaitingApprovals(),
         pearlTransferController?.cancelAllAwaitingApprovals(),
         solanaTransferController?.cancelAllAwaitingApprovals(),
+        quantusTransferController?.cancelAllAwaitingApprovals(),
         nearTransferController?.cancelAllAwaitingApprovals()
       ])
       await dappManager.clearConnections()
@@ -1510,6 +1570,19 @@ accountContextTransition.registerInvalidator({
       accountId: parseAccountId(request.scope.accountId)
     }
     const controller = solanaTransferController
+    if (!controller) return
+    await (request.mode === 'scope'
+      ? controller.cancelAwaitingApprovalsForScope(scope)
+      : controller.cancelAwaitingApprovalsExceptScope(scope))
+  }
+})
+accountContextTransition.registerInvalidator({
+  invalidate: async request => {
+    const scope = {
+      keyDomainId: parseKeyDomainId(request.scope.walletId),
+      accountId: parseAccountId(request.scope.accountId)
+    }
+    const controller = quantusTransferController
     if (!controller) return
     await (request.mode === 'scope'
       ? controller.cancelAwaitingApprovalsForScope(scope)
@@ -1977,6 +2050,11 @@ chrome.alarms.onAlarm.addListener(alarm => {
           console.warn('[Solana Transaction Monitor] Poll failed:', error)
         })
       }
+      if (alarm.name === QUANTUS_TRANSACTION_MONITOR_ALARM) {
+        quantusTransactionMonitor?.handleAlarm().catch(error => {
+          console.warn('[Quantus Transaction Monitor] Poll failed:', error)
+        })
+      }
       if (alarm.name === NEAR_TRANSACTION_MONITOR_ALARM) {
         nearTransactionMonitor?.handleAlarm().catch(error => {
           console.warn('[NEAR Transaction Monitor] Poll failed:', error)
@@ -2075,6 +2153,7 @@ const walletCleanupCoordinator = new WalletCleanupCoordinator(
     await bitcoinTransferController?.clearPendingTransfers()
     await pearlTransferController?.clearPendingTransfers()
     await solanaTransferController?.clearPendingTransfers()
+    await quantusTransferController?.clearPendingTransfers()
     await nearTransferController?.clearPendingTransfers()
     await rheaSwapTransactionMonitor?.clear()
   },
@@ -2188,6 +2267,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           chainId === 'evm' ||
           chainId === 'bitcoin' ||
           chainId === 'pearl' ||
+          chainId === 'quantus' ||
           chainId === 'solana' ||
           chainId === 'near' ||
           chainId === 'multichain'
@@ -2215,6 +2295,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             error: {
               code: 4200,
               message: 'The Pearl provider is unavailable in this wallet build.'
+            }
+          })
+          return
+        }
+        if (chainId === 'quantus' && !quantusFeatureRuntimePolicy.newOperationsEnabled) {
+          respond({
+            error: {
+              code: 4200,
+              message: 'The Quantus provider is unavailable in this wallet build.'
             }
           })
           return
@@ -2302,11 +2391,13 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   ? toBitcoinProviderErrorShape(error)
                   : parsedMessage.chainId === 'pearl'
                     ? toPearlProviderErrorShape(error)
-                    : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
-                      ? toNativeTransferProviderErrorShape(error)
-                      : error instanceof Error
-                        ? error.message
-                        : 'dApp request failed'
+                    : parsedMessage.chainId === 'quantus'
+                      ? toQuantusProviderErrorShape(error)
+                      : parsedMessage.chainId === 'solana' || parsedMessage.chainId === 'near'
+                        ? toNativeTransferProviderErrorShape(error)
+                        : error instanceof Error
+                          ? error.message
+                          : 'dApp request failed'
         })
       }
     })
@@ -3847,6 +3938,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         })
         await bitcoinDAppHandler.notifyAccountsChanged()
         await pearlDAppHandler.notifyAccountsChanged()
+        await quantusDAppHandler.notifyAccountsChanged()
         await multichainSessionDAppHandler?.notifyAllSessionsChanged()
         await chrome.runtime
           .sendMessage({
@@ -4024,6 +4116,45 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         })
         sendResponse({ error: mapEvmWalletRuntimeError(error) })
       })
+    return true
+  }
+
+  if (
+    message.type === 'PREPARE_QUANTUS_TRANSFER' ||
+    message.type === 'GET_PENDING_QUANTUS_TRANSFER' ||
+    message.type === 'APPROVE_QUANTUS_TRANSFER' ||
+    message.type === 'REJECT_QUANTUS_TRANSFER' ||
+    message.type === 'RESUME_QUANTUS_TRANSFER' ||
+    message.type === 'GET_QUANTUS_TRANSFER_STATUS'
+  ) {
+    if (!quantusTransferController) {
+      sendResponse({ error: createQuantusWalletRuntimeError('unavailable') })
+      return true
+    }
+    const operation =
+      message.type === 'PREPARE_QUANTUS_TRANSFER'
+        ? quantusTransferController.prepare(message.intent)
+        : message.type === 'GET_PENDING_QUANTUS_TRANSFER'
+          ? quantusTransferController.getPendingApproval(message.transactionId)
+          : message.type === 'APPROVE_QUANTUS_TRANSFER'
+            ? quantusTransferController.approve(message.transactionId, message.payloadFingerprint)
+            : message.type === 'REJECT_QUANTUS_TRANSFER'
+              ? quantusTransferController.reject(message.transactionId)
+              : message.type === 'GET_QUANTUS_TRANSFER_STATUS'
+                ? quantusTransferController.getTransferStatus(message.transactionId)
+                : quantusTransferController.resumeBroadcast(message.transactionId)
+    void operation
+      .then(result => {
+        if (
+          message.type === 'PREPARE_QUANTUS_TRANSFER' ||
+          message.type === 'APPROVE_QUANTUS_TRANSFER' ||
+          message.type === 'RESUME_QUANTUS_TRANSFER'
+        ) {
+          void chrome.alarms.create(QUANTUS_TRANSACTION_MONITOR_ALARM, { when: Date.now() + 100 })
+        }
+        sendResponse({ result })
+      })
+      .catch(error => sendResponse({ error: mapQuantusWalletRuntimeError(error) }))
     return true
   }
 
@@ -5356,6 +5487,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       : [
           evmTransactionMonitor?.handleAlarm() ?? Promise.resolve(null),
           solanaTransactionMonitor?.handleAlarm() ?? Promise.resolve(null),
+          quantusTransactionMonitor?.handleAlarm() ?? Promise.resolve(null),
           nearTransactionMonitor?.handleAlarm() ?? Promise.resolve(null),
           nearIntentsTransactionMonitor?.handleAlarm() ?? Promise.resolve(null)
         ]
@@ -5731,6 +5863,7 @@ function restoreZcashDAppPermissionsAfterUnlock(): void {
         await evmDAppHandler.notifyAccountsChanged()
         await bitcoinDAppHandler.notifyAccountsChanged()
         await pearlDAppHandler.notifyAccountsChanged()
+        await quantusDAppHandler.notifyAccountsChanged()
         await solanaDAppHandler?.notifyAccountsChanged()
         await nearDAppHandler?.notifyAccountsChanged()
         await multichainSessionDAppHandler?.notifyAllSessionsChanged()
@@ -5791,6 +5924,7 @@ async function performWalletUnlock(password: string): Promise<any> {
           evmDAppHandler.notifyAccountsChanged(),
           bitcoinDAppHandler.notifyAccountsChanged(),
           pearlDAppHandler.notifyAccountsChanged(),
+          quantusDAppHandler.notifyAccountsChanged(),
           solanaDAppHandler?.notifyAccountsChanged(),
           nearDAppHandler?.notifyAccountsChanged(),
           multichainSessionDAppHandler?.notifyAllSessionsChanged()

@@ -14,7 +14,8 @@ export function keySourceSupportsChainFamily(
       source.chainFamily === family
     )
   }
-  if (family === 'pearl') return false
+  // Quantus and Pearl software ML-DSA / BIP-86 paths have no hardware vendor contract yet.
+  if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
     return family !== 'tron' && source.capabilities.includes(family)
   }
@@ -36,7 +37,7 @@ export function keySourceSupportsAddressFamily(
       source.chainFamily === family
     )
   }
-  if (family === 'pearl') return false
+  if (family === 'pearl' || family === 'quantus') return false
   if (source.vendor === 'ledger') {
     return family !== 'tron' && source.capabilities.includes(family)
   }

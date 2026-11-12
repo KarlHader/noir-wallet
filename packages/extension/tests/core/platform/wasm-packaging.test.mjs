@@ -227,13 +227,14 @@ test.describe('WASM package integrity', () => {
     ).resolves.toMatchObject({
       schemaVersion: 2,
       engine: 'multichain',
-      abiVersion: 'wallet-engine-cb993e0-v11',
-      sourceCommit: 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
+      abiVersion: 'wallet-engine-8103f12-v12',
+      sourceCommit: '8103f125404272ae1181bbe7b887f8b05732f051'
     })
   })
 
   test('keeps the runtime capability gate identical to the pinned Multichain manifest', async () => {
     const source = await readFile(pinnedMultichainRuntime, 'utf8')
+    const syncSource = await readFile(multichainSyncScript, 'utf8')
     const manifest = JSON.parse(
       await readFile(path.join(multichainPackageDir, 'wasm-integrity.json'), 'utf8')
     )
@@ -242,8 +243,16 @@ test.describe('WASM package integrity', () => {
     )
     expect(declaration).not.toBeNull()
     const capabilities = [...declaration[1].matchAll(/'([^']+)'/g)].map(match => match[1])
-
     expect(capabilities.sort()).toEqual(manifest.capabilities)
+
+    // The sync script regenerates the manifest, so a capability added to only one
+    // of the two lists would silently rewrite the declared surface.
+    const syncDeclaration = syncSource.match(
+      /const CAPABILITIES = Object\.freeze\(\s*\[([\s\S]*?)\]\.sort\(\)\s*\)/
+    )
+    expect(syncDeclaration).not.toBeNull()
+    const syncCapabilities = [...syncDeclaration[1].matchAll(/'([^']+)'/g)].map(match => match[1])
+    expect(syncCapabilities.sort()).toEqual(manifest.capabilities)
   })
 
   test('rebuilds and replaces the Zcash package through pinned rollback-capable gates', async () => {
@@ -281,7 +290,7 @@ test.describe('WASM package integrity', () => {
     expect(migrationWorker).toContain('await initZcash({ module_or_path: zcashWasmBytes })')
     expect(buildGate).toContain("engine: 'zcash'")
     expect(buildGate).toContain("engine: 'multichain'")
-    expect(buildGate).toContain("sourceCommit: 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'")
+    expect(buildGate).toContain("sourceCommit: '8103f125404272ae1181bbe7b887f8b05732f051'")
     expect(buildGate).toContain('verifyWasmPackageIntegrity(directory, manifest)')
   })
 

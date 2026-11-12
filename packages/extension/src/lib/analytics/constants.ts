@@ -25,6 +25,7 @@ export const ANALYTICS_CHAIN_FAMILIES = [
   'evm',
   'bitcoin',
   'pearl',
+  'quantus',
   'solana',
   'near'
 ] as const

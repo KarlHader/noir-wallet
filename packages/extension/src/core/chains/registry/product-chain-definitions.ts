@@ -4,6 +4,7 @@ import {
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
+  QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG
 } from '@/config/multichain-feature-flags'
@@ -12,6 +13,7 @@ import {
   getNearNetworkConfig,
   getNearNetworkConfigs,
   getPearlNetworkConfig,
+  getQuantusNetworkConfig,
   getSolanaNetworkConfig,
   getSolanaNetworkConfigs,
   type EvmNetworkConfig,
@@ -23,7 +25,7 @@ import { BITCOIN_ADDRESS_POLICY } from '@/core/chains/bitcoin'
 import type { AssetDefinitionInput } from './asset-registry'
 import type { ChainDefinitionInput } from './chain-registry'
 import { createChainRegistry, type ChainRegistry } from './chain-registry'
-import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS, ZCASH_CHAIN_IDS } from './chain-ids'
+import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS, QUANTUS_CHAIN_IDS, ZCASH_CHAIN_IDS } from './chain-ids'
 
 function zcashDefinition(network: Network): ChainDefinitionInput {
   return {
@@ -143,6 +145,40 @@ function pearlDefinition(network: Network): ChainDefinitionInput {
   }
 }
 
+/**
+ * Declared software Quantus support. Hardware and quote-deposit stay closed.
+ * `chain.quantus` remains off in default builds until the transfer path is green.
+ */
+function quantusDefinition(network: Network): ChainDefinitionInput {
+  const config = getQuantusNetworkConfig(network)
+  return {
+    id: QUANTUS_CHAIN_IDS[network],
+    family: 'quantus',
+    network: { kind: network, name: config.networkName },
+    displayName: config.displayName,
+    featureFlag: QUANTUS_CHAIN_FEATURE_FLAG,
+    capabilities: {
+      address: {
+        status: 'available',
+        addressSchemes: ['quantus_ss58'],
+        derivationSchemes: ['ml-dsa-87', 'ml-dsa-65'],
+        supportsRotation: true,
+        supportsChange: true
+      },
+      signing: {
+        status: 'available',
+        transactionFormats: ['extrinsic'],
+        messageFormats: []
+      },
+      transaction: {
+        status: 'available',
+        model: 'account',
+        actions: ['native-transfer']
+      }
+    }
+  }
+}
+
 export function getSolanaWaitingChainDefinition(config: SolanaNetworkConfig): ChainDefinitionInput {
   return {
     id: config.chainId,
@@ -252,6 +288,7 @@ export function getInitialProductChainDefinitions(
     ...additionalEvmNetworks.map(getEvmChainDefinition),
     bitcoinDefinition(network),
     pearlDefinition(network),
+    quantusDefinition(network),
     getSolanaBetaChainDefinition(
       getSolanaNetworkConfig(network === 'mainnet' ? 'mainnet' : 'devnet')
     ),
@@ -280,6 +317,10 @@ export function getBitcoinChainId(network: Network): string {
 
 export function getPearlChainId(network: Network): string {
   return PEARL_CHAIN_IDS[network]
+}
+
+export function getQuantusChainId(network: Network): string {
+  return QUANTUS_CHAIN_IDS[network]
 }
 
 export function getEvmAssetDefinitions(config: EvmNetworkConfig): readonly AssetDefinitionInput[] {
@@ -359,6 +400,28 @@ export function getBundledPearlAssetDefinitions(network: Network): readonly Asse
   ])
 }
 
+export function getBundledQuantusAssetDefinitions(
+  network: Network
+): readonly AssetDefinitionInput[] {
+  const config = getQuantusNetworkConfig(network)
+  return Object.freeze([
+    {
+      chainId: QUANTUS_CHAIN_IDS[network],
+      namespace: 'slip44',
+      reference: config.nativeCurrency.slip44Reference,
+      kind: 'native',
+      metadata: {
+        name: config.nativeCurrency.name,
+        symbol: config.nativeCurrency.symbol,
+        decimals: config.nativeCurrency.decimals,
+        iconUrl: formatNativeTokenIconUrl('quantus')
+      },
+      source: 'bundled',
+      verification: 'trusted'
+    }
+  ])
+}
+
 export function getBundledInitialProductAssetDefinitions(
   network: Network,
   additionalEvmNetworks: readonly EvmNetworkConfig[] = []
@@ -382,6 +445,7 @@ export function getBundledInitialProductAssetDefinitions(
     ...additionalEvmNetworks.flatMap(getEvmAssetDefinitions),
     ...getBundledBitcoinAssetDefinitions(network),
     ...getBundledPearlAssetDefinitions(network),
+    ...getBundledQuantusAssetDefinitions(network),
     {
       chainId:
         network === 'mainnet'

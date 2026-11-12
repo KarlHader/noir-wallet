@@ -113,6 +113,18 @@ export const RPC_DEFAULT_ENDPOINTS = {
       label: 'Pearl Research',
       url: 'https://blockbook.testnet.pearlresearch.ai/api/v2'
     }
+  },
+  quantus: {
+    mainnet: {
+      id: 'quantus-mainnet',
+      label: 'Quantus',
+      url: 'https://rpc1-mainnet.quantus.com'
+    },
+    testnet: {
+      id: 'quantus-planck',
+      label: 'Quantus Planck',
+      url: 'https://a1-planck.quantus.cat'
+    }
   }
 } as const
 

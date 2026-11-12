@@ -10,7 +10,8 @@ import {
   type SigningSummary,
   type SigningSummaryExpectation,
   type SigningSummaryFamily,
-  type SigningSummarySchema
+  type SigningSummarySchema,
+  type QuantusTransferSummary
 } from './signing-summary'
 import { parseBitcoinSummary } from './signing-summary-validation-bitcoin'
 import { parseNearSummary } from './signing-summary-validation-near'
@@ -34,7 +35,8 @@ const FAMILY_NAMESPACES: Readonly<Record<SigningSummaryFamily, string>> = Object
   pearl: 'bip122',
   solana: 'solana',
   tron: 'tron',
-  near: 'near'
+  near: 'near',
+  quantus: 'quantus'
 })
 const ISSUE_CODES = new Set<SigningReviewIssueCode>([
   'contract-creation',
@@ -74,7 +76,8 @@ export const SCHEMA_EXPECTATIONS: Readonly<
   'tron.transaction.v1': Object.freeze({ family: 'tron', operation: 'transaction' }),
   'tron.sign-message-v2.v1': Object.freeze({ family: 'tron', operation: 'message' }),
   'near.transaction.v1': Object.freeze({ family: 'near', operation: 'transaction' }),
-  'near.nep413-message.v1': Object.freeze({ family: 'near', operation: 'message' })
+  'near.nep413-message.v1': Object.freeze({ family: 'near', operation: 'message' }),
+  'quantus.transfer.v1': Object.freeze({ family: 'quantus', operation: 'transaction' })
 })
 
 export type UnknownRecord = Record<string, unknown>
@@ -426,5 +429,82 @@ export function parseSigningSummary(
       return parseTronSummary(envelope)
     case 'near':
       return parseNearSummary(envelope)
+    case 'quantus':
+      return parseQuantusSummary(envelope)
   }
+}
+
+function parseQuantusSummary(envelope: ParsedSigningSummaryEnvelope): SigningSummary {
+  const fields = envelope.fields
+  assertExactKeys(
+    fields,
+    [
+      'signerAddress',
+      'signerAccountId',
+      'scheme',
+      'recipient',
+      'amountRaw',
+      'feeLimitRaw',
+      'keepAlive',
+      'nonce',
+      'tipRaw',
+      'eraPeriod',
+      'blockNumber',
+      'callHash',
+      'callLength'
+    ],
+    [],
+    'quantus.transfer.v1'
+  )
+  const signerAddress = readSs58Address(fields.signerAddress, 'quantus.transfer.v1.signerAddress')
+  const recipient = readSs58Address(fields.recipient, 'quantus.transfer.v1.recipient')
+  const signerAccountId = readHex(fields.signerAccountId, 'quantus.transfer.v1.signerAccountId', {
+    bytes: 32
+  })
+  const scheme = readLiteral(
+    fields.scheme,
+    ['ml-dsa-87', 'ml-dsa-65'],
+    'quantus.transfer.v1.scheme'
+  )
+  const keepAlive = readBoolean(fields.keepAlive, 'quantus.transfer.v1.keepAlive')
+  const amountRaw = readUnsignedDecimal(fields.amountRaw, 'quantus.transfer.v1.amountRaw')
+  const feeLimitRaw = readUnsignedDecimal(fields.feeLimitRaw, 'quantus.transfer.v1.feeLimitRaw')
+  if (feeLimitRaw === '0') {
+    throw new Error('quantus.transfer.v1.feeLimitRaw must be positive')
+  }
+  const tipRaw = readUnsignedDecimal(fields.tipRaw, 'quantus.transfer.v1.tipRaw')
+  const eraPeriod = readSafeInteger(fields.eraPeriod, 'quantus.transfer.v1.eraPeriod')
+  const callLength = readSafeInteger(fields.callLength, 'quantus.transfer.v1.callLength')
+  const summary: QuantusTransferSummary = Object.freeze({
+    schema: envelope.schema as 'quantus.transfer.v1',
+    chainId: envelope.chainId,
+    operation: 'transaction' as const,
+    review: envelope.review,
+    fields: Object.freeze({
+      signerAddress,
+      signerAccountId,
+      scheme,
+      recipient,
+      amountRaw,
+      feeLimitRaw,
+      keepAlive,
+      nonce: readUnsignedDecimal(fields.nonce, 'quantus.transfer.v1.nonce'),
+      tipRaw,
+      eraPeriod,
+      blockNumber: readSafeInteger(fields.blockNumber, 'quantus.transfer.v1.blockNumber'),
+      callHash: readHex(fields.callHash, 'quantus.transfer.v1.callHash', { bytes: 32 }),
+      callLength
+    })
+  })
+  if (envelope.schema !== 'quantus.transfer.v1') {
+    throw new Error('Unsupported Quantus signing summary schema')
+  }
+  return summary
+}
+
+function readSs58Address(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^qz[1-9A-HJ-NP-Za-km-z]{46,52}$/.test(value)) {
+    throw new Error(`${label} must be a Quantus SS58 address`)
+  }
+  return value
 }

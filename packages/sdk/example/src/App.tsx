@@ -22,6 +22,7 @@ import {
   NativeTransferExample,
   PearlExample,
   ProviderSwitcher,
+  QuantusExample,
   type ExampleNavigationProps,
   type ExampleProviderId
 } from './ProviderExamples'
@@ -244,7 +245,12 @@ function App() {
   const [activeProvider, setActiveProvider] = useState<ExampleProviderId>(() => {
     try {
       const saved = window.sessionStorage.getItem('noir-example-active-provider')
-      return saved === 'evm' || saved === 'bitcoin' || saved === 'solana' || saved === 'near'
+      return saved === 'evm' ||
+        saved === 'bitcoin' ||
+        saved === 'pearl' ||
+        saved === 'quantus' ||
+        saved === 'solana' ||
+        saved === 'near'
         ? saved
         : 'zcash'
     } catch {
@@ -748,6 +754,9 @@ function App() {
   }
   if (activeProvider === 'pearl') {
     return <PearlExample navigation={exampleNavigation} />
+  }
+  if (activeProvider === 'quantus') {
+    return <QuantusExample navigation={exampleNavigation} />
   }
   if (activeProvider === 'solana' || activeProvider === 'near') {
     return (

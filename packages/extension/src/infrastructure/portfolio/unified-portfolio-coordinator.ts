@@ -65,6 +65,7 @@ export interface UnifiedPortfolioCoordinatorOptions {
   readonly pearlPortfolio?: PearlPortfolioSourceReader
   readonly solanaPortfolio?: SingleChainPortfolioSourceReader
   readonly nearPortfolio?: SingleChainPortfolioSourceReader
+  readonly quantusPortfolio?: SingleChainPortfolioSourceReader
   readonly onBackgroundBitcoinRefreshError?: (error: unknown) => void
   readonly onBackgroundBitcoinRefreshSettled?: (source: ActiveBitcoinPortfolioSource | null) => void
   readonly onBackgroundPearlRefreshError?: (error: unknown) => void
@@ -83,10 +84,42 @@ export const PORTFOLIO_COORDINATOR_STAGES = Object.freeze([
   'pearl-source',
   'solana-source',
   'near-source',
+  'quantus-source',
   'read-model'
 ] as const)
 
 export type PortfolioCoordinatorStage = (typeof PORTFOLIO_COORDINATOR_STAGES)[number]
+
+interface SingleChainPortfolioSourceDefinition {
+  readonly family: 'solana' | 'near' | 'quantus'
+  readonly label: string
+  readonly stage: 'solana-source' | 'near-source' | 'quantus-source'
+  readonly read: (
+    options: UnifiedPortfolioCoordinatorOptions
+  ) => SingleChainPortfolioSourceReader | undefined
+}
+
+const SINGLE_CHAIN_PORTFOLIO_SOURCES: readonly SingleChainPortfolioSourceDefinition[] =
+  Object.freeze([
+    {
+      family: 'solana',
+      label: 'Solana',
+      stage: 'solana-source',
+      read: options => options.solanaPortfolio
+    },
+    {
+      family: 'near',
+      label: 'NEAR',
+      stage: 'near-source',
+      read: options => options.nearPortfolio
+    },
+    {
+      family: 'quantus',
+      label: 'Quantus',
+      stage: 'quantus-source',
+      read: options => options.quantusPortfolio
+    }
+  ])
 
 export class PortfolioCoordinatorError extends Error {
   readonly stage: PortfolioCoordinatorStage
@@ -311,58 +344,38 @@ export class UnifiedPortfolioCoordinator {
       }
     }
 
-    const solanaAccount = active.availableChainAccounts.find(item => item.chain.family === 'solana')
-    const nearAccount = active.availableChainAccounts.find(item => item.chain.family === 'near')
-    const [solanaSource, nearSource] = await Promise.all([
-      solanaAccount
-        ? atStage('solana-source', () => {
-            const portfolio = this.options.solanaPortfolio
-            if (!portfolio) throw new Error('Enabled Solana Portfolio source is unavailable')
-            return shouldRefreshChain(solanaAccount.chain.id)
-              ? portfolio.refreshActiveSource()
-              : portfolio.readCachedActiveSource()
-          })
-        : undefined,
-      nearAccount
-        ? atStage('near-source', () => {
-            const portfolio = this.options.nearPortfolio
-            if (!portfolio) throw new Error('Enabled NEAR Portfolio source is unavailable')
-            return shouldRefreshChain(nearAccount.chain.id)
-              ? portfolio.refreshActiveSource()
-              : portfolio.readCachedActiveSource()
-          })
-        : undefined
-    ])
-    if (solanaAccount) {
-      if (!solanaSource) {
+    const singleChainSources = await Promise.all(
+      SINGLE_CHAIN_PORTFOLIO_SOURCES.map(async definition => {
+        const account = active.availableChainAccounts.find(
+          item => item.chain.family === definition.family
+        )
+        if (!account) return null
+        const portfolio = definition.read(this.options)
+        if (!portfolio) {
+          throw new Error(`Enabled ${definition.label} Portfolio source is unavailable`)
+        }
+        const source = await atStage(definition.stage, () =>
+          shouldRefreshChain(account.chain.id)
+            ? portfolio.refreshActiveSource()
+            : portfolio.readCachedActiveSource()
+        )
+        return Object.freeze({ account, source, label: definition.label })
+      })
+    )
+    for (const entry of singleChainSources) {
+      if (!entry) continue
+      if (!entry.source) {
         if (action !== 'read') return null
-        sources.push(uncachedSource(solanaAccount.chainAccount))
-      } else {
-        if (
-          !sameActiveScope(solanaSource, active.generationId, scope.keyDomainId, scope.accountId)
-        ) {
-          return null
-        }
-        if (solanaSource.chainAccount.id !== solanaAccount.chainAccount.id) {
-          throw new Error('Solana Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(solanaSource.source)
+        sources.push(uncachedSource(entry.account.chainAccount))
+        continue
       }
-    }
-
-    if (nearAccount) {
-      if (!nearSource) {
-        if (action !== 'read') return null
-        sources.push(uncachedSource(nearAccount.chainAccount))
-      } else {
-        if (!sameActiveScope(nearSource, active.generationId, scope.keyDomainId, scope.accountId)) {
-          return null
-        }
-        if (nearSource.chainAccount.id !== nearAccount.chainAccount.id) {
-          throw new Error('NEAR Portfolio source does not match the active ChainAccount')
-        }
-        sources.push(nearSource.source)
+      if (!sameActiveScope(entry.source, active.generationId, scope.keyDomainId, scope.accountId)) {
+        return null
       }
+      if (entry.source.chainAccount.id !== entry.account.chainAccount.id) {
+        throw new Error(`${entry.label} Portfolio source does not match the active ChainAccount`)
+      }
+      sources.push(entry.source.source)
     }
 
     return atSynchronousStage('read-model', () =>

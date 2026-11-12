@@ -5,6 +5,7 @@ import {
   detectEvmProvider,
   detectNearProvider,
   detectPearlProvider,
+  detectQuantusProvider,
   detectSolanaProvider,
   getNoirWallet,
   switchEvmChain,
@@ -19,6 +20,10 @@ import {
   type PearlChainInfo,
   type PearlNetwork,
   type PearlProvider,
+  type QuantusBalance,
+  type QuantusChainInfo,
+  type QuantusNetwork,
+  type QuantusProvider,
   type SolanaProvider
 } from '@noir-wallet/sdk'
 import {
@@ -72,7 +77,14 @@ const TEST_BENCH_DEPLOYMENTS = testContractDeployments as Readonly<
   Record<string, { readonly NoirTestBench?: string }>
 >
 
-export type ExampleProviderId = 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near'
+export type ExampleProviderId =
+  | 'zcash'
+  | 'evm'
+  | 'bitcoin'
+  | 'pearl'
+  | 'quantus'
+  | 'solana'
+  | 'near'
 
 export interface ExampleNavigationProps {
   active: ExampleProviderId
@@ -187,6 +199,7 @@ export function ProviderSwitcher({
     })),
     { id: 'bitcoin' as const, label: 'Bitcoin', iconUrl: getExampleChainIconUrl('bitcoin') },
     { id: 'pearl' as const, label: 'Pearl', iconUrl: getExampleChainIconUrl('pearl') },
+    { id: 'quantus' as const, label: 'Quantus', iconUrl: getExampleChainIconUrl('quantus') },
     {
       id: 'solana' as const,
       label: networkMode === 'mainnet' ? 'Solana' : 'Solana Devnet',
@@ -1562,6 +1575,356 @@ export function PearlExample({ navigation }: { navigation: ExampleNavigationProp
             disabled={!account || !psbt || busy}
           >
             Broadcast PSBT
+          </button>
+        </section>
+      </div>
+    </ExampleLayout>
+  )
+}
+
+function formatQuantusUnits(raw: string, decimals: number): string {
+  if (!/^\d+$/.test(raw)) return raw
+  const base = 10n ** BigInt(decimals)
+  const value = BigInt(raw)
+  const whole = value / base
+  const fraction = (value % base).toString().padStart(decimals, '0').replace(/0+$/, '')
+  return fraction.length === 0 ? whole.toString() : `${whole}.${fraction}`
+}
+
+function shortenPublicKey(value: string): string {
+  if (value.length <= 48) return value
+  return `${value.slice(0, 32)}…${value.slice(-8)} (${value.length} hex chars)`
+}
+
+/**
+ * Quantus dApp example: accounts, network/chain reads, balances, a reviewed
+ * native QTC/PLK send, and `author_submitExtrinsic` broadcast of bytes signed
+ * elsewhere. Message and generic-call signing are not exposed.
+ */
+export function QuantusExample({ navigation }: { navigation: ExampleNavigationProps }) {
+  const [provider, setProvider] = useState<QuantusProvider | null>(
+    () => getNoirWallet()?.quantus ?? null
+  )
+  const [network, setNetwork] = useState<QuantusNetwork | ''>('')
+  const [chain, setChain] = useState<QuantusChainInfo | null>(null)
+  const [account, setAccount] = useState('')
+  const [accounts, setAccounts] = useState<readonly string[]>([])
+  const [publicKey, setPublicKey] = useState('')
+  const [balance, setBalance] = useState<QuantusBalance | null>(null)
+  const [extrinsic, setExtrinsic] = useState('')
+  const [signedExtrinsic, setSignedExtrinsic] = useState('')
+  const [recipient, setRecipient] = useState('')
+  const [amountRaw, setAmountRaw] = useState('')
+  const [result, setResult] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const symbol = network === 'testnet' ? 'PLK' : 'QTC'
+
+  useEffect(() => {
+    if (provider) return
+    const controller = new AbortController()
+    detectQuantusProvider({ timeoutMs: 3000, signal: controller.signal })
+      .then(setProvider)
+      .catch(discoveryError => {
+        if ((discoveryError as Error).name !== 'AbortError') setError(formatError(discoveryError))
+      })
+    return () => controller.abort()
+  }, [provider])
+
+  const refresh = useCallback(async (current: QuantusProvider) => {
+    const [nextNetwork, nextChain, authorized] = await Promise.all([
+      current.getNetwork(),
+      current.getChain(),
+      current.getAccounts()
+    ])
+    const nextAccount = authorized[0] ?? ''
+    setAccounts(authorized)
+    setNetwork(nextNetwork)
+    setChain(nextChain)
+    setAccount(nextAccount)
+    if (!nextAccount) {
+      setPublicKey('')
+      setBalance(null)
+      return
+    }
+    const [nextPublicKey, nextBalance] = await Promise.all([
+      current.getPublicKey(),
+      current.getBalance()
+    ])
+    setPublicKey(nextPublicKey)
+    setBalance(nextBalance)
+  }, [])
+
+  useEffect(() => {
+    if (!provider) return
+    const onAccountsChanged = () => {
+      void refresh(provider).catch(refreshError => setError(formatError(refreshError)))
+    }
+    provider.on('accountsChanged', onAccountsChanged)
+    void refresh(provider).catch(refreshError => setError(formatError(refreshError)))
+    return () => {
+      provider.removeListener('accountsChanged', onAccountsChanged)
+    }
+  }, [provider, refresh])
+
+  const run = async (operation: () => Promise<string | void>) => {
+    setBusy(true)
+    setError('')
+    setResult('')
+    try {
+      const nextResult = await operation()
+      if (nextResult) setResult(nextResult)
+      if (provider) await refresh(provider)
+    } catch (operationError) {
+      setError(formatError(operationError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const connect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Quantus provider is unavailable.')
+      const connected = await provider.connect()
+      setPublicKey(connected.publicKey)
+      return `Connected ${connected.address}`
+    })
+
+  const disconnect = () =>
+    run(async () => {
+      if (!provider) throw new Error('Noir Wallet Quantus provider is unavailable.')
+      await provider.disconnect()
+      return 'Quantus permission revoked.'
+    })
+
+  const validateNetwork = () =>
+    run(async () => {
+      if (!provider || !network) throw new Error('Connect a Quantus account first.')
+      await provider.switchNetwork(network)
+      return `${network} matches Noir Wallet global mode.`
+    })
+
+  const validateChain = () =>
+    run(async () => {
+      if (!provider || !chain) throw new Error('Connect a Quantus account first.')
+      await provider.switchChain({ enum: chain.enum })
+      return `${chain.name} matches Noir Wallet global mode.`
+    })
+
+  const requireQuantusProvider = () => {
+    if (!provider || !account) throw new Error('Connect a Quantus account first.')
+    return provider
+  }
+
+  const requireQuantusSendIntent = () => {
+    if (!recipient.trim()) throw new Error('Enter an SS58-189 Quantus recipient address.')
+    if (!/^[1-9][0-9]*$/.test(amountRaw.trim())) {
+      throw new Error('Amount must be a positive integer in 12-decimal base units.')
+    }
+    return { to: recipient.trim(), amount: amountRaw.trim() }
+  }
+
+  const sendQuantus = (event: FormEvent) => {
+    event.preventDefault()
+    void run(async () => {
+      const intent = requireQuantusSendIntent()
+      const extrinsicHash = await requireQuantusProvider().sendQuantus(intent.to, intent.amount)
+      return `Extrinsic hash: ${extrinsicHash}`
+    })
+  }
+
+  const signQuantusTransfer = () =>
+    void run(async () => {
+      setSignedExtrinsic('')
+      const intent = requireQuantusSendIntent()
+      const signed = await requireQuantusProvider().signQuantusTransfer(intent.to, intent.amount)
+      setSignedExtrinsic(signed)
+      return 'Quantus transfer signed successfully. It has not been broadcast.'
+    })
+
+  const broadcastExtrinsic = () =>
+    run(async () => {
+      if (!provider || !account) throw new Error('Connect a Quantus account first.')
+      const candidate = extrinsic.trim()
+      if (!/^0x(?:[0-9a-f]{2})+$/i.test(candidate)) {
+        throw new Error('Enter a signed extrinsic as 0x-prefixed hex bytes.')
+      }
+      const extrinsicHash = await provider.broadcastExtrinsic(candidate)
+      return `Extrinsic hash: ${extrinsicHash}`
+    })
+
+  return (
+    <ExampleLayout navigation={navigation} available={provider !== null} connected={account !== ''}>
+      {!provider && <div className="message warning">Quantus provider is not enabled.</div>}
+      <section className="provider-summary card">
+        <div className="provider-summary-copy">
+          <ExampleChainIcon
+            className="provider-hero-icon"
+            iconUrl={getExampleChainIconUrl('quantus')}
+            label="Quantus"
+          />
+          <div>
+            <p className="section-kicker">Selected provider</p>
+            <h2>Quantus provider</h2>
+            <p>
+              Typed access to accounts, balances, reviewed native sends, and signed extrinsic
+              broadcast.
+            </p>
+          </div>
+        </div>
+        <div className="provider-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => void connect()}
+            disabled={!provider || busy}
+          >
+            {account ? 'Reconnect Quantus' : 'Connect Quantus'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void disconnect()}
+            disabled={!account || busy}
+          >
+            Disconnect
+          </button>
+        </div>
+      </section>
+      {result && <div className="message success provider-result">{result}</div>}
+      {error && <div className="message error provider-result">{error}</div>}
+      <div className="tab-panel grid-2">
+        <section className="card card-compact">
+          <h2>Account &amp; network</h2>
+          <Result label="Network" value={network || 'Unavailable'} />
+          <Result label="Chain" value={chain?.name ?? 'Unavailable'} />
+          <Result label="Address" value={account || 'Not connected'} />
+          <Result
+            label="Public key"
+            value={publicKey ? shortenPublicKey(publicKey) : 'Unavailable'}
+          />
+          <Result
+            label={`Balance (${symbol})`}
+            value={balance ? `${formatQuantusUnits(balance.free, 12)} ${symbol}` : 'Unavailable'}
+          />
+          <Result
+            label="Reserved / nonce"
+            value={
+              balance
+                ? `${formatQuantusUnits(balance.reserved, 12)} ${symbol} / ${balance.nonce}`
+                : 'Unavailable'
+            }
+          />
+          <div className="button-row compact-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void validateNetwork()}
+              disabled={!account || busy}
+            >
+              Validate network
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void validateChain()}
+              disabled={!account || busy}
+            >
+              Validate chain
+            </button>
+          </div>
+          <p className="field-help">
+            These compatibility methods validate the active mode. Change Mainnet/Testnet Mode in
+            Noir Wallet settings.
+          </p>
+        </section>
+        <AuthorizedAccountsExample
+          accounts={accounts}
+          busy={busy}
+          onReview={() => void connect()}
+        />
+        <section className="card card-compact">
+          <h2>Send {symbol}</h2>
+          <form className="form-stack" onSubmit={sendQuantus}>
+            <label className="label" htmlFor="quantus-recipient">
+              Recipient
+            </label>
+            <input
+              id="quantus-recipient"
+              className="input input-sm"
+              value={recipient}
+              onChange={event => setRecipient(event.target.value)}
+              placeholder="SS58-189 address"
+              required
+            />
+            <label className="label" htmlFor="quantus-amount-raw">
+              Amount (base units)
+            </label>
+            <input
+              id="quantus-amount-raw"
+              className="input input-sm"
+              value={amountRaw}
+              onChange={event => setAmountRaw(event.target.value)}
+              inputMode="numeric"
+              placeholder="1000000000000"
+              required
+            />
+            <p className="field-help">
+              Raw u128 base units, {symbol} uses 12 decimals. Keep-alive is fixed and the fee
+              ceiling stays with the wallet.
+            </p>
+            <button className="btn btn-primary btn-full" disabled={!account || busy} type="submit">
+              {busy ? 'Sending…' : `Send ${symbol}`}
+            </button>
+            <button
+              className="btn btn-secondary btn-full"
+              disabled={!account || busy}
+              type="button"
+              onClick={() => signQuantusTransfer()}
+            >
+              Sign only (wallet does not send)
+            </button>
+            {signedExtrinsic && (
+              <div className="message success" role="status">
+                <strong>Signature successful — not broadcast.</strong>
+                <label className="label" htmlFor="quantus-signed-result">
+                  Signed extrinsic (hex)
+                </label>
+                <textarea
+                  id="quantus-signed-result"
+                  className="input"
+                  value={signedExtrinsic}
+                  readOnly
+                  rows={3}
+                  onFocus={event => event.currentTarget.select()}
+                />
+              </div>
+            )}
+            <p className="field-help">
+              Sign only returns the signed extrinsic without submitting it. The site owns that
+              submission, and the signed transfer can be sent later without another wallet review.
+            </p>
+          </form>
+        </section>
+        <section className="card card-compact">
+          <h2>Broadcast signed extrinsic</h2>
+          <p className="card-hint">
+            Submits an extrinsic that was signed elsewhere through{' '}
+            <code>author_submitExtrinsic</code>. Message and generic-call signing are not exposed by
+            the provider.
+          </p>
+          <textarea
+            className="input textarea"
+            value={extrinsic}
+            onChange={event => setExtrinsic(event.target.value)}
+            rows={4}
+            placeholder="0x… signed SCALE extrinsic"
+            aria-label="Signed extrinsic hex"
+          />
+          <button
+            className="btn btn-primary btn-full"
+            onClick={() => void broadcastExtrinsic()}
+            disabled={!account || !extrinsic.trim() || busy}
+          >
+            Broadcast extrinsic
           </button>
         </section>
       </div>

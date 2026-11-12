@@ -11,19 +11,25 @@ import { commitCredentialBoundStorageV2Pointer } from '@/core/keyring/applicatio
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
 import type { DerivedBitcoinAddress } from '@/core/chains/bitcoin'
 import {
+  decodeQuantusAccountId,
+  parseQuantusAddress,
+  resolveQuantusDerivationScheme
+} from '@/core/chains/quantus'
+import { getQuantusChainId, getPearlChainId, parseChainId } from '@/core/chains/registry'
+import {
   nearImplicitAccountIdFromPublicKey,
   parseNearAccountId,
   parseNearPublicKey
 } from '@/core/chains/near'
 import { parseSupportedPearlAddress, type DerivedPearlAddress } from '@/core/chains/pearl'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
-import { getPearlChainId, parseChainId } from '@/core/chains/registry'
 import type { AccountAddresses, Network } from '@/types'
 import {
   parseStorageV2GenerationId,
   parseStorageV2Snapshot,
   parseStorageV2SourceFingerprint
 } from '@/infrastructure/persistence/schema'
+import { resolveQuantusDerivation } from '@/infrastructure/keyring/multichain/quantus-derivation-client'
 import {
   STORAGE_V2_SCHEMA_VERSION,
   type CredentialRepository,
@@ -40,8 +46,20 @@ export interface NetworkAccountMetadataInput {
   readonly zcashAddresses: AccountAddresses
   readonly bitcoin: DerivedBitcoinAddress
   readonly pearl?: DerivedPearlAddress
+  readonly quantus?: DerivedQuantusNetworkAccount
   readonly solana?: DerivedEd25519NetworkAccount
   readonly near?: DerivedEd25519NetworkAccount
+}
+
+export interface DerivedQuantusNetworkAccount {
+  readonly chainId: string
+  readonly address: string
+  /** ML-DSA public key with a `0x` prefix. */
+  readonly publicKey: string
+  /** Poseidon account ID derived from the SS58 address, with a `0x` prefix. */
+  readonly accountId: string
+  readonly scheme: 'ml-dsa-87' | 'ml-dsa-65'
+  readonly derivationPath: string
 }
 
 export interface DerivedEd25519NetworkAccount {
@@ -128,6 +146,8 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
   }
   const pearl =
     value.pearl === undefined ? undefined : normalizePearlAccount(value.pearl, accountIndex)
+  const quantus =
+    value.quantus === undefined ? undefined : normalizeQuantusAccount(value.quantus, accountIndex)
   const solana =
     value.solana === undefined
       ? undefined
@@ -142,6 +162,7 @@ function normalizeInput(value: NetworkAccountMetadataInput): NetworkAccountMetad
     zcashChainId,
     bitcoin: Object.freeze({ ...value.bitcoin, chainId: bitcoinChainId }),
     ...(pearl === undefined ? {} : { pearl }),
+    ...(quantus === undefined ? {} : { quantus }),
     ...(solana === undefined ? {} : { solana }),
     ...(near === undefined ? {} : { near })
   })
@@ -189,6 +210,40 @@ function normalizePearlAccount(
     scriptPubKey: value.scriptPubKey,
     addressScheme: 'pearl_p2tr' as const,
     derivationScheme: 'bip86' as const
+  })
+}
+
+function normalizeQuantusAccount(
+  value: DerivedQuantusNetworkAccount,
+  accountIndex: number
+): DerivedQuantusNetworkAccount {
+  const chainId = parseChainId(value.chainId).id
+  if (chainId !== getQuantusChainId('mainnet') && chainId !== getQuantusChainId('testnet')) {
+    throw new Error('Network Account metadata requires a Quantus chain')
+  }
+  const scheme = resolveQuantusDerivationScheme(value.scheme)
+  const expectedPath = resolveQuantusDerivation(
+    { chainId, scheme, accountIndex, change: false, addressIndex: 0 },
+    0
+  ).derivationPath
+  if (value.derivationPath !== expectedPath) {
+    throw new Error('Network Account metadata Quantus derivation index mismatch')
+  }
+  const address = parseQuantusAddress(value.address)
+  if (!/^0x(?:[0-9a-f]{2})+$/.test(value.publicKey)) {
+    throw new Error('Network Account metadata Quantus public key is invalid')
+  }
+  const expectedAccountId = `0x${bytesToHex(decodeQuantusAccountId(address))}`
+  if (value.accountId !== expectedAccountId) {
+    throw new Error('Network Account metadata Quantus identity mismatch')
+  }
+  return Object.freeze({
+    chainId,
+    address,
+    publicKey: value.publicKey,
+    accountId: expectedAccountId,
+    scheme,
+    derivationPath: expectedPath
   })
 }
 
@@ -423,6 +478,35 @@ export class NetworkAccountMetadataCoordinator {
                         path: input.pearl.derivationPath
                       },
                       rotatable: true,
+                      preferredForReceive: true,
+                      privacy: 'transparent' as const,
+                      walletCompatibility: 'broad' as const
+                    }
+                  ]
+                }
+              ]),
+          ...(input.quantus === undefined
+            ? []
+            : [
+                {
+                  chainId: input.quantus.chainId,
+                  role: `quantus:${input.quantus.chainId}`,
+                  derivation: {
+                    scheme: input.quantus.scheme,
+                    path: input.quantus.derivationPath
+                  },
+                  identity: input.quantus.address,
+                  addresses: [
+                    {
+                      role: 'receive-0',
+                      value: input.quantus.address,
+                      scheme: 'quantus_ss58',
+                      purpose: 'receive' as const,
+                      derivation: {
+                        scheme: input.quantus.scheme,
+                        path: input.quantus.derivationPath
+                      },
+                      rotatable: false,
                       preferredForReceive: true,
                       privacy: 'transparent' as const,
                       walletCompatibility: 'broad' as const

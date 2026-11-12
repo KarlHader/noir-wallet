@@ -19,6 +19,8 @@ const solanaChainId = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
 const solanaAddress = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk'
 const nearChainId = 'near:testnet'
 const nearAddress = '5510e2b44cae6eb807e3e0e45d579dda058c274abcba15e5cb84636f5d1ee412'
+const quantusChainId = 'quantus:planck'
+const quantusAddress = 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2'
 
 const chains = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
   'chain.zcash',
@@ -226,6 +228,48 @@ test.describe('Additional receive targets coordinator', () => {
       keyDomainId,
       accountId
     })
+  })
+
+  test('projects the preferred Quantus target only for a valid enabled account', async () => {
+    const enabled = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
+      'chain.zcash',
+      'chain.quantus'
+    ])
+    const base = snapshot()
+    const quantusAccount = {
+      id: 'chain-account:receive-test:quantus',
+      scope: { keyDomainId, accountId, chainId: quantusChainId },
+      derivation: { scheme: 'ml-dsa-87', path: "m/44'/189189'/0'/0'/0'" },
+      identity: { kind: 'account-identifier', value: quantusAddress },
+      createdAt: 1_700_000_000_000
+    }
+    const quantusTarget = {
+      id: 'address:receive-test:quantus',
+      chainAccountId: quantusAccount.id,
+      value: quantusAddress,
+      scheme: 'quantus_ss58',
+      purpose: 'receive',
+      rotatable: false,
+      preferredForReceive: true,
+      privacy: 'transparent',
+      walletCompatibility: 'broad'
+    }
+    const read = address => new AdditionalReceiveTargetsCoordinator({
+      repository: repository({
+        ...base,
+        chainAccounts: [...base.chainAccounts, quantusAccount],
+        addresses: [...base.addresses, address]
+      }),
+      chains: enabled,
+      getBitcoinReceiveTarget
+    }).readActive({ keyDomainId, accountId })
+    await expect(read(quantusTarget)).resolves.toMatchObject({
+      targets: [{ chainId: quantusChainId, kind: 'quantus', address: quantusAddress }]
+    })
+    await expect(read({ ...quantusTarget, scheme: 'near' })).rejects.toThrow(
+      /unavailable Address scheme/
+    )
+    await expect(read({ ...quantusTarget, value: 'invalid-address' })).rejects.toThrow()
   })
 
   test('returns null when the request races an active Account change', async () => {

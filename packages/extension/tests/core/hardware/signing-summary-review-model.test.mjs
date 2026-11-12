@@ -96,17 +96,31 @@ const baseSummaries = [
   summary('pearl.psbt.v1', 'bip122:pearl', 'transaction', {
     psbtVersion: 0,
     signer: 'pr1psigner',
-    inputs: [{
-      index: 0, transactionId: digest, outputIndex: 0, amountSats: '1000',
-      sequence: 0xffffffff, scriptType: 'p2tr', sighashType: 'SIGHASH_DEFAULT',
-      ownership: 'signing-account'
-    }],
-    outputs: [{
-      index: 0, address: 'pr1precipient', scriptPubKeyHex: '5120',
-      amountSats: '900', classification: 'recipient'
-    }],
+    inputs: [
+      {
+        index: 0,
+        transactionId: digest,
+        outputIndex: 0,
+        amountSats: '1000',
+        sequence: 0xffffffff,
+        scriptType: 'p2tr',
+        sighashType: 'SIGHASH_DEFAULT',
+        ownership: 'signing-account'
+      }
+    ],
+    outputs: [
+      {
+        index: 0,
+        address: 'pr1precipient',
+        scriptPubKeyHex: '5120',
+        amountSats: '900',
+        classification: 'recipient'
+      }
+    ],
     signingInputIndexes: [0],
-    totalInputSats: '1000', totalOutputSats: '900', feeSats: '100'
+    totalInputSats: '1000',
+    totalOutputSats: '900',
+    feeSats: '100'
   }),
   summary('pearl.bip322-message.v1', 'bip122:pearl', 'message', {
     address: 'pr1psigner',
@@ -166,8 +180,45 @@ const baseSummaries = [
     nonceBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
     recipient: 'example.com',
     callbackUrl: null
+  }),
+  summary('quantus.transfer.v1', 'quantus:mainnet', 'transaction', {
+    signerAddress: 'qzna4bUiEiZdXQpwvSQDmM2y9rBPyJRS9iNm85jPgicM76kA8',
+    signerAccountId: `0x${'cd'.repeat(32)}`,
+    scheme: 'ml-dsa-87',
+    recipient: 'qznFDa1qesTQ5UzEjGV4SDZTJJkqVmiqXUxkm9gMPU3JsuFFh',
+    amountRaw: '1000000000',
+    feeLimitRaw: '10000000000',
+    keepAlive: true,
+    nonce: '7',
+    tipRaw: '0',
+    eraPeriod: 64,
+    blockNumber: 1024,
+    callHash: `0x${'44'.repeat(32)}`,
+    callLength: 13
   })
 ]
+
+test('formats Quantus review amounts in QTC or PLK without altering raw signing data', () => {
+  const original = baseSummaries.find(item => item.schema === 'quantus.transfer.v1')
+  const before = JSON.stringify(original)
+  for (const [chainId, symbol] of [['quantus:mainnet', 'QTC'], ['quantus:planck', 'PLK']]) {
+    const model = buildSigningSummaryReviewModel({ ...original, chainId })
+    const rows = model.sections[0].rows
+    expect(rows.find(row => row.label === 'Amount')).toMatchObject({
+      value: `0.001 ${symbol}`,
+      amount: { value: '0.001', symbol, profile: 'review' }
+    })
+    expect(rows.find(row => row.label === 'Fee limit (estimated)')).toMatchObject({
+      value: `0.01 ${symbol}`,
+      amount: { value: '0.01', symbol, profile: 'fee' }
+    })
+    expect(rows.find(row => row.label === 'Tip')).toMatchObject({
+      value: `0 ${symbol}`,
+      amount: { value: '0', symbol, profile: 'fee' }
+    })
+  }
+  expect(JSON.stringify(original)).toBe(before)
+})
 
 test('formats EVM approval amounts and addresses without changing the signing summary', () => {
   const original = baseSummaries.find(item => item.schema === 'evm.transaction.v1')
@@ -449,7 +500,9 @@ test.describe('Signing summary review model', () => {
   })
 
   test('shows Solana total fee, compute unit price, and maximum priority fee', () => {
-    const solana = structuredClone(baseSummaries.find(item => item.schema === 'solana.transaction.v1'))
+    const solana = structuredClone(
+      baseSummaries.find(item => item.schema === 'solana.transaction.v1')
+    )
     solana.fields.feeLamports = '5050'
     solana.fields.computeUnitLimit = '200000'
     solana.fields.computeUnitPriceMicroLamports = '250'

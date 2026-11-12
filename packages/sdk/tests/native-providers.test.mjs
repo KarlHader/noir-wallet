@@ -5,6 +5,7 @@ import { getNearProvider } from '../dist/chains/near/index.mjs'
 import { getSolanaProvider } from '../dist/chains/solana/index.mjs'
 import { getBitcoinProvider } from '../dist/chains/bitcoin/index.mjs'
 import { getPearlProvider } from '../dist/chains/pearl/index.mjs'
+import { getQuantusProvider } from '../dist/chains/quantus/index.mjs'
 
 function solanaProvider() {
   return {
@@ -138,6 +139,48 @@ test('detects the complete Bitcoin provider surface including batch signing and 
     assert.equal(getBitcoinProvider(), bitcoin)
     delete bitcoin.pushPsbt
     assert.equal(getBitcoinProvider(), null)
+  } finally {
+    delete globalThis.window
+  }
+})
+
+function quantusProvider() {
+  return {
+    request: async () => null,
+    connect: async () => ({
+      address: 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2',
+      publicKey: '0a'
+    }),
+    requestAccounts: async () => [],
+    getAccounts: async () => [],
+    getNetwork: async () => 'mainnet',
+    getChain: async () => ({ enum: 'QUANTUS_MAINNET', name: 'Quantus', network: 'mainnet' }),
+    getPublicKey: async () => '0a',
+    getBalance: async () => ({ free: '0', reserved: '0', nonce: 0 }),
+    broadcastExtrinsic: async () => '0xhash',
+    switchNetwork: async () => null,
+    switchChain: async () => null,
+    on() {
+      return this
+    },
+    removeListener() {
+      return this
+    },
+    disconnect: async () => {}
+  }
+}
+
+test('discovers an enabled Quantus provider without transfer or signing entry points', () => {
+  const quantus = quantusProvider()
+  globalThis.window = { noirwallet: { quantus } }
+  try {
+    assert.equal(getQuantusProvider(), quantus)
+    // Transfer and message signing are not part of the released provider surface.
+    assert.equal(quantus.signMessage, undefined)
+    assert.equal(quantus.sendQuantus, undefined)
+    assert.equal(quantus.signTransaction, undefined)
+    delete quantus.broadcastExtrinsic
+    assert.equal(getQuantusProvider(), null)
   } finally {
     delete globalThis.window
   }

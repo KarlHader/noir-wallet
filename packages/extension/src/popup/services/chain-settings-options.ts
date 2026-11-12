@@ -4,6 +4,7 @@ import {
   getEvmNetworkConfigs,
   getNearNetworkConfig,
   getPearlNetworkConfig,
+  getQuantusNetworkConfig,
   NETWORKS,
   getSolanaNetworkConfig
 } from '@/config/networks'
@@ -17,6 +18,7 @@ import {
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
+  resolveQuantusFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 import type { ChainEndpointSettings, ChainRpcProtocol } from '@/core/chains/chain-endpoint-settings'
@@ -27,6 +29,7 @@ import {
   resolveBitcoinRpcEndpointOptions,
   resolveNearRpcEndpointOptions,
   resolvePearlRpcEndpointOptions,
+  resolveQuantusRpcEndpointOptions,
   resolveSolanaRpcEndpointOptions
 } from '@/infrastructure/chains/managed-rpc-endpoints'
 import { getBitcoinChainId, getPearlChainId, getZcashChainId } from '@/core/chains/registry'
@@ -113,6 +116,7 @@ export function buildZcashRpcChainOption(groups: readonly RpcEndpointGroup[]): R
 export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly RpcChainOption[] {
   const bitcoin = getBitcoinNetworkConfig(DEFAULT_NETWORK)
   const pearl = getPearlNetworkConfig(DEFAULT_NETWORK)
+  const quantus = getQuantusNetworkConfig(DEFAULT_NETWORK)
   const solana = getSolanaNetworkConfig(DEFAULT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet')
   const near = getNearNetworkConfig(DEFAULT_NETWORK)
   const evmEnabled = resolveEvmFeatureRuntimePolicy(
@@ -128,6 +132,9 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
   const nearEnabled = resolveNearFeatureRuntimePolicy(
+    __ENABLED_CHAIN_FEATURE_FLAGS__
+  ).newOperationsEnabled
+  const quantusEnabled = resolveQuantusFeatureRuntimePolicy(
     __ENABLED_CHAIN_FEATURE_FLAGS__
   ).newOperationsEnabled
 
@@ -216,6 +223,20 @@ export function buildRpcChainOptions(settings: ChainEndpointSettings): readonly 
             protocol: 'near-json-rpc' as const,
             defaultUrl: resolveNearRpcEndpointOptions(near.network)[0].url,
             presets: resolveNearRpcEndpointOptions(near.network)
+          })
+        ]
+      : []),
+    ...(quantusEnabled
+      ? [
+          Object.freeze({
+            chainId: quantus.chainId,
+            label: quantus.displayName,
+            iconChain: 'quantus',
+            protocol: 'quantus-json-rpc' as const,
+            defaultUrl: resolveQuantusRpcEndpointOptions(DEFAULT_NETWORK)[0].url,
+            presets: resolveQuantusRpcEndpointOptions(DEFAULT_NETWORK).map(endpoint =>
+              Object.freeze({ id: endpoint.id, label: endpoint.label, url: endpoint.url })
+            )
           })
         ]
       : [])

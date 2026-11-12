@@ -13,6 +13,12 @@ import {
 } from '@/core/keyring/ports'
 import type { SigningCommandId } from '@/core/keyring/ports/signing'
 import {
+  expectedQuantusWasmNetwork,
+  requiresQuantusGenesisBinding,
+  toQuantusWasmChainId
+} from '@/core/chains/quantus'
+import { getQuantusChainId } from '@/core/chains/registry'
+import {
   adaptPreparedSigning,
   adaptSignedResult,
   parseSigningPreparePayload,
@@ -26,6 +32,7 @@ import {
   assertRawEd25519AccountMatches,
   assertRawEvmAccountMatches,
   assertRawPearlAccountMatches,
+  assertRawQuantusAccountMatches,
   globalPeaRequestJson,
   MAX_BIP32_INDEX,
   MAX_UINT64,
@@ -37,8 +44,10 @@ import {
   parseRawGlobalPeaAccount,
   parseRawExportedPrivateKey,
   parseRawPearlAccount,
+  parseRawQuantusAccount,
   parseRawSessionInfo,
   RAW_BITCOIN_ADDRESS_TYPES,
+  RAW_QUANTUS_SCHEMES,
   readArray,
   readBoolean,
   readLiteral,
@@ -51,9 +60,11 @@ import {
   type RawDerivedBitcoinAccount,
   type RawDerivedEd25519Account,
   type RawDerivedPearlAccount,
+  type RawDerivedQuantusAccount,
   type RawDerivedPeaAccount,
   type RawPeaExecutionAccount,
   type RawPrivateKeyChainFamily,
+  type RawQuantusScheme,
   type RawWalletEngine
 } from './raw-wallet-engine'
 import { bindMultichainVaultPassword } from './password-binding'
@@ -109,6 +120,7 @@ interface PendingSigning {
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
     | RawDerivedEd25519Account
+    | RawDerivedQuantusAccount
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
   readonly expiresAt: number
@@ -299,6 +311,25 @@ function parseAccountDerivation(value: unknown):
       readonly accountIndex: number
     }
   | {
+      readonly family: 'quantus'
+      readonly batch: false
+      readonly chainId: string
+      readonly scheme: RawQuantusScheme
+      readonly accountIndex: number
+      readonly change: boolean
+      readonly addressIndex: number
+    }
+  | {
+      readonly family: 'quantus'
+      readonly batch: true
+      readonly chainId: string
+      readonly scheme: RawQuantusScheme
+      readonly accountIndex: number
+      readonly change: boolean
+      readonly startAddressIndex: number
+      readonly count: number
+    }
+  | {
       readonly family: 'near'
       readonly chainId: string
       readonly accountIndex: number
@@ -306,9 +337,48 @@ function parseAccountDerivation(value: unknown):
   const record = readRecord(value, 'account.derive-public payload')
   const family = readLiteral(
     record.family,
-    ['evm', 'pea', 'bitcoin', 'pearl', 'solana', 'near'],
+    ['evm', 'pea', 'bitcoin', 'pearl', 'quantus', 'solana', 'near'],
     'account family'
   )
+  if (family === 'quantus') {
+    const batch = !Object.prototype.hasOwnProperty.call(record, 'addressIndex')
+    assertExactKeys(
+      record,
+      batch
+        ? ['family', 'chainId', 'scheme', 'accountIndex', 'change', 'startAddressIndex', 'count']
+        : ['family', 'chainId', 'scheme', 'accountIndex', 'change', 'addressIndex'],
+      [],
+      'derive payload'
+    )
+    const chainId = readString(record.chainId, 'chainId', 64)
+    if (chainId !== getQuantusChainId('mainnet') && chainId !== getQuantusChainId('testnet')) {
+      throw new KeyringError('UNSUPPORTED_CHAIN')
+    }
+    const common = {
+      family,
+      chainId,
+      scheme: readLiteral(record.scheme, RAW_QUANTUS_SCHEMES, 'Quantus scheme'),
+      accountIndex: readSafeInteger(record.accountIndex, 'accountIndex', MAX_BIP32_INDEX),
+      change: readBoolean(record.change, 'change')
+    } as const
+    if (!batch) {
+      return Object.freeze({
+        ...common,
+        batch: false as const,
+        addressIndex: readSafeInteger(record.addressIndex, 'addressIndex', MAX_BIP32_INDEX)
+      })
+    }
+    const startAddressIndex = readSafeInteger(
+      record.startAddressIndex,
+      'startAddressIndex',
+      MAX_BIP32_INDEX
+    )
+    const count = readSafeInteger(record.count, 'count', 1_000)
+    if (count === 0 || startAddressIndex > MAX_BIP32_INDEX - (count - 1)) {
+      throw new Error('Invalid Quantus derivation batch')
+    }
+    return Object.freeze({ ...common, batch: true as const, startAddressIndex, count })
+  }
   if (family === 'evm') {
     assertExactKeys(record, ['family', 'chainId', 'addressIndex'], [], 'derive payload')
     const chainId = readString(record.chainId, 'chainId', 64)
@@ -444,6 +514,7 @@ function publicAccount(
     | RawDerivedAccount
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
+    | RawDerivedQuantusAccount
     | RawDerivedEd25519Account,
   purpose: 'identity' | 'receive' | 'change'
 ) {
@@ -1098,6 +1169,76 @@ export class MultichainWorkerRuntime {
       )
       return publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
     }
+    if (derivation.family === 'quantus') {
+      const wasmChainId = toQuantusWasmChainId(derivation.chainId)
+      const expectedNetwork = expectedQuantusWasmNetwork(derivation.chainId)
+      if (derivation.batch) {
+        const accounts = callRaw(
+          command,
+          () =>
+            this.engine.deriveQuantusAccounts(
+              session.rawSessionId,
+              wasmChainId,
+              derivation.scheme,
+              derivation.accountIndex,
+              derivation.change,
+              derivation.startAddressIndex,
+              derivation.count
+            ),
+          value =>
+            readArray(
+              value,
+              'DerivedQuantusAccounts',
+              (candidate, offset) => {
+                const account = parseRawQuantusAccount(candidate)
+                assertRawQuantusAccountMatches(
+                  account,
+                  derivation.scheme,
+                  derivation.accountIndex,
+                  derivation.change,
+                  derivation.startAddressIndex + offset,
+                  expectedNetwork,
+                  session.kind === 'private_key'
+                )
+                return account
+              },
+              1_000
+            )
+        )
+        if (accounts.length !== derivation.count) throw new KeyringError('INVALID_RESPONSE')
+        return Object.freeze(
+          accounts.map(account =>
+            publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
+          )
+        )
+      }
+      const account = callRaw(
+        command,
+        () =>
+          this.engine.deriveQuantusAccount(
+            session.rawSessionId,
+            wasmChainId,
+            derivation.scheme,
+            derivation.accountIndex,
+            derivation.change,
+            derivation.addressIndex
+          ),
+        value => {
+          const account = parseRawQuantusAccount(value)
+          assertRawQuantusAccountMatches(
+            account,
+            derivation.scheme,
+            derivation.accountIndex,
+            derivation.change,
+            derivation.addressIndex,
+            expectedNetwork,
+            session.kind === 'private_key'
+          )
+          return account
+        }
+      )
+      return publicAccount(derivation.chainId, account, derivation.change ? 'change' : 'receive')
+    }
     if (derivation.batch) {
       const accounts = callRaw(
         command,
@@ -1315,6 +1456,15 @@ export class MultichainWorkerRuntime {
         raw = this.engine.prepareNearTransaction(session.rawSessionId, payload.transaction)
       } else if (payload.kind === 'near-nep413-message') {
         raw = this.engine.prepareNearMessage(session.rawSessionId, payload.request)
+      } else if (payload.kind === 'quantus-transfer') {
+        // The engine pins only the mainnet genesis hash and refuses to sign through
+        // any other reference until the host binds it to a trusted genesis hash.
+        // The binding is immutable per reference, so an endpoint that later reports
+        // a different chain fails closed instead of signing on the wrong network.
+        if (requiresQuantusGenesisBinding(payload.transfer.chainId)) {
+          this.engine.registerQuantusNetwork(payload.transfer.chainId, payload.transfer.genesisHash)
+        }
+        raw = this.engine.prepareQuantusTransfer(session.rawSessionId, payload.transfer)
       } else {
         raw = this.engine.prepareBitcoinMessage(session.rawSessionId, {
           chainId: payload.chainId,
@@ -1419,6 +1569,11 @@ export class MultichainWorkerRuntime {
           break
         case 'near-nep413-message':
           raw = this.engine.confirmNearMessage(pending.rawSessionId, pending.rawRequestId)
+          break
+        case 'quantus-transfer':
+          // Both Quantus prepare entry points store a `QuantusCall` request and
+          // only `confirmQuantusCall` exists upstream.
+          raw = this.engine.confirmQuantusCall(pending.rawSessionId, pending.rawRequestId)
           break
       }
     } catch (error) {

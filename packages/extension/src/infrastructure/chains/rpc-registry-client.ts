@@ -20,6 +20,7 @@ export interface RpcRegistryChain {
     | 'pearl-blockbook'
     | 'solana-json-rpc'
     | 'near-json-rpc'
+    | 'quantus-json-rpc'
   endpoints: RpcEndpointOption[]
 }
 
@@ -469,7 +470,8 @@ function isSupportedProbe(value: unknown): value is RpcRegistryChain['probe'] {
     value === 'bitcoin-esplora' ||
     value === 'pearl-blockbook' ||
     value === 'solana-json-rpc' ||
-    value === 'near-json-rpc'
+    value === 'near-json-rpc' ||
+    value === 'quantus-json-rpc'
   )
 }
 

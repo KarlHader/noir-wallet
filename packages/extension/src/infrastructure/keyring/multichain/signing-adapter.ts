@@ -41,6 +41,7 @@ import {
   type RawDerivedAccount,
   type RawDerivedBitcoinAccount,
   type RawDerivedEd25519Account,
+  type RawDerivedQuantusAccount,
   type RawDerivedPearlAccount,
   type RawDerivedPeaAccount,
   type RawPeaExecutionAccount,
@@ -58,6 +59,12 @@ import {
   parsePearlSigningPreparePayload,
   type PearlSigningPreparePayload
 } from './signing-adapter-pearl'
+import {
+  adaptQuantusPreparedSigning,
+  adaptQuantusSignedResult,
+  parseQuantusSigningPreparePayload,
+  type QuantusSigningPreparePayload
+} from './signing-adapter-quantus'
 import {
   adaptSolanaPreparedSigning,
   adaptSolanaSignedResult,
@@ -114,6 +121,7 @@ export type ParsedSigningPreparePayload =
   | SolanaSigningPreparePayload
   | NearSigningPreparePayload
   | PearlSigningPreparePayload
+  | QuantusSigningPreparePayload
   | {
       readonly kind: 'pea-evm-transaction'
       readonly chainId: ChainId
@@ -177,6 +185,7 @@ export interface AdaptedPreparedSigning {
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
     | RawDerivedEd25519Account
+    | RawDerivedQuantusAccount
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
   readonly prepared: PreparedSigningCommand
@@ -309,6 +318,9 @@ export function parseSigningPreparePayload(value: unknown): ParsedSigningPrepare
   }
   if (record.kind === 'pearl-psbt' || record.kind === 'pearl-bip322-message') {
     return parsePearlSigningPreparePayload(record)
+  }
+  if (record.kind === 'quantus-transfer') {
+    return parseQuantusSigningPreparePayload(record)
   }
   const kind = readLiteral(
     record.kind,
@@ -1155,6 +1167,8 @@ export async function adaptPreparedSigning(
     case 'near-transaction':
     case 'near-nep413-message':
       return adaptNearPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
+    case 'quantus-transfer':
+      return adaptQuantusPreparedSigning(raw, payload, signingCommandId, expiresAt, imported)
   }
 }
 
@@ -1166,6 +1180,7 @@ export function adaptSignedResult(
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
     | RawDerivedEd25519Account
+    | RawDerivedQuantusAccount
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
 ): SigningResult {
@@ -1225,5 +1240,10 @@ export function adaptSignedResult(
     case 'near-nep413-message':
       if (account.curve !== 'ed25519') throw new Error('Ed25519 signing account is missing')
       return adaptNearSignedResult(kind, raw, account)
+    case 'quantus-transfer':
+      if (!('addressScheme' in account) || account.addressScheme !== 'quantus') {
+        throw new Error('Quantus signing account is missing')
+      }
+      return adaptQuantusSignedResult(raw, account)
   }
 }

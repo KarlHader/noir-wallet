@@ -12,6 +12,7 @@ import {
   type NearTransactionSummary,
   type PearlBip322MessageSummary,
   type PearlPsbtSummary,
+  type QuantusTransferSummary,
   type SolanaMessageSummary,
   type SolanaTransactionSummary
 } from '@/core/keyring/domain'
@@ -233,6 +234,25 @@ export function parsePearlSigningSummary(
     if (operation === 'transaction' && summary.schema === 'pearl.psbt.v1') return summary
     if (operation === 'message' && summary.schema === 'pearl.bip322-message.v1') return summary
     return null
+  } catch {
+    return null
+  }
+}
+
+export function parseQuantusSigningSummary(value: unknown): QuantusTransferSummary | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const chainId = Reflect.get(value, 'chainId')
+  if (typeof chainId !== 'string') return null
+
+  try {
+    const parsedChainId = parseChainId(chainId)
+    if (parsedChainId.namespace !== 'quantus') return null
+    const summary = parseSigningSummary(value, {
+      family: 'quantus',
+      chainId: parsedChainId.id,
+      operation: 'transaction'
+    })
+    return summary.schema === 'quantus.transfer.v1' ? summary : null
   } catch {
     return null
   }

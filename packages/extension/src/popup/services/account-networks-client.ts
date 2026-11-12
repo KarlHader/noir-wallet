@@ -1,6 +1,7 @@
 import { parseAccountId, type AccountId } from '@/core/accounts/domain'
 import { parseSupportedBitcoinAddress } from '@/core/chains/bitcoin'
 import { parseSupportedPearlAddress } from '@/core/chains/pearl'
+import { parseQuantusAddress } from '@/core/chains/quantus'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
@@ -161,6 +162,11 @@ function parseAddress(value: unknown, chain: ChainDefinition): AccountNetworkAdd
       throw new Error('Invalid Pearl Account network Address scheme')
     }
     parseSupportedPearlAddress(address.value, chain.id)
+  } else if (chain.family === 'quantus') {
+    if (address.scheme !== 'quantus_ss58') {
+      throw new Error('Invalid Quantus Account network Address scheme')
+    }
+    parseQuantusAddress(address.value)
   } else {
     throw new Error('Unsupported Account network family')
   }

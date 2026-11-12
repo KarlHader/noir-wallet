@@ -10,7 +10,7 @@ import {
   RPC_DEFAULT_ENDPOINTS,
   type RpcEndpointOption
 } from '@/config/rpc-endpoints'
-import { getBitcoinChainId, getPearlChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId, getQuantusChainId } from '@/core/chains/registry'
 import { getManagedRpcEndpointOptions } from './rpc-registry-client'
 
 interface BitcoinEsploraEndpointConfig {
@@ -79,4 +79,13 @@ export function resolveSolanaRpcEndpointOptions(
 export function resolveNearRpcEndpointOptions(network: NearNetwork): readonly RpcEndpointOption[] {
   const managed = getManagedRpcEndpointOptions(`near:${network}`, network, 'near-json-rpc')
   return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.near[network])
+}
+
+export function resolveQuantusRpcEndpointOptions(network: Network): readonly RpcEndpointOption[] {
+  const managed = getManagedRpcEndpointOptions(
+    getQuantusChainId(network),
+    network,
+    'quantus-json-rpc'
+  )
+  return managedOrDefault(managed, RPC_DEFAULT_ENDPOINTS.quantus[network])
 }

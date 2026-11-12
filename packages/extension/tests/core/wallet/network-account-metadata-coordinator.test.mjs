@@ -2,6 +2,11 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { NetworkAccountMetadataCoordinator } from '../../../src/infrastructure/keyring/network-account-metadata-coordinator.ts'
 import { parseStorageV2Snapshot } from '../../../src/infrastructure/persistence/schema/storage-v2-validation.ts'
+import { decodeQuantusAccountId } from '../../../src/core/chains/quantus/identifiers.ts'
+import { bytesToHex } from '../../../src/lib/bytes.ts'
+
+const quantusAddress = 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2'
+const quantusAccountId = `0x${bytesToHex(decodeQuantusAccountId(quantusAddress))}`
 
 const source = parseStorageV2Snapshot({
   manifest: {
@@ -98,6 +103,14 @@ const input = {
     addressScheme: 'pearl_p2tr',
     derivationScheme: 'bip86'
   },
+  quantus: {
+    chainId: 'quantus:planck',
+    address: quantusAddress,
+    publicKey: `0x${'44'.repeat(64)}`,
+    accountId: quantusAccountId,
+    scheme: 'ml-dsa-87',
+    derivationPath: "m/44'/189189'/0'/0'/0'"
+  },
   solana: {
     chainId: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
     address: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk',
@@ -118,7 +131,7 @@ const input = {
 }
 
 test.describe('Network Account metadata coordinator', () => {
-  test('adds target Zcash, Bitcoin, Pearl, Solana and NEAR ChainAccounts atomically and idempotently', async () => {
+  test('adds target Zcash, Bitcoin, Pearl, Quantus, Solana and NEAR ChainAccounts atomically and idempotently', async () => {
     const repository = repositories()
     const coordinator = new NetworkAccountMetadataCoordinator({
       storageRepository: repository.storage,
@@ -129,7 +142,7 @@ test.describe('Network Account metadata coordinator', () => {
     })
     await expect(coordinator.synchronize([input])).resolves.toMatchObject({
       status: 'synchronized',
-      addedChainAccounts: 5
+      addedChainAccounts: 6
     })
     const active = repository.readActive()
     expect(active.chainAccounts.map(account => account.scope.chainId).sort()).toEqual([
@@ -137,13 +150,15 @@ test.describe('Network Account metadata coordinator', () => {
       'bip122:05a60a92d99d85997cce3b87616c089f',
       'bip122:b0c86d0cd8825f4d72260d2de46f4704',
       'near:testnet',
+      'quantus:planck',
       'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
     ])
-    expect(active.addresses).toHaveLength(8)
+    expect(active.addresses).toHaveLength(9)
     expect(
       active.addresses.filter(
         address =>
           address.scheme === 'pearl_p2tr' ||
+          address.scheme === 'quantus_ss58' ||
           address.scheme === 'solana' ||
           address.scheme === 'near'
       )
@@ -151,6 +166,11 @@ test.describe('Network Account metadata coordinator', () => {
       expect.objectContaining({
         scheme: 'pearl_p2tr',
         value: input.pearl.address,
+        preferredForReceive: true
+      }),
+      expect.objectContaining({
+        scheme: 'quantus_ss58',
+        value: input.quantus.address,
         preferredForReceive: true
       }),
       expect.objectContaining({
@@ -231,5 +251,15 @@ test.describe('Network Account metadata coordinator', () => {
         { ...input, pearl: { ...input.pearl, derivationPath: "m/86'/1'/1'/0/0" } }
       ])
     ).rejects.toThrow('Pearl derivation index mismatch')
+    await expect(
+      coordinator.synchronize([
+        { ...input, quantus: { ...input.quantus, derivationPath: "m/44'/189189'/1'/0'/0'" } }
+      ])
+    ).rejects.toThrow('Quantus derivation index mismatch')
+    await expect(
+      coordinator.synchronize([
+        { ...input, quantus: { ...input.quantus, accountId: `0x${'00'.repeat(32)}` } }
+      ])
+    ).rejects.toThrow('Quantus identity mismatch')
   })
 })

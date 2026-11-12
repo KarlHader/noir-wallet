@@ -5,6 +5,10 @@ import {
 } from '@/core/dapp/bitcoin-provider'
 import { PEARL_DAPP_RUNTIME_METHODS, type PearlDAppRuntimeMethod } from '@/core/dapp/pearl-provider'
 import {
+  QUANTUS_DAPP_RUNTIME_METHODS,
+  type QuantusDAppRuntimeMethod
+} from '@/core/dapp/quantus-provider'
+import {
   NEAR_DAPP_RUNTIME_METHODS,
   SOLANA_DAPP_RUNTIME_METHODS,
   type NearDAppRuntimeMethod,
@@ -57,6 +61,7 @@ export const DAPP_RUNTIME_METHODS = Object.freeze([
   ...EVM_DAPP_RUNTIME_METHODS,
   ...BITCOIN_DAPP_RUNTIME_METHODS,
   ...PEARL_DAPP_RUNTIME_METHODS,
+  ...QUANTUS_DAPP_RUNTIME_METHODS,
   ...SOLANA_DAPP_RUNTIME_METHODS,
   ...NEAR_DAPP_RUNTIME_METHODS,
   ...CAIP25_RUNTIME_METHODS
@@ -68,6 +73,7 @@ export type DAppRuntimeMethod =
   | EvmDAppRuntimeMethod
   | BitcoinDAppRuntimeMethod
   | PearlDAppRuntimeMethod
+  | QuantusDAppRuntimeMethod
   | NativeTransferDAppRuntimeMethod
   | SolanaDAppRuntimeMethod
   | NearDAppRuntimeMethod
@@ -76,7 +82,15 @@ export type DAppRuntimeMethod =
 export interface DAppRuntimeRequestMessage {
   readonly type: 'DAPP_REQUEST'
   readonly requestId: string
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
+  readonly chainId:
+    | 'zcash'
+    | 'evm'
+    | 'bitcoin'
+    | 'pearl'
+    | 'quantus'
+    | 'solana'
+    | 'near'
+    | 'multichain'
   readonly siteMetadata?: {
     readonly faviconUrl: string
   }
@@ -101,7 +115,15 @@ export interface KeyringWorkerRpcRuntimeMessage {
 
 export interface NoirRuntimeEventMessage {
   readonly type: 'NOIR_EVENT'
-  readonly chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
+  readonly chainId:
+    | 'zcash'
+    | 'evm'
+    | 'bitcoin'
+    | 'pearl'
+    | 'quantus'
+    | 'solana'
+    | 'near'
+    | 'multichain'
   readonly eventName:
     | 'accountsChanged'
     | 'accountCapabilitiesChanged'
@@ -707,6 +729,14 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   REJECT_EVM_TRANSFER: { required: { transactionId: isShortString } },
   RESUME_EVM_TRANSFER: { required: { transactionId: isShortString } },
+  PREPARE_QUANTUS_TRANSFER: { required: { intent: isRecord } },
+  GET_PENDING_QUANTUS_TRANSFER: { required: { transactionId: isShortString } },
+  APPROVE_QUANTUS_TRANSFER: {
+    required: { transactionId: isShortString, payloadFingerprint: isEvmPayloadFingerprint }
+  },
+  REJECT_QUANTUS_TRANSFER: { required: { transactionId: isShortString } },
+  RESUME_QUANTUS_TRANSFER: { required: { transactionId: isShortString } },
+  GET_QUANTUS_TRANSFER_STATUS: { required: { transactionId: isShortString } },
   PREPARE_SOLANA_TRANSFER: {
     required: { intent: isRecord },
     optional: { nearIntentsBinding: isRecord }
@@ -1001,6 +1031,12 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     SUBMIT_KEYSTONE_EVM_SIGNATURE: ['extension-page'],
     REJECT_EVM_TRANSFER: ['extension-page'],
     RESUME_EVM_TRANSFER: ['extension-page'],
+    PREPARE_QUANTUS_TRANSFER: ['extension-page'],
+    GET_PENDING_QUANTUS_TRANSFER: ['extension-page'],
+    APPROVE_QUANTUS_TRANSFER: ['extension-page'],
+    REJECT_QUANTUS_TRANSFER: ['extension-page'],
+    RESUME_QUANTUS_TRANSFER: ['extension-page'],
+    GET_QUANTUS_TRANSFER_STATUS: ['extension-page'],
     PREPARE_SOLANA_TRANSFER: ['extension-page'],
     GET_PENDING_SOLANA_TRANSFER: ['extension-page'],
     APPROVE_SOLANA_TRANSFER: ['extension-page'],
@@ -1072,6 +1108,7 @@ const zcashDappMethodSet = new Set<string>(ZCASH_DAPP_RUNTIME_METHODS)
 const evmDappMethodSet = new Set<string>(EVM_DAPP_RUNTIME_METHODS)
 const bitcoinDappMethodSet = new Set<string>(BITCOIN_DAPP_RUNTIME_METHODS)
 const pearlDappMethodSet = new Set<string>(PEARL_DAPP_RUNTIME_METHODS)
+const quantusDappMethodSet = new Set<string>(QUANTUS_DAPP_RUNTIME_METHODS)
 const solanaDappMethodSet = new Set<string>(SOLANA_DAPP_RUNTIME_METHODS)
 const nearDappMethodSet = new Set<string>(NEAR_DAPP_RUNTIME_METHODS)
 const caip25DappMethodSet = new Set<string>(CAIP25_RUNTIME_METHODS)
@@ -1348,6 +1385,7 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
     (value.chainId === 'evm' && !evmDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'bitcoin' && !bitcoinDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'pearl' && !pearlDappMethodSet.has(value.request.method)) ||
+    (value.chainId === 'quantus' && !quantusDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'solana' && !solanaDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'near' && !nearDappMethodSet.has(value.request.method)) ||
     (value.chainId === 'multichain' && !caip25DappMethodSet.has(value.request.method)) ||
@@ -1355,6 +1393,7 @@ export function parseDAppRuntimeRequestMessage(value: unknown): DAppRuntimeReque
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
       value.chainId !== 'pearl' &&
+      value.chainId !== 'quantus' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
       value.chainId !== 'multichain')
@@ -1415,6 +1454,7 @@ export function parseNoirRuntimeEventMessage(value: unknown): NoirRuntimeEventMe
       value.chainId !== 'evm' &&
       value.chainId !== 'bitcoin' &&
       value.chainId !== 'pearl' &&
+      value.chainId !== 'quantus' &&
       value.chainId !== 'solana' &&
       value.chainId !== 'near' &&
       value.chainId !== 'multichain') ||

@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "engine": "multichain",
   "packageVersion": "0.1.0",
-  "abiVersion": "wallet-engine-cb993e0-v11",
-  "sourceCommit": "cb993e08778fe6b0aafdf015a7a03a8741cdfe66",
+  "abiVersion": "wallet-engine-8103f12-v12",
+  "sourceCommit": "8103f125404272ae1181bbe7b887f8b05732f051",
   "artifacts": [
     {
       "path": "package.json",
@@ -14,26 +14,26 @@
     {
       "path": "wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 20044,
-      "sha256": "38fc7e7b015730135379508c8acc7613278a4f6f781569e48f3c4985d0e0fb92"
+      "bytes": 22143,
+      "sha256": "64aca4a22d8fbe06879910d34556e2aa57a5742cc03f34e7fd74fcafa59f6d09"
     },
     {
       "path": "wallet_wasm.js",
       "role": "loader",
-      "bytes": 101489,
-      "sha256": "67fc347748cdefc630a330187611226af9ece7dfa2e1c264e1e41f6deabbf9bb"
+      "bytes": 112180,
+      "sha256": "294a6bcafbaa2cdc1fcb9a91aab2ec1db20903cad166e954aed81bf83b257204"
     },
     {
       "path": "wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 4401385,
-      "sha256": "5550ac21530fe94c8802c30fd651bed349466784abf8e3c9697f022104ba2deb"
+      "bytes": 4524039,
+      "sha256": "729d6fb1e05b989b19048ed13704d973335d398107647959e974d219f7cd35a0"
     },
     {
       "path": "wallet_wasm_bg.wasm.d.ts",
       "role": "binary-types",
-      "bytes": 11326,
-      "sha256": "ed4984929d4375faaceda0fcd44e9c65420cd70889a98962e60de868f2c89b33"
+      "bytes": 12653,
+      "sha256": "a0e226374d7b03c814801b7db96cd4e0d2b5991b35fed1e3c3233dcae446190d"
     }
   ],
   "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",
@@ -56,6 +56,8 @@
     "account.pearl.batch-derive",
     "account.pearl.derive",
     "account.pearl.imported",
+    "account.quantus.batch-derive",
+    "account.quantus.derive",
     "account.solana.derive",
     "account.solana.imported",
     "bitcoin.bip322.full.sign",
@@ -86,6 +88,7 @@
     "pearl.bip322.sign",
     "pearl.bip322.verify",
     "pearl.psbt-v0.sign",
+    "quantus.extrinsic.sign",
     "solana.message.sign",
     "solana.message.verify",
     "solana.transaction.sign",

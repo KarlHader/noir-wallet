@@ -9,6 +9,9 @@ export type RawPrivateKeyChainFamily = 'eip155' | 'bip122' | 'solana' | 'near' |
 export type RawBitcoinNetwork = 'mainnet' | 'testnet'
 export type RawPearlNetwork = 'mainnet' | 'testnet2' | 'regtest'
 export type RawPearlKeyNetwork = 'mainnet' | 'testnet2'
+/** Aligns with Quantus WASM `scheme` on deriveQuantusAccount(s). */
+export const RAW_QUANTUS_SCHEMES = Object.freeze(['ml-dsa-87', 'ml-dsa-65'] as const)
+export type RawQuantusScheme = (typeof RAW_QUANTUS_SCHEMES)[number]
 export const MAX_BIP32_INDEX = 0x7fffffff
 export const MAX_UINT64 = (1n << 64n) - 1n
 export const MAX_UINT256 = (1n << 256n) - 1n
@@ -138,6 +141,49 @@ export interface RawWalletEngine {
   prepareNearMessage(sessionId: number, request: unknown): unknown
   confirmNearMessage(sessionId: number, requestId: number): unknown
   verifyNearMessage(request: unknown): unknown
+  /**
+   * Quantus derivation is advertised as `account.quantus.derive` and
+   * `account.quantus.batch-derive`, and Worker routing calls these two methods.
+   * Transfer prepare/confirm is routed through the Worker and declared as
+   * `quantus.extrinsic.sign`; the Background transfer lifecycle consumes the
+   * signed extrinsic.
+   *
+   * `registerQuantusNetwork` binds a configured genesis hash to a non-mainnet
+   * reference; the engine refuses to sign through a reference that has no
+   * trusted genesis hash. Registration is immutable per reference.
+   *
+   * `deriveQuantusWormhole` remains unmapped on purpose (wormhole is deferred).
+   * Transfer confirmation: only `confirmQuantusCall` is exported; both prepare
+   * entry points store a `QuantusCall` request, so `confirmQuantusCall` is the
+   * confirm path. There is no `confirmQuantusTransfer`; do not invent one.
+   */
+  deriveQuantusAccount(
+    sessionId: number,
+    chainId: string,
+    scheme: RawQuantusScheme,
+    accountIndex: number,
+    change: boolean,
+    addressIndex: number
+  ): unknown
+  deriveQuantusAccounts(
+    sessionId: number,
+    chainId: string,
+    scheme: RawQuantusScheme,
+    accountIndex: number,
+    change: boolean,
+    startAddressIndex: number,
+    count: number
+  ): unknown
+  deriveQuantusWormhole(
+    sessionId: number,
+    chainId: string,
+    accountIndex: number,
+    addressIndex: number
+  ): unknown
+  registerQuantusNetwork(chainId: string, genesisHash: string): void
+  prepareQuantusCall(sessionId: number, request: unknown): unknown
+  prepareQuantusTransfer(sessionId: number, request: unknown): unknown
+  confirmQuantusCall(sessionId: number, requestId: number): unknown
   verifyBitcoinMessage(
     chainId: string,
     address: string,
@@ -320,7 +366,9 @@ export function parseRawEncryptedVault(value: unknown): RawEncryptedVault {
   const memoryKib = readSafeInteger(params.memoryKib, 'EncryptedVault.kdfParams.memoryKib')
   const iterations = readSafeInteger(params.iterations, 'EncryptedVault.kdfParams.iterations')
   const parallelism = readSafeInteger(params.parallelism, 'EncryptedVault.kdfParams.parallelism')
-  if (memoryKib !== 19 * 1024 || iterations !== 2 || parallelism !== 1) {
+  const legacyKdf = memoryKib === 19 * 1024 && iterations === 2
+  const currentKdf = memoryKib === 64 * 1024 && iterations === 3
+  if (parallelism !== 1 || (!legacyKdf && !(version === 2 && currentKdf))) {
     throw new Error('EncryptedVault KDF parameters do not match the pinned ABI')
   }
   return Object.freeze({
@@ -359,10 +407,15 @@ export interface RawSessionInfo {
   readonly chainFamily?: RawPrivateKeyChainFamily
   readonly bitcoinNetwork?: RawBitcoinNetwork
   readonly pearlNetwork?: RawPearlKeyNetwork
+  readonly quantusScheme?: RawQuantusScheme
 }
 
 function parseRawPearlKeyNetwork(value: unknown, label: string): RawPearlKeyNetwork {
   return readLiteral(value, ['mainnet', 'testnet2'], label)
+}
+
+export function parseRawQuantusScheme(value: unknown, label: string): RawQuantusScheme {
+  return readLiteral(value, RAW_QUANTUS_SCHEMES, label)
 }
 
 export function parseRawSessionInfo(value: unknown): RawSessionInfo {
@@ -383,6 +436,10 @@ export function parseRawSessionInfo(value: unknown): RawSessionInfo {
   const sessionId = readSafeInteger(record.sessionId, 'Session.sessionId')
   if (sessionId === 0) throw new Error('Session.sessionId must be positive')
   const kind = readLiteral(record.kind, ['mnemonic', 'private_key'], 'Session.kind')
+  const quantusScheme =
+    record.quantusScheme === undefined
+      ? undefined
+      : parseRawQuantusScheme(record.quantusScheme, 'Session.quantusScheme')
   if (kind === 'mnemonic') {
     if (
       record.chainFamily !== undefined ||
@@ -391,7 +448,11 @@ export function parseRawSessionInfo(value: unknown): RawSessionInfo {
     ) {
       throw new Error('Mnemonic Session must not expose a private-key scope')
     }
-    return Object.freeze({ sessionId, kind })
+    return Object.freeze({
+      sessionId,
+      kind,
+      ...(quantusScheme === undefined ? {} : { quantusScheme })
+    })
   }
   const chainFamily = readLiteral(
     record.chainFamily,
@@ -419,7 +480,8 @@ export function parseRawSessionInfo(value: unknown): RawSessionInfo {
     kind,
     chainFamily,
     ...(bitcoinNetwork === undefined ? {} : { bitcoinNetwork }),
-    ...(pearlNetwork === undefined ? {} : { pearlNetwork })
+    ...(pearlNetwork === undefined ? {} : { pearlNetwork }),
+    ...(quantusScheme === undefined ? {} : { quantusScheme })
   })
 }
 
@@ -916,6 +978,124 @@ export function assertRawPearlAccountMatches(
     (imported && (accountIndex !== 0 || change || addressIndex !== 0))
   ) {
     throw new Error('Derived Pearl account does not match its request')
+  }
+}
+
+/** FIPS 204 public-key sizes for the two supported Quantus schemes. */
+const QUANTUS_PUBLIC_KEY_BYTES: Readonly<Record<RawQuantusScheme, number>> = Object.freeze({
+  'ml-dsa-87': 2592,
+  'ml-dsa-65': 1952
+})
+const QUANTUS_CURVES: Readonly<Record<RawQuantusScheme, 'ml_dsa87' | 'ml_dsa65'>> = Object.freeze({
+  'ml-dsa-87': 'ml_dsa87',
+  'ml-dsa-65': 'ml_dsa65'
+})
+export const RAW_QUANTUS_NETWORKS = Object.freeze(['mainnet', 'dev', 'heisenberg'] as const)
+export type RawQuantusNetwork = (typeof RAW_QUANTUS_NETWORKS)[number]
+
+export interface RawDerivedQuantusAccount {
+  readonly accountId: string
+  readonly address: string
+  readonly derivationPath: string
+  readonly publicKey: string
+  readonly curve: 'ml_dsa87' | 'ml_dsa65'
+  readonly addressScheme: 'quantus'
+  readonly derivationScheme: 'bip44' | 'imported'
+  readonly scheme: RawQuantusScheme
+  readonly network: RawQuantusNetwork
+}
+
+export function parseRawQuantusAccount(value: unknown): RawDerivedQuantusAccount {
+  const record = readRecord(value, 'DerivedQuantusAccount')
+  assertExactKeys(
+    record,
+    [
+      'accountId',
+      'address',
+      'derivationPath',
+      'publicKey',
+      'curve',
+      'addressScheme',
+      'derivationScheme',
+      'scheme',
+      'network'
+    ],
+    [],
+    'DerivedQuantusAccount'
+  )
+  const scheme = parseRawQuantusScheme(record.scheme, 'DerivedQuantusAccount.scheme')
+  const curve = readLiteral(record.curve, ['ml_dsa87', 'ml_dsa65'], 'DerivedQuantusAccount.curve')
+  if (curve !== QUANTUS_CURVES[scheme]) {
+    throw new Error('Derived Quantus curve does not match its scheme')
+  }
+  const addressScheme = readLiteral(
+    record.addressScheme,
+    ['quantus'],
+    'DerivedQuantusAccount.addressScheme'
+  )
+  const derivationScheme = readLiteral(
+    record.derivationScheme,
+    ['bip44', 'imported'],
+    'DerivedQuantusAccount.derivationScheme'
+  )
+  if (derivationScheme === 'bip44') {
+    return Object.freeze({
+      accountId: readHex(record.accountId, 'DerivedQuantusAccount.accountId', { bytes: 32 }),
+      address: readString(record.address, 'DerivedQuantusAccount.address', 128),
+      derivationPath: readString(
+        record.derivationPath,
+        'DerivedQuantusAccount.derivationPath',
+        128
+      ),
+      publicKey: readHex(record.publicKey, 'DerivedQuantusAccount.publicKey', {
+        bytes: QUANTUS_PUBLIC_KEY_BYTES[scheme]
+      }),
+      curve,
+      addressScheme,
+      derivationScheme,
+      scheme,
+      network: readLiteral(record.network, RAW_QUANTUS_NETWORKS, 'DerivedQuantusAccount.network')
+    })
+  }
+  return Object.freeze({
+    accountId: readHex(record.accountId, 'DerivedQuantusAccount.accountId', { bytes: 32 }),
+    address: readString(record.address, 'DerivedQuantusAccount.address', 128),
+    derivationPath: readString(record.derivationPath, 'DerivedQuantusAccount.derivationPath', 128),
+    publicKey: readHex(record.publicKey, 'DerivedQuantusAccount.publicKey', {
+      bytes: QUANTUS_PUBLIC_KEY_BYTES[scheme]
+    }),
+    curve,
+    addressScheme,
+    derivationScheme,
+    scheme,
+    network: readLiteral(record.network, RAW_QUANTUS_NETWORKS, 'DerivedQuantusAccount.network')
+  })
+}
+
+/**
+ * Asserts that a derived Quantus account answers the exact request that produced
+ * it, and that the WASM network label matches the host chain ID.
+ */
+export function assertRawQuantusAccountMatches(
+  account: RawDerivedQuantusAccount,
+  scheme: RawQuantusScheme,
+  accountIndex: number,
+  change: boolean,
+  addressIndex: number,
+  expectedNetwork: RawQuantusNetwork,
+  imported = false
+): void {
+  const expectedPath = imported
+    ? 'm'
+    : `m/44'/189189'/${accountIndex}'/${change ? 1 : 0}'/${addressIndex}'`
+  if (
+    account.scheme !== scheme ||
+    account.network !== expectedNetwork ||
+    account.derivationPath !== expectedPath ||
+    account.derivationScheme !== (imported ? 'imported' : 'bip44') ||
+    (imported && (accountIndex !== 0 || change || addressIndex !== 0))
+  ) {
+    throw new Error('Derived Quantus account does not match its request')
   }
 }
 

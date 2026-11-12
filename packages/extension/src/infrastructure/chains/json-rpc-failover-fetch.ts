@@ -57,6 +57,7 @@ export function createJsonRpcFailoverFetch(
     const method = request?.method
     const mayRetry =
       method !== 'sendTransaction' &&
+      method !== 'author_submitExtrinsic' &&
       method !== 'broadcast_tx_async' &&
       method !== 'broadcast_tx_commit'
     let lastError: unknown

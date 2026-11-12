@@ -3,6 +3,7 @@ import {
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
+  QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG,
   type ChainFeatureFlagValue
@@ -74,6 +75,18 @@ export function resolvePearlFeatureRuntimePolicy(
   })
 }
 
+export interface QuantusFeatureRuntimePolicy {
+  readonly newOperationsEnabled: boolean
+}
+
+export function resolveQuantusFeatureRuntimePolicy(
+  enabledFlags: readonly ChainFeatureFlagValue[]
+): QuantusFeatureRuntimePolicy {
+  return Object.freeze({
+    newOperationsEnabled: enabledFlags.includes(QUANTUS_CHAIN_FEATURE_FLAG)
+  })
+}
+
 export function isNewWalletFamilyEnabled(
   family: string,
   enabledFlags: readonly ChainFeatureFlagValue[]
@@ -90,6 +103,8 @@ export function isNewWalletFamilyEnabled(
       return resolveBitcoinFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'pearl':
       return resolvePearlFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
+    case 'quantus':
+      return resolveQuantusFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'solana':
       return resolveSolanaFeatureRuntimePolicy(enabledFlags).newOperationsEnabled
     case 'near':

@@ -43,6 +43,29 @@ interface EarlyEthereumProviderRegistration {
   readonly attach: (provider: EthereumProvider) => void
 }
 
+interface QuantusProvider {
+  request: (args: ProviderRequestArguments) => Promise<unknown>
+  connect: () => Promise<{ readonly address: string; readonly publicKey: string }>
+  requestAccounts: () => Promise<readonly string[]>
+  getAccounts: () => Promise<readonly string[]>
+  getNetwork: () => Promise<'mainnet' | 'testnet'>
+  getChain: () => Promise<Readonly<Record<string, unknown>>>
+  getPublicKey: () => Promise<string>
+  getBalance: () => Promise<{
+    readonly free: string
+    readonly reserved: string
+    readonly nonce: number
+  }>
+  broadcastExtrinsic: (extrinsicHex: string) => Promise<string>
+  sendQuantus: (recipient: string, amountRaw: string) => Promise<string>
+  signQuantusTransfer: (recipient: string, amountRaw: string) => Promise<string>
+  switchNetwork: (network: 'mainnet' | 'testnet') => Promise<null>
+  switchChain: (chain: { readonly enum: 'QUANTUS_MAINNET' | 'QUANTUS_PLANCK' }) => Promise<null>
+  on: (event: string, handler: ProviderListener) => QuantusProvider
+  removeListener: (event: string, handler: ProviderListener) => QuantusProvider
+  disconnect: () => Promise<void>
+}
+
 interface PearlProvider {
   request: (args: ProviderRequestArguments) => Promise<unknown>
   connect: () => Promise<{ readonly address: string; readonly publicKey: string }>
@@ -185,6 +208,7 @@ interface NoirWalletProvider {
   readonly ethereum?: EthereumProvider
   readonly bitcoin?: BitcoinProvider
   readonly pearl?: PearlProvider
+  readonly quantus?: QuantusProvider
   readonly solana?: SolanaProvider
   readonly near?: NearProvider
 }
@@ -212,6 +236,7 @@ const enabledChainFeatureFlags = import.meta.env.NOIR_ENABLED_CHAIN_FEATURE_FLAG
 const evmProviderEnabled = enabledChainFeatureFlags.includes('chain.evm')
 const bitcoinProviderEnabled = enabledChainFeatureFlags.includes('chain.bitcoin')
 const pearlProviderEnabled = enabledChainFeatureFlags.includes('chain.pearl')
+const quantusProviderEnabled = enabledChainFeatureFlags.includes('chain.quantus')
 const solanaProviderEnabled = enabledChainFeatureFlags.includes('chain.solana')
 const nearProviderEnabled = enabledChainFeatureFlags.includes('chain.near')
 const REQUEST_TIMEOUT_MS = 300_000
@@ -275,7 +300,7 @@ function removeProviderListener(chainId: string, event: string, handler: Provide
 }
 
 async function requestProvider(
-  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain',
+  chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near' | 'multichain',
   args: ProviderRequestArguments
 ) {
   if (
@@ -590,6 +615,47 @@ function createPearlProvider(): PearlProvider {
   return Object.freeze(provider)
 }
 
+function createQuantusProvider(): QuantusProvider {
+  const request = (method: string, params: readonly unknown[] = []) =>
+    requestProvider('quantus', { method, params })
+  const provider: QuantusProvider = {
+    request: args => requestProvider('quantus', args),
+    connect: () =>
+      request('connect') as Promise<{ readonly address: string; readonly publicKey: string }>,
+    requestAccounts: () => request('requestAccounts') as Promise<readonly string[]>,
+    getAccounts: () => request('getAccounts') as Promise<readonly string[]>,
+    getNetwork: () => request('getNetwork') as Promise<'mainnet' | 'testnet'>,
+    getChain: () => request('getChain') as Promise<Readonly<Record<string, unknown>>>,
+    getPublicKey: () => request('getPublicKey') as Promise<string>,
+    getBalance: () =>
+      request('getBalance') as Promise<{
+        readonly free: string
+        readonly reserved: string
+        readonly nonce: number
+      }>,
+    broadcastExtrinsic: extrinsicHex =>
+      request('broadcastExtrinsic', [extrinsicHex]) as Promise<string>,
+    sendQuantus: (recipient, amountRaw) =>
+      request('sendQuantus', [recipient, amountRaw]) as Promise<string>,
+    signQuantusTransfer: (recipient, amountRaw) =>
+      request('signQuantusTransfer', [recipient, amountRaw]) as Promise<string>,
+    switchNetwork: network => request('switchNetwork', [network]) as Promise<null>,
+    switchChain: chain => request('switchChain', [chain]) as Promise<null>,
+    on(event, handler) {
+      addProviderListener('quantus', event, handler)
+      return provider
+    },
+    removeListener(event, handler) {
+      removeProviderListener('quantus', event, handler)
+      return provider
+    },
+    async disconnect() {
+      await request('disconnect')
+    }
+  }
+  return Object.freeze(provider)
+}
+
 function createSolanaPublicKey(address: string): SolanaPublicKey {
   const bytes = decodeBase58(address, 32)
   return Object.freeze({
@@ -874,6 +940,7 @@ const ethereumProvider = underlyingEthereumProvider
   : null
 const bitcoinProvider = bitcoinProviderEnabled ? createBitcoinProvider() : null
 const pearlProvider = pearlProviderEnabled ? createPearlProvider() : null
+const quantusProvider = quantusProviderEnabled ? createQuantusProvider() : null
 const solanaProvider = solanaProviderEnabled ? createSolanaProvider() : null
 const nearProvider = nearProviderEnabled ? createNearProvider() : null
 const multichainProvider = createMultichainProvider()
@@ -886,6 +953,7 @@ const noirWalletProvider: NoirWalletProvider = Object.freeze({
   ...(ethereumProvider ? { ethereum: ethereumProvider } : {}),
   ...(bitcoinProvider ? { bitcoin: bitcoinProvider } : {}),
   ...(pearlProvider ? { pearl: pearlProvider } : {}),
+  ...(quantusProvider ? { quantus: quantusProvider } : {}),
   ...(solanaProvider ? { solana: solanaProvider } : {}),
   ...(nearProvider ? { near: nearProvider } : {})
 })
@@ -899,6 +967,7 @@ window.addEventListener('message', event => {
     event.data.chainId !== 'evm' &&
     event.data.chainId !== 'bitcoin' &&
     event.data.chainId !== 'pearl' &&
+    event.data.chainId !== 'quantus' &&
     event.data.chainId !== 'solana' &&
     event.data.chainId !== 'near' &&
     event.data.chainId !== 'multichain'

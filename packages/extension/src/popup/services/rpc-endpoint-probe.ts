@@ -5,6 +5,7 @@ import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near/near-network-attestation'
 import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
+import { attestQuantusRpcEndpoint } from '@/infrastructure/chains/quantus'
 import { attestSolanaRpcEndpoint } from '@/infrastructure/chains/solana/solana-network-attestation'
 import { attestZcashLightwalletdEndpoint } from '@/infrastructure/chains/zcash/zcash-network-attestation'
 import type { RpcChainOption } from './chain-settings-options'
@@ -88,6 +89,13 @@ export async function probeChainRpcEndpoint(
         break
       case 'near-json-rpc':
         await attestNearRpcEndpoint({
+          chainId: option.chainId,
+          rpcUrl: url,
+          signal: controller.signal
+        })
+        break
+      case 'quantus-json-rpc':
+        await attestQuantusRpcEndpoint({
           chainId: option.chainId,
           rpcUrl: url,
           signal: controller.signal

@@ -85,5 +85,8 @@ test('skips a wrong-chain node before broadcasting but never retries a submitted
   await expect(rpcFetch(endpoints[0].url, request('sendTransaction'))).rejects.toThrow(
     'connection lost'
   )
-  expect(calls).toEqual([endpoints[1].url])
+  await expect(rpcFetch(endpoints[0].url, request('author_submitExtrinsic'))).rejects.toThrow(
+    'connection lost'
+  )
+  expect(calls).toEqual([endpoints[1].url, endpoints[1].url])
 })

@@ -8,6 +8,7 @@ export {
 } from './chains/evm'
 export { detectBitcoinProvider, getBitcoinProvider } from './chains/bitcoin'
 export { detectPearlProvider, getPearlProvider } from './chains/pearl'
+export { detectQuantusProvider, getQuantusProvider } from './chains/quantus'
 export { detectSolanaProvider, getSolanaProvider } from './chains/solana'
 export { detectNearProvider, getNearProvider } from './chains/near'
 export type {
@@ -66,6 +67,18 @@ export type {
   PearlSendOptions,
   PearlSignPsbtOptions
 } from './chains/pearl'
+
+export type {
+  DetectQuantusProviderOptions,
+  QuantusBalance,
+  QuantusChain,
+  QuantusChainInfo,
+  QuantusConnectResult,
+  QuantusNetwork,
+  QuantusProvider,
+  QuantusProviderListener,
+  QuantusRequestArguments
+} from './chains/quantus'
 
 export type {
   DetectSolanaProviderOptions,

@@ -1,5 +1,13 @@
 export type CapabilityStatus = 'available' | 'waiting' | 'unsupported'
-export type ChainFamily = 'zcash' | 'evm' | 'bitcoin' | 'solana' | 'tron' | 'near' | 'pearl'
+export type ChainFamily =
+  | 'zcash'
+  | 'evm'
+  | 'bitcoin'
+  | 'solana'
+  | 'tron'
+  | 'near'
+  | 'pearl'
+  | 'quantus'
 export type ChainNetworkKind = 'mainnet' | 'testnet' | 'devnet' | 'custom'
 export type TransactionModel = 'account' | 'utxo' | 'hybrid-utxo'
 export type TransactionAction =

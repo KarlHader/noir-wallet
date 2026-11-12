@@ -17,6 +17,7 @@ const bitcoinNestedSegwitAddress = '2MtoVPpWDqsCuFigA4q9EbfSzJrw8ugvLfs'
 const bitcoinTaprootAddress = 'tb1pqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpq7vgt27'
 const solanaAddress = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk'
 const nearAddress = '5510e2b44cae6eb807e3e0e45d579dda058c274abcba15e5cb84636f5d1ee412'
+const quantusAddress = 'qzjTEdq3Wd1d98kaeE1RTDPBBYBfY6XpfCtaLq97wmfcAD8M2'
 const chains = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
   'chain.zcash',
   'chain.evm',
@@ -127,6 +128,32 @@ test.describe('Account networks Popup client', () => {
       ]
     })
     expect(Object.isFrozen(catalog.accounts[0].networks)).toBe(true)
+  })
+
+  test('accepts an enabled Quantus account address but rejects an invalid SS58 address', async () => {
+    const enabled = createAddressGatedChainRegistry(createInitialProductChainRegistry('testnet'), [
+      'chain.zcash',
+      'chain.quantus'
+    ])
+    const original = result().result.accounts[0]
+    const account = value => ({
+      ...original,
+      networks: [{
+        chainId: 'quantus:planck',
+        addresses: [address(value, 'quantus_ss58')]
+      }]
+    })
+    const client = value => createAccountNetworksClient(
+      async () => result({ accounts: [account(value)] }), enabled
+    )
+    await expect(client(quantusAddress).getCatalog()).resolves.toMatchObject({
+      accounts: [{ networks: [{ chain: { family: 'quantus' }, addresses: [{ value: quantusAddress }] }] }]
+    })
+    await expect(client('invalid-address').getCatalog()).rejects.toMatchObject({ code: 'invalid-response' })
+    await expect(
+      createAccountNetworksClient(async () => result({ accounts: [account(quantusAddress)] }), chains)
+        .getCatalog()
+    ).rejects.toMatchObject({ code: 'invalid-response' })
   })
 
   test('account catalogs retain wallet creation time and accept legacy entries without it', async () => {

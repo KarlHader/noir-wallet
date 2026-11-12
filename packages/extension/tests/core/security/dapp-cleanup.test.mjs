@@ -363,10 +363,36 @@ test.describe('dApp account reference cleanup', () => {
       accounts: [pearlAccount],
       binding: pearlAccount
     })
+    const quantusAccount = { walletId: 'wallet-quantus', accountId: 'account-quantus' }
+    const withQuantus = replaceDAppChainAuthorization(withPearl, {
+      origin: withPearl.origin,
+      id: 'unused-for-existing',
+      chainId: 'quantus:planck',
+      accounts: [quantusAccount],
+      binding: quantusAccount,
+      now: connectedAt + 6
+    })
+    expect(getConnectionChainAuthorization(withQuantus, 'quantus:planck')?.binding).toEqual(
+      quantusAccount
+    )
+    const withQuantusMainnet = replaceDAppChainAuthorization(withQuantus, {
+      origin: withQuantus.origin,
+      id: 'unused-for-existing',
+      chainId: 'quantus:mainnet',
+      accounts: [quantusAccount],
+      binding: quantusAccount,
+      now: connectedAt + 7
+    })
+    expect(getConnectionChainAuthorization(withQuantusMainnet, 'quantus:mainnet')?.binding).toEqual(
+      quantusAccount
+    )
+    expect(() => getConnectionChainAuthorization(withQuantusMainnet, 'quantus:unknown')).toThrow(
+      /released provider chain/
+    )
     expect(
       getConnectionChainAuthorization(withNear, 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1')?.binding
     ).toEqual(evmAccount)
-    const withSolanaMainnet = replaceDAppChainAuthorization(withPearl, {
+    const withSolanaMainnet = replaceDAppChainAuthorization(withQuantusMainnet, {
       origin: withPearl.origin,
       id: 'unused-for-existing',
       chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',

@@ -1,5 +1,9 @@
 import { Network } from '@/types'
-import { BITCOIN_CHAIN_IDS, PEARL_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
+import {
+  BITCOIN_CHAIN_IDS,
+  PEARL_CHAIN_IDS,
+  QUANTUS_CHAIN_IDS
+} from '@/core/chains/registry/chain-ids'
 import { getDefaultEvmRpcEndpoint, RPC_DEFAULT_ENDPOINTS } from './rpc-endpoints'
 
 export interface NetworkConfig {
@@ -107,6 +111,72 @@ export const PEARL_NETWORKS: Readonly<Record<Network, PearlNetworkConfig>> = Obj
 
 export function getPearlNetworkConfig(network: Network): PearlNetworkConfig {
   return PEARL_NETWORKS[network]
+}
+
+export type QuantusNetworkReference = 'mainnet' | 'planck'
+
+export interface QuantusNetworkConfig {
+  readonly networkMode: Network
+  readonly chainId: (typeof QUANTUS_CHAIN_IDS)[Network]
+  readonly networkName: QuantusNetworkReference
+  readonly displayName: string
+  readonly explorerUrl: string
+  readonly rpcUrl: string
+  readonly genesisHash: `0x${string}`
+  readonly ss58Prefix: 189
+  readonly nativeCurrency: Readonly<{
+    readonly name: string
+    readonly symbol: string
+    readonly decimals: 12
+    readonly slip44Reference: '189189'
+  }>
+  readonly requiredConfirmations: number
+}
+
+export const QUANTUS_NETWORKS: Readonly<Record<Network, QuantusNetworkConfig>> = Object.freeze({
+  mainnet: Object.freeze({
+    networkMode: 'mainnet',
+    chainId: QUANTUS_CHAIN_IDS.mainnet,
+    networkName: 'mainnet',
+    displayName: 'Quantus',
+    explorerUrl: 'https://explorer.quantus.com',
+    rpcUrl: RPC_DEFAULT_ENDPOINTS.quantus.mainnet.url,
+    genesisHash: '0xfb5487c0be6ae4ade2d41d16e50465129861636c2b8d61fa94d7a19631626fba',
+    ss58Prefix: 189,
+    nativeCurrency: Object.freeze({
+      name: 'Quantus',
+      symbol: 'QTC',
+      decimals: 12,
+      slip44Reference: '189189'
+    }),
+    requiredConfirmations: 1
+  }),
+  testnet: Object.freeze({
+    networkMode: 'testnet',
+    chainId: QUANTUS_CHAIN_IDS.testnet,
+    networkName: 'planck',
+    displayName: 'Quantus Planck',
+    // Planck explorer URL is provisional; confirm before shipping Testnet Mode.
+    explorerUrl: 'https://explorer.quantus.com',
+    rpcUrl: RPC_DEFAULT_ENDPOINTS.quantus.testnet.url,
+    genesisHash: '0x4901bf5c57fd3f9e726af399c763de6670dbdb115a91c0237e173f16eef65e72',
+    ss58Prefix: 189,
+    nativeCurrency: Object.freeze({
+      name: 'Planck',
+      symbol: 'PLK',
+      decimals: 12,
+      slip44Reference: '189189'
+    }),
+    requiredConfirmations: 1
+  })
+} as const satisfies Record<Network, QuantusNetworkConfig>)
+
+export function getQuantusNetworkConfig(network: Network): QuantusNetworkConfig {
+  return QUANTUS_NETWORKS[network]
+}
+
+export function getQuantusNetworkConfigs(): readonly QuantusNetworkConfig[] {
+  return Object.freeze([QUANTUS_NETWORKS.mainnet, QUANTUS_NETWORKS.testnet])
 }
 
 export type SolanaCluster = 'mainnet' | 'devnet' | 'testnet'

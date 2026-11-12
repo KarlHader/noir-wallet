@@ -7,6 +7,7 @@ import {
   EVM_CHAIN_FEATURE_FLAG,
   NEAR_CHAIN_FEATURE_FLAG,
   PEARL_CHAIN_FEATURE_FLAG,
+  QUANTUS_CHAIN_FEATURE_FLAG,
   SOLANA_CHAIN_FEATURE_FLAG,
   ZCASH_CHAIN_FEATURE_FLAG
 } from '../../../../src/config/multichain-feature-flags.ts'
@@ -181,6 +182,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:80094',
       'bip122:000000000019d6689c085ae165831e93',
       'bip122:a18d3093b7ff618f0cdd073fa3d10374',
+      'quantus:mainnet',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       'near:mainnet'
     ])
@@ -195,6 +197,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:43113',
       'bip122:000000000933ea01ad0ee984209779ba',
       'bip122:b0c86d0cd8825f4d72260d2de46f4704',
+      'quantus:planck',
       'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
       'near:testnet'
     ])
@@ -203,6 +206,7 @@ test.describe('initial multichain product definitions', () => {
       ...Array(12).fill(EVM_CHAIN_FEATURE_FLAG),
       BITCOIN_CHAIN_FEATURE_FLAG,
       PEARL_CHAIN_FEATURE_FLAG,
+      QUANTUS_CHAIN_FEATURE_FLAG,
       SOLANA_CHAIN_FEATURE_FLAG,
       NEAR_CHAIN_FEATURE_FLAG
     ])
@@ -214,6 +218,24 @@ test.describe('initial multichain product definitions', () => {
         address: { status: 'available', addressSchemes: ['pearl_p2tr'] },
         transaction: { status: 'available', model: 'utxo', actions: ['native-transfer'] }
       }
+    })
+    expect(mainnet.resolve('quantus:mainnet')).toMatchObject({
+      family: 'quantus',
+      namespace: 'quantus',
+      featureFlag: QUANTUS_CHAIN_FEATURE_FLAG,
+      capabilities: {
+        address: {
+          status: 'available',
+          addressSchemes: ['quantus_ss58'],
+          derivationSchemes: ['ml-dsa-87', 'ml-dsa-65']
+        },
+        transaction: { status: 'available', model: 'account', actions: ['native-transfer'] }
+      }
+    })
+    expect(testnet.resolve('quantus:planck')).toMatchObject({
+      family: 'quantus',
+      displayName: 'Quantus Planck',
+      featureFlag: QUANTUS_CHAIN_FEATURE_FLAG
     })
     expect(mainnet.resolve('bip122:00040fe8ec8471911baa1db1266ea15d').capabilities).toMatchObject({
       address: { status: 'available', derivationSchemes: ['zip32-unified'] },
@@ -303,6 +325,7 @@ test.describe('initial multichain product definitions', () => {
       'eip155:80094/slip44:8008',
       'bip122:000000000019d6689c085ae165831e93/slip44:0',
       'bip122:a18d3093b7ff618f0cdd073fa3d10374/slip44:808276',
+      'quantus:mainnet/slip44:189189',
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/slip44:501',
       'near:mainnet/slip44:397'
     ])

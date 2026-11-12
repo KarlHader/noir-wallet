@@ -33,10 +33,13 @@ function methodCategory(
     [
       'eth_sendTransaction',
       'sendBitcoin',
+      'sendQuantus',
+      'signQuantusTransfer',
       'signPsbt',
       'signPsbts',
       'pushPsbt',
       'pushTx',
+      'broadcastExtrinsic',
       'signTransaction',
       'signAllTransactions',
       'requestSignTransactions',

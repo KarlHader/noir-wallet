@@ -14,8 +14,8 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/multichain-wallet-wasm.git'
-const SOURCE_COMMIT = 'cb993e08778fe6b0aafdf015a7a03a8741cdfe66'
-const ABI_VERSION = 'wallet-engine-cb993e0-v11'
+const SOURCE_COMMIT = '8103f125404272ae1181bbe7b887f8b05732f051'
+const ABI_VERSION = 'wallet-engine-8103f12-v12'
 const RUST_TOOLCHAIN = '1.96.1'
 const WASM_PACK_VERSION = '0.14.0'
 const WASM_BINDGEN_VERSION = '0.2.126'
@@ -30,6 +30,8 @@ const CAPABILITIES = Object.freeze(
     'account.near.derive',
     'account.near.imported',
     'account.pea-v1.derive',
+    'account.quantus.batch-derive',
+    'account.quantus.derive',
     'account.pearl.batch-derive',
     'account.pearl.derive',
     'account.pearl.imported',
@@ -63,6 +65,7 @@ const CAPABILITIES = Object.freeze(
     'pearl.bip322.sign',
     'pearl.bip322.verify',
     'pearl.psbt-v0.sign',
+    'quantus.extrinsic.sign',
     'solana.message.sign',
     'solana.message.verify',
     'solana.transaction.sign',

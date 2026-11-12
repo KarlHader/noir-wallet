@@ -86,6 +86,7 @@ export type WalletOwnedQuoteAsset = Readonly<
   | (WalletOwnedQuoteAssetBase & { readonly family: 'solana' })
   | (WalletOwnedQuoteAssetBase & { readonly family: 'near' })
   | (WalletOwnedQuoteAssetBase & { readonly family: 'pearl' })
+  | (WalletOwnedQuoteAssetBase & { readonly family: 'quantus' })
   | (WalletOwnedQuoteAssetBase & {
       readonly family: 'bitcoin'
       readonly bitcoinAddressType: BitcoinSupportedAddressType
@@ -749,6 +750,9 @@ export function createQuoteDepositTransferClient(options: {
       if (input.source.family === 'pearl') {
         throw new Error('Pearl quote-deposit transfers are unsupported')
       }
+      if (input.source.family === 'quantus') {
+        throw new Error('Quantus quote-deposit transfers are unsupported')
+      }
 
       const review = await options.bitcoin.prepareTransfer(
         {
@@ -846,6 +850,9 @@ export function createQuoteDepositTransferClient(options: {
       }
       if (input.source.family === 'pearl') {
         throw new Error('Pearl quote-deposit transfers are unsupported')
+      }
+      if (input.source.family === 'quantus') {
+        throw new Error('Quantus quote-deposit transfers are unsupported')
       }
       const review = await options.bitcoin.prepareTransfer(
         {

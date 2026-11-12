@@ -1,6 +1,7 @@
 import type { ZcashClient } from './chains/zcash/api'
 import type { BitcoinProvider } from './chains/bitcoin/types'
 import type { PearlProvider } from './chains/pearl/types'
+import type { QuantusProvider } from './chains/quantus/types'
 import type { EvmProvider } from './chains/evm/types'
 import type { SolanaProvider } from './chains/solana/types'
 import type { NearProvider } from './chains/near/types'
@@ -21,6 +22,8 @@ export interface NoirWalletProvider {
   bitcoin?: BitcoinProvider
   /** Available when the installed extension enables Pearl support. */
   pearl?: PearlProvider
+  /** Available when the installed extension enables Quantus support. */
+  quantus?: QuantusProvider
   /** Available in Testnet Mode when the Solana Beta is enabled. */
   solana?: SolanaProvider
   /** Available in Testnet Mode when the NEAR Beta is enabled. */

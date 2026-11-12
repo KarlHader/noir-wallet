@@ -24,6 +24,11 @@ import {
   createConfiguredSolanaRpcClient,
   readSolanaPortfolioSource
 } from '@/infrastructure/chains/solana'
+import {
+  createConfiguredQuantusRpcClient,
+  readQuantusPortfolioSource
+} from '@/infrastructure/chains/quantus'
+import { resolveQuantusRuntimeNetworkConfig } from '@/core/chains/quantus'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm/evm-account'
 import {
@@ -133,6 +138,19 @@ export function createBackgroundPortfolioCoordinator(
           readNearPortfolioSource({ ...input, rpc: nearRpc, tokenInventory: nearTokenInventory })
       })
     : undefined
+  const quantusNetwork = resolveQuantusRuntimeNetworkConfig(DEFAULT_NETWORK, endpointSettings)
+  const quantusRpc = createConfiguredQuantusRpcClient(quantusNetwork)
+  const quantusPortfolio = chains.get(parseChainId(quantusNetwork.chainId).id)
+    ? new SingleChainPortfolioCoordinator({
+        storageRepository,
+        cacheRepository,
+        chains,
+        assets,
+        chainId: quantusNetwork.chainId,
+        family: 'quantus',
+        readSource: input => readQuantusPortfolioSource({ ...input, rpc: quantusRpc })
+      })
+    : undefined
 
   return new UnifiedPortfolioCoordinator({
     storageRepository,
@@ -143,6 +161,7 @@ export function createBackgroundPortfolioCoordinator(
     pearlPortfolio,
     solanaPortfolio,
     nearPortfolio,
+    quantusPortfolio,
     onBackgroundBitcoinRefreshError: error => {
       const { currentWalletId, currentAccountId } = useWalletStore.getState()
       logger.warn(

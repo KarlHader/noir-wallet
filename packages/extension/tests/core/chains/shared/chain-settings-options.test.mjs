@@ -36,3 +36,37 @@ test('includes enabled Solana and NEAR networks in block explorer settings', asy
     delete globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
   }
 })
+
+test('exposes Quantus RPC settings only when chain.quantus is enabled', async () => {
+  globalThis.__NETWORK_MODE__ = 'mainnet'
+  const [{ DEFAULT_CHAIN_ENDPOINT_SETTINGS }, { buildRpcChainOptions }, { QUANTUS_NETWORKS }] =
+    await Promise.all([
+      import('../../../../src/core/chains/chain-endpoint-settings.ts'),
+      import('../../../../src/popup/services/chain-settings-options.ts'),
+      import('../../../../src/config/networks.ts')
+    ])
+
+  try {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.zcash']
+    expect(
+      buildRpcChainOptions(DEFAULT_CHAIN_ENDPOINT_SETTINGS).some(
+        option => option.chainId === QUANTUS_NETWORKS.mainnet.chainId
+      )
+    ).toBe(false)
+
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.zcash', 'chain.quantus']
+    expect(
+      buildRpcChainOptions(DEFAULT_CHAIN_ENDPOINT_SETTINGS).find(
+        option => option.chainId === QUANTUS_NETWORKS.mainnet.chainId
+      )
+    ).toMatchObject({
+      label: 'Quantus',
+      iconChain: 'quantus',
+      protocol: 'quantus-json-rpc',
+      defaultUrl: QUANTUS_NETWORKS.mainnet.rpcUrl
+    })
+  } finally {
+    delete globalThis.__NETWORK_MODE__
+    delete globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  }
+})

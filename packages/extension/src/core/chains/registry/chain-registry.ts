@@ -43,7 +43,16 @@ export interface ChainRegistry {
   readonly resolve: (chainId: string) => ChainDefinition
 }
 
-const CHAIN_FAMILIES = new Set(['zcash', 'evm', 'bitcoin', 'pearl', 'solana', 'tron', 'near'])
+const CHAIN_FAMILIES = new Set([
+  'zcash',
+  'evm',
+  'bitcoin',
+  'pearl',
+  'quantus',
+  'solana',
+  'tron',
+  'near'
+])
 const NETWORK_KINDS = new Set(['mainnet', 'testnet', 'devnet', 'custom'])
 const CAPABILITY_STATUSES = new Set(['available', 'waiting', 'unsupported'])
 const TRANSACTION_MODELS = new Set(['account', 'utxo', 'hybrid-utxo'])

@@ -1,8 +1,10 @@
+import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type {
   BitcoinBip322MessageSummary,
   BitcoinPsbtSummary,
   PearlBip322MessageSummary,
   PearlPsbtSummary,
+  QuantusTransferSummary,
   SigningSummary
 } from '@/core/keyring/domain'
 import {
@@ -20,7 +22,11 @@ import {
   zcashTransactionReview
 } from './signing-summary-review-model-other'
 import { tronMessageReview, tronTransactionReview } from './signing-summary-review-model-tron'
-import type { SigningSummaryReviewModel } from './signing-summary-review-model-types'
+import {
+  reviewRow,
+  type SigningSummaryReviewModel,
+  type SigningSummaryReviewSection
+} from './signing-summary-review-model-types'
 
 function assertNever(value: never): never {
   throw new Error(`Unsupported signing summary schema: ${JSON.stringify(value)}`)
@@ -53,6 +59,86 @@ function pearlReview(
         )
       }
     ]
+  }
+}
+
+function issueDescription(code: string): { title: string; description: string } {
+  switch (code) {
+    case 'external-input':
+      return {
+        title: 'External input',
+        description: 'This request signs data that was not produced by the wallet review.'
+      }
+    case 'unrecognized-call':
+      return {
+        title: 'Unrecognized call',
+        description: 'The extrinsic call could not be matched to a known native transfer.'
+      }
+    default:
+      return {
+        title: 'Review required',
+        description: 'Review this request carefully before signing.'
+      }
+  }
+}
+
+function quantusTransactionReview(summary: QuantusTransferSummary): SigningSummaryReviewModel {
+  const fields = summary.fields
+  // Planck uses PLK; the symbol follows the reviewed chain, not the provider.
+  const symbol = summary.chainId === 'quantus:planck' ? 'PLK' : 'QTC'
+  const amount = formatBaseUnitDecimalAmount(fields.amountRaw, 12)
+  const feeLimit = formatBaseUnitDecimalAmount(fields.feeLimitRaw, 12)
+  const tip = formatBaseUnitDecimalAmount(fields.tipRaw, 12)
+  const sections: SigningSummaryReviewSection[] = [
+    {
+      title: 'Transfer',
+      rows: [
+        reviewRow('From', fields.signerAddress, { breakAll: true }),
+        reviewRow('Recipient', fields.recipient, { breakAll: true }),
+        reviewRow('Amount', `${formatBaseUnitAmount(fields.amountRaw, 12)} ${symbol}`, {
+          amount: { value: amount, symbol, profile: 'review' }
+        }),
+        reviewRow(
+          'Fee limit (estimated)',
+          `${formatBaseUnitAmount(fields.feeLimitRaw, 12)} ${symbol}`,
+          {
+            amount: { value: feeLimit, symbol, profile: 'fee' }
+          }
+        ),
+        reviewRow('Keep account alive', fields.keepAlive),
+        reviewRow('Tip', `${formatBaseUnitAmount(fields.tipRaw, 12)} ${symbol}`, {
+          amount: { value: tip, symbol, profile: 'fee' }
+        })
+      ]
+    },
+    {
+      title: 'Signing',
+      rows: [
+        reviewRow('Scheme', fields.scheme),
+        reviewRow('Nonce', fields.nonce),
+        reviewRow('Era period', fields.eraPeriod),
+        reviewRow('Block number', fields.blockNumber),
+        reviewRow('Call hash', fields.callHash, { breakAll: true, code: true }),
+        reviewRow('Call bytes', fields.callLength)
+      ]
+    },
+    {
+      title: 'Request',
+      rows: [
+        reviewRow('Schema', summary.schema, { code: true, breakAll: true }),
+        reviewRow('Chain ID', summary.chainId, { code: true, breakAll: true })
+      ]
+    }
+  ]
+  return {
+    title: 'Sign Quantus transfer',
+    operation: summary.operation,
+    level: summary.review.level,
+    issues: summary.review.issues.map(issue => ({
+      code: issue.code,
+      ...issueDescription(issue.code)
+    })),
+    sections
   }
 }
 
@@ -90,6 +176,8 @@ export function buildSigningSummaryReviewModel(
       return nearTransactionReview(summary)
     case 'near.nep413-message.v1':
       return nearMessageReview(summary)
+    case 'quantus.transfer.v1':
+      return quantusTransactionReview(summary)
     default:
       return assertNever(summary)
   }

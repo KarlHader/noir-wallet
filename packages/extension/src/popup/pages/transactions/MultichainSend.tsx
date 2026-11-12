@@ -42,6 +42,9 @@ import type { SolanaTransferSubmission } from '@/popup/services/solana-wallet-cl
 import { NearSendForm } from './NearSendForm'
 import { NearTransactionResult } from './NearTransactionResult'
 import type { NearTransferSubmission } from '@/popup/services/near-wallet-client'
+import { QuantusSendForm } from './QuantusSendForm'
+import { QuantusTransactionResult } from './QuantusTransactionResult'
+import type { QuantusTransferSubmission } from '@/popup/services/quantus-wallet-client'
 import { PearlSendForm } from './PearlSendForm'
 import { PearlTransactionResult } from './PearlTransactionResult'
 import type { PearlTransferSubmission } from '@/popup/services/pearl-wallet-client'
@@ -62,6 +65,7 @@ type SendSubmission =
   | Readonly<{ family: 'pearl'; value: PearlTransferSubmission }>
   | Readonly<{ family: 'solana'; value: SolanaTransferSubmission }>
   | Readonly<{ family: 'near'; value: NearTransferSubmission }>
+  | Readonly<{ family: 'quantus'; value: QuantusTransferSubmission }>
 
 function availableUsdPrice(
   asset: PortfolioReadModel['assets'][number],
@@ -497,6 +501,7 @@ export function MultichainSend() {
           chain.chain.family === 'bitcoin' ||
           chain.chain.family === 'pearl' ||
           chain.chain.family === 'solana' ||
+          chain.chain.family === 'quantus' ||
           chain.chain.family === 'near') &&
         chain.chain.capabilities.transaction.status === 'available'
         ? [{ asset, chain }]
@@ -662,6 +667,23 @@ export function MultichainSend() {
     )
   }
 
+  if (submission?.family === 'quantus' && selection?.chain.chain.family === 'quantus') {
+    return (
+      <QuantusTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
+
   const crossChainSourceAssetId =
     selection && currentNetwork === 'mainnet' && getCrossChainSendAssetGroup(selection.asset.asset)
       ? selection.asset.asset.id
@@ -745,6 +767,12 @@ export function MultichainSend() {
           selection={selection}
           priceUsd={availableUsdPrice(selection.asset, assetPrices)}
           onSubmitted={value => setSubmission({ family: 'solana', value })}
+        />
+      ) : selection?.chain.chain.family === 'quantus' ? (
+        <QuantusSendForm
+          selection={selection}
+          priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+          onSubmitted={value => setSubmission({ family: 'quantus', value })}
         />
       ) : selection?.chain.chain.family === 'near' ? (
         <NearSendForm

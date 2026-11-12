@@ -1,12 +1,15 @@
-import { getBitcoinChainId, getPearlChainId } from '@/core/chains/registry'
+import { getBitcoinChainId, getPearlChainId, getQuantusChainId } from '@/core/chains/registry'
 import type { TransactionGraph } from './domain'
 
-export type TransactionAnalyticsFamily = 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near'
+export type TransactionAnalyticsFamily = 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near'
 
 export function transactionAnalyticsFamily(chainId: string): TransactionAnalyticsFamily | null {
   if (chainId.startsWith('eip155:')) return 'evm'
   if (chainId === getPearlChainId('mainnet') || chainId === getPearlChainId('testnet')) {
     return 'pearl'
+  }
+  if (chainId === getQuantusChainId('mainnet') || chainId === getQuantusChainId('testnet')) {
+    return 'quantus'
   }
   if (
     chainId === getBitcoinChainId('mainnet') ||

@@ -106,6 +106,7 @@ const APPROVAL_ACTION_PREFIXES = Object.freeze({
   ]),
   bitcoin: Object.freeze(['bitcoinConnect', 'bitcoinTransaction', 'bitcoinMessage']),
   pearl: Object.freeze(['pearlConnect', 'pearlTransaction', 'pearlMessage']),
+  quantus: Object.freeze(['quantusConnect', 'quantusTransaction', 'quantusSignTransfer']),
   solana: Object.freeze(['solanaConnect', 'solanaTransaction', 'solanaMessage']),
   near: Object.freeze(['nearConnect', 'nearTransaction', 'nearMessage']),
   multichain: Object.freeze(['multichainConnect'])
@@ -1922,7 +1923,7 @@ export class DAppHandler {
 
   cancelPendingApprovals(
     origin: string,
-    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'solana' | 'near' | 'multichain'
+    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus' | 'solana' | 'near' | 'multichain'
   ): number {
     const actions = APPROVAL_ACTION_PREFIXES[chainId]
     return pendingRequestsManager.cancelOrigin(origin, action => actions.includes(action))
@@ -1931,7 +1932,7 @@ export class DAppHandler {
   countPendingApprovalsForContext(
     walletId: string,
     accountId: string,
-    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl'
+    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus'
   ): number {
     const actions = APPROVAL_ACTION_PREFIXES[chainId]
     return pendingRequestsManager.countContext(walletId, accountId, action =>
@@ -1942,7 +1943,7 @@ export class DAppHandler {
   cancelPendingApprovalsForContext(
     walletId: string,
     accountId: string,
-    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl'
+    chainId: 'zcash' | 'evm' | 'bitcoin' | 'pearl' | 'quantus'
   ): number {
     const actions = APPROVAL_ACTION_PREFIXES[chainId]
     return pendingRequestsManager.cancelContextMatching(walletId, accountId, action =>

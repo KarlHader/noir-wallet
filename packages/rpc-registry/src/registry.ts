@@ -9,6 +9,7 @@ export type RpcProbeKind =
   | 'pearl-blockbook'
   | 'solana-json-rpc'
   | 'near-json-rpc'
+  | 'quantus-json-rpc'
 
 export interface RpcRegistryEndpoint {
   id: string
@@ -250,6 +251,12 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       'pearl-blockbook',
       [['blockbook', 'Blockbook', 'https://blockbook.testnet.pearlresearch.ai/api/v2']]
     ),
+    chain('quantus:mainnet', MAINNET, 'Quantus', 'quantus', 'quantus-json-rpc', [
+      ['quantus-mainnet', 'Quantus', 'https://rpc1-mainnet.quantus.com']
+    ]),
+    chain('quantus:planck', TESTNET, 'Quantus Planck', 'quantus', 'quantus-json-rpc', [
+      ['quantus-planck', 'Quantus Planck', 'https://a1-planck.quantus.cat']
+    ]),
     chain('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', MAINNET, 'Solana', 'sol', 'solana-json-rpc', [
       ['delta', 'Delta', 'https://solana.deltarpc.com/'],
       ['solana-tracker', 'SolanaTracker', 'https://rpc.solanatracker.io/public'],

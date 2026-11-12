@@ -16,6 +16,7 @@ export type ExampleChainIcon =
   | 'pearl'
   | 'plasma'
   | 'polygon'
+  | 'quantus'
   | 'solana'
   | 'near'
   | 'xlayer'
@@ -37,6 +38,7 @@ const EXAMPLE_CHAIN_ICON_URLS: Readonly<Record<ExampleChainIcon, string>> = Obje
   pearl: `${import.meta.env.BASE_URL}pearl.svg`,
   plasma: chainIconUrl('plasma'),
   polygon: chainIconUrl('polygon'),
+  quantus: `${import.meta.env.BASE_URL}quantus.svg`,
   solana: chainIconUrl('solana'),
   near: chainIconUrl('near'),
   xlayer: chainIconUrl('xlayer'),

@@ -15,7 +15,8 @@ export const SIGNING_SUMMARY_SCHEMAS = Object.freeze([
   'tron.transaction.v1',
   'tron.sign-message-v2.v1',
   'near.transaction.v1',
-  'near.nep413-message.v1'
+  'near.nep413-message.v1',
+  'quantus.transfer.v1'
 ] as const)
 
 export type SigningSummarySchema = (typeof SIGNING_SUMMARY_SCHEMAS)[number]
@@ -27,6 +28,7 @@ export type SigningSummaryFamily =
   | 'solana'
   | 'tron'
   | 'near'
+  | 'quantus'
 export type SigningOperation = 'transaction' | 'message'
 export type SigningReviewLevel = 'standard' | 'caution' | 'blocked'
 export type SigningReviewIssueCode =
@@ -543,6 +545,28 @@ export type NearNep413MessageSummary = SigningSummaryEnvelope<
   }
 >
 
+export const QUANTUS_PROVISIONAL_FEE_LIMIT_RAW = '10000000000'
+
+export type QuantusTransferSummary = SigningSummaryEnvelope<
+  'quantus.transfer.v1',
+  'transaction',
+  {
+    readonly signerAddress: string
+    readonly signerAccountId: string
+    readonly scheme: 'ml-dsa-87' | 'ml-dsa-65'
+    readonly recipient: string
+    readonly amountRaw: string
+    readonly feeLimitRaw: string
+    readonly keepAlive: boolean
+    readonly nonce: string
+    readonly tipRaw: string
+    readonly eraPeriod: number
+    readonly blockNumber: number
+    readonly callHash: string
+    readonly callLength: number
+  }
+>
+
 export type SigningSummary =
   | ZcashTransactionSummary
   | ZcashMessageSummary
@@ -559,6 +583,7 @@ export type SigningSummary =
   | TronSignMessageV2Summary
   | NearTransactionSummary
   | NearNep413MessageSummary
+  | QuantusTransferSummary
 
 export interface SigningSummaryExpectation {
   readonly chainId: ChainId

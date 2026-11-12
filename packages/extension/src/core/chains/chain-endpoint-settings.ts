@@ -11,6 +11,7 @@ export type ChainRpcProtocol =
   | 'solana-json-rpc'
   | 'tron-http-api'
   | 'near-json-rpc'
+  | 'quantus-json-rpc'
 
 export interface CustomChainRpcEndpoint {
   readonly protocol: ChainRpcProtocol
@@ -94,7 +95,8 @@ const RPC_PROTOCOLS = new Set<ChainRpcProtocol>([
   'zcash-lightwalletd',
   'solana-json-rpc',
   'tron-http-api',
-  'near-json-rpc'
+  'near-json-rpc',
+  'quantus-json-rpc'
 ])
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/
 
@@ -215,6 +217,8 @@ function protocolForChainId(chainId: string): ChainRpcProtocol {
       return 'solana-json-rpc'
     case 'near':
       return 'near-json-rpc'
+    case 'quantus':
+      return 'quantus-json-rpc'
     default:
       throw new Error('Unsupported custom RPC chain namespace')
   }

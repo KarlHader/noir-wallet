@@ -14,3 +14,9 @@ export const PEARL_CHAIN_IDS = Object.freeze({
   mainnet: 'bip122:a18d3093b7ff618f0cdd073fa3d10374',
   testnet: 'bip122:b0c86d0cd8825f4d72260d2de46f4704'
 } as const satisfies Record<Network, string>)
+
+/** Global Network Mode maps testnet → Planck (`quantus:planck`). */
+export const QUANTUS_CHAIN_IDS = Object.freeze({
+  mainnet: 'quantus:mainnet',
+  testnet: 'quantus:planck'
+} as const satisfies Record<Network, string>)

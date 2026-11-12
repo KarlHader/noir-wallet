@@ -4,6 +4,7 @@ import {
   type BitcoinSupportedAddressType
 } from '@/core/chains/bitcoin'
 import { parseSupportedPearlAddress } from '@/core/chains/pearl'
+import { parseQuantusAddress } from '@/core/chains/quantus'
 import { parseBitcoinAddressType } from '@/infrastructure/chains/bitcoin'
 import { parseNearAccountId } from '@/core/chains/near'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
@@ -26,7 +27,11 @@ export type AdditionalReceiveTargetView =
       address: string
       addressType: BitcoinSupportedAddressType
     }>
-  | Readonly<{ chain: ChainDefinition; kind: 'solana' | 'near' | 'pearl'; address: string }>
+  | Readonly<{
+      chain: ChainDefinition
+      kind: 'solana' | 'near' | 'pearl' | 'quantus'
+      address: string
+    }>
 
 export interface AdditionalReceiveTargetsView {
   readonly generationId: StorageV2GenerationId
@@ -118,6 +123,11 @@ function parseTarget(
       kind: 'pearl',
       address: parseSupportedPearlAddress(target.address, chain.id)
     })
+  }
+  if (target.kind === 'quantus') {
+    assertExactKeys(target, ['chainId', 'kind', 'address'], 'Receive target')
+    if (chain.family !== 'quantus') throw new Error('Invalid Quantus receive target chain')
+    return Object.freeze({ chain, kind: 'quantus', address: parseQuantusAddress(target.address) })
   }
   throw new Error('Unsupported receive target kind')
 }

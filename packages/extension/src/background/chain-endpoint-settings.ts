@@ -20,6 +20,7 @@ import {
 import {
   getBitcoinChainId,
   getPearlChainId,
+  getQuantusChainId,
   getZcashChainId,
   parseChainId
 } from '@/core/chains/registry'
@@ -33,6 +34,7 @@ import { attestBitcoinEsploraEndpoint } from '@/infrastructure/chains/bitcoin'
 import { attestEvmRpcEndpoint } from '@/infrastructure/chains/evm'
 import { attestNearRpcEndpoint } from '@/infrastructure/chains/near'
 import { attestPearlBlockbookEndpoint } from '@/infrastructure/chains/pearl'
+import { attestQuantusRpcEndpoint } from '@/infrastructure/chains/quantus'
 import { attestSolanaRpcEndpoint } from '@/infrastructure/chains/solana'
 import { attestZcashLightwalletdEndpoint } from '@/infrastructure/chains/zcash/zcash-network-attestation'
 import {
@@ -54,6 +56,7 @@ import {
   resolveBitcoinFeatureRuntimePolicy,
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
+  resolveQuantusFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
 } from '@/core/chains/feature-runtime-policy'
 
@@ -176,16 +179,22 @@ export class ChainEndpointSettingsCoordinator {
     const bitcoinEnabled = resolveBitcoinFeatureRuntimePolicy(
       __ENABLED_CHAIN_FEATURE_FLAGS__
     ).newOperationsEnabled
+    const quantusChainId = getQuantusChainId(DEFAULT_NETWORK)
+    const quantusEnabled = resolveQuantusFeatureRuntimePolicy(
+      __ENABLED_CHAIN_FEATURE_FLAGS__
+    ).newOperationsEnabled
     assertDisabledChainEndpointsUnchanged(currentSettings, settings, [
       ...(!bitcoinEnabled ? [getBitcoinChainId(DEFAULT_NETWORK)] : []),
       ...(!solanaEnabled ? [solanaNetwork.chainId] : []),
-      ...(!nearEnabled ? [nearNetwork.chainId] : [])
+      ...(!nearEnabled ? [nearNetwork.chainId] : []),
+      ...(!quantusEnabled ? [quantusChainId] : [])
     ])
     const supportedChainIds = new Set([
       getZcashChainId(DEFAULT_NETWORK),
       getBitcoinChainId(DEFAULT_NETWORK),
       solanaNetwork.chainId,
       nearNetwork.chainId,
+      ...(quantusEnabled ? [quantusChainId] : []),
       ...catalog.map(network => network.chainId)
     ])
     const unsupportedOverride = [...settings.overrides, ...(settings.savedRpcEndpoints ?? [])].find(
@@ -300,6 +309,16 @@ export class ChainEndpointSettingsCoordinator {
         )
         continue
       }
+      if (
+        quantusEnabled &&
+        override.chainId === quantusChainId &&
+        rpc.protocol === 'quantus-json-rpc'
+      ) {
+        attestations.set(`quantus:${rpc.url}`, () =>
+          attestQuantusRpcEndpoint({ chainId: override.chainId, rpcUrl: rpc.url })
+        )
+        continue
+      }
       throw new Error('This chain does not have an active custom RPC adapter in this build')
     }
     await mapWithConcurrency([...attestations.values()], attestation => attestation())
@@ -406,4 +425,11 @@ export function resolveConfiguredPearlRpcUrl(settings: ChainEndpointSettings): s
     override?.rpc?.protocol === 'pearl-json-rpc'
     ? override.rpc.url
     : undefined
+}
+
+export function resolveConfiguredQuantusRpcUrl(
+  settings: ChainEndpointSettings
+): string | undefined {
+  const override = findChainEndpointOverride(settings, getQuantusChainId(DEFAULT_NETWORK))
+  return override?.rpc?.protocol === 'quantus-json-rpc' ? override.rpc.url : undefined
 }

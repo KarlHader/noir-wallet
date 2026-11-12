@@ -50,6 +50,7 @@ const ALLOWED_METHODS = new Set<string>(DAPP_RUNTIME_METHODS)
 const EVM_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.evm')
 const BITCOIN_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.bitcoin')
 const PEARL_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.pearl')
+const QUANTUS_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.quantus')
 const SOLANA_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.solana')
 const NEAR_PROVIDER_ENABLED = __ENABLED_CHAIN_FEATURE_FLAGS__.includes('chain.near')
 
@@ -230,6 +231,21 @@ function setupMessageBridge() {
       return
     }
 
+    if (chainId === 'quantus' && !QUANTUS_PROVIDER_ENABLED) {
+      window.postMessage(
+        {
+          target: 'noir-provider',
+          requestId,
+          error: {
+            code: 4200,
+            message: 'The Quantus provider is unavailable in this wallet build.'
+          }
+        },
+        window.location.origin
+      )
+      return
+    }
+
     if (
       (chainId === 'solana' && !SOLANA_PROVIDER_ENABLED) ||
       (chainId === 'near' && !NEAR_PROVIDER_ENABLED)
@@ -265,12 +281,13 @@ function setupMessageBridge() {
             (chainId === 'evm' ||
               chainId === 'bitcoin' ||
               chainId === 'pearl' ||
+              chainId === 'quantus' ||
               chainId === 'solana' ||
               chainId === 'near') &&
             typeof payload?.method === 'string'
               ? {
                   code: 4200,
-                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'pearl' ? 'Pearl' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
+                  message: `The requested ${chainId === 'evm' ? 'EVM' : chainId === 'bitcoin' ? 'Bitcoin' : chainId === 'pearl' ? 'Pearl' : chainId === 'quantus' ? 'Quantus' : chainId === 'solana' ? 'Solana' : 'NEAR'} method is not supported.`
                 }
               : 'Invalid or unsupported method'
         },
