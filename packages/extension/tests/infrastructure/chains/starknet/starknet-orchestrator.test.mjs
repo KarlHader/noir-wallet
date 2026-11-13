@@ -15,7 +15,6 @@ const RECIPIENT = '0x34'
 const ASSET_ID = 'starknet:SN_SEPOLIA/snip2:0x1'
 const DEPLOY_HASH = '0x22'
 const INVOKE_HASH = '0x44'
-const QUERY_VERSION = '0x100000000000000000000000000000003'
 
 test('broadcasts deploy and invoke in the same approval', async () => {
   const rpc = fakeRpc()
@@ -151,11 +150,11 @@ function orchestratorWith(rpc, repository = new InMemoryTransactionRepository())
   return new StarknetTransferOrchestrator({
     rpc,
     builder: {
-      async buildUnsignedDeployAccount(payload) {
-        return unsigned(payload.query, payload.query ? '0x11' : DEPLOY_HASH)
+      async prepareDeploy(payload) {
+        return preparation(payload, DEPLOY_HASH, 'deploy')
       },
-      async buildUnsignedInvoke(payload) {
-        return unsigned(payload.query, payload.query ? '0x33' : INVOKE_HASH)
+      async prepareInvoke(payload) {
+        return preparation(payload, INVOKE_HASH, 'invoke')
       }
     },
     signer: {
@@ -227,11 +226,41 @@ function fakeRpc(options = {}) {
   }
 }
 
-function unsigned(query, transactionHash) {
+function preparation(payload, signingHash, kind) {
+  const summary =
+    kind === 'deploy'
+      ? {
+          contractAddress: payload.accountAddress,
+          classHash: payload.classHash,
+          salt: payload.publicKey,
+          constructorCalldata:
+            payload.implementation === 'argent_v04'
+              ? ['0x0', payload.publicKey, '0x1']
+              : [payload.publicKey],
+          nonce: payload.nonce,
+          tip: '0',
+          resourceBounds: payload.resourceBounds,
+          nonceDataAvailabilityMode: 'l1',
+          feeDataAvailabilityMode: 'l1'
+        }
+      : {
+          senderAddress: payload.accountAddress,
+          nonce: payload.nonce,
+          tip: '0',
+          resourceBounds: payload.resourceBounds,
+          calls: payload.calls.map(call => ({
+            to: call.to,
+            selector: call.selector,
+            entrypoint: null,
+            calldata: [...call.calldata]
+          })),
+          nonceDataAvailabilityMode: 'l1',
+          feeDataAvailabilityMode: 'l1'
+        }
   return {
-    transactionHash,
-    query,
-    transaction: { version: query ? QUERY_VERSION : '0x3' }
+    account: { address: payload.accountAddress },
+    signingHash,
+    summary
   }
 }
 

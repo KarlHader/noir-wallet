@@ -2919,7 +2919,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: 'Invalid Ledger runtime message' })
       return true
     }
-    void computeStarknetLedgerAddress(publicKey)
+    void computeStarknetLedgerAddress(publicKey, getStarknetNetworkConfig(DEFAULT_NETWORK).chainId)
       .then(result => sendResponse({ result }))
       .catch(error =>
         sendResponse({

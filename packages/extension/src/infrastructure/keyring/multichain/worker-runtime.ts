@@ -53,6 +53,7 @@ import {
   readRecord,
   readSafeInteger,
   readString,
+  type UnknownRecord,
   type RawBitcoinAddressType,
   type RawBitcoinNetwork,
   type RawDerivedAccount,
@@ -89,12 +90,15 @@ import {
 import {
   assertStarknetPublicResult,
   parseRawStarknetAccount,
-  readQueryFlag,
+  parseStarknetAssembledDeploy,
+  parseStarknetAssembledInvoke,
+  parseStarknetExternalPrepareResult,
+  readOptionalFeltList,
   readStarknetCalls,
   readStarknetChainId,
   readStarknetFelt,
   readStarknetResourceBounds,
-  assertStarknetComputableClassHash,
+  readStarknetSignature,
   type RawDerivedStarknetAccount
 } from './starknet-codecs'
 import { starknetSessionRequestJson } from './signing-adapter-starknet'
@@ -622,6 +626,86 @@ function publicAccount(
   })
 }
 
+const STARKNET_INVOKE_OPTIONAL_FIELDS = Object.freeze([
+  'accountAddress',
+  'classHash',
+  'salt',
+  'implementation',
+  'tip',
+  'nonceDataAvailabilityMode',
+  'feeDataAvailabilityMode',
+  'paymasterData',
+  'accountDeploymentData',
+  'proofFacts',
+  'proof'
+])
+
+const STARKNET_DEPLOY_OPTIONAL_FIELDS = Object.freeze([
+  'accountAddress',
+  'classHash',
+  'salt',
+  'implementation',
+  'tip',
+  'nonceDataAvailabilityMode',
+  'feeDataAvailabilityMode',
+  'paymasterData'
+])
+
+function readOptionalStarknetFelt(value: unknown, label: string): void {
+  if (value !== undefined) readStarknetFelt(value, label)
+}
+
+function readOptionalStarknetAccountSelectors(payload: UnknownRecord): void {
+  readOptionalStarknetFelt(payload.classHash, 'classHash')
+  readOptionalStarknetFelt(payload.salt, 'salt')
+  if (payload.implementation !== undefined) {
+    readLiteral(payload.implementation, ['open_zeppelin', 'argent_v04'], 'implementation')
+  }
+}
+
+function readOptionalStarknetFeeFields(payload: UnknownRecord, includeInvokeFields: boolean): void {
+  if (payload.tip !== undefined) {
+    const tip = readString(payload.tip, 'tip', 32)
+    if (!/^(0|[1-9][0-9]*)$/.test(tip)) throw new Error('tip must be a decimal amount')
+  }
+  if (payload.nonceDataAvailabilityMode !== undefined) {
+    readLiteral(payload.nonceDataAvailabilityMode, ['l1', 'l2'], 'nonceDataAvailabilityMode')
+  }
+  if (payload.feeDataAvailabilityMode !== undefined) {
+    readLiteral(payload.feeDataAvailabilityMode, ['l1', 'l2'], 'feeDataAvailabilityMode')
+  }
+  if (payload.paymasterData !== undefined) {
+    readOptionalFeltList(payload.paymasterData, 'paymasterData')
+  }
+  if (!includeInvokeFields) return
+  if (payload.accountDeploymentData !== undefined) {
+    readOptionalFeltList(payload.accountDeploymentData, 'accountDeploymentData')
+  }
+  if (payload.proofFacts !== undefined) readOptionalFeltList(payload.proofFacts, 'proofFacts')
+  if (payload.proof !== undefined) readString(payload.proof, 'proof', 131_072)
+}
+
+function readStarknetExternalInvoke(payload: UnknownRecord): void {
+  readStarknetChainId(payload.chainId)
+  readStarknetFelt(payload.publicKey, 'publicKey')
+  readOptionalStarknetFelt(payload.accountAddress, 'accountAddress')
+  readOptionalStarknetAccountSelectors(payload)
+  readStarknetCalls(payload.calls)
+  readStarknetFelt(payload.nonce, 'nonce')
+  readStarknetResourceBounds(payload.resourceBounds)
+  readOptionalStarknetFeeFields(payload, true)
+}
+
+function readStarknetExternalDeploy(payload: UnknownRecord): void {
+  readStarknetChainId(payload.chainId)
+  readStarknetFelt(payload.publicKey, 'publicKey')
+  readOptionalStarknetFelt(payload.accountAddress, 'accountAddress')
+  readOptionalStarknetAccountSelectors(payload)
+  readStarknetFelt(payload.nonce, 'nonce')
+  readStarknetResourceBounds(payload.resourceBounds)
+  readOptionalStarknetFeeFields(payload, false)
+}
+
 export class MultichainWorkerRuntime {
   private readonly now: () => number
   private readonly createSigningCommandId: () => string
@@ -727,10 +811,12 @@ export class MultichainWorkerRuntime {
       case 'command.cancel':
         return this.cancelProductCommand(command)
       case 'starknet.compute-address':
-      case 'starknet.build-unsigned-invoke':
-      case 'starknet.build-unsigned-deploy-account':
-      case 'starknet.attach-signature':
+      case 'starknet.prepare-invoke-external':
+      case 'starknet.assemble-invoke-external':
+      case 'starknet.prepare-deploy-external':
+      case 'starknet.assemble-deploy-external':
       case 'starknet.hash-typed-data':
+      case 'starknet.verify-signature':
         return this.executeStarknetPublic(command)
       case 'identity.get-public':
         throw new KeyringError('UNSUPPORTED_OPERATION')
@@ -746,98 +832,77 @@ export class MultichainWorkerRuntime {
           throw new Error('Starknet public payload contains a secret field')
         }
       }
-      if (command.operation === 'starknet.compute-address') {
-        if (payload.preset === undefined) {
+      switch (command.operation) {
+        case 'starknet.compute-address':
           assertExactKeys(
             payload,
-            ['classHash', 'salt', 'constructorCalldata'],
-            [],
+            ['chainId', 'publicKey'],
+            ['classHash', 'salt', 'implementation'],
             'compute address'
           )
-          const classHash = readStarknetFelt(payload.classHash, 'classHash')
-          assertStarknetComputableClassHash(classHash)
-          readStarknetFelt(payload.salt, 'salt')
-          readStarknetCalls([
-            { to: payload.salt, selector: payload.salt, calldata: payload.constructorCalldata }
-          ])
-        } else {
-          assertExactKeys(payload, ['preset', 'publicKey'], [], 'compute address')
-          readLiteral(payload.preset, ['open_zeppelin', 'argent_v0_4'], 'preset')
+          readStarknetChainId(payload.chainId)
           readStarknetFelt(payload.publicKey, 'publicKey')
-        }
-      } else if (command.operation === 'starknet.build-unsigned-invoke') {
-        assertExactKeys(
-          payload,
-          ['chainId', 'senderAddress', 'publicKey', 'calls', 'nonce', 'resourceBounds'],
-          [
-            'classHash',
-            'tip',
-            'nonceDataAvailabilityMode',
-            'feeDataAvailabilityMode',
-            'paymasterData',
-            'accountDeploymentData',
-            'proofFacts',
-            'proof',
-            'query'
-          ],
-          'unsigned invoke'
-        )
-        readStarknetChainId(payload.chainId)
-        readStarknetFelt(payload.senderAddress, 'senderAddress')
-        readStarknetFelt(payload.publicKey, 'publicKey')
-        readStarknetCalls(payload.calls)
-        readStarknetFelt(payload.nonce, 'nonce')
-        readStarknetResourceBounds(payload.resourceBounds)
-        readQueryFlag(payload.query)
-      } else if (command.operation === 'starknet.build-unsigned-deploy-account') {
-        assertExactKeys(
-          payload,
-          ['chainId', 'senderAddress', 'publicKey', 'nonce', 'resourceBounds'],
-          [
-            'classHash',
-            'salt',
-            'constructorCalldata',
-            'tip',
-            'nonceDataAvailabilityMode',
-            'feeDataAvailabilityMode',
-            'paymasterData',
-            'query'
-          ],
-          'unsigned deploy'
-        )
-        readStarknetChainId(payload.chainId)
-        readStarknetFelt(payload.senderAddress, 'senderAddress')
-        readStarknetFelt(payload.publicKey, 'publicKey')
-        readStarknetResourceBounds(payload.resourceBounds)
-        readQueryFlag(payload.query)
-      } else if (command.operation === 'starknet.attach-signature') {
-        assertExactKeys(
-          payload,
-          ['chainId', 'transaction', 'signature', 'publicKey'],
-          [],
-          'attach signature'
-        )
-        readStarknetChainId(payload.chainId)
-        readRecord(payload.transaction, 'transaction')
-        readStarknetFelt(payload.publicKey, 'publicKey')
-        const signature = readArray(
-          payload.signature,
-          'signature',
-          item => readStarknetFelt(item, 'signature'),
-          2
-        )
-        if (signature.length !== 2) throw new Error('Starknet signature must be [r, s]')
-      } else {
-        assertExactKeys(
-          payload,
-          ['chainId', 'typedData', 'accountAddress'],
-          ['publicKey'],
-          'typed data hash'
-        )
-        readStarknetChainId(payload.chainId)
-        readStarknetFelt(payload.accountAddress, 'accountAddress')
-        readString(payload.typedData, 'typedData', 65_536)
-        if (payload.publicKey !== undefined) readStarknetFelt(payload.publicKey, 'publicKey')
+          readOptionalStarknetAccountSelectors(payload)
+          break
+        case 'starknet.prepare-invoke-external':
+          assertExactKeys(
+            payload,
+            ['chainId', 'publicKey', 'calls', 'nonce', 'resourceBounds'],
+            STARKNET_INVOKE_OPTIONAL_FIELDS,
+            'prepare invoke'
+          )
+          readStarknetExternalInvoke(payload)
+          break
+        case 'starknet.assemble-invoke-external':
+          assertExactKeys(
+            payload,
+            ['chainId', 'publicKey', 'calls', 'nonce', 'resourceBounds', 'signature'],
+            STARKNET_INVOKE_OPTIONAL_FIELDS,
+            'assemble invoke'
+          )
+          readStarknetExternalInvoke(payload)
+          readStarknetSignature(payload.signature)
+          break
+        case 'starknet.prepare-deploy-external':
+          assertExactKeys(
+            payload,
+            ['chainId', 'publicKey', 'nonce', 'resourceBounds'],
+            STARKNET_DEPLOY_OPTIONAL_FIELDS,
+            'prepare deploy'
+          )
+          readStarknetExternalDeploy(payload)
+          break
+        case 'starknet.assemble-deploy-external':
+          assertExactKeys(
+            payload,
+            ['chainId', 'publicKey', 'nonce', 'resourceBounds', 'signature'],
+            STARKNET_DEPLOY_OPTIONAL_FIELDS,
+            'assemble deploy'
+          )
+          readStarknetExternalDeploy(payload)
+          readStarknetSignature(payload.signature)
+          break
+        case 'starknet.hash-typed-data':
+          assertExactKeys(
+            payload,
+            ['chainId', 'accountAddress', 'publicKey', 'typedData'],
+            ['classHash', 'salt', 'implementation'],
+            'typed data hash'
+          )
+          readStarknetChainId(payload.chainId)
+          readStarknetFelt(payload.accountAddress, 'accountAddress')
+          readStarknetFelt(payload.publicKey, 'publicKey')
+          readString(payload.typedData, 'typedData', 65_536)
+          readOptionalStarknetAccountSelectors(payload)
+          break
+        case 'starknet.verify-signature':
+          assertExactKeys(payload, ['hash', 'publicKey', 'signature'], [], 'verify signature')
+          readStarknetFelt(payload.hash, 'hash')
+          readStarknetFelt(payload.publicKey, 'publicKey')
+          readStarknetSignature(payload.signature)
+          break
+        default:
+          throw new KeyringError('UNSUPPORTED_OPERATION')
       }
       return JSON.stringify(payload)
     }, 'INVALID_COMMAND')
@@ -847,27 +912,44 @@ export class MultichainWorkerRuntime {
         switch (command.operation) {
           case 'starknet.compute-address':
             return this.engine.computeStarknetAccountAddress(requestJson)
-          case 'starknet.build-unsigned-invoke':
-            return this.engine.buildStarknetUnsignedInvoke(requestJson)
-          case 'starknet.build-unsigned-deploy-account':
-            return this.engine.buildStarknetUnsignedDeployAccount(requestJson)
-          case 'starknet.attach-signature':
-            return this.engine.attachStarknetSignature(requestJson)
+          case 'starknet.prepare-invoke-external':
+            return this.engine.prepareStarknetInvokeExternal(requestJson)
+          case 'starknet.assemble-invoke-external':
+            return this.engine.assembleStarknetInvokeExternal(requestJson)
+          case 'starknet.prepare-deploy-external':
+            return this.engine.prepareStarknetDeployAccountExternal(requestJson)
+          case 'starknet.assemble-deploy-external':
+            return this.engine.assembleStarknetDeployAccountExternal(requestJson)
           case 'starknet.hash-typed-data':
             return this.engine.hashStarknetTypedData(requestJson)
+          case 'starknet.verify-signature':
+            return this.engine.verifyStarknetSignature(requestJson)
           default:
             throw new KeyringError('UNSUPPORTED_OPERATION')
         }
       },
       value => {
-        const result = assertStarknetPublicResult(value)
-        if (result.query === true && result.transaction !== undefined) {
-          const transaction = readRecord(result.transaction, 'transaction')
-          if (transaction.version === '0x3') {
-            throw new Error('Query Starknet transaction must not use the execution version')
+        switch (command.operation) {
+          case 'starknet.compute-address':
+            assertStarknetPublicResult(value)
+            return parseRawStarknetAccount(value)
+          case 'starknet.prepare-invoke-external':
+          case 'starknet.prepare-deploy-external':
+            return parseStarknetExternalPrepareResult(value)
+          case 'starknet.assemble-invoke-external':
+            return parseStarknetAssembledInvoke(value)
+          case 'starknet.assemble-deploy-external':
+            return parseStarknetAssembledDeploy(value)
+          case 'starknet.verify-signature': {
+            const verified = assertStarknetPublicResult(value)
+            if (typeof verified !== 'boolean') {
+              throw new Error('Starknet signature verification must be boolean')
+            }
+            return verified
           }
+          default:
+            return assertStarknetPublicResult(value)
         }
-        return result
       }
     )
   }

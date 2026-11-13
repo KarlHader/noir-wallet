@@ -227,8 +227,8 @@ test.describe('WASM package integrity', () => {
     ).resolves.toMatchObject({
       schemaVersion: 2,
       engine: 'multichain',
-      abiVersion: 'wallet-engine-1659f95-v11',
-      sourceCommit: '1659f959ca34f07072c0fe75c8c07b12eebe348c'
+      abiVersion: 'wallet-engine-fc72763-v10',
+      sourceCommit: 'fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05'
     })
   })
 
@@ -290,7 +290,7 @@ test.describe('WASM package integrity', () => {
     expect(migrationWorker).toContain('await initZcash({ module_or_path: zcashWasmBytes })')
     expect(buildGate).toContain("engine: 'zcash'")
     expect(buildGate).toContain("engine: 'multichain'")
-    expect(buildGate).toContain("sourceCommit: '1659f959ca34f07072c0fe75c8c07b12eebe348c'")
+    expect(buildGate).toContain("sourceCommit: 'fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05'")
     expect(buildGate).toContain('verifyWasmPackageIntegrity(directory, manifest)')
   })
 

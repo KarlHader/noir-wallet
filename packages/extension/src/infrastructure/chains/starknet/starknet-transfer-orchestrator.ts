@@ -38,15 +38,19 @@ import {
   createStarknetTransferGraph
 } from './starknet-transaction-graph'
 import {
-  parseUnsignedBuild,
+  parseStarknetExternalPreparation,
+  starknetDeployExternalRequest,
+  starknetInvokeExternalRequest
+} from './starknet-external-transaction'
+import {
   prepareStarknetTransfer,
   quoteStarknetDAppInvoke,
   quoteStarknetInvoke,
   quoteStarknetMaximum,
   type StarknetAccountRef,
   type StarknetCall,
-  type StarknetPreparedTransfer,
-  type StarknetUnsignedBuilder
+  type StarknetExternalBuilder,
+  type StarknetPreparedTransfer
 } from './starknet-transfer-preparer'
 
 const RECEIPT_TIMEOUT_MS = 10 * 60 * 1000
@@ -70,8 +74,7 @@ export interface StarknetTransferSigner {
     readonly transactionHash: string
     readonly transaction: Readonly<Record<string, unknown>>
     readonly resourceBounds: StarknetPreparedTransfer['invoke']['resourceBounds']
-    readonly calls?: readonly Readonly<Record<string, unknown>>[]
-    readonly constructorCalldata?: readonly string[]
+    readonly request: Readonly<Record<string, unknown>>
     readonly signal?: AbortSignal
   }): Promise<Readonly<Record<string, unknown>>>
 }
@@ -103,7 +106,7 @@ export class StarknetTransferOrchestrator {
   constructor(
     private readonly options: {
       readonly rpc: StarknetReadRpc & StarknetBroadcastRpc
-      readonly builder: StarknetUnsignedBuilder
+      readonly builder: StarknetExternalBuilder
       readonly signer: StarknetTransferSigner
       readonly pending: ChromeSessionStarknetPendingTransferStore
       readonly repository: TransactionRepository
@@ -730,49 +733,44 @@ export class StarknetTransferOrchestrator {
     if (!signLedger) throw new Error('Starknet Ledger signing is not connected')
     const kind =
       payload.kind === 'starknet-deploy-account' ? 'starknet-deploy-account' : 'starknet-invoke'
-    const senderAddress = this.accountRef(account).address
-    const request = {
-      chainId: payload.chainId,
-      senderAddress,
-      publicKey: account.publicKey,
-      classHash: payload.classHash,
-      nonce: payload.nonce,
-      resourceBounds: payload.resourceBounds,
-      paymasterData: [],
-      query: false
-    }
-    const built =
-      kind === 'starknet-deploy-account'
-        ? await this.options.builder.buildUnsignedDeployAccount({
-            ...request,
-            ...(Array.isArray(payload.constructorCalldata)
-              ? { constructorCalldata: payload.constructorCalldata }
-              : {})
-          })
-        : await this.options.builder.buildUnsignedInvoke({
-            ...request,
-            calls: payload.calls,
-            accountDeploymentData: []
-          })
-    const unsigned = parseUnsignedBuild(built, false)
-    if (unsigned.transactionHash !== expectedHash) {
-      throw new Error('Starknet signature does not match the review')
-    }
-    assertStarknetExecutionTransaction(unsigned.transaction)
+    const ref = this.accountRef(account)
+    if (typeof payload.nonce !== 'string') throw new Error('Starknet nonce is invalid')
     const resourceBounds = payload.resourceBounds
     if (!isResourceBounds(resourceBounds)) throw new Error('Starknet fee bounds are invalid')
+    const request =
+      kind === 'starknet-deploy-account'
+        ? starknetDeployExternalRequest({
+            chainId: ref.chainId,
+            publicKey: ref.publicKey,
+            accountAddress: ref.address,
+            classHash: ref.classHash,
+            nonce: payload.nonce,
+            resourceBounds
+          })
+        : starknetInvokeExternalRequest({
+            chainId: ref.chainId,
+            publicKey: ref.publicKey,
+            accountAddress: ref.address,
+            classHash: ref.classHash,
+            calls: payload.calls,
+            nonce: payload.nonce,
+            resourceBounds
+          })
+    const prepared = parseStarknetExternalPreparation(
+      kind === 'starknet-deploy-account'
+        ? await this.options.builder.prepareDeploy(request)
+        : await this.options.builder.prepareInvoke(request)
+    )
+    if (prepared.signingHash !== expectedHash) {
+      throw new Error('Starknet signature does not match the review')
+    }
     const signed = await signLedger({
       account,
       kind,
-      transactionHash: unsigned.transactionHash,
-      transaction: unsigned.transaction,
+      transactionHash: prepared.signingHash,
+      transaction: prepared.summary,
       resourceBounds,
-      ...(Array.isArray(payload.calls)
-        ? { calls: payload.calls as readonly Readonly<Record<string, unknown>>[] }
-        : {}),
-      ...(Array.isArray(payload.constructorCalldata)
-        ? { constructorCalldata: payload.constructorCalldata as readonly string[] }
-        : {}),
+      request,
       ...(signal === undefined ? {} : { signal })
     })
     if (signal?.aborted) throw new Error('Starknet signing was cancelled')
@@ -942,11 +940,7 @@ function deployPayload(record: StarknetPendingTransfer): Readonly<Record<string,
     addressIndex: record.addressIndex,
     classHash: record.classHash,
     nonce: record.deployNonce,
-    resourceBounds: record.deployBounds,
-    ...(normalizeStarknetFelt(record.classHash) ===
-    normalizeStarknetFelt(STARKNET_ARGENT_V04_CLASS_HASH)
-      ? { constructorCalldata: ['0x0', record.publicKey, '0x1'] }
-      : {})
+    resourceBounds: record.deployBounds
   }
 }
 

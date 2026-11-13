@@ -198,10 +198,12 @@ export interface RawWalletEngine {
   prepareStarknetTypedData(sessionId: number, requestJson: string): unknown
   confirmStarknetTypedData(sessionId: number, requestId: number): unknown
   computeStarknetAccountAddress(requestJson: string): unknown
-  buildStarknetUnsignedInvoke(requestJson: string): unknown
-  buildStarknetUnsignedDeployAccount(requestJson: string): unknown
-  attachStarknetSignature(requestJson: string): unknown
+  prepareStarknetInvokeExternal(requestJson: string): unknown
+  assembleStarknetInvokeExternal(requestJson: string): unknown
+  prepareStarknetDeployAccountExternal(requestJson: string): unknown
+  assembleStarknetDeployAccountExternal(requestJson: string): unknown
   hashStarknetTypedData(requestJson: string): unknown
+  verifyStarknetSignature(requestJson: string): unknown
   verifyBitcoinMessage(
     chainId: string,
     address: string,
@@ -416,6 +418,7 @@ export function parseRawEncryptedVault(value: unknown): RawEncryptedVault {
   const memoryKib = readSafeInteger(params.memoryKib, 'EncryptedVault.kdfParams.memoryKib')
   const iterations = readSafeInteger(params.iterations, 'EncryptedVault.kdfParams.iterations')
   const parallelism = readSafeInteger(params.parallelism, 'EncryptedVault.kdfParams.parallelism')
+  // Existing vaults use 19 MiB and 2 iterations. New wallets use version 2 with 64 MiB and 3 iterations.
   const legacyKdf = memoryKib === 19 * 1024 && iterations === 2
   const currentKdf = memoryKib === 64 * 1024 && iterations === 3
   if (parallelism !== 1 || (!legacyKdf && !(version === 2 && currentKdf))) {

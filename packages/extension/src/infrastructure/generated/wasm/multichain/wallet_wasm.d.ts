@@ -4,9 +4,8 @@
 export class WalletEngine {
     free(): void;
     [Symbol.dispose](): void;
-    attachStarknetSignature(request_json: string): any;
-    buildStarknetUnsignedDeployAccount(request_json: string): any;
-    buildStarknetUnsignedInvoke(request_json: string): any;
+    assembleStarknetDeployAccountExternal(request_json: string): any;
+    assembleStarknetInvokeExternal(request_json: string): any;
     computeStarknetAccountAddress(request_json: string): any;
     confirmBitcoinMessage(session_id: number, request_id: number): any;
     confirmBitcoinPsbt(session_id: number, request_id: number): any;
@@ -34,6 +33,7 @@ export class WalletEngine {
     deriveBitcoinAccounts(session_id: number, chain_id: string, address_type: string, account_index: number, change: boolean, start_address_index: number, count: number): any;
     deriveDashAccount(session_id: number, chain_id: string, account_index: number, change: boolean, address_index: number): any;
     deriveDashAccounts(session_id: number, chain_id: string, account_index: number, change: boolean, start_address_index: number, count: number): any;
+    deriveDashCoinJoinGap(session_id: number, request_json: string): any;
     deriveEvmAccount(session_id: number, chain_id: string, address_index: number): any;
     deriveNearAccount(session_id: number, chain_id: string, account_index: number): any;
     derivePeaAccount(session_id: number, request: string): any;
@@ -48,10 +48,12 @@ export class WalletEngine {
     deriveTronAccount(session_id: number, chain_id: string, address_index: number): any;
     exportPrivateKey(session_id: number, vault: any, password: string, request: any): any;
     getDashCoinJoinStatus(session_id: number): any;
+    getDashCoinJoinWatchList(session_id: number): any;
     hashStarknetTypedData(request_json: string): any;
     importPrivateKey(request: any, password: string): any;
     importStarknetAccount(mnemonic: string, password: string, bip39_passphrase: string, address: string): any;
     importWallet(mnemonic: string, password: string, bip39_passphrase: string): any;
+    listDashCoinJoinCoins(session_id: number): any;
     loadDashCoinJoinState(session_id: number, request_json: string): any;
     lock(session_id: number): boolean;
     lockAll(): void;
@@ -77,11 +79,14 @@ export class WalletEngine {
     prepareSolanaMessage(session_id: number, chain_id: string, account_index: number, message: Uint8Array): any;
     prepareSolanaTransaction(session_id: number, chain_id: string, account_index: number, transaction_base64: string): any;
     prepareStarknetDeployAccount(session_id: number, request_json: string): any;
+    prepareStarknetDeployAccountExternal(request_json: string): any;
     prepareStarknetInvoke(session_id: number, request_json: string): any;
+    prepareStarknetInvokeExternal(request_json: string): any;
     prepareStarknetTypedData(session_id: number, request_json: string): any;
     prepareTronMessage(session_id: number, chain_id: string, address_index: number, message: Uint8Array): any;
     prepareTronTransaction(session_id: number, request: any): any;
     processDashCoinJoinEvent(session_id: number, event_json: string): any;
+    recoverDashCoinJoinAddresses(session_id: number, request_json: string): any;
     registerQuantusNetwork(chain_id: string, genesis_hash: string): void;
     rejectSigningRequest(session_id: number, request_id: number): boolean;
     requestDashCoinJoinFundingAddresses(session_id: number, request_json: string): any;
@@ -95,6 +100,7 @@ export class WalletEngine {
     verifyNearMessage(request: any): any;
     verifyPearlMessage(chain_id: string, address: string, message: Uint8Array, signature: string): boolean;
     verifySolanaMessage(chain_id: string, address: string, message: Uint8Array, signature: string): boolean;
+    verifyStarknetSignature(request_json: string): any;
     verifyStarknetTypedData(request_json: string): any;
     verifyTronMessage(chain_id: string, address: string, message: Uint8Array, signature: string): boolean;
 }
@@ -104,9 +110,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_walletengine_free: (a: number, b: number) => void;
-    readonly walletengine_attachStarknetSignature: (a: number, b: number, c: number, d: number) => void;
-    readonly walletengine_buildStarknetUnsignedDeployAccount: (a: number, b: number, c: number, d: number) => void;
-    readonly walletengine_buildStarknetUnsignedInvoke: (a: number, b: number, c: number, d: number) => void;
+    readonly walletengine_assembleStarknetDeployAccountExternal: (a: number, b: number, c: number, d: number) => void;
+    readonly walletengine_assembleStarknetInvokeExternal: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_computeStarknetAccountAddress: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_confirmBitcoinMessage: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_confirmBitcoinPsbt: (a: number, b: number, c: number, d: number) => void;
@@ -134,6 +139,7 @@ export interface InitOutput {
     readonly walletengine_deriveBitcoinAccounts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly walletengine_deriveDashAccount: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly walletengine_deriveDashAccounts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly walletengine_deriveDashCoinJoinGap: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly walletengine_deriveEvmAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly walletengine_deriveNearAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly walletengine_derivePeaAccount: (a: number, b: number, c: number, d: number) => void;
@@ -148,10 +154,12 @@ export interface InitOutput {
     readonly walletengine_deriveTronAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly walletengine_exportPrivateKey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly walletengine_getDashCoinJoinStatus: (a: number, b: number, c: number) => void;
+    readonly walletengine_getDashCoinJoinWatchList: (a: number, b: number, c: number) => void;
     readonly walletengine_hashStarknetTypedData: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_importPrivateKey: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly walletengine_importStarknetAccount: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly walletengine_importWallet: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly walletengine_listDashCoinJoinCoins: (a: number, b: number, c: number) => void;
     readonly walletengine_loadDashCoinJoinState: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly walletengine_lock: (a: number, b: number) => number;
     readonly walletengine_lockAll: (a: number) => void;
@@ -177,11 +185,14 @@ export interface InitOutput {
     readonly walletengine_prepareSolanaMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly walletengine_prepareSolanaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly walletengine_prepareStarknetDeployAccount: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly walletengine_prepareStarknetDeployAccountExternal: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_prepareStarknetInvoke: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly walletengine_prepareStarknetInvokeExternal: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_prepareStarknetTypedData: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly walletengine_prepareTronMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly walletengine_prepareTronTransaction: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_processDashCoinJoinEvent: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly walletengine_recoverDashCoinJoinAddresses: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly walletengine_registerQuantusNetwork: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly walletengine_rejectSigningRequest: (a: number, b: number, c: number) => number;
     readonly walletengine_requestDashCoinJoinFundingAddresses: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -195,6 +206,7 @@ export interface InitOutput {
     readonly walletengine_verifyNearMessage: (a: number, b: number, c: number) => void;
     readonly walletengine_verifyPearlMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly walletengine_verifySolanaMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly walletengine_verifyStarknetSignature: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_verifyStarknetTypedData: (a: number, b: number, c: number, d: number) => void;
     readonly walletengine_verifyTronMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly rustsecp256k1_v0_10_0_context_create: (a: number) => number;

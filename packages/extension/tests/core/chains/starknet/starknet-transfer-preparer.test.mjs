@@ -7,9 +7,7 @@ import {
 } from '../../../../src/infrastructure/chains/starknet/starknet-transfer-preparer.ts'
 import {
   STARKNET_ARGENT_V04_CLASS_HASH,
-  STARKNET_ARGENT_V05_CLASS_HASH,
-  STARKNET_EXECUTION_VERSION,
-  STARKNET_QUERY_VERSION
+  STARKNET_ARGENT_V05_CLASS_HASH
 } from '../../../../src/infrastructure/chains/starknet/starknet-primitives.ts'
 import { normalizeStarknetFelt } from '../../../../src/core/chains/starknet/identifiers.ts'
 
@@ -42,30 +40,54 @@ const CALL = Object.freeze({
   ])
 })
 
+function preparation(payload, signingHash, kind) {
+  const summary =
+    kind === 'deploy'
+      ? {
+          contractAddress: payload.accountAddress,
+          classHash: payload.classHash,
+          salt: payload.publicKey,
+          constructorCalldata:
+            payload.implementation === 'argent_v04'
+              ? ['0x0', payload.publicKey, '0x1']
+              : [payload.publicKey],
+          nonce: payload.nonce,
+          tip: '0',
+          resourceBounds: payload.resourceBounds,
+          nonceDataAvailabilityMode: 'l1',
+          feeDataAvailabilityMode: 'l1'
+        }
+      : {
+          senderAddress: payload.accountAddress,
+          nonce: payload.nonce,
+          tip: '0',
+          resourceBounds: payload.resourceBounds,
+          calls: payload.calls.map(call => ({
+            to: call.to,
+            selector: call.selector,
+            entrypoint: null,
+            calldata: [...call.calldata]
+          })),
+          nonceDataAvailabilityMode: 'l1',
+          feeDataAvailabilityMode: 'l1'
+        }
+  return {
+    account: { address: payload.accountAddress, implementation: payload.implementation },
+    signingHash,
+    summary
+  }
+}
+
 function builder() {
   let sequence = 0
   return {
-    async buildUnsignedInvoke(payload) {
+    async prepareInvoke(payload) {
       sequence += 1
-      return {
-        query: payload.query,
-        transactionHash: `0x${sequence.toString(16)}`,
-        transaction: {
-          ...payload,
-          version: payload.query ? STARKNET_QUERY_VERSION : STARKNET_EXECUTION_VERSION
-        }
-      }
+      return preparation(payload, `0x${sequence.toString(16)}`, 'invoke')
     },
-    async buildUnsignedDeployAccount(payload) {
+    async prepareDeploy(payload) {
       sequence += 1
-      return {
-        query: payload.query,
-        transactionHash: `0x${sequence.toString(16)}`,
-        transaction: {
-          ...payload,
-          version: payload.query ? STARKNET_QUERY_VERSION : STARKNET_EXECUTION_VERSION
-        }
-      }
+      return preparation(payload, `0x${sequence.toString(16)}`, 'deploy')
     }
   }
 }

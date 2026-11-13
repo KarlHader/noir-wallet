@@ -3,7 +3,10 @@ import { StarknetMultichainSigningClient } from '@/infrastructure/keyring/multic
 
 const FELT_PRIME = 0x800000000000011000000000000000000000000000000000000000000000001n
 
-export async function computeStarknetLedgerAddress(publicKey: string): Promise<{
+export async function computeStarknetLedgerAddress(
+  publicKey: string,
+  chainId: 'starknet:SN_MAIN' | 'starknet:SN_SEPOLIA'
+): Promise<{
   readonly address: string
   readonly classHash: string
 }> {
@@ -21,7 +24,11 @@ export async function computeStarknetLedgerAddress(publicKey: string): Promise<{
       }
     }
   })
-  const result = await signing.computeAddress({ preset: 'argent_v0_4', publicKey: normalizedKey })
+  const result = await signing.computeAddress({
+    chainId,
+    publicKey: normalizedKey,
+    implementation: 'argent_v04'
+  })
   if (typeof result !== 'object' || result === null) {
     throw new Error('Starknet compute-address result is invalid')
   }

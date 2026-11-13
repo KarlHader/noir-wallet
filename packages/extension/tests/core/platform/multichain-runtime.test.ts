@@ -514,6 +514,18 @@ test.describe('Multichain Worker runtime boundaries', () => {
         kdfParams: { ...VAULT.kdfParams, iterations: 3 }
       })
     ).toThrow()
+    expect(() =>
+      parseRawEncryptedVault({
+        ...VAULT,
+        kdfParams: { memoryKib: 64 * 1024, iterations: 2, parallelism: 1 }
+      })
+    ).toThrow()
+    expect(() =>
+      parseRawEncryptedVault({
+        ...VAULT,
+        kdfParams: { memoryKib: 64 * 1024, iterations: 3, parallelism: 2 }
+      })
+    ).toThrow()
   })
 
   test('round-trips binary payloads through the Chrome JSON message codec', () => {

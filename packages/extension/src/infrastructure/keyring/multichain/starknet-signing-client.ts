@@ -106,35 +106,51 @@ export class StarknetMultichainSigningClient {
     return this.publicCommand('starknet.compute-address', payload, signal)
   }
 
-  async buildUnsignedInvoke(
+  async prepareInvokeExternal(
     payload: KeyringCommandPayload,
     signal?: AbortSignal
   ): Promise<unknown> {
-    return this.publicCommand('starknet.build-unsigned-invoke', payload, signal)
+    return this.publicCommand('starknet.prepare-invoke-external', payload, signal)
   }
 
-  async buildUnsignedDeployAccount(
+  async assembleInvokeExternal(
     payload: KeyringCommandPayload,
     signal?: AbortSignal
   ): Promise<unknown> {
-    return this.publicCommand('starknet.build-unsigned-deploy-account', payload, signal)
+    return this.publicCommand('starknet.assemble-invoke-external', payload, signal)
   }
 
-  async attachSignature(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown> {
-    return this.publicCommand('starknet.attach-signature', payload, signal)
+  async prepareDeployExternal(
+    payload: KeyringCommandPayload,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    return this.publicCommand('starknet.prepare-deploy-external', payload, signal)
+  }
+
+  async assembleDeployExternal(
+    payload: KeyringCommandPayload,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    return this.publicCommand('starknet.assemble-deploy-external', payload, signal)
   }
 
   async hashTypedData(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown> {
     return this.publicCommand('starknet.hash-typed-data', payload, signal)
   }
 
+  async verifySignature(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown> {
+    return this.publicCommand('starknet.verify-signature', payload, signal)
+  }
+
   private async publicCommand(
     operation:
       | 'starknet.compute-address'
-      | 'starknet.build-unsigned-invoke'
-      | 'starknet.build-unsigned-deploy-account'
-      | 'starknet.attach-signature'
-      | 'starknet.hash-typed-data',
+      | 'starknet.prepare-invoke-external'
+      | 'starknet.assemble-invoke-external'
+      | 'starknet.prepare-deploy-external'
+      | 'starknet.assemble-deploy-external'
+      | 'starknet.hash-typed-data'
+      | 'starknet.verify-signature',
     payload: KeyringCommandPayload,
     signal?: AbortSignal
   ): Promise<unknown> {

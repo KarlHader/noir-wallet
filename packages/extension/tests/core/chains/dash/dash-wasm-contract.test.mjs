@@ -43,7 +43,7 @@ test.describe('Dash WASM contract', () => {
     const info = new WalletEngine().coreInfo()
 
     expect(info).toMatchObject({
-      apiVersion: 11,
+      apiVersion: 10,
       vaultVersions: [1, 2]
     })
     expect(info.capabilities).toEqual(
@@ -258,7 +258,7 @@ function expectVault(vault) {
     version: 2,
     kdf: 'argon2id',
     cipher: 'xchacha20poly1305',
-    kdfParams: { memoryKib: 19456, iterations: 2, parallelism: 1 }
+    kdfParams: { memoryKib: 65536, iterations: 3, parallelism: 1 }
   })
   expect(vault).not.toHaveProperty('kind')
   for (const field of ['salt', 'nonce', 'ciphertext']) {

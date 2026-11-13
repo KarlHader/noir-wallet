@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "engine": "multichain",
   "packageVersion": "0.1.0",
-  "abiVersion": "wallet-engine-1659f95-v11",
-  "sourceCommit": "1659f959ca34f07072c0fe75c8c07b12eebe348c",
+  "abiVersion": "wallet-engine-fc72763-v10",
+  "sourceCommit": "fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05",
   "artifacts": [
     {
       "path": "package.json",
@@ -14,26 +14,26 @@
     {
       "path": "wallet_wasm.d.ts",
       "role": "types",
-      "bytes": 21087,
-      "sha256": "48be874f5cd799fbd8104fda24b4c43dac6ff63c754fc90d405eabe806e24045"
+      "bytes": 22143,
+      "sha256": "64aca4a22d8fbe06879910d34556e2aa57a5742cc03f34e7fd74fcafa59f6d09"
     },
     {
       "path": "wallet_wasm.js",
       "role": "loader",
-      "bytes": 106771,
-      "sha256": "3d6067bf9f73a3502013ccbbfdcc15dd4e59afde8f58117842633d03111e9eec"
+      "bytes": 112180,
+      "sha256": "294a6bcafbaa2cdc1fcb9a91aab2ec1db20903cad166e954aed81bf83b257204"
     },
     {
       "path": "wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 4485101,
-      "sha256": "1b061ba6d26343e97fa6f11698c835128cc9c1b5b26a87cb47c8fa96fe2ca623"
+      "bytes": 4522980,
+      "sha256": "f58dd28d3455aed65fdec586df02031cb46f339d567af8f066a956a68d4f67ee"
     },
     {
       "path": "wallet_wasm_bg.wasm.d.ts",
       "role": "binary-types",
-      "bytes": 11996,
-      "sha256": "d303e6d76f60b47e7734ae2b9dbdb150ccbfebdaad77fc30a046fbbd143317c4"
+      "bytes": 12653,
+      "sha256": "a0e226374d7b03c814801b7db96cd4e0d2b5991b35fed1e3c3233dcae446190d"
     }
   ],
   "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",

@@ -18,6 +18,7 @@ import {
   type StarknetTransferAccount,
   type StarknetTransferSigner
 } from '@/infrastructure/chains/starknet'
+import type { KeyringCommandPayload } from '@/core/keyring/ports'
 import { StarknetMultichainSigningClient } from '@/infrastructure/keyring/multichain/starknet-signing-client'
 import {
   IndexedDbCredentialRepository,
@@ -30,7 +31,14 @@ import {
   normalizeLedgerStarknetCalls,
   readLedgerStarknetTransactionNonce
 } from '@/lib/ledger/starknet-calls'
-import { parseUnsignedBuild } from '@/infrastructure/chains/starknet/starknet-transfer-preparer'
+import {
+  parseStarknetExternalPreparation,
+  readAssembledStarknetTransaction,
+  starknetDeployExternalRequest,
+  starknetExternalAssembleRequest,
+  starknetExternalImplementation,
+  starknetInvokeExternalRequest
+} from '@/infrastructure/chains/starknet/starknet-external-transaction'
 import {
   STARKNET_ARGENT_V04_CLASS_HASH,
   STARKNET_ARGENT_V05_CLASS_HASH
@@ -177,8 +185,8 @@ export function createBackgroundStarknetTransferController(
   const orchestrator = new StarknetTransferOrchestrator({
     rpc: createStarknetRpcClient({ chainId: config.chainId, rpcUrl: starknetRpcUrl(settings) }),
     builder: {
-      buildUnsignedInvoke: payload => signer.buildUnsignedInvoke(payload),
-      buildUnsignedDeployAccount: payload => signer.buildUnsignedDeployAccount(payload)
+      prepareInvoke: payload => starknetExternalClient(signer).prepareInvokeExternal(payload),
+      prepareDeploy: payload => starknetExternalClient(signer).prepareDeployExternal(payload)
     },
     signer: {
       prepare: async (keyDomainId, payload) => {
@@ -293,13 +301,12 @@ async function signStarknetLedgerTransaction(
     input.account.chainAccount.identity.kind === 'account-identifier'
       ? input.account.chainAccount.identity.value
       : ''
-  const nonce = readLedgerStarknetTransactionNonce(input.transaction)
+  const reviewed = input.transaction
+  const nonce = readLedgerStarknetTransactionNonce(reviewed)
   const invokeCalls =
-    input.kind === 'starknet-invoke' ? normalizeLedgerStarknetCalls(input.calls ?? []) : null
-  // Unsigned transactions flatten calldata. The device payload keeps the reviewed
-  // calls; signature attachment still uses the original transaction.
-  const ledgerTransaction =
-    invokeCalls === null ? input.transaction : { ...input.transaction, calls: invokeCalls }
+    input.kind === 'starknet-invoke'
+      ? normalizeLedgerStarknetCalls(summaryCallRecords(reviewed))
+      : null
   const summary = parseSigningSummary(
     input.kind === 'starknet-deploy-account'
       ? {
@@ -310,13 +317,16 @@ async function signStarknetLedgerTransaction(
           fields: {
             contractAddress: address,
             classHash: input.account.classHash,
-            salt: input.account.publicKey,
-            constructorCalldata: input.constructorCalldata ?? [input.account.publicKey],
+            salt: summaryFelt(reviewed, 'salt'),
+            constructorCalldata: summaryFeltList(
+              reviewed.constructorCalldata,
+              'constructor calldata'
+            ),
             nonce,
-            tip: '0',
+            tip: summaryTip(reviewed),
             resourceBounds: input.resourceBounds,
-            nonceDataAvailabilityMode: 'l1',
-            feeDataAvailabilityMode: 'l1'
+            nonceDataAvailabilityMode: summaryMode(reviewed.nonceDataAvailabilityMode),
+            feeDataAvailabilityMode: summaryMode(reviewed.feeDataAvailabilityMode)
           }
         }
       : {
@@ -333,11 +343,11 @@ async function signStarknetLedgerTransaction(
           fields: {
             senderAddress: address,
             nonce,
-            tip: '0',
+            tip: summaryTip(reviewed),
             resourceBounds: input.resourceBounds,
             calls: invokeCalls ?? [],
-            nonceDataAvailabilityMode: 'l1',
-            feeDataAvailabilityMode: 'l1'
+            nonceDataAvailabilityMode: summaryMode(reviewed.nonceDataAvailabilityMode),
+            feeDataAvailabilityMode: summaryMode(reviewed.feeDataAvailabilityMode)
           }
         },
     { family: 'starknet', chainId: scopeChainId, operation: 'transaction' }
@@ -352,7 +362,7 @@ async function signStarknetLedgerTransaction(
       classHash: input.account.classHash,
       blindSigning: false,
       transactionHash: input.transactionHash,
-      transaction: ledgerTransaction
+      transaction: reviewed
     },
     {
       scope: {
@@ -374,19 +384,17 @@ async function signStarknetLedgerTransaction(
   )
   if (response.kind !== input.kind)
     throw new Error('Starknet Ledger signature does not match the review')
-  const attached = parseUnsignedBuild(
-    await signer.attachSignature({
-      chainId,
-      publicKey: input.account.publicKey,
-      signature: response.signature,
-      transaction: input.transaction
-    }),
-    false
+  const external = starknetExternalClient(signer)
+  const assembledRequest = starknetExternalAssembleRequest(input.request, response.signature)
+  const assembled =
+    input.kind === 'starknet-deploy-account'
+      ? await external.assembleDeployExternal(assembledRequest)
+      : await external.assembleInvokeExternal(assembledRequest)
+  return readAssembledStarknetTransaction(
+    assembled,
+    input.kind === 'starknet-deploy-account' ? 'deploy' : 'invoke',
+    input.transactionHash
   )
-  if (attached.transactionHash !== input.transactionHash) {
-    throw new Error('Starknet signature does not match the review')
-  }
-  return attached.transaction
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -477,66 +485,57 @@ export function createStarknetLedgerDappSigner(
         throw new Error('Starknet Ledger account is not selected')
       }
       const classHash = normalizeStarknetFelt(context.classHash)
+      const external = starknetExternalClient(signer)
       if (input.quote.deploy) {
-        const constructorCalldata =
-          classHash === normalizeStarknetFelt(STARKNET_ARGENT_V04_CLASS_HASH)
-            ? ['0x0', input.account.publicKey, '0x1']
-            : []
-        const builtDeploy = parseUnsignedBuild(
-          await signer.buildUnsignedDeployAccount({
-            chainId: input.chainId,
-            senderAddress: input.account.address,
-            publicKey: input.account.publicKey,
-            classHash: input.account.classHash,
-            nonce: input.quote.deploy.nonce,
-            resourceBounds: input.quote.deploy.resourceBounds,
-            paymasterData: [],
-            constructorCalldata,
-            query: false
-          }),
-          false
+        const request = starknetDeployExternalRequest({
+          chainId: input.chainId,
+          publicKey: input.account.publicKey,
+          accountAddress: input.account.address,
+          classHash: input.account.classHash,
+          nonce: input.quote.deploy.nonce,
+          resourceBounds: input.quote.deploy.resourceBounds
+        })
+        const prepared = parseStarknetExternalPreparation(
+          await external.prepareDeployExternal(request)
         )
         const signedDeploy = await signStarknetLedgerTransaction(signer, {
           account: context,
           kind: 'starknet-deploy-account',
-          transactionHash: builtDeploy.transactionHash,
-          transaction: builtDeploy.transaction,
+          transactionHash: prepared.signingHash,
+          transaction: prepared.summary,
           resourceBounds: input.quote.deploy.resourceBounds,
-          constructorCalldata
+          request
         })
         const deployHash = await rpc.addDeployAccountTransaction(signedDeploy)
-        if (deployHash !== builtDeploy.transactionHash) {
+        if (deployHash !== prepared.signingHash) {
           throw new Error('Starknet deploy hash does not match the review')
         }
       } else if (classHash === normalizeStarknetFelt(STARKNET_ARGENT_V05_CLASS_HASH)) {
         const deployment = await readStarknetAccountDeployment(rpc, input.account.address)
         if (!deployment.deployed) throw new Error('Starknet hardware deploy is not enabled')
       }
-      const built = parseUnsignedBuild(
-        await signer.buildUnsignedInvoke({
-          chainId: input.chainId,
-          senderAddress: input.account.address,
-          publicKey: input.account.publicKey,
-          classHash: input.account.classHash,
-          calls: input.calls,
-          nonce: input.quote.nonce,
-          resourceBounds: input.quote.resourceBounds,
-          paymasterData: [],
-          accountDeploymentData: [],
-          query: false
-        }),
-        false
+      const request = starknetInvokeExternalRequest({
+        chainId: input.chainId,
+        publicKey: input.account.publicKey,
+        accountAddress: input.account.address,
+        classHash: input.account.classHash,
+        calls: input.calls,
+        nonce: input.quote.nonce,
+        resourceBounds: input.quote.resourceBounds
+      })
+      const prepared = parseStarknetExternalPreparation(
+        await external.prepareInvokeExternal(request)
       )
       const signed = await signStarknetLedgerTransaction(signer, {
         account: context,
         kind: 'starknet-invoke',
-        transactionHash: built.transactionHash,
-        transaction: built.transaction,
+        transactionHash: prepared.signingHash,
+        transaction: prepared.summary,
         resourceBounds: input.quote.resourceBounds,
-        calls: input.calls.map(call => ({ ...call }))
+        request
       })
       const transactionHash = await rpc.addInvokeTransaction(signed)
-      if (transactionHash !== built.transactionHash) {
+      if (transactionHash !== prepared.signingHash) {
         throw new Error('Starknet signature does not match the review')
       }
       return { transactionHash }
@@ -555,6 +554,8 @@ export function createStarknetLedgerDappSigner(
         chainId: input.chainId,
         accountAddress: input.account.address,
         publicKey: input.account.publicKey,
+        classHash: input.account.classHash,
+        implementation: starknetExternalImplementation(input.account.classHash),
         typedData
       })
       const messageHash = readTypedDataHash(hashed)
@@ -610,7 +611,65 @@ export function createStarknetLedgerDappSigner(
 function readTypedDataHash(value: unknown): string {
   if (typeof value !== 'object' || value === null)
     throw new Error('Starknet typed data hash is invalid')
-  const hash = (value as { messageHash?: unknown }).messageHash
+  const hash = (value as { signingHash?: unknown }).signingHash
   if (typeof hash !== 'string') throw new Error('Starknet typed data hash is invalid')
   return hash
+}
+
+interface StarknetExternalSigningMethods {
+  prepareInvokeExternal(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown>
+  assembleInvokeExternal(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown>
+  prepareDeployExternal(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown>
+  assembleDeployExternal(payload: KeyringCommandPayload, signal?: AbortSignal): Promise<unknown>
+}
+
+function starknetExternalClient(
+  signer: StarknetMultichainSigningClient
+): StarknetMultichainSigningClient & StarknetExternalSigningMethods {
+  return signer as StarknetMultichainSigningClient & StarknetExternalSigningMethods
+}
+
+function summaryCallRecords(
+  summary: Readonly<Record<string, unknown>>
+): readonly Readonly<Record<string, unknown>>[] {
+  const calls = summary.calls
+  if (!Array.isArray(calls)) throw new Error('Ledger Starknet transaction has no calls')
+  return calls.map(item => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error('Ledger Starknet transaction has no calls')
+    }
+    return item as Readonly<Record<string, unknown>>
+  })
+}
+
+function summaryFelt(summary: Readonly<Record<string, unknown>>, key: string): string {
+  const value = summary[key]
+  if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
+    throw new Error(`Starknet ${key} is invalid`)
+  }
+  return value.toLowerCase()
+}
+
+function summaryFeltList(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`Starknet ${label} is invalid`)
+  return value.map(item => {
+    if (typeof item !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(item)) {
+      throw new Error(`Starknet ${label} is invalid`)
+    }
+    return item.toLowerCase()
+  })
+}
+
+function summaryTip(summary: Readonly<Record<string, unknown>>): string {
+  const tip = summary.tip ?? '0'
+  if (typeof tip !== 'string' || !/^(0|[1-9][0-9]*)$/.test(tip)) {
+    throw new Error('Starknet tip is invalid')
+  }
+  return tip
+}
+
+function summaryMode(value: unknown): 'l1' | 'l2' {
+  if (value === 'l1' || value === 'L1') return 'l1'
+  if (value === 'l2' || value === 'L2') return 'l2'
+  throw new Error('Starknet data availability mode is invalid')
 }

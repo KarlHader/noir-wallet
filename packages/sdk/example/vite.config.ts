@@ -81,7 +81,7 @@ export default defineConfig({
     strictPort: true,
     headers: {
       'Content-Security-Policy':
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:* http://127.0.0.1:*; object-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* https://blockbook.pearlresearch.ai https://blockbook.testnet.pearlresearch.ai;"
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:* http://127.0.0.1:*; object-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* https://blockbook.pearlresearch.ai https://blockbook.testnet.pearlresearch.ai https://starknet-rpc.publicnode.com https://starknet-sepolia-rpc.publicnode.com;"
     },
     proxy: {
       // Same-origin proxies for Create test PSBT (avoids CSP connect-src blocks).

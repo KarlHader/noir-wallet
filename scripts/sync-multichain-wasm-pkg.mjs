@@ -14,8 +14,8 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/multichain-wallet-wasm.git'
-const SOURCE_COMMIT = '1659f959ca34f07072c0fe75c8c07b12eebe348c'
-const ABI_VERSION = 'wallet-engine-1659f95-v11'
+const SOURCE_COMMIT = 'fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05'
+const ABI_VERSION = 'wallet-engine-fc72763-v10'
 const RUST_TOOLCHAIN = '1.96.1'
 const WASM_PACK_VERSION = '0.14.0'
 const WASM_BINDGEN_VERSION = '0.2.126'

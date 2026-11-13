@@ -29,10 +29,12 @@ export const MULTICHAIN_OPERATIONS = Object.freeze([
   'signing.cancel-all',
   'command.cancel',
   'starknet.compute-address',
-  'starknet.build-unsigned-invoke',
-  'starknet.build-unsigned-deploy-account',
-  'starknet.attach-signature',
-  'starknet.hash-typed-data'
+  'starknet.prepare-invoke-external',
+  'starknet.assemble-invoke-external',
+  'starknet.prepare-deploy-external',
+  'starknet.assemble-deploy-external',
+  'starknet.hash-typed-data',
+  'starknet.verify-signature'
 ] as const satisfies readonly KeyringOperation[])
 
 export type MultichainOperation = (typeof MULTICHAIN_OPERATIONS)[number]

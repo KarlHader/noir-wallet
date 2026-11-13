@@ -1,8 +1,8 @@
 import init, { WalletEngine } from '../../generated/wasm/multichain/wallet_wasm.js'
 import manifest from '../../generated/wasm/multichain/wasm-integrity.json'
 
-export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-1659f95-v11'
-export const PINNED_MULTICHAIN_SOURCE_COMMIT = '1659f959ca34f07072c0fe75c8c07b12eebe348c'
+export const PINNED_MULTICHAIN_ABI_VERSION = 'wallet-engine-fc72763-v10'
+export const PINNED_MULTICHAIN_SOURCE_COMMIT = 'fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05'
 export const PINNED_MULTICHAIN_CAPABILITIES = Object.freeze(
   [
     'account.bitcoin.batch-derive',

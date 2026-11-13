@@ -1,7 +1,6 @@
 import {
   assertExactKeys,
   readArray,
-  readBoolean,
   readLiteral,
   readRecord,
   readSafeInteger,
@@ -29,11 +28,11 @@ export interface RawDerivedStarknetAccount {
   readonly derivationPath: string
   readonly curve: 'stark'
   readonly addressScheme: 'starknet'
-  readonly derivationScheme: 'bip44'
+  readonly derivationScheme: 'bip44' | 'imported'
   readonly network: 'mainnet' | 'sepolia'
   readonly classHash: string
-  readonly implementation: 'open_zeppelin'
-  readonly source: 'derived'
+  readonly implementation: 'open_zeppelin' | 'argent_v04'
+  readonly source: 'derived' | 'external'
 }
 
 export function readStarknetChainId(value: unknown): (typeof STARKNET_CHAIN_IDS)[number] {
@@ -119,12 +118,29 @@ export function parseRawStarknetAccount(value: unknown): RawDerivedStarknetAccou
   )
   readLiteral(record.curve, ['stark'], 'Starknet curve')
   readLiteral(record.addressScheme, ['starknet'], 'Starknet address scheme')
-  readLiteral(record.derivationScheme, ['bip44'], 'Starknet derivation scheme')
-  readLiteral(record.implementation, ['open_zeppelin'], 'Starknet implementation')
-  readLiteral(record.source, ['derived'], 'Starknet account source')
+  const derivationScheme = readLiteral(
+    record.derivationScheme,
+    ['bip44', 'imported'] as const,
+    'Starknet derivation scheme'
+  )
+  const implementation = readLiteral(
+    record.implementation,
+    ['open_zeppelin', 'argent_v04'] as const,
+    'Starknet implementation'
+  )
+  const source = readLiteral(
+    record.source,
+    ['derived', 'external'] as const,
+    'Starknet account source'
+  )
   const derivationPath = readString(record.derivationPath, 'derivationPath', 128)
-  if (!/^m\/44'\/9004'\/\d+'\/0\/\d+$/.test(derivationPath)) {
-    throw new Error('Starknet derivation path is not the software path')
+  // Session accounts stay on the software BIP-44 path. External signers publish path "m".
+  if (source === 'derived') {
+    if (derivationScheme !== 'bip44' || !/^m\/44'\/9004'\/\d+'\/0\/\d+$/.test(derivationPath)) {
+      throw new Error('Starknet derivation path is not the software path')
+    }
+  } else if (derivationScheme !== 'imported' || derivationPath !== 'm') {
+    throw new Error('Starknet external account derivation is invalid')
   }
   return Object.freeze({
     accountId: readString(record.accountId, 'accountId', 256),
@@ -133,15 +149,16 @@ export function parseRawStarknetAccount(value: unknown): RawDerivedStarknetAccou
     derivationPath,
     curve: 'stark',
     addressScheme: 'starknet',
-    derivationScheme: 'bip44',
+    derivationScheme,
     network: readLiteral(record.network, ['mainnet', 'sepolia'], 'Starknet network'),
     classHash: readStarknetFelt(record.classHash, 'classHash'),
-    implementation: 'open_zeppelin',
-    source: 'derived'
+    implementation,
+    source
   })
 }
 
-export function assertStarknetPublicResult(value: unknown): UnknownRecord {
+export function assertStarknetPublicResult(value: unknown): UnknownRecord | boolean {
+  if (typeof value === 'boolean') return value
   const record = readRecord(value, 'Starknet public result')
   const forbidden = ['privateKey', 'seed', 'mnemonic', 'sessionId', 'password']
   for (const key of Object.keys(record)) {
@@ -150,14 +167,94 @@ export function assertStarknetPublicResult(value: unknown): UnknownRecord {
   return record
 }
 
+export interface RawStarknetExternalPrepareResult {
+  readonly account: RawDerivedStarknetAccount
+  readonly signingHash: string
+  readonly summary: UnknownRecord
+}
+
+export interface RawStarknetAssembledInvoke {
+  readonly transactionHash: string
+  readonly signature: readonly [string, string]
+  readonly invokeTransaction: UnknownRecord
+}
+
+export interface RawStarknetAssembledDeploy {
+  readonly transactionHash: string
+  readonly contractAddress: string
+  readonly signature: readonly [string, string]
+  readonly deployAccountTransaction: UnknownRecord
+}
+
+function readPublicRecord(value: unknown, label: string): UnknownRecord {
+  const result = assertStarknetPublicResult(value)
+  if (typeof result === 'boolean') throw new Error(`${label} must be an object`)
+  return result
+}
+
+export function readStarknetSignature(value: unknown): readonly [string, string] {
+  const signature = readArray(value, 'signature', item => readStarknetFelt(item, 'signature'), 2)
+  if (signature.length !== 2) throw new Error('Starknet signature must be [r, s]')
+  return Object.freeze([signature[0], signature[1]])
+}
+
+export function parseStarknetExternalPrepareResult(
+  value: unknown
+): RawStarknetExternalPrepareResult {
+  const record = readPublicRecord(value, 'Starknet prepare result')
+  assertExactKeys(record, ['account', 'signingHash', 'summary'], [], 'Starknet prepare result')
+  return Object.freeze({
+    account: parseRawStarknetAccount(record.account),
+    signingHash: readStarknetFelt(record.signingHash, 'signingHash'),
+    summary: readRecord(record.summary, 'summary')
+  })
+}
+
+export function parseStarknetAssembledInvoke(value: unknown): RawStarknetAssembledInvoke {
+  const record = readPublicRecord(value, 'Starknet assembled invoke')
+  assertExactKeys(
+    record,
+    ['transactionHash', 'signature', 'invokeTransaction'],
+    [],
+    'Starknet assembled invoke'
+  )
+  const invokeTransaction = readRecord(record.invokeTransaction, 'invokeTransaction')
+  if (invokeTransaction.type !== 'INVOKE') {
+    throw new Error('invokeTransaction type is invalid')
+  }
+  return Object.freeze({
+    transactionHash: readStarknetFelt(record.transactionHash, 'transactionHash'),
+    signature: readStarknetSignature(record.signature),
+    invokeTransaction
+  })
+}
+
+export function parseStarknetAssembledDeploy(value: unknown): RawStarknetAssembledDeploy {
+  const record = readPublicRecord(value, 'Starknet assembled deploy')
+  assertExactKeys(
+    record,
+    ['transactionHash', 'contractAddress', 'signature', 'deployAccountTransaction'],
+    [],
+    'Starknet assembled deploy'
+  )
+  const deployAccountTransaction = readRecord(
+    record.deployAccountTransaction,
+    'deployAccountTransaction'
+  )
+  if (deployAccountTransaction.type !== 'DEPLOY_ACCOUNT') {
+    throw new Error('deployAccountTransaction type is invalid')
+  }
+  return Object.freeze({
+    transactionHash: readStarknetFelt(record.transactionHash, 'transactionHash'),
+    contractAddress: readStarknetFelt(record.contractAddress, 'contractAddress'),
+    signature: readStarknetSignature(record.signature),
+    deployAccountTransaction
+  })
+}
+
 export function readOptionalFeltList(value: unknown, label: string): readonly string[] | undefined {
   if (value === undefined) return undefined
   return readArray(value, label, item => readStarknetFelt(item, label), MAX_CALLDATA)
-}
-
-export function readQueryFlag(value: unknown): boolean {
-  if (value === undefined) return false
-  return readBoolean(value, 'query')
 }
 
 export function readAddressIndex(value: unknown, label: string): number {
