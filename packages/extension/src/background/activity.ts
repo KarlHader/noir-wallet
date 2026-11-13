@@ -340,7 +340,12 @@ export function createBackgroundActivityCoordinator(
       if (!state) return Object.freeze([])
       const fresh = await dashHistory.readAddressActivity({
         scope,
-        addresses: state.observations.map(observation => observation.derived.address)
+        ownedAddresses: state.observations.map(observation => observation.derived.address),
+        historyAddresses: state.observations
+          .filter(
+            observation => observation.transactions.length > 0 || observation.utxos.length > 0
+          )
+          .map(observation => observation.derived.address)
       })
       return mergeBoundedActivityItems(fallbackItems, fresh)
     } catch (error) {

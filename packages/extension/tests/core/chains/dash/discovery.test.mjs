@@ -9,7 +9,7 @@ import {
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions
 } from '../../../../src/core/chains/registry/index.ts'
-import { DASH_COINBASE_MATURITY, DASH_GAP_LIMIT } from '../../../../src/infrastructure/chains/dash/config.ts'
+import { DASH_COINBASE_MATURITY, DASH_GAP_LIMIT, DASH_LOOKAHEAD_ADDRESSES } from '../../../../src/infrastructure/chains/dash/config.ts'
 import { DashRpcError, parseDashAddressTransactions, parseDashTransaction, parseDashUtxos } from '../../../../src/infrastructure/chains/dash/dash-insight-codecs.ts'
 import { DashDiscoveryCoordinator } from '../../../../src/infrastructure/chains/dash/dash-discovery-coordinator.ts'
 import { dashCurrentReceiveAddress } from '../../../../src/infrastructure/chains/dash/dash-discovery-model.ts'
@@ -179,6 +179,7 @@ function createDiscovery(
       return pageBody
     },
     async getAddressUtxos(addresses) {
+      calls.push({ kind: 'utxos', count: addresses.length })
       if (fail()) throw new DashRpcError('network-unavailable', 'Dash Insight is unavailable')
       const raw = addresses.flatMap(address => plans.get(address)?.utxos ?? [])
       return parseDashUtxos(raw, addresses)
@@ -226,6 +227,24 @@ function createDiscovery(
           masterFingerprint: '0xabcdef01',
           scriptPubKey: `0x${located.script}`
         }
+      },
+      async deriveAddresses(keyDomainId, input, signal) {
+        const derived = []
+        for (let offset = 0; offset < input.count; offset += 1) {
+          derived.push(
+            await this.deriveAddress(
+              keyDomainId,
+              {
+                chainId: input.chainId,
+                accountIndex: input.accountIndex,
+                change: input.change,
+                addressIndex: input.startAddressIndex + offset
+              },
+              signal
+            )
+          )
+        }
+        return derived
       }
     },
     rpc
@@ -255,6 +274,22 @@ function createDiscovery(
 
 function receiveAddress(index) {
   return p2pkh(140, index)
+}
+
+function historyAddresses(calls) {
+  return new Set(calls.filter(call => Number.isInteger(call.page)).map(call => call.address))
+}
+
+function derivedIndexes(calls, change, { withHistory }) {
+  const history = historyAddresses(calls)
+  return calls
+    .filter(
+      call =>
+        call.kind === 'derive' &&
+        call.change === change &&
+        history.has(call.address) === withHistory
+    )
+    .map(call => call.addressIndex)
 }
 
 test('stops a P2PKH scan after 20 unused addresses and resumes an interrupted history page', async () => {
@@ -288,14 +323,19 @@ test('stops a P2PKH scan after 20 unused addresses and resumes an interrupted hi
   const receiveIndexes = harness.calls
     .filter(call => call.kind === 'derive' && call.change === false)
     .map(call => call.addressIndex)
-  const changeIndexes = harness.calls
-    .filter(call => call.kind === 'derive' && call.change === true)
-    .map(call => call.addressIndex)
-  expect([...new Set(receiveIndexes)]).toEqual([...Array(21).keys()])
+  expect([...new Set(derivedIndexes(harness.calls, false, { withHistory: true }))]).toEqual([
+    ...Array(21).keys()
+  ])
   expect(receiveIndexes.filter(index => index === 0)).toEqual([0, 0])
-  expect(receiveIndexes).not.toContain(21)
-  expect(changeIndexes).toEqual([...Array(DASH_GAP_LIMIT).keys()])
-  expect(changeIndexes).not.toContain(DASH_GAP_LIMIT)
+  expect(derivedIndexes(harness.calls, false, { withHistory: false })).toEqual(
+    [...Array(DASH_LOOKAHEAD_ADDRESSES).keys()].map(index => index + 21)
+  )
+  expect(derivedIndexes(harness.calls, true, { withHistory: true })).toEqual([
+    ...Array(DASH_GAP_LIMIT).keys()
+  ])
+  expect(derivedIndexes(harness.calls, true, { withHistory: false })).toEqual(
+    [...Array(DASH_LOOKAHEAD_ADDRESSES).keys()].map(index => index + DASH_GAP_LIMIT)
+  )
   expect(dashCurrentReceiveAddress(resumed)).toBe(receiveAddress(1).address)
   expect(resumed.observations.find(item => item.derived.address === receiveAddress(1).address)?.derived.privacy).toBe(
     'transparent'
@@ -481,9 +521,7 @@ test('includes a reserved change output that was allocated beyond the completed 
   const harness = createDiscovery(account, plans, { changeReservations: reservations })
   const initial = await harness.portfolio.refreshActiveSource()
   expect(initial.source.balances[0].totalRaw).toBe('0')
-  expect(
-    harness.calls.filter(call => call.kind === 'derive' && call.change).map(call => call.addressIndex)
-  ).not.toContain(DASH_GAP_LIMIT)
+  expect(derivedIndexes(harness.calls, true, { withHistory: true })).not.toContain(DASH_GAP_LIMIT)
 
   reservations.push({ state: 'committed', addressIndex: DASH_GAP_LIMIT })
   plans.set(change.address, {
@@ -506,7 +544,85 @@ test('includes a reserved change output that was allocated beyond the completed 
   })
   const state = await harness.repository.get({ chainAccount: account, accountIndex: 0 })
   expect(collectDashSpendableUtxos(state.observations).map(item => item.valueDuffs)).toEqual(['3080582'])
+  expect(derivedIndexes(harness.calls, true, { withHistory: true })).toContain(DASH_GAP_LIMIT)
+})
+
+test('finds a change output beyond the completed gap without a local reservation', async () => {
+  const receive = receiveAddress(0)
+  const account = chainAccount({ network: 'testnet', address: receive.address })
+  const change = p2pkh(140, 100 + DASH_GAP_LIMIT)
+  const plans = new Map()
+  const harness = createDiscovery(account, plans, { changeReservations: [] })
+  const initial = await harness.portfolio.refreshActiveSource()
+  expect(initial.source.balances[0].totalRaw).toBe('0')
+  expect(derivedIndexes(harness.calls, true, { withHistory: true })).not.toContain(DASH_GAP_LIMIT)
+
+  plans.set(change.address, {
+    pages: [[
+      insightTransaction({
+        id: 51,
+        address: change.address,
+        script: change.script,
+        duffs: 3_080_582n,
+        confirmations: 1660
+      })
+    ]],
+    utxos: [utxo(change.address, 51, change.script, 3_080_582n, 1660)]
+  })
+  const recovered = await harness.portfolio.refreshActiveSource()
+  expect(recovered.source.balances[0]).toMatchObject({
+    totalRaw: '3080582',
+    spendableRaw: '3080582',
+    availableRaw: '3080582'
+  })
+  const state = await harness.repository.get({ chainAccount: account, accountIndex: 0 })
   expect(
-    harness.calls.filter(call => call.kind === 'derive' && call.change).map(call => call.addressIndex)
-  ).toContain(DASH_GAP_LIMIT)
+    state.observations.find(item => item.derived.address === change.address)?.derived.addressIndex
+  ).toBe(DASH_GAP_LIMIT)
+  expect(harness.calls.some(call => call.kind === 'utxos' && call.count > 1)).toBe(true)
+})
+
+function derivedChange(addressIndex) {
+  const located = p2pkh(140, 100 + addressIndex)
+  return {
+    chainId: DASH_CHAIN_IDS.testnet,
+    network: 'testnet',
+    accountIndex: 0,
+    change: true,
+    addressIndex,
+    address: located.address,
+    scheme: 'dash_p2pkh',
+    purpose: 'change',
+    privacy: 'transparent',
+    derivationScheme: 'bip44',
+    derivationPath: `m/44'/1'/0'/1/${addressIndex}`,
+    publicKey: PUBLIC_KEY,
+    scriptPubKey: `0x${located.script}`
+  }
+}
+
+test('finds a reserved change output beyond the lookahead window in one refresh', async () => {
+  const receive = receiveAddress(0)
+  const account = chainAccount({ network: 'testnet', address: receive.address })
+  const addressIndex = DASH_GAP_LIMIT + DASH_LOOKAHEAD_ADDRESSES
+  const change = derivedChange(addressIndex)
+  const plans = new Map()
+  const reservations = []
+  const harness = createDiscovery(account, plans, { changeReservations: reservations })
+  const initial = await harness.portfolio.refreshActiveSource()
+  expect(initial.source.balances[0].totalRaw).toBe('0')
+
+  reservations.push({ state: 'committed', addressIndex, address: change })
+  plans.set(change.address, {
+    utxos: [utxo(change.address, 52, change.scriptPubKey.slice(2), 3_080_582n, 1)]
+  })
+  const historyBefore = harness.calls.filter(call => Number.isInteger(call.page)).length
+  const recovered = await harness.portfolio.refreshActiveSource()
+  const historyAfter = harness.calls.filter(call => Number.isInteger(call.page)).length
+  expect(historyAfter - historyBefore).toBeLessThanOrEqual(DASH_GAP_LIMIT)
+  expect(recovered.source.balances[0]).toMatchObject({
+    totalRaw: '3080582',
+    spendableRaw: '3080582',
+    availableRaw: '3080582'
+  })
 })

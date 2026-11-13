@@ -220,6 +220,118 @@ test('broadcast timeout stays pending and recovery does not sign again', async (
   expect(recovered[0].graph.root.status).toBe('broadcast')
 })
 
+test('invalid broadcast response keeps the reservation unless the transaction is already visible', async () => {
+  const { privateKey, publicKey, address, utxo } = walletFixture()
+  const recipient = p2pkh(9)
+  const selection = selectDashCoins({
+    chainId: CHAIN,
+    accountIndex: 0,
+    imported: false,
+    recipient,
+    amount: { mode: 'max' },
+    feeRateDuffsPerKb: FEE_RATE.toString(),
+    utxos: [utxo]
+  })
+  const prepared = buildDashPsbt({ selection, masterFingerprint: '0x0a0b0c0d' })
+  const account = chainAccount(address)
+  const visible = new Set()
+  const transitions = []
+  const reservations = new MemoryDashInputReservationRepository()
+  const inputReservation = await reservations.reserve({
+    chainAccount: account,
+    accountIndex: 0,
+    transactionId: 'transaction:dash:ambiguous',
+    outpoints: [{ transactionId: utxo.transactionId, outputIndex: utxo.outputIndex }],
+    now: 10
+  })
+  const signer = {
+    async prepare() {
+      return {
+        commandId: 'signing-command:dash:ambiguous',
+        chainId: CHAIN,
+        operation: 'transaction',
+        summary: createDashSigningSummary(prepared, address),
+        payloadFingerprint: {
+          algorithm: 'sha256',
+          digestHex: await computeDashSigningPayloadFingerprint(prepared.psbtBase64)
+        },
+        execution: { kind: 'internal' },
+        expiresAt: 50_000
+      }
+    },
+    async confirm() {
+      const psbt = Psbt.fromBase64(prepared.psbtBase64, { network: NETWORK })
+      psbt.signInput(0, {
+        publicKey,
+        sign: hash => Buffer.from(secp256k1.sign(hash, privateKey))
+      })
+      return { kind: 'signed-payload', payload: { encoding: 'base64', value: psbt.toBase64() } }
+    },
+    async cancel() {}
+  }
+  let event = 0
+  const orchestrator = new DashTransferOrchestrator({
+    repository: new InMemoryTransactionRepository(),
+    pendingStore: new MemoryDashPendingTransferStore(),
+    signer,
+    rpc: {
+      async broadcastRawTransaction() {
+        throw new DashRpcError('invalid-response', 'Dash RPC response is not valid JSON')
+      },
+      async getTransaction(transactionId) {
+        if (!visible.has(transactionId)) throw new DashRpcError('not-found', 'not yet visible')
+        return { transactionId }
+      }
+    },
+    assets,
+    changeReservations: {
+      async transition(input) {
+        transitions.push(input.state)
+        return {}
+      }
+    },
+    inputReservations: reservations,
+    now: () => 1_000,
+    createId: () => `event-ambiguous-${event += 1}`
+  })
+  const authorization = {
+    chainAccountId: account.id,
+    credentialGenerationId: 'generation-1',
+    chainId: CHAIN,
+    accountIndex: 0
+  }
+  await orchestrator.prepare({
+    chainAccount: account,
+    transactionId: 'transaction:dash:ambiguous',
+    segmentId: 'segment:dash:ambiguous',
+    prepared,
+    signerAddress: address,
+    changeReservation: null,
+    inputReservation,
+    authorization
+  })
+  const hidden = await orchestrator.approve({
+    scope: account.scope,
+    transactionId: 'transaction:dash:ambiguous',
+    payloadFingerprint: await computeDashSigningPayloadFingerprint(prepared.psbtBase64),
+    authorization
+  })
+  expect(hidden.status).toBe('signed-pending-broadcast')
+  expect(hidden.graph.root.status).not.toBe('failed')
+  expect(transitions).not.toContain('abandoned')
+  const stillReserved = await reservations.list({ chainAccount: account, accountIndex: 0 })
+  expect(stillReserved[0].state).toBe('reserved')
+
+  const signed = await orchestrator.listSignedPending()
+  visible.add(signed[0].transactionHash)
+  const recovered = await new DashTransactionRecovery(orchestrator).recoverSignedBroadcasts(account.scope)
+  expect(recovered[0].status).toBe('broadcast')
+  expect(recovered[0].graph.root.status).toBe('broadcast')
+  expect(transitions).not.toContain('abandoned')
+  const committed = await reservations.list({ chainAccount: account, accountIndex: 0 })
+  expect(committed[0].state).toBe('committed')
+})
+
 function finalizeSigned(psbt, publicKey, privateKey) {
   psbt.signInput(0, { publicKey, sign: hash => Buffer.from(secp256k1.sign(hash, privateKey)) })
   psbt.finalizeAllInputs()

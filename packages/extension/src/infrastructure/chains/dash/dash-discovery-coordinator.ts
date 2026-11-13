@@ -5,11 +5,13 @@ import { parseChainId } from '@/core/chains/registry'
 import { isDashChainId } from '@/core/chains/registry/chain-ids'
 import { DedupPromise } from '@/lib/async-utils'
 import type { StorageV2GenerationId, StorageV2ReadRepository } from '@/ports/repositories'
+import { DASH_MAX_ADDRESSES_PER_CHAIN } from './config'
 import type { DashChangeReservationRepository } from './dash-change-reservation-model'
 import { DashDiscoveryError, type DashGapLimitScanner } from './dash-gap-limit-scanner'
 import {
   dashDiscoveryComplete,
   parseDashDiscoveryScope,
+  type DashDerivedAddress,
   type DashDiscoveryCheckpoint,
   type DashDiscoveryCursor,
   type DashDiscoveryObservation,
@@ -48,6 +50,59 @@ export interface ScanActiveDashDiscoveryOptions {
 const DEFAULT_MINIMUM_REFRESH_INTERVAL_MS = 5 * 60_000
 const MAXIMUM_MINIMUM_REFRESH_INTERVAL_MS = 10 * 60_000
 
+function replaceCursor(
+  checkpoint: DashDiscoveryCheckpoint,
+  change: boolean,
+  cursor: DashDiscoveryCursor
+): DashDiscoveryCheckpoint {
+  return Object.freeze({
+    ...checkpoint,
+    cursors: Object.freeze(checkpoint.cursors.map(item => (item.change === change ? cursor : item)))
+  })
+}
+
+function observationKey(observation: DashDiscoveryObservation): string {
+  return `${observation.derived.change ? 1 : 0}:${observation.derived.addressIndex}`
+}
+
+function mergeObservations(
+  current: readonly DashDiscoveryObservation[],
+  extra: readonly DashDiscoveryObservation[]
+): readonly DashDiscoveryObservation[] {
+  const merged = new Map<string, DashDiscoveryObservation>()
+  for (const observation of current) merged.set(observationKey(observation), observation)
+  for (const observation of extra) merged.set(observationKey(observation), observation)
+  return Object.freeze([...merged.values()])
+}
+
+function boundChangeAddress(reservation: {
+  readonly state: string
+  readonly addressIndex: number
+  readonly address?: DashDerivedAddress | null
+}): DashDerivedAddress | null {
+  if (reservation.state !== 'committed' && reservation.state !== 'reserved') return null
+  const address = reservation.address
+  if (!address || address.change !== true || address.addressIndex !== reservation.addressIndex) {
+    return null
+  }
+  if (typeof address.address !== 'string' || address.address.length === 0) return null
+  return address
+}
+
+function cursorSignature(checkpoint: DashDiscoveryCheckpoint): string {
+  return checkpoint.cursors
+    .map(cursor =>
+      [
+        cursor.change ? 1 : 0,
+        cursor.nextAddressIndex,
+        cursor.consecutiveUnused,
+        cursor.complete ? 1 : 0,
+        cursor.nextPage
+      ].join(':')
+    )
+    .join('|')
+}
+
 function parseMinimumRefreshInterval(value: number | undefined): number {
   const interval = value ?? DEFAULT_MINIMUM_REFRESH_INTERVAL_MS
   if (
@@ -66,10 +121,16 @@ function reopenDashGap(
   reservations: readonly { readonly state: string; readonly addressIndex: number }[]
 ): DashDiscoveryCheckpoint {
   if (checkpoint.imported) return checkpoint
+  const observedChange = new Set(
+    observations
+      .filter(observation => observation.derived.change)
+      .map(observation => observation.derived.addressIndex)
+  )
   const reservedChangeIndexes = reservations.flatMap(reservation =>
     reservation.state !== 'abandoned' &&
     Number.isSafeInteger(reservation.addressIndex) &&
-    reservation.addressIndex >= 0
+    reservation.addressIndex >= 0 &&
+    !observedChange.has(reservation.addressIndex)
       ? [reservation.addressIndex]
       : []
   )
@@ -81,6 +142,7 @@ function reopenDashGap(
             observation =>
               observation.derived.change === cursor.change &&
               observation.derived.addressIndex >= firstUnused &&
+              observation.derived.addressIndex < cursor.nextAddressIndex &&
               observation.transactions.length > 0
           )
           .sort((left, right) => left.derived.addressIndex - right.derived.addressIndex)[0]
@@ -220,17 +282,7 @@ export class DashDiscoveryCoordinator {
         const reservations = this.options.changeReservations
           ? await this.options.changeReservations.list(context.scope)
           : []
-        const checkpoint = reopenDashGap(cached.checkpoint, observations, reservations)
-        const refreshedAt = this.timestamp()
-        await this.options.discoveryRepository.putRefresh({
-          ...context.scope,
-          checkpoint,
-          observations,
-          updatedAt: refreshedAt
-        })
-        if (!checkpoint.cursors.every(cursor => cursor.complete)) {
-          await this.extend(context, checkpoint, observations)
-        }
+        await this.persistRecoveredGap(context, cached.checkpoint, observations, reservations)
       } catch (error) {
         this.lastRefreshAttempts.delete(context.chainAccount.id)
         throw error
@@ -260,7 +312,123 @@ export class DashDiscoveryCoordinator {
         'Dash discovery stopped before the gap limit'
       )
     }
+    const reservations = this.options.changeReservations
+      ? await this.options.changeReservations.list(context.scope)
+      : []
+    await this.persistRecoveredGap(context, result.checkpoint, result.observations, reservations)
+    if (!(await this.remainsActive(context))) return null
     return this.options.discoveryRepository.get(context.scope)
+  }
+
+  private async persistRecoveredGap(
+    context: ActiveDashDiscoveryContext,
+    startCheckpoint: DashDiscoveryCheckpoint,
+    startObservations: readonly DashDiscoveryObservation[],
+    reservations: readonly {
+      readonly state: string
+      readonly addressIndex: number
+      readonly address?: DashDerivedAddress | null
+    }[]
+  ): Promise<void> {
+    let checkpoint = startCheckpoint
+    let observations = startObservations
+    const seen = new Set<string>()
+    for (let round = 0; round < DASH_MAX_ADDRESSES_PER_CHAIN; round += 1) {
+      const anchored = await this.anchorReservedChange(observations, reservations)
+      observations = mergeObservations(observations, anchored)
+      checkpoint = reopenDashGap(checkpoint, observations, reservations)
+      const looked = await this.reopenFromLookahead(context, checkpoint, observations)
+      checkpoint = looked.checkpoint
+      observations = mergeObservations(observations, looked.observations)
+      const signature = cursorSignature(checkpoint)
+      const fresh = !seen.has(signature)
+      seen.add(signature)
+      await this.options.discoveryRepository.putRefresh({
+        ...context.scope,
+        checkpoint,
+        observations,
+        updatedAt: this.timestamp()
+      })
+      if (checkpoint.cursors.every(cursor => cursor.complete) || !fresh) return
+      await this.extend(context, checkpoint, observations)
+      const state = await this.options.discoveryRepository.get(context.scope)
+      if (!state) return
+      checkpoint = state.checkpoint
+      observations = state.observations
+    }
+  }
+
+  private async anchorReservedChange(
+    observations: readonly DashDiscoveryObservation[],
+    reservations: readonly {
+      readonly state: string
+      readonly addressIndex: number
+      readonly address?: DashDerivedAddress | null
+    }[]
+  ): Promise<readonly DashDiscoveryObservation[]> {
+    const anchored: DashDiscoveryObservation[] = []
+    for (const reservation of reservations) {
+      const address = boundChangeAddress(reservation)
+      if (!address) continue
+      const exists = observations.some(
+        observation =>
+          observation.derived.change === address.change &&
+          observation.derived.addressIndex === address.addressIndex
+      )
+      if (exists) continue
+      anchored.push(await this.options.scanner.observeDerived(address))
+    }
+    return Object.freeze(anchored)
+  }
+
+  private async reopenFromLookahead(
+    context: ActiveDashDiscoveryContext,
+    checkpoint: DashDiscoveryCheckpoint,
+    observations: readonly DashDiscoveryObservation[]
+  ): Promise<{
+    readonly checkpoint: DashDiscoveryCheckpoint
+    readonly observations: readonly DashDiscoveryObservation[]
+  }> {
+    if (checkpoint.imported) {
+      return { checkpoint, observations: Object.freeze([]) }
+    }
+    let next = checkpoint
+    const found: DashDiscoveryObservation[] = []
+    for (const cursor of checkpoint.cursors) {
+      if (!cursor.complete) continue
+      const funded = await this.options.scanner.probeAhead({
+        keyDomainId: context.chainAccount.scope.keyDomainId,
+        scope: context.scope,
+        checkpoint: next,
+        cursor
+      })
+      if (funded.length === 0) continue
+      for (const derived of funded) {
+        const known =
+          observations.some(
+            observation =>
+              observation.derived.change === derived.change &&
+              observation.derived.addressIndex === derived.addressIndex
+          ) ||
+          found.some(
+            observation =>
+              observation.derived.change === derived.change &&
+              observation.derived.addressIndex === derived.addressIndex
+          )
+        if (known) continue
+        found.push(await this.options.scanner.observeDerived(derived))
+      }
+      const nextAddressIndex = funded[funded.length - 1].addressIndex + 1
+      if (nextAddressIndex >= DASH_MAX_ADDRESSES_PER_CHAIN) continue
+      next = replaceCursor(next, cursor.change, {
+        change: cursor.change,
+        nextAddressIndex,
+        consecutiveUnused: 0,
+        complete: false,
+        nextPage: 0
+      })
+    }
+    return { checkpoint: next, observations: Object.freeze(found) }
   }
 
   private async extend(

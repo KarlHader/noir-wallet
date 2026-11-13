@@ -3,7 +3,9 @@ import { expect } from '@playwright/test'
 import bs58check from 'bs58check'
 
 import { DASH_CHAIN_IDS } from '../../../../src/core/chains/registry/chain-ids.ts'
+import { DASH_GAP_LIMIT } from '../../../../src/infrastructure/chains/dash/config.ts'
 import {
+  DASH_CHANGE_RESERVATION_TTL_MS,
   nextDashChangeIndex,
   nextDashChangeStartIndex
 } from '../../../../src/infrastructure/chains/dash/dash-change-reservation-model.ts'
@@ -118,4 +120,34 @@ test('uses the first change address when the scanned gap has not been used', () 
       nextDashChangeStartIndex(used)
     )
   ).toBe(6)
+})
+
+test('reuses an expired change reservation and rejects an index outside the gap', () => {
+  const now = 1_000_000
+  const start = 5
+  expect(
+    nextDashChangeIndex(
+      [{ state: 'reserved', addressIndex: 5, createdAt: now - DASH_CHANGE_RESERVATION_TTL_MS }],
+      start,
+      now
+    )
+  ).toBe(5)
+  expect(
+    nextDashChangeIndex(
+      [{ state: 'allocating', addressIndex: 5, createdAt: now - DASH_CHANGE_RESERVATION_TTL_MS + 1 }],
+      start,
+      now
+    )
+  ).toBe(6)
+  expect(
+    nextDashChangeIndex([{ state: 'committed', addressIndex: 5, createdAt: 0 }], start, now)
+  ).toBe(6)
+  const blocking = [...Array(DASH_GAP_LIMIT).keys()].map(addressIndex => ({
+    state: 'committed',
+    addressIndex,
+    createdAt: 0
+  }))
+  expect(() => nextDashChangeIndex(blocking, 0, now)).toThrow(
+    'Dash change address is outside the scanned gap'
+  )
 })

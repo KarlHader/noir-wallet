@@ -1,7 +1,10 @@
 import type { KeyDomainId } from '@/core/keyring/domain'
-import type { DashAddressDerivationPort } from '@/infrastructure/keyring/multichain/dash-derivation-client'
-import { DASH_GAP_LIMIT, DASH_MAX_ADDRESSES_PER_CHAIN } from './config'
-import type { DashInsightRpc, DashTransaction } from './dash-insight-client'
+import type {
+  DashAddressDerivationPort,
+  DerivedDashAddress
+} from '@/infrastructure/keyring/multichain/dash-derivation-client'
+import { DASH_GAP_LIMIT, DASH_LOOKAHEAD_ADDRESSES, DASH_MAX_ADDRESSES_PER_CHAIN } from './config'
+import type { DashInsightRpc, DashTransaction, DashUtxo } from './dash-insight-client'
 import {
   dashAddressPath,
   initialDashCheckpoint,
@@ -275,44 +278,106 @@ export class DashGapLimitScanner {
   ): Promise<readonly DashDiscoveryObservation[]> {
     if (signal?.aborted) throw new Error('Dash discovery was cancelled')
     await this.options.rpc.assertExpectedChain(signal)
+    if (observations.length === 0) return Object.freeze([])
+    const fetched = await this.options.rpc.getAddressUtxos(
+      observations.map(observation => observation.derived.address),
+      signal
+    )
+    const known = new Map<string, DashObservedTransaction>()
     const reloaded: DashDiscoveryObservation[] = []
     for (const observation of observations) {
-      const fetched = await this.options.rpc.getAddressUtxos([observation.derived.address], signal)
-      const utxos = []
-      const transactions = []
-      for (const utxo of fetched) {
-        if (utxo.address !== observation.derived.address) continue
-        const loaded = await this.options.rpc.getTransaction(utxo.transactionId, signal)
-        const transaction = summary(loaded)
-        transactions.push(transaction)
-        utxos.push(
-          transaction.type === 0
-            ? classifyDashUtxo(utxo, transaction)
-            : classifyDashUtxo(
-                {
-                  transactionId: utxo.transactionId,
-                  outputIndex: utxo.outputIndex,
-                  valueDuffs: utxo.valueDuffs,
-                  confirmations: utxo.confirmations,
-                  ...(utxo.height === undefined ? {} : { height: utxo.height }),
-                  scriptHex: ''
-                },
-                transaction
-              )
-        )
-      }
+      const collected = await this.collectUtxos(observation.derived.address, fetched, known, signal)
       reloaded.push(
         Object.freeze({
           ...observation,
           transactions: Object.freeze(
-            transactions.length > 0 ? transactions : observation.transactions
+            collected.transactions.length > 0 ? collected.transactions : observation.transactions
           ),
-          utxos: Object.freeze(utxos),
+          utxos: collected.utxos,
           historyComplete: true
         })
       )
     }
     return Object.freeze(reloaded)
+  }
+
+  /**
+   * Batch-derives the next lookahead window and returns addresses that still
+   * hold a UTXO. Callers persist those observations directly: a completed gap
+   * cursor cannot be reopened from inside a scan progress write.
+   */
+  async probeAhead(input: {
+    readonly keyDomainId: KeyDomainId
+    readonly scope: DashDiscoveryScope
+    readonly checkpoint: DashDiscoveryCheckpoint
+    readonly cursor: DashDiscoveryCursor
+    readonly signal?: AbortSignal
+  }): Promise<readonly DashDerivedAddress[]> {
+    if (input.scope.imported) return Object.freeze([])
+    if (input.signal?.aborted) throw cancellation(input.checkpoint)
+    const start = input.cursor.nextAddressIndex
+    if (start >= DASH_MAX_ADDRESSES_PER_CHAIN) return Object.freeze([])
+    const count = Math.min(DASH_LOOKAHEAD_ADDRESSES, DASH_MAX_ADDRESSES_PER_CHAIN - start)
+    const scanInput: ScanDashAccountInput = {
+      keyDomainId: input.keyDomainId,
+      scope: input.scope,
+      checkpoint: input.checkpoint,
+      signal: input.signal
+    }
+    let derived: readonly DashDerivedAddress[]
+    try {
+      derived = await this.deriveRange(
+        scanInput,
+        input.cursor.change,
+        start,
+        count,
+        input.checkpoint
+      )
+    } catch (error) {
+      if (error instanceof DashDiscoveryError) throw error
+      if (input.signal?.aborted) throw cancellation(input.checkpoint)
+      throw new DashDiscoveryError(
+        'derivation-failure',
+        input.checkpoint,
+        'Dash address derivation failed',
+        error
+      )
+    }
+    let fetched: readonly DashUtxo[]
+    try {
+      fetched = await this.options.rpc.getAddressUtxos(
+        derived.map(address => address.address),
+        input.signal
+      )
+    } catch (error) {
+      if (input.signal?.aborted) throw cancellation(input.checkpoint)
+      throw new DashDiscoveryError(
+        'rpc-failure',
+        input.checkpoint,
+        'Dash UTXO request failed',
+        error
+      )
+    }
+    const funded = new Set(fetched.map(utxo => utxo.address))
+    return Object.freeze(derived.filter(address => funded.has(address.address)))
+  }
+
+  async observeDerived(
+    derived: DashDerivedAddress,
+    signal?: AbortSignal
+  ): Promise<DashDiscoveryObservation> {
+    if (signal?.aborted) throw new Error('Dash discovery was cancelled')
+    const fetched = await this.options.rpc.getAddressUtxos([derived.address], signal)
+    const collected = await this.collectUtxos(derived.address, fetched, new Map(), signal)
+    const hasHistory = collected.transactions.length > 0
+    return this.observation(
+      derived,
+      1,
+      hasHistory ? 1 : 0,
+      true,
+      collected.transactions,
+      collected.utxos
+    )
   }
 
   private async derive(
@@ -339,42 +404,7 @@ export class DashGapLimitScanner {
         },
         input.signal
       )
-      const path = dashAddressPath(
-        scope.chainAccount.scope.chainId,
-        scope.accountIndex,
-        cursor.change,
-        cursor.nextAddressIndex,
-        scope.imported
-      )
-      if (
-        derived.chainId !== scope.chainAccount.scope.chainId ||
-        derived.network !== scope.network ||
-        derived.accountIndex !== scope.accountIndex ||
-        derived.change !== cursor.change ||
-        derived.addressIndex !== cursor.nextAddressIndex ||
-        derived.addressScheme !== 'dash_p2pkh' ||
-        derived.derivationScheme !== (scope.imported ? 'imported' : 'bip44') ||
-        derived.derivationPath !== path ||
-        !/^0x0[23][0-9a-f]{64}$/.test(derived.publicKey) ||
-        !/^0x76a914[0-9a-f]{40}88ac$/.test(derived.scriptPubKey)
-      ) {
-        throw new Error('Derived Dash address does not match the scan')
-      }
-      return Object.freeze({
-        chainId: derived.chainId,
-        network: derived.network,
-        accountIndex: derived.accountIndex,
-        change: derived.change,
-        addressIndex: derived.addressIndex,
-        address: parseDashP2pkhAddress(derived.address, derived.chainId),
-        scheme: 'dash_p2pkh',
-        purpose: derived.change ? 'change' : 'receive',
-        privacy: 'transparent',
-        derivationScheme: derived.derivationScheme,
-        derivationPath: derived.derivationPath,
-        publicKey: derived.publicKey,
-        scriptPubKey: derived.scriptPubKey
-      })
+      return this.acceptDerived(derived, scope, cursor.change, cursor.nextAddressIndex)
     } catch (error) {
       if (error instanceof DashDiscoveryError) throw error
       if (input.signal?.aborted) throw cancellation(checkpoint)
@@ -387,6 +417,98 @@ export class DashGapLimitScanner {
     }
   }
 
+  private async deriveRange(
+    input: ScanDashAccountInput,
+    change: boolean,
+    startAddressIndex: number,
+    count: number,
+    checkpoint: DashDiscoveryCheckpoint
+  ): Promise<readonly DashDerivedAddress[]> {
+    const scope = input.scope
+    const derivation = this.options.derivation
+    if (!derivation.deriveAddresses) {
+      const sequential: DashDerivedAddress[] = []
+      for (let offset = 0; offset < count; offset += 1) {
+        sequential.push(
+          await this.derive(
+            input,
+            {
+              change,
+              nextAddressIndex: startAddressIndex + offset,
+              consecutiveUnused: 0,
+              complete: false,
+              nextPage: 0
+            },
+            checkpoint
+          )
+        )
+      }
+      return Object.freeze(sequential)
+    }
+    const derived = await derivation.deriveAddresses(
+      input.keyDomainId,
+      {
+        chainId: scope.chainAccount.scope.chainId,
+        accountIndex: scope.accountIndex,
+        change,
+        startAddressIndex,
+        count
+      },
+      input.signal
+    )
+    if (derived.length !== count)
+      throw new Error('Derived Dash account batch has an invalid length')
+    return Object.freeze(
+      derived.map((address, offset) =>
+        this.acceptDerived(address, scope, change, startAddressIndex + offset)
+      )
+    )
+  }
+
+  private acceptDerived(
+    derived: DerivedDashAddress,
+    scope: DashDiscoveryScope,
+    change: boolean,
+    addressIndex: number
+  ): DashDerivedAddress {
+    const path = dashAddressPath(
+      scope.chainAccount.scope.chainId,
+      scope.accountIndex,
+      change,
+      addressIndex,
+      scope.imported
+    )
+    if (
+      derived.chainId !== scope.chainAccount.scope.chainId ||
+      derived.network !== scope.network ||
+      derived.accountIndex !== scope.accountIndex ||
+      derived.change !== change ||
+      derived.addressIndex !== addressIndex ||
+      derived.addressScheme !== 'dash_p2pkh' ||
+      derived.derivationScheme !== (scope.imported ? 'imported' : 'bip44') ||
+      derived.derivationPath !== path ||
+      !/^0x0[23][0-9a-f]{64}$/.test(derived.publicKey) ||
+      !/^0x76a914[0-9a-f]{40}88ac$/.test(derived.scriptPubKey)
+    ) {
+      throw new Error('Derived Dash address does not match the scan')
+    }
+    return Object.freeze({
+      chainId: derived.chainId,
+      network: derived.network,
+      accountIndex: derived.accountIndex,
+      change: derived.change,
+      addressIndex: derived.addressIndex,
+      address: parseDashP2pkhAddress(derived.address, derived.chainId),
+      scheme: 'dash_p2pkh',
+      purpose: derived.change ? 'change' : 'receive',
+      privacy: 'transparent',
+      derivationScheme: derived.derivationScheme,
+      derivationPath: derived.derivationPath,
+      publicKey: derived.publicKey,
+      scriptPubKey: derived.scriptPubKey
+    })
+  }
+
   private async classifyUtxos(
     address: string,
     transactions: readonly DashObservedTransaction[],
@@ -395,6 +517,24 @@ export class DashGapLimitScanner {
   ): Promise<DashDiscoveryObservation['utxos']> {
     const fetched = await this.options.rpc.getAddressUtxos([address], signal)
     const known = new Map(transactions.map(transaction => [transaction.transactionId, transaction]))
+    const collected = await this.collectUtxos(address, fetched, known, signal)
+    if (checkpoint.imported && collected.utxos.length > 10_000) {
+      throw new DashDiscoveryError('rpc-failure', checkpoint, 'Dash UTXO response is too large')
+    }
+    return collected.utxos
+  }
+
+  private async collectUtxos(
+    address: string,
+    fetched: readonly DashUtxo[],
+    known: Map<string, DashObservedTransaction>,
+    signal?: AbortSignal
+  ): Promise<{
+    readonly transactions: readonly DashObservedTransaction[]
+    readonly utxos: DashDiscoveryObservation['utxos']
+  }> {
+    const transactions: DashObservedTransaction[] = []
+    const seen = new Set<string>()
     const utxos = []
     for (const utxo of fetched) {
       if (utxo.address !== address) continue
@@ -404,28 +544,27 @@ export class DashGapLimitScanner {
         transaction = summary(loaded)
         known.set(transaction.transactionId, transaction)
       }
-      if (transaction.type !== 0) {
-        utxos.push(
-          classifyDashUtxo(
-            {
-              transactionId: utxo.transactionId,
-              outputIndex: utxo.outputIndex,
-              valueDuffs: utxo.valueDuffs,
-              confirmations: utxo.confirmations,
-              ...(utxo.height === undefined ? {} : { height: utxo.height }),
-              scriptHex: ''
-            },
-            transaction
-          )
-        )
-        continue
+      if (!seen.has(transaction.transactionId)) {
+        seen.add(transaction.transactionId)
+        transactions.push(transaction)
       }
-      utxos.push(classifyDashUtxo(utxo, transaction))
+      utxos.push(
+        transaction.type === 0
+          ? classifyDashUtxo(utxo, transaction)
+          : classifyDashUtxo(
+              {
+                transactionId: utxo.transactionId,
+                outputIndex: utxo.outputIndex,
+                valueDuffs: utxo.valueDuffs,
+                confirmations: utxo.confirmations,
+                ...(utxo.height === undefined ? {} : { height: utxo.height }),
+                scriptHex: ''
+              },
+              transaction
+            )
+      )
     }
-    if (checkpoint.imported && utxos.length > 10_000) {
-      throw new DashDiscoveryError('rpc-failure', checkpoint, 'Dash UTXO response is too large')
-    }
-    return Object.freeze(utxos)
+    return { transactions: Object.freeze(transactions), utxos: Object.freeze(utxos) }
   }
 
   private observation(

@@ -1,5 +1,5 @@
 import { parseTransactionId, type TransactionId } from '@/core/transactions/domain'
-import { DASH_MAX_ADDRESSES_PER_CHAIN } from './config'
+import { DASH_GAP_LIMIT, DASH_MAX_ADDRESSES_PER_CHAIN } from './config'
 import {
   dashAddressPath,
   dashScopeKey,
@@ -12,6 +12,9 @@ import {
   type DashDiscoveryObservation,
   type DashDiscoveryScope
 } from './dash-discovery-model'
+
+/** Matches the Dash transfer approval window. Timed-out reservations can be reused. */
+export const DASH_CHANGE_RESERVATION_TTL_MS = 5 * 60 * 1000
 
 export const DASH_CHANGE_RESERVATION_STATES = Object.freeze([
   'allocating',
@@ -179,20 +182,45 @@ export function nextDashChangeStartIndex(
   return highestUsed + 1
 }
 
+function reservationOccupiesIndex(
+  reservation: {
+    readonly state: string
+    readonly createdAt?: number
+  },
+  now: number | undefined
+): boolean {
+  if (reservation.state === 'abandoned') return false
+  if (reservation.state === 'committed') return true
+  if (reservation.state !== 'reserved' && reservation.state !== 'allocating') return false
+  const createdAt = reservation.createdAt
+  if (now === undefined || typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt)) {
+    return true
+  }
+  return now < createdAt + DASH_CHANGE_RESERVATION_TTL_MS
+}
+
 export function nextDashChangeIndex(
-  reservations: readonly DashChangeReservation[],
-  minimumAddressIndex: number
+  reservations: readonly {
+    readonly state: string
+    readonly addressIndex: number
+    readonly createdAt?: number
+  }[],
+  minimumAddressIndex: number,
+  now?: number
 ): number {
   if (!Number.isSafeInteger(minimumAddressIndex) || minimumAddressIndex < 0) {
     throw new Error('Invalid Dash change address index')
   }
   const used = new Set(
     reservations
-      .filter(reservation => reservation.state !== 'abandoned')
+      .filter(reservation => reservationOccupiesIndex(reservation, now))
       .map(reservation => reservation.addressIndex)
   )
   let index = minimumAddressIndex
   while (used.has(index)) index += 1
+  if (index >= minimumAddressIndex + DASH_GAP_LIMIT) {
+    throw new Error('Dash change address is outside the scanned gap')
+  }
   if (index >= DASH_MAX_ADDRESSES_PER_CHAIN) throw new Error('Dash change addresses are exhausted')
   return index
 }

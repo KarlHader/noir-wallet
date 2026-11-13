@@ -35,6 +35,7 @@ import { parseStorageV2ChainAccount } from '@/infrastructure/persistence/schema'
 import type { TransactionRepository } from '@/ports/repositories'
 import { DashRpcError } from './dash-insight-codecs'
 import {
+  DASH_CHANGE_RESERVATION_TTL_MS,
   parseDashChangeReservation,
   type DashChangeReservation,
   type DashChangeReservationRepository
@@ -75,9 +76,15 @@ import {
   transitionPendingTransactionGraph
 } from '../pending-transaction-graph'
 
-const APPROVAL_TTL_MS = 5 * 60 * 1000
-const AMBIGUOUS_BROADCAST = new Set(['timeout', 'network-unavailable', 'rate-limited', 'cancelled'])
-const REJECTED_BROADCAST = new Set(['invalid-response', 'unauthorized', 'chain-mismatch'])
+const APPROVAL_TTL_MS = DASH_CHANGE_RESERVATION_TTL_MS
+const AMBIGUOUS_BROADCAST = new Set([
+  'timeout',
+  'network-unavailable',
+  'rate-limited',
+  'cancelled',
+  'invalid-response'
+])
+const REJECTED_BROADCAST = new Set(['unauthorized', 'chain-mismatch'])
 
 export interface DashTransferSigningPort {
   readonly prepare: (

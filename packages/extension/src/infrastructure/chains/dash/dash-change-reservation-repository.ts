@@ -128,7 +128,7 @@ export class IndexedDbDashChangeReservationRepository implements DashChangeReser
         ...scope,
         transactionId,
         state: 'allocating' as const,
-        addressIndex: nextDashChangeIndex(existing, input.minimumAddressIndex),
+        addressIndex: nextDashChangeIndex(existing, input.minimumAddressIndex, now),
         address: null,
         createdAt: now,
         updatedAt: now

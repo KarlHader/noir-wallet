@@ -33,6 +33,13 @@ export const DASH_INSIGHT_TX_PAGE_LENGTH = 10
 /** BIP44 gap limit for the external receive chain and the internal change chain. */
 export const DASH_GAP_LIMIT = 20
 
+/**
+ * Addresses checked past a completed gap in one batch.
+ * A change output allocated outside the previous window is still discovered
+ * on the next refresh, without a local reservation.
+ */
+export const DASH_LOOKAHEAD_ADDRESSES = DASH_GAP_LIMIT * 2
+
 /** Coinbase outputs are spendable after this many confirmations. */
 export const DASH_COINBASE_MATURITY = 100
 

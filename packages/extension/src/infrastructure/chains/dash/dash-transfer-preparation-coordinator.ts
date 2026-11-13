@@ -1,7 +1,6 @@
 import { parseTransactionId, type TransactionId } from '@/core/transactions/domain'
 import type { DashAddressDerivationPort } from '@/infrastructure/keyring/multichain/dash-derivation-client'
 import {
-  nextDashChangeIndex,
   nextDashChangeStartIndex,
   type DashChangeReservation,
   type DashChangeReservationRepository
@@ -182,15 +181,11 @@ export class DashTransferPreparationCoordinator {
     try {
       let change: { address: string; derivationPath: string; publicKey: string } | undefined
       if (BigInt(selection.changeDuffs) > 0n) {
-        const existing = await this.options.changeReservations.list(scope)
-        const addressIndex = nextDashChangeIndex(
-          existing,
-          nextDashChangeStartIndex(state.observations)
-        )
+        const minimumAddressIndex = nextDashChangeStartIndex(state.observations)
         changeReservation = await this.options.changeReservations.allocate({
           ...scope,
           transactionId,
-          minimumAddressIndex: addressIndex,
+          minimumAddressIndex,
           now
         })
         const derivedChange = await this.options.derivation.deriveAddress(
