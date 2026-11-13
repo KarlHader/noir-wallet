@@ -138,7 +138,7 @@ test.describe('Starknet WASM contract', () => {
         'starknet.typed-data.sign'
       ])
     )
-    expect(manifest.capabilities.join('\n')).not.toMatch(/strk20|quantus/i)
+    expect(manifest.capabilities.join('\n')).not.toMatch(/strk20/i)
     expect(manifest.abiVersion).toBe('wallet-engine-fc72763-v10')
     expect(manifest.sourceCommit).toBe('fc727637f4df9d3bf9bc2d0cd946e0df2e16dc05')
   })

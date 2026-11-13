@@ -81,7 +81,7 @@ test.describe('Dash WASM contract', () => {
     for (const rawCapability of info.capabilities) {
       expect(manifest.capabilities).not.toContain(rawCapability)
     }
-    expect(manifest.capabilities.join('\n')).not.toMatch(/strk20|quantus|coinjoin/i)
+    expect(manifest.capabilities.join('\n')).not.toMatch(/strk20|coinjoin/i)
   })
 
   test('returns the engine account, PSBT, and message objects for the public mnemonic', () => {

@@ -23,16 +23,14 @@ const WASM_NETWORK_BY_CHAIN_ID: Readonly<Record<string, QuantusWasmNetworkLabel>
 })
 
 /**
- * The product keeps the CAIP-2 identifier `quantus:planck` for Testnet Mode,
- * which the CAIP-2 profile defines and the live Planck node attests, but the
- * packaged WASM rejects it. Quantus derivation and extrinsic encoding do not
- * depend on the network reference (the HD path and SS58 prefix are shared), so
- * the host translates only at the WASM boundary and maps Planck onto
- * `quantus:dev`. The WASM pins the mainnet genesis hash and keeps `dev` as a
- * reference without one, so the host registers the configured genesis hash for
- * the selected reference before signing (`registerQuantusNetwork`); see
- * `requiresQuantusGenesisBinding`. Remove this mapping once the WASM accepts
- * `quantus:planck`.
+ * The product keeps the CAIP-2 identifier `quantus:planck` for Testnet Mode.
+ * The packaged WASM accepts that identifier and labels it `planck`. Derivation
+ * and extrinsic encoding do not depend on the network reference, and the host
+ * still maps Testnet Mode onto `quantus:dev` so genesis binding stays on the
+ * existing dev reference. The WASM pins the mainnet genesis hash and keeps
+ * `dev` as a reference without one, so the host registers the configured
+ * genesis hash for the selected reference before signing
+ * (`registerQuantusNetwork`); see `requiresQuantusGenesisBinding`.
  */
 export function toQuantusWasmChainId(chainId: string): QuantusWasmChainId {
   if (chainId === getQuantusChainId('mainnet')) return 'quantus:mainnet'

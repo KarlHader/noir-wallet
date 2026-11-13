@@ -12,14 +12,17 @@ import {
   resolveEvmFeatureRuntimePolicy,
   resolveNearFeatureRuntimePolicy,
   resolvePearlFeatureRuntimePolicy,
+  resolveQuantusFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy,
   resolveStarknetFeatureRuntimePolicy
 } from '../../../../src/core/chains/feature-runtime-policy.ts'
 
 describe('Chain feature runtime policy', () => {
-  it('defaults to Zcash, EVM and Pearl while keeping deferred chain operations closed', () => {
+  it('defaults to Zcash, EVM, Pearl, and Quantus while keeping deferred chain operations closed', () => {
     const enabled = parseEnabledChainFeatureFlags(undefined, ALL_CHAIN_FEATURE_FLAGS)
-    assert.deepEqual(enabled, ['chain.zcash', 'chain.evm', 'chain.pearl'])
+    assert.deepEqual(enabled, ['chain.zcash', 'chain.evm', 'chain.pearl', 'chain.quantus'])
+    assert.equal(resolveQuantusFeatureRuntimePolicy(enabled).newOperationsEnabled, true)
+    assert.equal(isNewWalletFamilyEnabled('quantus', enabled), true)
     assert.equal(resolveEvmFeatureRuntimePolicy(enabled).newOperationsEnabled, true)
     assert.equal(resolveBitcoinFeatureRuntimePolicy(enabled).newOperationsEnabled, false)
     assert.equal(resolveBitcoinFeatureRuntimePolicy(enabled).transactionRecoveryEnabled, true)

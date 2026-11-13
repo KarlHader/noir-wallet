@@ -101,14 +101,20 @@ test.describe('Packaged Quantus derivation contract', () => {
     expect(accounts[1].address).toBe('qznFDa1qesTQ5UzEjGV4SDZTJJkqVmiqXUxkm9gMPU3JsuFFh')
   })
 
-  test('rejects the CAIP-2 testnet identifier and accepts the mapped one', async () => {
+  test('accepts the Planck identifier and the host dev mapping', async () => {
     const { engine, sessionId } = await packagedEngine()
-    expect(() =>
-      engine.deriveQuantusAccount(sessionId, 'quantus:planck', 'ml-dsa-87', 0, false, 0)
-    ).toThrow()
+    const planck = engine.deriveQuantusAccount(
+      sessionId,
+      'quantus:planck',
+      'ml-dsa-87',
+      0,
+      false,
+      0
+    )
+    expect(planck).toMatchObject({ network: 'planck' })
 
     // Derivation is independent of the network reference: only the `network`
-    // label differs, so mapping Planck onto `quantus:dev` is safe.
+    // label differs, so the host can still map Planck onto `quantus:dev`.
     const mainnet = engine.deriveQuantusAccount(
       sessionId,
       toQuantusWasmChainId('quantus:mainnet'),
@@ -126,6 +132,9 @@ test.describe('Packaged Quantus derivation contract', () => {
       0
     )
     expect(testnet).toMatchObject({ network: 'dev' })
+    expect(planck.address).toBe(mainnet.address)
+    expect(planck.publicKey).toBe(mainnet.publicKey)
+    expect(planck.derivationPath).toBe(mainnet.derivationPath)
     expect(testnet.address).toBe(mainnet.address)
     expect(testnet.accountId).toBe(mainnet.accountId)
     expect(testnet.publicKey).toBe(mainnet.publicKey)

@@ -359,7 +359,7 @@ test.describe('initial multichain product definitions', () => {
     expect(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).not.toContain(DASH_CHAIN_FEATURE_FLAG)
     expect(ALL_CHAIN_FEATURE_FLAGS).toContain(PEARL_CHAIN_FEATURE_FLAG)
     expect(DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS).toContain(PEARL_CHAIN_FEATURE_FLAG)
-    expect(enabled).toEqual(['chain.zcash', 'chain.evm', 'chain.pearl'])
+    expect(enabled).toEqual(['chain.zcash', 'chain.evm', 'chain.pearl', 'chain.quantus'])
     expect(enabled).toContain(PEARL_CHAIN_FEATURE_FLAG)
     expect(enabled).not.toContain(DASH_CHAIN_FEATURE_FLAG)
 

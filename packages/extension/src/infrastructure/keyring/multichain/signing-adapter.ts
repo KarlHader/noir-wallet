@@ -1161,6 +1161,7 @@ function isRawDashAccount(
     | RawDerivedBitcoinAccount
     | RawDerivedPearlAccount
     | RawDerivedEd25519Account
+    | RawDerivedQuantusAccount
     | RawDerivedPeaAccount
     | RawPeaExecutionAccount
     | RawDashAccount
