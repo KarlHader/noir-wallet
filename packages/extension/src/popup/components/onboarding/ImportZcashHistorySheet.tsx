@@ -14,9 +14,12 @@ import { getFullZcashRecoveryBirthdayHeight } from '@/core/wallet/birthday-heigh
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { classifyError } from '@/lib/errors'
 import { LatestAttempt } from '@/lib/async-utils'
-import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import dayjs from '@/lib/dayjs'
-import { getImportZcashHistoryDefaults } from '@/popup/services/import-zcash-history-selection'
+import {
+  getImportZcashHistoryDefaults,
+  parseZcashHistoryRecoveryHeight,
+  resolveZcashHistoryRecoveryDate
+} from '@/popup/services/import-zcash-history-selection'
 
 class ZcashHistoryValidationError extends Error {}
 
@@ -78,17 +81,15 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
     if (historyMode === 'new') return undefined
 
     if (restoreMethod === 'height') {
-      const normalizedHeight = syncHeight.replace(/,/g, '').trim()
-      if (!/^\d+$/.test(normalizedHeight)) {
-        throw new ZcashHistoryValidationError('Enter a valid Zcash block height.')
-      }
-      const height = Number(normalizedHeight)
-      if (!Number.isSafeInteger(height) || height < fullRecoveryHeight) {
+      const parsed = parseZcashHistoryRecoveryHeight(syncHeight, fullRecoveryHeight)
+      if (parsed.height === null) {
         throw new ZcashHistoryValidationError(
-          `Block height must be ${fullRecoveryHeight.toLocaleString()} or later.`
+          parsed.error === 'format'
+            ? 'Enter a valid Zcash block height.'
+            : `Block height must be ${fullRecoveryHeight.toLocaleString()} or later.`
         )
       }
-      return height
+      return parsed.height
     }
 
     if (!syncDate) {
@@ -96,12 +97,9 @@ export function ImportZcashHistorySheet({ onClose }: { readonly onClose: () => v
         'Select a date before your account’s first transaction.'
       )
     }
-    const timestamp = getUtcDayStartTimestamp(syncDate)
-    const resolvedHeight = await zcashWalletRuntimeClient.getBlockByTime(timestamp)
-    if (!Number.isSafeInteger(resolvedHeight) || resolvedHeight <= 0) {
-      throw new Error('The Zcash network returned an invalid block height. Please try again.')
-    }
-    return Math.max(fullRecoveryHeight, resolvedHeight)
+    return resolveZcashHistoryRecoveryDate(syncDate, fullRecoveryHeight, timestamp =>
+      zcashWalletRuntimeClient.getBlockByTime(timestamp)
+    )
   }
 
   const handleContinue = async () => {

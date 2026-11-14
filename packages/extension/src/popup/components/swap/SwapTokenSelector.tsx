@@ -333,7 +333,6 @@ export function SwapTokenSelector({
             ? { walletId: balanceScope.walletId, accountId: balanceScope.accountId }
             : null)
         }
-        networkFilterStyle="icons"
         stableCatalogOrder
         tokens={tokens}
         defaultTokens={defaultTokens}

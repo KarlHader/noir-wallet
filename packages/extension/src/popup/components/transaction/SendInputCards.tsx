@@ -84,7 +84,7 @@ export function SendFieldLabel({ children }: { readonly children: ReactNode }) {
   )
 }
 
-export function SendSourceSection({
+function SendSourceSection({
   amountInput,
   assetSelector,
   balance,
@@ -107,22 +107,19 @@ export function SendSourceSection({
   readonly onDomainChange: (domain: BalanceDomain) => void
   readonly disabled?: boolean
 }) {
-  const sourceSection = (
-    <div className="order-1 flex min-w-0 items-center justify-between gap-3">
-      <SendFieldLabel>Send from</SendFieldLabel>
-      {sourceAction ?? (
-        <BalanceDomainTabs
-          value={domain}
-          available={availableDomains}
-          onChange={onDomainChange}
-          disabled={disabled}
-        />
-      )}
-    </div>
-  )
   return (
     <>
-      {sourceSection}
+      <div className="order-1 flex min-w-0 items-center justify-between gap-3">
+        <SendFieldLabel>Send from</SendFieldLabel>
+        {sourceAction ?? (
+          <BalanceDomainTabs
+            value={domain}
+            available={availableDomains}
+            onChange={onDomainChange}
+            disabled={disabled}
+          />
+        )}
+      </div>
       {recipient}
       <div className="order-3">
         <SendAmountRow
@@ -136,7 +133,7 @@ export function SendSourceSection({
   )
 }
 
-export function SendAmountRow({
+function SendAmountRow({
   amountInput,
   assetSelector,
   balance,
@@ -490,7 +487,7 @@ export function SendAmountInputCard({
           )}
         >
           <span className="shrink-0 text-muted">{amountFiat ? `~${amountFiat}` : '—'}</span>
-          <div className={cn('min-w-0 text-right text-muted', hero && 'hidden')}>
+          <div className="min-w-0 text-right text-muted">
             <div className="flex min-w-0 items-center justify-end gap-1">
               <span className="min-w-0 break-all" title={available}>
                 {availableLabel}{' '}
@@ -636,36 +633,6 @@ export function SendAssetHeader({
       />
       <p className="mt-2 text-base font-semibold leading-5">{symbol}</p>
       <p className="mt-0.5 text-[11px] leading-4 text-muted">{networkName}</p>
-    </div>
-  )
-}
-
-export function SendNetworkFeeCard({
-  label = 'Network fee',
-  loading = false,
-  children
-}: {
-  readonly label?: string
-  readonly loading?: boolean
-  readonly children: ReactNode
-}) {
-  return (
-    <div
-      data-testid="send-network-fee"
-      className="flex min-h-12 items-center justify-between gap-4 rounded-lg border border-white/15 px-4 py-3"
-    >
-      <span className="shrink-0 text-xs text-muted">{label}</span>
-      <div className="flex min-w-0 items-center gap-1.5 text-right text-xs font-medium">
-        {loading && (
-          <Icon
-            icon="lucide:loader-circle"
-            width={14}
-            height={14}
-            className="shrink-0 animate-spin text-muted"
-          />
-        )}
-        {children}
-      </div>
     </div>
   )
 }

@@ -62,26 +62,21 @@ function TxHashLink({
     network
   )
 
-  if (!explorerUrl) {
-    return (
-      <div className="flex justify-between items-center py-3 border-b border-white/10">
-        <span className="text-sm text-muted">{chainLabel} Tx</span>
-        <span className="text-sm font-mono text-muted">{formatSortAddress(hash)}</span>
-      </div>
-    )
-  }
-
   return (
     <div className="flex justify-between items-center py-3 border-b border-white/10">
       <span className="text-sm text-muted">{chainLabel} Tx</span>
-      <a
-        href={explorerUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-sm font-mono text-primary cursor-pointer hover:underline"
-      >
-        {formatSortAddress(hash)}
-      </a>
+      {explorerUrl ? (
+        <a
+          href={explorerUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-mono text-primary cursor-pointer hover:underline"
+        >
+          {formatSortAddress(hash)}
+        </a>
+      ) : (
+        <span className="text-sm font-mono text-muted">{formatSortAddress(hash)}</span>
+      )}
     </div>
   )
 }

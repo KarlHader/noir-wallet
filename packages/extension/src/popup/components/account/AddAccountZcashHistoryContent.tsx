@@ -12,8 +12,11 @@ import { getFullZcashRecoveryBirthdayHeight } from '@/core/wallet/birthday-heigh
 import { classifyError } from '@/lib/errors'
 import { LatestAttempt } from '@/lib/async-utils'
 import dayjs from '@/lib/dayjs'
-import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
+import {
+  parseZcashHistoryRecoveryHeight,
+  resolveZcashHistoryRecoveryDate
+} from '@/popup/services/import-zcash-history-selection'
 
 export type AddAccountZcashHistorySelection =
   | { readonly mode: 'new' }
@@ -54,17 +57,15 @@ export function AddAccountZcashHistoryContent({
 
   const resolveBirthdayHeight = async (): Promise<number> => {
     if (restoreMethod === 'height') {
-      const normalizedHeight = syncHeight.replace(/,/g, '').trim()
-      if (!/^\d+$/.test(normalizedHeight)) {
-        throw new ZcashAccountHistoryValidationError('Enter a valid Zcash block height.')
-      }
-      const height = Number(normalizedHeight)
-      if (!Number.isSafeInteger(height) || height < fullRecoveryHeight) {
+      const parsed = parseZcashHistoryRecoveryHeight(syncHeight, fullRecoveryHeight)
+      if (parsed.height === null) {
         throw new ZcashAccountHistoryValidationError(
-          `Block height must be ${fullRecoveryHeight.toLocaleString()} or later.`
+          parsed.error === 'format'
+            ? 'Enter a valid Zcash block height.'
+            : `Block height must be ${fullRecoveryHeight.toLocaleString()} or later.`
         )
       }
-      return height
+      return parsed.height
     }
 
     if (!syncDate) {
@@ -72,11 +73,9 @@ export function AddAccountZcashHistoryContent({
         'Select a date before your account’s first transaction.'
       )
     }
-    const height = await zcashWalletRuntimeClient.getBlockByTime(getUtcDayStartTimestamp(syncDate))
-    if (!Number.isSafeInteger(height) || height <= 0) {
-      throw new Error('The Zcash network returned an invalid block height. Please try again.')
-    }
-    return Math.max(fullRecoveryHeight, height)
+    return resolveZcashHistoryRecoveryDate(syncDate, fullRecoveryHeight, timestamp =>
+      zcashWalletRuntimeClient.getBlockByTime(timestamp)
+    )
   }
 
   const handleContinue = async () => {

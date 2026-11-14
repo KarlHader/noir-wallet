@@ -95,6 +95,32 @@ export function FeeTierPicker({
       <AmountDisplay value={selectedFeeZec} symbol="ZEC" profile="fee" className="text-sm" />
     </>
   )
+  const editButton = (
+    <DialogTrigger asChild>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
+        aria-label="Edit network fee"
+      >
+        <span>({getFeeTierLabel(tier)})</span>
+        <span
+          className={
+            variant === 'stacked'
+              ? 'size-3.5 inline-flex items-center justify-center [&_svg]:size-3.5'
+              : 'size-3 inline-flex items-center justify-center [&_svg]:size-3'
+          }
+        >
+          {trailingIcon}
+        </span>
+      </button>
+    </DialogTrigger>
+  )
+  const inlineFee = (
+    <div className="inline-flex min-w-0 items-center gap-1.5">
+      {feeAmount}
+      {editButton}
+    </div>
+  )
 
   const trigger =
     variant === 'stacked' ? (
@@ -102,54 +128,13 @@ export function FeeTierPicker({
         <label className="block text-sm text-muted mb-2">Network Fee</label>
         <div className="flex h-[54px] w-full items-center justify-between rounded-xl bg-card px-4">
           <div className="flex min-w-0 items-center gap-1.5 text-sm">{feeAmount}</div>
-          <DialogTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
-              aria-label="Edit network fee"
-            >
-              <span>({getFeeTierLabel(tier)})</span>
-              <span className="size-3.5 inline-flex items-center justify-center [&_svg]:size-3.5">
-                {trailingIcon}
-              </span>
-            </button>
-          </DialogTrigger>
+          {editButton}
         </div>
       </div>
     ) : hideLabel ? (
-      <div className="inline-flex min-w-0 items-center gap-1.5">
-        {feeAmount}
-        <DialogTrigger asChild>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
-            aria-label="Edit network fee"
-          >
-            <span>({getFeeTierLabel(tier)})</span>
-            <span className="size-3 inline-flex items-center justify-center [&_svg]:size-3">
-              {trailingIcon}
-            </span>
-          </button>
-        </DialogTrigger>
-      </div>
+      inlineFee
     ) : (
-      <DetailRow label="Network Fee">
-        <div className="inline-flex min-w-0 items-center gap-1.5">
-          {feeAmount}
-          <DialogTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
-              aria-label="Edit network fee"
-            >
-              <span>({getFeeTierLabel(tier)})</span>
-              <span className="size-3 inline-flex items-center justify-center [&_svg]:size-3">
-                {trailingIcon}
-              </span>
-            </button>
-          </DialogTrigger>
-        </div>
-      </DetailRow>
+      <DetailRow label="Network Fee">{inlineFee}</DetailRow>
     )
 
   return (

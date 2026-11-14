@@ -12,7 +12,6 @@ import { TokenBalanceDisplay } from './TokenBalanceDisplay'
 import { TokenSelectorView } from './TokenSelectorView'
 import type { TokenSelectionItem } from './TokenSelectionList'
 import { sortTokensByBalanceValue } from './token-balance-order'
-import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import {
   compareSwapTokenSearchRelevance,
   matchesSwapTokenSearch
@@ -38,14 +37,13 @@ export interface TokenSelectorProps {
   accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   selectedToken?: SwapToken
   onSelect: (token: SwapToken) => void
-  tokens?: readonly SwapToken[]
+  tokens: readonly SwapToken[]
   defaultTokens?: readonly SwapToken[]
   defaultCatalogLoading?: boolean
   balances?: ReadonlyMap<string, string>
   catalogLoading?: boolean
   stableCatalogOrder?: boolean
   fullHeight?: boolean
-  networkFilterStyle?: 'dropdown' | 'icons'
   excludeAssetId?: string
   emptyMessage?: string
   unavailableNetworks?: readonly Readonly<{ id: string; label: string; iconChain: string }>[]
@@ -70,7 +68,6 @@ export function TokenSelector({
   catalogLoading = false,
   stableCatalogOrder = false,
   fullHeight = false,
-  networkFilterStyle = 'dropdown',
   excludeAssetId,
   emptyMessage = 'No tokens found',
   unavailableNetworks = [],
@@ -85,46 +82,16 @@ export function TokenSelector({
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const [search, setSearch] = useState('')
   const [selectedBlockchain, setSelectedBlockchain] = useState('all')
-  const [fetchedTokens, setFetchedTokens] = useState<readonly SwapToken[]>([])
-  const [fetchedLoading, setFetchedLoading] = useState(providedTokens === undefined)
   const [selectionTraceId] = useState(() => createDebugRequestId('token-selector'))
   const previousRows = useRef<{ filter: string; keys: readonly string[] } | null>(null)
   const [renderWindow, setRenderWindow] = useState({ filter: 'all:', count: MAX_RENDERED_TOKENS })
-  const hasProvidedTokens = providedTokens !== undefined
   const tokens = useMemo(
     () =>
-      (providedTokens ?? fetchedTokens).filter(token =>
+      providedTokens.filter(token =>
         isSelectableSwapBlockchain(token.blockchain, __ENABLED_CHAIN_FEATURE_FLAGS__)
       ),
-    [providedTokens, fetchedTokens]
+    [providedTokens]
   )
-  const loading = !hasProvidedTokens && fetchedLoading
-
-  useEffect(() => {
-    if (hasProvidedTokens) return
-
-    let cancelled = false
-    async function loadTokens() {
-      setFetchedLoading(true)
-      try {
-        const cached = await swapTokenCatalogClient.readCached()
-        if (!cancelled && cached.length > 0) {
-          setFetchedTokens(cached)
-          setFetchedLoading(false)
-        }
-        const refreshed = await swapTokenCatalogClient.refresh()
-        if (!cancelled) setFetchedTokens(refreshed)
-      } catch {
-        // Keep the last usable cached catalog.
-      } finally {
-        if (!cancelled) setFetchedLoading(false)
-      }
-    }
-    void loadTokens()
-    return () => {
-      cancelled = true
-    }
-  }, [hasProvidedTokens])
 
   const networkOptions = useMemo(() => {
     const options = new Map<string, string>()
@@ -286,13 +253,12 @@ export function TokenSelector({
           : undefined
       }
       loading={
-        loading ||
-        (filteredTokens.length === 0 &&
-          visibleExtraItems.length === 0 &&
-          (catalogLoading || (!search.trim() && defaultCatalogLoading)))
+        filteredTokens.length === 0 &&
+        visibleExtraItems.length === 0 &&
+        (catalogLoading || (!search.trim() && defaultCatalogLoading))
       }
       emptyMessage={emptyMessage}
-      fullHeight={fullHeight || networkFilterStyle === 'icons'}
+      fullHeight={fullHeight}
       discovery={
         onDiscoveredToken && currentWalletId && currentAccountId
           ? {

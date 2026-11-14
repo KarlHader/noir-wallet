@@ -20,12 +20,15 @@ import { zcashWalletRuntimeClient } from '../../services/zcash-wallet-runtime-cl
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { useSettingsStore } from '@/store/settings-store'
-import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { LatestAttempt } from '@/lib/async-utils'
 import { toast } from '@/store/toast-store'
 import { formatSortAddress } from '@/lib/format'
 import { accountNetworksClient } from '../../services/account-networks-client'
+import {
+  parseZcashHistoryRecoveryHeight,
+  resolveZcashHistoryRecoveryDate
+} from '../../services/import-zcash-history-selection'
 import dayjs from '@/lib/dayjs'
 import {
   isRetainedV1UpgradeAccount,
@@ -68,13 +71,16 @@ export function ManageAccountNetworksPage() {
         .filter(chain => available.includes(chain.family)),
     [available, chainEndpointSettings]
   )
-  const initial =
-    account?.networkChainSelections?.[DEFAULT_NETWORK] ??
-    chains
-      .filter(chain =>
-        (account?.networkSelections?.[DEFAULT_NETWORK] ?? available).includes(chain.family)
-      )
-      .map(chain => chain.id)
+  const initial = useMemo(
+    () =>
+      account?.networkChainSelections?.[DEFAULT_NETWORK] ??
+      chains
+        .filter(chain =>
+          (account?.networkSelections?.[DEFAULT_NETWORK] ?? available).includes(chain.family)
+        )
+        .map(chain => chain.id),
+    [account, chains, available]
+  )
   const [selected, setSelected] = useState<readonly string[]>(initial)
   const [successNotice, setSuccessNotice] = useState<{
     title: string
@@ -114,14 +120,7 @@ export function ManageAccountNetworksPage() {
     const scope = `${currentNetwork}:${walletId}:${accountId}`
     if (initializedScope.current === scope) return
     initializedScope.current = scope
-    setSelected(
-      account?.networkChainSelections?.[DEFAULT_NETWORK] ??
-        chains
-          .filter(chain =>
-            (account?.networkSelections?.[DEFAULT_NETWORK] ?? available).includes(chain.family)
-          )
-          .map(chain => chain.id)
-    )
+    setSelected(initial)
     setSuccessNotice(null)
     setHistory('new')
     setDate(null)
@@ -130,7 +129,7 @@ export function ManageAccountNetworksPage() {
     attempts.current.invalidate()
     savingRef.current = false
     setSaving(false)
-  }, [walletId, accountId, currentNetwork, account, available, chains])
+  }, [walletId, accountId, currentNetwork, account, initial])
 
   if (
     !walletId ||
@@ -177,24 +176,16 @@ export function ManageAccountNetworksPage() {
     try {
       let birthdayHeight: number | undefined
       if (choosingZcashHistory && history === 'height') {
-        const normalized = height.replace(/,/g, '').trim()
-        birthdayHeight = Number(normalized)
-        if (
-          !/^\d+$/.test(normalized) ||
-          !Number.isSafeInteger(birthdayHeight) ||
-          birthdayHeight < recoveryFloor
-        ) {
+        const parsed = parseZcashHistoryRecoveryHeight(height, recoveryFloor)
+        if (parsed.error) {
           throw new Error(`Enter a block height of ${recoveryFloor.toLocaleString()} or later.`)
         }
+        birthdayHeight = parsed.height
       } else if (choosingZcashHistory && history === 'date') {
         if (!date) throw new Error('Select the approximate date of the first ZEC transaction.')
-        birthdayHeight = await zcashWalletRuntimeClient.getBlockByTime(
-          getUtcDayStartTimestamp(date)
+        birthdayHeight = await resolveZcashHistoryRecoveryDate(date, recoveryFloor, timestamp =>
+          zcashWalletRuntimeClient.getBlockByTime(timestamp)
         )
-        if (!Number.isSafeInteger(birthdayHeight) || birthdayHeight <= 0) {
-          throw new Error('The Zcash network returned an invalid block height. Please try again.')
-        }
-        birthdayHeight = Math.max(recoveryFloor, birthdayHeight)
       }
       if (!attempts.current.isCurrent(attempt)) return
       const current = useWalletStore.getState()
