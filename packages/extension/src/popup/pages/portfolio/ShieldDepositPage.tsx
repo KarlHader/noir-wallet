@@ -9,6 +9,7 @@ import {
   hasExternalShieldDepositFunding,
   externalShieldDepositFailureMessage,
   isExternalShieldDepositAutoHidden,
+  isExternalShieldDepositPending,
   shouldAutoRefreshExternalShieldDeposit
 } from '@/core/services/confidential-funding/confidential-external-deposit'
 import type { ChainDefinition } from '@/core/chains/registry'
@@ -345,8 +346,8 @@ function ShieldDepositContent() {
   )
   const historyRecords = showAllHistory ? scopedRecords : recentRecords
   const hasHiddenHistory = recentRecords.length < scopedRecords.length
-  const hasPendingDeposits = recentRecords.some(
-    record => record.phase === 'awaiting-payment' || record.phase === 'processing'
+  const hasPendingDeposits = recentRecords.some(record =>
+    isExternalShieldDepositPending(record, now)
   )
   const viewedRecord = scopedRecords.find(record => record.depositId === viewRecordId) ?? null
   const viewedToken = catalog.find(token => token.assetId === viewedRecord?.source.protocolAssetId)
@@ -358,7 +359,7 @@ function ShieldDepositContent() {
     if (records.length === 0) return
     const timer = window.setInterval(
       () => setNow(Date.now()),
-      viewedRecord?.phase === 'awaiting-payment' ? 1_000 : 20_000
+      viewedRecord?.phase === 'awaiting-payment' ? 10_000 : 20_000
     )
     return () => window.clearInterval(timer)
   }, [records.length, viewedRecord?.phase])

@@ -95,3 +95,16 @@ export function isRetainedV1UpgradeAccount(
     account.networkSelections?.[network]
   )
 }
+
+export function isRetainedV1ZcashOnlyAccount(
+  wallet: WalletItem | null | undefined,
+  account: AccountData | null | undefined,
+  network: Network
+): boolean {
+  const families = account?.networkSelections?.[network]
+  return (
+    isRetainedV1UpgradeAccount(wallet, account, network) &&
+    families?.length === 1 &&
+    families[0] === 'zcash'
+  )
+}

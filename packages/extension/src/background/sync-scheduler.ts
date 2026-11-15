@@ -19,6 +19,7 @@ import type { Network, SyncReason, ZcashBalance } from '@/types'
 import { isAccountNetworkEnabled } from '@/core/wallet/account-network-selection'
 
 export type SyncStateSnapshot = {
+  network?: Network
   isSyncing: boolean
   syncProgress: number
   currentHeight?: number
@@ -105,6 +106,7 @@ export class SyncScheduler {
         latestHeight: 0,
         etaMs: null,
         syncReason: null,
+        network: backgroundZcashWalletRuntime.getNetwork(),
         walletId: targetWalletId,
         accountId: targetAccountId
       }
@@ -113,6 +115,7 @@ export class SyncScheduler {
     const cached = this.syncStates.get(key) || { isSyncing: false, syncProgress: 0 }
     return {
       isSyncing: cached.isSyncing ?? false,
+      network: backgroundZcashWalletRuntime.getNetwork(),
       syncProgress: cached.syncProgress ?? 0,
       currentHeight: cached.currentHeight ?? 0,
       latestHeight: cached.latestHeight ?? 0,
@@ -147,6 +150,7 @@ export class SyncScheduler {
   }
 
   applySyncProgressMessage(message: Partial<SyncStateSnapshot> & { walletId?: string }): void {
+    if (message.network !== backgroundZcashWalletRuntime.getNetwork()) return
     const key = getWalletSyncKey(message.walletId)
     const current = this.syncStates.get(key) || { isSyncing: false, syncProgress: 0 }
     this.syncStates.set(key, {
@@ -518,6 +522,7 @@ export class SyncScheduler {
     chrome.runtime
       .sendMessage({
         type: 'SYNC_PROGRESS',
+        network,
         walletId,
         isSyncing: false,
         syncProgress: 0,

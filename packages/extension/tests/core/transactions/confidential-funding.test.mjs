@@ -10,6 +10,7 @@ import { assertPersistableTransactionGraph } from '../../../src/infrastructure/p
 import {
   createExternalShieldDepositGraph,
   isExternalShieldDepositAutoHidden,
+  isExternalShieldDepositPending,
   shouldAutoRefreshExternalShieldDeposit,
   projectExternalShieldDepositActivityGraph
 } from '../../../src/core/services/confidential-funding/confidential-external-deposit.ts'
@@ -30,6 +31,7 @@ import {
   defaultDepositRefundAddress,
   depositSourceAssetId,
   depositStatusLabel,
+  canPayShieldDeposit,
   depositTokenForNetwork,
   formatDepositAmount,
   formatMinimumDepositPaymentAmount,
@@ -410,6 +412,23 @@ test.describe('confidential funding safety rules', () => {
       requestId: 'create-one'
     }
     const created = await coordinator.createExternalDeposit(request)
+    expect(canPayShieldDeposit(created, now)).toBe(true)
+    expect(canPayShieldDeposit(created, created.expiresAt)).toBe(false)
+    expect(isExternalShieldDepositPending(created, created.expiresAt)).toBe(false)
+    const providerExpired = {
+      ...created,
+      providerStatus: 'EXPIRED',
+      expiresAt: now + 3 * 24 * 60 * 60 * 1000
+    }
+    expect(depositStatusLabel(providerExpired, now)).toBe('Quote expired')
+    expect(canPayShieldDeposit(providerExpired, now)).toBe(false)
+    expect(isExternalShieldDepositPending(providerExpired, now)).toBe(false)
+    expect(
+      isExternalShieldDepositAutoHidden(providerExpired, created.createdAt + 24 * 60 * 60 * 1000)
+    ).toBe(true)
+    records.set(created.depositId, providerExpired)
+    await expect(coordinator.createExternalDeposit(request)).rejects.toThrow('quote has expired')
+    records.set(created.depositId, created)
     const pendingGraph = createExternalShieldDepositGraph(created)
     expect(() => assertPersistableTransactionGraph(pendingGraph)).not.toThrow()
     expect(() =>
@@ -512,6 +531,8 @@ test.describe('confidential funding safety rules', () => {
     const expiredPartial = await coordinator.getExternalDeposit(created.depositId)
     expect(expiredPartial.providerStatus).toBe('EXPIRED')
     expect(expiredPartial.fundingObservedAt).toBe(fundedWithoutAmount.fundingObservedAt)
+    expect(canPayShieldDeposit(expiredPartial, now)).toBe(false)
+    expect(isExternalShieldDepositPending(expiredPartial, now)).toBe(true)
     expect(isExternalShieldDepositAutoHidden(expiredPartial, now)).toBe(false)
     const beforeRecovery = statusCalls
     await new ConfidentialFundingCoordinator(coordinatorOptions).resumeAll()

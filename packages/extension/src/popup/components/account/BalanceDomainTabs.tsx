@@ -15,6 +15,7 @@ export function BalanceDomainTabs({
   labels,
   onChange,
   allowReselect = false,
+  optimistic = false,
   className,
   disabled = false,
   pending = false
@@ -24,6 +25,7 @@ export function BalanceDomainTabs({
   readonly labels?: Partial<Record<BalanceDomain, string>>
   readonly onChange: (value: BalanceDomain) => void
   readonly allowReselect?: boolean
+  readonly optimistic?: boolean
   readonly className?: string
   readonly disabled?: boolean
   readonly pending?: boolean
@@ -37,7 +39,7 @@ export function BalanceDomainTabs({
       setIntent(null)
     }
   }, [intent, pending, value])
-  const visualValue = intent ?? value
+  const visualValue = optimistic ? (intent ?? value) : value
   const resolvedLabels = { ...LABELS, ...labels }
   return (
     <div
@@ -55,7 +57,7 @@ export function BalanceDomainTabs({
           onClick={() => {
             if (allowReselect || value !== domain) {
               sawPending.current = false
-              setIntent(domain)
+              if (optimistic) setIntent(domain)
               onChange(domain)
             }
           }}

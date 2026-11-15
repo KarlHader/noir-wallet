@@ -1173,6 +1173,7 @@ export class BackgroundZcashWalletRuntime {
     chrome.runtime
       .sendMessage({
         type: 'SYNC_PROGRESS',
+        network: this.network,
         walletId,
         accountId,
         balance
@@ -5950,7 +5951,9 @@ export class BackgroundZcashWalletRuntime {
     syncReason?: SyncReason | null
   }): void {
     this.onSyncProgress?.(data)
-    chrome.runtime.sendMessage({ type: 'SYNC_PROGRESS', ...data }).catch(() => {})
+    chrome.runtime
+      .sendMessage({ type: 'SYNC_PROGRESS', network: this.network, ...data })
+      .catch(() => {})
   }
 }
 

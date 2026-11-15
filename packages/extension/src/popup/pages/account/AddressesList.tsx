@@ -399,7 +399,8 @@ export function AddressesList() {
       walletId && accountId && walletId === currentWalletId && accountId === currentAccountId
     ),
     walletId,
-    accountId
+    accountId,
+    DEFAULT_NETWORK
   )
   const [privateExecutionSupported, setPrivateExecutionSupported] = useState(false)
   const defaultMode =

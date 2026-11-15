@@ -24,7 +24,7 @@ import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyT
 import { ChainIcon } from '../common/ChainIcon'
 import evmGroupIcon from '@/images/figma-evm-group.svg'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { isRetainedV1UpgradeAccount } from '@/core/wallet/account-network-selection'
+import { isRetainedV1ZcashOnlyAccount } from '@/core/wallet/account-network-selection'
 import {
   createBuildFeatureGatedChainRegistry,
   createInitialProductChainRegistry
@@ -128,7 +128,7 @@ function AccountAddressPopover({
   className
 }: {
   readonly account: SwitcherAccount
-  readonly defaultEvmMode: 'public' | 'private'
+  readonly defaultEvmMode: 'public' | 'private' | null
   readonly onCopy: (value: string, key: string) => void
   readonly onCopyPrivate: (value: string, key: string) => void
   readonly isCopied: (key: string) => boolean
@@ -142,7 +142,9 @@ function AccountAddressPopover({
   const zcash = account.networks.find(network => network.chain.family === 'zcash')
   const evm = account.networks.filter(network => network.chain.family === 'evm')
   const evmAddresses = evmExecutionAddresses(evm)
-  const evmMode = selectedEvmMode ?? (evmAddresses.privateAddress ? defaultEvmMode : 'public')
+  const evmMode =
+    selectedEvmMode ??
+    (defaultEvmMode === null ? null : evmAddresses.privateAddress ? defaultEvmMode : 'public')
   const otherAddresses = account.networks.flatMap(network => {
     if (network.chain.family === 'zcash' || network.chain.family === 'evm') return []
     const address =
@@ -152,7 +154,12 @@ function AccountAddressPopover({
   const zcashAddresses = [...(zcash?.addresses ?? [])].sort(
     (left, right) => Number(left.privacy === 'shielded') - Number(right.privacy === 'shielded')
   )
-  const evmAddress = evmMode === 'private' ? evmAddresses.privateAddress : evmAddresses.mainAddress
+  const evmAddress =
+    evmMode === 'private'
+      ? evmAddresses.privateAddress
+      : evmMode === 'public'
+        ? evmAddresses.mainAddress
+        : null
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const guideOnlyZcash = Boolean(
     onAddNetworks && zcash && evm.length === 0 && otherAddresses.length === 0
@@ -388,7 +395,7 @@ export function AccountSwitcher({
   readonly className?: string
   readonly accountName?: string
   readonly accountIdentity: ActiveAccountIdentity | null
-  readonly defaultEvmMode?: 'public' | 'private'
+  readonly defaultEvmMode?: 'public' | 'private' | null
 }) {
   const { navigate, replace } = useNavigate()
   const { confirm, alert } = useDialog()
@@ -406,6 +413,26 @@ export function AccountSwitcher({
   const previewAnchor = useRef<HTMLButtonElement | null>(null)
   const accountList = useRef<HTMLDivElement>(null)
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addressesCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addressesOpenedByHover = useRef(false)
+
+  const cancelAddressesClose = useCallback(() => {
+    if (addressesCloseTimer.current !== null) {
+      clearTimeout(addressesCloseTimer.current)
+      addressesCloseTimer.current = null
+    }
+  }, [])
+  const scheduleAddressesClose = useCallback(() => {
+    if (!addressesOpenedByHover.current) return
+    cancelAddressesClose()
+    addressesCloseTimer.current = setTimeout(() => {
+      addressesCloseTimer.current = null
+      addressesOpenedByHover.current = false
+      setAddressesOpen(false)
+    }, 180)
+  }, [cancelAddressesClose])
+
+  useEffect(() => cancelAddressesClose, [cancelAddressesClose])
 
   const cancelPreviewTimer = useCallback(() => {
     if (previewTimer.current !== null) {
@@ -541,7 +568,7 @@ export function AccountSwitcher({
 
   const canAddNetworks = (account: SwitcherAccount) => {
     const wallet = wallets.find(item => item.id === account.walletId)
-    return isRetainedV1UpgradeAccount(
+    return isRetainedV1ZcashOnlyAccount(
       wallet,
       wallet?.accounts.find(item => item.id === account.accountId),
       currentNetwork
@@ -787,26 +814,11 @@ export function AccountSwitcher({
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
-      <button
-        type="button"
-        aria-label={`Choose account, current: ${activeName}`}
-        onClick={() => {
-          setAddressesOpen(false)
-          setDrawerOpen(true)
-        }}
-        className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      >
-        <span className="min-w-0 truncate">{activeName}</span>
-        <Icon
-          icon="lucide:chevron-down"
-          width={10}
-          height={10}
-          className="shrink-0 text-wallet-secondary"
-        />
-      </button>
       <Popover
         open={addressesOpen}
         onOpenChange={open => {
+          cancelAddressesClose()
+          if (!open) addressesOpenedByHover.current = false
           setAddressesOpen(open)
           if (open) setDrawerOpen(false)
         }}
@@ -814,18 +826,48 @@ export function AccountSwitcher({
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label="Show account addresses"
-            title="Show account addresses"
-            className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-sm text-wallet-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label={`Choose account, current: ${activeName}`}
+            onPointerEnter={event => {
+              if (event.pointerType === 'mouse' && !addressesOpen) {
+                cancelAddressesClose()
+                addressesOpenedByHover.current = true
+                setAddressesOpen(true)
+              }
+            }}
+            onPointerLeave={event => {
+              if (event.pointerType === 'mouse') scheduleAddressesClose()
+            }}
+            onClick={event => {
+              event.preventDefault()
+              cancelAddressesClose()
+              addressesOpenedByHover.current = false
+              setAddressesOpen(false)
+              setDrawerOpen(true)
+            }}
+            className="wallet-interactive flex min-w-0 max-w-[150px] items-center gap-1 rounded-sm text-sm font-semibold leading-[18px] hover:text-primary active:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            <Icon icon="lucide:copy" width={14} height={14} />
+            <span className="min-w-0 truncate">{activeName}</span>
+            <Icon
+              icon="lucide:chevron-down"
+              width={10}
+              height={10}
+              className="shrink-0 text-wallet-secondary"
+            />
           </button>
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          alignOffset={-38}
           sideOffset={6}
           aria-label={`${activeName} addresses`}
+          onOpenAutoFocus={event => {
+            if (addressesOpenedByHover.current) event.preventDefault()
+          }}
+          onPointerEnter={event => {
+            if (event.pointerType === 'mouse') cancelAddressesClose()
+          }}
+          onPointerLeave={event => {
+            if (event.pointerType === 'mouse') scheduleAddressesClose()
+          }}
           className="!z-[70] !w-[281px] !rounded-md !border-0 !bg-wallet-surface !p-0 !shadow-2xl"
         >
           {activeAccount && (
@@ -849,6 +891,19 @@ export function AccountSwitcher({
           )}
         </PopoverContent>
       </Popover>
+      <button
+        type="button"
+        aria-label="Show account addresses"
+        title="Show account addresses"
+        onClick={() => {
+          cancelAddressesClose()
+          addressesOpenedByHover.current = false
+          setAddressesOpen(true)
+        }}
+        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-sm text-wallet-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        <Icon icon="lucide:copy" width={14} height={14} />
+      </button>
     </div>
   )
 }

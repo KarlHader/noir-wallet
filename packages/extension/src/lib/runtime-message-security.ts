@@ -359,6 +359,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   PORTFOLIO_UPDATED: { required: { walletId: isShortString, accountId: isShortString } },
   SYNC_PROGRESS: {
     optional: {
+      network: isNetworkMode,
       walletId: isShortString,
       accountId: isShortString,
       isSyncing: isBoolean,

@@ -14,6 +14,7 @@ import {
 } from '@/lib/analytics/operations'
 import {
   hasExternalShieldDepositFunding,
+  isExternalShieldDepositExpired,
   shouldAutoRefreshExternalShieldDeposit,
   ExternalShieldDepositError,
   type ExternalShieldDepositFailureStage
@@ -659,7 +660,10 @@ export class ConfidentialFundingCoordinator {
         )
       : undefined
     if (existing) {
-      if (existing.phase === 'awaiting-payment' && existing.expiresAt <= this.now()) {
+      if (
+        existing.phase === 'awaiting-payment' &&
+        isExternalShieldDepositExpired(existing, this.now())
+      ) {
         throw new Error('External Shield deposit quote has expired; create a new request')
       }
       if (

@@ -137,6 +137,24 @@ export function hasExternalShieldDepositFunding(record: ExternalShieldDepositLif
   )
 }
 
+export function isExternalShieldDepositExpired(
+  record: ExternalShieldDepositLifecycle,
+  now = Date.now()
+): boolean {
+  return now >= record.expiresAt || record.providerStatus?.trim().toUpperCase() === 'EXPIRED'
+}
+
+export function isExternalShieldDepositPending(
+  record: ExternalShieldDepositLifecycle,
+  now = Date.now()
+): boolean {
+  return (
+    record.phase === 'processing' ||
+    (record.phase === 'awaiting-payment' &&
+      (!isExternalShieldDepositExpired(record, now) || hasExternalShieldDepositFunding(record)))
+  )
+}
+
 export function shouldAutoRefreshExternalShieldDeposit(
   record: ExternalShieldDepositLifecycle,
   now = Date.now()
@@ -154,7 +172,7 @@ export function isExternalShieldDepositAutoHidden(
 ): boolean {
   return (
     !hasExternalShieldDepositFunding(record) &&
-    now >= record.expiresAt &&
+    isExternalShieldDepositExpired(record, now) &&
     now - record.createdAt >= UNFUNDED_AUTO_HIDE_MS
   )
 }

@@ -116,6 +116,8 @@ import { BalanceDomainTabs, type BalanceDomain } from '../../components/account/
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { InlineError } from '../../components/common/InlineError'
+import { ZcashSyncProgress } from '../../components/common/ZcashSyncProgress'
+import { useZcashSyncReadStatus } from '@/popup/hooks/usePersistedExtensionContextSync'
 import { AmountDisplay } from '../../components/common/AmountDisplay'
 import { Button } from '../../components/ui/button'
 import { Skeleton } from '../../components/ui/skeleton'
@@ -417,6 +419,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const syncReadStatus = useZcashSyncReadStatus(currentNetwork, currentWalletId, currentAccountId)
+  const syncState = useAccountDataStore(state =>
+    currentWalletId ? state.getWalletSyncState(currentNetwork, currentWalletId) : null
+  )
   const shieldPanelScope = `${currentNetwork}:${currentWalletId}:${currentAccountId}`
   const [visitedShieldScope, setVisitedShieldScope] = useState<string | null>(null)
   useEffect(() => {
@@ -679,6 +685,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               : defaultSwapChainId
     }
   )
+  const feeSyncScope = syncState?.isSyncing ? 'syncing' : 'idle'
+  const zcashSyncActionStatus =
+    swap.isZecSource && syncState?.isSyncing && syncReadStatus === 'available' ? (
+      <ZcashSyncProgress className="mb-2 w-fit" showLabel {...syncState} />
+    ) : null
   const { addRecentRecipientAddress } = useSwapPreferences()
   const { setResult, updateSwapOriginTransaction } = useTransactionResultStore()
   const { sendTransaction } = useTransaction()
@@ -2470,7 +2481,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     to: zcashMaximumAddress,
     feeTier,
     fundingSource,
-    enabled: swap.isZecSource
+    enabled: swap.isZecSource,
+    scopeKey: feeSyncScope
   })
   const isMaxTransferAmount =
     !!maxTransfer.maxAmount && safeBig(swap.amountIn || '0').eq(maxTransfer.maxAmount)
@@ -2483,7 +2495,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     amount: swap.amountIn,
     fundingSource,
     feeTier,
-    enabled: swap.isZecSource && !!swap.depositAddress && !maxSelected && !isMaxTransferAmount
+    enabled: swap.isZecSource && !!swap.depositAddress && !maxSelected && !isMaxTransferAmount,
+    scopeKey: feeSyncScope
   })
   const isMaxFeeMode = maxSelected || isMaxTransferAmount
   const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
@@ -5978,6 +5991,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   : 'Sign Swap Order'
           }
           insufficient={hasInsufficientFunds || preparedFeeUnaffordable}
+          actionStatus={zcashSyncActionStatus}
         />
       )
     }
@@ -6264,6 +6278,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
           )
         }
+        actionStatus={zcashSyncActionStatus}
         hasInsufficientFunds={hasInsufficientFunds || Boolean(nativeMaxError)}
         insufficientMessage={
           nativeMaxError ??
@@ -6513,6 +6528,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             available={availableBalanceDomains}
             onChange={handleBalanceDomainChange}
             allowReselect
+            optimistic
             disabled={shieldBusy || isPreparingReview}
             className="shrink-0 justify-center px-4 pb-3 pt-3"
           />

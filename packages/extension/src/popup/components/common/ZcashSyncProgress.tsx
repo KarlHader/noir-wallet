@@ -11,6 +11,7 @@ export interface ZcashSyncProgressState {
 
 interface ZcashSyncProgressProps extends ZcashSyncProgressState {
   readonly className?: string
+  readonly showLabel?: boolean
 }
 
 function formatSyncHeight(height: number): string {
@@ -31,7 +32,8 @@ export function ZcashSyncProgress({
   currentHeight,
   latestHeight,
   etaMs,
-  className
+  className,
+  showLabel = false
 }: ZcashSyncProgressProps) {
   const progressLabel = latestHeight > 0 && syncProgress > 0 ? `${syncProgress}%` : 'Syncing'
 
@@ -63,7 +65,11 @@ export function ZcashSyncProgress({
         )}
       >
         <Icon icon="lucide:refresh-cw" width={10} height={10} className="animate-spin" />
-        <span>{progressLabel}</span>
+        <span>
+          {showLabel
+            ? `Zcash Syncing${progressLabel === 'Syncing' ? '' : ` · ${progressLabel}`}`
+            : progressLabel}
+        </span>
       </div>
     </Tooltip>
   )

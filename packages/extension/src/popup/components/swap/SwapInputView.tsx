@@ -204,6 +204,7 @@ interface SwapInputViewProps {
   hideReceiveAddress?: boolean
   actionLabel?: string
   actionLoading?: boolean
+  actionStatus?: ReactNode
   onAmountInChange: (value: string) => void
   focusAmountOnMount?: boolean
   amountFocusToken?: number
@@ -623,6 +624,7 @@ export function SwapInputView({
   hideReceiveAddress = false,
   actionLabel = 'Swap',
   actionLoading = false,
+  actionStatus,
   onAmountInChange,
   focusAmountOnMount = false,
   amountFocusToken,
@@ -966,6 +968,7 @@ export function SwapInputView({
       </div>
 
       <div className="page-footer">
+        {actionStatus}
         <Button
           onClick={onGetQuote}
           disabled={!canGetQuote || hasInsufficientFunds || actionLoading}

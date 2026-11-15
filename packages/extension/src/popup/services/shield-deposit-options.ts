@@ -17,12 +17,19 @@ import type { SwapToken } from '@/core/services/intents-api'
 import { resolveManagedIntentsCatalogAsset } from './intents-asset-manager-client'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { parseZcashAddress } from '@/core/address-book/address-book'
-import { formatBaseUnitDecimalAmount, formatDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
+import {
+  formatBaseUnitDecimalAmount,
+  formatDecimalAmount,
+  parseDisplayUnitAmount
+} from '@/lib/number-format'
 import Big from '@/lib/big'
 import { isAddress, zeroAddress } from 'viem'
 import type { AccountNetworkView } from './account-networks-client'
 import type { ExternalShieldDeposit } from './confidential-funding-client'
-import { hasExternalShieldDepositFunding } from '@/core/services/confidential-funding/confidential-external-deposit'
+import {
+  hasExternalShieldDepositFunding,
+  isExternalShieldDepositExpired
+} from '@/core/services/confidential-funding/confidential-external-deposit'
 
 const bundledAssetMappings = getAssetProtocolSourceMappings(
   'mainnet',
@@ -220,7 +227,8 @@ export function depositStatusLabel(record: ExternalShieldDeposit, now: number): 
   if (record.phase === 'awaiting-payment' && hasExternalShieldDepositFunding(record)) {
     return 'Deposit detected'
   }
-  if (record.phase === 'awaiting-payment' && now >= record.expiresAt) return 'Quote expired'
+  if (record.phase === 'awaiting-payment' && isExternalShieldDepositExpired(record, now))
+    return 'Quote expired'
   switch (record.phase) {
     case 'awaiting-payment':
       return 'Awaiting deposit'
@@ -254,7 +262,7 @@ export function depositPaymentProgress(
   const amountUnknown = record.providerStatus === 'INCOMPLETE_DEPOSIT' && !hasDeposit
   const canPay =
     record.phase === 'awaiting-payment' &&
-    now < record.expiresAt &&
+    !isExternalShieldDepositExpired(record, now) &&
     remainingRaw !== '0' &&
     !amountUnknown
   return Object.freeze({

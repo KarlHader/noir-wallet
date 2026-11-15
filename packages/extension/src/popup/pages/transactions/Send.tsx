@@ -20,6 +20,7 @@ import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanne
 import { openModal } from '../../provider/ModalManager'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { ZcashSyncProgress } from '@/popup/components/common/ZcashSyncProgress'
 import {
   SendAmountInputCard,
   SendFormActions,
@@ -42,7 +43,8 @@ import { useAccountDataStore } from '@/store/account-data-store'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import {
   retryZcashBalanceRead,
-  useZcashBalanceReadStatus
+  useZcashBalanceReadStatus,
+  useZcashSyncReadStatus
 } from '@/popup/hooks/usePersistedExtensionContextSync'
 import { useLocation, useNavigate } from '../../provider/Router'
 import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
@@ -278,12 +280,21 @@ export function Send({
     currentWalletId,
     currentAccountId
   )
+  const syncReadStatus = useZcashSyncReadStatus(currentNetwork, currentWalletId, currentAccountId)
   const balanceKnown = balance !== null
   const syncState = useAccountDataStore(state =>
     currentWalletId
       ? state.getWalletSyncState(currentNetwork, currentWalletId)
-      : { isSyncing: false, currentHeight: 0, latestHeight: 0 }
+      : {
+          isSyncing: false,
+          syncProgress: 0,
+          currentHeight: 0,
+          latestHeight: 0,
+          etaMs: null
+        }
   )
+  const syncBlocked = isSelfMove && (syncReadStatus !== 'available' || syncState.isSyncing)
+  const feeSyncScope = syncState.isSyncing ? 'syncing' : 'idle'
   const zecPrice = useWalletStore(state => state.zecPrice)
   const { setResult, updateStep } = useTransactionResultStore()
 
@@ -379,6 +390,7 @@ export function Send({
     (!effectiveToAddress || isTransparentZcashAddress(effectiveToAddress)) &&
     !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
   const sendPrivately = privateSendAvailable && privateSendScope === privacyScope
+  const memoUnsupported = Boolean(!isSelfMove && !sendPrivately && memo && !recipientSupportsMemo)
   const previewKey =
     active &&
     sendPrivately &&
@@ -476,9 +488,11 @@ export function Send({
     memo: effectiveMemo,
     feeTier,
     fundingSource,
+    scopeKey: feeSyncScope,
     enabled:
       active &&
       balanceKnown &&
+      !syncBlocked &&
       !sendPrivately &&
       !moveUnavailable &&
       !!effectiveToAddress &&
@@ -495,9 +509,11 @@ export function Send({
     memo: effectiveMemo,
     fundingSource,
     feeTier,
+    scopeKey: feeSyncScope,
     enabled:
       active &&
       balanceKnown &&
+      !syncBlocked &&
       !sendPrivately &&
       !moveUnavailable &&
       safeBig(amount || '0').gt(0) &&
@@ -673,7 +689,7 @@ export function Send({
   }
 
   const handleContinue = () => {
-    if (!active) return
+    if (!active || syncBlocked) return
     if (sendPrivately) {
       if (!privatePreviewReady || !currentWalletId || !currentAccountId || !isValidAmount) return
       navigate(
@@ -696,6 +712,7 @@ export function Send({
       isValidAmount &&
       !reviewInsufficient &&
       feeReady &&
+      !memoUnsupported &&
       !recipientFormatError &&
       (isSelfMove ||
         isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
@@ -717,9 +734,10 @@ export function Send({
       reviewInsufficient ||
       !feeReady ||
       !selectedFeeQuote ||
+      memoUnsupported ||
       !fromAddress ||
       !currentAccount ||
-      (isSelfMove && syncState.isSyncing) ||
+      syncBlocked ||
       moveUnavailable
     )
       return
@@ -1079,14 +1097,24 @@ export function Send({
           />
         )}
 
-      {!isSelfMove && !sendPrivately && recipientSupportsMemo && (
+      {!isSelfMove && !sendPrivately && (
         <div className="order-4">
-          <label htmlFor="zcash-send-memo" className="mb-1.5 block px-1 text-xs text-muted">
-            Memo (optional)
-          </label>
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <label htmlFor="zcash-send-memo" className="text-xs text-muted">
+              Memo (optional)
+            </label>
+            {memoUnsupported && (
+              <button type="button" onClick={() => setMemo('')} className="text-xs text-primary">
+                Clear
+              </button>
+            )}
+          </div>
           <textarea
             id="zcash-send-memo"
             value={memo}
+            disabled={!recipientSupportsMemo}
+            aria-invalid={memoUnsupported || undefined}
+            aria-describedby={memoUnsupported ? 'zcash-send-memo-error' : undefined}
             onChange={event => {
               const encoded = new TextEncoder().encode(event.target.value)
               if (encoded.length <= 512) setMemo(event.target.value)
@@ -1095,6 +1123,11 @@ export function Send({
             rows={2}
             className="w-full resize-none rounded-xl border border-border/60 bg-card/50 px-4 py-3 text-sm placeholder:text-muted/50 focus:border-primary/50 focus:outline-none disabled:opacity-40"
           />
+          {memoUnsupported && (
+            <p id="zcash-send-memo-error" role="alert" className="mt-1 px-1 text-xs text-warning">
+              This recipient cannot receive a memo.
+            </p>
+          )}
           {memo && (
             <p className="mt-1 px-1 text-right text-xs text-muted">
               {new TextEncoder().encode(memo).length}/512 bytes
@@ -1206,14 +1239,6 @@ export function Send({
           onRetry={() => setPrivatePreviewRetry(value => value + 1)}
         />
       )}
-
-      {syncState.isSyncing && (
-        <p role="status" className="order-8 text-muted text-xs px-1">
-          {isSelfMove
-            ? 'Syncing wallet'
-            : 'Syncing wallet. Send will start after the current batch.'}
-        </p>
-      )}
     </div>
   )
 
@@ -1223,13 +1248,30 @@ export function Send({
     moveUnavailable ||
     !amount ||
     !isValidAmount ||
+    memoUnsupported ||
     reviewInsufficient ||
     Boolean(recipientFormatError) ||
     (sendPrivately ? !privatePreviewReady : !feeReady) ||
-    (isSelfMove && syncState.isSyncing) ||
+    syncBlocked ||
     (isTransparentToShieldMove && !hasEnoughTransparentBalanceToShield(shieldableBalance)) ||
     (!isSelfMove &&
       !isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
+  const syncActionStatus =
+    syncState.isSyncing && syncReadStatus === 'available' ? (
+      <ZcashSyncProgress className="mb-2 w-fit" showLabel {...syncState} />
+    ) : isSelfMove && syncReadStatus === 'loading' ? (
+      <p role="status" className="mb-2 text-xs text-muted">
+        Checking sync status
+      </p>
+    ) : isSelfMove && syncReadStatus === 'error' && currentWalletId && currentAccountId ? (
+      <InlineError
+        className="mb-2"
+        message="Could not check sync status"
+        onRetry={() =>
+          void retryZcashBalanceRead(currentNetwork, currentWalletId, currentAccountId)
+        }
+      />
+    ) : null
 
   return (
     <div
@@ -1241,6 +1283,7 @@ export function Send({
         <>
           <div className="page-content min-h-0 !px-4 pt-4">{sendContent}</div>
           <div className="page-footer">
+            {syncActionStatus}
             <Button
               size="wallet"
               disabled={actionDisabled}
@@ -1342,21 +1385,24 @@ export function Send({
             </button>
           }
           footer={
-            <SendFormActions
-              privacy={
-                privateSendAvailable
-                  ? {
-                      checked: sendPrivately,
-                      onChange: () => {
-                        setPrivateSendScope(sendPrivately ? null : privacyScope)
-                        setMaxSelected(false)
+            <>
+              {syncActionStatus}
+              <SendFormActions
+                privacy={
+                  privateSendAvailable
+                    ? {
+                        checked: sendPrivately,
+                        onChange: () => {
+                          setPrivateSendScope(sendPrivately ? null : privacyScope)
+                          setMaxSelected(false)
+                        }
                       }
-                    }
-                  : undefined
-              }
-              disabled={actionDisabled}
-              onContinue={handleContinue}
-            />
+                    : undefined
+                }
+                disabled={actionDisabled}
+                onContinue={handleContinue}
+              />
+            </>
           }
         >
           {sendContent}
@@ -1478,7 +1524,7 @@ export function Send({
               moveUnavailable ||
               reviewInsufficient ||
               !feeReady ||
-              (isSelfMove && syncState.isSyncing) ||
+              syncBlocked ||
               isHardwareSigning
             }
             cancelDisabled={isConfirming || isHardwareSigning}

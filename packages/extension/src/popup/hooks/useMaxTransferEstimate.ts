@@ -37,6 +37,7 @@ interface UseMaxTransferEstimateArgs {
   feeTier: FeeTier
   fundingSource?: FundingSource
   enabled?: boolean
+  scopeKey?: string
 }
 
 function tierState(
@@ -63,7 +64,8 @@ export function useMaxTransferEstimate({
   memo,
   feeTier,
   fundingSource = 'shielded',
-  enabled = true
+  enabled = true,
+  scopeKey: estimateScopeKey
 }: UseMaxTransferEstimateArgs): MaxTransferEstimateState {
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
@@ -84,7 +86,8 @@ export function useMaxTransferEstimate({
     available: sourceBalance.available,
     pending: sourceBalance.pending,
     rpcPreference,
-    rpcScope
+    rpcScope,
+    scopeKey: estimateScopeKey
   }
   const mountedRef = useRef(false)
   const enabledRef = useRef(enabled)

@@ -16,6 +16,7 @@ export interface MaxTransferContext {
   readonly pending: string
   readonly rpcPreference: unknown
   readonly rpcScope: string
+  readonly scopeKey?: string
 }
 
 type Client = Pick<typeof zcashWalletRuntimeClient, 'getFeeQuote' | 'estimateMaxTransfer'>
@@ -35,7 +36,8 @@ function contextKey(context: MaxTransferContext): string {
     context.available,
     context.pending,
     context.rpcPreference,
-    context.rpcScope
+    context.rpcScope,
+    context.scopeKey
   ])
 }
 

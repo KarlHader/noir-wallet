@@ -15,7 +15,7 @@ export function WalletModeSwitch({
   useEffect(() => {
     if (!busy) setIntent(null)
   }, [busy, state?.mode])
-  const visualMode = intent ?? state?.mode ?? 'main'
+  const visualMode = intent ?? state?.mode ?? null
   return (
     <div
       role="radiogroup"
@@ -30,9 +30,9 @@ export function WalletModeSwitch({
           type="button"
           role="radio"
           aria-label={mode === 'main' ? 'Public mode' : 'Private mode'}
-          aria-checked={(state?.mode ?? 'main') === mode}
+          aria-checked={state?.mode === mode}
           title={
-            mode === 'private' && !state?.privateAvailable
+            mode === 'private' && state && !state.privateAvailable
               ? 'Private mode unavailable for this account'
               : undefined
           }

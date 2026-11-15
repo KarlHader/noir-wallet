@@ -1,5 +1,5 @@
 import { Icon } from '@iconify/react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Button } from '../ui/button'
 import type { SwapToken } from '@/core/services/intents-api'
 import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
@@ -91,6 +91,7 @@ interface SwapReviewViewProps {
   confirmLabel?: string
   /** Selected amount exceeds spendable balance once the fee delta is applied. */
   insufficient?: boolean
+  actionStatus?: ReactNode
 }
 
 export function SwapReviewView({
@@ -139,7 +140,8 @@ export function SwapReviewView({
   hasSigningReview,
   signingActionLabel = 'Sign Swap Order',
   confirmLabel = 'Confirm Swap',
-  insufficient
+  insufficient,
+  actionStatus
 }: SwapReviewViewProps) {
   const [showMore, setShowMore] = useState(false)
   const [showApprovalDetails, setShowApprovalDetails] = useState(false)
@@ -435,46 +437,49 @@ export function SwapReviewView({
         )}
       </div>
 
-      <div className="page-footer flex gap-2.5">
-        {onCancel && (
+      <div className="page-footer">
+        {actionStatus}
+        <div className="flex gap-2.5">
+          {onCancel && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="wallet"
+              onClick={onCancel}
+              disabled={isLoading}
+              className="min-w-0 flex-[1] bg-wallet-surface text-sm"
+            >
+              Cancel
+            </Button>
+          )}
           <Button
             type="button"
-            variant="secondary"
             size="wallet"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="min-w-0 flex-[1] bg-wallet-surface text-sm"
+            onClick={priceAcceptanceRequired ? onAcceptNewPrice : onConfirm}
+            disabled={
+              isLoading ||
+              insufficient ||
+              feeUnavailable ||
+              Boolean(preparationError) ||
+              (priceAcceptanceRequired && !onAcceptNewPrice)
+            }
+            isLoading={isLoading}
+            aria-label={
+              priceAcceptanceRequired
+                ? 'Accept new price'
+                : approvalDetails
+                  ? 'Confirm token approval'
+                  : actionLabel
+            }
+            className={`min-w-0 flex-[2] text-sm text-black ${priceAcceptanceRequired ? 'bg-warning hover:bg-warning/90' : ''}`}
           >
-            Cancel
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="wallet"
-          onClick={priceAcceptanceRequired ? onAcceptNewPrice : onConfirm}
-          disabled={
-            isLoading ||
-            insufficient ||
-            feeUnavailable ||
-            Boolean(preparationError) ||
-            (priceAcceptanceRequired && !onAcceptNewPrice)
-          }
-          isLoading={isLoading}
-          aria-label={
-            priceAcceptanceRequired
+            {priceAcceptanceRequired
               ? 'Accept new price'
-              : approvalDetails
-                ? 'Confirm token approval'
-                : actionLabel
-          }
-          className={`min-w-0 flex-[2] text-sm text-black ${priceAcceptanceRequired ? 'bg-warning hover:bg-warning/90' : ''}`}
-        >
-          {priceAcceptanceRequired
-            ? 'Accept new price'
-            : actionLabel === 'Confirm Swap'
-              ? 'Confirm'
-              : actionLabel}
-        </Button>
+              : actionLabel === 'Confirm Swap'
+                ? 'Confirm'
+                : actionLabel}
+          </Button>
+        </div>
       </div>
     </>
   )
