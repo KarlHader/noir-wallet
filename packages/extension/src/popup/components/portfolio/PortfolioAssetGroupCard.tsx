@@ -31,6 +31,7 @@ import {
   type PortfolioAssetGroupEntry
 } from '@/popup/services/portfolio-presentation'
 import type { AssetDomain } from '@/popup/services/asset-domains'
+import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
 
 export const portfolioAssetRowClassName =
   'flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left'
@@ -172,6 +173,7 @@ function UnitPrice({
 
 function PortfolioAssetBalanceRow({
   entry,
+  domain,
   prices,
   balancesHidden,
   leading,
@@ -217,11 +219,16 @@ function PortfolioAssetBalanceRow({
           />
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-medium">
-            {leading === 'chain'
-              ? entry.chain.chain.displayName
-              : formatSymbol(entry.asset.metadata.symbol)}
-          </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <p className="truncate text-base font-medium">
+              {leading === 'chain'
+                ? entry.chain.chain.displayName
+                : formatSymbol(entry.asset.metadata.symbol)}
+            </p>
+            {domain === 'public' && entry.chain.chain.family === 'zcash' && (
+              <ZcashFundingBadge source="transparent" />
+            )}
+          </div>
           {showUnitPrice && (
             <UnitPrice
               price={quote?.priceUsd ?? null}
@@ -333,6 +340,10 @@ export function PortfolioAssetGroupCard({
           title={
             <>
               <p className="truncate text-base font-medium">{formatSymbol(group.symbol)}</p>
+              {domain === 'public' &&
+                group.entries.every(entry => entry.chain.chain.family === 'zcash') && (
+                  <ZcashFundingBadge source="transparent" />
+                )}
               {!group.bundled && (
                 <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
                   Custom

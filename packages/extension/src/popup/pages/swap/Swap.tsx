@@ -835,6 +835,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               assetId: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
               symbol: 'ZEC',
               chainName: 'Zcash Transparent',
+              zcashFundingSource: 'transparent' as const,
               chainId: 'zec',
               badgeBlockchain: 'zec',
               nativeIconChain: 'zcash',
@@ -852,6 +853,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         symbol: option.symbol,
         iconUrl: option.iconUrl,
         chainName: option.chainName,
+        zcashFundingSource: option.kind === 'native-shielded' ? ('shielded' as const) : undefined,
         chainId: option.badgeBlockchain,
         badgeBlockchain: option.badgeBlockchain,
         nativeIconChain: 'zcash',
@@ -4852,6 +4854,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           >
             <SwapTokenSelector
               fullHeight
+              zcashFundingSource={type === 'in' ? fundingSource : zecDestinationType}
               accountScope={effectiveAccount}
               extraItems={
                 type === 'in' && ordinarySwapRequested
@@ -6180,6 +6183,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         onSelectProviderRoute={handleSelectProviderRoute}
         onRefreshQuote={handleRefreshProviderRoutes}
         hideAccountDetails={ordinarySwapRequested}
+        sourceZcashFundingSource={fundingSource}
         addressType={zecDestinationType}
         destinationAddress={resolvedRecipientAddress}
         spendableBalance={spendableBalance}

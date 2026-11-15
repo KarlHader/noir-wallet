@@ -11,6 +11,7 @@ import { InlineError } from '@/popup/components/common/InlineError'
 import { SendRouteMenu } from '@/popup/components/transaction/SendRouteMenu'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
+import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
 import type { EvmTransferSubmission } from '@/popup/services/evm-wallet-client'
 import { useNavigate } from '@/popup/provider/Router'
 import { useWalletStore } from '@/store/wallet-store'
@@ -989,6 +990,11 @@ export function MultichainSend({
           {
             key: ZEC_ZCASH_ASSET,
             symbol: 'ZEC',
+            symbolSuffix: (
+              <ZcashFundingBadge
+                source={sourcePicker?.mode === 'zcash-public' ? 'transparent' : 'shielded'}
+              />
+            ),
             subtitle: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
             icon: <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={32} />,
             balance: (

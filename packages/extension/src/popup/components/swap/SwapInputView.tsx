@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
-import type { AddressType } from '@/types'
+import type { AddressType, FundingSource } from '@/types'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { RheaSwapRouteView } from '@/core/services/rhea-swap'
 import { formatChainName, formatSortAddress, formatSymbol } from '@/lib/format'
@@ -12,6 +12,7 @@ import {
 } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { ExecutionAccountBadge } from '../account/ExecutionAccountSelector'
+import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
@@ -195,6 +196,7 @@ interface SwapInputViewProps {
   feeIsApproximate?: boolean
   sourceAddress?: string
   sourceBadge?: string
+  sourceZcashFundingSource?: FundingSource
   destinationBadge?: string
   sourceAccountAction?: ReactNode
   onSelectDestinationAccount?: () => void
@@ -225,6 +227,7 @@ interface SwapAssetCardProps {
   token: SwapToken | null
   tokenBadgeBlockchain?: string
   tokenNetworkLabel?: string
+  zcashFundingSource?: FundingSource
   amount: string
   fiatValue: string
   accountAddress?: string
@@ -296,6 +299,7 @@ export function SwapAssetCard({
   token,
   tokenBadgeBlockchain,
   tokenNetworkLabel,
+  zcashFundingSource,
   amount,
   fiatValue,
   accountAddress,
@@ -473,8 +477,13 @@ export function SwapAssetCard({
                 />
               )}
             </span>
-            <span className="mt-0.5 block truncate text-xs leading-4 text-muted">
-              {token ? (tokenNetworkLabel ?? formatChainName(token.blockchain)) : 'Choose network'}
+            <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-4 text-muted">
+              <span className="truncate">
+                {token
+                  ? (tokenNetworkLabel ?? formatChainName(token.blockchain))
+                  : 'Choose network'}
+              </span>
+              {zcashFundingSource && <ZcashFundingBadge source={zcashFundingSource} />}
             </span>
           </span>
         </button>
@@ -615,6 +624,7 @@ export function SwapInputView({
   feeIsApproximate,
   sourceAddress,
   sourceBadge,
+  sourceZcashFundingSource,
   destinationBadge: destinationBadgeOverride,
   sourceAccountAction,
   onSelectDestinationAccount,
@@ -665,6 +675,7 @@ export function SwapInputView({
           <SwapAssetCard
             direction="From"
             token={tokenIn}
+            zcashFundingSource={isZecSource ? sourceZcashFundingSource : undefined}
             amount={amountIn}
             fiatValue={fromFiat}
             accountAddress={hideAccountDetails ? undefined : sourceAddress}
@@ -725,6 +736,7 @@ export function SwapInputView({
             <SwapAssetCard
               direction="To"
               token={tokenOut}
+              zcashFundingSource={isZecDestination ? addressType : undefined}
               amount={estimatedOut}
               fiatValue={toFiat}
               accountAddress={hideAccountDetails ? undefined : destinationAddress}

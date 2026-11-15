@@ -1,4 +1,6 @@
 import { formatSymbol } from '@/lib/format'
+import type { FundingSource } from '@/types'
+import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { TokenIcon } from './TokenIcon'
 import { TokenBalanceDisplay } from './TokenBalanceDisplay'
@@ -13,6 +15,7 @@ export interface ShieldSourceTokenPickerItem {
   readonly chainId?: string
   readonly badgeBlockchain?: string
   readonly nativeIconChain?: string
+  readonly zcashFundingSource?: FundingSource
   readonly availableRaw: string
   readonly decimals: number
   readonly priceUsd?: string | number | null
@@ -27,6 +30,9 @@ export function shieldSourceSelectionItem(
   return {
     key: item.key,
     symbol: formatSymbol(item.symbol),
+    symbolSuffix: item.zcashFundingSource ? (
+      <ZcashFundingBadge source={item.zcashFundingSource} />
+    ) : undefined,
     icon: (
       <TokenIcon
         assetId={item.assetId}
@@ -37,7 +43,7 @@ export function shieldSourceSelectionItem(
         size={32}
       />
     ),
-    subtitle: item.chainName,
+    subtitle: item.zcashFundingSource ? 'Zcash' : item.chainName,
     balance: (
       <TokenBalanceDisplay
         amount={balance}

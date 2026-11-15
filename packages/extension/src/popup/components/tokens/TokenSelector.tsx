@@ -3,6 +3,8 @@
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { SwapToken } from '@/core/services/intents-api'
+import type { FundingSource } from '@/types'
+import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { Icon } from '@iconify/react'
 import { RHEA_SWAP_CHAIN_CATALOG } from '@/core/services/rhea-swap'
 import type { InspectedTokenAddress } from '@/popup/services/token-address-discovery'
@@ -41,6 +43,7 @@ export interface TokenSelectorProps {
   defaultTokens?: readonly SwapToken[]
   defaultCatalogLoading?: boolean
   balances?: ReadonlyMap<string, string>
+  zcashFundingSource?: FundingSource
   catalogLoading?: boolean
   stableCatalogOrder?: boolean
   fullHeight?: boolean
@@ -65,6 +68,7 @@ export function TokenSelector({
   defaultTokens,
   defaultCatalogLoading = false,
   balances,
+  zcashFundingSource,
   catalogLoading = false,
   stableCatalogOrder = false,
   fullHeight = false,
@@ -196,6 +200,10 @@ export function TokenSelector({
       return {
         key: token.blockchain + ':' + token.assetId,
         symbol,
+        symbolSuffix:
+          token.blockchain === 'zec' && zcashFundingSource ? (
+            <ZcashFundingBadge source={zcashFundingSource} />
+          ) : undefined,
         icon: <TokenIcon token={token} size={32} />,
         subtitle: chainName,
         ariaLabel:
