@@ -157,49 +157,28 @@ test.describe('extension display mode', () => {
     ])
   })
 
-  test('opens side-panel hardware signing in a focused browser window with device chooser support', async () => {
+  test('opens hardware signing in an active tab without creating a window', async () => {
     const calls = []
-    const signTab = { id: 42 }
-    globalThis.chrome = {
-      windows: {
-        create: async options => {
-          calls.push(options)
-          return { id: 7, tabs: [signTab] }
-        }
-      },
-      tabs: {
-        create: async options => ({ ...options, id: 8 }),
-        query: async () => []
-      }
-    }
-
-    await expect(
-      launchHardwareSignSurface(
-        'chrome-extension://wallet/index.html#/hardware/sign?req=x',
-        'window'
-      )
-    ).resolves.toBe(signTab)
-    expect(calls).toEqual([
-      {
-        url: 'chrome-extension://wallet/index.html#/hardware/sign?req=x',
-        type: 'normal',
-        width: 375,
-        height: 632,
-        focused: true
-      }
-    ])
-  })
-
-  test('keeps normal hardware signing in a tab', async () => {
     let openedWindow = false
     globalThis.chrome = {
       windows: { create: async () => (openedWindow = true) },
-      tabs: { create: async options => ({ ...options, id: 8 }) }
+      tabs: {
+        create: async options => {
+          calls.push(options)
+          return { id: 8 }
+        }
+      }
     }
 
     await expect(
-      launchHardwareSignSurface('chrome-extension://wallet/sign', 'tab')
-    ).resolves.toEqual({ url: 'chrome-extension://wallet/sign', id: 8 })
+      launchHardwareSignSurface('chrome-extension://wallet/index.html#/hardware/sign?req=x')
+    ).resolves.toEqual({ id: 8 })
+    expect(calls).toEqual([
+      {
+        url: 'chrome-extension://wallet/index.html#/hardware/sign?req=x',
+        active: true
+      }
+    ])
     expect(openedWindow).toBe(false)
   })
 })

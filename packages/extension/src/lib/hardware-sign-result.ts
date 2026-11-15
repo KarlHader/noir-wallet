@@ -106,7 +106,7 @@ async function readHardwareSignResult(requestId: string): Promise<HardwareSignRe
   return parseHardwareSignResult(stored[key], requestId)
 }
 
-/** Wait for one side-panel signing request, including window close and timeout. */
+/** Wait for one side-panel signing request, including tab close and timeout. */
 export function waitForHardwareSignResult({
   requestId,
   tabId,

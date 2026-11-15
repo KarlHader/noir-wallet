@@ -184,7 +184,7 @@ export function useShieldFunds(pageId: string): UseShieldFundsResult {
 
           setIsShielding(true)
           try {
-            const result = await openHardwareSignAndWait(request, { presentation: 'window' })
+            const result = await openHardwareSignAndWait(request)
             if (result.status === 'success') {
               setResult(
                 {

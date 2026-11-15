@@ -8,7 +8,7 @@
 import type { QuoteBinding } from '@/types'
 import type { FeeTier } from '@/config/fee'
 import type { TransactionId } from '@/core/transactions/domain'
-import { launchHardwareSignSurface, type HardwareSignPresentation } from './hardware-sign-launcher'
+import { launchHardwareSignSurface } from './hardware-sign-launcher'
 import { waitForHardwareSignResult, type HardwareSignResult } from './hardware-sign-result'
 import { hardwareConnectRoute, type HardwareConnectVendor } from './hardware-connect-options'
 
@@ -435,8 +435,7 @@ interface HardwareSignSession {
 }
 
 async function openHardwareSignSession(
-  request: Omit<HardwareSignRequest, 'createdAt'>,
-  presentation: HardwareSignPresentation = 'tab'
+  request: Omit<HardwareSignRequest, 'createdAt'>
 ): Promise<HardwareSignSession> {
   const id = crypto.randomUUID()
   const storedRequest = parseHardwareSignRequest({ ...request, createdAt: Date.now() })
@@ -445,8 +444,7 @@ async function openHardwareSignSession(
   })
   try {
     const tab = await launchHardwareSignSurface(
-      chrome.runtime.getURL(`index.html#/hardware/sign?req=${id}`),
-      presentation
+      chrome.runtime.getURL(`index.html#/hardware/sign?req=${id}`)
     )
     return { requestId: id, tab }
   } catch (error) {
@@ -462,13 +460,9 @@ export async function openHardwareSignTab(
 }
 
 export async function openHardwareSignAndWait(
-  request: Omit<HardwareSignRequest, 'createdAt' | 'reportToOrigin'>,
-  options: { presentation?: HardwareSignPresentation } = {}
+  request: Omit<HardwareSignRequest, 'createdAt' | 'reportToOrigin'>
 ): Promise<HardwareSignResult> {
-  const session = await openHardwareSignSession(
-    { ...request, reportToOrigin: true },
-    options.presentation
-  )
+  const session = await openHardwareSignSession({ ...request, reportToOrigin: true })
   try {
     return await waitForHardwareSignResult({ requestId: session.requestId, tabId: session.tab.id })
   } finally {

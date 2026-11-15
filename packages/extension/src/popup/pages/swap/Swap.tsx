@@ -4197,7 +4197,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
           setIsSending(true)
           try {
-            const result = await openHardwareSignAndWait(request, { presentation: 'window' })
+            const result = await openHardwareSignAndWait(request)
             if (result.status === 'success') {
               navigateToSwapResult(result.txHash, 'zcash', result.transactionId, false, {
                 accountKey: result.accountKey,
