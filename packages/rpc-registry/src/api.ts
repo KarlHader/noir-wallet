@@ -1,14 +1,18 @@
 import { RPC_REGISTRY, ZCASH_RPC_REGISTRY } from './registry'
 import { ZERO_INDEXER_REGISTRY } from './zero-indexer-registry'
+import { DAPP_REGISTRY } from './dapp-registry'
 
 const REGISTRY_PATH = '/v1/rpc-endpoints'
 const ZERO_INDEXER_PATH = '/v1/zero-indexer-endpoints'
+const DAPP_PATH = '/v1/dapps'
 
 export function handleRegistryRequest(request: Request): Response {
   const url = new URL(request.url)
   if (
     request.method === 'OPTIONS' &&
-    (url.pathname === REGISTRY_PATH || url.pathname === ZERO_INDEXER_PATH)
+    (url.pathname === REGISTRY_PATH ||
+      url.pathname === ZERO_INDEXER_PATH ||
+      url.pathname === DAPP_PATH)
   ) {
     return new Response(null, {
       status: 204,
@@ -21,6 +25,9 @@ export function handleRegistryRequest(request: Request): Response {
 
   if (url.pathname === ZERO_INDEXER_PATH) {
     return Response.json(ZERO_INDEXER_REGISTRY, { headers: registryHeaders() })
+  }
+  if (url.pathname === DAPP_PATH) {
+    return Response.json(DAPP_REGISTRY, { headers: registryHeaders() })
   }
   if (url.pathname !== REGISTRY_PATH) return new Response('Not Found', { status: 404 })
 
