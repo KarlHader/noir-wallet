@@ -4962,30 +4962,37 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'ADD_SOFTWARE_WALLET') {
     enqueueWalletSessionTransition(async () => {
-      const result = await accountContextTransition.runActiveOperation(() =>
-        addSoftwareWallet(
-          {
-            mode: message.mode as SoftwareWalletProvisioningMode,
-            mnemonic: message.mnemonic as string,
-            accountName: message.accountName as string,
-            ...(message.birthdayHeight === undefined
-              ? {}
-              : { birthdayHeight: message.birthdayHeight as number }),
-            ...(message.selectedNetworkFamilies === undefined
-              ? {}
-              : {
-                  selectedNetworkFamilies: parseSelectedNetworkFamilies(
-                    message.selectedNetworkFamilies
-                  )
-                })
-          },
-          synchronizeCurrentSoftwareWalletNetworkMetadata
+      // Provisioning and activation share one pause: resuming between them can
+      // start sync readiness work that the account switch then waits to stop.
+      syncScheduler.pauseForTx()
+      try {
+        const result = await accountContextTransition.runActiveOperation(() =>
+          addSoftwareWallet(
+            {
+              mode: message.mode as SoftwareWalletProvisioningMode,
+              mnemonic: message.mnemonic as string,
+              accountName: message.accountName as string,
+              ...(message.birthdayHeight === undefined
+                ? {}
+                : { birthdayHeight: message.birthdayHeight as number }),
+              ...(message.selectedNetworkFamilies === undefined
+                ? {}
+                : {
+                    selectedNetworkFamilies: parseSelectedNetworkFamilies(
+                      message.selectedNetworkFamilies
+                    )
+                  })
+            },
+            synchronizeCurrentSoftwareWalletNetworkMetadata
+          )
         )
-      )
-      const accountId = useWalletStore.getState().getWallet(result.walletId)?.accounts[0]?.id
-      if (!accountId) throw new Error('Wallet setup produced no account')
-      await handleSwitchWalletAccount(result.walletId, accountId)
-      return result
+        const accountId = useWalletStore.getState().getWallet(result.walletId)?.accounts[0]?.id
+        if (!accountId) throw new Error('Wallet setup produced no account')
+        await handleSwitchWalletAccount(result.walletId, accountId)
+        return result
+      } finally {
+        syncScheduler.resumeAfterTx()
+      }
     })
       .then(result => sendResponse({ success: true, ...result }))
       .catch(error =>

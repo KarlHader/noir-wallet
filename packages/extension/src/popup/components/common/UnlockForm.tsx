@@ -128,7 +128,7 @@ export function UnlockForm({
   const handleForgotPassword = async () => {
     const confirmed = await openModal<boolean>({
       title: 'Reset Wallet',
-      body: (resolve, close) => (
+      body: resolve => (
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm text-muted">
@@ -146,7 +146,6 @@ export function UnlockForm({
             <Button
               variant="outline"
               onClick={() => {
-                close()
                 resolve(false)
               }}
               className="flex-1"
@@ -156,7 +155,6 @@ export function UnlockForm({
             <Button
               variant="destructive"
               onClick={() => {
-                close()
                 resolve(true)
               }}
               className="flex-1"
