@@ -24,7 +24,10 @@ import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
+import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import type { ShieldProvider } from '@/popup/services/asset-domains'
 import {
+  filterShieldSourcePickerItemsByProvider,
   shieldSourceSelectionItem,
   type ShieldSourceTokenPickerItem
 } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
@@ -154,6 +157,7 @@ function ShieldSwapForm({
   const [picker, setPicker] = useState<'from' | 'to' | null>(null)
   const [search, setSearch] = useState('')
   const [pickerNetwork, setPickerNetwork] = useState('all')
+  const [pickerProvider, setPickerProvider] = useState<ShieldProvider>('near-confidential')
   const [prepared, setPrepared] = useState<Readonly<{
     review: ConfidentialFundingReview
     request: PrepareConfidentialFundingRequest
@@ -222,6 +226,7 @@ function ShieldSwapForm({
     setPicker(null)
     setSearch('')
     setPickerNetwork('all')
+    setPickerProvider('near-confidential')
     setPrepared(null)
     setActiveActivity(null)
     setBalanceRefreshRequired(false)
@@ -451,7 +456,14 @@ function ShieldSwapForm({
     tokenPrices,
     nativeZecTransparentRaw
   ])
+  const visibleFromPickerItems = useMemo(
+    () => filterShieldSourcePickerItemsByProvider(fromPickerItems, pickerProvider),
+    [fromPickerItems, pickerProvider]
+  )
   const pickerNetworks = useMemo(() => {
+    if (picker === 'from' && pickerProvider === 'zcash-shield') {
+      return [{ id: 'zec', label: 'Zcash', iconChain: 'zec' }]
+    }
     const choices = picker === 'from' ? sourceChoices : options
     const networks = new Map<string, { id: string; label: string; iconChain: string }>()
     for (const asset of choices) {
@@ -470,11 +482,8 @@ function ShieldSwapForm({
       }
     }
     if (picker === 'from') {
-      if (nativeZecTransparentRaw !== null && !networks.has('zec')) {
-        networks.set('zec', { id: 'zec', label: 'Zcash', iconChain: 'zec' })
-      }
       for (const option of zecSourceOptions) {
-        if (!networks.has(option.badgeBlockchain)) {
+        if (option.kind === 'intents' && !networks.has(option.badgeBlockchain)) {
           networks.set(option.badgeBlockchain, {
             id: option.badgeBlockchain,
             label: option.chainName,
@@ -484,11 +493,11 @@ function ShieldSwapForm({
       }
     }
     return [...networks.values()]
-  }, [picker, sourceChoices, options, zecSourceOptions, nativeZecTransparentRaw])
+  }, [picker, pickerProvider, sourceChoices, options, zecSourceOptions])
   const pickerItems = useMemo(() => {
     if (picker === null) return []
     return picker === 'from'
-      ? fromPickerItems
+      ? visibleFromPickerItems
           .filter(item => {
             if (pickerNetwork === 'all') return true
             const chainId =
@@ -533,7 +542,7 @@ function ShieldSwapForm({
           }))
   }, [
     picker,
-    fromPickerItems,
+    visibleFromPickerItems,
     pickerNetwork,
     sourceChoices,
     hidden,
@@ -1079,6 +1088,7 @@ function ShieldSwapForm({
           onTokenSelect={() => {
             setSearch('')
             setPickerNetwork('all')
+            setPickerProvider('near-confidential')
             setPicker('from')
           }}
           tokenSelectLocked={busy}
@@ -1249,6 +1259,24 @@ function ShieldSwapForm({
           networks={pickerNetworks}
           selectedNetwork={pickerNetwork}
           onNetworkChange={setPickerNetwork}
+          toolbar={
+            picker === 'from' ? (
+              <div className="-mx-4 mt-3">
+                <ShieldSendProviderTabs
+                  value={pickerProvider}
+                  onChange={provider => {
+                    setPickerNetwork('all')
+                    setPickerProvider(provider)
+                  }}
+                  availableProviders={
+                    zcashAccountEnabled
+                      ? ['near-confidential', 'zcash-shield']
+                      : ['near-confidential']
+                  }
+                />
+              </div>
+            ) : undefined
+          }
           items={pickerItems}
           selectedKey={
             picker === 'from'
@@ -1262,7 +1290,7 @@ function ShieldSwapForm({
           lowBalanceKeys={
             new Set(
               picker === 'from'
-                ? fromPickerItems
+                ? visibleFromPickerItems
                     .filter(item => {
                       try {
                         return BigInt(item.availableRaw) <= 0n

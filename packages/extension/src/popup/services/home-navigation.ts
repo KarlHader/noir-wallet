@@ -1,6 +1,6 @@
 import type { AssetDomain } from './asset-domains'
 
-export type HomeDefaultTab = 'assets' | 'activity'
+export type HomeDefaultTab = 'assets' | 'dapp' | 'activity'
 
 export function legacyShieldHomePath(search: string): string | null {
   const params = new URLSearchParams(search)
@@ -14,7 +14,7 @@ export function legacyShieldHomePath(search: string): string | null {
 
 export function resolveHomeDefaultTab(search: string): HomeDefaultTab {
   const tab = new URLSearchParams(search).get('tab')
-  if (tab === 'activity') return 'activity'
+  if (tab === 'activity' || tab === 'dapp') return tab
   return 'assets'
 }
 
@@ -29,8 +29,13 @@ export function clearHomeTransactionFocus(search: string): string | null {
 export function homeTabPath(search: string, tab: HomeDefaultTab): string {
   const params = new URLSearchParams(search)
   params.delete('transactionId')
-  if (tab === 'activity') params.set('tab', tab)
-  else {
+  if (tab === 'activity' || tab === 'dapp') {
+    params.set('tab', tab)
+    if (tab === 'dapp') {
+      params.delete('assetId')
+      params.delete('mode')
+    }
+  } else {
     params.delete('tab')
     params.delete('assetId')
     params.delete('mode')
@@ -61,7 +66,7 @@ export function homeAssetDomainPath(search: string, domain: AssetDomain): string
   params.delete('mode')
   if (domain === 'all') params.delete('domain')
   else params.set('domain', domain)
-  if (params.get('tab') !== 'activity') params.delete('tab')
+  if (params.get('tab') !== 'activity' && params.get('tab') !== 'dapp') params.delete('tab')
   const remaining = params.toString()
   return remaining ? `/?${remaining}` : '/'
 }

@@ -78,6 +78,7 @@ export function isAccountChainEnabled(
   chainId: string
 ): boolean {
   if (!isAccountNetworkEnabled(account, network, family)) return false
+  if (family === 'evm') return true
   const selected = account.networkChainSelections?.[network]
   return selected === undefined || parseSelectedChainIds(selected).includes(chainId)
 }

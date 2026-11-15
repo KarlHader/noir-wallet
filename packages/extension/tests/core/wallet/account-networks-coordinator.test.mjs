@@ -201,7 +201,7 @@ test.describe('Account networks coordinator', () => {
     ).toContain(zcashChainId)
   })
 
-  test('keeps unselected EVM chains out of account and dApp projections', async () => {
+  test('uses the EVM family selection for all EVM account and dApp chains', async () => {
     const source = snapshot()
     source.chainAccounts.push({
       ...source.chainAccounts[2],
@@ -219,7 +219,7 @@ test.describe('Account networks coordinator', () => {
     }
     expect(() => parseSelectedChainIds([evmChainId, evmChainId])).toThrow()
     expect(isAccountChainEnabled(account, 'testnet', 'evm', evmChainId)).toBe(true)
-    expect(isAccountChainEnabled(account, 'testnet', 'evm', secondEvmChainId)).toBe(false)
+    expect(isAccountChainEnabled(account, 'testnet', 'evm', secondEvmChainId)).toBe(true)
     expect(
       isAccountChainEnabled(
         { networkSelections: { testnet: ['evm'] } },
@@ -261,11 +261,17 @@ test.describe('Account networks coordinator', () => {
       isNetworkEnabled: (_scope, family, chainId) =>
         isAccountChainEnabled(account, 'testnet', family, chainId)
     })
-    expect((await coordinator.readActiveAccount()).chainIds).toEqual([zcashChainId, evmChainId])
+    expect((await coordinator.readActiveAccount()).chainIds).toEqual([
+      zcashChainId,
+      evmChainId,
+      secondEvmChainId
+    ])
     expect(
       (await coordinator.readCatalog()).accounts[0].networks.map(item => item.chainId)
-    ).toEqual([zcashChainId, evmChainId])
-    account.networkChainSelections.testnet = [zcashChainId, evmChainId, secondEvmChainId]
+    ).toEqual([zcashChainId, evmChainId, secondEvmChainId])
+    account.networkSelections.testnet = ['zcash']
+    expect((await coordinator.readActiveAccount()).chainIds).toEqual([zcashChainId])
+    account.networkSelections.testnet = ['zcash', 'evm']
     expect((await coordinator.readActiveAccount()).chainIds).toContain(secondEvmChainId)
   })
 

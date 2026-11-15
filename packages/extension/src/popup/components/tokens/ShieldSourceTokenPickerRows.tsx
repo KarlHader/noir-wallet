@@ -1,5 +1,6 @@
 import { formatSymbol } from '@/lib/format'
 import type { FundingSource } from '@/types'
+import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { TokenIcon } from './TokenIcon'
@@ -20,6 +21,17 @@ export interface ShieldSourceTokenPickerItem {
   readonly decimals: number
   readonly priceUsd?: string | number | null
   readonly disabledReason?: string
+}
+
+export function filterShieldSourcePickerItemsByProvider(
+  items: readonly ShieldSourceTokenPickerItem[],
+  provider: ShieldProvider
+): readonly ShieldSourceTokenPickerItem[] {
+  return items.filter(item =>
+    provider === 'zcash-shield'
+      ? item.zcashFundingSource !== undefined
+      : item.zcashFundingSource === undefined
+  )
 }
 
 export function shieldSourceSelectionItem(

@@ -6,6 +6,7 @@ import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../components/c
 import { DAppConnectPrompt } from '../components/dapp/DAppConnectPrompt'
 import { WalletModeSwitch } from '../components/dapp/WalletModeSwitch'
 import { ConnectedDAppBar } from '../components/dapp/ConnectedDAppBar'
+import { HomeDAppList } from '../components/dapp/HomeDAppList'
 import { AccountSwitcher } from '../components/account/AccountSwitcher'
 import {
   AssetDomainSelector,
@@ -107,6 +108,7 @@ export function Home() {
   const { copyToClipboard, showToast, isCopied } = useCopyToClipboard()
   const {
     currentDApp,
+    connectedDApps,
     currentAccountAuthorized,
     canConnectCurrentAccount,
     disconnectDApp,
@@ -1071,7 +1073,7 @@ export function Home() {
         <Tabs
           value={activeTab}
           onValueChange={value => {
-            if (value === 'assets' || value === 'activity') {
+            if (value === 'assets' || value === 'dapp' || value === 'activity') {
               if (value !== 'activity') setFocusTransactionId(null)
               const path = homeTabPath(location.search, value)
               if (path !== `${location.pathname}${location.search}`) navigate.replace(path)
@@ -1086,6 +1088,12 @@ export function Home() {
                 className="tab-trigger-custom h-full flex-0 rounded-none px-0 py-0 text-base font-normal text-wallet-secondary data-[state=active]:text-white after:max-w-11"
               >
                 {ASSET_DOMAIN_LABELS[assetDomain]}
+              </TabsTrigger>
+              <TabsTrigger
+                value="dapp"
+                className="tab-trigger-custom h-full flex-0 rounded-none px-0 py-0 text-base font-normal text-wallet-secondary data-[state=active]:text-white after:max-w-11"
+              >
+                DApp
               </TabsTrigger>
               <TabsTrigger
                 value="activity"
@@ -1104,7 +1112,7 @@ export function Home() {
               />
             )}
           </div>
-          {syncIssue && (
+          {syncIssue && activeTab !== 'dapp' && (
             <div
               className={
                 syncIssue.description
@@ -1140,6 +1148,9 @@ export function Home() {
               )}
             </div>
           )}
+          <TabsContent value="dapp" className="mt-0">
+            <HomeDAppList account={effectiveAccount} connections={connectedDApps} />
+          </TabsContent>
           <TabsContent
             value="assets"
             className={multichainPortfolioEnabled ? 'mt-0' : 'px-5 py-4 mt-0'}

@@ -1,9 +1,12 @@
 import { ShieldSwapPage } from '../portfolio/ShieldSwapPage'
 import {
+  filterShieldSourcePickerItemsByProvider,
   shieldSourceSelectionItem,
   type ShieldSourceTokenPickerItem
 } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import type { ShieldProvider } from '@/popup/services/asset-domains'
 import {
   TokenSelectorContent,
   TokenSelectorDialog,
@@ -324,6 +327,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [shieldZecPickerOpen, setShieldZecPickerOpen] = useState(false)
   const [shieldPickerSearch, setShieldPickerSearch] = useState('')
   const [shieldPickerNetwork, setShieldPickerNetwork] = useState('all')
+  const [shieldPickerProvider, setShieldPickerProvider] = useState<ShieldProvider>('zcash-shield')
   const confidentialShieldSwapActive = shieldConfidentialSwapActive({
     shieldSwapSelected,
     shieldZecSource
@@ -889,10 +893,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     shieldDisplayBalances,
     shieldCatalogTokens
   ])
-  const shieldPickerNetworks = useMemo(
-    () => [
+  const visibleShieldPickerRows = useMemo(
+    () => filterShieldSourcePickerItemsByProvider(shieldPickerRows, shieldPickerProvider),
+    [shieldPickerRows, shieldPickerProvider]
+  )
+  const shieldPickerNetworks = useMemo(() => {
+    if (shieldPickerProvider === 'zcash-shield') {
+      return [{ id: 'zec', label: 'Zcash', iconChain: 'zec' }]
+    }
+    return [
       ...new Map(
-        shieldPickerRows.map(row => [
+        visibleShieldPickerRows.map(row => [
           row.chainId,
           {
             id: row.chainId ?? '',
@@ -901,9 +912,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
         ])
       ).values()
-    ],
-    [shieldPickerRows]
-  )
+    ]
+  }, [visibleShieldPickerRows, shieldPickerProvider])
   const [walletSourcesTraceId] = useState(() => createDebugRequestId('swap-wallet-sources'))
   const selectedAssetRegistrationKey = useRef<string | null>(null)
   const selectedAssetRegistrationAttempts = useRef<{ key: string; count: number } | null>(null)
@@ -4800,6 +4810,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const handleSelectToken = useCallback(
     async (type: 'in' | 'out') => {
       if (type === 'in' && shieldNativeZecSwap) {
+        setShieldPickerSearch('')
+        setShieldPickerNetwork('all')
+        setShieldPickerProvider('zcash-shield')
         setShieldZecPickerOpen(true)
         return
       }
@@ -6730,7 +6743,23 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           networks={shieldPickerNetworks}
           selectedNetwork={shieldPickerNetwork}
           onNetworkChange={setShieldPickerNetwork}
-          items={shieldPickerRows
+          toolbar={
+            <div className="-mx-4 mt-3">
+              <ShieldSendProviderTabs
+                value={shieldPickerProvider}
+                onChange={provider => {
+                  setShieldPickerNetwork('all')
+                  setShieldPickerProvider(provider)
+                }}
+                availableProviders={
+                  confidentialShieldAvailable
+                    ? ['near-confidential', 'zcash-shield']
+                    : ['zcash-shield']
+                }
+              />
+            </div>
+          }
+          items={visibleShieldPickerRows
             .filter(row => shieldPickerNetwork === 'all' || row.chainId === shieldPickerNetwork)
             .filter(
               row =>
@@ -6740,7 +6769,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             .map(row => shieldSourceSelectionItem(row, balancesHidden))}
           lowBalanceKeys={
             new Set(
-              shieldPickerRows.filter(row => BigInt(row.availableRaw) <= 0n).map(row => row.key)
+              visibleShieldPickerRows
+                .filter(row => BigInt(row.availableRaw) <= 0n)
+                .map(row => row.key)
             )
           }
           selectedKey={
