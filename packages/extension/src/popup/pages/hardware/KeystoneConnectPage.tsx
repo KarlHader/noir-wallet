@@ -34,6 +34,7 @@ import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
 import keystoneLogo from '@/images/keystone-logo.webp'
 import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { logger } from '@/lib/logger'
+import { MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION } from '@/lib/zcash-hardware-compatibility'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { accountNetworksClient } from '../../services/account-networks-client'
 import { keystoneHardwareProvisioningClient } from '../../services/hardware-provisioning-client'
@@ -110,7 +111,7 @@ export function KeystoneConnectPage() {
       ? "Use Multi-Coin firmware, then scan your Keystone's account connection QR."
       : selectedFirmwareProfile === 'bitcoin-only'
         ? "Use Bitcoin-Only firmware, then scan your Keystone's Bitcoin account QR."
-        : "Use Cypherpunk firmware, then scan your Keystone's Zcash connection QR."
+        : `Use Cypherpunk firmware ${MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION} or newer, then scan your Keystone's Zcash connection QR.`
   const firstGuideStep =
     selectedFirmwareProfile === 'multi-coin'
       ? 'Unlock your Keystone with Multi-Coin firmware'

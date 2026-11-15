@@ -12,6 +12,11 @@ import { StandardTransactionResult } from '../../components/transaction/Standard
 import { useLocation } from '../../provider/Router'
 import { parseSignedPczt, type UR } from '@/lib/keystone'
 import {
+  MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION,
+  ledgerZcashTransactionBranchId,
+  minimumLedgerZcashAppVersion
+} from '@/lib/zcash-hardware-compatibility'
+import {
   discoverLedger,
   isLedgerTransparentInputDataError,
   ledgerSupportsBluetooth,
@@ -707,6 +712,9 @@ export function KeystoneSignPage() {
               <p className="text-xs text-muted text-center mt-4 max-w-[260px]">
                 Scan with your Keystone, review the details on the device, then sign.
               </p>
+              <p className="text-xs text-muted text-center mt-2">
+                Requires Cypherpunk firmware {MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION} or newer.
+              </p>
             </div>
           </div>
           <div className="page-footer space-y-3">
@@ -733,6 +741,13 @@ export function KeystoneSignPage() {
               feeZec={feeZec}
               ledgerDisplayAddress={ledgerDisplayAddress ?? undefined}
             />
+            <p className="mt-4 text-xs text-muted text-center">
+              Requires Ledger Zcash app{' '}
+              {minimumLedgerZcashAppVersion(
+                ledgerZcashTransactionBranchId(ledgerPayload.transaction)
+              )}{' '}
+              or newer.
+            </p>
             {reviewNotice && (
               <p role="status" className="mt-4 text-sm text-warning">
                 {reviewNotice}

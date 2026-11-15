@@ -6,6 +6,7 @@ import {
   type KeystoneMultiAccountsPayload
 } from '@/lib/keystone'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
+import { MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION } from '@/lib/zcash-hardware-compatibility'
 
 export interface KeystoneNetworkBundle {
   readonly id: 'zcash' | 'multi-chain' | 'bitcoin-only'
@@ -42,7 +43,7 @@ export function buildKeystoneNetworkBundles(
     {
       id: 'zcash',
       name: cypherpunk.includes('bitcoin') ? 'Zcash + BTC' : 'Zcash',
-      firmwareDescription: 'Cypherpunk firmware',
+      firmwareDescription: `Cypherpunk firmware ${MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION}+`,
       requestedNetworks: cypherpunk,
       comingSoonNetworks: comingSoonNetworks(KEYSTONE_PRODUCT_CHAINS_BY_PROFILE.cypherpunk),
       disabled: cypherpunk.length === 0

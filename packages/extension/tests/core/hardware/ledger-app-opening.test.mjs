@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
 import { openAndVerifyLedgerApp } from '../../../src/lib/ledger/app-session.ts'
+import { assertLedgerZcashAppVersion } from '../../../src/lib/zcash-hardware-compatibility.ts'
+
+it('requires NU7-compatible Zcash firmware before signing without blocking older branches', () => {
+  const nu7 = 0x77190ad9
+  assert.doesNotThrow(() => assertLedgerZcashAppVersion('3.9.4', 0x37a5165b))
+  assert.throws(() => assertLedgerZcashAppVersion('3.9.4', nu7), /Update.*3\.10\.0/)
+  assert.doesNotThrow(() => assertLedgerZcashAppVersion('3.10.0', nu7))
+  assert.doesNotThrow(() => assertLedgerZcashAppVersion('3.11.0', nu7))
+  assert.throws(() => assertLedgerZcashAppVersion('3.9.1'), /Update.*3\.9\.2/)
+})
 
 function deviceWithApp(initialApp, options = {}) {
   let currentApp = initialApp

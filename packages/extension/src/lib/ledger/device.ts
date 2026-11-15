@@ -26,6 +26,10 @@ import type { LedgerPcztSignatures, LedgerSigningPayload } from '@/core/worker/t
 import { logger } from '@/lib/logger'
 import { getLedgerAccountPath } from '@/lib/zcash-derivation'
 import { openAndVerifyLedgerApp } from './app-session'
+import {
+  assertLedgerZcashAppVersion,
+  ledgerZcashTransactionBranchId
+} from '@/lib/zcash-hardware-compatibility'
 
 export type LedgerTransport = 'usb' | 'bluetooth'
 
@@ -41,6 +45,7 @@ export function parseLedgerSigningPayload(value: unknown): LedgerSigningPayload 
     throw new Error('Invalid Ledger signing payload')
   }
   const record = value as Record<string, unknown>
+  ledgerZcashTransactionBranchId(record.transaction)
   if (
     typeof record.transaction !== 'object' ||
     record.transaction === null ||
@@ -90,7 +95,6 @@ export function ledgerSupportsBluetooth(deviceModel?: string): boolean {
   return BLUETOOTH_DEVICE_MODELS.has(deviceModel as DeviceModelId)
 }
 
-const MIN_ZCASH_APP_VERSION = '3.9.2'
 const DISCOVERY_TIMEOUT_MS = 60_000
 const ACTION_TIMEOUT_MS = 5 * 60_000
 const LEDGER_TRANSPARENT_INPUT_DATA_ERROR = 'LedgerPcztTransparentInputDataError'
@@ -252,27 +256,9 @@ export function isLedgerTransparentInputDataError(error: unknown): boolean {
   return message.includes(LEDGER_TRANSPARENT_INPUT_DATA_ERROR)
 }
 
-function compareVersions(left: string, right: string): number {
-  const a = left.split('.').map(value => Number.parseInt(value, 10) || 0)
-  const b = right.split('.').map(value => Number.parseInt(value, 10) || 0)
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const delta = (a[index] ?? 0) - (b[index] ?? 0)
-    if (delta !== 0) return delta
-  }
-  return 0
-}
-
 function assertSupportedDevice(device: DiscoveredDevice): void {
   if (device.deviceModel.model === DeviceModelId.NANO_S) {
     throw new Error('Ledger Nano S is not supported by the Zcash app')
-  }
-}
-
-function assertSupportedAppVersion(version: string): void {
-  if (compareVersions(version, MIN_ZCASH_APP_VERSION) < 0) {
-    throw new Error(
-      `Zcash app ${MIN_ZCASH_APP_VERSION} or newer is required; connected device has ${version}`
-    )
   }
 }
 
@@ -475,7 +461,7 @@ async function withLedgerSigner<T>(
         'zcash_get_app_config',
         signal
       )
-      assertSupportedAppVersion(config.version)
+      assertLedgerZcashAppVersion(config.version)
       return await action({ signer, device, appVersion: config.version })
     }
   )
@@ -622,8 +608,9 @@ export async function signLedgerPczt(params: {
 }): Promise<LedgerPcztSignatures> {
   return withLedgerSigner(
     params.transport,
-    async ({ signer }) => {
+    async ({ signer, appVersion }) => {
       const transaction = toPcztTransaction(params.payload)
+      assertLedgerZcashAppVersion(appVersion, transaction.global.consensusBranchId)
       lastLedgerCommand = undefined
       const result = await runAction(
         signer.signPcztTransaction(transaction),
