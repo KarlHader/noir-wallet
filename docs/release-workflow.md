@@ -179,18 +179,7 @@ The SDK example in `packages/sdk/example/` is verified on pull requests and depl
 
 ## Website and Signup Worker
 
-The website at `https://www.zknoir.com/` keeps its existing Cloudflare Pages Git integration. It builds and publishes the independent `/frost` page with the rest of the website. The [Website Signup Worker workflow](../.github/workflows/web-vote.yml) deploys only `packages/web-vote/`, independently of Pages and wallet releases. Homepage traffic continues to use Pages; signup API routing is defined in the [Worker configuration](../packages/web-vote/wrangler.json).
-
-### One-Time Deployment Credentials
-
-In the GitHub repository, open **Settings → Secrets and variables → Actions** and add these repository secrets:
-
-| Secret                  | Value                                                                                     |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the website's zone and the signup Worker                |
-| `CLOUDFLARE_API_TOKEN`  | A Cloudflare API token authorized to deploy the Worker and manage its routes in that zone |
-
-Follow [Cloudflare's GitHub Actions authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/) to create a token using the **Edit Cloudflare Workers** template and restrict it to the intended account and website zone. See [Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/) for Worker creation and route permissions. Store the token in Actions secrets, never in source files or frontend build variables. The configured hosts must use Cloudflare-proxied DNS for Worker routes.
+The website at `https://www.zknoir.com/` keeps its existing Cloudflare Pages Git integration. It builds and publishes the independent `/frost` page with the rest of the website. The [Website Signup Worker workflow](../.github/workflows/web-vote.yml) verifies `packages/web-vote/` and its website client; it does not deploy. Homepage traffic continues to use Pages; signup API routing is defined in the [Worker configuration](../packages/web-vote/wrangler.json).
 
 ### Signup Email Configuration
 
@@ -231,16 +220,21 @@ LIMIT 20;
 
 Failure logs contain only bounded diagnostic fields and the outcome, never recipient addresses, credentials, exception messages, or raw SMTP responses. `EAUTH` with SMTP code `535` identifies an authentication rejection; verify the actual Google login account and App Password. `ESOCKET`, `ETLS`, or `ETIMEDOUT` at `CONNECT` identifies connection or TLS setup failure. `WORKER_INTERRUPTED` records a restarted in-flight job. Correct configuration failures without deleting saved signups or mail history. The signup client lives in `packages/web/src/pages/FrostVotePage.tsx`.
 
-### Automatic Deployment and Recovery
+### Deployment and Recovery
 
-- Relevant pushes to `main` verify the Worker, test and build the signup client, then deploy the production Worker. The workflow's path filters define relevant changes.
-- Pull requests run verification without deployment or access to the deployment credentials. Forks do not deploy.
-- Manual runs can deploy from `main`; other branches only verify. Missing credentials fail deployment with a configuration error.
-- Deployment uses the committed Wrangler configuration, including runtime caching and the existing Durable Object binding and migration. Signup responses use `Cache-Control: no-store`. Signups use a separate named instance from historical votes; neither stored dataset is reset, and local test data is not uploaded.
-- Before deployment, the run's commit must still match current `main`. Rerunning an older workflow cannot replace a newer Worker deployment; start a new manual run from current `main` instead.
-- The final step performs a read-only health request to the production API and validates its response against the client contract. It does not submit a production signup or read email addresses.
+Relevant pushes to `main`, pull requests, and manual workflow runs verify the Worker and test and build the signup client. GitHub Actions does not require Cloudflare deployment credentials.
 
-After pushing, check **Actions → Website Signup Worker** and the existing Pages deployment status. These are independent deployments; the page may publish before its API is ready. If credential or route setup fails, correct the relevant account, token, or DNS configuration and rerun the workflow from `main`. If the post-deployment API check fails, inspect the route and API response: the deployment may already have succeeded. Do not remove the Durable Object or reset stored data to recover a failed deployment. For a code regression, revert the affected change on `main` and let the normal deployment workflow publish the correction. No production deployment is verified merely by a local dry run.
+Deploy manually from the reviewed `main` checkout using local Cloudflare authentication:
+
+```bash
+pnpm --filter @noir-wallet/web-vote deploy
+```
+
+Cloudflare Git integration can handle deployments once configured. The website's existing Pages deployment remains independent of the signup Worker.
+
+Deployment uses the committed Wrangler configuration, including runtime caching and the existing Durable Object binding and migration. Signups use a separate named instance from historical votes; neither stored dataset is reset, and local test data is not uploaded.
+
+After deployment, check `GET https://www.zknoir.com/api/frost-signups` for HTTP 200 and `{ "status": "ok" }`, then verify email delivery as described above. If credential or route setup fails, correct the relevant Cloudflare authentication or DNS configuration before retrying. Do not remove the Durable Object or reset stored data to recover a failed deployment. For a code regression, revert the affected change on `main` and deploy the corrected revision. No production deployment is verified merely by a local dry run.
 
 ## History Proxy Deployment
 
