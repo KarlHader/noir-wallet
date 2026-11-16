@@ -26,6 +26,7 @@ import type {
 
 export const TRANSACTION_REPOSITORY_LIMITS = Object.freeze({
   list: 200,
+  confidentialActivity: 10_000,
   recordsPerAccount: 10_000,
   eventsPerTransaction: 10_000
 })
@@ -46,6 +47,7 @@ export interface ParsedTransactionListQuery {
   readonly chainId?: string
   readonly statuses?: ReadonlySet<TransactionLifecycleStatus>
   readonly limit: number
+  readonly protocolProvider?: 'Confidential Intents'
 }
 
 export interface ParsedTransactionMutation {
@@ -210,14 +212,27 @@ export function parseTransactionListQuery(value: TransactionListQuery): ParsedTr
   if (
     !isTransactionRepositoryRecord(value) ||
     !Object.prototype.hasOwnProperty.call(value, 'scope') ||
-    !hasOnlyTransactionRepositoryKeys(value, ['scope', 'chainId', 'statuses', 'limit'])
+    !hasOnlyTransactionRepositoryKeys(value, [
+      'scope',
+      'chainId',
+      'statuses',
+      'limit',
+      'protocolProvider'
+    ])
   ) {
     throw new Error('Invalid transaction list query')
   }
   const scope = parseTransactionRepositoryScope(value.scope)
   const limit =
     value.limit === undefined ? 50 : parseTransactionRepositoryRevision(value.limit, 'query.limit')
-  if (limit === 0 || limit > TRANSACTION_REPOSITORY_LIMITS.list) {
+  if (
+    (value.protocolProvider !== undefined && value.protocolProvider !== 'Confidential Intents') ||
+    limit === 0 ||
+    limit >
+      (value.protocolProvider === 'Confidential Intents'
+        ? TRANSACTION_REPOSITORY_LIMITS.confidentialActivity
+        : TRANSACTION_REPOSITORY_LIMITS.list)
+  ) {
     throw new Error('Transaction query limit is out of range')
   }
   const chainId = value.chainId === undefined ? undefined : parseChainId(value.chainId).id
@@ -236,6 +251,7 @@ export function parseTransactionListQuery(value: TransactionListQuery): ParsedTr
   return Object.freeze({
     scope,
     limit,
+    ...(value.protocolProvider === undefined ? {} : { protocolProvider: value.protocolProvider }),
     ...(chainId === undefined ? {} : { chainId }),
     ...(statuses === undefined ? {} : { statuses })
   })

@@ -70,12 +70,14 @@ export function filterActivityItems(input: {
         senderMode !== undefined &&
         recipientMode !== undefined &&
         senderMode !== recipientMode)
-    const shieldActivity =
-      shield?.sourceDomain === 'shield' || shield?.destinationDomain === 'shield'
     const hasConfidentialIntentsSegment = item.segments.some(
       segment =>
         segment.target.kind === 'protocol' && segment.target.provider === 'Confidential Intents'
     )
+    const shieldActivity =
+      shield?.sourceDomain === 'shield' ||
+      shield?.destinationDomain === 'shield' ||
+      hasConfidentialIntentsSegment
     const providerMatches =
       input.shieldProvider === undefined ||
       (input.shieldProvider === 'near-confidential'

@@ -742,7 +742,6 @@ function ShieldProviderContent() {
                 filterDomain="shield"
                 shieldProvider={provider}
                 confidentialIntentsOnly={provider === 'near-confidential'}
-                localPagination={provider === 'near-confidential'}
                 showToolbar={false}
                 compact
                 heading={undefined}

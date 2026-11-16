@@ -3829,7 +3829,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         includeSupplemental: message.action !== 'read',
         accountMode: message.executionMode ?? 'all',
         chainIds: Array.isArray(message.chainIds) ? message.chainIds : undefined,
-        historyPageCount: message.historyPageCount
+        historyPageCount: message.historyPageCount,
+        protocolProvider: message.protocolProvider
       })
       .then(result => {
         if (result && message.action !== 'read') {

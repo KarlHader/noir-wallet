@@ -66,6 +66,28 @@ test('persists V2 transaction graphs, events, indexes, and CAS across reloads', 
   await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
 })
 
+test('finds an older Confidential graph through the MV3 IndexedDB repository', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `transaction-v2-confidential-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await expect(
+    popup.evaluate(
+      name => window.transactionRepositoryIntegration!.inspectOlderConfidentialGraph(name),
+      databaseName
+    )
+  ).resolves.toEqual({
+    hiddenFromRecent: true,
+    confidentialIds: ['transaction:confidential-old']
+  })
+})
+
 test('persists and replaces generation-bound Portfolio cache records', async ({
   popup,
   extensionId

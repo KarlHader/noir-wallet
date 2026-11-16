@@ -619,6 +619,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       action: isPortfolioAction,
       executionMode: value => value === 'all' || isDAppExecutionMode(value),
       chainIds: isChainIdArray,
+      protocolProvider: value => value === 'Confidential Intents',
       historyPageCount: value =>
         typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 10
     }

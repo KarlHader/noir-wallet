@@ -171,6 +171,56 @@ async function inspect(databaseName: string) {
   }
 }
 
+async function inspectOlderConfidentialGraph(databaseName: string) {
+  await deleteDatabase(databaseName)
+  const current = repository(databaseName)
+  const original = graph('transaction:confidential-old', 'account:1', ethereumChainId)
+  const relayId = 'segment:transaction:confidential-old:relay'
+  const confidential = parseTransactionGraph({
+    root: { ...original.root, segmentIds: [...original.root.segmentIds, relayId] },
+    segments: [
+      ...original.segments,
+      {
+        id: relayId,
+        transactionId: original.root.id,
+        role: 'relay',
+        target: {
+          kind: 'protocol',
+          provider: 'Confidential Intents',
+          account: `0x${'1'.repeat(40)}`
+        },
+        status: 'created',
+        requiredForFinality: false,
+        dependsOn: [original.segments[0].id],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        revision: 0
+      }
+    ]
+  })
+  await current.create(confidential)
+  for (let index = 0; index < 201; index += 1) {
+    const ordinary = graph(`transaction:new-${index}`, 'account:1', ethereumChainId)
+    await current.create(
+      parseTransactionGraph({
+        ...ordinary,
+        root: { ...ordinary.root, createdAt: 2_000 + index, updatedAt: 2_000 + index }
+      })
+    )
+  }
+  const recent = await repository(databaseName).list({ scope: scope(), limit: 200 })
+  const confidentialPage = await repository(databaseName).list({
+    scope: scope(),
+    protocolProvider: 'Confidential Intents',
+    limit: 200
+  })
+  await deleteIndexedDbTransactionPersistence(databaseName)
+  return {
+    hiddenFromRecent: !recent.some(item => item.root.id === confidential.root.id),
+    confidentialIds: confidentialPage.map(item => item.root.id)
+  }
+}
+
 async function deleteAccount(databaseName: string) {
   const current = repository(databaseName)
   const deleted = await current.deleteByAccountScope(scope())
@@ -662,6 +712,7 @@ export interface TransactionRepositoryIntegration {
   readonly reset: (databaseName: string) => Promise<void>
   readonly initialize: (databaseName: string) => ReturnType<typeof initialize>
   readonly inspect: (databaseName: string) => ReturnType<typeof inspect>
+  readonly inspectOlderConfidentialGraph: typeof inspectOlderConfidentialGraph
   readonly deleteAccount: (databaseName: string) => ReturnType<typeof deleteAccount>
   readonly initializeProductionEvmMonitor: typeof initializeProductionEvmMonitor
   readonly inspectProductionEvmMonitor: typeof inspectProductionEvmMonitor
@@ -687,6 +738,7 @@ window.transactionRepositoryIntegration = Object.freeze({
   reset: deleteDatabase,
   initialize,
   inspect,
+  inspectOlderConfidentialGraph,
   deleteAccount,
   initializeProductionEvmMonitor,
   inspectProductionEvmMonitor,

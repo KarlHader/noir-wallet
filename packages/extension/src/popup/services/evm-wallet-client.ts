@@ -157,7 +157,11 @@ export interface EvmWalletClient {
   readonly getActivity: (
     action: 'read' | 'refresh',
     executionMode?: 'main' | 'private' | 'all',
-    options?: { readonly chainIds?: readonly string[]; readonly historyPageCount?: number }
+    options?: {
+      readonly chainIds?: readonly string[]
+      readonly historyPageCount?: number
+      readonly protocolProvider?: 'Confidential Intents'
+    }
   ) => Promise<ActivityReadModel | null>
   readonly prepareTransfer: (
     intent: EvmTransferIntent,
@@ -914,7 +918,11 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
     getActivity: async (
       action: 'read' | 'refresh',
       executionMode: 'main' | 'private' | 'all' = 'all',
-      options: { readonly chainIds?: readonly string[]; readonly historyPageCount?: number } = {}
+      options: {
+        readonly chainIds?: readonly string[]
+        readonly historyPageCount?: number
+        readonly protocolProvider?: 'Confidential Intents'
+      } = {}
     ) => {
       const requestedChainIds = options.chainIds
       const chainIds =
@@ -943,7 +951,10 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           action,
           executionMode,
           ...(chainIds === undefined ? {} : { chainIds }),
-          ...(historyPageCount === undefined ? {} : { historyPageCount })
+          ...(historyPageCount === undefined ? {} : { historyPageCount }),
+          ...(options.protocolProvider === undefined
+            ? {}
+            : { protocolProvider: options.protocolProvider })
         },
         value => (value === null ? null : parseActivityReadModel(value))
       )

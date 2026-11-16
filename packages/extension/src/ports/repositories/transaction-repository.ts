@@ -14,6 +14,7 @@ export interface TransactionListQuery {
   readonly chainId?: ChainId
   readonly statuses?: readonly TransactionLifecycleStatus[]
   readonly limit?: number
+  readonly protocolProvider?: 'Confidential Intents'
 }
 
 export type TransactionCreateStatus = 'created' | 'already-exists' | 'id-conflict'

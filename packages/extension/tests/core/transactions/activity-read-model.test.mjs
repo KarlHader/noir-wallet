@@ -372,7 +372,12 @@ test.describe('Activity read model', () => {
       },
       segments: [{ target: { kind: 'protocol', provider: 'Confidential Intents' } }]
     }
-    const selection = { items: [zcash, near], selectedChainIds: ['eip155:1'], domain: 'shield' }
+    const olderNear = {
+      ...near,
+      id: 'older-near-confidential',
+      snapshot: { primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '1' } }
+    }
+    const selection = { items: [zcash, near, olderNear], selectedChainIds: ['eip155:1'], domain: 'shield' }
     expect(
       filterActivityItems({ ...selection, shieldProvider: 'zcash-shield' }).map(item => item.id)
     ).toEqual(['zcash-shield'])
@@ -382,7 +387,7 @@ test.describe('Activity read model', () => {
         shieldProvider: 'near-confidential',
         confidentialIntentsOnly: true
       }).map(item => item.id)
-    ).toEqual(['near-confidential'])
+    ).toEqual(['near-confidential', 'older-near-confidential'])
   })
 
   test('preserves a persisted pre-finality reorg through the strict Activity boundary', () => {

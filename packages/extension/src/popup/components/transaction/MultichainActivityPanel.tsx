@@ -293,11 +293,10 @@ export function MultichainActivityPanel({
     const chainIds = !focusTransactionId && providerChainIds?.length ? providerChainIds : undefined
     let localModelAvailable = false
     try {
-      const local = await evmWalletClient.getActivity(
-        'read',
-        'all',
-        chainIds ? { chainIds } : undefined
-      )
+      const local = await evmWalletClient.getActivity('read', 'all', {
+        ...(chainIds ? { chainIds } : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {})
+      })
       if (request !== requestSequence.current) return
       if (isActivityModelForScope(local, walletId, accountId)) {
         localModelAvailable = true
@@ -309,17 +308,14 @@ export function MultichainActivityPanel({
     }
 
     try {
-      const refreshed = await evmWalletClient.getActivity(
-        'refresh',
-        'all',
-        focusTransactionId
-          ? undefined
-          : filteredChainId
-            ? { chainIds: [filteredChainId] }
-            : chainIds
-              ? { chainIds }
-              : undefined
-      )
+      const refreshed = await evmWalletClient.getActivity('refresh', 'all', {
+        ...(!focusTransactionId && filteredChainId
+          ? { chainIds: [filteredChainId] }
+          : !focusTransactionId && chainIds
+            ? { chainIds }
+            : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {})
+      })
       if (request !== requestSequence.current) return
       if (!isActivityModelForScope(refreshed, walletId, accountId)) {
         setStatus(localModelAvailable ? 'ready' : 'error')
@@ -331,7 +327,14 @@ export function MultichainActivityPanel({
       if (request !== requestSequence.current) return
       setStatus(localModelAvailable ? 'ready' : 'error')
     }
-  }, [accountId, filteredChainId, focusTransactionId, providerChainIds, walletId])
+  }, [
+    accountId,
+    confidentialIntentsOnly,
+    filteredChainId,
+    focusTransactionId,
+    providerChainIds,
+    walletId
+  ])
 
   useEffect(() => {
     const retainedModel = isActivityModelForScope(initialModel, walletId, accountId)
@@ -568,6 +571,7 @@ export function MultichainActivityPanel({
     try {
       const next = await evmWalletClient.getActivity('refresh', 'all', {
         ...(providerChainIds?.length ? { chainIds: providerChainIds } : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {}),
         historyPageCount: nextPageCount
       })
       if (request !== olderRequestSequence.current || refreshRequest !== requestSequence.current)
