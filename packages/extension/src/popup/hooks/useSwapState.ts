@@ -478,6 +478,16 @@ export function useSwapState(
     [crossChainDestinationCatalog, sourceCatalog, tokenIn]
   )
   useEffect(() => {
+    if (
+      !tokenIn ||
+      selectionScope !== preferenceScope ||
+      !isSwapAssetOnEnabledChain(tokenIn.assetId, options.enabledChains) ||
+      findSwapTokenInCatalog(sourceCatalog, tokenIn)
+    )
+      return
+    setSourceCatalog(previous => mergeTokenCatalogs(previous, [tokenIn]))
+  }, [tokenIn, sourceCatalog, selectionScope, preferenceScope, enabledChainKey])
+  useEffect(() => {
     if (!tokenOut || findSwapTokenInCatalog(sourceCatalog, tokenOut)) return
     const sourceToken = findSwapTokenInCatalog(selectorSourceCatalog.current, tokenOut)
     if (!sourceToken) return

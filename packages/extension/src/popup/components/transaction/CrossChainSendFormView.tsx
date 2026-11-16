@@ -21,6 +21,7 @@ interface CrossChainSendFormViewProps {
   readonly tokenIn: RheaSwapToken | null
   readonly tokenOut: RheaSwapToken | null
   readonly destinationOptions: readonly ChainSelectorOption[]
+  readonly selectedDestinationChainId?: string | null
   readonly onSelectDestination: (chainId: string) => void
   readonly amount: string
   readonly estimatedOut: string
@@ -64,6 +65,7 @@ export function CrossChainSendFormView({
   tokenIn,
   tokenOut,
   destinationOptions,
+  selectedDestinationChainId,
   onSelectDestination,
   amount,
   estimatedOut,
@@ -267,7 +269,7 @@ export function CrossChainSendFormView({
         onOpenChange={setNetworkPickerOpen}
         options={destinationOptions}
         loading={destinationNetworksLoading}
-        selectedId={tokenOut?.rheaChainId ?? null}
+        selectedId={tokenOut?.rheaChainId ?? selectedDestinationChainId ?? null}
         onSelect={onSelectDestination}
       />
     </>

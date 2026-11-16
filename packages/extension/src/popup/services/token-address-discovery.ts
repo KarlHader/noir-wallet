@@ -1,6 +1,7 @@
 import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import type { UserEvmAssetCandidate, UserEvmAssetRecord } from '@/core/chains/user-assets'
+import type { AssetDisplayMetadata } from '@/core/chains/domain'
 import type { SwapToken } from '@/core/services/intents-api'
 import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -40,6 +41,45 @@ export function toDiscoveredSwapToken(
     price: 0,
     priceUpdatedAt: new Date(0).toISOString(),
     symbol: asset.metadata.symbol
+  })
+}
+
+export function toWalletEvmSwapToken(input: {
+  readonly assetId: string
+  readonly chainId: string
+  readonly contractAddress: string
+  readonly metadata: AssetDisplayMetadata
+}): RheaSwapToken | null {
+  const address = input.contractAddress.toLowerCase()
+  const chain = RHEA_SWAP_CHAIN_CATALOG.find(
+    candidate =>
+      candidate.walletFamily === 'evm' && `eip155:${candidate.apiChainId}` === input.chainId
+  )
+  if (
+    !chain ||
+    !isEvmTokenContractAddress(address) ||
+    input.assetId.toLowerCase() !== `${input.chainId}/erc20:${address}`.toLowerCase() ||
+    !Number.isInteger(input.metadata.decimals) ||
+    input.metadata.decimals < 0 ||
+    input.metadata.decimals > 255 ||
+    !input.metadata.symbol
+  ) {
+    return null
+  }
+  return Object.freeze({
+    assetId: input.assetId,
+    blockchain: chain.blockchain,
+    contractAddress: address,
+    decimals: input.metadata.decimals,
+    icon: input.metadata.iconUrl ?? null,
+    price: 0,
+    priceUpdatedAt: new Date(0).toISOString(),
+    symbol: input.metadata.symbol,
+    rheaChainId: chain.apiChainId,
+    tokenListChainId: chain.tokenListChainId,
+    rheaAddress: address,
+    isNative: false,
+    sources: Object.freeze([])
   })
 }
 

@@ -60,13 +60,12 @@ export function resolveCrossChainSendRouteAssetDisplay(
     const source = parseAssetId(input.sourceAssetId)
     const destination = parseAssetId(input.destinationAssetId)
     const group = getCrossChainSendAssetGroup(source)
-    if (!group || getCrossChainSendAssetGroup(destination) !== group) return null
     const chains = getInitialProductChainDefinitions(input.network)
     const sourceChain = chains.find(chain => chain.id === source.chainId)
     const destinationChain = chains.find(chain => chain.id === destination.chainId)
-    if (!sourceChain || !destinationChain || sourceChain.id === destinationChain.id) return null
+    if (!sourceChain || !destinationChain) return null
     return {
-      sourceSymbol: group,
+      sourceSymbol: group ?? undefined,
       sourceNetworkName: sourceChain.displayName,
       destinationName: destinationChain.displayName
     }

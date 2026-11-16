@@ -29,7 +29,7 @@ const eth = {
 }
 const enabledChains = { evm: true, solana: true }
 
-test('cross-chain Send route draft stays bound to its source account and same asset', () => {
+test('cross-chain Send keeps the selected network draft bound to its source account', () => {
   const route = {
     network: 'mainnet',
     walletId: 'wallet-1',
@@ -87,7 +87,10 @@ test('cross-chain Send route draft stays bound to its source account and same as
   })
   expect(
     resolveCrossChainSendRouteDraft({ ...route, destinationAssetId: 'eip155:1/slip44:0' })
-  ).toBeNull()
+  ).toMatchObject({ destinationName: 'Ethereum' })
+  expect(
+    resolveCrossChainSendRouteDraft({ ...route, destinationAssetId: route.sourceAssetId })
+  ).toMatchObject({ destinationName: 'Arbitrum' })
 })
 
 test('cross-chain Send uses verified asset identities and excludes the source network', () => {

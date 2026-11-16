@@ -323,6 +323,15 @@ function formatSwapTokenPortfolioBalance(
   return formatBaseUnitDecimalAmount(availableRaw, asset.metadata.decimals)
 }
 
+const portfolioTokenBalances = new WeakMap<
+  PortfolioReadModel,
+  {
+    readonly receiveTargets: AdditionalReceiveTargetsView | null
+    readonly main: WeakMap<RheaSwapToken, string | undefined>
+    readonly private: WeakMap<RheaSwapToken, string | undefined>
+  }
+>()
+
 export function buildWalletSwapSourceBalances(input: {
   readonly tokens: readonly RheaSwapToken[]
   readonly portfolio: PortfolioReadModel | null
@@ -331,18 +340,33 @@ export function buildWalletSwapSourceBalances(input: {
   readonly evmExecutionMode: 'main' | 'private'
 }): ReadonlyMap<string, string> {
   const balances = new Map<string, string>()
+  let snapshot = input.portfolio ? portfolioTokenBalances.get(input.portfolio) : undefined
+  if (input.portfolio && (!snapshot || snapshot.receiveTargets !== input.receiveTargets)) {
+    snapshot = {
+      receiveTargets: input.receiveTargets,
+      main: new WeakMap(),
+      private: new WeakMap()
+    }
+    portfolioTokenBalances.set(input.portfolio, snapshot)
+  }
+  // Portfolio read models are immutable and account scoped. A new snapshot or
+  // receive-target view invalidates these display values; funding modes never mix.
+  const cached = snapshot?.[input.evmExecutionMode]
   for (const token of input.tokens) {
     if (isZecToken(token)) {
       balances.set(token.assetId, input.zcashAvailable)
       continue
     }
     if (!input.portfolio) continue
-    const formatted = formatSwapTokenPortfolioBalance(
-      token,
-      input.portfolio,
-      input.receiveTargets,
-      input.evmExecutionMode
-    )
+    const formatted = cached?.has(token)
+      ? cached.get(token)
+      : formatSwapTokenPortfolioBalance(
+          token,
+          input.portfolio,
+          input.receiveTargets,
+          input.evmExecutionMode
+        )
+    cached?.set(token, formatted)
     if (formatted !== undefined) balances.set(token.assetId, formatted)
   }
   return balances

@@ -203,6 +203,28 @@ function hasBalance(balance: string | undefined): boolean {
   }
 }
 
+// Token identity does not change when balances refresh. Keep normalization out
+// of the repeated catalog ranking path, without retaining obsolete catalogs.
+const tokenKeys = new WeakMap<
+  RheaSwapToken,
+  { readonly addresses: readonly string[]; readonly custom: string }
+>()
+
+function getTokenKeys(token: RheaSwapToken) {
+  const cached = tokenKeys.get(token)
+  if (cached) return cached
+  const keys = {
+    addresses: [token.rheaAddress, token.contractAddress, token.assetId].flatMap(address =>
+      typeof address === 'string'
+        ? [`${token.tokenListChainId}:${normalizedAddress(address, token)}`]
+        : []
+    ),
+    custom: `eip155:${token.rheaChainId}:${token.contractAddress?.toLowerCase() ?? ''}`
+  }
+  tokenKeys.set(token, keys)
+  return keys
+}
+
 export function selectDefaultSwapTokens(
   tokens: readonly RheaSwapToken[],
   curatedRows: readonly CuratedSwapTokenRow[],
@@ -221,18 +243,15 @@ export function selectDefaultSwapTokens(
     )
   )
   const ranked = tokens.flatMap((token, index) => {
+    const keys = getTokenKeys(token)
     const curated = token.isNative
       ? (ranks.native.get(token.tokenListChainId) ?? Infinity)
-      : [token.rheaAddress, token.contractAddress, token.assetId].reduce((best, candidate) => {
-          if (typeof candidate !== 'string') return best
-          const rank = ranks.addresses.get(
-            `${token.tokenListChainId}:${normalizedAddress(candidate, token)}`
-          )
+      : keys.addresses.reduce((best, candidate) => {
+          const rank = ranks.addresses.get(candidate)
           return rank === undefined ? best : Math.min(best, rank)
         }, Infinity)
     const held = hasBalance(options.balances?.get(token.assetId))
-    const customKey = `eip155:${token.rheaChainId}:${token.contractAddress?.toLowerCase() ?? ''}`
-    const userAdded = !token.isNative && custom.has(customKey)
+    const userAdded = !token.isNative && custom.has(keys.custom)
     if (!Number.isFinite(curated) && !token.isNative && !held && !userAdded) return []
     return [{ token, index, rank: Number.isFinite(curated) ? 0 : token.isNative ? 1 : 2, curated }]
   })

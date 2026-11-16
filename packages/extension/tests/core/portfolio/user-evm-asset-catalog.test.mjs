@@ -20,7 +20,8 @@ import {
 import {
   addInspectedToken,
   findVerifiedRheaSwapToken,
-  inspectTokenAddress
+  inspectTokenAddress,
+  toWalletEvmSwapToken
 } from '../../../src/popup/services/token-address-discovery.ts'
 
 const NOW = Date.parse('2026-08-15T03:00:00.000Z')
@@ -283,6 +284,15 @@ test('address discovery keeps inspection separate from addition and rejects a cr
     }
     expect(findVerifiedRheaSwapToken(candidate, [catalogToken])).toBe(catalogToken)
     expect(findVerifiedRheaSwapToken(otherChain, [catalogToken])).toBeNull()
+    expect(toWalletEvmSwapToken(candidate)).toMatchObject({
+      assetId: ASSET_ID,
+      rheaChainId: '1',
+      tokenListChainId: 1,
+      rheaAddress: CONTRACT,
+      isNative: false,
+      sources: []
+    })
+    expect(toWalletEvmSwapToken({ ...candidate, assetId: otherChain.assetId })).toBeNull()
   } finally {
     globalThis.chrome = previousChrome
   }

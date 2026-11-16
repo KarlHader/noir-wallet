@@ -871,39 +871,47 @@ export function MultichainSend({
     const draft = navigationSnapshot?.crossChainReturnDraft
     const sourceAssetId = asset?.asset.asset.id ?? ZEC_ZCASH_ASSET
     const destinationChainId = draft?.destinationChainId
-    const destinationAssetId = draft?.destinationAssetId
     const destinationChain = visibleModel?.chains.find(
       chain => chain.chain.id === destinationChainId
     )
     const group = asset ? getCrossChainSendAssetGroup(asset.asset.asset) : null
-    const sourceDescriptor = asset ? getEnabledSwapChains([asset.chain.chain])[0] : null
+    const matchingDestinationAssetId =
+      destinationChainId && group
+        ? getCrossChainSendDestinationAssetId(destinationChainId, group)
+        : null
+    let preservedDestinationAssetId: string | null = null
+    try {
+      if (
+        draft?.destinationAssetId &&
+        parseAssetId(draft.destinationAssetId).chainId === destinationChainId
+      )
+        preservedDestinationAssetId = draft.destinationAssetId
+    } catch {}
+    const destinationAssetId = matchingDestinationAssetId ?? preservedDestinationAssetId
     const destinationDescriptor = destinationChain
       ? getEnabledSwapChains([destinationChain.chain])[0]
       : null
-    const enabledDescriptor = (descriptor: typeof sourceDescriptor) =>
+    const enabledDescriptor = (descriptor: typeof destinationDescriptor) =>
       descriptor &&
       ((descriptor.walletFamily === 'evm' && crossChainCapabilities.evm) ||
         (descriptor.walletFamily === 'solana' && crossChainCapabilities.solana))
     const validDestination =
       currentNetwork === 'mainnet' &&
       asset &&
-      group &&
       destinationChainId &&
       destinationAssetId &&
-      destinationChainId !== asset.chain.chain.id &&
+      storageV2Account?.networks.some(network => network.chain.id === asset.chain.chain.id) &&
       storageV2Account?.networks.some(network => network.chain.id === destinationChainId) &&
       destinationChain &&
       isSelectableChainFamily(destinationChain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
       destinationChain?.chain.capabilities.transaction.status === 'available' &&
-      enabledDescriptor(sourceDescriptor) &&
-      enabledDescriptor(destinationDescriptor) &&
-      getCrossChainSendDestinationAssetId(destinationChainId, group) === destinationAssetId
+      enabledDescriptor(destinationDescriptor)
         ? destinationAssetId
         : null
     const recipient = draft?.recipient ?? requestedRecipient ?? ''
     const amount = draft?.amount ?? requestedAmount
     setAssetPickerOpen(false)
-    if (validDestination && asset) {
+    if (validDestination && asset && asset.chain.chain.id !== destinationChainId) {
       navigate(
         `/send/cross-chain?${new URLSearchParams({
           source: sourceAssetId,
@@ -1545,11 +1553,10 @@ export function MultichainSend({
                     : undefined
                 }
                 initialRecipient={
-                  /^0x[0-9a-fA-F]{40}$/.test(
-                    returnDraft?.recipient ?? currentSession.publicRecipient
-                  )
-                    ? (returnDraft?.recipient ?? currentSession.publicRecipient)
-                    : undefined
+                  returnDraft?.recipient ??
+                  (/^0x[0-9a-fA-F]{40}$/.test(currentSession.publicRecipient)
+                    ? currentSession.publicRecipient
+                    : undefined)
                 }
                 initialAmount={returnDraft?.amount ?? currentSession.publicAmount}
                 initialDraft={publicPrivateDraft ?? undefined}

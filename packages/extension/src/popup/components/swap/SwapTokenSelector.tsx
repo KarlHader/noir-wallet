@@ -7,7 +7,10 @@ import { getEvmNetworkConfigs } from '@/config/networks'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { TokenSelector, type TokenSelectorProps } from '../tokens/TokenSelector'
-import { findVerifiedRheaSwapToken } from '@/popup/services/token-address-discovery'
+import {
+  findVerifiedRheaSwapToken,
+  toWalletEvmSwapToken
+} from '@/popup/services/token-address-discovery'
 import { ListSkeleton } from '../ui/skeleton'
 import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
 import { isPortfolioModelForScope, readCachedPortfolio } from '@/popup/services/portfolio-cache'
@@ -53,11 +56,15 @@ export function SwapTokenSelector({
   balanceScope,
   ...props
 }: SwapTokenSelectorProps) {
-  const [tokens, setTokens] = useState(initialTokens)
+  const [catalogTokens, setTokens] = useState(initialTokens)
   const [loading, setLoading] = useState(true)
-  const chainIdsKey = [...new Set(tokens.map(token => token.tokenListChainId))]
-    .sort((a, b) => a - b)
-    .join(',')
+  const chainIdsKey = useMemo(
+    () =>
+      [...new Set(catalogTokens.map(token => token.tokenListChainId))]
+        .sort((a, b) => a - b)
+        .join(','),
+    [catalogTokens]
+  )
   const chainIds = useMemo(
     () => (chainIdsKey ? chainIdsKey.split(',').map(Number) : []),
     [chainIdsKey]
@@ -67,6 +74,20 @@ export function SwapTokenSelector({
   )
   const [curatedLoading, setCuratedLoading] = useState(true)
   const [customAssets, setCustomAssets] = useState<readonly UserEvmAssetRecord[]>([])
+  const tokens = useMemo(() => {
+    const known = new Set(
+      catalogTokens.map(token => `${token.rheaChainId}:${token.rheaAddress.toLowerCase()}`)
+    )
+    const custom = customAssets.flatMap(asset => {
+      const token = toWalletEvmSwapToken(asset)
+      return token &&
+        chainIds.includes(token.tokenListChainId) &&
+        !known.has(`${token.rheaChainId}:${token.rheaAddress.toLowerCase()}`)
+        ? [token]
+        : []
+    })
+    return custom.length ? [...catalogTokens, ...custom] : catalogTokens
+  }, [catalogTokens, customAssets, chainIds])
   useEffect(() => {
     let cancelled = false
     setCuratedRows(readCachedCuratedSwapTokens(chainIds))
@@ -343,8 +364,10 @@ export function SwapTokenSelector({
         onVisibleTokensChange={onVisibleTokensChange}
         catalogLoading={loading}
         onDiscoveredToken={result => {
-          const matched = findVerifiedRheaSwapToken(result.candidate, tokens)
-          if (!matched) return 'Added to wallet; unavailable for swapping'
+          const matched =
+            findVerifiedRheaSwapToken(result.candidate, tokens) ??
+            toWalletEvmSwapToken(result.candidate)
+          if (!matched) return 'Select an available EVM network'
           onSelect(matched, scopedPortfolio)
         }}
         onSelect={token => {

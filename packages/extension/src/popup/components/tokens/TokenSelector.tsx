@@ -1,7 +1,7 @@
 /**
  * Token selector component for Swap and other scenarios
  */
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react'
 import type { SwapToken } from '@/core/services/intents-api'
 import type { FundingSource } from '@/types'
 import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
@@ -14,11 +14,7 @@ import { TokenBalanceDisplay } from './TokenBalanceDisplay'
 import { TokenSelectorView } from './TokenSelectorView'
 import type { TokenSelectionItem } from './TokenSelectionList'
 import { sortTokensByBalanceValue } from './token-balance-order'
-import {
-  compareSwapTokenSearchRelevance,
-  matchesSwapTokenSearch,
-  rankTokenSearchFields
-} from '@/popup/services/swap-token-selection'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { createDebugRequestId, logDebugTiming } from '@/lib/debug-performance'
 import {
   deferredChainChoices,
@@ -86,6 +82,7 @@ export function TokenSelector({
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
   const [selectedBlockchain, setSelectedBlockchain] = useState('all')
   const [selectionTraceId] = useState(() => createDebugRequestId('token-selector'))
   const previousRows = useRef<{ filter: string; keys: readonly string[] } | null>(null)
@@ -129,35 +126,44 @@ export function TokenSelector({
       disabledReason: 'Coming soon'
     }))
   ]
-  const filterKey = `${effectiveBlockchain}:${search}`
+  const availableTokenKeys = useMemo(
+    () => new Set(tokens.map(token => `${token.blockchain}:${token.assetId}`)),
+    [tokens]
+  )
+  const filterKey = `${effectiveBlockchain}:${deferredSearch}`
   const filteredTokens = useMemo(() => {
     const startedAt = performance.now()
-    const available = new Set(tokens.map(token => `${token.blockchain}:${token.assetId}`))
+    const searching = Boolean(deferredSearch.trim())
+    const searchRanks = new Map<SwapToken, number>()
     const previous =
-      stableCatalogOrder && !search && previousRows.current?.filter === filterKey
+      stableCatalogOrder && !searching && previousRows.current?.filter === filterKey
         ? new Map(previousRows.current.keys.map((key, index) => [key, index]))
         : undefined
     const ranked = [
       ...sortTokensByBalanceValue(
-        (search.trim() ? tokens : (defaultTokens ?? tokens)).filter(token => {
-          if (!available.has(`${token.blockchain}:${token.assetId}`)) return false
+        (searching ? tokens : (defaultTokens ?? tokens)).filter(token => {
+          if (!availableTokenKeys.has(`${token.blockchain}:${token.assetId}`)) return false
           if (token.assetId === excludeAssetId) return false
           if (effectiveBlockchain !== 'all' && token.blockchain !== effectiveBlockchain)
             return false
-          return matchesSwapTokenSearch(token, search)
+          if (!searching) return true
+          const rank = rankTokenSearchFields(token, deferredSearch)
+          searchRanks.set(token, rank)
+          return rank < 99
         }),
         balances,
         previous,
-        !search.trim() && defaultTokens
+        !searching && defaultTokens
           ? new Map(
               defaultTokens.map((token, index) => [`${token.blockchain}:${token.assetId}`, index])
             )
           : undefined
       )
-    ].sort((left, right) => compareSwapTokenSearchRelevance(left, right, search))
+    ]
+    if (searching) ranked.sort((left, right) => searchRanks.get(left)! - searchRanks.get(right)!)
     logDebugTiming(
       selectionTraceId,
-      `filter-sort input=${tokens.length} output=${ranked.length} queryLength=${search.length}`,
+      `filter-sort input=${tokens.length} output=${ranked.length} queryLength=${deferredSearch.length}`,
       startedAt
     )
     return ranked
@@ -166,7 +172,8 @@ export function TokenSelector({
     defaultTokens,
     excludeAssetId,
     effectiveBlockchain,
-    search,
+    deferredSearch,
+    availableTokenKeys,
     balances,
     selectionTraceId,
     stableCatalogOrder,
