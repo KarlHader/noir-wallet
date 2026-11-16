@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StandardTransactionResult } from '../../components/transaction/StandardTransactionResult'
 import { SwapStatusDisplay } from '../../components/swap/SwapStatus'
@@ -57,6 +57,9 @@ import { buildAccountKey } from '@/store/account-data-store'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import { readCachedPortfolio } from '@/popup/services/portfolio-cache'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 
 const RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000
@@ -93,6 +96,57 @@ export function TransactionResultPage() {
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const [resultPortfolio, setResultPortfolio] = useState<PortfolioReadModel | null>(null)
+  const resultPortfolioScope = JSON.stringify([
+    data?.type === 'swap' ? effectiveWalletId : null,
+    data?.type === 'swap' ? effectiveAccountId : null
+  ])
+  const resultPortfolioScopeRef = useRef(resultPortfolioScope)
+  const resultPortfolioReadSequence = useRef(0)
+  const resultPortfolioMountedRef = useRef(false)
+  resultPortfolioScopeRef.current = resultPortfolioScope
+  const readResultPortfolio = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      if (
+        !resultPortfolioMountedRef.current ||
+        data?.type !== 'swap' ||
+        !effectiveWalletId ||
+        !effectiveAccountId
+      )
+        return
+      const request = ++resultPortfolioReadSequence.current
+      const requestedScope = JSON.stringify([effectiveWalletId, effectiveAccountId])
+      const model = await readCachedPortfolio({
+        walletId: effectiveWalletId,
+        accountId: effectiveAccountId
+      })
+      if (
+        isActive() &&
+        resultPortfolioMountedRef.current &&
+        resultPortfolioReadSequence.current === request &&
+        resultPortfolioScopeRef.current === requestedScope
+      ) {
+        setResultPortfolio(model)
+      }
+    },
+    [data?.type, effectiveWalletId, effectiveAccountId]
+  )
+  useEffect(() => {
+    resultPortfolioMountedRef.current = true
+    setResultPortfolio(null)
+    let active = true
+    void readResultPortfolio(() => active).catch(() => {})
+    return () => {
+      active = false
+      resultPortfolioMountedRef.current = false
+      resultPortfolioReadSequence.current += 1
+    }
+  }, [readResultPortfolio])
+  usePortfolioUpdates(
+    data?.type === 'swap' ? effectiveWalletId : null,
+    data?.type === 'swap' ? effectiveAccountId : null,
+    readResultPortfolio
+  )
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const wallets = useWalletStore(state => state.wallets)
   const resultAccountKey = data?.type === 'zcash' ? data.accountKey : undefined
@@ -761,6 +815,7 @@ export function TransactionResultPage() {
         <PageHeader title={data.actionName || 'Swap'} />
         <SwapStatusDisplay
           network={currentNetwork}
+          portfolio={resultPortfolio}
           confidentialPlan={scopedConfidentialPlan}
           status={data.status}
           tokenInSymbol={data.tokenInSymbol}

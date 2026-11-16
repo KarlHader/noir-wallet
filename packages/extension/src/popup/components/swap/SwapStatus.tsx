@@ -9,6 +9,7 @@ import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
 import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 import type { Network } from '@/types'
 import type { ActivityItem } from '@/core/activity'
+import type { PortfolioReadModel } from '@/core/portfolio'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
 import { useSettingsStore } from '@/store/settings-store'
@@ -54,6 +55,7 @@ interface SwapStatusDisplayProps {
   onViewActivity: () => void
   viewActivityDisabled?: boolean
   activityItem?: ActivityItem | null
+  portfolio?: PortfolioReadModel | null
 }
 
 function TxHashLink({ hash, label, url }: { hash: string; label: string; url: string }) {
@@ -89,7 +91,8 @@ export function SwapStatusDisplay({
   onClose,
   onViewActivity,
   viewActivityDisabled,
-  activityItem
+  activityItem,
+  portfolio
 }: SwapStatusDisplayProps) {
   const currentStatus = status?.status || 'PENDING_DEPOSIT'
   const destinationTxHash = status?.swapDetails?.destinationChainTxHashes?.[0]?.hash
@@ -143,6 +146,12 @@ export function SwapStatusDisplay({
     detectedAssets: detectedEvmAssets,
     catalogTokens
   } = useActivityEvmAssets()
+  const scopedPortfolio =
+    activityItem &&
+    portfolio?.scope.keyDomainId === activityItem.scope.keyDomainId &&
+    portfolio.scope.accountId === activityItem.scope.accountId
+      ? portfolio
+      : null
   const activityCatalog = useMemo(
     () =>
       buildActivityPresentationCatalog({
@@ -150,9 +159,10 @@ export function SwapStatusDisplay({
         endpointSettings,
         userEvmAssets,
         detectedEvmAssets,
-        catalogTokens
+        catalogTokens,
+        portfolio: scopedPortfolio
       }),
-    [network, endpointSettings, userEvmAssets, detectedEvmAssets, catalogTokens]
+    [network, endpointSettings, userEvmAssets, detectedEvmAssets, catalogTokens, scopedPortfolio]
   )
   const activityView = activityItem
     ? buildActivityTransactionView({
