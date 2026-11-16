@@ -12,8 +12,13 @@ import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
 import { selectActivityObservation } from '@/popup/services/activity-observation'
+import {
+  confidentialFundingClient,
+  getConfidentialFundingPlanId
+} from '@/popup/services/confidential-funding-client'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
 import type { ActivityItem } from '@/core/activity'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
 
 export interface ConfidentialActivityTarget {
@@ -59,6 +64,7 @@ export function ConfidentialActivityView({
     nativeAccount: activeAccount
   })
   const [activity, setActivity] = useState<ActivityItem | null>(null)
+  const [confidentialPlan, setConfidentialPlan] = useState<ConfidentialFundingPlan | null>(null)
   const activityRef = useRef<ActivityItem | null>(null)
   const targetRef = useRef('')
   const [stillLoading, setStillLoading] = useState(false)
@@ -88,6 +94,7 @@ export function ConfidentialActivityView({
       targetRef.current = target
       activityRef.current = null
       setActivity(null)
+      setConfidentialPlan(null)
       setStillLoading(false)
     }
     if (!matchesAccount && !accountLoading) {
@@ -101,6 +108,22 @@ export function ConfidentialActivityView({
     }, 10_000)
 
     const load = async () => {
+      const planId = getConfidentialFundingPlanId(plan.transactionId)
+      if (planId) {
+        void confidentialFundingClient
+          .get(planId)
+          .then(next => {
+            if (
+              active &&
+              next.transactionId === plan.transactionId &&
+              next.network === plan.network &&
+              next.keyDomainId === plan.keyDomainId &&
+              next.accountId === plan.accountId
+            )
+              setConfidentialPlan(next)
+          })
+          .catch(() => {})
+      }
       try {
         const model = await evmWalletClient.getActivity('read', 'all')
         const item = model?.items.find(candidate => candidate.id === plan.transactionId)
@@ -152,12 +175,21 @@ export function ConfidentialActivityView({
     activity.scope.accountId === plan.accountId
       ? activity
       : null
+  const scopedPlan =
+    scopedActivity &&
+    confidentialPlan?.transactionId === plan.transactionId &&
+    confidentialPlan.network === plan.network &&
+    confidentialPlan.keyDomainId === plan.keyDomainId &&
+    confidentialPlan.accountId === plan.accountId
+      ? confidentialPlan
+      : null
   const activityView = scopedActivity
     ? buildActivityTransactionView({
         item: scopedActivity,
         network: plan.network,
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
+        confidentialPlan: scopedPlan,
         fallback: display
           ? {
               source: { value: display.amount, symbol: formatSymbol(display.symbol) },

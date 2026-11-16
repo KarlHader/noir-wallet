@@ -9,8 +9,10 @@ import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
 import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 import type { Network } from '@/types'
 import type { ActivityItem } from '@/core/activity'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
 import { useSettingsStore } from '@/store/settings-store'
+import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import {
   ActivityTransactionBody,
   buildActivityTransactionView
@@ -45,6 +47,7 @@ interface SwapStatusDisplayProps {
   /** ZEC fee for the on-chain leg, in ZEC. Omit to hide the fee row. */
   fee?: string
   confidentialFunding?: ConfidentialFundingStatusView
+  confidentialPlan?: ConfidentialFundingPlan | null
   onResumeConfidentialFunding?: () => void
   resumingConfidentialFunding?: boolean
   onClose: () => void
@@ -80,6 +83,7 @@ export function SwapStatusDisplay({
   signedOrder,
   fee,
   confidentialFunding,
+  confidentialPlan,
   onResumeConfidentialFunding,
   resumingConfidentialFunding,
   onClose,
@@ -134,14 +138,21 @@ export function SwapStatusDisplay({
   const showFee = !!fee
   const showDestinationAmount = showExchangeAmounts && confidentialFunding?.phase !== 'refunded'
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const {
+    userAssets: userEvmAssets,
+    detectedAssets: detectedEvmAssets,
+    catalogTokens
+  } = useActivityEvmAssets()
   const activityCatalog = useMemo(
     () =>
       buildActivityPresentationCatalog({
         network,
         endpointSettings,
-        userEvmAssets: []
+        userEvmAssets,
+        detectedEvmAssets,
+        catalogTokens
       }),
-    [network, endpointSettings]
+    [network, endpointSettings, userEvmAssets, detectedEvmAssets, catalogTokens]
   )
   const activityView = activityItem
     ? buildActivityTransactionView({
@@ -149,6 +160,7 @@ export function SwapStatusDisplay({
         network,
         assetMetadata: activityCatalog.assetMetadata,
         chainMetadata: activityCatalog.chainMetadata,
+        confidentialPlan,
         refunded: confidentialFunding?.phase === 'refunded',
         fallback: {
           source: { value: amountIn, symbol: tokenInSymbol },

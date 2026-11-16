@@ -660,6 +660,7 @@ export function MultichainActivityDetail({
     chainMetadata,
     executionAddressModes,
     settledDestination: getClusterSettledDestination(visibleItem, activeConfidentialPlan),
+    confidentialPlan: activeConfidentialPlan,
     refunded: activeConfidentialPlan?.phase === 'refunded',
     replacementHash: scopedZcashRecord?.replacedByTxHash,
     statusLabel: needsSubmissionCheck
