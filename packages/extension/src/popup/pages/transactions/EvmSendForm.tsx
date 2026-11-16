@@ -471,6 +471,12 @@ export function EvmSendForm({
     maximumRaw: maximum.value?.amountRaw ?? null
   })
   const spendableRaw = transferAvailability.amountRaw
+  const maxHighlighted =
+    maxSelected ||
+    (amountRaw !== null &&
+      BigInt(amountRaw) > 0n &&
+      amountRaw === spendableRaw &&
+      (asset.asset.kind === 'token' || maximum.value !== null))
   const validAmount =
     domainAvailableRaw !== null &&
     domainNativeAvailableRaw !== null &&
@@ -1151,7 +1157,7 @@ export function EvmSendForm({
           <button
             type="button"
             aria-label="Max"
-            aria-pressed={maxSelected}
+            aria-pressed={maxHighlighted}
             disabled={
               route === 'pending' ||
               !sourceAddress ||
