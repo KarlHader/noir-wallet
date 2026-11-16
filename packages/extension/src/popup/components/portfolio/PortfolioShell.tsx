@@ -545,7 +545,7 @@ export function PortfolioShell({
               />
             ))}
             {lowValueAssetGroups.length > 0 && (
-              <section className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
+              <section className="mx-4 overflow-hidden rounded-xl border border-border/60 bg-card/40">
                 <button
                   type="button"
                   aria-expanded={lowValueExpanded}
