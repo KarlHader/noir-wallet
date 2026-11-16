@@ -312,11 +312,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
             >
               {view.isRefunded ? (
                 swap.source ? (
-                  <AmountDisplay
-                    value={swap.source.exact}
-                    symbol={swap.source.symbol}
-                    showDetails={false}
-                  />
+                  <AmountDisplay value={swap.source.exact} symbol={swap.source.symbol} />
                 ) : (
                   '—'
                 )
@@ -325,7 +321,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   value={swap.destination.exact}
                   prefix="+"
                   symbol={swap.destination.symbol}
-                  showDetails={false}
                 />
               ) : (
                 '—'
@@ -336,12 +331,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
           <>
             <div className="mt-4 max-w-full break-all font-sans text-3xl font-bold tabular-nums">
               {swap.source ? (
-                <AmountDisplay
-                  value={swap.source.exact}
-                  prefix="−"
-                  symbol={swap.source.symbol}
-                  showDetails={false}
-                />
+                <AmountDisplay value={swap.source.exact} prefix="−" symbol={swap.source.symbol} />
               ) : (
                 '—'
               )}
@@ -357,7 +347,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   value={swap.destination.exact}
                   prefix={view.isShieldSend ? '' : '+'}
                   symbol={swap.destination.symbol}
-                  showDetails={false}
                 />
               </div>
             )}
@@ -410,7 +399,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                 value={change.value}
                 prefix={change.direction === 'incoming' ? '+' : '−'}
                 symbol={change.symbol}
-                showDetails={false}
               />
             </div>
           ))}
@@ -421,7 +409,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
             value={view.amount.value}
             prefix={view.amount.prefix}
             symbol={view.amount.symbol}
-            showDetails={false}
           />
         </div>
       ) : view.showChanges || view.interaction ? null : (
@@ -596,7 +583,6 @@ export function ActivityTransactionFee({ view }: { readonly view: ActivityTransa
         symbol={view.fee.symbol}
         profile="fee"
         className="text-sm"
-        showDetails={false}
       />
     </DetailRow>
   ) : null

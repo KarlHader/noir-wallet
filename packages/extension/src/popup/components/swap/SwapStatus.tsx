@@ -238,7 +238,6 @@ export function SwapStatusDisplay({
               value={amountIn}
               symbol={tokenInSymbol}
               prefix={showExchangeAmounts ? '- ' : undefined}
-              showDetails={false}
               className="text-sm font-medium"
             />
           </div>
@@ -249,7 +248,6 @@ export function SwapStatusDisplay({
                 value={amountOut}
                 symbol={tokenOutSymbol}
                 prefix="+ "
-                showDetails={false}
                 className="text-sm font-medium"
               />
             </div>

@@ -29,7 +29,6 @@ interface NetworkFeeTierPickerProps {
   readonly disabled?: boolean
   readonly details?: ReactNode
   readonly layout?: 'stacked' | 'inline'
-  readonly showAmountDetails?: boolean
   readonly customDefaults?: Readonly<{
     gasLimit: string
     maxFeePerGasWei: string
@@ -50,7 +49,6 @@ export function NetworkFeeTierPicker({
   disabled = false,
   details,
   layout = 'stacked',
-  showAmountDetails = true,
   customDefaults,
   feeModel = 'eip1559'
 }: NetworkFeeTierPickerProps) {
@@ -84,7 +82,7 @@ export function NetworkFeeTierPicker({
         layout === 'inline' && 'flex-row flex-wrap items-center justify-end gap-x-2 gap-y-1'
       )}
     >
-      <AmountDisplay value={amount} symbol={symbol} profile="fee" showDetails={showAmountDetails} />
+      <AmountDisplay value={amount} symbol={symbol} profile="fee" />
       <button
         type="button"
         onClick={handleEdit}

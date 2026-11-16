@@ -241,7 +241,6 @@ export function SwapReviewView({
               <AmountDisplay
                 value={formatAmount(minAmountOut, tokenOut.decimals)}
                 symbol={formatSymbol(tokenOut.symbol)}
-                showDetails={false}
                 className="font-sans tabular-nums"
               />
             )}
@@ -287,7 +286,6 @@ export function SwapReviewView({
               <DetailItem label="Network fee">
                 {sourceNetworkFee && sourceFeeTier && sourceFeeFamily && onSourceFeeTierChange ? (
                   <NetworkFeeTierPicker
-                    showAmountDetails={false}
                     chainFamily={sourceFeeFamily}
                     tier={sourceFeeTier}
                     amount={sourceNetworkFee.amount}
@@ -300,7 +298,6 @@ export function SwapReviewView({
                     value={sourceNetworkFee.amount}
                     symbol={sourceNetworkFee.symbol}
                     profile="fee"
-                    showDetails={false}
                     className="font-sans tabular-nums"
                   />
                 ) : feeTier && onFeeTierChange && feeByTier ? (
@@ -398,7 +395,6 @@ export function SwapReviewView({
                       <AmountDisplay
                         value={approvalDetails.amount}
                         symbol={formatSymbol(approvalDetails.symbol)}
-                        showDetails={false}
                       />
                     </div>
                     <div className="flex justify-between gap-3">
@@ -525,7 +521,6 @@ function QuoteAssetRow({
                 value={amount}
                 symbol={formatSymbol(token.symbol)}
                 prefix={direction === 'pay' ? '-' : '+'}
-                showDetails={false}
                 className="max-w-full justify-start gap-1 font-sans tabular-nums"
               />
             </div>

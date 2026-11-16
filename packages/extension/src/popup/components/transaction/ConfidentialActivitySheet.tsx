@@ -227,7 +227,6 @@ export function ConfidentialActivityView({
                     value={display.amount}
                     symbol={formatSymbol(display.symbol)}
                     prefix={display.operation === 'swap' ? '-' : ''}
-                    showDetails={false}
                   />
                   {display.operation === 'swap' &&
                     display.receiveAmount &&
@@ -237,7 +236,6 @@ export function ConfidentialActivityView({
                           value={display.receiveAmount}
                           symbol={formatSymbol(display.receiveSymbol)}
                           prefix="+"
-                          showDetails={false}
                         />
                       </span>
                     )}

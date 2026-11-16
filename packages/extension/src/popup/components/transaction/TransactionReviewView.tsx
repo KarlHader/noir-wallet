@@ -36,7 +36,6 @@ interface TransactionReviewViewProps {
   readonly asset: TransactionReviewAsset | null
   readonly amount: string
   readonly amountPrefix?: string
-  readonly amountDetails?: boolean
   readonly fiatValue?: string | null
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
@@ -64,7 +63,6 @@ export function TransactionReviewView({
   asset,
   amount,
   amountPrefix = '',
-  amountDetails = true,
   fiatValue,
   network,
   rows,
@@ -98,7 +96,7 @@ export function TransactionReviewView({
             summary
           ) : (
             <TransactionResultDetailRow label="Amount">
-              <AmountDisplay value={amount} symbol={asset?.symbol} showDetails={false} />
+              <AmountDisplay value={amount} symbol={asset?.symbol} />
             </TransactionResultDetailRow>
           )}
           {rows
@@ -181,7 +179,6 @@ export function TransactionReviewView({
                   value={amount}
                   symbol={asset.symbol}
                   prefix={amountPrefix}
-                  showDetails={amountDetails}
                   className={figma ? 'justify-start gap-x-1' : undefined}
                 />
               ) : (
@@ -286,7 +283,6 @@ export function TransactionReviewExchangeSummary({
           value={source.amount}
           symbol={source.asset.symbol}
           prefix="-"
-          showDetails={false}
           className="max-w-full justify-start"
         />
       </div>
@@ -321,7 +317,6 @@ export function TransactionReviewExchangeSummary({
                   value={entry.amount}
                   symbol={entry.asset.symbol}
                   prefix={index === 0 ? '-' : destinationPrefix}
-                  showDetails={false}
                   className="max-w-full justify-start font-sans tabular-nums"
                 />
               )}

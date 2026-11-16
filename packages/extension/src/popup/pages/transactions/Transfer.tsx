@@ -1748,7 +1748,6 @@ function TransferForm() {
             icon: selected.asset.metadata.iconUrl
           }}
           amount={currentAmount}
-          amountDetails={false}
           fiatValue={moveReviewFiatValue}
           network={selected.chain.chain.displayName}
           rows={[
