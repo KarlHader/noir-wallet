@@ -23,6 +23,7 @@ interface ChainSelectorProps {
   readonly title?: string
   readonly label?: string
   readonly loading?: boolean
+  readonly allowSelectionWhileLoading?: boolean
   readonly error?: string
   readonly onRetry?: () => void
 }
@@ -36,6 +37,7 @@ export function ChainSelector({
   title = 'Select Network',
   label,
   loading = false,
+  allowSelectionWhileLoading = false,
   error,
   onRetry
 }: ChainSelectorProps) {
@@ -51,7 +53,7 @@ export function ChainSelector({
   const filtered = options.filter(option =>
     option.name.toLowerCase().includes(search.trim().toLowerCase())
   )
-  const busy = loading || pendingId !== null
+  const busy = (loading && !allowSelectionWhileLoading) || pendingId !== null
   const select = async (id: string) => {
     if (busy) return
     setPendingId(id)

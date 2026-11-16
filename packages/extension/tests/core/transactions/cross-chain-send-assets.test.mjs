@@ -12,6 +12,7 @@ import {
   resolveCrossChainSendRouteDraft
 } from '../../../src/popup/services/cross-chain-send-assets.ts'
 import { getSwapDestinationTokens } from '../../../src/popup/services/swap-token-selection.ts'
+import { MARKET_ASSETS } from '../../../src/config/asset-market-assets.ts'
 
 const eth = {
   assetId: 'nep141:eth.omft.near',
@@ -94,7 +95,13 @@ test('cross-chain Send keeps the selected network draft bound to its source acco
 })
 
 test('cross-chain Send uses verified asset identities and excludes the source network', () => {
-  const baseEth = { ...eth, rheaChainId: '8453', tokenListChainId: 8453, blockchain: 'base' }
+  const baseEth = {
+    ...eth,
+    assetId: 'nep141:base.omft.near',
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base'
+  }
   expect(isCrossChainSendDestination(eth, baseEth, enabledChains)).toBe(true)
   expect(isCrossChainSendDestination(eth, eth, enabledChains)).toBe(false)
   expect(isCrossChainSendDestination(eth, { ...baseEth, isNative: false }, enabledChains)).toBe(
@@ -122,7 +129,7 @@ test('cross-chain Send uses verified asset identities and excludes the source ne
       namespace: 'slip44',
       reference: '60'
     })
-  ).toBe('ETH')
+  ).toBe(MARKET_ASSETS.eth)
   expect(
     getCrossChainSendAssetGroup({
       chainId: 'eip155:8453',
@@ -130,7 +137,9 @@ test('cross-chain Send uses verified asset identities and excludes the source ne
       reference: '0x0000000000000000000000000000000000000001'
     })
   ).toBe(null)
-  expect(getCrossChainSendDestinationAssetId('eip155:8453', 'ETH')).toBe('eip155:8453/slip44:60')
+  expect(getCrossChainSendDestinationAssetId('eip155:8453', MARKET_ASSETS.eth)).toBe(
+    'eip155:8453/slip44:60'
+  )
 
   const arbitrumEth = {
     ...eth,
@@ -189,6 +198,7 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
   }
   const solanaUsdc = {
     ...usdc,
+    assetId: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
     rheaChainId: 'solana',
     tokenListChainId: 501,
     blockchain: 'sol',
@@ -248,7 +258,7 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
   expect(
     resolveCrossChainSendDestinationByWalletAssetId(
       ethereumUsdc,
-      getCrossChainSendDestinationAssetId('eip155:137', 'USDC'),
+      getCrossChainSendDestinationAssetId('eip155:137', MARKET_ASSETS.usdc),
       [polygonUsdc],
       enabledChains
     )
@@ -280,17 +290,86 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
       namespace: 'token',
       reference: solanaUsdc.rheaAddress
     })
-  ).toBe('USDC')
+  ).toBe(MARKET_ASSETS.usdc)
   expect(isCrossChainSendRecipientValid(solanaUsdc, solanaUsdc.rheaAddress)).toBe(true)
   expect(isCrossChainSendRecipientValid(solanaUsdc, 'invalid')).toBe(false)
   expect(isCrossChainSendRecipientValid(usdc, `0x${'12'.repeat(20)}`)).toBe(true)
   expect(isCrossChainSendRecipientValid(usdc, '0x1234')).toBe(false)
   expect(
-    getCrossChainSendDestinationAssetId('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'USDC')
+    getCrossChainSendDestinationAssetId(
+      'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+      MARKET_ASSETS.usdc
+    )
   ).toBe(
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   )
   expect(getCrossChainSendWalletAssetId(solanaUsdc)).toBe(
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   )
+})
+
+test('cross-chain Send resolves verified native and provider identities without matching symbols', () => {
+  const bnb = {
+    ...eth,
+    assetId: 'nep141:bnb.omdep.near',
+    blockchain: 'bsc',
+    rheaChainId: '56',
+    tokenListChainId: 56,
+    symbol: 'BNB'
+  }
+  const baseEth = {
+    ...eth,
+    assetId: 'nep141:base.omft.near',
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base'
+  }
+  expect(getCrossChainSendWalletAssetId(bnb)).toBe('eip155:56/slip44:714')
+  expect(
+    getCrossChainSendAssetGroup({ chainId: 'eip155:56', namespace: 'slip44', reference: '714' })
+  ).toBe(MARKET_ASSETS.bnb)
+  expect(isCrossChainSendDestination(bnb, baseEth, enabledChains)).toBe(false)
+  expect(getCrossChainSendDestinationAssetId('eip155:8453', MARKET_ASSETS.bnb)).toBeNull()
+
+  const contract = '0x1234567890123456789012345678901234567890'
+  const custom = {
+    ...eth,
+    assetId: 'nep141:shared-token.near',
+    isNative: false,
+    contractAddress: contract,
+    rheaAddress: contract,
+    symbol: 'CUSTOM'
+  }
+  const destination = {
+    ...custom,
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base',
+    contractAddress: '0x9876543210987654321098765432109876543210',
+    rheaAddress: '0x9876543210987654321098765432109876543210'
+  }
+  expect(getCrossChainSendWalletAssetId(custom)).toBe(`eip155:1/erc20:${contract}`)
+  expect(isCrossChainSendDestination(custom, destination, enabledChains)).toBe(true)
+  expect(
+    resolveCrossChainSendDestinationByWalletAssetId(
+      custom,
+      'eip155:8453/erc20:0x9876543210987654321098765432109876543210',
+      [destination],
+      enabledChains
+    )
+  ).toBe(destination)
+  expect(
+    isCrossChainSendDestination(
+      custom,
+      { ...destination, assetId: 'nep141:another-token.near' },
+      enabledChains
+    )
+  ).toBe(false)
+  expect(
+    isCrossChainSendDestination(
+      custom,
+      { ...destination, assetId: 'rhea:shared-token' },
+      enabledChains
+    )
+  ).toBe(false)
 })

@@ -4,6 +4,7 @@ import {
   getCrossChainSendTokenGroup,
   isCrossChainSendDestination
 } from '../../../src/popup/services/cross-chain-send-assets.ts'
+import { MARKET_ASSETS } from '../../../src/config/asset-market-assets.ts'
 
 const ethereumUsdc = {
   assetId: 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
@@ -26,14 +27,14 @@ const polygonUsdc = {
 describe('Cross-chain Send USDC identity', () => {
   it('matches known EVM contracts while keeping quote and asset identifiers distinct', () => {
     const capabilities = { evm: true, solana: false }
-    assert.equal(getCrossChainSendTokenGroup(ethereumUsdc), 'USDC')
+    assert.equal(getCrossChainSendTokenGroup(ethereumUsdc), MARKET_ASSETS.usdc)
     assert.equal(isCrossChainSendDestination(ethereumUsdc, polygonUsdc, capabilities), true)
     assert.equal(
       getCrossChainSendTokenGroup({
         ...ethereumUsdc,
         rheaAddress: ethereumUsdc.assetId
       }),
-      'USDC'
+      MARKET_ASSETS.usdc
     )
     assert.equal(
       getCrossChainSendTokenGroup({
@@ -55,7 +56,7 @@ describe('Cross-chain Send USDC identity', () => {
         ...ethereumUsdc,
         contractAddress: null
       }),
-      'USDC'
+      MARKET_ASSETS.usdc
     )
   })
 })

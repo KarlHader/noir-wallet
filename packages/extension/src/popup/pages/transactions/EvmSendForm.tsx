@@ -139,6 +139,7 @@ export function EvmSendForm({
   destinationNetworks,
   destinationNetworksLoading,
   destinationNetworksError,
+  destinationNetworksPartialError,
   onRetryDestinationNetworks,
   onSelectDestinationNetwork,
   catalogAccount,
@@ -165,6 +166,7 @@ export function EvmSendForm({
   }[]
   destinationNetworksLoading: boolean
   destinationNetworksError: boolean
+  destinationNetworksPartialError: boolean
   onRetryDestinationNetworks: () => void
   onSelectDestinationNetwork: (
     destinationAssetId: string,
@@ -1192,14 +1194,16 @@ export function EvmSendForm({
               {!sendPrivately &&
               (destinationNetworks.length > 1 ||
                 destinationNetworksLoading ||
-                destinationNetworksError) ? (
+                destinationNetworksError ||
+                networkPickerOpen) ? (
                 <>
                   <button
                     type="button"
                     onClick={() => setNetworkPickerOpen(true)}
                     disabled={
-                      destinationNetworksLoading ||
-                      (destinationNetworks.length <= 1 && !destinationNetworksError)
+                      destinationNetworks.length <= 1 &&
+                      !destinationNetworksLoading &&
+                      !destinationNetworksError
                     }
                     className="inline-flex items-center gap-1.5 text-foreground hover:text-primary disabled:cursor-wait disabled:opacity-60"
                     aria-label={`Select destination network, ${chain.chain.displayName}`}
@@ -1236,7 +1240,14 @@ export function EvmSendForm({
                       icon: option.icon
                     }))}
                     loading={destinationNetworksLoading}
-                    error={destinationNetworksError ? 'Unable to load networks' : undefined}
+                    allowSelectionWhileLoading
+                    error={
+                      destinationNetworksError
+                        ? destinationNetworksPartialError
+                          ? 'Could not load some networks.'
+                          : 'Unable to load networks'
+                        : undefined
+                    }
                     onRetry={onRetryDestinationNetworks}
                     onSelect={destinationAssetId =>
                       onSelectDestinationNetwork(destinationAssetId, {

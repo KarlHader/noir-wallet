@@ -101,6 +101,7 @@ import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/rep
 import { transactionFailedBeforeBroadcast } from '@/core/transactions/transaction-analytics'
 
 import { SwapTokenSelector } from '../../components/swap/SwapTokenSelector'
+import { isBundledWalletAsset } from '../../components/tokens/token-display-policy'
 import { SlippageSettingContent, SwapSettingsButton } from '../../components/swap/SlippageSetting'
 import { SwapReviewView } from '../../components/swap/SwapReviewView'
 import { SwapInputView } from '../../components/swap/SwapInputView'
@@ -815,52 +816,67 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const receiveTargets =
     receiveTargetsSnapshot.scope === walletSourcesScope ? receiveTargetsSnapshot.value : null
   const sendSourceAssetId = swap.tokenIn ? getCrossChainSendWalletAssetId(swap.tokenIn) : null
-  const sendSourceGroup = swap.tokenIn ? getCrossChainSendTokenGroup(swap.tokenIn) : null
   const sendDestinationCandidates = useMemo(
     () =>
-      crossChainSendRequested && sendSourceAssetId && sendSourceGroup && portfolio
+      crossChainSendRequested && sendSourceAssetId && portfolio
         ? getCrossChainSendDestinationCandidates({
             sourceChainId: sendSourceAssetId.split('/')[0],
-            group: sendSourceGroup,
             chains: portfolio.chains,
             enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
             capabilities: CROSS_CHAIN_SEND_CAPABILITIES,
             enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
           })
         : [],
-    [crossChainSendRequested, sendSourceAssetId, sendSourceGroup, portfolio, storageV2Account]
+    [crossChainSendRequested, sendSourceAssetId, portfolio, storageV2Account]
   )
   const sendDestinationCatalogKey = JSON.stringify([
     walletSourcesScope,
     swap.tokenIn?.assetId,
-    sendDestinationCandidates.map(item => item.assetId)
+    sendDestinationCandidates.map(item => item.chain.chain.id)
   ])
+  const [sendDestinationCatalogRevision, setSendDestinationCatalogRevision] = useState(0)
   const [sendDestinationCatalog, setSendDestinationCatalog] = useState<{
     key: string
+    revision: number
     tokens: readonly RheaSwapToken[]
+    failedChainIds: readonly number[]
+    error: string | null
   } | null>(null)
   useEffect(() => {
-    if (!crossChainSendRequested || !swap.tokenIn || sendDestinationCandidates.length === 0) {
-      setSendDestinationCatalog(null)
-      return
-    }
+    if (!crossChainSendRequested || sendDestinationCandidates.length === 0) return
     let cancelled = false
     void rheaSwapClient
-      .listTokens({
-        direction: 'cross-chain-to',
-        tokenListChainIds: sendDestinationCandidates.map(item => item.descriptor.tokenListChainId)
-      })
+      .listTokens(
+        {
+          direction: 'cross-chain-to',
+          tokenListChainIds: sendDestinationCandidates.map(item => item.descriptor.tokenListChainId)
+        },
+        { bypassCache: sendDestinationCatalogRevision > 0 }
+      )
       .then(catalog => {
         if (!cancelled)
-          setSendDestinationCatalog({ key: sendDestinationCatalogKey, tokens: catalog.tokens })
+          setSendDestinationCatalog({
+            key: sendDestinationCatalogKey,
+            revision: sendDestinationCatalogRevision,
+            tokens: catalog.tokens,
+            failedChainIds: catalog.failedChainIds,
+            error: null
+          })
       })
-      .catch(() => {
-        if (!cancelled) setSendDestinationCatalog({ key: sendDestinationCatalogKey, tokens: [] })
+      .catch(error => {
+        if (!cancelled)
+          setSendDestinationCatalog({
+            key: sendDestinationCatalogKey,
+            revision: sendDestinationCatalogRevision,
+            tokens: [],
+            failedChainIds: sendDestinationCandidates.map(item => item.descriptor.tokenListChainId),
+            error: getRheaSwapErrorMessage(error)
+          })
       })
     return () => {
       cancelled = true
     }
-  }, [crossChainSendRequested, sendDestinationCatalogKey, sendDestinationCandidates, swap.tokenIn])
+  }, [crossChainSendRequested, sendDestinationCatalogKey, sendDestinationCatalogRevision])
   const privateCatalogRequested =
     privateExecutionSupported &&
     (walletActionMode.mode === 'private' ||
@@ -1663,8 +1679,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (selectedAssetRegistrationKey.current === registrationKey) return
     selectedAssetRegistrationKey.current = registrationKey
     selectedAssetRegistrationAttempts.current.count += 1
-    void intentsAssetManagerClient
-      .ensureSelectedEvmAsset(selectedEvmAsset)
+    const bundledAsset = isBundledWalletAsset(selectedEvmAsset.assetId)
+    void (
+      bundledAsset
+        ? Promise.resolve()
+        : intentsAssetManagerClient.ensureSelectedEvmAsset(selectedEvmAsset)
+    )
       .then(async () => {
         if (
           selectedAssetRegistrationKey.current !== registrationKey ||
@@ -1676,6 +1696,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         return portfolioSnapshot.readLatest()
       })
       .then(refreshed => {
+        if (bundledAsset) return
         if (
           selectedAssetRegistrationKey.current !== registrationKey ||
           activeScopeRef.current !== walletSourcesScope ||
@@ -1687,7 +1708,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }
       })
       .catch(error => {
-        if (selectedAssetRegistrationKey.current !== registrationKey) return
+        if (
+          selectedAssetRegistrationKey.current !== registrationKey ||
+          activeScopeRef.current !== walletSourcesScope ||
+          useWalletStore.getState().currentNetwork !== currentNetwork
+        )
+          return
         toast.error(getRheaSwapErrorMessage(error))
         const attempts = selectedAssetRegistrationAttempts.current
         if (attempts?.key !== registrationKey || attempts.count >= 3) return
@@ -1944,7 +1970,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       ? resolveCrossChainSendDestinationByWalletAssetId(
           lockedSourceToken,
           requestedDestinationAssetId,
-          swap.destinationTokens,
+          sendDestinationCatalog?.key === sendDestinationCatalogKey
+            ? getSwapDestinationTokens(
+                lockedSourceToken,
+                swap.sourceTokens,
+                sendDestinationCatalog.tokens
+              )
+            : swap.destinationTokens,
           CROSS_CHAIN_SEND_CAPABILITIES
         )
       : null
@@ -2271,7 +2303,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           swap.clearTokenOutForFlow()
           return
         }
-        if (!requestedCrossChainDestinationToken && swap.destinationTokensLoading) return
+        if (
+          !requestedCrossChainDestinationToken &&
+          (swap.destinationTokensLoading ||
+            (sendDestinationCandidates.length > 0 &&
+              (sendDestinationCatalog?.key !== sendDestinationCatalogKey ||
+                sendDestinationCatalog.revision !== sendDestinationCatalogRevision)))
+        )
+          return
         initializedCrossChainSendScope.current = crossChainDraftScope
         if (requestedCrossChainRecipient) {
           swap.setRecipientAddress(requestedCrossChainRecipient)
@@ -2288,6 +2327,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
         }
         setHydratedCrossChainSendScope(crossChainDraftScope)
+      } else if (!swap.tokenOut && requestedCrossChainDestinationToken) {
+        swap.selectTokenOutForFlow(requestedCrossChainDestinationToken)
       } else if (
         swap.tokenOut &&
         (!isCrossChainSendDestination(sourceToken, swap.tokenOut, CROSS_CHAIN_SEND_CAPABILITIES) ||
@@ -2433,6 +2474,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     requestedSourceAssetId,
     requestedDestinationAssetId,
     requestedCrossChainDestinationToken?.assetId,
+    sendDestinationCatalog,
+    sendDestinationCatalogKey,
+    sendDestinationCatalogRevision,
     requestedCrossChainRecipient,
     requestedCrossChainAmount,
     crossChainSendRouteScopeMatches,
@@ -7494,6 +7538,29 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         ? getEnabledSwapChains([destinationChain.chain])[0]?.apiChainId
         : null
       const sourceAsset = portfolio?.assets.find(asset => asset.asset.id === requestedSourceAssetId)
+      const destinationCatalogLoading =
+        sendDestinationCandidates.length > 0 &&
+        (sendDestinationCatalog?.key !== sendDestinationCatalogKey ||
+          sendDestinationCatalog.revision !== sendDestinationCatalogRevision)
+      const destinationDescriptor = sendDestinationCandidates.find(
+        item => item.descriptor.apiChainId === requestedDestinationChainId
+      )?.descriptor
+      const destinationCatalogError =
+        !destinationCatalogLoading &&
+        sendDestinationCatalog?.key === sendDestinationCatalogKey &&
+        destinationDescriptor &&
+        sendDestinationCatalog.failedChainIds.includes(destinationDescriptor.tokenListChainId)
+          ? (sendDestinationCatalog.error ?? 'Could not load tokens on this network.')
+          : null
+      const destinationTokenMissing = Boolean(
+        requestedDestinationAssetId &&
+        lockedSourceToken &&
+        !crossChainSendDestinationReady &&
+        !requestedCrossChainDestinationToken &&
+        !swap.destinationTokensLoading &&
+        !destinationCatalogLoading &&
+        !destinationCatalogError
+      )
       const destinations =
         sendDestinationCatalog?.key === sendDestinationCatalogKey
           ? getSwapDestinationTokens(
@@ -7570,10 +7637,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           destinationNameFallback={crossChainRouteDisplay?.destinationName}
           destinationOptions={destinationOptions}
           selectedDestinationChainId={requestedDestinationChainId}
-          destinationNetworksLoading={
-            sendDestinationCandidates.length > 0 &&
-            sendDestinationCatalog?.key !== sendDestinationCatalogKey
-          }
+          destinationNetworksLoading={destinationCatalogLoading}
           onSelectDestination={chainId => {
             if (chainId === swap.tokenIn?.rheaChainId) {
               returnFromCrossChainSend()
@@ -7617,14 +7681,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   !walletSourcesLoading &&
                   !swap.areTokensLoading
                 ? 'Source asset is unavailable for cross-chain Send.'
-                : lockedSourceToken && !getCrossChainSendTokenGroup(lockedSourceToken)
-                  ? 'No Send route is available for this asset and network.'
-                  : requestedDestinationAssetId &&
-                      lockedSourceToken &&
-                      !swap.tokenOut &&
-                      !requestedCrossChainDestinationToken &&
-                      !swap.destinationTokensLoading
-                    ? 'No Send route is available for this asset and network.'
+                : destinationCatalogError
+                  ? destinationCatalogError
+                  : destinationTokenMissing
+                    ? `${formatSymbol(lockedSourceToken?.symbol ?? '')} is not available on ${destinationChain?.chain.displayName ?? 'this network'}. Choose another network.`
                     : swap.tokenOut && resolvedRecipientAddress && !crossChainSendRecipientReady
                       ? 'Enter a valid address on the destination network.'
                       : swap.quoteError
@@ -7685,30 +7745,28 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           onSelectRecipient={recipientChainId ? handleSelectRecipient : undefined}
           onRetryCatalog={() => {
             if (accountNetworksError) void refreshAccountNetworks()
+            setSendDestinationCatalogRevision(value => value + 1)
             swap.retryTokenCatalog()
           }}
           onRetryQuote={
-            (requestedSourceAssetId &&
-              !lockedSourceToken &&
-              !walletSourcesLoading &&
-              !swap.areTokensLoading) ||
-            (requestedDestinationAssetId &&
-              lockedSourceToken &&
-              !swap.tokenOut &&
-              !requestedCrossChainDestinationToken &&
-              !swap.destinationTokensLoading)
-              ? () => swap.retryTokenCatalog()
-              : swap.quoteError &&
-                  quoteRetryable &&
-                  (liveQuoteRequest || nativeIntentsRequest || reverseIntentsRequest)
-                ? () => {
-                    reviewAfterQuoteRefresh.current = null
-                    expiredPrepareRetryKey.current = null
-                    swap.setQuoteError(null)
-                    swap.setIsQuoting(true)
-                    setQuoteRefreshTick(current => current + 1)
-                  }
-                : undefined
+            destinationCatalogError
+              ? () => setSendDestinationCatalogRevision(value => value + 1)
+              : requestedSourceAssetId &&
+                  !lockedSourceToken &&
+                  !walletSourcesLoading &&
+                  !swap.areTokensLoading
+                ? () => swap.retryTokenCatalog()
+                : swap.quoteError &&
+                    quoteRetryable &&
+                    (liveQuoteRequest || nativeIntentsRequest || reverseIntentsRequest)
+                  ? () => {
+                      reviewAfterQuoteRefresh.current = null
+                      expiredPrepareRetryKey.current = null
+                      swap.setQuoteError(null)
+                      swap.setIsQuoting(true)
+                      setQuoteRefreshTick(current => current + 1)
+                    }
+                  : undefined
           }
           onOpenSlippage={handleOpenSlippageSetting}
           onReview={() => void reviewLiveQuote()}

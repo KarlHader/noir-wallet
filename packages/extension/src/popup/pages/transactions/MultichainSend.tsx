@@ -1,3 +1,4 @@
+import { MARKET_ASSETS } from '@/config/asset-market-assets'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import type { PortfolioReadModel } from '@/core/portfolio'
@@ -59,11 +60,13 @@ import {
   getCrossChainSendDestinationCandidates,
   getCrossChainSendDestinationAssetId,
   getCrossChainSendTokenGroup,
+  getCrossChainSendWalletAssetId,
   isCrossChainSendDestination
 } from '@/popup/services/cross-chain-send-assets'
 import { prefetchEvmSendCatalogs } from '@/popup/services/evm-send-catalog'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
+import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import {
   getSwapDestinationTokens,
   rankTokenSearchFields
@@ -352,10 +355,23 @@ export function MultichainSend({
   } | null>(null)
   const [destinationCatalog, setDestinationCatalog] = useState<{
     key: string
+    revision: number
     status: 'loading' | 'ready' | 'error'
   } | null>(null)
-  const verifiedDestinationCatalog = useRef(new Map<string, readonly string[]>())
-  const [destinationCatalogRevision, retryDestinationCatalog] = useState(0)
+  const verifiedDestinationCatalog = useRef(
+    new Map<
+      string,
+      {
+        sourceToken: RheaSwapToken | null
+        available: readonly { chainId: string; assetId: string }[]
+        failedDestinationChainIds: readonly number[]
+      }
+    >()
+  )
+  const [destinationCatalogRetry, retryDestinationCatalog] = useState<{
+    key: string
+    revision: number
+  } | null>(null)
   const [nonEvmDraft, setNonEvmDraft] = useState<{
     key: string
     assetId: string
@@ -697,108 +713,195 @@ export function MultichainSend({
     navigationSnapshot?.crossChainReturnDraft?.accountId === effectiveAccountId
       ? navigationSnapshot.crossChainReturnDraft
       : null
-  const crossChainGroup =
-    selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet'
-      ? getCrossChainSendAssetGroup(selection.asset.asset)
-      : null
   const destinationCandidates = useMemo(
     () =>
-      crossChainGroup && selection && visibleModel
+      selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet' && visibleModel
         ? getCrossChainSendDestinationCandidates({
             sourceChainId: selection.chain.chain.id,
-            group: crossChainGroup,
             chains: visibleModel.chains,
             enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
             capabilities: crossChainCapabilities,
             enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
           })
         : [],
-    [crossChainGroup, selection, storageV2Account, visibleModel]
+    [currentNetwork, selection, storageV2Account, visibleModel]
   )
   const destinationCatalogKey = JSON.stringify([
     scopeKey,
     selection?.asset.asset.id,
-    destinationCandidates.map(item => item.assetId)
+    destinationCandidates.map(item => item.chain.chain.id)
   ])
+  const destinationCatalogRevision =
+    destinationCatalogRetry?.key === destinationCatalogKey ? destinationCatalogRetry.revision : 0
   useEffect(() => {
     if (shieldActive) return
-    if (!crossChainGroup || !selection || destinationCandidates.length === 0) {
+    if (!selection || destinationCandidates.length === 0) {
       setDestinationCatalog(null)
       return
     }
     const sourceDescriptor = getEnabledSwapChains([selection.chain.chain])[0]
     const destinationDescriptors = destinationCandidates.map(item => item.descriptor)
     if (!sourceDescriptor) {
-      verifiedDestinationCatalog.current.set(destinationCatalogKey, [])
-      setDestinationCatalog({ key: destinationCatalogKey, status: 'ready' })
+      verifiedDestinationCatalog.current.set(destinationCatalogKey, {
+        sourceToken: null,
+        available: [],
+        failedDestinationChainIds: []
+      })
+      setDestinationCatalog({
+        key: destinationCatalogKey,
+        revision: destinationCatalogRevision,
+        status: 'ready'
+      })
       return
     }
     let cancelled = false
-    setDestinationCatalog({ key: destinationCatalogKey, status: 'loading' })
-    void Promise.all([
-      rheaSwapClient.listTokens({
-        direction: 'from',
-        tokenListChainIds: [sourceDescriptor.tokenListChainId]
-      }),
-      rheaSwapClient.listTokens({
-        direction: 'cross-chain-to',
-        tokenListChainIds: destinationDescriptors.map(descriptor => descriptor.tokenListChainId)
-      })
-    ])
-      .then(([sourceCatalog, destinationCatalog]) => {
+    setDestinationCatalog({
+      key: destinationCatalogKey,
+      revision: destinationCatalogRevision,
+      status: 'loading'
+    })
+    const bypassCache = destinationCatalogRevision > 0
+    const previous = verifiedDestinationCatalog.current.get(destinationCatalogKey)
+    const retryFailedDestinations =
+      bypassCache && previous?.sourceToken && previous.failedDestinationChainIds.length > 0
+    const requestedDestinationDescriptors = retryFailedDestinations
+      ? destinationDescriptors.filter(descriptor =>
+          previous.failedDestinationChainIds.includes(descriptor.tokenListChainId)
+        )
+      : destinationDescriptors
+    let resolvedSourceToken: RheaSwapToken | null = previous?.sourceToken ?? null
+    void (async () => {
+      try {
+        const sourceCatalog = retryFailedDestinations
+          ? null
+          : await rheaSwapClient.listTokens(
+              { direction: 'from', tokenListChainIds: [sourceDescriptor.tokenListChainId] },
+              { bypassCache }
+            )
         if (cancelled) return
-        if (sourceCatalog.failedChainIds.length || destinationCatalog.failedChainIds.length) {
-          setDestinationCatalog({ key: destinationCatalogKey, status: 'error' })
+        const sourceToken = retryFailedDestinations
+          ? previous.sourceToken
+          : (sourceCatalog?.tokens.find(
+              token =>
+                token.rheaChainId === sourceDescriptor.apiChainId &&
+                getCrossChainSendWalletAssetId(token) === selection.asset.asset.id
+            ) ?? null)
+        resolvedSourceToken = sourceToken
+        if (!sourceToken || !getCrossChainSendTokenGroup(sourceToken)) {
+          verifiedDestinationCatalog.current.set(destinationCatalogKey, {
+            sourceToken: null,
+            available: [],
+            failedDestinationChainIds: []
+          })
+          setDestinationCatalog({
+            key: destinationCatalogKey,
+            revision: destinationCatalogRevision,
+            status: sourceCatalog?.failedChainIds.includes(sourceDescriptor.tokenListChainId)
+              ? 'error'
+              : 'ready'
+          })
           return
         }
-        const sourceToken = sourceCatalog.tokens.find(
-          token =>
-            token.rheaChainId === sourceDescriptor.apiChainId &&
-            getCrossChainSendTokenGroup(token) === crossChainGroup
+        const destinationCatalog = await rheaSwapClient.listTokens(
+          {
+            direction: 'cross-chain-to',
+            tokenListChainIds: requestedDestinationDescriptors.map(
+              descriptor => descriptor.tokenListChainId
+            )
+          },
+          { bypassCache }
         )
+        if (cancelled) return
         const destinations = getSwapDestinationTokens(
-          sourceToken ?? null,
-          sourceCatalog.tokens,
+          sourceToken,
+          sourceCatalog?.tokens ?? [sourceToken],
           destinationCatalog.tokens
         )
-        const assetIds = sourceToken
-          ? destinationCandidates.flatMap((item, index) => {
-              const destinationToken = destinations.find(
-                token =>
-                  token.rheaChainId === destinationDescriptors[index]?.apiChainId &&
-                  getCrossChainSendTokenGroup(token) === crossChainGroup &&
-                  isCrossChainSendDestination(sourceToken, token, crossChainCapabilities)
+        const refreshedChainIds = new Set(
+          requestedDestinationDescriptors.map(descriptor => descriptor.tokenListChainId)
+        )
+        const available = destinationCandidates.flatMap(item => {
+          if (!refreshedChainIds.has(item.descriptor.tokenListChainId)) return []
+          const destinationToken = destinations.find(
+            token =>
+              token.rheaChainId === item.descriptor.apiChainId &&
+              isCrossChainSendDestination(sourceToken, token, crossChainCapabilities)
+          )
+          const assetId = destinationToken ? getCrossChainSendWalletAssetId(destinationToken) : null
+          return assetId?.startsWith(`${item.chain.chain.id}/`)
+            ? [{ chainId: item.chain.chain.id, assetId }]
+            : []
+        })
+        const failedDestinationChainIds = destinationCatalog.failedChainIds.filter(chainId =>
+          refreshedChainIds.has(chainId)
+        )
+        const retained = retryFailedDestinations
+          ? previous.available.filter(destination => {
+              const candidate = destinationCandidates.find(
+                item => item.chain.chain.id === destination.chainId
               )
-              return destinationToken ? [item.assetId] : []
+              if (!candidate || !refreshedChainIds.has(candidate.descriptor.tokenListChainId))
+                return true
+              return (
+                failedDestinationChainIds.includes(candidate.descriptor.tokenListChainId) &&
+                !available.some(item => item.chainId === destination.chainId)
+              )
             })
           : []
-        verifiedDestinationCatalog.current.set(destinationCatalogKey, assetIds)
-        setDestinationCatalog({ key: destinationCatalogKey, status: 'ready' })
-      })
-      .catch(() => {
-        if (!cancelled) setDestinationCatalog({ key: destinationCatalogKey, status: 'error' })
-      })
+        verifiedDestinationCatalog.current.set(destinationCatalogKey, {
+          sourceToken,
+          available: [...retained, ...available],
+          failedDestinationChainIds
+        })
+        setDestinationCatalog({
+          key: destinationCatalogKey,
+          revision: destinationCatalogRevision,
+          status: failedDestinationChainIds.length > 0 ? 'error' : 'ready'
+        })
+      } catch {
+        if (!cancelled) {
+          verifiedDestinationCatalog.current.set(destinationCatalogKey, {
+            sourceToken: resolvedSourceToken,
+            available: previous?.available ?? [],
+            failedDestinationChainIds: requestedDestinationDescriptors.map(
+              descriptor => descriptor.tokenListChainId
+            )
+          })
+          setDestinationCatalog({
+            key: destinationCatalogKey,
+            revision: destinationCatalogRevision,
+            status: 'error'
+          })
+        }
+      }
+    })()
     return () => {
       cancelled = true
     }
-  }, [
-    shieldActive,
-    crossChainGroup,
-    destinationCatalogKey,
-    destinationCatalogRevision,
-    destinationCandidates,
-    selection
-  ])
-  const verifiedDestinationAssetIds = verifiedDestinationCatalog.current.get(destinationCatalogKey)
-  const availableDestinationNetworks = destinationCandidates.filter(item =>
-    verifiedDestinationAssetIds?.includes(item.assetId)
-  )
+  }, [shieldActive, destinationCatalogKey, destinationCatalogRevision])
+  const verifiedDestinationState = verifiedDestinationCatalog.current.get(destinationCatalogKey)
+  const verifiedDestinations = verifiedDestinationState?.available
+  const availableDestinationNetworks = destinationCandidates.flatMap(item => {
+    const verified = verifiedDestinations?.find(
+      destination => destination.chainId === item.chain.chain.id
+    )
+    return verified ? [{ ...item, assetId: verified.assetId }] : []
+  })
   const destinationNetworksLoading =
     destinationCandidates.length > 0 &&
-    !verifiedDestinationAssetIds &&
-    (destinationCatalog?.key !== destinationCatalogKey || destinationCatalog.status === 'loading')
+    (destinationCatalog?.key !== destinationCatalogKey ||
+      destinationCatalog.revision !== destinationCatalogRevision ||
+      destinationCatalog.status === 'loading')
   const destinationNetworksError =
-    destinationCatalog?.key === destinationCatalogKey && destinationCatalog.status === 'error'
+    destinationCatalog?.key === destinationCatalogKey &&
+    destinationCatalog.revision === destinationCatalogRevision &&
+    destinationCatalog.status === 'error'
+  const destinationNetworksPartialError = Boolean(
+    destinationNetworksError &&
+    verifiedDestinationState?.sourceToken &&
+    verifiedDestinationState.failedDestinationChainIds.length > 0 &&
+    verifiedDestinationState.failedDestinationChainIds.length < destinationCandidates.length
+  )
 
   const selectReturnedSource = (asset: SendAsset | null) => {
     if (!returnedSourcePickerRequested || !effectiveWalletId || !effectiveAccountId) {
@@ -1058,10 +1161,10 @@ export function MultichainSend({
 
   const walletMode = 'public'
   const nonEvmCrossChainSourceAssetId =
-    selection?.chain.chain.family !== 'evm' &&
-    selection &&
+    selection?.chain.chain.family === 'solana' &&
+    crossChainCapabilities.solana &&
     currentNetwork === 'mainnet' &&
-    getCrossChainSendAssetGroup(selection.asset.asset)
+    getCrossChainSendAssetGroup(selection.asset.asset) === MARKET_ASSETS.usdc
       ? selection.asset.asset.id
       : null
   const activeNonEvmDraft =
@@ -1447,7 +1550,13 @@ export function MultichainSend({
                 )}
                 destinationNetworksLoading={destinationNetworksLoading}
                 destinationNetworksError={destinationNetworksError}
-                onRetryDestinationNetworks={() => retryDestinationCatalog(revision => revision + 1)}
+                destinationNetworksPartialError={destinationNetworksPartialError}
+                onRetryDestinationNetworks={() =>
+                  retryDestinationCatalog(previous => ({
+                    key: destinationCatalogKey,
+                    revision: previous?.key === destinationCatalogKey ? previous.revision + 1 : 1
+                  }))
+                }
                 onSelectDestinationNetwork={(destinationAssetId, draft) => {
                   if (!effectiveWalletId || !effectiveAccountId) return
                   const destination = availableDestinationNetworks.find(
