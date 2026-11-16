@@ -369,6 +369,8 @@ test.describe('quote deposit transfer client', () => {
       executionId: 'execution-signature-binding',
       router: 'one-inch',
       amountIn: '1000',
+      estimatedOut: '890',
+      minAmountOut: '840',
       isCrossChain: true,
       execution: {
         kind: 'evm-signature',
@@ -376,17 +378,20 @@ test.describe('quote deposit transfer client', () => {
       }
     }
 
-    expect(
-      createRheaSwapBinding({
-        source,
-        destinationAssetId: 'near:mainnet/slip44:397',
-        destinationChainId: 'near:mainnet',
-        tokenIn,
-        tokenOut,
-        quote,
-        review
-      }).sourceTarget
-    ).toBe(source.refundAddress)
+    const binding = createRheaSwapBinding({
+      source,
+      destinationAssetId: 'near:mainnet/slip44:397',
+      destinationChainId: 'near:mainnet',
+      tokenIn,
+      tokenOut,
+      quote,
+      review
+    })
+    expect(binding.sourceTarget).toBe(source.refundAddress)
+    expect(binding.destination).toMatchObject({
+      expectedAmountRaw: review.estimatedOut,
+      minimumAmountRaw: review.minAmountOut
+    })
   })
 
   test('monitors same-chain Confidential routes through destination settlement', () => {
@@ -420,6 +425,8 @@ test.describe('quote deposit transfer client', () => {
         executionId: 'execution-private-same-chain',
         router: 'nearintents',
         amountIn: '1000',
+        estimatedOut: '990',
+        minAmountOut: '980',
         isCrossChain: false,
         execution: {
           kind: 'evm-signature',

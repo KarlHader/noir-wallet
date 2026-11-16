@@ -3972,6 +3972,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           if (newlyQuoted) await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
           return
         }
+        if (
+          isPrivateFunding &&
+          privateFundingMinimumRaw &&
+          /^\d+$/.test(privateFundingMinimumRaw) &&
+          BigInt(review.minAmountOut) < BigInt(privateFundingMinimumRaw)
+        ) {
+          const message = `Increase the amount to receive enough ${tokenOut.symbol}`
+          swap.setQuoteError(message)
+          if (lockedAssetFlowRequested || feeTierOverride) setTransferPreparationError(message)
+          return
+        }
         let preparedBalanceTransferReview: PrivateBalanceTransferReview | null = null
         if (
           maxSelected &&
@@ -4409,12 +4420,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           setQuoteResult(result)
           setLiveQuoteKey(requestKey)
           setQuoteReceivedAt(result.receivedAt)
-          swap.setAmountOut(formatBaseUnitDecimalAmount(result.estimatedOut, tokenOut.decimals))
           if (previousQuote && previousQuote.quoteHandle !== result.quoteHandle) {
             void rheaSwapClient.discard(previousQuote.quoteHandle).catch(() => {})
           }
         }
-        const termsChanged = previousQuote && hasSwapQuoteTermsChanged(previousQuote, result)
+        swap.setAmountOut(formatBaseUnitDecimalAmount(review.estimatedOut, tokenOut.decimals))
+        const termsChanged =
+          hasSwapQuoteTermsChanged(result, review) ||
+          Boolean(previousQuote && hasSwapQuoteTermsChanged(previousQuote, result))
         setPreviousReviewRate(termsChanged ? previousRate : null)
         setAcceptedReviewHandle(termsChanged ? null : result.quoteHandle)
         setRheaReview(review)
@@ -5088,8 +5101,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     }
     if (
       viewStep === 'review' &&
-      !privateBalanceTransferRequested &&
-      !publicPrivacySendRequested &&
       (isPreparingReview ||
         isSending ||
         Boolean(transferPreparationError) ||
@@ -5264,8 +5275,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 depositAddress: swap.depositAddress,
                 originAsset: swap.tokenIn?.assetId,
                 destinationAsset: swap.tokenOut?.assetId,
-                expectedAmountOut: quoteResult.estimatedOut,
-                minAmountOut: quoteResult.minAmountOut,
+                expectedAmountOut: rheaReview.estimatedOut,
+                minAmountOut: rheaReview.minAmountOut,
                 recipient: quoteResult.recipient,
                 deadline: getRheaSwapQuoteDeadline(quoteResult)
               }
@@ -6994,7 +7005,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     const reviewedQuote = quoteResult
     if (viewStep === 'review' && reviewedQuote && rheaReview && swap.tokenIn && swap.tokenOut) {
       const refreshingMaximumReview = swap.isZecSource && reviewAfterQuoteRefresh.current !== null
-      const minAmountOut = reviewedQuote.minAmountOut
+      const minAmountOut = rheaReview.minAmountOut
       const priceImpact = calculateSwapPriceImpact({
         amountIn: swap.amountIn,
         amountOut: swap.amountOut,
@@ -7003,6 +7014,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       })
 
       if (privateBalanceTransferRequested && walletOwnedSource) {
+        const priceAcceptanceRequired =
+          acceptedReviewHandle !== reviewedQuote.quoteHandle &&
+          !isPreparingReview &&
+          !transferPreparationError
         const transferReview =
           privateBalanceTransferReview?.quoteHandle === rheaReview.quoteHandle &&
           privateBalanceTransferReview.executionId === rheaReview.executionId
@@ -7156,6 +7171,32 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             amountPrefix={publicPrivacySendRequested ? '-' : ''}
             network={walletOwnedSource.chain.chain.displayName}
             rows={reviewRows}
+            afterRows={
+              priceAcceptanceRequired ? (
+                <button
+                  type="button"
+                  className="min-h-8 text-xs text-primary hover:underline"
+                  onClick={() => {
+                    if (
+                      !isAcceptedSwapReview({
+                        quote: reviewedQuote,
+                        review: rheaReview,
+                        acceptedHandle: reviewedQuote.quoteHandle,
+                        quoteKey: liveQuoteKey,
+                        requestKey: liveQuoteRequest?.key
+                      })
+                    ) {
+                      void refreshExpiredReview()
+                      return
+                    }
+                    setAcceptedReviewHandle(reviewedQuote.quoteHandle)
+                    setPreviousReviewRate(null)
+                  }}
+                >
+                  Accept updated quote
+                </button>
+              ) : undefined
+            }
             error={
               transferPreparationError ? (
                 <InlineError
@@ -7168,6 +7209,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 <p className="mt-3 px-1 text-xs text-warning" role="alert">
                   Transfer review is unavailable. Go back and try again.
                 </p>
+              ) : priceAcceptanceRequired ? (
+                <InlineError message="Quote changed. Review the updated amount before confirming." />
               ) : hasInsufficientFunds || preparedFeeUnaffordable ? (
                 <p className="mt-3 px-1 text-xs text-warning">
                   Amount exceeds balance at this fee. Go back to lower the amount or switch fee
@@ -7181,6 +7224,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             confirmDisabled={
               !transferReview ||
               Boolean(transferPreparationError) ||
+              priceAcceptanceRequired ||
               hasInsufficientFunds ||
               preparedFeeUnaffordable
             }
@@ -7334,7 +7378,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     }
                   ]
                 : []),
-              { label: 'Provider', content: reviewedQuote.router }
+              { label: 'Provider', content: rheaReview.router }
             ]}
             afterRows={
               <div className="flex flex-wrap items-center gap-3">
@@ -7440,12 +7484,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   : 'Public'
           }}
           rate={swap.rate}
-          provider={reviewedQuote.router}
+          provider={rheaReview.router}
           quoteRefreshing={isPreparingReview || refreshingMaximumReview}
           previousRate={previousReviewRate ?? undefined}
           priceAcceptanceRequired={
-            !privateBalanceTransferRequested &&
-            !publicPrivacySendRequested &&
             Boolean(
               quoteResult && rheaReview && acceptedReviewHandle !== quoteResult.quoteHandle
             ) &&

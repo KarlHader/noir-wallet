@@ -790,6 +790,122 @@ test('catalog loading deduplicates native EVM address aliases after canonicaliza
   })
 })
 
+test('prepared BNB swaps accept native address aliases while binding the custom ERC-20 contract', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const quoteHandle = 'rhea-quote:bnb-custom-token'
+  const tokenOut = `0x${'a'.repeat(40)}`
+  const request = toSdkQuoteRequest(
+    parseRheaSwapQuoteRequest({
+      fromChain: '56',
+      toChain: '56',
+      tokenIn: {
+        chain: '56',
+        address: 'nep141:bnb.omdep.near',
+        symbol: 'BNB',
+        decimals: 18,
+        isNative: true
+      },
+      tokenOut: { chain: '56', address: tokenOut, symbol: 'CUSTOM', decimals: 18 },
+      amountIn: '1000000000000000',
+      slippageBps: 50,
+      sender: `0x${'1'.repeat(40)}`,
+      recipient: `0x${'2'.repeat(40)}`
+    })
+  )
+  const rawQuote = {
+    isCrossChain: false,
+    chainType: 'evm',
+    bestQuote: {
+      router: 'rango',
+      amountOut: '2500000000000000000',
+      minAmountOut: '2400000000000000000'
+    }
+  }
+  const quote = normalizeQuote(request, rawQuote, 1_000)
+  const rawBuild = {
+    isCrossChain: false,
+    chainType: 'evm',
+    router: 'rango',
+    fromChain: '56',
+    toChain: '56',
+    tokenIn: {
+      address: '0x0000000000000000000000000000000000000000',
+      symbol: 'BNB',
+      decimals: 18
+    },
+    tokenOut: { address: tokenOut, symbol: 'CUSTOM', decimals: 18 },
+    amountIn: quote.amountIn,
+    estimatedOut: quote.estimatedOut,
+    minAmountOut: quote.minAmountOut,
+    tx: {
+      chainId: 56,
+      from: request.sender,
+      to: `0x${'3'.repeat(40)}`,
+      data: '0x1234',
+      value: quote.amountIn
+    },
+    approve: null
+  }
+  const record = {
+    schemaVersion: 1,
+    quoteHandle,
+    request,
+    quoteRaw: rawQuote,
+    receivedAt: 1_000,
+    expiresAt: 31_000,
+    build: {
+      executionId: 'execution-bnb',
+      request: {
+        ...quote.buildContext.request,
+        router: 'rango',
+        expectedOut: quote.estimatedOut,
+        minAmountOut: quote.minAmountOut
+      },
+      raw: rawBuild
+    }
+  }
+  await sessions.put(record)
+  const service = new RheaSwapService({}, sessions, { now: () => 2_000 })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    tokenIn: { address: rawBuild.tokenIn.address },
+    tokenOut: { address: tokenOut }
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: {
+        ...rawBuild,
+        tokenIn: { ...rawBuild.tokenIn, address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' }
+      }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    tokenIn: { address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' }
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: { ...rawBuild, router: 'rango-updated' }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    router: 'rango-updated'
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: {
+        ...rawBuild,
+        tokenOut: { ...rawBuild.tokenOut, address: `0x${'4'.repeat(40)}` }
+      }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).rejects.toThrow(/does not match its quote/)
+})
+
 test('quote and build remain bound across a session-store reload', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const calls = []
@@ -993,6 +1109,9 @@ test('quote and build remain bound across a session-store reload', async () => {
   )
   buildRecipient = 'alice.near'
   for (const field of ['estimatedOut', 'minAmountOut']) {
+    const updatedAmount = field === 'estimatedOut'
+      ? (BigInt(quote.estimatedOut) + 1n).toString()
+      : (BigInt(quote.minAmountOut) - 1n).toString()
     const driftedBuildService = new RheaSwapService(
       {
         ...client,
@@ -1000,8 +1119,8 @@ test('quote and build remain bound across a session-store reload', async () => {
           const build = await client.buildSwap(input)
           return {
             ...build,
-            [field]: '1',
-            raw: { ...build.raw, [field]: '1' }
+            [field]: updatedAmount,
+            raw: { ...build.raw, [field]: updatedAmount }
           }
         }
       },
@@ -1009,11 +1128,31 @@ test('quote and build remain bound across a session-store reload', async () => {
       { now: () => 2_000, createHandle: () => `drifted-${field}` }
     )
     const driftedQuote = await driftedBuildService.quote(confidentialQuoteRequest)
-    await expect(driftedBuildService.prepare(driftedQuote.quoteHandle)).rejects.toThrow(
-      /does not match its quote/
+    const review = await driftedBuildService.prepare(driftedQuote.quoteHandle)
+    expect(review[field]).toBe(updatedAmount)
+    expect(review[field]).not.toBe(driftedQuote[field])
+    await expect(driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)).resolves.toMatchObject({
+      [field]: updatedAmount
+    })
+  }
+  for (const [field, invalidAmount] of [
+    ['estimatedOut', '1'],
+    ['minAmountOut', '0']
+  ]) {
+    const invalidBuildService = new RheaSwapService(
+      {
+        ...client,
+        async buildSwap(input) {
+          const build = await client.buildSwap(input)
+          return { ...build, [field]: invalidAmount }
+        }
+      },
+      new MemoryRheaSwapQuoteSessionStore(),
+      { now: () => 2_000, createHandle: () => `invalid-${field}` }
     )
-    await expect(driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)).rejects.toThrow(
-      /has not been prepared/
+    const invalidQuote = await invalidBuildService.quote(confidentialQuoteRequest)
+    await expect(invalidBuildService.prepare(invalidQuote.quoteHandle)).rejects.toThrow(
+      /does not match its quote \(output\)/
     )
   }
   for (const field of ['tokenIn', 'tokenOut']) {

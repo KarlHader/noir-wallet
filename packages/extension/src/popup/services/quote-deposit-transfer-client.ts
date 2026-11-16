@@ -202,8 +202,8 @@ export function createRheaSwapBinding(input: {
       protocolChainId: input.tokenOut.rheaChainId,
       protocolAssetId: input.tokenOut.assetId,
       recipient: input.quote.recipient,
-      expectedAmountRaw: input.quote.estimatedOut,
-      minimumAmountRaw: input.quote.minAmountOut,
+      expectedAmountRaw: input.review.estimatedOut,
+      minimumAmountRaw: input.review.minAmountOut,
       ...(destinationMetadata ? { metadata: destinationMetadata } : {})
     }
   })

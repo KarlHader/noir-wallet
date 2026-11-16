@@ -253,6 +253,7 @@ it('requires a fresh, matching and explicitly accepted swap review before execut
   assert.equal(isAcceptedSwapReview({ ...input, now: now + 60_000 }), false)
   assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, quoteHandle: 'quote-b' }), false)
   assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, minAmountOut: '89' }), true)
+  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, router: 'updated-router' }), true)
   assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, recipient: 'other' }), true)
 })
 
