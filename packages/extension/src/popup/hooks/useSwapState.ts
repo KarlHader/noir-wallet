@@ -95,8 +95,8 @@ export function useSwapState(
   const [tokenIn, setTokenIn] = useState<RheaSwapToken | null>(initialState.tokenIn)
   const [selectedSourceAssetId, setSelectedSourceAssetId] = useState<string | null>(null)
   const [tokenOut, setTokenOut] = useState<RheaSwapToken | null>(initialState.tokenOut)
-  const currentSelectionContext = useRef({ catalogScope, preferenceScope, tokenIn })
-  currentSelectionContext.current = { catalogScope, preferenceScope, tokenIn }
+  const currentSelectionContext = useRef({ catalogScope, preferenceScope, tokenIn, tokenOut })
+  currentSelectionContext.current = { catalogScope, preferenceScope, tokenIn, tokenOut }
   const [sourceCatalog, setSourceCatalog] = useState<readonly RheaSwapToken[]>(initialState.sources)
   const [crossChainDestinationCatalog, setCrossChainDestinationCatalog] = useState<
     readonly RheaSwapToken[]
@@ -197,6 +197,37 @@ export function useSwapState(
 
   useEffect(() => {
     let cancelled = false
+    const mergeSourceCatalog = (
+      current: readonly RheaSwapToken[],
+      incoming: readonly RheaSwapToken[] = []
+    ) => {
+      const selection = currentSelectionContext.current
+      if (
+        !selectionEdited.current ||
+        selection.catalogScope !== catalogScope ||
+        activePreferenceScope.current !== selection.preferenceScope ||
+        !isSwapAssetOnEnabledChain(selection.tokenIn?.assetId, options.enabledChains)
+      )
+        return mergeTokenCatalogs(current, incoming)
+      const selected = [
+        selection.tokenIn,
+        selection.tokenOut?.blockchain === selection.tokenIn?.blockchain ? selection.tokenOut : null
+      ].filter((token): token is RheaSwapToken => token != null)
+      const identity = (token: RheaSwapToken) => `${token.rheaChainId}:${token.rheaAddress}`
+      const selectedByAddress = new Map(selected.map(token => [identity(token), token]))
+      const refreshed = incoming.map(token => {
+        const retained = selectedByAddress.get(identity(token))
+        return retained && retained.assetId !== token.assetId
+          ? Object.freeze({ ...token, assetId: retained.assetId })
+          : token
+      })
+      const refreshedAddresses = new Set(refreshed.map(identity))
+      return mergeTokenCatalogs(
+        current,
+        refreshed,
+        selected.filter(token => !refreshedAddresses.has(identity(token)))
+      )
+    }
     const readActiveSelection = () => {
       const scope = activePreferenceScope.current
       return scope ? useSwapPreferences.getState().tokenSelections[scope] : undefined
@@ -298,7 +329,7 @@ export function useSwapState(
       setCatalogError(false)
       if (sourcesReady && destinationsReady) return
       if (!sourcesReady) {
-        setSourceCatalog(displaySources)
+        setSourceCatalog(() => mergeSourceCatalog([], displaySources))
         setTokenIn(previous =>
           previous && isSwapAssetOnEnabledChain(previous.assetId, options.enabledChains)
             ? previous
@@ -342,7 +373,7 @@ export function useSwapState(
           plan.sourceChainIds,
           catalogRequestId > 0,
           tokens => {
-            setSourceCatalog(previous => mergeTokenCatalogs(previous, tokens))
+            setSourceCatalog(previous => mergeSourceCatalog(previous, tokens))
             setTokenOut(previous =>
               previous?.isDisplaySeed
                 ? (tokens.find(token => token.assetId === previous.assetId) ?? previous)
@@ -369,7 +400,7 @@ export function useSwapState(
         if (sources.length === 0 && cachedPlannedSources.length === 0) {
           throw new Error('RHEA Swap source assets are unavailable')
         }
-        setSourceCatalog(previous => mergeTokenCatalogs(previous, sources))
+        setSourceCatalog(previous => mergeSourceCatalog(previous, sources))
         setTokenOut(previous =>
           previous?.isDisplaySeed
             ? (sources.find(token => token.assetId === previous.assetId) ?? previous)
@@ -395,7 +426,7 @@ export function useSwapState(
       } catch {
         if (!cancelled) {
           if (cachedPlannedSources.length === 0) {
-            setSourceCatalog(displaySources)
+            setSourceCatalog(() => mergeSourceCatalog([], displaySources))
             setAmountOut('')
             setQuoteError(null)
           }
