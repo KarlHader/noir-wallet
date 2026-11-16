@@ -2695,6 +2695,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (
       !maxSelected ||
       viewStep !== 'input' ||
+      preparingReview.current ||
       !walletOwnedSource ||
       walletOwnedSource.asset.asset.kind !== 'native'
     ) {
@@ -3158,7 +3159,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   ])
   useEffect(() => {
     const refreshingMaximumReview =
-      viewStep === 'review' && swap.isZecSource && reviewAfterQuoteRefresh.current !== null
+      viewStep === 'review' && reviewAfterQuoteRefresh.current !== null
     if (viewStep !== 'input' && !refreshingMaximumReview) {
       swap.setIsQuoting(false)
       return
@@ -3225,8 +3226,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               error
             )
             reviewAfterQuoteRefresh.current = null
-            if (refreshingMaximumReview) setViewStep('input')
-            setQuoteResult(null)
+            if (refreshingMaximumReview) {
+              setTransferPreparationError(quoteFailure.message)
+              setAcceptedReviewHandle(null)
+            } else {
+              setQuoteResult(null)
+            }
             setLiveQuoteKey(null)
             setQuoteReceivedAt(null)
             swap.setAmountOut('')
@@ -3721,7 +3726,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       const refreshReviewQuote =
         viewStep === 'review' &&
         liveQuoteKey === requestKey &&
-        (feeTierOverride !== undefined || forceQuote)
+        (feeTierOverride !== undefined || evmFeeSelectionOverride !== undefined || forceQuote)
       if (
         !liveQuoteRequest ||
         !requestKey ||
@@ -3732,13 +3737,27 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           !isRheaSwapQuoteFresh(resultToReview)) &&
           !refreshReviewQuote)
       ) {
-        reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
-        setQuoteResult(null)
+        if (viewStep === 'review') {
+          if (!liveQuoteRequest || !tokenIn || !tokenOut) {
+            setTransferPreparationError(
+              'Swap inputs changed. Check the selected assets and amount.'
+            )
+            setAcceptedReviewHandle(null)
+            return
+          }
+          // Preserve the reviewed layout while the bound replacement quote is requested.
+          reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
+          setTransferPreparationError(null)
+          setAcceptedReviewHandle(null)
+        } else {
+          reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
+          setQuoteResult(null)
+          swap.setAmountOut('')
+          setViewStep('input')
+        }
         setLiveQuoteKey(null)
         setQuoteReceivedAt(null)
-        swap.setAmountOut('')
         swap.setDepositAddress('')
-        setViewStep('input')
         setQuoteRefreshTick(current => current + 1)
         return
       }
@@ -3844,7 +3863,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               decimals: walletOwnedSource.asset.metadata.decimals
             })
             if (adjustment.maximum) routeMaximum.update(adjustment.maximum)
-            setViewStep('input')
+            if (viewStep !== 'review') setViewStep('input')
+            setAcceptedReviewHandle(null)
+            setLiveQuoteKey(null)
             swap.updateAmountIn(adjustment.amount)
             return
           }
@@ -4111,7 +4132,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   decimal: adjustment.amount,
                   decimals: walletOwnedSource.asset.metadata.decimals
                 })
-                setViewStep('input')
+                if (viewStep !== 'review') setViewStep('input')
+                setAcceptedReviewHandle(null)
+                setLiveQuoteKey(null)
                 swap.updateAmountIn(adjustment.amount)
                 return null
               })
@@ -4291,21 +4314,23 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             reviewAfterQuoteRefresh.current = retry
               ? createSwapQuoteRefreshTarget(liveQuoteRequest)
               : null
-            setViewStep('input')
-            setQuoteResult(null)
-            setRheaReview(null)
+            if (viewStep !== 'review') {
+              setViewStep('input')
+              setQuoteResult(null)
+              setRheaReview(null)
+              swap.setAmountOut('')
+            }
             setAcceptedReviewHandle(null)
             setLiveQuoteKey(null)
             setQuoteReceivedAt(null)
-            swap.setAmountOut('')
             swap.setDepositAddress('')
             if (retry) setQuoteRefreshTick(current => current + 1)
             else {
-              swap.setQuoteError(
-                priceMoved
-                  ? getRheaSwapErrorMessage(error)
-                  : 'Swap quote expired. Refresh it and try again.'
-              )
+              const message = priceMoved
+                ? getRheaSwapErrorMessage(error)
+                : 'Swap quote expired. Refresh it and try again.'
+              if (viewStep === 'review') setTransferPreparationError(message)
+              else swap.setQuoteError(message)
               setQuoteRetryable(true)
             }
             return
@@ -6808,7 +6833,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     }
     const reviewedQuote = quoteResult
     if (viewStep === 'review' && reviewedQuote && rheaReview && swap.tokenIn && swap.tokenOut) {
-      const refreshingMaximumReview = swap.isZecSource && reviewAfterQuoteRefresh.current !== null
+      const refreshingMaximumReview = reviewAfterQuoteRefresh.current !== null
       const minAmountOut = rheaReview.minAmountOut
       const priceImpact = calculateSwapPriceImpact({
         amountIn: swap.amountIn,
@@ -7333,8 +7358,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           recipient={reviewedQuote.recipient}
           tokenIn={swap.tokenIn}
           tokenOut={swap.tokenOut}
-          amountIn={swap.amountIn}
-          amountOut={swap.amountOut}
+          amountIn={formatBaseUnitDecimalAmount(rheaReview.amountIn, swap.tokenIn.decimals)}
+          amountOut={formatBaseUnitDecimalAmount(rheaReview.estimatedOut, swap.tokenOut.decimals)}
           minAmountOut={minAmountOut}
           priceImpact={priceImpact}
           fromFiat={swap.fromFiat}

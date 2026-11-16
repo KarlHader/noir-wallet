@@ -164,6 +164,7 @@ export function SwapReviewView({
         <div className="space-y-3 px-1">
           <QuoteAssetRow
             direction="pay"
+            loading={quoteRefreshing}
             token={tokenIn}
             amount={amountIn}
             fiatValue={fromFiat}
@@ -216,7 +217,9 @@ export function SwapReviewView({
             <DetailItem label="Send method">{sendMethod}</DetailItem>
           ) : (
             <DetailItem label="Rate">
-              {rate ? (
+              {quoteRefreshing ? (
+                <span className="inline-block h-4 w-32 animate-pulse rounded bg-card" />
+              ) : rate ? (
                 <span className="inline-flex max-w-full flex-col items-end gap-0.5 tabular-nums">
                   {priceAcceptanceRequired && previousRate && (
                     <span className="text-xs text-muted line-through">
@@ -284,7 +287,12 @@ export function SwapReviewView({
                 </DetailItem>
               )}
               <DetailItem label="Network fee">
-                {sourceNetworkFee && sourceFeeTier && sourceFeeFamily && onSourceFeeTierChange ? (
+                {quoteRefreshing ? (
+                  <span className="inline-block h-4 w-24 animate-pulse rounded bg-card" />
+                ) : sourceNetworkFee &&
+                  sourceFeeTier &&
+                  sourceFeeFamily &&
+                  onSourceFeeTierChange ? (
                   <NetworkFeeTierPicker
                     chainFamily={sourceFeeFamily}
                     tier={sourceFeeTier}

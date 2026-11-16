@@ -473,10 +473,14 @@ export function useSwapState(
     [sourceCatalog, crossChainDestinationCatalog, tokenIn, tokenOut, enabledChainKey]
   )
 
-  const destinationTokens = useMemo(
-    () => getSwapDestinationTokens(tokenIn, sourceCatalog, crossChainDestinationCatalog),
-    [crossChainDestinationCatalog, sourceCatalog, tokenIn]
-  )
+  const destinationTokens = useMemo(() => {
+    const catalog = getSwapDestinationTokens(tokenIn, sourceCatalog, crossChainDestinationCatalog)
+    return tokenOut &&
+      tokenOut.assetId !== tokenIn?.assetId &&
+      !findSwapTokenInCatalog(catalog, tokenOut)
+      ? mergeTokenCatalogs(catalog, [tokenOut])
+      : catalog
+  }, [crossChainDestinationCatalog, sourceCatalog, tokenIn, tokenOut])
   useEffect(() => {
     if (
       !tokenIn ||
@@ -497,27 +501,6 @@ export function useSwapState(
     () => mergeTokenCatalogs(sourceCatalog, destinationTokens),
     [destinationTokens, sourceCatalog]
   )
-
-  useEffect(() => {
-    if (
-      tokenOut &&
-      !areTokensLoading &&
-      !destinationTokensLoading &&
-      selectionScope === preferenceScope &&
-      !findSwapTokenInCatalog(destinationTokens, tokenOut)
-    ) {
-      setTokenOut(null)
-      setAmountOut('')
-      setQuoteError(null)
-    }
-  }, [
-    areTokensLoading,
-    destinationTokensLoading,
-    selectionScope,
-    preferenceScope,
-    destinationTokens,
-    tokenOut
-  ])
 
   // Derived state
   const isZecSource = isZecToken(tokenIn)
