@@ -19,7 +19,11 @@ export function selectSwapFeeEstimate(
 ) {
   const matchesMax = maxAmount !== null && safeBig(amount || '0').eq(maxAmount)
   const staleMax = maxSelected && maxAmount !== null && !matchesMax
-  const estimate = maxSelected || matchesMax ? (matchesMax ? maxEstimate : null) : amountEstimate
+  const estimate = matchesMax
+    ? maxEstimate
+    : maxSelected && maxAmount !== null
+      ? null
+      : amountEstimate
   const feeZats = estimate?.feeZats ?? null
   const feeQuote = estimate?.feeQuote ?? null
   const ready =

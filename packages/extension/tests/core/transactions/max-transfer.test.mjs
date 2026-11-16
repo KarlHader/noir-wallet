@@ -261,6 +261,13 @@ describe('dynamic maximum transfer regressions', () => {
     const amount = { feeZats: 15000, feeQuote, loading: false, error: false }
     assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 1000).feeZats, 20000)
     assert.equal(selectSwapFeeEstimate('0.7', false, '0.8', max, amount, 1000).feeZats, 15000)
+    assert.deepEqual(selectSwapFeeEstimate('0.7', true, null, max, amount, 1000), {
+      feeZats: 15000,
+      feeQuote,
+      ready: true,
+      staleMax: false
+    })
+    assert.equal(selectSwapFeeEstimate('0.7', true, '0.8', max, amount, 1000).ready, false)
   })
 
   it('re-quotes cross-chain Max transfers after the exact destination is known', () => {
