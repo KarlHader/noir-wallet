@@ -5884,6 +5884,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         isPrivateFunding,
         externalRecipient: requiresRecipientAddress
       })
+      const selectorZcashFundingSource =
+        type === 'in'
+          ? fundingSource
+          : ordinarySwapRequested && !shieldSwapSelected
+            ? 'transparent'
+            : zecDestinationType
       const filterDestinations = (tokens: readonly RheaSwapToken[]) =>
         filterSelectableSwapDestinationTokens({
           tokens,
@@ -5929,7 +5935,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           >
             <SwapTokenSelector
               fullHeight
-              zcashFundingSource={type === 'in' ? fundingSource : zecDestinationType}
+              zcashFundingSource={selectorZcashFundingSource}
               accountScope={effectiveAccount}
               extraItems={
                 type === 'in' && ordinarySwapRequested
@@ -6001,7 +6007,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                       zcashAvailable:
                         type === 'in'
                           ? zcashAvailableBalance
-                          : zecDestinationType === 'transparent'
+                          : selectorZcashFundingSource === 'transparent'
                             ? getFundingBalance(storeBalance, 'transparent').available
                             : storeBalance?.available || '0',
                       evmExecutionMode: selectorBalanceMode
@@ -8365,7 +8371,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               reviewAfterQuoteRefresh.current = null
               void discardPreparedQuoteTransfer()
               swap.selectTokenIn(source)
-              swap.setTokenPair(source, zec)
+              swap.setTokenPair(source, zec, true)
               setSourceMode('main')
               setMaxSelected(false)
               updateShieldZecSourceInUrl('native-shielded', source.assetId)

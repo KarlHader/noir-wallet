@@ -635,11 +635,11 @@ export function useSwapState(
   }, [])
 
   const setTokenPair = useCallback(
-    (nextTokenIn: RheaSwapToken, nextTokenOut: RheaSwapToken | null) => {
+    (nextTokenIn: RheaSwapToken, nextTokenOut: RheaSwapToken | null, persistSelection = false) => {
       inputRevision.current += 1
       setTokenIn(nextTokenIn)
       setTokenOut(nextTokenOut)
-      if (preferenceScope) {
+      if (preferenceScope && persistSelection) {
         setSavedTokenSelection(preferenceScope, {
           tokenInId: nextTokenIn.assetId,
           tokenOutId: nextTokenOut?.assetId ?? null
