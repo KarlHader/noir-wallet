@@ -38,6 +38,7 @@ import {
   getConfidentialFundingResult
 } from '@/popup/services/confidential-funding-client'
 import { getConfidentialFundingProgress } from '@/core/services/confidential-funding'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { toast } from '@/store/toast-store'
 import type { ActivityItem } from '@/core/activity'
 import {
@@ -77,6 +78,7 @@ export function TransactionResultPage() {
   const leavingResultRef = useRef(false)
   const [destinationConfirmations, setDestinationConfirmations] = useState<number | null>(null)
   const [resumingConfidentialFunding, setResumingConfidentialFunding] = useState(false)
+  const [confidentialPlan, setConfidentialPlan] = useState<ConfidentialFundingPlan | null>(null)
   const [originActivity, setOriginActivity] = useState<ActivityItem | null>(null)
   const [originActivityNetwork, setOriginActivityNetwork] = useState<string | null>(null)
   const originActivityRef = useRef<ActivityItem | null>(null)
@@ -150,6 +152,8 @@ export function TransactionResultPage() {
       .find(transaction => transaction.id === swapZcashTransactionId)
   })
   const activityTransactionId = data?.type === 'swap' ? data.activityTransactionId : undefined
+  const confidentialFundingPlanId =
+    data?.type === 'swap' ? data.confidentialFunding?.planId : undefined
   const scopedOriginActivity =
     originActivity &&
     originActivityNetwork === currentNetwork &&
@@ -157,6 +161,16 @@ export function TransactionResultPage() {
     originActivity.scope.keyDomainId === effectiveWalletId &&
     originActivity.scope.accountId === effectiveAccountId
       ? originActivity
+      : null
+  const scopedConfidentialPlan =
+    confidentialPlan &&
+    confidentialPlan.planId === confidentialFundingPlanId &&
+    scopedOriginActivity &&
+    confidentialPlan.transactionId === scopedOriginActivity.id &&
+    confidentialPlan.network === currentNetwork &&
+    confidentialPlan.keyDomainId === effectiveWalletId &&
+    confidentialPlan.accountId === effectiveAccountId
+      ? confidentialPlan
       : null
   const sourceExecutionMode = data?.type === 'swap' ? (data.sourceExecutionMode ?? 'main') : 'main'
   const recoveryAction = getTransactionRecoveryAction(resultTransaction)
@@ -175,8 +189,6 @@ export function TransactionResultPage() {
   )
   const swapDepositAddress = data?.type === 'swap' ? data.depositAddress : undefined
   const rheaQuoteHandle = data?.type === 'swap' ? data.rheaQuoteHandle : undefined
-  const confidentialFundingPlanId =
-    data?.type === 'swap' ? data.confidentialFunding?.planId : undefined
   const waitsForZcashDestination =
     data?.type === 'swap' &&
     data.status?.status === 'SUCCESS' &&
@@ -294,6 +306,7 @@ export function TransactionResultPage() {
   }, [data, navigate])
 
   useEffect(() => {
+    setConfidentialPlan(null)
     if (!confidentialFundingPlanId) return
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -301,6 +314,7 @@ export function TransactionResultPage() {
       try {
         const plan = await confidentialFundingClient.get(confidentialFundingPlanId)
         if (!active) return
+        setConfidentialPlan(plan)
         const result = getConfidentialFundingResult(plan)
         const progress = getConfidentialFundingProgress(plan)
         updateConfidentialFunding({
@@ -653,6 +667,7 @@ export function TransactionResultPage() {
         current.planId,
         current.approvalFingerprint
       )
+      setConfidentialPlan(plan)
       const result = getConfidentialFundingResult(plan)
       const progress = getConfidentialFundingProgress(plan)
       updateConfidentialFunding({
@@ -711,6 +726,7 @@ export function TransactionResultPage() {
         <StandardTransactionResult
           activityView={resultActivityView}
           step={resultStep}
+          phaseLayout={data.operation === 'send'}
           operation={
             data.operation ??
             (resultTransaction?.type === 'shield' || resultTransaction?.type === 'unshield'
@@ -745,6 +761,7 @@ export function TransactionResultPage() {
         <PageHeader title={data.actionName || 'Swap'} />
         <SwapStatusDisplay
           network={currentNetwork}
+          confidentialPlan={scopedConfidentialPlan}
           status={data.status}
           tokenInSymbol={data.tokenInSymbol}
           tokenOutSymbol={data.tokenOutSymbol}

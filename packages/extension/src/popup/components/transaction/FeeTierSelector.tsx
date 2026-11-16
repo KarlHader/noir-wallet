@@ -73,16 +73,6 @@ export function FeeTierSelector({
                 >
                   {tier.label}
                 </span>
-                {tier.multiplier > 1 && (
-                  <span
-                    className={cn(
-                      'rounded px-1 text-[10px] font-medium leading-tight',
-                      selected ? 'bg-primary/20 text-primary' : 'bg-white/10 text-muted'
-                    )}
-                  >
-                    {tier.multiplier}×
-                  </span>
-                )}
               </div>
               <div className="mt-2 text-sm font-semibold tabular-nums text-white">
                 {pending ? (

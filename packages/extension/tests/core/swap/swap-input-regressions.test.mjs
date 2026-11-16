@@ -17,6 +17,7 @@ import {
 } from '../../../src/popup/services/swap-page-model.ts'
 import {
   canReverseSwapPair,
+  isSwapAssetOnEnabledChain,
   loadReversedSwapPair
 } from '../../../src/popup/services/swap-catalog-loading.ts'
 
@@ -32,6 +33,7 @@ const zcashChain = {
   network: { kind: 'mainnet' }
 }
 const arbitrumChain = { id: 'eip155:42161', family: 'evm', network: { kind: 'mainnet' } }
+const bnbChain = { id: 'eip155:56', family: 'evm', network: { kind: 'mainnet' } }
 
 test('only the current destination account can restore a managed recipient and allow reversal', () => {
   const publicAddress = `0x${'a'.repeat(40)}`
@@ -126,6 +128,21 @@ test('asset selector balances follow their own side and never claim an unknown p
 test('reversal loads the supported destination as a source before changing the pair', async () => {
   assert.equal(canReverseSwapPair(usdc, zec, [zcashChain, arbitrumChain]), true)
   assert.equal(canReverseSwapPair(usdc, zec, [arbitrumChain]), false)
+  const bnb = {
+    assetId: 'nep141:bnb.omdep.near',
+    rheaChainId: '56',
+    blockchain: 'bsc'
+  }
+  assert.equal(canReverseSwapPair(usdc, bnb, [arbitrumChain, bnbChain]), true)
+  assert.equal(canReverseSwapPair(usdc, bnb, [arbitrumChain]), false)
+  assert.equal(isSwapAssetOnEnabledChain(bnb.assetId, [bnbChain]), true)
+  assert.equal(
+    isSwapAssetOnEnabledChain(
+      'nep141:bnb-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.omdep.near',
+      [bnbChain]
+    ),
+    true
+  )
   const sourceZec = { ...zec, direction: 'source' }
   const destinationUsdc = { ...usdc, direction: 'destination' }
   const input = {

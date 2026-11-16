@@ -15,6 +15,7 @@ export interface StandardTransactionResultProps {
   activityView?: ActivityTransactionView | null
   step: TransactionStep
   operation?: 'send' | 'move'
+  phaseLayout?: boolean
   amount: string
 
   fromAddress?: string
@@ -46,6 +47,7 @@ export function StandardTransactionResult({
   activityView,
   step,
   operation = 'send',
+  phaseLayout = false,
   amount,
   fromAddress,
   toAddress,
@@ -71,6 +73,9 @@ export function StandardTransactionResult({
   const baseConfig = getStandardTransactionResultCopy(step, { error, shield })
   const title = customTitle || baseConfig.title
   const description = customDescription || baseConfig.description
+  const submittingOnly = phaseLayout && step === 'pending' && !error
+  const detailsOnly =
+    phaseLayout && (step === 'submitted' || step === 'confirming' || step === 'success')
 
   const footer =
     step === 'success' ||
@@ -102,12 +107,15 @@ export function StandardTransactionResult({
       description={step === 'failed' && failureAction?.retry ? undefined : description}
       layout="single-asset"
       onClose={onDone}
+      showStatus={!detailsOnly}
+      bodyClassName={detailsOnly ? 'mt-0' : undefined}
       footer={footer}
     >
+      {detailsOnly && <h2 className="sr-only">{title}</h2>}
       {step === 'failed' && failureAction?.retry && (
         <InlineError message={description || error || title} onRetry={failureAction.onClick} />
       )}
-      {activityView ? (
+      {submittingOnly ? null : activityView ? (
         <ActivityTransactionBody view={activityView} showDate={showTime} />
       ) : (
         step !== 'failed' && (
@@ -140,6 +148,16 @@ export function StandardTransactionResult({
             <TransactionResultDetailRow label="Network">
               {DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
             </TransactionResultDetailRow>
+
+            {detailsOnly && (
+              <TransactionResultDetailRow label="Status">
+                {step === 'success'
+                  ? 'Confirmed'
+                  : step === 'confirming'
+                    ? 'Confirming'
+                    : 'Submitted'}
+              </TransactionResultDetailRow>
+            )}
 
             {extraDetails?.map(detail => (
               <TransactionResultDetailRow key={detail.label} label={detail.label}>

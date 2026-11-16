@@ -149,7 +149,11 @@ export function canReverseSwapPair(
   tokenOut: RheaSwapToken | null,
   enabledChains: readonly ChainDefinition[] | undefined
 ): boolean {
-  return Boolean(tokenIn && tokenOut && isSwapAssetOnEnabledChain(tokenOut.assetId, enabledChains))
+  return Boolean(
+    tokenIn &&
+    tokenOut &&
+    getEnabledSwapChains(enabledChains).some(chain => chain.apiChainId === tokenOut.rheaChainId)
+  )
 }
 
 export async function loadReversedSwapPair(input: {
@@ -177,6 +181,12 @@ export async function loadReversedSwapPair(input: {
 
 function assetChain(assetId?: string | null) {
   if (!assetId) return undefined
+  if (
+    assetId === ASSET_PRICE_SOURCE_ASSETS.bnb ||
+    /^nep141:bnb-0x[0-9a-f]{40}\.omdep\.near$/i.test(assetId)
+  ) {
+    return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === '56')
+  }
   const numericChain =
     /^nep245:[^:]+:([0-9]+)_/.exec(assetId)?.[1] ?? /^eip155:([0-9]+)(?:\/|$)/.exec(assetId)?.[1]
   if (numericChain) return RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.apiChainId === numericChain)
