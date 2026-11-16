@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   accountNetworksClient,
   type AccountNetworksCatalogView,
@@ -7,6 +7,7 @@ import {
 import { useWalletStore } from '@/store/wallet-store'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { resolveEffectiveAccountNetworks } from '@/popup/lib/effective-active-account'
+import { getAccountDisplayName } from '@/lib/format'
 
 export function useActiveAccountNetworks() {
   const [catalog, setCatalog] = useState<AccountNetworksCatalogView | null>(null)
@@ -17,6 +18,7 @@ export function useActiveAccountNetworks() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const scope = `${currentNetwork}:${currentWalletId}:${currentAccountId}`
 
   const refresh = useCallback(async () => {
@@ -62,7 +64,25 @@ export function useActiveAccountNetworks() {
     }
   }, [refresh])
 
-  const visibleCatalog = loadedScope === scope ? catalog : null
+  const visibleCatalog = useMemo(() => {
+    if (loadedScope !== scope || !catalog) return null
+    return Object.freeze({
+      ...catalog,
+      accounts: Object.freeze(
+        catalog.accounts.map(account =>
+          Object.freeze({
+            ...account,
+            accountDisplayName: getAccountDisplayName(
+              account.walletId,
+              account.accountId,
+              account.accountDisplayName,
+              accountDisplayNames
+            )
+          })
+        )
+      )
+    })
+  }, [accountDisplayNames, catalog, loadedScope, scope])
   const activeAccount: AccountNetworksView | null = visibleCatalog
     ? resolveEffectiveAccountNetworks(visibleCatalog.accounts, currentWalletId, currentAccountId)
     : null
