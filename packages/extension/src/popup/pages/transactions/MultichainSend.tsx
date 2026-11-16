@@ -40,7 +40,7 @@ import type { BitcoinTransferSubmission } from '@/popup/services/bitcoin-wallet-
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useSettingsStore } from '@/store/settings-store'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { offerSaveRecipient } from '@/popup/services/save-recipient-prompt'
 import { buildSendAssetSelectionModel, sortSendNetworks, type SendAsset } from './send-asset-order'
@@ -51,11 +51,7 @@ import type { SolanaTransferSubmission } from '@/popup/services/solana-wallet-cl
 import { NearSendForm } from './NearSendForm'
 import { NearTransactionResult } from './NearTransactionResult'
 import type { NearTransferSubmission } from '@/popup/services/near-wallet-client'
-import {
-  isPortfolioModelForScope,
-  readCachedPortfolio,
-  refreshPortfolioFromCache
-} from '@/popup/services/portfolio-cache'
+import { isPortfolioModelForScope } from '@/popup/services/portfolio-cache'
 import { parsePublicPrivateEvmSendDraft } from './evm-send-validation'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
@@ -323,17 +319,11 @@ export function MultichainSend({
   )
   const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
   const zcashTotal = zcashBalance?.transparent ?? '0'
-  const requestSequence = useRef(0)
   const appliedRequestedAssetRef = useRef<string | null>(null)
-  const [modelSnapshot, setModelSnapshot] = useState<{
-    scopeKey: string
-    value: PortfolioReadModel | null
-  } | null>(null)
   const [assetPriceSnapshot, setAssetPriceSnapshot] = useState<{
     scopeKey: string
     value: AssetPriceReadModel | null
   } | null>(null)
-  const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [selectionSnapshot, setSelectionSnapshot] = useState<{
     scopeKey: string
     entryKey: string
@@ -385,6 +375,12 @@ export function MultichainSend({
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const {
+    model,
+    status: loadStatus,
+    refresh,
+    readLatest
+  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
   const entryScope = location.state as {
     walletId?: unknown
     accountId?: unknown
@@ -610,13 +606,7 @@ export function MultichainSend({
     )
       ? navigationSnapshot.initialPortfolio
       : null
-  const model = modelSnapshot?.scopeKey === scopeKey ? modelSnapshot.value : null
-  const visibleModel =
-    loadStatus === 'loading' &&
-    initialPortfolio &&
-    (model?.assets.length ?? 0) < initialPortfolio.assets.length
-      ? initialPortfolio
-      : (model ?? initialPortfolio)
+  const visibleModel = model
   const initialPrices =
     initialPortfolio && navigationSnapshot?.initialPrices?.status !== 'error'
       ? (navigationSnapshot?.initialPrices ?? null)
@@ -652,61 +642,16 @@ export function MultichainSend({
 
   const load = useCallback(
     async (forceRefresh = false, refreshChainId?: string) => {
-      const request = ++requestSequence.current
-      setLoadStatus('loading')
-      try {
-        if (!effectiveWalletId || !effectiveAccountId) {
-          setLoadStatus('error')
-          return
-        }
-        const scope = {
-          walletId: effectiveWalletId,
-          accountId: effectiveAccountId,
-          endpointRuntimeKey: chainEndpointRuntimeKey
-        }
-        const cached = await readCachedPortfolio(scope)
-        if (request !== requestSequence.current) return
-        if (cached) setModelSnapshot({ scopeKey, value: cached })
-        const refreshed = await refreshPortfolioFromCache(scope, cached, {
-          forceRefresh,
-          ...(refreshChainId ? { refreshChainIds: [refreshChainId] } : {})
-        })
-        if (request !== requestSequence.current) return
-        setModelSnapshot({ scopeKey, value: refreshed })
-        setLoadStatus(refreshed ? 'ready' : 'error')
-      } catch {
-        if (request === requestSequence.current) setLoadStatus('error')
-      }
+      await refresh(forceRefresh, refreshChainId ? { chainIds: [refreshChainId] } : {})
     },
-    [chainEndpointRuntimeKey, effectiveAccountId, effectiveWalletId, scopeKey]
+    [refresh]
   )
-
-  const readLatest = useCallback(async () => {
-    const request = requestSequence.current
-    try {
-      if (!effectiveWalletId || !effectiveAccountId) return
-      const latest = await readCachedPortfolio({
-        walletId: effectiveWalletId,
-        accountId: effectiveAccountId
-      })
-      if (request !== requestSequence.current) return
-      setModelSnapshot({ scopeKey, value: latest })
-      setLoadStatus(latest ? 'ready' : 'error')
-    } catch {
-      if (request === requestSequence.current && !visibleModel) setLoadStatus('error')
-    }
-  }, [effectiveAccountId, effectiveWalletId, scopeKey, visibleModel])
 
   useEffect(() => {
     setSelectionSnapshot(null)
     setSubmission(null)
     setAssetPickerState(null)
-    setModelSnapshot(null)
-    void load()
-    return () => {
-      requestSequence.current += 1
-    }
-  }, [effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey, load])
+  }, [effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey])
 
   useEffect(() => {
     let cancelled = false
@@ -721,8 +666,6 @@ export function MultichainSend({
       cancelled = true
     }
   }, [scopeKey])
-
-  usePortfolioUpdates(effectiveWalletId, effectiveAccountId, readLatest)
 
   const assets = useMemo<readonly SendAsset[]>(() => {
     if (!visibleModel) return []
@@ -1388,7 +1331,9 @@ export function MultichainSend({
                 ?.asset ?? null
             }
             refresh={load}
-            readProjection={readLatest}
+            readProjection={async () => {
+              await readLatest()
+            }}
             onStateChange={handleShieldStateChange}
             onSelectPublic={(assetId, recipient, amount, destinationAssetId) => {
               if (

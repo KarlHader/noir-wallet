@@ -15,7 +15,8 @@ import {
   deleteStorageV2Persistence,
   IndexedDbPortfolioCacheRepository,
   IndexedDbStorageV2Repository,
-  IndexedDbTransactionRepository
+  IndexedDbTransactionRepository,
+  subscribeTransactionPortfolioInvalidations
 } from '@/infrastructure/persistence/repositories'
 import {
   parseStorageV2GenerationId,
@@ -147,6 +148,117 @@ async function initialize(databaseName: string) {
     createStatuses: [created.status, duplicate.status, conflict.status],
     eventStatuses: [broadcast.status, duplicateEvent.status, conflictingEvent.status, stale.status],
     raceStatuses: race.map(result => result.status).sort()
+  }
+}
+
+async function inspectTransactionPortfolioInvalidations(databaseName: string) {
+  await deleteDatabase(databaseName)
+  const events: Array<{
+    network: string
+    keyDomainId: string
+    accountId: string
+    chainIds: readonly string[]
+  }> = []
+  let markListenerEntered!: () => void
+  const listenerEntered = new Promise<void>(resolve => {
+    markListenerEntered = resolve
+  })
+  let releaseListener!: () => void
+  const listenerGate = new Promise<void>(resolve => {
+    releaseListener = resolve
+  })
+  let holdFirstNotification = true
+  const unsubscribe = subscribeTransactionPortfolioInvalidations(event => {
+    events.push({ ...event.scope, chainIds: event.chainIds })
+    if (!holdFirstNotification) return
+    holdFirstNotification = false
+    markListenerEntered()
+    return listenerGate
+  })
+  const unsubscribeFailure = subscribeTransactionPortfolioInvalidations(() => {
+    throw new Error('Observer failed after persistence')
+  })
+  try {
+    const store = repository(databaseName)
+    const created = await store.create(
+      graph('transaction:portfolio-invalidation', 'account:1', ethereumChainId)
+    )
+    const broadcastInput = mutation(
+      'transaction:portfolio-invalidation',
+      'event:portfolio-broadcast',
+      'broadcast',
+      1_100
+    )
+    let broadcastResolved = false
+    const broadcastOperation = store.applySegmentEvent(broadcastInput).then(result => {
+      broadcastResolved = true
+      return result
+    })
+    await listenerEntered
+    const committedBeforeNotification = (
+      await store.get(scope(), parseTransactionId('transaction:portfolio-invalidation'))
+    )?.root.status
+    const waitedForNotification = !broadcastResolved
+    releaseListener()
+    const broadcast = await broadcastOperation
+    const duplicate = await store.applySegmentEvent(broadcastInput)
+    const confirmed = await store.applySegmentEvent({
+      ...mutation(
+        'transaction:portfolio-invalidation',
+        'event:portfolio-confirming',
+        'confirming',
+        1_200
+      ),
+      expectedRootRevision: 1,
+      expectedSegmentRevision: 1
+    })
+    const confirmationInput = mutation(
+      'transaction:portfolio-invalidation',
+      'event:portfolio-confirmation-count',
+      'confirming',
+      1_300
+    )
+    const confirmationCount = await store.applySegmentEvent({
+      ...confirmationInput,
+      event: {
+        ...confirmationInput.event,
+        evidence: {
+          transactionHash: 'hash:transaction:portfolio-invalidation',
+          confirmations: 1
+        }
+      },
+      expectedRootRevision: 2,
+      expectedSegmentRevision: 2
+    })
+    const historical = graph('transaction:historical-final', 'account:1', ethereumChainId)
+    const imported = await store.create(
+      parseTransactionGraph({
+        root: { ...historical.root, status: 'final' },
+        segments: historical.segments.map(segment => ({ ...segment, status: 'final' }))
+      })
+    )
+    await Promise.resolve()
+    return {
+      statuses: [
+        created.status,
+        broadcast.status,
+        duplicate.status,
+        confirmed.status,
+        confirmationCount.status,
+        imported.status
+      ],
+      committedBeforeNotification,
+      waitedForNotification,
+      events,
+      persistedStatus: (
+        await store.get(scope(), parseTransactionId('transaction:portfolio-invalidation'))
+      )?.root.status
+    }
+  } finally {
+    releaseListener()
+    unsubscribe()
+    unsubscribeFailure()
+    await deleteDatabase(databaseName)
   }
 }
 
@@ -381,6 +493,16 @@ async function initializePortfolioCache(databaseName: string) {
   const generationId = parseStorageV2GenerationId('metadata:portfolio:generation:1')
   await repository.put({ generationId, cachedAt: 2_000, source: portfolioSource('1') })
   await repository.put({ generationId, cachedAt: 2_100, source: portfolioSource('2', 'error') })
+  await repository.put({ generationId, cachedAt: 2_050, source: portfolioSource('3') })
+  await repository.put({ generationId, cachedAt: 2_100, source: portfolioSource('4') })
+  await repository.markStaleByAccountScope(
+    {
+      keyDomainId: parseKeyDomainId(portfolioChainAccount.scope.keyDomainId),
+      accountId: parseAccountId(portfolioChainAccount.scope.accountId)
+    },
+    ['eip155:1'],
+    2_200
+  )
   return repository.get(generationId, portfolioChainAccount.id)
 }
 
@@ -402,6 +524,52 @@ async function inspectPortfolioCache(databaseName: string) {
     })),
     deleted,
     remaining: (await repository.list(generationId, scope)).length
+  }
+}
+
+const portfolioInvalidationScope = {
+  network: 'mainnet' as const,
+  generationId: parseStorageV2GenerationId('metadata:portfolio:generation:1'),
+  keyDomainId: parseKeyDomainId(portfolioChainAccount.scope.keyDomainId),
+  accountId: parseAccountId(portfolioChainAccount.scope.accountId)
+}
+
+async function initializePortfolioInvalidations(databaseName: string) {
+  await deleteDatabase(databaseName)
+  const repository = new IndexedDbPortfolioCacheRepository({ databaseName })
+  const chain = await repository.markInvalidated(
+    portfolioInvalidationScope,
+    ['eip155:1'],
+    'chain',
+    3_000
+  )
+  await repository.markInvalidated(
+    portfolioInvalidationScope,
+    ['near:mainnet'],
+    'confidential',
+    3_100
+  )
+  return chain[0]
+}
+
+async function inspectPortfolioInvalidations(
+  databaseName: string,
+  oldChainMarker: Awaited<ReturnType<typeof initializePortfolioInvalidations>>
+) {
+  const repository = new IndexedDbPortfolioCacheRepository({ databaseName })
+  const resumed = await repository.listInvalidated(portfolioInvalidationScope)
+  await repository.markInvalidated(portfolioInvalidationScope, ['eip155:1'], 'chain', 3_200)
+  await repository.acknowledgeInvalidated(portfolioInvalidationScope, [oldChainMarker])
+  const afterOldAcknowledgement = await repository.listInvalidated(portfolioInvalidationScope)
+  const deleted = await repository.deleteByAccountScope({
+    keyDomainId: portfolioInvalidationScope.keyDomainId,
+    accountId: portfolioInvalidationScope.accountId
+  })
+  return {
+    resumed,
+    afterOldAcknowledgement,
+    deleted,
+    remaining: await repository.listInvalidated(portfolioInvalidationScope)
   }
 }
 
@@ -711,6 +879,7 @@ async function initializeResyncIsolationProbe() {
 export interface TransactionRepositoryIntegration {
   readonly reset: (databaseName: string) => Promise<void>
   readonly initialize: (databaseName: string) => ReturnType<typeof initialize>
+  readonly inspectTransactionPortfolioInvalidations: typeof inspectTransactionPortfolioInvalidations
   readonly inspect: (databaseName: string) => ReturnType<typeof inspect>
   readonly inspectOlderConfidentialGraph: typeof inspectOlderConfidentialGraph
   readonly deleteAccount: (databaseName: string) => ReturnType<typeof deleteAccount>
@@ -719,6 +888,8 @@ export interface TransactionRepositoryIntegration {
   readonly resetProductionEvmMonitor: typeof resetProductionEvmMonitor
   readonly initializePortfolioCache: typeof initializePortfolioCache
   readonly inspectPortfolioCache: typeof inspectPortfolioCache
+  readonly initializePortfolioInvalidations: typeof initializePortfolioInvalidations
+  readonly inspectPortfolioInvalidations: typeof inspectPortfolioInvalidations
   readonly initializeProductionEvmPortfolio: typeof initializeProductionEvmPortfolio
   readonly inspectProductionEvmPortfolioCache: typeof inspectProductionEvmPortfolioCache
   readonly resetProductionEvmPortfolio: typeof resetProductionEvmPortfolio
@@ -737,6 +908,7 @@ declare global {
 window.transactionRepositoryIntegration = Object.freeze({
   reset: deleteDatabase,
   initialize,
+  inspectTransactionPortfolioInvalidations,
   inspect,
   inspectOlderConfidentialGraph,
   deleteAccount,
@@ -745,6 +917,8 @@ window.transactionRepositoryIntegration = Object.freeze({
   resetProductionEvmMonitor,
   initializePortfolioCache,
   inspectPortfolioCache,
+  initializePortfolioInvalidations,
+  inspectPortfolioInvalidations,
   initializeProductionEvmPortfolio,
   inspectProductionEvmPortfolioCache,
   resetProductionEvmPortfolio,

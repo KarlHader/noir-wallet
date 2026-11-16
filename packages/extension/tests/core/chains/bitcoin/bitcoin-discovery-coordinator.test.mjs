@@ -308,6 +308,40 @@ test.describe('Bitcoin active discovery coordinator', () => {
     expect(derives).toBe(1)
   })
 
+  test('starts a new forced scan after an already-running scan', async () => {
+    let refreshes = 0
+    let releaseFirstRefresh
+    const firstRefreshStarted = new Promise(resolve => {
+      releaseFirstRefresh = resolve
+    })
+    let notifyFirstRefresh
+    const firstRefreshPending = new Promise(resolve => {
+      notifyFirstRefresh = resolve
+    })
+    const instance = coordinator({
+      refresher: {
+        refresh: async ({ state }) => {
+          refreshes += 1
+          if (refreshes === 1) {
+            notifyFirstRefresh()
+            await firstRefreshStarted
+          }
+          return { checkpoint: state.checkpoint, observations: state.observations }
+        }
+      }
+    })
+    await instance.scanActive()
+    const oldScan = instance.scanActive({ forceRefresh: true })
+    await firstRefreshPending
+    const afterInvalidation = instance.scanActive({
+      forceRefresh: true,
+      requireNewScan: true
+    })
+    releaseFirstRefresh()
+    await Promise.all([oldScan, afterInvalidation])
+    expect(refreshes).toBe(2)
+  })
+
   test('continues gap discovery after refresh finds activity inside the previous unused gap', async () => {
     let derives = 0
     const discoveryRepository = repository()

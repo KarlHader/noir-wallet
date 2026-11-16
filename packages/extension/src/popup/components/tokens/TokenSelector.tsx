@@ -208,7 +208,7 @@ export function TokenSelector({
   const selectorItems = [
     ...visibleExtraItems,
     ...visibleTokens.map(token => {
-      const balance = balances === undefined ? undefined : (balances.get(token.assetId) ?? '0')
+      const balance = balances?.get(token.assetId)
       const symbol = formatSymbol(token.symbol)
       const chainName = formatChainName(token.blockchain)
       return {
@@ -224,7 +224,7 @@ export function TokenSelector({
           symbol +
           ' on ' +
           chainName +
-          (balances === undefined ? '' : ', balance ' + balance + ' ' + symbol),
+          (balance === undefined ? '' : ', balance ' + balance + ' ' + symbol),
         balance:
           balance === undefined ? undefined : (
             <TokenBalanceDisplay
@@ -268,9 +268,7 @@ export function TokenSelector({
         balances || visibleExtraItems.some(item => item.lowBalance)
           ? new Set([
               ...visibleTokens
-                .filter(
-                  token => balances !== undefined && (balances.get(token.assetId) ?? '0') === '0'
-                )
+                .filter(token => balances?.get(token.assetId) === '0')
                 .map(token => token.blockchain + ':' + token.assetId),
               ...visibleExtraItems.filter(item => item.lowBalance).map(item => item.key)
             ])

@@ -76,6 +76,7 @@ import {
   flushWalletStore
 } from '@/store/wallet-store'
 import { transactionRecorder } from './transaction-recorder'
+import { subscribeTransactionPortfolioInvalidations } from '@/infrastructure/persistence/repositories/transaction-portfolio-invalidation'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { syncScheduler, SYNC_KEEPALIVE_ALARM } from './sync-scheduler'
 import {
@@ -487,6 +488,19 @@ let evmPortfolioConformanceCoordinator: ReturnType<
   typeof createBackgroundEvmPortfolioCoordinator
 > | null = null
 let portfolioCoordinator: ReturnType<typeof createBackgroundPortfolioCoordinator> | null = null
+subscribeTransactionPortfolioInvalidations(async ({ scope, chainIds }) => {
+  const coordinator = portfolioCoordinator
+  if (!coordinator) return
+  try {
+    await coordinator.invalidate(scope, chainIds, { refresh: false })
+    if (scope.network !== DEFAULT_NETWORK || !(await coordinator.isActiveAccount(scope))) return
+    void coordinator.refreshActive(chainIds, { automatic: true }).catch(error => {
+      logger.warn('Portfolio transaction refresh failed', undefined, undefined, error)
+    })
+  } catch (error) {
+    logger.warn('Portfolio transaction invalidation failed', undefined, undefined, error)
+  }
+})
 let activityCoordinator!: ReturnType<typeof createBackgroundActivityCoordinator>
 let assetPriceService = createBackgroundAssetPriceService()
 setObservationPriceReader(() => assetPriceService.readCached())
@@ -523,21 +537,7 @@ const rheaSwapTransactionMonitor = rheaSwapService
           }
         }),
       refreshPortfolio: async ({ scope, chainIds }) => {
-        const model = await portfolioCoordinator?.refreshActive(chainIds)
-        if (
-          !model ||
-          model.scope.keyDomainId !== scope.keyDomainId ||
-          model.scope.accountId !== scope.accountId
-        ) {
-          return
-        }
-        await chrome.runtime
-          .sendMessage({
-            type: 'PORTFOLIO_UPDATED',
-            walletId: scope.keyDomainId,
-            accountId: scope.accountId
-          })
-          .catch(() => {})
+        await portfolioCoordinator?.invalidate({ network: DEFAULT_NETWORK, ...scope }, chainIds)
       }
     })
   : null
@@ -1245,6 +1245,7 @@ async function reloadMultichainRuntime(
   evmPortfolioConformanceCoordinator = __MULTICHAIN_CONFORMANCE_RPC_ENABLED__
     ? createBackgroundEvmPortfolioCoordinator(activeEvm)
     : null
+  portfolioCoordinator?.dispose()
   portfolioCoordinator =
     evmFeatureRuntimePolicy.newOperationsEnabled ||
     bitcoinFeatureRuntimePolicy.newOperationsEnabled ||
@@ -1255,7 +1256,17 @@ async function reloadMultichainRuntime(
           customEvmNetworks,
           userAssets.definitions,
           intentsProtocolAssets,
-          settings
+          settings,
+          async (model, refresh) => {
+            try {
+              return (
+                (await confidentialFundingCoordinator?.enrichPortfolio(model, refresh)) ?? model
+              )
+            } catch (error) {
+              logger.warn('Confidential balance projection failed', undefined, undefined, error)
+              return model
+            }
+          }
         )
       : null
   activityCoordinator = createBackgroundActivityCoordinator(bitcoinRpcUrl, settings)
@@ -1293,30 +1304,33 @@ async function reloadMultichainRuntime(
         intentsFullCatalogTokens,
         settings,
         async target => {
-          if (!portfolioCoordinator) return
-          if (target) {
-            const active = await portfolioCoordinator.readCachedActive()
+          const coordinator = portfolioCoordinator
+          if (!coordinator) return
+          if (target.balanceUpdated) {
+            const model = await coordinator.readCachedActive()
             if (
-              active?.scope.keyDomainId !== target.keyDomainId ||
-              active.scope.accountId !== target.accountId
-            )
-              return
-          }
-          const refreshed = await portfolioCoordinator.refreshActive(target?.chainIds)
-          if (
-            !refreshed ||
-            (target &&
-              (refreshed.scope.keyDomainId !== target.keyDomainId ||
-                refreshed.scope.accountId !== target.accountId))
-          )
+              model?.scope.keyDomainId === target.keyDomainId &&
+              model.scope.accountId === target.accountId
+            ) {
+              await chrome.runtime
+                .sendMessage({
+                  type: 'PORTFOLIO_UPDATED',
+                  walletId: target.keyDomainId,
+                  accountId: target.accountId
+                })
+                .catch(() => {})
+            }
             return
-          await chrome.runtime
-            .sendMessage({
-              type: 'PORTFOLIO_UPDATED',
-              walletId: refreshed.scope.keyDomainId,
-              accountId: refreshed.scope.accountId
-            })
-            .catch(() => {})
+          }
+          await coordinator.invalidate(
+            {
+              network: DEFAULT_NETWORK,
+              keyDomainId: target.keyDomainId,
+              accountId: target.accountId
+            },
+            target.chainIds,
+            { domain: target.domain ?? 'chain' }
+          )
         },
         confidentialFundingStore,
         () => {
@@ -3878,35 +3892,31 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         : undefined
       const coordinator = portfolioCoordinator
       if (!coordinator) throw new Error('Portfolio runtime is unavailable')
-      const baseModel =
+      const expectedScopeMatches = async () => {
+        if (message.expectedWalletId === undefined && message.expectedAccountId === undefined)
+          return true
+        if (
+          typeof message.expectedWalletId !== 'string' ||
+          typeof message.expectedAccountId !== 'string'
+        )
+          return false
+        return coordinator.isActiveAccount({
+          keyDomainId: message.expectedWalletId,
+          accountId: message.expectedAccountId
+        })
+      }
+      if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
+      const model =
         message.action === 'read'
           ? await coordinator.readCachedActive()
-          : await coordinator.refreshActive(refreshChainIds)
-      const model = baseModel
-        ? ((await confidentialFundingCoordinator
-            ?.enrichPortfolio(
-              baseModel,
-              message.action === 'refresh' && refreshChainIds === undefined ? 'if-stale' : false
-            )
-            .catch(error => {
-              console.warn(
-                '[Confidential Funding] Balance merge failed:',
-                error instanceof Error ? error.name : 'UnknownError'
-              )
-              return baseModel
-            })) ?? baseModel)
-        : null
+          : await coordinator.refreshActive(refreshChainIds, {
+              automatic: message.automatic === true
+            })
+      if (!(await expectedScopeMatches())) throw new Error('Portfolio Account changed')
       if (message.action === 'refresh' && model) {
         void assetPriceService
           .readCached()
           .then(prices => observePortfolioBalances(model, prices))
-          .catch(() => {})
-        void chrome.runtime
-          .sendMessage({
-            type: 'PORTFOLIO_UPDATED',
-            walletId: model.scope.keyDomainId,
-            accountId: model.scope.accountId
-          })
           .catch(() => {})
       }
       const policy = await readTokenDisplayPolicy()
@@ -5523,24 +5533,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         // Inventory reconciliation advances the generation and invalidates active portfolio caches.
         const coordinator = portfolioCoordinator
         if (!coordinator) return
-        void coordinator
-          .refreshActive()
-          .then(async model => {
-            if (!model) return
-            await chrome.runtime
-              .sendMessage({
-                type: 'PORTFOLIO_UPDATED',
-                walletId: model.scope.keyDomainId,
-                accountId: model.scope.accountId
-              })
-              .catch(() => {})
-          })
-          .catch(error => {
-            console.warn(
-              '[Portfolio] Account inventory refresh failed:',
-              error instanceof Error ? error.name : 'UnknownError'
-            )
-          })
+        void coordinator.refreshActive().catch(error => {
+          console.warn(
+            '[Portfolio] Account inventory refresh failed:',
+            error instanceof Error ? error.name : 'UnknownError'
+          )
+        })
       })
       .catch(error =>
         sendResponse({
@@ -5640,21 +5638,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           void handleAccountSwitched({ refreshPortfolio: false }).catch(error => {
             console.warn('[Background] Account network notification failed:', error)
           })
-          void portfolioCoordinator
-            ?.refreshActive()
-            .then(async model => {
-              if (!model) return
-              await chrome.runtime
-                .sendMessage({
-                  type: 'PORTFOLIO_UPDATED',
-                  walletId,
-                  accountId
-                })
-                .catch(() => {})
-            })
-            .catch(error => {
-              console.warn('[Portfolio] Account network refresh failed:', error)
-            })
+          void portfolioCoordinator?.refreshActive().catch(error => {
+            console.warn('[Portfolio] Account network refresh failed:', error)
+          })
           return { families }
         } finally {
           syncScheduler.resumeAfterTx()
@@ -6283,42 +6269,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       for (const result of results) {
         if (result.status === 'rejected') {
           console.warn('[Transaction Monitor] Fast foreground recheck failed:', result.reason)
-        }
-      }
-
-      const applied = results.some(result => {
-        if (result.status !== 'fulfilled' || result.value === null) return false
-        const value: unknown = result.value
-        return (
-          typeof value === 'object' &&
-          value !== null &&
-          typeof Reflect.get(value, 'applied') === 'number' &&
-          Reflect.get(value, 'applied') > 0
-        )
-      })
-      if (applied && portfolioCoordinator) {
-        try {
-          const cached = await portfolioCoordinator.readCachedActive()
-          const fastChainIds = cached
-            ? cached.chains.flatMap(chain =>
-                chain.chain.family === 'evm' ||
-                (!evmOnly && (chain.chain.family === 'solana' || chain.chain.family === 'near'))
-                  ? [chain.chain.id]
-                  : []
-              )
-            : undefined
-          const refreshed = await portfolioCoordinator.refreshActive(fastChainIds)
-          if (refreshed) {
-            await chrome.runtime
-              .sendMessage({
-                type: 'PORTFOLIO_UPDATED',
-                walletId: refreshed.scope.keyDomainId,
-                accountId: refreshed.scope.accountId
-              })
-              .catch(() => {})
-          }
-        } catch (error) {
-          console.warn('[Portfolio] Fast transaction refresh failed:', error)
         }
       }
 
@@ -6997,7 +6947,7 @@ async function handleAccountSwitched({
       multichainSessionDAppHandler?.notifyAllSessionsChanged()
     ])
     if (refreshPortfolio) {
-      portfolioCoordinator?.refreshActive().catch(error => {
+      portfolioCoordinator?.refreshActive(undefined, { automatic: true }).catch(error => {
         console.warn('[Portfolio] Account refresh failed:', error)
       })
     }

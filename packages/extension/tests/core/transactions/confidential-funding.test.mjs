@@ -311,7 +311,20 @@ test.describe('confidential funding safety rules', () => {
       amountRaw: '1000'
     }
     const records = new Map()
-    const repository = new InMemoryTransactionRepository()
+    let metadataLockHeld = false
+    let metadataLockTail = Promise.resolve()
+    let verifyNotificationLockBoundary = false
+    let accountDeleted = false
+    let deleteAfterPrecheck = false
+    const repository = new (class extends InMemoryTransactionRepository {
+      async applySegmentEvent(input) {
+        const result = await super.applySegmentEvent(input)
+        if (result.status === 'applied' && verifyNotificationLockBoundary && metadataLockHeld) {
+          throw new Error('Portfolio invalidation reentered the metadata lock')
+        }
+        return result
+      }
+    })()
     let quoteCalls = 0
     let catalogBlockchain = 'base'
     let balanceReads = 0
@@ -419,7 +432,28 @@ test.describe('confidential funding safety rules', () => {
           records.set(record.depositId, structuredClone(record))
         },
         async withExternalDepositScope(_scope, operation) {
-          return operation()
+          const previous = metadataLockTail
+          let release
+          metadataLockTail = new Promise(resolve => { release = resolve })
+          await previous
+          metadataLockHeld = true
+          let result
+          try {
+            if (accountDeleted) throw new Error('Wallet Account metadata is unavailable')
+            result = await operation()
+          } finally {
+            metadataLockHeld = false
+            release()
+          }
+          if (deleteAfterPrecheck) {
+            deleteAfterPrecheck = false
+            accountDeleted = true
+            await repository.deleteByAccountScope({
+              keyDomainId: 'wallet:one',
+              accountId: 'account:one'
+            })
+          }
+          return result
         },
         async getSession() {
           return { accessToken: 'synthetic', expiresAt: now + 1_000_000 }
@@ -615,7 +649,9 @@ test.describe('confidential funding safety rules', () => {
       '400'
     )
     serviceStatus = 'PROCESSING'
+    verifyNotificationLockBoundary = true
     expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('processing')
+    verifyNotificationLockBoundary = false
     serviceStatus = 'INCOMPLETE_DEPOSIT'
     depositedAmountRaw = '500'
     const processingPartial = await coordinator.refreshExternalDeposit(created.depositId)
@@ -773,6 +809,34 @@ test.describe('confidential funding safety rules', () => {
     await expect(coordinator.createExternalDeposit({ ...minimumRequest, source })).rejects.toThrow(
       'request ID was reused'
     )
+    const deletionRace = {
+      ...created,
+      depositId: 'deletion-race',
+      transactionId: 'tx:confidential-external:deletion-race',
+      phase: 'processing'
+    }
+    records.set(deletionRace.depositId, deletionRace)
+    await repository.create(createExternalShieldDepositGraph(deletionRace))
+    serviceStatus = 'PROCESSING'
+    deleteAfterPrecheck = true
+    expect((await coordinator.refreshExternalDeposit(deletionRace.depositId)).phase).toBe(
+      'processing'
+    )
+    expect(
+      await repository.get(
+        { keyDomainId: 'wallet:one', accountId: 'account:one' },
+        deletionRace.transactionId
+      )
+    ).toBeNull()
+    await expect(coordinator.refreshExternalDeposit(deletionRace.depositId)).rejects.toThrow(
+      'Wallet Account metadata is unavailable'
+    )
+    expect(
+      await repository.get(
+        { keyDomainId: 'wallet:one', accountId: 'account:one' },
+        deletionRace.transactionId
+      )
+    ).toBeNull()
   })
 
   test('discovers the provider minimum and binds a flexible external deposit quote', async () => {

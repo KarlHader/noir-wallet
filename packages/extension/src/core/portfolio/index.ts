@@ -2,6 +2,13 @@ export { buildPortfolioReadModel } from './portfolio-read-model'
 export { parsePortfolioReadModel } from './portfolio-read-model-parsing'
 export { hidePortfolioAssets } from './portfolio-visibility'
 export {
+  PORTFOLIO_AUTOMATIC_REFRESH_MAX_AGE_MS,
+  portfolioChainIdsForAutomaticRefresh,
+  portfolioChainIdsNeedingRefresh,
+  shouldRefreshPortfolioFromNetwork,
+  type PortfolioRefreshSelection
+} from './refresh-policy'
+export {
   applyTokenDisplayPolicy,
   isPortfolioTokenVisible,
   type TokenDisplayPolicy

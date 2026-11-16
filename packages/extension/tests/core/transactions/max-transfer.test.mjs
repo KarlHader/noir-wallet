@@ -314,7 +314,6 @@ describe('dynamic maximum transfer regressions', () => {
 
   it('clears a pending wallet Max and quote when the active Account or chain scope changes', () => {
     const swap = readSource('src/popup/pages/swap/Swap.tsx')
-    const multichainSend = readSource('src/popup/pages/transactions/MultichainSend.tsx')
     const background = readSource('src/background/index.ts')
     const popupContextSync = readSource('src/popup/hooks/usePersistedExtensionContextSync.ts')
     const resultPage = readSource('src/popup/pages/transactions/TransactionResultPage.tsx')
@@ -334,10 +333,6 @@ describe('dynamic maximum transfer regressions', () => {
     assert.match(
       resultPage,
       /if \(!data && !leavingResultRef\.current\)[\s\S]*?navigate\('\/', \{ replace: true \}\)[\s\S]*?\[data, navigate\]/
-    )
-    assert.match(
-      multichainSend,
-      /\[effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey, load\]/
     )
     assert.match(
       background,

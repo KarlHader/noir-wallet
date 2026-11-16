@@ -50,6 +50,7 @@ export interface SingleChainPortfolioCoordinatorOptions {
   readonly readSource: (
     input: ReadSingleChainPortfolioSourceInput
   ) => Promise<PortfolioSourceSnapshot>
+  readonly canCommit?: () => boolean | Promise<boolean>
   readonly now?: () => number
 }
 
@@ -193,7 +194,14 @@ export class SingleChainPortfolioCoordinator {
   private async refresh(
     context: Omit<ActiveSingleChainPortfolioSource, 'source'>
   ): Promise<ActiveSingleChainPortfolioSource | null> {
-    const refreshedAt = (this.options.now ?? Date.now)()
+    const previous = await this.options.cacheRepository.get(
+      context.generationId,
+      context.chainAccount.id
+    )
+    if (previous && !chainAccountsEqual(previous.source.chainAccount, context.chainAccount)) {
+      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
+    }
+    const refreshedAt = Math.max((this.options.now ?? Date.now)(), (previous?.cachedAt ?? -1) + 1)
     if (!Number.isSafeInteger(refreshedAt) || refreshedAt < 0) {
       throw new Error('Invalid single-chain Portfolio refresh timestamp')
     }
@@ -213,13 +221,40 @@ export class SingleChainPortfolioCoordinator {
       throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
     }
     const source = preserveCachedBalances(refreshedSource, cached?.source)
+    if (this.options.canCommit && !(await this.options.canCommit())) return null
+    const pointerBeforeWrite = await this.options.storageRepository.getActivePointer()
+    if (pointerBeforeWrite?.generationId !== context.generationId) return null
+    const activeBeforeWrite = await this.loadActiveContext()
+    if (
+      !activeBeforeWrite ||
+      activeBeforeWrite.generationId !== context.generationId ||
+      !chainAccountsEqual(activeBeforeWrite.chainAccount, context.chainAccount)
+    ) {
+      return null
+    }
+    if (this.options.canCommit && !(await this.options.canCommit())) return null
     await this.options.cacheRepository.put({
       generationId: context.generationId,
       cachedAt: refreshedAt,
       source
     })
-    const currentPointer = await this.options.storageRepository.getActivePointer()
-    if (currentPointer?.generationId !== context.generationId) return null
-    return Object.freeze({ ...context, source })
+    const stored = await this.options.cacheRepository.get(
+      context.generationId,
+      context.chainAccount.id
+    )
+    if (!stored || !chainAccountsEqual(stored.source.chainAccount, context.chainAccount)) {
+      throw new Error('Refreshed Portfolio cache does not match active ChainAccount')
+    }
+    const pointerAfterWrite = await this.options.storageRepository.getActivePointer()
+    if (pointerAfterWrite?.generationId !== context.generationId) return null
+    const activeAfterWrite = await this.loadActiveContext()
+    if (
+      !activeAfterWrite ||
+      activeAfterWrite.generationId !== context.generationId ||
+      !chainAccountsEqual(activeAfterWrite.chainAccount, context.chainAccount)
+    ) {
+      return null
+    }
+    return Object.freeze({ ...context, source: stored.source })
   }
 }

@@ -204,8 +204,7 @@ import {
   receiveTargetsClient,
   type AdditionalReceiveTargetsView
 } from '@/popup/services/receive-targets-client'
-import type { PortfolioReadModel } from '@/core/portfolio'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import {
   createSwapTokenPreferenceScope,
   getDefaultSwapSourceAssetId,
@@ -222,11 +221,6 @@ import {
   isSwapAssetOnEnabledChain,
   mergeTokenCatalogs
 } from '@/popup/services/swap-catalog-loading'
-import {
-  isPortfolioModelForScope,
-  readCachedPortfolio,
-  refreshPortfolioFromCache
-} from '@/popup/services/portfolio-cache'
 
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
@@ -311,11 +305,6 @@ const CROSS_CHAIN_SEND_CAPABILITIES = Object.freeze({
   solana: resolveSolanaFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled
 })
 
-interface SwapWalletSourcesSnapshot {
-  readonly portfolio: PortfolioReadModel | null
-  readonly receiveTargets: AdditionalReceiveTargetsView | null
-}
-
 type PendingRheaEvmAfterApproval = Readonly<{
   readonly approval: Readonly<{
     readonly token: string
@@ -328,19 +317,6 @@ type PendingRheaSigningReview =
   | Readonly<{ kind: 'evm-signature'; review: RheaSwapEvmSignatureReview }>
   | Readonly<{ kind: 'solana-transaction'; review: RheaSwapSolanaTransactionReview }>
   | Readonly<{ kind: 'near-transaction-batch'; review: RheaSwapNearTransactionBatchReview }>
-
-const swapWalletSourcesCache = new Map<string, SwapWalletSourcesSnapshot>()
-const MAX_SWAP_WALLET_SOURCE_SCOPES = 8
-
-function cacheSwapWalletSources(scope: string, snapshot: SwapWalletSourcesSnapshot): void {
-  swapWalletSourcesCache.delete(scope)
-  swapWalletSourcesCache.set(scope, snapshot)
-  while (swapWalletSourcesCache.size > MAX_SWAP_WALLET_SOURCE_SCOPES) {
-    const oldest = swapWalletSourcesCache.keys().next().value
-    if (oldest === undefined) break
-    swapWalletSourcesCache.delete(oldest)
-  }
-}
 
 function sameNativeZecDestination(
   left: NativeZecIntentsSwapReview['destination'],
@@ -612,6 +588,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     effectiveWalletId && effectiveAccountId
       ? `${currentNetwork}:${effectiveWalletId}:${effectiveAccountId}:${chainEndpointRuntimeKey}`
       : null
+  const portfolioSnapshot = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
   const publicPrivacySendRoute =
     publicPrivacySendRequested && effectiveWalletId && effectiveAccountId && requestedSourceAssetId
       ? parsePublicPrivateEvmSwapRoute(searchParams, {
@@ -623,9 +600,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       : null
   const publicPrivacySendRouteReady =
     !publicPrivacySendRequested || (currentNetwork === 'mainnet' && publicPrivacySendRoute !== null)
-  const retainedWalletSources = walletSourcesScope
-    ? swapWalletSourcesCache.get(walletSourcesScope)
-    : undefined
   const getCurrentBalance = useAccountDataStore(state => state.getCurrentBalance)
   const storeBalance = getCurrentBalance()
 
@@ -830,15 +804,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     scope: string | null
     address: string
   }>({ scope: walletSourcesScope, address: '' })
-  const [portfolioSnapshot, setPortfolioSnapshot] = useState(() => ({
+  const [receiveTargetsSnapshot, setReceiveTargetsSnapshot] = useState<{
+    scope: string | null
+    value: AdditionalReceiveTargetsView | null
+  }>(() => ({
     scope: walletSourcesScope,
-    value: retainedWalletSources?.portfolio ?? null
+    value: null
   }))
-  const [receiveTargetsSnapshot, setReceiveTargetsSnapshot] = useState(() => ({
-    scope: walletSourcesScope,
-    value: retainedWalletSources?.receiveTargets ?? null
-  }))
-  const portfolio = portfolioSnapshot.scope === walletSourcesScope ? portfolioSnapshot.value : null
+  const portfolio = portfolioSnapshot.model
   const receiveTargets =
     receiveTargetsSnapshot.scope === walletSourcesScope ? receiveTargetsSnapshot.value : null
   const sendSourceAssetId = swap.tokenIn ? getCrossChainSendWalletAssetId(swap.tokenIn) : null
@@ -1148,14 +1121,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     },
     []
   )
-  const [walletSourcesRequestLoading, setWalletSourcesLoading] = useState(true)
+  const [receiveTargetsLoading, setReceiveTargetsLoading] = useState(true)
+  const [manualPortfolioRefreshScope, setManualPortfolioRefreshScope] = useState<string | null>(
+    null
+  )
   const walletSourcesLoading =
-    walletSourcesRequestLoading ||
+    receiveTargetsLoading ||
+    (walletSourcesScope !== null && manualPortfolioRefreshScope === walletSourcesScope) ||
+    !portfolioSnapshot.settled ||
     !accountNetworksReady ||
-    portfolioSnapshot.scope !== walletSourcesScope ||
     receiveTargetsSnapshot.scope !== walletSourcesScope
-  const selectedPortfolioVersion = useRef(0)
-  const updatedPortfolioVersion = useRef(0)
   const [preparedQuoteTransfer, setPreparedQuoteTransfer] =
     useState<PreparedQuoteDepositTransfer | null>(null)
   const [rheaSigningReview, setRheaSigningReview] = useState<PendingRheaSigningReview | null>(null)
@@ -1337,146 +1312,52 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
   useEffect(() => {
     let cancelled = false
-    const portfolioVersion = selectedPortfolioVersion.current
-    const updatedVersion = updatedPortfolioVersion.current
-    const retained = walletSourcesScope ? swapWalletSourcesCache.get(walletSourcesScope) : undefined
-    setPortfolioSnapshot({ scope: walletSourcesScope, value: retained?.portfolio ?? null })
-    setReceiveTargetsSnapshot({
-      scope: walletSourcesScope,
-      value: retained?.receiveTargets ?? null
-    })
+    setReceiveTargetsSnapshot({ scope: walletSourcesScope, value: null })
     if (!effectiveWalletId || !effectiveAccountId) {
-      setWalletSourcesLoading(false)
+      setReceiveTargetsLoading(false)
       return () => {
         cancelled = true
       }
     }
-    // Retained data keeps the screen responsive, but actions wait for the current
-    // Bitcoin account-type selection to be read from the Background.
-    setWalletSourcesLoading(true)
-    void (async () => {
-      const startedAt = performance.now()
-      try {
-        const scope = {
-          walletId: effectiveWalletId,
-          accountId: effectiveAccountId,
-          endpointRuntimeKey: chainEndpointRuntimeKey
-        }
-        const [cached, targets] = await Promise.all([
-          traceDebugStage(walletSourcesTraceId, 'read-cached-portfolio', () =>
-            readCachedPortfolio(scope)
-          ),
-          traceDebugStage(walletSourcesTraceId, 'load-receive-targets', () =>
-            receiveTargetsClient.getAdditionalTargets({
-              keyDomainId: effectiveWalletId,
-              accountId: effectiveAccountId
-            })
-          )
-        ])
-        if (cancelled) return
-        logDebugTiming(
-          walletSourcesTraceId,
-          `sources-ready assets=${cached?.assets.length ?? 0} targets=${targets?.targets.length ?? 0}`,
-          startedAt
-        )
-        if (
-          portfolioVersion === selectedPortfolioVersion.current &&
-          updatedVersion === updatedPortfolioVersion.current
-        )
-          setPortfolioSnapshot({ scope: walletSourcesScope, value: cached })
-        setReceiveTargetsSnapshot({ scope: walletSourcesScope, value: targets })
-        setWalletSourcesLoading(false)
-        if (
-          walletSourcesScope &&
-          portfolioVersion === selectedPortfolioVersion.current &&
-          updatedVersion === updatedPortfolioVersion.current
-        ) {
-          cacheSwapWalletSources(walletSourcesScope, {
-            portfolio: cached,
-            receiveTargets: targets
-          })
-        }
-      } catch {
-        // Keep the last verified cached portfolio when a refresh is unavailable.
-      } finally {
-        if (!cancelled) setWalletSourcesLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [
-    effectiveWalletId,
-    effectiveAccountId,
-    chainEndpointRuntimeKey,
-    walletSourcesScope,
-    walletSourcesTraceId
-  ])
-
-  const readLatestPortfolio = useCallback(async () => {
-    if (!effectiveWalletId || !effectiveAccountId || !walletSourcesScope) return
-    const portfolioVersion = selectedPortfolioVersion.current
-    const startedAt = performance.now()
-    const latest = await traceDebugStage(walletSourcesTraceId, 'read-portfolio-update', () =>
-      readCachedPortfolio({
-        walletId: effectiveWalletId,
+    setReceiveTargetsLoading(true)
+    void traceDebugStage(walletSourcesTraceId, 'load-receive-targets', () =>
+      receiveTargetsClient.getAdditionalTargets({
+        keyDomainId: effectiveWalletId,
         accountId: effectiveAccountId
       })
     )
-    logDebugTiming(
-      walletSourcesTraceId,
-      `portfolio-update assets=${latest?.assets.length ?? 0}`,
-      startedAt
-    )
-    if (
-      portfolioVersion === selectedPortfolioVersion.current &&
-      activeScopeRef.current === walletSourcesScope &&
-      isPortfolioModelForScope(latest, effectiveWalletId, effectiveAccountId)
-    ) {
-      updatedPortfolioVersion.current += 1
-      setPortfolioSnapshot({ scope: walletSourcesScope, value: latest })
-      setWalletSourcesLoading(false)
+      .then(targets => {
+        if (!cancelled) setReceiveTargetsSnapshot({ scope: walletSourcesScope, value: targets })
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setReceiveTargetsLoading(false)
+      })
+    return () => {
+      cancelled = true
     }
   }, [effectiveWalletId, effectiveAccountId, walletSourcesScope, walletSourcesTraceId])
 
+  const readLatestPortfolio = useCallback(async () => {
+    await portfolioSnapshot.readLatest()
+  }, [portfolioSnapshot.readLatest])
+
   const refreshShieldPortfolio = useCallback(async () => {
-    if (!effectiveWalletId || !effectiveAccountId || !walletSourcesScope) return
-    const portfolioVersion = selectedPortfolioVersion.current
-    setWalletSourcesLoading(true)
+    if (!walletSourcesScope) return
+    setManualPortfolioRefreshScope(walletSourcesScope)
     try {
-      const refreshed = await refreshPortfolioFromCache(
-        {
-          walletId: effectiveWalletId,
-          accountId: effectiveAccountId,
-          endpointRuntimeKey: chainEndpointRuntimeKey
-        },
-        portfolio,
-        { forceDiscovery: true, forceRefresh: true }
-      )
       if (
-        portfolioVersion === selectedPortfolioVersion.current &&
-        activeScopeRef.current === walletSourcesScope &&
-        isPortfolioModelForScope(refreshed, effectiveWalletId, effectiveAccountId)
+        !(await portfolioSnapshot.refresh(true, { forceDiscovery: true })) &&
+        activeScopeRef.current === walletSourcesScope
       ) {
-        updatedPortfolioVersion.current += 1
-        setPortfolioSnapshot({ scope: walletSourcesScope, value: refreshed })
-        cacheSwapWalletSources(walletSourcesScope, { portfolio: refreshed, receiveTargets })
+        toast.error('Unable to refresh balances')
       }
     } catch {
       if (activeScopeRef.current === walletSourcesScope) toast.error('Unable to refresh balances')
     } finally {
-      if (activeScopeRef.current === walletSourcesScope) setWalletSourcesLoading(false)
+      setManualPortfolioRefreshScope(current => (current === walletSourcesScope ? null : current))
     }
-  }, [
-    effectiveWalletId,
-    effectiveAccountId,
-    walletSourcesScope,
-    chainEndpointRuntimeKey,
-    portfolio,
-    receiveTargets
-  ])
-
-  usePortfolioUpdates(effectiveWalletId, effectiveAccountId, readLatestPortfolio)
+  }, [walletSourcesScope, portfolioSnapshot.refresh])
 
   const walletSourceQuoteTarget = useMemo(
     () =>
@@ -1782,41 +1663,28 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (selectedAssetRegistrationKey.current === registrationKey) return
     selectedAssetRegistrationKey.current = registrationKey
     selectedAssetRegistrationAttempts.current.count += 1
-    const portfolioVersion = selectedPortfolioVersion.current
-    const scope = {
-      walletId: effectiveWalletId,
-      accountId: effectiveAccountId,
-      endpointRuntimeKey: chainEndpointRuntimeKey
-    }
     void intentsAssetManagerClient
       .ensureSelectedEvmAsset(selectedEvmAsset)
-      .then(() => {
+      .then(async () => {
         if (
           selectedAssetRegistrationKey.current !== registrationKey ||
           activeScopeRef.current !== walletSourcesScope ||
           useWalletStore.getState().currentNetwork !== currentNetwork
         )
           return null
-        return refreshPortfolioFromCache(scope, portfolio, {
-          forceRefresh: true,
-          refreshChainIds: [selectedEvmAsset.chainId]
-        })
+        await portfolioSnapshot.refresh(true, { chainIds: [selectedEvmAsset.chainId] })
+        return portfolioSnapshot.readLatest()
       })
       .then(refreshed => {
         if (
           selectedAssetRegistrationKey.current !== registrationKey ||
-          portfolioVersion !== selectedPortfolioVersion.current ||
           activeScopeRef.current !== walletSourcesScope ||
-          useWalletStore.getState().currentNetwork !== currentNetwork ||
-          !isPortfolioModelForScope(refreshed, effectiveWalletId, effectiveAccountId)
+          useWalletStore.getState().currentNetwork !== currentNetwork
         )
           return
-        if (!refreshed.assets.some(asset => asset.asset.id === selectedEvmAsset.assetId)) {
+        if (!refreshed?.assets.some(asset => asset.asset.id === selectedEvmAsset.assetId)) {
           throw new Error('Selected token balance is temporarily unavailable')
         }
-        updatedPortfolioVersion.current += 1
-        setPortfolioSnapshot({ scope: walletSourcesScope, value: refreshed })
-        cacheSwapWalletSources(walletSourcesScope, { portfolio: refreshed, receiveTargets })
       })
       .catch(error => {
         if (selectedAssetRegistrationKey.current !== registrationKey) return
@@ -1841,68 +1709,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     effectiveWalletId,
     effectiveAccountId,
     walletSourcesScope,
-    chainEndpointRuntimeKey,
     currentNetwork,
-    receiveTargets,
+    portfolioSnapshot.refresh,
+    portfolioSnapshot.readLatest,
     assetRegistrationRetry
   ])
   const swapRefreshChainId = resolveSwapRefreshChainId(swap.tokenIn, receiveTargets)
   useEffect(() => {
-    if (!swapRefreshChainId || !effectiveWalletId || !effectiveAccountId) return
-    let cancelled = false
-    const portfolioVersion = selectedPortfolioVersion.current
-    const updatedVersion = updatedPortfolioVersion.current
-    const scope = {
-      walletId: effectiveWalletId,
-      accountId: effectiveAccountId,
-      endpointRuntimeKey: chainEndpointRuntimeKey
-    }
-    const startedAt = performance.now()
-    void traceDebugStage(walletSourcesTraceId, 'read-refresh-source', () =>
-      readCachedPortfolio(scope)
-    )
-      .then(cached =>
-        cancelled
-          ? null
-          : traceDebugStage(walletSourcesTraceId, 'refresh-source-chain', () =>
-              refreshPortfolioFromCache(scope, cached, {
-                refreshChainIds: [swapRefreshChainId],
-                additionalChainIds: [swapRefreshChainId]
-              })
-            )
-      )
-      .then(refreshed => {
-        logDebugTiming(
-          walletSourcesTraceId,
-          `source-chain-ready assets=${refreshed?.assets.length ?? 0}`,
-          startedAt
-        )
-        if (
-          cancelled ||
-          portfolioVersion !== selectedPortfolioVersion.current ||
-          updatedVersion !== updatedPortfolioVersion.current ||
-          activeScopeRef.current !== walletSourcesScope ||
-          !isPortfolioModelForScope(refreshed, effectiveWalletId, effectiveAccountId)
-        )
-          return
-        updatedPortfolioVersion.current += 1
-        setPortfolioSnapshot({ scope: walletSourcesScope, value: refreshed })
-        if (walletSourcesScope)
-          cacheSwapWalletSources(walletSourcesScope, { portfolio: refreshed, receiveTargets })
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [
-    swapRefreshChainId,
-    effectiveWalletId,
-    effectiveAccountId,
-    chainEndpointRuntimeKey,
-    walletSourcesScope,
-    receiveTargets,
-    walletSourcesTraceId
-  ])
+    if (!swapRefreshChainId || !walletSourcesScope) return
+    void portfolioSnapshot.refresh(false, {
+      chainIds: [swapRefreshChainId],
+      additionalChainIds: [swapRefreshChainId]
+    })
+  }, [swapRefreshChainId, walletSourcesScope, portfolioSnapshot.refresh])
   const walletDestinationTarget = useMemo(
     () =>
       !isZecDestination && swap.tokenOut && portfolio
@@ -6156,7 +5975,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                       scopeKey: walletSourcesScope,
                       walletId: effectiveWalletId,
                       accountId: effectiveAccountId,
-                      initialPortfolio: portfolio,
                       receiveTargets,
                       zcashAvailable:
                         type === 'in'
@@ -6181,21 +5999,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   : 'No destination assets are available'
               }
               selectedToken={(type === 'in' ? swap.tokenIn : swap.tokenOut) || undefined}
-              onSelect={(token, selectedPortfolio) => {
-                if (
-                  selectedPortfolio &&
-                  walletSourcesScope &&
-                  activeScopeRef.current === walletSourcesScope &&
-                  isPortfolioModelForScope(selectedPortfolio, effectiveWalletId, effectiveAccountId)
-                ) {
-                  selectedPortfolioVersion.current += 1
-                  updatedPortfolioVersion.current += 1
-                  setPortfolioSnapshot({ scope: walletSourcesScope, value: selectedPortfolio })
-                  cacheSwapWalletSources(walletSourcesScope, {
-                    portfolio: selectedPortfolio,
-                    receiveTargets
-                  })
-                }
+              onSelect={token => {
                 if (
                   type === 'out' &&
                   privateDestinationSelectionRequested &&

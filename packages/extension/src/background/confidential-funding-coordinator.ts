@@ -267,10 +267,12 @@ export interface ConfidentialFundingCoordinatorOptions {
   readonly getNativeZecActiveAccount?: () => NativeZecActiveAccountSnapshot
   readonly scheduleMonitoring?: (delayInMinutes?: number) => Promise<void>
   readonly refreshPortfolio?: (
-    target?: Readonly<{
+    target: Readonly<{
       keyDomainId: string
       accountId: string
       chainIds: readonly string[]
+      domain?: 'chain' | 'confidential'
+      balanceUpdated?: true
     }>
   ) => Promise<void>
   readonly onActivityChanged?: (
@@ -1245,12 +1247,14 @@ export class ConfidentialFundingCoordinator {
         session = await this.ensureSession(identity, true)
       }
       if (!session) return record
+      const requestedAt = this.now()
       const balances = await this.options.api.getBalances(session.accessToken)
       await this.options.store.putBalances(
         record.network,
         record.keyDomainId,
         record.accountId,
-        balances
+        balances,
+        requestedAt
       )
       const updated: ExternalShieldDeposit = Object.freeze({
         ...record,
@@ -1258,7 +1262,15 @@ export class ConfidentialFundingCoordinator {
         updatedAt: this.now()
       })
       await this.options.store.putExternalDeposit(updated)
-      await this.options.refreshPortfolio?.().catch(() => {})
+      await this.options
+        .refreshPortfolio?.({
+          keyDomainId: record.keyDomainId,
+          accountId: record.accountId,
+          chainIds: [record.source.chainId],
+          domain: 'confidential',
+          balanceUpdated: true
+        })
+        .catch(() => {})
       return updated
     } catch {
       await this.scheduleMonitoring()
@@ -1301,33 +1313,33 @@ export class ConfidentialFundingCoordinator {
           segment.status === 'failed'
         )
           break
-        const result = await this.options.store.withExternalDepositScope(record, () =>
-          this.options.repository.applySegmentEvent({
-            scope,
-            transactionId,
-            segmentId: segment.id,
-            event: {
-              id: parseTransactionEventId(`event:confidential-external:${crypto.randomUUID()}`),
-              status: targetStatus,
-              cause: targetStatus === 'failed' ? 'failure' : 'progress',
-              observedAt: this.now(),
-              ...(settledAmount ? { evidence: { settledAmount } } : {}),
-              ...(targetStatus === 'failed'
-                ? {
-                    failure: {
-                      code:
-                        record.phase === 'refunded'
-                          ? ('refunded' as const)
-                          : ('relay-failed' as const),
-                      occurredAt: this.now()
-                    }
+        // Release the metadata lock before applying: the committed event awaits observers that reacquire it.
+        await this.options.store.withExternalDepositScope(record, async () => {})
+        const result = await this.options.repository.applySegmentEvent({
+          scope,
+          transactionId,
+          segmentId: segment.id,
+          event: {
+            id: parseTransactionEventId(`event:confidential-external:${crypto.randomUUID()}`),
+            status: targetStatus,
+            cause: targetStatus === 'failed' ? 'failure' : 'progress',
+            observedAt: this.now(),
+            ...(settledAmount ? { evidence: { settledAmount } } : {}),
+            ...(targetStatus === 'failed'
+              ? {
+                  failure: {
+                    code:
+                      record.phase === 'refunded'
+                        ? ('refunded' as const)
+                        : ('relay-failed' as const),
+                    occurredAt: this.now()
                   }
-                : {})
-            },
-            expectedRootRevision: graph.root.revision,
-            expectedSegmentRevision: segment.revision
-          })
-        )
+                }
+              : {})
+          },
+          expectedRootRevision: graph.root.revision,
+          expectedSegmentRevision: segment.revision
+        })
         if (result.status !== 'revision-conflict') break
       }
     }
@@ -2507,8 +2519,9 @@ export class ConfidentialFundingCoordinator {
       model.scope.keyDomainId,
       model.scope.accountId
     )
-    const cached = snapshot.fresh ? snapshot.balances : null
-    const project = (balances: typeof cached): PortfolioReadModel => {
+    const project = (current: typeof snapshot): PortfolioReadModel => {
+      const known = current.known ?? current.fresh ?? current.updatedAt > 0
+      const balances = known ? current.balances : null
       const tokens = this.options.getProtocolTokens?.() ?? this.options.protocolTokens ?? []
       const managedAssets = (() => {
         if (balances === null) return []
@@ -2526,17 +2539,29 @@ export class ConfidentialFundingCoordinator {
       const merged =
         balances === null
           ? model
-          : mergeConfidentialBalancesIntoPortfolio(model, portfolioMappings, balances)
+          : mergeConfidentialBalancesIntoPortfolio(model, portfolioMappings, balances, {
+              freshness: current.fresh ? 'fresh' : 'stale',
+              updatedAt: current.updatedAt
+            })
       const confidential =
         balances === null
-          ? Object.freeze({ status: 'unavailable' as const, assets: Object.freeze([]) })
-          : buildConfidentialPortfolioView(
-              balances,
-              tokens,
-              managedAssets,
-              portfolioMappings,
-              this.options.assets
-            )
+          ? Object.freeze({
+              status: 'unavailable' as const,
+              freshness: 'unavailable' as const,
+              updatedAt: 0,
+              assets: Object.freeze([])
+            })
+          : Object.freeze({
+              ...buildConfidentialPortfolioView(
+                balances,
+                tokens,
+                managedAssets,
+                portfolioMappings,
+                this.options.assets
+              ),
+              freshness: current.fresh ? ('fresh' as const) : ('stale' as const),
+              updatedAt: current.updatedAt
+            })
       const projected = projectConfidentialOnlyEvmAssets(
         merged,
         confidential,
@@ -2545,17 +2570,17 @@ export class ConfidentialFundingCoordinator {
       )
       return Object.freeze({ ...projected, confidential })
     }
-    if (!refresh || (refresh === 'if-stale' && snapshot.fresh)) return project(cached)
+    if (!refresh || (refresh === 'if-stale' && snapshot.fresh)) return project(snapshot)
     const firstEvm = this.options.evmNetworks[0]
     if (!firstEvm) {
-      return project(cached)
+      return project(snapshot)
     }
     const session = await this.readUsableSessionForScope(
       model.scope.keyDomainId,
       model.scope.accountId
     )
     if (!session) {
-      return project(cached)
+      return project(snapshot)
     }
     const identity = await this.options.signer
       .resolveIdentity(parseChainId(firstEvm.chainId).id)
@@ -2565,12 +2590,14 @@ export class ConfidentialFundingCoordinator {
       model.scope.keyDomainId !== identity.context.chainAccount.scope.keyDomainId ||
       model.scope.accountId !== identity.context.chainAccount.scope.accountId
     ) {
-      return project(cached)
+      return project(snapshot)
     }
-    const balances = await this.refreshPortfolioBalances(identity, session.accessToken).catch(
-      () => cached
+    await this.refreshPortfolioBalances(identity, session.accessToken).catch(() => null)
+    return project(
+      await this.options.store
+        .getBalanceSnapshot(this.options.network, model.scope.keyDomainId, model.scope.accountId)
+        .catch(() => snapshot)
     )
-    return project(balances)
   }
 
   async refreshBalances(
@@ -2859,7 +2886,23 @@ export class ConfidentialFundingCoordinator {
           phase: 'ready',
           settledOutputRaw: status.settledAmountOutRaw
         })
-        await this.options.refreshPortfolio?.().catch(() => {})
+        await this.options
+          .refreshPortfolio?.({
+            keyDomainId: ready.keyDomainId,
+            accountId: ready.accountId,
+            chainIds: [ready.source.chainId],
+            domain: 'confidential',
+            balanceUpdated: true
+          })
+          .catch(() => {})
+        void this.options
+          .refreshPortfolio?.({
+            keyDomainId: ready.keyDomainId,
+            accountId: ready.accountId,
+            chainIds: [ready.source.chainId],
+            domain: 'chain'
+          })
+          .catch(() => {})
         return ready
       }
       const reportedTooLittle =
@@ -3933,7 +3976,14 @@ export class ConfidentialFundingCoordinator {
           const depositSettlementStatus = normalizeStatus(status.status)
           if (depositSettlementStatus === 'REFUNDED') {
             plan = await this.updatePlan(plan, { phase: 'refunded' })
-            await this.options.refreshPortfolio?.().catch(() => {})
+            void this.options
+              .refreshPortfolio?.({
+                keyDomainId: plan.keyDomainId,
+                accountId: plan.accountId,
+                chainIds: [plan.source.chainId],
+                domain: 'chain'
+              })
+              .catch(() => {})
           }
         }
       }
@@ -4106,16 +4156,47 @@ export class ConfidentialFundingCoordinator {
         next.phase !== previousPhase ||
         rows.some((row, index) => row.status !== previousRows[index].status))
     ) {
-      if (accessToken) await this.readAndCacheBalancesForPlan(next, accessToken).catch(() => [])
-      await this.options.refreshPortfolio?.().catch(() => {})
+      const refreshedBalances = accessToken
+        ? await this.readAndCacheBalancesForPlan(next, accessToken).catch(() => null)
+        : null
+      await this.options
+        .refreshPortfolio?.({
+          keyDomainId: next.keyDomainId,
+          accountId: next.accountId,
+          chainIds: [next.source.chainId],
+          domain: 'confidential',
+          ...(refreshedBalances === null ? {} : { balanceUpdated: true as const })
+        })
+        .catch(() => {})
+      if (newlySettled && next.destinationDomain !== 'shield') {
+        void this.options
+          .refreshPortfolio?.({
+            keyDomainId: next.keyDomainId,
+            accountId: next.accountId,
+            chainIds: [next.destination.chainId],
+            domain: 'chain'
+          })
+          .catch(() => {})
+      }
     } else if (newlySettled) {
       await this.options
         .refreshPortfolio?.({
           keyDomainId: plan.keyDomainId,
           accountId: plan.accountId,
-          chainIds: [plan.destination.chainId]
+          chainIds: [plan.source.chainId],
+          domain: 'confidential'
         })
         .catch(() => {})
+      if (plan.destinationDomain !== 'shield') {
+        void this.options
+          .refreshPortfolio?.({
+            keyDomainId: plan.keyDomainId,
+            accountId: plan.accountId,
+            chainIds: [plan.destination.chainId],
+            domain: 'chain'
+          })
+          .catch(() => {})
+      }
     }
     return next
   }
@@ -4263,23 +4344,27 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async readAndCacheBalances(identity: ConfidentialSigningIdentity, accessToken: string) {
+    const requestedAt = this.now()
     const balances = await this.options.api.getBalances(accessToken)
     await this.options.store.putBalances(
       this.options.network,
       identity.context.chainAccount.scope.keyDomainId,
       identity.context.chainAccount.scope.accountId,
-      balances
+      balances,
+      requestedAt
     )
     return balances
   }
 
   private async readAndCacheBalancesForPlan(plan: ConfidentialFundingPlan, accessToken: string) {
+    const requestedAt = this.now()
     const balances = await this.options.api.getBalances(accessToken)
     await this.options.store.putBalances(
       this.options.network,
       plan.keyDomainId,
       plan.accountId,
-      balances
+      balances,
+      requestedAt
     )
     return balances
   }

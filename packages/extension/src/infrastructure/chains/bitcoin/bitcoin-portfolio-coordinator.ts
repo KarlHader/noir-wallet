@@ -152,7 +152,9 @@ export class BitcoinPortfolioCoordinator {
     return Object.freeze({ ...context, source })
   }
 
-  async refreshActiveSource(): Promise<ActiveBitcoinPortfolioSource | null> {
+  async refreshActiveSource(
+    options: Readonly<{ requireNewScan?: boolean }> = {}
+  ): Promise<ActiveBitcoinPortfolioSource | null> {
     const context = await atBitcoinPortfolioStage('active-context', () => this.loadActiveContext())
     if (!context) return null
     try {
@@ -163,7 +165,11 @@ export class BitcoinPortfolioCoordinator {
       const forceRefresh = await atBitcoinPortfolioStage('discovery-cache', () =>
         this.hasCommittedInputStillCached(context, cached, addressType)
       )
-      const state = await this.options.discovery.scanActive({ forceRefresh, addressType })
+      const state = await this.options.discovery.scanActive({
+        forceRefresh: forceRefresh || options.requireNewScan === true,
+        requireNewScan: options.requireNewScan,
+        addressType
+      })
       if (
         !state ||
         !(await atBitcoinPortfolioStage('active-pointer', () => this.contextRemainsActive(context)))

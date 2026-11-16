@@ -758,7 +758,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_SWAP_TOKEN_CATALOG: {},
   GET_PORTFOLIO: {
     required: { action: isPortfolioAction },
-    optional: { forceDiscovery: isBoolean, chainIds: isChainIdArray }
+    optional: {
+      forceDiscovery: isBoolean,
+      automatic: isBoolean,
+      chainIds: isChainIdArray,
+      expectedWalletId: isShortString,
+      expectedAccountId: isShortString
+    }
   },
   GET_EVM_PORTFOLIO: { required: { action: isPortfolioAction } },
   GET_EVM_CONFIRMATION_ESTIMATE: {

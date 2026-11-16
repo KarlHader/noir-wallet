@@ -104,6 +104,8 @@ export interface ConfidentialPortfolioAssetView {
 
 export interface ConfidentialPortfolioView {
   readonly status: 'ready' | 'unavailable'
+  readonly freshness?: 'fresh' | 'stale' | 'unavailable'
+  readonly updatedAt?: number
   readonly assets: readonly ConfidentialPortfolioAssetView[]
 }
 

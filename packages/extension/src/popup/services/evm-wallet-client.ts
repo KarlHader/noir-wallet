@@ -152,6 +152,9 @@ export interface EvmWalletClient {
     options?: {
       readonly forceDiscovery?: boolean
       readonly chainIds?: readonly string[]
+      readonly automatic?: boolean
+      readonly expectedWalletId?: string
+      readonly expectedAccountId?: string
     }
   ) => Promise<PortfolioReadModel | null>
   readonly getActivity: (
@@ -867,6 +870,9 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
       options: {
         readonly forceDiscovery?: boolean
         readonly chainIds?: readonly string[]
+        readonly automatic?: boolean
+        readonly expectedWalletId?: string
+        readonly expectedAccountId?: string
       } = {}
     ) => {
       const requestedChainIds = options.chainIds
@@ -887,7 +893,14 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         type: 'GET_PORTFOLIO',
         action,
         ...(options.forceDiscovery === undefined ? {} : { forceDiscovery: options.forceDiscovery }),
-        ...(chainIds === undefined ? {} : { chainIds })
+        ...(chainIds === undefined ? {} : { chainIds }),
+        ...(options.automatic === undefined ? {} : { automatic: options.automatic }),
+        ...(options.expectedWalletId === undefined
+          ? {}
+          : { expectedWalletId: options.expectedWalletId }),
+        ...(options.expectedAccountId === undefined
+          ? {}
+          : { expectedAccountId: options.expectedAccountId })
       })
       return parseRuntimeResult(response, value => {
         const result = readRecord(value, 'Portfolio result')

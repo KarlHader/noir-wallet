@@ -16,3 +16,9 @@ export {
   type ReadSingleChainPortfolioSourceInput,
   type SingleChainPortfolioCoordinatorOptions
 } from './single-chain-portfolio-coordinator'
+export {
+  BackgroundPortfolioService,
+  type BackgroundPortfolioScope,
+  type BackgroundPortfolioServiceOptions,
+  type PortfolioInvalidationScope
+} from './background-portfolio-service'

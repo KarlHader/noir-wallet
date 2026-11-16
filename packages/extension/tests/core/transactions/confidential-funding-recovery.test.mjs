@@ -1739,7 +1739,9 @@ test.describe('confidential funding persisted recovery', () => {
     ])
     h.state.statuses = ['SUCCESS', 'PROCESSING', 'PROCESSING']
     expect((await h.restart().continuePlan(h.initial.planId)).phase).toBe('processing')
-    expect(h.state.refreshTargets).toEqual([{ ...scope, chainIds: ['eip155:1'] }])
+    const confidentialTarget = { ...scope, chainIds: ['eip155:1'], domain: 'confidential' }
+    const chainTarget = { ...scope, chainIds: ['eip155:1'], domain: 'chain' }
+    expect(h.state.refreshTargets).toEqual([confidentialTarget, chainTarget])
     h.state.statuses = ['PROCESSING', 'SUCCESS', null]
     const intermediate = await h.restart().continuePlan(h.initial.planId)
     expect(intermediate.withdraws.map(row => row.status)).toEqual([
@@ -1749,8 +1751,10 @@ test.describe('confidential funding persisted recovery', () => {
     ])
     expect(intermediate.withdraws[0].transactionHash).toBe('hash-0')
     expect(h.state.refreshTargets).toEqual([
-      { ...scope, chainIds: ['eip155:1'] },
-      { ...scope, chainIds: ['eip155:1'] }
+      confidentialTarget,
+      chainTarget,
+      confidentialTarget,
+      chainTarget
     ])
     h.state.statuses = ['FAILED', 'PROCESSING', 'SUCCESS']
     const ready = await h.restart().continuePlan(h.initial.planId)
@@ -1762,10 +1766,13 @@ test.describe('confidential funding persisted recovery', () => {
     expect(
       graph.segments.filter(row => row.role === 'destination').every(row => row.status === 'final')
     ).toBe(true)
-    expect(h.state.refreshes).toBe(3)
-    expect(h.state.refreshTargets.at(-1)).toBeNull()
+    expect(h.state.refreshes).toBe(6)
+    expect(h.state.refreshTargets.slice(-2)).toEqual([
+      { ...confidentialTarget, balanceUpdated: true },
+      chainTarget
+    ])
     await h.restart().resumeAll()
-    expect(h.state.refreshes).toBe(3)
+    expect(h.state.refreshes).toBe(6)
   })
 
   test('reopens a failed Cluster read-only and resumes late refunds after worker restart', async () => {
@@ -1846,7 +1853,12 @@ test.describe('confidential funding persisted recovery', () => {
     const partial = await h.restart().continuePlan(h.initial.planId)
     expect(partial.phase).toBe('partial')
     expect(partial.withdraws.map(row => row.status)).toEqual(['SUCCESS', 'REFUNDED', 'FAILED'])
-    expect(h.state.refreshes).toBe(2)
+    expect(h.state.refreshes).toBe(3)
+    expect(h.state.refreshTargets).toEqual([
+      { ...scope, chainIds: ['eip155:1'], domain: 'confidential' },
+      { ...scope, chainIds: ['eip155:1'], domain: 'chain' },
+      { ...scope, chainIds: ['eip155:1'], domain: 'confidential', balanceUpdated: true }
+    ])
     expect(h.state.submissions).toHaveLength(0)
   })
 

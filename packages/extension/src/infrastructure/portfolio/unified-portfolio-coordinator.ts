@@ -43,7 +43,9 @@ export interface EvmPortfolioSourceRegistration {
 
 export interface BitcoinPortfolioSourceReader {
   readonly readCachedActiveSource: () => Promise<ActiveBitcoinPortfolioSource | null>
-  readonly refreshActiveSource: () => Promise<ActiveBitcoinPortfolioSource | null>
+  readonly refreshActiveSource: (
+    options?: Readonly<{ requireNewScan?: boolean }>
+  ) => Promise<ActiveBitcoinPortfolioSource | null>
 }
 
 export interface SingleChainPortfolioSourceReader {
@@ -176,13 +178,17 @@ export class UnifiedPortfolioCoordinator {
     return this.readActive('read')
   }
 
-  refreshActive(chainIds?: readonly string[]): Promise<PortfolioReadModel | null> {
-    return this.readActive('refresh', chainIds)
+  refreshActive(
+    chainIds?: readonly string[],
+    options: Readonly<{ awaitBitcoin?: boolean; requireNewBitcoinScan?: boolean }> = {}
+  ): Promise<PortfolioReadModel | null> {
+    return this.readActive('refresh', chainIds, options)
   }
 
   private async readActive(
     action: 'read' | 'refresh',
-    chainIds?: readonly string[]
+    chainIds?: readonly string[],
+    options: Readonly<{ awaitBitcoin?: boolean; requireNewBitcoinScan?: boolean }> = {}
   ): Promise<PortfolioReadModel | null> {
     const active = await atStage('active-wallet', () =>
       loadActiveReceiveWalletSet({
@@ -275,7 +281,11 @@ export class UnifiedPortfolioCoordinator {
       }
       const bitcoinSource = await atStage('bitcoin-source', () =>
         shouldRefreshChain(bitcoinAccount.chain.id)
-          ? this.refreshBitcoinInBackground(bitcoinPortfolio)
+          ? options.awaitBitcoin
+            ? bitcoinPortfolio.refreshActiveSource({
+                requireNewScan: options.requireNewBitcoinScan
+              })
+            : this.refreshBitcoinInBackground(bitcoinPortfolio)
           : this.readBitcoinSource(bitcoinPortfolio)
       )
       if (!bitcoinSource) {

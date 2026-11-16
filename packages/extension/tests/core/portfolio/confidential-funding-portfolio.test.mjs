@@ -414,10 +414,11 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
   }
   const model = {
     scope: { keyDomainId: 'wallet:one', accountId: 'account:one' },
+    status: 'ready',
     assets: [asset],
-    chains: [{ chain: { id: 'eip155:1' }, assets: [asset] }]
+    chains: [{ chain: { id: 'eip155:1' }, status: 'ready', assets: [asset] }]
   }
-  let snapshot = { fresh: false, balances: [] }
+  let snapshot = { known: false, fresh: false, updatedAt: 0, balances: [] }
   let session = null
   let resolvedIdentity = false
   const coordinator = new ConfidentialFundingCoordinator({
@@ -445,7 +446,7 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
       }
     },
     repository: {},
-    assets: {},
+    assets: { get: () => undefined },
     evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
     assetMappings: [{ assetId: asset.asset.id, protocolAssetId: 'nep141:usdc.omft.near' }],
     now: () => 1000
@@ -453,6 +454,8 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
 
   expect((await coordinator.enrichPortfolio(model)).confidential).toEqual({
     status: 'unavailable',
+    freshness: 'unavailable',
+    updatedAt: 0,
     assets: []
   })
   expect(resolvedIdentity).toBe(false)
@@ -460,16 +463,20 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
   session = { accessToken: 'session', expiresAt: 1_000_000_000, refreshExpiresAt: 2_000_000_000 }
   expect((await coordinator.enrichPortfolio(model, false)).confidential).toEqual({
     status: 'unavailable',
+    freshness: 'unavailable',
+    updatedAt: 0,
     assets: []
   })
   expect(resolvedIdentity).toBe(false)
   expect((await coordinator.enrichPortfolio(model)).confidential).toEqual({
     status: 'unavailable',
+    freshness: 'unavailable',
+    updatedAt: 0,
     assets: []
   })
   expect(resolvedIdentity).toBe(true)
 
-  snapshot = { fresh: true, balances: [] }
+  snapshot = { known: true, fresh: true, updatedAt: 1000, balances: [] }
   const knownZero = await coordinator.enrichPortfolio(model)
   expect(knownZero.assets[0].balance).toMatchObject({
     totalRaw: '150',
@@ -477,7 +484,26 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
     privateOnchainRaw: '50',
     confidentialRaw: '0'
   })
-  expect(knownZero.confidential).toEqual({ status: 'ready', assets: [] })
+  expect(knownZero.confidential).toEqual({
+    status: 'ready', freshness: 'fresh', updatedAt: 1000, assets: []
+  })
+
+  snapshot = {
+    known: true,
+    fresh: false,
+    updatedAt: 1000,
+    balances: [{ tokenId: 'nep141:usdc.omft.near', available: '10', source: 'intents' }]
+  }
+  const stale = await coordinator.enrichPortfolio(model, false)
+  expect(stale.confidential).toMatchObject({
+    status: 'ready', freshness: 'stale', updatedAt: 1000
+  })
+  expect(stale.assets[0]).toMatchObject({
+    freshness: 'stale',
+    balance: { totalRaw: '160', privateRaw: '60', confidentialRaw: '10' }
+  })
+  expect(stale.status).toBe('partial')
+  expect(stale.chains[0].status).toBe('partial')
 })
 
 test('notifies Portfolio only after a successful Confidential refresh for the active account', { timeout: 5000 }, async () => {

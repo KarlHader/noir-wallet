@@ -133,7 +133,8 @@ export function buildConfidentialPortfolioView(
 function mergeAsset(
   asset: PortfolioAssetView,
   mappings: readonly ConfidentialPortfolioAssetMapping[],
-  balances: readonly ConfidentialPortfolioBalance[]
+  balances: readonly ConfidentialPortfolioBalance[],
+  snapshot?: Readonly<{ freshness: 'fresh' | 'stale'; updatedAt: number }>
 ): PortfolioAssetView {
   const mapping = mappings.find(candidate => candidate.assetId === asset.asset.id)
   if (!mapping || asset.balance.mainRaw === undefined || asset.balance.privateRaw === undefined) {
@@ -152,6 +153,15 @@ function mergeAsset(
   const addDelta = (raw: string) => (BigInt(raw) + delta).toString()
   return Object.freeze({
     ...asset,
+    ...(snapshot?.freshness === 'stale'
+      ? {
+          freshness: 'stale' as const,
+          updatedAt:
+            typeof asset.updatedAt === 'number'
+              ? Math.min(asset.updatedAt, snapshot.updatedAt)
+              : snapshot.updatedAt
+        }
+      : {}),
     balance: Object.freeze({
       ...asset.balance,
       totalRaw: addDelta(asset.balance.totalRaw),
@@ -165,17 +175,32 @@ function mergeAsset(
 export function mergeConfidentialBalancesIntoPortfolio(
   model: PortfolioReadModel,
   mappings: readonly ConfidentialPortfolioAssetMapping[],
-  balances: readonly ConfidentialPortfolioBalance[]
+  balances: readonly ConfidentialPortfolioBalance[],
+  snapshot?: Readonly<{ freshness: 'fresh' | 'stale'; updatedAt: number }>
 ): PortfolioReadModel {
-  const assets = model.assets.map(asset => mergeAsset(asset, mappings, balances))
+  const assets = model.assets.map(asset => mergeAsset(asset, mappings, balances, snapshot))
   const byId = new Map(assets.map(asset => [asset.asset.id, asset]))
   const chains = model.chains.map(chain =>
     Object.freeze({
       ...chain,
-      assets: Object.freeze(chain.assets.map(asset => byId.get(asset.asset.id) ?? asset))
+      assets: Object.freeze(chain.assets.map(asset => byId.get(asset.asset.id) ?? asset)),
+      ...(snapshot?.freshness === 'stale' &&
+      chain.status === 'ready' &&
+      chain.assets.some(asset => byId.get(asset.asset.id)?.freshness === 'stale')
+        ? { status: 'partial' as const }
+        : {})
     })
   )
-  return Object.freeze({ ...model, assets: Object.freeze(assets), chains: Object.freeze(chains) })
+  return Object.freeze({
+    ...model,
+    assets: Object.freeze(assets),
+    chains: Object.freeze(chains),
+    ...(snapshot?.freshness === 'stale' &&
+    model.status === 'ready' &&
+    chains.some(chain => chain.status === 'partial')
+      ? { status: 'partial' as const }
+      : {})
+  })
 }
 
 export function projectConfidentialOnlyEvmAssets(
@@ -220,7 +245,7 @@ export function projectConfidentialOnlyEvmAssets(
       entry.metadata.decimals !== holding.decimals ||
       !chain ||
       chain.chain.family !== 'evm' ||
-      chain.status !== 'ready' ||
+      (chain.status !== 'ready' && chain.status !== 'partial') ||
       !chainAccountIds
     )
       return []
@@ -241,8 +266,8 @@ export function projectConfidentialOnlyEvmAssets(
           confidentialRaw: holding.availableRaw
         }),
         chainAccountIds,
-        freshness: 'fresh' as const,
-        updatedAt: Date.now()
+        freshness: confidential.freshness === 'stale' ? ('stale' as const) : ('fresh' as const),
+        updatedAt: confidential.updatedAt ?? Date.now()
       }) satisfies PortfolioAssetView
     ]
   })
@@ -250,6 +275,11 @@ export function projectConfidentialOnlyEvmAssets(
   const chains = model.chains.map(chain =>
     Object.freeze({
       ...chain,
+      ...(confidential.freshness === 'stale' &&
+      chain.status === 'ready' &&
+      projected.some(asset => asset.asset.chainId === chain.chain.id)
+        ? { status: 'partial' as const }
+        : {}),
       assets: Object.freeze([
         ...chain.assets,
         ...projected.filter(asset => asset.asset.chainId === chain.chain.id)
@@ -258,6 +288,9 @@ export function projectConfidentialOnlyEvmAssets(
   )
   return Object.freeze({
     ...model,
+    ...(confidential.freshness === 'stale' && model.status === 'ready'
+      ? { status: 'partial' as const }
+      : {}),
     chains: Object.freeze(chains),
     assets: Object.freeze(chains.flatMap(chain => chain.assets))
   })

@@ -10,6 +10,7 @@ import {
   getZcashChainId
 } from '../../../src/core/chains/registry/index.ts'
 import {
+  BackgroundPortfolioService,
   PortfolioCoordinatorError,
   UnifiedPortfolioCoordinator
 } from '../../../src/infrastructure/portfolio/index.ts'
@@ -680,4 +681,388 @@ test.describe('Unified active Portfolio coordinator', () => {
       ]
     })
   })
+})
+
+function serviceModel(scope, refreshed = new Set()) {
+  return {
+    scope: { keyDomainId: scope.keyDomainId, accountId: scope.accountId },
+    chains: ['eip155:1', 'near:mainnet'].map(id => ({
+      chain: { id, family: id.startsWith('eip155:') ? 'evm' : 'near' },
+      status: refreshed.has(id) ? 'ready' : 'loading',
+      assets: refreshed.has(id) ? [{ freshness: 'fresh', updatedAt: 10_000 }] : []
+    })),
+    assets: []
+  }
+}
+
+const emptyInvalidations = {
+  readInvalidations: async () => [],
+  acknowledgeInvalidations: async () => {}
+}
+
+test('background Portfolio joins overlapping chain refreshes and leaves fresh automatic reads cached', async () => {
+  const scope = {
+    network: 'mainnet',
+    generationId,
+    keyDomainId,
+    accountId,
+    runtimeKey: 'rpc-1'
+  }
+  const refreshed = new Set()
+  const requests = []
+  const published = []
+  const coordinator = {
+    readCachedActive: async () => serviceModel(scope, refreshed),
+    refreshActive: chainIds =>
+      new Promise(resolve =>
+        requests.push({
+          chainIds,
+          resolve: () => {
+            for (const id of chainIds) refreshed.add(id)
+            resolve(serviceModel(scope, refreshed))
+          }
+        })
+      )
+  }
+  const service = new BackgroundPortfolioService({
+    coordinator,
+    readScope: async () => scope,
+    enrich: async model => model,
+    onUpdated: model => published.push(model),
+    markStale: async () => {},
+    ...emptyInvalidations,
+    now: () => 10_000
+  })
+
+  const partial = service.refreshActive(['eip155:1'])
+  const full = service.refreshActive()
+  await new Promise(resolve => setImmediate(resolve))
+  expect(requests.map(request => request.chainIds)).toEqual([['eip155:1'], ['near:mainnet']])
+  requests.forEach(request => request.resolve())
+  await Promise.all([partial, full])
+  expect(published).toHaveLength(1)
+  await service.refreshActive(undefined, { automatic: true })
+  expect(requests).toHaveLength(2)
+})
+
+test('background Portfolio discards a refresh after the active account changes', async () => {
+  const oldScope = {
+    network: 'mainnet',
+    generationId,
+    keyDomainId,
+    accountId,
+    runtimeKey: 'rpc-1'
+  }
+  let activeScope = oldScope
+  let finish
+  const published = []
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => serviceModel(oldScope),
+      refreshActive: async () =>
+        new Promise(resolve => {
+          finish = resolve
+        })
+    },
+    readScope: async () => activeScope,
+    enrich: async model => model,
+    onUpdated: model => published.push(model),
+    markStale: async () => {},
+    ...emptyInvalidations,
+    now: () => 10_000
+  })
+  const refresh = service.refreshActive(['eip155:1'])
+  await new Promise(resolve => setImmediate(resolve))
+  activeScope = { ...oldScope, accountId: 'account:other' }
+  finish(serviceModel(oldScope, new Set(['eip155:1'])))
+  await expect(refresh).resolves.toBeNull()
+  expect(published).toHaveLength(0)
+})
+
+test('disposing the background Portfolio rejects a pending refresh and disables its runtime', async () => {
+  const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+  let finish
+  let active = true
+  const published = []
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => serviceModel(scope),
+      refreshActive: async () =>
+        new Promise(resolve => {
+          finish = resolve
+        })
+    },
+    readScope: async () => (active ? scope : null),
+    enrich: async model => model,
+    onUpdated: model => published.push(model),
+    onDispose: () => {
+      active = false
+    },
+    markStale: async () => {},
+    ...emptyInvalidations
+  })
+  const refresh = service.refreshActive(['eip155:1'])
+  await new Promise(resolve => setImmediate(resolve))
+  service.dispose()
+  service.dispose()
+  finish(serviceModel(scope, new Set(['eip155:1'])))
+  await expect(refresh).resolves.toBeNull()
+  await expect(service.readCachedActive()).resolves.toBeNull()
+  expect(published).toHaveLength(0)
+})
+
+test('background Portfolio retains cached balances and backs off after a failed automatic refresh', async () => {
+  const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+  const cached = serviceModel(scope)
+  let now = 10_000
+  let requests = 0
+  let published = 0
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => cached,
+      refreshActive: async () => {
+        requests += 1
+        throw new Error('RPC unavailable')
+      }
+    },
+    readScope: async () => scope,
+    enrich: async model => model,
+    onUpdated: () => {
+      published += 1
+    },
+    markStale: async () => {},
+    ...emptyInvalidations,
+    now: () => now
+  })
+
+  await expect(service.refreshActive(['eip155:1'], { automatic: true })).resolves.toEqual(cached)
+  await expect(service.refreshActive(['eip155:1'], { automatic: true })).resolves.toEqual(cached)
+  expect({ requests, published }).toEqual({ requests: 1, published: 0 })
+  now += 10_001
+  await service.refreshActive(['eip155:1'], { automatic: true })
+  expect(requests).toBe(2)
+})
+
+test('background Portfolio rechecks confirmed-empty chains after the automatic TTL', async () => {
+  const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+  const empty = {
+    scope: { keyDomainId, accountId },
+    chains: [{ chain: { id: 'eip155:1', family: 'evm' }, status: 'ready', assets: [] }],
+    assets: []
+  }
+  let now = 10_000
+  let requests = 0
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => empty,
+      refreshActive: async () => {
+        requests += 1
+        return empty
+      }
+    },
+    readScope: async () => scope,
+    enrich: async model => model,
+    onUpdated: () => {},
+    markStale: async () => {},
+    ...emptyInvalidations,
+    now: () => now
+  })
+  await service.refreshActive(undefined, { automatic: true })
+  await service.refreshActive(undefined, { automatic: true })
+  expect(requests).toBe(1)
+  now += 60_000
+  await service.refreshActive(undefined, { automatic: true })
+  expect(requests).toBe(2)
+})
+
+test('background Portfolio refreshes again when an invalidation arrives during an older request', async () => {
+  const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+  const refreshed = new Set()
+  const requests = []
+  const published = []
+  let marker = null
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => serviceModel(scope, refreshed),
+      refreshActive: chainIds =>
+        new Promise(resolve =>
+          requests.push({
+            chainIds,
+            resolve: () => {
+              if (requests.length > 1) refreshed.add(chainIds[0])
+              resolve(serviceModel(scope, refreshed))
+            }
+          })
+        )
+    },
+    readScope: async () => scope,
+    enrich: async model => model,
+    onUpdated: model => published.push(model),
+    markStale: async () => {
+      marker = { chainId: 'eip155:1', domain: 'chain', revision: 1, invalidatedAt: 9_000 }
+    },
+    readInvalidations: async () => (marker ? [marker] : []),
+    acknowledgeInvalidations: async (_scope, markers) => {
+      if (marker?.revision === markers[0]?.revision) marker = null
+    },
+    now: () => 10_000
+  })
+
+  const old = service.refreshActive(['eip155:1'])
+  await new Promise(resolve => setImmediate(resolve))
+  const invalidating = service.invalidate(scope, ['eip155:1'])
+  await new Promise(resolve => setImmediate(resolve))
+  requests[0].resolve()
+  await new Promise(resolve => setImmediate(resolve))
+  expect(requests.map(request => request.chainIds)).toEqual([['eip155:1'], ['eip155:1']])
+  requests[1].resolve()
+  await Promise.all([old, invalidating])
+  expect(marker).toBeNull()
+  expect(published).toHaveLength(1)
+})
+
+test('background Portfolio requires a new Bitcoin scan before acknowledging its marker', async () => {
+  const scope = {
+    network: 'mainnet',
+    generationId,
+    keyDomainId,
+    accountId,
+    runtimeKey: 'rpc-1'
+  }
+  const chainId = 'bip122:000000000019d6689c085ae165831e93'
+  const marker = { chainId, domain: 'chain', revision: 1, invalidatedAt: 9_000 }
+  const requests = []
+  const acknowledged = []
+  let refreshed = false
+  const model = () => ({
+    scope: { keyDomainId, accountId },
+    chains: [
+      {
+        chain: { id: chainId, family: 'bitcoin' },
+        status: refreshed ? 'ready' : 'loading',
+        assets: []
+      }
+    ],
+    assets: []
+  })
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => model(),
+      refreshActive: async (chainIds, options) => {
+        requests.push({ chainIds, options })
+        refreshed = true
+        return model()
+      }
+    },
+    readScope: async () => scope,
+    enrich: async value => value,
+    onUpdated: () => {},
+    markStale: async () => {},
+    readInvalidations: async () => (acknowledged.length ? [] : [marker]),
+    acknowledgeInvalidations: async (_scope, markers) => acknowledged.push(...markers)
+  })
+
+  await service.refreshActive([chainId])
+  expect(requests).toEqual([
+    {
+      chainIds: [chainId],
+      options: { awaitBitcoin: true, requireNewBitcoinScan: true }
+    }
+  ])
+  expect(acknowledged).toEqual([marker])
+})
+
+test('background Portfolio retains a chain marker after a partial refresh', async () => {
+  const scope = {
+    network: 'mainnet',
+    generationId,
+    keyDomainId,
+    accountId,
+    runtimeKey: 'rpc-1'
+  }
+  const marker = { chainId: 'eip155:1', domain: 'chain', revision: 1, invalidatedAt: 9_000 }
+  let partial = false
+  let requests = 0
+  let published = 0
+  const model = () => ({
+    scope: { keyDomainId, accountId },
+    chains: [
+      {
+        chain: { id: 'eip155:1', family: 'evm' },
+        status: partial ? 'partial' : 'loading',
+        assets: partial ? [{ freshness: 'fresh', updatedAt: 10_000 }] : []
+      }
+    ],
+    assets: []
+  })
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => model(),
+      refreshActive: async () => {
+        requests += 1
+        partial = true
+        return model()
+      }
+    },
+    readScope: async () => scope,
+    enrich: async value => value,
+    onUpdated: () => {
+      published += 1
+    },
+    markStale: async () => {},
+    readInvalidations: async () => [marker],
+    acknowledgeInvalidations: async () => {
+      throw new Error('Partial refresh acknowledged')
+    },
+    now: () => 10_000
+  })
+
+  await service.refreshActive(['eip155:1'], { automatic: true })
+  await service.refreshActive(['eip155:1'], { automatic: true })
+  expect({ requests, published }).toEqual({ requests: 1, published: 1 })
+})
+
+test('targeted Confidential invalidation refreshes its projection through an existing session', async () => {
+  const scope = { network: 'mainnet', generationId, keyDomainId, accountId, runtimeKey: 'rpc-1' }
+  const marker = {
+    chainId: 'near:mainnet',
+    domain: 'confidential',
+    revision: 1,
+    invalidatedAt: 9_000
+  }
+  const model = {
+    ...serviceModel(scope, new Set(['near:mainnet', 'eip155:1'])),
+    confidential: { status: 'ready', freshness: 'stale', updatedAt: 8_000, assets: [] }
+  }
+  const enrichModes = []
+  const acknowledged = []
+  let networkRefreshes = 0
+  const service = new BackgroundPortfolioService({
+    coordinator: {
+      readCachedActive: async () => model,
+      refreshActive: async () => {
+        networkRefreshes += 1
+        return model
+      }
+    },
+    readScope: async () => scope,
+    enrich: async (base, refresh) => {
+      enrichModes.push(refresh)
+      return refresh === true
+        ? { ...base, confidential: { ...base.confidential, freshness: 'fresh', updatedAt: 10_000 } }
+        : base
+    },
+    onUpdated: () => {},
+    markStale: async () => {},
+    readInvalidations: async () => [marker],
+    acknowledgeInvalidations: async (_scope, markers) => {
+      acknowledged.push(...markers)
+    },
+    now: () => 10_000
+  })
+
+  await service.refreshActive(['near:mainnet'], { automatic: true })
+  expect(enrichModes).toEqual([false, true])
+  expect(networkRefreshes).toBe(0)
+  expect(acknowledged).toEqual([marker])
 })

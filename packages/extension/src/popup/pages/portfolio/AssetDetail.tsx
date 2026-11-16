@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
-import type { PortfolioReadModel } from '@/core/portfolio'
 import { parseAssetId } from '@/core/chains/registry'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActivityItem } from '@/core/activity'
@@ -45,11 +44,6 @@ import { getPrivateTransferChainIds } from '@/popup/services/private-balance-tra
 import { resolveNearConfidentialZecHolding } from '@/popup/services/near-confidential-holdings'
 
 import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
-import {
-  isPortfolioModelForScope,
-  readCachedPortfolio,
-  refreshPortfolioFromCache
-} from '@/popup/services/portfolio-cache'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { assetMarketHistoryClient } from '@/popup/services/asset-market-history-client'
 import {
@@ -59,7 +53,7 @@ import {
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
 import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
 import { openModal } from '@/popup/provider/ModalManager'
@@ -102,11 +96,12 @@ export function AssetDetail() {
   const chainEndpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
-  const requestSequence = useRef(0)
-  const cacheReadSequence = useRef(0)
-  const availableModel = useRef<PortfolioReadModel | null>(null)
   const historyRequestSequence = useRef(0)
-  const [model, setModel] = useState<PortfolioReadModel | null>(null)
+  const missingAssetRefreshes = useRef(new Set<string>())
+  const { model, status, refresh, readLatest } = usePortfolioSnapshot(
+    effectiveWalletId,
+    effectiveAccountId
+  )
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [history, setHistory] = useState<AssetMarketHistoryReadModel | null>(null)
@@ -119,7 +114,6 @@ export function AssetDetail() {
     'loading'
   )
   const [historyRetry, setHistoryRetry] = useState(0)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [bitcoinCatalog, setBitcoinCatalog] = useState<BitcoinAddressBalanceCatalogView | null>(
     null
   )
@@ -131,121 +125,34 @@ export function AssetDetail() {
     setPrivateCopyAddress(null)
   }, [effectiveWalletId, effectiveAccountId, currentNetwork, requestedAssetId])
 
-  const load = useCallback(
-    async (forceRefresh = false) => {
-      const request = ++requestSequence.current
-      cacheReadSequence.current += 1
-      const hasAvailableModel = () =>
-        isPortfolioModelForScope(availableModel.current, effectiveWalletId, effectiveAccountId)
-      setStatus(
-        hasAvailableModel() &&
-          availableModel.current?.assets.some(item => item.asset.id === requestedAssetId)
-          ? 'ready'
-          : 'loading'
-      )
-      try {
-        if (!effectiveWalletId || !effectiveAccountId) {
-          return
-        }
-        const scope = {
-          walletId: effectiveWalletId,
-          accountId: effectiveAccountId,
-          endpointRuntimeKey: chainEndpointRuntimeKey
-        }
-        const cached = await readCachedPortfolio(scope).catch(() => null)
-        if (request !== requestSequence.current) return
-        const cachedAsset = cached?.assets.find(item => item.asset.id === requestedAssetId)
-        let missingChainId: string | null = null
-        if (
-          cached &&
-          !cachedAsset &&
-          requestedAssetId &&
-          storageV2Account?.walletId === effectiveWalletId &&
-          storageV2Account.accountId === effectiveAccountId
-        ) {
-          try {
-            const chainId = parseAssetId(requestedAssetId).chainId
-            if (storageV2Account.networks.some(network => network.chain.id === chainId))
-              missingChainId = chainId
-          } catch {}
-        }
-        if (cached) {
-          availableModel.current = cached
-          setModel(cached)
-          setStatus(cachedAsset ? 'ready' : 'loading')
-        }
-        const selectedChainId = cachedAsset?.asset.chainId ?? missingChainId
-        const refreshed = await refreshPortfolioFromCache(scope, cached, {
-          forceRefresh: forceRefresh || missingChainId !== null,
-          refreshChainIds: selectedChainId ? [selectedChainId] : []
-        })
-        if (request !== requestSequence.current) return
-        cacheReadSequence.current += 1
-        if (refreshed) {
-          availableModel.current = refreshed
-          setModel(refreshed)
-        }
-        setStatus(hasAvailableModel() ? 'ready' : 'error')
-      } catch {
-        if (request === requestSequence.current) {
-          setStatus(hasAvailableModel() ? 'ready' : 'error')
-        }
-      }
-    },
-    [
-      chainEndpointRuntimeKey,
-      effectiveAccountId,
-      effectiveWalletId,
-      requestedAssetId,
-      storageV2Account
-    ]
-  )
+  const load = useCallback((forceRefresh = false) => refresh(forceRefresh), [refresh])
 
   useEffect(() => {
-    availableModel.current = null
-    setModel(null)
-    void load()
-    return () => {
-      requestSequence.current += 1
-    }
-  }, [effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey, load])
-
-  const readLatest = useCallback(async () => {
-    const request = requestSequence.current
-    const cacheRequest = ++cacheReadSequence.current
-    try {
-      if (!effectiveWalletId || !effectiveAccountId) return
-      const latest = await readCachedPortfolio({
-        walletId: effectiveWalletId,
-        accountId: effectiveAccountId
-      })
-      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
-      if (!isPortfolioModelForScope(latest, effectiveWalletId, effectiveAccountId)) return
-      availableModel.current = latest
-      setModel(latest)
-      const latestAsset = latest?.assets.find(item => item.asset.id === requestedAssetId)
-      const latestChain = latestAsset
-        ? latest?.chains.find(item => item.chain.id === latestAsset.asset.chainId)
-        : undefined
-      if (latestChain?.chain.family === 'bitcoin') {
-        const catalog = await bitcoinAddressBalancesClient.getActiveCatalog().catch(() => null)
+    if (!effectiveWalletId || !effectiveAccountId) return
+    const selectedAsset = model?.assets.find(item => item.asset.id === requestedAssetId)
+    if (
+      !selectedAsset ||
+      model?.chains.find(item => item.chain.id === selectedAsset.asset.chainId)?.chain.family !==
+        'bitcoin'
+    )
+      return
+    let active = true
+    void bitcoinAddressBalancesClient
+      .getActiveCatalog()
+      .then(catalog => {
         if (
-          request === requestSequence.current &&
+          active &&
           catalog?.walletId === effectiveWalletId &&
           catalog.accountId === effectiveAccountId
         ) {
           setBitcoinCatalog(catalog)
         }
-      }
-      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
-      setStatus('ready')
-    } catch {
-      // Notifications are opportunistic cache reads. Initial load/retry owns
-      // connection errors; a transient notification must not replace its UI.
+      })
+      .catch(() => {})
+    return () => {
+      active = false
     }
-  }, [effectiveAccountId, effectiveWalletId, requestedAssetId])
-
-  usePortfolioUpdates(effectiveWalletId, effectiveAccountId, readLatest)
+  }, [effectiveWalletId, effectiveAccountId, requestedAssetId, model])
 
   useEffect(() => {
     let cancelled = false
@@ -272,9 +179,42 @@ export function AssetDetail() {
     }
   }, [requestedAssetId])
 
-  const visibleModel = isPortfolioModelForScope(model, effectiveWalletId, effectiveAccountId)
-    ? model
-    : null
+  const visibleModel = model
+  useEffect(() => {
+    if (!visibleModel || !requestedAssetId || !effectiveWalletId || !effectiveAccountId) return
+    if (visibleModel.assets.some(item => item.asset.id === requestedAssetId)) return
+    if (
+      storageV2Account?.walletId !== effectiveWalletId ||
+      storageV2Account.accountId !== effectiveAccountId
+    )
+      return
+    let chainId: string
+    try {
+      chainId = parseAssetId(requestedAssetId).chainId
+    } catch {
+      return
+    }
+    if (!storageV2Account.networks.some(network => network.chain.id === chainId)) return
+    const attemptKey = JSON.stringify([
+      currentNetwork,
+      effectiveWalletId,
+      effectiveAccountId,
+      chainEndpointRuntimeKey,
+      requestedAssetId
+    ])
+    if (missingAssetRefreshes.current.has(attemptKey)) return
+    missingAssetRefreshes.current.add(attemptKey)
+    void refresh(false, { additionalChainIds: [chainId] })
+  }, [
+    visibleModel,
+    requestedAssetId,
+    effectiveWalletId,
+    effectiveAccountId,
+    storageV2Account,
+    currentNetwork,
+    chainEndpointRuntimeKey,
+    refresh
+  ])
   const displayPrices = useMemo(
     () => withConfidentialAssetPrices(visibleModel, prices),
     [visibleModel, prices]
