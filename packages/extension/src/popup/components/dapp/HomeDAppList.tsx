@@ -96,6 +96,7 @@ export function HomeDAppList({
               <Icon icon="lucide:globe" width={24} height={24} className="text-muted" />
               <img
                 src={dapp.iconUrl}
+                crossOrigin="anonymous"
                 referrerPolicy="no-referrer"
                 alt=""
                 className="absolute inset-0 size-full rounded-[11px] object-cover"
