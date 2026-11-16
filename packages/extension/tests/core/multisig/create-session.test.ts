@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { readFile } from 'node:fs/promises'
 import { expect } from '@playwright/test'
 import {
   createInitialSession,
@@ -24,6 +25,7 @@ import type {
   MultisigThreshold,
   MultisigTransportKind
 } from '../../../src/core/multisig/types'
+import type { SealedVaultRecord } from '../../../src/core/multisig/vault-record'
 
 const GROUP_ID = 'group-1'
 const SESSION_ID = 'session-1'
@@ -115,6 +117,15 @@ const BUNDLE: Record<number, string> = { 1: 'QjE=', 2: 'QjI=' }
 const INBOX: Record<number, string> = { 1: 'STE=', 2: 'STI=' }
 const QSK: Record<number, string> = { 1: 'UTE=', 2: 'UTI=' }
 
+// A real sealed record, relabelled for this file's mainnet sessions and group; the reducer only
+// carries it, so the ciphertext not matching the new labels does not matter here.
+const FIXTURE_RECORD = (
+  JSON.parse(
+    await readFile(new URL('./fixtures/vault-record-v1.json', import.meta.url), 'utf8')
+  ) as { record: SealedVaultRecord }
+).record
+const RECORD: SealedVaultRecord = { ...FIXTURE_RECORD, groupId: GROUP_ID, network: 'mainnet' }
+
 function bySlot(slots: readonly (2 | 3)[], values: Record<number, string>): Record<string, string> {
   return Object.fromEntries(slots.map(slot => [String(slot - 1), values[slot - 1]]))
 }
@@ -128,7 +139,8 @@ function completeRound2(slots: readonly (2 | 3)[]): VaultDkgRound2Response {
     complete: true,
     fingerprint: FP,
     inboxes: bySlot(slots, INBOX),
-    sealedQsk: bySlot(slots, QSK)
+    sealedQsk: bySlot(slots, QSK),
+    record: RECORD
   }
 }
 
@@ -241,7 +253,7 @@ test.describe('multisig create-session', () => {
     expect(locked.state.phase).toBe('DKG_R1')
     expect(locked.state.dkgSessionId).toBeNull()
     expect(locked.effects).toEqual([
-      { type: 'dkgOpen', participants: 3, threshold: 2, mainnet: true }
+      { type: 'dkgOpen', participants: 3, threshold: 2, mainnet: true, groupId: GROUP_ID }
     ])
 
     const opened = run(locked.state, { type: 'DKG_OPENED', sessionId: SID })
@@ -338,11 +350,15 @@ test.describe('multisig create-session', () => {
       { type: 'awaitFrom', slot: 3, messageType: 'DKG_FINAL' }
     ])
 
-    const done = run(
+    const saving = run(
       r2.state,
       { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
       ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
     )
+    expect(saving.state.phase).toBe('KEYSET_VERIFIED')
+    expect(saving.effects).toEqual([{ type: 'saveVaultRecord', groupId: GROUP_ID, record: RECORD }])
+
+    const done = run(saving.state, { type: 'VAULT_RECORD_SAVED' })
     expect(done.state.phase).toBe('ACTIVATED')
     expect(done.effects).toEqual([
       { type: 'sendTo', slot: 2, messageType: 'DKG_ACTIVATE' },
@@ -367,7 +383,8 @@ test.describe('multisig create-session', () => {
       initial,
       ...bleCeremonyEvents('2-of-3', 'verified'),
       { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
-      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP }),
+      { type: 'VAULT_RECORD_SAVED' }
     )
     expect(whole.state.phase).toBe('ACTIVATED')
     const sends = whole.effects.filter(
@@ -471,9 +488,12 @@ test.describe('multisig create-session', () => {
       { slot: 3, device: PHONES[3], confirmed: false }
     ])
 
-    const allFinal = run(oneFinal.state, message(3, 'DKG_FINAL', { fingerprint: FP }))
+    const allFinal = run(oneFinal.state, message(3, 'DKG_FINAL', { fingerprint: FP }), {
+      type: 'VAULT_RECORD_SAVED'
+    })
     expect(allFinal.state.phase).toBe('ACTIVATED')
     expect(allFinal.effects.map(e => e.type)).toEqual([
+      'saveVaultRecord',
       'sendTo',
       'sendTo',
       'persistGroup',
@@ -483,8 +503,214 @@ test.describe('multisig create-session', () => {
     // Phones confirming first still wait for the owner.
     const phonesFirst = run(verified, ...each([2, 3], 'DKG_FINAL', { fingerprint: FP }))
     expect(phonesFirst.state.phase).toBe('KEYSET_VERIFIED')
-    const ownerLast = run(phonesFirst.state, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+    const ownerLast = run(
+      phonesFirst.state,
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      { type: 'VAULT_RECORD_SAVED' }
+    )
     expect(ownerLast.state.phase).toBe('ACTIVATED')
+  })
+
+  test('round 2 keeps the sealed record', () => {
+    const initial = start('2-of-3', 'ble')
+    expect(initial.vaultRecord).toBeNull()
+    expect(initial.savingRecord).toBe(false)
+
+    const verified = bleToKeysetVerified('2-of-3')
+    expect(verified.phase).toBe('KEYSET_VERIFIED')
+    expect(verified.vaultRecord).toEqual(RECORD)
+    expect(verified.savingRecord).toBe(false)
+  })
+
+  test('a round-2 result with no valid record, or one for another group or network, aborts', () => {
+    const events = bleCeremonyEvents('2-of-3', 'verified')
+    const beforeLast = run(start('2-of-3', 'ble'), ...events.slice(0, -1)).state
+    expect(beforeLast.phase).toBe('DKG_R2')
+    const records: unknown[] = [
+      undefined,
+      { ...RECORD, version: 2 },
+      { ...RECORD, groupId: 'other' },
+      { ...RECORD, network: 'testnet' }
+    ]
+    for (const record of records) {
+      const result = reduceCreateSession(beforeLast, {
+        type: 'DKG_ROUND2_ACCEPTED',
+        slot: 3,
+        result: { ...completeRound2([2, 3]), record } as VaultDkgRound2Response
+      })
+      expect(result.state.phase).toBe('ABORTED')
+      expect(result.state.abortReason).toBe('verification_failed')
+      expect(result.state.vaultRecord).toBeNull()
+      expect(result.effects).toEqual([...BLE_ABORT_NOTICES, { type: 'dkgClose', sessionId: SID }])
+    }
+
+    // A testnet session must get a testnet record, so a mainnet one is refused there too.
+    const testnet = run(
+      createInitialSession({
+        groupId: GROUP_ID,
+        sessionId: SESSION_ID,
+        threshold: '2-of-3',
+        transportKind: 'ble',
+        owner: OWNER,
+        mainnet: false
+      }),
+      ...events
+    ).state
+    expect(testnet.phase).toBe('ABORTED')
+    expect(testnet.abortReason).toBe('verification_failed')
+  })
+
+  test('Bluetooth saves before it activates', () => {
+    for (const threshold of ['2-of-2', '2-of-3', '3-of-3'] as const) {
+      const slots: readonly (2 | 3)[] = threshold === '2-of-2' ? [2] : [2, 3]
+      const whole = run(
+        start(threshold, 'ble'),
+        ...bleCeremonyEvents(threshold, 'verified'),
+        { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+        ...each(slots, 'DKG_FINAL', { fingerprint: FP })
+      )
+      expect(whole.state.phase).toBe('KEYSET_VERIFIED')
+      expect(whole.state.savingRecord).toBe(true)
+      expect(whole.effects.at(-1)).toEqual({
+        type: 'saveVaultRecord',
+        groupId: GROUP_ID,
+        record: RECORD
+      })
+
+      const last = reduceCreateSession(
+        run(
+          bleToKeysetVerified(threshold),
+          { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+          ...each(slots.slice(0, -1), 'DKG_FINAL', { fingerprint: FP })
+        ).state,
+        message(slots[slots.length - 1], 'DKG_FINAL', { fingerprint: FP })
+      )
+      expect(last.effects).toEqual([{ type: 'saveVaultRecord', groupId: GROUP_ID, record: RECORD }])
+
+      expect(whole.effects.some(effect => effect.type === 'persistGroup')).toBe(false)
+      expect(
+        whole.effects.some(
+          effect => effect.type === 'sendTo' && effect.messageType === 'DKG_ACTIVATE'
+        )
+      ).toBe(false)
+    }
+  })
+
+  test('VAULT_RECORD_SAVED activates with the usual effects', () => {
+    const saving = run(
+      bleToKeysetVerified('2-of-3'),
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
+    ).state
+    const saved = reduceCreateSession(saving, { type: 'VAULT_RECORD_SAVED' })
+    expect(saved.state.phase).toBe('ACTIVATED')
+    expect(saved.state.savingRecord).toBe(false)
+    expect(saved.effects).toEqual([
+      { type: 'sendTo', slot: 2, messageType: 'DKG_ACTIVATE' },
+      { type: 'sendTo', slot: 3, messageType: 'DKG_ACTIVATE' },
+      {
+        type: 'persistGroup',
+        record: {
+          groupId: GROUP_ID,
+          threshold: '2-of-3',
+          transportKind: 'ble',
+          devices: [OWNER, PHONES[2], PHONES[3]],
+          fingerprint: FP,
+          createdAt: 0,
+          mock: true
+        }
+      },
+      { type: 'dkgClose', sessionId: SID }
+    ])
+  })
+
+  test('VAULT_RECORD_SAVE_FAILED aborts with save_failed and tells the phones', () => {
+    const saving = run(
+      bleToKeysetVerified('2-of-3'),
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
+    ).state
+    const failed = reduceCreateSession(saving, { type: 'VAULT_RECORD_SAVE_FAILED' })
+    expect(failed.state.phase).toBe('ABORTED')
+    expect(failed.state.abortReason).toBe('save_failed')
+    expect(failed.state.savingRecord).toBe(false)
+    expect(failed.effects).toEqual([...BLE_ABORT_NOTICES, { type: 'dkgClose', sessionId: SID }])
+    expect(failed.effects.some(effect => effect.type === 'persistGroup')).toBe(false)
+    expectGuardiansEmpty(failed.state)
+  })
+
+  test('a save report outside saving is ignored', () => {
+    const verified = bleToKeysetVerified('2-of-3')
+    const ownerOnly = run(verified, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' }).state
+    const phonesOnly = run(verified, ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })).state
+    const activated = run(
+      verified,
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP }),
+      { type: 'VAULT_RECORD_SAVED' }
+    ).state
+    expect(activated.phase).toBe('ACTIVATED')
+    const aborted = run(verified, { type: 'USER_ABORT' }).state
+    for (const state of [verified, ownerOnly, phonesOnly, activated, aborted]) {
+      for (const type of ['VAULT_RECORD_SAVED', 'VAULT_RECORD_SAVE_FAILED'] as const) {
+        const result = reduceCreateSession(state, { type })
+        expect(result.state).toBe(state)
+        expect(result.effects).toEqual([])
+      }
+    }
+  })
+
+  test('a repeated DKG_FINAL while saving starts no second save', () => {
+    const saving = run(
+      bleToKeysetVerified('2-of-3'),
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
+    ).state
+    expect(saving.savingRecord).toBe(true)
+    const again = run(
+      saving,
+      message(2, 'DKG_FINAL', { fingerprint: FP }),
+      message(3, 'DKG_FINAL', { fingerprint: FP }),
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' }
+    )
+    expect(again.effects).toEqual([])
+    expect(again.state.phase).toBe('KEYSET_VERIFIED')
+    expect(again.state.savingRecord).toBe(true)
+  })
+
+  test('USER_ABORT while saving aborts', () => {
+    const saving = run(
+      bleToKeysetVerified('2-of-3'),
+      { type: 'FINGERPRINT_CONFIRMED', stage: 'final' },
+      ...each([2, 3], 'DKG_FINAL', { fingerprint: FP })
+    ).state
+    const aborted = reduceCreateSession(saving, { type: 'USER_ABORT' })
+    expect(aborted.state.phase).toBe('ABORTED')
+    expect(aborted.state.abortReason).toBe('user_cancelled')
+    expect(aborted.effects).toEqual([...BLE_ABORT_NOTICES, { type: 'dkgClose', sessionId: SID }])
+    expect(aborted.state.savingRecord).toBe(false)
+
+    // The save answer that arrives afterwards changes nothing.
+    const late = reduceCreateSession(aborted.state, { type: 'VAULT_RECORD_SAVED' })
+    expect(late.state).toBe(aborted.state)
+    expect(late.effects).toEqual([])
+  })
+
+  test('QR activates without a save', () => {
+    const verified = run(
+      start('2-of-2', 'qr'),
+      ...qrPair(2),
+      { type: 'CONTINUE' },
+      { type: 'QR_PHONE_SCANNED', slot: 2 },
+      message(2, 'DKG_FINAL')
+    ).state
+    expect(verified.phase).toBe('KEYSET_VERIFIED')
+    const activated = run(verified, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+    expect(activated.state.phase).toBe('ACTIVATED')
+    expect(activated.state.savingRecord).toBe(false)
+    expect(activated.state.vaultRecord).toBeNull()
+    expect(activated.effects.map(effect => effect.type)).toEqual(['persistGroup'])
+    expect(activated.effects.some(effect => effect.type === 'saveVaultRecord')).toBe(false)
   })
 
   test('disconnect during ceremony aborts and clears every guardian', () => {

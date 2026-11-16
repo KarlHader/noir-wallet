@@ -14,6 +14,7 @@ import type {
 import { deriveMockFingerprint } from './fingerprint'
 import { deviceId, type MultisigEnvelope, type MultisigMessageType } from './messages'
 import { buildQrCeremonySteps, type QrStep } from './qr-plan'
+import { parseSealedVaultRecord, type SealedVaultRecord } from './vault-record'
 import {
   PAIRING_CODE_MAX_ATTEMPTS,
   thresholdDeviceCount,
@@ -63,6 +64,10 @@ export interface CreateSessionState {
   mainnet: boolean
   /** Bluetooth only: the Worker's DKG session (base64), from DKG_OPENED until the end. */
   dkgSessionId: string | null
+  /** Bluetooth only: the extension's sealed share from round 2; ciphertext, never the share. */
+  vaultRecord: SealedVaultRecord | null
+  /** Bluetooth only: the record is on its way to storage and activation waits for the answer. */
+  savingRecord: boolean
 }
 
 export type CreateSessionEvent =
@@ -87,6 +92,8 @@ export type CreateSessionEvent =
   | { type: 'DKG_ROUND1_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound1Response }
   | { type: 'DKG_ROUND2_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound2Response }
   | { type: 'DKG_FAILED' }
+  | { type: 'VAULT_RECORD_SAVED' }
+  | { type: 'VAULT_RECORD_SAVE_FAILED' }
 
 export type CreateSessionEffect =
   | { type: 'requestDevice'; slot: DeviceSlot }
@@ -102,10 +109,11 @@ export type CreateSessionEffect =
   | { type: 'awaitScan'; slot: DeviceSlot; messageType: MultisigMessageType }
   | { type: 'disconnect'; slot: DeviceSlot }
   | { type: 'persistGroup'; record: MultisigGroupRecord }
-  | { type: 'dkgOpen'; participants: 2 | 3; threshold: 2 | 3; mainnet: boolean }
+  | { type: 'dkgOpen'; participants: 2 | 3; threshold: 2 | 3; mainnet: boolean; groupId: string }
   | { type: 'dkgAcceptRound1'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
   | { type: 'dkgAcceptRound2'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
   | { type: 'dkgClose'; sessionId: string }
+  | { type: 'saveVaultRecord'; groupId: string; record: SealedVaultRecord }
 
 export interface CreateSessionInput {
   groupId: string
@@ -166,7 +174,9 @@ export function createInitialSession(input: CreateSessionInput): CreateSessionSt
     qrCeremonyIndex: -1,
     qrShownTo: [],
     mainnet: input.mainnet,
-    dkgSessionId: null
+    dkgSessionId: null,
+    vaultRecord: null,
+    savingRecord: false
   }
 }
 
@@ -272,7 +282,11 @@ function abort(state: CreateSessionState, reason: AbortReason): ReduceResult {
   if (state.dkgSessionId !== null) {
     effects.push({ type: 'dkgClose', sessionId: state.dkgSessionId })
   }
-  return result({ ...state, phase: 'ABORTED', abortReason: reason, devices }, effects)
+  // An aborted session has no save in flight any more; a late save answer is ignored anyway.
+  return result(
+    { ...state, phase: 'ABORTED', abortReason: reason, devices, savingRecord: false },
+    effects
+  )
 }
 
 function parsePayload(envelope: MultisigEnvelope): Record<string, unknown> | null {
@@ -327,7 +341,9 @@ function activate(state: CreateSessionState): ReduceResult {
     state.transportKind === 'ble'
       ? guardianSlots(state).map(slot => ({ type: 'sendTo', slot, messageType: 'DKG_ACTIVATE' }))
       : []
-  // This round keeps no share: the Worker's session is dropped once the group record is out.
+  // A Worker session exists only on the Bluetooth path, which activates once Background has
+  // confirmed the sealed record is stored: the share now lives in that record, so the session
+  // holds nothing that is still needed.
   const release: CreateSessionEffect[] =
     state.dkgSessionId !== null ? [{ type: 'dkgClose', sessionId: state.dkgSessionId }] : []
   return result({ ...state, phase: 'ACTIVATED' }, [...announce, persist, ...release])
@@ -350,6 +366,13 @@ export function reduceCreateSession(
       return abort(state, 'verification_failed')
     case 'FINGERPRINT_REJECTED':
       return abort(state, 'fingerprint_mismatch')
+    case 'VAULT_RECORD_SAVED':
+      // Only a save this session asked for can activate it; anything else is a stale answer.
+      if (state.phase !== 'KEYSET_VERIFIED' || !state.savingRecord) return ignored(state)
+      return activate({ ...state, savingRecord: false })
+    case 'VAULT_RECORD_SAVE_FAILED':
+      // A share that is not on disk cannot back a group, so the ceremony is void.
+      return state.savingRecord ? abort(state, 'save_failed') : ignored(state)
     case 'MESSAGE_RECEIVED': {
       const sender = messageSender(state, event)
       if (!sender) return ignored(state)
@@ -423,7 +446,7 @@ function lockRoster(state: CreateSessionState): ReduceResult {
   if (state.transportKind === 'ble') {
     const shape = dkgShape(state.threshold)
     return result({ ...state, phase: 'DKG_R1' }, [
-      { type: 'dkgOpen', ...shape, mainnet: state.mainnet }
+      { type: 'dkgOpen', ...shape, mainnet: state.mainnet, groupId: state.groupId }
     ])
   }
 
@@ -718,10 +741,23 @@ function round2Accepted(
   const inboxes = perGuardian(next, outcome.inboxes)
   const sealedQsk = perGuardian(next, outcome.sealedQsk)
   if (!inboxes || !sealedQsk) return abort(next, 'verification_failed')
+  // The record crossed chrome.runtime, so it is checked again; one sealed for another group or
+  // network would later be stored under the wrong account.
+  const vaultRecord = parseSealedVaultRecord(outcome.record)
+  const network = state.mainnet ? 'mainnet' : 'testnet'
+  if (!vaultRecord || vaultRecord.groupId !== state.groupId || vaultRecord.network !== network) {
+    return abort(next, 'verification_failed')
+  }
   // FINALIZED and KEYSET_SETUP have no screen of their own this round, so the session goes
   // straight to the final fingerprint check once the phones have what they need to reach it.
   const slots = guardianSlots(next)
-  return result({ ...next, phase: 'KEYSET_VERIFIED', finalFingerprint: outcome.fingerprint }, [
+  const verified: CreateSessionState = {
+    ...next,
+    phase: 'KEYSET_VERIFIED',
+    finalFingerprint: outcome.fingerprint,
+    vaultRecord
+  }
+  return result(verified, [
     ...slots.flatMap((target): CreateSessionEffect[] => [
       {
         type: 'sendTo',
@@ -793,9 +829,17 @@ function receiveBleMessage(state: CreateSessionState, event: MessageReceivedEven
   return ignored(state)
 }
 
+// Bluetooth activates only once the extension's share is stored: a group the phones activate
+// while this side has nothing on disk could never sign. The phase stays KEYSET_VERIFIED, so the
+// page does not move, until VAULT_RECORD_SAVED or VAULT_RECORD_SAVE_FAILED arrives.
 function activateWhenAllConfirmed(state: CreateSessionState): ReduceResult {
   const ready = state.ownerConfirmed.final && everyGuardian(state, device => device.finalReceived)
-  return ready ? activate(state) : result(state)
+  if (!ready) return result(state)
+  if (state.savingRecord) return result(state)
+  if (state.vaultRecord === null) return abort(state, 'verification_failed')
+  return result({ ...state, savingRecord: true }, [
+    { type: 'saveVaultRecord', groupId: state.groupId, record: state.vaultRecord }
+  ])
 }
 
 // QR: walks the step plan from qr-plan.ts. Phases move as data arrives rather than by step

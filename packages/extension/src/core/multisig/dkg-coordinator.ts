@@ -5,12 +5,27 @@
  * transport or `chrome.*`.
  *
  * Key material (round secrets, the static secret, the qsk) stays inside this object and is wiped
- * on close; nothing the methods return can reconstruct a share.
+ * on close. Of everything the methods return, only the sealed vault record contains the share,
+ * and only encrypted.
  */
-import { bytesToHex } from '@/lib/bytes'
+import { bytesToBase64, bytesToHex } from '@/lib/bytes'
 import { SecretBin, round1Hash, type DkgShape, type VaultWasm } from './dkg-protocol'
+import { deviceId } from './messages'
+import {
+  openVaultRecord,
+  sealVaultRecord,
+  type SealedVaultRecord,
+  type VaultRecordHeader
+} from './vault-record'
 
-export type DkgCoordinatorConfig = DkgShape & { mainnet: boolean }
+/** The wallet's mnemonic, which seals the record; throws when the wallet is not unlocked. */
+export type MnemonicResolver = (walletId: string) => string
+
+export type DkgCoordinatorConfig = DkgShape & {
+  mainnet: boolean
+  walletId: string
+  groupId: string
+}
 
 export type Round1Outcome = { round1Hash: string; bundles: ReadonlyMap<number, Uint8Array> }
 
@@ -18,6 +33,7 @@ export type Round2Outcome = {
   fingerprint: string
   inboxes: ReadonlyMap<number, Uint8Array>
   sealedQsk: ReadonlyMap<number, Uint8Array>
+  record: SealedVaultRecord
 }
 
 export type AcceptOutcome<T> = { complete: false } | ({ complete: true } & T)
@@ -29,6 +45,28 @@ type DkgRelay = InstanceType<VaultWasm['DkgRelay']>
 type MessageSet = InstanceType<VaultWasm['MessageSet']>
 
 const CLOSED = 'DKG session is closed'
+
+/** What the synchronous WASM part of round 2 hands to the asynchronous sealing part. */
+type Prepared = {
+  outcome: Omit<Round2Outcome, 'record'>
+  header: VaultRecordHeader
+  share: Uint8Array
+  keyPackage: Uint8Array
+}
+
+const encoder = new TextEncoder()
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, index) => byte === b[index])
+}
+
+function sameHeader(a: VaultRecordHeader, b: VaultRecordHeader): boolean {
+  const keys = Object.keys(a) as (keyof VaultRecordHeader)[]
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every(key => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key])
+  )
+}
 
 interface OpenedState {
   relay: DkgRelay
@@ -50,6 +88,7 @@ export class DkgCoordinatorSession {
   private constructor(
     private readonly wasm: VaultWasm,
     private readonly config: DkgCoordinatorConfig,
+    private readonly resolveMnemonic: MnemonicResolver,
     private readonly bin: SecretBin,
     sessionId: Uint8Array,
     state: OpenedState
@@ -61,6 +100,7 @@ export class DkgCoordinatorSession {
   static open(
     wasm: VaultWasm,
     config: DkgCoordinatorConfig,
+    resolveMnemonic: MnemonicResolver,
     bin: SecretBin = new SecretBin()
   ): DkgCoordinatorSession {
     const sessionId = wasm.EnvelopeCodec.new_session_id()
@@ -73,7 +113,7 @@ export class DkgCoordinatorSession {
     for (let slot = 0; slot < config.participants; slot += 1) {
       inboxes.set(slot, new wasm.MessageSet())
     }
-    return new DkgCoordinatorSession(wasm, config, bin, sessionId, {
+    return new DkgCoordinatorSession(wasm, config, resolveMnemonic, bin, sessionId, {
       relay,
       dkg,
       dkg1,
@@ -125,7 +165,7 @@ export class DkgCoordinatorSession {
       this.accepted2.add(sender)
       this.sortIntoInboxes(state, sender, batchBytes)
       if (this.accepted2.size < this.peerCount) return { complete: false }
-      return { complete: true, ...this.finish(state) }
+      return { complete: true, ...(await this.finish(state)) }
     } catch (error) {
       this.close()
       throw error
@@ -194,9 +234,42 @@ export class DkgCoordinatorSession {
     }
   }
 
-  /** Spec §5.2: own round 2 and 3, a fresh qsk, then one inbox and one sealed qsk per phone. */
-  private finish(state: OpenedState): Round2Outcome {
-    const { wasm, bin } = this
+  /**
+   * Spec §5.2: own round 2 and 3, a fresh qsk, then one inbox and one sealed qsk per phone; and
+   * the extension's own share, sealed into a vault record under the wallet's mnemonic.
+   */
+  private async finish(state: OpenedState): Promise<Round2Outcome> {
+    const { outcome, header, share, keyPackage } = this.derive(state)
+    try {
+      const mnemonic = this.resolveMnemonic(this.config.walletId)
+      const record = await sealVaultRecord(header, share, mnemonic)
+      if (this.closed) throw new Error(CLOSED)
+      // Read back before handing the record out: one that cannot be opened would lose the share.
+      const opened = await openVaultRecord(record, mnemonic)
+      try {
+        if (this.closed) throw new Error(CLOSED)
+        if (!sameHeader(opened.header, header) || !sameBytes(opened.share, share)) {
+          throw new Error('sealed vault record does not read back')
+        }
+      } finally {
+        opened.share.fill(0)
+      }
+      return { ...outcome, record }
+    } catch (error) {
+      // A close() during an await wiped the share mid-flight; whatever failed, that is the cause.
+      throw this.closed ? new Error(CLOSED) : error
+    } finally {
+      share.fill(0)
+      keyPackage.fill(0)
+    }
+  }
+
+  /**
+   * Every WASM call of round 2, done before the first await: a close() during the sealing awaits
+   * frees the state's WASM objects, so nothing after this may touch them.
+   */
+  private derive(state: OpenedState): Prepared {
+    const { wasm, bin, config } = this
     const temporaries: { free(): void }[] = []
     try {
       const dkg2 = state.dkg.part2(state.round1Secret, state.broadcasts)
@@ -221,6 +294,8 @@ export class DkgCoordinatorSession {
       const prologue = wasm.Sealed.prologue(statics)
       const qsk = bin.keep(wasm.Keyset.generate_qsk())
       const groupKey = dkg3.group_verifying_key()
+      const keyPackage = bin.keep(dkg3.key_package())
+      const publicKeyPackage = dkg3.public_key_package()
 
       const inboxes = new Map<number, Uint8Array>()
       const sealedQsk = new Map<number, Uint8Array>()
@@ -232,10 +307,52 @@ export class DkgCoordinatorSession {
         sealedQsk.set(slot, wasm.Sealed.seal(staticSecret, peerKey, prologue, qsk))
       }
 
-      const keyset: unknown[] = wasm.Keyset.derive(groupKey, qsk, this.config.mainnet, 0)
-      const fingerprint = keyset[4]
-      if (!(fingerprint instanceof Uint8Array)) throw new Error('unexpected keyset output')
-      return { fingerprint: bytesToHex(fingerprint), inboxes, sealedQsk }
+      const keyset: unknown[] = wasm.Keyset.derive(groupKey, qsk, config.mainnet, 0)
+      const [fvk, ufvk, address, , fingerprint] = keyset
+      if (
+        !(fvk instanceof Uint8Array) ||
+        typeof ufvk !== 'string' ||
+        typeof address !== 'string' ||
+        !(fingerprint instanceof Uint8Array)
+      ) {
+        throw new Error('unexpected keyset output')
+      }
+      if (!wasm.Keyset.address_is_shielded_only(address)) {
+        throw new Error('derived address is not shielded-only')
+      }
+
+      // Roster slot 0 is the extension's own; the device id is a placeholder until devices have
+      // real identities, and only labels the backup.
+      const backup = new wasm.ShareBackup(
+        keyPackage,
+        0,
+        encoder.encode(deviceId(1)),
+        encoder.encode(config.groupId),
+        groupKey
+      )
+      temporaries.push(backup)
+      const share = bin.keep(backup.to_bytes())
+
+      const header: VaultRecordHeader = {
+        version: 1,
+        groupId: config.groupId,
+        network: config.mainnet ? 'mainnet' : 'testnet',
+        participants: config.participants,
+        threshold: config.threshold,
+        rosterSlot: 0,
+        groupVerifyingKey: bytesToHex(groupKey),
+        publicKeyPackage: bytesToBase64(publicKeyPackage),
+        fvk: bytesToBase64(fvk),
+        ufvk,
+        address,
+        fingerprint: bytesToHex(fingerprint)
+      }
+      return {
+        outcome: { fingerprint: header.fingerprint, inboxes, sealedQsk },
+        header,
+        share,
+        keyPackage
+      }
     } finally {
       for (const temporary of temporaries) temporary.free()
     }

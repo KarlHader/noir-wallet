@@ -82,10 +82,14 @@ export function VerifyPage() {
       footer={
         <div className="space-y-2">
           <FlowButton
-            isLoading={waitingForDevices}
+            isLoading={waitingForDevices || session.savingRecord}
             onClick={() => dispatch({ type: 'FINGERPRINT_CONFIRMED', stage })}
           >
-            {waitingForDevices ? 'Waiting for devices…' : 'Matches'}
+            {session.savingRecord
+              ? 'Saving…'
+              : waitingForDevices
+                ? 'Waiting for devices…'
+                : 'Matches'}
           </FlowButton>
           {/* Once the owner has said Matches, rejecting is no longer the owner's call here. */}
           {!session.ownerConfirmed[stage] && (

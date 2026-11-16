@@ -25,6 +25,7 @@ import type {
 } from './types'
 import type { Network } from '@/types'
 import type { VaultDkgMethod } from '@/core/multisig/dkg-rpc'
+import type { VaultGroupMethod } from '@/core/multisig/vault-group-rpc'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { DedupPromise, ReadyFlag, TimeoutError } from '@/lib/async-utils'
 import { WALLET_CONFIG } from '@/config/wallet'
@@ -158,6 +159,10 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'vault.dkg.acceptRound1': LIGHT,
   'vault.dkg.acceptRound2': LIGHT,
   'vault.dkg.close': LIGHT,
+  'vault.record.summary': LIGHT,
+  'vault.group.open': LIGHT,
+  'vault.group.save': LIGHT,
+  'vault.group.summary': LIGHT,
   default: MEDIUM
 }
 
@@ -401,6 +406,13 @@ export function forwardKeyringRpcToOffscreen<T>(
  * and must never trigger wallet initialisation or reconciliation.
  */
 export function requestVaultDkg<M extends VaultDkgMethod>(
+  method: M,
+  payload: RPCSchema[M]['request']
+): Promise<RPCSchema[M]['response']> {
+  return forwardToOffscreen(method, payload)
+}
+
+export function requestVaultGroup<M extends VaultGroupMethod>(
   method: M,
   payload: RPCSchema[M]['request']
 ): Promise<RPCSchema[M]['response']> {

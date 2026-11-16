@@ -7,13 +7,15 @@ import {
   useCreateSessionStore
 } from '../../../src/popup/multisig/create-session-store'
 import type { DkgPort } from '../../../src/core/multisig/dkg-port'
+import type { VaultGroupOpenRequest } from '../../../src/core/multisig/vault-group-rpc'
 import type { VaultWasm } from '../../../src/core/multisig/dkg-protocol'
 import {
   createVaultDkgRpcHandler,
   type VaultDkgRpcHandler
 } from '../../../src/core/multisig/dkg-rpc'
 import type { MultisigThreshold } from '../../../src/core/multisig/types'
-import { createInProcessDkgPort, loadVaultWasm } from './helpers/vault-wasm'
+import { installLockEnv } from './helpers/storage-env'
+import { TEST_MNEMONIC, createInProcessDkgPort, loadVaultWasm } from './helpers/vault-wasm'
 import { useMultisigGroupStore } from '../../../src/popup/multisig/group-store'
 import {
   DEFAULT_MOCK_SETTINGS,
@@ -25,7 +27,14 @@ import { MockPhone } from '../../../src/popup/multisig/mock/mock-phone'
 import { createEnvelopeFactory, deviceId } from '../../../src/core/multisig/messages'
 import type { DeviceSlot, SessionPhase } from '../../../src/core/multisig/types'
 import { encodeCborByteString, encodeEnvelopeUR } from '../../../src/lib/multisig-ur'
-import { readMultisigGroup, type MultisigGroupScope } from '../../../src/lib/multisig-group-storage'
+import {
+  MULTISIG_GROUPS_STORAGE_KEY,
+  multisigGroupScopeKey,
+  readMultisigGroup,
+  type MultisigGroupScope
+} from '../../../src/lib/multisig-group-storage'
+import { openVaultRecord, type SealedVaultRecord } from '../../../src/core/multisig/vault-record'
+import type { VaultGroupSaveRequest } from '../../../src/core/multisig/vault-group-rpc'
 import { useToastStore } from '../../../src/store/toast-store'
 
 const SCOPE: MultisigGroupScope = { network: 'mainnet', walletId: 'wallet-1', accountId: 'acc-1' }
@@ -57,6 +66,9 @@ host.chrome = {
   }
 }
 
+// The store writes through the multisig storage lock, which Node's `navigator` lacks.
+const restoreLocks = installLockEnv()
+
 const cryptoHost = globalThis.crypto as { randomUUID?: () => string }
 if (typeof cryptoHost.randomUUID !== 'function') {
   let counter = 0
@@ -73,11 +85,13 @@ let wasm: VaultWasm
 let handler: VaultDkgRpcHandler
 let basePort: DkgPort
 let restoreDependencies = () => {}
+// The sealed records the in-process port's save has stored, by account scope key.
+const saved = new Map<string, SealedVaultRecord>()
 
 before(async () => {
   wasm = await loadVaultWasm()
-  handler = createVaultDkgRpcHandler(wasm)
-  basePort = createInProcessDkgPort(handler)
+  handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+  basePort = createInProcessDkgPort(handler, saved)
   restoreDependencies = setCreateSessionDependencies({
     dkgPort: basePort,
     loadPhoneVault: async () => wasm
@@ -86,6 +100,7 @@ before(async () => {
 
 after(() => {
   restoreDependencies()
+  restoreLocks()
   if (originalChrome === undefined) delete host.chrome
   else host.chrome = originalChrome
 })
@@ -139,6 +154,7 @@ function phase(): SessionPhase | undefined {
 // step timer is left to keep the test process alive.
 async function withFreshStore(run: () => Promise<void> | void): Promise<void> {
   storageArea.clear()
+  saved.clear()
   store.getState().reset()
   try {
     await run()
@@ -204,44 +220,157 @@ async function withBrowserChooser(
 
 test.describe('multisig create-session store', () => {
   test('Bluetooth 2-of-3 pairs, runs the ceremony, activates and persists the group', async () => {
-    await withFreshStore(async () => {
-      store.getState().start(SCOPE, '2-of-3', 'ble', OWNER_NAME)
-      const started = store.getState().session
-      expect(started?.phase).toBe('PAIRING')
-      expect(started?.devices[0].device).toEqual({
-        slot: 1,
-        role: 'owner',
-        name: OWNER_NAME,
-        model: 'MacBook',
-        platform: 'extension'
+    // What storage held when the record was saved: the group must not be stored before it.
+    const groupsAtSave: unknown[] = []
+    const restore = setCreateSessionDependencies({
+      dkgPort: {
+        ...basePort,
+        save: request => {
+          groupsAtSave.push(storageArea.get(MULTISIG_GROUPS_STORAGE_KEY))
+          return basePort.save(request)
+        }
+      }
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-3', 'ble', OWNER_NAME)
+        const started = store.getState().session
+        expect(started?.phase).toBe('PAIRING')
+        expect(started?.devices[0].device).toEqual({
+          slot: 1,
+          role: 'owner',
+          name: OWNER_NAME,
+          model: 'MacBook',
+          platform: 'extension'
+        })
+
+        await pairOverBluetooth(2)
+        await pairOverBluetooth(3)
+
+        store.getState().dispatch({ type: 'CONTINUE' })
+        await waitUntil(() => phase() === 'KEYSET_VERIFIED', 'KEYSET_VERIFIED')
+        expect(currentQrStep(store.getState())).toBeNull()
+        const finalFingerprint = store.getState().session?.finalFingerprint
+        expect(finalFingerprint).toMatch(/^[0-9a-f]{64}$/)
+
+        store.getState().dispatch({ type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+        await waitUntil(() => phase() === 'ACTIVATED', 'ACTIVATED')
+        expect(store.getState().pendingScan).toBeNull()
+        expect(store.getState().pendingDisplay).toBeNull()
+
+        const groupId = store.getState().session?.groupId
+        await waitUntil(async () => (await readMultisigGroup(SCOPE)) !== null, 'the stored group')
+        const stored = await readMultisigGroup(SCOPE)
+        expect(stored?.groupId).toBe(groupId)
+        expect(stored?.threshold).toBe('2-of-3')
+        expect(stored?.transportKind).toBe('ble')
+        expect(stored?.devices.map(device => device.slot)).toEqual([1, 2, 3])
+        expect(stored?.createdAt).toBeGreaterThan(0)
+        expect(stored?.fingerprint).toBe(finalFingerprint)
+        expect(useMultisigGroupStore.getState().getGroup(SCOPE)).toEqual(stored)
+        await waitUntil(() => handler.sessionCount === 0, 'the Worker session to close')
+
+        expect(groupsAtSave).toEqual([undefined])
+        const record = saved.get(multisigGroupScopeKey(SCOPE))
+        if (!record) throw new Error('expected a saved vault record')
+        expect(record.groupId).toBe(groupId)
+        expect(record.network).toBe('mainnet')
+        const opened = await openVaultRecord(record, TEST_MNEMONIC)
+        expect(opened.header.fingerprint).toBe(finalFingerprint)
       })
+    } finally {
+      restore()
+    }
+  })
 
-      await pairOverBluetooth(2)
-      await pairOverBluetooth(3)
+  test('a failed save aborts with save_failed and stores no group', async () => {
+    const restore = setCreateSessionDependencies({
+      dkgPort: {
+        ...basePort,
+        save: async () => {
+          throw new Error('storage full')
+        }
+      }
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        store.getState().dispatch({ type: 'CONTINUE' })
+        await waitUntil(() => phase() === 'KEYSET_VERIFIED', 'KEYSET_VERIFIED')
+        store.getState().dispatch({ type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+        await waitUntil(() => phase() === 'ABORTED', 'ABORTED')
+        expect(store.getState().session?.abortReason).toBe('save_failed')
+        await waitUntil(() => handler.sessionCount === 0, 'the Worker session to close')
+        expect(await readMultisigGroup(SCOPE)).toBeNull()
+        expect(storageArea.has(MULTISIG_GROUPS_STORAGE_KEY)).toBe(false)
+        expect(saved.size).toBe(0)
+      })
+    } finally {
+      restore()
+    }
+  })
 
+  test('a save answered after a reset does not activate the next session', async () => {
+    const held: { request: VaultGroupSaveRequest; resolve: () => void }[] = []
+    const restore = setCreateSessionDependencies({
+      dkgPort: {
+        ...basePort,
+        save: request =>
+          new Promise<void>(resolve => {
+            held.push({ request, resolve })
+          })
+      }
+    })
+    // Runs a 2-of-2 ceremony up to the point where its save is held.
+    async function startSaving(): Promise<void> {
+      const pending = held.length
       store.getState().dispatch({ type: 'CONTINUE' })
       await waitUntil(() => phase() === 'KEYSET_VERIFIED', 'KEYSET_VERIFIED')
-      expect(currentQrStep(store.getState())).toBeNull()
-      const finalFingerprint = store.getState().session?.finalFingerprint
-      expect(finalFingerprint).toMatch(/^[0-9a-f]{64}$/)
-
       store.getState().dispatch({ type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
-      await waitUntil(() => phase() === 'ACTIVATED', 'ACTIVATED')
-      expect(store.getState().pendingScan).toBeNull()
-      expect(store.getState().pendingDisplay).toBeNull()
+      await waitUntil(() => held.length === pending + 1, 'the save request')
+      expect(store.getState().session?.savingRecord).toBe(true)
+    }
+    // Gives a late answer every chance to arrive before checking that it was dropped.
+    async function settle(): Promise<void> {
+      for (let turn = 0; turn < 10; turn += 1) await new Promise(r => setTimeout(r, 0))
+    }
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        await startSaving()
+        expect(held[0].request.scope).toEqual(SCOPE)
+        expect(held[0].request.groupId).toBe(store.getState().session?.groupId)
+        store.getState().reset()
 
-      const groupId = store.getState().session?.groupId
-      await waitUntil(async () => (await readMultisigGroup(SCOPE)) !== null, 'the stored group')
-      const stored = await readMultisigGroup(SCOPE)
-      expect(stored?.groupId).toBe(groupId)
-      expect(stored?.threshold).toBe('2-of-3')
-      expect(stored?.transportKind).toBe('ble')
-      expect(stored?.devices.map(device => device.slot)).toEqual([1, 2, 3])
-      expect(stored?.createdAt).toBeGreaterThan(0)
-      expect(stored?.fingerprint).toBe(finalFingerprint)
-      expect(useMultisigGroupStore.getState().getGroup(SCOPE)).toEqual(stored)
-      await waitUntil(() => handler.sessionCount === 0, 'the Worker session to close')
-    })
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        const next = store.getState().session
+        held[0].resolve()
+        await settle()
+        expect(store.getState().session).toBe(next)
+        expect(phase()).toBe('PAIRING')
+
+        // The reducer alone would drop an answer that reaches a pairing session, so the next
+        // check lands one on a session that is itself waiting for its own save.
+        await startSaving()
+        store.getState().reset()
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        await startSaving()
+        held[1].resolve()
+        await settle()
+        expect(phase()).toBe('KEYSET_VERIFIED')
+        expect(store.getState().session?.savingRecord).toBe(true)
+
+        // Its own answer still activates it.
+        held[2].resolve()
+        await waitUntil(() => phase() === 'ACTIVATED', 'ACTIVATED')
+      })
+    } finally {
+      restore()
+    }
   })
 
   test('Bluetooth 2-of-2 and 3-of-3 activate, and two runs give different fingerprints', async () => {
@@ -258,7 +387,7 @@ test.describe('multisig create-session store', () => {
   })
 
   test('a testnet account completes the ceremony on testnet', async () => {
-    const opens: unknown[] = []
+    const opens: VaultGroupOpenRequest[] = []
     const restore = setCreateSessionDependencies({
       dkgPort: {
         ...basePort,
@@ -270,9 +399,45 @@ test.describe('multisig create-session store', () => {
     })
     try {
       await withFreshStore(async () => {
-        const fingerprint = await runBluetoothCeremony('2-of-2', { ...SCOPE, network: 'testnet' })
+        const testnet: MultisigGroupScope = { ...SCOPE, network: 'testnet' }
+        const fingerprint = await runBluetoothCeremony('2-of-2', testnet)
         expect(fingerprint).toMatch(/^[0-9a-f]{64}$/)
-        expect(opens).toEqual([{ participants: 2, threshold: 2, mainnet: false }])
+        expect(opens).toEqual([
+          {
+            participants: 2,
+            threshold: 2,
+            mainnet: false,
+            scope: testnet,
+            groupId: expect.any(String)
+          }
+        ])
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('the DKG opens for the session scope and group', async () => {
+    const opens: VaultGroupOpenRequest[] = []
+    const restore = setCreateSessionDependencies({
+      dkgPort: {
+        ...basePort,
+        open: request => {
+          opens.push(request)
+          return basePort.open(request)
+        }
+      }
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        store.getState().dispatch({ type: 'CONTINUE' })
+        await waitUntil(() => opens.length === 1, 'the DKG open request')
+        const [request] = opens
+        expect(request.scope).toEqual(SCOPE)
+        expect(request.groupId).toBe(store.getState().session?.groupId)
+        expect(request.groupId).toEqual(expect.any(String))
       })
     } finally {
       restore()
@@ -302,7 +467,7 @@ test.describe('multisig create-session store', () => {
 
   test('a lost Worker session aborts the ceremony', async () => {
     // The session was opened on one Worker; by round 1 a restarted Worker no longer knows it.
-    const restarted = createInProcessDkgPort(createVaultDkgRpcHandler(wasm))
+    const restarted = createInProcessDkgPort(createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC))
     const restore = setCreateSessionDependencies({
       dkgPort: { ...basePort, acceptRound1: request => restarted.acceptRound1(request) }
     })
@@ -351,7 +516,13 @@ test.describe('multisig create-session store', () => {
         store.getState().reset()
       })
       // The Worker answers only now, to a session nobody is waiting for.
-      const opened = await basePort.open({ participants: 2, threshold: 2, mainnet: true })
+      const opened = await basePort.open({
+        participants: 2,
+        threshold: 2,
+        mainnet: true,
+        scope: SCOPE,
+        groupId: 'orphan-group'
+      })
       expect(handler.sessionCount).toBe(1)
       resolveOpen(opened)
       await waitUntil(() => handler.sessionCount === 0, 'the orphan session to close')

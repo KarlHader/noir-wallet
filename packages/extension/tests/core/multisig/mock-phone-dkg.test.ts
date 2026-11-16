@@ -9,7 +9,7 @@ import {
 import { SecretBin, type VaultWasm } from '../../../src/core/multisig/dkg-protocol'
 import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
 import { MockPhoneDkg } from '../../../src/popup/multisig/mock/mock-phone-dkg'
-import { loadVaultWasm } from './helpers/vault-wasm'
+import { TEST_MNEMONIC, loadVaultWasm } from './helpers/vault-wasm'
 
 type Shape = { participants: 2 | 3; threshold: 2 | 3 }
 
@@ -36,7 +36,11 @@ function b64(map: ReadonlyMap<number, Uint8Array>, slot: number): string {
 }
 
 function openCeremony(shape: Shape, mainnet: boolean, bins: SecretBin[] = []) {
-  const session = DkgCoordinatorSession.open(wasm, { ...shape, mainnet })
+  const session = DkgCoordinatorSession.open(
+    wasm,
+    { ...shape, mainnet, walletId: 'wallet-1', groupId: 'group-1' },
+    () => TEST_MNEMONIC
+  )
   const dkgSessionId = bytesToBase64(session.sessionId)
   const phones: Phone[] = []
   for (let roster = 1; roster < shape.participants; roster += 1) {

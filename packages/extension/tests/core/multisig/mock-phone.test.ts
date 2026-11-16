@@ -11,7 +11,7 @@ import {
   type MockPhoneHooks,
   type MockPhoneSignal
 } from '../../../src/popup/multisig/mock/mock-phone'
-import { loadVaultWasm } from './helpers/vault-wasm'
+import { TEST_MNEMONIC, loadVaultWasm } from './helpers/vault-wasm'
 import {
   DEFAULT_MOCK_SETTINGS,
   MOCK_GUARDIANS,
@@ -192,7 +192,11 @@ test.describe('multisig mock phone', () => {
   })
 
   test('approve walks the ceremony with real wasm and replies with the fingerprint', async () => {
-    const session = DkgCoordinatorSession.open(wasm, { ...TWO_OF_TWO, mainnet: true })
+    const session = DkgCoordinatorSession.open(
+      wasm,
+      { ...TWO_OF_TWO, mainnet: true, walletId: 'wallet-1', groupId: 'group-1' },
+      () => TEST_MNEMONIC
+    )
     const phone = new MockPhone(2, SESSION, HOOKS, loadVault)
     const r2 = await driveToRound2(phone, session)
 
@@ -214,7 +218,11 @@ test.describe('multisig mock phone', () => {
   })
 
   test('DKG_R2_INBOX is processed without using the dev-panel response', async () => {
-    const session = DkgCoordinatorSession.open(wasm, { ...TWO_OF_TWO, mainnet: true })
+    const session = DkgCoordinatorSession.open(
+      wasm,
+      { ...TWO_OF_TWO, mainnet: true, walletId: 'wallet-1', groupId: 'group-1' },
+      () => TEST_MNEMONIC
+    )
     const phone = new MockPhone(2, SESSION, HOOKS, loadVault)
     const r2 = await driveToRound2(phone, session)
 

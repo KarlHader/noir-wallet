@@ -10,10 +10,16 @@ import type {
   VaultDkgRpcHandler,
   VaultDkgSchema
 } from '../../../../src/core/multisig/dkg-rpc'
+import type { SealedVaultRecord } from '../../../../src/core/multisig/vault-record'
+import { multisigGroupScopeKey } from '../../../../src/lib/multisig-group-storage'
 
 type WalletWasmModule = typeof import('../../../../src/lib/wasm-pkg/zcash_wallet_wasm')
 
 const packageDir = new URL('../../../../src/lib/wasm-pkg/', import.meta.url)
+
+/** The wallet mnemonic every in-process handler seals under; the Worker resolves it per wallet. */
+export const TEST_MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
 let loading: Promise<VaultWasm> | null = null
 
@@ -35,9 +41,15 @@ export function loadVaultWasm(): Promise<VaultWasm> {
 
 /**
  * A DkgPort that calls a Worker handler in this process. Every request and response is JSON
- * round-tripped, as it would be across chrome.runtime messaging.
+ * round-tripped, as it would be across chrome.runtime messaging. `open` does what Background does
+ * with the page's request: it names the scope's wallet and forwards the rest to the Worker.
+ * `save` stands in for Background's sealed-record storage: it keeps each record in `saved`,
+ * under the account's scope key.
  */
-export function createInProcessDkgPort(handler: VaultDkgRpcHandler): DkgPort {
+export function createInProcessDkgPort(
+  handler: VaultDkgRpcHandler,
+  saved = new Map<string, SealedVaultRecord>()
+): DkgPort {
   const roundTrip = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
   async function call<M extends VaultDkgMethod>(
     method: M,
@@ -46,11 +58,21 @@ export function createInProcessDkgPort(handler: VaultDkgRpcHandler): DkgPort {
     return roundTrip(await handler.handle(method, roundTrip(request)))
   }
   return {
-    open: request => call('vault.dkg.open', request),
+    open: request =>
+      call('vault.dkg.open', {
+        participants: request.participants,
+        threshold: request.threshold,
+        mainnet: request.mainnet,
+        ownerWalletId: request.scope.walletId,
+        groupId: request.groupId
+      }),
     acceptRound1: request => call('vault.dkg.acceptRound1', request),
     acceptRound2: request => call('vault.dkg.acceptRound2', request),
     close: async request => {
       await call('vault.dkg.close', request)
+    },
+    save: async request => {
+      saved.set(multisigGroupScopeKey(request.scope), roundTrip(request.record))
     }
   }
 }

@@ -544,7 +544,11 @@ export const keyset_derive: (
   f: number,
   g: number
 ) => void
+export const keyset_fingerprint_from_fvk: (a: number, b: number, c: number, d: number) => void
+export const keyset_fingerprint_from_ufvk: (a: number, b: number, c: number, d: number) => void
+export const keyset_fvk_from_ufvk: (a: number, b: number, c: number) => void
 export const keyset_generate_qsk: () => number
+export const keyset_ufvk_matches_ak: (a: number, b: number, c: number, d: number, e: number) => void
 export const messageset_from_bytes: (a: number, b: number, c: number) => void
 export const messageset_get: (a: number, b: number) => number
 export const messageset_is_empty: (a: number) => number
@@ -611,6 +615,21 @@ export const sharebackup_from_bytes: (
   d: number,
   e: number,
   f: number
+) => void
+export const sharebackup_from_scalar: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number,
+  i: number,
+  j: number,
+  k: number,
+  l: number,
+  m: number
 ) => void
 export const sharebackup_group_verifying_key: (a: number) => number
 export const sharebackup_key_package: (a: number, b: number) => void
@@ -697,11 +716,11 @@ export const rustsecp256k1_v0_14_default_error_callback_fn: (a: number, b: numbe
 export const rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
 export const rustsecp256k1_v0_14_context_create: (a: number) => number
 export const rustsecp256k1_v0_14_context_destroy: (a: number) => void
-export const __wasm_bindgen_func_elem_16645: (a: number, b: number, c: number, d: number) => void
 export const __wasm_bindgen_func_elem_16662: (a: number, b: number, c: number, d: number) => void
-export const __wasm_bindgen_func_elem_12542: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_16647: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_12465: (a: number, b: number) => void
+export const __wasm_bindgen_func_elem_16679: (a: number, b: number, c: number, d: number) => void
+export const __wasm_bindgen_func_elem_12559: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_16664: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_12482: (a: number, b: number) => void
 export const memory: WebAssembly.Memory
 export const __wbindgen_export: (a: number, b: number) => number
 export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

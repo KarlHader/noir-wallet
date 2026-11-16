@@ -28,7 +28,8 @@ import init, {
   MessageSet,
   EnvelopeCodec,
   Keyset,
-  Sealed
+  Sealed,
+  ShareBackup
 } from '../../lib/wasm-pkg/zcash_wallet_wasm'
 import { loadPinnedZcashWasmBinary } from '../zcash/pinned-wasm'
 import { createVaultDkgRpcHandler } from '../multisig/dkg-rpc'
@@ -571,15 +572,20 @@ const debugLogsEnabled = typeof __DEBUG_LOGS__ !== 'boolean' || __DEBUG_LOGS__
 let activeWalletId: string | undefined
 
 // The wasm-bindgen classes bind to the module lazily, so the handler can exist before init runs;
-// every message awaits initializeWasm() before reaching it.
-const vaultDkg = createVaultDkgRpcHandler({
-  Dkg,
-  DkgRelay,
-  MessageSet,
-  EnvelopeCodec,
-  Keyset,
-  Sealed
-})
+// every message awaits initializeWasm() before reaching it. The share is sealed under the bound
+// wallet's mnemonic, so a ceremony for a locked wallet fails at round 2.
+const vaultDkg = createVaultDkgRpcHandler(
+  {
+    Dkg,
+    DkgRelay,
+    MessageSet,
+    EnvelopeCodec,
+    Keyset,
+    Sealed,
+    ShareBackup
+  },
+  walletId => resolveWalletMnemonic(walletId)
+)
 
 function forwardLog(level: 'log' | 'warn' | 'error' | 'info', ...args: any[]) {
   if (!debugLogsEnabled) return
@@ -956,7 +962,8 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'vault.dkg.open':
       case 'vault.dkg.acceptRound1':
       case 'vault.dkg.acceptRound2':
-      case 'vault.dkg.close': {
+      case 'vault.dkg.close':
+      case 'vault.record.summary': {
         result = await vaultDkg.handle(method, payload)
         break
       }

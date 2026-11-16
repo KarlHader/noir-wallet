@@ -65,7 +65,7 @@ export function setCreateSessionDependencies(
 
 type DkgEffect = Extract<
   CreateSessionEffect,
-  { type: 'dkgOpen' | 'dkgAcceptRound1' | 'dkgAcceptRound2' | 'dkgClose' }
+  { type: 'dkgOpen' | 'dkgAcceptRound1' | 'dkgAcceptRound2' | 'dkgClose' | 'saveVaultRecord' }
 >
 
 function isDkgEffect(effect: CreateSessionEffect): effect is DkgEffect {
@@ -73,7 +73,8 @@ function isDkgEffect(effect: CreateSessionEffect): effect is DkgEffect {
     effect.type === 'dkgOpen' ||
     effect.type === 'dkgAcceptRound1' ||
     effect.type === 'dkgAcceptRound2' ||
-    effect.type === 'dkgClose'
+    effect.type === 'dkgClose' ||
+    effect.type === 'saveVaultRecord'
   )
 }
 
@@ -329,7 +330,8 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
   function runOnCurrentDriver(effects: readonly CreateSessionEffect[]): void {
     const discard: Dispatch = () => {}
     for (const effect of effects) {
-      if (effect.type === 'persistGroup') continue
+      // Both write for a session that is being thrown away.
+      if (effect.type === 'persistGroup' || effect.type === 'saveVaultRecord') continue
       if (isDkgEffect(effect)) runDkgEffect(effect, discard)
       else driver?.execute(effect, discard)
     }
@@ -342,12 +344,20 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     const port = dependencies.dkgPort
     const failed = () => report({ type: 'DKG_FAILED' })
     switch (effect.type) {
-      case 'dkgOpen':
+      case 'dkgOpen': {
+        // The share is sealed under the scope's wallet; without a scope there is no wallet to name.
+        const { scope } = get()
+        if (!scope) {
+          failed()
+          break
+        }
         port
           .open({
             participants: effect.participants,
             threshold: effect.threshold,
-            mainnet: effect.mainnet
+            mainnet: effect.mainnet,
+            scope,
+            groupId: effect.groupId
           })
           .then(({ sessionId }) => {
             report({ type: 'DKG_OPENED', sessionId })
@@ -358,6 +368,7 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
             }
           }, failed)
         break
+      }
       case 'dkgAcceptRound1':
         port
           .acceptRound1(effect.request)
@@ -377,6 +388,19 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
       case 'dkgClose':
         void port.close({ sessionId: effect.sessionId }).catch(() => {})
         break
+      case 'saveVaultRecord': {
+        const saveFailed = () => report({ type: 'VAULT_RECORD_SAVE_FAILED' })
+        // Background files the record under the scope's account; with no scope there is none.
+        const { scope } = get()
+        if (!scope) {
+          saveFailed()
+          break
+        }
+        port
+          .save({ scope, groupId: effect.groupId, record: effect.record })
+          .then(() => report({ type: 'VAULT_RECORD_SAVED' }), saveFailed)
+        break
+      }
     }
   }
 

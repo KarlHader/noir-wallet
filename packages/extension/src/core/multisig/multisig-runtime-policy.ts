@@ -14,3 +14,12 @@ export function isVaultRpcBlocked(
 ): boolean {
   return method.startsWith('vault.') && !multisigUiEnabled
 }
+
+/**
+ * Worker methods that take a wallet id. A page must not be able to name a wallet and get a share
+ * sealed or a record opened under it, so only Background (via `vault.group.open` and
+ * `vault.group.summary`) may send them.
+ */
+export function isBackgroundOnlyVaultRpc(method: string): boolean {
+  return method === 'vault.record.summary' || method === 'vault.dkg.open'
+}

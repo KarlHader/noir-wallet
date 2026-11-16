@@ -19,7 +19,8 @@ const DEFAULT_THRESHOLD: MultisigThreshold = '2-of-3'
 const FALLBACK_OWNER_NAME = 'Account'
 const ACCOUNT_ERRORS = {
   missing: 'Missing account.',
-  unsupported: 'This account type does not support multisig.'
+  unsupported: 'This account type does not support multisig.',
+  inactive: 'Switch to this wallet to set up multisig.'
 } as const
 
 type AccountCheck = 'ok' | keyof typeof ACCOUNT_ERRORS
@@ -54,6 +55,8 @@ export function ThresholdPage() {
     if (isZcashHardwareKeySource(wallet.keySource) || wallet.keySource === 'private-key') {
       return 'unsupported'
     }
+    // Background binds only the active wallet's credential, so the share could not be sealed.
+    if (state.currentWalletId !== walletId) return 'inactive'
     return 'ok'
   })
 
@@ -75,10 +78,16 @@ export function ThresholdPage() {
 
   const scope: MultisigGroupScope | null =
     walletId && accountId && accountCheck === 'ok' ? { network, walletId, accountId } : null
+  // Looking a group up needs no credential, so an account of a wallet that is not active still
+  // finds its existing group; only starting a new setup is limited to the active wallet.
+  const lookupScope: MultisigGroupScope | null =
+    walletId && accountId && (accountCheck === 'ok' || accountCheck === 'inactive')
+      ? { network, walletId, accountId }
+      : null
 
   // An account has at most one group, so one that already exists opens its team page instead of
   // a second setup.
-  const existingGroup = useMultisigGroup(scope)
+  const existingGroup = useMultisigGroup(lookupScope)
   const groupsLoaded = useMultisigGroupStore(state => state.loaded)
   const teamRoute =
     groupsLoaded && existingGroup && walletId && accountId

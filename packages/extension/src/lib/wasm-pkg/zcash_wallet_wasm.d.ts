@@ -511,6 +511,29 @@ export class Keyset {
     diversifier_index: number
   ): Array<any>
   /**
+   * The keyset fingerprint, recomputed from an FVK: `SHA-256(domain ‖ network_tag ‖ fvk)`.
+   *
+   * Recovery needs this: a device keeps the FVK but not the `qsk`, so [`Self::derive`] is not
+   * available to it, and the fingerprint is what the user compares against an independent device to
+   * detect a coordinator handing over a viewing key with a real `ak` and attacker-chosen
+   * `nk`/`rivk`.
+   *
+   * Do not reimplement this hash elsewhere: the domain tag and network tag are part of the preimage,
+   * and a one-byte difference makes two implementations disagree forever.
+   */
+  static fingerprint_from_fvk(fvk: Uint8Array, mainnet: boolean): Uint8Array
+  /**
+   * `fingerprint_from_fvk` for callers holding the encoded UFVK.
+   */
+  static fingerprint_from_ufvk(ufvk: string, mainnet: boolean): Uint8Array
+  /**
+   * The 96-byte FVK inside a UFVK string.
+   *
+   * A recovering device receives a viewing key but not the `qsk` behind it, so it cannot re-derive
+   * anything with [`Self::derive`]. This reads the key back out.
+   */
+  static fvk_from_ufvk(ufvk: string): Uint8Array
+  /**
    * A fresh `qsk`: the `nk`/`rivk` source, and the ZIP-2005 recovery candidate.
    *
    * Generate it **once**, on one device, then deliver it to every other device over a
@@ -522,6 +545,14 @@ export class Keyset {
    * `qsk` does not weaken the threshold, which is why backing it up is cheap insurance.
    */
   static generate_qsk(): Uint8Array
+  /**
+   * Whether a UFVK was derived from this group key.
+   *
+   * Run this before trusting a viewing key handed to you by a coordinator or a peer: `ak` is the
+   * first 32 bytes of the FVK, and a mismatch would restore the device into a different, empty
+   * wallet.
+   */
+  static ufvk_matches_ak(ufvk: string, group_verifying_key: Uint8Array): boolean
 }
 
 /**
@@ -779,6 +810,26 @@ export class ShareBackup {
     bytes: Uint8Array,
     group_verifying_key: Uint8Array,
     expected_slot: number
+  ): ShareBackup
+  /**
+   * Rebuild a share from a 32-byte signing scalar plus the group's public data.
+   *
+   * This is the 24-word path: a BIP39 mnemonic carries 256 bits, which fits the scalar and nothing
+   * else. The identifier and verifying share are derived from `slot` and the scalar, and `ak` /
+   * `min_signers` come from the group's public state, which is not secret.
+   *
+   * **Pass `publicKeyPackage` whenever you have it.** With it, the reconstructed share is checked
+   * against the group's record for this slot, so a wrong scalar fails here instead of producing
+   * signature shares that never aggregate.
+   */
+  static from_scalar(
+    signing_scalar: Uint8Array,
+    group_verifying_key: Uint8Array,
+    slot: number,
+    min_signers: number,
+    device_id: Uint8Array,
+    vault_id: Uint8Array,
+    public_key_package?: Uint8Array | null
   ): ShareBackup
   group_verifying_key(): Uint8Array
   /**
@@ -2224,7 +2275,11 @@ export interface InitOutput {
     f: number,
     g: number
   ) => void
+  readonly keyset_fingerprint_from_fvk: (a: number, b: number, c: number, d: number) => void
+  readonly keyset_fingerprint_from_ufvk: (a: number, b: number, c: number, d: number) => void
+  readonly keyset_fvk_from_ufvk: (a: number, b: number, c: number) => void
   readonly keyset_generate_qsk: () => number
+  readonly keyset_ufvk_matches_ak: (a: number, b: number, c: number, d: number, e: number) => void
   readonly messageset_from_bytes: (a: number, b: number, c: number) => void
   readonly messageset_get: (a: number, b: number) => number
   readonly messageset_is_empty: (a: number) => number
@@ -2291,6 +2346,21 @@ export interface InitOutput {
     d: number,
     e: number,
     f: number
+  ) => void
+  readonly sharebackup_from_scalar: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number,
+    h: number,
+    i: number,
+    j: number,
+    k: number,
+    l: number,
+    m: number
   ) => void
   readonly sharebackup_group_verifying_key: (a: number) => number
   readonly sharebackup_key_package: (a: number, b: number) => void
@@ -2377,11 +2447,11 @@ export interface InitOutput {
   readonly rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
   readonly rustsecp256k1_v0_14_context_create: (a: number) => number
   readonly rustsecp256k1_v0_14_context_destroy: (a: number) => void
-  readonly __wasm_bindgen_func_elem_16645: (a: number, b: number, c: number, d: number) => void
   readonly __wasm_bindgen_func_elem_16662: (a: number, b: number, c: number, d: number) => void
-  readonly __wasm_bindgen_func_elem_12542: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_16647: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_12465: (a: number, b: number) => void
+  readonly __wasm_bindgen_func_elem_16679: (a: number, b: number, c: number, d: number) => void
+  readonly __wasm_bindgen_func_elem_12559: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_16664: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_12482: (a: number, b: number) => void
   readonly memory: WebAssembly.Memory
   readonly __wbindgen_export: (a: number, b: number) => number
   readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

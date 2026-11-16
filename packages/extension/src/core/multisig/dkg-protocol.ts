@@ -10,7 +10,7 @@ import type { DeviceSlot, MultisigThreshold } from './types'
 
 export type VaultWasm = Pick<
   typeof ZcashWasm,
-  'Dkg' | 'DkgRelay' | 'MessageSet' | 'EnvelopeCodec' | 'Keyset' | 'Sealed'
+  'Dkg' | 'DkgRelay' | 'MessageSet' | 'EnvelopeCodec' | 'Keyset' | 'Sealed' | 'ShareBackup'
 >
 
 export type DkgShape = { participants: 2 | 3; threshold: 2 | 3 }

@@ -2,6 +2,15 @@ import type { MultisigDevice, MultisigGroupRecord } from '@/core/multisig/types'
 
 export const MULTISIG_GROUPS_STORAGE_KEY = 'multisig_groups_v1'
 export const MULTISIG_BANNER_STORAGE_KEY = 'multisig_banner_dismissed_v1'
+export const MULTISIG_VAULT_RECORDS_STORAGE_KEY = 'multisig_vault_records_v1'
+const MULTISIG_STORAGE_LOCK_NAME = 'noir-multisig-storage'
+
+// One lock for all three keys: every read-modify-write below, in any extension context, would
+// otherwise overwrite a concurrent writer's change to the same key.
+export async function withMultisigStorageLock<T>(operation: () => Promise<T>): Promise<T> {
+  if (!navigator.locks) throw new Error('Multisig storage coordination is unavailable')
+  return navigator.locks.request(MULTISIG_STORAGE_LOCK_NAME, operation)
+}
 
 export interface MultisigGroupScope {
   network: string
@@ -112,9 +121,11 @@ export async function writeMultisigGroup(
 ): Promise<void> {
   const sanitized = parseGroupRecord(record)
   if (!sanitized) throw new Error('Invalid multisig group record')
-  const groups = await readStoredGroups()
-  await chrome.storage.local.set({
-    [MULTISIG_GROUPS_STORAGE_KEY]: { ...groups, [multisigGroupScopeKey(scope)]: sanitized }
+  await withMultisigStorageLock(async () => {
+    const groups = await readStoredGroups()
+    await chrome.storage.local.set({
+      [MULTISIG_GROUPS_STORAGE_KEY]: { ...groups, [multisigGroupScopeKey(scope)]: sanitized }
+    })
   })
 }
 
@@ -123,12 +134,20 @@ export async function isMultisigBannerDismissed(scope: MultisigGroupScope): Prom
 }
 
 export async function dismissMultisigBanner(scope: MultisigGroupScope): Promise<void> {
-  const flags = await readStoredBannerFlags()
-  await chrome.storage.local.set({
-    [MULTISIG_BANNER_STORAGE_KEY]: { ...flags, [multisigGroupScopeKey(scope)]: true }
+  await withMultisigStorageLock(async () => {
+    const flags = await readStoredBannerFlags()
+    await chrome.storage.local.set({
+      [MULTISIG_BANNER_STORAGE_KEY]: { ...flags, [multisigGroupScopeKey(scope)]: true }
+    })
   })
 }
 
 export async function clearMultisigData(): Promise<void> {
-  await chrome.storage.local.remove([MULTISIG_GROUPS_STORAGE_KEY, MULTISIG_BANNER_STORAGE_KEY])
+  await withMultisigStorageLock(() =>
+    chrome.storage.local.remove([
+      MULTISIG_GROUPS_STORAGE_KEY,
+      MULTISIG_BANNER_STORAGE_KEY,
+      MULTISIG_VAULT_RECORDS_STORAGE_KEY
+    ])
+  )
 }

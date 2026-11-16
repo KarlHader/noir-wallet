@@ -1,12 +1,22 @@
 /**
  * The `vault.dkg.*` Worker RPC: one coordinator session per DKG session id, addressed by base64
- * id, with bytes crossing as base64 and roster-slot maps as plain objects. Requests are validated
- * here because they arrive from another extension context as JSON; the coordinator underneath only
- * ever sees well-typed values.
+ * id, with bytes crossing as base64 and roster-slot maps as plain objects. Alongside it,
+ * `vault.record.summary` is sessionless: it opens a stored record under the owner wallet's
+ * mnemonic and returns only its public summary. Requests are validated here because they arrive
+ * from another extension context as JSON; the coordinator underneath only ever sees well-typed
+ * values.
  */
-import { base64ToBytes, bytesToBase64 } from '@/lib/bytes'
-import { DkgCoordinatorSession } from './dkg-coordinator'
+import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@/lib/bytes'
+import { DkgCoordinatorSession, type MnemonicResolver } from './dkg-coordinator'
 import { isBase64Text, isDkgShape, type VaultWasm } from './dkg-protocol'
+import {
+  isVaultGroupId,
+  isVaultWalletId,
+  openVaultRecord,
+  parseSealedVaultRecord,
+  type SealedVaultRecord,
+  type VaultRecordSummary
+} from './vault-record'
 
 export type VaultDkgAcceptRequest = { sessionId: string; senderSlot: number; envelope: string }
 
@@ -21,16 +31,27 @@ export type VaultDkgRound2Response =
       fingerprint: string
       inboxes: Record<string, string>
       sealedQsk: Record<string, string>
+      record: SealedVaultRecord
     }
 
 export interface VaultDkgSchema {
   'vault.dkg.open': {
-    request: { participants: 2 | 3; threshold: 2 | 3; mainnet: boolean }
+    request: {
+      participants: 2 | 3
+      threshold: 2 | 3
+      mainnet: boolean
+      ownerWalletId: string
+      groupId: string
+    }
     response: { sessionId: string }
   }
   'vault.dkg.acceptRound1': { request: VaultDkgAcceptRequest; response: VaultDkgRound1Response }
   'vault.dkg.acceptRound2': { request: VaultDkgAcceptRequest; response: VaultDkgRound2Response }
   'vault.dkg.close': { request: { sessionId: string }; response: true }
+  'vault.record.summary': {
+    request: { record: SealedVaultRecord; ownerWalletId: string }
+    response: VaultRecordSummary
+  }
 }
 
 export type VaultDkgMethod = keyof VaultDkgSchema
@@ -39,7 +60,8 @@ const METHODS: readonly VaultDkgMethod[] = [
   'vault.dkg.open',
   'vault.dkg.acceptRound1',
   'vault.dkg.acceptRound2',
-  'vault.dkg.close'
+  'vault.dkg.close',
+  'vault.record.summary'
 ]
 
 export function isVaultDkgMethod(method: string): method is VaultDkgMethod {
@@ -72,6 +94,7 @@ function scheduleWithTimeout(fn: () => void, delayMs: number): () => void {
 
 const INVALID_REQUEST = 'Invalid vault DKG request'
 const UNKNOWN_SESSION = 'Unknown vault DKG session'
+const RECORD_UNOPENABLE = 'Vault record cannot be opened'
 const DEFAULT_MAX_SESSIONS = 4
 const DEFAULT_IDLE_MS = 10 * 60_000
 
@@ -91,12 +114,27 @@ function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<
 }
 
 function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'] {
-  if (!hasExactKeys(payload, ['participants', 'threshold', 'mainnet'])) {
+  if (
+    !hasExactKeys(payload, ['participants', 'threshold', 'mainnet', 'ownerWalletId', 'groupId'])
+  ) {
     throw new Error(INVALID_REQUEST)
   }
   const shape = { participants: payload.participants, threshold: payload.threshold }
-  if (!isDkgShape(shape) || typeof payload.mainnet !== 'boolean') throw new Error(INVALID_REQUEST)
-  return { participants: shape.participants, threshold: shape.threshold, mainnet: payload.mainnet }
+  if (
+    !isDkgShape(shape) ||
+    typeof payload.mainnet !== 'boolean' ||
+    !isVaultWalletId(payload.ownerWalletId) ||
+    !isVaultGroupId(payload.groupId)
+  ) {
+    throw new Error(INVALID_REQUEST)
+  }
+  return {
+    participants: shape.participants,
+    threshold: shape.threshold,
+    mainnet: payload.mainnet,
+    ownerWalletId: payload.ownerWalletId,
+    groupId: payload.groupId
+  }
 }
 
 function parseAccept(payload: unknown): VaultDkgAcceptRequest {
@@ -123,6 +161,18 @@ function parseClose(payload: unknown): { sessionId: string } {
   return { sessionId: payload.sessionId }
 }
 
+function parseSummary(payload: unknown): VaultDkgSchema['vault.record.summary']['request'] {
+  if (
+    !hasExactKeys(payload, ['record', 'ownerWalletId']) ||
+    !isVaultWalletId(payload.ownerWalletId)
+  ) {
+    throw new Error(INVALID_REQUEST)
+  }
+  const record = parseSealedVaultRecord(payload.record)
+  if (!record) throw new Error(INVALID_REQUEST)
+  return { record, ownerWalletId: payload.ownerWalletId }
+}
+
 function encodeBySlot(map: ReadonlyMap<number, Uint8Array>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [slot, bytes] of map) out[String(slot)] = bytesToBase64(bytes)
@@ -131,6 +181,7 @@ function encodeBySlot(map: ReadonlyMap<number, Uint8Array>): Record<string, stri
 
 export function createVaultDkgRpcHandler(
   wasm: VaultWasm,
+  resolveMnemonic: MnemonicResolver,
   options: VaultDkgRpcOptions = {}
 ): VaultDkgRpcHandler {
   const now = options.now ?? (() => Date.now())
@@ -197,14 +248,53 @@ export function createVaultDkgRpcHandler(
     }
   }
 
+  /**
+   * Opens a stored record and re-checks it against the WASM before vouching for it. Every failure
+   * gives the same message: the caller learns nothing about why, and no error can carry the share.
+   */
+  async function summarize(
+    request: VaultDkgSchema['vault.record.summary']['request']
+  ): Promise<VaultRecordSummary> {
+    let share: Uint8Array | null = null
+    try {
+      const opened = await openVaultRecord(request.record, resolveMnemonic(request.ownerWalletId))
+      share = opened.share
+      const { header } = opened
+      const ak = hexToBytes(header.groupVerifyingKey)
+      wasm.ShareBackup.from_bytes(share, ak, 0).free()
+      const mainnet = header.network === 'mainnet'
+      const fvk = base64ToBytes(header.fvk)
+      if (bytesToHex(wasm.Keyset.fingerprint_from_fvk(fvk, mainnet)) !== header.fingerprint) {
+        throw new Error('fingerprint mismatch')
+      }
+      if (!wasm.Keyset.ufvk_matches_ak(header.ufvk, ak)) throw new Error('ufvk mismatch')
+      return {
+        fingerprint: header.fingerprint,
+        address: header.address,
+        participants: header.participants,
+        threshold: header.threshold
+      }
+    } catch {
+      throw new Error(RECORD_UNOPENABLE)
+    } finally {
+      share?.fill(0)
+    }
+  }
+
   async function dispatch(method: VaultDkgMethod, payload: unknown): Promise<unknown> {
+    // Not a ceremony call: it neither uses nor sweeps the session table.
+    if (method === 'vault.record.summary') return summarize(parseSummary(payload))
     const at = now()
     expireIdle(at)
     switch (method) {
       case 'vault.dkg.open': {
-        const request = parseOpen(payload)
+        const { ownerWalletId, ...rest } = parseOpen(payload)
         if (sessions.size >= maxSessions) evictOldest()
-        const session = DkgCoordinatorSession.open(wasm, request)
+        const session = DkgCoordinatorSession.open(
+          wasm,
+          { ...rest, walletId: ownerWalletId },
+          resolveMnemonic
+        )
         const id = bytesToBase64(session.sessionId)
         const entry: Entry = { session, lastUsed: at, disarm: () => {} }
         sessions.set(id, entry)
@@ -230,7 +320,8 @@ export function createVaultDkgRpcHandler(
                 complete: true,
                 fingerprint: outcome.fingerprint,
                 inboxes: encodeBySlot(outcome.inboxes),
-                sealedQsk: encodeBySlot(outcome.sealedQsk)
+                sealedQsk: encodeBySlot(outcome.sealedQsk),
+                record: outcome.record
               }
             : { complete: false }
         })

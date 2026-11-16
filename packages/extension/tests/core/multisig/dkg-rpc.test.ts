@@ -7,12 +7,14 @@ import {
   type VaultDkgRpcHandler,
   type VaultDkgSchema
 } from '../../../src/core/multisig/dkg-rpc'
-import { round1Hash, type VaultWasm } from '../../../src/core/multisig/dkg-protocol'
-import { base64ToBytes, bytesToBase64, bytesToHex } from '../../../src/lib/bytes'
-import { loadVaultWasm } from './helpers/vault-wasm'
-
-type Shape = { participants: 2 | 3; threshold: 2 | 3 }
-type Dkg = InstanceType<VaultWasm['Dkg']>
+import type { VaultWasm } from '../../../src/core/multisig/dkg-protocol'
+import {
+  parseSealedVaultRecord,
+  type SealedVaultRecord
+} from '../../../src/core/multisig/vault-record'
+import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
+import { Phone, callVaultDkg, runRounds, type Round2Complete } from './helpers/raw-phone'
+import { TEST_MNEMONIC, loadVaultWasm } from './helpers/vault-wasm'
 
 let wasm: VaultWasm
 
@@ -20,81 +22,42 @@ before(async () => {
   wasm = await loadVaultWasm()
 })
 
-// Every request and response crosses a JSON boundary, as chrome.runtime messages do.
-async function call<M extends VaultDkgMethod>(
+const call = callVaultDkg
+
+const WALLET_ID = 'wallet-1'
+const GROUP_ID = '11111111-2222-4333-8444-555555555555'
+const OPEN_2_OF_3 = {
+  participants: 3,
+  threshold: 2,
+  mainnet: true,
+  ownerWalletId: WALLET_ID,
+  groupId: GROUP_ID
+} as const
+
+/** Runs a whole ceremony of the given shape through the handler and returns the final answer. */
+async function runCeremony(
   handler: VaultDkgRpcHandler,
-  method: M,
-  payload: unknown
-): Promise<VaultDkgSchema[M]['response']> {
-  const result = await handler.handle(method, JSON.parse(JSON.stringify(payload)))
-  return JSON.parse(JSON.stringify(result))
+  open: VaultDkgSchema['vault.dkg.open']['request']
+): Promise<{ sessionId: string; r2: Round2Complete }> {
+  const { sessionId } = await call(handler, 'vault.dkg.open', open)
+  return { sessionId, r2: await runRounds(wasm, handler, open, sessionId) }
 }
 
-/** A phone that only ever sees base64 strings, like the extension's transport shell. */
-class Phone {
-  private readonly dkg: Dkg
-  private readonly sessionId: Uint8Array
-  private dkg1: ReturnType<Dkg['part1']> | null = null
-  private dkg2: ReturnType<Dkg['part2']> | null = null
-  private broadcasts: InstanceType<VaultWasm['MessageSet']> | null = null
-
-  constructor(
-    shape: Shape,
-    readonly slot: number,
-    sessionId: string
-  ) {
-    this.sessionId = base64ToBytes(sessionId)
-    this.dkg = new wasm.Dkg(shape.participants, shape.threshold, slot)
-  }
-
-  round1(): string {
-    this.dkg1 = this.dkg.part1()
-    return bytesToBase64(this.dkg1.broadcast_envelope(this.sessionId, 1, this.slot))
-  }
-
-  echo(bundle: string): Promise<string> {
-    const payload = wasm.EnvelopeCodec.decode(base64ToBytes(bundle))[6] as Uint8Array
-    return round1Hash(wasm.MessageSet.from_bytes(payload).to_bytes())
-  }
-
-  round2(bundle: string): string {
-    if (!this.dkg1) throw new Error('round1() first')
-    const payload = wasm.EnvelopeCodec.decode(base64ToBytes(bundle))[6] as Uint8Array
-    this.broadcasts = wasm.MessageSet.from_bytes(payload)
-    this.dkg2 = this.dkg.part2(this.dkg1.secret(), this.broadcasts)
-    return bytesToBase64(this.dkg2.outgoing_envelope(this.sessionId, 2, this.slot))
-  }
-
-  finish(inbox: string, sealedQsk: string, mainnet: boolean): string {
-    if (!this.dkg2 || !this.broadcasts) throw new Error('round2() first')
-    const payload = wasm.EnvelopeCodec.decode(base64ToBytes(inbox))[6] as Uint8Array
-    const dkg3 = this.dkg.part3(
-      this.dkg2.secret(),
-      this.broadcasts,
-      wasm.MessageSet.from_bytes(payload)
-    )
-    const statics = dkg3.statics()
-    const coordinatorKey = statics.get(0)
-    if (!coordinatorKey) throw new Error('no coordinator static key')
-    const qsk = wasm.Sealed.open(
-      dkg3.static_secret(),
-      coordinatorKey,
-      wasm.Sealed.prologue(statics),
-      base64ToBytes(sealedQsk)
-    )
-    return bytesToHex(wasm.Keyset.derive(dkg3.group_verifying_key(), qsk, mainnet, 0)[4])
-  }
+/** The same record with one ciphertext byte flipped, so its tag no longer verifies. */
+function tampered(record: SealedVaultRecord): SealedVaultRecord {
+  const ciphertext = base64ToBytes(record.ciphertext)
+  ciphertext[0] ^= 1
+  return { ...record, ciphertext: bytesToBase64(ciphertext) }
 }
-
-const OPEN_2_OF_3 = { participants: 3, threshold: 2, mainnet: true } as const
 
 test.describe('multisig dkg rpc handler', () => {
-  test('names its four methods', () => {
+  test('names its five methods', () => {
     for (const method of [
       'vault.dkg.open',
       'vault.dkg.acceptRound1',
       'vault.dkg.acceptRound2',
-      'vault.dkg.close'
+      'vault.dkg.close',
+      'vault.record.summary'
     ]) {
       expect(isVaultDkgMethod(method)).toBe(true)
     }
@@ -103,11 +66,11 @@ test.describe('multisig dkg rpc handler', () => {
   })
 
   test('runs a 2-of-3 ceremony through JSON-shaped calls', async () => {
-    const handler = createVaultDkgRpcHandler(wasm)
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
     const { sessionId } = await call(handler, 'vault.dkg.open', OPEN_2_OF_3)
     expect(base64ToBytes(sessionId)).toHaveLength(16)
     expect(handler.sessionCount).toBe(1)
-    const phones = [1, 2].map(slot => new Phone(OPEN_2_OF_3, slot, sessionId))
+    const phones = [1, 2].map(slot => new Phone(wasm, OPEN_2_OF_3, slot, sessionId))
 
     const [first, second] = phones
     expect(
@@ -148,13 +111,13 @@ test.describe('multisig dkg rpc handler', () => {
   })
 
   test('refuses malformed requests', async () => {
-    const handler = createVaultDkgRpcHandler(wasm)
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
     const { sessionId } = await call(handler, 'vault.dkg.open', OPEN_2_OF_3)
     const badOpens = [
-      { participants: 4, threshold: 2, mainnet: true },
-      { participants: 3, threshold: '2', mainnet: true },
-      { participants: 3, threshold: 2, mainnet: 'yes' },
-      { participants: 3, threshold: 2, mainnet: true, extra: 1 }
+      { ...OPEN_2_OF_3, participants: 4 },
+      { ...OPEN_2_OF_3, threshold: '2' },
+      { ...OPEN_2_OF_3, mainnet: 'yes' },
+      { ...OPEN_2_OF_3, extra: 1 }
     ]
     for (const payload of badOpens) {
       await expect(call(handler, 'vault.dkg.open', payload)).rejects.toThrow(
@@ -185,10 +148,13 @@ test.describe('multisig dkg rpc handler', () => {
   })
 
   test('drops a session after a failed call', async () => {
-    const handler = createVaultDkgRpcHandler(wasm)
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
     const shape = { participants: 2, threshold: 2 } as const
-    const { sessionId } = await call(handler, 'vault.dkg.open', { ...shape, mainnet: true })
-    const phone = new Phone(shape, 1, sessionId)
+    const { sessionId } = await call(handler, 'vault.dkg.open', {
+      ...OPEN_2_OF_3,
+      ...shape
+    })
+    const phone = new Phone(wasm, shape, 1, sessionId)
     const r1 = await call(handler, 'vault.dkg.acceptRound1', {
       sessionId,
       senderSlot: 1,
@@ -212,7 +178,7 @@ test.describe('multisig dkg rpc handler', () => {
 
   test('expires idle sessions and evicts the oldest beyond the cap', async () => {
     let now = 0
-    const handler = createVaultDkgRpcHandler(wasm, {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC, {
       now: () => now,
       maxSessions: 2,
       idleMs: 1_000
@@ -239,7 +205,7 @@ test.describe('multisig dkg rpc handler', () => {
     // A tab closed mid-ceremony never sends another vault call, so the Worker has to notice on
     // its own: every open or use arms a timer, and the timer alone closes the session.
     const timers: { fn: () => void; delayMs: number }[] = []
-    const handler = createVaultDkgRpcHandler(wasm, {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC, {
       idleMs: 1_000,
       schedule: (fn, delayMs) => {
         // Like a real timer, one that has fired or been cancelled is gone.
@@ -262,7 +228,7 @@ test.describe('multisig dkg rpc handler', () => {
     expect(timers.map(timer => timer.delayMs)).toEqual([1_000])
 
     // A real use re-arms the timer instead of adding a second one.
-    const phone = new Phone(OPEN_2_OF_3, 1, sessionId)
+    const phone = new Phone(wasm, OPEN_2_OF_3, 1, sessionId)
     await call(handler, 'vault.dkg.acceptRound1', {
       sessionId,
       senderSlot: 1,
@@ -283,10 +249,91 @@ test.describe('multisig dkg rpc handler', () => {
   })
 
   test('close is idempotent', async () => {
-    const handler = createVaultDkgRpcHandler(wasm)
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
     const { sessionId } = await call(handler, 'vault.dkg.open', OPEN_2_OF_3)
     expect(await call(handler, 'vault.dkg.close', { sessionId })).toBe(true)
     expect(await call(handler, 'vault.dkg.close', { sessionId })).toBe(true)
+    expect(handler.sessionCount).toBe(0)
+  })
+
+  test('open requires an owner wallet id and a group id', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const { ownerWalletId: _ownerWalletId, ...withoutWallet } = OPEN_2_OF_3
+    const { groupId: _groupId, ...withoutGroup } = OPEN_2_OF_3
+    const badOpens = [
+      withoutWallet,
+      withoutGroup,
+      // The Offscreen relay treats a `walletId` key as a wallet RPC, so the old name is refused.
+      { ...withoutWallet, walletId: WALLET_ID },
+      { ...OPEN_2_OF_3, ownerWalletId: 'a b' },
+      { ...OPEN_2_OF_3, groupId: 'a:b' },
+      { ...OPEN_2_OF_3, scope: { walletId: WALLET_ID } }
+    ]
+    for (const payload of badOpens) {
+      await expect(call(handler, 'vault.dkg.open', payload)).rejects.toThrow(
+        'Invalid vault DKG request'
+      )
+    }
+    expect(handler.sessionCount).toBe(0)
+  })
+
+  test('the completing round-2 response carries a sealed record', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const { sessionId, r2 } = await runCeremony(handler, OPEN_2_OF_3)
+    expect(parseSealedVaultRecord(r2.record)).not.toBeNull()
+    expect(r2.record.groupId).toBe(OPEN_2_OF_3.groupId)
+    expect(r2.record.network).toBe('mainnet')
+    await call(handler, 'vault.dkg.close', { sessionId })
+  })
+
+  test('vault.record.summary opens a record this handler sealed', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const { r2 } = await runCeremony(handler, OPEN_2_OF_3)
+    const sessions = handler.sessionCount
+    expect(sessions).toBe(1)
+    const summary = await call(handler, 'vault.record.summary', {
+      record: r2.record,
+      ownerWalletId: WALLET_ID
+    })
+    expect(summary).toEqual({
+      fingerprint: r2.fingerprint,
+      address: expect.any(String),
+      participants: OPEN_2_OF_3.participants,
+      threshold: OPEN_2_OF_3.threshold
+    })
+    expect(wasm.Keyset.address_is_shielded_only(summary.address)).toBe(true)
+    expect(handler.sessionCount).toBe(sessions)
+  })
+
+  test('vault.record.summary gives one generic error', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const { sessionId, r2 } = await runCeremony(handler, OPEN_2_OF_3)
+    await call(handler, 'vault.dkg.close', { sessionId })
+
+    await expect(
+      call(handler, 'vault.record.summary', {
+        record: tampered(r2.record),
+        ownerWalletId: WALLET_ID
+      })
+    ).rejects.toThrow(/^Vault record cannot be opened$/)
+
+    const locked = createVaultDkgRpcHandler(wasm, () => {
+      throw new Error('Wallet credential session is locked')
+    })
+    await expect(
+      call(locked, 'vault.record.summary', { record: r2.record, ownerWalletId: WALLET_ID })
+    ).rejects.toThrow(/^Vault record cannot be opened$/)
+
+    await expect(
+      call(handler, 'vault.record.summary', { record: {}, ownerWalletId: 'w' })
+    ).rejects.toThrow('Invalid vault DKG request')
+    await expect(
+      call(handler, 'vault.record.summary', {
+        record: r2.record,
+        ownerWalletId: WALLET_ID,
+        extra: 1
+      })
+    ).rejects.toThrow('Invalid vault DKG request')
     expect(handler.sessionCount).toBe(0)
   })
 })

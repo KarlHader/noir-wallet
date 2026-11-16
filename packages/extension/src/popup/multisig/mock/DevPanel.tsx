@@ -11,11 +11,14 @@
 import { useEffect, useId, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { guardianSlots } from '@/core/multisig/create-session'
+import { formatFingerprint } from '@/core/multisig/fingerprint'
 import type { DeviceSlot } from '@/core/multisig/types'
 import { Button } from '@/popup/components/ui/button'
 import { useCreateSessionStore } from '@/popup/multisig/create-session-store'
 import { useMultisigGroupStore } from '@/popup/multisig/group-store'
+import { useLocation } from '@/popup/provider/Router'
 import { toast } from '@/store/toast-store'
+import { useWalletStore } from '@/store/wallet-store'
 import {
   readMockSettings,
   writeMockSettings,
@@ -88,6 +91,9 @@ export function DevPanel() {
   const dispatch = useCreateSessionStore(state => state.dispatch)
   const markPhoneScanned = useCreateSessionStore(state => state.markPhoneScanned)
   const simulateScan = useCreateSessionStore(state => state.simulateScan)
+  const storedScope = useCreateSessionStore(state => state.scope)
+  const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const { search } = useLocation()
 
   const [open, setOpen] = useState(panelOpen)
   const [settings, setSettings] = useState<MockSettings>(readMockSettings)
@@ -155,6 +161,33 @@ export function DevPanel() {
     } catch (error) {
       console.error('Failed to clear multisig data', error)
       toast.error('Could not clear multisig data')
+    }
+  }
+
+  const handleCheckShare = async () => {
+    const params = new URLSearchParams(search)
+    const walletId = params.get('walletId')
+    const accountId = params.get('accountId')
+    const scope =
+      storedScope ??
+      (walletId && accountId ? { network: currentNetwork, walletId, accountId } : null)
+    if (!scope) {
+      toast.info('No account to check')
+      return
+    }
+    try {
+      // Loaded on click, like the session store does, so nothing that imports this panel pulls the
+      // Worker client (and chrome.*) into its module graph.
+      const { requestVaultGroup } = await import('@/core/worker/client')
+      const summary = await requestVaultGroup('vault.group.summary', { scope })
+      if (summary.status === 'ok') {
+        toast.info(`Saved share OK · ${formatFingerprint(summary.fingerprint)}`)
+      } else {
+        toast.info('No saved share for this account')
+      }
+    } catch {
+      // Not logged: the error may carry detail about the sealed record.
+      toast.error('Could not check the saved share')
     }
   }
 
@@ -243,6 +276,14 @@ export function DevPanel() {
             </Button>
             <Button variant="outline" size="sm" onClick={() => void handleReset()}>
               Reset multisig data
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="noir-multisig-mock-check-share"
+              onClick={() => void handleCheckShare()}
+            >
+              Check saved share
             </Button>
           </div>
         </div>

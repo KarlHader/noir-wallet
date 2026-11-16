@@ -158,7 +158,14 @@ import {
   parseTrustedExtensionRuntimeMessage,
   parseWorkerRpcRuntimeMessage
 } from '@/lib/runtime-message-security'
-import { isVaultRpcBlocked } from '@/core/multisig/multisig-runtime-policy'
+import {
+  isBackgroundOnlyVaultRpc,
+  isVaultRpcBlocked
+} from '@/core/multisig/multisig-runtime-policy'
+import { isVaultGroupMethod } from '@/core/multisig/vault-group-rpc'
+import { createMultisigVaultHandler } from './multisig-vault'
+import { readVaultRecord, saveVaultRecordVerified } from '@/lib/multisig-vault-storage'
+import { readMultisigGroup } from '@/lib/multisig-group-storage'
 import { authorizeMultichainExtensionCommand } from './multichain-rpc-policy'
 import {
   BackgroundEvmTransactionMonitor,
@@ -2946,6 +2953,21 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
     if (isVaultRpcBlocked(rpcMessage.method)) {
       sendResponse({ error: 'Vault RPC is unavailable in this build' })
+      return true
+    }
+
+    if (isBackgroundOnlyVaultRpc(rpcMessage.method)) {
+      sendResponse({ error: 'Vault RPC is Background-only' })
+      return true
+    }
+
+    if (isVaultGroupMethod(rpcMessage.method)) {
+      void multisigVault
+        .handle(rpcMessage.method, rpcMessage.payload)
+        .then(result => sendResponse({ result }))
+        .catch(error => {
+          sendResponse({ error: error instanceof Error ? error.message : 'Vault request failed' })
+        })
       return true
     }
 
@@ -5969,6 +5991,29 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   return false
 }
+
+const multisigVault = createMultisigVaultHandler({
+  readWalletState: async () => {
+    await rehydrateWalletStore()
+    const state = useWalletStore.getState()
+    return {
+      network: state.currentNetwork,
+      activeWalletId: state.currentWalletId,
+      wallets: state.wallets.map(wallet => ({
+        id: wallet.id,
+        // Same test as the multisig setup page: only a recovery-phrase wallet can seal a share.
+        mnemonic: !isZcashHardwareKeySource(wallet.keySource) && wallet.keySource !== 'private-key',
+        accountIds: wallet.accounts.map(account => account.id)
+      }))
+    }
+  },
+  isUnlocked: () => credentialSession.hasUnlockSession(),
+  bindCredential: walletId => credentialSession.bindZcashCredential(walletId),
+  forwardToWorker: (method, payload) => forwardKeyringRpcToOffscreen(method, payload),
+  readRecord: readVaultRecord,
+  saveRecord: saveVaultRecordVerified,
+  readGroupId: async scope => (await readMultisigGroup(scope))?.groupId ?? null
+})
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (isRuntimeRecord(message) && message.type === 'REFRESH_EXTENSION_UPDATE') {

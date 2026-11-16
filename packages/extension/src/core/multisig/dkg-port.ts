@@ -5,15 +5,18 @@
 import type {
   VaultDkgAcceptRequest,
   VaultDkgRound1Response,
-  VaultDkgRound2Response,
-  VaultDkgSchema
+  VaultDkgRound2Response
 } from './dkg-rpc'
+import type { VaultGroupOpenRequest, VaultGroupSaveRequest } from './vault-group-rpc'
 
 export interface DkgPort {
-  open(request: VaultDkgSchema['vault.dkg.open']['request']): Promise<{ sessionId: string }>
+  /** Background names the scope's wallet before the Worker opens the session. */
+  open(request: VaultGroupOpenRequest): Promise<{ sessionId: string }>
   acceptRound1(request: VaultDkgAcceptRequest): Promise<VaultDkgRound1Response>
   acceptRound2(request: VaultDkgAcceptRequest): Promise<VaultDkgRound2Response>
   close(request: { sessionId: string }): Promise<void>
+  /** Background stores the sealed record for the scope's account before the group activates. */
+  save(request: VaultGroupSaveRequest): Promise<void>
 }
 
 /**
@@ -33,6 +36,7 @@ export function createLazyDkgPort(load: () => Promise<DkgPort>): DkgPort {
     open: request => port().then(loaded => loaded.open(request)),
     acceptRound1: request => port().then(loaded => loaded.acceptRound1(request)),
     acceptRound2: request => port().then(loaded => loaded.acceptRound2(request)),
-    close: request => port().then(loaded => loaded.close(request))
+    close: request => port().then(loaded => loaded.close(request)),
+    save: request => port().then(loaded => loaded.save(request))
   }
 }

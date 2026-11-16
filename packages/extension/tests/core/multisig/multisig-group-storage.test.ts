@@ -20,6 +20,7 @@ import {
   openMultisigCreateTab,
   openMultisigTeamTab
 } from '../../../src/lib/multisig-tab'
+import { installLockEnv } from './helpers/storage-env'
 import type { MultisigGroupRecord } from '../../../src/core/multisig/types'
 
 const MAINNET: MultisigGroupScope = { network: 'mainnet', walletId: 'w', accountId: 'a' }
@@ -52,6 +53,7 @@ async function withChrome(run: (env: ChromeEnv) => void | Promise<void>): Promis
   const host = globalThis as { chrome?: unknown }
   const original = host.chrome
   const env: ChromeEnv = { store: new Map(), createdTabUrls: [] }
+  const restoreLocks = installLockEnv()
   const keysOf = (keys: string | string[]): string[] => (Array.isArray(keys) ? keys : [keys])
   host.chrome = {
     runtime: { getURL: (path: string) => `chrome-extension://test-id/${path}` },
@@ -82,6 +84,7 @@ async function withChrome(run: (env: ChromeEnv) => void | Promise<void>): Promis
   try {
     await run(env)
   } finally {
+    restoreLocks()
     if (original === undefined) delete host.chrome
     else host.chrome = original
   }

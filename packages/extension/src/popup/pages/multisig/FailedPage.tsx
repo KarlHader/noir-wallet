@@ -15,7 +15,8 @@ const ABORT_REASON_COPY: Record<AbortReason, string> = {
   session_expired: 'The session timed out.',
   transport_switched: 'Connection method changed.',
   fingerprint_mismatch: 'The fingerprints did not match.',
-  phone_rejected: 'A device rejected the setup.'
+  phone_rejected: 'A device rejected the setup.',
+  save_failed: 'The key share could not be saved.'
 }
 const FALLBACK_REASON = 'Setup could not be completed.'
 

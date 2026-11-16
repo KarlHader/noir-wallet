@@ -1230,6 +1230,85 @@ export class Keyset {
     }
   }
   /**
+   * The keyset fingerprint, recomputed from an FVK: `SHA-256(domain ‖ network_tag ‖ fvk)`.
+   *
+   * Recovery needs this: a device keeps the FVK but not the `qsk`, so [`Self::derive`] is not
+   * available to it, and the fingerprint is what the user compares against an independent device to
+   * detect a coordinator handing over a viewing key with a real `ak` and attacker-chosen
+   * `nk`/`rivk`.
+   *
+   * Do not reimplement this hash elsewhere: the domain tag and network tag are part of the preimage,
+   * and a one-byte difference makes two implementations disagree forever.
+   * @param {Uint8Array} fvk
+   * @param {boolean} mainnet
+   * @returns {Uint8Array}
+   */
+  static fingerprint_from_fvk(fvk, mainnet) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(fvk, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.keyset_fingerprint_from_fvk(retptr, ptr0, len0, mainnet)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * `fingerprint_from_fvk` for callers holding the encoded UFVK.
+   * @param {string} ufvk
+   * @param {boolean} mainnet
+   * @returns {Uint8Array}
+   */
+  static fingerprint_from_ufvk(ufvk, mainnet) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(ufvk, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      wasm.keyset_fingerprint_from_ufvk(retptr, ptr0, len0, mainnet)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The 96-byte FVK inside a UFVK string.
+   *
+   * A recovering device receives a viewing key but not the `qsk` behind it, so it cannot re-derive
+   * anything with [`Self::derive`]. This reads the key back out.
+   * @param {string} ufvk
+   * @returns {Uint8Array}
+   */
+  static fvk_from_ufvk(ufvk) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(ufvk, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      wasm.keyset_fvk_from_ufvk(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * A fresh `qsk`: the `nk`/`rivk` source, and the ZIP-2005 recovery candidate.
    *
    * Generate it **once**, on one device, then deliver it to every other device over a
@@ -1244,6 +1323,35 @@ export class Keyset {
   static generate_qsk() {
     const ret = wasm.keyset_generate_qsk()
     return takeObject(ret)
+  }
+  /**
+   * Whether a UFVK was derived from this group key.
+   *
+   * Run this before trusting a viewing key handed to you by a coordinator or a peer: `ak` is the
+   * first 32 bytes of the FVK, and a mismatch would restore the device into a different, empty
+   * wallet.
+   * @param {string} ufvk
+   * @param {Uint8Array} group_verifying_key
+   * @returns {boolean}
+   */
+  static ufvk_matches_ak(ufvk, group_verifying_key) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(ufvk, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(group_verifying_key, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.keyset_ufvk_matches_ak(retptr, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return r0 !== 0
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
   }
 }
 if (Symbol.dispose) Keyset.prototype[Symbol.dispose] = Keyset.prototype.free
@@ -2329,6 +2437,74 @@ export class ShareBackup {
       const ptr1 = passArray8ToWasm0(group_verifying_key, wasm.__wbindgen_export)
       const len1 = WASM_VECTOR_LEN
       wasm.sharebackup_from_bytes(retptr, ptr0, len0, ptr1, len1, expected_slot)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return ShareBackup.__wrap(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Rebuild a share from a 32-byte signing scalar plus the group's public data.
+   *
+   * This is the 24-word path: a BIP39 mnemonic carries 256 bits, which fits the scalar and nothing
+   * else. The identifier and verifying share are derived from `slot` and the scalar, and `ak` /
+   * `min_signers` come from the group's public state, which is not secret.
+   *
+   * **Pass `publicKeyPackage` whenever you have it.** With it, the reconstructed share is checked
+   * against the group's record for this slot, so a wrong scalar fails here instead of producing
+   * signature shares that never aggregate.
+   * @param {Uint8Array} signing_scalar
+   * @param {Uint8Array} group_verifying_key
+   * @param {number} slot
+   * @param {number} min_signers
+   * @param {Uint8Array} device_id
+   * @param {Uint8Array} vault_id
+   * @param {Uint8Array | null} [public_key_package]
+   * @returns {ShareBackup}
+   */
+  static from_scalar(
+    signing_scalar,
+    group_verifying_key,
+    slot,
+    min_signers,
+    device_id,
+    vault_id,
+    public_key_package
+  ) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(signing_scalar, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(group_verifying_key, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      const ptr2 = passArray8ToWasm0(device_id, wasm.__wbindgen_export)
+      const len2 = WASM_VECTOR_LEN
+      const ptr3 = passArray8ToWasm0(vault_id, wasm.__wbindgen_export)
+      const len3 = WASM_VECTOR_LEN
+      var ptr4 = isLikeNone(public_key_package)
+        ? 0
+        : passArray8ToWasm0(public_key_package, wasm.__wbindgen_export)
+      var len4 = WASM_VECTOR_LEN
+      wasm.sharebackup_from_scalar(
+        retptr,
+        ptr0,
+        len0,
+        ptr1,
+        len1,
+        slot,
+        min_signers,
+        ptr2,
+        len2,
+        ptr3,
+        len3,
+        ptr4,
+        len4
+      )
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
       var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
@@ -5504,7 +5680,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16662(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16679(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -5544,7 +5720,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16662(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16679(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -5852,22 +6028,22 @@ function __wbg_get_imports(memory) {
     },
     __wbindgen_cast_0000000000000001: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 4216, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12542)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12559)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000002: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5432, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16645)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16662)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000003: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5434, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16647)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16664)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000004: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 4187, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12465)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12482)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000005: function (arg0) {
@@ -5934,22 +6110,22 @@ function __wbg_get_imports(memory) {
   }
 }
 
-function __wasm_bindgen_func_elem_12465(arg0, arg1) {
-  wasm.__wasm_bindgen_func_elem_12465(arg0, arg1)
+function __wasm_bindgen_func_elem_12482(arg0, arg1) {
+  wasm.__wasm_bindgen_func_elem_12482(arg0, arg1)
 }
 
-function __wasm_bindgen_func_elem_12542(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_12542(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_12559(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_12559(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16647(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_16647(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_16664(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_16664(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16645(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_16662(arg0, arg1, arg2) {
   try {
     const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    wasm.__wasm_bindgen_func_elem_16645(retptr, arg0, arg1, addHeapObject(arg2))
+    wasm.__wasm_bindgen_func_elem_16662(retptr, arg0, arg1, addHeapObject(arg2))
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
     if (r1) {
@@ -5960,8 +6136,8 @@ function __wasm_bindgen_func_elem_16645(arg0, arg1, arg2) {
   }
 }
 
-function __wasm_bindgen_func_elem_16662(arg0, arg1, arg2, arg3) {
-  wasm.__wasm_bindgen_func_elem_16662(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
+function __wasm_bindgen_func_elem_16679(arg0, arg1, arg2, arg3) {
+  wasm.__wasm_bindgen_func_elem_16679(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
 }
 
 const __wbindgen_enum_ReadableStreamType = ['bytes']

@@ -50,6 +50,12 @@ import {
   resetWalletMetadata
 } from '@/lib/wallet-metadata-storage'
 import { blockWalletRecords, getBlockedWalletIds, unblockWalletRecords } from '@/lib/indexed-db'
+import {
+  deleteMultisigDataForAccount,
+  deleteMultisigDataForWallet
+} from '@/lib/multisig-vault-storage'
+import { clearMultisigData } from '@/lib/multisig-group-storage'
+import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
 import { dappHandler } from './dapp-handler'
 import { syncScheduler } from './sync-scheduler'
 import { transactionMonitor } from './transaction-monitor'
@@ -338,6 +344,7 @@ export class WalletCleanupCoordinator {
         )
         await accountData.deleteWalletData(network, walletId, [...accountIds])
       }
+      await this.removeMultisigWalletData(walletId)
       await completeWalletMetadataDeletion(walletId)
       await completeLegacyPendingCleanup(walletId)
     })
@@ -532,8 +539,10 @@ export class WalletCleanupCoordinator {
           await this.refreshCredentialSessionAfterWalletRemoval(sessionPassword)
         }
         await this.resumeAfterMutation(previous, !removesWallet)
-        if (removesWallet) await completeWalletMetadataDeletion(walletId)
-        else {
+        if (removesWallet) {
+          await this.removeMultisigWalletData(walletId)
+          await completeWalletMetadataDeletion(walletId)
+        } else {
           await completeAccountMetadataDeletion(
             walletId,
             accountId,
@@ -587,6 +596,7 @@ export class WalletCleanupCoordinator {
           await this.credentialRemoval.removeWallet(walletId)
           await this.refreshCredentialSessionAfterWalletRemoval(sessionPassword)
           await this.resumeAfterMutation(previous, false)
+          await this.removeMultisigWalletData(walletId)
           await completeWalletMetadataDeletion(walletId)
         }
       )
@@ -751,6 +761,7 @@ export class WalletCleanupCoordinator {
           dappHandler.clearConnections()
         ])
         await Promise.all([
+          this.resetMultisigData(),
           deleteIndexedDbTransactionPersistence(),
           deleteIndexedDbPortfolioCache(),
           deleteIndexedDbBitcoinDiscovery(),
@@ -809,8 +820,25 @@ export class WalletCleanupCoordinator {
       this.activityHistoryCache.deleteByScope(scope),
       dappExecutionModeCoordinator.removeAccount(walletId, accountId),
       clearSwapApprovalContinuationsForAccount(walletId, accountId),
-      new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId)
+      new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId),
+      this.removeMultisigAccountData(walletId, accountId)
     ])
+  }
+
+  // Multisig stores are only touched when the feature is built in, so flag-off builds never open them.
+  private async removeMultisigAccountData(walletId: string, accountId: string): Promise<void> {
+    if (!isMultisigUiEnabled()) return
+    await deleteMultisigDataForAccount(walletId, accountId)
+  }
+
+  private async removeMultisigWalletData(walletId: string): Promise<void> {
+    if (!isMultisigUiEnabled()) return
+    await deleteMultisigDataForWallet(walletId)
+  }
+
+  private async resetMultisigData(): Promise<void> {
+    if (!isMultisigUiEnabled()) return
+    await clearMultisigData()
   }
 
   private async removeNativeStorageV2Wallet(
@@ -863,6 +891,7 @@ export class WalletCleanupCoordinator {
           await this.notifyAccountSwitched()
           if (cleanupIncomplete)
             throw new Error('Wallet removal cleanup is incomplete; retry removal')
+          await this.removeMultisigWalletData(walletId)
           await completeWalletMetadataDeletion(walletId)
         } catch (error) {
           if (!committed) await syncScheduler.cancelWalletRemoval(walletId)

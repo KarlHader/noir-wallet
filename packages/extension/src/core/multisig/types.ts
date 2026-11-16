@@ -45,6 +45,7 @@ export type AbortReason =
   | 'transport_switched'
   | 'fingerprint_mismatch'
   | 'phone_rejected'
+  | 'save_failed'
 
 // The design document lists `reply_scanned` separately, but it happens in the same event as
 // `connected`, so the two are merged into `connected`.
