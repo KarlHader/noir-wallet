@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useSettingsStore } from '@/store/settings-store'
-import { initializeDefaultIntentsAssets } from '@/popup/services/intents-asset-manager-client'
 import {
   isPortfolioModelForScope,
   readCachedPortfolio,
@@ -93,17 +92,8 @@ export function useHomePortfolio(walletId: string | null, accountId: string | nu
       setSettled(true)
       return
     }
-    let active = true
-    const initialLoad = load()
-    void initializeDefaultIntentsAssets()
-      .then(async initialized => {
-        if (!initialized || !active) return
-        await initialLoad.catch(() => {})
-        if (active) await load()
-      })
-      .catch(() => {})
+    void load()
     return () => {
-      active = false
       requestSequence.current += 1
     }
   }, [walletId, accountId, load, scopeKey])

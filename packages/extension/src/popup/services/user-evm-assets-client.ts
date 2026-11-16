@@ -72,7 +72,6 @@ export function createUserEvmAssetsClient(sendMessage: RuntimeMessenger) {
         detectedAssets: readonly DetectedEvmAssetRecord[]
         hiddenAssetIds: readonly string[]
         protocolAssetIds: readonly string[]
-        defaultAssetIds: readonly string[]
       }>
     > => {
       const result = readRecord(
@@ -80,7 +79,7 @@ export function createUserEvmAssetsClient(sendMessage: RuntimeMessenger) {
         'managed Token result'
       )
       if (
-        Object.keys(result).length !== 5 ||
+        Object.keys(result).length !== 4 ||
         !Array.isArray(result.userAssets) ||
         result.userAssets.length > 64 ||
         !Array.isArray(result.detectedAssets) ||
@@ -88,9 +87,7 @@ export function createUserEvmAssetsClient(sendMessage: RuntimeMessenger) {
         !Array.isArray(result.hiddenAssetIds) ||
         result.hiddenAssetIds.length > 4_096 ||
         !Array.isArray(result.protocolAssetIds) ||
-        result.protocolAssetIds.length > 1_024 ||
-        !Array.isArray(result.defaultAssetIds) ||
-        result.defaultAssetIds.length > 4_096
+        result.protocolAssetIds.length > 1_024
       ) {
         throw new UserEvmAssetsClientError('Invalid managed Token result')
       }
@@ -111,18 +108,11 @@ export function createUserEvmAssetsClient(sendMessage: RuntimeMessenger) {
         }
         return parseAssetId(item).id
       })
-      const defaultAssetIds = result.defaultAssetIds.map(item => {
-        if (typeof item !== 'string' || parseAssetId(item).id !== item) {
-          throw new UserEvmAssetsClientError('Invalid default Token')
-        }
-        return item
-      })
       return Object.freeze({
         userAssets: Object.freeze(userAssets),
         detectedAssets: Object.freeze(detectedAssets),
         hiddenAssetIds: Object.freeze(hiddenAssetIds),
-        protocolAssetIds: Object.freeze(protocolAssetIds),
-        defaultAssetIds: Object.freeze(defaultAssetIds)
+        protocolAssetIds: Object.freeze(protocolAssetIds)
       })
     },
     inspect: async (input: {

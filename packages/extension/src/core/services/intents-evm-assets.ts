@@ -134,10 +134,3 @@ export function resolveIntentsEvmAssets(
   }
   return Object.freeze([...resolved.values()])
 }
-
-export function getDefaultIntentsEvmAssets(
-  assets: readonly IntentsEvmAsset[],
-  defaultVisibleAssetIds: ReadonlySet<string> = new Set()
-): readonly IntentsEvmAsset[] {
-  return Object.freeze(assets.filter(asset => defaultVisibleAssetIds.has(asset.assetId)))
-}

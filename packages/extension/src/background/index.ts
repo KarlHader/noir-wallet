@@ -178,11 +178,14 @@ import {
 import {
   createBackgroundRheaSwapService,
   readBackgroundRheaSwapCatalog,
+  hydrateBackgroundRheaSwapCatalog,
+  getCachedBackgroundRheaSwapTokens,
   readRheaZcashTransferDeadline
 } from './rhea-swap'
 import { getSafeRheaSwapRuntimeErrorMessage } from '@/core/services/rhea-swap/rhea-swap-error'
 import {
   assertPrivateQuoteRoute,
+  RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest,
   type PrivateQuotePurpose
 } from '@/core/services/rhea-swap/rhea-swap-model'
@@ -256,7 +259,6 @@ import {
   type TokenDisplayPolicy,
   type PortfolioScope
 } from '@/core/portfolio'
-import { tokenRegistryClient } from '@/infrastructure/portfolio/token-registry-client'
 import { mapEvmWalletRuntimeError } from './evm-wallet-runtime-error'
 import {
   isNewWalletFamilyEnabled,
@@ -404,7 +406,10 @@ import {
   refreshBackgroundSwapCatalog,
   SWAP_CATALOG_REFRESH_ALARM
 } from './swap-token-catalog'
-import { resolveManagedIntentsAssets } from '@/core/services/intents-managed-assets'
+import {
+  resolveManagedIntentsAssets,
+  resolveSwapTokenAssetIds
+} from '@/core/services/intents-managed-assets'
 import { getBundledInitialProductAssetDefinitions } from '@/core/chains/registry'
 import {
   createIntentsWalletAssetCatalog,
@@ -628,7 +633,7 @@ let intentsFullCatalogTokens: readonly SwapToken[] = Object.freeze([])
 let intentsProtocolAssetIds: readonly string[] = Object.freeze([])
 let intentsProtocolPriceMappings: readonly IntentsProtocolAssetPriceMapping[] = Object.freeze([])
 let intentsProtocolAssetRefresh: Promise<void> | null = null
-let intentsProtocolAssetsReady = false
+let intentsProtocolCatalogKey = ''
 let evmDAppHandler!: ReturnType<typeof createBackgroundEvmDAppHandler>
 let evmDAppOrigins: EvmDAppOriginRuntime
 let bitcoinDAppHandler!: ReturnType<typeof createBackgroundBitcoinDAppHandler>
@@ -1506,6 +1511,18 @@ function scheduleMultichainRuntimeReload(
   return operation
 }
 
+function getPortfolioSwapChainIds(): readonly number[] {
+  const networks = resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings())
+  return RHEA_SWAP_CHAIN_CATALOG.filter(
+    chain =>
+      (chain.walletFamily === 'evm' &&
+        evmFeatureRuntimePolicy.newOperationsEnabled &&
+        networks.some(network => network.chainId === `eip155:${chain.apiChainId}`)) ||
+      (chain.walletFamily === 'solana' && areSolanaOperationsEnabled()) ||
+      (chain.walletFamily === 'near' && areNearOperationsEnabled())
+  ).map(chain => chain.tokenListChainId)
+}
+
 function refreshIntentsProtocolAssets(force = false): Promise<void> {
   if (
     DEFAULT_NETWORK !== 'mainnet' ||
@@ -1515,25 +1532,29 @@ function refreshIntentsProtocolAssets(force = false): Promise<void> {
   ) {
     return Promise.resolve()
   }
-  if (intentsProtocolAssetsReady && !force) return Promise.resolve()
   if (intentsProtocolAssetRefresh) return intentsProtocolAssetRefresh
 
-  const operation = (async () => {
-    const fullCatalog = await refreshBackgroundSwapCatalog(force)
+  const applyCatalog = async (fullCatalog: readonly SwapToken[]) => {
     if (fullCatalog.length === 0) throw new Error('Intents token catalog is unavailable')
+    const key = JSON.stringify(
+      fullCatalog.map(token => [
+        token.assetId,
+        token.symbol,
+        token.blockchain,
+        token.contractAddress,
+        token.decimals,
+        token.icon,
+        token.coingeckoIcon,
+        token.coingeckoId
+      ])
+    )
+    intentsFullCatalogTokens = fullCatalog
+    if (key === intentsProtocolCatalogKey && !force) return
     const walletTokens = fullCatalog.filter(token =>
       resolveIntentsWalletAsset(token, DEFAULT_NETWORK)
     )
-    const walletChainsEnabled = areSolanaOperationsEnabled() || areNearOperationsEnabled()
-    if (walletChainsEnabled && walletTokens.length === 0) {
-      throw new Error('Intents wallet token catalog is unavailable')
-    }
     if (walletTokens.length > 0) {
-      const catalog = createIntentsWalletAssetCatalog(
-        walletTokens,
-        DEFAULT_NETWORK,
-        getDefaultTokenAssetIds()
-      )
+      const catalog = createIntentsWalletAssetCatalog(walletTokens, DEFAULT_NETWORK)
       intentsProtocolAssets = catalog.definitions
       intentsProtocolAssetIds = Object.freeze(
         catalog.preferences.map(preference => preference.assetId)
@@ -1545,15 +1566,36 @@ function refreshIntentsProtocolAssets(force = false): Promise<void> {
       intentsProtocolAssetIds = Object.freeze([])
       intentsProtocolPriceMappings = Object.freeze([])
     }
-    intentsFullCatalogTokens = fullCatalog
-    await scheduleMultichainRuntimeReload(undefined, true, false)
+    await refreshMultichainRuntimeForUserAssets(false)
     void refreshAssetPrices().catch(error => {
       console.warn(
         '[Intents assets] Market data refresh after catalog change failed:',
         error instanceof Error ? error.message : 'Unknown error'
       )
     })
-    intentsProtocolAssetsReady = true
+    intentsProtocolCatalogKey = key
+    const model = await portfolioCoordinator?.readCachedActive()
+    if (model) {
+      void refreshDetectedEvmAssetsForActiveAccount(model.scope).catch(() => {})
+      void chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: model.scope.keyDomainId,
+          accountId: model.scope.accountId
+        })
+        .catch(() => {})
+    }
+  }
+  const operation = (async () => {
+    const input = { direction: 'from' as const, tokenListChainIds: getPortfolioSwapChainIds() }
+    if (input.tokenListChainIds.length === 0) return
+    await chrome.alarms.create(SWAP_CATALOG_REFRESH_ALARM, { periodInMinutes: 5 })
+    await hydrateBackgroundRheaSwapCatalog(input)
+    const cached = getCachedBackgroundRheaSwapTokens()
+    if (cached.length > 0) await applyCatalog(cached)
+    await readBackgroundRheaSwapCatalog(input)
+    const refreshed = getCachedBackgroundRheaSwapTokens()
+    if (refreshed.length > 0) await applyCatalog(refreshed)
   })()
   intentsProtocolAssetRefresh = operation
   void operation.then(
@@ -1612,92 +1654,32 @@ async function refreshMultichainRuntimeForUserAssets(
   })
 }
 
-function getDefaultTokenAssetIds(): ReadonlySet<string> {
-  return new Set(
-    tokenRegistryClient
-      .getEntries(DEFAULT_NETWORK)
-      .flatMap(entry => (entry.defaultVisible ? [entry.assetId] : []))
-  )
-}
-
 async function readTokenDisplayPolicy(): Promise<TokenDisplayPolicy> {
   const overrides = await tokenVisibility?.readUserOverrides().catch(() => undefined)
+  const networks = resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings())
   return {
-    allowedAssetIds: new Set(
-      tokenRegistryClient.getEntries(DEFAULT_NETWORK).map(entry => entry.assetId)
+    allowedAssetIds: resolveSwapTokenAssetIds(
+      getCachedBackgroundRheaSwapTokens(),
+      DEFAULT_NETWORK,
+      networks
     ),
-    defaultAssetIds: getDefaultTokenAssetIds(),
     visibleAssetIds: new Set([
       ...(overrides?.visibleAssetIds ?? []),
       ...userEvmAssetRecords.flatMap(record =>
         record.source === 'user-added' ? [record.assetId] : []
-      )
+      ),
+      ...(DEFAULT_NETWORK === 'testnet'
+        ? [
+            ...userEvmAssetRecords.map(record => record.assetId),
+            ...detectedEvmAssetRecords.map(record => record.assetId),
+            ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK)
+              .filter(asset => asset.kind === 'token')
+              .map(asset => `${asset.chainId}/${asset.namespace}:${asset.reference}`)
+          ]
+        : [])
     ]),
     hiddenAssetIds: new Set(overrides?.hiddenAssetIds ?? [])
   }
-}
-
-const tokenRegistryRefresh = new DedupPromise<void>()
-
-function refreshTokenRegistryConfiguration(): Promise<void> {
-  return tokenRegistryRefresh.run(async () => {
-    const network = DEFAULT_NETWORK
-    const changed = await tokenRegistryClient.refresh()
-    if (network !== DEFAULT_NETWORK) return
-    const defaultAssetIds = getDefaultTokenAssetIds()
-    const coordinator = userEvmAssetCoordinator
-    const bundledIds = new Set(
-      getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK).map(
-        asset => `${asset.chainId}/${asset.namespace}:${asset.reference}`
-      )
-    )
-    const existingIds = new Set(userEvmAssetRecords.map(record => record.assetId))
-    const chainIds = new Set<string>(
-      resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings()).map(
-        chain => chain.chainId
-      )
-    )
-    const missing = [...defaultAssetIds].filter(id => {
-      const asset = parseAssetId(id)
-      return (
-        asset.namespace === 'erc20' &&
-        chainIds.has(asset.chainId) &&
-        !bundledIds.has(id) &&
-        !existingIds.has(id)
-      )
-    })
-    const registered = coordinator
-      ? await Promise.allSettled(
-          missing.map(id => {
-            const asset = parseAssetId(id)
-            return coordinator.ensure({ chainId: asset.chainId, contractAddress: asset.reference })
-          })
-        )
-      : []
-    // A parallel runtime reload may have read the catalog before these inserts finished.
-    // Rebuild from persisted records using the current settings, even if its coordinator changed.
-    if (network !== DEFAULT_NETWORK) return
-    if (!changed && !registered.some(result => result.status === 'fulfilled')) return
-    if (intentsFullCatalogTokens.length > 0) {
-      const catalog = createIntentsWalletAssetCatalog(
-        intentsFullCatalogTokens,
-        DEFAULT_NETWORK,
-        defaultAssetIds
-      )
-      await tokenVisibility?.synchronizeProtocolDefaults(catalog.preferences)
-    }
-    await refreshMultichainRuntimeForUserAssets(false)
-    const model = await portfolioCoordinator?.readCachedActive()
-    if (model) {
-      await chrome.runtime
-        .sendMessage({
-          type: 'PORTFOLIO_UPDATED',
-          walletId: model.scope.keyDomainId,
-          accountId: model.scope.accountId
-        })
-        .catch(() => {})
-    }
-  })
 }
 
 const tokenDiscoveryRefreshes = new Map<string, DedupPromise<void>>()
@@ -2111,9 +2093,12 @@ enqueueExtensionDisplayModeUpdate(initializeExtensionDisplayMode).catch(error =>
 // Network-bound services start only after the persisted global mode is resolved.
 const multichainStartupReady = runtimeNetworkReady.then(async () => {
   await prepareWalletStoreForUse()
-  await tokenRegistryClient.loadCached()
+  if (DEFAULT_NETWORK === 'mainnet')
+    await hydrateBackgroundRheaSwapCatalog({
+      direction: 'from',
+      tokenListChainIds: getPortfolioSwapChainIds()
+    })
   await scheduleMultichainRuntimeReload()
-  void refreshTokenRegistryConfiguration().catch(() => {})
 })
 
 function rheaSignedRecoveryJobs() {
@@ -2420,6 +2405,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
       if (alarm.name === SWAP_CATALOG_REFRESH_ALARM) {
         if (DEFAULT_NETWORK === 'mainnet') {
           void refreshBackgroundSwapCatalog().catch(() => {})
+          void refreshIntentsProtocolAssets().catch(() => {})
         } else {
           void chrome.alarms.clear(SWAP_CATALOG_REFRESH_ALARM)
         }
@@ -3635,8 +3621,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               policy.visibleAssetIds.has(record.assetId)
           ),
           hiddenAssetIds,
-          protocolAssetIds: intentsProtocolAssetIds,
-          defaultAssetIds: [...policy.defaultAssetIds]
+          protocolAssetIds: intentsProtocolAssetIds
         }
       })
     })().catch(() => sendResponse({ error: 'Managed Tokens could not be loaded' }))
@@ -3850,7 +3835,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'GET_SWAP_TOKEN_CATALOG') {
     void readBackgroundSwapCatalog()
-      .then(tokens => sendResponse({ result: tokens }))
+      .then(tokens => {
+        sendResponse({ result: tokens })
+        void refreshIntentsProtocolAssets().catch(() => {})
+      })
       .catch(() =>
         sendResponse({ error: 'Token list is temporarily unavailable. Please try again shortly.' })
       )
@@ -3888,11 +3876,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       const refreshChainIds = Array.isArray(message.chainIds)
         ? (message.chainIds as readonly string[])
         : undefined
-      if (message.action === 'refresh' && refreshChainIds === undefined) {
-        await refreshIntentsProtocolAssets().catch(error => {
-          console.warn('[Portfolio] Intents token catalog refresh failed', error)
-        })
-      }
       const coordinator = portfolioCoordinator
       if (!coordinator) throw new Error('Portfolio runtime is unavailable')
       const baseModel =
@@ -3926,13 +3909,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           })
           .catch(() => {})
       }
-      await tokenVisibility?.revealHeldProtocolAssets(
-        model?.assets.flatMap(asset =>
-          asset.asset.kind === 'token' && BigInt(asset.balance.totalRaw) > 0n
-            ? [asset.asset.id]
-            : []
-        ) ?? []
-      )
       const policy = await readTokenDisplayPolicy()
       return {
         model: model ? applyTokenDisplayPolicy(model, policy) : null,
@@ -3949,7 +3925,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         sendResponse({ result })
         // Discovery may wait on an indexer; return RPC balances before starting it.
         if (message.action === 'refresh' && !Array.isArray(message.chainIds) && result.model) {
-          void refreshTokenRegistryConfiguration().catch(() => {})
+          void refreshIntentsProtocolAssets().catch(() => {})
           void refreshDetectedEvmAssetsForActiveAccount(
             result.model.scope,
             message.forceDiscovery === true

@@ -21,7 +21,8 @@ import {
   createConfiguredEvmRpcClient
 } from '@/infrastructure/chains/evm'
 import { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
-import { tokenRegistryClient } from '@/infrastructure/portfolio/token-registry-client'
+import { getCachedBackgroundRheaSwapTokens } from './rhea-swap'
+import { resolveSwapTokenAssetIds } from '@/core/services/intents-managed-assets'
 import { ChromeUserAssetDexPoolCacheRepository } from '@/infrastructure/prices'
 import { FourMemeMarketClient } from '@/infrastructure/prices/four-meme-market-client'
 
@@ -67,13 +68,22 @@ export async function createBackgroundUserEvmAssetRuntime(
       return rpc
     }
   })
+  let swapTokens = getCachedBackgroundRheaSwapTokens()
+  let swapAssetIds = resolveSwapTokenAssetIds(swapTokens, DEFAULT_NETWORK, evmNetworks)
   const detectedCoordinator = new DetectedEvmAssetCoordinator({
     chains,
     repository: detectedRepository,
     discovery: new EvmTokenDiscoveryClient({ chains }),
-    isExcluded: assetId =>
-      bundledAssets.inspect(assetId) !== undefined ||
-      !tokenRegistryClient.getEntries(DEFAULT_NETWORK).some(entry => entry.assetId === assetId),
+    isExcluded: assetId => {
+      if (bundledAssets.inspect(assetId)) return true
+      if (DEFAULT_NETWORK !== 'mainnet') return false
+      const current = getCachedBackgroundRheaSwapTokens()
+      if (current !== swapTokens) {
+        swapTokens = current
+        swapAssetIds = resolveSwapTokenAssetIds(current, DEFAULT_NETWORK, evmNetworks)
+      }
+      return !swapAssetIds.has(assetId)
+    },
     resolveIconUrl: async assetId => (await fourMeme.getToken(assetId))?.iconUrl,
     resolveRpc: chainId => {
       const rpc = rpcByChainId.get(chainId)

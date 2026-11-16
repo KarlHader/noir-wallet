@@ -9,14 +9,7 @@ import {
   resolveManagedIntentsAssets,
   type IntentsManagedAsset
 } from '@/core/services/intents-managed-assets'
-import { DedupPromise } from '@/lib/async-utils'
-
 import { swapTokenCatalogClient } from './swap-token-catalog-client'
-import { userEvmAssetsClient } from './user-evm-assets-client'
-import { automaticRefreshSession } from './automatic-refresh-session'
-
-const defaultAssetInitialization = new DedupPromise<boolean>()
-const DEFAULT_ASSET_REFRESH_COOLDOWN_MS = 5 * 60_000
 
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -108,35 +101,6 @@ export const intentsAssetManagerClient = Object.freeze({
       throw new Error('Selected token registration failed')
     }
   },
-  ensureDefaults: async (
-    tokens: readonly SwapToken[],
-    options: Readonly<{ forceProtocolRefresh?: boolean }> = {}
-  ): Promise<readonly UserEvmAssetRecord[]> => {
-    const assets = resolveManagedIntentsCatalog(tokens)
-    const managed = await userEvmAssetsClient.listManaged()
-    const defaultAssetIds = new Set(managed.defaultAssetIds)
-    const existingEvmAssetIds = new Set(managed.userAssets.map(asset => asset.assetId))
-    const existingProtocolAssetIds = new Set(managed.protocolAssetIds)
-    const missingDefaultEvmAssets = assets.filter(
-      asset =>
-        asset.management === 'evm' &&
-        defaultAssetIds.has(asset.assetId) &&
-        !existingEvmAssetIds.has(asset.assetId)
-    )
-    const missingProtocolAssets = assets.some(
-      asset =>
-        asset.management === 'protocol' &&
-        defaultAssetIds.has(asset.assetId) &&
-        !existingProtocolAssetIds.has(asset.assetId)
-    )
-    const [evmResult] = await Promise.all([
-      enableEvmAssets(missingDefaultEvmAssets, false),
-      missingProtocolAssets || options.forceProtocolRefresh === true
-        ? refreshProtocolAssets(options.forceProtocolRefresh === true)
-        : Promise.resolve()
-    ])
-    return evmResult
-  },
   setVisible: async (
     asset: IntentsManagedAsset,
     visible: boolean
@@ -170,30 +134,3 @@ export const intentsAssetManagerClient = Object.freeze({
     return true
   }
 })
-
-export function initializeDefaultIntentsAssets(): Promise<boolean> {
-  if (DEFAULT_NETWORK !== 'mainnet') return Promise.resolve(false)
-  return defaultAssetInitialization.run(async () => {
-    let initializedFromCache = false
-    const cached = await swapTokenCatalogClient.readCached()
-    if (cached.length > 0) {
-      await intentsAssetManagerClient.ensureDefaults(cached)
-      initializedFromCache = true
-    }
-    const claimed = await automaticRefreshSession.claim(
-      `intents-default-assets:${DEFAULT_NETWORK}`,
-      ['catalog'],
-      Date.now(),
-      DEFAULT_ASSET_REFRESH_COOLDOWN_MS
-    )
-    if (claimed.length === 0) return initializedFromCache
-    try {
-      const refreshed = await swapTokenCatalogClient.refresh()
-      await intentsAssetManagerClient.ensureDefaults(refreshed)
-      return true
-    } catch (error) {
-      if (initializedFromCache) return true
-      throw error
-    }
-  })
-}

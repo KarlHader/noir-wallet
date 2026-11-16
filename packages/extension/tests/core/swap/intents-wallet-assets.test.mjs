@@ -59,13 +59,7 @@ test('maps only mainnet SOL, SPL and NEP-141 protocol assets into the wallet reg
     kind: 'native'
   })
 
-  const defaultSolanaUsdcAssetId =
-    'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
-  const catalog = createIntentsWalletAssetCatalog(
-    [sol, token({}), near],
-    'mainnet',
-    new Set([defaultSolanaUsdcAssetId])
-  )
+  const catalog = createIntentsWalletAssetCatalog([sol, token({}), near], 'mainnet')
   const definitions = catalog.definitions
   expect(definitions).toHaveLength(3)
   const chains = createInitialProductChainRegistry('mainnet')
@@ -91,7 +85,7 @@ test('maps only mainnet SOL, SPL and NEP-141 protocol assets into the wallet reg
     {
       assetId:
         'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      visibleByDefault: true
+      visibleByDefault: false
     },
     { assetId: 'near:mainnet/nep141:wrap.near', visibleByDefault: false },
     { assetId: 'near:mainnet/nep141:lst.rhealab.near', visibleByDefault: false }
@@ -155,25 +149,6 @@ test('isolates malformed provider token identities instead of poisoning the cata
   expect(catalog.entries).toHaveLength(2)
   expect(catalog.entries[0].symbol).toBe('USDC')
   expect(catalog.entries[1].symbol).toBe('rNEAR')
-})
-
-test('does not default to a provider token that only claims a stablecoin symbol', () => {
-  const catalog = createIntentsWalletAssetCatalog(
-    [
-      token({
-        assetId: 'nep141:fake-usdc.near',
-        blockchain: 'near',
-        contractAddress: 'fake-usdc.near',
-        symbol: 'USDC'
-      })
-    ],
-    'mainnet',
-    new Set(['near:mainnet/nep141:usdt.tether-token.near'])
-  )
-  expect(catalog.preferences).toContainEqual({
-    assetId: 'near:mainnet/nep141:fake-usdc.near',
-    visibleByDefault: false
-  })
 })
 
 test('registers trusted rNEAR even when the external Swap catalog omits it', () => {

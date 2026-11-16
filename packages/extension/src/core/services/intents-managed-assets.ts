@@ -2,8 +2,9 @@ import type { EvmNetworkConfig } from '@/config/networks'
 import type { Network } from '@/types'
 
 import type { SwapToken } from './intents-api'
-import { resolveIntentsEvmAssets } from './intents-evm-assets'
-import { createIntentsWalletAssetCatalog } from './intents-wallet-assets'
+import type { RheaSwapToken } from './rhea-swap/rhea-swap-model'
+import { isDeprecatedIntentsToken, resolveIntentsEvmAssets } from './intents-evm-assets'
+import { createIntentsWalletAssetCatalog, resolveIntentsWalletAsset } from './intents-wallet-assets'
 
 export interface IntentsManagedAsset {
   readonly protocolAssetId: string
@@ -16,6 +17,44 @@ export interface IntentsManagedAsset {
   readonly decimals: number
   readonly iconUrl?: string
   readonly management: 'evm' | 'protocol'
+}
+
+export function resolveSwapTokenAssetIds(
+  tokens: readonly RheaSwapToken[],
+  network: Network,
+  evmNetworks: readonly EvmNetworkConfig[]
+): ReadonlySet<string> {
+  if (network !== 'mainnet') return new Set()
+  const chains = new Set<string>(evmNetworks.map(chain => chain.chainId))
+  const assetIds = new Set<string>()
+  for (const token of tokens) {
+    if (
+      token.isNative ||
+      token.isDisplaySeed ||
+      token.sources.length === 0 ||
+      isDeprecatedIntentsToken(token)
+    )
+      continue
+    if (/^[1-9]\d*$/.test(token.rheaChainId)) {
+      const chainId = `eip155:${token.rheaChainId}`
+      const address = token.rheaAddress.toLowerCase()
+      if (!chains.has(chainId) || !/^0x[0-9a-f]{40}$/.test(address) || /^0x0{40}$/.test(address))
+        continue
+      if (token.contractAddress && token.contractAddress.toLowerCase() !== address) continue
+      assetIds.add(`${chainId}/erc20:${address}`)
+    } else if (
+      (token.rheaChainId === 'solana' && token.blockchain === 'sol') ||
+      (token.rheaChainId === 'near' && token.blockchain === 'near')
+    ) {
+      if (token.contractAddress && token.contractAddress !== token.rheaAddress) continue
+      const asset = resolveIntentsWalletAsset(
+        { ...token, contractAddress: token.rheaAddress },
+        network
+      )
+      if (asset?.kind === 'token') assetIds.add(asset.assetId)
+    }
+  }
+  return assetIds
 }
 
 export function resolveManagedIntentsAssets(

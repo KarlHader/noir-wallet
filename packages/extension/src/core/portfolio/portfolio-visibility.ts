@@ -2,7 +2,6 @@ import type { PortfolioReadModel } from './portfolio-types'
 
 export interface TokenDisplayPolicy {
   readonly allowedAssetIds: ReadonlySet<string>
-  readonly defaultAssetIds: ReadonlySet<string>
   readonly visibleAssetIds: ReadonlySet<string>
   readonly hiddenAssetIds: ReadonlySet<string>
 }
@@ -13,10 +12,7 @@ export function isPortfolioTokenVisible(
   policy: TokenDisplayPolicy
 ): boolean {
   if (policy.hiddenAssetIds.has(assetId)) return false
-  return (
-    policy.visibleAssetIds.has(assetId) ||
-    (policy.allowedAssetIds.has(assetId) && (held || policy.defaultAssetIds.has(assetId)))
-  )
+  return policy.visibleAssetIds.has(assetId) || (policy.allowedAssetIds.has(assetId) && held)
 }
 
 export function applyTokenDisplayPolicy(
