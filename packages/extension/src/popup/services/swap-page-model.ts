@@ -2,6 +2,7 @@ import type { PortfolioReadModel } from '@/core/portfolio'
 import { decodeFunctionData, parseAbi } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isZecToken, type SwapToken } from '@/core/services/intents-api'
+import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { resolveIntentsEvmAssets } from '@/core/services/intents-evm-assets'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
@@ -23,6 +24,7 @@ import {
 
 import {
   resolveWalletOwnedQuoteAsset,
+  resolveRheaSwapDestinationIdentity,
   resolveWalletQuoteReceiveTarget,
   type PreparedQuoteDepositTransfer,
   type WalletOwnedQuoteAsset
@@ -54,6 +56,38 @@ export function resolveSwapRecipientChainId(
       .list()
       .find(chain => chain.family === descriptor.walletFamily)?.id ?? null
   )
+}
+
+export function resolveNativeZecIntentsDestination(
+  token: RheaSwapToken,
+  portfolio: PortfolioReadModel | null,
+  network: Network,
+  managedAssets: readonly IntentsManagedAsset[],
+  protocolTokens: readonly SwapToken[]
+): Readonly<{ chainId: string; assetId: string; protocolAssetId: string }> | null {
+  if (isZecToken(token)) return null
+  const chainId = resolveSwapRecipientChainId(token, network)
+  if (!chainId) return null
+  const managed = managedAssets.find(
+    asset =>
+      asset.chainId === chainId &&
+      asset.decimals === token.decimals &&
+      (asset.assetId === token.assetId ||
+        asset.protocolAssetId === token.assetId ||
+        (asset.namespace === 'erc20' &&
+          token.contractAddress !== null &&
+          token.contractAddress !== undefined &&
+          asset.reference.toLowerCase() === token.contractAddress.toLowerCase()))
+  )
+  const native = token.isNative ? resolveRheaSwapDestinationIdentity(token, portfolio) : null
+  const assetId = managed?.assetId ?? native?.assetId
+  const protocolAssetId =
+    managed?.protocolAssetId ??
+    (native && protocolTokens.some(candidate => candidate.assetId === token.assetId)
+      ? token.assetId
+      : null)
+  if (!assetId || !protocolAssetId || (managed?.chainId ?? native?.chainId) !== chainId) return null
+  return Object.freeze({ chainId, assetId, protocolAssetId })
 }
 
 export function resolveManagedSwapRecipient(input: {

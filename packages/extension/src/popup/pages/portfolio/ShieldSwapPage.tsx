@@ -5,6 +5,7 @@ import { getCachedTokens, type SwapToken } from '@/core/services/intents-api'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { classifyError } from '@/lib/errors'
 import { formatSymbol } from '@/lib/format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { useWalletStore } from '@/store/wallet-store'
@@ -20,6 +21,7 @@ import { useNavigate } from '@/popup/provider/Router'
 import { SwapAssetCard, SwapProviderCard } from '@/popup/components/swap/SwapInputView'
 import { getSwapAmountValues } from '@/popup/components/swap/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
@@ -1250,35 +1252,29 @@ function ShieldSwapForm({
           />
         )}
         {!error && !balanceError && previewError && (
-          <div
+          <InlineError
+            className="mt-3"
+            tone="warning"
             role="alert"
-            className="mt-3 flex items-center justify-between gap-2 text-xs text-warning"
-          >
-            <span>
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh Shield balances to get a quote.'
-                : SWAP_QUOTE_DISPLAY_ERROR}
-            </span>
-            <button
-              type="button"
-              disabled={connecting}
-              onClick={
-                previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                  ? () => void refreshBalances()
-                  : retryPreview
-              }
-              className="shrink-0 text-primary disabled:opacity-45"
-            >
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh balances'
-                : 'Retry'}
-            </button>
-          </div>
+            message={classifyError(previewError).userMessage}
+            onRetry={
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                ? () => void refreshBalances()
+                : retryPreview
+            }
+            retrying={connecting}
+            retryLabel={
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'
+            }
+          />
         )}
         {(error || balanceError) && (
-          <p role="alert" className="mt-3 text-xs text-warning">
-            {error || balanceError}
-          </p>
+          <InlineError
+            className="mt-3"
+            tone="warning"
+            role="alert"
+            message={classifyError(error || balanceError).userMessage}
+          />
         )}
         {status === 'error' && trustedBalances && (
           <Button variant="ghost" onClick={() => void onRefreshPortfolio()} className="w-full">

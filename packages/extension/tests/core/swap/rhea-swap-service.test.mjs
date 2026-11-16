@@ -232,11 +232,18 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     toChain: '56',
     sender: source,
     recipient: destination,
-    confidentiality: 'basic',
     tokenIn: { address: 'native' },
     tokenOut: { address: 'native' }
   }
   expect(() => assertPrivateQuoteRoute(route, account, 'private-swap', account)).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, confidentiality: 'basic' },
+      account,
+      'private-swap',
+      account
+    )
+  ).toThrow(/account changed/)
   const publicDestination = account.networks[1].addresses[0].value
   expect(() =>
     assertPrivateQuoteRoute(
@@ -418,44 +425,45 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     assertPrivateQuoteRoute(route, account, 'private-swap', { ...account, accountId: 'account-2' })
   ).toThrow(/account changed/)
   expect(() => assertPrivateQuoteRoute(route, null, 'private-swap')).toThrow(/account changed/)
+  const confidentialRoute = { ...route, confidentiality: 'basic' }
   const main = account.networks[0].addresses[0].value
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main },
+      { ...confidentialRoute, toChain: '1', recipient: main },
       account,
       'private-transfer'
     )
   ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: `0x${'5'.repeat(40)}` },
+      { ...confidentialRoute, toChain: '1', recipient: `0x${'5'.repeat(40)}` },
       account,
       'private-transfer'
     )
   ).toThrow(/must stay in this Account/)
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main, tokenOut: { address: 'other' } },
+      { ...confidentialRoute, toChain: '1', recipient: main, tokenOut: { address: 'other' } },
       account,
       'private-transfer'
     )
   ).toThrow(/asset/)
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, recipient: `0x${'5'.repeat(40)}` },
+      { ...confidentialRoute, recipient: `0x${'5'.repeat(40)}` },
       account,
       'private-cross-chain-send'
     )
   ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main },
+      { ...confidentialRoute, toChain: '1', recipient: main },
       account,
       'private-cross-chain-send'
     )
   ).toThrow(/route is invalid/)
   const privateDappRoute = {
-    ...route,
+    ...confidentialRoute,
     toChain: '1',
     recipient: `0x${'5'.repeat(40)}`
   }
@@ -470,7 +478,7 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     )
   ).toThrow(/route is invalid/)
   const publicRoute = {
-    ...route,
+    ...confidentialRoute,
     toChain: '1',
     sender: main,
     recipient: `0x${'5'.repeat(40)}`

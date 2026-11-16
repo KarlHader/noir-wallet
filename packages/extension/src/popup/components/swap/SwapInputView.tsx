@@ -496,7 +496,7 @@ export function SwapAssetCard({
               aria-label={isEstimatedAmount && amount ? `Estimated output: ${amount}` : undefined}
               title={amount || undefined}
               className={cn(
-                'min-h-[26px] overflow-x-auto whitespace-nowrap font-sans text-xl font-semibold leading-[26px]',
+                'flex h-[26px] items-center justify-end overflow-x-auto whitespace-nowrap font-sans text-xl font-semibold leading-[26px]',
                 isEstimatedAmount && 'text-muted'
               )}
             >

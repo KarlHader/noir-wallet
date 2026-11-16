@@ -125,7 +125,6 @@ export function useSwapState(
   const setSlippage = useSwapPreferences(state => state.setSlippage)
   const setSavedTokenSelection = useSwapPreferences(state => state.setSavedTokenSelection)
   const setSavedTokenInId = useSwapPreferences(state => state.setSavedTokenInId)
-  const setSavedTokenOutId = useSwapPreferences(state => state.setSavedTokenOutId)
 
   const [areTokensLoading, setAreTokensLoading] = useState(true)
   const [destinationTokensLoading, setDestinationTokensLoading] = useState(true)
@@ -706,11 +705,15 @@ export function useSwapState(
         )
       }
       setTokenOut(token)
-      if (preferenceScope) setSavedTokenOutId(preferenceScope, token.assetId)
+      if (preferenceScope)
+        setSavedTokenSelection(preferenceScope, {
+          tokenInId: tokenIn?.assetId ?? null,
+          tokenOutId: token.assetId
+        })
       setAmountOut('')
       setQuoteError(null)
     },
-    [markSelectionEdited, preferenceScope, setSavedTokenOutId, tokenIn?.blockchain]
+    [markSelectionEdited, preferenceScope, setSavedTokenSelection, tokenIn]
   )
 
   const selectTokenOutForFlow = useCallback((token: RheaSwapToken) => {

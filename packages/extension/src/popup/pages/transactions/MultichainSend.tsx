@@ -360,8 +360,10 @@ export function MultichainSend({
   } | null>(null)
   const [destinationCatalog, setDestinationCatalog] = useState<{
     key: string
-    assetIds: readonly string[]
+    status: 'loading' | 'ready' | 'error'
   } | null>(null)
+  const verifiedDestinationCatalog = useRef(new Map<string, readonly string[]>())
+  const [destinationCatalogRevision, retryDestinationCatalog] = useState(0)
   const [nonEvmDraft, setNonEvmDraft] = useState<{
     key: string
     assetId: string
@@ -783,8 +785,13 @@ export function MultichainSend({
     }
     const sourceDescriptor = getEnabledSwapChains([selection.chain.chain])[0]
     const destinationDescriptors = destinationCandidates.map(item => item.descriptor)
-    if (!sourceDescriptor) return
+    if (!sourceDescriptor) {
+      verifiedDestinationCatalog.current.set(destinationCatalogKey, [])
+      setDestinationCatalog({ key: destinationCatalogKey, status: 'ready' })
+      return
+    }
     let cancelled = false
+    setDestinationCatalog({ key: destinationCatalogKey, status: 'loading' })
     void Promise.all([
       rheaSwapClient.listTokens({
         direction: 'from',
@@ -797,6 +804,10 @@ export function MultichainSend({
     ])
       .then(([sourceCatalog, destinationCatalog]) => {
         if (cancelled) return
+        if (sourceCatalog.failedChainIds.length || destinationCatalog.failedChainIds.length) {
+          setDestinationCatalog({ key: destinationCatalogKey, status: 'error' })
+          return
+        }
         const sourceToken = sourceCatalog.tokens.find(
           token =>
             token.rheaChainId === sourceDescriptor.apiChainId &&
@@ -818,21 +829,33 @@ export function MultichainSend({
               return destinationToken ? [item.assetId] : []
             })
           : []
-        setDestinationCatalog({ key: destinationCatalogKey, assetIds })
+        verifiedDestinationCatalog.current.set(destinationCatalogKey, assetIds)
+        setDestinationCatalog({ key: destinationCatalogKey, status: 'ready' })
       })
       .catch(() => {
-        if (!cancelled) setDestinationCatalog({ key: destinationCatalogKey, assetIds: [] })
+        if (!cancelled) setDestinationCatalog({ key: destinationCatalogKey, status: 'error' })
       })
     return () => {
       cancelled = true
     }
-  }, [shieldActive, crossChainGroup, destinationCatalogKey, destinationCandidates, selection])
-  const availableDestinationNetworks =
-    destinationCatalog?.key === destinationCatalogKey
-      ? destinationCandidates.filter(item => destinationCatalog.assetIds.includes(item.assetId))
-      : []
+  }, [
+    shieldActive,
+    crossChainGroup,
+    destinationCatalogKey,
+    destinationCatalogRevision,
+    destinationCandidates,
+    selection
+  ])
+  const verifiedDestinationAssetIds = verifiedDestinationCatalog.current.get(destinationCatalogKey)
+  const availableDestinationNetworks = destinationCandidates.filter(item =>
+    verifiedDestinationAssetIds?.includes(item.assetId)
+  )
   const destinationNetworksLoading =
-    destinationCandidates.length > 0 && destinationCatalog?.key !== destinationCatalogKey
+    destinationCandidates.length > 0 &&
+    !verifiedDestinationAssetIds &&
+    (destinationCatalog?.key !== destinationCatalogKey || destinationCatalog.status === 'loading')
+  const destinationNetworksError =
+    destinationCatalog?.key === destinationCatalogKey && destinationCatalog.status === 'error'
 
   const selectReturnedSource = (asset: SendAsset | null) => {
     if (!returnedSourcePickerRequested || !effectiveWalletId || !effectiveAccountId) {
@@ -1470,6 +1493,8 @@ export function MultichainSend({
                   option => ({ id: option.chainId, name: option.name })
                 )}
                 destinationNetworksLoading={destinationNetworksLoading}
+                destinationNetworksError={destinationNetworksError}
+                onRetryDestinationNetworks={() => retryDestinationCatalog(revision => revision + 1)}
                 onSelectDestinationNetwork={(destinationAssetId, draft) => {
                   if (!effectiveWalletId || !effectiveAccountId) return
                   const destination = availableDestinationNetworks.find(

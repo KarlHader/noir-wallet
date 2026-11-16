@@ -6,6 +6,7 @@ import {
   buildLiveSwapQuoteRequest,
   hasSwapQuoteTermsChanged,
   isAcceptedSwapReview,
+  resolveNativeZecIntentsDestination,
   resolveScopedSwapZcashRecipient,
   resolveShieldDomainZecFundingSource,
   shieldConfidentialSwapActive
@@ -46,6 +47,35 @@ it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
   })
   assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 1000).ready, true)
   assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 2000).ready, false)
+})
+
+it('uses the Intents protocol ID when quoting native Shield ZEC to Base USDC', () => {
+  const assetId = 'eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+  const protocolAssetId = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near'
+  const token = {
+    assetId: 'nep141:older-base-usdc.omft.near',
+    rheaChainId: '8453',
+    blockchain: 'base',
+    contractAddress: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    decimals: 6,
+    isNative: false
+  }
+  const managed = [
+    {
+      assetId,
+      protocolAssetId,
+      chainId: 'eip155:8453',
+      namespace: 'erc20',
+      reference: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      decimals: 6
+    }
+  ]
+  const protocolTokens = [{ assetId: protocolAssetId, blockchain: 'base', decimals: 6 }]
+  assert.deepEqual(
+    resolveNativeZecIntentsDestination(token, null, 'mainnet', managed, protocolTokens),
+    { chainId: 'eip155:8453', assetId, protocolAssetId }
+  )
+  assert.equal(resolveNativeZecIntentsDestination(token, null, 'mainnet', [], protocolTokens), null)
 })
 
 function source(balance = '1000000') {

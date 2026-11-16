@@ -117,7 +117,7 @@ test('fee-estimate failure leaves a positive native proposal with a fee reserve 
   }
 })
 
-test('estimates confidential native gas using the actual smaller route and discards the unsigned quote', async () => {
+test('estimates Private Swap native gas using the actual smaller route and discards the unsigned quote', async () => {
   const calls = []
   const token = {
     rheaChainId: '1',
@@ -164,7 +164,7 @@ test('estimates confidential native gas using the actual smaller route and disca
     tokenIn: token,
     tokenOut: token,
     recipient: '0x2222222222222222222222222222222222222222',
-    confidential: true,
+    confidential: false,
     purpose: 'private-swap',
     executionMode: 'private',
     feeTier: 'fast'
@@ -176,12 +176,12 @@ test('estimates confidential native gas using the actual smaller route and disca
     'quote',
     {
       amountIn: '500000000000000000',
-      confidentiality: 'basic',
       sender: source.refundAddress,
       recipient: input.recipient
     },
     'private-swap'
   ])
+  expect(calls[0][1]).not.toHaveProperty('confidentiality')
   expect(calls[1]).toMatchObject([
     'estimate',
     {

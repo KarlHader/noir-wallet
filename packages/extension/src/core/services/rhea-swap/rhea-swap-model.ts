@@ -59,7 +59,9 @@ export function assertPrivateQuoteRoute(
       purpose !== 'public-cross-chain-send' &&
       ((!/^[1-9]\d*$/.test(request.fromChain) &&
         !(purpose === 'public-private-send' && request.fromChain === 'zcash')) ||
-        request.confidentiality !== 'basic'))
+        (purpose === 'private-swap'
+          ? request.confidentiality !== undefined
+          : request.confidentiality !== 'basic')))
   ) {
     throw new Error('Private quote account changed. Get a new quote.')
   }

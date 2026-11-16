@@ -715,7 +715,7 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
     const data = await response.json()
 
     if (data?.quote) {
-      if (params.validateQuoteRequest && data.quoteRequest !== undefined) {
+      if (params.validateQuoteRequest) {
         const echoed = data.quoteRequest
         const sameAddress = (left: unknown, right: string) =>
           typeof left === 'string' &&

@@ -1145,6 +1145,40 @@ test.describe('quote deposit transfer client', () => {
     })
   })
 
+  test('binds a canonical Base source to its Intents protocol ID and Shield recipient', () => {
+    const assetId = 'eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+    const protocolAssetId = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near'
+    const recipient =
+      'u1nvgt6yr35mhc9wdf4wckvl38476vqy96dx3cwkfdwy4jet9300l5v8l2yg27ql7w9qwm0lf8kncnj9nus4mgete06j3cu3mhrqvstg6swvdya6xgzwhh6a9xxdhxkavvvmztqeuaurjtqfk3dzetuzgnu0zjvmdpe8ehvj53sy6yhzxj'
+    const source = {
+      sourceAssetId: assetId,
+      refundAddress: '0x1111111111111111111111111111111111111111',
+      chain: { chain: { id: 'eip155:8453' } },
+      asset: { metadata: { decimals: 6 }, asset: { id: assetId } }
+    }
+    const binding = createNearIntentsSwapBinding({
+      source,
+      tokenIn: token(assetId, 'base', 6),
+      tokenOut: token('nep141:zec.omft.near', 'zec', 8),
+      originProtocolAssetId: protocolAssetId,
+      amountInRaw: '100000000',
+      recipient,
+      quote: {
+        amountIn: '100000000',
+        amountOut: '11000000',
+        minAmountOut: '10900000',
+        depositAddress: '0x2222222222222222222222222222222222222222',
+        deadline: new Date(Date.now() + 600_000).toISOString()
+      }
+    })
+    expect(binding.origin).toMatchObject({ assetId, protocolAssetId })
+    expect(binding.destination).toMatchObject({
+      assetId: ZCASH_ASSET_ID,
+      protocolAssetId: 'nep141:zec.omft.near',
+      recipient
+    })
+  })
+
   test('routes EVM quote deposits through prepare, fingerprint-bound approve, and reject', async () => {
     const calls = []
     const evmReview = review('transaction:evm:quote')

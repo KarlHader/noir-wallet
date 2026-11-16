@@ -138,6 +138,8 @@ export function EvmSendForm({
   onSelectShield,
   destinationNetworks,
   destinationNetworksLoading,
+  destinationNetworksError,
+  onRetryDestinationNetworks,
   onSelectDestinationNetwork,
   catalogAccount,
   catalog,
@@ -162,6 +164,8 @@ export function EvmSendForm({
     icon: string
   }[]
   destinationNetworksLoading: boolean
+  destinationNetworksError: boolean
+  onRetryDestinationNetworks: () => void
   onSelectDestinationNetwork: (
     destinationAssetId: string,
     draft: Readonly<{ recipient: string; amount: string }>
@@ -1184,12 +1188,18 @@ export function EvmSendForm({
           <div>
             <div className="mb-2 flex items-center justify-between text-xs">
               <SendFieldLabel>Send to</SendFieldLabel>
-              {!sendPrivately && (destinationNetworks.length > 1 || destinationNetworksLoading) ? (
+              {!sendPrivately &&
+              (destinationNetworks.length > 1 ||
+                destinationNetworksLoading ||
+                destinationNetworksError) ? (
                 <>
                   <button
                     type="button"
                     onClick={() => setNetworkPickerOpen(true)}
-                    disabled={destinationNetworks.length <= 1}
+                    disabled={
+                      destinationNetworksLoading ||
+                      (destinationNetworks.length <= 1 && !destinationNetworksError)
+                    }
                     className="inline-flex items-center gap-1.5 text-foreground hover:text-primary disabled:cursor-wait disabled:opacity-60"
                     aria-label={`Select destination network, ${chain.chain.displayName}`}
                   >
@@ -1224,6 +1234,9 @@ export function EvmSendForm({
                       name: option.name,
                       icon: option.icon
                     }))}
+                    loading={destinationNetworksLoading}
+                    error={destinationNetworksError ? 'Unable to load networks' : undefined}
+                    onRetry={onRetryDestinationNetworks}
                     onSelect={destinationAssetId =>
                       onSelectDestinationNetwork(destinationAssetId, {
                         recipient,

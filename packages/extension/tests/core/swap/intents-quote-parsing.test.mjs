@@ -77,6 +77,44 @@ test('swap quote sends the configured 35 bps app fee', async () => {
   }
 })
 
+test('protected Intents quote requires a matching request echo', async () => {
+  const originalFetch = globalThis.fetch
+  let requestedBody
+  globalThis.fetch = async (_input, init) => {
+    requestedBody = JSON.parse(init.body)
+    return new Response(JSON.stringify(response()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+  }
+
+  try {
+    const request = {
+      originAsset: 'nep141:base-usdc.omft.near',
+      destinationAsset: 'nep141:zec.omft.near',
+      amount: '1000000',
+      refundTo: '0x1111111111111111111111111111111111111111',
+      recipient: 'u1destination',
+      validateQuoteRequest: true
+    }
+    expect((await fetchQuote(request)).quoteStatus).toBe('error')
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({ ...response(), quoteRequest: { ...requestedBody, recipient: 't1other' } }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    expect((await fetchQuote(request)).quoteStatus).toBe('error')
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ...response(), quoteRequest: requestedBody }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    expect((await fetchQuote(request)).quoteStatus).toBe('success')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 function response(overrides = {}) {
   return {
     quote: {
