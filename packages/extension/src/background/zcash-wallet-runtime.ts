@@ -672,7 +672,7 @@ export class BackgroundZcashWalletRuntime {
         })
         this.walletCores.delete(oldestId)
         this.walletCoreLastUsed.delete(oldestId)
-        logger.log(`Evicted idle walletCore: ${oldestId}`, oldestId)
+        logger.log('Evicted idle walletCore', oldestId)
       }
     }
 
@@ -1257,7 +1257,7 @@ export class BackgroundZcashWalletRuntime {
       const network = this.network
       const passwordGeneration = this.passwordGeneration
       const dbKey = `${network}_${walletId}`
-      logger.log(`Will init with dbKey: ${dbKey}`, walletId)
+      logger.log('Initializing walletCore with persistence key', walletId)
 
       core
         .initialize(undefined, dbKey)
@@ -3868,7 +3868,7 @@ export class BackgroundZcashWalletRuntime {
         this.startSyncFor(walletId)
       }
 
-      logger.log('Hardware wallet created: ' + walletId, walletId)
+      logger.log('Hardware wallet created', walletId)
       return walletId
     } catch (e) {
       let persisted = true
@@ -4103,7 +4103,7 @@ export class BackgroundZcashWalletRuntime {
     walletIds.delete('temp-query')
 
     const logPrefix = reason === 'manual' ? 'RPC SWITCH' : 'RPC FAILOVER'
-    logger.log(`[${logPrefix}] applying endpoint ${lightwalletdUrl} to ${walletIds.size} wallet(s)`)
+    logger.log(`[${logPrefix}] applying endpoint to ${walletIds.size} wallet(s)`)
 
     const failed: string[] = []
     for (const walletId of walletIds) {
@@ -4226,7 +4226,7 @@ export class BackgroundZcashWalletRuntime {
 
     const core = this.walletCores.get(syncWalletId)
     if (!core) {
-      logger.log(`WalletCore not found for ${syncWalletId}, skipping`, syncWalletId)
+      logger.log('WalletCore not found, skipping', syncWalletId)
       return { status: 'skipped' }
     }
 
@@ -4255,7 +4255,7 @@ export class BackgroundZcashWalletRuntime {
     }
 
     if (!core.hasAccount()) {
-      logger.log(`No account for ${syncWalletId}, skipping`, syncWalletId)
+      logger.log('No account in walletCore, skipping', syncWalletId)
       return { status: 'skipped' }
     }
 

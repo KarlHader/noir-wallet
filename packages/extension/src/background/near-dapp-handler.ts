@@ -113,15 +113,13 @@ export class BackgroundNearDAppHandler {
     tabInfo: NativeTransferDAppTabInfo
   ): Promise<unknown> {
     if (request.method === 'signTransaction') {
-      const [signedTx] = await this.signTransactions(
-        [parseNearDAppTransaction(request.params)],
-        origin,
-        tabInfo
-      )
+      const {
+        signed: [signedTx]
+      } = await this.signTransactions([parseNearDAppTransaction(request.params)], origin, tabInfo)
       return signedTx
     }
     if (request.method === 'requestSignTransactions') {
-      const signed = await this.signTransactions(
+      const { signed } = await this.signTransactions(
         parseNearDAppTransactionBatch(request.params),
         origin,
         tabInfo
@@ -179,7 +177,7 @@ export class BackgroundNearDAppHandler {
     origin: string,
     tabInfo: NativeTransferDAppTabInfo,
     broadcast = false
-  ): Promise<readonly string[]> {
+  ): Promise<Readonly<{ signed: readonly string[]; account: AuthorizedNearDAppAccount }>> {
     return this.options.runActiveOperation(async () => {
       const active = await this.options.loadAuthorizedAccount(origin)
       if (
@@ -302,7 +300,7 @@ export class BackgroundNearDAppHandler {
           }
         }
       }
-      return Object.freeze(signed)
+      return Object.freeze({ signed: Object.freeze(signed), account: active })
     })
   }
 
@@ -311,12 +309,21 @@ export class BackgroundNearDAppHandler {
     origin: string,
     tabInfo: NativeTransferDAppTabInfo
   ): Promise<readonly Readonly<Record<string, unknown>>[]> {
-    const signed = await this.signTransactions(requests, origin, tabInfo, true)
+    const { signed, account } = await this.signTransactions(requests, origin, tabInfo, true)
     const results: Readonly<Record<string, unknown>>[] = []
     for (const transaction of signed) {
       let result: Readonly<Record<string, unknown>>
       try {
-        result = await this.options.rpc.broadcastSignedTransactionAndWait(transaction)
+        result = await this.options.runActiveOperation(async () => {
+          const current = await this.options.loadAuthorizedAccount(origin)
+          if (!sameAccount(current, account)) {
+            throw new NativeTransferProviderError(
+              4100,
+              'The active NEAR account changed. Review the transaction again.'
+            )
+          }
+          return this.options.rpc.broadcastSignedTransactionAndWait(transaction)
+        })
       } catch (error) {
         emitDAppEvent(this.options.analytics, 'near', ANALYTICS_EVENTS.DAPP_TRANSACTION_FAILED)
         throw error

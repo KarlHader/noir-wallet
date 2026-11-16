@@ -10,6 +10,7 @@ const publicKey = `ed25519:${'1'.repeat(32)}`
 function harness({ approved = true } = {}) {
   const calls = []
   const analyticsEvents = []
+  let authorized = true
   const active = {
     context: {
       chainAccount: {
@@ -72,7 +73,10 @@ function harness({ approved = true } = {}) {
       async notifyAccountsChanged() {}
     },
     network: { chainId, displayName: 'NEAR Testnet' },
-    loadAuthorizedAccount: async () => active,
+    loadAuthorizedAccount: async () => {
+      if (!authorized) throw new Error('Site connection was revoked')
+      return active
+    },
     requestApproval: async (_origin, action, data) => {
       calls.push(['approval', action, data])
       return { approved, requestId: 'approval:1' }
@@ -97,7 +101,7 @@ function harness({ approved = true } = {}) {
       }
     }
   })
-  return { handler, calls, analyticsEvents, signer }
+  return { handler, calls, analyticsEvents, signer, revoke: () => (authorized = false) }
 }
 
 test('signs an OKX-compatible NEAR function-call transaction without broadcasting it', async () => {
@@ -191,6 +195,32 @@ test('signs and broadcasts a Near Connect transaction after approval', async () 
     gas: '300000000000000',
     depositYocto: '0'
   })
+})
+
+test('does not broadcast a signed NEAR transaction after site authorization is revoked', async () => {
+  const state = harness()
+  const confirm = state.signer.confirm
+  state.signer.confirm = async (...args) => {
+    const result = await confirm(...args)
+    state.revoke()
+    return result
+  }
+  await expect(
+    state.handler.request(
+      {
+        method: 'signAndSendTransaction',
+        params: [
+          {
+            receiverId: 'recipient.testnet',
+            actions: [{ type: 'Transfer', params: { deposit: '1' } }]
+          }
+        ]
+      },
+      'https://dapp.example',
+      {}
+    )
+  ).rejects.toThrow('Site connection was revoked')
+  expect(state.calls.some(call => call[0] === 'broadcast')).toBe(false)
 })
 
 test('allocates consecutive nonces for a NEAR transaction batch', async () => {

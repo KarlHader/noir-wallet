@@ -999,7 +999,12 @@ export class RheaSwapService {
       build.toChain !== quote.toChain ||
       build.tokenIn.address !== quote.tokenIn.address ||
       build.tokenOut.address !== quote.tokenOut.address ||
+      (quote.tokenIn.decimals !== undefined && build.tokenIn.decimals !== quote.tokenIn.decimals) ||
+      (quote.tokenOut.decimals !== undefined &&
+        build.tokenOut.decimals !== quote.tokenOut.decimals) ||
       build.amountIn !== quote.amountIn ||
+      build.estimatedOut !== quote.estimatedOut ||
+      build.minAmountOut !== quote.minAmountOut ||
       build.router !== quote.route.router ||
       build.request?.sender !== quote.buildContext.request.sender ||
       build.request?.recipient !== quote.buildContext.request.recipient ||

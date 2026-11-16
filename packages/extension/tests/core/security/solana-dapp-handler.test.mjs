@@ -10,6 +10,7 @@ const transaction = 'AQ=='
 function harness({ approved = true, hardware = false } = {}) {
   const calls = []
   const analyticsEvents = []
+  let authorized = true
   const active = {
     context: {
       chainAccount: {
@@ -93,14 +94,17 @@ function harness({ approved = true, hardware = false } = {}) {
     network: { chainId, displayName: 'Solana Devnet' },
     signer,
     rpc,
-    loadAuthorizedAccount: async () => active,
+    loadAuthorizedAccount: async () => {
+      if (!authorized) throw new Error('Site connection was revoked')
+      return active
+    },
     requestApproval: async (_origin, action, data) => {
       calls.push(['approval', action, data])
       return { approved, requestId: 'approval:1' }
     },
     runActiveOperation: operation => operation()
   })
-  return { handler, calls, analyticsEvents, signer, rpc }
+  return { handler, calls, analyticsEvents, signer, rpc, revoke: () => (authorized = false) }
 }
 
 test('signs and broadcasts an authorized serialized Solana transaction', async () => {
@@ -117,6 +121,24 @@ test('signs and broadcasts an authorized serialized Solana transaction', async (
   expect(state.calls[1][2]).toMatchObject({
     faviconPageUrl: 'https://dapp.example/send'
   })
+})
+
+test('does not broadcast a signed Solana transaction after site authorization is revoked', async () => {
+  const state = harness()
+  const confirm = state.signer.confirm
+  state.signer.confirm = async (...args) => {
+    const result = await confirm(...args)
+    state.revoke()
+    return result
+  }
+  await expect(
+    state.handler.request(
+      { method: 'signAndSendTransaction', params: [transaction] },
+      'https://dapp.example',
+      {}
+    )
+  ).rejects.toThrow('Site connection was revoked')
+  expect(state.calls.some(call => call[0] === 'broadcast')).toBe(false)
 })
 
 test('honors Wallet Standard send options and requested confirmation', async () => {

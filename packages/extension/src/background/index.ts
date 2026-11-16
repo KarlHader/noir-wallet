@@ -94,6 +94,7 @@ import { getRetryableWalletRpcUserMessage } from '@/core/zcash/wallet-rpc-errors
 import {
   clearPreparedHardwareSignRequest,
   consumePreparedHardwareSignRequest,
+  isHardwareDAppAuthorizationCurrent,
   isHardwareSignRequestFresh,
   readHardwareSignRequest,
   writePreparedHardwareSignRequest,
@@ -5898,6 +5899,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           if (request.kind !== 'send' || !request.origin) {
             throw new Error('Invalid dApp hardware signing request.')
           }
+          if (
+            !isHardwareDAppAuthorizationCurrent(
+              request,
+              await dappManager.getAuthorization(request.origin)
+            )
+          ) {
+            throw new Error('This site authorization changed. Review the request again.')
+          }
           const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(request.origin)
           if (!snapshot) {
             throw new Error('This site is no longer authorized. Review the request again.')
@@ -5999,6 +6008,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         if (request.dappRequestId) {
           if (request.kind !== 'send' || !request.origin) {
             throw new Error('Invalid dApp hardware signing request.')
+          }
+          if (
+            !isHardwareDAppAuthorizationCurrent(
+              request,
+              await dappManager.getAuthorization(request.origin)
+            )
+          ) {
+            throw new Error('This site authorization changed. Review the request again.')
           }
           const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(request.origin)
           if (!snapshot) {

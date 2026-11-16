@@ -984,6 +984,54 @@ test('quote and build remain bound across a session-store reload', async () => {
     /does not match its quote/
   )
   buildRecipient = 'alice.near'
+  for (const field of ['estimatedOut', 'minAmountOut']) {
+    const driftedBuildService = new RheaSwapService(
+      {
+        ...client,
+        async buildSwap(input) {
+          const build = await client.buildSwap(input)
+          return {
+            ...build,
+            [field]: '1',
+            raw: { ...build.raw, [field]: '1' }
+          }
+        }
+      },
+      new MemoryRheaSwapQuoteSessionStore(),
+      { now: () => 2_000, createHandle: () => `drifted-${field}` }
+    )
+    const driftedQuote = await driftedBuildService.quote(confidentialQuoteRequest)
+    await expect(driftedBuildService.prepare(driftedQuote.quoteHandle)).rejects.toThrow(
+      /does not match its quote/
+    )
+    await expect(driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)).rejects.toThrow(
+      /has not been prepared/
+    )
+  }
+  for (const field of ['tokenIn', 'tokenOut']) {
+    const driftedBuildService = new RheaSwapService(
+      {
+        ...client,
+        async buildSwap(input) {
+          const build = await client.buildSwap(input)
+          return {
+            ...build,
+            [field]: { ...build[field], decimals: build[field].decimals + 1 },
+            raw: {
+              ...build.raw,
+              [field]: { ...build.raw[field], decimals: build.raw[field].decimals + 1 }
+            }
+          }
+        }
+      },
+      new MemoryRheaSwapQuoteSessionStore(),
+      { now: () => 2_000, createHandle: () => `drifted-${field}` }
+    )
+    const driftedQuote = await driftedBuildService.quote(confidentialQuoteRequest)
+    await expect(driftedBuildService.prepare(driftedQuote.quoteHandle)).rejects.toThrow(
+      /does not match its quote/
+    )
+  }
   let now = 2_000
   const service = new RheaSwapService(client, sessions, {
     now: () => now,

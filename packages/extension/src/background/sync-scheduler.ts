@@ -181,7 +181,7 @@ export class SyncScheduler {
       this.cancelledPreflightWalletIds.add(walletId)
       backgroundZcashWalletRuntime.finishSyncPreflight(walletId)
       signalSyncAbort(walletId).catch(() => {})
-      logger.log(`Sync abort requested for ${key}`, walletId)
+      logger.log('Sync abort requested', walletId)
     } else {
       for (const k of this.activeSyncPromises.keys()) {
         this.syncAbortFlags.set(k, true)
@@ -640,7 +640,7 @@ export class SyncScheduler {
                 : wallet.accounts[0].id
 
             this.abortNonCurrentSyncs(syncTarget)
-            logger.log(`Sync foreground: ${logger.getWalletLabel(syncTarget)}`)
+            logger.log('Sync foreground', syncTarget, accountId)
             const status = await this.runSyncForWallet(syncTarget, accountId, passiveRun)
             if (passiveRun) this.onPassiveSyncOutcome?.(status)
           }

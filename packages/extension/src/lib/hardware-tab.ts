@@ -44,6 +44,8 @@ export interface HardwareSignRequest {
   monitorParams?: SwapMonitorParams
   /** When set, the sign tab reports the outcome via a HW_SIGN_RESULT message */
   dappRequestId?: string
+  /** Authorization revision captured when the dApp transaction was approved. */
+  authorizationRevision?: number
   /** Return a correlated transaction result to the side panel that opened this request. */
   reportToOrigin?: boolean
   /** dApp origin, shown in the sign tab for context */
@@ -276,6 +278,7 @@ export function parseHardwareSignRequest(value: unknown): HardwareSignRequest {
         'quoteBinding',
         'monitorParams',
         'dappRequestId',
+        'authorizationRevision',
         'reportToOrigin',
         'origin',
         'marginalFeeZats',
@@ -301,6 +304,7 @@ export function parseHardwareSignRequest(value: unknown): HardwareSignRequest {
   const quoteBinding = parseQuoteBinding(value.quoteBinding)
   const monitorParams = parseMonitorParams(value.monitorParams)
   const dappRequestId = parseOptionalString(value.dappRequestId, 'hardware dApp request ID', 128)
+  const authorizationRevision = value.authorizationRevision
   const reportToOrigin = value.reportToOrigin
   const origin = parseDappOrigin(value.origin)
   const marginalFeeZats = value.marginalFeeZats
@@ -329,6 +333,9 @@ export function parseHardwareSignRequest(value: unknown): HardwareSignRequest {
   }
   if (
     (dappRequestId === undefined) !== (origin === undefined) ||
+    (dappRequestId === undefined) !== (authorizationRevision === undefined) ||
+    (authorizationRevision !== undefined &&
+      (!Number.isSafeInteger(authorizationRevision) || (authorizationRevision as number) < 0)) ||
     (dappRequestId && kind !== 'send') ||
     (reportToOrigin !== undefined && typeof reportToOrigin !== 'boolean') ||
     (reportToOrigin === true && dappRequestId !== undefined)
@@ -363,6 +370,9 @@ export function parseHardwareSignRequest(value: unknown): HardwareSignRequest {
     ...(quoteBinding === undefined ? {} : { quoteBinding }),
     ...(monitorParams === undefined ? {} : { monitorParams }),
     ...(dappRequestId === undefined ? {} : { dappRequestId }),
+    ...(authorizationRevision === undefined
+      ? {}
+      : { authorizationRevision: authorizationRevision as number }),
     ...(reportToOrigin === undefined ? {} : { reportToOrigin }),
     ...(origin === undefined ? {} : { origin }),
     ...(marginalFeeZats === undefined ? {} : { marginalFeeZats: marginalFeeZats as number }),
@@ -373,6 +383,25 @@ export function parseHardwareSignRequest(value: unknown): HardwareSignRequest {
       : { fundingSource: fundingSource as 'shielded' | 'transparent' }),
     ...(maxTransfer === undefined ? {} : { maxTransfer: maxTransfer as boolean })
   }
+}
+
+export function isHardwareDAppAuthorizationCurrent(
+  request: HardwareSignRequest,
+  authorization: {
+    readonly revision: number
+    readonly accounts: readonly Readonly<{ walletId: string; accountId: string }>[]
+  }
+): boolean {
+  return (
+    request.kind === 'send' &&
+    request.dappRequestId !== undefined &&
+    request.origin !== undefined &&
+    request.authorizationRevision !== undefined &&
+    authorization.revision === request.authorizationRevision &&
+    authorization.accounts.some(
+      account => account.walletId === request.walletId && account.accountId === request.accountId
+    )
+  )
 }
 
 export function parsePreparedHardwareSignRequest(value: unknown): PreparedHardwareSignRequest {

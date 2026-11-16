@@ -332,11 +332,26 @@ export class BackgroundSolanaDAppHandler {
       }
       if (!broadcast) return signed.payload.value
       const { commitment, ...broadcastOptions } = transactionOptions ?? {}
-      const signature = await this.options.rpc.broadcastSignedTransaction(
-        signed.payload.value,
-        undefined,
-        broadcastOptions
-      )
+      const signedTransaction = signed.payload.value
+      const signature = await this.options.runActiveOperation(async () => {
+        const current = await this.options.loadAuthorizedAccount(origin)
+        if (
+          current.reference.walletId !== active.reference.walletId ||
+          current.reference.accountId !== active.reference.accountId ||
+          current.context.chainAccount.id !== active.context.chainAccount.id ||
+          current.address !== active.address
+        ) {
+          throw new NativeTransferProviderError(
+            4100,
+            'The active Solana account changed. Review the transaction again.'
+          )
+        }
+        return this.options.rpc.broadcastSignedTransaction(
+          signedTransaction,
+          undefined,
+          broadcastOptions
+        )
+      })
       broadcasted = true
       emitDAppEvent(this.options.analytics, 'solana', ANALYTICS_EVENTS.DAPP_TRANSACTION_SENT, {
         hasTransaction: 1,
