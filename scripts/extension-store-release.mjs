@@ -10,7 +10,7 @@ import {
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyReleaseArtifact } from './extension-release.mjs'
+import { sourceProfileForVersion, verifyReleaseArtifact } from './extension-release.mjs'
 import { validatePublicationTarget } from './extension-release-gates.mjs'
 import { signCrx3, verifyCrx3 } from './lib/crx3.mjs'
 import { readZipManifest } from './lib/release-zip.mjs'
@@ -58,6 +58,7 @@ function directoryInventory(directory, expected) {
 
 export function selectStoreAsset(metadata) {
   if (
+    sourceProfileForVersion(metadata.version) !== 'multichain' ||
     metadata.mode !== 'candidate' ||
     metadata.buildChannel !== 'production' ||
     metadata.repository !== REPOSITORY ||
@@ -65,7 +66,7 @@ export function selectStoreAsset(metadata) {
   ) {
     throw new Error('Store signing requires an accepted production candidate')
   }
-  const assets = metadata.assets.filter(asset => ['mainnet', 'multichain'].includes(asset.network))
+  const assets = metadata.assets.filter(asset => asset.network === 'multichain')
   if (assets.length !== 1 || assets[0].name !== `noir-wallet-v${metadata.version}.zip`) {
     throw new Error('Exactly one production store ZIP is required')
   }
@@ -136,6 +137,7 @@ export function verifyStoreBundle(directory, { metadataSha256, publicKeySha256, 
     binding.repository !== REPOSITORY ||
     binding.extensionId !== EXTENSION_ID ||
     binding.publicKeySha256 !== publicKeySha256 ||
+    binding.network !== 'multichain' ||
     binding.zipName !== `noir-wallet-v${binding.version}.zip` ||
     binding.crxName !== `noir-wallet-v${binding.version}.crx`
   ) {

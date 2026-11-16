@@ -1,20 +1,16 @@
 # Contributing
 
-The SDK and its example app live in `packages/sdk/` of the Noir Wallet repository.
-Submit SDK changes through a pull request to this repository.
+The SDK and example live in `packages/sdk/` of the Noir Wallet workspace. Submit SDK and example changes through the wallet repository's `main` branch.
 
 ## Development
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm --filter @noir-wallet/sdk type-check
 pnpm --filter @noir-wallet/sdk test
-pnpm --filter @noir-wallet/sdk build
 pnpm --filter @noir-wallet/example type-check
 pnpm --filter @noir-wallet/example build
 pnpm --filter @noir-wallet/sdk pack:dry
-node scripts/sdk-package-check.mjs
 ```
 
-Run these commands from the Noir Wallet repository root. The root [contribution guide](../../CONTRIBUTING.md)
-describes pull request targets and review expectations.
+Run these commands from the wallet repository root. The SDK's `test` script builds the package before running native tests. Root `pnpm test` runs the wallet core suite separately.

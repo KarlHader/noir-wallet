@@ -11,7 +11,7 @@ on:
         default: beta
         options: [beta, candidate]
       source_ref:
-        description: Repository branch or full commit SHA; candidates require release/X.Y.Z
+        description: main or its exact SHA for Beta; candidates require release/X.Y.Z
         required: true
         type: string
         default: main
@@ -21,8 +21,8 @@ on:
         type: boolean
         default: true
       confirm_sha:
-        description: Full reviewed source SHA for candidates (ignored for beta)
-        required: false
+        description: Full reviewed source SHA (required for Beta and candidates)
+        required: true
         type: string
 
 concurrency:
@@ -41,7 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       source_ref: ${{ steps.source.outputs.source_ref }}
@@ -64,30 +63,6 @@ jobs:
           SOURCE_INPUT: ${{ inputs.source_ref }}
           CONFIRM_SHA: ${{ inputs.confirm_sha }}
         run: node scripts/extension-release-gates.mjs resolve
-      - name: Maintain associated PR version labels
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          MATCHING_PRS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/pulls" \
-            --jq ".[] | select(.state == \"open\" and .head.sha == \"${SOURCE_SHA}\" and .base.repo.full_name == \"${GITHUB_REPOSITORY}\") | [.number, .base.ref] | @tsv")
-
-          while IFS=$'\t' read -r PR_NUMBER BASE_BRANCH; do
-            [ -n "$PR_NUMBER" ] || continue
-            [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
-            LABEL_ENDPOINT="repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels"
-            CURRENT_LABELS=$(gh api "$LABEL_ENDPOINT" --jq '.[].name')
-            if [ "$BASE_BRANCH" = "v2" ]; then
-              if ! printf '%s\n' "$CURRENT_LABELS" | grep -Fxq 'v2'; then
-                gh api --method POST "$LABEL_ENDPOINT" -f 'labels[]=v2' >/dev/null
-              fi
-            elif printf '%s\n' "$CURRENT_LABELS" | grep -Fxq 'v2'; then
-              gh api --method DELETE "$LABEL_ENDPOINT/v2" >/dev/null
-            fi
-          done <<< "$MATCHING_PRS"
       - name: Show source for review
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
@@ -126,40 +101,26 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - run: pnpm install --frozen-lockfile
         working-directory: wallet
-      - run: pnpm verify-wasm-pkg
-        if: needs.prepare.outputs.source_profile == 'zcash'
-        working-directory: wallet
       - name: Type-check V2 EVM history Worker
-        if: needs.prepare.outputs.source_profile == 'multichain'
         run: pnpm --filter @noir-wallet/evm-history-worker type-check
         working-directory: wallet
       - run: pnpm test
         working-directory: wallet
-      - name: Build mainnet
+      - name: Build extension
         working-directory: wallet
         env:
           BUILD_CHANNEL: ${{ inputs.mode == 'candidate' && 'production' || 'beta' }}
-          GA_API_SECRET: ${{ inputs.mode == 'candidate' && secrets.GA_API_SECRET || '' }}
-          CUSTOM_ANALYTICS_PASSWORD: ${{ inputs.mode == 'candidate' && secrets.CUSTOM_ANALYTICS_PASSWORD || '' }}
-          EVM_HISTORY_API_ORIGIN: ${{ needs.prepare.outputs.source_profile == 'multichain' && vars.EVM_HISTORY_API_ORIGIN || '' }}
-          RHEA_SWAP_ACCESS_TOKEN: ${{ needs.prepare.outputs.source_profile == 'multichain' && secrets.RHEA_SWAP_ACCESS_TOKEN || '' }}
+          BETA_INVITE_REQUIRED: ${{ inputs.mode == 'beta' && '1' || '0' }}
+          GA_API_SECRET: ${{ secrets.GA_API_SECRET }}
+          CUSTOM_ANALYTICS_PASSWORD: ${{ secrets.CUSTOM_ANALYTICS_PASSWORD }}
+
+          EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
+          RHEA_SWAP_ACCESS_TOKEN: ${{ secrets.RHEA_SWAP_ACCESS_TOKEN }}
         run: pnpm build:extension
-      - name: Build testnet
-        if: needs.prepare.outputs.source_profile == 'zcash'
-        working-directory: wallet
-        env:
-          BUILD_CHANNEL: ${{ inputs.mode == 'candidate' && 'production' || 'beta' }}
-        run: pnpm build:extension:testnet
       - name: Stage wallet ZIPs
-        env:
-          SOURCE_PROFILE: ${{ needs.prepare.outputs.source_profile }}
         run: |
           mkdir -p raw-zips/dist
           cp wallet/packages/extension/dist/*.zip raw-zips/dist/
-          if [ "$SOURCE_PROFILE" = "zcash" ]; then
-            mkdir raw-zips/dist-testnet
-            cp wallet/packages/extension/dist-testnet/*.zip raw-zips/dist-testnet/
-          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: artifact
         with:
@@ -226,7 +187,7 @@ jobs:
       (inputs.mode == 'candidate' || (inputs.mode == 'beta' && inputs.publish_beta)) &&
       github.ref == 'refs/heads/main' &&
       github.event.repository.fork == false &&
-      (github.repository == 'NoirWallet/noir-wallet' || github.event.repository.private == false)
+      github.repository == 'NoirWallet/noir-wallet'
     needs: [prepare, package]
     runs-on: ubuntu-latest
     permissions:
@@ -265,8 +226,11 @@ jobs:
           TAG: ${{ needs.package.outputs.prerelease_tag }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GH_REPO}/git/refs" \
+            -f "ref=refs/tags/${TAG}" -f "sha=${SOURCE_SHA}" >/dev/null
           RELEASE_URL=$(gh release create "$TAG" --repo "$GH_REPO" \
-            --title "Noir Wallet $TAG" --prerelease --latest=false --target "$SOURCE_SHA" \
+            --title "Noir Wallet $TAG" --prerelease --latest=false --verify-tag \
             --notes-file prerelease-notes.md \
             release-assets/*.zip release-assets/SHA256SUMS)
           printf '## Download prerelease\n\n[%s](%s)\n\n' "$TAG" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"

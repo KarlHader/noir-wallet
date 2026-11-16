@@ -1,5 +1,6 @@
 import { validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
+import type { MnemonicWordCount } from '@/config/wallet'
 
 const englishWords = new Set(wordlist)
 
@@ -9,7 +10,10 @@ export interface MnemonicValidation {
   isValid: boolean
 }
 
-export function validateEnglishMnemonicWords(words: string[]): MnemonicValidation {
+export function validateEnglishMnemonicWords(
+  words: string[],
+  expectedWordCount: MnemonicWordCount
+): MnemonicValidation {
   const normalizedWords = words.map(word => word.trim().toLowerCase())
   const invalidWordIndexes = normalizedWords.flatMap((word, index) =>
     word && !englishWords.has(word) ? [index] : []
@@ -20,6 +24,7 @@ export function validateEnglishMnemonicWords(words: string[]): MnemonicValidatio
     phrase,
     invalidWordIndexes,
     isValid:
+      normalizedWords.length === expectedWordCount &&
       normalizedWords.every(Boolean) &&
       invalidWordIndexes.length === 0 &&
       validateMnemonic(phrase, wordlist)

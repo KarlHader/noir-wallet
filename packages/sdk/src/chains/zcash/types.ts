@@ -19,9 +19,7 @@ export interface Balance {
   transparent: string
   shielded: string
   total?: string
-  /** Amount currently selectable before destination-specific fees. */
   spendable?: string
-  /** Amount currently available for selection before destination-specific fees. */
   available?: string
 }
 
@@ -39,9 +37,8 @@ export interface ZcashAccount {
 }
 
 /**
- * Balance for one authorized account. `synced` is `false` when the value is a
- * cached/zero fallback (e.g. the wallet is locked or that account has not been
- * synced yet), so dApps can choose whether to trust it.
+ * Balance for one authorized account. `synced` is `false` for a zero fallback
+ * when current balance data is unavailable. `getBalance()` rejects while locked.
  */
 export interface ZcashAccountBalance {
   id: string

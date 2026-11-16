@@ -1,15 +1,10 @@
-export const HARDWARE_SIGN_RESULT_MESSAGE = 'HARDWARE_SIGN_FLOW_RESULT'
-
-const RESULT_PREFIX = 'hw_sign_result_'
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
-
 export interface HardwareSignSuccessResult {
   requestId: string
   status: 'success'
   txHash: string
   accountKey: string
+  amount: string
   transactionId?: string
-  amount?: string
   completedAt: number
 }
 
@@ -22,43 +17,76 @@ export interface HardwareSignStoppedResult {
 
 export type HardwareSignResult = HardwareSignSuccessResult | HardwareSignStoppedResult
 
+const RESULT_PREFIX = 'hw_sign_result_'
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
+
 function resultKey(requestId: string): string {
   return RESULT_PREFIX + requestId
 }
 
-function parseHardwareSignResult(value: unknown): HardwareSignResult | null {
+function parseHardwareSignResult(value: unknown, requestId: string): HardwareSignResult | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
+  const allowedKeys = new Set([
+    'requestId',
+    'status',
+    'txHash',
+    'accountKey',
+    'amount',
+    'transactionId',
+    'error',
+    'completedAt'
+  ])
   if (
-    typeof candidate.requestId !== 'string' ||
-    typeof candidate.status !== 'string' ||
-    typeof candidate.completedAt !== 'number'
+    Object.keys(candidate).some(key => !allowedKeys.has(key)) ||
+    candidate.requestId !== requestId ||
+    typeof candidate.completedAt !== 'number' ||
+    !Number.isSafeInteger(candidate.completedAt)
   ) {
     return null
   }
 
   if (candidate.status === 'success') {
-    if (typeof candidate.txHash !== 'string' || typeof candidate.accountKey !== 'string') {
+    if (
+      candidate.error !== undefined ||
+      typeof candidate.txHash !== 'string' ||
+      candidate.txHash.length === 0 ||
+      candidate.txHash.length > 256 ||
+      typeof candidate.accountKey !== 'string' ||
+      candidate.accountKey.length === 0 ||
+      candidate.accountKey.length > 512 ||
+      typeof candidate.amount !== 'string' ||
+      candidate.amount.length === 0 ||
+      candidate.amount.length > 256 ||
+      (candidate.transactionId !== undefined &&
+        (typeof candidate.transactionId !== 'string' || candidate.transactionId.length > 256))
+    ) {
       return null
     }
     return {
-      requestId: candidate.requestId,
+      requestId,
       status: 'success',
       txHash: candidate.txHash,
       accountKey: candidate.accountKey,
-      transactionId:
-        typeof candidate.transactionId === 'string' ? candidate.transactionId : undefined,
-      amount: typeof candidate.amount === 'string' ? candidate.amount : undefined,
+      amount: candidate.amount,
+      ...(typeof candidate.transactionId === 'string'
+        ? { transactionId: candidate.transactionId }
+        : {}),
       completedAt: candidate.completedAt
     }
   }
 
   if (
     (candidate.status === 'cancelled' || candidate.status === 'timeout') &&
-    typeof candidate.error === 'string'
+    candidate.txHash === undefined &&
+    candidate.accountKey === undefined &&
+    candidate.amount === undefined &&
+    candidate.transactionId === undefined &&
+    typeof candidate.error === 'string' &&
+    candidate.error.length <= 1_024
   ) {
     return {
-      requestId: candidate.requestId,
+      requestId,
       status: candidate.status,
       error: candidate.error,
       completedAt: candidate.completedAt
@@ -70,27 +98,22 @@ function parseHardwareSignResult(value: unknown): HardwareSignResult | null {
 
 export async function publishHardwareSignResult(result: HardwareSignSuccessResult): Promise<void> {
   await chrome.storage.session.set({ [resultKey(result.requestId)]: result })
-  chrome.runtime.sendMessage({ type: HARDWARE_SIGN_RESULT_MESSAGE, result }).catch(() => {})
 }
 
 async function readHardwareSignResult(requestId: string): Promise<HardwareSignResult | null> {
   const key = resultKey(requestId)
   const stored = await chrome.storage.session.get(key)
-  const result = parseHardwareSignResult(stored[key])
-  return result?.requestId === requestId ? result : null
+  return parseHardwareSignResult(stored[key], requestId)
 }
 
-/**
- * Wait for the result associated with one signing surface. The persisted result
- * closes the listener-registration race; runtime and storage events only reduce latency.
- */
+/** Wait for one side-panel signing request, including tab close and timeout. */
 export function waitForHardwareSignResult({
   requestId,
   tabId,
   timeoutMs = DEFAULT_TIMEOUT_MS
 }: {
   requestId: string
-  tabId?: number
+  tabId: number
   timeoutMs?: number
 }): Promise<HardwareSignResult> {
   const key = resultKey(requestId)
@@ -100,7 +123,6 @@ export function waitForHardwareSignResult({
 
     const cleanup = () => {
       clearTimeout(timer)
-      chrome.runtime.onMessage.removeListener(onMessage)
       chrome.storage.onChanged.removeListener(onStorageChanged)
       chrome.tabs.onRemoved.removeListener(onTabRemoved)
     }
@@ -109,16 +131,8 @@ export function waitForHardwareSignResult({
       if (settled) return
       settled = true
       cleanup()
-      chrome.storage.session.remove(key).catch(() => {})
+      void chrome.storage.session.remove(key).catch(() => {})
       resolve(result)
-    }
-
-    const onMessage = (message: unknown) => {
-      if (!message || typeof message !== 'object' || Array.isArray(message)) return
-      const candidate = message as Record<string, unknown>
-      if (candidate.type !== HARDWARE_SIGN_RESULT_MESSAGE) return
-      const result = parseHardwareSignResult(candidate.result)
-      if (result?.requestId === requestId) finish(result)
     }
 
     const onStorageChanged = (
@@ -126,14 +140,14 @@ export function waitForHardwareSignResult({
       areaName: string
     ) => {
       if (areaName !== 'session') return
-      const result = parseHardwareSignResult(changes[key]?.newValue)
-      if (result?.requestId === requestId) finish(result)
+      const result = parseHardwareSignResult(changes[key]?.newValue, requestId)
+      if (result) finish(result)
     }
 
     const onTabRemoved = (removedTabId: number) => {
-      if (tabId === undefined || removedTabId !== tabId) return
+      if (removedTabId !== tabId) return
       void readHardwareSignResult(requestId)
-        .then(result => {
+        .then(result =>
           finish(
             result ?? {
               requestId,
@@ -142,15 +156,15 @@ export function waitForHardwareSignResult({
               completedAt: Date.now()
             }
           )
-        })
-        .catch(() => {
+        )
+        .catch(() =>
           finish({
             requestId,
             status: 'cancelled',
             error: 'Hardware signing was cancelled',
             completedAt: Date.now()
           })
-        })
+        )
     }
 
     const timer = setTimeout(() => {
@@ -160,10 +174,9 @@ export function waitForHardwareSignResult({
         error: 'Hardware signing timed out',
         completedAt: Date.now()
       })
-      if (tabId !== undefined) chrome.tabs.remove(tabId).catch(() => {})
+      chrome.tabs.remove(tabId).catch(() => {})
     }, timeoutMs)
 
-    chrome.runtime.onMessage.addListener(onMessage)
     chrome.storage.onChanged.addListener(onStorageChanged)
     chrome.tabs.onRemoved.addListener(onTabRemoved)
 

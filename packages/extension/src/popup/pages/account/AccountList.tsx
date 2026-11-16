@@ -1,15 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
-import { PageHeader } from '../../components/common/PageHeader'
-import { RenameAccountContent } from '../../components/account/AccountModals'
-import { Input } from '../../components/ui/input'
+import { InlineError } from '../../components/common/InlineError'
+import { InlineEditableName } from '../../components/account/InlineEditableName'
+import { AddWalletContent, type AddWalletAction } from '../../components/account/AddWalletContent'
 import { openModal } from '../../provider/ModalManager'
-import { accountManager } from '@/core/wallet/account-manager'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { useNavigate } from '../../provider/Router'
 import { useDialog } from '../../hooks/useDialog'
 import { openHardwareConnectTab } from '@/lib/hardware-tab'
-import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
 
 import {
   DropdownMenu,
@@ -21,50 +20,138 @@ import { cn } from '@/lib/utils'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
+import { getAccountDisplayName } from '@/lib/format'
+import { formatFiatAmount } from '@/lib/number-format'
+import type { AccountData, WalletItem } from '@/types'
+import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import {
-  formatAccountName,
-  formatNumber,
-  formatPrice,
-  formatWalletName,
-  getAccountDisplayName
-} from '@/lib/format'
-import Big from '@/lib/big'
-import type { AccountData, WalletItem, AddressType, ZcashBalance } from '@/types'
-import { matchesAccountSearch } from '@/lib/account-search'
-import { isHardwareKeySource } from '@/lib/hardware-capabilities'
+  accountNetworksClient,
+  type AccountNetworksCatalogView,
+  type AccountNetworkView,
+  type AccountNetworksView
+} from '../../services/account-networks-client'
+import { ChainIcon } from '../../components/common/ChainIcon'
+import { accountNetworkIconChain } from '@/popup/services/account-network-presentation'
+import { HardwareWalletLogo } from '../../components/hardware/HardwareWalletLogo'
+import { nativeHardwareWalletClient } from '../../services/native-hardware-wallet-client'
+import { toast } from '@/store/toast-store'
+import { ListSkeleton } from '../../components/ui/skeleton'
+import {
+  AddAccountZcashHistoryContent,
+  type AddAccountZcashHistorySelection
+} from '../../components/account/AddAccountZcashHistoryContent'
+import { isWalletLockedError } from '@/lib/errors'
+import { switchWalletAccount } from '@/popup/services/account-switch'
+import {
+  accountListKey,
+  buildVisibleAccountList,
+  hasAccountMenuAddAction,
+  resolveAccountPortfolioValue,
+  type WalletAddAccountAction
+} from '@/popup/services/account-list-model'
 
-interface Account {
-  id: string
-  name: string
-  balance: string
-  balanceUsd: string
-  addresses: {
-    type: AddressType
-    address: string
-  }[]
-  isPinned: boolean
-  isHidden: boolean
-  walletId: string
-  walletName: string
+function AccountTotalValue({
+  snapshot,
+  hidden
+}: {
+  snapshot: AccountPortfolioValueSnapshot | null
+  hidden: boolean
+}) {
+  const knownPositive = snapshot?.totalUsd !== undefined && snapshot.totalUsd !== '0'
+  const canShowValue = snapshot?.complete || knownPositive
+  const value = hidden
+    ? '••••'
+    : canShowValue && snapshot
+      ? `${snapshot.complete ? '' : '≈'}${formatFiatAmount(snapshot.totalUsd, { showSign: true })}`
+      : '—'
+  const accessibleValue = hidden
+    ? 'Account total hidden'
+    : !canShowValue || !snapshot
+      ? 'Account total unavailable'
+      : snapshot.complete
+        ? `Account total ${formatFiatAmount(snapshot.totalUsd, { showSign: true })}`
+        : `Account total approximately ${formatFiatAmount(snapshot.totalUsd, { showSign: true })}`
+
+  return (
+    <span
+      aria-label={accessibleValue}
+      className="mt-1 block text-xs font-normal leading-4 tabular-nums text-muted"
+      title={snapshot && !snapshot.complete ? 'Based on loaded account balances' : undefined}
+    >
+      {value}
+    </span>
+  )
+}
+
+function SelectedAccountIndicator({ selected }: { selected: boolean }) {
+  if (!selected) return null
+  return (
+    <span
+      aria-label={selected ? 'Current account' : undefined}
+      className={cn(
+        'flex size-[18px] shrink-0 items-center justify-center rounded-full',
+        selected && 'bg-foreground text-wallet-surface'
+      )}
+    >
+      {selected && <Icon icon="lucide:check" width={13} height={13} />}
+    </span>
+  )
+}
+
+function AccountChainIcons({ networks }: { networks: readonly AccountNetworkView[] }) {
+  const families = new Set<string>()
+  const iconNetworks = networks.filter(network => {
+    if (families.has(network.chain.family)) return false
+    families.add(network.chain.family)
+    return true
+  })
+  if (iconNetworks.length === 0) return null
+
+  return (
+    <span className="flex shrink-0 items-center pl-1">
+      {iconNetworks.map(network => (
+        <ChainIcon
+          key={network.chain.family}
+          chain={network.chain.family === 'evm' ? 'evm' : accountNetworkIconChain(network)}
+          width={19}
+          height={19}
+          className="-ml-1.5 shrink-0 rounded-[4px] ring-2 ring-background first:ml-0"
+        />
+      ))}
+    </span>
+  )
 }
 
 export function AccountList() {
   const { navigate, replace } = useNavigate()
-  const { confirm } = useDialog()
-  const [searchQuery, setSearchQuery] = useState('')
-  const { wallets, accountDisplayNames } = useWalletStore()
-  const { enableDerivedAccounts } = useSettingsStore()
+  const { alert, confirm } = useDialog()
+  const { wallets, accountDisplayNames, currentNetwork, zecPrice } = useWalletStore()
+  const portfolioValues = useAccountDataStore(state => state.portfolioValues)
+  const zcashBalances = useAccountDataStore(state => state.balances)
+  const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const [loading, setLoading] = useState(true)
-  const [accountBalances, setAccountBalances] = useState<Map<string, ZcashBalance>>(new Map())
+  const [networkCatalog, setNetworkCatalog] = useState<AccountNetworksCatalogView | null>(null)
+  const [networksLoading, setNetworksLoading] = useState(true)
+  const [catalogError, setCatalogError] = useState(false)
+  const loadRequest = useRef(0)
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    loadWallets()
+    void loadWallets()
+    return () => {
+      loadRequest.current += 1
+    }
   }, [])
 
   useEffect(() => {
-    const listener = (message: any) => {
-      if (message.type === 'SYNC_PROGRESS') {
-        loadWallets()
+    const listener = (message: any, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      if (
+        message.type === 'ACCOUNT_CONTEXT_CHANGED' ||
+        (message.type === 'SYNC_PROGRESS' && message.isSyncing === false)
+      ) {
+        void loadWallets()
       }
     }
     chrome.runtime.onMessage.addListener(listener)
@@ -72,78 +159,45 @@ export function AccountList() {
   }, [])
 
   const loadWallets = async () => {
+    const request = ++loadRequest.current
+    setNetworksLoading(true)
     try {
-      const allWallets = accountManager.getAllWallets()
-
-      const balanceMap = new Map<string, ZcashBalance>()
-      for (const wallet of allWallets) {
-        const walletBalances = await accountManager.loadAllAccountBalances(wallet.id)
-        walletBalances.forEach((balance, accountId) => {
-          balanceMap.set(accountId, balance)
-        })
-      }
-      setAccountBalances(balanceMap)
-    } catch (error) {
-      console.error('Failed to load wallets:', error)
+      const nextCatalog = await accountNetworksClient.getCatalog()
+      if (request !== loadRequest.current) return
+      setNetworkCatalog(nextCatalog)
+      setCatalogError(false)
+    } catch {
+      if (request === loadRequest.current) setCatalogError(true)
     } finally {
-      setLoading(false)
+      if (request === loadRequest.current) {
+        setLoading(false)
+        setNetworksLoading(false)
+      }
     }
   }
 
-  const accounts: Account[] = wallets.flatMap(wallet =>
-    wallet.accounts.map(account => {
-      const balance = accountBalances.get(account.id)
-      const totalBalance = balance?.total ?? '0'
-      const totalUsd = useAccountDataStore.getState().getBalanceUsd(wallet.id, account.id)
-
-      const displayName = getAccountDisplayName(
-        wallet.id,
-        account.id,
-        account.name,
-        accountDisplayNames
-      )
-
-      return {
-        id: account.id,
-        name: displayName,
-        balance: balance ? `${formatNumber(totalBalance, { rm: Big.roundDown })} ZEC` : '0 ZEC',
-        balanceUsd: totalUsd > 0 ? formatPrice(totalUsd, { showSign: true }) : '$0',
-        addresses: [
-          { type: 'shielded' as const, address: account.addresses.shielded },
-          { type: 'transparent' as const, address: account.addresses.transparent }
-        ],
-        isPinned: account.isPinned || false,
-        isHidden: account.isHidden || false,
-        walletId: wallet.id,
-        walletName: formatWalletName(wallet, wallets)
-      }
-    })
-  )
-
-  const accountBalanceMap = new Map(
-    accounts.map(acc => [acc.id, { balance: acc.balance, balanceUsd: acc.balanceUsd }])
-  )
-
-  const filteredAccounts = accounts.filter(account => matchesAccountSearch(account, searchQuery))
-  const filteredAccountKeys = new Set(
-    filteredAccounts.map(account => `${account.walletId}:${account.id}`)
-  )
-
-  const sortedAccounts = [...filteredAccounts].sort((a, b) => {
-    if (a.isPinned !== b.isPinned) {
-      return a.isPinned ? -1 : 1
-    }
-    if (a.isHidden !== b.isHidden) {
-      return a.isHidden ? 1 : -1
-    }
-    return 0
+  const {
+    pinnedAccounts,
+    hiddenAccounts,
+    nativeAccounts,
+    regularEntries,
+    walletAddAccountActions
+  } = buildVisibleAccountList({
+    wallets,
+    accountDisplayNames,
+    nativeAccounts: networkCatalog?.accounts ?? [],
+    searchQuery: ''
   })
+  const catalogNetworksByAccount = new Map(
+    (networkCatalog?.accounts ?? []).map(account => [
+      accountListKey(account.walletId, account.accountId),
+      account.networks
+    ])
+  )
 
-  const pinnedAccounts = sortedAccounts.filter(acc => acc.isPinned && !acc.isHidden)
-  const hiddenAccounts = sortedAccounts.filter(acc => acc.isHidden)
-
-  const [switchingAccountId, setSwitchingAccountId] = useState<string | null>(null)
+  const [switchingAccountKey, setSwitchingAccountKey] = useState<string | null>(null)
   const [addingWalletId, setAddingWalletId] = useState<string | null>(null)
+  const [removingWalletId, setRemovingWalletId] = useState<string | null>(null)
 
   const handleAccountSelect = async (accountId: string, walletId: string) => {
     try {
@@ -155,151 +209,251 @@ export function AccountList() {
         return
       }
 
-      setSwitchingAccountId(accountId)
+      setSwitchingAccountKey(accountListKey(walletId, accountId))
 
-      const isCrossWalletSwitch = currentWalletId && currentWalletId !== walletId
-      const syncState = isCrossWalletSwitch
-        ? await chrome.runtime.sendMessage({
-            type: 'GET_SYNC_STATE',
-            walletId: currentWalletId,
-            accountId: currentAccount?.id
-          })
-        : null
-
-      if (syncState?.isSyncing) {
-        const progress = syncState.syncProgress || 0
-        if (progress >= 95) {
-          const waitForSync = () =>
-            new Promise<void>(resolve => {
-              const listener = (msg: any) => {
-                if (
-                  msg.type === 'SYNC_PROGRESS' &&
-                  msg.walletId === currentWalletId &&
-                  !msg.isSyncing
-                ) {
-                  chrome.runtime.onMessage.removeListener(listener)
-                  resolve()
-                }
-              }
-              chrome.runtime.onMessage.addListener(listener)
-              setTimeout(() => {
-                chrome.runtime.onMessage.removeListener(listener)
-                resolve()
-              }, 30000)
-            })
-          await waitForSync()
-        } else {
-          const proceed = await confirm({
-            title: 'Switch Account',
-            message: `Blockchain sync is in progress (${progress}%). Switching now will interrupt the sync. Continue?`,
-            confirmText: 'Switch anyway',
-            cancelText: 'Cancel',
-            variant: 'default'
-          })
-
-          if (!proceed) {
-            setSwitchingAccountId(null)
-            return
-          }
-        }
-      }
-
-      await accountManager.switchAccount(walletId, accountId)
-      sendAnalyticsEvent(ANALYTICS_EVENTS.ACCOUNT_SWITCHED, {
-        pageId: PAGE_IDS.ACCOUNT_LIST,
-        extra: { cross_wallet: Boolean(isCrossWalletSwitch) }
+      const switched = await switchWalletAccount({
+        walletId,
+        accountId,
+        currentWalletId,
+        currentAccountId: currentAccount?.id ?? null,
+        confirm
       })
+      if (!switched) return
+      await loadWallets()
       replace('/')
     } catch (error) {
       console.error('Failed to switch account:', error)
-      setSwitchingAccountId(null)
+      if (isWalletLockedError(error)) {
+        replace('/unlock?redirect=%2Faccount-list')
+        return
+      }
+      await alert({
+        title: 'Unable to switch account',
+        message: error instanceof Error ? error.message : 'Account switch failed. Please try again.'
+      })
+    } finally {
+      setSwitchingAccountKey(null)
+    }
+  }
+
+  const handleNativeAccountSelect = async (accountId: string, walletId: string) => {
+    const key = accountListKey(walletId, accountId)
+    if (
+      networkCatalog?.accounts.find(
+        account => account.active && accountListKey(account.walletId, account.accountId) === key
+      )
+    ) {
+      replace('/')
+      return
+    }
+    setSwitchingAccountKey(key)
+    try {
+      const state = useWalletStore.getState()
+      const switched = await switchWalletAccount({
+        walletId,
+        accountId,
+        currentWalletId: state.currentWalletId,
+        currentAccountId: state.currentAccountId,
+        confirm
+      })
+      if (!switched) return
+      await loadWallets()
+      replace('/')
+    } catch (error) {
+      if (isWalletLockedError(error)) {
+        replace('/unlock?redirect=%2Faccount-list')
+        return
+      }
+      await alert({
+        title: 'Unable to switch account',
+        message: error instanceof Error ? error.message : 'Account switch failed. Please try again.'
+      })
+    } finally {
+      setSwitchingAccountKey(null)
     }
   }
 
   const handleAddWallet = async () => {
-    const action = await openModal<'import' | 'create' | 'hardware'>({
-      title: 'Add Wallet',
-      body: (resolve: (value: any) => void, close: () => void) => (
-        <AddWalletContent
-          onImport={() => {
-            close()
-            resolve('import')
-          }}
-          onCreate={() => {
-            close()
-            resolve('create')
-          }}
-          onHardware={() => {
-            close()
-            resolve('hardware')
-          }}
-        />
-      )
+    const action = await openModal<AddWalletAction | undefined>({
+      className:
+        'flex max-h-[calc(100%-16px)] flex-col gap-6 rounded-t-[20px] border-0 bg-popover px-4 pb-10 pt-5 [&>[data-slot=dialog-close]]:right-3 [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:opacity-100 [&>[data-slot=dialog-close]>svg]:size-6',
+      body: resolve => <AddWalletContent onSelect={resolve} />
     })
 
     if (action === 'import') {
       navigate('/import-wallet')
+    } else if (action === 'private-key') {
+      navigate('/import-private-key')
     } else if (action === 'create') {
       navigate('/add-wallet')
-    } else if (action === 'hardware') {
-      openHardwareConnectTab()
+    } else if (action === 'ledger' || action === 'keystone') {
+      openHardwareConnectTab(action)
     }
+  }
+
+  const handleWalletRename = async (walletId: string, name: string) => {
+    await nativeHardwareWalletClient.renameWallet(walletId, name)
+    await loadWallets()
+  }
+
+  const handleAccountRename = async (walletId: string, accountId: string, name: string) => {
+    await zcashWalletRuntimeClient.renameAccount(walletId, accountId, name)
+    await loadWallets()
+  }
+
+  const handleNativeWalletRemove = async (account: AccountNetworksView) => {
+    const isPrivateKey = account.walletSource.kind === 'private-key'
+    const recoveryMessage =
+      account.walletSource.kind === 'private-key'
+        ? 'You will need its private key to import it again.'
+        : 'You will need to reconnect the hardware wallet to add it again.'
+    const ok = await confirm({
+      title: isPrivateKey ? 'Remove account' : 'Remove wallet',
+      message: `Remove "${isPrivateKey ? account.accountDisplayName : account.walletDisplayName}" from this device? ${recoveryMessage}`,
+      confirmText: 'Remove',
+      variant: 'danger'
+    })
+    if (!ok) return
+    setRemovingWalletId(account.walletId)
+    try {
+      await nativeHardwareWalletClient.removeWallet(account.walletId)
+      await loadWallets()
+    } catch (error) {
+      await alert({
+        title: 'Unable to remove wallet',
+        message: error instanceof Error ? error.message : 'The wallet could not be removed.'
+      })
+    } finally {
+      setRemovingWalletId(null)
+    }
+  }
+
+  const handleAddSoftwareAccount = async (walletId: string) => {
+    if (addingWalletId) return
+    let accountCreated = false
+    try {
+      setAddingWalletId(walletId)
+      const inspection = await zcashWalletRuntimeClient.inspectNextAccountHistory(walletId)
+      let birthdayHeight = inspection.birthdayHeight
+
+      if (inspection.status === 'unknown' || birthdayHeight === undefined) {
+        const selection = await openModal<AddAccountZcashHistorySelection | undefined>({
+          className: 'max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 p-0',
+          body: resolve => (
+            <AddAccountZcashHistoryContent
+              priorUsageDetected={inspection.status === 'used'}
+              onConfirm={resolve}
+            />
+          )
+        })
+        if (!selection) return
+        birthdayHeight = selection.mode === 'restore' ? selection.birthdayHeight : undefined
+      }
+
+      const accountId = await zcashWalletRuntimeClient.addAccount(walletId, {
+        expectedDerivationIndex: inspection.derivationIndex,
+        ...(birthdayHeight === undefined ? {} : { birthdayHeight })
+      })
+      accountCreated = true
+      await zcashWalletRuntimeClient.switchAccount(walletId, accountId)
+      replace('/')
+    } catch (e) {
+      console.error('Failed to add account:', e)
+      await alert({
+        title: accountCreated ? 'Unable to switch account' : 'Account setup incomplete',
+        message:
+          e instanceof Error
+            ? e.message
+            : accountCreated
+              ? 'The account was created, but could not be selected. Please try again.'
+              : 'Account setup did not finish. Please try again.'
+      })
+    } finally {
+      setAddingWalletId(null)
+    }
+  }
+
+  const handleAddAccount = (action: WalletAddAccountAction | null | undefined) => {
+    if (!action) return
+    void handleAddSoftwareAccount(action.walletId)
   }
 
   return (
     <div className="page-container">
-      <PageHeader title="Noir Wallet" showBack onBack={() => replace('/')} />
+      <header className="relative flex h-14 shrink-0 items-center justify-center px-4">
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={() => replace('/')}
+          className="wallet-interactive absolute left-4 flex size-6 items-center justify-center rounded-md text-foreground hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+        >
+          <Icon icon="lucide:x" width={20} height={20} />
+        </button>
+        <h1 className="text-lg font-medium leading-[23px]">Accounts</h1>
+      </header>
 
-      <div className="page-content">
-        <div className="mb-4">
-          <Input
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search Account"
-            className="h-[46px] rounded-xl pl-10"
-            startContent={
-              <Icon
-                icon="lucide:search"
-                width={18}
-                height={18}
-                className="text-muted pointer-events-none"
-              />
-            }
+      <div className="page-content min-h-0 !px-0 !pt-2">
+        {catalogError && (
+          <InlineError
+            message="Unable to load accounts."
+            onRetry={() => void loadWallets()}
+            retrying={networksLoading}
+            className="mb-4"
           />
-        </div>
-
-        <div className="space-y-2">
-          <div className="space-y-6">
+        )}
+        <div>
+          <div>
             {loading ? (
-              <div className="text-center py-8 text-muted">Loading wallets...</div>
-            ) : wallets.length === 0 ? (
-              <div className="text-center py-8 text-muted">No wallets found</div>
-            ) : searchQuery.trim() && filteredAccounts.length === 0 ? (
-              <div className="text-center py-8 text-muted">No accounts found</div>
+              <ListSkeleton rows={4} label="Loading wallets" card />
+            ) : wallets.length === 0 && nativeAccounts.length === 0 ? (
+              catalogError ? null : (
+                <div className="text-center py-8 text-muted">No wallets found</div>
+              )
             ) : (
               <>
                 {pinnedAccounts.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="px-2">
-                      <span className="text-sm font-medium text-muted">Pinned</span>
+                  <div>
+                    <div className="px-5 py-3">
+                      <span className="text-xs font-medium text-muted">Pinned</span>
                     </div>
-                    <div className="space-y-2">
+                    <div>
                       {pinnedAccounts.map(account => {
                         const wallet = wallets.find(w => w.id === account.walletId)
                         if (!wallet) return null
                         const accountData = wallet.accounts.find(a => a.id === account.id)
                         if (!accountData) return null
-                        const balanceInfo = accountBalanceMap.get(account.id)
                         return (
                           <AccountItem
-                            key={account.id}
+                            key={accountListKey(account.walletId, account.id)}
                             account={accountData}
                             wallet={wallet}
-                            walletDisplayName={formatWalletName(wallet, wallets)}
-                            showWalletName={true}
-                            switchingAccountId={switchingAccountId}
-                            balance={balanceInfo?.balance}
+                            networks={
+                              catalogNetworksByAccount.get(accountListKey(wallet.id, account.id)) ??
+                              []
+                            }
+                            switchingAccountKey={switchingAccountKey}
                             onSelect={handleAccountSelect}
+                            onRenameAccount={name =>
+                              handleAccountRename(wallet.id, account.id, name)
+                            }
+                            onAddAccount={
+                              hasAccountMenuAddAction(
+                                wallet,
+                                walletAddAccountActions.get(wallet.id)
+                              )
+                                ? () => handleAddAccount(walletAddAccountActions.get(wallet.id))
+                                : undefined
+                            }
+                            addingAccount={addingWalletId === wallet.id}
+                            portfolioValue={resolveAccountPortfolioValue(
+                              wallet.id,
+                              account.id,
+                              currentNetwork,
+                              portfolioValues,
+                              zcashBalances,
+                              zecPrice
+                            )}
+                            balancesHidden={balancesHidden}
                           />
                         )
                       })}
@@ -307,103 +461,200 @@ export function AccountList() {
                   </div>
                 )}
 
-                {wallets.map(wallet => {
-                  const walletNormalAccounts = wallet.accounts.filter(
-                    account =>
-                      !account.isPinned &&
-                      !account.isHidden &&
-                      filteredAccountKeys.has(`${wallet.id}:${account.id}`)
-                  )
-
-                  if (walletNormalAccounts.length === 0 && searchQuery) {
-                    return null
-                  }
-
-                  return (
-                    <div key={wallet.id} className="space-y-2">
-                      {enableDerivedAccounts && (
-                        <div className="px-2">
-                          <span className="text-sm font-medium text-muted">
-                            {formatWalletName(wallet, wallets)}
-                          </span>
-                        </div>
+                {regularEntries.map(entry => (
+                  <section
+                    key={entry.id}
+                    aria-label={`Wallet group ${entry.displayName}`}
+                    className="border-b border-white/10"
+                  >
+                    <div className="flex h-11 min-w-0 items-center gap-2 pl-5 pr-3 pt-3">
+                      {(entry.hardwareVendor === 'ledger' ||
+                        entry.hardwareVendor === 'keystone') && (
+                        <span
+                          className="shrink-0"
+                          aria-label={`${entry.hardwareVendor === 'ledger' ? 'Ledger' : 'Keystone'} hardware wallet`}
+                        >
+                          <HardwareWalletLogo vendor={entry.hardwareVendor} />
+                        </span>
                       )}
-                      <div className="space-y-2">
-                        {walletNormalAccounts.map(account => {
-                          const balanceInfo = accountBalanceMap.get(account.id)
+                      {entry.walletId ? (
+                        <InlineEditableName
+                          value={entry.displayName}
+                          kind="wallet"
+                          onSave={name => handleWalletRename(entry.walletId!, name)}
+                          className="min-w-0 flex-1 text-xs font-normal text-muted"
+                        />
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted">
+                          {entry.displayName}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={
+                          collapsedGroups[entry.id]
+                            ? `Expand ${entry.displayName}`
+                            : `Collapse ${entry.displayName}`
+                        }
+                        aria-expanded={!collapsedGroups[entry.id]}
+                        onClick={() =>
+                          setCollapsedGroups(state => ({ ...state, [entry.id]: !state[entry.id] }))
+                        }
+                        className="wallet-interactive flex size-6 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-white/10 active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                      >
+                        <Icon
+                          icon={
+                            collapsedGroups[entry.id] ? 'lucide:chevron-down' : 'lucide:chevron-up'
+                          }
+                          width={16}
+                          height={16}
+                        />
+                      </button>
+                    </div>
+                    {!collapsedGroups[entry.id] &&
+                      entry.accounts.map(item => {
+                        if (item.kind === 'native') {
+                          const account = item.account
                           return (
-                            <AccountItem
-                              key={account.id}
+                            <NativeAccountItem
+                              key={accountListKey(account.walletId, account.accountId)}
                               account={account}
-                              wallet={wallet}
-                              showWalletName={false}
-                              switchingAccountId={switchingAccountId}
-                              balance={balanceInfo?.balance}
-                              onSelect={handleAccountSelect}
+                              switching={
+                                switchingAccountKey ===
+                                accountListKey(account.walletId, account.accountId)
+                              }
+                              removing={removingWalletId === account.walletId}
+                              onSelect={handleNativeAccountSelect}
+                              onRename={name =>
+                                handleAccountRename(account.walletId, account.accountId, name)
+                              }
+                              onRemove={handleNativeWalletRemove}
+                              onExport={account =>
+                                navigate(
+                                  `/export-private-key?walletId=${account.walletId}&accountId=${account.accountId}`
+                                )
+                              }
+                              portfolioValue={resolveAccountPortfolioValue(
+                                account.walletId,
+                                account.accountId,
+                                currentNetwork,
+                                portfolioValues,
+                                zcashBalances,
+                                zecPrice
+                              )}
+                              balancesHidden={balancesHidden}
                             />
                           )
-                        })}
-
-                        {enableDerivedAccounts && !isHardwareKeySource(wallet.keySource) && (
-                          <Button
-                            onClick={async () => {
-                              if (addingWalletId) return
-                              try {
-                                setAddingWalletId(wallet.id)
-                                await accountManager.addNewAccount(wallet.id)
-                                await loadWallets()
-                              } catch (e) {
-                                console.error('Failed to add account:', e)
-                              } finally {
-                                setAddingWalletId(null)
-                              }
-                            }}
-                            disabled={addingWalletId === wallet.id}
-                            variant="outline"
-                            className="w-full p-3 h-10 rounded-xl border border-dashed border-border/50 text-muted hover:text-foreground text-sm"
-                          >
-                            {addingWalletId === wallet.id ? (
-                              <Icon
-                                icon="lucide:loader-2"
-                                width={16}
-                                height={16}
-                                className="animate-spin"
-                              />
-                            ) : (
-                              <Icon icon="lucide:plus" width={16} height={16} />
+                        }
+                        const { wallet, account } = item
+                        return (
+                          <AccountItem
+                            key={accountListKey(wallet.id, account.id)}
+                            account={account}
+                            wallet={wallet}
+                            networks={
+                              catalogNetworksByAccount.get(accountListKey(wallet.id, account.id)) ??
+                              []
+                            }
+                            switchingAccountKey={switchingAccountKey}
+                            onSelect={handleAccountSelect}
+                            onRenameAccount={name =>
+                              handleAccountRename(wallet.id, account.id, name)
+                            }
+                            portfolioValue={resolveAccountPortfolioValue(
+                              wallet.id,
+                              account.id,
+                              currentNetwork,
+                              portfolioValues,
+                              zcashBalances,
+                              zecPrice
                             )}
-                            {addingWalletId === wallet.id ? 'Adding...' : 'Add account'}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
+                            balancesHidden={balancesHidden}
+                          />
+                        )
+                      })}
+                    {!collapsedGroups[entry.id] && entry.addAccount && entry.walletId && (
+                      <Button
+                        onClick={() => handleAddAccount(entry.addAccount)}
+                        disabled={addingWalletId === entry.walletId}
+                        variant="ghost"
+                        className="h-[68px] w-full justify-start gap-2.5 rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
+                      >
+                        <span className="flex size-[30px] items-center justify-center rounded-md bg-wallet-selected text-foreground">
+                          <Icon
+                            icon={
+                              addingWalletId === entry.walletId ? 'lucide:loader-2' : 'lucide:plus'
+                            }
+                            width={14}
+                            height={14}
+                            className={
+                              addingWalletId === entry.walletId ? 'animate-spin' : undefined
+                            }
+                          />
+                        </span>
+                        {addingWalletId === entry.walletId ? 'Adding...' : 'Add account'}
+                      </Button>
+                    )}
+                    {!collapsedGroups[entry.id] && entry.kind === 'private-key' && (
+                      <Button
+                        variant="ghost"
+                        className="h-[68px] w-full justify-start gap-2.5 rounded-none px-5 pb-[10px] pt-0 text-sm font-normal leading-[18px] text-foreground hover:bg-wallet-surface"
+                        onClick={() => navigate('/import-private-key')}
+                      >
+                        <span className="flex size-[30px] items-center justify-center rounded-md bg-wallet-selected">
+                          <Icon icon="lucide:plus" width={14} height={14} />
+                        </span>
+                        Import Private Key
+                      </Button>
+                    )}
+                  </section>
+                ))}
 
                 {hiddenAccounts.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="px-2">
+                  <div>
+                    <div className="px-5 py-3">
                       <span className="text-sm font-medium text-muted">
                         Hidden ({hiddenAccounts.length})
                       </span>
                     </div>
-                    <div className="space-y-2">
+                    <div>
                       {hiddenAccounts.map(account => {
                         const wallet = wallets.find(w => w.id === account.walletId)
                         if (!wallet) return null
                         const accountData = wallet.accounts.find(a => a.id === account.id)
                         if (!accountData) return null
-                        const balanceInfo = accountBalanceMap.get(account.id)
                         return (
                           <AccountItem
-                            key={account.id}
+                            key={accountListKey(account.walletId, account.id)}
                             account={accountData}
                             wallet={wallet}
-                            walletDisplayName={formatWalletName(wallet, wallets)}
-                            showWalletName={true}
-                            switchingAccountId={switchingAccountId}
-                            balance={balanceInfo?.balance}
+                            networks={
+                              catalogNetworksByAccount.get(accountListKey(wallet.id, account.id)) ??
+                              []
+                            }
+                            switchingAccountKey={switchingAccountKey}
                             onSelect={handleAccountSelect}
+                            onRenameAccount={name =>
+                              handleAccountRename(wallet.id, account.id, name)
+                            }
+                            onAddAccount={
+                              hasAccountMenuAddAction(
+                                wallet,
+                                walletAddAccountActions.get(wallet.id)
+                              )
+                                ? () => handleAddAccount(walletAddAccountActions.get(wallet.id))
+                                : undefined
+                            }
+                            addingAccount={addingWalletId === wallet.id}
+                            portfolioValue={resolveAccountPortfolioValue(
+                              wallet.id,
+                              account.id,
+                              currentNetwork,
+                              portfolioValues,
+                              zcashBalances,
+                              zecPrice
+                            )}
+                            balancesHidden={balancesHidden}
                           />
                         )
                       })}
@@ -416,8 +667,9 @@ export function AccountList() {
         </div>
       </div>
 
-      <div className="page-footer">
-        <Button onClick={handleAddWallet} className="w-full h-[45px]">
+      <div className="page-footer bg-background !px-4">
+        <Button onClick={handleAddWallet} size="wallet" className="w-full text-background">
+          <Icon icon="lucide:plus" width={16} height={16} />
           Add Wallet
         </Button>
       </div>
@@ -425,151 +677,105 @@ export function AccountList() {
   )
 }
 
-function AccountItem({
-  account,
-  wallet,
-  walletDisplayName,
-  showWalletName = true,
-  switchingAccountId,
-  balance,
-  onSelect
+function AccountRow({
+  name,
+  networks,
+  active,
+  busy,
+  selectDisabled = false,
+  renameDisabled,
+  menuDisabled = false,
+  onSelect,
+  onRename,
+  portfolioValue,
+  balancesHidden,
+  className,
+  children
 }: {
-  account: AccountData
-  wallet: WalletItem
-  walletDisplayName?: string
-  showWalletName?: boolean
-  switchingAccountId: string | null
-  balance?: string
-  onSelect: (accountId: string, walletId: string) => void
+  name: string
+  networks: readonly AccountNetworkView[]
+  active: boolean
+  busy: boolean
+  selectDisabled?: boolean
+  renameDisabled: boolean
+  menuDisabled?: boolean
+  onSelect: () => void
+  onRename: (name: string) => Promise<void>
+  portfolioValue: AccountPortfolioValueSnapshot | null
+  balancesHidden: boolean
+  className: string
+  children: ReactNode
 }) {
-  const { navigate } = useNavigate()
-  const { getCurrentAccount, accountDisplayNames } = useWalletStore()
-  const currentAccount = getCurrentAccount()
-
-  const displayName = getAccountDisplayName(
-    wallet.id,
-    account.id,
-    account.name,
-    accountDisplayNames
-  )
-
-  const isActiveAccount = currentAccount?.id === account.id
-  const balanceDisplay = balance || '--'
+  const [editingName, setEditingName] = useState(false)
+  const selectionStartedWhileEditing = useRef(false)
 
   return (
     <div className="relative">
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelect(account.id, wallet.id)}
-        onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            onSelect(account.id, wallet.id)
-          }
-        }}
         className={cn(
-          'w-full p-4 rounded-xl hover:bg-card transition-colors cursor-pointer',
-          isActiveAccount ? 'bg-card/60' : ''
+          'relative flex w-full flex-col justify-center pl-5 pr-3 py-2',
+          className,
+          active && 'bg-wallet-surface'
         )}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="text-left">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-medium">{formatAccountName(displayName, 20)}</span>
-                {isActiveAccount && (
-                  <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full font-medium">
-                    Active
-                  </span>
-                )}
-              </div>
-              {showWalletName && (
-                <span className="text-sm text-muted">{walletDisplayName || wallet.name}</span>
-              )}
+        <button
+          type="button"
+          aria-label={`Switch to ${name}`}
+          aria-current={active ? 'true' : undefined}
+          className="wallet-interactive absolute inset-0 z-0 enabled:hover:bg-wallet-surface enabled:active:bg-wallet-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 disabled:cursor-not-allowed"
+          disabled={selectDisabled}
+          onPointerDown={() => {
+            selectionStartedWhileEditing.current = editingName
+          }}
+          onClick={() => {
+            if (selectionStartedWhileEditing.current || editingName) {
+              selectionStartedWhileEditing.current = false
+              return
+            }
+            onSelect()
+          }}
+        />
+        <div className="pointer-events-none relative z-10 flex w-full min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1 text-left">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <InlineEditableName
+                value={name}
+                kind="account"
+                onSave={onRename}
+                onEditingChange={setEditingName}
+                disabled={renameDisabled}
+                className="text-base font-medium leading-[21px]"
+                endContent={<AccountChainIcons networks={networks} />}
+              />
             </div>
+            {busy ? (
+              <Icon
+                icon="lucide:loader-2"
+                className="animate-spin text-primary"
+                width={14}
+                height={14}
+              />
+            ) : (
+              <AccountTotalValue snapshot={portfolioValue} hidden={balancesHidden} />
+            )}
           </div>
-
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              {switchingAccountId === account.id ? (
-                <Icon
-                  icon="lucide:loader-2"
-                  className="animate-spin text-primary"
-                  width={20}
-                  height={20}
-                />
-              ) : (
-                <p className="font-semibold text-muted text-sm">{balanceDisplay}</p>
-              )}
-            </div>
+          <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+            <SelectedAccountIndicator selected={active} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="icon-sm" onClick={e => e.stopPropagation()}>
-                  <Icon icon="lucide:more-vertical" width={20} height={20} />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Account actions for ${name}`}
+                  onClick={event => event.stopPropagation()}
+                  disabled={menuDisabled}
+                  className="size-6 text-muted"
+                >
+                  <Icon icon="lucide:ellipsis" width={16} height={16} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation()
-                    navigate(`/account-detail?accountId=${account.id}&walletId=${wallet.id}`)
-                  }}
-                >
-                  <Icon icon="lucide:wallet" className="mr-2 h-4 w-4" />
-                  Account details
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={e => {
-                    e.stopPropagation()
-                    navigate(`/addresses-list?accountId=${account.id}&walletId=${wallet.id}`)
-                  }}
-                >
-                  <Icon icon="lucide:scan-qr-code" className="mr-2 h-4 w-4" />
-                  Addresses
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={async e => {
-                    e.stopPropagation()
-                    await openModal({
-                      title: 'Rename account',
-                      body: (_resolve: (value: any) => void, close: () => void) => (
-                        <RenameAccountContent
-                          walletId={wallet.id}
-                          accountId={account.id}
-                          currentName={displayName}
-                          close={close}
-                        />
-                      )
-                    })
-                  }}
-                >
-                  <Icon icon="lucide:pencil" className="mr-2 h-4 w-4" />
-                  Rename
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={async e => {
-                    e.stopPropagation()
-                    await accountManager.togglePinAccount(wallet.id, account.id)
-                  }}
-                >
-                  <Icon
-                    icon={account.isPinned ? 'lucide:pin-off' : 'lucide:pin'}
-                    className="mr-2 h-4 w-4"
-                  />
-                  {account.isPinned ? 'Unpin' : 'Pin to top'}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={async e => {
-                    e.stopPropagation()
-                    await accountManager.toggleHideAccount(wallet.id, account.id)
-                  }}
-                >
-                  <Icon
-                    icon={account.isHidden ? 'lucide:eye' : 'lucide:eye-off'}
-                    className="mr-2 h-4 w-4"
-                  />
-                  {account.isHidden ? 'Show account' : 'Hide account'}
-                </DropdownMenuItem>
+                {children}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -579,51 +785,194 @@ function AccountItem({
   )
 }
 
-interface AddWalletContentProps {
-  onImport: () => void
-  onCreate: () => void
-  onHardware: () => void
+function NativeAccountItem({
+  account,
+  switching,
+  removing,
+  onSelect,
+  onRename,
+  onRemove,
+  onExport,
+  portfolioValue,
+  balancesHidden
+}: {
+  account: AccountNetworksView
+  switching: boolean
+  removing: boolean
+  onSelect: (accountId: string, walletId: string) => void
+  onRename: (name: string) => Promise<void>
+  onRemove: (account: AccountNetworksView) => void
+  onExport: (account: AccountNetworksView) => void
+  portfolioValue: AccountPortfolioValueSnapshot | null
+  balancesHidden: boolean
+}) {
+  const { navigate } = useNavigate()
+  const isPrivateKey = account.walletSource.kind === 'private-key'
+  return (
+    <AccountRow
+      name={account.accountDisplayName}
+      networks={account.networks}
+      active={account.active}
+      busy={switching || removing}
+      selectDisabled={removing}
+      renameDisabled={removing || switching}
+      menuDisabled={removing}
+      onSelect={() => onSelect(account.accountId, account.walletId)}
+      onRename={onRename}
+      portfolioValue={portfolioValue}
+      balancesHidden={balancesHidden}
+      className="min-h-[67px]"
+    >
+      <DropdownMenuItem
+        onClick={event => {
+          event.stopPropagation()
+          navigate(
+            `/addresses-list?accountId=${encodeURIComponent(account.accountId)}&walletId=${encodeURIComponent(account.walletId)}`
+          )
+        }}
+      >
+        <Icon icon="lucide:qr-code" className="mr-2 h-4 w-4" />
+        Addresses
+      </DropdownMenuItem>
+      {isPrivateKey && (
+        <DropdownMenuItem
+          onClick={event => {
+            event.stopPropagation()
+            onExport(account)
+          }}
+        >
+          <Icon icon="lucide:key-round" className="mr-2 h-4 w-4" />
+          Export private key
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem
+        className="text-danger focus:text-danger"
+        onClick={event => {
+          event.stopPropagation()
+          onRemove(account)
+        }}
+      >
+        <Icon icon="lucide:trash-2" className="mr-2 h-4 w-4" />
+        {isPrivateKey ? 'Remove account' : 'Remove wallet'}
+      </DropdownMenuItem>
+    </AccountRow>
+  )
 }
 
-function AddWalletContent({ onImport, onCreate, onHardware }: AddWalletContentProps) {
+function AccountItem({
+  account,
+  wallet,
+  networks,
+  switchingAccountKey,
+  onSelect,
+  onAddAccount,
+  onRenameAccount,
+  addingAccount = false,
+  portfolioValue,
+  balancesHidden
+}: {
+  account: AccountData
+  wallet: WalletItem
+  networks: readonly AccountNetworkView[]
+  switchingAccountKey: string | null
+  onSelect: (accountId: string, walletId: string) => void
+  onAddAccount?: () => void
+  onRenameAccount: (name: string) => Promise<void>
+  addingAccount?: boolean
+  portfolioValue: AccountPortfolioValueSnapshot | null
+  balancesHidden: boolean
+}) {
+  const { navigate } = useNavigate()
+  const { currentWalletId, getCurrentAccount, accountDisplayNames } = useWalletStore()
+  const currentAccount = getCurrentAccount()
+
+  const displayName = getAccountDisplayName(
+    wallet.id,
+    account.id,
+    account.name,
+    accountDisplayNames
+  )
+
+  const isActiveAccount = currentWalletId === wallet.id && currentAccount?.id === account.id
+  const itemKey = accountListKey(wallet.id, account.id)
+
   return (
-    <div className="space-y-2">
-      <button
-        onClick={onImport}
-        className="w-full p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+    <AccountRow
+      name={displayName}
+      networks={networks}
+      active={isActiveAccount}
+      busy={switchingAccountKey === itemKey}
+      renameDisabled={switchingAccountKey === itemKey}
+      onSelect={() => onSelect(account.id, wallet.id)}
+      onRename={onRenameAccount}
+      portfolioValue={portfolioValue}
+      balancesHidden={balancesHidden}
+      className="min-h-[60px]"
+    >
+      <DropdownMenuItem
+        onClick={e => {
+          e.stopPropagation()
+          navigate(`/account-detail?accountId=${account.id}&walletId=${wallet.id}`)
+        }}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <Icon icon="lucide:import" width={16} height={16} className="mr-2" />
-            <span>Import wallet</span>
-          </div>
-          <Icon icon="lucide:chevron-right" width={16} height={16} className="text-muted" />
-        </div>
-      </button>
-      <button
-        onClick={onCreate}
-        className="w-full p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+        <Icon icon="lucide:wallet" className="mr-2 h-4 w-4" />
+        Account details
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={e => {
+          e.stopPropagation()
+          navigate(`/addresses-list?accountId=${account.id}&walletId=${wallet.id}`)
+        }}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <Icon icon="lucide:plus" width={16} height={16} className="mr-2" />
-            <span>Create new wallet</span>
-          </div>
-          <Icon icon="lucide:chevron-right" width={16} height={16} className="text-muted" />
-        </div>
-      </button>
-      <button
-        onClick={onHardware}
-        className="w-full p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+        <Icon icon="lucide:scan-qr-code" className="mr-2 h-4 w-4" />
+        Addresses
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={async e => {
+          e.stopPropagation()
+          try {
+            await zcashWalletRuntimeClient.setAccountPinned(
+              wallet.id,
+              account.id,
+              !account.isPinned
+            )
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Account update failed')
+          }
+        }}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <Icon icon="lucide:shield" width={16} height={16} className="mr-2" />
-            <span>Connect Hardware Wallet</span>
-          </div>
-          <Icon icon="lucide:chevron-right" width={16} height={16} className="text-muted" />
-        </div>
-      </button>
-    </div>
+        <Icon icon={account.isPinned ? 'lucide:pin-off' : 'lucide:pin'} className="mr-2 h-4 w-4" />
+        {account.isPinned ? 'Unpin' : 'Pin to top'}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onClick={async e => {
+          e.stopPropagation()
+          try {
+            await zcashWalletRuntimeClient.setAccountHidden(
+              wallet.id,
+              account.id,
+              !account.isHidden
+            )
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Account update failed')
+          }
+        }}
+      >
+        <Icon icon={account.isHidden ? 'lucide:eye' : 'lucide:eye-off'} className="mr-2 h-4 w-4" />
+        {account.isHidden ? 'Show account' : 'Hide account'}
+      </DropdownMenuItem>
+      {onAddAccount && (
+        <DropdownMenuItem
+          disabled={addingAccount}
+          onClick={e => {
+            e.stopPropagation()
+            onAddAccount()
+          }}
+        >
+          <Icon icon="lucide:plus" className="mr-2 h-4 w-4" />
+          Add Account
+        </DropdownMenuItem>
+      )}
+    </AccountRow>
   )
 }

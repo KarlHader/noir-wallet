@@ -28,9 +28,9 @@ Transparent transactions expose public on-chain details. Zcash shielded transact
 
 No. Shielding moves funds into the shielded pool, but the original transparent transaction remains public.
 
-### Why can Max be lower than Available?
+### Why is my available balance lower than my total balance?
 
-On **Send**, Available shows funds you can use from the selected funding source before this transaction's network fee. Max estimates what can be sent to the entered destination after transaction selection, fees, and dust constraints. The final amount can change if the fee or destination changes. See [Send and receive](/wallet-guide/send-and-receive#enter-the-amount) for the difference between available funds and a transaction's confirmation status.
+On Zcash **Send** and **Swap**, Available shows funds you can use from the selected source before this transaction's network fee. Max estimates what can be sent to the entered destination after transaction selection, fees, and dust constraints. The final amount can change if the fee or destination changes. See [Send and receive](/wallet-guide/send-and-receive#enter-the-amount) for the difference between available funds and a transaction's confirmation status.
 
 ## Transactions
 
@@ -44,7 +44,9 @@ Noir Wallet cannot cancel a transaction after it has been broadcast to the netwo
 
 ### Why is my restored wallet still synchronizing?
 
-Restoring requires scanning Zcash history to discover notes and transactions. Keep the browser available until the initial scan catches up. If sync pauses, check the connection and restart the extension if it remains paused.
+Restoring requires scanning Zcash history to discover notes and transactions. Keep the browser available until the initial scan catches up. If sync pauses, check the connection.
+
+If local sync data is quarantined because it cannot be recovered, automatic synchronization pauses until you use **Resync Zcash** under **Actions** in the current account's details or in its Zcash settings. Resync rebuilds that wallet's local Zcash scan data and leaves its credentials and other chains' data unchanged.
 
 ## dApps
 
@@ -58,7 +60,7 @@ No. Locking protects local access; disconnecting removes an origin's authorizati
 
 ### How do I connect on testnet?
 
-Install the separate `[Testnet] Noir Wallet` build. Runtime network switching is not supported.
+Open **Settings > Developer Settings** and switch the wallet's global network mode to Testnet. The wallet locks and reloads before the Testnet networks become available.
 
 ## Security
 
@@ -70,4 +72,4 @@ No. Anyone asking for the phrase is attempting to gain control of the wallet.
 
 Treat the wallet as compromised. On a trusted device, create a new wallet and move remaining funds only after independently verifying the destination.
 
-Still need help? Use the official links on [GitHub](https://github.com/NoirWallet/noir-wallet) or [X](https://x.com/noir_wallet), and never send secrets in a support request.
+Still need help? Use the official links on [GitHub](https://zknoir.com/github) or [X](https://x.com/noir_wallet), and never send secrets in a support request.

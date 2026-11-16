@@ -6,7 +6,6 @@
   "type": "module",
   "packageManager": "pnpm@10.33.4",
   "scripts": {
-    "test": "pnpm --filter @noir-wallet/extension --filter @noir-wallet/rpc-registry --filter @noir-wallet/sdk --filter @noir-wallet/web --filter @noir-wallet/web-vote -r test",
     "dev": "pnpm dev:extension & pnpm dev:web & pnpm dev:example",
     "dev:extension": "pnpm --filter @noir-wallet/extension dev",
     "dev:web": "pnpm --filter @noir-wallet/web dev",
@@ -17,11 +16,10 @@
     "build:extension:testnet": "pnpm --filter @noir-wallet/extension build:testnet",
     "build:web": "pnpm --filter @noir-wallet/web build",
     "build:docs": "pnpm --filter @noir-wallet/docs build",
-    "sync-wasm-pkg": "node scripts/wasm-package.mjs sync-local",
-    "update-wasm-pkg": "node scripts/wasm-package.mjs update",
-    "update-wasm-pkg:local": "node scripts/wasm-package.mjs update-local",
-    "verify-wasm-pkg": "node scripts/wasm-package.mjs verify",
-    "type-check": "pnpm --filter @noir-wallet/sdk build && pnpm -r type-check",
+    "test": "pnpm --filter @noir-wallet/extension test",
+    "sync-wasm-pkg": "node scripts/sync-wasm-pkg.js",
+    "sync-multichain-wasm-pkg": "node scripts/sync-multichain-wasm-pkg.mjs",
+    "type-check": "pnpm -r type-check",
     "knip": "knip --no-config-hints",
     "lint:eslint": "eslint",
     "format": "prettier --write .",
@@ -45,5 +43,28 @@
     "lint-staged": "16.2.7",
     "prettier": "3.8.0",
     "typescript-eslint": "8.59.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "axios@1": "1.18.0",
+      "elliptic": ">=6.6.1",
+      "follow-redirects@1": "1.16.0",
+      "form-data@4": "4.0.6",
+      "mathjs@15": "15.2.0",
+      "nanoid@3": "3.3.18",
+      "picomatch@4": "4.0.4",
+      "postcss@8": "8.5.23",
+      "rollup@4": "4.59.0",
+      "source-map-js": "1.2.2",
+      "vite@7": "7.3.5",
+      "ws": "8.21.0",
+      "uuid": "11.1.1",
+      "bn.js": ">=5.2.3",
+      "bs58@4>base-x": "3.0.11",
+      "bs58@5>base-x": "4.0.1"
+    }
   }
 }

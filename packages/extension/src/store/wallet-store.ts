@@ -1,52 +1,22 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AccountData, Network, WalletItem } from '@/types'
-import { DEFAULT_NETWORK } from '@/config/networks'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { createChromeStorageAdapter } from '@/lib/chrome-storage-adapter'
-import { clearLendingHomeCache } from '@/core/services/lending-home-cache'
-import { getWalletsNeedingSecretPhraseBackup } from '@/core/wallet/secret-phrase-backup'
 import {
-  removeWalletMetadata,
+  migrateRetainedV1NetworkSelections,
+  refreshWalletMetadata,
   resetWalletMetadata,
-  refreshWalletMetadata
+  writeWalletMetadata
 } from '@/lib/wallet-metadata-storage'
-
-function isValidBackupTime(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-}
-
-function isBackupWallet(value: unknown): value is WalletItem {
-  if (!value || typeof value !== 'object') return false
-  const wallet = value as Partial<WalletItem>
-  return (
-    typeof wallet.id === 'string' &&
-    typeof wallet.name === 'string' &&
-    typeof wallet.seedPhraseKey === 'string' &&
-    typeof wallet.createdAt === 'number' &&
-    Array.isArray(wallet.accounts) &&
-    wallet.accounts.every(
-      account =>
-        account &&
-        typeof account.id === 'string' &&
-        typeof account.name === 'string' &&
-        typeof account.derivationIndex === 'number'
-    )
-  )
-}
-
-function matchesBackupWallet(left: WalletItem, right: WalletItem): boolean {
-  return (
-    left.id === right.id &&
-    left.name === right.name &&
-    left.seedPhraseKey === right.seedPhraseKey &&
-    left.createdAt === right.createdAt &&
-    left.keySource === right.keySource &&
-    Array.isArray(left.accounts) &&
-    Array.isArray(right.accounts) &&
-    left.accounts.length === right.accounts.length &&
-    left.accounts.every((account, index) => account.id === right.accounts[index]?.id)
-  )
-}
+import { migrateLegacyWalletData } from '@/infrastructure/persistence/migrations'
+import { removeAccountMetadata, removeWalletMetadata } from '@/core/wallet/wallet-metadata-cleanup'
+import { DedupPromise } from '@/lib/async-utils'
+import {
+  EMPTY_ACCOUNT_ADDRESSES,
+  projectWalletNetwork,
+  withNetworkAddresses
+} from './wallet-network-projection'
 
 interface WalletStore {
   // Global pointer state
@@ -65,27 +35,23 @@ interface WalletStore {
 
   // Actions
   setCurrentWallet: (walletId: string | null) => void
-  setCurrentAccount: (walletId: string, accountId: string) => Promise<void>
+  setCurrentAccount: (walletId: string, accountId: string) => void
+  clearCurrentAccount: () => void
   setCurrentNetwork: (network: Network) => void
   setZecPrice: (price: number) => void
 
   setWallets: (wallets: WalletItem[]) => void
-  addWallet: (wallet: WalletItem) => Promise<void>
-  addWalletAndSelect: (wallet: WalletItem) => Promise<void>
-  removeWallet: (walletId: string) => Promise<void>
+  addWallet: (wallet: WalletItem) => void
+  removeWallet: (walletId: string) => void
+  removeAccount: (walletId: string, accountId: string) => void
   updateWallet: (walletId: string, updater: (wallet: WalletItem) => WalletItem) => void
-  markWalletBackupVerified: (
-    walletId: string,
-    verifiedAt: number,
-    isSessionCurrent: () => boolean
-  ) => Promise<void>
   updateAccountInWallets: (
     walletId: string,
     accountId: string,
     updates: Partial<AccountData>
   ) => void
 
-  setAccountDisplayName: (walletId: string, accountId: string, displayName: string) => void
+  setAccountDisplayName: (walletId: string, accountId: string, displayName: string | null) => void
   getAccountDisplayName: (walletId: string, accountId: string) => string | null
 
   // Helper getters
@@ -95,8 +61,11 @@ interface WalletStore {
   getAccount: (walletId: string, accountId: string) => AccountData | undefined
 
   // Reset
-  reset: () => Promise<void>
+  reset: () => void
 }
+
+let hydrationFailure: Error | null = null
+const hydrationFailureListeners = new Set<(error: Error) => void>()
 
 export const useWalletStore = create<WalletStore>()(
   persist(
@@ -110,113 +79,67 @@ export const useWalletStore = create<WalletStore>()(
 
       setCurrentWallet: walletId => set({ currentWalletId: walletId }),
 
-      setCurrentAccount: async (walletId, accountId) => {
-        await set({
+      setCurrentAccount: (walletId, accountId) =>
+        set({
           currentWalletId: walletId,
           currentAccountId: accountId
-        })
-      },
+        }),
 
-      setCurrentNetwork: network => set({ currentNetwork: network }),
+      clearCurrentAccount: () =>
+        set({
+          currentWalletId: null,
+          currentAccountId: null
+        }),
+
+      setCurrentNetwork: network =>
+        set(state => ({
+          currentNetwork: network,
+          wallets: state.wallets.map(wallet => projectWalletNetwork(wallet, network))
+        })),
 
       setZecPrice: price => set({ zecPrice: price }),
 
-      setWallets: wallets => set({ wallets }),
+      setWallets: wallets =>
+        set(state => ({
+          wallets: wallets.map(wallet => ({
+            ...wallet,
+            accounts: wallet.accounts.map(account =>
+              withNetworkAddresses(account, state.currentNetwork)
+            )
+          }))
+        })),
 
-      addWallet: async wallet => {
-        await set(state => ({
-          wallets: [...state.wallets, wallet]
-        }))
-      },
+      addWallet: wallet =>
+        set(state => ({
+          wallets: [
+            ...state.wallets,
+            {
+              ...wallet,
+              accounts: wallet.accounts.map(account =>
+                withNetworkAddresses(account, state.currentNetwork)
+              )
+            }
+          ]
+        })),
 
-      addWalletAndSelect: async wallet => {
-        // Persist returns the storage write promise; wait before notifying other contexts.
-        await set(state => ({
-          wallets: [...state.wallets, wallet],
-          currentWalletId: wallet.id,
-          currentAccountId: wallet.accounts[0].id
-        }))
-      },
+      removeWallet: walletId => set(state => removeWalletMetadata(state, walletId)),
 
-      removeWallet: async walletId => {
-        await removeWalletMetadata(walletId)
-        await rehydrateWalletStore()
-        void clearLendingHomeCache(walletId).catch(error => {
-          console.warn('[WalletStore] Failed to clear lending cache:', error)
-        })
-      },
+      removeAccount: (walletId, accountId) =>
+        set(state => removeAccountMetadata(state, walletId, accountId)),
 
       updateWallet: (walletId, updater) =>
         set(state => ({
-          wallets: state.wallets.map(w => (w.id === walletId ? updater(w) : w))
-        })),
-
-      markWalletBackupVerified: async (walletId, verifiedAt, isSessionCurrent) => {
-        if (!Number.isSafeInteger(verifiedAt) || verifiedAt <= 0 || !isSessionCurrent()) {
-          throw new Error('Wallet backup verification is no longer available')
-        }
-        const wallet = get().wallets.find(item => item.id === walletId)
-        if (!wallet) throw new Error('Wallet not found')
-        const saved = await useWalletStore.persist.getOptions().storage?.getItem('wallet_state')
-        const savedWallets: unknown = (saved?.state as Partial<WalletStore> | undefined)?.wallets
-        if (
-          !Array.isArray(savedWallets) ||
-          !savedWallets.every(isBackupWallet) ||
-          !isSessionCurrent()
-        ) {
-          throw new Error('Wallet backup verification is no longer available')
-        }
-        const latestTarget = savedWallets.find(item => item?.id === walletId)
-        if (
-          !latestTarget ||
-          !matchesBackupWallet(wallet, latestTarget) ||
-          (!isValidBackupTime(latestTarget.secretPhraseBackupVerifiedAt) &&
-            !getWalletsNeedingSecretPhraseBackup([latestTarget]).length)
-        ) {
-          throw new Error('Wallet backup verification is no longer available')
-        }
-        const latestById = new Map(savedWallets.map(item => [item.id, item]))
-        const confirmedAt = isValidBackupTime(latestTarget.secretPhraseBackupVerifiedAt)
-          ? latestTarget.secretPhraseBackupVerifiedAt
-          : verifiedAt
-        const previous = isValidBackupTime(latestTarget.secretPhraseBackupVerifiedAt)
-          ? latestTarget.secretPhraseBackupVerifiedAt
-          : wallet.secretPhraseBackupVerifiedAt
-        try {
-          // Zustand persist returns the storage write promise from its wrapped setter.
-          await set(state => ({
-            wallets: state.wallets.map(item => {
-              const latest = latestById.get(item.id)
-              const latestTime =
-                latest && matchesBackupWallet(item, latest)
-                  ? latest.secretPhraseBackupVerifiedAt
-                  : undefined
-              if (item.id === walletId) {
-                return { ...item, secretPhraseBackupVerifiedAt: confirmedAt }
-              }
-              return isValidBackupTime(latestTime)
-                ? { ...item, secretPhraseBackupVerifiedAt: latestTime }
-                : item
-            })
-          }))
-          if (!isSessionCurrent()) {
-            throw new Error('Wallet backup verification is no longer available')
-          }
-        } catch (error) {
-          try {
-            await set(state => ({
-              wallets: state.wallets.map(item =>
-                item.id === walletId && item.secretPhraseBackupVerifiedAt === confirmedAt
-                  ? { ...item, secretPhraseBackupVerifiedAt: previous }
-                  : item
+          wallets: state.wallets.map(wallet => {
+            if (wallet.id !== walletId) return wallet
+            const updated = updater(wallet)
+            return {
+              ...updated,
+              accounts: updated.accounts.map(account =>
+                withNetworkAddresses(account, state.currentNetwork)
               )
-            }))
-          } catch {
-            // The in-memory rollback still ran even when storage remains unavailable.
-          }
-          throw error
-        }
-      },
+            }
+          })
+        })),
 
       updateAccountInWallets: (walletId, accountId, updates) =>
         set(state => ({
@@ -224,9 +147,30 @@ export const useWalletStore = create<WalletStore>()(
             wallet.id === walletId
               ? {
                   ...wallet,
-                  accounts: wallet.accounts.map(account =>
-                    account.id === accountId ? { ...account, ...updates } : account
-                  )
+                  accounts: wallet.accounts.map(account => {
+                    if (account.id !== accountId) return account
+                    const updated = { ...account, ...updates }
+                    if (updates.addresses === undefined && updates.birthdayHeight === undefined) {
+                      return updated
+                    }
+                    return {
+                      ...updated,
+                      networkAddresses:
+                        updates.addresses === undefined
+                          ? account.networkAddresses
+                          : {
+                              ...account.networkAddresses,
+                              [state.currentNetwork]: updates.addresses
+                            },
+                      networkBirthdayHeights:
+                        updates.birthdayHeight === undefined
+                          ? account.networkBirthdayHeights
+                          : {
+                              ...account.networkBirthdayHeights,
+                              [state.currentNetwork]: updates.birthdayHeight
+                            }
+                    }
+                  })
                 }
               : wallet
           )
@@ -235,6 +179,11 @@ export const useWalletStore = create<WalletStore>()(
       setAccountDisplayName: (walletId, accountId, displayName) =>
         set(state => {
           const key = `${walletId}_${accountId}`
+          if (displayName === null) {
+            const accountDisplayNames = { ...state.accountDisplayNames }
+            delete accountDisplayNames[key]
+            return { accountDisplayNames }
+          }
           return {
             accountDisplayNames: {
               ...state.accountDisplayNames,
@@ -271,13 +220,15 @@ export const useWalletStore = create<WalletStore>()(
         return wallet?.accounts.find(a => a.id === accountId)
       },
 
-      reset: async () => {
-        await resetWalletMetadata()
-        await rehydrateWalletStore()
-        void clearLendingHomeCache().catch(error => {
-          console.warn('[WalletStore] Failed to clear lending cache:', error)
+      reset: () =>
+        set({
+          currentWalletId: null,
+          currentAccountId: null,
+          currentNetwork: DEFAULT_NETWORK,
+          zecPrice: 0,
+          wallets: [],
+          accountDisplayNames: {}
         })
-      }
     }),
     {
       name: 'wallet_state',
@@ -290,35 +241,28 @@ export const useWalletStore = create<WalletStore>()(
         wallets: state.wallets,
         accountDisplayNames: state.accountDisplayNames
       }),
-      merge: (persisted, current) => {
-        const state = { ...current, ...(persisted as Partial<WalletStore>) }
-        return {
-          ...state,
-          wallets: state.wallets.map(wallet => {
-            const legacyHardwareName =
-              wallet.keySource === 'ledger'
-                ? 'Ledger Account'
-                : wallet.keySource === 'keystone'
-                  ? 'Keystone Account'
-                  : undefined
-            return {
-              ...wallet,
-              accounts: wallet.accounts.map(account => ({
-                ...account,
-                // Old hardware imports saved the chosen name only on the wallet.
-                name:
-                  legacyHardwareName &&
-                  wallet.accounts.length === 1 &&
-                  account.name === legacyHardwareName &&
-                  wallet.name.trim() &&
-                  !state.accountDisplayNames[`${wallet.id}_${account.id}`]
-                    ? wallet.name.trim()
-                    : account.name,
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          hydrationFailure = new Error('Wallet metadata could not be loaded')
+          for (const listener of hydrationFailureListeners) listener(hydrationFailure)
+          return
+        }
+        hydrationFailure = null
+        if (state?.wallets) {
+          state.wallets = state.wallets.map(wallet => ({
+            ...wallet,
+            accounts: wallet.accounts.map(account => {
+              const migrated = withNetworkAddresses(account, DEFAULT_NETWORK)
+              return {
+                ...migrated,
+                addresses: migrated.networkAddresses?.[DEFAULT_NETWORK] ?? EMPTY_ACCOUNT_ADDRESSES,
+                birthdayHeight: migrated.networkBirthdayHeights?.[DEFAULT_NETWORK] ?? 0,
                 isPinned: account.isPinned ?? false,
                 isHidden: account.isHidden ?? false
-              }))
-            }
-          })
+              }
+            })
+          }))
+          state.currentNetwork = DEFAULT_NETWORK
         }
       }
     }
@@ -329,11 +273,28 @@ export const useWalletStore = create<WalletStore>()(
  * Wait for initial hydration from chrome.storage to complete.
  * Must be called before reading store state to avoid seeing stale defaults.
  */
-export async function waitForHydration(): Promise<void> {
-  if (useWalletStore.persist.hasHydrated()) return
-  // Initial automatic hydration can fail without emitting onFinishHydration.
-  // An explicit refresh provides a terminal failure instead of waiting forever.
-  await rehydrateWalletStore()
+export function waitForHydration(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (useWalletStore.persist.hasHydrated()) {
+      resolve()
+      return
+    }
+    if (hydrationFailure) {
+      reject(hydrationFailure)
+      return
+    }
+    const unsub = useWalletStore.persist.onFinishHydration(() => {
+      unsub()
+      hydrationFailureListeners.delete(onFailure)
+      resolve()
+    })
+    const onFailure = (error: Error) => {
+      unsub()
+      hydrationFailureListeners.delete(onFailure)
+      reject(error)
+    }
+    hydrationFailureListeners.add(onFailure)
+  })
 }
 
 /**
@@ -345,39 +306,69 @@ export async function rehydrateWalletStore(): Promise<void> {
     () => useWalletStore.persist.rehydrate(),
     () => useWalletStore.persist.hasHydrated()
   )
+  if (hydrationFailure) throw hydrationFailure
 }
+
+export async function flushWalletStore(): Promise<void> {
+  const state = useWalletStore.getState()
+  await writeWalletMetadata({
+    state: {
+      currentWalletId: state.currentWalletId,
+      currentAccountId: state.currentAccountId,
+      currentNetwork: state.currentNetwork,
+      zecPrice: state.zecPrice,
+      wallets: state.wallets,
+      accountDisplayNames: state.accountDisplayNames
+    },
+    version: 0
+  })
+}
+
+export async function resetWalletStoreMetadata(): Promise<void> {
+  await resetWalletMetadata()
+  useWalletStore.getState().reset()
+}
+
+const walletStorePreparation = new DedupPromise<void>()
+let walletStorePrepared = false
 
 /**
  * Migrate legacy `walletData` key into the unified `wallet_state` store.
- * Called once on extension startup from background.
+ * Every extension context must rehydrate after a retained migration because
+ * Zustand persistence does not synchronize in-memory snapshots across contexts.
  */
 export async function migrateWalletDataIfNeeded(): Promise<void> {
   try {
-    const result = await chrome.storage.local.get('walletData')
-    const legacy = result.walletData
-    if (!legacy?.wallets) return
-
-    const store = useWalletStore.getState()
-
-    if (store.wallets.length > 0) {
-      await chrome.storage.local.remove('walletData')
-      return
+    const result = await migrateLegacyWalletData({
+      getAll: () => chrome.storage.local.get(null),
+      set: values => chrome.storage.local.set(values)
+    })
+    if (result.status === 'quarantined') {
+      throw new Error(`Legacy wallet metadata migration quarantined: ${result.reason}`)
     }
-
-    store.setWallets(legacy.wallets)
-    if (legacy.currentWalletId) {
-      store.setCurrentWallet(legacy.currentWalletId)
+    const networkSelectionsMigrated = await migrateRetainedV1NetworkSelections()
+    if (result.status === 'retained' || networkSelectionsMigrated) {
+      await rehydrateWalletStore()
     }
-    if (legacy.currentWalletId && legacy.currentAccountId) {
-      store.setCurrentAccount(legacy.currentWalletId, legacy.currentAccountId)
-    }
-    if (legacy.network) {
-      store.setCurrentNetwork(legacy.network)
-    }
-
-    await chrome.storage.local.remove('walletData')
-    console.log('[WalletStore] Migrated legacy walletData → wallet_state')
-  } catch (e) {
-    console.error('[WalletStore] Migration error:', e)
+  } catch (error) {
+    console.error('[WalletStore] Legacy wallet metadata migration failed')
+    throw error
   }
+}
+
+/**
+ * Establishes a migration-safe wallet-store snapshot before a context may
+ * initialize the Background Zcash runtime or perform another persistent wallet mutation.
+ */
+export async function prepareWalletStoreForUse(): Promise<void> {
+  if (walletStorePrepared) return
+  await walletStorePreparation.run(
+    async () => {
+      await waitForHydration()
+      await migrateWalletDataIfNeeded()
+    },
+    () => {
+      walletStorePrepared = true
+    }
+  )
 }

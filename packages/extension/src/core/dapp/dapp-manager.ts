@@ -1,3 +1,7 @@
+import { parseChainId } from '@/core/chains/registry'
+import { parseStoredCaip25Session, type Caip25StoredSession } from './caip25'
+import { getDAppSessionScopeLimit, shouldAutoConnectDApp } from './first-party-policy'
+
 /** Reference to a specific account within a specific wallet. */
 export interface AccountRef {
   walletId: string
@@ -15,81 +19,1169 @@ export interface ConnectedDApp {
   boundWalletId?: string
   boundAccountId?: string
   /**
-   * Accounts authorized via batch (multi-wallet) connection. Independent of the
-   * single-account `boundWalletId`/`boundAccountId` binding, so legacy flows are
-   * unaffected. Absent for connections that only used single-account connect.
+   * Accounts authorized via batch (multi-wallet) connection. When present,
+   * this list is authoritative and the single-account binding must refer to one
+   * of its entries. Absent for legacy single-account connections.
    */
   authorizedAccounts?: AccountRef[]
+  /** Shared authorization for every EVM chain. */
+  evmAuthorization?: DAppAccountAuthorization
+  /** Network consent and active network for this origin, separate from Account authorization. */
+  evmNetworkState?: EvmNetworkState
+  /** The last approved network was removed; Account authorization remains for a reviewed reconnect. */
+  evmNetworkConsentInvalidated?: true
+  /** Chain-scoped V2 permissions. Legacy Zcash permissions remain above for compatibility. */
+  chainAuthorizations?: DAppChainAuthorization[]
+  /** CAIP-25 methods and notifications granted by the latest multichain session approval. */
+  caip25Session?: Caip25StoredSession
+}
+
+export interface DAppChainAuthorization {
+  readonly chainId: string
+  readonly accounts: AccountRef[]
+  readonly binding: AccountRef
+}
+
+export interface DAppAccountAuthorization {
+  readonly accounts: AccountRef[]
+  readonly binding: AccountRef
+}
+
+export interface EvmNetworkState {
+  readonly activeChainId: string
+  readonly approvedChainIds: readonly string[]
 }
 
 const STORAGE_KEY = 'connectedDApps'
+const MAX_NEW_FAVICON_LENGTH = 4_096
+const MAX_STORED_FAVICON_LENGTH = 262_144
 const AUTHORIZATION_KEY = 'dapp_authorization_state'
+const MAX_CONNECTED_DAPPS = 256
+const MAX_AUTHORIZED_ACCOUNTS = 100
+const MAX_ACCOUNT_REF_LENGTH = 256
+const MAX_CONNECTION_TEXT_LENGTH = 2_048
+
+function normalizeEvmNetworkChainId(value: unknown): string {
+  if (typeof value !== 'string' || !/^eip155:[1-9][0-9]{0,31}$/.test(value)) {
+    throw new Error('Invalid dApp EVM network chain ID')
+  }
+  return value
+}
+
+function normalizeEvmNetworkState(value: unknown, origin?: string): EvmNetworkState {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(key => key !== 'activeChainId' && key !== 'approvedChainIds') ||
+    !Array.isArray(value.approvedChainIds) ||
+    value.approvedChainIds.length === 0 ||
+    value.approvedChainIds.length > getDAppSessionScopeLimit(origin)
+  ) {
+    throw new Error('Invalid dApp EVM network state')
+  }
+  const activeChainId = normalizeEvmNetworkChainId(value.activeChainId)
+  const approvedChainIds = value.approvedChainIds.map(normalizeEvmNetworkChainId)
+  if (
+    new Set(approvedChainIds).size !== approvedChainIds.length ||
+    !approvedChainIds.includes(activeChainId)
+  ) {
+    throw new Error('Invalid dApp EVM network state')
+  }
+  return Object.freeze({ activeChainId, approvedChainIds: Object.freeze(approvedChainIds) })
+}
+
+function explicitEvmNetworkState(connection: ConnectedDApp): EvmNetworkState | null {
+  const chainIds = [
+    ...(connection.chainAuthorizations ?? []).map(item => item.chainId),
+    ...(connection.caip25Session?.scopes ?? []).map(scope => scope.chainId)
+  ].filter(chainId => {
+    try {
+      normalizeEvmNetworkChainId(chainId)
+      return true
+    } catch {
+      return false
+    }
+  })
+  const approvedChainIds = [...new Set(chainIds)].slice(
+    0,
+    getDAppSessionScopeLimit(connection.origin)
+  )
+  return approvedChainIds.length === 0
+    ? null
+    : normalizeEvmNetworkState(
+        { activeChainId: approvedChainIds[0], approvedChainIds },
+        connection.origin
+      )
+}
+
+function connectionEvmNetworkState(connection: ConnectedDApp): EvmNetworkState | null {
+  return connection.evmNetworkState ?? explicitEvmNetworkState(connection)
+}
+
+function removeEvmNetworkChains(
+  connection: ConnectedDApp,
+  removedChainIds: ReadonlySet<string>
+): EvmNetworkState | undefined {
+  const state = connectionEvmNetworkState(connection)
+  const approvedChainIds = state?.approvedChainIds.filter(chainId => !removedChainIds.has(chainId))
+  if (!approvedChainIds?.length) return undefined
+  return normalizeEvmNetworkState(
+    {
+      activeChainId: approvedChainIds.includes(state!.activeChainId)
+        ? state!.activeChainId
+        : approvedChainIds[0],
+      approvedChainIds
+    },
+    connection.origin
+  )
+}
+
 interface AuthorizationState {
-  revision: number
-  mode: 'approved' | 'revoked'
+  readonly revision: number
+  readonly mode: 'approved' | 'revoked' | 'unreviewed'
+  readonly publicExplicit?: true
+  readonly firstPartySession?: 'automatic' | 'explicit'
 }
 
 function parseAuthorizationState(value: unknown): Record<string, AuthorizationState> {
-  if (value == null) return {}
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Site authorization storage is unavailable')
+  if (value === undefined) return Object.create(null) as Record<string, AuthorizationState>
+  if (!isRecord(value)) {
+    throw new Error('Invalid stored dApp authorization state')
   }
-  const states: Record<string, AuthorizationState> = {}
-  for (const [origin, entry] of Object.entries(value)) {
+  const states: Record<string, AuthorizationState> = Object.create(null)
+  for (const [origin, state] of Object.entries(value)) {
+    parseHttpOrigin(origin)
     if (
-      !entry ||
-      typeof entry !== 'object' ||
-      !('revision' in entry) ||
-      typeof entry.revision !== 'number' ||
-      !Number.isSafeInteger(entry.revision) ||
-      entry.revision < 0 ||
-      !('mode' in entry) ||
-      (entry.mode !== 'approved' && entry.mode !== 'revoked')
+      !isRecord(state) ||
+      Object.keys(state).some(
+        key =>
+          key !== 'revision' &&
+          key !== 'mode' &&
+          key !== 'publicExplicit' &&
+          key !== 'firstPartySession'
+      ) ||
+      !Number.isSafeInteger(state.revision) ||
+      (state.revision as number) < 0 ||
+      (state.mode !== undefined &&
+        state.mode !== 'approved' &&
+        state.mode !== 'revoked' &&
+        state.mode !== 'unreviewed') ||
+      (state.publicExplicit !== undefined && state.publicExplicit !== true) ||
+      (state.firstPartySession !== undefined &&
+        state.firstPartySession !== 'automatic' &&
+        state.firstPartySession !== 'explicit')
     ) {
-      throw new Error('Site authorization storage is unavailable')
+      throw new Error('Invalid stored dApp authorization state')
     }
-    states[origin] = { revision: entry.revision, mode: entry.mode }
+    states[origin] = {
+      revision: state.revision as number,
+      mode: state.mode ?? 'unreviewed',
+      ...(state.publicExplicit === true ? { publicExplicit: true } : {}),
+      ...(state.firstPartySession === undefined
+        ? {}
+        : { firstPartySession: state.firstPartySession })
+    }
   }
   return states
 }
 
+interface DAppConnectionStorage {
+  get(key: string | string[]): Promise<Record<string, unknown>>
+  set(items: Record<string, unknown>): Promise<void>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
 function isAccountRef(value: unknown): value is AccountRef {
-  if (typeof value !== 'object' || value === null) return false
-  const { walletId, accountId } = value as Partial<AccountRef>
   return (
-    typeof walletId === 'string' &&
-    walletId.length > 0 &&
-    typeof accountId === 'string' &&
-    accountId.length > 0
+    isRecord(value) &&
+    Object.keys(value).length === 2 &&
+    typeof value.walletId === 'string' &&
+    value.walletId.length > 0 &&
+    value.walletId.length <= MAX_ACCOUNT_REF_LENGTH &&
+    typeof value.accountId === 'string' &&
+    value.accountId.length > 0 &&
+    value.accountId.length <= MAX_ACCOUNT_REF_LENGTH
+  )
+}
+
+function accountRefsEqual(left: AccountRef, right: AccountRef): boolean {
+  return left.walletId === right.walletId && left.accountId === right.accountId
+}
+
+function normalizeAccountRefs(values: readonly AccountRef[]): AccountRef[] {
+  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_AUTHORIZED_ACCOUNTS) {
+    throw new Error('A dApp connection requires a bounded non-empty Account selection')
+  }
+  const refs: AccountRef[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    if (!isAccountRef(value)) throw new Error('Invalid dApp Account reference')
+    const key = JSON.stringify([value.walletId, value.accountId])
+    if (seen.has(key)) throw new Error('Duplicate dApp Account reference')
+    seen.add(key)
+    refs.push({ walletId: value.walletId, accountId: value.accountId })
+  }
+  return refs
+}
+
+const BITCOIN_DAPP_CHAIN_IDS = new Set([
+  'bip122:000000000019d6689c085ae165831e93',
+  'bip122:000000000933ea01ad0ee984209779ba'
+])
+const RELEASED_NATIVE_DAPP_CHAIN_IDS = new Set([
+  'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+  'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+  'near:mainnet',
+  'near:testnet'
+])
+const ZCASH_DAPP_CHAIN_IDS = new Set([
+  'bip122:00040fe8ec8471911baa1db1266ea15d',
+  'bip122:05a60a92d99d85997cce3b87616c089f'
+])
+
+function normalizeDAppChainId(value: string): string {
+  const chain = parseChainId(value)
+  if (
+    chain.namespace !== 'eip155' &&
+    !BITCOIN_DAPP_CHAIN_IDS.has(chain.id) &&
+    !ZCASH_DAPP_CHAIN_IDS.has(chain.id) &&
+    !RELEASED_NATIVE_DAPP_CHAIN_IDS.has(chain.id)
+  ) {
+    throw new Error('dApp chain authorization requires a released provider chain')
+  }
+  return chain.id
+}
+
+function normalizeChainAuthorization(value: DAppChainAuthorization): DAppChainAuthorization {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(key => !['chainId', 'accounts', 'binding'].includes(key))
+  ) {
+    throw new Error('Invalid dApp chain authorization')
+  }
+  const chainId = normalizeDAppChainId(value.chainId)
+  const accounts = normalizeAccountRefs(value.accounts)
+  if (!isAccountRef(value.binding)) throw new Error('Invalid dApp chain binding')
+  if (
+    !accounts.some(
+      account =>
+        account.walletId === value.binding.walletId && account.accountId === value.binding.accountId
+    )
+  ) {
+    throw new Error('The dApp chain binding must be part of its authorized selection')
+  }
+  return Object.freeze({
+    chainId,
+    accounts,
+    binding: Object.freeze({ ...value.binding })
+  })
+}
+
+function normalizeAccountAuthorization(value: DAppAccountAuthorization): DAppAccountAuthorization {
+  if (!isRecord(value) || Object.keys(value).some(key => !['accounts', 'binding'].includes(key))) {
+    throw new Error('Invalid dApp EVM authorization')
+  }
+  const accounts = normalizeAccountRefs(value.accounts)
+  if (
+    !isAccountRef(value.binding) ||
+    !accounts.some(account => accountRefsEqual(account, value.binding))
+  ) {
+    throw new Error('The dApp EVM binding must be part of its authorized selection')
+  }
+  return Object.freeze({ accounts, binding: Object.freeze({ ...value.binding }) })
+}
+
+function isEvmChain(chainId: string): boolean {
+  return parseChainId(chainId).namespace === 'eip155'
+}
+
+function sameAccountSet(left: readonly AccountRef[], right: readonly AccountRef[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(account => right.some(other => accountRefsEqual(account, other)))
+  )
+}
+
+function normalizeLegacyEvmAuthorization(connection: ConnectedDApp): ConnectedDApp {
+  if (connection.evmAuthorization) return connection
+  const authorizations = connection.chainAuthorizations ?? []
+  const evm = authorizations.filter(item => isEvmChain(item.chainId))
+  if (
+    evm.length < 2 ||
+    evm.some(
+      item =>
+        !sameAccountSet(item.accounts, evm[0].accounts) ||
+        !accountRefsEqual(item.binding, evm[0].binding)
+    )
+  ) {
+    return connection
+  }
+  const session = connection.caip25Session
+  const scopes = session?.scopes.map(scope => {
+    if (!isEvmChain(scope.chainId) || scope.accounts !== undefined) return scope
+    const prior = evm.find(item => item.chainId === scope.chainId)
+    return { ...scope, accounts: prior?.accounts ?? [] }
+  })
+  return {
+    ...connection,
+    evmAuthorization: { accounts: evm[0].accounts, binding: evm[0].binding },
+    evmNetworkState: connection.evmNetworkState ?? explicitEvmNetworkState(connection) ?? undefined,
+    chainAuthorizations: authorizations.filter(item => !isEvmChain(item.chainId)),
+    ...(session === undefined ? {} : { caip25Session: { ...session, scopes: scopes! } })
+  }
+}
+
+function readConnectionsForMigration(stored: unknown): {
+  readonly connections: ConnectedDApp[]
+  readonly migrated: boolean
+} {
+  const connections = stored === undefined ? [] : parseStoredDAppConnections(stored)
+  const raw = Array.isArray(stored) ? stored : []
+  const migrated = connections.some(
+    connection =>
+      connection.evmAuthorization !== undefined &&
+      raw.some(
+        candidate =>
+          isRecord(candidate) &&
+          candidate.origin === connection.origin &&
+          candidate.evmAuthorization === undefined
+      )
+  )
+  return { connections, migrated }
+}
+
+function normalizeChainAuthorizations(
+  values: readonly DAppChainAuthorization[] | undefined,
+  origin?: string
+): DAppChainAuthorization[] {
+  if (values === undefined) return []
+  if (!Array.isArray(values) || values.length > getDAppSessionScopeLimit(origin)) {
+    throw new Error('Invalid dApp chain authorizations')
+  }
+  const authorizations = values.map(normalizeChainAuthorization)
+  if (new Set(authorizations.map(item => item.chainId)).size !== authorizations.length) {
+    throw new Error('Duplicate dApp chain authorization')
+  }
+  return authorizations
+}
+
+function retainSessionScopes(
+  session: Caip25StoredSession | undefined,
+  chainIds: ReadonlySet<string>,
+  removedAccount?: { readonly walletId: string; readonly accountId?: string }
+): Caip25StoredSession | undefined {
+  if (!session) return undefined
+  const scopes = session.scopes
+    .filter(scope => chainIds.has(scope.chainId))
+    .map(scope =>
+      removedAccount === undefined || scope.accounts === undefined
+        ? scope
+        : {
+            ...scope,
+            accounts: scope.accounts.filter(
+              account =>
+                account.walletId !== removedAccount.walletId ||
+                (removedAccount.accountId !== undefined &&
+                  account.accountId !== removedAccount.accountId)
+            )
+          }
+    )
+  if (scopes.length === 0) return undefined
+  return Object.freeze({
+    scopes: Object.freeze(scopes),
+    ...(session.properties === undefined ? {} : { properties: session.properties })
+  })
+}
+
+function parseHttpOrigin(value: string): { readonly origin: string; readonly host: string } {
+  if (value.length === 0 || value.length > 2048) throw new Error('Invalid dApp origin')
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('Invalid dApp origin')
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.origin !== value) {
+    throw new Error('Invalid dApp origin')
+  }
+  return { origin: url.origin, host: url.host }
+}
+
+function parseStoredText(
+  value: unknown,
+  label: string,
+  options: { readonly allowEmpty?: boolean; readonly maximumLength?: number } = {}
+): string {
+  const maximumLength = options.maximumLength ?? MAX_CONNECTION_TEXT_LENGTH
+  if (
+    typeof value !== 'string' ||
+    (!options.allowEmpty && value.length === 0) ||
+    value.length > maximumLength
+  ) {
+    throw new Error(`Invalid stored dApp ${label}`)
+  }
+  return value
+}
+
+function persistableFavicon(value: string | undefined, origin: string): string {
+  if (value === undefined || value === '') return ''
+  if (typeof value !== 'string') throw new Error('Invalid dApp favicon')
+  return value.length <= MAX_NEW_FAVICON_LENGTH ? value : `${origin}/favicon.ico`
+}
+
+function parseStoredTime(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`Invalid stored dApp ${label}`)
+  }
+  return value as number
+}
+
+function requireMonotonicActivityTime(value: unknown, existing?: ConnectedDApp): number {
+  const now = parseStoredTime(value, 'authorization time')
+  if (existing && now < existing.connectedAt) {
+    throw new Error('dApp authorization time predates its connection')
+  }
+  return existing ? Math.max(now, existing.lastActiveAt) : now
+}
+
+function nextActivityTime(connection: ConnectedDApp): number {
+  return Math.max(Date.now(), connection.connectedAt, connection.lastActiveAt)
+}
+
+function fallbackFavicon(origin: string): string {
+  return `${origin}/favicon.ico`
+}
+
+function safeStoredFavicon(value: unknown, origin: string): string {
+  return typeof value === 'string' && value.length <= MAX_STORED_FAVICON_LENGTH
+    ? value
+    : fallbackFavicon(origin)
+}
+
+export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(
+      key =>
+        ![
+          'id',
+          'name',
+          'host',
+          'origin',
+          'favicon',
+          'connectedAt',
+          'lastActiveAt',
+          'boundWalletId',
+          'boundAccountId',
+          'authorizedAccounts',
+          'evmAuthorization',
+          'evmNetworkState',
+          'evmNetworkConsentInvalidated',
+          'chainAuthorizations',
+          'caip25Session'
+        ].includes(key)
+    )
+  ) {
+    throw new Error('Invalid stored dApp connection')
+  }
+  const { origin, host } = parseHttpOrigin(parseStoredText(value.origin, 'origin'))
+  if (parseStoredText(value.host, 'host') !== host) {
+    throw new Error('Stored dApp host does not match its origin')
+  }
+  const boundWalletId = value.boundWalletId
+  const boundAccountId = value.boundAccountId
+  if ((boundWalletId === undefined) !== (boundAccountId === undefined)) {
+    throw new Error('Stored dApp binding is incomplete')
+  }
+  const binding =
+    boundWalletId === undefined ? null : { walletId: boundWalletId, accountId: boundAccountId }
+  if (binding !== null && !isAccountRef(binding)) {
+    throw new Error('Invalid stored dApp binding')
+  }
+  const authorizedAccounts =
+    value.authorizedAccounts === undefined
+      ? undefined
+      : normalizeAccountRefs(value.authorizedAccounts as AccountRef[])
+  if (
+    authorizedAccounts !== undefined &&
+    binding !== null &&
+    !authorizedAccounts.some(account => accountRefsEqual(account, binding))
+  ) {
+    throw new Error('Stored dApp binding is outside its authorized selection')
+  }
+  const chainAuthorizations =
+    value.chainAuthorizations === undefined
+      ? undefined
+      : normalizeChainAuthorizations(value.chainAuthorizations as DAppChainAuthorization[], origin)
+  const evmAuthorization =
+    value.evmAuthorization === undefined
+      ? undefined
+      : normalizeAccountAuthorization(value.evmAuthorization as DAppAccountAuthorization)
+  const evmNetworkState =
+    value.evmNetworkState === undefined
+      ? undefined
+      : normalizeEvmNetworkState(value.evmNetworkState, origin)
+  if (
+    value.evmNetworkConsentInvalidated !== undefined &&
+    value.evmNetworkConsentInvalidated !== true
+  ) {
+    throw new Error('Invalid stored dApp EVM network consent')
+  }
+  const caip25Session =
+    value.caip25Session === undefined
+      ? undefined
+      : parseStoredCaip25Session(value.caip25Session, origin)
+  const connectedAt = parseStoredTime(value.connectedAt, 'connectedAt')
+  const lastActiveAt = parseStoredTime(value.lastActiveAt, 'lastActiveAt')
+  if (lastActiveAt < connectedAt) {
+    throw new Error('Stored dApp activity predates its connection')
+  }
+
+  return normalizeLegacyEvmAuthorization({
+    id: parseStoredText(value.id, 'id', { maximumLength: 512 }),
+    name: parseStoredText(value.name, 'name', { maximumLength: 512 }),
+    host,
+    origin,
+    favicon: safeStoredFavicon(value.favicon, origin),
+    connectedAt,
+    lastActiveAt,
+    ...(binding === null
+      ? {}
+      : { boundWalletId: binding.walletId, boundAccountId: binding.accountId }),
+    ...(authorizedAccounts === undefined ? {} : { authorizedAccounts }),
+    ...(evmAuthorization === undefined ? {} : { evmAuthorization }),
+    ...(evmNetworkState === undefined ? {} : { evmNetworkState }),
+    ...(value.evmNetworkConsentInvalidated === true
+      ? { evmNetworkConsentInvalidated: true as const }
+      : {}),
+    ...(chainAuthorizations === undefined ? {} : { chainAuthorizations }),
+    ...(caip25Session === undefined ? {} : { caip25Session })
+  })
+}
+
+export function parseStoredDAppConnections(value: unknown): ConnectedDApp[] {
+  if (!Array.isArray(value) || value.length > MAX_CONNECTED_DAPPS) return []
+  const parsed = value.flatMap(candidate => {
+    try {
+      return [parseStoredDAppConnection(candidate)]
+    } catch {
+      return []
+    }
+  })
+  const originCounts = new Map<string, number>()
+  for (const connection of parsed) {
+    originCounts.set(connection.origin, (originCounts.get(connection.origin) ?? 0) + 1)
+  }
+  return parsed.filter(connection => originCounts.get(connection.origin) === 1)
+}
+
+export function connectionHasEvmAuthorization(dapp: ConnectedDApp): boolean {
+  if (dapp.evmAuthorization) return true
+  try {
+    return normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).some(
+      authorization => parseChainId(authorization.chainId).namespace === 'eip155'
+    )
+  } catch {
+    return false
+  }
+}
+
+export function connectionHasEvmAuthorizationForAccount(
+  dapp: ConnectedDApp,
+  account: AccountRef
+): boolean {
+  if (!isAccountRef(account)) return false
+  if (dapp.evmAuthorization?.accounts.some(reference => accountRefsEqual(reference, account)))
+    return true
+  try {
+    return normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).some(
+      authorization =>
+        parseChainId(authorization.chainId).namespace === 'eip155' &&
+        authorization.accounts.some(reference => accountRefsEqual(reference, account))
+    )
+  } catch {
+    return false
+  }
+}
+
+export interface ReplaceDAppAuthorizationInput {
+  readonly origin: string
+  readonly id: string
+  readonly title?: string
+  readonly favicon?: string
+  readonly accounts: readonly AccountRef[]
+  readonly binding: AccountRef
+  readonly now: number
+}
+
+export function replaceDAppAuthorization(
+  existing: ConnectedDApp | undefined,
+  input: ReplaceDAppAuthorizationInput
+): ConnectedDApp {
+  const { origin, host } = parseHttpOrigin(input.origin)
+  if (existing && existing.origin !== origin) {
+    throw new Error('Cannot replace authorization for another dApp origin')
+  }
+  const activityTime = requireMonotonicActivityTime(input.now, existing)
+  const accounts = normalizeAccountRefs(input.accounts)
+  if (!isAccountRef(input.binding)) throw new Error('Invalid dApp Account binding')
+  if (
+    !accounts.some(
+      account =>
+        account.walletId === input.binding.walletId && account.accountId === input.binding.accountId
+    )
+  ) {
+    throw new Error('The dApp Account binding must be part of the authorized selection')
+  }
+
+  return {
+    id: existing?.id ?? input.id,
+    name: existing?.name ?? (input.title || host),
+    host,
+    origin,
+    favicon: existing?.favicon ?? persistableFavicon(input.favicon, origin),
+    connectedAt: existing?.connectedAt ?? activityTime,
+    lastActiveAt: activityTime,
+    boundWalletId: input.binding.walletId,
+    boundAccountId: input.binding.accountId,
+    authorizedAccounts: accounts,
+    ...(existing?.evmAuthorization === undefined
+      ? {}
+      : { evmAuthorization: existing.evmAuthorization }),
+    ...(existing?.evmNetworkState === undefined
+      ? {}
+      : { evmNetworkState: existing.evmNetworkState }),
+    ...(existing?.evmNetworkConsentInvalidated === undefined
+      ? {}
+      : { evmNetworkConsentInvalidated: existing.evmNetworkConsentInvalidated }),
+    ...(existing?.chainAuthorizations === undefined
+      ? {}
+      : {
+          chainAuthorizations: normalizeChainAuthorizations(existing.chainAuthorizations, origin)
+        }),
+    ...(existing?.caip25Session === undefined ? {} : { caip25Session: existing.caip25Session })
+  }
+}
+
+/**
+ * The explicit authorized set is authoritative. A single-account binding is
+ * only a compatibility fallback for connections that predate that set.
+ */
+export function getConnectionAccountRefs(dapp: ConnectedDApp): AccountRef[] {
+  if (dapp.authorizedAccounts !== undefined) {
+    try {
+      return normalizeAccountRefs(dapp.authorizedAccounts)
+    } catch {
+      return []
+    }
+  }
+  const legacyBinding = {
+    walletId: dapp.boundWalletId,
+    accountId: dapp.boundAccountId
+  }
+  return isAccountRef(legacyBinding) ? [legacyBinding] : []
+}
+
+export function connectionAuthorizesAccount(dapp: ConnectedDApp, account: AccountRef): boolean {
+  return getConnectionAccountRefs(dapp).some(
+    ref => ref.walletId === account.walletId && ref.accountId === account.accountId
   )
 }
 
 /**
- * Every account associated with a connection: the batch-authorized set united
- * with the single-account binding, so legacy connections that predate
- * `authorizedAccounts` still resolve to their bound account.
+ * Wallet UI status spans the legacy Zcash permission and every chain-scoped
+ * permission. Sensitive RPC handlers must continue using their own scope.
  */
-export function getConnectionAccountRefs(dapp: ConnectedDApp): AccountRef[] {
-  const refs = Array.isArray(dapp.authorizedAccounts)
-    ? dapp.authorizedAccounts.filter(isAccountRef)
-    : []
-  const binding = { walletId: dapp.boundWalletId, accountId: dapp.boundAccountId }
-  if (
-    isAccountRef(binding) &&
-    !refs.some(a => a.walletId === binding.walletId && a.accountId === binding.accountId)
-  ) {
-    refs.push(binding)
+export function connectionAuthorizesAccountForWalletStatus(
+  dapp: ConnectedDApp,
+  account: AccountRef
+): boolean {
+  if (connectionAuthorizesAccount(dapp, account)) return true
+  if (dapp.evmAuthorization?.accounts.some(ref => accountRefsEqual(ref, account))) return true
+  try {
+    return normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).some(authorization =>
+      authorization.accounts.some(ref => accountRefsEqual(ref, account))
+    )
+  } catch {
+    return false
   }
-  return refs
+}
+
+export interface DAppPrivateExecutionSupportSummary {
+  readonly connected: number
+  readonly privateCapable: number
+  readonly mainOnly: number
+}
+
+/**
+ * Counts connected origins for the active Account without widening any
+ * chain-specific permission. V1 Private Execution is available only to an
+ * origin that has an EVM authorization for that Account.
+ */
+export function summarizeDAppPrivateExecutionSupport(
+  dapps: readonly ConnectedDApp[],
+  account: AccountRef
+): DAppPrivateExecutionSupportSummary {
+  const active = dapps.filter(dapp => connectionAuthorizesAccountForWalletStatus(dapp, account))
+  const privateCapable = active.filter(dapp =>
+    connectionHasEvmAuthorizationForAccount(dapp, account)
+  ).length
+  return Object.freeze({
+    connected: active.length,
+    privateCapable,
+    mainOnly: active.length - privateCapable
+  })
+}
+
+export function getConnectionChainAuthorization(
+  dapp: ConnectedDApp,
+  chainIdValue: string
+): DAppChainAuthorization | null {
+  const chainId = normalizeDAppChainId(chainIdValue)
+  if (isEvmChain(chainId) && dapp.evmAuthorization) {
+    if (dapp.evmNetworkConsentInvalidated) return null
+    const shared = normalizeAccountAuthorization(dapp.evmAuthorization)
+    const scope = dapp.caip25Session?.scopes.find(item => item.chainId === chainId)
+    const scoped = normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).find(
+      item => item.chainId === chainId
+    )
+    const sharedAccounts =
+      scope?.accounts === undefined
+        ? shared.accounts
+        : shared.accounts.filter(account =>
+            scope.accounts!.some(selected => accountRefsEqual(account, selected))
+          )
+    const scopedAccounts = (scoped?.accounts ?? []).filter(
+      account =>
+        scope?.accounts?.some(selected => accountRefsEqual(account, selected)) &&
+        !sharedAccounts.some(selected => accountRefsEqual(account, selected))
+    )
+    const accounts = scope ? [...sharedAccounts, ...scopedAccounts] : sharedAccounts
+    if (accounts.length === 0) return null
+    const binding =
+      accounts.find(account => scoped && accountRefsEqual(account, scoped.binding)) ??
+      accounts.find(account => accountRefsEqual(account, shared.binding)) ??
+      accounts[0]
+    return Object.freeze({ chainId, accounts, binding })
+  }
+  const authorizations = normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin)
+  return authorizations.find(item => item.chainId === chainId) ?? null
+}
+
+export function replaceDAppChainAuthorization(
+  existing: ConnectedDApp | undefined,
+  input: {
+    readonly origin: string
+    readonly id: string
+    readonly title?: string
+    readonly favicon?: string
+    readonly chainId: string
+    readonly accounts: readonly AccountRef[]
+    readonly binding: AccountRef
+    readonly now: number
+  }
+): ConnectedDApp {
+  const { origin, host } = parseHttpOrigin(input.origin)
+  if (existing && existing.origin !== origin) {
+    throw new Error('Cannot replace authorization for another dApp origin')
+  }
+  const activityTime = requireMonotonicActivityTime(input.now, existing)
+  const authorization = normalizeChainAuthorization({
+    chainId: input.chainId,
+    accounts: [...input.accounts],
+    binding: input.binding
+  })
+  const remaining = normalizeChainAuthorizations(existing?.chainAuthorizations, origin).filter(
+    item => item.chainId !== authorization.chainId
+  )
+  return {
+    ...(existing ?? {
+      id: input.id,
+      name: input.title || host,
+      host,
+      origin,
+      favicon: persistableFavicon(input.favicon, origin),
+      connectedAt: activityTime,
+      lastActiveAt: activityTime
+    }),
+    lastActiveAt: activityTime,
+    chainAuthorizations: [...remaining, authorization],
+    ...(existing?.caip25Session === undefined ? {} : { caip25Session: existing.caip25Session })
+  }
+}
+
+export function replaceDAppCaip25Session(
+  existing: ConnectedDApp | undefined,
+  input: {
+    readonly origin: string
+    readonly id: string
+    readonly title?: string
+    readonly favicon?: string
+    readonly authorizations: readonly DAppChainAuthorization[]
+    readonly session: Caip25StoredSession
+    readonly zcashAuthorization?: {
+      readonly accounts: readonly AccountRef[]
+      readonly binding: AccountRef
+    }
+    readonly now: number
+  }
+): ConnectedDApp {
+  const { origin, host } = parseHttpOrigin(input.origin)
+  if (existing && existing.origin !== origin) {
+    throw new Error('Cannot replace a CAIP-25 session for another dApp origin')
+  }
+  const activityTime = requireMonotonicActivityTime(input.now, existing)
+  const session = parseStoredCaip25Session(input.session, origin)
+  const replacements = normalizeChainAuthorizations(input.authorizations, origin)
+  const replacementIds = new Set(replacements.map(item => item.chainId))
+  if (session.scopes.some(scope => !replacementIds.has(scope.chainId))) {
+    throw new Error('Every CAIP-25 scope requires a chain authorization')
+  }
+  const remaining = normalizeChainAuthorizations(existing?.chainAuthorizations, origin).filter(
+    item => !replacementIds.has(item.chainId)
+  )
+  const evm = replacements.filter(item => isEvmChain(item.chainId))
+  if (
+    evm.some(
+      item =>
+        !sameAccountSet(item.accounts, evm[0].accounts) ||
+        !accountRefsEqual(item.binding, evm[0].binding)
+    )
+  ) {
+    throw new Error('CAIP-25 EVM scopes require one shared Account selection')
+  }
+  const sessionWithSnapshots =
+    evm.length === 0
+      ? session
+      : {
+          ...session,
+          scopes: session.scopes.map(scope => {
+            const authorization = evm.find(item => item.chainId === scope.chainId)
+            if (!authorization) return scope
+            if (
+              scope.accounts !== undefined &&
+              !sameAccountSet(scope.accounts, authorization.accounts)
+            ) {
+              throw new Error('CAIP-25 EVM scope accounts must match its authorized selection')
+            }
+            return { ...scope, accounts: authorization.accounts }
+          })
+        }
+  const zcashAuthorization = input.zcashAuthorization
+  const zcashAccounts =
+    zcashAuthorization === undefined ? undefined : normalizeAccountRefs(zcashAuthorization.accounts)
+  if (
+    zcashAccounts !== undefined &&
+    zcashAuthorization !== undefined &&
+    !zcashAccounts.some(account => accountRefsEqual(account, zcashAuthorization.binding))
+  ) {
+    throw new Error('The CAIP-25 Zcash binding must be part of its authorized selection')
+  }
+  const currentNetworkState =
+    existing && connectionHasEvmAuthorization(existing) ? connectionEvmNetworkState(existing) : null
+  const approvedChainIds = [
+    ...(currentNetworkState?.approvedChainIds ?? []),
+    ...session.scopes
+      .filter(scope => isEvmChain(scope.chainId))
+      .map(scope => normalizeEvmNetworkChainId(scope.chainId))
+  ]
+  const uniqueApprovedChainIds = [...new Set(approvedChainIds)]
+  const evmNetworkState =
+    uniqueApprovedChainIds.length === 0
+      ? undefined
+      : normalizeEvmNetworkState(
+          {
+            activeChainId: currentNetworkState?.activeChainId ?? uniqueApprovedChainIds[0],
+            approvedChainIds: uniqueApprovedChainIds
+          },
+          origin
+        )
+  return {
+    ...(existing ?? {
+      id: input.id,
+      name: input.title || host,
+      host,
+      origin,
+      favicon: persistableFavicon(input.favicon, origin),
+      connectedAt: activityTime,
+      lastActiveAt: activityTime
+    }),
+    lastActiveAt: activityTime,
+    chainAuthorizations: [...remaining, ...replacements].filter(
+      item => !isEvmChain(item.chainId) || evm.length === 0
+    ),
+    ...(evm.length === 0
+      ? existing?.evmAuthorization === undefined
+        ? {}
+        : { evmAuthorization: existing.evmAuthorization }
+      : { evmAuthorization: { accounts: evm[0].accounts, binding: evm[0].binding } }),
+    ...(evmNetworkState === undefined ? {} : { evmNetworkState }),
+    evmNetworkConsentInvalidated:
+      evm.length > 0 ? undefined : existing?.evmNetworkConsentInvalidated,
+    caip25Session: sessionWithSnapshots,
+    ...(zcashAuthorization === undefined
+      ? {}
+      : {
+          authorizedAccounts: zcashAccounts,
+          boundWalletId: zcashAuthorization.binding.walletId,
+          boundAccountId: zcashAuthorization.binding.accountId
+        })
+  }
+}
+
+export interface PrunedDAppConnections {
+  readonly connections: readonly ConnectedDApp[]
+  readonly affectedOrigins: readonly string[]
+  readonly disconnectedOrigins: readonly string[]
+}
+
+export function pruneDAppChainAuthorizations(
+  connections: readonly ConnectedDApp[],
+  chainIdValues: readonly string[]
+): PrunedDAppConnections {
+  const chainIds = new Set(chainIdValues.map(normalizeDAppChainId))
+  const kept: ConnectedDApp[] = []
+  const affectedOrigins: string[] = []
+  const disconnectedOrigins: string[] = []
+
+  for (const connection of connections) {
+    const authorizations = normalizeChainAuthorizations(
+      connection.chainAuthorizations,
+      connection.origin
+    )
+    const remaining = authorizations.filter(authorization => !chainIds.has(authorization.chainId))
+    const sessionScopeRemoved =
+      connection.caip25Session?.scopes.some(scope => chainIds.has(scope.chainId)) ?? false
+    const networkConsentRemoved =
+      connectionEvmNetworkState(connection)?.approvedChainIds.some(chainId =>
+        chainIds.has(chainId)
+      ) ?? false
+    if (
+      remaining.length === authorizations.length &&
+      !sessionScopeRemoved &&
+      !networkConsentRemoved
+    ) {
+      kept.push(connection)
+      continue
+    }
+    affectedOrigins.push(connection.origin)
+    if (
+      remaining.length === 0 &&
+      getConnectionAccountRefs(connection).length === 0 &&
+      !connection.evmAuthorization
+    ) {
+      disconnectedOrigins.push(connection.origin)
+      continue
+    }
+    const evmNetworkState = removeEvmNetworkChains(connection, chainIds)
+    kept.push({
+      ...connection,
+      chainAuthorizations: remaining.length === 0 ? undefined : remaining,
+      evmNetworkState,
+      evmNetworkConsentInvalidated:
+        connection.evmAuthorization && networkConsentRemoved && !evmNetworkState
+          ? true
+          : connection.evmNetworkConsentInvalidated,
+      caip25Session: retainSessionScopes(
+        connection.caip25Session,
+        new Set([
+          ...remaining.map(item => item.chainId),
+          ...(connection.evmAuthorization
+            ? (connection.caip25Session?.scopes ?? [])
+                .filter(scope => isEvmChain(scope.chainId) && !chainIds.has(scope.chainId))
+                .map(scope => scope.chainId)
+            : [])
+        ])
+      ),
+      lastActiveAt: connection.lastActiveAt
+    })
+  }
+
+  return Object.freeze({
+    connections: Object.freeze(kept),
+    affectedOrigins: Object.freeze(affectedOrigins),
+    disconnectedOrigins: Object.freeze(disconnectedOrigins)
+  })
+}
+
+export function pruneDAppAccountReferences(
+  connections: readonly ConnectedDApp[],
+  target: { readonly walletId: string; readonly accountId?: string }
+): PrunedDAppConnections {
+  const kept: ConnectedDApp[] = []
+  const affectedOrigins: string[] = []
+  const disconnectedOrigins: string[] = []
+
+  for (const connection of connections) {
+    const refs = getConnectionAccountRefs(connection)
+    const remaining = refs.filter(
+      ref =>
+        ref.walletId !== target.walletId ||
+        (target.accountId !== undefined && ref.accountId !== target.accountId)
+    )
+    const chainAuthorizations = normalizeChainAuthorizations(
+      connection.chainAuthorizations,
+      connection.origin
+    )
+    const evmAccounts = connection.evmAuthorization?.accounts.filter(
+      ref =>
+        ref.walletId !== target.walletId ||
+        (target.accountId !== undefined && ref.accountId !== target.accountId)
+    )
+    const evmAuthorization =
+      evmAccounts && evmAccounts.length > 0
+        ? {
+            accounts: evmAccounts,
+            binding:
+              evmAccounts.find(ref =>
+                accountRefsEqual(ref, connection.evmAuthorization!.binding)
+              ) ?? evmAccounts[0]
+          }
+        : undefined
+    const nextChainAuthorizations = chainAuthorizations.flatMap(authorization => {
+      const chainAccounts = authorization.accounts.filter(
+        ref =>
+          ref.walletId !== target.walletId ||
+          (target.accountId !== undefined && ref.accountId !== target.accountId)
+      )
+      if (chainAccounts.length === 0) return []
+      const bindingRemoved =
+        authorization.binding.walletId === target.walletId &&
+        (target.accountId === undefined || authorization.binding.accountId === target.accountId)
+      return [
+        Object.freeze({
+          ...authorization,
+          accounts: chainAccounts,
+          binding: bindingRemoved ? chainAccounts[0] : authorization.binding
+        })
+      ]
+    })
+    const chainChanged =
+      nextChainAuthorizations.some((authorization, index) => {
+        const previous = chainAuthorizations[index]
+        return (
+          !previous ||
+          previous.accounts.length !== authorization.accounts.length ||
+          previous.binding.walletId !== authorization.binding.walletId ||
+          previous.binding.accountId !== authorization.binding.accountId
+        )
+      }) || nextChainAuthorizations.length !== chainAuthorizations.length
+    const evmNetworkState =
+      evmAuthorization === undefined
+        ? removeEvmNetworkChains(
+            connection,
+            new Set(
+              connection.evmAuthorization
+                ? (connectionEvmNetworkState(connection)?.approvedChainIds ?? []).filter(
+                    chainId => !nextChainAuthorizations.some(item => item.chainId === chainId)
+                  )
+                : chainAuthorizations
+                    .filter(item => isEvmChain(item.chainId))
+                    .map(item => item.chainId)
+                    .filter(
+                      chainId => !nextChainAuthorizations.some(item => item.chainId === chainId)
+                    )
+            )
+          )
+        : connection.evmNetworkState
+    const retainedEvmNetworkState =
+      evmAuthorization !== undefined ||
+      nextChainAuthorizations.some(item => isEvmChain(item.chainId))
+        ? evmNetworkState
+        : undefined
+    if (
+      remaining.length === refs.length &&
+      !chainChanged &&
+      evmAccounts?.length === connection.evmAuthorization?.accounts.length
+    ) {
+      kept.push(connection)
+      continue
+    }
+
+    affectedOrigins.push(connection.origin)
+    if (remaining.length === 0 && nextChainAuthorizations.length === 0 && !evmAuthorization) {
+      disconnectedOrigins.push(connection.origin)
+      continue
+    }
+
+    if (remaining.length === 0) {
+      kept.push({
+        ...connection,
+        boundWalletId: undefined,
+        boundAccountId: undefined,
+        authorizedAccounts: undefined,
+        chainAuthorizations: nextChainAuthorizations,
+        evmAuthorization,
+        evmNetworkState: retainedEvmNetworkState,
+        caip25Session: retainSessionScopes(
+          connection.caip25Session,
+          new Set([
+            ...nextChainAuthorizations.map(item => item.chainId),
+            ...(evmAuthorization
+              ? (connection.caip25Session?.scopes ?? [])
+                  .filter(scope => isEvmChain(scope.chainId))
+                  .map(scope => scope.chainId)
+              : [])
+          ]),
+          target
+        )
+      })
+      continue
+    }
+
+    const boundRemoved =
+      connection.boundWalletId === target.walletId &&
+      (target.accountId === undefined || connection.boundAccountId === target.accountId)
+    const nextBinding = boundRemoved
+      ? remaining[0]
+      : {
+          walletId: connection.boundWalletId,
+          accountId: connection.boundAccountId
+        }
+    kept.push({
+      ...connection,
+      boundWalletId: nextBinding.walletId,
+      boundAccountId: nextBinding.accountId,
+      authorizedAccounts: remaining,
+      chainAuthorizations: nextChainAuthorizations,
+      evmAuthorization,
+      evmNetworkState: retainedEvmNetworkState,
+      caip25Session: retainSessionScopes(
+        connection.caip25Session,
+        new Set([
+          ...nextChainAuthorizations.map(item => item.chainId),
+          ...(evmAuthorization
+            ? (connection.caip25Session?.scopes ?? [])
+                .filter(scope => isEvmChain(scope.chainId))
+                .map(scope => scope.chainId)
+            : [])
+        ]),
+        target
+      ),
+      lastActiveAt: connection.lastActiveAt
+    })
+  }
+
+  return Object.freeze({
+    connections: Object.freeze(kept),
+    affectedOrigins: Object.freeze(affectedOrigins),
+    disconnectedOrigins: Object.freeze(disconnectedOrigins)
+  })
 }
 
 export class DAppManager {
   private static instance: DAppManager
   private connectedDApps: Map<string, ConnectedDApp> = new Map()
-  private authorizationState: Record<string, AuthorizationState> = {}
-  private mutations: Promise<unknown> = Promise.resolve()
+  private initialized = false
+  private initializationPromise: Promise<void> | null = null
+  private mutationQueue: Promise<void> = Promise.resolve()
+  private authorizationState: Record<string, AuthorizationState> = Object.create(null)
 
-  private constructor() {}
+  constructor(private readonly injectedStorage?: DAppConnectionStorage) {}
 
   static getInstance(): DAppManager {
     if (!DAppManager.instance) {
@@ -99,115 +1191,649 @@ export class DAppManager {
   }
 
   async initialize(): Promise<void> {
-    await this.mutate(() => {})
-  }
+    if (this.initialized) return
+    if (this.initializationPromise) return this.initializationPromise
 
-  private async loadStorage(): Promise<void> {
-    const result = await chrome.storage.local.get([STORAGE_KEY, AUTHORIZATION_KEY])
-    const stored = result[STORAGE_KEY]
-    this.connectedDApps.clear()
-    if (stored && Array.isArray(stored)) {
-      stored.forEach((dapp: ConnectedDApp) => {
-        this.connectedDApps.set(dapp.origin, dapp)
-      })
-    }
-    this.authorizationState = parseAuthorizationState(result[AUTHORIZATION_KEY])
-  }
-
-  private mutate<T>(operation: () => T | Promise<T>): Promise<T> {
-    const run = async () => {
-      const commit = async () => {
-        await this.loadStorage()
-        return operation()
+    const operation = (async () => {
+      if (typeof navigator !== 'undefined' && navigator.locks) {
+        await navigator.locks.request('noir-dapp-authorization', async () => {
+          await this.reloadStorage()
+        })
+      } else {
+        await this.reloadStorage()
       }
-      return typeof navigator !== 'undefined' && navigator.locks
-        ? navigator.locks.request('noir-dapp-authorization', commit)
-        : commit()
+    })()
+    this.initializationPromise = operation
+    try {
+      await operation
+    } catch (error) {
+      console.error('Failed to initialize DAppManager:', error)
+      throw error
+    } finally {
+      if (this.initializationPromise === operation) this.initializationPromise = null
     }
-    const result = this.mutations.then(run, run)
-    this.mutations = result.catch(() => {})
-    return result
-  }
-
-  async getAuthorizationRevision(origin: string): Promise<number> {
-    return this.mutate(() => this.authorizationState[origin]?.revision ?? 0)
-  }
-
-  async canAutoConnect(origin: string): Promise<boolean> {
-    return this.mutate(() => !this.authorizationState[origin])
-  }
-
-  async isRevoked(origin: string): Promise<boolean> {
-    return this.mutate(() => this.authorizationState[origin]?.mode === 'revoked')
   }
 
   /**
    * Persist the set of batch-authorized accounts for an origin, creating the
-   * connection if it does not exist yet. The first account also seeds the
-   * single-account binding when none is set, so legacy methods keep working.
+   * connection if it does not exist yet. The binding is committed in the same
+   * storage write and must belong to the explicit selection.
    */
   async setAuthorizedAccounts(
     origin: string,
     tabInfo: { title?: string; favIconUrl?: string },
     accounts: AccountRef[],
-    authorization?: { automatic?: boolean; expectedRevision?: number }
+    binding: AccountRef,
+    authorization?: { readonly automatic?: boolean; readonly expectedRevision?: number }
   ): Promise<void> {
-    return this.mutate(async () => {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
       const state = this.authorizationState[origin]
+      const automaticState = this.getAutomaticAuthorizationState(origin)
       if (
-        (authorization?.automatic && state) ||
+        (authorization?.automatic &&
+          automaticState !== undefined &&
+          (automaticState.mode !== 'unreviewed' || automaticState.publicExplicit === true)) ||
         (authorization?.expectedRevision !== undefined &&
           authorization.expectedRevision !== (state?.revision ?? 0))
-      )
+      ) {
         throw new Error('Site authorization changed. Connect again.')
-      const primary = accounts[0]
+      }
       const existing = this.connectedDApps.get(origin)
-
-      if (existing) {
-        existing.authorizedAccounts = accounts
-        existing.lastActiveAt = Date.now()
-        if (primary) {
-          existing.boundWalletId = primary.walletId
-          existing.boundAccountId = primary.accountId
-        }
-      } else {
-        const host = new URL(origin).host
-        this.connectedDApps.set(origin, {
-          id: this.generateId(origin),
-          name: tabInfo.title || host,
-          host,
-          origin,
-          favicon: tabInfo.favIconUrl || this.getDefaultFavicon(origin),
-          connectedAt: Date.now(),
-          lastActiveAt: Date.now(),
-          boundWalletId: primary?.walletId,
-          boundAccountId: primary?.accountId,
-          authorizedAccounts: accounts
-        })
-      }
-
+      this.assertConnectionCapacity(existing)
+      const replacement = replaceDAppAuthorization(existing, {
+        origin,
+        id: this.generateId(),
+        title: tabInfo.title,
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
+        accounts,
+        binding,
+        now: Date.now()
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, replacement)
+      const states = { ...this.authorizationState }
       if (!authorization?.automatic) {
-        this.authorizationState[origin] = { revision: state?.revision ?? 0, mode: 'approved' }
+        states[origin] = { ...state, revision: state?.revision ?? 0, mode: 'approved' }
+      } else if (automaticState !== undefined) {
+        states[origin] = automaticState
       }
-      await this.saveToStorage()
+      await this.commitConnections(next, states)
     })
   }
 
-  /** Union of batch-authorized accounts and the single-account binding. */
+  async getAuthorization(origin: string): Promise<{ revision: number; accounts: AccountRef[] }> {
+    await this.waitForStableState()
+    const state = this.authorizationState[origin]
+    const connection = this.connectedDApps.get(origin)
+    return {
+      revision: state?.revision ?? 0,
+      accounts: connection && state?.mode !== 'revoked' ? getConnectionAccountRefs(connection) : []
+    }
+  }
+
+  async getAuthorizationRevision(origin: string): Promise<number> {
+    return (await this.getAuthorization(origin)).revision
+  }
+
+  async canAutoConnect(origin: string): Promise<boolean> {
+    await this.waitForStableState()
+    const state = this.getAutomaticAuthorizationState(origin)
+    return (state === undefined || state.mode === 'unreviewed') && state?.publicExplicit !== true
+  }
+
+  private getAutomaticAuthorizationState(origin: string): AuthorizationState | undefined {
+    const state = this.authorizationState[origin]
+    return state?.mode === 'revoked' &&
+      shouldAutoConnectDApp(origin) &&
+      state.publicExplicit !== true
+      ? { revision: state.revision, mode: 'unreviewed' }
+      : state
+  }
+
+  async canAutoConnectSession(origin: string): Promise<boolean> {
+    if (!shouldAutoConnectDApp(origin)) return false
+    await this.waitForStableState()
+    return this.canAutoConnectSessionFromState(origin)
+  }
+
+  private canAutoConnectSessionFromState(origin: string): boolean {
+    const state = this.getAutomaticAuthorizationState(origin)
+    if (
+      (state !== undefined && state.mode !== 'unreviewed') ||
+      state?.publicExplicit === true ||
+      state?.firstPartySession === 'explicit'
+    ) {
+      return false
+    }
+    const connection = this.connectedDApps.get(origin)
+    return (
+      state?.firstPartySession === 'automatic' ||
+      !connection ||
+      (!connection.evmAuthorization &&
+        !connection.caip25Session &&
+        normalizeChainAuthorizations(connection.chainAuthorizations, connection.origin).length ===
+          0)
+    )
+  }
+
+  async isRevoked(origin: string): Promise<boolean> {
+    await this.waitForStableState()
+    return this.authorizationState[origin]?.mode === 'revoked'
+  }
+
+  /** Explicit batch authorization, or the valid legacy single-account binding. */
   async getAuthorizedAccounts(origin: string): Promise<AccountRef[]> {
     return (await this.getAuthorization(origin)).accounts
   }
 
-  async getAuthorization(origin: string): Promise<{ revision: number; accounts: AccountRef[] }> {
-    return this.mutate(() => {
-      const dapp = this.connectedDApps.get(origin)
-      return {
-        revision: this.authorizationState[origin]?.revision ?? 0,
-        accounts:
-          dapp && this.authorizationState[origin]?.mode !== 'revoked'
-            ? getConnectionAccountRefs(dapp)
-            : []
+  async setChainAuthorizedAccounts(
+    origin: string,
+    tabInfo: { title?: string; favIconUrl?: string },
+    chainId: string,
+    accounts: AccountRef[],
+    binding: AccountRef
+  ): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      this.assertConnectionCapacity(existing)
+      const replacement = replaceDAppChainAuthorization(existing, {
+        origin,
+        id: this.generateId(),
+        title: tabInfo.title,
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
+        chainId,
+        accounts,
+        binding,
+        now: Date.now()
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, replacement)
+      const states = { ...this.authorizationState }
+      if (ZCASH_DAPP_CHAIN_IDS.has(normalizeDAppChainId(chainId))) {
+        states[origin] = {
+          ...states[origin],
+          revision: states[origin]?.revision ?? 0,
+          mode: 'approved',
+          firstPartySession: 'explicit'
+        }
+      } else {
+        states[origin] = {
+          ...states[origin],
+          revision: states[origin]?.revision ?? 0,
+          mode: states[origin]?.mode ?? 'unreviewed',
+          firstPartySession: 'explicit'
+        }
       }
+      await this.commitConnections(next, states)
+    })
+  }
+
+  async setEvmAuthorizedAccounts(
+    origin: string,
+    tabInfo: { title?: string; favIconUrl?: string },
+    accounts: AccountRef[],
+    binding: AccountRef,
+    expectedRevision?: number
+  ): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      if (
+        expectedRevision !== undefined &&
+        expectedRevision !== (this.authorizationState[origin]?.revision ?? 0)
+      ) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      const existing = this.connectedDApps.get(origin)
+      this.assertConnectionCapacity(existing)
+      const authorization = normalizeAccountAuthorization({ accounts, binding })
+      const { host } = parseHttpOrigin(origin)
+      const now = requireMonotonicActivityTime(Date.now(), existing)
+      const previousChains = normalizeChainAuthorizations(existing?.chainAuthorizations, origin)
+      const evmNetworkState = existing && connectionEvmNetworkState(existing)
+      const caip25Session =
+        existing?.caip25Session &&
+        retainSessionScopes(
+          existing.caip25Session,
+          new Set(
+            existing.caip25Session.scopes
+              .filter(scope => !isEvmChain(scope.chainId))
+              .map(scope => scope.chainId)
+          )
+        )
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...(existing ?? {
+          id: this.generateId(),
+          name: tabInfo.title || host,
+          host,
+          origin,
+          favicon: this.getFavicon(origin, tabInfo.favIconUrl),
+          connectedAt: now,
+          lastActiveAt: now
+        }),
+        lastActiveAt: now,
+        evmAuthorization: authorization,
+        ...(evmNetworkState ? { evmNetworkState } : {}),
+        evmNetworkConsentInvalidated: undefined,
+        chainAuthorizations: previousChains.filter(item => !isEvmChain(item.chainId)),
+        caip25Session: caip25Session ?? undefined
+      })
+      const states = { ...this.authorizationState }
+      states[origin] = {
+        ...states[origin],
+        revision: states[origin]?.revision ?? 0,
+        mode: states[origin]?.mode ?? 'unreviewed',
+        firstPartySession: 'explicit'
+      }
+      await this.commitConnections(next, states)
+    })
+  }
+
+  async getEvmAuthorization(origin: string): Promise<DAppAccountAuthorization | null> {
+    await this.waitForStableState()
+    return this.connectedDApps.get(origin)?.evmAuthorization ?? null
+  }
+
+  async getEvmNetworkState(origin: string): Promise<EvmNetworkState | null> {
+    await this.waitForStableState()
+    const connection = this.connectedDApps.get(origin)
+    return connection && connectionHasEvmAuthorization(connection)
+      ? connectionEvmNetworkState(connection)
+      : null
+  }
+
+  async setEvmActiveChain(
+    origin: string,
+    chainIdValue: string,
+    options: {
+      readonly approve: boolean
+      readonly expectedActiveChainId?: string | null
+      readonly expectedRevision?: number
+    }
+  ): Promise<EvmNetworkState> {
+    const chainId = normalizeEvmNetworkChainId(chainIdValue)
+    if (typeof options?.approve !== 'boolean') throw new Error('Invalid EVM network approval')
+    if (
+      options.expectedRevision !== undefined &&
+      (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)
+    ) {
+      throw new Error('Invalid dApp authorization revision')
+    }
+    if (options.expectedActiveChainId !== undefined && options.expectedActiveChainId !== null) {
+      normalizeEvmNetworkChainId(options.expectedActiveChainId)
+    }
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      if (
+        options.expectedRevision !== undefined &&
+        options.expectedRevision !== (this.authorizationState[origin]?.revision ?? 0)
+      ) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      const connection = this.connectedDApps.get(origin)
+      if (!connection || !connectionHasEvmAuthorization(connection)) {
+        throw new Error('Reconnect from the site to update this network permission')
+      }
+      const current = connectionEvmNetworkState(connection)
+      if (
+        options.expectedActiveChainId !== undefined &&
+        options.expectedActiveChainId !== (current?.activeChainId ?? null)
+      ) {
+        throw new Error('Site network changed. Try again.')
+      }
+      if (!options.approve && !current?.approvedChainIds.includes(chainId)) {
+        throw new Error('Reconnect from the site to update this network permission')
+      }
+      const approvedChainIds = current?.approvedChainIds.includes(chainId)
+        ? [...current.approvedChainIds]
+        : [...(current?.approvedChainIds ?? []), chainId]
+      const state = normalizeEvmNetworkState({ activeChainId: chainId, approvedChainIds }, origin)
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...connection,
+        evmNetworkState: state,
+        evmNetworkConsentInvalidated: undefined,
+        lastActiveAt: nextActivityTime(connection)
+      })
+      await this.commitConnections(next)
+      return state
+    })
+  }
+
+  async removeEvmAuthorization(origin: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const dapp = this.connectedDApps.get(origin)
+      const states = this.advanceAuthorizationRevision(origin, 'explicit')
+      if (!dapp) {
+        await this.commitConnections(new Map(this.connectedDApps), states)
+        return
+      }
+      const chainAuthorizations = normalizeChainAuthorizations(
+        dapp.chainAuthorizations,
+        dapp.origin
+      ).filter(item => !isEvmChain(item.chainId))
+      const caip25Session =
+        dapp.caip25Session &&
+        retainSessionScopes(
+          dapp.caip25Session,
+          new Set(
+            dapp.caip25Session.scopes
+              .filter(scope => !isEvmChain(scope.chainId))
+              .map(scope => scope.chainId)
+          )
+        )
+      const next = new Map(this.connectedDApps)
+      if (chainAuthorizations.length === 0 && getConnectionAccountRefs(dapp).length === 0) {
+        next.delete(origin)
+      } else {
+        next.set(origin, {
+          ...dapp,
+          evmAuthorization: undefined,
+          evmNetworkState: undefined,
+          evmNetworkConsentInvalidated: undefined,
+          chainAuthorizations: chainAuthorizations.length === 0 ? undefined : chainAuthorizations,
+          caip25Session,
+          lastActiveAt: nextActivityTime(dapp)
+        })
+      }
+      await this.commitConnections(next, states)
+    })
+  }
+
+  async getChainAuthorization(
+    origin: string,
+    chainId: string
+  ): Promise<DAppChainAuthorization | null> {
+    await this.waitForStableState()
+    const dapp = this.connectedDApps.get(origin)
+    return dapp ? getConnectionChainAuthorization(dapp, chainId) : null
+  }
+
+  async addEvmAuthorizedAccount(
+    origin: string,
+    chainIdValue: string,
+    account: AccountRef
+  ): Promise<void> {
+    if (parseChainId(chainIdValue).namespace !== 'eip155') {
+      throw new Error('Wallet-side account connection requires an EVM network')
+    }
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      const authorization = existing && getConnectionChainAuthorization(existing, chainIdValue)
+      if (!existing || !authorization || existing.caip25Session) {
+        throw new Error('Reconnect from the site to update this network permission')
+      }
+      const accounts = authorization.accounts.some(ref => accountRefsEqual(ref, account))
+        ? authorization.accounts
+        : [...authorization.accounts, account]
+      const next = new Map(this.connectedDApps)
+      if (existing.evmAuthorization) {
+        next.set(origin, {
+          ...existing,
+          evmAuthorization: normalizeAccountAuthorization({ accounts, binding: account }),
+          lastActiveAt: nextActivityTime(existing)
+        })
+        await this.commitConnections(next, this.advanceAuthorizationRevision(origin, 'explicit'))
+        return
+      }
+      next.set(
+        origin,
+        replaceDAppChainAuthorization(existing, {
+          origin,
+          id: existing.id,
+          chainId: authorization.chainId,
+          accounts,
+          binding: account,
+          now: Date.now()
+        })
+      )
+      await this.commitConnections(next, this.advanceAuthorizationRevision(origin, 'explicit'))
+    })
+  }
+
+  async addCaip25AuthorizedAccount(
+    origin: string,
+    chainIds: readonly string[],
+    account: AccountRef
+  ): Promise<void> {
+    if (!isAccountRef(account) || !Array.isArray(chainIds) || chainIds.length === 0) {
+      throw new Error('Invalid wallet-side session account selection')
+    }
+    const requested = new Set(chainIds.map(normalizeDAppChainId))
+    if (requested.size !== chainIds.length) {
+      throw new Error('Duplicate wallet-side session chain')
+    }
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      const session = existing?.caip25Session
+      if (!existing || !session) {
+        throw new Error('No active multichain session for this site')
+      }
+      if (
+        this.authorizationState[origin]?.mode === 'revoked' &&
+        [...requested].some(chainId => ZCASH_DAPP_CHAIN_IDS.has(chainId))
+      ) {
+        throw new Error('Reconnect from the site to update this Zcash permission')
+      }
+      if (
+        [...requested].some(chainId => !session.scopes.some(scope => scope.chainId === chainId))
+      ) {
+        throw new Error('Reconnect from the site to update this network permission')
+      }
+      const chainAuthorizations = normalizeChainAuthorizations(
+        existing.chainAuthorizations,
+        existing.origin
+      )
+      let zcashAccounts = existing.authorizedAccounts
+      let zcashBinding =
+        existing.boundWalletId && existing.boundAccountId
+          ? { walletId: existing.boundWalletId, accountId: existing.boundAccountId }
+          : undefined
+      const nextChains = [...chainAuthorizations]
+      const nextScopes = session.scopes.map(scope => {
+        if (!requested.has(scope.chainId)) return scope
+        const authorization = getConnectionChainAuthorization(existing, scope.chainId)
+        if (!authorization) {
+          throw new Error('Reconnect from the site to update this network permission')
+        }
+        const accounts = normalizeAccountRefs(
+          authorization.accounts.some(ref => accountRefsEqual(ref, account))
+            ? authorization.accounts
+            : [...authorization.accounts, account]
+        )
+        if (isEvmChain(scope.chainId)) {
+          if (!existing.evmAuthorization) {
+            throw new Error('Reconnect from the site to update this network permission')
+          }
+          const index = nextChains.findIndex(item => item.chainId === scope.chainId)
+          const scoped = normalizeChainAuthorization({
+            chainId: scope.chainId,
+            accounts,
+            binding: account
+          })
+          if (index < 0) nextChains.push(scoped)
+          else nextChains[index] = scoped
+          return { ...scope, accounts }
+        }
+        const index = nextChains.findIndex(item => item.chainId === scope.chainId)
+        if (index < 0) {
+          throw new Error('Reconnect from the site to update this network permission')
+        }
+        nextChains[index] = normalizeChainAuthorization({
+          chainId: scope.chainId,
+          accounts,
+          binding: account
+        })
+        if (ZCASH_DAPP_CHAIN_IDS.has(scope.chainId)) {
+          zcashAccounts = accounts
+          zcashBinding = account
+        }
+        return scope
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...existing,
+        chainAuthorizations: normalizeChainAuthorizations(nextChains, origin),
+        caip25Session: parseStoredCaip25Session({ ...session, scopes: nextScopes }, origin),
+        ...(zcashAccounts === undefined ? {} : { authorizedAccounts: zcashAccounts }),
+        ...(zcashBinding === undefined
+          ? {}
+          : { boundWalletId: zcashBinding.walletId, boundAccountId: zcashBinding.accountId }),
+        lastActiveAt: nextActivityTime(existing)
+      })
+      await this.commitConnections(next, this.advanceAuthorizationRevision(origin, 'explicit'))
+    })
+  }
+
+  async carryEvmAuthorizationToChain(
+    origin: string,
+    sourceChainId: string,
+    targetChainId: string
+  ): Promise<void> {
+    if (
+      parseChainId(sourceChainId).namespace !== 'eip155' ||
+      parseChainId(targetChainId).namespace !== 'eip155'
+    ) {
+      throw new Error('EVM authorization can only be carried between EVM chains')
+    }
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const existing = this.connectedDApps.get(origin)
+      if (!existing || getConnectionChainAuthorization(existing, targetChainId)) return
+      const source = getConnectionChainAuthorization(existing, sourceChainId)
+      if (!source) return
+      const next = new Map(this.connectedDApps)
+      next.set(
+        origin,
+        replaceDAppChainAuthorization(existing, {
+          origin,
+          id: existing.id,
+          chainId: targetChainId,
+          accounts: source.accounts,
+          binding: source.binding,
+          now: Date.now()
+        })
+      )
+      await this.commitConnections(next)
+    })
+  }
+
+  async setCaip25Session(
+    origin: string,
+    tabInfo: { title?: string; favIconUrl?: string },
+    authorizations: readonly DAppChainAuthorization[],
+    session: Caip25StoredSession,
+    zcashAuthorization?: {
+      readonly accounts: readonly AccountRef[]
+      readonly binding: AccountRef
+    },
+    expectedRevision?: number,
+    authorization?: { readonly automatic?: boolean }
+  ): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      if (
+        (expectedRevision !== undefined &&
+          expectedRevision !== (this.authorizationState[origin]?.revision ?? 0)) ||
+        (authorization?.automatic &&
+          (expectedRevision === undefined ||
+            !shouldAutoConnectDApp(origin) ||
+            !this.canAutoConnectSessionFromState(origin)))
+      ) {
+        throw new Error('Site authorization changed. Connect again.')
+      }
+      const existing = this.connectedDApps.get(origin)
+      this.assertConnectionCapacity(existing)
+      const replacement = replaceDAppCaip25Session(existing, {
+        origin,
+        id: this.generateId(),
+        title: tabInfo.title,
+        favicon: this.getFavicon(origin, tabInfo.favIconUrl),
+        authorizations,
+        session,
+        ...(zcashAuthorization === undefined ? {} : { zcashAuthorization }),
+        now: Date.now()
+      })
+      const next = new Map(this.connectedDApps)
+      next.set(origin, replacement)
+      const states = { ...this.authorizationState }
+      const state = authorization?.automatic
+        ? this.getAutomaticAuthorizationState(origin)
+        : states[origin]
+      states[origin] = {
+        ...state,
+        revision: state?.revision ?? 0,
+        mode: authorization?.automatic
+          ? 'unreviewed'
+          : zcashAuthorization !== undefined
+            ? 'approved'
+            : (states[origin]?.mode ?? 'unreviewed'),
+        firstPartySession: authorization?.automatic ? 'automatic' : 'explicit'
+      }
+      await this.commitConnections(next, states)
+    })
+  }
+
+  async getCaip25Session(origin: string): Promise<Caip25StoredSession | null> {
+    await this.waitForStableState()
+    return this.connectedDApps.get(origin)?.caip25Session ?? null
+  }
+
+  async removeChainAuthorization(origin: string, chainIdValue: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const dapp = this.connectedDApps.get(origin)
+      if (!dapp) {
+        await this.commitConnections(
+          new Map(this.connectedDApps),
+          this.advanceAuthorizationRevision(origin, 'explicit')
+        )
+        return
+      }
+      const chainId = normalizeDAppChainId(chainIdValue)
+      const remaining = normalizeChainAuthorizations(dapp.chainAuthorizations, dapp.origin).filter(
+        item => item.chainId !== chainId
+      )
+      const next = new Map(this.connectedDApps)
+      if (
+        remaining.length === 0 &&
+        getConnectionAccountRefs(dapp).length === 0 &&
+        !dapp.evmAuthorization
+      ) {
+        next.delete(origin)
+      } else {
+        const evmNetworkState = removeEvmNetworkChains(dapp, new Set([chainId]))
+        next.set(origin, {
+          ...dapp,
+          chainAuthorizations: remaining.length === 0 ? undefined : remaining,
+          evmNetworkState,
+          evmNetworkConsentInvalidated:
+            dapp.evmAuthorization &&
+            isEvmChain(chainId) &&
+            connectionEvmNetworkState(dapp)?.approvedChainIds.includes(chainId) &&
+            !evmNetworkState
+              ? true
+              : dapp.evmNetworkConsentInvalidated,
+          caip25Session: retainSessionScopes(
+            dapp.caip25Session,
+            new Set([
+              ...remaining.map(item => item.chainId),
+              ...(dapp.evmAuthorization
+                ? (dapp.caip25Session?.scopes ?? [])
+                    .filter(scope => isEvmChain(scope.chainId) && scope.chainId !== chainId)
+                    .map(scope => scope.chainId)
+                : [])
+            ])
+          ),
+          lastActiveAt: nextActivityTime(dapp)
+        })
+      }
+      await this.commitConnections(next, this.advanceAuthorizationRevision(origin, 'explicit'))
     })
   }
 
@@ -217,7 +1843,8 @@ export class DAppManager {
    * already authorized.
    */
   async addAuthorizedAccount(origin: string, account: AccountRef): Promise<void> {
-    return this.mutate(async () => {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
       const dapp = this.connectedDApps.get(origin)
       if (!dapp) return
 
@@ -225,9 +1852,13 @@ export class DAppManager {
       if (!refs.some(a => a.walletId === account.walletId && a.accountId === account.accountId)) {
         refs.push(account)
       }
-      dapp.authorizedAccounts = refs
-      dapp.lastActiveAt = Date.now()
-      await this.saveToStorage()
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...dapp,
+        authorizedAccounts: refs,
+        lastActiveAt: nextActivityTime(dapp)
+      })
+      await this.commitConnections(next)
     })
   }
 
@@ -235,49 +1866,140 @@ export class DAppManager {
     origin: string,
     binding: { walletId: string; accountId: string }
   ): Promise<void> {
-    return this.mutate(async () => {
-      const d = this.connectedDApps.get(origin)
-      if (!d) return
-      d.boundWalletId = binding.walletId
-      d.boundAccountId = binding.accountId
-      d.lastActiveAt = Date.now()
-      await this.saveToStorage()
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const dapp = this.connectedDApps.get(origin)
+      if (!dapp) return
+      if (!connectionAuthorizesAccount(dapp, binding)) {
+        throw new Error('Cannot bind a dApp connection to an unauthorized Account')
+      }
+      const next = new Map(this.connectedDApps)
+      next.set(origin, {
+        ...dapp,
+        boundWalletId: binding.walletId,
+        boundAccountId: binding.accountId,
+        lastActiveAt: nextActivityTime(dapp)
+      })
+      await this.commitConnections(next)
     })
   }
 
   async removeConnection(origin: string): Promise<void> {
-    return this.mutate(async () => {
-      this.authorizationState[origin] = {
-        revision: (this.authorizationState[origin]?.revision ?? 0) + 1,
-        mode: 'revoked'
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const next = new Map(this.connectedDApps)
+      next.delete(origin)
+      await this.commitConnections(next, this.revokeOrigins([origin], true))
+    })
+  }
+
+  async removeLegacyAuthorization(origin: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const dapp = this.connectedDApps.get(origin)
+      if (!dapp || getConnectionAccountRefs(dapp).length === 0) {
+        await this.commitConnections(new Map(this.connectedDApps), this.revokeOrigins([origin]))
+        return
       }
-      this.connectedDApps.delete(origin)
-      await this.saveToStorage()
+      const chainAuthorizations = normalizeChainAuthorizations(
+        dapp.chainAuthorizations,
+        dapp.origin
+      )
+      const next = new Map(this.connectedDApps)
+      if (chainAuthorizations.length === 0 && !dapp.evmAuthorization) {
+        next.delete(origin)
+      } else {
+        next.set(origin, {
+          id: dapp.id,
+          name: dapp.name,
+          host: dapp.host,
+          origin: dapp.origin,
+          favicon: dapp.favicon,
+          connectedAt: dapp.connectedAt,
+          lastActiveAt: nextActivityTime(dapp),
+          chainAuthorizations,
+          ...(dapp.evmAuthorization === undefined
+            ? {}
+            : { evmAuthorization: dapp.evmAuthorization }),
+          ...(dapp.evmNetworkState === undefined ? {} : { evmNetworkState: dapp.evmNetworkState }),
+          caip25Session: dapp.caip25Session
+        })
+      }
+      await this.commitConnections(next, this.revokeOrigins([origin]))
+    })
+  }
+
+  async removeAccountReferences(
+    walletId: string,
+    accountId?: string
+  ): Promise<PrunedDAppConnections> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const result = pruneDAppAccountReferences(Array.from(this.connectedDApps.values()), {
+        walletId,
+        ...(accountId === undefined ? {} : { accountId })
+      })
+      await this.commitConnections(
+        new Map(result.connections.map(connection => [connection.origin, connection]))
+      )
+      return result
+    })
+  }
+
+  async removeChainAuthorizations(chainIds: readonly string[]): Promise<PrunedDAppConnections> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      if (chainIds.length === 0) {
+        return Object.freeze({
+          connections: Object.freeze(Array.from(this.connectedDApps.values())),
+          affectedOrigins: Object.freeze([]),
+          disconnectedOrigins: Object.freeze([])
+        })
+      }
+      const result = pruneDAppChainAuthorizations(
+        Array.from(this.connectedDApps.values()),
+        chainIds
+      )
+      await this.commitConnections(
+        new Map(result.connections.map(connection => [connection.origin, connection]))
+      )
+      return result
+    })
+  }
+
+  async clearConnections(): Promise<readonly string[]> {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
+      const origins = Object.freeze(Array.from(this.connectedDApps.keys()))
+      await this.commitConnections(new Map(), this.revokeOrigins(origins))
+      return origins
     })
   }
 
   async updateLastActive(origin: string): Promise<void> {
-    return this.mutate(async () => {
+    return this.enqueueMutation(async () => {
+      await this.initialize()
       const dapp = this.connectedDApps.get(origin)
-      if (dapp) {
-        dapp.lastActiveAt = Date.now()
-        await this.saveToStorage()
-      }
+      if (!dapp) return
+      const next = new Map(this.connectedDApps)
+      next.set(origin, { ...dapp, lastActiveAt: nextActivityTime(dapp) })
+      await this.commitConnections(next)
     })
   }
 
   async getConnection(origin: string): Promise<ConnectedDApp | null> {
-    return this.mutate(() => this.connectedDApps.get(origin) || null)
+    await this.waitForStableState()
+    return this.connectedDApps.get(origin) || null
   }
 
   async getAllConnections(): Promise<ConnectedDApp[]> {
-    return this.mutate(() =>
-      Array.from(this.connectedDApps.values()).sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-    )
+    await this.waitForStableState()
+    return Array.from(this.connectedDApps.values()).sort((a, b) => b.lastActiveAt - a.lastActiveAt)
   }
 
   async isConnected(origin: string): Promise<boolean> {
-    return this.mutate(() => this.connectedDApps.has(origin))
+    await this.waitForStableState()
+    return this.connectedDApps.has(origin)
   }
 
   async getCurrentTabDApp(): Promise<ConnectedDApp | null> {
@@ -301,25 +2023,121 @@ export class DAppManager {
     }
   }
 
-  private async saveToStorage(): Promise<void> {
-    const dapps = Array.from(this.connectedDApps.values())
-    await chrome.storage.local.set({
-      [STORAGE_KEY]: dapps,
-      [AUTHORIZATION_KEY]: this.authorizationState
-    })
+  private getStorage(): DAppConnectionStorage {
+    return this.injectedStorage ?? chrome.storage.local
   }
 
-  private generateId(origin: string): string {
-    return `dapp_${Date.now()}_${origin.replace(/[^a-zA-Z0-9]/g, '_')}`
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const execute = async () => {
+        await this.reloadStorage()
+        return operation()
+      }
+      return typeof navigator !== 'undefined' && navigator.locks
+        ? navigator.locks.request('noir-dapp-authorization', execute)
+        : execute()
+    }
+    const result = this.mutationQueue.then(run)
+    this.mutationQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+
+  private async waitForStableState(): Promise<void> {
+    await this.mutationQueue
+    const read = () => this.reloadStorage()
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      await navigator.locks.request('noir-dapp-authorization', read)
+    } else {
+      await read()
+    }
+  }
+
+  private async reloadStorage(): Promise<void> {
+    const result = await this.getStorage().get([STORAGE_KEY, AUTHORIZATION_KEY])
+    const { connections, migrated } = readConnectionsForMigration(result[STORAGE_KEY])
+    const states = parseAuthorizationState(result[AUTHORIZATION_KEY])
+    if (migrated) {
+      await this.getStorage().set({ [STORAGE_KEY]: connections, [AUTHORIZATION_KEY]: states })
+    }
+    this.connectedDApps = new Map(connections.map(connection => [connection.origin, connection]))
+    this.authorizationState = states
+    this.initialized = true
+  }
+
+  private revokeOrigins(
+    origins: readonly string[],
+    blockAutomatic = false
+  ): Record<string, AuthorizationState> {
+    const states = { ...this.authorizationState }
+    for (const origin of origins) {
+      const revision = states[origin]?.revision ?? 0
+      if (revision >= Number.MAX_SAFE_INTEGER)
+        throw new Error('Site authorization revision exhausted')
+      states[origin] = {
+        ...states[origin],
+        revision: revision + 1,
+        mode: 'revoked',
+        ...(blockAutomatic ? { publicExplicit: true } : {})
+      }
+    }
+    return states
+  }
+
+  private advanceAuthorizationRevision(
+    origin: string,
+    firstPartySession?: AuthorizationState['firstPartySession']
+  ): Record<string, AuthorizationState> {
+    const states = { ...this.authorizationState }
+    const revision = states[origin]?.revision ?? 0
+    if (revision >= Number.MAX_SAFE_INTEGER)
+      throw new Error('Site authorization revision exhausted')
+    states[origin] = {
+      ...states[origin],
+      revision: revision + 1,
+      mode: states[origin]?.mode ?? 'unreviewed',
+      ...(firstPartySession === undefined ? {} : { firstPartySession })
+    }
+    return states
+  }
+
+  private async commitConnections(
+    next: Map<string, ConnectedDApp>,
+    states: Record<string, AuthorizationState> = this.authorizationState
+  ): Promise<void> {
+    await this.getStorage().set({
+      [STORAGE_KEY]: Array.from(next.values()),
+      [AUTHORIZATION_KEY]: states
+    })
+    this.connectedDApps = next
+    this.authorizationState = states
+  }
+
+  private assertConnectionCapacity(existing: ConnectedDApp | undefined): void {
+    if (!existing && this.connectedDApps.size >= MAX_CONNECTED_DAPPS) {
+      throw new Error('Connected dApp limit reached')
+    }
+  }
+
+  private generateId(): string {
+    return `dapp_${crypto.randomUUID()}`
   }
 
   private getDefaultFavicon(origin: string): string {
     try {
       const url = new URL(origin)
-      return `${url.origin}/favicon.ico`
+      return fallbackFavicon(url.origin)
     } catch {
       return ''
     }
+  }
+
+  private getFavicon(origin: string, candidate?: string): string {
+    return candidate && candidate.length <= MAX_NEW_FAVICON_LENGTH
+      ? candidate
+      : this.getDefaultFavicon(origin)
   }
 }
 

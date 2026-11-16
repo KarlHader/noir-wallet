@@ -1,5 +1,5 @@
 name: '[Manual] Stage SDK on npm'
-run-name: SDK ${{ inputs.release_line || 'stable' }} ${{ inputs.operation }} by @${{ github.actor }}
+run-name: SDK ${{ inputs.release_line || 'beta' }} ${{ inputs.operation }} by @${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -12,15 +12,15 @@ on:
       release_line:
         description: SDK release line (stage only; verify uses the original artifact)
         required: true
-        default: stable
+        default: beta
         type: choice
-        options: [stable, beta]
+        options: [beta]
       confirm_version:
         description: SDK version to stage (required for stage)
         required: false
         type: string
       confirm_sha:
-        description: Full selected branch HEAD SHA to stage (required for stage)
+        description: Full main branch HEAD SHA to stage (required for stage)
         required: false
         type: string
       candidate_run_id:

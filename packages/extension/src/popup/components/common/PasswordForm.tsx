@@ -4,12 +4,11 @@ import { PageHeader } from './PageHeader'
 import { PasswordStrength } from './PasswordStrength'
 import { PasswordInput } from './PasswordInput'
 import { LabeledCheckbox } from './LabeledCheckbox'
-import { WALLET_CONFIG } from '@/config/wallet'
+import { PASSWORD_POLICY } from '@/config/wallet'
+import { getNewPasswordValidationError, isNewPasswordValid } from '@/core/wallet/password-policy'
 import { classifyError } from '@/lib/errors'
 import { openModal } from '../../provider/ModalManager'
 import { TermsOfUse } from '../../pages/settings/TermsOfUse'
-
-const MIN_PW = WALLET_CONFIG.SECURITY.MIN_PASSWORD_LENGTH
 
 type PasswordFormMode = 'create' | 'import' | 'change'
 
@@ -39,8 +38,9 @@ export function PasswordForm({
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  const passwordError = password ? getNewPasswordValidationError(password) : null
   const isValid =
-    password.length >= MIN_PW &&
+    isNewPasswordValid(password) &&
     password === confirmPassword &&
     (!showTerms || agreedToTerms) &&
     (mode !== 'change' || currentPassword.length > 0)
@@ -84,7 +84,12 @@ export function PasswordForm({
             label={mode === 'change' ? 'New Password' : 'Password'}
             value={password}
             onChange={setPassword}
-            placeholder={mode === 'change' ? 'Enter new password' : `At least ${MIN_PW} characters`}
+            placeholder={
+              mode === 'change'
+                ? 'Enter new password'
+                : `${PASSWORD_POLICY.MIN_LENGTH}–${PASSWORD_POLICY.MAX_LENGTH} characters`
+            }
+            error={passwordError ?? undefined}
           />
 
           <PasswordStrength password={password} />
@@ -102,8 +107,8 @@ export function PasswordForm({
             }
           />
           <div className="text-xs text-muted">
-            * Minimum {MIN_PW} characters required. Adding uppercase, lowercase, numbers, and
-            symbols will make your password stronger.
+            * Use {PASSWORD_POLICY.MIN_LENGTH}–{PASSWORD_POLICY.MAX_LENGTH} characters. Spaces and
+            symbols are allowed; your password is used exactly as entered.
           </div>
         </div>
       </div>
@@ -122,9 +127,7 @@ export function PasswordForm({
                     onClick={() =>
                       openModal({
                         showCloseButton: true,
-                        body: (_resolve: (v: any) => void, close: () => void) => (
-                          <TermsOfUse embedded onClose={close} />
-                        )
+                        body: () => <TermsOfUse embedded />
                       })
                     }
                     className="text-muted hover:text-foreground underline cursor-pointer"

@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { formatAccountName } from '@/lib/format'
+import { toast } from '@/store/toast-store'
 
 interface DAppConnectPromptProps {
   host: string
   favicon: string
   accountName: string
+  canConnect: boolean
   onConnect: () => Promise<void>
+  onReturnToSite: () => void
 }
 
 /**
@@ -18,7 +21,9 @@ export function DAppConnectPrompt({
   host,
   favicon,
   accountName,
-  onConnect
+  canConnect,
+  onConnect,
+  onReturnToSite
 }: DAppConnectPromptProps) {
   const [connecting, setConnecting] = useState(false)
 
@@ -29,6 +34,7 @@ export function DAppConnectPrompt({
       await onConnect()
     } catch (error) {
       console.error('Failed to connect account to dApp:', error)
+      toast.error(error instanceof Error ? error.message : 'Unable to connect this account')
     } finally {
       setConnecting(false)
     }
@@ -43,6 +49,7 @@ export function DAppConnectPrompt({
         <img
           src={favicon}
           alt={host}
+          crossOrigin="anonymous"
           className="w-8 h-8 rounded-full bg-muted/20"
           onError={e => {
             ;(e.target as HTMLImageElement).src = 'icons/icon128.png'
@@ -53,18 +60,19 @@ export function DAppConnectPrompt({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{host}</div>
         <div className="text-xs text-muted truncate">
-          {formatAccountName(accountName, 14)} · Not connected
+          {formatAccountName(accountName, 14)} ·{' '}
+          {canConnect ? 'Not connected' : 'Reconnect from site'}
         </div>
       </div>
       <button
-        onClick={handleConnect}
+        onClick={canConnect ? handleConnect : onReturnToSite}
         disabled={connecting}
         className="shrink-0 h-8 px-4 rounded-full bg-primary text-background text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-60 inline-flex items-center gap-1.5 cursor-pointer"
       >
         {connecting && (
           <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
         )}
-        Connect
+        {canConnect ? 'Connect' : 'Return to site'}
       </button>
     </div>
   )

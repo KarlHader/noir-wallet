@@ -5,7 +5,7 @@ const marker = /^<!-- noir-extension-preview:(\d+):(\d+) -->/
 const shaPattern = /^[0-9a-f]{40}$/
 const positiveId = value => Number.isSafeInteger(value) && value > 0
 const previewName = prNumber =>
-  new RegExp(`^noir-wallet-(development-)?v(\\d+)\\.\\d+\\.\\d+-pr\\.${prNumber}\\.[0-9a-f]{7}$`)
+  new RegExp(`^noir-wallet-development-v(\\d+)\\.\\d+\\.\\d+-pr\\.${prNumber}\\.[0-9a-f]{7}$`)
 const workflowPath = '.github/workflows/extension-ci.yml'
 
 async function pages(request, route, key) {
@@ -28,7 +28,7 @@ function previewArtifact(artifacts, run, prNumber) {
     const match = name.exec(artifact.name)
     return (
       match &&
-      Boolean(match[1]) === Number(match[2]) >= 2 &&
+      Number(match[1]) >= 2 &&
       positiveId(artifact.id) &&
       artifact.size_in_bytes > 0 &&
       !artifact.expired &&
@@ -52,23 +52,24 @@ function commentBody(repository, run, artifact, forkPreview) {
     ''
   ]
   if (artifact) {
-    const v2 = artifact.name.startsWith('noir-wallet-development-')
     lines.push(
       'Preview package: **ready**',
       '',
-      `[Download ${v2 ? 'V2 development' : 'V1 Mainnet + Testnet'} package for PR head ${run.head_sha.slice(0, 7)}](${root}/actions/runs/${run.id}/artifacts/${artifact.id})`,
+      `[Download V2 development package for PR head ${run.head_sha.slice(0, 7)}](${root}/actions/runs/${run.id}/artifacts/${artifact.id})`,
       '',
       `Built: ${new Date(artifact.created_at).toISOString().replace('.000Z', ' UTC')}.`,
       `Expires: ${new Date(artifact.expires_at).toISOString().replace('.000Z', ' UTC')}. GitHub sign-in and repository access are required.`,
       'The package metadata records the tested PR merge commit.',
-      v2
-        ? 'Includes one extension ZIP with runtime Mainnet/Testnet Mode.'
-        : 'Includes separate Mainnet and Testnet extension ZIPs.'
+      'Includes one extension ZIP with runtime Mainnet/Testnet Mode.'
     )
-    if (v2 && forkPreview)
+    if (forkPreview)
       lines.push('Swap is unavailable in fork previews because repository secrets are not shared.')
   } else {
     if (run.status !== 'completed') lines.push('Preview package: **building**.')
+    else if (run.conclusion === 'success' && forkPreview)
+      lines.push(
+        'Fork checks passed. No preview package was uploaded. Move the reviewed changes to a repository branch for a configured download.'
+      )
     else if (run.conclusion === 'success')
       lines.push(
         'Preview package: **unavailable or expired**. Re-run Extension CI for this commit.'
@@ -145,7 +146,7 @@ export async function reportExtensionPreview({
       pr.head?.sha !== run.head_sha ||
       pr.head.repo?.id !== run.head_repository.id ||
       pr.base?.repo?.full_name?.toLowerCase() !== repository.toLowerCase() ||
-      !/^(main|v2|release\/.+)$/.test(pr.base.ref)
+      !/^(main|release\/.+)$/.test(pr.base.ref)
     )
       continue
     const comments = await pages(request, `issues/${number}/comments`)
@@ -227,7 +228,7 @@ async function retainPreviewArtifacts({ request, run, repository, prNumber, head
     const match = previewName(prNumber).exec(artifact.name)
     return (
       match &&
-      Boolean(match[1]) === Number(match[2]) >= 2 &&
+      Number(match[1]) >= 2 &&
       positiveId(artifact.id) &&
       positiveId(artifact.workflow_run?.id) &&
       shaPattern.test(artifact.workflow_run.head_sha) &&

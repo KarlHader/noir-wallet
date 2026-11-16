@@ -1,92 +1,155 @@
+import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../ui/button'
-import { useDAppConnection } from '@/popup/hooks/useDAppConnection'
-import { useState } from 'react'
-import { Loading } from '../ui/loading'
+import { ListSkeleton } from '../ui/skeleton'
 import { useWalletStore } from '@/store/wallet-store'
-import { getNetworkConfig } from '@/config/networks'
+import { useSettingsStore } from '@/store/settings-store'
+import { ChainIcon } from '../common/ChainIcon'
+import { InlineError } from '../common/InlineError'
+import { useDAppConnection } from '@/popup/hooks/useDAppConnection'
+import { presentDAppPermissions } from '@/popup/services/dapp-connection-presentation'
+import { toast } from '@/store/toast-store'
 
 export function DAppConnectionModal() {
-  const { connectedDApps, loading, disconnectDApp } = useDAppConnection()
+  const { connectedDApps, loading, connectionError, refreshConnectedDApps, disconnectDApp } =
+    useDAppConnection()
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
-  const network = useWalletStore(state => state.currentNetwork)
-  const currentNetwork = getNetworkConfig(network).name
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const networkMode = useWalletStore(state => state.currentNetwork)
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
 
-  const handleDisconnect = async (origin: string) => {
+  const handleDisconnect = async (origin?: string) => {
     if (disconnecting) return
-
-    setDisconnecting(origin)
+    setDisconnecting(origin ?? 'all')
     try {
-      await disconnectDApp(origin)
-    } catch (error) {
-      console.error('Failed to disconnect:', error)
+      const origins = origin ? [origin] : connectedDApps.map(dapp => dapp.origin)
+      for (const currentOrigin of origins) await disconnectDApp(currentOrigin)
+    } catch {
+      toast.error('Unable to disconnect dApp')
     } finally {
       setDisconnecting(null)
     }
   }
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden">
-      <div className="mb-6">
-        <div className="text-xs text-muted mb-2">Current Network</div>
-        <div className="flex items-center gap-2 px-4 py-3 bg-card rounded-xl">
-          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-            <Icon icon="lucide:link" width={16} height={16} className="text-primary" />
-          </div>
-          <span className="font-medium">{currentNetwork}</span>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="text-xs text-muted mb-3">Connected dApps</div>
-        {loading ? (
-          <div className="text-center py-8 text-muted">
-            <Loading text="Loading..." />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-1">
+        {loading && connectedDApps.length === 0 ? (
+          <ListSkeleton rows={3} label="Loading connected dApps" />
+        ) : connectionError && connectedDApps.length === 0 ? (
+          <div className="px-4 py-12">
+            <InlineError
+              message="Unable to load connected dApps"
+              onRetry={() => void refreshConnectedDApps()}
+            />
           </div>
         ) : connectedDApps.length === 0 ? (
-          <div className="text-center py-8 text-muted">
-            <Icon icon="lucide:unplug" width={32} height={32} className="mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No connected dApps</p>
-          </div>
+          <div className="py-16 text-center text-sm text-muted">No connected dApps</div>
         ) : (
-          <div className="min-h-0 space-y-2 overflow-y-auto overscroll-contain pr-1">
-            {connectedDApps.map(dapp => (
-              <div
-                key={dapp.id}
-                className="flex items-center justify-between px-4 py-3 bg-card rounded-xl"
-              >
-                <div className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden">
-                  <img
-                    src={dapp.favicon}
-                    alt={dapp.name}
-                    className="w-8 h-8 rounded-full shrink-0"
-                    onError={e => {
-                      ;(e.target as HTMLImageElement).src =
-                        'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9IiNlNmU2ZTYiIHN0cm9rZS13aWR0aD0iMS41Ij48cGF0aCBkPSJtOS44NTMgMTQuNjMzbC02LjIwMS0zLjk0NmEyIDIgMCAwIDEgMC0zLjM3NGw2LjItMy45NDZhNCA0IDAgMCAxIDQuMjk2IDBsNi4yIDMuOTQ2YTIgMiAwIDAgMSAwIDMuMzc0bC02LjIgMy45NDZhNCA0IDAgMCAxLTQuMjk2IDBaIi8+PHBhdGggZD0ibTE4LjI4NiAxMmwyLjA2MyAxLjMxM2EyIDIgMCAwIDEgMCAzLjM3NGwtNi4yMDEgMy45NDZhNCA0IDAgMCAxLTQuMjk2IDBsLTYuMi0zLjk0NmEyIDIgMCAwIDEgMC0zLjM3NEw1LjcxNCAxMiIvPjwvZz48L3N2Zz4='
-                    }}
-                  />
-                  <div className="min-w-0 flex-1 overflow-hidden">
-                    <div className="font-medium text-sm truncate">{dapp.name}</div>
-                    <div className="text-xs text-muted truncate">{dapp.host}</div>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDisconnect(dapp.origin)}
-                  disabled={disconnecting === dapp.origin}
-                  className="text-danger hover:text-danger hover:bg-danger/10 flex-shrink-0"
-                >
-                  {disconnecting === dapp.origin ? (
-                    <Icon icon="lucide:loader-2" width={16} height={16} className="animate-spin" />
-                  ) : (
-                    'Disconnect'
-                  )}
-                </Button>
+          <>
+            {connectionError && (
+              <div className="px-4 py-3">
+                <InlineError
+                  message="Unable to refresh connected dApps"
+                  onRetry={() => void refreshConnectedDApps()}
+                />
               </div>
-            ))}
-          </div>
+            )}
+            {connectedDApps.map(dapp => {
+              const permissions = presentDAppPermissions(dapp, {
+                network: networkMode,
+                endpointSettings
+              })
+              return (
+                <div key={dapp.id}>
+                  <div className="flex min-h-[68px] items-center gap-3 px-4">
+                    <div className="flex min-w-0 flex-1 items-center gap-[9px]">
+                      <img
+                        src={dapp.favicon || 'icons/icon128.png'}
+                        alt=""
+                        crossOrigin="anonymous"
+                        className="size-9 shrink-0 rounded-lg"
+                        onError={event => {
+                          event.currentTarget.src = 'icons/icon128.png'
+                        }}
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate text-base font-medium">{dapp.name}</span>
+                        <span className="block truncate text-xs text-muted">{dapp.host}</span>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Disconnect ${dapp.name}`}
+                      title={`Disconnect ${dapp.name}`}
+                      onClick={() => void handleDisconnect(dapp.origin)}
+                      disabled={disconnecting !== null}
+                      className="wallet-interactive flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-wallet-surface text-danger enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+                    >
+                      <Icon
+                        icon={
+                          disconnecting === dapp.origin ? 'lucide:loader-circle' : 'lucide:unplug'
+                        }
+                        width={16}
+                        height={16}
+                        className={disconnecting === dapp.origin ? 'animate-spin' : undefined}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`View ${dapp.name} permissions`}
+                      aria-expanded={expanded === dapp.id}
+                      title={expanded === dapp.id ? 'Hide permissions' : 'View permissions'}
+                      onClick={() => setExpanded(expanded === dapp.id ? null : dapp.id)}
+                      className="wallet-interactive flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-wallet-surface text-muted hover:bg-wallet-selected hover:text-foreground active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                    >
+                      <Icon
+                        icon={expanded === dapp.id ? 'lucide:chevron-down' : 'lucide:chevron-right'}
+                        width={16}
+                        height={16}
+                      />
+                    </button>
+                  </div>
+                  {expanded === dapp.id && (
+                    <div
+                      className="flex flex-wrap gap-2 px-4 pb-3 pl-[61px]"
+                      aria-label="Authorized networks"
+                    >
+                      {permissions.map(permission => (
+                        <span
+                          key={permission.chainId}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-wallet-surface px-2 py-1 text-xs text-wallet-secondary"
+                        >
+                          <ChainIcon
+                            chain={permission.iconChain}
+                            width={14}
+                            height={14}
+                            showTooltip={false}
+                          />
+                          {permission.label}
+                          {permission.accountCount > 1 && <span>· {permission.accountCount}</span>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </>
         )}
+      </div>
+      <div className="page-footer">
+        <Button
+          variant="ghost"
+          className="h-[45px] w-full rounded-[10px] border border-white/6 bg-white/5 text-base font-medium"
+          onClick={() => void handleDisconnect()}
+          disabled={
+            loading || connectionError || connectedDApps.length === 0 || disconnecting !== null
+          }
+          isLoading={disconnecting === 'all'}
+        >
+          Disconnect all
+        </Button>
       </div>
     </div>
   )

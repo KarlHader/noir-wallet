@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "noir-evm-history-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "cache": {
+    "enabled": true
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "*"
+  },
+  "ratelimits": [
+    {
+      "name": "HISTORY_RATE_LIMITER",
+      "namespace_id": "61337001",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ]
+}

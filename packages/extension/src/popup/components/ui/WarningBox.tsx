@@ -8,11 +8,11 @@ interface WarningBoxProps {
 
 export function WarningBox({ children, className }: WarningBoxProps) {
   return (
-    <div className={cn('flex items-start gap-3 p-3 bg-warning/10 rounded-lg', className)}>
+    <div className={cn('flex items-start gap-3 p-3 bg-warning-surface rounded-lg', className)}>
       <div className="flex-shrink-0 mt-0.5">
-        <Icon icon="lucide:triangle-alert" width={18} height={18} style={{ color: '#FFC201' }} />
+        <Icon icon="lucide:triangle-alert" width={18} height={18} className="text-warning" />
       </div>
-      <p className="text-xs text-white/70 leading-relaxed">{children}</p>
+      <p className="text-xs text-warning leading-relaxed">{children}</p>
     </div>
   )
 }

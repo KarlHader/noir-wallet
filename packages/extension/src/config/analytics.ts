@@ -6,6 +6,8 @@ export const GA_CONFIG = {
   endpoint: 'https://www.google-analytics.com/mp/collect'
 } as const
 
+export const ANALYTICS_COUNTRY_ENDPOINT = 'https://rpc.zknoir.com/cdn-cgi/trace'
+
 /**
  * Collector credentials are supplied by the release build. Values embedded
  * in an extension are visible to its users and cannot act as server secrets.

@@ -2,7 +2,6 @@ export type {
   AddressType,
   FundingSource,
   AccountAddresses,
-  ShieldedReceiveAddress,
   AccountData,
   KeySource,
   HardwareWalletData,
@@ -17,8 +16,5 @@ export type {
   Network,
   ZcashTransaction,
   ZcashWalletConfig,
-  SyncReason,
-  SyncTrigger
+  SyncReason
 } from './wallet'
-
-export { SYNC_TRIGGERS, normalizeSyncTrigger } from './wallet'

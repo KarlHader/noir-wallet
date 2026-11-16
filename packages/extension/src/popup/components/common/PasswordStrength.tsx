@@ -1,36 +1,17 @@
 import { useMemo } from 'react'
-import { WALLET_CONFIG } from '@/config/wallet'
+import { getPasswordStrength } from '@/core/wallet/password-policy'
 
 interface PasswordStrengthProps {
   password: string
 }
 
-type Strength = 'Too Weak' | 'Weak' | 'Medium' | 'Strong'
-
 export function PasswordStrength({ password }: PasswordStrengthProps) {
-  const { strength, score } = useMemo(() => {
-    let score = 0
-
-    const minLen = WALLET_CONFIG.SECURITY.MIN_PASSWORD_LENGTH
-    if (password.length >= minLen) score++
-    if (password.length >= minLen + 4) score++
-    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++
-    if (/\d/.test(password)) score++
-    if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++
-
-    let strength: Strength
-    if (score <= 1) strength = 'Too Weak'
-    else if (score === 2) strength = 'Weak'
-    else if (score === 3) strength = 'Medium'
-    else strength = 'Strong'
-
-    return { strength, score }
-  }, [password])
+  const { strength, score } = useMemo(() => getPasswordStrength(password), [password])
 
   const strengthColors = {
     'Too Weak': 'bg-danger',
-    Weak: 'bg-orange-500',
-    Medium: 'bg-yellow-500',
+    Weak: 'bg-warning',
+    Medium: 'bg-warning',
     Strong: 'bg-success'
   }
 

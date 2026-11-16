@@ -1,12 +1,22 @@
+import { useEffect, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { UnlockForm } from '../../components/common/UnlockForm'
 import { useNavigate, useLocation } from '../../provider/Router'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
+import { useBetaInviteBinding } from '../../hooks/useBetaInviteBinding'
 
 export function UnlockPage() {
   const { replace } = useNavigate()
   const location = useLocation()
+  const [pendingRedirect, setPendingRedirect] = useState<string | null>(null)
+  const { status, changeCode, error, activate } = useBetaInviteBinding(!!pendingRedirect)
+
+  useEffect(() => {
+    if (pendingRedirect && (!status.required || status.state.phase === 'activated')) {
+      replace(pendingRedirect)
+    }
+  }, [pendingRedirect, replace, status])
 
   const handleUnlockSuccess = async () => {
     // In-app navigation uses MemoryRouter and never updates the real URL
@@ -20,8 +30,6 @@ export function UnlockPage() {
     const requestId = getParam('requestId')
     const fromDapp = getParam('from') === 'dapp'
 
-    console.log('[UnlockPage] Unlock successful', { redirect, requestId, fromDapp })
-
     await SecureStorage.saveLastActivityTime()
     sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_UNLOCKED, {
       pageId: PAGE_IDS.UNLOCK,
@@ -32,7 +40,6 @@ export function UnlockPage() {
     if (fromDapp) {
       try {
         await chrome.runtime.sendMessage({ type: 'UNLOCK_SUCCESS' })
-        console.log('[UnlockPage] UNLOCK_SUCCESS sent, closing window')
       } catch (error) {
         console.warn('[UnlockPage] Failed to send message:', error)
       }
@@ -49,8 +56,11 @@ export function UnlockPage() {
       targetUrl = `${targetUrl}${separator}requestId=${requestId}`
     }
 
-    console.log('[UnlockPage] Redirecting to:', targetUrl)
-    replace(targetUrl)
+    if (status.required && status.state.phase !== 'activated') {
+      setPendingRedirect(targetUrl)
+    } else {
+      replace(targetUrl)
+    }
   }
 
   return (
@@ -60,6 +70,16 @@ export function UnlockPage() {
         showWalletIcon={true}
         showForgotPassword={true}
         onUnlockSuccess={handleUnlockSuccess}
+        activation={
+          pendingRedirect
+            ? {
+                pending: true,
+                error,
+                onRetry: () => void activate(),
+                onChangeCode: changeCode
+              }
+            : undefined
+        }
       />
     </div>
   )

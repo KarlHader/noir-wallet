@@ -1,48 +1,24 @@
+import { EXTENSION_POPUP_PATH, EXTENSION_SIDE_PANEL_PATH } from '@/config/extension'
 import {
-  EXTENSION_POPUP_PATH,
-  EXTENSION_SIDE_PANEL_PATH,
+  EXTENSION_DISPLAY_MODE_STORAGE_KEY,
   readStoredExtensionDisplayMode
-} from '@/config/extension-display'
-import { EXTENSION_DISPLAY_MODE_STORAGE_KEY, SETTINGS_STORAGE_KEY } from '@/config/storage-keys'
+} from '@/lib/extension-display-mode'
+import { SETTINGS_STORAGE_KEY, decodePersistedWalletSettings } from '@/lib/wallet-settings-storage'
 
 interface SidePanelApi {
   setOptions(options: { enabled: boolean; path: string }): Promise<void>
   setPanelBehavior(behavior: { openPanelOnActionClick: boolean }): Promise<void>
 }
 
-interface PersistedSettings extends Record<string, unknown> {
-  state: Record<string, unknown>
-}
-
 let displayModeUpdateQueue = Promise.resolve()
 let appliedSidePanelMode = false
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function parsePersistedSettings(value: unknown): PersistedSettings | null {
-  if (value === undefined || value === null) {
-    return { state: {}, version: 0 }
-  }
-
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value
-    if (!isRecord(parsed) || !isRecord(parsed.state)) return null
-
-    return { ...parsed, state: parsed.state }
-  } catch {
-    return null
-  }
-}
 
 function getSidePanelApi(): SidePanelApi | undefined {
   return (chrome as typeof chrome & { sidePanel?: SidePanelApi }).sidePanel
 }
 
-export function readSidePanelMode(value: unknown): boolean | null {
-  const sidePanelMode = parsePersistedSettings(value)?.state.sidePanelMode
-  return typeof sidePanelMode === 'boolean' ? sidePanelMode : null
+export function readSidePanelMode(value: unknown): boolean {
+  return decodePersistedWalletSettings(value)?.sidePanelMode === true
 }
 
 export function getAppliedSidePanelMode(): boolean {
@@ -72,9 +48,9 @@ export async function readPersistedSidePanelMode(): Promise<boolean> {
   const storedMode = readStoredExtensionDisplayMode(stored[EXTENSION_DISPLAY_MODE_STORAGE_KEY])
   if (storedMode !== null) return storedMode
 
-  const initialMode = readSidePanelMode(stored[SETTINGS_STORAGE_KEY]) ?? true
-  await persistSidePanelMode(initialMode)
-  return initialMode
+  const legacyMode = readSidePanelMode(stored[SETTINGS_STORAGE_KEY])
+  await persistSidePanelMode(legacyMode)
+  return legacyMode
 }
 
 export async function applyExtensionDisplayMode(sidePanelMode: boolean): Promise<void> {

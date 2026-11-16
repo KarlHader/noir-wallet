@@ -1,37 +1,29 @@
+import { InlineError } from '@/popup/components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
 import WalletIcon from '@/images/wallet-icon.svg'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
+import { useBetaInviteBinding } from '../../hooks/useBetaInviteBinding'
 
 export function CongratulationsPage() {
   const { replace } = useNavigate()
-  const { flowMode, dappRequestId, reset } = useOnboardingStore()
-
-  console.log('[CongratulationsPage] Loaded with state:', {
-    flowMode,
-    dappRequestId,
-    hasDappRequestId: !!dappRequestId
-  })
+  const { dappRequestId, reset } = useOnboardingStore()
+  const { status, changeCode, error, busy, activate } = useBetaInviteBinding()
+  const activationPending = status.required && status.state.phase !== 'activated'
 
   const handleComplete = async () => {
-    console.log('[CongratulationsPage] handleComplete called, dappRequestId:', dappRequestId)
+    if (activationPending) return
+    reset()
 
     // If onboarding was triggered by dApp connection, redirect to approval page
     if (dappRequestId) {
-      console.log('[CongratulationsPage] Redirecting to approval page:', dappRequestId)
       // Redirect to approval page where user can manually approve the connection
       replace(`/approval?requestId=${dappRequestId}`)
       return
     }
 
-    // Normal onboarding flow
-    reset()
-    if (flowMode === 'addWallet') {
-      replace('/account-list')
-    } else {
-      replace('/')
-    }
+    replace('/')
   }
 
   return (
@@ -46,14 +38,29 @@ export function CongratulationsPage() {
         <h1 className="text-lg font-semibold text-center mb-3">Congratulations!</h1>
 
         <p className="text-base text-muted text-center leading-relaxed">
-          Your wallet is ready. You can now securely receive, store, and send digital assets.
+          Your wallet is ready. You can now securely send, receive, and store digital assets.
         </p>
       </div>
 
       <div className="px-5 pb-5">
-        <Button onClick={handleComplete} className="w-full h-[45px]">
-          Got it
-        </Button>
+        {error && (
+          <div className="mb-3 space-y-2">
+            <InlineError message={error} onRetry={() => void activate()} retrying={busy} />
+            <Button variant="ghost" onClick={changeCode} disabled={busy} className="w-full h-10">
+              Use another code
+            </Button>
+          </div>
+        )}
+        {!error && (
+          <Button
+            onClick={handleComplete}
+            disabled={activationPending || busy}
+            isLoading={busy}
+            className="w-full h-[45px]"
+          >
+            Got it
+          </Button>
+        )}
       </div>
     </div>
   )

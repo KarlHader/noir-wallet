@@ -45,7 +45,7 @@ function releaseIdentity(version) {
   supportedVersion(version)
   return STABLE_VERSION.test(version)
     ? { releaseLine: 'stable', sourceBranch: 'main', distTag: 'latest' }
-    : { releaseLine: 'beta', sourceBranch: 'v2', distTag: 'beta' }
+    : { releaseLine: 'beta', sourceBranch: 'main', distTag: 'beta' }
 }
 
 function positiveInteger(value, label) {
@@ -121,9 +121,9 @@ export function resolveSdkRelease({ env, manifest, branchHeadSha }) {
   const operation = env.OPERATION
   assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
   if (operation === 'verify') return { operation, should_stage: 'false' }
-  const releaseLine = env.RELEASE_LINE || 'stable'
-  assert(['stable', 'beta'].includes(releaseLine), 'Choose stable or beta release line')
-  const sourceBranch = releaseLine === 'stable' ? 'main' : 'v2'
+  const releaseLine = env.RELEASE_LINE || 'beta'
+  assert(releaseLine === 'beta', 'Only the 2.x SDK beta release line can be staged')
+  const sourceBranch = 'main'
   assert(SHA.test(branchHeadSha ?? ''), 'Selected branch has no valid head commit')
   assert(
     env.CONFIRM_SHA === branchHeadSha,
@@ -176,6 +176,10 @@ function artifactName(metadata) {
 export function packageSdkRelease(directory, env, { sourceRoot = root, run = execFileSync } = {}) {
   trustedInvocation(env)
   assert(SHA.test(env.SDK_SOURCE_SHA ?? ''), 'A pinned SDK source SHA is required')
+  assert(
+    env.SDK_RELEASE_LINE === 'beta' && env.SDK_SOURCE_BRANCH === 'main',
+    'Only a main-branch 2.x SDK beta can be packaged for release'
+  )
   return packageSdkArtifact(directory, env, 'release', { sourceRoot, run })
 }
 
@@ -267,7 +271,8 @@ export function validateSdkArtifact(directory, expected = {}) {
   const identity = releaseIdentity(metadata.version)
   assert(
     metadata.mode === 'release'
-      ? metadata.sourceBranch === identity.sourceBranch &&
+      ? (metadata.sourceBranch === identity.sourceBranch ||
+          (metadata.releaseLine === 'beta' && metadata.sourceBranch === 'v2')) &&
           metadata.releaseLine === identity.releaseLine &&
           metadata.distTag === identity.distTag
       : metadata.sourceBranch === null &&
@@ -387,6 +392,10 @@ export async function stageSdkRelease(
     'GitHub OIDC is required; npm token authentication is not supported'
   )
   const metadata = validateSdkArtifact(directory, { ...expected, mode: 'release' })
+  assert(
+    metadata.releaseLine === 'beta' && metadata.sourceBranch === 'main',
+    'Only a main-branch 2.x SDK beta can be staged'
+  )
   assert(
     metadata.workflowSha === env.GITHUB_SHA && metadata.runId === env.GITHUB_RUN_ID,
     'SDK upload must use a build from this trusted workflow run'
@@ -772,14 +781,14 @@ async function main() {
   if (command === 'resolve') {
     trustedInvocation(env)
     const operation = env.OPERATION
-    const releaseLine = env.RELEASE_LINE || 'stable'
+    const releaseLine = env.RELEASE_LINE || 'beta'
     assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
-    assert(['stable', 'beta'].includes(releaseLine), 'Choose stable or beta release line')
+    assert(releaseLine === 'beta', 'Only the 2.x SDK beta release line can be staged')
     let branchHeadSha
     let manifest
     if (operation === 'stage') {
       assert(env.GH_TOKEN, 'GH_TOKEN is required to resolve SDK source')
-      const sourceBranch = releaseLine === 'stable' ? 'main' : 'v2'
+      const sourceBranch = 'main'
       const get = route =>
         requestJson(`https://api.github.com/repos/${SDK_REPOSITORY}/${route}`, {
           token: env.GH_TOKEN

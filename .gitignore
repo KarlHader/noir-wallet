@@ -7,33 +7,45 @@ dist-ssr
 .idea
 *.log
 .pnpm-store
-/packages/extension/tests/.local/
+.playwright-shots/
 
 # Build output
 build/
 .crx
 packages/extension/dist-testnet/
+packages/extension/dist-dev/
 
 # Environment files
 .env
 .env.*
 !.env.example
-.dev.vars*
+!.env.test-wallets.example
+
+# Local test-wallet registry and secret fixtures
+packages/extension/.env.test-wallets.local
+packages/extension/.test-wallets/
 
 .cursor/
 .agent/
 openspec/
 
+tmp
 zcash-wallet-wasm
 
-# Local artifacts
-/output/
+# E2E test output
+e2e-output/
+output/
+packages/extension/e2e-dist/
+packages/extension/e2e-dist-testnet/
 packages/docs/.react-router/
 packages/docs/.source/
-packages/rpc-registry/.wrangler/
-packages/web-vote/.wrangler/
+packages/rpc-monitor/.wrangler/
+packages/evm-history-worker/.wrangler/
 
 # Example extension builds
 packages/example/public/extension/*.zip
 packages/example/public/extension/version.json
 packages/zcash-wallet-wasm/
+
+# Local UI acceptance suites, configuration, scripts, and dedicated helpers.
+packages/extension/tests/.local/

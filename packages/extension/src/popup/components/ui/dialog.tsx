@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { Icon } from '@iconify/react'
 
 import { cn } from '@/lib/utils'
 
@@ -30,7 +29,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50',
+        'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/70 backdrop-blur-sm',
         className
       )}
       {...props}
@@ -43,42 +42,70 @@ function DialogContent({
   children,
   showCloseButton = true,
   position = 'center',
-  portalContainer,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   position?: 'center' | 'bottom'
-  portalContainer?: HTMLElement
 }) {
   const positionClasses = {
     center:
       'top-[50%] left-[50%] translate-x-[-50%] translate-y-[-50%] data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 max-w-[calc(100%-2rem)] sm:max-w-lg rounded-lg',
     bottom:
-      'bottom-0 left-0 right-0 translate-x-0 translate-y-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom max-w-full rounded-t-2xl rounded-b-none'
+      'bottom-0 left-0 right-0 translate-x-0 translate-y-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom max-w-full rounded-t-2xl rounded-b-none border-t border-foreground/10 shadow-[0_-14px_36px_rgba(0,0,0,0.48)]'
   }
+  const scrollableBody = typeof className === 'string' && /\boverflow-y-auto\b/.test(className)
+  const surfaceClassName =
+    scrollableBody && typeof className === 'string'
+      ? className
+          .replace(/\boverflow-y-auto\b/g, '')
+          .replace(/\boverscroll-contain\b/g, '')
+          .trim()
+      : className
+
+  const closeButton = showCloseButton ? (
+    <DialogPrimitive.Close
+      data-slot="dialog-close"
+      className="ring-offset-background focus-visible:ring-ring absolute right-4 top-4 z-10 flex size-8 shrink-0 items-center justify-center rounded-full bg-inherit text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+    >
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        width={16}
+        height={16}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+      >
+        <path d="m18 6-12 12M6 6l12 12" />
+      </svg>
+      <span className="sr-only">Close</span>
+    </DialogPrimitive.Close>
+  ) : null
 
   return (
-    <DialogPortal data-slot="dialog-portal" container={portalContainer}>
+    <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 grid w-full gap-4 overflow-hidden p-6 shadow-lg duration-200 outline-none [&>*]:min-w-0',
+          'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 w-full shadow-lg duration-200 outline-none [&>*]:min-w-0',
+          scrollableBody
+            ? 'flex max-h-[calc(100dvh-1rem)] flex-col gap-4 overflow-hidden p-6'
+            : 'grid gap-4 overflow-hidden p-6',
           positionClasses[position],
-          className
+          surfaceClassName
         )}
         {...props}
       >
-        {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
-          >
-            <Icon icon="lucide:x" />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
+        {scrollableBody ? (
+          <div className="grid min-h-0 flex-1 content-start gap-[inherit] overflow-y-auto overscroll-contain">
+            {children}
+          </div>
+        ) : (
+          children
         )}
+        {closeButton}
       </DialogPrimitive.Content>
     </DialogPortal>
   )

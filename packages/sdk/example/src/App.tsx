@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useState, useEffect } from 'react'
 import {
   getNoirWallet,
   publicKeyToAddress,
@@ -11,8 +11,23 @@ import {
   type MaxTransferEstimate,
   type SignMessageResult,
   type LendingMcaStatus,
-  type SigningMode
+  type SigningMode,
+  type Network
 } from '@noir-wallet/sdk'
+import {
+  BitcoinExample,
+  ExampleChainIcon,
+  EvmExample,
+  NativeTransferExample,
+  ProviderSwitcher,
+  type ExampleNavigationProps,
+  type ExampleProviderId
+} from './ProviderExamples'
+import {
+  EVM_NETWORK_EXAMPLES,
+  getEvmNetworkExamples,
+  getExampleChainIconUrl
+} from './evm-network-catalog'
 import './App.css'
 
 type TabId = 'overview' | 'send' | 'signing' | 'tools' | 'batch'
@@ -97,6 +112,50 @@ function isTransparentRecipient(address: string): boolean {
 }
 
 function App() {
+  const [activeProvider, setActiveProvider] = useState<ExampleProviderId>(() => {
+    try {
+      const saved = window.sessionStorage.getItem('noir-example-active-provider')
+      return saved === 'evm' || saved === 'bitcoin' || saved === 'solana' || saved === 'near'
+        ? saved
+        : 'zcash'
+    } catch {
+      return 'zcash'
+    }
+  })
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem('noir-example-active-provider', activeProvider)
+    } catch {
+      // Session storage may be unavailable in a restricted browser context.
+    }
+  }, [activeProvider])
+  const [exampleNetworkMode, setExampleNetworkMode] = useState<'mainnet' | 'testnet'>('mainnet')
+  const [selectedEvmNetwork, setSelectedEvmNetwork] = useState(EVM_NETWORK_EXAMPLES[0])
+  const [evmSelectionVersion, setEvmSelectionVersion] = useState(0)
+  const handleExampleNetworkModeChange = useCallback((mode: 'mainnet' | 'testnet') => {
+    setExampleNetworkMode(mode)
+    setSelectedEvmNetwork(current =>
+      current.mode === mode ? current : (getEvmNetworkExamples(mode)[0] ?? current)
+    )
+  }, [])
+  const handleSelectEvmNetwork = useCallback((network: (typeof EVM_NETWORK_EXAMPLES)[number]) => {
+    setSelectedEvmNetwork(network)
+    setEvmSelectionVersion(version => version + 1)
+  }, [])
+  const handleSyncEvmNetwork = useCallback((network: (typeof EVM_NETWORK_EXAMPLES)[number]) => {
+    setExampleNetworkMode(network.mode)
+    setSelectedEvmNetwork(network)
+  }, [])
+  const exampleNavigation: ExampleNavigationProps = {
+    active: activeProvider,
+    onChange: setActiveProvider,
+    networkMode: exampleNetworkMode,
+    onNetworkModeChange: handleExampleNetworkModeChange,
+    selectedEvmNetwork,
+    evmSelectionVersion,
+    onSelectEvmNetwork: handleSelectEvmNetwork,
+    onSyncEvmNetwork: handleSyncEvmNetwork
+  }
   const [noirWallet, setNoirWallet] = useState(() => getNoirWallet())
   const isInstalled = !!noirWallet
 
@@ -177,12 +236,14 @@ function App() {
     null
   )
 
+  const zcashNetwork: Network = addresses?.transparent.startsWith('tm') ? 'testnet' : 'mainnet'
+
   useEffect(() => {
     if (!noirWallet) return
 
     const zcash = noirWallet.zcash
 
-    zcash.on('accountsChanged', async (accounts: ZcashAddress | null) => {
+    const onAccountsChanged = async (accounts: ZcashAddress | null) => {
       if (!accounts) {
         setConnected(false)
         setAddresses(null)
@@ -198,15 +259,25 @@ function App() {
         setBalance(bal)
         setBatchBalances(bal.accounts)
       }
-    })
+    }
 
-    zcash.on('chainChanged', async () => {
+    const onChainChanged = async () => {
       const bal = await zcash.getBalance()
       setBalance(bal)
       setBatchBalances(bal.accounts)
-    })
+    }
+    const onSessionChanged = () => void autoConnect()
 
-    autoConnect()
+    zcash.on('accountsChanged', onAccountsChanged)
+    zcash.on('chainChanged', onChainChanged)
+    noirWallet.multichain?.on('wallet_sessionChanged', onSessionChanged)
+
+    void autoConnect()
+    return () => {
+      zcash.removeListener('accountsChanged', onAccountsChanged)
+      zcash.removeListener('chainChanged', onChainChanged)
+      noirWallet.multichain?.removeListener('wallet_sessionChanged', onSessionChanged)
+    }
   }, [noirWallet])
 
   const autoConnect = async () => {
@@ -357,7 +428,7 @@ function App() {
         signature: verifyForm.signature,
         pubkey: verifyForm.pubkey || undefined,
         address: verifyForm.address || undefined,
-        network: 'mainnet'
+        network: zcashNetwork
       })
       if (result.error) {
         setVerifyResult({ success: false, message: result.error, data: result })
@@ -476,7 +547,7 @@ function App() {
     e.preventDefault()
     if (!convertForm.pubkey) return
     try {
-      const address = publicKeyToAddress(convertForm.pubkey, 'mainnet')
+      const address = publicKeyToAddress(convertForm.pubkey, zcashNetwork)
       setConvertResult({ success: true, address })
     } catch (err: any) {
       setConvertResult({ success: false, error: err.message || 'Conversion failed' })
@@ -506,6 +577,22 @@ function App() {
     { id: 'batch', label: 'Batch' }
   ]
 
+  if (activeProvider === 'evm') {
+    return <EvmExample navigation={exampleNavigation} />
+  }
+  if (activeProvider === 'bitcoin') {
+    return <BitcoinExample navigation={exampleNavigation} />
+  }
+  if (activeProvider === 'solana' || activeProvider === 'near') {
+    return (
+      <NativeTransferExample
+        key={activeProvider}
+        navigation={exampleNavigation}
+        chain={activeProvider}
+      />
+    )
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -522,12 +609,12 @@ function App() {
                 <span className="logo-wallet">Wallet</span>
               </span>
             </a>
-            <span className="logo-badge">SDK Example</span>
+            <span className="logo-badge">SDK Example V2</span>
           </div>
           <div className="header-status">
-            {!isInstalled && <span className="status-badge disconnected">Not Detected</span>}
+            {!isInstalled && <span className="status-badge unavailable">Not detected</span>}
             {isInstalled && !connected && (
-              <span className="status-badge disconnected">Disconnected</span>
+              <span className="status-badge ready">Provider ready</span>
             )}
             {connected && <span className="status-badge connected">Connected</span>}
           </div>
@@ -535,19 +622,32 @@ function App() {
       </header>
 
       <main className="main">
+        <section className="page-intro">
+          <div>
+            <p className="eyebrow">Noir Wallet developer tools</p>
+            <h1>Multichain SDK Playground</h1>
+          </div>
+        </section>
+        <ProviderSwitcher {...exampleNavigation} />
         {error && <div className="message error">{error}</div>}
 
         {!isInstalled && (
           <div className="card install-prompt">
-            <h2>🔒 Wallet Not Detected</h2>
+            <div className="empty-state-icon">N</div>
+            <h2>Wallet not detected</h2>
             <p>Install the Noir Wallet extension to use this example.</p>
           </div>
         )}
 
         {isInstalled && !connected && (
           <div className="card connect-section">
-            <h2>🔗 Connect Wallet</h2>
-            <p>Click below to connect your Noir Wallet</p>
+            <ExampleChainIcon
+              className="empty-state-icon"
+              iconUrl={getExampleChainIconUrl('zcash')}
+              label="Zcash"
+            />
+            <h2>Connect Zcash provider</h2>
+            <p>Authorize this example to access the selected Noir Wallet account.</p>
             <button className="btn btn-primary" onClick={connect} disabled={loading}>
               {loading ? (
                 <>
@@ -581,7 +681,7 @@ function App() {
             {activeTab === 'overview' && (
               <div className="tab-panel grid-2">
                 <div className="card card-compact">
-                  <h2>📦 Account</h2>
+                  <h2>Account</h2>
                   <div className="account-addresses">
                     <div className="address-item">
                       <label className="label">Transparent</label>
@@ -612,7 +712,7 @@ function App() {
 
                 <div className="card card-compact">
                   <div className="card-header">
-                    <h2>💰 Balance</h2>
+                    <h2>Balance</h2>
                     <button className="btn btn-secondary btn-xs" onClick={refreshBalance}>
                       Refresh
                     </button>
@@ -672,7 +772,7 @@ function App() {
             {activeTab === 'send' && (
               <div className="tab-panel">
                 <div className="card card-compact">
-                  <h2>📤 Send Transaction</h2>
+                  <h2>Send transaction</h2>
                   <p className="card-hint">
                     Cached available:{' '}
                     <strong>
@@ -807,7 +907,7 @@ function App() {
             {activeTab === 'signing' && (
               <div className="tab-panel grid-2">
                 <div className="card card-compact">
-                  <h2>✍️ Sign Message</h2>
+                  <h2>Sign message</h2>
                   <div className="form-group">
                     <label className="label">Signing Mode</label>
                     <SigningModeSelector value={signingMode} onChange={setSigningMode} />
@@ -872,7 +972,7 @@ function App() {
                 </div>
 
                 <div className="card card-compact">
-                  <h2>✅ Verify Signature</h2>
+                  <h2>Verify signature</h2>
                   <p className="card-hint">
                     Recovers signer from message + signature; optionally checks against pubkey or
                     address.
@@ -998,7 +1098,7 @@ function App() {
             {activeTab === 'tools' && (
               <div className="tab-panel grid-2">
                 <div className="card card-compact">
-                  <h2>🔑 Public Key</h2>
+                  <h2>Public key</h2>
                   <div className="form-group">
                     <label className="label">Signing Mode</label>
                     <SigningModeSelector value={signingMode} onChange={setSigningMode} />
@@ -1047,7 +1147,7 @@ function App() {
                 </div>
 
                 <div className="card card-compact">
-                  <h2>🔄 Pubkey → Address</h2>
+                  <h2>Public key to address</h2>
                   <form onSubmit={handleConvertPubkey} className="form-stack">
                     <div className="form-group">
                       <label className="label">Public Key (hex)</label>
@@ -1086,7 +1186,7 @@ function App() {
                 </div>
 
                 <div className="card card-compact grid-span-2">
-                  <h2>🏦 Lending MCA</h2>
+                  <h2>Lending MCA</h2>
                   <button
                     className="btn btn-primary btn-full"
                     onClick={handleCheckMca}
@@ -1132,7 +1232,7 @@ function App() {
               <div className="tab-panel">
                 <div className="card card-compact">
                   <div className="card-header">
-                    <h2>👛 Multi-Wallet Access</h2>
+                    <h2>Multi-wallet access</h2>
                     <div className="btn-row">
                       <button
                         className="btn btn-primary btn-xs"
@@ -1222,7 +1322,7 @@ function App() {
       </main>
 
       <footer className="footer">
-        <p>Noir Wallet SDK Example</p>
+        <p>Noir Wallet SDK Example V2</p>
       </footer>
     </div>
   )

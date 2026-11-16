@@ -23,26 +23,22 @@ export async function replayJournalPages(options: JournalReplayOptions): Promise
     throw new Error('Invalid sync journal sequence range')
   }
 
-  const replayPage = async (start: number): Promise<number> => {
-    const entries = await readPage(start, toSeq)
+  let next = fromSeq
+  while (next < toSeq) {
+    ensureActive()
+    const entries = await readPage(next, toSeq)
     if (entries.length === 0) {
-      throw new Error(`Missing sync journal entry at sequence ${start}`)
+      throw new Error(`Missing sync journal entry at sequence ${next}`)
     }
     for (let i = 0; i < entries.length; i++) {
-      const expected = start + i
+      const expected = next + i
       if (entries[i].seq !== expected || expected >= toSeq) {
         throw new Error(`Invalid sync journal sequence; expected ${expected}`)
       }
     }
     ensureActive()
     await applyPage(entries.map(entry => entry.data))
-    return entries.length
-  }
-
-  let next = fromSeq
-  while (next < toSeq) {
-    ensureActive()
-    next += await replayPage(next)
+    next += entries.length
   }
   return next - fromSeq
 }

@@ -1,53 +1,56 @@
-import { useEffect, useMemo, useState, useRef, KeyboardEvent } from 'react'
+import { useMemo, useState, useRef, KeyboardEvent } from 'react'
 import { Input } from '../../components/ui/input'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
-import { WALLET_CONFIG } from '@/config/wallet'
 import { useOnboardingStore } from '@/store/onboarding-store'
-import { openModal } from '../../provider/ModalManager'
-import { SyncOptionsModal } from '../../components/onboarding/SyncOptionsModal'
 import { validateEnglishMnemonicWords } from '@/core/wallet/mnemonic-validation'
 
 export function ImportWalletPage() {
-  const { navigate, replace } = useNavigate()
+  const { navigate } = useNavigate()
   const {
-    flowMode,
+    mnemonicWordCount,
+    importedSeedPhrase,
     setImportedSeedPhrase,
-    addImportedWallet,
     setBirthdayHeight,
-    birthdayHeight,
+    setImportZcashHistorySelection,
+    setSelectedNetworkFamilies,
     error
   } = useOnboardingStore()
 
-  const [words, setWords] = useState<string[]>(Array(WALLET_CONFIG.MNEMONIC_LENGTH).fill(''))
+  const [words, setWords] = useState<string[]>(() => {
+    const importedWords = importedSeedPhrase.trim().split(/\s+/).filter(Boolean)
+    return importedWords.length === mnemonicWordCount
+      ? importedWords
+      : Array(mnemonicWordCount).fill('')
+  })
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
-  const [isImporting, setIsImporting] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
-  const mnemonicValidation = useMemo(() => validateEnglishMnemonicWords(words), [words])
+  const mnemonicValidation = useMemo(
+    () => validateEnglishMnemonicWords(words, mnemonicWordCount),
+    [mnemonicWordCount, words]
+  )
   const invalidWordIndexes = useMemo(
     () => new Set(mnemonicValidation.invalidWordIndexes),
     [mnemonicValidation.invalidWordIndexes]
   )
-  useEffect(() => {
-    setImportedSeedPhrase('')
-  }, [setImportedSeedPhrase])
-
   const handleWordChange = (index: number, value: string) => {
     setValidationError(null)
     setImportedSeedPhrase('')
 
     if (value.includes(' ')) {
-      const pastedWords = value.trim().split(/\s+/)
+      const pastedWords = value.trim() ? value.trim().split(/\s+/) : []
+      if (index + pastedWords.length > mnemonicWordCount) {
+        setValidationError(`Recovery phrase must contain exactly ${mnemonicWordCount} words.`)
+        return
+      }
       const newWordsFromPaste = [...words]
       pastedWords.forEach((word, i) => {
-        if (index + i < WALLET_CONFIG.MNEMONIC_LENGTH) {
-          newWordsFromPaste[index + i] = word.toLowerCase()
-        }
+        newWordsFromPaste[index + i] = word.toLowerCase()
       })
       setWords(newWordsFromPaste)
 
-      const nextIndex = Math.min(index + pastedWords.length, WALLET_CONFIG.MNEMONIC_LENGTH - 1)
+      const nextIndex = Math.min(index + pastedWords.length, mnemonicWordCount - 1)
       inputRefs.current[nextIndex]?.focus()
       return
     }
@@ -61,7 +64,7 @@ export function ImportWalletPage() {
     if (e.key === 'Backspace' && !words[index] && index > 0) {
       inputRefs.current[index - 1]?.focus()
     }
-    if (e.key === ' ' && words[index] && index < WALLET_CONFIG.MNEMONIC_LENGTH - 1) {
+    if (e.key === ' ' && words[index] && index < mnemonicWordCount - 1) {
       e.preventDefault()
       inputRefs.current[index + 1]?.focus()
     }
@@ -80,37 +83,11 @@ export function ImportWalletPage() {
 
     const seedPhrase = mnemonicValidation.phrase
     if (seedPhrase) {
-      // 1. Open Sync Optimization Modal
-      const result = await openModal<{ height?: number; confirmed: boolean } | undefined>({
-        title: 'Sync Optimization',
-        body: (resolve, close) => (
-          <SyncOptionsModal
-            initialHeight={birthdayHeight}
-            onConfirm={height => {
-              resolve({ height, confirmed: true })
-              close()
-            }}
-          />
-        )
-      })
-
-      // If cancelled (clicked outside or X), do not proceed
-      if (!result?.confirmed) return
-
-      // 2. Set options and proceed
       setImportedSeedPhrase(seedPhrase)
-      setBirthdayHeight(result.height)
-
-      if (flowMode === 'addWallet') {
-        setIsImporting(true)
-        const success = await addImportedWallet()
-        setIsImporting(false)
-        if (success) {
-          replace('/onboarding/congratulations')
-        }
-      } else {
-        navigate('/onboarding/import-password')
-      }
+      setBirthdayHeight(undefined)
+      setImportZcashHistorySelection(null)
+      setSelectedNetworkFamilies(null)
+      navigate('/onboarding/import-accounts')
     }
   }
 
@@ -118,12 +95,11 @@ export function ImportWalletPage() {
 
   return (
     <div className="page-container">
-      <PageHeader title="Import Secret Recovery Phrase" showBack backDisabled={isImporting} />
+      <PageHeader title="Import Secret Recovery Phrase" showBack />
       <div className="page-content px-5 py-6">
         <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-1">Import a wallet</h2>
           <div className="flex items-center gap-1.5 text-sm text-muted">
-            <span>Enter Your Secret Recovery Phrase</span>
+            <span>Enter your {mnemonicWordCount}-word Secret Recovery Phrase</span>
           </div>
         </div>
 
@@ -154,12 +130,7 @@ export function ImportWalletPage() {
         )}
       </div>
       <div className="page-footer">
-        <Button
-          onClick={handleContinue}
-          disabled={!isAllFilled || isImporting}
-          isLoading={isImporting}
-          className="w-full h-[45px]"
-        >
+        <Button onClick={handleContinue} disabled={!isAllFilled} className="w-full h-[45px]">
           Continue
         </Button>
       </div>

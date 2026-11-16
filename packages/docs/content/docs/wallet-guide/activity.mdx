@@ -6,15 +6,14 @@ icon: History
 
 Activity combines confirmed on-chain history with locally recorded transactions that are still progressing.
 
-| Status                               | Meaning                                                                 |
-| ------------------------------------ | ----------------------------------------------------------------------- |
-| Preparing / Waiting for confirmation | The transaction is being built or has been submitted                    |
-| Confirming                           | The required on-chain confirmations are still pending                   |
-| Processing                           | A cross-chain deposit or relay is still being handled                   |
-| Success / Confirmed                  | The tracked operation reached its final expected result                 |
-| Refund submitted                     | A cross-chain refund was submitted; the balance may take time to update |
-| Status unavailable                   | No cross-chain status update has arrived for over an hour               |
-| Failed                               | The tracked operation reported a failure                                |
+| Status          | Meaning                                                                           |
+| --------------- | --------------------------------------------------------------------------------- |
+| Pending         | The origin transaction or external relay is still being observed                  |
+| Relay confirmed | The relay completed, but a destination Zcash transaction still needs confirmation |
+| Success         | The operation reached its final expected result                                   |
+| Failed          | The tracked operation reported a terminal failure                                 |
+
+Restored Zcash sends can recover a transparent recipient from public transaction outputs. If the recipient cannot be determined, the detail shows **Unavailable**. Open the transaction in the explorer to inspect its public outputs; a shielded source does not prove that the recipient is shielded.
 
 ## Cross-chain operations
 
@@ -25,7 +24,7 @@ Swaps and lending can involve more than one network. The origin transaction may 
 1. Open the activity detail and copy the transaction hash when available.
 2. Check whether the origin transaction exists on-chain.
 3. Distinguish a wallet synchronization delay from an external relay delay.
-4. Avoid submitting the same action again until you understand the first result. If a cross-chain status is unavailable, check **Swap progress** or the activity detail again later.
+4. Avoid submitting the same action again until you understand the first result.
 
 <Callout type="info">
   The wallet records a Zcash transaction locally after broadcast. Non-critical catch-up

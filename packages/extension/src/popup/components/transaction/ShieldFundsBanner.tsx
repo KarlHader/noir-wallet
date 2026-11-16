@@ -1,74 +1,81 @@
 import { Icon } from '@iconify/react'
-import Big from 'big.js'
-import { formatNumber } from '@/lib/format'
-import { hasEnoughTransparentBalanceToShield } from '@/core/zcash/shielding'
-import { openModal } from '../../provider/ModalManager'
 import { Button } from '../ui/button'
+import { openModal } from '../../provider/ModalManager'
+import { formatTokenQuantity } from '@/lib/number-format'
+import { hasEnoughTransparentBalanceToShield } from '@/core/zcash/shielding'
 
-function WhyShieldContent() {
+function WhyMigrateContent() {
   const benefits = [
     {
-      icon: 'lucide:lock-keyhole',
+      icon: '🔒',
       title: 'Full privacy',
-      description: 'Shielded transactions hide amounts and participants.'
+      description: 'z-address transactions hide amounts and participants'
     },
     {
-      icon: 'lucide:scan-eye',
+      icon: '🎯',
       title: 'Selective disclosure',
-      description: 'You choose which transaction details to reveal.'
+      description: 'You can choose what transaction details to reveal'
     },
     {
-      icon: 'lucide:shield-check',
+      icon: '🛡️',
       title: 'Enhanced security',
-      description: 'Keep your activity protected from blockchain surveillance.'
+      description: 'Protected against blockchain surveillance'
     }
   ]
 
   return (
-    <div className="space-y-5 px-3 py-4">
-      {benefits.map(benefit => (
-        <div key={benefit.title} className="flex gap-4">
-          <Icon icon={benefit.icon} className="mt-0.5 size-5 shrink-0 text-primary" />
-          <div className="min-w-0 flex-1">
-            <h4 className="mb-1 text-sm font-medium">{benefit.title}</h4>
-            <p className="text-sm leading-relaxed text-muted">{benefit.description}</p>
+    <div className="px-3 py-4">
+      <div className="space-y-5">
+        {benefits.map(benefit => (
+          <div key={benefit.title} className="flex gap-4">
+            <div className="text-base shrink-0 w-6 h-6 flex items-center justify-center">
+              {benefit.icon}
+            </div>
+            <div className="flex-1">
+              <h4 className="font-medium mb-1 text-base">{benefit.title}</h4>
+              <p className="text-sm text-muted leading-relaxed">{benefit.description}</p>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
 
 interface ShieldFundsBannerProps {
-  transparentBalance: string
+  transparentBalance: number
+  action?: string
   isShielding: boolean
   onShield: () => void
 }
 
 export function ShieldFundsBanner({
   transparentBalance,
+  action = 'send',
   isShielding,
   onShield
 }: ShieldFundsBannerProps) {
   if (!hasEnoughTransparentBalanceToShield(transparentBalance)) return null
 
-  const handleWhyShield = async () => {
+  const handleWhyMigrate = async () => {
     await openModal({
       title: 'Why shielded?',
       showCloseButton: true,
-      body: () => <WhyShieldContent />
+      body: () => <WhyMigrateContent />
     })
   }
 
+  const actionVerb = action === 'send' ? 'send' : action === 'supply' ? 'supply' : 'spend'
+
   return (
-    <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2">
-      <Icon icon="lucide:alert-triangle" className="size-3.5 shrink-0 text-warning" />
-      <p className="min-w-0 flex-1 text-xs leading-snug text-warning">
-        <strong>{formatNumber(transparentBalance, { rm: Big.roundDown })} ZEC</strong> in
-        transparent - shield for private spending.
+    <div className="flex items-center gap-2 px-3 py-2 bg-warning-surface rounded-lg border border-warning/20 mb-4">
+      <Icon icon="lucide:alert-triangle" width={14} height={14} className="text-warning shrink-0" />
+      <p className="flex-1 min-w-0 text-xs text-warning leading-snug">
+        <strong>{formatTokenQuantity(transparentBalance)} ZEC</strong> in transparent — shield to{' '}
+        {actionVerb}.
         <button
           type="button"
-          onClick={handleWhyShield}
+          onClick={handleWhyMigrate}
           className="ml-1 underline decoration-dotted underline-offset-2 hover:opacity-80"
         >
           Why?
@@ -77,7 +84,7 @@ export function ShieldFundsBanner({
       <Button
         size="sm"
         variant="outline"
-        className="h-7 shrink-0 border-warning/30 px-2.5 text-xs text-warning hover:border-warning/40 hover:bg-warning/30 hover:text-warning/80"
+        className="h-7 text-xs px-2.5 shrink-0 border-warning/30 text-warning hover:bg-warning/30 hover:border-warning/40 hover:text-warning/80"
         onClick={onShield}
         isLoading={isShielding}
       >

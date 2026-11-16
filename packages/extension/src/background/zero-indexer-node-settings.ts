@@ -1,37 +1,44 @@
-import { DEFAULT_NETWORK } from '@/config/networks'
-import { verifyZcashRpcEndpoint } from '@/config/rpc-registry-client'
-import { readZeroIndexerEnabled } from '@/config/zero-indexer-settings'
-import type { ZeroIndexerOptions } from '@/config/zero-indexer'
-import { DedupPromise } from '@/lib/async-utils'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { attestZcashLightwalletdEndpoint } from '@/infrastructure/chains/zcash/zcash-network-attestation'
+import {
+  readZeroIndexerEnabled,
+  ZERO_INDEXER_NODES_STORAGE_KEY,
+  ZERO_INDEXER_REGISTRY_CACHE_KEY,
+  ZERO_INDEXER_RUNTIME_STORAGE_KEY
+} from '@/infrastructure/chains/zero-indexer-preferences'
+import { DEFAULT_ZERO_INDEXER_REGISTRY, ZERO_INDEXER_REGISTRY_URL } from '@/config/zero-indexer'
+import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 import {
   createCustomZeroIndexerEndpoint,
-  DEFAULT_ZERO_INDEXER_REGISTRY,
   normalizeZeroIndexerUrl,
   parseZeroIndexerNodePreferences,
   parseZeroIndexerNodeStatus,
   parseZeroIndexerRegistryDocument,
-  ZERO_INDEXER_NODES_STORAGE_KEY,
-  ZERO_INDEXER_REGISTRY_CACHE_KEY,
-  ZERO_INDEXER_REGISTRY_URL,
-  ZERO_INDEXER_RUNTIME_STORAGE_KEY,
+  type ZeroIndexerOptions,
   type ZeroIndexerNetwork,
   type ZeroIndexerNodePreferences,
   type ZeroIndexerNodeStatus,
   type ZeroIndexerRegistryDocument
-} from '@/config/zero-indexer-nodes'
+} from '@/core/zcash/zero-indexer'
 
 const REGISTRY_TIMEOUT_MS = 3_000
 const PROBE_CACHE_MAX_AGE_MS = 5 * 60_000
-let mutationQueue: Promise<void> = Promise.resolve()
+const mutationQueue = new SerialTaskQueue()
 const refreshDedup = new DedupPromise<ZeroIndexerNodeStatus>()
+let registrySuccessAt = 0
+let registryAttemptAt = 0
+
+async function verifyZcashRpcEndpoint(
+  endpoint: { url: string },
+  network: ZeroIndexerNetwork
+): Promise<number> {
+  const started = performance.now()
+  await attestZcashLightwalletdEndpoint({ baseUrl: endpoint.url, network })
+  return Math.max(0, Math.round(performance.now() - started))
+}
 
 function enqueue<T>(operation: () => Promise<T>): Promise<T> {
-  const result = mutationQueue.catch(() => {}).then(operation)
-  mutationQueue = result.then(
-    () => undefined,
-    () => undefined
-  )
-  return result
+  return mutationQueue.run(operation)
 }
 
 async function readPreferences(): Promise<ZeroIndexerNodePreferences> {
@@ -177,11 +184,16 @@ export function getZeroIndexerNodeStatus(refresh = false): Promise<ZeroIndexerNo
 
 async function refreshZeroIndexerNodeStatus(): Promise<ZeroIndexerNodeStatus> {
   let registry = await readRegistry()
-  try {
-    registry = await fetchRegistry()
-    await chrome.storage.local.set({ [ZERO_INDEXER_REGISTRY_CACHE_KEY]: registry })
-  } catch {
-    // The cached registry and bundled defaults keep node selection usable offline.
+  const now = Date.now()
+  if (now - registrySuccessAt >= 5 * 60_000 && now - registryAttemptAt >= 60_000) {
+    registryAttemptAt = now
+    try {
+      registry = await fetchRegistry()
+      await chrome.storage.local.set({ [ZERO_INDEXER_REGISTRY_CACHE_KEY]: registry })
+      registrySuccessAt = Date.now()
+    } catch {
+      // The cached registry and bundled defaults keep node selection usable offline.
+    }
   }
 
   const network = DEFAULT_NETWORK

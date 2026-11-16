@@ -10,7 +10,7 @@ export function PasswordPage() {
     // Store the password
     setPassword(data.new)
     // Navigate to next step
-    navigate('/onboarding/secure-wallet')
+    navigate('/onboarding/create-word-count')
   }
 
   const handleBack = () => {

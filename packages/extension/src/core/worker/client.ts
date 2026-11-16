@@ -15,25 +15,50 @@
  * - No manual initialize() call required by the consumer
  */
 
-import type { RPCSchema, RPCRequest, RPCResponse, RPCMethod } from './types'
+import type {
+  RPCSchema,
+  RPCRequest,
+  RPCResponse,
+  RPCMethod,
+  JournalReplayOptions,
+  ZcashTransactionContext
+} from './types'
 import type { Network } from '@/types'
-import { DEFAULT_NETWORK, getNetworkConfig } from '@/config/networks'
+import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { DedupPromise, ReadyFlag, TimeoutError } from '@/lib/async-utils'
 import { WALLET_CONFIG } from '@/config/wallet'
 import { isRetryableWalletRpcError, isWalletDirtyError } from '@/core/zcash/wallet-rpc-errors'
-import type { ZeroIndexerOptions } from '@/config/zero-indexer'
-import { readZeroIndexerOptionsForWorker } from '@/config/zero-indexer-runtime'
-import { TransactionSubmissionUnknownError } from '@/core/zcash/transfer-result'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import { decodeWorkerRpcError } from './rpc-errors'
+import { readZeroIndexerOptionsForWorker } from '@/infrastructure/chains/zero-indexer-preferences'
+import type { ZeroIndexerOptions } from '@/core/zcash/zero-indexer'
 
 const { LIGHT, MEDIUM, WASM_HEAVY, TRANSACTION } = WALLET_CONFIG.SYNC.RPC_TIMEOUT_MS
+const syncOwner = { ownerId: crypto.randomUUID(), ownerStartedAt: performance.timeOrigin }
 
 // Worker instance singleton
 let worker: Worker | null = null
 let messageId = 0
 const pendingRequests = new Map<
   string,
-  { resolve: (val: any) => void; reject: (err: Error) => void }
+  {
+    resolve: (val: any) => void
+    reject: (err: Error) => void
+    timedOut?: boolean
+    onLateResult?: (response: RPCResponse<RPCMethod>) => void
+  }
 >()
+
+export interface LateTransactionResult {
+  method: 'transaction.send' | 'transaction.oneclick_shield'
+  walletId: string
+  transactionContext?: ZcashTransactionContext
+  response: RPCResponse<RPCMethod>
+}
+
+function isTransactionMutation(method: string): method is LateTransactionResult['method'] {
+  return method === 'transaction.send' || method === 'transaction.oneclick_shield'
+}
 
 // Detect environment: Extension contexts only
 function detectEnvironment(): 'extension' | 'offscreen' {
@@ -54,21 +79,32 @@ function waitForOffscreenReady(): Promise<void> {
   if (offscreenReady) return offscreenReady
 
   offscreenReady = new Promise(resolve => {
-    const listener = (message: any) => {
-      if (message.type === 'OFFSCREEN_READY') {
-        chrome.runtime.onMessage.removeListener(listener)
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const finish = (timedOut: boolean) => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      chrome.runtime.onMessage.removeListener(listener)
+      if (timedOut) {
+        console.warn('[ZcashWorkerClient] Offscreen ready timeout, proceeding anyway')
+      } else {
         console.log('[ZcashWorkerClient] Offscreen is ready')
-        resolve()
+      }
+      resolve()
+    }
+    const listener = (message: any, sender: chrome.runtime.MessageSender) => {
+      if (
+        message.type === 'OFFSCREEN_READY' &&
+        getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'offscreen-document'
+      ) {
+        finish(false)
       }
     }
     chrome.runtime.onMessage.addListener(listener)
 
     // Timeout fallback
-    setTimeout(() => {
-      chrome.runtime.onMessage.removeListener(listener)
-      console.warn('[ZcashWorkerClient] Offscreen ready timeout, proceeding anyway')
-      resolve()
-    }, 3000)
+    timeout = setTimeout(() => finish(true), 3000)
   })
 
   return offscreenReady
@@ -97,12 +133,10 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'wallet.endSyncSession': LIGHT,
   'wallet.markDirty': LIGHT,
   'wallet.reload': WALLET_CONFIG.SYNC.RELOAD_TIMEOUT_MS,
-  'wallet.reconcile': LIGHT,
+  'wallet.reconcile': WASM_HEAVY,
   'worker.recreate': WASM_HEAVY,
+  'compatibility.migrate': MEDIUM,
   'wallet.getBalance': LIGHT,
-  'transaction.send': TRANSACTION,
-  'transaction.oneclick_shield': TRANSACTION,
-  'pczt.proveSend': TRANSACTION,
   'voting.discoverRounds': MEDIUM,
   'voting.checkEligibility': WASM_HEAVY,
   'voting.roundStatus': LIGHT,
@@ -112,6 +146,9 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'voting.submitBallot': WASM_HEAVY,
   'voting.resumeRound': WASM_HEAVY,
   'voting.clearRound': MEDIUM,
+  'transaction.send': TRANSACTION,
+  'transaction.oneclick_shield': TRANSACTION,
+  'pczt.proveSend': TRANSACTION,
   'transaction.estimateFee': LIGHT,
   'transaction.getFeeQuote': LIGHT,
   'transaction.estimateMaxTransfer': LIGHT,
@@ -190,6 +227,7 @@ type OffscreenRpcResponse = {
   error?: string
   errorType?: 'timeout' | 'submission_unknown'
   txId?: string
+  txIds?: string[]
   retryable?: boolean
   deferred?: boolean
 }
@@ -197,7 +235,8 @@ type OffscreenRpcResponse = {
 function sendOffscreenRpcOnce(
   method: string,
   payload: any,
-  timeout: number
+  timeout: number,
+  transactionContext?: ZcashTransactionContext
 ): Promise<OffscreenRpcResponse> {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -205,16 +244,20 @@ function sendOffscreenRpcOnce(
       reject(new TimeoutError(`Offscreen RPC timeout: ${method}`))
     }, timeout)
 
-    chrome.runtime.sendMessage({ type: 'WORKER_RPC', method, payload }, response => {
-      clearTimeout(timeoutId)
+    const type = typeof document === 'undefined' ? 'KEYRING_WORKER_RPC' : 'WORKER_RPC'
+    chrome.runtime.sendMessage(
+      { type, method, payload, ...(transactionContext ? { transactionContext } : {}) },
+      response => {
+        clearTimeout(timeoutId)
 
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message))
-        return
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message))
+          return
+        }
+
+        resolve((response ?? {}) as OffscreenRpcResponse)
       }
-
-      resolve((response ?? {}) as OffscreenRpcResponse)
-    })
+    )
   })
 }
 
@@ -239,7 +282,8 @@ async function maybeReloadWalletBeforeRetry(payload: {
       walletId,
       dbKey,
       network,
-      lightwalletdUrl: payload.lightwalletdUrl ?? getNetworkConfig(network).rpcUrl
+      lightwalletdUrl: payload.lightwalletdUrl ?? getNetworkConfig(network).rpcUrl,
+      compactBlockCdn: getNetworkConfig(network).compactBlockCdn
     },
     getRpcTimeout('wallet.reload')
   ).catch(err => {
@@ -248,7 +292,11 @@ async function maybeReloadWalletBeforeRetry(payload: {
 }
 
 // Forward RPC to Offscreen Document (Extension only)
-async function forwardToOffscreen<T = any>(method: string, payload: any): Promise<T> {
+async function forwardToOffscreen<T = any>(
+  method: string,
+  payload: any,
+  transactionContext?: ZcashTransactionContext
+): Promise<T> {
   // Check Offscreen API availability
   if (!chrome.offscreen || !chrome.offscreen.hasDocument || !chrome.offscreen.createDocument) {
     throw new Error(
@@ -266,36 +314,36 @@ async function forwardToOffscreen<T = any>(method: string, payload: any): Promis
     hasDocument = false
   }
 
-  if (!hasDocument) {
-    // Avoid concurrent creation
-    if (creatingOffscreen) {
-      await creatingOffscreen
-    } else {
-      // Reset ready state when creating new Offscreen
-      offscreenReady = null
-
-      creatingOffscreen = chrome.offscreen
-        .createDocument({
-          url: chrome.runtime.getURL('src/offscreen/index.html'),
-          reasons: [chrome.offscreen.Reason.WORKERS],
-          justification: 'Run Zcash WASM Worker for cryptographic operations'
-        })
-        .then(() => {
-          console.log('[ZcashWorkerClient] Offscreen Document created')
-        })
-        .catch(err => {
-          console.error('[ZcashWorkerClient] Failed to create Offscreen:', err)
-          throw err
-        })
-        .finally(() => {
-          creatingOffscreen = null
-        })
-
-      await creatingOffscreen
-    }
-
-    // Wait for Offscreen to be ready
+  // `hasDocument()` may become true before the new document has installed its
+  // message listener. Always join an in-flight creation and register the ready
+  // listener before creating the document so concurrent callers cannot send an
+  // RPC into that gap and lose the response port.
+  if (creatingOffscreen) {
+    await creatingOffscreen
     await waitForOffscreenReady()
+  } else if (!hasDocument) {
+    offscreenReady = null
+    const ready = waitForOffscreenReady()
+
+    creatingOffscreen = chrome.offscreen
+      .createDocument({
+        url: chrome.runtime.getURL('src/offscreen/index.html'),
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification: 'Run Zcash WASM Worker for cryptographic operations'
+      })
+      .then(() => {
+        console.log('[ZcashWorkerClient] Offscreen Document created')
+      })
+      .catch(err => {
+        console.error('[ZcashWorkerClient] Failed to create Offscreen:', err)
+        throw err
+      })
+      .finally(() => {
+        creatingOffscreen = null
+      })
+
+    await creatingOffscreen
+    await ready
   }
 
   // Send RPC to Offscreen with method-specific timeout
@@ -306,7 +354,7 @@ async function forwardToOffscreen<T = any>(method: string, payload: any): Promis
   const retryDelays = WALLET_CONFIG.SYNC.OFFSCREEN_RPC_RETRY_DELAYS_MS
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await sendOffscreenRpcOnce(method, payload, timeout)
+    const response = await sendOffscreenRpcOnce(method, payload, timeout, transactionContext)
 
     if (response.error) {
       const canRetry =
@@ -322,11 +370,12 @@ async function forwardToOffscreen<T = any>(method: string, payload: any): Promis
         continue
       }
 
-      if (response.errorType === 'timeout') throw new TimeoutError(response.error)
-      if (response.errorType === 'submission_unknown' && response.txId) {
-        throw new TransactionSubmissionUnknownError(response.txId, response.error)
-      }
-      throw new Error(response.error)
+      throw decodeWorkerRpcError({
+        error: response.error,
+        errorType: response.errorType,
+        txId: response.txId,
+        txIds: response.txIds
+      })
     }
 
     return response.result as T
@@ -335,17 +384,24 @@ async function forwardToOffscreen<T = any>(method: string, payload: any): Promis
   throw new Error(`Offscreen RPC failed after ${maxAttempts} attempts: ${method}`)
 }
 
-export async function applyZeroIndexerOptions(
+export function forwardKeyringRpcToOffscreen<T>(
+  method: string,
+  payload: Readonly<Record<string, unknown>>
+): Promise<T> {
+  return forwardToOffscreen<T>(method, payload)
+}
+
+export async function applyZeroIndexerOptionsToActiveWorker(
   network: Network,
   options: ZeroIndexerOptions | null
 ): Promise<void> {
-  // A future wallet initialization reads persisted options; changing settings
-  // alone must not create a compute document or initialize WASM.
   if (!(await chrome.offscreen.hasDocument())) return
   await forwardToOffscreen('zeroIndexer.setOptions', { network, options })
 }
 
 export class ZcashWorkerClient {
+  onLateTransactionResult?: (event: LateTransactionResult) => void | Promise<void>
+
   // WASM initialization state
   private initDedup = new DedupPromise<boolean | 'empty'>()
   private isInitialized = false
@@ -359,6 +415,8 @@ export class ZcashWorkerClient {
   // Config state
   private network: Network = DEFAULT_NETWORK
   private lightwalletdUrl: string = getNetworkConfig(DEFAULT_NETWORK).rpcUrl
+  private compactBlockCdnUrl: string | null =
+    getNetworkConfig(DEFAULT_NETWORK).compactBlockCdn?.baseUrl ?? null
   private dbBytes: Uint8Array | undefined = undefined
   private dbKey: string | undefined = undefined
 
@@ -407,16 +465,18 @@ export class ZcashWorkerClient {
 
     // Handle responses
     worker.onmessage = (event: MessageEvent<RPCResponse<any>>) => {
-      const { id, result, error, errorType, txId } = event.data
+      const { id, result, error } = event.data
       const pending = pendingRequests.get(id)
 
       if (pending) {
         pendingRequests.delete(id)
+        if (pending.timedOut) {
+          pending.onLateResult?.(event.data)
+          return
+        }
         if (error) {
           pending.reject(
-            errorType === 'submission_unknown' && txId
-              ? new TransactionSubmissionUnknownError(txId, error)
-              : new Error(error)
+            decodeWorkerRpcError(event.data as OffscreenRpcResponse & { error: string })
           )
         } else {
           pending.resolve(result)
@@ -438,7 +498,7 @@ export class ZcashWorkerClient {
   }
 
   recreateWorker(): void {
-    this.handleWorkerCrash('forced worker recreate')
+    this.handleWorkerCrash('forced worker recreate', true)
     if (this.environment === 'offscreen') {
       this.initWorker()
     }
@@ -456,6 +516,13 @@ export class ZcashWorkerClient {
     this.initDedup.abort()
   }
 
+  invalidateInitialization(): void {
+    this.isInitialized = false
+    this.initDedup.abort()
+    this.initDedup.reset()
+    this.accountReady.reset()
+  }
+
   async forceRecreateWorkerIfNeeded(): Promise<void> {
     if (!this.isUnhealthy()) return
     if (this.environment === 'extension') {
@@ -468,13 +535,22 @@ export class ZcashWorkerClient {
     this.initDedup.reset()
   }
 
-  private handleWorkerCrash(reason: string): void {
-    console.warn(
-      `%c[ZcashWorker] Worker crashed: ${reason} — rejecting ${pendingRequests.size} pending request(s), will auto-recover on next call`,
-      'background: #FF4444; color: #FFF; font-weight: bold; padding: 2px 6px; border-radius: 4px;'
-    )
+  private handleWorkerCrash(reason: string, intentional = false): void {
+    const message = intentional
+      ? `Worker request cancelled: ${reason}`
+      : `Worker crashed: ${reason}`
+    if (intentional) {
+      console.info(
+        `[ZcashWorker] ${message}; cancelling ${pendingRequests.size} pending request(s)`
+      )
+    } else {
+      console.warn(
+        `%c[ZcashWorker] ${message} — rejecting ${pendingRequests.size} pending request(s), will auto-recover on next call`,
+        'background: #FF4444; color: #FFF; font-weight: bold; padding: 2px 6px; border-radius: 4px;'
+      )
+    }
     for (const [id, pending] of pendingRequests) {
-      pending.reject(new Error(`Worker crashed: ${reason}`))
+      pending.reject(new Error(message))
       pendingRequests.delete(id)
     }
     if (worker) {
@@ -498,10 +574,15 @@ export class ZcashWorkerClient {
     dbBytes?: Uint8Array,
     dbKey?: string
   ): Promise<void> {
-    const configChanged = this.network !== network || this.lightwalletdUrl !== lightwalletdUrl
+    const compactBlockCdnUrl = getNetworkConfig(network).compactBlockCdn?.baseUrl ?? null
+    const configChanged =
+      this.network !== network ||
+      this.lightwalletdUrl !== lightwalletdUrl ||
+      this.compactBlockCdnUrl !== compactBlockCdnUrl
 
     this.network = network
     this.lightwalletdUrl = lightwalletdUrl
+    this.compactBlockCdnUrl = compactBlockCdnUrl
 
     if (dbBytes) {
       this.dbBytes = dbBytes
@@ -530,12 +611,16 @@ export class ZcashWorkerClient {
     this.lightwalletdUrl = getNetworkConfig(this.network).rpcUrl
 
     await this.initDedup.run(
-      () => {
+      async () => {
+        if (this.environment === 'extension') {
+          await this.reconcileWallet()
+        }
         if (this.environment === 'extension' && this.dbKey && !this.dbBytes) {
           return this.request('init', {
             walletId: this.walletId,
             network: this.network,
             lightwalletdUrl: this.lightwalletdUrl,
+            compactBlockCdn: getNetworkConfig(this.network).compactBlockCdn,
             dbKey: this.dbKey
           })
         }
@@ -543,6 +628,7 @@ export class ZcashWorkerClient {
           walletId: this.walletId,
           network: this.network,
           lightwalletdUrl: this.lightwalletdUrl,
+          compactBlockCdn: getNetworkConfig(this.network).compactBlockCdn,
           dbBytes: this.dbBytes
         })
       },
@@ -559,15 +645,16 @@ export class ZcashWorkerClient {
    */
   private async request<M extends RPCMethod>(
     method: M,
-    payload: RPCSchema[M]['request']
+    payload: RPCSchema[M]['request'],
+    transactionContext?: ZcashTransactionContext
   ): Promise<RPCSchema[M]['response']> {
     // Extension environment (Background/Popup/Windows): forward to Offscreen
     if (this.environment === 'extension') {
-      return forwardToOffscreen(method, payload)
+      return forwardToOffscreen(method, payload, transactionContext)
     }
 
     // Offscreen or Web environment: use local Worker
-    return this.requestToWorker(method, payload)
+    return this.requestToWorker(method, payload, transactionContext)
   }
 
   /**
@@ -576,7 +663,8 @@ export class ZcashWorkerClient {
    */
   async requestToWorker<M extends RPCMethod>(
     method: M,
-    payload: RPCSchema[M]['request']
+    payload: RPCSchema[M]['request'],
+    transactionContext?: ZcashTransactionContext
   ): Promise<RPCSchema[M]['response']> {
     if (method === 'init') {
       const initPayload = payload as RPCSchema['init']['request']
@@ -591,15 +679,41 @@ export class ZcashWorkerClient {
 
     const id = (messageId++).toString()
     const timeout = getRpcTimeout(method)
+    const transactionWalletId = isTransactionMutation(method)
+      ? (payload as { walletId?: unknown }).walletId
+      : undefined
+    const onLateResult =
+      isTransactionMutation(method) && typeof transactionWalletId === 'string'
+        ? (response: RPCResponse<RPCMethod>) => {
+            void Promise.resolve()
+              .then(() =>
+                this.onLateTransactionResult?.({
+                  method,
+                  walletId: transactionWalletId,
+                  transactionContext,
+                  response
+                })
+              )
+              .catch(() => {
+                console.warn('[ZcashWorkerClient] Late transaction result handling failed')
+              })
+          }
+        : undefined
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        pendingRequests.delete(id)
+        const pending = pendingRequests.get(id)
+        if (pending?.onLateResult) {
+          pending.timedOut = true
+        } else {
+          pendingRequests.delete(id)
+        }
         this.recoverWorkerAfterRpcTimeout(method, payload as { walletId?: string })
         reject(new TimeoutError(`Worker RPC timeout: ${method}`))
       }, timeout)
 
       pendingRequests.set(id, {
+        onLateResult,
         resolve: val => {
           clearTimeout(timeoutId)
           resolve(val)
@@ -636,9 +750,9 @@ export class ZcashWorkerClient {
     return this.request('mnemonic.validate', { phrase })
   }
 
-  async mnemonicToSeed(phrase: string, passphrase?: string): Promise<Uint8Array> {
+  async mnemonicToSeed(phrase: string): Promise<Uint8Array> {
     await this.ensureInitialized()
-    return this.request('mnemonic.toSeed', { phrase, passphrase })
+    return this.request('mnemonic.toSeed', { phrase })
   }
 
   async mnemonicToAddresses(phrase: string, accountIndex: number, network: Network) {
@@ -646,20 +760,12 @@ export class ZcashWorkerClient {
     return this.request('mnemonic.toAddresses', { phrase, accountIndex, network })
   }
 
-  // Encryption
-  async encrypt(plaintext: string, passphrase: string): Promise<string> {
-    await this.ensureInitialized()
-    return this.request('encrypt', { plaintext, passphrase })
-  }
-
-  async decrypt(ciphertext: string, passphrase: string): Promise<string> {
-    await this.ensureInitialized()
-    return this.request('decrypt', { ciphertext, passphrase })
-  }
-
   async reset(options?: { force?: boolean; strict?: boolean }): Promise<void> {
     if (this.isInitialized || options?.force) {
       try {
+        if (options?.force && this.environment === 'extension') {
+          await this.reconcileWallet(true)
+        }
         await this.request('wallet.reset', { walletId: this.walletId })
       } catch (e) {
         if (options?.strict) throw e
@@ -692,6 +798,25 @@ export class ZcashWorkerClient {
     })
   }
 
+  async createAccountFromSession(accountIndex: number, birthdayHeight?: number): Promise<number> {
+    await this.ensureInitialized()
+    return this.request('wallet.createAccountFromSession', {
+      walletId: this.wid(),
+      accountIndex,
+      birthdayHeight
+    })
+  }
+
+  async getSessionAddresses(accountIndex: number, network: Network) {
+    // Public derivation only requires a bound credential capsule; it must not
+    // initialize or mutate either network's wallet database.
+    return this.request('wallet.getSessionAddresses', {
+      walletId: this.wid(),
+      accountIndex,
+      network
+    })
+  }
+
   async getAccountIds(): Promise<number[]> {
     await this.ensureInitialized()
     return this.request('wallet.getAccountIds', { walletId: this.wid() })
@@ -707,6 +832,74 @@ export class ZcashWorkerClient {
     return this.request('wallet.getBalance', { walletId: this.wid(), accountId })
   }
 
+  async discoverVotingRounds(accountId: number) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.discoverRounds', { walletId: this.wid(), accountId })
+  }
+
+  async checkVotingEligibility(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.checkEligibility', { walletId: this.wid(), accountId, roundId })
+  }
+
+  async getVotingRoundStatus(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.roundStatus', { walletId: this.wid(), accountId, roundId })
+  }
+
+  async prepareVotingRound(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.prepareRound', { walletId: this.wid(), accountId, roundId })
+  }
+
+  async getVotingRoundProposals(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.roundProposals', { walletId: this.wid(), accountId, roundId })
+  }
+
+  async submitVotingDelegation(params: {
+    readonly accountId: number
+    readonly roundId: string
+    readonly credentialGenerationId: string
+    readonly globalUnlockEpoch: string
+  }) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.submitDelegation', { ...params, walletId: this.wid() })
+  }
+
+  async submitVotingBallot(
+    accountId: number,
+    roundId: string,
+    decisions: RPCSchema['voting.submitBallot']['request']['decisions']
+  ) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.submitBallot', {
+      walletId: this.wid(),
+      accountId,
+      roundId,
+      decisions
+    })
+  }
+
+  async resumeVotingRound(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.resumeRound', { walletId: this.wid(), accountId, roundId })
+  }
+
+  async clearVotingRound(accountId: number, roundId: string) {
+    await this.ensureInitialized()
+    await this.ensureAccountReady()
+    return this.request('voting.clearRound', { walletId: this.wid(), accountId, roundId })
+  }
+
   async getUnifiedAddresses(accountId: number) {
     await this.ensureInitialized()
     return this.request('wallet.getUnifiedAddresses', { walletId: this.wid(), accountId })
@@ -715,11 +908,6 @@ export class ZcashWorkerClient {
   async getNextShieldedAddress(accountId: number) {
     await this.ensureInitialized()
     return this.request('wallet.getNextShieldedAddress', { walletId: this.wid(), accountId })
-  }
-
-  async listShieldedAddresses(accountId: number) {
-    await this.ensureInitialized()
-    return this.request('wallet.listShieldedAddresses', { walletId: this.wid(), accountId })
   }
 
   async getBlockByTime(timestamp: number): Promise<number> {
@@ -752,6 +940,7 @@ export class ZcashWorkerClient {
   async reloadWallet(options?: {
     dbKey?: string
     recreateWorker?: boolean
+    resetWallet?: boolean
     network?: Network
     lightwalletdUrl?: string
   }): Promise<{ generation: number }> {
@@ -763,20 +952,23 @@ export class ZcashWorkerClient {
       walletId: this.wid(),
       network,
       lightwalletdUrl,
+      compactBlockCdn: getNetworkConfig(network).compactBlockCdn,
       dbKey: options?.dbKey,
-      recreateWorker: options?.recreateWorker
+      recreateWorker: options?.recreateWorker,
+      resetWallet: options?.resetWallet
     })
     // Sync client config only after the worker actually reloaded, so a failed
     // reload keeps configChanged detection working for the next init attempt
     this.network = network
     this.lightwalletdUrl = lightwalletdUrl
+    this.compactBlockCdnUrl = getNetworkConfig(network).compactBlockCdn?.baseUrl ?? null
     this.isInitialized = true
     this.dbKey = options?.dbKey
     return result
   }
 
-  async reconcileWallet(): Promise<boolean> {
-    return this.request('wallet.reconcile', { walletId: this.wid() })
+  async reconcileWallet(force = false): Promise<boolean> {
+    return this.request('wallet.reconcile', { walletId: this.wid(), ...syncOwner, force })
   }
 
   async sync(): Promise<void> {
@@ -809,6 +1001,7 @@ export class ZcashWorkerClient {
     await this.ensureInitialized()
     return this.request('wallet.prepareSyncBatchWithJournal', {
       walletId: this.wid(),
+      ...syncOwner,
       batchSize,
       network,
       journalWalletId,
@@ -823,12 +1016,17 @@ export class ZcashWorkerClient {
     await this.request('wallet.syncSessionSetup', { walletId: this.wid() })
   }
 
-  async replayJournalEntries(network: string, journalWalletId: string): Promise<number> {
+  async replayJournalEntries(
+    network: string,
+    journalWalletId: string,
+    options?: JournalReplayOptions
+  ): Promise<number> {
     await this.ensureInitialized()
     return this.request('wallet.replayJournalEntries', {
       walletId: this.wid(),
       network,
-      journalWalletId
+      journalWalletId,
+      allowAfterAbort: options?.allowAfterAbort
     })
   }
 
@@ -866,11 +1064,12 @@ export class ZcashWorkerClient {
   }
 
   async sendTransaction(
-    params: Omit<RPCSchema['transaction.send']['request'], 'walletId'>
+    params: Omit<RPCSchema['transaction.send']['request'], 'walletId'>,
+    transactionContext?: ZcashTransactionContext
   ): Promise<RPCSchema['transaction.send']['response']> {
     await this.ensureInitialized()
     await this.ensureAccountReady()
-    return this.request('transaction.send', { ...params, walletId: this.wid() })
+    return this.request('transaction.send', { ...params, walletId: this.wid() }, transactionContext)
   }
 
   // --- Hardware wallet (watch-only UFVK + external PCZT signing) ---
@@ -905,15 +1104,21 @@ export class ZcashWorkerClient {
     })
   }
 
-  async pcztProveSend(fullBase64: string, signedBase64: string): Promise<string> {
+  async pcztProveSend(
+    fullBase64: string,
+    signedBase64: string,
+    submissionDeadline?: number
+  ): Promise<string> {
     await this.ensureInitialized()
-    return this.request('pczt.proveSend', { fullBase64, signedBase64, walletId: this.wid() })
+    return this.request('pczt.proveSend', {
+      fullBase64,
+      signedBase64,
+      walletId: this.wid(),
+      ...(submissionDeadline === undefined ? {} : { submissionDeadline })
+    })
   }
 
-  async pcztLedgerPayload(
-    redactedBase64: string,
-    accountIndex: number
-  ): Promise<RPCSchema['pczt.ledgerPayload']['response']> {
+  async pcztLedgerPayload(redactedBase64: string, accountIndex: number) {
     await this.ensureInitialized()
     return this.request('pczt.ledgerPayload', {
       redactedBase64,
@@ -936,64 +1141,12 @@ export class ZcashWorkerClient {
     })
   }
 
-  async discoverVotingRounds(accountId: number) {
-    await this.ensureInitialized()
-    return this.request('voting.discoverRounds', { walletId: this.wid(), accountId })
-  }
-
-  async checkVotingEligibility(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.checkEligibility', { walletId: this.wid(), accountId, roundId })
-  }
-
-  async getVotingRoundStatus(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.roundStatus', { walletId: this.wid(), accountId, roundId })
-  }
-
-  async prepareVotingRound(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.prepareRound', { walletId: this.wid(), accountId, roundId })
-  }
-
-  async getVotingRoundProposals(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.roundProposals', { walletId: this.wid(), accountId, roundId })
-  }
-
-  async submitVotingDelegation(params: {
-    accountId: number
-    accountIndex: number
-    roundId: string
-    seedPhrase: string
-  }) {
+  async estimateTransferFee(
+    params: Omit<RPCSchema['transaction.estimateFee']['request'], 'walletId'>
+  ): Promise<RPCSchema['transaction.estimateFee']['response']> {
     await this.ensureInitialized()
     await this.ensureAccountReady()
-    return this.request('voting.submitDelegation', { ...params, walletId: this.wid() })
-  }
-
-  async submitVotingBallot(
-    accountId: number,
-    roundId: string,
-    decisions: RPCSchema['voting.submitBallot']['request']['decisions']
-  ) {
-    await this.ensureInitialized()
-    return this.request('voting.submitBallot', {
-      walletId: this.wid(),
-      accountId,
-      roundId,
-      decisions
-    })
-  }
-
-  async resumeVotingRound(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.resumeRound', { walletId: this.wid(), accountId, roundId })
-  }
-
-  async clearVotingRound(accountId: number, roundId: string) {
-    await this.ensureInitialized()
-    return this.request('voting.clearRound', { walletId: this.wid(), accountId, roundId })
+    return this.request('transaction.estimateFee', { ...params, walletId: this.wid() })
   }
 
   async getFeeQuote(
@@ -1007,14 +1160,6 @@ export class ZcashWorkerClient {
       accountIndex,
       walletId: this.wid()
     })
-  }
-
-  async estimateTransferFee(
-    params: Omit<RPCSchema['transaction.estimateFee']['request'], 'walletId'>
-  ): Promise<RPCSchema['transaction.estimateFee']['response']> {
-    await this.ensureInitialized()
-    await this.ensureAccountReady()
-    return this.request('transaction.estimateFee', { ...params, walletId: this.wid() })
   }
 
   async estimateMaxTransfer(
@@ -1034,11 +1179,16 @@ export class ZcashWorkerClient {
   }
 
   async oneClickShield(
-    params: Omit<RPCSchema['transaction.oneclick_shield']['request'], 'walletId'>
+    params: Omit<RPCSchema['transaction.oneclick_shield']['request'], 'walletId'>,
+    transactionContext?: ZcashTransactionContext
   ): Promise<string> {
     await this.ensureInitialized()
     await this.ensureAccountReady()
-    return this.request('transaction.oneclick_shield', { ...params, walletId: this.wid() })
+    return this.request(
+      'transaction.oneclick_shield',
+      { ...params, walletId: this.wid() },
+      transactionContext
+    )
   }
 
   async signMessage(
@@ -1057,11 +1207,11 @@ export class ZcashWorkerClient {
   }
 
   async beginSyncSession(): Promise<void> {
-    await this.request('wallet.beginSyncSession', { walletId: this.wid() })
+    await this.request('wallet.beginSyncSession', { walletId: this.wid(), ...syncOwner })
   }
 
   async endSyncSession(): Promise<void> {
-    await this.request('wallet.endSyncSession', { walletId: this.wid() })
+    await this.request('wallet.endSyncSession', { walletId: this.wid(), ...syncOwner })
   }
 
   async markDirty(): Promise<void> {

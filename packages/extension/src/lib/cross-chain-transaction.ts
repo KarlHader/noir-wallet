@@ -1,5 +1,6 @@
-import { ZEC_ZCASH_ASSET } from '@/config/near'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import type { Transaction, TransactionStatus, TransactionType } from '@/types'
+import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 
 export interface CrossChainRoute {
   destinationAsset?: string
@@ -35,15 +36,31 @@ export function isIntentsSettledTransaction(
   return type === 'supply' || type === 'swap'
 }
 
+export function getZcashIntentsOriginStatus(
+  transaction: Pick<Transaction, 'txHash' | 'status' | 'confirmations'>
+): TransactionLifecycleStatus {
+  if (!transaction.txHash) return transaction.status === 'failed' ? 'failed' : 'created'
+  if (transaction.status === 'success' || transaction.status === 'relay_confirmed') return 'final'
+  if (transaction.confirmations != null && transaction.confirmations > 0) return 'final'
+  return 'broadcast'
+}
+
 /**
  * Returns whether an interrupted withdraw/claim still needs the Intents relay
  * monitor before a destination Zcash transaction hash is available.
  */
 export function needsRelayStatusRecovery(
-  transaction: Pick<Transaction, 'type' | 'status' | 'depositAddress' | 'destinationTxHash'>
+  transaction: Pick<Transaction, 'type' | 'status' | 'depositAddress' | 'destinationTxHash'> &
+    Partial<Pick<Transaction, 'quoteBinding'>>
 ): boolean {
   if (
-    (transaction.type !== 'withdraw' && transaction.type !== 'claim') ||
+    (transaction.type !== 'withdraw' &&
+      transaction.type !== 'claim' &&
+      !(
+        transaction.type === 'swap' &&
+        transaction.quoteBinding?.provider === 'near-intents' &&
+        transaction.quoteBinding.quoteHandle
+      )) ||
     !transaction.depositAddress ||
     transaction.destinationTxHash
   ) {

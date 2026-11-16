@@ -77,6 +77,27 @@ const expected = {
   runAttempt: '1',
   version: '0.2.0'
 }
+const betaVersion = '2.0.0-beta.10'
+const betaManifest = {
+  ...manifest,
+  version: betaVersion,
+  publishConfig: { access: 'public', tag: 'beta' }
+}
+const betaEnv = {
+  ...env,
+  RELEASE_LINE: 'beta',
+  CONFIRM_VERSION: betaVersion,
+  SDK_SOURCE_BRANCH: 'main',
+  SDK_RELEASE_LINE: 'beta',
+  SDK_DIST_TAG: 'beta'
+}
+const betaExpected = {
+  ...expected,
+  sourceBranch: 'main',
+  releaseLine: 'beta',
+  distTag: 'beta',
+  version: betaVersion
+}
 
 function fixture(t, packageManifest = manifest, metadataOverrides = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'noir-sdk-release-test-'))
@@ -116,45 +137,66 @@ function fixture(t, packageManifest = manifest, metadataOverrides = {}) {
 
 test('resolves only a confirmed current branch head from the trusted main workflow', () => {
   const resolve = (changes = {}) =>
-    resolveSdkRelease({ env, manifest, branchHeadSha: sourceSha, ...changes })
+    resolveSdkRelease({
+      env: betaEnv,
+      manifest: betaManifest,
+      branchHeadSha: sourceSha,
+      ...changes
+    })
   assert.equal(resolve().should_stage, 'true')
   assert.equal(resolve().source_branch, 'main')
   assert.equal(resolve().workflow_sha, workflowSha)
-  assert.throws(() => resolve({ env: { ...env, GITHUB_EVENT_NAME: 'push' } }), /event/)
+  assert.throws(() => resolve({ env: { ...betaEnv, GITHUB_EVENT_NAME: 'push' } }), /event/)
   assert.throws(() => resolve({ branchHeadSha: 'b'.repeat(40) }), /branch head/)
-  assert.throws(() => resolve({ env: { ...env, CONFIRM_SHA: 'b'.repeat(40) } }), /Confirmed source/)
   assert.throws(
-    () => resolve({ env: { ...env, CONFIRM_VERSION: '0.3.0' } }),
+    () => resolve({ env: { ...betaEnv, CONFIRM_SHA: 'b'.repeat(40) } }),
+    /Confirmed source/
+  )
+  assert.throws(
+    () => resolve({ env: { ...betaEnv, CONFIRM_VERSION: '0.3.0' } }),
     /Confirmed SDK version/
   )
-  assert.throws(() => resolve({ env: { ...env, GITHUB_REF: 'refs/heads/v2' } }), /canonical/)
-  assert.throws(() => resolve({ env: { ...env, GITHUB_REPOSITORY: 'fork/wallet' } }), /canonical/)
+  assert.throws(() => resolve({ env: { ...betaEnv, GITHUB_REF: 'refs/heads/v2' } }), /canonical/)
+  assert.throws(
+    () => resolve({ env: { ...betaEnv, GITHUB_REPOSITORY: 'fork/wallet' } }),
+    /canonical/
+  )
   assert.throws(
     () =>
       resolve({
         manifest: { ...manifest, version: '0.2.0-beta.1' },
-        env: { ...env, CONFIRM_VERSION: '0.2.0-beta.1' }
+        env: { ...betaEnv, CONFIRM_VERSION: '0.2.0-beta.1' }
       }),
     /0.x.y and 2.x.y-beta.N/
   )
   assert.throws(
-    () => resolve({ env: { ...env, GITHUB_WORKFLOW_REF: 'another/workflow' } }),
+    () => resolve({ env: { ...betaEnv, GITHUB_WORKFLOW_REF: 'another/workflow' } }),
     /workflow identity/
   )
-  assert.equal(resolve({ env: { ...env, OPERATION: 'verify' } }).operation, 'verify')
+  assert.equal(resolve({ env: { ...betaEnv, OPERATION: 'verify' } }).operation, 'verify')
   assert.equal(compareVersions('0.10.0', '0.9.99'), 1)
   assert.equal(compareVersions('2.0.0-beta.10', '2.0.0-beta.9'), 1)
   assert.throws(() => compareVersions('2.0.0-beta.1', '0.2.0'), /release line/)
-  const betaEnv = { ...env, RELEASE_LINE: 'beta', CONFIRM_VERSION: '2.0.0-beta.10' }
-  const beta = resolve({ env: betaEnv, manifest: { ...manifest, version: '2.0.0-beta.10' } })
-  assert.deepEqual([beta.source_branch, beta.dist_tag], ['v2', 'beta'])
-  assert.throws(() => resolve({ env: betaEnv }), /Confirmed SDK version/)
+  assert.deepEqual([resolve().source_branch, resolve().dist_tag], ['main', 'beta'])
+  assert.throws(
+    () => resolve({ env: { ...betaEnv, RELEASE_LINE: 'stable' } }),
+    /Only the 2.x SDK beta/
+  )
+  assert.throws(() => resolve({ manifest }), /Confirmed SDK version/)
 })
 
 test('binds packed bytes to the source, run, attempt, manifest and exact file inventory', t => {
-  const f = fixture(t)
+  const legacy = fixture(t)
+  assert.throws(
+    () =>
+      packageSdkRelease(path.join(legacy.directory, 'legacy-release'), env, {
+        sourceRoot: legacy.source
+      }),
+    /Only a main-branch 2.x SDK beta/
+  )
+  const f = fixture(t, betaManifest, betaExpected)
   const destination = path.join(f.directory, 'packed')
-  const packed = packageSdkRelease(destination, env, {
+  const packed = packageSdkRelease(destination, betaEnv, {
     sourceRoot: f.source,
     run(command) {
       if (command === 'git') return `${sourceSha}\n`
@@ -163,26 +205,26 @@ test('binds packed bytes to the source, run, attempt, manifest and exact file in
     }
   })
   assert.deepEqual(packed, f.metadata)
-  assert.deepEqual(validateSdkArtifact(destination, expected), packed)
+  assert.deepEqual(validateSdkArtifact(destination, betaExpected), packed)
   for (const change of [
     { sourceSha: 'b'.repeat(40) },
     { runId: '124' },
     { runAttempt: '2' },
-    { version: '0.3.0' }
+    { version: '2.0.0-beta.11' }
   ]) {
     assert.throws(
-      () => validateSdkArtifact(destination, { ...expected, ...change }),
+      () => validateSdkArtifact(destination, { ...betaExpected, ...change }),
       /expected build/
     )
   }
   writeFileSync(path.join(destination, 'unexpected.json'), '{}')
-  assert.throws(() => validateSdkArtifact(destination, expected), /exactly one tarball/)
+  assert.throws(() => validateSdkArtifact(destination, betaExpected), /exactly one tarball/)
   rmSync(path.join(destination, 'unexpected.json'))
   writeFileSync(
     path.join(destination, f.filename),
     Buffer.concat([f.bytes, Buffer.from('tampered')])
   )
-  assert.throws(() => validateSdkArtifact(destination, expected), /checksum/)
+  assert.throws(() => validateSdkArtifact(destination, betaExpected), /checksum/)
 })
 
 test('rejects a wrong package, unsafe filename, changed publication policy or mismatched tarball manifest', t => {
@@ -325,28 +367,36 @@ test('refuses existing versions, a latest downgrade, registry errors and missing
   validateRegistryTarget(registry, '0.2.0')
   assert.throws(() => validateRegistryTarget(registry, '0.1.9'), /already published/)
   assert.throws(() => validateRegistryTarget(registry, '0.1.8'), /advance latest/)
-  const f = fixture(t)
+  const legacy = fixture(t)
+  await assert.rejects(
+    stageSdkRelease(legacy.artifact, expected, env, {
+      fetchImpl: () => assert.fail('V1 artifact must not reach npm'),
+      run: () => assert.fail('V1 artifact must not reach npm')
+    }),
+    /Only a main-branch 2.x SDK beta/
+  )
+  const f = fixture(t, betaManifest, betaExpected)
   const summaryPath = path.join(f.directory, 'stage-summary.md')
-  const stageEnv = { ...env, GITHUB_STEP_SUMMARY: summaryPath }
+  const stageEnv = { ...betaEnv, GITHUB_STEP_SUMMARY: summaryPath }
   const run = () => assert.fail('Upload must not run')
   await assert.rejects(
     stageSdkRelease(
       f.artifact,
-      expected,
+      betaExpected,
       { ...stageEnv, ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' },
       { run }
     ),
     /OIDC/
   )
   await assert.rejects(
-    stageSdkRelease(f.artifact, expected, stageEnv, {
+    stageSdkRelease(f.artifact, betaExpected, stageEnv, {
       run,
       fetchImpl: async () => ({ ok: false, status: 403 })
     }),
     /403/
   )
   await assert.rejects(
-    stageSdkRelease(f.artifact, expected, stageEnv, {
+    stageSdkRelease(f.artifact, betaExpected, stageEnv, {
       run,
       fetchImpl: async () => {
         throw new Error('network unavailable')
@@ -355,11 +405,11 @@ test('refuses existing versions, a latest downgrade, registry errors and missing
     /network unavailable/
   )
   await assert.rejects(
-    stageSdkRelease(f.artifact, expected, stageEnv, {
+    stageSdkRelease(f.artifact, betaExpected, stageEnv, {
       run,
       fetchImpl: async () => ({
         ok: true,
-        json: async () => ({ ...registry, versions: { ...registry.versions, '0.2.0': {} } })
+        json: async () => ({ ...registry, versions: { ...registry.versions, [betaVersion]: {} } })
       })
     }),
     /already published/
@@ -367,21 +417,21 @@ test('refuses existing versions, a latest downgrade, registry errors and missing
   assert.equal(existsSync(summaryPath), false)
 })
 
-test('beta staging binds a pinned v2 source to trusted main and advances only the beta tag', async t => {
+test('beta staging binds a pinned main source to trusted main and advances only the beta tag', async t => {
   const betaSourceSha = 'b'.repeat(40)
   const betaVersion = '2.0.0-beta.10'
   const betaManifest = { ...manifest, version: betaVersion }
   const betaEnv = {
     ...env,
     SDK_SOURCE_SHA: betaSourceSha,
-    SDK_SOURCE_BRANCH: 'v2',
+    SDK_SOURCE_BRANCH: 'main',
     SDK_RELEASE_LINE: 'beta',
     SDK_DIST_TAG: 'beta'
   }
   const betaExpected = {
     sourceSha: betaSourceSha,
     workflowSha,
-    sourceBranch: 'v2',
+    sourceBranch: 'main',
     releaseLine: 'beta',
     distTag: 'beta',
     runId: '123',
@@ -472,6 +522,14 @@ test('beta verification accepts a later V1 stable release but requires the accep
     releaseLine: 'beta',
     distTag: 'beta'
   })
+  assert.deepEqual(validateSdkArtifact(f.artifact).sourceBranch, 'v2')
+  await assert.rejects(
+    stageSdkRelease(f.artifact, {}, betaEnv, {
+      fetchImpl: () => assert.fail('Legacy v2 artifact must not reach npm'),
+      run: () => assert.fail('Legacy v2 artifact must not reach npm')
+    }),
+    /Only a main-branch 2.x SDK beta/
+  )
   const published = {
     ...betaManifest,
     dist: {
@@ -498,9 +556,9 @@ test('beta verification accepts a later V1 stable release but requires the accep
 })
 
 test('retries upload with the original bytes and build attempt, without npm credentials or package lifecycle scripts', async t => {
-  const f = fixture(t)
+  const f = fixture(t, betaManifest, betaExpected)
   const summaryPath = path.join(f.directory, 'stage-summary.md')
-  const stageEnv = { ...env, GITHUB_STEP_SUMMARY: summaryPath }
+  const stageEnv = { ...betaEnv, GITHUB_STEP_SUMMARY: summaryPath }
   let fail = true
   const attempts = []
   const options = {
@@ -510,7 +568,7 @@ test('retries upload with the original bytes and build attempt, without npm cred
       if (args[0] === '--version') return `${SDK_NPM_VERSION}\n`
       assert.deepEqual(args.slice(0, 2), ['stage', 'publish'])
       assert.equal(args[2], path.join(f.artifact, f.filename))
-      for (const flag of ['--ignore-scripts', '--provenance', '--tag=latest', '--access=public'])
+      for (const flag of ['--ignore-scripts', '--provenance', '--tag=beta', '--access=public'])
         assert.ok(args.includes(flag))
       assert.equal(args.includes('--force'), false)
       assert.equal(args.includes('--dry-run'), false)
@@ -520,19 +578,19 @@ test('retries upload with the original bytes and build attempt, without npm cred
       if (fail) throw new Error('E409: check Staged Packages')
       return JSON.stringify({
         name: SDK_PACKAGE,
-        version: '0.2.0',
+        version: betaVersion,
         integrity: f.metadata.integrity,
         stageId: 'stage-123'
       })
     }
   }
-  await assert.rejects(stageSdkRelease(f.artifact, expected, stageEnv, options), /E409/)
+  await assert.rejects(stageSdkRelease(f.artifact, betaExpected, stageEnv, options), /E409/)
   assert.equal(attempts.length, 1)
   assert.match(readFileSync(summaryPath, 'utf8'), /SDK staging result unconfirmed/)
   fail = false
   const result = await stageSdkRelease(
     f.artifact,
-    expected,
+    betaExpected,
     {
       ...stageEnv,
       GITHUB_RUN_ATTEMPT: '2',
@@ -550,12 +608,12 @@ test('retries upload with the original bytes and build attempt, without npm cred
     '-f operation=verify -f candidate_run_id=123 -f candidate_run_attempt=1'
   assert.equal(stageSummary.split(verifyCommand).length, 3)
   assert.doesNotMatch(stageSummary, /candidate_run_attempt=2/)
-  assert.match(stageSummary, /Release line: `stable`/)
-  assert.match(stageSummary, /npm tag: `latest`/)
+  assert.match(stageSummary, /Release line: `beta`/)
+  assert.match(stageSummary, /npm tag: `beta`/)
 })
 
 test('does not retry after an ambiguous upload or receipt', async t => {
-  const f = fixture(t)
+  const f = fixture(t, betaManifest, betaExpected)
   const cases = [
     () => {
       throw new Error('ETIMEDOUT')
@@ -575,8 +633,8 @@ test('does not retry after an ambiguous upload or receipt', async t => {
     await assert.rejects(
       stageSdkRelease(
         f.artifact,
-        expected,
-        { ...env, GITHUB_STEP_SUMMARY: summaryPath },
+        betaExpected,
+        { ...betaEnv, GITHUB_STEP_SUMMARY: summaryPath },
         {
           fetchImpl: async () => ({ ok: true, json: async () => registry }),
           run(_command, args) {

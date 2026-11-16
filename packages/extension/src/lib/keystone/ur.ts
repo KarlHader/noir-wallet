@@ -7,7 +7,7 @@
  */
 
 // Must come first: installs the global Buffer required by the UR libraries
-import './buffer-polyfill'
+import '../buffer-polyfill'
 import { Buffer } from 'buffer'
 import { UR, UREncoder, URDecoder } from '@ngraveio/bc-ur'
 import { ZcashAccounts, ZcashPCZT } from '@keystonehq/bc-ur-registry-zcash'
@@ -24,6 +24,11 @@ export const UR_TYPE = {
  * and the device fails to scan them reliably.
  */
 export const DEFAULT_PCZT_FRAGMENT_LENGTH = 200
+const MAX_ZCASH_ACCOUNT_CBOR_BYTES = 256 * 1024
+const MAX_ZCASH_ACCOUNTS = 64
+const MAX_ZCASH_UFVK_LENGTH = 4096
+const MAX_ZCASH_ACCOUNT_NAME_LENGTH = 256
+const MAX_ZCASH_ACCOUNT_INDEX = 0x7fffffff
 
 export interface KeystoneAccount {
   ufvk: string
@@ -32,8 +37,49 @@ export interface KeystoneAccount {
 }
 
 export interface KeystoneAccountsPayload {
-  seedFingerprintHex: string
-  accounts: KeystoneAccount[]
+  readonly seedFingerprintHex: string
+  readonly accounts: readonly KeystoneAccount[]
+}
+
+function decodeZcashAccounts(ur: UR): ZcashAccounts {
+  try {
+    return ZcashAccounts.fromCBOR(ur.cbor)
+  } catch {
+    throw new Error('Keystone Zcash account QR could not be decoded')
+  }
+}
+
+function readZcashAccount(
+  value: ReturnType<ZcashAccounts['getAccounts']>[number]
+): KeystoneAccount {
+  const ufvk = value.getUfvk()
+  const index = value.getIndex()
+  const name = value.getName()
+  if (
+    typeof ufvk !== 'string' ||
+    ufvk.length === 0 ||
+    ufvk.length > MAX_ZCASH_UFVK_LENGTH ||
+    ufvk.trim() !== ufvk
+  ) {
+    throw new Error('Keystone Zcash account QR contains an invalid UFVK')
+  }
+  if (!Number.isSafeInteger(index) || index < 0 || index > MAX_ZCASH_ACCOUNT_INDEX) {
+    throw new Error('Keystone Zcash account QR contains an invalid Account index')
+  }
+  if (
+    name !== undefined &&
+    name !== '' &&
+    (typeof name !== 'string' ||
+      name.length > MAX_ZCASH_ACCOUNT_NAME_LENGTH ||
+      name.trim() !== name)
+  ) {
+    throw new Error('Keystone Zcash account QR contains an invalid Account name')
+  }
+  return Object.freeze({
+    ufvk,
+    index,
+    ...(typeof name === 'string' && name.length > 0 ? { name } : {})
+  })
 }
 
 /**
@@ -43,20 +89,34 @@ export function parseZcashAccounts(ur: UR): KeystoneAccountsPayload {
   if (ur.type !== UR_TYPE.ZCASH_ACCOUNTS) {
     throw new Error(`Unexpected QR content: ${ur.type} (expected ${UR_TYPE.ZCASH_ACCOUNTS})`)
   }
-
-  const decoded = ZcashAccounts.fromCBOR(ur.cbor)
-  const seedFingerprintHex = decoded.getSeedFingerprint().toString('hex')
-  const accounts = decoded.getAccounts().map(account => ({
-    ufvk: account.getUfvk(),
-    index: account.getIndex(),
-    name: account.getName()
-  }))
-
-  if (!accounts.length || !accounts[0].ufvk) {
-    throw new Error('QR code contains no Zcash accounts')
+  if (ur.cbor.byteLength === 0 || ur.cbor.byteLength > MAX_ZCASH_ACCOUNT_CBOR_BYTES) {
+    throw new Error('Keystone Zcash account QR payload has an invalid size')
   }
 
-  return { seedFingerprintHex, accounts }
+  const decoded = decodeZcashAccounts(ur)
+  const seedFingerprint = decoded.getSeedFingerprint()
+  if (!(seedFingerprint instanceof Uint8Array) || seedFingerprint.byteLength !== 32) {
+    throw new Error('Keystone Zcash seed fingerprint has an invalid length')
+  }
+  const decodedAccounts = decoded.getAccounts()
+  if (
+    !Array.isArray(decodedAccounts) ||
+    decodedAccounts.length === 0 ||
+    decodedAccounts.length > MAX_ZCASH_ACCOUNTS
+  ) {
+    throw new Error('Keystone Zcash account QR contains an invalid number of Accounts')
+  }
+  const accounts = Object.freeze(decodedAccounts.map(readZcashAccount))
+  const indexes = new Set(accounts.map(account => account.index))
+  const ufvks = new Set(accounts.map(account => account.ufvk))
+  if (indexes.size !== accounts.length || ufvks.size !== accounts.length) {
+    throw new Error('Keystone Zcash account QR contains duplicate Accounts')
+  }
+
+  return Object.freeze({
+    seedFingerprintHex: Buffer.from(seedFingerprint).toString('hex'),
+    accounts
+  })
 }
 
 /**

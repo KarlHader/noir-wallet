@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import {
   Dialog,
   DialogContent,
@@ -25,29 +26,28 @@ interface ModalConfig {
   resolve: (value: any) => void
 }
 
-interface ModalContextType {
-  openModal: <T>(options: OpenModalOptions<T>) => Promise<T>
-}
-
-const ModalContext = createContext<ModalContextType | null>(null)
-
 let globalOpenModal: (<T>(options: OpenModalOptions<T>) => Promise<T>) | null = null
 
 export function ModalProvider({ children }: { children: React.ReactNode }) {
   const [modals, setModals] = useState<ModalConfig[]>([])
+  const pending = useRef(new Map<string, () => void>())
 
   const openModalFn = useCallback(<T,>(options: OpenModalOptions<T>): Promise<T> => {
     return new Promise(resolve => {
       const id = `modal-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       const close = () => {
+        pending.current.delete(id)
         setModals(prev => prev.filter(m => m.id !== id))
+        resolve(undefined as T)
       }
 
       const handleResolve = (value: T) => {
-        close()
         resolve(value)
+        close()
       }
+
+      pending.current.set(id, close)
 
       setModals(prev => [
         ...prev,
@@ -65,6 +65,23 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
+    const dismiss = () => {
+      for (const close of pending.current.values()) close()
+    }
+    const handleSessionChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (didCredentialSessionEnd(changes, areaName)) dismiss()
+    }
+    chrome.storage.onChanged.addListener(handleSessionChange)
+    return () => {
+      chrome.storage.onChanged.removeListener(handleSessionChange)
+      dismiss()
+    }
+  }, [])
+
+  useEffect(() => {
     globalOpenModal = openModalFn
     return () => {
       globalOpenModal = null
@@ -72,7 +89,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
   }, [openModalFn])
 
   return (
-    <ModalContext.Provider value={{ openModal: openModalFn }}>
+    <>
       {children}
       {modals.map(modal => (
         <Dialog
@@ -102,16 +119,8 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
           </DialogContent>
         </Dialog>
       ))}
-    </ModalContext.Provider>
+    </>
   )
-}
-
-export function useModal() {
-  const context = useContext(ModalContext)
-  if (!context) {
-    throw new Error('useModal must be used within ModalProvider')
-  }
-  return context
 }
 
 export function openModal<T = any>(options: OpenModalOptions<T>): Promise<T> {

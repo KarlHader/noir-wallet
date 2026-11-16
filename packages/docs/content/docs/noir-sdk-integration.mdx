@@ -8,31 +8,17 @@ The SDK is a typed wrapper around the Noir Wallet provider injected into web pag
 
 ## Install the extension
 
-<Tabs items={['Mainnet', 'Testnet']}>
-  <Tab value="Mainnet">
-    Install the production extension from the
-    [official Chrome Web Store](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn).
-    Use this build only with real ZEC.
-  </Tab>
-  <Tab value="Testnet">
-    Testnet is distributed through
-    [official GitHub Releases](https://zknoir.com/beta/versions):
+Install the currently published wallet from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn),
+or obtain a V2 beta through the [V2 release workflow](https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md#routine-previews):
 
-    1. Open the release you want to test.
-    2. Download the asset whose filename ends with `-testnet.zip`.
-    3. Unzip the downloaded file.
-    4. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
-    5. Select the extracted extension directory and confirm the installed name is **[Testnet] Noir Wallet**.
+1. Download and unzip the V2 extension ZIP.
+2. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+3. Select the extracted extension directory.
 
-  </Tab>
-</Tabs>
-
-<Callout type="warn" title="Use only official testnet packages">
-  Do not install ZIP files shared through messages or third-party mirrors. A mainnet asset does not
-  contain `-testnet` in its filename.
-</Callout>
-
-Mainnet and testnet use different extension IDs and isolated wallet data. `switchNetwork()` is deprecated and always throws; install the appropriate extension build instead.
+V2 uses one extension with a global Mainnet/Testnet Mode in Developer Settings. Changing mode locks
+and reloads the wallet. The SDK's `switchNetwork()` method is deprecated and always throws; users
+select the mode in the wallet.
 
 ## Install the SDK
 
@@ -40,21 +26,21 @@ Mainnet and testnet use different extension IDs and isolated wallet data. `switc
   <Tab value="pnpm">
 
 ```bash
-pnpm add @noir-wallet/sdk
+pnpm add @noir-wallet/sdk@beta --save-exact
 ```
 
   </Tab>
   <Tab value="npm">
 
 ```bash
-npm install @noir-wallet/sdk
+npm install @noir-wallet/sdk@beta --save-exact
 ```
 
   </Tab>
   <Tab value="yarn">
 
 ```bash
-yarn add @noir-wallet/sdk
+yarn add @noir-wallet/sdk@beta --exact
 ```
 
   </Tab>
@@ -88,9 +74,7 @@ console.log(balance.shielded)
 console.log(balance.accounts)
 ```
 
-`total` includes pending funds. `available` and `spendable` exclude pending funds but do not account
-for destination-specific fees. Use `getMaxTransfer()` after the recipient, memo, funding source, and
-fee tier are known; a different fee tier selected during approval can change the final maximum.
+`available` excludes pending funds but does not account for destination-specific fees. Use `getMaxTransfer()` after the recipient, memo, funding source, and fee tier are known; a different fee tier during approval can change the final maximum.
 
 ## Send a transaction
 
@@ -106,9 +90,6 @@ ZEC strings.
   shielded funding when the workflow supports it. Keystone cannot send from transparent funds or
   shield them; Ledger supports both through hardware signing.
 </Callout>
-
-`fundingSource` in `getMaxTransfer()` and `sendTransaction()` requires Noir Wallet extension 1.0.27
-or later. Omit it on older builds to use shielded funding.
 
 ## Next steps
 

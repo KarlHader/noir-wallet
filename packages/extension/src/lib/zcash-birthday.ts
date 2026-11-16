@@ -23,12 +23,12 @@ export function formatBirthdayResyncHint(
   timestamp: number | null,
   source: BirthdayHeightSource
 ): string {
-  const lowerHint = 'choose an earlier height if needed.'
+  const lowerHint = 'Use a lower value if transactions are missing.'
   if (source === 'fallback') {
-    return `Resyncs all accounts from current tip #${height.toLocaleString()}; ${lowerHint}`
+    return `Suggested starting height: #${height.toLocaleString()} (current chain tip). ${lowerHint}`
   }
   if (timestamp != null && (source === 'stored' || source === 'wasm')) {
-    return `Resyncs all accounts from ${formatBirthdayDisplay(height, timestamp)}; ${lowerHint}`
+    return `Block mined in ${formatBirthdayDisplay(height, timestamp)}. ${lowerHint}`
   }
-  return `Resyncs all accounts from this height; ${lowerHint}`
+  return `The block height to start syncing from. ${lowerHint}`
 }

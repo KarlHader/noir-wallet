@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../components/ui/button'
+import { Skeleton } from '../components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -69,8 +70,23 @@ export function UpdatePage() {
   return (
     <div className="page-container bg-background">
       {isLoading ? (
-        <div className="flex h-full items-center justify-center">
-          <Icon icon="lucide:loader-2" width={24} className="animate-spin text-primary" />
+        <div
+          role="status"
+          aria-label="Loading update information"
+          className="flex h-full items-center justify-center px-5"
+        >
+          <div className="w-full max-w-[335px] space-y-4 rounded-2xl border border-border bg-card p-5">
+            <div className="flex flex-col items-center gap-3">
+              <Skeleton className="size-10 rounded-full" />
+              <Skeleton className="h-5 w-36" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-12 rounded-lg" />
+            <div className="grid grid-cols-2 gap-2">
+              <Skeleton className="h-10 rounded-lg" />
+              <Skeleton className="h-10 rounded-lg" />
+            </div>
+          </div>
         </div>
       ) : (
         <Dialog open>
@@ -91,7 +107,7 @@ export function UpdatePage() {
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted">
+                <div className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-warning">
                   <Icon icon="lucide:info" width={14} className="mt-0.5 shrink-0 text-warning" />
                   <p>Finish any transaction before restarting.</p>
                 </div>

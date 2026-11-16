@@ -2,8 +2,7 @@ node_modules
 dist
 build
 .git
-/packages/extension/tests/.local/
-/packages/extension/src/lib/wasm-pkg/
-/output/
 pnpm-lock.yaml
 *.log
+packages/extension/src/infrastructure/generated/wasm/
+packages/extension/src/lib/wasm-pkg/

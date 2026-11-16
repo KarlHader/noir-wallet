@@ -1,4 +1,4 @@
-import { accountManager } from '../core/wallet/account-manager'
+import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { syncScheduler } from './sync-scheduler'
 import { syncJobStore } from '@/lib/sync-job-store'
 import { logger } from '@/lib/logger'
@@ -20,23 +20,20 @@ export function isForegroundWallet(walletId: string): boolean {
   return fg === walletId
 }
 
-// Records an 'interrupted' sync job so the next foreground sync reloads the
-// wallet from the persisted DB (reloadPersistedWalletIfInterrupted) and
-// catches up with the missed on-chain tx. Intentionally does NOT mark the
-// wallet dirty: an idle wallet's in-memory state is consistent (just behind
-// the chain tip), and marking it dirty would fail every read until the next
-// sync runs.
+// Persist the catch-up request before scheduling work so a service-worker
+// restart can still resume it from the wallet snapshot.
 export async function markWalletNeedsCatchUp(walletId: string, accountId?: string): Promise<void> {
-  const network = accountManager.getNetwork()
+  const network = backgroundZcashWalletRuntime.getNetwork()
   const wallet = useWalletStore.getState().getWallet(walletId)
   const resolvedAccountId =
     accountId || wallet?.accounts[0]?.id || useWalletStore.getState().currentAccountId
 
-  const scannedHeight = accountManager.getWalletScannedHeight(walletId)
+  const scannedHeight = backgroundZcashWalletRuntime.getWalletScannedHeight(walletId)
 
   await syncJobStore.upsert(walletId, network, {
     accountId: resolvedAccountId || '',
     status: 'interrupted',
+    resumeOnStartup: true,
     ...(scannedHeight > 0 ? { lastPersistedHeight: scannedHeight } : {})
   })
 
@@ -49,38 +46,26 @@ export async function markWalletNeedsCatchUp(walletId: string, accountId?: strin
 
 /** Refreshes the pending balance produced by WASM without forcing chain settlement. */
 export async function refreshAfterOnChainBroadcast(walletId: string): Promise<void> {
-  await accountManager.refreshBalances(walletId, true)
+  await backgroundZcashWalletRuntime.refreshBalances(walletId, true)
 }
 
 export async function catchUpAfterOnChainTx(walletId: string, accountId: string): Promise<boolean> {
+  await markWalletNeedsCatchUp(walletId, accountId)
   const status = await syncScheduler.runTransactionCatchUp(walletId, accountId)
-
-  if (status === 'skipped' || status === 'failed' || status === 'partial') {
+  if (status !== 'completed') {
     logger.warn(`Tx catch-up sync ${status}, scheduling retry`, walletId, accountId)
     await markWalletNeedsCatchUp(walletId, accountId)
-    accountManager.requestSync('transaction')
+    backgroundZcashWalletRuntime.requestSync()
   }
 
-  await accountManager.refreshBalances(walletId, true)
-  await accountManager.refreshTransactionHistoryFromWasm(walletId, accountId).catch(() => {})
+  await backgroundZcashWalletRuntime.refreshBalances(walletId, true)
+  await backgroundZcashWalletRuntime
+    .refreshTransactionHistoryFromWasm(walletId, accountId)
+    .catch(() => {})
   return status === 'completed'
 }
 
 export async function finalizeTxCatchUp(accountKey: string): Promise<boolean> {
-  const parsed = parseAccountKey(accountKey)
-  if (!parsed) return false
-
-  const { walletId, accountId } = parsed
-
-  // Persist recovery before starting foreground work. The service worker may
-  // be suspended while the immediate catch-up is still in flight.
-  await markWalletNeedsCatchUp(walletId, accountId)
-
-  return runScheduledTxCatchUp(accountKey)
-}
-
-/** Runs an already-persisted catch-up immediately when its wallet is foreground. */
-export async function runScheduledTxCatchUp(accountKey: string): Promise<boolean> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return false
 
@@ -93,10 +78,11 @@ export async function runScheduledTxCatchUp(accountKey: string): Promise<boolean
       logger.warn('Foreground catch-up after tx confirm failed', walletId, accountId)
       console.error('[TxSync] catch-up failed:', err)
       await markWalletNeedsCatchUp(walletId, accountId)
-      accountManager.requestSync('transaction')
+      backgroundZcashWalletRuntime.requestSync()
     }
     return false
   }
 
+  await markWalletNeedsCatchUp(walletId, accountId)
   return false
 }

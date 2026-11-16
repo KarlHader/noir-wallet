@@ -5,99 +5,58 @@ export const SPENDABILITY_REPAIR_STARTED_MESSAGE =
 export const SPENDABILITY_RESTART_REQUIRED_MESSAGE =
   'Wallet balance metadata is still unavailable. Restart the extension and try again.'
 
-interface SpendabilityRecoveryOptions<T> {
+export async function runWithSpendabilityRecovery<T>(options: {
   operation: () => Promise<T>
   isMetadataError: (error: unknown) => boolean
   isSyncing: () => Promise<boolean>
   waitForSyncIdle: () => Promise<boolean>
   recover: () => Promise<void>
-  onSyncRace?: () => void
+}): Promise<T> {
+  let stableFailures = 0
+  const startedDuringSync = await options.isSyncing()
+  try {
+    return await options.operation()
+  } catch (error) {
+    if (!options.isMetadataError(error)) throw error
+    stableFailures = startedDuringSync || (await options.isSyncing()) ? 0 : 1
+  }
+
+  for (let retry = 0; retry < 4 && stableFailures < 2; retry++) {
+    if (await options.isSyncing()) {
+      stableFailures = 0
+      if (!(await options.waitForSyncIdle())) {
+        throw new Error(SPENDABILITY_SYNC_IN_PROGRESS_MESSAGE)
+      }
+    }
+    try {
+      return await options.operation()
+    } catch (error) {
+      if (!options.isMetadataError(error)) throw error
+      stableFailures = (await options.isSyncing()) ? 0 : stableFailures + 1
+    }
+  }
+  if (stableFailures < 2) throw new Error(SPENDABILITY_SYNC_IN_PROGRESS_MESSAGE)
+  await options.recover()
+  throw new Error(SPENDABILITY_REPAIR_STARTED_MESSAGE)
 }
 
-interface SpendabilitySnapshotRefreshOptions {
+export async function runSpendabilitySnapshotRefresh(options: {
   hasAttempted: () => boolean
   hasPersistedSnapshot: () => Promise<boolean>
   markAttempted: () => void
   clearAttempt: () => void
   reloadPersistedSnapshot: () => Promise<void>
   startCatchUpSync: () => void | Promise<void>
-}
-
-/**
- * Reloads the last durable wallet snapshot once without deleting scan state.
- * An unresolved metadata failure asks for a runtime restart without assuming scan corruption.
- */
-export async function runSpendabilitySnapshotRefresh({
-  hasAttempted,
-  hasPersistedSnapshot,
-  markAttempted,
-  clearAttempt,
-  reloadPersistedSnapshot,
-  startCatchUpSync
-}: SpendabilitySnapshotRefreshOptions): Promise<void> {
-  if (hasAttempted() || !(await hasPersistedSnapshot())) {
+}): Promise<void> {
+  if (options.hasAttempted() || !(await options.hasPersistedSnapshot())) {
     throw new Error(SPENDABILITY_RESTART_REQUIRED_MESSAGE)
   }
-
-  markAttempted()
+  options.markAttempted()
   try {
-    await reloadPersistedSnapshot()
-    await startCatchUpSync()
+    await options.reloadPersistedSnapshot()
+    await options.startCatchUpSync()
   } catch (error) {
-    clearAttempt()
+    options.clearAttempt()
     throw error
   }
-}
-
-/**
- * Retries metadata-sensitive work without treating an active sync as corruption.
- * Only two consecutive failures observed while idle are strong enough to refresh
- * the wallet runtime; failures observed during sync are discarded as transient evidence.
- */
-export async function runWithSpendabilityRecovery<T>({
-  operation,
-  isMetadataError,
-  isSyncing,
-  waitForSyncIdle,
-  recover,
-  onSyncRace
-}: SpendabilityRecoveryOptions<T>): Promise<T> {
-  let stableFailures = 0
-  const startedDuringSync = await isSyncing()
-
-  try {
-    return await operation()
-  } catch (error) {
-    if (!isMetadataError(error)) throw error
-    stableFailures = startedDuringSync || (await isSyncing()) ? 0 : 1
-  }
-
-  // Bound retries so repeated sync restarts cannot leave an estimate pending forever.
-  for (let retry = 0; retry < 4 && stableFailures < 2; retry++) {
-    if (await isSyncing()) {
-      stableFailures = 0
-      onSyncRace?.()
-      if (!(await waitForSyncIdle())) {
-        throw new Error(SPENDABILITY_SYNC_IN_PROGRESS_MESSAGE)
-      }
-    }
-
-    try {
-      return await operation()
-    } catch (error) {
-      if (!isMetadataError(error)) throw error
-      if (await isSyncing()) {
-        stableFailures = 0
-      } else {
-        stableFailures += 1
-      }
-    }
-  }
-
-  if (stableFailures < 2) {
-    throw new Error(SPENDABILITY_SYNC_IN_PROGRESS_MESSAGE)
-  }
-
-  await recover()
-  throw new Error(SPENDABILITY_REPAIR_STARTED_MESSAGE)
 }

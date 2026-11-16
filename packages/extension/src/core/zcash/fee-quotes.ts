@@ -1,11 +1,11 @@
-import { DedupPromise } from '../../lib/async-utils'
+import { DedupPromise } from '../../lib/async-utils.ts'
 import {
   FEE_QUOTE_TTL_MS,
   MARGINAL_FEE_ZATS,
   isValidMarginalFeeZats,
-  marginalFeeForTier,
   type FeeQuote
-} from '../../config/fee'
+} from '../../config/fee.ts'
+import { marginalFeeForTier } from './fee-policy.ts'
 
 export interface FeeQuoteContext {
   walletId: string
@@ -23,16 +23,18 @@ function contextKey(context: FeeQuoteContext): string {
   return JSON.stringify([context.network, context.walletId, context.accountId, context.rpcUrl])
 }
 
-/** Keeps approved rates in the worker so extension messages cannot invent a fee. */
+/** Keep approved rates in the worker so extension messages cannot invent a fee. */
 export class FeeQuoteRegistry {
   private readonly entries = new Map<string, QuoteEntry>()
   private readonly pending = new Map<string, DedupPromise<FeeQuote>>()
   private readonly generations = new Map<string, number>()
+  private readonly now: () => number
+  private readonly createId: () => string
 
-  constructor(
-    private readonly now: () => number = Date.now,
-    private readonly createId: () => string = () => crypto.randomUUID()
-  ) {}
+  constructor(now: () => number = Date.now, createId: () => string = () => crypto.randomUUID()) {
+    this.now = now
+    this.createId = createId
+  }
 
   async get(context: FeeQuoteContext, recommend: () => Promise<number>): Promise<FeeQuote> {
     for (const [id, entry] of this.entries) {
@@ -58,7 +60,7 @@ export class FeeQuoteRegistry {
           const recommended = await recommend()
           if (isValidMarginalFeeZats(recommended)) standardMarginalFeeZats = recommended
         } catch {
-          // Old lightwalletd servers do not implement GetStandardFee.
+          // Older lightwalletd servers may not implement GetStandardFee.
         }
         if ((this.generations.get(context.walletId) ?? 0) !== generation) {
           throw new Error('Wallet changed. Review the network fee again.')

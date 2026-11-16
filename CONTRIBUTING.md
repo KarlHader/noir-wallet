@@ -1,20 +1,18 @@
 # Contributing
 
-This repository contains the Noir Wallet extension, SDK, website, documentation, and supporting packages. Contribute SDK changes here; its [package guide](./packages/sdk/CONTRIBUTING.md) lists the focused checks. The Rust/WASM source is maintained separately; this repository tracks its built package and [lock file](./wasm-package.lock.json).
+This repository contains the Noir Wallet extension, SDK and example, website, documentation, and supporting packages. Contribute SDK changes in `packages/sdk/` through this repository. The Rust/WASM source is maintained separately; this repository tracks built packages and their integrity files.
 
-Start with the [README quick start](./README.md#quick-start). Keep changes scoped, and include a short description of the behavior changed and the checks you ran when opening a pull request. Apply the [documentation scope](./AGENTS.md#documentation-governance) before editing guidance; code changes alone do not require documentation changes.
+Start with the [README quick start](./README.md#quick-start). Keep changes scoped, describe the behavior changed in your pull request, and report the checks you ran. Apply the [documentation scope](./AGENTS.md#documentation-governance) before editing guidance; code changes alone do not require documentation changes.
 
-Do not include real user or production recovery phrases, private keys, passwords, wallet exports, or sensitive transaction data in issues, pull requests, test fixtures, or logs. Use published test vectors or synthetic values in fixtures. Report a security vulnerability through the private channel in [SECURITY.md](./SECURITY.md).
+Use synthetic data or published test vectors. Do not put real recovery phrases, private keys, passwords, wallet exports, or sensitive transaction data in issues, pull requests, fixtures, or logs. Report vulnerabilities through the private channel in [SECURITY.md](./SECURITY.md).
 
 ## Licensing
 
 Wallet contributions are provided under the [root license](./LICENSE), including its scheduled Apache License 2.0 grant. Contributions under `packages/sdk/` remain under the SDK's [MIT license](./packages/sdk/LICENSE). Preserve notices and licenses for third-party material.
 
-## Development and Verification
+## Development Practice
 
-Use the workspace's existing package manager and scripts; the [README](./README.md#quick-start) has installation, test, type-check, and build commands. Keep TypeScript strict, validate runtime data at boundaries, handle async cleanup and failures, and prefer existing utilities over new dependencies. Code comments and public API JSDoc are in English and explain why a non-obvious choice exists.
-
-Match checks to the change. Choose checks independently of whether new cases are needed; required CI, browser, security, and compatibility verification still apply. Run focused regression tests while iterating, `pnpm test` for core behavior or public contracts, extension type-check and production build for extension changes, and broader workspace checks for shared or public SDK changes. Confirm production builds contain no test harness. For documentation-only changes, check formatting, links, and consistency with implementation sources; a full build is unnecessary unless the changed guidance requires it. Report commands that actually completed and any remaining unverified behavior.
+Read the affected code, configuration, tests, and Git state before editing. Use existing modules and conventions, keep TypeScript strict, validate external input, and handle rejection, cancellation, and resource cleanup. Prefer a focused fix over a new dependency or parallel implementation. Public comments and API documentation use English.
 
 Add maintained tests only when a core business invariant or critical public contract has a realistic failure risk affecting business correctness, authorization, funds safety, or persisted-data integrity, and existing tests do not cover it. Before adding a case, identify the rule, failure, and coverage gap. A bug fix, a file's location, or a coverage target alone does not justify a new case. Copy, styling, layout, ordinary display, and wiring need no new tests when core behavior is unchanged; approval, signing, and recipient or amount confirmation remain in scope when they affect safety.
 
@@ -22,20 +20,39 @@ Read the owning suites' input conditions, assertions, and fixtures first. Reuse 
 
 Choose the lowest-cost deterministic layer that exercises the failing boundary: unit tests for isolated logic, integration tests for module or persistence interactions, and real-extension checks for browser, MV3, popup, window, or dApp boundaries that lower layers cannot exercise. Before adding integration or E2E coverage, explain the additional boundary it proves; do not duplicate a unit test's full input matrix across layers.
 
-Committed core tests use `node:test` and `node:assert/strict`, with one flat `tests/` directory and `test` script per package. Do not add tests that mirror constants or UI markup. Standard tests must not need a browser, network, credentials, hardware, or real transactions. Root `pnpm test` aggregates package suites; the independent WASM repository is outside it.
+Group wallet tests by execution environment and domain under `packages/extension/tests/`:
 
-For popup, storage, and MV3 lifecycle changes, verify the real isolated extension locally. Keep local browser tooling under ignored `packages/extension/tests/.local/`, extension builds in `output/extension/`, and screenshots, traces, logs, and disposable runs under ignored `output/` (use `output/browser/runs/` for disposable runs). Do not add Playwright or local UI tooling to workspace dependencies, standard tests, or CI; do not overwrite production artifacts. Browser, hardware, and transaction checks are separate from the core suite; do not imply one covers the others.
+- `core/<domain>/**/*.test.mjs` (or `.test.ts`): offline tests using Node's test runner. These may use the existing `expect` assertion library, but require no browser, external services, hardware, or funded credentials.
+- `extension/`: non-UI checks for real MV3 permissions, storage, migration, Workers, and package installation. UI acceptance suites and their dedicated helpers/configuration stay local and ignored by Git; do not commit them.
+- `live/`: external-service and funded integration checks, gated by explicit opt-in flags. Keep them outside the default test command.
+- `helpers/` and `fixtures/`: shared setup and immutable compatibility data; neither directory is discovered as a test suite.
+- `.local/`: ignored, temporary investigations. Keep reusable coverage in its owning suite instead of accumulating per-defect scripts as maintained tests.
+
+Share repeated setup without merging unrelated behavior into large catch-all files. Do not add tests that only mirror implementation wiring. Keep SDK and service tests in their owning packages; do not add a second runner for wallet logic or new testing dependencies.
+
+## Verification
+
+Run checks that match the change and report both results and omissions. Choose checks independently of whether new cases are needed; required CI, browser, security, and compatibility verification still apply. Documentation-only work needs formatting, link, and source consistency checks, not a full build. Root `pnpm test` recursively discovers wallet core behavior tests; SDK tests run separately. Use `pnpm test --list` to audit discovery, and pass Node test options such as `--test-name-pattern` for focused checks. When moving or consolidating suites, reconcile discovered files and behavior cases before and after the change. For extension behavior, run focused regressions, then core tests, extension type checking, and a default build. Verify that a distributable build excludes test harnesses. For browser, storage, service-worker, or WASM behavior, check the actual isolated MV3 extension; do not treat a mocked page as wallet acceptance.
+
+The wallet uses one test entry point from either the repository root or extension package:
+
+```bash
+pnpm test                            # Offline core tests
+pnpm test e2e extension              # Build and run MV3 safety checks
+pnpm test live                       # Opt-in service checks only
+pnpm test rc                         # Core, MV3 safety checks, and build verification
+```
+
+`pnpm test --help` lists projects. Add `--dry-run` to inspect commands, or `--skip-build` to reuse a matching build for `e2e`/`live`; other options are forwarded to Node or Playwright. The runner supplies each project's network, feature flags, and build prerequisites. `development-extension` uses an already running `pnpm dev:extension`. Live projects retain their existing opt-in requirements; selecting `live` alone never selects funded flows. `production-dist` and RC production build checks use test configuration and write local distributable output that must not be published.
+
+Keep browser test builds in `packages/extension/e2e-dist/` and screenshots, traces, and logs in ignored root `e2e-output/`, separate from release packages. Use existing opt-in flags for live-service tests and hardware checks; send real transactions only in user-authorized scenarios. Report checks blocked by missing hardware or credentials. Reusable fixtures follow the [test-wallet registry](./docs/mutil-chain/operations/test-wallet-registry.md); never print or commit funded credentials.
 
 ## Pull Request Targets
 
-Target `main` for V1 maintenance and `v2` for V2 development. Use the `v2` version label only for PRs targeting `v2`; V1 PRs have no version label. Manual Beta or candidate preparation maintains this label for open PRs whose HEAD matches the selected source commit, adding it for `v2` targets and removing it for other targets. Set or adjust it manually at PR creation or retargeting when immediate triage is needed. Other labels such as `bug`, `enhancement`, and `documentation` are unaffected.
+Target `main` for V2 development. `v1` is a frozen archive; do not target it for new releases. Temporary `release/**` branches hold reviewed production candidates. Use English Conventional Commit titles and describe the behavior and verification relevant to the change.
 
-When a fix is needed in both versions, open one pull request from each target branch and link them to each other. Use English Conventional Commit titles and describe the behavior and verification relevant to that version.
+Pull requests changing extension code, tests, WASM, or related build inputs run **Extension CI**. Its development ZIP is not a release candidate; see [V2 preview downloads](./docs/release-workflow.md#routine-previews) for the current process.
 
-## Review and Acceptance
+For SDK changes, follow the [SDK contribution checks](./packages/sdk/CONTRIBUTING.md). Root `pnpm test` covers the wallet core suite separately.
 
-Contributors own verification; new regression cases follow the scope in [Development and Verification](#development-and-verification). Pull requests changing extension code, tests, WASM, or related build inputs automatically run **Extension CI** with core tests, type checking, and ZIP builds in one job. No preview label is required. V1 builds separate network ZIPs; V2 produces one development ZIP. V2 previews from this repository include the configured Swap access token; fork previews receive no repository secrets and cannot use Swap. New commits cancel older runs for the same PR. Download the latest package from the PR comment or Actions; see [preview downloads and retention](./docs/release-workflow.md#pr-previews-and-beta-builds). Changes limited to Markdown documentation or SDK source run their relevant workflows. Maintainers review the change and verify affected wallet flows before merging; hardware changes require verification by someone with the device.
-
-Release owners review the selected source and verify production candidate ZIPs before manually promoting that exact build. When enabled, Chrome Web Store automation signs the accepted production ZIP for staged review; release owners publish it manually after approval. Follow the [release runbook](./docs/release-workflow.md); CI success alone does not establish browser, hardware, or real-transaction acceptance.
-
-Before changing release CI, inspect the affected workflows under `.github/workflows/`, `scripts/extension-release*.mjs`, and preview reporting code; the runbook is guidance, not a substitute for the current implementation.
+Maintainers review pull requests and verify affected wallet flows before merging. Browser, hardware, and real transaction checks require the relevant environment or device; report any checks that could not be run.

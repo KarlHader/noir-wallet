@@ -1,28 +1,29 @@
 import { wordlist } from '@scure/bip39/wordlists/english'
 
+const MAX_DEPTH = 4
+const recoveryWords = new Set(wordlist)
+const nativeStackGetter = Object.getOwnPropertyDescriptor(new Error(), 'stack')?.get
+const nativeDomExceptionGetters = new Map(
+  ['name', 'message', 'code'].map(key => [
+    key,
+    typeof DOMException === 'undefined'
+      ? undefined
+      : Object.getOwnPropertyDescriptor(DOMException.prototype, key)?.get
+  ])
+)
+
 export const DIAGNOSTIC_LOG_MAX_ENTRIES = 500
 export const DIAGNOSTIC_LOG_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const DIAGNOSTIC_LOG_MAX_ENTRY_BYTES = 2 * 1024
 export const DIAGNOSTIC_LOG_MAX_TOTAL_BYTES = 512 * 1024
 
-const MAX_DEPTH = 4
-const MAX_OBJECT_FIELDS = 30
-const MAX_ARRAY_ITEMS = 50
-const textEncoder = new TextEncoder()
-const recoveryWords = new Set(wordlist)
-const nativeStackGetter = Object.getOwnPropertyDescriptor(new Error(), 'stack')?.get
-
-export function getDiagnosticRpcMethod(method: unknown): string {
-  return typeof method === 'string' &&
-    method.length <= 80 &&
-    /^[a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*$/.test(method)
-    ? method
-    : '[invalid RPC method]'
+export function isDiagnosticContextId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|context-\d+)$/.test(value)
+  )
 }
 
-// Error objects may carry full HTTP requests or wallet payloads. Preserve the
-// diagnostic fields, including non-enumerable native Error fields, without
-// invoking custom accessors or copying those payloads across extension contexts.
 export function getDiagnosticErrorDetails(error: unknown): unknown {
   return projectError(error, new WeakSet(), 0)
 }
@@ -42,15 +43,19 @@ function projectError(error: unknown, seen: WeakSet<object>, depth: number): unk
     const fields: Record<string, unknown> = {}
     for (const key of [
       'name',
+      '_tag',
       'message',
       'code',
+      'errorCode',
       'status',
       'statusCode',
       'type',
       'retryable',
       'details',
       'stack',
-      'cause'
+      'cause',
+      'originalError',
+      'err'
     ]) {
       let owner: object | null = error
       let descriptor: PropertyDescriptor | undefined
@@ -72,11 +77,20 @@ function projectError(error: unknown, seen: WeakSet<object>, depth: number): unk
         // V8 exposes its lazy native stack through a shared accessor. Custom
         // accessors stay excluded, just like other error payload properties.
         value = nativeStackGetter.call(error)
+      } else if (
+        typeof DOMException !== 'undefined' &&
+        error instanceof DOMException &&
+        descriptor.get &&
+        descriptor.get === nativeDomExceptionGetters.get(key)
+      ) {
+        // Browser transport failures use native prototype accessors. Only call
+        // the captured intrinsic; user-defined getters remain excluded.
+        value = descriptor.get.call(error)
       } else {
         continue
       }
-      if (key === 'cause') {
-        fields.cause = projectError(value, seen, depth + 1)
+      if (key === 'cause' || key === 'originalError' || key === 'err') {
+        fields[key] = projectError(value, seen, depth + 1)
       } else if (
         typeof value === 'string' ||
         typeof value === 'number' ||
@@ -124,15 +138,15 @@ function redactRecoveryPhrases(value: string): string {
 }
 
 export type DiagnosticLogLevel = 'debug' | 'info' | 'warn' | 'error'
-export type DiagnosticLogSource = 'background' | 'popup' | 'offscreen' | 'worker' | 'content-script'
+export type DiagnosticLogSource = 'background' | 'popup' | 'offscreen' | 'worker'
 
 export interface DiagnosticLogDraft {
   source: DiagnosticLogSource
   level: DiagnosticLogLevel
   message: string
   timestamp: number
-  contextId: string
   sequence: number
+  contextId?: string
 }
 
 export interface DiagnosticLogEntry extends DiagnosticLogDraft {
@@ -140,317 +154,127 @@ export interface DiagnosticLogEntry extends DiagnosticLogDraft {
   byteSize: number
 }
 
-const SECRET_KEY_PARTS = [
-  'mnemonic',
-  'seedphrase',
-  'seedwords',
-  'password',
-  'passphrase',
-  'privatekey',
-  'spendingkey',
-  'viewingkey',
-  'ufvk',
-  'secret',
-  'credential',
-  'keymaterial',
-  'sessionpassword',
-  'signature',
-  'memo',
-  'ciphertext',
-  'authorization',
-  'authtoken',
-  'accesstoken',
-  'refreshtoken'
-]
+const encoder = new TextEncoder()
+const SECRET_KEY =
+  /mnemonic|seed|password|passphrase|private.?key|spending.?key|viewing.?key|ufvk|ciphertext|key.?material|secret|credential|signature|memo|token|auth/i
+const PRIVATE_KEY = /amount|balance|value|fee|price|usd/i
+const IDENTIFIER_KEY =
+  /address|wallet.?id|account.?id|transaction.?id|tx.?hash|txid|request.?id|origin|domain|hostname|endpoint/i
 
-const PRIVATE_VALUE_KEY_PARTS = ['amount', 'balance', 'valuezat', 'usdvalue', 'usdamount']
-const IDENTIFIER_KEY_PARTS = [
-  'address',
-  'walletid',
-  'accountid',
-  'transactionid',
-  'txhash',
-  'txid',
-  'requestid',
-  'depositaddress'
-]
-const PRIVATE_LOCATION_KEY_PARTS = ['origin', 'domain', 'hostname', 'url', 'endpoint']
-
-function normalizeKey(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9]/g, '')
+function utf8Length(value: string): number {
+  return encoder.encode(value).byteLength
 }
 
-function keyContains(key: string | undefined, candidates: string[]): boolean {
-  if (!key) return false
-  const normalized = normalizeKey(key)
-  return candidates.some(candidate => normalized.includes(candidate))
-}
-
-function isSecretKey(key?: string): boolean {
-  return keyContains(key, SECRET_KEY_PARTS)
-}
-
-function isPrivateValueKey(key?: string): boolean {
-  if (!key) return false
-  const normalized = normalizeKey(key)
-  return (
-    PRIVATE_VALUE_KEY_PARTS.some(candidate => normalized.includes(candidate)) ||
-    normalized === 'fee' ||
-    normalized.endsWith('fee') ||
-    normalized === 'price'
-  )
-}
-
-function isIdentifierKey(key?: string): boolean {
-  return keyContains(key, IDENTIFIER_KEY_PARTS)
-}
-
-function isPrivateLocationKey(key?: string): boolean {
-  return keyContains(key, PRIVATE_LOCATION_KEY_PARTS)
-}
-
-function getObjectTag(value: object): string {
-  try {
-    return Object.prototype.toString.call(value).slice(8, -1)
-  } catch {
-    return 'Object'
-  }
-}
-
-function byteLength(value: string): number {
-  return textEncoder.encode(value).byteLength
-}
-
-export function truncateUtf8(value: string, maxBytes: number): string {
-  if (byteLength(value) <= maxBytes) return value
-
+export function truncateDiagnosticText(value: string, maxBytes: number): string {
+  if (utf8Length(value) <= maxBytes) return value
   const suffix = '...[Truncated]'
-  const suffixBytes = byteLength(suffix)
-  const bytes = textEncoder.encode(value)
-  const limit = Math.max(0, maxBytes - suffixBytes)
-  const decoder = new TextDecoder('utf-8', { fatal: false })
-  let end = Math.min(bytes.length, limit)
-  let truncated = decoder.decode(bytes.slice(0, end))
-
-  while (byteLength(truncated) > limit && end > 0) {
+  const bytes = encoder.encode(value)
+  let end = Math.max(0, maxBytes - utf8Length(suffix))
+  let prefix = new TextDecoder().decode(bytes.slice(0, end))
+  while (utf8Length(prefix) > maxBytes - utf8Length(suffix)) {
     end -= 1
-    truncated = decoder.decode(bytes.slice(0, end))
+    prefix = new TextDecoder().decode(bytes.slice(0, end))
   }
-
-  return `${truncated}${suffix}`
+  return `${prefix}${suffix}`
 }
 
-async function fingerprint(kind: string, value: string, salt: string): Promise<string> {
-  try {
-    const digest = await crypto.subtle.digest('SHA-256', textEncoder.encode(`${salt}:${value}`))
-    const shortHash = Array.from(new Uint8Array(digest).slice(0, 4), byte =>
-      byte.toString(16).padStart(2, '0')
-    ).join('')
-    return `[${kind}:${shortHash}]`
-  } catch {
-    return `[${kind}:redacted]`
-  }
+function redactText(input: string): string {
+  input = redactRecoveryPhrases(input)
+  const redacted = input
+    .replace(
+      /["']?\b(seed(?:\s*phrase)?|mnemonic)\b["']?\s*[:=]\s*["']?((?:[a-z]{2,}\s+){11,23}[a-z]{2,})["']?/gi,
+      '$1=[Recovery phrase redacted]'
+    )
+    .replace(
+      /["']?\b(seed(?:\s*phrase)?|mnemonic|password|passphrase|private[\s_-]*key|spending[\s_-]*key|viewing[\s_-]*key|ufvk|ciphertext|key[\s_-]*material|credential|signature|memo|auth(?:orization)?[\s_-]*token|access[\s_-]*token|refresh[\s_-]*token)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/gi,
+      '$1=[Redacted]'
+    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [Redacted]')
+    .replace(/\buview1[a-z0-9]+\b/gi, '[Viewing key redacted]')
+    .replace(
+      /["']?\b(amount|balance|fee|price|value|usd(?:\s*value)?|transparent|shielded|sapling|orchard|ironwood|unshielded|spendable|available|pending|total)(?:\s+balance)?\b["']?\s*[:=]\s*["']?-?\d+(?:\.\d+)?/gi,
+      '$1=[Redacted]'
+    )
+    .replace(
+      /["']?\b(address|walletId|accountId|transactionId|txHash|txid|requestId|origin|domain|hostname|endpoint)\b["']?\s*[:=]\s*(?:\[Redacted identifier\]|"[^"]*"|'[^']*'|[^\s,;)}\]]+)/gi,
+      '$1=[Redacted identifier]'
+    )
+    .replace(/-?\d+(?:\.\d+)?\s*(?:ZEC|zatoshis?|USD)\b/gi, '[Redacted amount]')
+    .replace(/\b(?:https?|wss?):\/\/[^\s)\]}>,]+/gi, '[URL]')
+    .replace(
+      /\b(?:u1|utest1|zs1|ztestsapling1|t1|t2|t3|tm)[a-zA-Z0-9]{28,}\b/g,
+      '[Redacted address]'
+    )
+    .replace(/\b(?:bc1|tb1|bcrt1)[a-z0-9]{25,90}\b/gi, '[Redacted address]')
+    .replace(/\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b/g, '[Redacted address]')
+    .replace(/\b0x[0-9a-fA-F]{40,}\b/g, '[Redacted identifier]')
+    .replace(/\b[a-z0-9_-]{2,64}\.(?:near|testnet)\b/gi, '[Redacted address]')
+    .replace(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g, '[Redacted address]')
+    .replace(/\b[0-9a-fA-F]{64}\b/g, '[Redacted identifier]')
+    .replace(
+      /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
+      '[Redacted identifier]'
+    )
+  return /^(?:[a-z]{2,}\s+){11,23}[a-z]{2,}$/i.test(redacted.trim())
+    ? '[Recovery phrase redacted]'
+    : redacted
 }
 
-async function replaceAsync(
-  value: string,
-  pattern: RegExp,
-  replacer: (match: string) => Promise<string>
-): Promise<string> {
-  const matches = [...value.matchAll(pattern)]
-  if (matches.length === 0) return value
-
-  let result = ''
-  let cursor = 0
-  for (const match of matches) {
-    const index = match.index ?? 0
-    result += value.slice(cursor, index)
-    result += await replacer(match[0])
-    cursor = index + match[0].length
-  }
-  return result + value.slice(cursor)
-}
-
-export function redactSensitiveText(value: string): string {
-  let sanitized = redactRecoveryPhrases(value)
-
-  sanitized = sanitized.replace(
-    /["']?\b(seed(?:\s*(?:phrase|words))?|recovery\s*phrase|mnemonic|password|passphrase|private\s*key|spending\s*key|viewing\s*key|session\s*key|key\s*material|secret|credential|signature|memo|auth(?:orization)?(?:\s*token)?|access\s*token|refresh\s*token)["']?\s*[:=]\s*(?:\[(?:Redacted|Recovery phrase redacted)\]|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n,;)}\]]+)/gi,
-    '$1=[Redacted]'
-  )
-  return sanitized
-}
-
-export async function sanitizeDiagnosticText(value: string, salt: string): Promise<string> {
-  let sanitized = redactSensitiveText(value)
-
-  sanitized = sanitized.replace(
-    /\b(amount|balance|fee|value|usd(?:\s*value)?|transparent|shielded|sapling|orchard|ironwood|unshielded|spendable|available|pending|total)(?:\s+balance)?\s*[:=]\s*-?\d+(?:\.\d+)?/gi,
-    '$1=[Redacted]'
-  )
-  sanitized = sanitized.replace(/-?\d+(?:\.\d+)?\s*(?:ZEC|zatoshis?|USD)\b/gi, '[Redacted amount]')
-  sanitized = sanitized.replace(/\b(?:https?|wss?):\/\/[^\s)\]}>,]+/gi, '[URL]')
-
-  sanitized = await replaceAsync(
-    sanitized,
-    /\b(?:u1|utest1|zs1|ztestsapling1|t1|t2|t3|tm)[a-zA-Z0-9]{28,}\b/g,
-    match => fingerprint('address', match, salt)
-  )
-  sanitized = await replaceAsync(sanitized, /\b[0-9a-fA-F]{64}\b/g, match =>
-    fingerprint('tx', match.toLowerCase(), salt)
-  )
-  sanitized = await replaceAsync(
-    sanitized,
-    /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b/g,
-    match => fingerprint('id', match.toLowerCase(), salt)
-  )
-
-  return sanitized
-}
-
-async function serializeValue(
-  value: unknown,
-  salt: string,
-  seen: WeakSet<object>,
-  depth: number,
-  key?: string
-): Promise<unknown> {
-  if (isSecretKey(key) || isPrivateValueKey(key)) return '[Redacted]'
-  if (isPrivateLocationKey(key)) return '[Redacted URL]'
-  if (isIdentifierKey(key) && value !== null && value !== undefined) {
-    return fingerprint('id', String(value), salt)
-  }
-
-  if (value === null) return null
-  if (typeof value === 'string') {
-    const sanitized = await sanitizeDiagnosticText(value, salt)
-    return key === 'stack' ? truncateUtf8(sanitized, 512) : sanitized
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return value
-  if (typeof value === 'bigint') return `[BigInt:${value.toString()}]`
-  if (typeof value === 'undefined') return '[Undefined]'
-  if (typeof value === 'symbol') return `[Symbol:${value.description ?? ''}]`
-  if (typeof value === 'function') return `[Function:${value.name || 'anonymous'}]`
-  if (typeof value !== 'object') return String(value)
-
-  if (seen.has(value)) return '[Circular]'
-  if (depth >= MAX_DEPTH) return `[MaxDepth:${getObjectTag(value)}]`
-  seen.add(value)
-
-  try {
-    if (value instanceof Error) {
-      return serializeValue(getDiagnosticErrorDetails(value), salt, seen, depth)
-    }
-
-    if (value instanceof Date) {
-      return Number.isNaN(value.getTime()) ? '[Invalid Date]' : value.toISOString()
-    }
-    if (typeof URL !== 'undefined' && value instanceof URL) return '[Redacted URL]'
-    if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) {
-      return `[ArrayBuffer:${value.byteLength} bytes]`
-    }
-    if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value)) {
-      return `[${getObjectTag(value)}:${value.byteLength} bytes]`
-    }
-    if (typeof Blob !== 'undefined' && value instanceof Blob) {
-      const name = typeof File !== 'undefined' && value instanceof File ? 'File' : 'Blob'
-      return `[${name}:${value.size} bytes${value.type ? `:${value.type}` : ''}]`
-    }
-    if (typeof Event !== 'undefined' && value instanceof Event) {
-      return `[${getObjectTag(value)}:${await sanitizeDiagnosticText(value.type, salt)}]`
-    }
-    if (value instanceof Map) {
-      const entries = [...value.entries()].slice(0, MAX_OBJECT_FIELDS)
-      const serialized = await Promise.all(
-        entries.map(async ([mapKey, mapValue]) => [
-          await serializeValue(mapKey, salt, seen, depth + 1),
-          await serializeValue(mapValue, salt, seen, depth + 1)
-        ])
-      )
-      if (value.size > MAX_OBJECT_FIELDS) serialized.push(['[Truncated]', value.size])
-      return { '[Map]': serialized }
-    }
-    if (value instanceof Set) {
-      const values = [...value.values()].slice(0, MAX_ARRAY_ITEMS)
-      const serialized = await Promise.all(
-        values.map(item => serializeValue(item, salt, seen, depth + 1))
-      )
-      if (value.size > MAX_ARRAY_ITEMS)
-        serialized.push(`[Truncated:${value.size - MAX_ARRAY_ITEMS}]`)
-      return { '[Set]': serialized }
-    }
-    if (Array.isArray(value)) {
-      const serialized = await Promise.all(
-        value.slice(0, MAX_ARRAY_ITEMS).map(item => serializeValue(item, salt, seen, depth + 1))
-      )
-      if (value.length > MAX_ARRAY_ITEMS) {
-        serialized.push(`[Truncated:${value.length - MAX_ARRAY_ITEMS}]`)
-      }
-      return serialized
-    }
-
-    let descriptors: Record<string, PropertyDescriptor>
+function serialize(value: unknown, depth = 0, key = ''): unknown {
+  if (SECRET_KEY.test(key) || PRIVATE_KEY.test(key)) return '[Redacted]'
+  if (IDENTIFIER_KEY.test(key)) return '[Redacted identifier]'
+  if (depth >= 4) return '[MaxDepth]'
+  if (typeof value === 'string') return redactText(value)
+  if (typeof value === 'number') return PRIVATE_KEY.test(key) ? '[Redacted]' : value
+  if (typeof value === 'bigint') return '[Redacted]'
+  if (typeof value === 'boolean' || value === null) return value
+  if (value instanceof Error) return serialize(getDiagnosticErrorDetails(value), depth, key)
+  if (value instanceof Date)
+    return Number.isNaN(value.getTime()) ? '[Invalid Date]' : value.toISOString()
+  if (typeof URL !== 'undefined' && value instanceof URL) return '[Redacted URL]'
+  if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer)
+    return `[ArrayBuffer:${value.byteLength} bytes]`
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value))
+    return `[${Object.prototype.toString.call(value).slice(8, -1)}:${value.byteLength} bytes]`
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return `[Blob:${value.size} bytes]`
+  if (Array.isArray(value)) return value.slice(0, 50).map(item => serialize(item, depth + 1))
+  if (typeof value === 'object' && value !== null) {
+    const result: Record<string, unknown> = {}
+    let descriptors: PropertyDescriptorMap
     try {
       descriptors = Object.getOwnPropertyDescriptors(value)
     } catch {
       return '[Unserializable]'
     }
-
-    const keys = Object.keys(descriptors)
-      .filter(descriptorKey => descriptors[descriptorKey]?.enumerable)
-      .sort()
-      .slice(0, MAX_OBJECT_FIELDS)
-    const serialized: Record<string, unknown> = {}
-    for (const propertyKey of keys) {
-      const descriptor = descriptors[propertyKey]
-      if (!descriptor || !('value' in descriptor)) {
-        serialized[propertyKey] = '[Unserializable]'
-        continue
-      }
-      serialized[propertyKey] = await serializeValue(
-        descriptor.value,
-        salt,
-        seen,
-        depth + 1,
-        propertyKey
-      )
+    for (const property of Object.keys(descriptors).sort().slice(0, 30)) {
+      const descriptor = descriptors[property]
+      if (!descriptor?.enumerable) continue
+      result[property] =
+        'value' in descriptor
+          ? serialize(descriptor.value, depth + 1, property)
+          : '[Unserializable]'
     }
-    const fieldCount = Object.keys(descriptors).filter(
-      descriptorKey => descriptors[descriptorKey]?.enumerable
-    ).length
-    if (fieldCount > MAX_OBJECT_FIELDS) {
-      serialized['[Truncated]'] = `${fieldCount - MAX_OBJECT_FIELDS} fields`
-    }
-    if (keys.length === 0 && getObjectTag(value) !== 'Object') {
-      return `[${getObjectTag(value)}]`
-    }
-    return serialized
-  } catch {
-    return '[Unserializable]'
-  } finally {
-    seen.delete(value)
+    return result
   }
+  return value === undefined ? '[Undefined]' : String(value)
 }
 
-export async function serializeDiagnosticArgs(args: unknown[], salt: string): Promise<string> {
-  const parts: string[] = []
-  for (const arg of args) {
-    const serialized = await serializeValue(arg, salt, new WeakSet(), 0)
-    if (typeof serialized === 'string') {
-      parts.push(serialized)
-      continue
-    }
-    try {
-      parts.push(JSON.stringify(serialized))
-    } catch {
-      parts.push('[Unserializable]')
-    }
-  }
-  return truncateUtf8(parts.join(' '), DIAGNOSTIC_LOG_MAX_ENTRY_BYTES)
+export function serializeDiagnosticArgs(args: unknown[]): string {
+  const message = args
+    .map(value => {
+      const safe = serialize(value)
+      return typeof safe === 'string' ? safe : JSON.stringify(safe)
+    })
+    .join(' ')
+  return truncateDiagnosticText(message, DIAGNOSTIC_LOG_MAX_ENTRY_BYTES)
+}
+
+export function sanitizeDiagnosticMessage(message: string): string {
+  return truncateDiagnosticText(redactText(message), DIAGNOSTIC_LOG_MAX_ENTRY_BYTES)
 }
 
 export function getDiagnosticEntryByteSize(entry: Pick<DiagnosticLogEntry, 'message'>): number {
-  return byteLength(entry.message) + 96
+  return utf8Length(entry.message) + 64
 }
 
 export function retainDiagnosticEntries<T extends DiagnosticLogEntry>(
@@ -459,61 +283,43 @@ export function retainDiagnosticEntries<T extends DiagnosticLogEntry>(
 ): T[] {
   const cutoff = now - DIAGNOSTIC_LOG_MAX_AGE_MS
   const eligible = entries
-    .filter(entry => entry.timestamp >= cutoff && entry.timestamp <= now + 5 * 60 * 1000)
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp
-      if (a.contextId === b.contextId && a.sequence !== b.sequence) return a.sequence - b.sequence
-      return (a.id ?? 0) - (b.id ?? 0)
-    })
-
+    .filter(entry => entry.timestamp >= cutoff && entry.timestamp <= now + 300_000)
+    .sort((left, right) => left.timestamp - right.timestamp || (left.id ?? 0) - (right.id ?? 0))
   const retained: T[] = []
   let totalBytes = 0
   for (let index = eligible.length - 1; index >= 0; index -= 1) {
     const entry = eligible[index]
-    const entryBytes = entry.byteSize || getDiagnosticEntryByteSize(entry)
-    if (retained.length >= DIAGNOSTIC_LOG_MAX_ENTRIES) break
-    if (totalBytes + entryBytes > DIAGNOSTIC_LOG_MAX_TOTAL_BYTES) break
+    const bytes = entry.byteSize || getDiagnosticEntryByteSize(entry)
+    if (
+      retained.length >= DIAGNOSTIC_LOG_MAX_ENTRIES ||
+      totalBytes + bytes > DIAGNOSTIC_LOG_MAX_TOTAL_BYTES
+    )
+      break
     retained.push(entry)
-    totalBytes += entryBytes
+    totalBytes += bytes
   }
   return retained.reverse()
 }
 
-export function isDiagnosticLogLevel(value: unknown): value is DiagnosticLogLevel {
-  return value === 'debug' || value === 'info' || value === 'warn' || value === 'error'
-}
-
-export function isDiagnosticLogSource(value: unknown): value is DiagnosticLogSource {
-  return (
-    value === 'background' ||
-    value === 'popup' ||
-    value === 'offscreen' ||
-    value === 'worker' ||
-    value === 'content-script'
-  )
-}
-
 export function parseDiagnosticLogDraft(value: unknown): DiagnosticLogDraft | null {
   if (!value || typeof value !== 'object') return null
-  const candidate = value as Partial<DiagnosticLogDraft>
+  const draft = value as Partial<DiagnosticLogDraft>
   if (
-    !isDiagnosticLogSource(candidate.source) ||
-    !isDiagnosticLogLevel(candidate.level) ||
-    typeof candidate.message !== 'string' ||
-    !Number.isFinite(candidate.timestamp) ||
-    typeof candidate.contextId !== 'string' ||
-    candidate.contextId.length > 100 ||
-    !Number.isSafeInteger(candidate.sequence) ||
-    (candidate.sequence ?? -1) < 0
-  ) {
+    !['background', 'popup', 'offscreen', 'worker'].includes(draft.source ?? '') ||
+    !['debug', 'info', 'warn', 'error'].includes(draft.level ?? '') ||
+    typeof draft.message !== 'string' ||
+    !Number.isFinite(draft.timestamp) ||
+    (draft.contextId !== undefined && !isDiagnosticContextId(draft.contextId)) ||
+    !Number.isSafeInteger(draft.sequence) ||
+    (draft.sequence ?? -1) < 0
+  )
     return null
-  }
   return {
-    source: candidate.source,
-    level: candidate.level,
-    message: truncateUtf8(candidate.message, DIAGNOSTIC_LOG_MAX_ENTRY_BYTES),
-    timestamp: candidate.timestamp as number,
-    contextId: candidate.contextId,
-    sequence: candidate.sequence as number
+    source: draft.source as DiagnosticLogSource,
+    level: draft.level as DiagnosticLogLevel,
+    message: truncateDiagnosticText(draft.message, DIAGNOSTIC_LOG_MAX_ENTRY_BYTES),
+    timestamp: draft.timestamp as number,
+    sequence: draft.sequence as number,
+    ...(draft.contextId ? { contextId: draft.contextId } : {})
   }
 }

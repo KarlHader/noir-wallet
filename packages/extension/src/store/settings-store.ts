@@ -1,86 +1,170 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { WALLET_CONFIG, type AutoLockMs } from '@/config/wallet'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { getResponseErrorMessage } from '@/lib/errors'
+import type { Network } from '@/types'
 import { DEFAULT_FEE_TIER, type FeeTier } from '@/config/fee'
-import { createChromeStorageAdapter } from '@/lib/chrome-storage-adapter'
-import { applyLendingSdkEnv } from '@/core/services/lending-sdk-init'
-import { setNearRpcUrl } from '@/core/services/lending-service'
+import { createWalletSettingsPersistStorage } from '@/lib/wallet-settings-persist-storage'
+import { applyRheaSdkEnv, setNearRpcUrl } from '@/core/services/rhea-sdk-init'
 import {
   DEFAULT_BLOCK_EXPLORER_PREFERENCES,
-  setActiveBlockExplorerPreferences,
   type BlockExplorerChain,
   type BlockExplorerId,
   type BlockExplorerPreferences
 } from '@/config/block-explorers'
+import { setActiveBlockExplorerPreferences } from '@/lib/block-explorer-preferences'
 import {
-  DEFAULT_RPC_ENDPOINT_MODES,
   DEFAULT_RPC_ENDPOINT_PREFERENCES,
-  migrateRpcEndpointDefaults,
-  parseRpcEndpointModes,
-  setActiveCustomRpcEndpoints,
-  setActiveRpcEndpointModes,
   setActiveRpcEndpointPreferences,
-  type RpcEndpointChain,
-  type RpcEndpointId,
-  type RpcEndpointModes,
   type RpcEndpointPreferences
-} from '@/config/rpc-endpoints'
+} from '@/infrastructure/chains/rpc-endpoints'
+import type { RpcEndpointChain, RpcEndpointId } from '@/config/rpc-endpoints'
 import {
-  EMPTY_CUSTOM_RPC_ENDPOINTS,
-  parseCustomRpcEndpoints,
-  type CustomRpcEndpoints
-} from '@/config/custom-rpc'
-import { SETTINGS_STORAGE_KEY } from '@/config/storage-keys'
+  SETTINGS_STORAGE_KEY,
+  resolvePersistedNetworkChainEndpointSettings
+} from '@/lib/wallet-settings-storage'
+import {
+  DEFAULT_CHAIN_ENDPOINT_SETTINGS,
+  setActiveChainEndpointSettings,
+  parseChainEndpointSettings,
+  type ChainEndpointSettings
+} from '@/core/chains/chain-endpoint-settings'
+
+export { SETTINGS_STORAGE_KEY } from '@/lib/wallet-settings-storage'
 
 export const AUTO_LOCK_OPTIONS = WALLET_CONFIG.SECURITY.AUTO_LOCK.OPTIONS
 
+let settingsHydrationPromise: Promise<void> | null = null
+
+function parsePortfolioChainSelectionByAccount(
+  value: unknown
+): Readonly<Record<string, readonly string[]>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .flatMap(([scopeKey, chainIds]) => {
+        if (
+          scopeKey.length === 0 ||
+          scopeKey.length > 512 ||
+          !Array.isArray(chainIds) ||
+          chainIds.length > 64
+        ) {
+          return []
+        }
+        const parsed = [
+          ...new Set(
+            chainIds.filter(
+              (chainId): chainId is string =>
+                typeof chainId === 'string' && chainId.length > 0 && chainId.length <= 128
+            )
+          )
+        ]
+        return parsed.length === chainIds.length ? [[scopeKey, Object.freeze(parsed)]] : []
+      })
+      .slice(0, 64)
+  )
+}
+
+function parseExpandedPortfolioChainLists(value: unknown): Readonly<Record<string, true>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(
+        ([scopeKey, expanded]) => scopeKey.length > 0 && scopeKey.length <= 512 && expanded === true
+      )
+      .slice(0, 64)
+  )
+}
+
+function parseLedgerSigningTransportByWallet(
+  value: unknown
+): Readonly<Record<string, 'usb' | 'bluetooth'>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(
+        ([walletId, transport]) =>
+          walletId.length > 0 &&
+          walletId.length <= 128 &&
+          (transport === 'usb' || transport === 'bluetooth')
+      )
+      .slice(0, 64)
+  )
+}
+
+function ensureSettingsStoreHydrated(): Promise<void> {
+  if (useSettingsStore.persist.hasHydrated()) return Promise.resolve()
+  if (!settingsHydrationPromise) {
+    const operation = Promise.resolve(useSettingsStore.persist.rehydrate()).then(
+      () => {
+        settingsHydrationPromise = null
+      },
+      (error: unknown) => {
+        settingsHydrationPromise = null
+        throw error
+      }
+    )
+    settingsHydrationPromise = operation
+    return operation
+  }
+  return settingsHydrationPromise
+}
+
+let sidePanelModeRevision = 0
+let sidePanelModeLoadSequence = 0
+
 interface SettingsStore {
+  networkMode: 'mainnet' | 'testnet'
+  chainEndpointSettingsByNetwork: Partial<Record<Network, ChainEndpointSettings>>
   autoLockMs: AutoLockMs
   nearRpcUrl: string
-  enableDerivedAccounts: boolean
   blockExplorerPreferences: BlockExplorerPreferences
   rpcEndpointPreferences: RpcEndpointPreferences
-  rpcEndpointModes: RpcEndpointModes
-  customRpcEndpoints: CustomRpcEndpoints
+  chainEndpointSettings: ChainEndpointSettings
   zeroIndexerEnabled: boolean
   feeTier: FeeTier
-  votingIntroSeen: boolean
+  balancesHidden: boolean
+  portfolioViewMode: 'assets' | 'chains'
+  portfolioChainSelectionByAccount: Readonly<Record<string, readonly string[]>>
+  expandedPortfolioChainLists: Readonly<Record<string, true>>
+  ledgerSigningTransportByWallet: Readonly<Record<string, 'usb' | 'bluetooth'>>
   sidePanelMode: boolean
   isSidePanelModeLoaded: boolean
   isLoaded: boolean
   setAutoLockMs: (ms: AutoLockMs) => void
   setNearRpcUrl: (url: string) => void
-  setEnableDerivedAccounts: (enable: boolean) => void
   setBlockExplorerPreference: (chain: BlockExplorerChain, explorerId: BlockExplorerId) => void
   setRpcEndpointPreference: (chain: RpcEndpointChain, endpointId: RpcEndpointId) => void
-  syncRpcEndpointSettings: (
-    preferences: RpcEndpointPreferences,
-    modes: RpcEndpointModes,
-    customRpcEndpoints: CustomRpcEndpoints
-  ) => void
+  setChainEndpointSettings: (settings: ChainEndpointSettings) => void
   setFeeTier: (tier: FeeTier) => void
-  setVotingIntroSeen: (seen: boolean) => void
+  setBalancesHidden: (hidden: boolean) => void
+  setPortfolioViewMode: (mode: 'assets' | 'chains') => void
+  setPortfolioChainSelection: (scopeKey: string, chainIds: readonly string[] | null) => void
+  setPortfolioChainListExpanded: (scopeKey: string, expanded: boolean) => void
+  setLedgerSigningTransport: (walletId: string, transport: 'usb' | 'bluetooth') => void
   setSidePanelMode: (enabled: boolean) => Promise<void>
   syncSidePanelMode: (enabled: boolean) => void
   loadSidePanelMode: () => Promise<void>
   loadSettings: () => Promise<void>
 }
-
-export { SETTINGS_STORAGE_KEY }
-
 export const useSettingsStore = create<SettingsStore>()(
   persist(
     (set, get) => ({
       autoLockMs: WALLET_CONFIG.SECURITY.AUTO_LOCK.DEFAULT_MS,
+      networkMode: DEFAULT_NETWORK,
+      chainEndpointSettingsByNetwork: {},
       nearRpcUrl: '',
-      enableDerivedAccounts: false,
       blockExplorerPreferences: DEFAULT_BLOCK_EXPLORER_PREFERENCES,
       rpcEndpointPreferences: DEFAULT_RPC_ENDPOINT_PREFERENCES,
-      rpcEndpointModes: DEFAULT_RPC_ENDPOINT_MODES,
-      customRpcEndpoints: EMPTY_CUSTOM_RPC_ENDPOINTS,
+      chainEndpointSettings: DEFAULT_CHAIN_ENDPOINT_SETTINGS,
       zeroIndexerEnabled: true,
       feeTier: DEFAULT_FEE_TIER,
-      votingIntroSeen: false,
+      balancesHidden: false,
+      portfolioViewMode: 'assets',
+      portfolioChainSelectionByAccount: {},
+      expandedPortfolioChainLists: {},
+      ledgerSigningTransportByWallet: {},
       sidePanelMode: false,
       isSidePanelModeLoaded: false,
       isLoaded: false,
@@ -96,44 +180,81 @@ export const useSettingsStore = create<SettingsStore>()(
         }
       },
 
-      setEnableDerivedAccounts: enable => {
-        set({ enableDerivedAccounts: enable })
-      },
-
       setFeeTier: tier => {
         set({ feeTier: tier })
       },
 
-      setVotingIntroSeen: seen => {
-        set({ votingIntroSeen: seen })
+      setBalancesHidden: hidden => {
+        set({ balancesHidden: hidden })
+      },
+
+      setPortfolioViewMode: mode => {
+        set({ portfolioViewMode: mode })
+      },
+
+      setPortfolioChainSelection: (scopeKey, chainIds) => {
+        set(state => {
+          const next = { ...state.portfolioChainSelectionByAccount }
+          if (chainIds === null) delete next[scopeKey]
+          else next[scopeKey] = Object.freeze([...new Set(chainIds)])
+          return { portfolioChainSelectionByAccount: next }
+        })
+      },
+
+      setPortfolioChainListExpanded: (scopeKey, expanded) => {
+        if (!scopeKey || scopeKey.length > 512) return
+        set(state => {
+          const next = { ...state.expandedPortfolioChainLists }
+          if (expanded) next[scopeKey] = true
+          else delete next[scopeKey]
+          return { expandedPortfolioChainLists: next }
+        })
+      },
+
+      setLedgerSigningTransport: (walletId, transport) => {
+        if (!walletId || walletId.length > 128) return
+        set(state => ({
+          ledgerSigningTransportByWallet: {
+            ...state.ledgerSigningTransportByWallet,
+            [walletId]: transport
+          }
+        }))
       },
 
       setSidePanelMode: async enabled => {
+        const revision = ++sidePanelModeRevision
         const response = await chrome.runtime.sendMessage({
           type: 'SET_EXTENSION_DISPLAY_MODE',
           sidePanelMode: enabled
         })
         if (!response?.success) {
-          throw new Error(response?.error || 'Failed to change wallet display mode')
+          throw new Error(
+            getResponseErrorMessage(response) || 'Failed to change wallet display mode'
+          )
         }
         if (typeof response.sidePanelMode !== 'boolean') {
           throw new Error('Background returned an invalid wallet display mode')
         }
-        set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
+        if (revision === sidePanelModeRevision)
+          set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
       },
 
       syncSidePanelMode: enabled => {
+        sidePanelModeRevision += 1
         set({ sidePanelMode: enabled, isSidePanelModeLoaded: true })
       },
 
       loadSidePanelMode: async () => {
+        const revision = sidePanelModeRevision
+        const sequence = ++sidePanelModeLoadSequence
         const response = await chrome.runtime.sendMessage({
           type: 'GET_EXTENSION_DISPLAY_MODE'
         })
         if (!response?.success || typeof response.sidePanelMode !== 'boolean') {
-          throw new Error(response?.error || 'Failed to read wallet display mode')
+          throw new Error(getResponseErrorMessage(response) || 'Failed to read wallet display mode')
         }
-        set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
+        if (revision === sidePanelModeRevision && sequence === sidePanelModeLoadSequence)
+          set({ sidePanelMode: response.sidePanelMode, isSidePanelModeLoaded: true })
       },
 
       setBlockExplorerPreference: (chain, explorerId) => {
@@ -150,93 +271,129 @@ export const useSettingsStore = create<SettingsStore>()(
           ...get().rpcEndpointPreferences,
           [chain]: endpointId
         }
-        const rpcEndpointModes = { ...get().rpcEndpointModes, [chain]: 'fixed' as const }
-        set({ rpcEndpointPreferences, rpcEndpointModes })
+        set({ rpcEndpointPreferences })
         setActiveRpcEndpointPreferences(rpcEndpointPreferences)
-        setActiveRpcEndpointModes(rpcEndpointModes)
       },
 
-      syncRpcEndpointSettings: (
-        rpcEndpointPreferences,
-        rpcEndpointModesValue,
-        customRpcEndpointsValue
-      ) => {
-        const rpcEndpointModes = parseRpcEndpointModes(rpcEndpointModesValue)
-        const customRpcEndpoints = parseCustomRpcEndpoints(customRpcEndpointsValue)
-        set({
-          rpcEndpointPreferences,
-          rpcEndpointModes,
-          customRpcEndpoints
-        })
-        setActiveCustomRpcEndpoints(customRpcEndpoints)
-        setActiveRpcEndpointPreferences(rpcEndpointPreferences)
-        setActiveRpcEndpointModes(rpcEndpointModes)
+      setChainEndpointSettings: settings => {
+        const parsed = setActiveChainEndpointSettings(settings)
+        set(state => ({
+          chainEndpointSettings: parsed,
+          chainEndpointSettingsByNetwork: {
+            ...state.chainEndpointSettingsByNetwork,
+            [DEFAULT_NETWORK]: parsed
+          }
+        }))
       },
 
       loadSettings: async () => {
+        await ensureSettingsStoreHydrated()
         if (get().isLoaded) return
         const {
           nearRpcUrl,
           blockExplorerPreferences,
           rpcEndpointPreferences,
-          rpcEndpointModes,
-          customRpcEndpoints
+          chainEndpointSettings
         } = get()
         if (nearRpcUrl) {
           setNearRpcUrl(nearRpcUrl)
         }
-        applyLendingSdkEnv('prd')
+        applyRheaSdkEnv('prd')
         setActiveBlockExplorerPreferences(blockExplorerPreferences)
-        setActiveCustomRpcEndpoints(customRpcEndpoints)
         setActiveRpcEndpointPreferences(rpcEndpointPreferences)
-        setActiveRpcEndpointModes(rpcEndpointModes)
-        set({ isLoaded: true })
+        setActiveChainEndpointSettings(chainEndpointSettings)
+        try {
+          const response = await chrome.runtime.sendMessage({ type: 'GET_CHAIN_ENDPOINT_SETTINGS' })
+          if (response?.result !== undefined) {
+            const authoritative = parseChainEndpointSettings(response.result)
+            setActiveChainEndpointSettings(authoritative)
+            if (JSON.stringify(authoritative) !== JSON.stringify(chainEndpointSettings)) {
+              set(state => ({
+                chainEndpointSettings: authoritative,
+                chainEndpointSettingsByNetwork: {
+                  ...state.chainEndpointSettingsByNetwork,
+                  [DEFAULT_NETWORK]: authoritative
+                }
+              }))
+            }
+          }
+        } catch {
+          // Persisted local settings remain available if Background is restarting.
+        }
+        set({ networkMode: DEFAULT_NETWORK, isLoaded: true })
       }
     }),
     {
       name: SETTINGS_STORAGE_KEY,
-      storage: createChromeStorageAdapter('local') as any,
+      storage: createWalletSettingsPersistStorage<Partial<SettingsStore>>(),
+      merge: (persisted, current) => {
+        const value =
+          persisted && typeof persisted === 'object' && !Array.isArray(persisted)
+            ? (persisted as Partial<SettingsStore>)
+            : {}
+        const chainEndpointSettings = parseChainEndpointSettings(
+          resolvePersistedNetworkChainEndpointSettings(value, DEFAULT_NETWORK)
+        )
+        const persistedByNetwork = value.chainEndpointSettingsByNetwork
+        const chainEndpointSettingsByNetwork =
+          persistedByNetwork &&
+          typeof persistedByNetwork === 'object' &&
+          !Array.isArray(persistedByNetwork)
+            ? Object.fromEntries(
+                Object.entries(persistedByNetwork).flatMap(([network, settings]) =>
+                  network === 'mainnet' || network === 'testnet'
+                    ? [[network, parseChainEndpointSettings(settings)]]
+                    : []
+                )
+              )
+            : { [DEFAULT_NETWORK]: chainEndpointSettings }
+        return {
+          ...current,
+          ...value,
+          zeroIndexerEnabled: value.zeroIndexerEnabled !== false,
+          balancesHidden:
+            typeof value.balancesHidden === 'boolean'
+              ? value.balancesHidden
+              : current.balancesHidden,
+          portfolioViewMode:
+            value.portfolioViewMode === 'assets' || value.portfolioViewMode === 'chains'
+              ? value.portfolioViewMode
+              : current.portfolioViewMode,
+          portfolioChainSelectionByAccount: parsePortfolioChainSelectionByAccount(
+            value.portfolioChainSelectionByAccount
+          ),
+          expandedPortfolioChainLists: parseExpandedPortfolioChainLists(
+            value.expandedPortfolioChainLists
+          ),
+          ledgerSigningTransportByWallet: parseLedgerSigningTransportByWallet(
+            value.ledgerSigningTransportByWallet
+          ),
+          sidePanelMode: current.sidePanelMode,
+          isSidePanelModeLoaded: current.isSidePanelModeLoaded,
+          chainEndpointSettingsByNetwork,
+          chainEndpointSettings
+        }
+      },
       onRehydrateStorage: () => state => {
         setActiveBlockExplorerPreferences(state?.blockExplorerPreferences)
-        setActiveCustomRpcEndpoints(state?.customRpcEndpoints)
         setActiveRpcEndpointPreferences(state?.rpcEndpointPreferences)
-        setActiveRpcEndpointModes(state?.rpcEndpointModes)
-      },
-      merge: (persistedState, currentState) => {
-        if (typeof persistedState !== 'object' || persistedState === null) return currentState
-
-        const persistedSettings = { ...persistedState } as Partial<SettingsStore>
-        delete persistedSettings.sidePanelMode
-        delete persistedSettings.isSidePanelModeLoaded
-        persistedSettings.customRpcEndpoints = parseCustomRpcEndpoints(
-          persistedSettings.customRpcEndpoints
-        )
-        persistedSettings.rpcEndpointModes = parseRpcEndpointModes(
-          persistedSettings.rpcEndpointModes
-        )
-        const migrated = migrateRpcEndpointDefaults(
-          persistedSettings.rpcEndpointPreferences,
-          persistedSettings.rpcEndpointModes
-        )
-        persistedSettings.rpcEndpointPreferences = migrated.preferences
-        persistedSettings.rpcEndpointModes = migrated.modes
-        persistedSettings.zeroIndexerEnabled = persistedSettings.zeroIndexerEnabled !== false
-        delete (
-          persistedSettings as Partial<SettingsStore> & { zeroIndexerDefaultApplied?: boolean }
-        ).zeroIndexerDefaultApplied
-        return { ...currentState, ...persistedSettings }
+        setActiveChainEndpointSettings(state?.chainEndpointSettings)
       },
       partialize: state => ({
+        networkMode: state.networkMode,
+        chainEndpointSettingsByNetwork: state.chainEndpointSettingsByNetwork,
         autoLockMs: state.autoLockMs,
         nearRpcUrl: state.nearRpcUrl,
-        enableDerivedAccounts: state.enableDerivedAccounts,
         blockExplorerPreferences: state.blockExplorerPreferences,
         rpcEndpointPreferences: state.rpcEndpointPreferences,
-        rpcEndpointModes: state.rpcEndpointModes,
-        customRpcEndpoints: state.customRpcEndpoints,
+        chainEndpointSettings: state.chainEndpointSettings,
         zeroIndexerEnabled: state.zeroIndexerEnabled,
         feeTier: state.feeTier,
-        votingIntroSeen: state.votingIntroSeen
+        balancesHidden: state.balancesHidden,
+        portfolioViewMode: state.portfolioViewMode,
+        portfolioChainSelectionByAccount: state.portfolioChainSelectionByAccount,
+        expandedPortfolioChainLists: state.expandedPortfolioChainLists,
+        ledgerSigningTransportByWallet: state.ledgerSigningTransportByWallet
       })
     }
   )

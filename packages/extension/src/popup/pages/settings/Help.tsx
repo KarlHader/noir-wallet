@@ -2,9 +2,15 @@ import { useState } from 'react'
 import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { Button } from '../../components/ui/button'
-import { TELEGRAM_SUPPORT_URL } from '../../components/common/SocialLinks'
 import { toast } from '@/store/toast-store'
-import { exportDiagnosticLogs } from '@/lib/diagnostic-log-store'
+import { TELEGRAM_SUPPORT_URL } from '@/config/social-links'
+
+interface DiagnosticExportResponse {
+  success: boolean
+  text?: string
+  filename?: string
+  count?: number
+}
 
 export function Help() {
   const [isDownloading, setIsDownloading] = useState(false)
@@ -14,21 +20,29 @@ export function Help() {
     if (isDownloading) return
     setIsDownloading(true)
     try {
-      const exported = await exportDiagnosticLogs()
-      const url = URL.createObjectURL(
-        new Blob([exported.text], { type: 'text/plain;charset=utf-8' })
-      )
+      const result = (await chrome.runtime.sendMessage({
+        type: 'EXPORT_DIAGNOSTIC_LOGS'
+      })) as DiagnosticExportResponse
+      if (
+        !result?.success ||
+        typeof result.text !== 'string' ||
+        typeof result.filename !== 'string'
+      ) {
+        throw new Error('Could not export diagnostic logs')
+      }
+      const url = URL.createObjectURL(new Blob([result.text], { type: 'text/plain;charset=utf-8' }))
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = exported.filename
+      anchor.download = result.filename
       anchor.style.display = 'none'
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+      const count = result.count ?? 0
       toast.success(
         'Logs downloaded',
-        `${exported.count} diagnostic ${exported.count === 1 ? 'entry' : 'entries'} exported`
+        `${count} diagnostic ${count === 1 ? 'entry' : 'entries'} exported`
       )
     } catch (error) {
       toast.error(

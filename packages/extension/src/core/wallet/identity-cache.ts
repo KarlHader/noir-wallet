@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger'
 import { SIGNING_ACCOUNT_INDEX } from '@/config/wallet'
 import type { ZcashWalletCore } from '../zcash/wallet-core'
 import type { Network } from '@/types'
@@ -35,11 +36,13 @@ async function getOrCreateIdentity(
 ): Promise<CachedIdentity> {
   const cached = identityCache.get(key)
   if (cached) {
+    logger.log('identity cache hit', key.split(':')[1])
     return cached
   }
 
   const pending = identityInFlight.get(key)
   if (pending) {
+    logger.log('dedup hit', key.split(':')[1])
     return pending
   }
 

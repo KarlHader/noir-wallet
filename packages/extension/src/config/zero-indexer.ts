@@ -1,21 +1,20 @@
-export const ZERO_INDEXER_MAINNET_URL = 'https://tee.unsafe.zec.rocks'
-export const ZERO_INDEXER_TESTNET_URL = 'https://tee.testnet.unsafe.zec.rocks'
+import type { ZeroIndexerRegistryDocument } from '@/core/zcash/zero-indexer'
 
-const zeroIndexerOrigins = new Set([
-  new URL(ZERO_INDEXER_MAINNET_URL).origin,
-  new URL(ZERO_INDEXER_TESTNET_URL).origin
-])
+export const ZERO_INDEXER_REGISTRY_URL = 'https://rpc.zknoir.com/v1/zero-indexer-endpoints'
 
-export function isZeroIndexerEndpoint(endpoint: { id: string; url: string }): boolean {
-  if (endpoint.id === 'zero-indexer') return true
-  try {
-    return zeroIndexerOrigins.has(new URL(endpoint.url).origin)
-  } catch {
-    return false
+export const DEFAULT_ZERO_INDEXER_REGISTRY: ZeroIndexerRegistryDocument = {
+  version: 1,
+  updatedAt: '2026-10-11T00:00:00.000Z',
+  networks: {
+    mainnet: [
+      { id: 'zero-indexer-mainnet', label: 'ZeroIndexer', url: 'https://tee.unsafe.zec.rocks' }
+    ],
+    testnet: [
+      {
+        id: 'zero-indexer-testnet',
+        label: 'ZeroIndexer Testnet',
+        url: 'https://tee.testnet.unsafe.zec.rocks'
+      }
+    ]
   }
-}
-
-export interface ZeroIndexerOptions {
-  urls: string[]
-  sendTimeoutMs?: number
 }

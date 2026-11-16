@@ -61,8 +61,6 @@ export function LegacyPoolPrivacyNotice({ open, onDismiss }: LegacyPoolPrivacyNo
             wallet balance, activity timing, and real IP address, enable{' '}
             <button
               type="button"
-              data-analytics-outbound="privacy_nym"
-              data-analytics-domain={new URL(NYM_DOWNLOAD_URL).hostname}
               className="inline-flex items-center gap-1 align-middle font-medium text-[#73b7ef] hover:underline"
               onClick={() => openPrivacyTool(NYM_DOWNLOAD_URL)}
             >
@@ -80,8 +78,6 @@ export function LegacyPoolPrivacyNotice({ open, onDismiss }: LegacyPoolPrivacyNo
             {' or '}
             <button
               type="button"
-              data-analytics-outbound="privacy_tor"
-              data-analytics-domain={new URL(TOR_DOWNLOAD_URL).hostname}
               className="inline-flex items-center gap-1 align-middle font-medium text-[#9fc4ef] hover:underline"
               onClick={() => openPrivacyTool(TOR_DOWNLOAD_URL)}
             >

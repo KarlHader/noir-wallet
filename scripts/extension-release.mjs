@@ -20,7 +20,7 @@ import { formatReleaseCommitLog, validateReleaseCommits } from './lib/extension-
 const MODES = new Set(['preview', 'beta', 'candidate'])
 const SHA = /^[0-9a-f]{40}$/i
 const HASH = /^[0-9a-f]{64}$/
-const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/
+const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-beta\.[1-9]\d*)?$/
 const POSITIVE_ID = /^[1-9]\d*$/
 const REF = /^[A-Za-z0-9._/-]+$/
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
@@ -56,25 +56,33 @@ function requireSha(value, label) {
 
 function requireVersion(value) {
   const version = requireString(value, 'version', VERSION)
-  if (!version.split('.').every(part => Number.isSafeInteger(Number(part)))) {
+  if (!version.match(/\d+/g).every(part => Number.isSafeInteger(Number(part)))) {
     throw new Error('Invalid version')
   }
+  if (Number(version.split('.')[0]) < 2) throw new Error('V1 releases are frozen')
   return version
 }
 
 export function sourceProfileForVersion(version) {
-  return Number(requireVersion(version).split('.')[0]) >= 2 ? 'multichain' : 'zcash'
+  requireVersion(version)
+  return 'multichain'
 }
 
 function networksForVersion(version) {
-  return sourceProfileForVersion(version) === 'multichain' ? ['multichain'] : ['mainnet', 'testnet']
+  requireVersion(version)
+  return ['multichain']
 }
 
 function buildChannelFor(mode, version) {
+  requireVersion(version)
+  if (mode === 'candidate' && version.includes('-')) {
+    throw new Error('Production candidates require a stable 2.x version')
+  }
+  if (mode === 'beta' && !version.includes('-beta.')) {
+    throw new Error('Beta releases require a 2.x-beta version')
+  }
   if (mode === 'candidate') return 'production'
-  return mode === 'preview' && sourceProfileForVersion(version) === 'multichain'
-    ? 'development'
-    : 'beta'
+  return mode === 'preview' ? 'development' : 'beta'
 }
 
 function requireId(value, label) {
@@ -110,16 +118,15 @@ export function artifactLabelFor({ mode, version, sourceSha, runId, runAttempt, 
   requireId(runId, 'runId')
   requireId(runAttempt, 'runAttempt')
   if (mode === 'candidate') return `v${version}-rc.${runId}.${runAttempt}.${shortSha}`
-  if (mode === 'beta') return `v${version}-beta.${runId}.${runAttempt}.${shortSha}`
+  if (mode === 'beta') return `v${version}`
   return prNumber === undefined
     ? `v${version}-preview.${runId}.${runAttempt}.${shortSha}`
     : `v${version}-pr.${requireId(prNumber, 'prNumber')}.${shortSha}`
 }
 
-function assetName(mode, version, label, network) {
-  const suffix = network === 'testnet' ? '-testnet' : ''
+function assetName(mode, version, label) {
   const releaseName = mode === 'candidate' ? `v${version}` : label
-  return `noir-wallet-${releaseName}${suffix}.zip`
+  return `noir-wallet-${releaseName}.zip`
 }
 
 function validateMetadata(value) {
@@ -159,6 +166,9 @@ function validateMetadata(value) {
   if (buildChannel !== buildChannelFor(mode, version)) {
     throw new Error('Build channel does not match release mode')
   }
+  if (mode === 'beta' && sourceRef !== 'main' && sourceRef !== sourceSha) {
+    throw new Error('Beta sourceRef must be main or its exact commit')
+  }
   if (mode === 'candidate' && sourceRef !== `release/${version}`) {
     throw new Error(`Candidate sourceRef must be release/${version}`)
   }
@@ -192,10 +202,7 @@ function validateMetadata(value) {
     ) {
       throw new Error(`Invalid ${network} asset metadata`)
     }
-    if (
-      asset.network !== network ||
-      asset.name !== assetName(mode, version, artifactLabel, network)
-    ) {
+    if (asset.network !== network || asset.name !== assetName(mode, version, artifactLabel)) {
       throw new Error(`${network} asset name or network does not match release metadata`)
     }
     requireString(asset.sha256, `${network} sha256`, HASH)
@@ -248,10 +255,7 @@ function releaseBody(metadata, changelog, commits) {
     '',
     '| Network | Download |',
     '| --- | --- |',
-    ...assets.map(
-      asset =>
-        `| ${asset.network === 'multichain' ? 'Mainnet + Testnet' : asset.network === 'mainnet' ? 'Mainnet' : 'Testnet'} | [${asset.name}](${link(asset.name)}) |`
-    ),
+    ...assets.map(asset => `| Mainnet + Testnet | [${asset.name}](${link(asset.name)}) |`),
     '',
     `SHA-256: [SHA256SUMS](${link('SHA256SUMS')})`
   ]
@@ -309,12 +313,14 @@ export async function packageReleaseArtifact(
       ? undefined
       : validateReleaseCommits(JSON.parse(env.COMMIT_HISTORY))
   let changelog
-  if (input.mode === 'candidate') {
+  if (input.mode === 'beta' || input.mode === 'candidate') {
     const changelogFile = path.join(sourceDir, 'CHANGELOG.md')
-    const notesFile = path.join(sourceDir, 'packages', 'web', 'public', 'changelog.json')
     regularFile(changelogFile, 'CHANGELOG.md')
-    regularFile(notesFile, 'changelog.json')
     changelog = extractChangelogVersion(readFileSync(changelogFile, 'utf8'), input.version)
+  }
+  if (input.mode === 'candidate') {
+    const notesFile = path.join(sourceDir, 'packages', 'web', 'public', 'changelog.json')
+    regularFile(notesFile, 'changelog.json')
     const { parseProductReleaseNotesManifest } =
       await import('../packages/extension/src/lib/extension-update.ts')
     parseProductReleaseNotesManifest(JSON.parse(readFileSync(notesFile, 'utf8')), input.version)
@@ -322,11 +328,11 @@ export async function packageReleaseArtifact(
   const assets = networks
     .map(network => ({
       network,
-      source: sourceZip(networkBuildDir, network === 'testnet' ? 'dist-testnet' : 'dist')
+      source: sourceZip(networkBuildDir, 'dist')
     }))
     .map(({ network, source }) => ({
       network,
-      name: assetName(input.mode, input.version, input.artifactLabel, network),
+      name: assetName(input.mode, input.version, input.artifactLabel),
       sha256: sha256(source),
       size: statSync(source).size,
       source

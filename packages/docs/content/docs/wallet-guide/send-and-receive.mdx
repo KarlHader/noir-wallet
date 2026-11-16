@@ -1,6 +1,6 @@
 ---
 title: Send and receive
-description: Choose transparent or shielded addresses, review available funds, and confirm ZEC transactions.
+description: Send and receive ZEC and EVM assets.
 icon: Send
 ---
 
@@ -15,6 +15,10 @@ Open **Receive** and choose the address appropriate for the sender.
 
 Copy the full address or let the sender scan the QR code. Verify the beginning and end of the address after pasting.
 
+To reuse an earlier shielded address, open the active account's **Zcash settings** and choose
+**Shielded addresses**. Select an address to make it the default receiving address; **Current**
+marks the selected address. Copying an address does not change the selection.
+
 ## Send ZEC
 
 <Steps>
@@ -27,26 +31,32 @@ Copy the full address or let the sender scan the QR code. Verify the beginning a
   <Step>
     ### Choose the funding source
 
-    Select shielded funds for stronger privacy when available. Transparent funding can reveal and link the selected public UTXOs.
+    Open the **Shielded** or **Transparent** control beside **Amount** to choose the source.
+    The selector shows each source's available and pending funds. Transparent funding can reveal
+    and link the selected public UTXOs; it is unavailable for Keystone accounts.
 
   </Step>
   <Step>
     ### Enter the amount
 
-    Available shows funds you can use from the selected source before this transaction's network fee. Pending funds cannot be used yet. Enter a destination before selecting **Max**; its estimate accounts for transaction selection, fees, and dust constraints.
+    On Zcash, Available shows funds you can use from the selected source before this transaction's network fee. Pending funds cannot be used yet. Enter a destination before selecting **Max**; its estimate accounts for transaction selection, fees, and dust constraints.
 
-    **Standard** uses the current recommended network fee. **Fast** uses four times that rate. Switching tiers updates the estimated transaction fee and Max amount.
-
-    Received funds meet the wallet's confirmation requirement after 3 confirmations. They appear as available once synchronized and eligible for selection. In **Activity**, an external incoming transaction can still show **Confirming** until it reaches 10 confirmations, even when its funds are available. If you do not trust the sender, wait for more confirmations before spending them.
+    Received Zcash funds meet the wallet's confirmation requirement after 3 confirmations. They appear as available once synchronized and eligible for selection. In **Activity**, an external incoming transaction can still show **Confirming** until it reaches 10 confirmations, even when its funds are available. If you do not trust the sender, wait for more confirmations before spending them.
 
   </Step>
   <Step>
     ### Review and approve
 
-    Check the destination, amount, funding source, memo, and fee before broadcasting. If the fee estimate expires or cannot be refreshed, wait for a new estimate before confirming. Sends use a 40-block expiry window from construction; if a transaction expires before confirmation, review and send it again.
+    Check the destination, amount, funding source, memo, and fee before broadcasting.
 
   </Step>
 </Steps>
+
+## Send EVM assets
+
+Choose a **Public** or **Confidential** source. Confidential sends use the privacy route for supported assets; unsupported assets are sent directly on-chain from the same address. Review any privacy warning before choosing **Send anyway**. If availability cannot be checked, choose **Retry**.
+
+After a direct EVM transfer is submitted, choose **Done** to return to the wallet or **View on Explorer** to open the configured block explorer. The transfer remains in **Activity** for status and recovery.
 
 ## Private memos
 

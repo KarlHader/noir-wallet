@@ -22,9 +22,9 @@ export function WordTag({
   return (
     <button
       type="button"
-      aria-pressed={selected}
       onClick={handleClick}
       disabled={disabled}
+      aria-pressed={selected}
       className={`
         inline-flex items-center px-2 py-1.5 
         bg-content1 rounded-md font-mono text-sm

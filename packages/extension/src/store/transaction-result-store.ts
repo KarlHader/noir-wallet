@@ -1,10 +1,17 @@
 import { create } from 'zustand'
 import type { TransactionStep } from '@/popup/hooks/useTransaction'
 import type { SwapStatus } from '@/core/services/intents-api'
-import type { Transaction } from '@/types/wallet'
+import { mergeSwapProgressStatus } from '@/lib/swap-progress'
+import type { CreateAddressBookContactInput } from '@/core/address-book/address-book'
+import type { FundingSource, Network } from '@/types'
+import type {
+  ConfidentialFundingPhase,
+  ConfidentialFundingProgress
+} from '@/core/services/confidential-funding'
 
 interface ZcashTransactionResult {
   type: 'zcash'
+  operation?: 'send' | 'move'
   step: TransactionStep
   amount: string
   fromAddress?: string
@@ -21,6 +28,7 @@ interface ZcashTransactionResult {
   showTxHash?: boolean
   showTime?: boolean
   extraDetails?: Array<{ label: string; value: string }>
+  saveRecipient?: CreateAddressBookContactInput & { readonly selfTransfer?: boolean }
 }
 
 interface SwapTransactionResult {
@@ -32,34 +40,53 @@ interface SwapTransactionResult {
   amountIn: string
   amountOut: string
   actionName?: string
+  destinationAsset?: string
   destinationChain?: string
-  zcashTxHash?: string
+  originChain?: string
+  originTxHash?: string
+  activityTransactionId?: string
+  zcashAccountKey?: string
+  zcashTransactionId?: string
+  signedOrder?: boolean
+  sourceExecutionMode?: 'main' | 'private'
+  rheaQuoteHandle?: string
+  router?: string
+  approvalRequestIdAfterFunding?: string
+  confidentialFunding?: Readonly<{
+    planId: string
+    phase: ConfidentialFundingPhase
+    completed: number
+    total: number
+    stage: ConfidentialFundingProgress['stage']
+    message: string
+  }>
   /** ZEC fee paid for the on-chain leg, when known (e.g. Supply). */
   fee?: string
-  onBack?: () => void
 }
 
 export type TransactionResultData = ZcashTransactionResult | SwapTransactionResult
 
-export function resolveZcashResultView(
-  result: Pick<ZcashTransactionResult, 'step' | 'txHash' | 'timestamp'>,
-  record?: Transaction
-): { step: TransactionStep; txHash?: string; timestamp?: number } {
-  let step = result.step
-  if (record?.status === 'success' || record?.status === 'failed') step = record.status
-  else if (record?.status === 'confirming') step = 'confirming'
-  else if (record?.txHash && (step === 'idle' || step === 'pending')) step = 'submitted'
-  return {
-    step,
-    txHash: record?.txHash || result.txHash,
-    timestamp: record?.timestamp ?? result.timestamp
-  }
+export interface ZcashSendRetryDraft {
+  readonly network: Network
+  readonly walletId: string
+  readonly accountId: string
+  readonly fundingSource: FundingSource
+  readonly toAddress: string
+  readonly amount: string
+  readonly memo: string
+  readonly maxSelected: boolean
+}
+
+interface ZcashSendRetry {
+  readonly path: string
+  readonly draft: ZcashSendRetryDraft
 }
 
 interface TransactionResultStore {
   data: TransactionResultData | null
   returnPath: string
-  setResult: (data: TransactionResultData, returnPath?: string) => void
+  retry: ZcashSendRetry | null
+  setResult: (data: TransactionResultData, returnPath?: string, retry?: ZcashSendRetry) => void
   updateStep: (
     step: TransactionStep,
     updates?: Partial<ZcashTransactionResult>,
@@ -67,16 +94,30 @@ interface TransactionResultStore {
     transactionId?: string
   ) => void
   updateSwapStatus: (status: SwapStatus) => void
-  updateSwapTxHash: (txHash: string) => void
+  updateSwapOriginTransaction: (
+    chain: string,
+    txHash: string | undefined,
+    transaction?: { accountKey: string; transactionId: string },
+    quoteHandle?: string
+  ) => void
+  updateConfidentialFunding: (input: {
+    phase: ConfidentialFundingPhase
+    completed: number
+    total: number
+    stage: ConfidentialFundingProgress['stage']
+    message: string
+    status: SwapStatus
+  }) => void
   clear: () => void
 }
 
 export const useTransactionResultStore = create<TransactionResultStore>()((set, get) => ({
   data: null,
   returnPath: '/',
+  retry: null,
 
-  setResult: (data, returnPath = '/') => {
-    set({ data, returnPath })
+  setResult: (data, returnPath = '/', retry) => {
+    set({ data, returnPath, retry: retry ?? null })
   },
 
   updateStep: (step, updates, accountKey, transactionId) => {
@@ -96,20 +137,49 @@ export const useTransactionResultStore = create<TransactionResultStore>()((set, 
   updateSwapStatus: status => {
     const current = get().data
     if (!current || current.type !== 'swap') return
+    const merged = mergeSwapProgressStatus(current.status, status)
+    if (merged !== current.status) set({ data: { ...current, status: merged } })
+  },
+
+  updateSwapOriginTransaction: (chain, txHash, transaction, quoteHandle) => {
+    const current = get().data
+    if (!current || current.type !== 'swap') return
+    if (quoteHandle && current.rheaQuoteHandle !== quoteHandle) return
     set({
-      data: { ...current, status }
+      data: {
+        ...current,
+        originChain: chain,
+        ...(txHash ? { originTxHash: txHash } : {}),
+        ...(transaction
+          ? {
+              zcashAccountKey: transaction.accountKey,
+              zcashTransactionId: transaction.transactionId
+            }
+          : {})
+      }
     })
   },
 
-  updateSwapTxHash: txHash => {
+  updateConfidentialFunding: input => {
     const current = get().data
-    if (!current || current.type !== 'swap') return
+    if (!current || current.type !== 'swap' || !current.confidentialFunding) return
     set({
-      data: { ...current, zcashTxHash: txHash }
+      data: {
+        ...current,
+        status: input.status,
+        confidentialFunding: {
+          ...current.confidentialFunding,
+          phase: input.phase,
+          completed: input.completed,
+          total: input.total,
+          stage: input.stage,
+          message: input.message
+        }
+      }
     })
   },
 
   clear: () => {
-    set({ data: null, returnPath: '/' })
+    set({ data: null, returnPath: '/', retry: null })
   }
 }))

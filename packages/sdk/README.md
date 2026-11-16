@@ -1,17 +1,21 @@
 # Noir Wallet SDK
 
-Typed TypeScript SDK for connecting web apps to the Noir Wallet browser extension.
+Typed TypeScript SDK for connecting web apps to Noir Wallet's Zcash and optional multichain providers.
 
 - [Integration guide](https://docs.zknoir.com/developers)
 - [Provider API reference](https://docs.zknoir.com/developers/provider-api)
-- [Live example dApp](https://noirwallet.github.io/noir-wallet/) · [Source](https://github.com/NoirWallet/noir-wallet/tree/main/packages/sdk/example)
-- [Install Noir Wallet for mainnet](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn)
-- [Download the testnet build](https://zknoir.com/beta/versions)
-- [Report a non-security issue](https://github.com/NoirWallet/noir-wallet/issues)
+- [Example dApp](https://github.com/NoirWallet/noir-wallet/tree/main/packages/sdk/example)
+- [Install Noir Wallet](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn)
+- [V2 Beta download instructions](https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md#routine-previews)
+- [Legacy V1 releases](https://github.com/NoirWallet/noir-wallet-sdk/releases)
+- [Questions and bug reports](https://github.com/NoirWallet/noir-wallet/issues)
+- [Private security reports](https://github.com/NoirWallet/noir-wallet/blob/main/SECURITY.md)
 
 ## What the SDK does
 
-`@noir-wallet/sdk` wraps the provider injected at `window.noirwallet` and gives your app a typed Zcash API. Use it to:
+`@noir-wallet/sdk` wraps the providers injected at `window.noirwallet`. The V2 SDK retains the V1 Zcash entry point and adds optional EVM, Bitcoin, Solana, NEAR, and multichain-session providers. Check for each provider before using it; availability depends on the installed extension, enabled capabilities, and selected network mode.
+
+The Zcash client lets your app:
 
 - request access to one or more wallet accounts;
 - read addresses and balances;
@@ -24,33 +28,59 @@ The SDK is browser-only. It does not create or custody wallets, and Noir Wallet 
 
 ## Install an extension build
 
-Mainnet and testnet are separate Noir Wallet extensions:
+V2 uses one extension with a global Mainnet/Testnet Mode. Select the mode in the wallet's Developer Settings; dApps cannot change it.
 
-| Network | Download                                                                                                  | Use                          |
-| ------- | --------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| Mainnet | [Chrome Web Store](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn) | Production apps and real ZEC |
-| Testnet | [Wallet builds](https://zknoir.com/beta/versions)                                                         | Development and test ZEC     |
+Get a V2 beta from [Beta versions](https://zknoir.com/beta/versions). The currently published wallet is also available from the [Chrome Web Store](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn). To load a V2 beta ZIP locally:
 
-To install testnet:
+1. Download and unzip the extension ZIP from the beta versions page.
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Select **Load unpacked** and choose the extracted extension directory.
+4. In the wallet's Developer Settings, select Mainnet or Testnet Mode.
 
-1. Open the official Releases page and choose the release you want to test.
-2. Download the asset whose filename ends with `-testnet.zip`.
-3. Unzip the downloaded file.
-4. Open `chrome://extensions`, enable **Developer mode**, and select **Load unpacked**.
-5. Choose the extracted extension directory and confirm the installed name is **[Testnet] Noir Wallet**.
-
-Only install testnet ZIP files published by the `NoirWallet/noir-wallet` repository. The mainnet asset does not contain `-testnet` in its filename.
-
-The builds use different extension IDs and isolated wallet data. The SDK does not switch networks at runtime; `switchNetwork()` is deprecated and always throws.
+The wallet locks and reloads when its network mode changes. Older V1 downloads, including their separate Testnet builds, remain available in the [legacy SDK releases](https://github.com/NoirWallet/noir-wallet-sdk/releases).
 
 ## Install the SDK
 
+Install the V2 prerelease from the `beta` tag and save the resolved version exactly. The `latest` tag remains on the V1 SDK release line.
+
 ```bash
-pnpm add @noir-wallet/sdk
-npm install @noir-wallet/sdk
+pnpm add @noir-wallet/sdk@beta --save-exact
+npm install @noir-wallet/sdk@beta --save-exact
 ```
 
-## Quick start
+## V2 provider entry points
+
+`getNoirWallet()` returns a required `zcash` client and the optional providers below when the installed extension exposes them:
+
+| Property     | Interface                                     |
+| ------------ | --------------------------------------------- |
+| `zcash`      | Zcash client, including the V1 connection API |
+| `ethereum`   | EIP-1193 provider with EIP-6963 discovery     |
+| `bitcoin`    | Bitcoin accounts, transactions, and PSBTs     |
+| `solana`     | Solana accounts, transactions, and messages   |
+| `near`       | NEAR sign-in, transactions, and messages      |
+| `multichain` | CAIP-25 sessions and CAIP-27 scoped requests  |
+
+Solana and NEAR providers require Testnet Mode and their enabled Beta capabilities. Provider presence does not guarantee every operation is supported by the selected account or hardware wallet.
+
+For EVM integrations, discover Noir directly rather than relying on the shared `window.ethereum` slot. Request account access from your Connect button:
+
+```ts
+import { detectEvmProvider, getEvmChainId } from '@noir-wallet/sdk'
+
+async function connectEvmWallet() {
+  const ethereum = await detectEvmProvider()
+  const accounts = await ethereum.request<string[]>({ method: 'eth_requestAccounts' })
+  const chainId = await getEvmChainId(ethereum)
+  return { ethereum, accounts, chainId }
+}
+```
+
+EVM account access is shared across configured EVM networks, including custom networks. Adding or switching networks still requires wallet confirmation. CAIP-25 sessions retain their approved chain, method, and account limits. Explicitly reauthorizing through `eth_requestAccounts` or `wallet_requestPermissions` clears the session's EVM scopes; create a new session to use them again. Revoking `eth_accounts` removes the site's EVM account access across networks while preserving its other provider permissions.
+
+The package also exports `getBitcoinProvider()` / `detectBitcoinProvider()`, `getSolanaProvider()` / `detectSolanaProvider()`, and `getNearProvider()` / `detectNearProvider()`. Synchronous getters return `null` when unavailable; asynchronous discovery rejects if no provider appears before its timeout. Use `addEvmNetwork()` and `switchEvmChain()` for the [EVM network requests](https://github.com/NoirWallet/noir-wallet/blob/main/packages/docs/content/docs/developers/provider-api.mdx#evm-network-requests) supported by the installed wallet; they do not change the global Mainnet/Testnet Mode.
+
+## Zcash quick start
 
 There are two different connection calls:
 
@@ -130,13 +160,13 @@ if (selected) {
 }
 ```
 
-`synced: false` marks a zero fallback without current synced data. A locked wallet returns an empty `accounts` array.
+`synced: false` means no current balance data is available for that account. `getBalance()` rejects while the wallet is locked.
 
 ### Amounts and available balance
 
 Amounts are decimal ZEC strings. Keep them as strings instead of converting them to JavaScript floating-point numbers.
 
-`getBalance().available` is the amount currently available for selection, excluding pending funds. It cannot account for the final recipient, memo, fee tier, or transaction action count. Use `getMaxTransfer()` when you need a Max estimate for the same destination, memo, and funding source.
+`getBalance().available` is a destination-agnostic estimate. It cannot account for the final recipient, memo, fee tier, or transaction action count. Use `getMaxTransfer()` when you need an exact Max value.
 
 ## Send ZEC
 
@@ -213,8 +243,6 @@ if (!verification.valid) {
 
 Available signing modes are `current`, `derived`, and `legacy_index0`. See the [Provider API reference](https://docs.zknoir.com/developers/provider-api) before choosing a compatibility mode.
 
-Ledger and Keystone accounts do not support message signing, public-key identity access, or lending identity methods through this API.
-
 ## Listen for account changes
 
 Refresh account-scoped state after `accountsChanged`. Remove the listener when your component or integration is disposed.
@@ -242,9 +270,9 @@ zcash.on('accountsChanged', handleAccountsChanged)
 zcash.removeListener('accountsChanged', handleAccountsChanged)
 ```
 
-## API overview
+## Zcash API overview
 
-All wallet methods are available on `getNoirWallet().zcash`.
+The methods below are available on `getNoirWallet().zcash`.
 
 | Method                           | Approval | Purpose                                                 |
 | -------------------------------- | -------: | ------------------------------------------------------- |
@@ -262,7 +290,7 @@ All wallet methods are available on `getNoirWallet().zcash`.
 | `on(event, handler)`             |       No | Subscribe to provider events                            |
 | `removeListener(event, handler)` |       No | Unsubscribe from provider events                        |
 
-`switchNetwork()` is deprecated and always throws. Mainnet and testnet are separate extension builds; install the appropriate extension instead of switching at runtime.
+`switchNetwork()` is deprecated and always throws. Select the wallet's global network mode in Developer Settings.
 
 The package also exports lower-level helpers such as `detectProvider()`, `getZcashProvider()`, `publicKeyToAddress()`, and `verifyMessageSignature()`. Most applications should start with `getNoirWallet()`.
 
@@ -292,15 +320,20 @@ The SDK normalizes older single-account responses into the current `accounts` ar
 
 ## Run the example locally
 
-Run these commands from the Noir Wallet repository root:
+Run these commands from the wallet repository root:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm --filter @noir-wallet/sdk build
-pnpm --filter @noir-wallet/sdk type-check
 pnpm --filter @noir-wallet/example build
-pnpm dev:example
+pnpm --filter @noir-wallet/example dev
 ```
+
+## Example
+
+The example app lives in `example/` and uses the workspace SDK package. It exposes the same
+Zcash, EVM, and Bitcoin provider flows that a dApp uses, including connection, balance queries,
+transactions, message signing, EIP-712, BIP-322, and PSBT signing.
 
 The example dApp requires Noir Wallet to be installed in the same browser.
 

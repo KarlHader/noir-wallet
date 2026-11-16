@@ -8,7 +8,8 @@ import { collectReleaseCommits } from './lib/extension-release-history.mjs'
 const candidateWorkflow = '.github/workflows/extension-release.yml'
 const shaPattern = /^[0-9a-f]{40}$/
 const integerPattern = /^[1-9][0-9]*$/
-const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/
+const versionPattern =
+  /^(?:2|[3-9]|[1-9][0-9]+)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-beta\.[1-9][0-9]*)?$/
 
 function requireSha(value, name) {
   if (typeof value !== 'string' || !shaPattern.test(value)) {
@@ -39,13 +40,16 @@ function requireBranch(value) {
   return value
 }
 
-export async function resolveReleaseSource({ mode, source, confirmSha, request }) {
+export async function resolveReleaseSource({ mode, source, confirmSha, workflowSha, request }) {
   if (!['beta', 'candidate'].includes(mode))
     throw new Error('Release mode must be beta or candidate')
   if (typeof source !== 'string' || !source)
     throw new Error('A source branch or commit SHA is required')
   const isSha = shaPattern.test(source)
   if (!isSha) requireBranch(source)
+  if (mode === 'beta' && source !== 'main' && !isSha) {
+    throw new Error('Beta source must be main or its current exact commit')
+  }
   if (mode === 'candidate' && (isSha || !source.startsWith('release/'))) {
     throw new Error('Production candidates must use a release/X.Y.Z branch')
   }
@@ -54,13 +58,31 @@ export async function resolveReleaseSource({ mode, source, confirmSha, request }
     isSha ? `commits/${source}` : `branches/${encodeURIComponent(source)}`
   )
   const sourceSha = requireSha(isSha ? resolved?.sha : resolved?.commit?.sha, 'Resolved source')
+  if (mode === 'beta') {
+    requireSha(confirmSha, 'Confirmed Beta commit')
+    const main = await request('branches/main')
+    const mainSha = requireSha(main?.commit?.sha, 'Current main commit')
+    if (
+      sourceSha !== confirmSha ||
+      sourceSha !== mainSha ||
+      (workflowSha && sourceSha !== requireSha(workflowSha, 'Workflow commit'))
+    ) {
+      throw new Error('Beta source must match the current dispatched main commit')
+    }
+  }
   const packageFile = await request(`contents/packages/extension/package.json?ref=${sourceSha}`)
   if (packageFile?.encoding !== 'base64' || typeof packageFile.content !== 'string') {
     throw new Error('Source commit has no readable extension package.json')
   }
   const { version } = JSON.parse(Buffer.from(packageFile.content, 'base64').toString('utf8'))
   if (typeof version !== 'string' || !versionPattern.test(version)) {
-    throw new Error('Extension version must be numeric X.Y.Z')
+    throw new Error('Extension version must be V2 or newer')
+  }
+  if (mode === 'beta' && !version.includes('-beta.')) {
+    throw new Error('Beta release requires a 2.x-beta version')
+  }
+  if (mode === 'candidate' && version.includes('-')) {
+    throw new Error('Production candidate requires a stable 2.x version')
   }
   if (mode === 'candidate') {
     if (source !== `release/${version}`)
@@ -102,7 +124,7 @@ export function selectCandidateArtifact(artifacts, { runId, runAttempt }) {
   requireInteger(runId, 'Candidate run ID')
   requireInteger(runAttempt, 'Candidate run attempt')
   const pattern = new RegExp(
-    `^noir-wallet-v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.${runId}\\.${runAttempt}\\.[0-9a-f]{7}$`
+    `^noir-wallet-v(?:2|[3-9]|[1-9][0-9]+)\\.[0-9]+\\.[0-9]+-rc\\.${runId}\\.${runAttempt}\\.[0-9a-f]{7}$`
   )
   const matches = artifacts.filter(artifact => pattern.test(artifact.name))
   if (
@@ -146,6 +168,7 @@ export async function resolvePromotion({ repository, runId, runAttempt, confirmS
 
 export async function validateCurrentCandidate(metadata, request) {
   if (
+    sourceProfileForVersion(metadata.version) !== 'multichain' ||
     metadata.mode !== 'candidate' ||
     metadata.buildChannel !== 'production' ||
     metadata.sourceRef !== `release/${metadata.version}`
@@ -254,6 +277,7 @@ if (isCli) {
         mode: env.RELEASE_MODE,
         source: env.SOURCE_INPUT,
         confirmSha: env.CONFIRM_SHA,
+        workflowSha: env.GITHUB_SHA,
         request
       })
       writeOutputs({

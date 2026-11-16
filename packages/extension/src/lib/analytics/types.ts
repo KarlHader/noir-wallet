@@ -4,7 +4,7 @@
  * The JSON array of these payloads is AES-128-CBC encrypted before upload.
  */
 export interface AnalyticsEventPayload {
-  chain: string
+  chain: import('./constants.ts').AnalyticsChain
   event_name: string
   extra: string
   has_transaction: 0 | 1
@@ -23,33 +23,35 @@ export interface AnalyticsEventPayload {
 
 /** Call-site options for tracking an event (all fields optional). */
 export interface TrackOptions {
-  /** Sent to GA as event params and merged into custom `extra` */
+  /** Validated financial metrics for the first-party collector only. */
+  collector?: import('./collector-metrics.ts').CollectorMetrics
+  /** Controlled chain family; defaults to Zcash for legacy call sites. */
+  chain?: import('./constants.ts').AnalyticsChain
+  /** Scoped to the event name; used locally for channel deduplication and never uploaded. */
+  idempotencyKey?: string
+  /** Filtered by the event-specific allowlist before leaving the extension */
   params?: Record<string, unknown>
-  /** Custom-channel-only extra fields (not sent to GA) */
+  /** Filtered by the event-specific allowlist before leaving the extension */
   extra?: Record<string, unknown>
   /** Defaults to the current popup page, or `noir_background` in the SW */
   pageId?: string
-  /** 1 when the event involves a broadcast transaction */
+  /** Transaction-related context; the event name determines its lifecycle stage */
   hasTransaction?: 0 | 1
-  /** Exact transaction amount reported only to the encrypted custom collector. */
-  inputAmount?: string
   inputSymbol?: string
-  /** Token codes may contain identifiers and are discarded before reporting. */
-  inputTokenCode?: string
-  outputAmount?: string
   outputSymbol?: string
-  outputTokenCode?: string
-  /** Estimated transaction value reported only to the encrypted custom collector. */
-  usdAmount?: string
-  /** @deprecated Wallet addresses are never reported. */
-  walletAddress?: string
 }
 
 export type AnalyticsMessage =
-  | { type: 'ANALYTICS_EVENT'; name: string; options?: TrackOptions; timestamp?: number }
+  | {
+      type: 'ANALYTICS_EVENT'
+      name: string
+      options?: TrackOptions
+      timestamp?: number
+      engagementTimeMsec?: number
+    }
   | {
       type: 'ANALYTICS_PAGE_VIEW'
-      engagementTimeMsec?: number
       page: string
       timestamp?: number
+      engagementTimeMsec?: number
     }

@@ -3,17 +3,16 @@ import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
 import { Button } from '../../components/ui/button'
-import { accountManager } from '@/core/wallet/account-manager'
-import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { Switch } from '@/popup/components/ui/switch'
 import { useSettingsStore } from '@/store/settings-store'
+import { toast } from '@/store/toast-store'
+import { EXTENSION_SIDE_PANEL_PATH } from '@/config/extension'
 import {
-  EXTENSION_SIDE_PANEL_PATH,
-  isSidePanelSurface,
+  EXTENSION_DISPLAY_MODE_STORAGE_KEY,
   readStoredExtensionDisplayMode
-} from '@/config/extension-display'
-import { EXTENSION_DISPLAY_MODE_STORAGE_KEY } from '@/config/storage-keys'
-import { SocialLinks } from '@/popup/components/common/SocialLinks'
+} from '@/lib/extension-display-mode'
+import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 
 interface SidePanelOpenApi {
   open(options: { windowId: number }): Promise<void>
@@ -24,20 +23,19 @@ function getSidePanelOpenApi(): SidePanelOpenApi | undefined {
   return (chrome as typeof chrome & { sidePanel?: SidePanelOpenApi }).sidePanel
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Failed to change wallet display mode'
-}
-
 export function Settings() {
   const { navigate } = useNavigate()
-  const isSidePanel = isSidePanelSurface(window.location.search)
+  const { activeAccount } = useActiveAccountNetworks()
+  const isSidePanelSurface =
+    new URLSearchParams(window.location.search).get('surface') === 'side-panel'
+  const sidePanelSupported = Boolean(getSidePanelOpenApi())
   const sidePanelMode = useSettingsStore(state => state.sidePanelMode)
   const isSidePanelModeLoaded = useSettingsStore(state => state.isSidePanelModeLoaded)
   const setSidePanelMode = useSettingsStore(state => state.setSidePanelMode)
   const syncSidePanelMode = useSettingsStore(state => state.syncSidePanelMode)
   const loadSidePanelMode = useSettingsStore(state => state.loadSidePanelMode)
   const [isChangingDisplayMode, setIsChangingDisplayMode] = useState(false)
-  const [displayModeError, setDisplayModeError] = useState<string | null>(null)
+  const [isInitializingDisplayMode, setIsInitializingDisplayMode] = useState(true)
   const [currentWindowId, setCurrentWindowId] = useState<number | null>(null)
 
   useEffect(() => {
@@ -55,11 +53,12 @@ export function Settings() {
     }
 
     const initializeDisplayMode = async () => {
+      setIsInitializingDisplayMode(true)
       await loadSidePanelMode()
-      if (isSidePanel) return
+      if (isSidePanelSurface) return
 
       const sidePanel = getSidePanelOpenApi()
-      if (!sidePanel) throw new Error('Side panel is not supported by this browser')
+      if (!sidePanel) return
 
       const [currentWindow] = await Promise.all([
         chrome.windows.getCurrent(),
@@ -70,67 +69,81 @@ export function Settings() {
       if (!disposed) setCurrentWindowId(currentWindow.id)
     }
 
-    initializeDisplayMode().catch(error => {
-      if (!disposed) setDisplayModeError(getErrorMessage(error))
-    })
+    initializeDisplayMode()
+      .catch(() => {})
+      .finally(() => {
+        if (!disposed) setIsInitializingDisplayMode(false)
+      })
     chrome.storage.onChanged.addListener(handleStorageChanged)
     return () => {
       disposed = true
       chrome.storage.onChanged.removeListener(handleStorageChanged)
     }
-  }, [isSidePanel, loadSidePanelMode, syncSidePanelMode])
+  }, [isSidePanelSurface, loadSidePanelMode, syncSidePanelMode])
 
   const menuItems = [
-    { label: 'General', action: () => navigate('/general') },
-    { label: 'Preferred Explorer', action: () => navigate('/preferred-explorer') },
-    { label: 'RPC Endpoint', action: () => navigate('/rpc-endpoint') },
-    { label: 'Security & Privacy', action: () => navigate('/security-privacy') },
-    { label: 'Experimental Features', action: () => navigate('/experimental-features') },
-    { label: 'Help', action: () => navigate('/help') },
-    { label: 'About', action: () => navigate('/about') }
+    {
+      label: 'Address Book',
+      icon: 'lucide:contact-round',
+      action: () => navigate('/address-book')
+    },
+    { label: 'DApps Connection', icon: 'lucide:link', action: () => navigate('/dapp-connections') },
+    { label: 'General', icon: 'lucide:heart', action: () => navigate('/general') },
+    {
+      label: 'Security & Privacy',
+      icon: 'lucide:shield-check',
+      action: () => navigate('/security-privacy')
+    },
+    { label: 'Networks', icon: 'lucide:radio', action: () => navigate('/networks') },
+    {
+      label: 'Default EVM Wallet',
+      icon: 'lucide:wallet',
+      action: () => navigate('/default-evm-wallet')
+    },
+    {
+      label: 'Developer Settings',
+      icon: 'lucide:code',
+      action: () => navigate('/developer-settings')
+    },
+    ...(activeAccount?.walletSource.kind === 'software' &&
+    activeAccount.networks.some(network => network.chain.family === 'zcash')
+      ? [{ label: 'Zcash voting', icon: 'lucide:vote', action: () => navigate('/voting') }]
+      : []),
+    { label: 'Help', icon: 'lucide:circle-help', action: () => navigate('/help') },
+    { label: 'About', icon: 'lucide:info', action: () => navigate('/about') }
   ]
 
   const handleLock = async () => {
-    sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_LOCKED, {
-      pageId: PAGE_IDS.SETTINGS,
-      extra: { reason: 'manual' }
-    })
-    await accountManager.lock()
-    chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }).catch(() => {})
+    await zcashWalletRuntimeClient.lock()
     navigate('/unlock', { replace: true })
   }
 
   const handleDisplayModeChange = async () => {
-    if (!isSidePanelModeLoaded) return
+    if (!isSidePanelModeLoaded || isChangingDisplayMode) return
 
     const nextSidePanelMode = !sidePanelMode
-    const shouldOpenSidePanel = nextSidePanelMode && !isSidePanel
+    const shouldOpenSidePanel = nextSidePanelMode && !isSidePanelSurface
 
     setIsChangingDisplayMode(true)
-    setDisplayModeError(null)
     try {
-      if (shouldOpenSidePanel) {
-        const sidePanel = getSidePanelOpenApi()
-        if (!sidePanel || currentWindowId === null) {
-          throw new Error('Side panel is not ready in the current browser window')
+      let openResult: Promise<boolean> | undefined
+      if (shouldOpenSidePanel && currentWindowId !== null) {
+        // Start within the click gesture; opening is optional once the mode is saved.
+        try {
+          openResult = getSidePanelOpenApi()
+            ?.open({ windowId: currentWindowId })
+            .then(
+              () => true,
+              () => false
+            )
+        } catch {
+          // The toolbar can still open the saved side-panel mode on its next click.
         }
-
-        const openResult = sidePanel.open({ windowId: currentWindowId }).then(
-          () => ({ success: true }) as const,
-          error => ({ success: false, error }) as const
-        )
-        await setSidePanelMode(true)
-        const result = await openResult
-        if (!result.success) {
-          await setSidePanelMode(false)
-          throw result.error
-        }
-        window.close()
-      } else {
-        await setSidePanelMode(nextSidePanelMode)
       }
-    } catch (error) {
-      setDisplayModeError(getErrorMessage(error))
+      await setSidePanelMode(nextSidePanelMode)
+      if (openResult && (await openResult)) window.close()
+    } catch {
+      toast.info('Display mode unchanged.')
     } finally {
       setIsChangingDisplayMode(false)
     }
@@ -140,59 +153,43 @@ export function Settings() {
     <div className="page-container">
       <PageHeader title="Settings" showBack />
 
-      <div className="page-content space-y-2">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={sidePanelMode}
-          aria-label="Side panel mode"
-          disabled={
-            isChangingDisplayMode ||
-            !isSidePanelModeLoaded ||
-            (!sidePanelMode && !isSidePanel && currentWindowId === null)
-          }
-          onClick={handleDisplayModeChange}
-          className="w-full p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait text-left"
-        >
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm">Side panel mode</div>
-              <div className="text-xs text-muted mt-1">
-                {sidePanelMode
-                  ? 'Toolbar icon opens the Chrome side panel'
-                  : isSidePanelModeLoaded
-                    ? 'Toolbar icon opens the wallet popup'
-                    : 'Loading wallet display mode'}
-              </div>
-            </div>
-            <Switch checked={sidePanelMode} />
-          </div>
-        </button>
-        {displayModeError && (
-          <p role="alert" className="px-1 text-xs text-danger">
-            {displayModeError}
-          </p>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4">
+        {sidePanelSupported && (isInitializingDisplayMode || isSidePanelModeLoaded) && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={sidePanelMode}
+            aria-label="Side panel mode"
+            disabled={isChangingDisplayMode || isInitializingDisplayMode || !isSidePanelModeLoaded}
+            onClick={handleDisplayModeChange}
+            className="wallet-interactive flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left enabled:hover:bg-white/5 enabled:active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-50"
+          >
+            <Icon icon="lucide:panel-left" width={20} height={20} />
+            <span className="flex-1 text-base">Sidebar</span>
+            <Switch checked={sidePanelMode} size="md" />
+          </button>
         )}
 
         {menuItems.map((item, index) => (
           <button
             key={index}
             onClick={item.action}
-            className="w-full p-4 bg-card rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+            className="wallet-interactive flex min-h-[63px] w-full items-center gap-4 rounded-lg px-1 text-left hover:bg-white/5 active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-sm">{item.label}</span>
-              <Icon icon="lucide:chevron-right" width={16} height={16} className="text-muted" />
-            </div>
+            <Icon icon={item.icon} width={20} height={20} />
+            <span className="flex-1 text-base">{item.label}</span>
+            <Icon icon="lucide:chevron-right" width={18} height={18} />
           </button>
         ))}
       </div>
 
-      <div className="page-footer space-y-3">
-        <div className="flex justify-center">
-          <SocialLinks />
-        </div>
-        <Button onClick={handleLock} variant="outline" className="w-full h-[45px]">
+      <div className="page-footer">
+        <Button
+          onClick={handleLock}
+          variant="ghost"
+          size="wallet"
+          className="w-full font-normal text-danger hover:text-danger"
+        >
           <Icon icon="lucide:lock" width={16} height={16} className="mr-2" />
           Lock Wallet
         </Button>

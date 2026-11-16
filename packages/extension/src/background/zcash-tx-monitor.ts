@@ -1,34 +1,35 @@
 import { transactionRecorder } from './transaction-recorder'
-import { WALLET_CONFIG, WASM_SELECTION_CONFIRMATIONS } from '@/config/wallet'
-import { getNetworkConfig } from '@/config/networks'
+import { WALLET_CONFIG } from '@/config/wallet'
+import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { lookupTransaction, getBlockCount, type TxLookup } from '@/lib/zcash-node-rpc'
 import {
   decideMonitorSignal,
   isExpiredAtTip,
-  shouldRefreshSpendability,
+  shouldRestoreZcashOriginMonitor,
   type MonitorAction
 } from './tx-monitor-policy'
 import { DEFAULT_EXPIRY_DELTA_BLOCKS } from '@/config/fee'
-import {
-  finalizeTxCatchUp,
-  markWalletNeedsCatchUp,
-  parseAccountKey,
-  runScheduledTxCatchUp
-} from './tx-sync'
-import { accountManager } from '@/core/wallet/account-manager'
+import { finalizeTxCatchUp, parseAccountKey } from './tx-sync'
+import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import { isWalletSettlementComplete } from '@/lib/wallet-settlement'
 import { loadTransactions } from '@/lib/indexed-db'
 import type { TransactionStatusUpdatedMessage } from '@/types/transaction-messages'
-import { getRequiredConfirmations, type ZcashConfirmation } from '@/lib/transaction-status'
+import {
+  getRequiredConfirmations,
+  isRecoverableZcashFailure,
+  type ZcashConfirmation
+} from '@/lib/transaction-status'
 import type { TransactionType } from '@/types'
 import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
+import type { AccountScope } from '@/core/wallet/account-scope'
+import { isAccountScopeForNetwork, resolveAccountScope } from '@/core/wallet/account-scope'
+import { useWalletStore, waitForHydration } from '@/store/wallet-store'
 import { getZcashConfirmationNotificationCopy } from '@/lib/transaction-status-copy'
-import { scheduleSpendabilityCatchUp } from '@/lib/spendability-catch-up'
-import { logger } from '@/lib/logger'
+import { getZcashDestinationCatchUpThreshold } from '@/lib/intents-progress'
+import { deliverTerminalNotificationAndRemoveTask } from './tx-monitor-finalization'
 
-export interface PendingZcashTx {
+export interface PendingZcashTx extends AccountScope {
   txHash: string
-  accountKey: string
   transactionId: string
   amount?: string
   type?: TransactionType
@@ -36,9 +37,8 @@ export interface PendingZcashTx {
   expiryHeight?: number
   settlementPending?: boolean
   requiredScanHeight?: number
-  /** A durable catch-up job has been persisted once funds reach the spendability threshold. */
-  spendabilityCatchUpScheduled?: boolean
   notificationPending?: boolean
+  destinationCatchUpConfirmations?: number
 }
 
 /**
@@ -67,6 +67,7 @@ const POLL_DELAY_MIN = TX_MONITOR_POLL_MS / 60000
 export class ZcashTxMonitor {
   private pendingTxs: Map<string, PendingZcashTx> = new Map()
   private finalizing = new Set<string>()
+  private destinationCatchUpInFlight = new Set<string>()
   private storageWrite: Promise<void> = Promise.resolve()
 
   async init() {
@@ -74,33 +75,24 @@ export class ZcashTxMonitor {
     this.scheduleNextCheck()
   }
 
-  /** Restores persisted transactions that need an on-chain check. */
-  async restoreStuckWithdrawals(accountKeys: string[]): Promise<void> {
+  /**
+   * Recovers missing tasks from durable origin and Zcash-destination records
+   * after a restart or an interrupted monitor storage write.
+   */
+  async restoreStuckWithdrawals(accountScopes: AccountScope[]): Promise<void> {
     await this.storageWrite
     const alreadyMonitored = new Set(this.pendingTxs.keys())
     let added = 0
 
-    for (const accountKey of accountKeys) {
+    for (const accountScope of accountScopes) {
       try {
+        const { accountKey } = accountScope
         const txs = await loadTransactions(accountKey)
         for (const tx of txs) {
-          if (
-            !tx.id.startsWith('wasm_') &&
-            (tx.type === 'send' ||
-              tx.type === 'shield' ||
-              tx.type === 'supply' ||
-              tx.type === 'swap' ||
-              (tx.type === 'receive' && tx.status === 'failed')) &&
-            (tx.status === 'pending' ||
-              tx.status === 'confirming' ||
-              (tx.status === 'failed' &&
-                (tx.type === 'send' || tx.type === 'shield' || tx.type === 'receive'))) &&
-            tx.txHash?.trim() &&
-            !alreadyMonitored.has(tx.txHash)
-          ) {
+          if (shouldRestoreZcashOriginMonitor(tx) && !alreadyMonitored.has(tx.txHash)) {
             this.pendingTxs.set(tx.txHash, {
               txHash: tx.txHash,
-              accountKey,
+              ...accountScope,
               transactionId: tx.id,
               amount: tx.amount,
               type: tx.type,
@@ -118,7 +110,7 @@ export class ZcashTxMonitor {
           ) {
             const entry: PendingZcashTx = {
               txHash: tx.destinationTxHash,
-              accountKey,
+              ...accountScope,
               transactionId: tx.id,
               amount: tx.amount,
               type: tx.type === 'swap' ? 'receive' : tx.type,
@@ -148,14 +140,20 @@ export class ZcashTxMonitor {
     tx: Omit<PendingZcashTx, 'startTime'>,
     options?: { checkImmediately?: boolean }
   ) {
-    const entry: PendingZcashTx = { ...tx, startTime: Date.now() }
+    const accountScope = resolveAccountScope(tx, [])
+    if (!accountScope) {
+      throw new Error('Pending Zcash transaction requires a valid wallet and account identity')
+    }
+    if (!this.isCurrentNetworkTransaction(accountScope)) {
+      throw new Error('Pending Zcash transaction does not match the active network')
+    }
+    const entry: PendingZcashTx = { ...tx, ...accountScope, startTime: Date.now() }
     this.pendingTxs.set(tx.txHash, entry)
     try {
       await this.saveToStorage()
     } finally {
       this.scheduleNextCheck()
     }
-    logger.log(`${TAG} Added transaction for monitoring`)
     console.log(TAG, 'Added tx for monitoring:', tx.txHash)
 
     if (options?.checkImmediately) {
@@ -163,9 +161,29 @@ export class ZcashTxMonitor {
     }
   }
 
+  async removeAccount(walletId: string, accountId?: string): Promise<void> {
+    await this.loadFromStorage()
+    for (const [txHash, transaction] of this.pendingTxs) {
+      if (
+        transaction.walletId === walletId &&
+        (accountId === undefined || transaction.accountId === accountId)
+      ) {
+        this.pendingTxs.delete(txHash)
+      }
+    }
+    await this.saveToStorage()
+    this.scheduleNextCheck()
+  }
+
+  async clear(): Promise<void> {
+    this.pendingTxs.clear()
+    await this.saveToStorage()
+    this.scheduleNextCheck()
+  }
+
   async handleAlarm() {
     await this.loadFromStorage()
-    if (this.pendingTxs.size === 0) {
+    if (!this.hasCurrentNetworkTransactions()) {
       chrome.alarms.clear(ALARM_NAME)
       return
     }
@@ -175,7 +193,7 @@ export class ZcashTxMonitor {
 
   async recheckNow() {
     await this.loadFromStorage()
-    if (this.pendingTxs.size === 0) return
+    if (!this.hasCurrentNetworkTransactions()) return
     await this.runCheck()
   }
 
@@ -185,7 +203,7 @@ export class ZcashTxMonitor {
   }
 
   private scheduleNextCheck() {
-    if (this.pendingTxs.size === 0) {
+    if (!this.hasCurrentNetworkTransactions()) {
       chrome.alarms.clear(ALARM_NAME)
       return
     }
@@ -193,32 +211,80 @@ export class ZcashTxMonitor {
   }
 
   private async runCheck() {
-    const promises = Array.from(this.pendingTxs.values()).map(tx => this.checkTx(tx))
+    const promises = Array.from(this.pendingTxs.values())
+      .filter(tx => this.isCurrentNetworkTransaction(tx))
+      .map(tx => this.checkTx(tx))
     await Promise.allSettled(promises)
   }
 
-  private async loadFromStorage() {
-    const read = this.storageWrite.then(async () => {
-      const result = await chrome.storage.local.get(STORAGE_KEY)
-      if (result[STORAGE_KEY]) {
-        const txs: PendingZcashTx[] = result[STORAGE_KEY]
-        txs.forEach(tx => this.pendingTxs.set(tx.txHash, tx))
-      }
-    })
-    this.storageWrite = read.catch(() => {})
-    await read
+  private hasCurrentNetworkTransactions(): boolean {
+    return Array.from(this.pendingTxs.values()).some(tx => this.isCurrentNetworkTransaction(tx))
   }
 
-  private async saveToStorage(change?: () => void, rollback?: () => void) {
-    const write = this.storageWrite.then(async () => {
-      change?.()
-      try {
-        await chrome.storage.local.set({ [STORAGE_KEY]: Array.from(this.pendingTxs.values()) })
-      } catch (error) {
-        rollback?.()
-        throw error
+  private isCurrentNetworkTransaction(tx: AccountScope): boolean {
+    return isAccountScopeForNetwork(tx, DEFAULT_NETWORK)
+  }
+
+  private async loadFromStorage() {
+    try {
+      await this.storageWrite
+      await waitForHydration()
+      const result = await chrome.storage.local.get(STORAGE_KEY)
+      const stored = result[STORAGE_KEY]
+      if (Array.isArray(stored)) {
+        this.pendingTxs.clear()
+        const wallets = useWalletStore.getState().wallets
+        let migrated = false
+        let hasUnresolvedRecords = false
+
+        for (const value of stored) {
+          if (!value || typeof value !== 'object') {
+            hasUnresolvedRecords = true
+            continue
+          }
+          const tx = value as Partial<PendingZcashTx>
+          if (
+            typeof tx.txHash !== 'string' ||
+            typeof tx.transactionId !== 'string' ||
+            typeof tx.startTime !== 'number'
+          ) {
+            hasUnresolvedRecords = true
+            continue
+          }
+
+          const accountScope = resolveAccountScope(tx, wallets)
+          if (!accountScope) {
+            hasUnresolvedRecords = true
+            console.warn(TAG, 'Skipped pending tx with unresolved account identity:', tx.txHash)
+            continue
+          }
+
+          const normalized: PendingZcashTx = {
+            ...tx,
+            ...accountScope,
+            txHash: tx.txHash,
+            transactionId: tx.transactionId,
+            startTime: tx.startTime
+          }
+          if (tx.walletId !== accountScope.walletId || tx.accountId !== accountScope.accountId) {
+            migrated = true
+          }
+          this.pendingTxs.set(normalized.txHash, normalized)
+        }
+
+        if (migrated && !hasUnresolvedRecords) {
+          await this.saveToStorage()
+        }
       }
-    })
+    } catch (error) {
+      console.error(TAG, 'Failed to load from storage:', error)
+    }
+  }
+
+  private async saveToStorage() {
+    const write = this.storageWrite.then(() =>
+      chrome.storage.local.set({ [STORAGE_KEY]: Array.from(this.pendingTxs.values()) })
+    )
     this.storageWrite = write.catch(() => {})
     await write
   }
@@ -233,12 +299,11 @@ export class ZcashTxMonitor {
       if (record.status === 'failed') {
         const recordHash = record.txHash?.trim().toLowerCase()
         const recoverable =
-          !record.id.startsWith('wasm_') &&
-          (record.type === 'send' || record.type === 'shield' || record.type === 'receive') &&
+          isRecoverableZcashFailure(record) &&
           (tx.type == null || record.type === tx.type) &&
           (!recordHash || recordHash === tx.txHash.trim().toLowerCase())
         if (recoverable) {
-          const rpcUrl = this.rpcUrlFor(tx)
+          const rpcUrl = this.rpcUrlForCurrentNetwork()
           const lookup = rpcUrl
             ? await lookupTransaction(rpcUrl, tx.txHash)
             : ({ status: 'error' } as const)
@@ -251,10 +316,7 @@ export class ZcashTxMonitor {
                 lookup.confirmations,
                 undefined,
                 true,
-                {
-                  txHash: tx.txHash,
-                  confirmations: lookup.confirmations
-                }
+                { txHash: tx.txHash, confirmations: lookup.confirmations }
               )
             }
             return
@@ -278,10 +340,17 @@ export class ZcashTxMonitor {
         record.status === 'success' &&
         (tx.notificationPending || !isIntentsSettledTransaction(tx.type))
       ) {
-        await this.finalizeTx(tx, record.status, 'confirmed', record.confirmations, undefined, true)
+        await this.finalizeTx(
+          tx,
+          record.status,
+          record.status === 'success' ? 'confirmed' : (record.failureReason ?? 'timeout'),
+          record.confirmations,
+          undefined,
+          true
+        )
         return
       }
-      const rpcUrl = this.rpcUrlFor(tx)
+      const rpcUrl = this.rpcUrlForCurrentNetwork()
       const lookup: TxLookup = rpcUrl
         ? await lookupTransaction(rpcUrl, tx.txHash)
         : { status: 'error' }
@@ -336,11 +405,7 @@ export class ZcashTxMonitor {
           'success',
           'confirmed',
           lookup.status === 'confirmed' ? lookup.confirmations : undefined,
-          requiredScanHeight,
-          false,
-          lookup.status === 'confirmed'
-            ? { txHash: tx.txHash, confirmations: lookup.confirmations }
-            : undefined
+          requiredScanHeight
         )
         return
       case 'expire':
@@ -365,22 +430,20 @@ export class ZcashTxMonitor {
         await this.removePersistedTask(tx)
         return
       case 'wait':
-        if (lookup.status === 'confirmed' && lookup.confirmations > 0) {
-          await this.refreshSpendability(tx, lookup.confirmations)
-          if (isIntentsSettledTransaction(tx.type)) {
-            await this.updateIntentsOriginConfirmations(tx, lookup.confirmations)
-          } else {
-            await this.updateConfirmingStatus(tx, lookup.confirmations)
-          }
+        if (
+          lookup.status === 'confirmed' &&
+          lookup.confirmations > 0 &&
+          !isIntentsSettledTransaction(tx.type)
+        ) {
+          await this.updateConfirmingStatus(tx, lookup.confirmations)
+          await this.catchUpZcashDestination(tx, lookup.confirmations)
         }
         return
     }
   }
 
-  private rpcUrlFor(tx: PendingZcashTx): string | undefined {
-    // accountKey format: `${network}_${walletId}_${accountId}`
-    const network = tx.accountKey.startsWith('testnet') ? 'testnet' : 'mainnet'
-    return getNetworkConfig(network).nodeRpcUrl || undefined
+  private rpcUrlForCurrentNetwork(): string | undefined {
+    return getNetworkConfig(DEFAULT_NETWORK).nodeRpcUrl || undefined
   }
 
   private async isAlreadyConfirmedInDB(tx: PendingZcashTx): Promise<boolean> {
@@ -407,8 +470,6 @@ export class ZcashTxMonitor {
       notified: false,
       ...(confirmations != null ? { confirmations, requiredConfirmations } : {})
     })
-    const persisted = await loadTransactions(tx.accountKey)
-    if (!persisted.some(record => record.id === tx.transactionId)) return
     await this.removePersistedTask(tx)
 
     void finalizeTxCatchUp(tx.accountKey).catch(err => {
@@ -417,71 +478,54 @@ export class ZcashTxMonitor {
   }
 
   private async updateConfirmingStatus(tx: PendingZcashTx, confirmations: number) {
-    try {
-      const txs = await loadTransactions(tx.accountKey)
-      const record = txs.find(t => t.id === tx.transactionId)
-      if (!record || record.status === 'success' || record.status === 'failed') return
+    const txs = await loadTransactions(tx.accountKey)
+    const record = txs.find(t => t.id === tx.transactionId)
+    if (!record || record.status === 'success' || record.status === 'failed') return
+    if (
+      record.status === 'confirming' ||
+      record.status === 'relay_confirmed' ||
+      record.status === 'pending'
+    ) {
+      const required = getRequiredConfirmations(tx.type ?? 'send')
       if (
-        record.status === 'confirming' ||
-        record.status === 'relay_confirmed' ||
-        record.status === 'pending'
+        record.status === 'confirming' &&
+        record.confirmations === confirmations &&
+        record.requiredConfirmations === required
       ) {
-        const required = getRequiredConfirmations(tx.type ?? 'send')
-        if (
-          record.status === 'confirming' &&
-          record.confirmations === confirmations &&
-          record.requiredConfirmations === required
-        ) {
-          return
-        }
-        await transactionRecorder.updateTransaction(tx.accountKey, tx.transactionId, {
-          status: 'confirming',
-          confirmations,
-          requiredConfirmations: required
-        })
-        console.log(TAG, `Tx ${tx.txHash} confirming (${confirmations}/${required})`)
+        return
       }
-    } catch (error) {
-      console.error(TAG, 'Failed to update confirming status:', error)
+      await transactionRecorder.updateTransaction(tx.accountKey, tx.transactionId, {
+        status: 'confirming',
+        confirmations,
+        requiredConfirmations: required
+      })
+      console.log(TAG, `Tx ${tx.txHash} confirming (${confirmations}/${required})`)
     }
   }
 
-  private async updateIntentsOriginConfirmations(tx: PendingZcashTx, confirmations: number) {
-    const requiredConfirmations = getRequiredConfirmations(tx.type ?? 'send')
-    await transactionRecorder.updateTransaction(tx.accountKey, tx.transactionId, {
-      status: 'pending',
-      confirmations,
-      requiredConfirmations
-    })
-  }
-
-  private async refreshSpendability(tx: PendingZcashTx, confirmations: number): Promise<void> {
+  private async catchUpZcashDestination(tx: PendingZcashTx, confirmations: number): Promise<void> {
+    if (tx.type !== 'receive' && tx.type !== 'withdraw' && tx.type !== 'claim') return
+    const threshold = getZcashDestinationCatchUpThreshold(confirmations)
     if (
-      !shouldRefreshSpendability(
-        confirmations,
-        WASM_SELECTION_CONFIRMATIONS,
-        tx.spendabilityCatchUpScheduled
-      )
+      threshold <= (tx.destinationCatchUpConfirmations ?? 0) ||
+      this.destinationCatchUpInFlight.has(tx.txHash)
     ) {
       return
     }
-
+    this.destinationCatchUpInFlight.add(tx.txHash)
     try {
-      const parsed = parseAccountKey(tx.accountKey)
-      if (!parsed) return
-      await scheduleSpendabilityCatchUp(
-        () => markWalletNeedsCatchUp(parsed.walletId, parsed.accountId),
-        async () => {
-          tx.spendabilityCatchUpScheduled = true
-          this.pendingTxs.set(tx.txHash, tx)
-          await this.saveToStorage()
-        },
-        () => runScheduledTxCatchUp(tx.accountKey)
-      )
-    } catch (error) {
-      console.error(TAG, 'Spendability balance refresh failed:', error)
-      tx.spendabilityCatchUpScheduled = false
-      this.pendingTxs.set(tx.txHash, tx)
+      await finalizeTxCatchUp(tx.accountKey)
+      if (!this.pendingTxs.has(tx.txHash)) return
+      const updated = { ...tx, destinationCatchUpConfirmations: threshold }
+      this.pendingTxs.set(tx.txHash, updated)
+      try {
+        await this.saveToStorage()
+      } catch (error) {
+        this.pendingTxs.set(tx.txHash, tx)
+        throw error
+      }
+    } finally {
+      this.destinationCatchUpInFlight.delete(tx.txHash)
     }
   }
 
@@ -500,6 +544,9 @@ export class ZcashTxMonitor {
     this.finalizing.add(tx.txHash)
     try {
       if (status === 'success' && !tx.notificationPending && !alreadyTerminal) {
+        if (confirmations != null) {
+          await this.updateConfirmingStatus(tx, confirmations)
+        }
         if (!tx.settlementPending) {
           tx.settlementPending = true
           tx.requiredScanHeight = requiredScanHeight
@@ -509,7 +556,9 @@ export class ZcashTxMonitor {
 
         const caughtUp = await finalizeTxCatchUp(tx.accountKey)
         const parsed = parseAccountKey(tx.accountKey)
-        const scannedHeight = parsed ? accountManager.getWalletScannedHeight(parsed.walletId) : 0
+        const scannedHeight = parsed
+          ? backgroundZcashWalletRuntime.getWalletScannedHeight(parsed.walletId)
+          : 0
         if (!isWalletSettlementComplete(caughtUp, scannedHeight, tx.requiredScanHeight)) {
           console.log(TAG, 'Confirmed tx is waiting for wallet settlement:', {
             txHash: tx.txHash,
@@ -533,17 +582,11 @@ export class ZcashTxMonitor {
         return
       }
       if (shouldNotify && !tx.notificationPending) {
-        await this.saveToStorage(
-          () => {
-            tx.notificationPending = true
-            this.pendingTxs.set(tx.txHash, tx)
-          },
-          () => {
-            tx.notificationPending = false
-          }
-        )
+        tx.notificationPending = true
+        this.pendingTxs.set(tx.txHash, tx)
+        await this.saveToStorage()
       }
-      let canNotify = !shouldNotify
+      let canNotify = false
       if (shouldNotify) {
         const notification = await transactionRecorder.markTerminalNotified(
           tx.accountKey,
@@ -553,25 +596,27 @@ export class ZcashTxMonitor {
         if (!notification.found) return
         canNotify = notification.newlyNotified
       }
-      await this.removePersistedTask(tx)
-      if (tx.notificationPending && canNotify) {
-        this.notifyFrontend(tx, status, reason)
-        this.showNotification(tx, status, reason)
-      }
+      await deliverTerminalNotificationAndRemoveTask(
+        !!tx.notificationPending && canNotify,
+        () => {
+          this.notifyFrontend(tx, status, reason)
+          this.showNotification(tx, status, reason)
+        },
+        () => this.removePersistedTask(tx)
+      )
     } finally {
       this.finalizing.delete(tx.txHash)
     }
   }
 
-  private async removePersistedTask(tx: PendingZcashTx) {
-    await this.saveToStorage(
-      () => {
-        this.pendingTxs.delete(tx.txHash)
-      },
-      () => {
-        this.pendingTxs.set(tx.txHash, tx)
-      }
-    )
+  private async removePersistedTask(tx: PendingZcashTx): Promise<void> {
+    this.pendingTxs.delete(tx.txHash)
+    try {
+      await this.saveToStorage()
+    } catch (error) {
+      this.pendingTxs.set(tx.txHash, tx)
+      throw error
+    }
   }
 
   private async updateIndexedDB(

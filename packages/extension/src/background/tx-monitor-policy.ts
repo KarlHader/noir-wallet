@@ -1,4 +1,24 @@
 import type { TxLookup } from '@/lib/zcash-node-rpc'
+import { isRecoverableZcashFailure } from '@/lib/transaction-status'
+import type { Transaction } from '@/types/wallet'
+
+export function shouldRestoreZcashOriginMonitor(
+  transaction: Pick<Transaction, 'id' | 'type' | 'status' | 'txHash'>
+): boolean {
+  const activeOriginType =
+    transaction.type === 'send' ||
+    transaction.type === 'shield' ||
+    transaction.type === 'unshield' ||
+    transaction.type === 'supply' ||
+    transaction.type === 'swap'
+  return (
+    !transaction.id.startsWith('wasm_') &&
+    ((activeOriginType &&
+      (transaction.status === 'pending' || transaction.status === 'confirming')) ||
+      isRecoverableZcashFailure(transaction)) &&
+    !!transaction.txHash?.trim()
+  )
+}
 
 /** Action the monitor should take for a pending tx after a single check. */
 export type MonitorAction = 'confirm' | 'expire' | 'timeout' | 'clear' | 'wait'
@@ -23,14 +43,6 @@ export function isExpiredAtTip(
   bufferBlocks: number
 ): boolean {
   return tip != null && expiryHeight != null && tip >= expiryHeight + bufferBlocks
-}
-
-export function shouldRefreshSpendability(
-  confirmations: number,
-  requiredConfirmations: number,
-  refreshRequested: boolean | undefined
-): boolean {
-  return confirmations >= requiredConfirmations && refreshRequested !== true
 }
 
 /**

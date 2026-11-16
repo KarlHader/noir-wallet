@@ -1,62 +1,26 @@
 import { useMemo, useEffect, useRef } from 'react'
 import { Icon } from '@iconify/react'
-import {
-  useAccountDataStore,
-  formatTransactionForDisplay,
-  buildAccountKey
-} from '@/store/account-data-store'
+import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { TokenIcon } from '../tokens/TokenIcon'
-import { WALLET_CONFIG } from '@/config/wallet'
-import { getNetworkConfig } from '@/config/networks'
-import { getTransactionConfirmations } from '@/lib/zcash-node-rpc'
 import { useWalletStore } from '@/store/wallet-store'
-import type { Transaction } from '@/types'
+import { getCrossChainCompletionStatus } from '@/lib/cross-chain-transaction'
+import { ListSkeleton } from '../ui/skeleton'
 import { useIntentsProgress } from '../../hooks/useIntentsProgress'
-import { isTerminalIntentsStatus } from '@/lib/intents-progress'
-import { getIntentsStatusCopy, type TransactionStatusTone } from '@/lib/transaction-status-copy'
+import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
+import { recheckPendingTransaction } from '@/popup/services/pending-transaction-recheck'
+import { buildTransactionDateGroups } from '@/popup/services/transaction-list-model'
+import type { AssetDomain } from '@/popup/services/asset-domains'
 
 interface TransactionListProps {
   network: 'mainnet' | 'testnet'
+  domain?: AssetDomain
   onItemClick?: (txId: string) => void
-}
-
-async function checkZcashTxOnChain(
-  txHash: string,
-  network: 'mainnet' | 'testnet'
-): Promise<boolean> {
-  const rpcUrl = getNetworkConfig(network).nodeRpcUrl
-  if (!rpcUrl) return false
-
-  const confirmations = await getTransactionConfirmations(rpcUrl, txHash)
-  return confirmations !== null && confirmations >= WALLET_CONFIG.MIN_CONFIRMATIONS
-}
-
-async function recheckPendingTx(tx: Transaction): Promise<Partial<Transaction> | null> {
-  if (tx.txHash && (tx.type === 'send' || tx.type === 'shield')) {
-    const confirmed = await checkZcashTxOnChain(tx.txHash, tx.network)
-    return confirmed ? { status: 'success', notified: true } : null
-  }
-
-  // Tx stuck without txHash for > 10 min means the WASM call failed but the
-  // status update was lost (e.g. popup closed before background could notify).
-  const ORPHAN_TIMEOUT_MS = 10 * 60 * 1000
-  if (!tx.txHash && Date.now() - tx.timestamp > ORPHAN_TIMEOUT_MS) {
-    return { status: 'failed', notified: true }
-  }
-
-  return null
-}
-
-function getStatusClassName(tone: TransactionStatusTone): string {
-  if (tone === 'error') return 'text-red-500'
-  if (tone === 'success') return 'text-green-500'
-  return 'text-yellow-500'
 }
 
 /**
  * Displays transaction history grouped by date
  */
-export function TransactionList({ network, onItemClick }: TransactionListProps) {
+export function TransactionList({ network, domain = 'all', onItemClick }: TransactionListProps) {
   const transactions = useAccountDataStore(state => state.getCurrentTransactions())
   const reloadTransactions = useAccountDataStore(state => state.reloadTransactions)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -64,8 +28,11 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
   const accountKey =
     currentWalletId && currentAccountId
       ? buildAccountKey(network, currentWalletId, currentAccountId)
-      : undefined
-  const intentsProgress = useIntentsProgress(accountKey)
+      : null
+  const hasTransactionCache = useAccountDataStore(state =>
+    accountKey ? state.transactionsCache.has(accountKey) : true
+  )
+  const intentsProgress = useIntentsProgress(accountKey ?? undefined)
   const isSyncing = useAccountDataStore(state =>
     currentWalletId ? state.getWalletSyncState(network, currentWalletId).isSyncing : false
   )
@@ -77,7 +44,6 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
     if (currentAccountId && currentWalletId) {
       const currentNetwork = useWalletStore.getState().currentNetwork
       const accountKey = buildAccountKey(currentNetwork, currentWalletId, currentAccountId)
-      console.log('[TransactionList] Reloading for:', accountKey)
       reloadTransactions(accountKey).catch(console.error)
     }
   }, [currentWalletId, currentAccountId, reloadTransactions, isSyncing])
@@ -93,7 +59,10 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
           (tx.status === 'failed' &&
             !tx.id.startsWith('wasm_') &&
             !!tx.txHash?.trim() &&
-            (tx.type === 'send' || tx.type === 'shield' || tx.type === 'receive')))
+            (tx.type === 'send' ||
+              tx.type === 'shield' ||
+              tx.type === 'receive' ||
+              tx.type === 'unshield')))
     )
     if (backgroundRecheckTxs.length === 0 || !accountKey) return
     recheckedRef.current = true
@@ -103,15 +72,17 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
     const { updateTransaction } = useAccountDataStore.getState()
     const foregroundRecheckTxs = backgroundRecheckTxs.filter(
       tx =>
-        tx.type !== 'swap' &&
-        tx.type !== 'supply' &&
         tx.type !== 'withdraw' &&
         tx.type !== 'claim' &&
-        tx.status === 'pending'
+        (tx.status === 'pending' ||
+          (tx.status === 'relay_confirmed' &&
+            getCrossChainCompletionStatus(tx.type, {
+              destinationAsset: tx.quoteBinding?.destinationAsset
+            }) === 'success'))
     )
     foregroundRecheckTxs.forEach(async tx => {
       try {
-        const updates = await recheckPendingTx(tx)
+        const updates = await recheckPendingTransaction(tx)
         if (updates) {
           await updateTransaction(tx.id, updates)
         }
@@ -119,45 +90,14 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
     })
   }, [transactions, network, accountKey])
 
-  const groups = useMemo(() => {
-    const localFiltered = transactions.filter(tx => tx.network === network)
+  const groups = useMemo(
+    () => buildTransactionDateGroups(transactions, network, intentsProgress, domain),
+    [transactions, network, intentsProgress, domain]
+  )
 
-    const localItems = localFiltered
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .map(tx => {
-        const formatted = formatTransactionForDisplay(tx)
-        const progress = intentsProgress.find(
-          entry =>
-            entry.transactionId === tx.id &&
-            !isTerminalIntentsStatus(entry.status) &&
-            (entry.kind !== 'swap' || entry.direction === 'from_zcash')
-        )
-        const progressCopy = progress ? getIntentsStatusCopy(progress.status) : null
-        return {
-          ...formatted,
-          status: progressCopy?.compactLabel ?? formatted.status,
-          statusTone: progressCopy?.tone ?? formatted.statusTone,
-          statusDescription: progressCopy?.description ?? formatted.statusDescription,
-          timestamp: tx.timestamp,
-          isWasm: false,
-          intentsProgress: progress
-        }
-      })
-
-    const allItems = localItems
-
-    const dateMap = new Map<string, typeof allItems>()
-    for (const item of allItems) {
-      const existing = dateMap.get(item.date)
-      if (existing) {
-        existing.push(item)
-      } else {
-        dateMap.set(item.date, [item])
-      }
-    }
-
-    return Array.from(dateMap.entries()).map(([date, items]) => ({ date, items }))
-  }, [transactions, network, intentsProgress])
+  if (!hasTransactionCache && groups.length === 0) {
+    return <ListSkeleton rows={3} label="Loading transactions" className="px-5" />
+  }
 
   if (groups.length === 0) {
     return (
@@ -192,6 +132,7 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
                     />
                     <TokenIcon
                       symbol="ZEC"
+                      nativeChain="zcash"
                       size={12}
                       className="absolute bottom-0 right-0 rounded-full"
                     />
@@ -202,19 +143,21 @@ export function TransactionList({ network, onItemClick }: TransactionListProps) 
                         ? 'Received'
                         : tx.type === 'shield'
                           ? 'Shielded'
-                          : tx.type === 'swap'
-                            ? 'Swap'
-                            : tx.type === 'supply'
-                              ? 'Supply'
-                              : tx.type === 'withdraw'
-                                ? 'Withdraw'
-                                : tx.type === 'claim'
-                                  ? 'Claim'
-                                  : 'Sent'}{' '}
+                          : tx.type === 'unshield'
+                            ? 'Unshielded'
+                            : tx.type === 'swap'
+                              ? 'Swap'
+                              : tx.type === 'supply'
+                                ? 'Supply'
+                                : tx.type === 'withdraw'
+                                  ? 'Withdraw'
+                                  : tx.type === 'claim'
+                                    ? 'Claim'
+                                    : 'Sent'}{' '}
                       ZEC
                     </p>
                     <p
-                      className={`truncate text-xs ${getStatusClassName(tx.statusTone)}`}
+                      className={`truncate text-xs ${getTransactionStatusToneClassName(tx.statusTone)}`}
                       title={
                         tx.intentsProgress
                           ? `Deposit: ${tx.intentsProgress.depositAddress}\nUpdated: ${new Date(

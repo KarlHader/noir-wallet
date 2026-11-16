@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { accountManager, type WalletBackupVerification } from '@/core/wallet/account-manager'
-import { didWalletSessionEnd } from '@/core/wallet/session-state'
+import type { WalletBackupVerification } from '@/core/wallet/secret-phrase-backup'
+import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { classifyError } from '@/lib/errors'
-import { useWalletStore } from '@/store/wallet-store'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 
 export function useWalletBackupVerification(walletId: string | null) {
-  const walletExists = useWalletStore(state => Boolean(walletId && state.getWallet(walletId)))
   const [wordIndices, setWordIndices] = useState<[number, number] | null>(null)
   const [words, setWords] = useState<[string, string]>(['', ''])
   const [error, setError] = useState('')
   const [isPreparing, setIsPreparing] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const mounted = useRef(false)
   const version = useRef(0)
-  const submitting = useRef(false)
+  const mounted = useRef(false)
   const sessionEnded = useRef(false)
+  const submitting = useRef(false)
 
   const reset = useCallback(() => {
     version.current += 1
@@ -25,47 +24,36 @@ export function useWalletBackupVerification(walletId: string | null) {
     setIsSubmitting(false)
   }, [])
 
-  const isCurrent = useCallback(
-    (requestVersion: number) =>
-      mounted.current &&
-      !sessionEnded.current &&
-      requestVersion === version.current &&
-      !accountManager.isLocked(),
-    []
-  )
-
   useEffect(() => {
     mounted.current = true
     sessionEnded.current = false
     reset()
-    const handleSessionChange = (
+    const onStorageChange = (
       changes: Record<string, chrome.storage.StorageChange>,
-      areaName: string
+      area: string
     ) => {
-      if (!didWalletSessionEnd(changes, areaName)) return
+      if (!didCredentialSessionEnd(changes, area)) return
       sessionEnded.current = true
       reset()
     }
-    chrome.storage.onChanged.addListener(handleSessionChange)
+    chrome.storage.onChanged.addListener(onStorageChange)
     return () => {
       mounted.current = false
       version.current += 1
-      chrome.storage.onChanged.removeListener(handleSessionChange)
+      chrome.storage.onChanged.removeListener(onStorageChange)
     }
   }, [walletId, reset])
 
-  useEffect(() => {
-    if (!walletExists) reset()
-  }, [walletExists, reset])
+  const isCurrent = (requestVersion: number) =>
+    mounted.current && !sessionEnded.current && version.current === requestVersion
 
   const prepare = useCallback(async () => {
-    if (!walletId || submitting.current || sessionEnded.current || accountManager.isLocked())
-      return false
+    if (!walletId || sessionEnded.current || submitting.current) return false
     reset()
     const requestVersion = version.current
     setIsPreparing(true)
     try {
-      const indices = await accountManager.getWalletBackupWordIndices(walletId)
+      const indices = await zcashWalletRuntimeClient.getWalletBackupWordIndices(walletId)
       if (!isCurrent(requestVersion)) return false
       setWordIndices(indices)
       return true
@@ -75,7 +63,7 @@ export function useWalletBackupVerification(walletId: string | null) {
     } finally {
       if (isCurrent(requestVersion)) setIsPreparing(false)
     }
-  }, [walletId, reset, isCurrent])
+  }, [walletId, reset])
 
   const setWord = (position: number, value: string) => {
     if (submitting.current || (position !== 0 && position !== 1)) return
@@ -93,15 +81,7 @@ export function useWalletBackupVerification(walletId: string | null) {
 
   const submit = async (action: (verification: WalletBackupVerification) => Promise<void>) => {
     const requestVersion = version.current
-    if (
-      !canSubmit ||
-      !wordIndices ||
-      submitting.current ||
-      !isCurrent(requestVersion) ||
-      !walletId ||
-      !useWalletStore.getState().getWallet(walletId)
-    )
-      return
+    if (!wordIndices || !canSubmit || submitting.current || !isCurrent(requestVersion)) return
     submitting.current = true
     setIsSubmitting(true)
     setError('')

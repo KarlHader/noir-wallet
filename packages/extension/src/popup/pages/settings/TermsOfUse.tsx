@@ -147,10 +147,9 @@ Ref Labs' total liability for any claim relating to the Services will not exceed
 
 interface TermsOfUseProps {
   embedded?: boolean
-  onClose?: () => void
 }
 
-export function TermsOfUse({ embedded, onClose }: TermsOfUseProps = {}) {
+export function TermsOfUse({ embedded }: TermsOfUseProps = {}) {
   const content = (
     <>
       <p className="text-xs text-muted mb-4">Last Updated: {TERMS_LAST_UPDATED}</p>

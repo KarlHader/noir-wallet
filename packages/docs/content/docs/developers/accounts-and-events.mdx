@@ -58,6 +58,4 @@ wallet.zcash.on('accountsChanged', handleAccountsChanged)
 wallet.zcash.removeListener('accountsChanged', handleAccountsChanged)
 ```
 
-The event carries the active account's `{ transparent, shielded }` addresses, `[]` when locked, or
-`null` when disconnected or the active account is unauthorized. After any event, call
-`getAccounts()` again before using cached account data. A locked wallet returns `null` until unlocked.
+The event carries the active account's `{ transparent, shielded }` addresses, `[]` when locked, or `null` when disconnected or the active account is unauthorized. After any event, call `getAccounts()` again before using cached account data. A locked wallet returns `null` until unlocked.

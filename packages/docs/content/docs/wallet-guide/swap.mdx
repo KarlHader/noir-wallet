@@ -10,13 +10,18 @@ On mainnet, Noir Wallet can route supported swaps through external liquidity and
   <Step>
     ### Choose assets and amount
 
-    Select the asset you are paying and the asset you want to receive.
+    Select the asset you are paying and the asset you want to receive. Swap starts with assets
+    available on networks enabled for the current account. A saved pair is restored when its
+    source remains available. You can still choose another supported destination network.
+    For ZEC, select Shielded or Transparent funds when available. Keystone accounts cannot use
+    Transparent ZEC as the funding source.
 
   </Step>
   <Step>
     ### Review the quote
 
-    Check the selected destination or refund address before requesting a quote. On **Review Quote**,
+    For ZEC, choose an address from a Zcash wallet or enter a destination address if the current
+    account has none. Check the destination or refund address before requesting a quote. On **Review Quote**,
     check the recipient, estimated output, minimum received, price impact, slippage, and any ZEC network fee.
     A quote can change before submission.
 
@@ -24,10 +29,14 @@ On mainnet, Noir Wallet can route supported swaps through external liquidity and
   <Step>
     ### Fund the quoted deposit
 
-    For a swap from ZEC, approve the wallet's Zcash transaction. For a swap into ZEC, copy or scan
-    the quoted deposit address and send the shown amount and token on the displayed network from
-    the source-chain wallet. An incorrect token or network may prevent a refund. The wallet then
-    monitors the deposit or relay.
+    Approve the wallet's transfer from the selected source account to the quoted deposit address.
+    A ZEC quote uses a transparent refund address.
+    Depending on the chain and account, this may require a hardware-signing step. Check the source
+    network and token before approval; sending another token or using another network can prevent
+    a refund. The wallet then monitors the deposit or relay.
+
+    If an EVM token needs a separate approval, submit it first. Once it is confirmed, select
+    **Continue Swap** to refresh the quote and review the swap before confirming it.
 
   </Step>
   <Step>

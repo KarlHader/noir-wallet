@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node ../../scripts/run-core-tests.mjs",
+    "test": "node --import ../../scripts/register-test-loader.mjs --test tests/*.test.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

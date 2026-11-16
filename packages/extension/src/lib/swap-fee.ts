@@ -8,13 +8,14 @@ interface FeeEstimate {
   error: boolean
 }
 
-/** A Max estimate only applies to its exact amount, even when the old amount is affordable. */
+/** A Max fee estimate belongs to its exact amount. */
 export function selectSwapFeeEstimate(
   amount: string,
   maxSelected: boolean,
   maxAmount: string | null,
   maxEstimate: FeeEstimate,
-  amountEstimate: FeeEstimate
+  amountEstimate: FeeEstimate,
+  now = Date.now()
 ) {
   const matchesMax = maxAmount !== null && safeBig(amount || '0').eq(maxAmount)
   const staleMax = maxSelected && maxAmount !== null && !matchesMax
@@ -26,9 +27,8 @@ export function selectSwapFeeEstimate(
     Number.isSafeInteger(feeZats) &&
     feeZats > 0 &&
     !!feeQuote &&
-    feeQuote.expiresAt > Date.now() &&
+    feeQuote.expiresAt > now &&
     !estimate?.loading &&
     !estimate?.error
-
   return { feeZats, feeQuote, ready, staleMax }
 }

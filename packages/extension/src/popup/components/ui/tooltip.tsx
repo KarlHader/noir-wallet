@@ -5,12 +5,14 @@ import { cn } from '@/lib/utils'
 
 function TooltipProvider({
   delayDuration = 0,
+  disableHoverableContent = true,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
   return (
     <TooltipPrimitive.Provider
       data-slot="tooltip-provider"
       delayDuration={delayDuration}
+      disableHoverableContent={disableHoverableContent}
       {...props}
     />
   )
@@ -49,7 +51,7 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          'bg-foreground text-background animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 w-fit max-w-[200px] origin-(--radix-tooltip-content-transform-origin) rounded-md px-3 py-1.5 text-xs text-balance',
+          'pointer-events-none bg-foreground text-background animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 w-fit max-w-[200px] origin-(--radix-tooltip-content-transform-origin) rounded-md px-3 py-1.5 text-xs text-balance',
           className
         )}
         {...props}
@@ -65,17 +67,23 @@ function Tooltip({
   content,
   children,
   side,
-  className
+  sideOffset,
+  className,
+  open,
+  onOpenChange
 }: {
   content: React.ReactNode
   children: React.ReactNode
   side?: 'top' | 'bottom' | 'left' | 'right'
+  sideOffset?: number
   className?: string
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   return (
-    <_Tooltip>
+    <_Tooltip open={open} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side={side} className={className}>
+      <TooltipContent side={side} sideOffset={sideOffset} className={className}>
         {content}
       </TooltipContent>
     </_Tooltip>

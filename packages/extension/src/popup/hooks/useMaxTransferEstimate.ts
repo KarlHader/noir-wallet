@@ -1,27 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { accountManager } from '@/core/wallet/account-manager'
-import { marginalFeeForTier, type FeeQuote, type FeeTier } from '@/config/fee'
-import { safeBig } from '@/lib/big'
+import type { FeeQuote, FeeTier } from '@/config/fee'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { ZEC_DECIMALS } from '@/config/wallet'
 import type { FundingSource } from '@/types'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
+import { getFundingBalance } from '@/core/wallet/funding-balance'
+import { safeBig } from '@/lib/big'
+import type { MaxTransferEstimate } from '@/popup/services/zcash-wallet-runtime-client'
+import {
+  MaxTransferEstimateCache,
+  type MaxTransferContext
+} from '@/popup/services/max-transfer-estimate-cache'
 
-export interface MaxTransferEstimateState {
+interface TierEstimate {
   maxAmount: string | null
   fee: string | null
   feeQuote: FeeQuote | null
   loading: boolean
   error: boolean
+  request: (refresh?: boolean) => Promise<void>
+  update: (estimate: MaxTransferEstimate, to: string) => void
+  estimateForTarget: (to: string) => Promise<MaxTransferEstimate | null>
+}
+
+export interface MaxTransferEstimateState extends TierEstimate {
   feeByTier: Record<FeeTier, number | null>
   loadingByTier: Record<FeeTier, boolean>
-  refresh: () => void
 }
-type TierEstimateState = Pick<
-  MaxTransferEstimateState,
-  'maxAmount' | 'fee' | 'feeQuote' | 'loading' | 'error' | 'refresh'
->
-type InternalState = Omit<TierEstimateState, 'refresh'> & { requestKey: string }
 
 interface UseMaxTransferEstimateArgs {
   to?: string
@@ -29,203 +37,140 @@ interface UseMaxTransferEstimateArgs {
   feeTier: FeeTier
   fundingSource?: FundingSource
   enabled?: boolean
-  debounceMs?: number
+  scopeKey?: string
 }
 
-/** Builds the same send-max proposal that will be used by the transaction. */
-function useMaxTransferEstimateForTier({
+function tierState(
+  cache: MaxTransferEstimateCache,
+  to: string | undefined,
+  tier: FeeTier,
+  active: boolean
+): Pick<TierEstimate, 'maxAmount' | 'fee' | 'feeQuote' | 'loading' | 'error'> {
+  if (!active || !to)
+    return { maxAmount: null, fee: null, feeQuote: null, loading: false, error: false }
+  const { estimate, error } = cache.peek(to, tier)
+  return {
+    maxAmount: estimate ? formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS) : null,
+    fee: estimate ? formatBaseUnitDecimalAmount(estimate.feeZats, ZEC_DECIMALS) : null,
+    feeQuote: estimate?.feeQuote ?? null,
+    loading: !estimate && !error,
+    error
+  }
+}
+
+/** Keep both tier fees available while prioritizing the selected Max proposal. */
+export function useMaxTransferEstimate({
   to,
   memo,
   feeTier,
   fundingSource = 'shielded',
   enabled = true,
-  debounceMs = 300
-}: UseMaxTransferEstimateArgs): TierEstimateState {
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const rpcMode = useSettingsStore(state => state.rpcEndpointModes.zcash)
+  scopeKey: estimateScopeKey
+}: UseMaxTransferEstimateArgs): MaxTransferEstimateState {
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
   const rpcPreference = useSettingsStore(state => state.rpcEndpointPreferences.zcash)
-  const customRpc = useSettingsStore(state => state.customRpcEndpoints.zcash)
-  const [generation, setGeneration] = useState(0)
-  const currentBalance = useAccountDataStore(state => state.getCurrentBalance())
-  const sourceAvailable = currentBalance?.confirmed?.[fundingSource] ?? '0'
-  const [state, setState] = useState<InternalState>({
-    maxAmount: null,
-    fee: null,
-    feeQuote: null,
-    loading: false,
-    error: false,
-    requestKey: ''
-  })
-  const requestSeq = useRef(0)
-  const refresh = useCallback(() => setGeneration(value => value + 1), [])
-  const active = enabled && !!to
-  const requestKey = JSON.stringify([
-    to,
+  const rpcScope = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
+  )
+  const balance = useAccountDataStore(state => state.getCurrentBalance())
+  const sourceBalance = getFundingBalance(balance, fundingSource)
+  const context: MaxTransferContext = {
     memo,
-    feeTier,
     fundingSource,
-    active,
-    currentWalletId,
-    currentAccountId,
-    currentNetwork,
-    sourceAvailable,
-    rpcMode,
+    enabled,
+    walletId,
+    accountId,
+    network,
+    available: sourceBalance.available,
+    pending: sourceBalance.pending,
     rpcPreference,
-    customRpc,
-    generation
-  ])
+    rpcScope,
+    scopeKey: estimateScopeKey
+  }
+  const mountedRef = useRef(false)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
+  const [, setVersion] = useState(0)
+  const [generation, setGeneration] = useState(0)
+  const cacheRef = useRef<MaxTransferEstimateCache | null>(null)
+  if (!cacheRef.current) {
+    cacheRef.current = new MaxTransferEstimateCache(context, () => {
+      if (mountedRef.current && enabledRef.current) setVersion(value => value + 1)
+    })
+  } else cacheRef.current.setContext(context)
+  const cache = cacheRef.current
+  const scopeKey = cache.scopeKey
+  const active = cache.canEstimate && !!to
+  const selectedRequestRef = useRef('')
+  selectedRequestRef.current = JSON.stringify([scopeKey, to, feeTier])
 
   useEffect(() => {
-    const seq = ++requestSeq.current
-    if (!active) {
-      setState({
-        maxAmount: null,
-        fee: null,
-        feeQuote: null,
-        loading: false,
-        error: false,
-        requestKey
-      })
-      return
-    }
-
-    setState({
-      maxAmount: null,
-      fee: null,
-      feeQuote: null,
-      loading: true,
-      error: false,
-      requestKey
-    })
-    let expiryTimer: ReturnType<typeof setTimeout> | undefined
-    const timer = setTimeout(async () => {
-      try {
-        const requestWalletId = currentWalletId
-        const requestAccountId = currentAccountId
-        const quote = await accountManager.getFeeQuote()
-        const estimate = await accountManager.estimateMaxTransfer(
-          to!,
-          memo,
-          marginalFeeForTier(feeTier, quote.standardMarginalFeeZats),
-          fundingSource,
-          quote.id
-        )
-        if (seq !== requestSeq.current) return
-        if (estimate.feeQuote.id !== quote.id || estimate.feeQuote.expiresAt <= Date.now()) {
-          throw new Error('Network fee quote expired')
-        }
-        if (
-          Number(estimate.marginalFeeZats) !==
-          marginalFeeForTier(feeTier, estimate.feeQuote.standardMarginalFeeZats)
-        ) {
-          throw new Error('Estimate does not use the selected network fee')
-        }
-
-        const cachedBalance =
-          requestWalletId && requestAccountId
-            ? useAccountDataStore
-                .getState()
-                .getBalance(currentNetwork, requestWalletId, requestAccountId)
-            : null
-        const cachedSourceZats = safeBig(cachedBalance?.confirmed?.[fundingSource] ?? '0').mul(1e8)
-        const estimateTotalZats = safeBig(estimate.maxAmountZats).plus(estimate.feeZats)
-
-        if (requestWalletId && estimateTotalZats.gt(cachedSourceZats)) {
-          await accountManager.refreshBalances(requestWalletId, true)
-        }
-
-        const walletState = useWalletStore.getState()
-        if (
-          seq !== requestSeq.current ||
-          walletState.currentWalletId !== requestWalletId ||
-          walletState.currentAccountId !== requestAccountId ||
-          walletState.currentNetwork !== currentNetwork
-        ) {
-          return
-        }
-        setState({
-          maxAmount: safeBig(estimate.maxAmountZats).div(1e8).toFixed(),
-          fee: safeBig(estimate.feeZats).div(1e8).toFixed(),
-          feeQuote: estimate.feeQuote,
-          loading: false,
-          error: false,
-          requestKey
-        })
-        expiryTimer = setTimeout(
-          () => setGeneration(value => value + 1),
-          Math.max(0, estimate.feeQuote.expiresAt - Date.now())
-        )
-      } catch {
-        if (seq !== requestSeq.current) return
-        setState({
-          maxAmount: null,
-          fee: null,
-          feeQuote: null,
-          loading: false,
-          error: true,
-          requestKey
-        })
-      }
-    }, debounceMs)
-
+    mountedRef.current = true
     return () => {
-      clearTimeout(timer)
-      clearTimeout(expiryTimer)
-      requestSeq.current++
+      mountedRef.current = false
     }
-  }, [
-    to,
-    memo,
-    feeTier,
-    fundingSource,
-    active,
-    debounceMs,
-    currentWalletId,
-    currentAccountId,
-    currentNetwork,
-    sourceAvailable,
-    rpcMode,
-    rpcPreference,
-    customRpc,
-    generation,
-    requestKey
-  ])
+  }, [])
 
-  if (state.requestKey !== requestKey) {
-    return { maxAmount: null, fee: null, feeQuote: null, loading: active, error: false, refresh }
-  }
+  const estimateForTarget = useCallback(
+    (target: string) =>
+      cache.scopeKey === scopeKey ? cache.get(target, feeTier, true) : Promise.resolve(null),
+    [cache, feeTier, scopeKey]
+  )
+  const request = useCallback(
+    async (refresh = false) => {
+      if (!to || cache.scopeKey !== scopeKey) return
+      const pending = cache.get(to, feeTier, true, refresh)
+      if (refresh && mountedRef.current && enabledRef.current) {
+        setGeneration(value => value + 1)
+      }
+      await pending
+    },
+    [cache, feeTier, scopeKey, to]
+  )
+  const update = useCallback(
+    (estimate: MaxTransferEstimate, target: string) => {
+      if (cache.scopeKey === scopeKey) cache.update(target, feeTier, estimate)
+    },
+    [cache, feeTier, scopeKey]
+  )
+
+  useEffect(() => {
+    if (!active || !to) return
+    const selectedRequest = selectedRequestRef.current
+    const timer = setTimeout(() => {
+      if (cache.scopeKey !== scopeKey) return
+      void cache.get(to, feeTier).then(() => {
+        if (!mountedRef.current || selectedRequestRef.current !== selectedRequest) return
+        const otherTier = feeTier === 'standard' ? 'fast' : 'standard'
+        void cache.get(to, otherTier)
+      })
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [active, cache, scopeKey, feeTier, generation, to])
+
+  const selected = tierState(cache, to, feeTier, active)
+  useEffect(() => {
+    if (!selected.feeQuote) return
+    const timer = setTimeout(
+      () => setGeneration(value => value + 1),
+      Math.max(0, selected.feeQuote.expiresAt - Date.now())
+    )
+    return () => clearTimeout(timer)
+  }, [selected.feeQuote])
+
+  const standard = tierState(cache, to, 'standard', active)
+  const fast = tierState(cache, to, 'fast', active)
   return {
-    maxAmount: state.maxAmount,
-    fee: state.fee,
-    feeQuote: state.feeQuote,
-    loading: state.loading,
-    error: state.error,
-    refresh
-  }
-}
-
-export function useMaxTransferEstimate(args: UseMaxTransferEstimateArgs): MaxTransferEstimateState {
-  const standard = useMaxTransferEstimateForTier({ ...args, feeTier: 'standard' })
-  const fast = useMaxTransferEstimateForTier({ ...args, feeTier: 'fast' })
-  const selected = args.feeTier === 'fast' ? fast : standard
-  const refresh = useCallback(() => {
-    standard.refresh()
-    fast.refresh()
-  }, [standard.refresh, fast.refresh])
-
-  return {
-    maxAmount: selected.maxAmount,
-    fee: selected.fee,
-    feeQuote: selected.feeQuote,
-    loading: selected.loading,
-    error: selected.error,
+    ...selected,
+    request,
+    update,
+    estimateForTarget,
     feeByTier: {
       standard: standard.fee === null ? null : safeBig(standard.fee).mul(1e8).toNumber(),
       fast: fast.fee === null ? null : safeBig(fast.fee).mul(1e8).toNumber()
     },
-    loadingByTier: { standard: standard.loading, fast: fast.loading },
-    refresh
+    loadingByTier: { standard: standard.loading, fast: fast.loading }
   }
 }

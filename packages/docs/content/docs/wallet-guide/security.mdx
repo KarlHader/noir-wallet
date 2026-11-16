@@ -8,13 +8,17 @@ icon: LockKeyhole
 
 The recovery phrase controls the wallet. Keep it offline, private, legible, and protected from loss. Noir Wallet cannot recover it for you.
 
-Before removing a software wallet, Noir Wallet asks for two randomly selected words from your saved recovery phrase. If they do not match, use **View secret phrase** to update your backup before trying again. This check does not validate every word in your backup.
+If a backup reminder appears, select **Back up** for the named wallet. Enter its local password, select **Click to reveal seed phrase**, save it offline, then confirm the two requested words. Phrase words stay hidden until you reveal them. Viewing or copying the phrase alone does not complete confirmation. Some wallets created by an older flow need this check even when another wallet is selected.
 
-If a recovery phrase reminder appears, select **Back up** to view the named wallet's phrase after entering your password. Save the phrase, then confirm the two requested words from your backup. The reminder stays until confirmation succeeds, even when another wallet is selected. Viewing or copying the phrase alone does not complete this check.
+Removing a software wallet, including its last account, requires two words from that wallet's recovery phrase. Hardware wallets have no local recovery phrase and use their hardware removal flow. Wallets imported from individual private keys use their own removal flow.
 
 ## Local password
 
 The password encrypts wallet credentials on this browser profile. It is not a replacement for the recovery phrase and does not protect a device that is already compromised while the wallet is unlocked.
+
+New passwords must contain a non-whitespace character. Existing passwords still unlock exactly as entered, including spaces.
+
+If local access data is missing, Noir Wallet may restore access to another healthy wallet after verifying its password and existing credential binding. It retains the damaged wallet entry. If recovery is unavailable, restore that wallet from its recovery phrase; an access-data error does not mean the password was wrong.
 
 ## Auto-lock
 
@@ -26,7 +30,11 @@ Review dApp authorizations regularly and remove origins you do not recognize or 
 
 ## Hardware wallets
 
-Keystone and Ledger accounts use supported PCZT transaction flows. Message signing and lending identity are unavailable for both. Keystone cannot send from transparent funds or shield them; lending is unavailable for hardware accounts.
+Keystone and Ledger Zcash accounts use supported PCZT transaction flows. Zcash message signing and lending identity are unavailable for both. Keystone cannot send from transparent funds or shield them; lending is unavailable for hardware accounts.
+
+V2 includes a Ledger EVM adapter, pending physical-device acceptance. Only enabled chains exported from the connected device are registered. If a signing prompt expires or the network changes, prepare and approve the request again.
+
+When importing existing Ledger accounts, select the chains and connect your device. The wallet requests the required device App automatically; unlock your Ledger or confirm opening the App when prompted on the device. Choose the matching address from the account list. Change the derivation preset or load the next page if the address is missing; **Advanced** accepts a starting device index. Confirm the selected accounts on the device before adding them. An unavailable balance lookup does not prevent importing an account.
 
 ## Incident checklist
 

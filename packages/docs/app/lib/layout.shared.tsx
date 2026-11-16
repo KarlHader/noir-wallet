@@ -23,7 +23,7 @@ export function baseOptions(): BaseLayoutProps {
         type: 'icon',
         text: 'GitHub',
         label: 'GitHub',
-        url: 'https://github.com/NoirWallet/noir-wallet',
+        url: 'https://zknoir.com/github',
         icon: <Github />,
         external: true
       }

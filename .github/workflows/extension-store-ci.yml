@@ -4,16 +4,18 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - '.github/workflows/extension-release.yml'
       - '.github/workflows/publish-extension.yml'
       - '.github/workflows/extension-store-ci.yml'
       - 'scripts/extension-store-*.mjs'
       - 'scripts/extension-release*.mjs'
       - 'scripts/lib/crx3.mjs'
+      - 'scripts/lib/extension-release-history.mjs'
       - 'scripts/lib/release-zip.mjs'
       - 'scripts/lib/chrome-web-store.mjs'
       - 'scripts/lib/store-release-journal.mjs'
-      - 'packages/extension/tests/extension-*.test.mjs'
-      - 'packages/extension/tests/store-release-journal.test.mjs'
+      - 'packages/extension/tests/core/platform/extension-*.test.mjs'
+      - 'packages/extension/tests/core/platform/store-release-journal.test.mjs'
       - 'packages/extension/tests/fixtures/**'
       - '.node-version'
 
@@ -40,11 +42,11 @@ jobs:
           package-manager-cache: false
       - name: Verify release and store contracts without production credentials
         run: >-
-          node --test packages/extension/tests/extension-release.test.mjs
-          packages/extension/tests/extension-release-history.test.mjs
-          packages/extension/tests/extension-crx.test.mjs
-          packages/extension/tests/extension-store.test.mjs
-          packages/extension/tests/store-release-journal.test.mjs
+          node --test packages/extension/tests/core/platform/extension-release.test.mjs
+          packages/extension/tests/core/platform/extension-release-history.test.mjs
+          packages/extension/tests/core/platform/extension-crx.test.mjs
+          packages/extension/tests/core/platform/extension-store.test.mjs
+          packages/extension/tests/core/platform/store-release-journal.test.mjs
       - name: Sign a synthetic ZIP using a temporary RSA key
         id: sign
         run: node scripts/extension-store-rehearsal.mjs create rehearsal

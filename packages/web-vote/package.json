@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev --env local --port 8788 --persist-to ../../output/web-vote/state",
     "deploy": "wrangler deploy --env=\"\"",
-    "test": "node ../../scripts/run-core-tests.mjs",
+    "test": "node --import ../../scripts/register-test-loader.mjs --test tests/*.test.mjs",
     "type-check": "tsc --noEmit",
     "verify": "pnpm type-check && pnpm test && wrangler deploy --dry-run --env=\"\""
   },

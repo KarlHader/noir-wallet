@@ -1,4 +1,5 @@
-import { ZEC_DECIMALS } from '../../config/wallet.ts'
+import { WALLET_CONFIG, ZEC_DECIMALS } from '../../config/wallet.ts'
+import { formatBaseUnitDecimalAmount } from '../../lib/number-format.ts'
 import type { ZcashBalance } from '../../types/wallet.ts'
 
 export type WasmAccountBalanceSummary = {
@@ -26,19 +27,19 @@ function zatoshiValue(value: bigint | number | string | undefined): bigint {
 }
 
 function formatZatoshis(value: bigint): string {
-  const divisor = 10n ** BigInt(ZEC_DECIMALS)
-  const whole = value / divisor
-  const remainder = value % divisor
-
-  if (remainder === 0n) return whole.toString()
-
-  const decimals = remainder.toString().padStart(ZEC_DECIMALS, '0').replace(/0+$/, '')
-
-  return `${whole}.${decimals}`
+  return formatBaseUnitDecimalAmount(value, ZEC_DECIMALS)
 }
 
 function formatZatoshisFixed(value: bigint): string {
   return Number(formatZatoshis(value)).toFixed(ZEC_DECIMALS)
+}
+
+/** Tier-agnostic available balance reserves the Standard fee and wallet dust threshold. */
+export function getMaxSpendableZec(shieldedBalance: string | number): string {
+  const rawBalance =
+    typeof shieldedBalance === 'number' ? shieldedBalance : Number(shieldedBalance || 0)
+  const reserve = WALLET_CONFIG.NETWORK_FEE * 2 + WALLET_CONFIG.DUST_THRESHOLD
+  return Math.max(0, rawBalance - reserve).toFixed(ZEC_DECIMALS)
 }
 
 export function mapWasmAccountBalanceToZcashBalance(
@@ -88,14 +89,13 @@ export function mapWasmAccountBalanceToZcashBalance(
       ? zatoshiValue(wasmBalance.spendable_balance)
       : shieldedConfirmed
   const spendableZec = formatZatoshis(spendable)
-  const totalZec = formatZatoshis(total)
 
   return {
     transparent: formatZatoshis(transparentTotal),
     shielded: formatZatoshis(shieldedTotal),
-    total: totalZec,
+    total: formatZatoshis(total),
     spendable: spendableZec,
-    available: spendableZec,
+    available: getMaxSpendableZec(spendableZec),
     shieldable: formatZatoshis(
       wasmBalance.unshielded_shieldable_balance == null
         ? transparentConfirmed

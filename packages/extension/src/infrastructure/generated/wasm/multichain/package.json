@@ -1,0 +1,17 @@
+{
+  "name": "wallet-wasm",
+  "type": "module",
+  "description": "Security-sensitive multichain wallet core for WebAssembly",
+  "version": "0.1.0",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "files": [
+    "wallet_wasm_bg.wasm",
+    "wallet_wasm.js",
+    "wallet_wasm.d.ts"
+  ],
+  "main": "wallet_wasm.js",
+  "types": "wallet_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -8,15 +8,15 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
-      - '.node-version'
       - '.github/workflows/docs.yml'
       - 'scripts/ci-validated-scope.mjs'
-permissions:
-  contents: read
-  actions: read
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   verify:

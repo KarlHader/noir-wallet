@@ -1,6 +1,81 @@
 # Changelog
 
-Developer-oriented release history for Noir Wallet. Concise in-wallet update notes are maintained separately in [packages/web/public/changelog.json](./packages/web/public/changelog.json).
+All notable user-facing changes to Noir Wallet are documented in this file.
+
+## [2.0.0-beta.2] - 2026-11-10
+
+### Added
+
+- Added Shield Funds for NEAR Confidential balances and native Zcash shielded balances, with Send, Receive, Move, and supported Swap routes.
+- Added external Shield deposits with receiving addresses, editable refund addresses, and deposit tracking.
+- Added Directly and Cluster options for Public/Private transfers, with route fees and estimated arrival times before confirmation.
+- Added an optional private route for supported dApp transfers from Private accounts, with quotes for the amount the recipient should receive.
+
+### Changed
+
+- Redesigned Home, asset details, account management, Send, Receive, Move, Swap, and Settings for the V2 interface, including side-panel layouts.
+- Separated Total, Public, Shield, and Private asset views on Home and asset details, with matching balances and activity filters.
+- Updated Shield Move to select a funding source and asset first, support direction switching, and offer supported EVM destination networks for the same token.
+- Updated wallet import with network selection and address previews, while retaining Zcash recovery and synchronization controls.
+- Added all-EVM and single-network contacts, compact address previews, and a warning before copying Private addresses.
+- Updated the default Swap token list to use RHEA's curated catalog while retaining held assets and token search.
+- Simplified connected dApp account and network selection, and removed the built-in Lending views and valuations.
+
+### Fixed
+
+- Fixed wallet switching getting stuck behind Zcash synchronization requests.
+- Fixed backup reminders appearing for newly imported wallets or referring to a different wallet.
+- Fixed Shield balance loading, asset classification, and action routing; stopped repeated checks for expired, unfunded deposit requests.
+- Fixed Send, Move, and Swap Max controls and stale fee estimates, and made quote failures and retries clearer.
+- Fixed Zcash Swap funding selection in Private mode and preserved the selected recipient and funding source through confirmation.
+- Fixed transaction progress and activity recovery after reopening the wallet, including interrupted hardware-wallet Swap approvals.
+- Fixed Swap asset selection and address lists when custom EVM networks are configured.
+- Fixed network labels and duplicate Zcash account counts in connected dApp permissions.
+- Fixed stale recovery-date requests and import errors appearing after changing Zcash history options.
+- Fixed Public-to-Confidential Max transfers opening confirmation before the current route's gas estimate was ready.
+- Fixed wallet snapshot recovery after locking and unlocking when the Zcash Worker had restarted.
+- Fixed Swap rates displaying both equality and approximation symbols at the same time.
+
+## [2.0.0-beta.1] - 2026-11-02
+
+### Added
+
+- Added one multichain Wallet experience for Zcash, Ethereum, and released EVM networks, with unified Assets, Addresses, Send, Receive, and Activity views.
+- Added 12-word and 24-word recovery phrase creation and import, with all supported account identities derived from either phrase length.
+- Added invite-code activation for V2 Beta, with binding retries and code replacement that retain the existing wallet.
+- Added EVM native and token balances, transfers, message and transaction signing, dApp permissions, discovered-token management, and network-aware activity.
+- Added encrypted EVM private-key Wallet import and export, including Confidential mode, without exposing secrets to the popup after provisioning.
+- Added Ledger account provisioning for Zcash and EVM, with accounts retained when adding another chain.
+- Added a global Mainnet/Testnet Mode that keeps account caches, activity, RPC settings, approvals, and Zcash databases isolated between modes.
+- Added custom EVM networks with verified RPC chain identity, configurable block explorers, and settings isolated between Mainnet and Testnet.
+- Added a default EVM wallet preference so Noir Wallet can coexist with other installed wallets.
+- Added grouped wallets and accounts with inline renaming and consistent ordering across restarts.
+
+### Changed
+
+- Updated Swap and Lending to select from supported multichain assets, restore cached data immediately, and refresh markets in the background.
+- Redesigned Portfolio, asset details, transaction details, account management, recipient selection, and loading states for the V2 multichain interface.
+- Expanded the dApp SDK and example with EVM providers, network helpers, account switching, and smart-contract testing flows.
+- Deferred Bitcoin, Solana, and NEAR wallet operations; chain selectors mark them as Coming soon.
+- Kept cached balances available across navigation and network filters, and refreshed newly discovered token prices in the background.
+- Updated EVM transaction activity to use receipts and token transfers, preserve wallet-authored amounts, and omit untracked token history.
+- Added inline Retry for recoverable Send and Swap preparation failures, including expired quotes, unavailable routes, and provider timeouts.
+
+### Fixed
+
+- Fixed dApp network switching after approval when the destination chain's public RPC is temporarily unavailable.
+- Fixed repeated EVM activity reloads, empty-result retries, token/icon mismatches, value ordering, and stale price or protocol displays.
+- Kept Send, Swap, and dApp approvals bound to the selected account, funding source, recipient, reviewed amount, and current fee estimate.
+- Recalculated Max for the current recipient and route, reserved EVM transaction gas, and prevented submission of expired or non-executable quotes.
+- Resumed interrupted Swap and Ledger approval flows, retained destination asset details, and refreshed Zcash balances after settlement without switching accounts.
+- Fixed Confidential Swap offering destination assets unsupported by its route.
+- Fixed SDK example authorization requesting chains unavailable in the installed wallet.
+- Fixed Ledger unlocking after adding Zcash and retained-account provisioning when other chains are disabled.
+- Prevented removed wallets and accounts from reappearing, preserved other accounts during cleanup, and allowed removed private-key wallets to be imported again.
+- Fixed Zcash recovery setup, retained wallet recovery dates, rejected blank passwords, and allowed failed account, hardware, and settings initialization to retry.
+- Kept recovery words hidden until revealed, preserved site disconnections across restarts, and cancelled stale synchronization work when locking the wallet.
+- Removed sensitive identifiers and Zcash pool balances from exported diagnostics while retaining actionable failure details.
+- Preserved V1 1.0.40 encrypted credentials, passwords, Zcash data, account metadata, and transaction state during V2 migration, including late Zcash broadcast results.
 
 ## [1.0.40] - 2026-10-25
 

@@ -34,7 +34,7 @@ const RESULT_FIELDS = [
 ]
 const SHA256 = /^[0-9a-f]{64}$/
 const SHA = /^[0-9a-f]{40}$/
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const VERSION = /^(?:2|[3-9]|[1-9]\d+)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
 const EXTENSION_ID = /^[a-p]{32}$/
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024
@@ -99,7 +99,7 @@ export function validateBinding(value) {
     } else if (field === 'version') {
       binding[field] = matching(entry, VERSION, field)
     } else if (field === 'network') {
-      binding[field] = matching(entry, /^(mainnet|multichain)$/, field)
+      binding[field] = matching(entry, /^multichain$/, field)
     } else if (field === 'extensionId') {
       binding[field] = matching(entry, EXTENSION_ID, field)
     } else if (field === 'publisherId') {

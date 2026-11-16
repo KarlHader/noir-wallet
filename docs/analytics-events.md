@@ -1,108 +1,122 @@
 # Analytics Event Reference
 
-> Event and page identifiers are defined in [constants.ts](../packages/extension/src/lib/analytics/constants.ts). Field filtering, transport, and preference behavior are defined in [payload.ts](../packages/extension/src/lib/analytics/payload.ts), [index.ts](../packages/extension/src/lib/analytics/index.ts), and [ga.ts](../packages/extension/src/lib/analytics/ga.ts). This is an event reference, not a substitute for the [privacy policy](../packages/docs/content/docs/privacy-policy.mdx).
+Event names and page IDs are defined in [constants.ts](../packages/extension/src/lib/analytics/constants.ts). This reference does not replace the [privacy policy](../packages/docs/content/docs/privacy-policy.mdx).
+
+## Module Boundaries
+
+| Responsibility                                    | Owner                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UI events, page context and engagement            | [UI entry](../packages/extension/src/lib/analytics/index.ts), which sends runtime messages without importing storage or network transports.                                                                                                                                                                                                    |
+| Event names, allowed fields and operation mapping | Pure [policy](../packages/extension/src/lib/analytics/policy.ts), [Zcash operation mapping](../packages/extension/src/lib/analytics/operations.ts), [transaction broadcast checks](../packages/extension/src/core/transactions/transaction-analytics.ts) and [Swap event model](../packages/extension/src/popup/services/swap-event-model.ts). |
+| Transaction lifecycle events                      | Existing execution handlers and transaction monitors emit events from their business results and state transitions. Analytics does not maintain a second transaction ledger.                                                                                                                                                                   |
+| Metadata, privacy filtering and channel dispatch  | The background-only [reporter](../packages/extension/src/background/analytics/reporter.ts). Background initialization owns preferences and outbox recovery; Chrome alarms resume pending delivery.                                                                                                                                             |
+| Collector delivery and GA transport               | [Collector client](../packages/extension/src/lib/analytics/client.ts), [outbox model](../packages/extension/src/lib/analytics/outbox.ts) and [GA adapter](../packages/extension/src/lib/analytics/ga.ts). These are composed by the reporter, never the UI entry.                                                                              |
+
+UI event calls, background `trackEvent()` and runtime event handling return `void`. Reporting errors, storage writes and network requests never determine a wallet operation's result or delay transaction cleanup. There are no analytics-specific transaction registration commands, intent records or reporting receipts.
+
+Zcash execution requests carry operation context rather than caller-selected success and failure event names. The execution owner maps the event after observing its outcome; hardware signing uses the same mapping. Multichain monitors use existing transaction state and broadcast evidence. Signed transactions awaiting broadcast remain pending even when they already have a hash.
 
 ## Reporting
 
-| Property           | Behavior                                                                                                                                                                                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Collector endpoint | `POST https://datareport.rhea.finance/v1/events/common`                                                                                                                                                                                           |
-| Build scope        | Production mainnet builds, excluding local browser-verification builds; see the [build policy](../packages/extension/analytics-build-policy.ts)                                                                                                   |
-| Request body       | `{ "data": "<encrypted string>" }`; plaintext is a JSON array of event objects                                                                                                                                                                    |
-| Encryption         | AES-128-CBC, PKCS#7, Base64; the key and IV are the first 16 bytes of the password, matching the collector's Go `DecryptStringFast`                                                                                                               |
-| Batching           | The background service worker batches for 2 seconds, up to 20 events per batch and 200 queued events. Failed uploads retry after 15 seconds; the current batch is dropped after the third failure. Collector business rejections are not retried. |
-| Channels           | The same event name goes to Google Analytics (`params` only) and the custom collector (full payload).                                                                                                                                             |
-| User control       | **Share Google Analytics** defaults to on. Turning it off stops Google requests and clears the GA session only. Collector reporting continues and the per-install identifier remains.                                                             |
+| Property     | Current behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build scope  | PR preview and release Mainnet builds (Beta and Production), excluding local development and browser-verification builds; see [vite.config.ts](../packages/extension/vite.config.ts).                                                                                                                                                                                                                                                                                                                                                               |
+| Collector    | `POST https://datareport.rhea.finance/v1/events/common` with `{ "data": "<encrypted string>" }`. The plaintext is a JSON array of event objects.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Encryption   | AES-128-CBC, PKCS#7, Base64; the key and IV use the first 16 bytes of the configured password.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Batching     | The background persists at most 200 pending events in a local outbox. It flushes after 2 seconds or at 20 events, with a Chrome alarm as the suspension fallback. Failed requests, malformed responses and collector business rejections retry after 15 seconds, up to three attempts per event. Pending events expire after seven days. A full outbox rejects new entries without evicting pending entries.                                                                                                                                        |
+| Delivery     | HTTP success with JSON `code: 0` removes a batch from the collector queue. Recovery discards pending events outside the current catalog. This response is internal to the uploader. Queued keys and up to 500 process-local delivered keys suppress duplicates; no delivery receipts are persisted. Reporting is best effort: an event can be lost before enqueue, and a later observation after a worker restart can duplicate a delivered event. Collector retries reuse event IDs; ambiguous network outcomes require server-side deduplication. |
+| Channels     | Google Analytics receives the event name and allowed event context, including controlled chain and page IDs. The collector receives the filtered payload. Page views use GA `page_view` and collector `show_page`. GA dispatch does not wait for collector storage or delivery; it uses a separate, bounded process-local deduplication cache. GA transport remains best effort.                                                                                                                                                                    |
+| User control | **Share Google Analytics** defaults to on. Turning it off cancels GA requests and country lookup, and clears the GA session and country cache. Collector reporting continues, as does the per-install anonymous identifier.                                                                                                                                                                                                                                                                                                                         |
 
-## Shared Fields
+## Collector Fields And Privacy Boundary
 
-| Field                                         | Meaning                                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `project_id`                                  | Fixed value `noir_wallet`                                                                                                                               |
-| `chain`                                       | Fixed value `zcash`                                                                                                                                     |
-| `wallet_address`                              | Required collector compatibility field, always `anon_<uuid>`: a random per-install identifier shared with the GA client ID, never a real wallet address |
-| `page_id`                                     | `noir_<route>`; background events use `noir_background` and dApp RPC events use `noir_dapp`. See `PAGE_IDS` in `constants.ts`.                          |
-| `timestamp`                                   | Event time in milliseconds, assigned at the call site                                                                                                   |
-| `extra`                                       | JSON string with empty fields removed                                                                                                                   |
-| `input_amount`, `output_amount`, `usd_amount` | The collector can receive valid input and output amounts and estimated USD values; absent or invalid values become empty strings.                       |
+| Field                                         | Meaning                                                                                                                                                                                                  |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project_id`, `chain`                         | Project `noir_wallet`; chain family `zcash`, `evm`, `bitcoin`, `solana` or `near`. Legacy or chain-neutral calls default to `zcash`.                                                                     |
+| `wallet_address`                              | Collector compatibility field set to `anon_<uuid>`, a random per-install identifier; never a wallet address. GA derives a dotted numeric client ID from this identifier without replacing the stored ID. |
+| `page_id`                                     | `noir_<route>`; background events use `noir_background` and dApp RPC events use `noir_dapp`. The full list is `PAGE_IDS` in `constants.ts`.                                                              |
+| `timestamp`                                   | Event time in milliseconds, assigned when the event is raised.                                                                                                                                           |
+| `extra`                                       | JSON string of allowed event metadata, with empty fields omitted.                                                                                                                                        |
+| `input_amount`, `output_amount`, `usd_amount` | Validated decimal strings supplied through `TrackOptions.collector`; unknown amounts remain empty. These fields go only to the collector, never GA.                                                      |
 
-The payload excludes real wallet addresses, transaction hashes, dApp origins, raw errors, recovery phrases, private keys, passwords, UFVKs, memo contents, contact names, and signed dApp messages. The collector can receive the amount fields above, so it must not be described as excluding exact amounts. `extra` uses a bounded allowlist of metadata, including version, build channel, network mode, browser, operating system, language, and event identifier; the filter defines the exact fields.
+The typed event API isolates financial metrics in `TrackOptions.collector`; `sanitizeAnalyticsEvent()` and `buildPayload()` validate those fields and discard unrecognized inputs at runtime. Financial metrics are excluded from GA parameters. The policy rejects wallet and recipient addresses, transaction hashes, dApp origins, raw errors, recovery phrases, private keys, passwords, UFVKs, memo contents, contact names and signed messages. `params` and `extra` use event-specific allowlists. Idempotency keys stay local and are hashed before outbox persistence; they are never included in either channel.
+
+Page metadata uses registered page IDs and a synthetic `https://noir-wallet.extension/<page_id>` location. Query strings, fragments, unknown route paths and the real extension origin are excluded. Unknown pages map to `noir_background`.
+
+`has_transaction: 1` supplies event context; it does not establish chain confirmation. Send-success events require broadcast evidence. Signed bytes, a prepared graph, an ERC-20 approval or a scheduled rebroadcast do not count as a successful send. Asset labels may accompany relevant events, subject to bounded format checks.
+
+Runtime metadata adds the extension version, build channel, network mode, a random event ID, and coarse browser, browser major version, operating-system, desktop category, and language labels. It excludes the raw user agent. GA uses device metadata in its device fields and limits event parameters to 25. Converting existing UUIDs to numeric GA client IDs changes their GA identity; earlier GA events may not join to the new identity. Collector identities remain unchanged.
+
+While GA is enabled, the extension reads the country code from `https://rpc.zknoir.com/cdn-cgi/trace` and supplies it as GA `user_location.country_id`. Only the country code is cached in session storage for 45 minutes; IP addresses and other trace fields are not cached or reported. Failed or unrecognized responses omit country and use a one-minute retry cache. Country is not added to collector events.
+
+Foreground events create or refresh a 30-minute GA session; background monitoring may reuse an active session but cannot create or extend one. Engagement measures focused, visible extension time and excludes background work. It is sent with UI events or a periodic `extension_engagement` event while the UI remains active.
+
+## Measurement Scope
+
+Retain an event only when it supports a defined metric or operational decision. Local diagnostic logs own routine interaction details. Clipboard copies, account switches and wallet locks are not analytics events.
+
+| Measurement                       | Events and intended use                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Activation and version coverage   | Installation, update, wallet creation/import and unlock identify adoption and return usage.                                             |
+| Feature usage                     | Page views identify visited features; focused engagement measures visible usage time.                                                   |
+| Send and Shield reliability       | Submission, broadcast and failure outcomes identify conversion and execution failures.                                                  |
+| Swap conversion                   | Quote, submission, origin broadcast and terminal outcome identify the stage where a flow stops.                                         |
+| dApp usage and friction           | Authorized connections, signed messages, transaction outcomes and user rejection distinguish usage, cancellation and execution failure. |
+| Hardware adoption and reliability | Successful account provisioning and signing failure identify adapter usage and failures.                                                |
 
 ## Event Catalog
 
-`has_transaction: 1` marks a transaction-related call site, not a broadcast or confirmation. Events marked ★ retain historical GA names for report continuity. Every event also carries shared metadata; “no raw error” does not mean the request contains only an event name.
+| Event                               | Trigger and permitted context                                                                                                                                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `asset_received`                    | Newly observed confirmed incoming transfers after a local history baseline; known credited amount and optional fresh USD valuation. Initial imported history is excluded.                                                                              |
+| `balance_snapshot`                  | At most one valuation per observed account/domain/UTC day, with same-day upgrades when valuation coverage improves. Uses existing fresh balances and prices; no additional polling.                                                                    |
+| `extension_engagement`              | Focused visible UI time; bounded engagement duration, excluding background work.                                                                                                                                                                       |
+| `extension_installed`               | First installation.                                                                                                                                                                                                                                    |
+| `extension_updated`                 | Update; `previous_version`.                                                                                                                                                                                                                            |
+| `wallet_created`                    | Successful creation or mnemonic/private-key/hardware import; controlled `method`, `hardware` and optional `has_birthday_height`.                                                                                                                       |
+| `wallet_unlocked`                   | Successful password unlock; `from_dapp`.                                                                                                                                                                                                               |
+| `show_page`                         | Route view; `page_id`. GA receives `page_view`.                                                                                                                                                                                                        |
+| `send_submitted`                    | Send confirmation, including transfer/private-transfer and entry to hardware signing; chain, asset label, `fee_tier`, `funding_source`, `kind` and `hardware`.                                                                                         |
+| `transaction_sent`                  | Successful send broadcast, including hardware flow; optional `hardware`, `funding_source` and `kind`.                                                                                                                                                  |
+| `send_failed`                       | Send failure; bounded `funding_source`, `kind` or `phase`, never the raw error.                                                                                                                                                                        |
+| `shield_succeeded`, `shield_failed` | Native Zcash shielding broadcast or failure.                                                                                                                                                                                                           |
+| `shield_operation_result`           | Persisted NEAR Confidential operation outcome; bounded `operation` and `status`. External deposits report confirmed receipt or refund, not address creation or provisional failures. Recoverable processing failures and partial payouts are excluded. |
+| `swap_quoted`                       | Quote received; asset labels and `direction`.                                                                                                                                                                                                          |
+| `swap_submitted`                    | Swap confirmed; asset labels, `direction` and `hardware`.                                                                                                                                                                                              |
+| `swap_initiated`                    | Swap origin broadcast, including multichain flows; asset labels, `direction` and controlled `sourceFamily`.                                                                                                                                            |
+| `swap_failed`                       | Deposit send failure; `direction`, never the raw error.                                                                                                                                                                                                |
+| `swap_completed`                    | Terminal cross-chain Swap status; `status` and `action`. Transfers do not count as swaps.                                                                                                                                                              |
+| `hardware_wallet_connected`         | Successful Ledger or Keystone account provisioning; `hardware` and `is_existing_wallet`. A newly created wallet also reports `wallet_created`.                                                                                                         |
+| `hardware_sign_failed`              | Hardware signing or broadcast failure; `kind` and `phase`.                                                                                                                                                                                             |
+| `dapp_connected`                    | Connection authorized; `account_count` and `source`, never the origin.                                                                                                                                                                                 |
+| `dapp_disconnected`                 | Connection removed; no origin.                                                                                                                                                                                                                         |
+| `dapp_request_rejected`             | User rejects a request; allowed `method` category.                                                                                                                                                                                                     |
+| `dapp_transaction_sent`             | dApp transaction broadcast or completed private route; chain, asset label, `funding_source` and `hardware`. Signature-only operations do not report this event.                                                                                        |
+| `dapp_transaction_failed`           | Approved dApp transaction fails; bounded context, no origin or raw error.                                                                                                                                                                              |
+| `dapp_message_signed`               | Message signing approved; `signing_mode`, no origin or message body.                                                                                                                                                                                   |
 
-### Extension and Wallet Lifecycle
+`transaction_sent`, `swap_initiated`, `hardware_wallet_connected`, `dapp_connected` and `dapp_transaction_sent` retain established GA names for report continuity. Swap `direction` preserves `zec_to_other` and `other_to_zec`; other routes use `same_chain` or `cross_chain`. Same-asset public/private transfers use the Send event family rather than the Swap funnel. Events follow current business execution and monitor observations; old history is not backfilled. A dApp private transfer can contribute to both its dApp event family and the Send lifecycle family, which are distinct metrics.
 
-| `event_name`          | Trigger                    | Key fields                                                                         |
-| --------------------- | -------------------------- | ---------------------------------------------------------------------------------- |
-| `extension_installed` | First installation         | None                                                                               |
-| `extension_updated`   | Extension update           | `extra.previous_version`                                                           |
-| `wallet_created`      | Wallet creation            | `extra.method`: create, import, or hardware; import includes `has_birthday_height` |
-| `wallet_unlocked`     | Successful password unlock | `extra.from_dapp`                                                                  |
-| `wallet_locked`       | Wallet lock                | `extra.reason`: manual or auto                                                     |
+## PMF Collector Metrics
 
-### Page Views
+The collector's `extra` includes `pmf_version: 1` when financial context is present. `source_domain` and `destination_domain` distinguish Public, Private and Shield funds; `privacy_route` distinguishes direct, Confidential and native Zcash shielded paths. A Private source alone does not prove a privacy route. `activity_type` separates transfers, swaps, receipts, approvals and unclassified contract calls. Unknown contracts are not classified as DeFi. `transfer_type` is `self`, `external` or `unknown`; unknown ownership must not be silently counted as verified external activity.
 
-| `event_name`           | Trigger                                                               | Key fields                                        |
-| ---------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
-| `show_page`            | Each route change, including first view, unlock, and onboarding steps | `page_id`; GA uses `page_view`                    |
-| `extension_engagement` | Time visible and focused                                              | `extra.engagement_time_msec`                      |
-| `click`                | Explicitly marked external link                                       | `extra.link_id`, `extra.link_domain`; no full URL |
+Use `settlement` to distinguish broadcast from confirmed settlement, and existing terminal status fields to exclude failed or refunded operations. A successful Confidential Cluster reports one plan event, not one event per payout. External Shield receipts use `shield_operation_result` with `operation=deposit`, `status=success` and `activity_type=receive`. Native Zcash shielding remains a broadcast event. Do not sum dApp and wallet lifecycle families as independent transfers.
 
-### Accounts and Addresses
+Amounts are decimal strings in token units, not raw integers. `usd_amount` is a valuation, not a token amount. Unknown metadata or prices leave values absent rather than zero. The collector's non-nullable Decimal columns do not preserve absence: use `extra.input_amount_known`, `extra.output_amount_known` and `extra.usd_amount_known` (0 or 1) to distinguish unavailable amounts from known zero values. `quoted_privacy_fee_bps` records an accepted quoted app fee rate when available; it is not actual paid gas or independently verified privacy revenue. Reserved `privacy_fee_amount`, `privacy_fee_symbol` and `privacy_fee_usd` fields must only be supplied when a paid privacy fee is known.
 
-| `event_name`       | Trigger                   | Key fields                                    |
-| ------------------ | ------------------------- | --------------------------------------------- |
-| `account_switched` | Successful account switch | `extra.cross_wallet`                          |
-| `address_copied`   | Copy on Receive page      | `extra.address_type`: transparent or shielded |
+Balance observations carry `observation_scope=active_account`, `chain_scope=multichain` and `valuation=complete|partial|unavailable`; the legacy top-level `chain` is not a chain filter for these aggregate observations. They are observed account valuations, not an inventory of all wallets on an installation. Unavailable Confidential balances never fall back into the Private bucket. Same-day improved valuations replace earlier samples in analysis; do not sum samples. No sample means unobserved, not zero or churn. Offline users and unsupported prices limit financial-retention coverage.
 
-### Send and Shield
-
-| `event_name`         | Trigger                                                              | Key fields                                             |
-| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------ |
-| `send_submitted`     | Confirm send, including entry into hardware flow; transaction marker | `input_symbol=ZEC`, `extra.fee_tier`, `extra.hardware` |
-| `transaction_sent` ★ | Successful broadcast, including hardware signing; transaction marker | Hardware flow includes `extra.kind`                    |
-| `send_failed`        | Broadcast failure                                                    | No raw error                                           |
-| `shield_succeeded`   | Shielding transaction broadcast                                      | `input_symbol=ZEC`, `input_amount`                     |
-| `shield_failed`      | Shielding failure                                                    | No raw error                                           |
-
-### Swap
-
-| `event_name`             | Trigger                                               | Key fields                                   |
-| ------------------------ | ----------------------------------------------------- | -------------------------------------------- |
-| `swap_quoted`            | Quote succeeds; start of funnel                       | Input and output symbols                     |
-| `swap_submitted`         | User confirms ZEC to asset swap; transaction marker   | Symbols, `extra.hardware`                    |
-| `swap_initiated` ★       | ZEC deposit broadcast; transaction marker             | Symbols                                      |
-| `swap_deposit_shown`     | External deposit address shown for asset to ZEC swap  | Input and output symbols                     |
-| `swap_deposit_confirmed` | User selects “I have deposited” for asset to ZEC swap | Same symbols                                 |
-| `swap_failed`            | ZEC deposit send fails                                | No raw error                                 |
-| `swap_completed`         | Cross-chain monitor reaches terminal state            | `extra.status`: SUCCESS, FAILED, or REFUNDED |
-
-Shared swap metadata: `extra.direction` is `zec_to_other` or `other_to_zec`.
-
-### Hardware Wallets (Keystone / Ledger)
-
-| `event_name`                  | Trigger                                                                 | Key fields                  |
-| ----------------------------- | ----------------------------------------------------------------------- | --------------------------- |
-| `hardware_wallet_connected` ★ | QR pairing succeeds; also reports `wallet_created` with method=hardware | `extra.is_existing_wallet`  |
-| `hardware_sign_failed`        | QR signing or broadcast fails                                           | `extra.kind`, `extra.phase` |
-
-### dApp RPC
-
-| `event_name`              | Trigger                                        | Key fields                                                            |
-| ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------- |
-| `dapp_connected` ★        | Connection authorized                          | `extra.account_count`                                                 |
-| `dapp_disconnected`       | User or dApp disconnects                       | No origin                                                             |
-| `dapp_request_rejected`   | User rejects approval request                  | `extra.method`: connect, sendTransaction, signMessage, or shieldFunds |
-| `dapp_transaction_sent` ★ | dApp transaction broadcast; transaction marker | `input_symbol=ZEC`; hardware flow includes `extra.hardware`           |
-| `dapp_transaction_failed` | Approved dApp transaction fails                | No origin or raw error                                                |
-| `dapp_message_signed`     | Message signing approved                       | `extra.signing_mode`; no origin or message body                       |
+Monthly active and repeat-use metrics can group qualifying events by the existing anonymous installation identifier and event date. For sustained use, require another qualifying operation on a different day after the first one. This measures installations, not distinct people. Exact installation-wide funds retention, arbitrary dApp DeFi classification and server-side dashboards are not provided by this client contract.
 
 ## Verification
 
+Core tests cover catalog filtering, canonical metadata, bounded delivery, operation mapping and dApp outcomes. Reporting tests exercise the UI/runtime boundary, independent channel dispatch and non-blocking failure behavior. Transaction tests cover broadcast evidence and exclude signed-only transactions, user cancellation and approval-only stages from send success.
+
+The local [analytics tests](../packages/extension/tests/core/platform/analytics.test.mjs) cover encryption compatibility, field filtering, payload construction, preferences, batching, and retries without contacting the collector:
+
 ```bash
-pnpm --filter @noir-wallet/extension exec node --import ../../scripts/register-test-loader.mjs --test tests/analytics.test.mjs
+pnpm test
 ```
 
-The core test checks encryption, field filtering, amounts, the preference, and batch retries without connecting to the live collector. There is no `ANALYTICS_E2E` switch. A live collector check requires a separately authorized isolated test; a passing core test does not establish collector availability.
+`ANALYTICS_E2E=1` enables the separate `pnpm test live` collector check when `CUSTOM_ANALYTICS_PASSWORD` is supplied. It sends a test event to the live service; a passing local test alone does not establish collector availability.

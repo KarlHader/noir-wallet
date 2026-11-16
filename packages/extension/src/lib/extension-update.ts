@@ -26,7 +26,11 @@ export interface AvailableExtensionUpdate extends ExtensionUpdateBase {
   status: 'available'
 }
 
-export type ExtensionUpdateState = AvailableExtensionUpdate
+interface DetectedExtensionUpdate extends ExtensionUpdateBase {
+  status: 'detected'
+}
+
+export type ExtensionUpdateState = AvailableExtensionUpdate | DetectedExtensionUpdate
 
 function isVersion(value: unknown): value is string {
   return (
@@ -95,7 +99,7 @@ function parseReleaseNotesManifest(value: unknown): Record<string, unknown> {
   return value.releases
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareVersions(left: string, right: string): number {
   const leftParts = left.split('.').map(Number)
   const rightParts = right.split('.').map(Number)
   const length = Math.max(leftParts.length, rightParts.length)
@@ -212,7 +216,7 @@ export function isExtensionUpdateState(value: unknown): value is ExtensionUpdate
     return false
   }
 
-  return state.status === 'available'
+  return state.status === 'available' || state.status === 'detected'
 }
 
 export async function readExtensionUpdateState(): Promise<ExtensionUpdateState | null> {

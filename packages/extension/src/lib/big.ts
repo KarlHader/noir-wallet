@@ -16,15 +16,3 @@ export function safeBig(val: BigValue, defaultVal = '0') {
     return new Big('0')
   }
 }
-
-export function safeBigMax(v1: BigValue, v2: BigValue) {
-  return safeBig(v1).gt(safeBig(v2)) ? safeBig(v1).toFixed() : safeBig(v2).toFixed()
-}
-
-export function safeBigMin(v1: BigValue, v2: BigValue) {
-  return safeBig(v1).lt(safeBig(v2)) ? safeBig(v1).toFixed() : safeBig(v2).toFixed()
-}
-
-export function safeBigDiv(v1: BigValue, v2: BigValue) {
-  return safeBig(v1).div(safeBig(v2).eq(0) ? 1 : safeBig(v2))
-}

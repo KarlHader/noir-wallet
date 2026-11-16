@@ -1,0 +1,1 @@
+export const SWAP_TOKEN_CATALOG_CACHE_STORAGE_KEY = 'swap_token_catalog_cache_v1'

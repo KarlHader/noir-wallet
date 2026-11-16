@@ -8,6 +8,10 @@ icon: Download
 
 Use the [official Chrome Web Store listing](https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn). After installation, pin the extension from Chrome's extensions menu.
 
+## V2 Beta access
+
+Enter an unused invite code before setting up or unlocking the wallet. Activation finishes after wallet creation, import, or unlock. If binding fails, select **Retry** or **Use another code** to continue with the existing wallet.
+
 ## Create or restore
 
 <Tabs items={['New wallet', 'Restore wallet']}>
@@ -16,15 +20,21 @@ Use the [official Chrome Web Store listing](https://chromewebstore.google.com/de
     the phrase confirmation before funding the wallet.
   </Tab>
   <Tab value="Restore wallet">
-    Choose **Import wallet** and enter the existing recovery phrase in order. Select the wallet's
-    first-use date (or an earlier date if unsure) or its birthday block height in **Sync
-    Optimization**, then set a password for this browser installation.
+    Choose **Import wallet** and enter the recovery phrase in order. If it previously received ZEC,
+    choose **Restore Zcash history** and select an approximate first-use date or birthday block
+    height. Then set a password for this browser installation.
   </Tab>
 </Tabs>
 
 ## Wallets and accounts
 
 Noir Wallet can hold multiple wallets and accounts. A connected dApp may request read access to more than one account, but the wallet keeps a primary account for actions that operate on a single account.
+
+Open the wallet selector and choose **Add Wallet**. Choose **Import Wallet** for a **Secret Recovery Phrase** or **Private Key**, **Create New Wallet** for a new recovery phrase, or **Connect Hardware Wallet** to select **Ledger** or **Keystone**. Selecting a hardware wallet opens its connection flow in a browser tab.
+
+Recovery-phrase wallets and hardware wallets each have their own group. Accounts imported from individual private keys appear together under **Imported Private Key** and have no **Add Account** action. Each imported account keeps its own credentials and removal action.
+
+Hover over a wallet or account name and select the edit icon to rename it in place. Use **Add Account** on a recovery-phrase wallet to derive another account.
 
 ## Synchronization
 
@@ -33,15 +43,37 @@ Zcash wallet history is discovered by scanning the chain. After an import or a l
 - The interface can show locally cached information while synchronization continues.
 - Actions remain unavailable until their prerequisites are ready.
 - Keep the browser open if the wallet indicates that an initial scan is still running.
-- If sync pauses, check the network connection and restart the extension if it remains paused.
+- If sync pauses, check the connection. **Resync Zcash** is available under **Actions** in the current account's details and in its Zcash settings.
 
-On Mainnet, open **Settings > RPC Endpoint** to choose a provider or enable **Auto**. Auto switches among managed providers when needed. If a fixed provider is temporarily unavailable, retry later or select another provider. If it is removed from the available providers, the wallet switches to Auto. Testnet uses its fixed synchronization endpoint.
+## Networks
+
+Open **Settings > Networks** and select a network to configure its **RPC Endpoint** and **Block Explorer**. The list includes the chains available in the installed build. Opening a network's settings does not switch the network used by connected dApps.
+
+### Custom EVM networks
+
+Choose **Add Network** to enter the network name, decimal Chain ID, native currency, RPC URL, and optional block explorer. The wallet checks that the RPC reports the entered Chain ID before saving. Adding a network does not switch networks automatically; connected dApps can request a network switch for approval.
+
+For a listed network, visit [Chainlist](https://chainlist.org/), connect Noir Wallet, and use the network's add button. Review and confirm the network in the wallet. If its default RPC is unavailable, expand the network's RPC list and use an individual endpoint's add button. Custom network icons load from a remote catalog by chain ID; networks without an available icon use a generic network icon.
+
+Open a custom network, then use **Network options > Edit Network** to update its name and native currency or **Remove Network** to delete it. Their settings are saved separately for Mainnet and Testnet. Removing the active custom network restores the default EVM network and removes that chain's site permissions. Tokens saved for a removed network are hidden until the same Chain ID is added again. Pending transactions must be completed before their network can be removed.
+
+### RPC endpoints
+
+Open a network's **RPC Endpoint** to choose an available preset or manage custom endpoints. An active RPC override takes precedence over the default RPC in the network definition. Custom networks support the account's available EVM operations; adding a chain does not enable unsupported Swap, price, or remote history services.
+
+### Block explorers
+
+Open a network's **Block Explorer** to select a preset, or use **Custom Explorer > Add** to enter a name, HTTPS URL, and transaction path. Explorer choices are saved separately for Mainnet and Testnet. Selecting the chain's original preset restores its default explorer.
+
+## Default EVM wallet
+
+Open **Settings > Default EVM Wallet** to choose **Ask every time**, **Use Noir Wallet**, or **Use another wallet** when multiple EVM wallets are installed. **Ask every time** is the initial choice. Reload open websites after changing this preference. Choosing a default does not connect an account or grant a website permission to use it.
 
 ## Transaction broadcasting
 
-ZeroIndexer broadcasting is enabled by default under **Settings > Security & Privacy**. Open **Nodes** in the **ZeroIndexer** card to use **Auto**, choose an official node, or add and select a custom node. Auto orders official nodes by reachability and probe latency; custom nodes are used only when explicitly selected. Adding a custom node saves it without changing the selection. Deleting a selected custom node restores Auto. Choices are saved separately for Mainnet and Testnet and retained when ZeroIndexer is turned off. The preferred-node indicator and latency describe probe results, not the node that accepted a transaction.
+**Zcash Private Broadcast** is enabled by default in **Settings > Security & Privacy**. Open **ZeroIndexer nodes** to select Auto, choose a managed node, or add a custom HTTPS node. Adding a node saves it without selecting it; removing the selected custom node restores Auto. Node selections are saved separately for Mainnet and Testnet and retained while private broadcasting is disabled.
 
-Transactions containing Orchard try the selected ZeroIndexer node, or the ordered official nodes in Auto. If every attempt fails, the wallet broadcasts the same transaction through its ordinary RPC, including when a node was manually selected. During synchronization, status lookups for locally created Orchard transactions also try these nodes before falling back to the ordinary RPC. Other transactions use the ordinary RPC directly. Turning off ZeroIndexer uses the ordinary RPC for all broadcasts and these status lookups. These settings do not change the synchronization provider or compact-block CDN.
+Transactions containing Orchard try the selected ZeroIndexer node, or the ordered managed nodes in Auto. If those attempts fail, the same transaction falls back to the wallet's ordinary RPC. Other transactions, and all transactions when private broadcasting is disabled, use the ordinary RPC directly. These settings do not change the synchronization provider or compact-block CDN. Probe latency describes node reachability, not which node accepted a transaction.
 
 <Callout type="info">
   Locking Noir Wallet protects local access. It does not remove an existing dApp authorization;

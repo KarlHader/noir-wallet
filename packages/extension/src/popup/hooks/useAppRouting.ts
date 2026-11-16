@@ -1,17 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate, useLocation } from '../provider/Router'
-import { useWalletStore, waitForHydration } from '@/store/wallet-store'
+import { prepareWalletStoreForUse, useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useOnboardingStore } from '@/store/onboarding-store'
-import { accountManager } from '@/core/wallet/account-manager'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { toast } from '@/store/toast-store'
-import { needsUnlock } from '@/lib/lock-utils'
 import { SecureStorage } from '@/core/wallet/secure-storage'
-import { sleep } from '@/lib/utils'
-import { ANALYTICS_EVENTS, sendAnalyticsEvent } from '@/lib/analytics'
+import { accountNetworksClient } from '../services/account-networks-client'
+import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
-import { didWalletSessionEnd } from '@/core/wallet/session-state'
+import { useBetaInviteActivation } from './useBetaInviteActivation'
+import {
+  canUseRouteBeforeBetaActivation,
+  getPendingBetaInviteReturnRoute
+} from '../services/beta-invite-route-policy'
 
 /**
  * Custom hook for application routing logic
@@ -21,13 +24,16 @@ export function useAppRouting() {
   const { replace } = useNavigate()
   const location = useLocation()
   const [isLoading, setIsLoading] = useState(true)
+  const hasProjectedWallet = useWalletStore(state => state.wallets.length > 0)
+  const [hasCatalogWallet, setHasCatalogWallet] = useState(false)
+  const hasAnyWallet = hasProjectedWallet || hasCatalogWallet
+  const [initializationFailure, setInitializationFailure] = useState<'upgrade' | 'startup' | null>(
+    null
+  )
 
-  const { currentWalletId, currentAccountId, getCurrentAccount, setCurrentAccount } =
-    useWalletStore()
+  const { setCurrentAccount } = useWalletStore()
   const { autoLockMs, loadSettings } = useSettingsStore()
   const { getPendingNotifications, markAsNotified } = useAccountDataStore()
-
-  const currentAccount = getCurrentAccount()
 
   const lastVisibleTimeRef = useRef<number>(Date.now())
 
@@ -42,43 +48,80 @@ export function useAppRouting() {
   // Hardware wallet flows (connect/sign) run in a dedicated full tab and must
   // keep their route across init and unlock redirects
   const isHardwareTab = useRef(window.location.hash.includes('/hardware/'))
+  const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
+  const isTokenManagerEntry = useRef(window.location.hash === '#/manage-tokens')
+  const { status: betaInviteStatus } = useBetaInviteActivation()
+  const inviteReturnRoute = useRef(
+    getPendingBetaInviteReturnRoute(
+      location.pathname,
+      location.search,
+      betaInviteStatus.required && betaInviteStatus.state.phase !== 'activated',
+      isDApp.current || isHardwareTab.current
+    )
+  )
+  const restoredInviteRoute = useRef(false)
+
+  useEffect(() => {
+    if (
+      isLoading ||
+      betaInviteStatus.state.phase !== 'activated' ||
+      !inviteReturnRoute.current ||
+      restoredInviteRoute.current ||
+      canUseRouteBeforeBetaActivation(location.pathname)
+    ) {
+      return
+    }
+    restoredInviteRoute.current = true
+    if (`${location.pathname}${location.search}` !== inviteReturnRoute.current) {
+      replace(inviteReturnRoute.current)
+    }
+  }, [betaInviteStatus.state.phase, isLoading, location.pathname, location.search, replace])
 
   const routeToUnlock = useCallback(() => {
-    if (!currentAccount || location.pathname === '/unlock') return
+    // Import/create can complete without remounting the app. Read the current
+    // projection as well as the startup catalog when the session ends.
+    if (
+      (!useWalletStore.getState().wallets.length && !hasCatalogWallet) ||
+      location.pathname === '/unlock'
+    ) {
+      return
+    }
     if (isDApp.current) {
       window.close()
       return
     }
     const target = `${location.pathname}${location.search || ''}`
     replace(`/unlock?redirect=${encodeURIComponent(target)}`)
-  }, [currentAccount, location.pathname, location.search, replace])
+  }, [hasCatalogWallet, location.pathname, location.search, replace])
 
   // Auto-lock handler
   const handleAutoLock = useCallback(async () => {
-    const isLocked = accountManager.isLocked()
-
-    if (!isLocked && currentAccount) {
-      try {
-        sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_LOCKED, { extra: { reason: 'auto' } })
-        await accountManager.lock()
-        chrome.runtime.sendMessage({ type: 'WALLET_LOCKED' }).catch(() => {})
+    if (!hasAnyWallet) return
+    // Another extension page may still be active (for example a hardware setup
+    // tab while the side panel is idle). Only Background can decide whether
+    // the shared activity deadline has expired; page timers are wakeups only.
+    try {
+      const response: unknown = await chrome.runtime.sendMessage({ type: 'CHECK_WALLET_AUTO_LOCK' })
+      if (
+        response &&
+        typeof response === 'object' &&
+        'active' in response &&
+        response.active === false
+      )
         routeToUnlock()
-      } catch {
-        // Keep the current route when locking fails.
-      }
+    } catch {
+      // Background's alarm remains responsible for enforcing the deadline.
     }
-  }, [currentAccount, routeToUnlock])
+  }, [hasAnyWallet, routeToUnlock])
 
   useEffect(() => {
     const handleSessionChange = (
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string
     ) => {
-      if (!didWalletSessionEnd(changes, areaName)) return
-      void accountManager.lock().finally(routeToUnlock)
+      if (didCredentialSessionEnd(changes, areaName)) routeToUnlock()
     }
-
     chrome.storage.onChanged.addListener(handleSessionChange)
     return () => chrome.storage.onChanged.removeListener(handleSessionChange)
   }, [routeToUnlock])
@@ -89,10 +132,11 @@ export function useAppRouting() {
       if (document.hidden) {
         lastVisibleTimeRef.current = Date.now()
       } else {
-        const hiddenDuration = Date.now() - lastVisibleTimeRef.current
-        if (autoLockMs > 0 && !accountManager.isLocked() && currentAccount) {
+        if (autoLockMs > 0 && hasAnyWallet) {
+          const hiddenDuration = Date.now() - lastVisibleTimeRef.current
+
           if (hiddenDuration >= autoLockMs) {
-            void handleAutoLock()
+            handleAutoLock()
           }
         }
       }
@@ -102,32 +146,32 @@ export function useAppRouting() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [autoLockMs, currentAccount, handleAutoLock])
+  }, [autoLockMs, hasAnyWallet, handleAutoLock])
 
   // Idle detection: lock after autoLockMs of no user interaction while popup is open
   useEffect(() => {
-    const isLocked = accountManager.isLocked()
-    if (autoLockMs <= 0 || isLocked || !currentAccount) return
+    if (autoLockMs <= 0 || !hasAnyWallet || isLoading || location.pathname === '/unlock') return
 
     let idleTimer: ReturnType<typeof setTimeout>
 
-    const resetIdleTimer = () => {
+    const resetIdleTimer = (recordActivity = true) => {
       clearTimeout(idleTimer)
-      SecureStorage.saveLastActivityTime().catch(() => {})
+      if (recordActivity) SecureStorage.saveLastActivityTime().catch(() => {})
       idleTimer = setTimeout(() => {
-        void handleAutoLock()
+        handleAutoLock()
       }, autoLockMs)
     }
 
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click']
-    events.forEach(event => document.addEventListener(event, resetIdleTimer, { passive: true }))
-    resetIdleTimer()
+    const recordActivity = () => resetIdleTimer()
+    events.forEach(e => document.addEventListener(e, recordActivity, { passive: true }))
+    resetIdleTimer(false)
 
     return () => {
       clearTimeout(idleTimer)
-      events.forEach(event => document.removeEventListener(event, resetIdleTimer))
+      events.forEach(e => document.removeEventListener(e, recordActivity))
     }
-  }, [autoLockMs, currentAccount, handleAutoLock])
+  }, [autoLockMs, hasAnyWallet, handleAutoLock, isLoading, location.pathname])
 
   // Load settings
   useEffect(() => {
@@ -172,69 +216,29 @@ export function useAppRouting() {
     checkWalletStatus()
   }, [])
 
-  // Redirect from unlock to home for normal popup windows
-  useEffect(() => {
-    if (
-      !isDApp.current &&
-      !isHardwareTab.current &&
-      !accountManager.isLocked() &&
-      currentAccount &&
-      location.pathname === '/unlock'
-    ) {
-      replace('/')
-    }
-  }, [currentAccount, location.pathname, replace])
-
-  useEffect(() => {
-    if (
-      isLoading ||
-      isDApp.current ||
-      isHardwareTab.current ||
-      location.pathname !== '/onboarding' ||
-      !currentWalletId ||
-      !currentAccountId
-    ) {
-      return
-    }
-
-    let cancelled = false
-    const enterWallet = async () => {
-      try {
-        await accountManager.initialize()
-        const unlockNeeded = await needsUnlock()
-        if (!cancelled) {
-          replace(unlockNeeded ? '/unlock?redirect=%2F' : '/')
-        }
-      } catch (error) {
-        console.error('[useAppRouting] Failed to open newly created wallet:', error)
-      }
-    }
-
-    enterWallet()
-    return () => {
-      cancelled = true
-    }
-  }, [currentAccountId, currentWalletId, isLoading, location.pathname, replace])
-
   /**
    * Unified wallet initialization for all window types
    * Handles both normal popup and dApp-triggered windows
    */
   const checkWalletStatus = async () => {
-    const startTime = Date.now()
-    const minLoadingDuration = isDApp.current ? 500 : 1000
+    let initializationPhase: 'upgrade' | 'startup' = 'upgrade'
+
+    setIsLoading(true)
 
     try {
-      await waitForHydration()
+      await prepareWalletStoreForUse()
+      initializationPhase = 'startup'
+      setInitializationFailure(null)
       await loadSettings()
 
       if (isUpdatePage.current) {
         return
       }
 
-      await accountManager.initialize()
-
-      if (useWalletStore.getState().wallets.length === 0) {
+      const hasRetainedV1Wallet = useWalletStore.getState().wallets.length > 0
+      const hasNativeWallet = hasRetainedV1Wallet ? false : await accountNetworksClient.hasWallet()
+      setHasCatalogWallet(hasNativeWallet)
+      if (!hasRetainedV1Wallet && !hasNativeWallet) {
         // Hardware connect tab handles the first-wallet case itself
         // (collects a password during setup)
         if (isHardwareTab.current) {
@@ -255,8 +259,13 @@ export function useAppRouting() {
         return
       }
 
-      // Use unified lock check
-      const unlockNeeded = await needsUnlock()
+      // Startup can overlap another page's unlock. Let Background recheck the
+      // shared session inside its lock transition instead of locking a stale read.
+      const session: unknown = await chrome.runtime.sendMessage({ type: 'CHECK_WALLET_AUTO_LOCK' })
+      if (!session || typeof session !== 'object' || !('active' in session)) {
+        throw new Error('Unable to check wallet auto-lock')
+      }
+      const unlockNeeded = session.active !== true
 
       if (unlockNeeded) {
         // Build redirect URL with current route and parameters
@@ -268,7 +277,7 @@ export function useAppRouting() {
 
         // For dApp windows, redirect back to original route
         if (isDApp.current && currentPath !== '/unlock') {
-          redirectParams.set('redirect', currentPath)
+          redirectParams.set('redirect', isActivationDApp.current ? '/' : currentPath)
           if (requestId) {
             redirectParams.set('requestId', requestId)
           }
@@ -276,13 +285,21 @@ export function useAppRouting() {
           // Hardware tabs must return to their flow (with query, e.g. sign request id)
           redirectParams.set('redirect', `${currentPath}${location.search || ''}`)
         } else {
-          // For normal popup, redirect to home
-          redirectParams.set('redirect', '/')
+          redirectParams.set(
+            'redirect',
+            inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/')
+          )
         }
 
         replace(`/unlock?${redirectParams.toString()}`)
         return
       }
+
+      if (hasNativeWallet) {
+        const catalog = await accountNetworksClient.getCatalog()
+        setHasCatalogWallet((catalog?.accounts.length ?? 0) > 0)
+      }
+      await zcashWalletRuntimeClient.initialize()
 
       {
         const { currentWalletId: cwid, currentAccountId: caid } = useWalletStore.getState()
@@ -296,23 +313,20 @@ export function useAppRouting() {
       await SecureStorage.saveLastActivityTime()
 
       // dApp windows and hardware tabs stay on their route; normal popup goes home
-      if (!isDApp.current && !isHardwareTab.current) {
-        replace('/')
+      if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
+        replace(inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/'))
       }
     } catch (error) {
       console.error('[useAppRouting] Initialization error:', error)
-      // A read failure is not evidence of an empty installation.
-      toast.error('Unable to open wallet', 'Restart the extension and try again.')
-      replace('/unlock')
+      setInitializationFailure(initializationPhase)
     } finally {
-      const elapsed = Date.now() - startTime
-      const remainingTime = Math.max(0, minLoadingDuration - elapsed)
-      if (remainingTime > 0) {
-        await sleep(remainingTime)
-      }
       setIsLoading(false)
     }
   }
 
-  return { isLoading }
+  return {
+    isLoading,
+    initializationFailure,
+    retryInitialization: checkWalletStatus
+  }
 }

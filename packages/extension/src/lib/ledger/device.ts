@@ -2,6 +2,9 @@ import {
   DeviceActionStatus,
   DeviceManagementKitBuilder,
   DeviceModelId,
+  GetAppAndVersionCommand,
+  OpenAppDeviceAction,
+  isSuccessCommandResult,
   type DeviceManagementKit,
   type DiscoveredDevice,
   type ExecuteDeviceActionReturnType,
@@ -15,13 +18,18 @@ import {
 } from '@ledgerhq/device-signer-kit-zcash'
 import { webHidIdentifier, webHidTransportFactory } from '@ledgerhq/device-transport-kit-web-hid'
 import { webBleIdentifier, webBleTransportFactory } from '@ledgerhq/device-transport-kit-web-ble'
-import { firstValueFrom, timeout, type Subscription } from 'rxjs'
+import { firstValueFrom, Observable, takeUntil, timeout, type Subscription } from 'rxjs'
 import { bytesToBase64, base64ToBytes } from '@/lib/bytes'
 import { normalizeLedgerTransparentSignature } from '@/lib/ledger/signature'
 import type { Network } from '@/types'
 import type { LedgerPcztSignatures, LedgerSigningPayload } from '@/core/worker/types'
 import { logger } from '@/lib/logger'
 import { getLedgerAccountPath } from '@/lib/zcash-derivation'
+import { openAndVerifyLedgerApp } from './app-session'
+import {
+  assertLedgerZcashAppVersion,
+  ledgerZcashTransactionBranchId
+} from '@/lib/zcash-hardware-compatibility'
 
 export type LedgerTransport = 'usb' | 'bluetooth'
 
@@ -30,6 +38,32 @@ export interface LedgerAccountExport {
   deviceModel: string
   deviceName: string
   appVersion: string
+}
+
+export function parseLedgerSigningPayload(value: unknown): LedgerSigningPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Invalid Ledger signing payload')
+  }
+  const record = value as Record<string, unknown>
+  ledgerZcashTransactionBranchId(record.transaction)
+  if (
+    typeof record.transaction !== 'object' ||
+    record.transaction === null ||
+    !Array.isArray(record.orchardSignatureIndices) ||
+    !Array.isArray(record.ironwoodSignatureIndices) ||
+    record.orchardSignatureIndices.length > 1024 ||
+    record.ironwoodSignatureIndices.length > 1024 ||
+    [...record.orchardSignatureIndices, ...record.ironwoodSignatureIndices].some(
+      index => !Number.isSafeInteger(index) || index < 0
+    )
+  ) {
+    throw new Error('Invalid Ledger signing payload')
+  }
+  return {
+    transaction: record.transaction,
+    orchardSignatureIndices: record.orchardSignatureIndices,
+    ironwoodSignatureIndices: record.ironwoodSignatureIndices
+  }
 }
 
 const BLUETOOTH_DEVICE_MODELS = new Set<DeviceModelId>([
@@ -61,7 +95,6 @@ export function ledgerSupportsBluetooth(deviceModel?: string): boolean {
   return BLUETOOTH_DEVICE_MODELS.has(deviceModel as DeviceModelId)
 }
 
-const MIN_ZCASH_APP_VERSION = '3.9.2'
 const DISCOVERY_TIMEOUT_MS = 60_000
 const ACTION_TIMEOUT_MS = 5 * 60_000
 const LEDGER_TRANSPARENT_INPUT_DATA_ERROR = 'LedgerPcztTransparentInputDataError'
@@ -70,14 +103,6 @@ let dmkInstance: DeviceManagementKit | null = null
 
 interface LedgerCommandTrace {
   command: string
-  p1?: string
-  p2?: string
-  dataLength?: number
-  transparentInputFields?: {
-    prevoutIndex: number
-    sequenceTag: number
-    amountZats: string
-  }
 }
 
 let lastLedgerCommand: LedgerCommandTrace | undefined
@@ -97,25 +122,7 @@ function pcztCommandFromApdu(apdu: string): LedgerCommandTrace | undefined {
   if (!/^e0[0-9a-f]{8}/i.test(apdu)) return undefined
   const command = PCZT_COMMAND_BY_INS[apdu.slice(2, 4).toLowerCase()]
   if (!command) return undefined
-  const trace: LedgerCommandTrace = {
-    command,
-    p1: `0x${apdu.slice(4, 6).toLowerCase()}`,
-    p2: `0x${apdu.slice(6, 8).toLowerCase()}`,
-    dataLength: Number.parseInt(apdu.slice(8, 10), 16)
-  }
-  if (command === 'PcztTransparentInput' && trace.dataLength === 45) {
-    const payload = apdu.slice(10)
-    const littleEndianNumber = (hex: string) =>
-      Number.parseInt(hex.match(/../g)?.reverse().join('') ?? '', 16)
-    const littleEndianBigInt = (hex: string) =>
-      BigInt(`0x${hex.match(/../g)?.reverse().join('') ?? '0'}`)
-    trace.transparentInputFields = {
-      prevoutIndex: littleEndianNumber(payload.slice(64, 72)),
-      sequenceTag: Number.parseInt(payload.slice(72, 74), 16),
-      amountZats: littleEndianBigInt(payload.slice(74, 90)).toString()
-    }
-  }
-  return trace
+  return { command }
 }
 
 const ledgerCommandTracker: LoggerSubscriberService = {
@@ -129,8 +136,7 @@ const ledgerCommandTracker: LoggerSubscriberService = {
       return
     }
 
-    // Device actions call DMK's internal sendCommand path, which skips the
-    // command-name log. Recover the stage from the non-sensitive APDU header.
+    // Device actions skip the command-name log; inspect only the APDU header.
     const outgoingApdu = /^\[will send APDU\]\s+~\.\.\.>\s+([0-9a-f]+)/i.exec(message)?.[1]
     const exchangeApdu =
       options.data?.type === 'apdu-exchange' && typeof options.data.apdu === 'string'
@@ -143,17 +149,19 @@ const ledgerCommandTracker: LoggerSubscriberService = {
   }
 }
 
-function getDmk(): DeviceManagementKit {
+export function getLedgerDmk(): DeviceManagementKit {
   if (!dmkInstance) {
     dmkInstance = new DeviceManagementKitBuilder()
       .addTransport(webHidTransportFactory)
       .addTransport(webBleTransportFactory)
-      // Keep only the command name so failures can be located without logging APDU payloads.
+      // Track only command names for actionable device errors.
       .addLogger(ledgerCommandTracker)
       .build()
   }
   return dmkInstance
 }
+
+const getDmk = getLedgerDmk
 
 function transportIdentifier(transport: LedgerTransport) {
   return transport === 'usb' ? webHidIdentifier : webBleIdentifier
@@ -190,7 +198,7 @@ function getErrorMessage(value: unknown): string | undefined {
   )
 }
 
-function describeLedgerError(error: unknown): LedgerErrorDetails {
+function describeLedgerError(error: unknown, zcashOperation: boolean): LedgerErrorDetails {
   const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : undefined
   const tag = typeof record?._tag === 'string' ? record._tag : undefined
   const code =
@@ -198,8 +206,13 @@ function describeLedgerError(error: unknown): LedgerErrorDetails {
       ? String(record.errorCode)
       : undefined
   const rawMessage = getErrorMessage(error) ?? 'Ledger operation failed'
-  const mappedMessage =
-    LEDGER_ERROR_MESSAGES[rawMessage] ?? (tag ? LEDGER_ERROR_MESSAGES[tag] : undefined)
+  const mappedMessage = zcashOperation
+    ? (LEDGER_ERROR_MESSAGES[rawMessage] ?? (tag ? LEDGER_ERROR_MESSAGES[tag] : undefined))
+    : tag === 'ConditionOfUseNotSatisfiedError'
+      ? 'Request was rejected on the Ledger device.'
+      : tag === 'SecurityStatusNotSatisfiedError'
+        ? 'Unlock your Ledger and try again.'
+        : undefined
 
   return {
     tag,
@@ -243,103 +256,187 @@ export function isLedgerTransparentInputDataError(error: unknown): boolean {
   return message.includes(LEDGER_TRANSPARENT_INPUT_DATA_ERROR)
 }
 
-function compareVersions(left: string, right: string): number {
-  const a = left.split('.').map(value => Number.parseInt(value, 10) || 0)
-  const b = right.split('.').map(value => Number.parseInt(value, 10) || 0)
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const delta = (a[index] ?? 0) - (b[index] ?? 0)
-    if (delta !== 0) return delta
-  }
-  return 0
-}
-
 function assertSupportedDevice(device: DiscoveredDevice): void {
   if (device.deviceModel.model === DeviceModelId.NANO_S) {
     throw new Error('Ledger Nano S is not supported by the Zcash app')
   }
 }
 
-function assertSupportedAppVersion(version: string): void {
-  if (compareVersions(version, MIN_ZCASH_APP_VERSION) < 0) {
-    throw new Error(
-      `Zcash app ${MIN_ZCASH_APP_VERSION} or newer is required; connected device has ${version}`
-    )
-  }
-}
-
-async function runAction<Output, Error, Intermediate extends { requiredUserInteraction: string }>(
-  action: ExecuteDeviceActionReturnType<Output, Error, Intermediate>,
+export async function runLedgerAction<Output, ActionError, Intermediate>(
+  action: ExecuteDeviceActionReturnType<Output, ActionError, Intermediate>,
   onInteraction?: (interaction: string) => void,
-  operation:
-    | 'device_action'
-    | 'get_app_config'
-    | 'get_full_viewing_key'
-    | 'sign_pczt_transaction' = 'device_action'
+  operation = 'device_action',
+  signal?: AbortSignal
 ): Promise<Output> {
+  signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     lastLedgerCommand = undefined
     let subscription: Subscription | undefined
-    const timer = window.setTimeout(() => {
-      action.cancel()
-      subscription?.unsubscribe()
-      reject(new Error('Ledger operation timed out'))
-    }, ACTION_TIMEOUT_MS)
+    const timer: { id?: ReturnType<typeof setTimeout> } = {}
+    let finished = false
     const finish = (callback: () => void) => {
-      window.clearTimeout(timer)
+      if (finished) return
+      finished = true
+      if (timer.id !== undefined) globalThis.clearTimeout(timer.id)
+      signal?.removeEventListener('abort', cancel)
       subscription?.unsubscribe()
       callback()
     }
-    subscription = action.observable.subscribe(state => {
-      if (state.status === DeviceActionStatus.Pending) {
-        onInteraction?.(state.intermediateValue.requiredUserInteraction)
-      } else if (state.status === DeviceActionStatus.Completed) {
-        finish(() => resolve(state.output))
-      } else if (state.status === DeviceActionStatus.Error) {
-        const details = describeLedgerError(state.error)
-        const diagnostic = {
-          operation,
-          lastCommand: lastLedgerCommand,
-          tag: details.tag,
-          errorCode: details.code,
-          message: details.message
-        }
-        console.error('[Ledger] Device action failed', JSON.stringify(diagnostic))
-        const command = lastLedgerCommand?.command
-        const safeCommand =
-          command && Object.values(PCZT_COMMAND_BY_INS).includes(command) ? command : 'unknown'
-        const safeCode =
-          details.code && /^[0-9a-fA-F]{4}$/.test(details.code)
-            ? details.code.toLowerCase()
-            : 'unknown'
-        logger.warn(
-          `[Ledger] ${operation} failed at ${safeCommand} (${safeCode})`,
-          undefined,
-          undefined,
-          { message: details.message, code: details.code, cause: state.error }
-        )
-        const wrappedError = new Error(formatLedgerError(details, lastLedgerCommand))
-        Object.defineProperty(wrappedError, 'cause', { value: state.error })
-        finish(() => reject(wrappedError))
-      } else if (state.status === DeviceActionStatus.Stopped) {
-        finish(() => reject(new Error('Ledger operation was cancelled')))
+    const stop = (error: Error) => {
+      finish(() => reject(error))
+      try {
+        action.cancel()
+      } catch {
+        // The operation has already settled; cleanup must not mask its error.
       }
-    })
+    }
+    const cancel = () => stop(new DOMException('Ledger operation was cancelled', 'AbortError'))
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) {
+      cancel()
+      return
+    }
+    timer.id = globalThis.setTimeout(
+      () => stop(new Error('Ledger operation timed out')),
+      ACTION_TIMEOUT_MS
+    )
+    try {
+      subscription = action.observable.subscribe({
+        next: state => {
+          if (state.status === DeviceActionStatus.Pending) {
+            const interaction = state.intermediateValue
+            if (
+              interaction &&
+              typeof interaction === 'object' &&
+              'requiredUserInteraction' in interaction &&
+              typeof interaction.requiredUserInteraction === 'string'
+            ) {
+              onInteraction?.(interaction.requiredUserInteraction)
+            }
+          } else if (state.status === DeviceActionStatus.Completed) {
+            finish(() => resolve(state.output))
+          } else if (state.status === DeviceActionStatus.Error) {
+            const details = describeLedgerError(state.error, operation.startsWith('zcash_'))
+            logger.warn(
+              `[Ledger] ${operation} failed at ${lastLedgerCommand?.command ?? 'unknown'} (${details.code ?? 'unknown'})`
+            )
+            const wrappedError = new Error(formatLedgerError(details, lastLedgerCommand))
+            Object.defineProperty(wrappedError, 'cause', { value: state.error })
+            finish(() => reject(wrappedError))
+          } else if (state.status === DeviceActionStatus.Stopped) {
+            finish(() => reject(new Error('Ledger operation was cancelled')))
+          }
+        },
+        error: error => finish(() => reject(error))
+      })
+      // A synchronous observable can finish before subscribe returns its handle.
+      if (finished) subscription.unsubscribe()
+    } catch (error) {
+      finish(() => reject(error))
+    }
   })
 }
 
-export async function discoverLedger(transport: LedgerTransport): Promise<DiscoveredDevice> {
+const runAction = runLedgerAction
+
+export async function openLedgerApp(
+  dmk: DeviceManagementKit,
+  sessionId: string,
+  appName: string,
+  signal?: AbortSignal,
+  onInteraction?: (interaction: string) => void
+): Promise<string> {
+  return openAndVerifyLedgerApp(
+    appName,
+    name =>
+      runLedgerAction(
+        dmk.executeDeviceAction({
+          sessionId,
+          deviceAction: new OpenAppDeviceAction({ input: { appName: name } })
+        }),
+        onInteraction,
+        'open_app',
+        signal
+      ),
+    async () => {
+      const app = await dmk.sendCommand({ sessionId, command: new GetAppAndVersionCommand() })
+      return isSuccessCommandResult(app) ? app.data : null
+    },
+    signal
+  )
+}
+
+export async function discoverLedger(
+  transport: LedgerTransport,
+  signal?: AbortSignal
+): Promise<DiscoveredDevice> {
+  signal?.throwIfAborted()
   const dmk = getDmk()
   try {
+    const discovery = dmk
+      .startDiscovering({ transport: transportIdentifier(transport) })
+      .pipe(timeout(DISCOVERY_TIMEOUT_MS))
+    const abort$ = signal
+      ? new Observable<void>(subscriber => {
+          const onAbort = () => subscriber.next()
+          signal.addEventListener('abort', onAbort, { once: true })
+          if (signal.aborted) onAbort()
+          return () => signal.removeEventListener('abort', onAbort)
+        })
+      : undefined
     const device = await firstValueFrom(
-      dmk
-        .startDiscovering({ transport: transportIdentifier(transport) })
-        .pipe(timeout(DISCOVERY_TIMEOUT_MS))
-    )
-    assertSupportedDevice(device)
+      abort$ ? discovery.pipe(takeUntil(abort$)) : discovery
+    ).catch(error => {
+      signal?.throwIfAborted()
+      throw error
+    })
     return device
   } finally {
     await dmk.stopDiscovering().catch(() => {})
   }
+}
+
+export interface LedgerSessionOptions {
+  readonly transport: LedgerTransport
+  readonly device?: DiscoveredDevice
+  readonly signal?: AbortSignal
+  readonly onInteraction?: (interaction: string) => void
+}
+
+export async function withLedgerSession<T>(
+  options: LedgerSessionOptions,
+  action: (session: {
+    dmk: DeviceManagementKit
+    sessionId: string
+    device: DiscoveredDevice
+  }) => Promise<T>
+): Promise<T> {
+  const connect = async () => {
+    options.signal?.throwIfAborted()
+    const dmk = getDmk()
+    const device = options.device ?? (await discoverLedger(options.transport, options.signal))
+    const sessionId = await dmk.connect({
+      device,
+      sessionRefresherOptions: { isRefresherDisabled: true }
+    })
+    const abort = () => {
+      void dmk.disconnect({ sessionId }).catch(() => {})
+    }
+    options.signal?.addEventListener('abort', abort, { once: true })
+    try {
+      options.signal?.throwIfAborted()
+      return await action({ dmk, sessionId, device })
+    } finally {
+      options.signal?.removeEventListener('abort', abort)
+      await dmk.disconnect({ sessionId }).catch(() => {})
+    }
+  }
+  // Ledger apps share one device transport; serialize sessions across signing tabs.
+  return navigator.locks.request(
+    'noir-ledger-device-session',
+    { mode: 'exclusive', ...(options.signal ? { signal: options.signal } : {}) },
+    connect
+  )
 }
 
 async function withLedgerSigner<T>(
@@ -350,22 +447,24 @@ async function withLedgerSigner<T>(
     appVersion: string
   }) => Promise<T>,
   onInteraction?: (interaction: string) => void,
-  preDiscovered?: DiscoveredDevice
+  preDiscovered?: DiscoveredDevice,
+  signal?: AbortSignal
 ): Promise<T> {
-  const dmk = getDmk()
-  const device = preDiscovered ?? (await discoverLedger(transport))
-  const sessionId = await dmk.connect({
-    device,
-    sessionRefresherOptions: { isRefresherDisabled: true }
-  })
-  try {
-    const signer = new SignerZcashBuilder({ dmk, sessionId }).build()
-    const config = await runAction(signer.getAppConfig(), onInteraction, 'get_app_config')
-    assertSupportedAppVersion(config.version)
-    return await action({ signer, device, appVersion: config.version })
-  } finally {
-    await dmk.disconnect({ sessionId }).catch(() => {})
-  }
+  return withLedgerSession(
+    { transport, device: preDiscovered, onInteraction, signal },
+    async ({ dmk, sessionId, device }) => {
+      assertSupportedDevice(device)
+      const signer = new SignerZcashBuilder({ dmk, sessionId }).build()
+      const config = await runAction(
+        signer.getAppConfig(),
+        onInteraction,
+        'zcash_get_app_config',
+        signal
+      )
+      assertLedgerZcashAppVersion(config.version)
+      return await action({ signer, device, appVersion: config.version })
+    }
+  )
 }
 
 const LEDGER_BYTE_FIELDS = new Set([
@@ -451,79 +550,6 @@ function toPcztTransaction(payload: LedgerSigningPayload): PcztTransaction {
   return tx as unknown as PcztTransaction
 }
 
-function summarizePczt(transaction: PcztTransaction) {
-  const sumValues = (entries: Array<{ value: bigint }>) =>
-    entries.reduce((total, entry) => total + entry.value, 0n).toString()
-
-  const scriptType = (script: Uint8Array) => {
-    if (
-      script.length === 25 &&
-      script[0] === 0x76 &&
-      script[1] === 0xa9 &&
-      script[2] === 0x14 &&
-      script[23] === 0x88 &&
-      script[24] === 0xac
-    ) {
-      return 'p2pkh'
-    }
-    if (script.length === 23 && script[0] === 0xa9 && script[1] === 0x14 && script[22] === 0x87) {
-      return 'p2sh'
-    }
-    return 'unsupported'
-  }
-
-  const derivationSummary = (
-    derivation: (typeof transaction.transparentInputs)[number]['derivation'] | null | undefined
-  ) =>
-    derivation
-      ? {
-          signingPath: derivation.signingPath,
-          pubkeyLength: derivation.pubkey.length,
-          seedFingerprintLength: derivation.seedFingerprint?.length ?? 0,
-          seedFingerprintIsZero:
-            !derivation.seedFingerprint || derivation.seedFingerprint.every(byte => byte === 0)
-        }
-      : null
-
-  return {
-    txVersion: transaction.global.txVersion,
-    versionGroupId: `0x${transaction.global.versionGroupId.toString(16)}`,
-    consensusBranchId: `0x${transaction.global.consensusBranchId.toString(16)}`,
-    fallbackLockTime: transaction.global.fallbackLockTime,
-    expiryHeight: transaction.global.expiryHeight,
-    coinType: transaction.global.coinType,
-    txModifiable: transaction.global.txModifiable,
-    transparentInputCount: transaction.transparentInputs.length,
-    transparentInputTotalZats: sumValues(transaction.transparentInputs),
-    transparentInputs: transaction.transparentInputs.map((input, index) => ({
-      index,
-      prevoutTxidLength: input.prevoutTxid.length,
-      prevoutIndex: input.prevoutIndex,
-      sequence: input.sequence ?? null,
-      valueZats: input.value.toString(),
-      scriptType: scriptType(input.scriptPubKey),
-      scriptLength: input.scriptPubKey.length,
-      sighashType: input.sighashType,
-      derivation: derivationSummary(input.derivation)
-    })),
-    transparentOutputCount: transaction.transparentOutputs.length,
-    transparentOutputTotalZats: sumValues(transaction.transparentOutputs),
-    transparentOutputs: transaction.transparentOutputs.map((output, index) => ({
-      index,
-      valueZats: output.value.toString(),
-      scriptType: scriptType(output.scriptPubKey),
-      scriptLength: output.scriptPubKey.length,
-      derivation: derivationSummary(output.derivation)
-    })),
-    orchardBundlePresent: transaction.orchardBundle !== null,
-    orchardActionCount: transaction.orchardBundle?.actions.length ?? 0,
-    orchardValueBalanceZats: transaction.orchardBundle?.valueBalance.toString() ?? '0',
-    ironwoodBundlePresent: transaction.ironwoodBundle != null,
-    ironwoodActionCount: transaction.ironwoodBundle?.actions.length ?? 0,
-    ironwoodValueBalanceZats: transaction.ironwoodBundle?.valueBalance.toString() ?? '0'
-  }
-}
-
 function serializeSignatures(result: SignPcztTransactionResult): LedgerPcztSignatures {
   return {
     orchard: result.orchard.map(({ spendAuthSig }) => ({
@@ -544,6 +570,7 @@ export async function exportLedgerAccount(params: {
   accountIndex: number
   onInteraction?: (interaction: string) => void
   device?: DiscoveredDevice
+  signal?: AbortSignal
 }): Promise<LedgerAccountExport> {
   return withLedgerSigner(
     params.transport,
@@ -553,7 +580,8 @@ export async function exportLedgerAccount(params: {
           mode: 'ufvk'
         }),
         params.onInteraction,
-        'get_full_viewing_key'
+        'zcash_get_full_viewing_key',
+        params.signal
       )
       if (viewingKey.mode !== 'ufvk') {
         throw new Error('Ledger returned an unexpected viewing key format')
@@ -566,7 +594,8 @@ export async function exportLedgerAccount(params: {
       }
     },
     params.onInteraction,
-    params.device
+    params.device,
+    params.signal
   )
 }
 
@@ -575,24 +604,24 @@ export async function signLedgerPczt(params: {
   payload: LedgerSigningPayload
   onInteraction?: (interaction: string) => void
   device?: DiscoveredDevice
+  signal?: AbortSignal
 }): Promise<LedgerPcztSignatures> {
   return withLedgerSigner(
     params.transport,
     async ({ signer, appVersion }) => {
       const transaction = toPcztTransaction(params.payload)
+      assertLedgerZcashAppVersion(appVersion, transaction.global.consensusBranchId)
       lastLedgerCommand = undefined
-      console.info(
-        '[Ledger] Signing PCZT',
-        JSON.stringify({ appVersion, ...summarizePczt(transaction) })
-      )
       const result = await runAction(
         signer.signPcztTransaction(transaction),
         params.onInteraction,
-        'sign_pczt_transaction'
+        'zcash_sign_pczt_transaction',
+        params.signal
       )
       return serializeSignatures(result)
     },
     params.onInteraction,
-    params.device
+    params.device,
+    params.signal
   )
 }

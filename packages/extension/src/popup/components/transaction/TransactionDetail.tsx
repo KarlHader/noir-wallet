@@ -1,14 +1,10 @@
 import { useState, useEffect } from 'react'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
-import {
-  formatExplorerUrl,
-  formatNumber,
-  formatSortAddress,
-  formatAmount,
-  detectAddressType
-} from '@/lib/format'
-import Big, { safeBig } from '@/lib/big'
+import { formatExplorerUrl, formatSortAddress, detectAddressType } from '@/lib/format'
+import { formatAmount } from '@/lib/number-format'
+import { safeBig } from '@/lib/big'
+import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { AddressTypeLabel } from '@/popup/components/account/AddressType'
 
 import { DetailRow } from '@/popup/components/common/DetailRow'
@@ -16,18 +12,31 @@ import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
 import { isMultiStepZcashSend } from '@/lib/tx-history-dedup'
 import { buildAccountKey, useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
-import { useContactsStore } from '@/store/contacts-store'
+import { useAddressBookStore } from '@/store/address-book-store'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import type { WasmTransactionEntry } from '@/core/worker/types'
 import type { Transaction } from '@/types/wallet'
-import { resolveMinedTransactionStatus } from '@/lib/transaction-status'
+import { getZcashConfirmationHeight, resolveMinedTransactionStatus } from '@/lib/transaction-status'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { getZcashChainId } from '@/core/chains/registry'
+import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
+import { getLegacyIntentsProgressPresentation } from '@/popup/services/transaction-progress'
+import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
+import {
+  getMissingZcashTransactionSource,
+  getZcashTransactionRecipient
+} from '@/popup/services/zcash-transaction-parties'
+import { TransactionProgressSteps } from './TransactionProgressSteps'
+
+function formatZcashTransactionExplorerUrl(hash: string): string {
+  return formatChainTransactionExplorerUrl(getZcashChainId(DEFAULT_NETWORK), hash, DEFAULT_NETWORK)
+}
 import { useIntentsProgress } from '../../hooks/useIntentsProgress'
-import { getIntentsExplorerUrl, isTerminalIntentsStatus } from '@/lib/intents-progress'
+import { getIntentsExplorerUrl } from '@/lib/intents-progress'
 import {
   getIntentsStatusCopy,
   getOnChainStatusCopy,
-  getTransactionStatusCopy,
-  type TransactionStatusTone
+  getTransactionStatusCopy
 } from '@/lib/transaction-status-copy'
 
 interface TransactionDetailContentProps {
@@ -40,19 +49,6 @@ interface TransactionDetailContentProps {
 const isZcashAddress = (addr: string) => {
   if (!addr) return false
   return addr.startsWith('t') || addr.startsWith('z') || addr.startsWith('u')
-}
-
-function getStatusClassName(tone: TransactionStatusTone): string {
-  if (tone === 'error') return 'text-red-500'
-  if (tone === 'success') return 'text-green-500'
-  return 'text-yellow-500'
-}
-
-function getMissingFromSource(txType: string, fromType?: string) {
-  const isIncoming = txType === 'receive' || txType === 'withdraw' || txType === 'claim'
-  const isShieldedSend = (txType === 'send' || txType === 'shield') && fromType === 'shielded'
-  if (!isIncoming && !isShieldedSend) return null
-  return { label: 'Shielded Pool', type: 'shielded' as const }
 }
 
 function MemoSection({ memo }: { memo: string }) {
@@ -82,8 +78,11 @@ function useWasmTransaction(transactionId?: string) {
   const [wasmTx, setWasmTx] = useState<WasmTransactionEntry | null>(null)
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
 
   useEffect(() => {
+    let cancelled = false
+    setWasmTx(null)
     if (!transactionId?.startsWith('wasm_')) return
     const txidHex = transactionId.slice(5)
     chrome.runtime
@@ -91,10 +90,13 @@ function useWasmTransaction(transactionId?: string) {
       .then((resp: WasmTransactionEntry[] | undefined) => {
         if (!Array.isArray(resp)) return
         const found = resp.find(e => wasmTxidToHex(e.txid) === txidHex)
-        if (found) setWasmTx(found)
+        if (!cancelled) setWasmTx(found ?? null)
       })
       .catch(() => {})
-  }, [transactionId, walletId, accountId])
+    return () => {
+      cancelled = true
+    }
+  }, [transactionId, walletId, accountId, network])
 
   return wasmTx
 }
@@ -110,13 +112,16 @@ export function TransactionDetailContent({
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
+  const chainTip = useAccountDataStore(state =>
+    getZcashConfirmationHeight(state.getWalletSyncState(network, walletId ?? ''))
+  )
+  const scannedHeight = useAccountDataStore(
+    state => state.getWalletSyncState(network, walletId ?? '').currentHeight
+  )
   const accountKey =
     walletId && accountId ? buildAccountKey(network, walletId, accountId) : undefined
   const intentsProgress = useIntentsProgress(accountKey).find(
-    entry =>
-      entry.transactionId === transactionId &&
-      !isTerminalIntentsStatus(entry.status) &&
-      (entry.kind !== 'swap' || entry.direction === 'from_zcash')
+    entry => entry.transactionId === transactionId || entry.depositAddress === tx?.depositAddress
   )
 
   if (!tx && !wasmTx) {
@@ -147,7 +152,6 @@ export function TransactionDetailContent({
       ts = Date.now()
     }
     const dateStr = new Date(ts).toLocaleString()
-    const chainTip = useAccountDataStore.getState().getCurrentSyncState().currentHeight
     const wasmType = isIncoming ? 'receive' : wasmTx.kind === 'shield' ? 'shield' : 'send'
     const receiveTrust =
       isIncoming && (wasmTx.kind === 'send' || wasmTx.kind === 'shield') ? 'trusted' : 'untrusted'
@@ -156,7 +160,8 @@ export function TransactionDetailContent({
       wasmTx.mined_height,
       chainTip,
       wasmType,
-      receiveTrust
+      receiveTrust,
+      scannedHeight
     )
     const statusCopy = getOnChainStatusCopy(
       confirmationState.status,
@@ -164,7 +169,7 @@ export function TransactionDetailContent({
       confirmationState.confirmations,
       confirmationState.requiredConfirmations
     )
-    const explorerUrl = formatExplorerUrl('zcash', txidHex, 'transaction')
+    const explorerUrl = formatZcashTransactionExplorerUrl(txidHex)
     const kindLabel = isIncoming ? 'Receive' : wasmTx.kind === 'shield' ? 'Shield' : 'Send'
 
     return (
@@ -181,15 +186,16 @@ export function TransactionDetailContent({
               badgeType={isIncoming ? 'receive' : 'send'}
             />
           </div>
-          <p className="text-3xl font-bold">
-            {isIncoming ? '+' : '-'}
-            {zecAmount}
-          </p>
+          <div className="max-w-full text-center text-3xl font-bold">
+            <AmountDisplay value={zecAmount} prefix={isIncoming ? '+' : '-'} showDetails={false} />
+          </div>
         </div>
         <div className="space-y-4 mb-6">
           <DetailRow label="Date">{dateStr}</DetailRow>
           <DetailRow label="Status">
-            <span className={getStatusClassName(statusCopy.tone)}>{statusCopy.label}</span>
+            <span className={getTransactionStatusToneClassName(statusCopy.tone)}>
+              {statusCopy.label}
+            </span>
           </DetailRow>
           {wasmTx.mined_height && (
             <DetailRow label="Block Height">{wasmTx.mined_height.toLocaleString()}</DetailRow>
@@ -208,7 +214,11 @@ export function TransactionDetailContent({
           )}
           {wasmTx.fee_zatoshis != null && wasmTx.fee_zatoshis > 0 && (
             <DetailRow label="Fee">
-              {formatAmount(wasmTx.fee_zatoshis.toString(), ZEC_DECIMALS)} ZEC
+              <AmountDisplay
+                value={formatAmount(wasmTx.fee_zatoshis.toString(), ZEC_DECIMALS)}
+                symbol="ZEC"
+                profile="fee"
+              />
             </DetailRow>
           )}
           {wasmTx.memo && <MemoSection memo={wasmTx.memo} />}
@@ -219,10 +229,14 @@ export function TransactionDetailContent({
 
   const localTx = tx!
   const intentsDepositAddress =
-    localTx.depositAddress ||
-    localTx.quoteBinding?.depositAddress ||
-    intentsProgress?.depositAddress
-  const toContact = useContactsStore(state => state.getContact(localTx.to))
+    localTx.quoteBinding?.provider === 'rhea-cross-chain-dex'
+      ? undefined
+      : localTx.depositAddress ||
+        localTx.quoteBinding?.depositAddress ||
+        intentsProgress?.depositAddress
+  const toContact = useAddressBookStore(state =>
+    state.getContact(getZcashChainId(DEFAULT_NETWORK), localTx.to)
+  )
   const isIncoming =
     localTx.type === 'receive' || localTx.type === 'withdraw' || localTx.type === 'claim'
   const chainHashes = localTx.chainHashes ?? []
@@ -232,23 +246,20 @@ export function TransactionDetailContent({
   const visibleStatusCopy = intentsProgress
     ? getIntentsStatusCopy(intentsProgress.status)
     : transactionStatusCopy
-  const explorerUrl = localTx.txHash
-    ? formatExplorerUrl('zcash', localTx.txHash, 'transaction')
-    : ''
+  const intentsSteps = intentsProgress
+    ? getLegacyIntentsProgressPresentation(localTx, intentsProgress)
+    : null
+  const explorerUrl = localTx.txHash ? formatZcashTransactionExplorerUrl(localTx.txHash) : ''
   const fromType = localTx.fromType
   const toType = detectAddressType(localTx.to)
-  const missingFromSource = localTx.from ? null : getMissingFromSource(localTx.type, fromType)
+  const missingFromSource = localTx.from
+    ? null
+    : getMissingZcashTransactionSource(localTx.type, fromType)
   const fromLabel = localTx.from
     ? formatSortAddress(localTx.from)
     : (missingFromSource?.label ?? '')
   const fromLabelType = localTx.from ? fromType : missingFromSource?.type
-  const isMissingShieldedReceiveTarget = !localTx.to && localTx.type === 'receive'
-  const toLabel = localTx.to
-    ? formatSortAddress(localTx.to)
-    : isMissingShieldedReceiveTarget
-      ? 'Shielded Pool'
-      : 'Unavailable'
-  const toLabelType = localTx.to ? toType : isMissingShieldedReceiveTarget ? 'shielded' : null
+  const recipient = getZcashTransactionRecipient(localTx)
 
   return (
     <div>
@@ -260,33 +271,46 @@ export function TransactionDetailContent({
 
       <div className="flex flex-col items-center py-8">
         <div className="relative mb-4">
-          <TokenIcon symbol="ZEC" size="xl" showBadge badgeType={isIncoming ? 'receive' : 'send'} />
+          <TokenIcon
+            symbol="ZEC"
+            nativeChain="zcash"
+            size="xl"
+            showBadge
+            badgeType={isIncoming ? 'receive' : 'send'}
+          />
         </div>
-        <p className="text-3xl font-bold">
-          {isIncoming ? '+' : '-'}
-          {formatNumber(localTx.amount, { rm: Big.roundDown })}
-        </p>
+        <div className="max-w-full text-center text-3xl font-bold">
+          <AmountDisplay
+            value={localTx.amount}
+            prefix={isIncoming ? '+' : '-'}
+            showDetails={false}
+          />
+        </div>
       </div>
 
       <div className="space-y-4 mb-6">
         <DetailRow label="Date">{dateStr}</DetailRow>
         <DetailRow label="Status">
-          <span className={getStatusClassName(visibleStatusCopy.tone)}>
+          <span className={getTransactionStatusToneClassName(visibleStatusCopy.tone)}>
             {visibleStatusCopy.label}
           </span>
         </DetailRow>
-        {!intentsProgress && transactionStatusCopy.key === 'status_unavailable' && (
-          <DetailRow label="Last Update">
-            <span className="max-w-[190px] text-right text-muted">
-              {transactionStatusCopy.description}
-            </span>
-          </DetailRow>
-        )}
         {intentsProgress && (
           <>
             <DetailRow label="Route">
-              {formatNumber(intentsProgress.amountIn)} {intentsProgress.tokenInSymbol} →{' '}
-              {formatNumber(intentsProgress.amountOut)} {intentsProgress.tokenOutSymbol}
+              <span className="inline-flex max-w-full flex-wrap items-center justify-end gap-1">
+                <AmountDisplay
+                  value={intentsProgress.amountIn}
+                  symbol={intentsProgress.tokenInSymbol}
+                  showDetails={false}
+                />
+                <span>→</span>
+                <AmountDisplay
+                  value={intentsProgress.amountOut}
+                  symbol={intentsProgress.tokenOutSymbol}
+                  showDetails={false}
+                />
+              </span>
             </DetailRow>
             <DetailRow label="Updated">
               {new Date(intentsProgress.lastStatusChangeAt).toLocaleString()}
@@ -296,7 +320,7 @@ export function TransactionDetailContent({
         {intentsDepositAddress && (
           <DetailRow label="NEAR Intents">
             <a
-              href={getIntentsExplorerUrl(intentsDepositAddress)}
+              href={getIntentsExplorerUrl(intentsDepositAddress, localTx.type)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary hover:underline"
@@ -312,21 +336,25 @@ export function TransactionDetailContent({
               fromLabelType && <AddressTypeLabel type={fromLabelType} />}
           </div>
         </DetailRow>
-        <DetailRow label="To">
-          <div className="flex flex-col items-end gap-0.5">
-            {toContact?.znsName && (
-              <span className="text-xs text-primary">{toContact.znsName}</span>
-            )}
-            <div className="flex items-center gap-2">
-              <span className={localTx.to ? '' : 'text-muted'}>{toLabel}</span>
-              {((localTx.to && isZcashAddress(localTx.to)) || toLabelType) && (
-                <AddressTypeLabel type={toLabelType ?? toType} />
+        {recipient && (
+          <DetailRow label="To">
+            <div className="flex flex-col items-end gap-0.5">
+              {toContact?.znsName && (
+                <span className="text-xs text-primary">{toContact.znsName}</span>
               )}
+              <div className="flex items-center gap-2">
+                <span className={localTx.to ? '' : 'text-muted'}>{recipient.label}</span>
+                {((localTx.to && isZcashAddress(localTx.to)) || recipient.type) && (
+                  <AddressTypeLabel type={recipient.type ?? toType} />
+                )}
+              </div>
             </div>
-          </div>
-        </DetailRow>
+          </DetailRow>
+        )}
         {localTx.fee && safeBig(localTx.fee).gt(0) && (
-          <DetailRow label="Fee">{formatNumber(localTx.fee, { rm: Big.roundDown })} ZEC</DetailRow>
+          <DetailRow label="Fee">
+            <AmountDisplay value={localTx.fee} symbol="ZEC" profile="fee" />
+          </DetailRow>
         )}
         {chainHashes.length > 0
           ? chainHashes.map((chainHash, index) => {
@@ -376,7 +404,7 @@ export function TransactionDetailContent({
         {localTx.replacedByTxHash && (
           <DetailRow label="Replacement Hash">
             <a
-              href={formatExplorerUrl('zcash', localTx.replacedByTxHash, 'transaction')}
+              href={formatZcashTransactionExplorerUrl(localTx.replacedByTxHash)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary hover:underline cursor-pointer break-all font-mono"
@@ -387,6 +415,8 @@ export function TransactionDetailContent({
         )}
         {localTx.memo && <MemoSection memo={localTx.memo} />}
       </div>
+
+      {intentsSteps && <TransactionProgressSteps steps={intentsSteps.steps} className="mb-6" />}
 
       {getTransactionRecoveryAction(localTx) === 'speed_up' && onSpeedUp && (
         <Button

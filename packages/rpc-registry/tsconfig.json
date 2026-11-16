@@ -5,5 +5,5 @@
     "target": "ES2022",
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src"]
+  "include": ["src", "tests", "playwright.config.ts"]
 }

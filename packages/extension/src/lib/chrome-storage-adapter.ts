@@ -4,19 +4,11 @@
  */
 
 type StorageArea = 'local' | 'session'
-
-import { SETTINGS_STORAGE_KEY } from '../config/storage-keys'
-import {
-  readWalletMetadata,
-  writeWalletMetadata,
-  WALLET_STATE_KEY
-} from './wallet-metadata-storage'
-import { withWalletSettingsLock } from './wallet-settings-storage'
-import { ACCOUNT_DATA_KEY, readAccountData, writeAccountData } from './account-data-storage'
+import { SETTINGS_STORAGE_KEY, withWalletSettingsLock } from './wallet-settings-storage'
 
 interface StorageAdapter {
-  getItem(key: string): Promise<unknown>
-  setItem(key: string, value: unknown): Promise<void>
+  getItem(key: string): Promise<string | null>
+  setItem(key: string, value: string): Promise<void>
   removeItem(key: string): Promise<void>
 }
 
@@ -24,41 +16,40 @@ interface StorageAdapter {
  * Creates a chrome.storage adapter for Zustand persist middleware
  * @param area - 'local' for persistent storage, 'session' for ephemeral storage
  */
-export function createChromeStorageAdapter(area: StorageArea = 'local'): StorageAdapter {
+export function createChromeStorageAdapter(
+  area: StorageArea = 'local',
+  options: { strictRead?: boolean } = {}
+): StorageAdapter {
   const storage = area === 'local' ? chrome.storage.local : chrome.storage.session
 
   return {
-    getItem: async (key: string): Promise<unknown> => {
+    getItem: async (key: string): Promise<string | null> => {
       if (area === 'local' && key === WALLET_STATE_KEY) {
-        return readWalletMetadata(storage)
+        return (await readWalletMetadata()) as unknown as string | null
       }
-      if (area === 'local' && key === ACCOUNT_DATA_KEY) return readAccountData(storage)
       try {
         const result = await storage.get(key)
         return result[key] ?? null
       } catch (error) {
         console.error('[ChromeStorageAdapter] getItem error:', error)
+        if (options.strictRead) throw error
         return null
       }
     },
 
-    setItem: async (key: string, value: unknown): Promise<void> => {
+    setItem: async (key: string, value: string): Promise<void> => {
       if (area === 'local' && key === WALLET_STATE_KEY) {
-        await writeWalletMetadata(storage, value)
-        return
-      }
-      if (area === 'local' && key === ACCOUNT_DATA_KEY) {
-        await writeAccountData(storage, value)
+        await writeWalletMetadata(value)
         return
       }
       const write = async () => {
         try {
           if (area === 'local' && key === SETTINGS_STORAGE_KEY) {
-            const current = (await storage.get(key))[key]
+            const latest = (await storage.get(key))[key]
             const parse = (raw: unknown): Record<string, unknown> => {
               try {
                 const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-                return parsed && typeof parsed === 'object'
+                return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
                   ? (parsed as Record<string, unknown>)
                   : {}
               } catch {
@@ -66,19 +57,26 @@ export function createChromeStorageAdapter(area: StorageArea = 'local'): Storage
               }
             }
             const incoming = parse(value)
-            const latest = parse(current)
-            const latestState = latest.state as Record<string, unknown> | undefined
-            const incomingState = incoming.state as Record<string, unknown> | undefined
-            if (incomingState) {
-              const { zeroIndexerDefaultApplied: _retired, ...state } = incomingState
-              value = {
-                ...incoming,
-                state: {
-                  ...state,
-                  zeroIndexerEnabled: latestState?.zeroIndexerEnabled !== false
+            const previous = parse(latest)
+            if (incoming.state && typeof incoming.state === 'object') {
+              const state = parse(incoming.state)
+              const previousState = previous.state ? parse(previous.state) : previous
+              // Network definitions are committed by Background; page stores only mirror them.
+              // Preserve absence too, so an empty partition cannot mask legacy settings.
+              for (const field of ['chainEndpointSettings', 'chainEndpointSettingsByNetwork']) {
+                if (Object.prototype.hasOwnProperty.call(previousState, field)) {
+                  state[field] = previousState[field]
+                } else {
+                  delete state[field]
                 }
               }
-              if (typeof current === 'string') value = JSON.stringify(value)
+              if (Object.prototype.hasOwnProperty.call(previousState, 'networkMode')) {
+                state.networkMode = previousState.networkMode
+              }
+              value = JSON.stringify({
+                ...incoming,
+                state: { ...state, zeroIndexerEnabled: previousState.zeroIndexerEnabled !== false }
+              })
             }
           }
           await storage.set({ [key]: value })
@@ -94,11 +92,8 @@ export function createChromeStorageAdapter(area: StorageArea = 'local'): Storage
           }
         }
       }
-      if (area === 'local' && key === SETTINGS_STORAGE_KEY) {
-        await withWalletSettingsLock(write)
-      } else {
-        await write()
-      }
+      if (area === 'local' && key === SETTINGS_STORAGE_KEY) await withWalletSettingsLock(write)
+      else await write()
     },
 
     removeItem: async (key: string): Promise<void> => {
@@ -110,11 +105,8 @@ export function createChromeStorageAdapter(area: StorageArea = 'local'): Storage
           throw error
         }
       }
-      if (area === 'local' && key === SETTINGS_STORAGE_KEY) {
-        await withWalletSettingsLock(remove)
-      } else {
-        await remove()
-      }
+      if (area === 'local' && key === SETTINGS_STORAGE_KEY) await withWalletSettingsLock(remove)
+      else await remove()
     }
   }
 }
@@ -139,3 +131,8 @@ async function clearOldCacheEntries(storage: chrome.storage.StorageArea): Promis
     console.error('[ChromeStorageAdapter] clearOldCacheEntries error:', error)
   }
 }
+import {
+  WALLET_STATE_KEY,
+  readWalletMetadata,
+  writeWalletMetadata
+} from './wallet-metadata-storage'

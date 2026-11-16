@@ -1,30 +1,166 @@
 # Noir Wallet CI/CD and Release Workflow
 
-This runbook describes automatic PR checks and preview packages in [extension-ci.yml](../.github/workflows/extension-ci.yml), manual Beta and production candidate builds in [extension-release.yml](../.github/workflows/extension-release.yml), and promotion and optional Chrome Web Store submission in [publish-extension.yml](../.github/workflows/publish-extension.yml). The [documentation workflow](../.github/workflows/docs.yml) verifies the documentation site on relevant pull requests but does not deploy it. The [SDK workflow](../.github/workflows/sdk.yml) checks the SDK package and example; [SDK npm staging](#sdk-npm-staging) is a separate workflow. Website and signup Worker deployment are described in [Website and Signup Worker](#website-and-signup-worker). SDK npm staging approval and final Chrome Web Store go-live remain manual operations.
+This runbook covers V2 extension previews, Beta releases, and production candidates on `main`. [Extension CI](../.github/workflows/extension-ci.yml) creates development inspection artifacts. The [manual release workflow](../.github/workflows/extension-release.yml) prepares Betas and production candidates; [Publish Accepted Extension](../.github/workflows/publish-extension.yml) promotes an accepted production artifact and optionally submits it for Chrome Web Store review. SDK staging and final store go-live remain separate manual operations. The [documentation workflow](../.github/workflows/docs.yml) validates documentation without deploying it.
 
 On repeated PR pushes, SDK and documentation verification reuse a prior successful run only when the target branch commit and relevant inputs are unchanged. A failed, cancelled, or incomparable run performs the checks again.
 
+## Branches and Versions
+
+- Feature and fix PRs merge into `main`. PRs that change extension code, tests, WASM, the EVM history Worker, or related build and test inputs automatically run Extension CI and build a development extension. New commits cancel older runs for the same PR; no preview label is needed. Changes limited to Markdown documentation, SDK source, or unrelated tooling do not start Extension CI.
+- To prepare a V2 Beta, dispatch `extension-release.yml` from the `main` workflow branch with mode `beta` and `source_ref=main`. The workflow builds that dispatched commit; required `confirm_sha` checks it against the reviewed full SHA. Publishing is controlled by that manual run's `publish_beta` input; see [Routine Previews](#routine-previews).
+- `v1` retains the frozen V1 source. New development targets `main`; V1 packages are no longer built or published. Pushes and tags do not publish extension releases. Production candidates require a reviewed `release/X.Y.Z` branch and a separate manual promotion.
+- The production extension has one ZIP with runtime Mainnet/Testnet Mode. `NETWORK_MODE=testnet` is reserved for isolated local test builds, not a second release package.
+
+## Verification and Build
+
+Extension CI installs dependencies, type-checks the EVM History Worker, runs `pnpm test`, and builds and packages the development extension:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @noir-wallet/evm-history-worker type-check
+pnpm test
+pnpm build:extension
+```
+
+`pnpm test` runs the wallet's offline suite; see [contributor verification](../CONTRIBUTING.md#verification) for suite organization and commands. Browser projects run through `pnpm test e2e <project>` for local verification; they are not CI or release gates. The extension build verifies both packaged Zcash and Multichain WASM integrity manifests and excludes E2E-only files. The `production-dist` project uses test analytics/RHEA values and produces a local `dist/` that must not be published. For browser, MV3, storage, hardware, or network changes, maintainers should run the relevant local tools according to risk.
+
+Default extension builds write `packages/extension/dist/`; the HMR development server writes `dist-dev/`; isolated browser and Testnet verification builds write `e2e-dist/<profile>/`. Keep these outputs separate. Do not delete an active HMR or browser-test directory, and never submit a test-only build as a release package.
+
+V2 repository PR previews and releases enable Mainnet analytics. PR previews use `BUILD_CHANNEL=beta` with `BETA_INVITE_REQUIRED=1` so their packages exercise invite activation. Repository PR and manual Beta builds require `RHEA_SWAP_ACCESS_TOKEN`, `GA_API_SECRET` and `CUSTOM_ANALYTICS_PASSWORD`; missing values fail the build. Fork PRs run checks as development builds without repository secrets and do not upload distributable previews; move reviewed changes to a repository branch to generate a configured test package. Local development and isolated browser-verification builds do not report analytics. Preview packages are not production candidates. The repository variable `EVM_HISTORY_API_ORIGIN` may override the default public History proxy origin; it must be a credential-free HTTPS origin without a path or query. The Worker API key stays in a Worker secret and is not passed into the extension build.
+
+The default V2 build enables Zcash and EVM networks. Bitcoin, Solana, and NEAR remain deferred; their chain-selection entries show **Coming soon** and cannot start wallet operations. Use the default feature flags when preparing this Beta. Explicit `ENABLED_CHAIN_FEATURE_FLAGS` values are available for isolated implementation checks and must match their Playwright build profile; they do not change the default release scope.
+
+Beta builds require invite activation before wallet use, including installations upgraded from V1. An unused invite code is checked before wallet setup or unlock, then bound to the first wallet's first available account. Binding prefers its ordinary EVM address; Zcash-only hardware accounts use a transparent receive address. A successful bind completes activation. When the bind response explicitly confirms that the requested wallet address is already bound (`2004`, `wallet address has already been bound`), the extension restores activation for that address and continues. An already-used invite code remains an error, even though the service also uses `2004` for that conflict. Other failures preserve the wallet for retry or another code; `bound=true` on a code check alone never activates an installation.
+
+Activation persists locally for the installation across wallet reset and network changes. Activated wallets do not contact the invite service on each startup; uninstalling or clearing extension storage requires activation again. After checking an unused code and unlocking or setting up the wallet, the server's explicit confirmation of an existing address binding can restore activation, including after a lost successful response. Production builds disable the gate. For local development verification, set `BETA_INVITE_REQUIRED=1` with `BUILD_CHANNEL=development`; `BUILD_CHANNEL=beta` always enables it. Invite generation is an operator API operation: its management key must never be supplied to an extension build.
+
+The public History proxy serves only the existing Ankr History, EVM token discovery, and icon services. The client selects History adapters across chains; other chains request their own data sources directly. See the [Activity architecture](mutil-chain/architecture/transaction-lifecycle.md#6-local-first-activity-merge) for routing and cache fallback, and the [History proxy deployment](#history-proxy-deployment) for Worker configuration and deployment checks.
+
+Private broadcast uses the separate `/v1/zero-indexer-endpoints` endpoint on `https://rpc.zknoir.com`, maintained in `packages/rpc-registry/src/zero-indexer-registry.ts`. Broadcast nodes are excluded from the scheduled synchronization-RPC monitor. Deploying that registry is separate from publishing the extension; check its response when updating managed nodes. If the registry is unavailable, the extension uses its cache or bundled broadcast nodes. Wallet settings and recovery behavior are documented in the [broadcasting guide](../packages/docs/content/docs/wallet-guide/install-and-setup.mdx#transaction-broadcasting).
+
+The V2 Beta contains one ZIP for both runtime network modes, `SHA256SUMS`, and Release notes with its source commit. The manual workflow builds the dispatched `main` commit and publishes the verified artifact in a separate write-scoped job. CI previews retain numeric base-version labels for the [preview reporter](../.github/workflows/extension-preview-comment.yml); their metadata retains the full Beta version and tested merge commit.
+
+### Historical Releases
+
+The SDK is maintained in `packages/sdk/` with its own version and [npm staging process](#sdk-npm-staging). For historical stable wallet Releases migrated from [the SDK repository](https://github.com/NoirWallet/noir-wallet-sdk/releases), copy the binary assets byte-for-byte and link each original Release in the migration notes. Preserve wallet source commit links where the original notes provide them, pointing old `NoirWallet/noir-wallet` commit URLs to `NoirWallet/noir-wallet-private` with the same SHA; do not infer missing wallet source commits from the SDK Release target. Migration tags in this repository point to its initial commit (`5d7fcf4`); their source archives are not snapshots of the historical wallet source. This workflow does not modify those Releases.
+
+The wallet source repository is public. Use its Releases for current wallet downloads; existing Releases in the former SDK repository remain historical mirrors. The wallet download and repository entry points are [wallet builds](https://zknoir.com/beta/versions) and [wallet source](https://zknoir.com/github); see the [website build configuration](../README.md#build).
+
+## WASM Package Updates
+
+WASM source and releases are maintained separately. V2 commits complete packages for Zcash at `packages/extension/src/lib/wasm-pkg/` and Multichain at `packages/extension/src/infrastructure/generated/wasm/multichain/`. Each contains a `wasm-integrity.json` with source, ABI, build-tool versions, and artifact hashes. Upstream releases do not automatically update the wallet; ordinary builds and merges use these committed packages without rebuilding or synchronizing WASM. Merges do not amend commits.
+
+For an intentional upgrade, select an upstream release and update the relevant engine's source/build/ABI pins and compatibility checks in this wallet repository. Use a clean separate source checkout at the pinned full commit. The explicit local commands rebuild with the checked tool versions and generate the complete package and integrity manifest:
+
+```bash
+pnpm sync-wasm-pkg -- --source <zcash-checkout>
+pnpm sync-multichain-wasm-pkg -- --source <multichain-checkout>
+```
+
+Run only the command for the engine being updated. These commands build fresh output; they do not import an existing `pkg/`. They reject dirty source checkouts, mismatched commits, and mismatched tool versions. Check the sync script for its pinned tools and optional local tool paths before running it.
+
+Develop and test the extension against the generated package, then submit its complete files, integrity manifest, updated pins, and related extension changes in one PR targeting `main`. Include the upstream version and checks performed. Never submit only TypeScript bindings without their matching loader, binary, and support files. Run the [verification and build commands](#verification-and-build); the build checks both engine manifests without access to the source repositories.
+
+## Routine Previews
+
+1. Open a PR against `main` and check **Extension CI**. Download the development package from its PR comment or **Actions → Extension CI** after the run succeeds. Downloads require GitHub sign-in and repository access and expire after three days. Rerun Extension CI for the current PR commit if the package expires. Fork PRs receive no repository secrets.
+2. Run `gh workflow run extension-release.yml --ref main -f mode=beta -f source_ref=main -f confirm_sha=<reviewed-full-SHA> -F publish_beta=false` to build without publishing. The selected source must match the dispatched and current `main` commit. Set `publish_beta=true` to create its public GitHub prerelease. A mismatched `confirm_sha` stops the build.
+3. Check Mainnet and Testnet Mode separately in a real isolated MV3 extension. Verify invite activation, unavailable chain selectors, and V1 Golden Profile upgrade compatibility using the same default flags as the Beta. Run browser and external-service checks locally; the workflow does not run them.
+
+Set the extension package version to `2.0.0-beta.N` and add its matching `CHANGELOG.md` section. Chrome manifest versions remain numeric (`2.0.0`); `version_name` carries the Beta suffix. Product notes in `packages/web/public/changelog.json` use the numeric manifest version and keep `notifyUpdate: false` for this Beta. The workflow publishes `v2.0.0-beta.N` with ZIP `noir-wallet-v2.0.0-beta.N.zip` and notes from that section. Increment `N` for each public Beta.
+
+## Production Release
+
+### Release notes
+
+`CHANGELOG.md` holds developer-oriented GitHub Release notes; `packages/web/public/changelog.json` holds the concise notes displayed after an extension update. Give each meaningful user-visible feature or important fix its own bullet, but combine minor fixes where appropriate. Do not pad the list or include internal refactors, tests, CI, or dependency updates unless they materially affect users. Keep the wording plain and specific. The changelog schema permits 1–8 bullets of at most 120 characters each; verify the current schema before changing this format.
+
+### 1. Prepare and review the release source
+
+Create a temporary `release/{version}` branch from the source you intend to ship. For a selective release, use the verified stable source commit or an actual production source tag, then cherry-pick the required fixes. Open a preparation PR for review; merging unrelated integration changes is not required.
+
+1. Set a new version in `packages/extension/package.json`, for example `2.0.0`, and use branch `release/2.0.0`.
+2. Add exactly one nonempty `## [2.0.0]` section to `CHANGELOG.md`.
+3. Add the matching user-facing update entry in `packages/web/public/changelog.json`, following the [release notes rules](#release-notes).
+
+Review the exact diff against the stable baseline and run the [verification and build commands](#verification-and-build). There is one extension ZIP for both runtime network modes.
+
+### 2. Build and accept the production candidate
+
+Open **Actions → Prepare Extension Release → Run workflow** from `main`. Select `mode=candidate`, set `source_ref=release/2.0.0`, and enter the full reviewed release branch HEAD in `confirm_sha`. `publish_beta` is ignored for candidates.
+
+After all jobs succeed, open the `v2.0.0-rc.…` prerelease on the repository's Releases page or follow the download link in the run summary. Download its multichain ZIP and `SHA256SUMS`, check the hash, and validate both runtime network modes. The same files remain available in the final Actions artifact. Use these ZIPs, not a local rebuild or a previous Beta. Keep the run ID, attempt, and full source SHA from the prerelease notes or run summary for promotion. See [review responsibilities](../CONTRIBUTING.md#verification).
+
+### 3. Promote the accepted artifact
+
+After acceptance, open **Actions → Publish Accepted Extension → Run workflow** from `main`. Leave `operation=publish` selected and enter the accepted `candidate_run_id`, `candidate_run_attempt`, and `confirm_sha`. This separate action is the production publication confirmation.
+
+The workflow verifies the candidate's origin and current release branch before creating the GitHub Release and `v2.0.0` tag. It downloads and publishes the accepted ZIPs without rebuilding. With store automation enabled, separate `sign`, `upload`, `submit`, and `notify` jobs then process the production ZIP. Keep the source branch unchanged and present until publication completes.
+
+### 4. Check publication
+
+Confirm **Publish Accepted Extension** succeeded. In the wallet repository's Releases page, check the source tag/commit, Latest status, the expected ZIP assets, and release notes. Download `SHA256SUMS` beside the ZIPs and run `sha256sum --check SHA256SUMS` (or `shasum -a 256 --check SHA256SUMS` on macOS). Compare those hashes with the accepted candidate. Forks and private repositories other than `NoirWallet/noir-wallet` retain build artifacts only.
+
+### 5. Submit to Chrome Web Store
+
+When `CWS_AUTOMATION_ENABLED=true`, the promotion signs the accepted production ZIP (`noir-wallet-v{version}.zip`) into a CRX3 package without rebuilding it, uploads the CRX, submits it with `STAGED_PUBLISH`, `skipReview=false`, and `blockOnWarnings=true`, then sends the result to the configured Slack channel. The signed CRX and stage intent/result receipts are separate 30-day Actions artifacts, not GitHub Release assets. Each external write has a persisted intent first; an unconfirmed result is not blindly retried.
+
+Check the workflow's `sign`, `upload`, `submit`, and `notify` results, ZIP and CRX checksums, and the Developer Dashboard status. A successful submission means the item is awaiting review or staged; it is not live. After approval, verify the version, permissions, and release notes in the Dashboard and publish it manually. [Chrome's deferred publication guidance](https://developer.chrome.com/docs/webstore/update#deferred_publishing_option) gives up to 30 days after approval before the staged submission returns to draft. Record the store publication time and retain the submission evidence; a matching version alone does not prove package correspondence. Historical migration tags remain subject to the [source limitations above](#historical-releases).
+
+### Chrome Web Store setup
+
+Store automation runs only for `NoirWallet/noir-wallet` and only when the repository variable `CWS_AUTOMATION_ENABLED` is `true`; unset or `false` keeps promotion limited to the GitHub Release. Set these values in `cws-production`:
+
+| Type     | Name                             | Value                                                      |
+| -------- | -------------------------------- | ---------------------------------------------------------- |
+| Variable | `CWS_PUBLISHER_ID`               | Publisher ID of the production store account               |
+| Variable | `CWS_EXTENSION_ID`               | `mfoghjbpfanobmnoemoepenjjcmfpmdn`                         |
+| Variable | `CWS_SIGNING_PUBLIC_KEY_SHA256`  | Lowercase SHA-256 of the RSA public key in DER SPKI format |
+| Variable | `GCP_PROJECT_ID`                 | Google Cloud project with Chrome Web Store API enabled     |
+| Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity provider resource name              |
+| Variable | `GCP_SERVICE_ACCOUNT`            | Service account authorized for this store item             |
+| Secret   | `CWS_SIGNING_PRIVATE_KEY`        | Existing PEM RSA CRX signing private key                   |
+| Secret   | `CWS_SLACK_WEBHOOK_URL`          | Incoming Webhook bound to the intended Slack channel       |
+
+Do not replace the existing signing key during setup. If store signing protection is enabled, retain its enrolled key; otherwise register the corresponding public key in Chrome Web Store before enabling automation. Verify its public key fingerprint against `CWS_SIGNING_PUBLIC_KEY_SHA256`; the CRX signing identity does not have to equal the store listing ID. Restrict the Workload Identity provider to this repository's numeric owner and repository IDs, `main`, the `publish-extension.yml` workflow, and `cws-production`. The workflow requests the `chromewebstore.readonly` scope for `check-auth` and the `chromewebstore` scope for upload and submission. Run [Extension Store Rehearsal](../.github/workflows/extension-store-ci.yml) on the PR and `operation=check-auth` successfully before setting `CWS_AUTOMATION_ENABLED=true`. The rehearsal runs release/store tests and transfers a synthetic CRX signed with a temporary key between runners; it uses no production credentials or package. Neither check proves a real upload, review submission, or Slack delivery.
+
+Candidate packaging and promotion enforce:
+
+1. The source branch is `release/` plus the numeric version in `packages/extension/package.json`, and its resolved commit matches the manually confirmed full SHA.
+2. The candidate uses production build settings and includes one multichain ZIP for both runtime network modes.
+3. `CHANGELOG.md` has exactly one nonempty `## [version]` section for that version.
+4. `packages/web/public/changelog.json` has a matching entry accepted by the wallet's release-notes parser.
+
+Promotion additionally verifies a successful candidate workflow dispatched from this repository's `main`, the exact run attempt and artifact ID, artifact metadata, every ZIP checksum, and unchanged release branch HEAD. A Beta or PR artifact cannot be promoted. Source code need not be contained in `main`. Existing production tags are never moved, and published assets are never overwritten.
+
+## Failure Recovery
+
+- PR check/build failure: fix the source and update the PR; Extension CI builds the new commit automatically. An existing development artifact is not a release candidate.
+- Missing Beta build input: configure `RHEA_SWAP_ACCESS_TOKEN` in the trusted release repository and rerun the manual workflow. Do not publish the PR development ZIP as Beta.
+- Incorrect selected source: review the current `main` commit and dispatch again with its full SHA in `confirm_sha`; verify the source commit and checksums before publication.
+- Beta publication failure: inspect the original run and any tag or Release it created before retrying. The workflow never reuses an existing tag; a failure after tag creation requires manual review and recovery rather than moving the tag or replacing its assets.
+- Production publication failure: inspect the original candidate run, artifact, and any existing Release before retrying with the same accepted run, attempt, and SHA. Matching published assets are retained; conflicting or partial publication requires manual review. For an uncertain store upload or review submission, inspect the saved receipts and Developer Dashboard before retrying. Do not move a published tag, rebuild its package, or cancel review as a retry mechanism.
+
 ## SDK npm Staging
 
-The SDK has its own version in `packages/sdk/package.json`. Before npm setup or merge, the [SDK PR workflow](../.github/workflows/sdk.yml) must pass its no-publication rehearsal: it checks and retains one tarball, then a separate read-only job validates that artifact, runs the npm CLI staging dry-run, and installs the same tarball as a consumer. The dry-run does not verify GitHub OIDC or npm server staging. The [SDK staging workflow](../.github/workflows/publish-sdk.yml) runs only in the public, non-fork `NoirWallet/noir-wallet` repository on `main`. Publication is manual: maintainers dispatch `operation=stage`, select a release line, and confirm the exact version and full source SHA. The workflow builds and tests the selected SDK and example, packs the SDK once, checks that tarball as an installed consumer, and retains the tarball and source metadata as an Actions artifact for up to 30 days. Its separate upload job uses the `sdk-npm` environment to stage that same tarball using npm trusted publishing with provenance; it does not directly publish a version or change npm dist-tags.
+The SDK has its own version in `packages/sdk/package.json`. Before npm setup or merge, the [SDK PR workflow](../.github/workflows/sdk.yml) must pass its no-publication rehearsal: it checks and retains one tarball, then a separate read-only job validates that artifact, runs the npm CLI staging dry-run, and installs the same tarball as a consumer. The dry-run does not verify GitHub OIDC or npm server staging. The [SDK staging workflow](../.github/workflows/publish-sdk.yml) runs only in the public, non-fork `NoirWallet/noir-wallet` repository on `main`. Publication is manual: maintainers dispatch `operation=stage`, select the Beta release line, and confirm the exact version and full source SHA. The workflow builds and tests the selected SDK and example, packs the SDK once, checks that tarball as an installed consumer, and retains the tarball and source metadata as an Actions artifact for up to 30 days. Its separate upload job uses the `sdk-npm` environment to stage that same tarball using npm trusted publishing with provenance; it does not directly publish a version or change npm dist-tags.
 
 | Release line | Source branch | SDK versions                               | npm dist-tag |
 | ------------ | ------------- | ------------------------------------------ | ------------ |
-| `stable`     | `main`        | `0.x.y`, starting at `0.2.0`               | `latest`     |
-| `beta`       | `v2`          | `2.x.y-beta.N`, starting at `2.0.0-beta.1` | `beta`       |
+| `beta`       | `main`        | `2.x.y-beta.N`, starting at `2.0.0-beta.1` | `beta`       |
 
-Only the current commit of the selected source branch can start a candidate; unmerged branches cannot be staged. Subsequent jobs use that fixed source SHA. Source and workflow commits are recorded separately: npm provenance identifies the trusted `main` workflow commit, while the original candidate artifact binds the selected SDK source and package bytes. SDK Beta releases do not require a simultaneous extension release.
+V1 SDK publication is frozen. New SDK candidates use the npm `beta` channel; `latest` remains on the existing V1 stable line. Only the current commit of the selected source branch can start a candidate; unmerged branches cannot be staged. Subsequent jobs use that fixed source SHA. Source and workflow commits are recorded separately: npm provenance identifies the trusted `main` workflow commit, while the original candidate artifact binds the selected SDK source and package bytes. SDK Beta releases do not require a simultaneous extension release.
 
 ### One-time npm setup
 
 After the PR rehearsal passes and the workflow is merged to `main`, add a Trusted Publisher in the npm settings for `@noir-wallet/sdk` with GitHub owner `NoirWallet`, repository `noir-wallet`, workflow filename `publish-sdk.yml`, and environment `sdk-npm`. New configurations automatically allow `npm stage publish`; leave **Allow npm publish** and **Allow npm dist-tag** disabled. Create the GitHub `sdk-npm` environment and restrict deployment to `main`. Keep npm account two-factor authentication enabled for the maintainer who approves staging. Configure and validate a new Trusted Publisher within npm's two-day setup window; check the current npm settings before staging. The workflow uses npm CLI `11.21.1` and GitHub OIDC; do not add an npm access-token secret. After migration succeeds, review and remove obsolete Trusted Publishers or tokens for the former SDK repository.
 
-After `SDK Gate` has run successfully, configure an additional ruleset for `main` only: require one approval, approval of the most recent reviewable push by another maintainer, and the `SDK Gate` check from GitHub Actions with the branch up to date before merging. Use no bypass actors. Preserve the existing ruleset shared with `v2`. The SDK PR workflow runs for every PR to `main` and `v2`; its gate accepts complete checks or explicit reuse of a prior successful check of unchanged relevant inputs.
+After `SDK Gate` has run successfully, configure an additional ruleset for `main` only: require one approval, approval of the most recent reviewable push by another maintainer, and the `SDK Gate` check from GitHub Actions with the branch up to date before merging. Use no bypass actors. The SDK PR workflow runs for every PR to `main`; its gate accepts complete checks or explicit reuse of a prior successful check of unchanged relevant inputs.
 
 ### Stage and accept a version
 
 1. Open a PR for the SDK version change against its source branch and require `SDK Gate` to pass before merging the reviewed PR. Choose an unpublished version from the release line above; do not reuse a version already present on npm or in staging. Complete the one-time npm setup. Before starting a new candidate, check npm **Staged Packages** and finish or resolve any pending candidate for this package.
-2. Select `Stage SDK on npm` on `main`, choose `operation=stage` and `release_line=stable` or `beta`, and enter the package version and full current SHA of `main` or `v2`, respectively. Keep the run ID, original build attempt, source SHA, workflow SHA, and artifact name. Verify the tarball checksum and inspect its contents before approval.
+2. Select `Stage SDK on npm` on `main`, choose `operation=stage` and `release_line=beta`, and enter the package version and full current SHA of `main`. Keep the run ID, original build attempt, source SHA, workflow SHA, and artifact name. Verify the tarball checksum and inspect its contents before approval.
 3. Test three combinations in a real browser against the existing Zcash contract: the candidate SDK tarball with the accepted V1 Mainnet and Testnet ZIPs, the candidate SDK tarball with the accepted V2 candidate ZIP, and the existing published SDK with that V2 candidate ZIP. Record SHA-256 hashes for both SDK packages and every extension ZIP used. The CI consumer check does not establish browser or extension behavior.
 4. Open npm **Staged Packages** from the account page in the run summary, find the reported Stage ID, confirm the candidate's target dist-tag, and approve with the authorized npm account and its two-factor authentication. Run the verification command from the candidate's build or staging summary; it binds `operation=verify` to the original `candidate_run_id` and `candidate_run_attempt`. The same fields can be entered manually when dispatching the workflow from `main`; verification restores the release line and target tag from the original candidate. It compares the published package and provenance with the accepted artifact, installs the registry version as a consumer, and runs `npm audit signatures`. Beta verification requires `beta` to point to the candidate and `latest` to remain on the V1 stable line; a newer V1 release does not invalidate the Beta. Check that verification succeeds before announcing the version.
 
@@ -38,6 +174,8 @@ Only the staging job has OIDC permission. The verification operation has read-on
 | The state is unknown or contents differ | Stop and investigate before uploading or approving.                                                                                                                         |
 
 Fix artifact or registry preflight failures before rerunning the affected job. An expired original artifact blocks standard verification; repacking cannot recover the accepted candidate. After a deliberate new build, use its new artifact and build attempt and repeat acceptance. Existing or conflicting npm versions, a newer target dist-tag, mismatched source or run metadata, and missing provenance stop the workflow. A verification failure reports whether the version was confirmed published, confirmed absent from the registry, or its publication state remains unknown; only the completed verification establishes release acceptance.
+
+The SDK example in `packages/sdk/example/` is verified on pull requests and deployed by the existing GitHub Pages job after successful `main` checks. SDK npm publication is independent of extension releases.
 
 ## Website and Signup Worker
 
@@ -91,7 +229,7 @@ LIMIT 20;
 
 `pending` awaits an alarm, `sending` is in flight, and `sent` means SMTP acceptance, not confirmed inbox delivery. `failed` marks a permanent rejection or exhausted retries. `unknown` marks ambiguous acceptance or an interrupted send; investigate before any resend. Invalid mail configuration leaves jobs pending and schedules another configuration check after at least five minutes, without consuming a send attempt. Do not reset signup records to resend mail. Existing signups are not backfilled, and historical votes remain untouched.
 
-Failure logs contain only bounded diagnostic fields and the outcome, never recipient addresses, credentials, exception messages, or raw SMTP responses. `EAUTH` with SMTP code `535` identifies an authentication rejection; verify the actual Google login account and App Password. `ESOCKET`, `ETLS`, or `ETIMEDOUT` at `CONNECT` identifies connection or TLS setup failure. `WORKER_INTERRUPTED` records a restarted in-flight job. Correct configuration failures without deleting saved signups or mail history. See the [README](../README.md#frost-beta-signup) for signup and retry behavior.
+Failure logs contain only bounded diagnostic fields and the outcome, never recipient addresses, credentials, exception messages, or raw SMTP responses. `EAUTH` with SMTP code `535` identifies an authentication rejection; verify the actual Google login account and App Password. `ESOCKET`, `ETLS`, or `ETIMEDOUT` at `CONNECT` identifies connection or TLS setup failure. `WORKER_INTERRUPTED` records a restarted in-flight job. Correct configuration failures without deleting saved signups or mail history. The signup client lives in `packages/web/src/pages/FrostVotePage.tsx`.
 
 ### Automatic Deployment and Recovery
 
@@ -104,255 +242,21 @@ Failure logs contain only bounded diagnostic fields and the outcome, never recip
 
 After pushing, check **Actions → Website Signup Worker** and the existing Pages deployment status. These are independent deployments; the page may publish before its API is ready. If credential or route setup fails, correct the relevant account, token, or DNS configuration and rerun the workflow from `main`. If the post-deployment API check fails, inspect the route and API response: the deployment may already have succeeded. Do not remove the Durable Object or reset stored data to recover a failed deployment. For a code regression, revert the affected change on `main` and let the normal deployment workflow publish the correction. No production deployment is verified merely by a local dry run.
 
-## Branches and Releases
+## History Proxy Deployment
 
-- `main` is the integration branch. Submit features and fixes through short-lived pull request branches; `v2` is also an extension verification target.
-- Pull requests targeting `main`, `v2`, or `release/**` automatically run Extension CI when extension code, tests, WASM, or related build inputs change. Each new commit runs checks and builds a downloadable preview in one job; no label is needed. A new commit cancels an older run for that PR. Merging to `main` does not repeat the preview build. Automatic builds do not publish GitHub Releases.
-- Manual Beta builds select a repository branch or full commit SHA without requiring a merge to `main`.
-- V1 sources use separate mainnet and testnet ZIPs. V2 sources (extension version major 2 or later) use one multichain ZIP with runtime network selection. Both use the trusted manual workflow dispatched from `main`; select `source_ref=v2` for the current V2 source.
-- A temporary `release/{version}` branch holds the reviewed production source. For a partial release or hotfix, start from a verified stable wallet source commit or a real production source tag, and cherry-pick only the intended changes. Historical migration tags are not usable source baselines; see [historical Releases](#historical-releases).
-- Build a production candidate, accept its production ZIPs, then run a separate manual promotion. Promotion publishes those exact bytes and creates `v{version}` on the accepted source commit. Pushing a tag alone does not publish.
-- The canonical `NoirWallet/noir-wallet` repository publishes wallet Releases even while private. Other public, non-fork repositories also publish to themselves. Forks and other private repositories retain Actions build artifacts without publishing Releases.
-- Release workflow definitions must run from `main`; the source input selects wallet code independently. Keep the release branch until promotion completes, then merge applicable fixes back to integration branches and remove the temporary branch.
+The existing Worker source is `packages/evm-history-worker/`; its production hostname is `https://history-proxy.zknoir.com`. It serves the bounded Ankr methods used by the extension. Bitcoin, Solana, NEAR, and Blockscout providers remain direct client requests.
 
-```mermaid
-flowchart LR
-  A["Feature / Fix PR"] --> B["Checks; requested preview: V1 two ZIPs / V2 one ZIP"]
-  C["Selected branch / commit"] --> D["Manual Beta build"]
-  D --> E["Optional GitHub prerelease"]
-  F["Reviewed release/X.Y.Z source"] --> G["Manual production candidate build"]
-  G --> H["Accept production ZIPs"]
-  H --> I["Manual promotion of same ZIPs"]
-  I --> J["GitHub Release + vX.Y.Z tag"]
-  J --> K["Optional signed CRX upload and staged review submission"]
-  K --> L["Manual store go-live after approval"]
-```
+Runtime caching is enabled in the [History proxy configuration](../packages/evm-history-worker/wrangler.json) and [RPC registry configuration](../packages/rpc-registry/wrangler.json), so deployments retain the setting. Public icon and registry responses use their existing cache headers; History and token-discovery responses use `Cache-Control: no-store`.
 
-### PR previews and Beta builds
-
-The [Extension CI path filters](../.github/workflows/extension-ci.yml) cover extension code and tests, the EVM history Worker, related packaging and test helpers, and shared build inputs. Changes limited to Markdown documentation, SDK source, or unrelated tooling do not start extension builds. Core tests run once in the same job as the extension builds, which include TypeScript checking. V1 verifies the vendored WASM package and builds Mainnet and Testnet ZIPs with the `beta` channel. V2 type-checks the EVM history Worker and builds one `development` ZIP with an explicit development artifact name. Repository V2 previews include `RHEA_SWAP_ACCESS_TOKEN` for Swap and fail the build if it is missing. Fork PR previews receive no repository secrets and cannot use Swap. Manual Beta artifacts use `beta`. PR metadata records the tested merge commit plus PR head and base commits.
-
-[Extension Preview Download](../.github/workflows/extension-preview-comment.yml) updates one bot comment when Extension CI starts or finishes. It shows a build in progress, its failure, or the current download. Successful builds link the package for the PR head with build and expiration times; package metadata names the tested merge commit. Old commits and superseded attempts cannot overwrite a newer result. Downloads require GitHub sign-in and repository access, expire after three days, and remain under **Actions → Extension CI**. Rerun Extension CI for the current PR commit if its package has expired or is unavailable. Only the two newest verified preview artifacts per PR are retained.
-
-The reporting workflow runs only trusted `main` code with `actions: write` for verified preview artifact retention and `pull-requests: write` for the comment. It reads GitHub metadata without downloading or executing PR artifacts. Wallet builds retain read-only permissions. Merge reporting changes into `main` to enable them for both V1 and V2 PRs, including fork PRs. Ignored local UI tools and `output/` are not committed or release triggers.
-
-Manual builds generate labels containing the run ID, attempt, and source commit; do not create them manually:
-
-```text
-v{version}-beta.{run ID}.{attempt}.{short source SHA}
-v{version}-rc.{run ID}.{attempt}.{short source SHA}
-```
-
-Multiple Betas can use the same extension version. Manual runs are queued rather than cancelling an earlier build. Candidate labels identify Actions artifacts only; a candidate does not create a tag or Release. Manual build artifacts are retained for 30 days.
-
-### Manual confirmation and production validation
-
-Both manual workflows require repository write access and must be dispatched from `main`. Candidate construction requires confirmation of the full reviewed source SHA. `operation=publish` requires a separate dispatch with the accepted candidate run ID, attempt, and full source SHA; `operation=check-auth` needs no candidate and only checks read-only store authorization. These are maintainer confirmations; the workflows do not enforce a second independent reviewer. Configure `cws-production` for `main` only, without a required reviewer. See [manual workflow permissions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) and [environment review availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments).
-
-### Chrome Web Store setup
-
-Store automation runs only for `NoirWallet/noir-wallet` and only when the repository variable `CWS_AUTOMATION_ENABLED` is `true`; unset or `false` keeps promotion limited to the GitHub Release. Set these values in `cws-production`:
-
-| Type     | Name                             | Value                                                      |
-| -------- | -------------------------------- | ---------------------------------------------------------- |
-| Variable | `CWS_PUBLISHER_ID`               | Publisher ID of the production store account               |
-| Variable | `CWS_EXTENSION_ID`               | `mfoghjbpfanobmnoemoepenjjcmfpmdn`                         |
-| Variable | `CWS_SIGNING_PUBLIC_KEY_SHA256`  | Lowercase SHA-256 of the RSA public key in DER SPKI format |
-| Variable | `GCP_PROJECT_ID`                 | Google Cloud project with Chrome Web Store API enabled     |
-| Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity provider resource name              |
-| Variable | `GCP_SERVICE_ACCOUNT`            | Service account authorized for this store item             |
-| Secret   | `CWS_SIGNING_PRIVATE_KEY`        | Existing PEM RSA CRX signing private key                   |
-| Secret   | `CWS_SLACK_WEBHOOK_URL`          | Incoming Webhook bound to the intended Slack channel       |
-
-Do not replace the existing signing key during setup. If store signing protection is enabled, retain its enrolled key; otherwise register the corresponding public key in Chrome Web Store before enabling automation. Verify its public key fingerprint against `CWS_SIGNING_PUBLIC_KEY_SHA256`; the CRX signing identity does not have to equal the store listing ID. Restrict the Workload Identity provider to this repository's numeric owner and repository IDs, `main`, the `publish-extension.yml` workflow, and `cws-production`. The workflow requests the `chromewebstore.readonly` scope for `check-auth` and the `chromewebstore` scope for upload and submission. Run [Extension Store Rehearsal](../.github/workflows/extension-store-ci.yml) on the PR and `operation=check-auth` successfully before setting `CWS_AUTOMATION_ENABLED=true`. The rehearsal runs release/store tests and transfers a synthetic CRX signed with a temporary key between runners; it uses no production credentials or package. Neither check proves a real upload, review submission, or Slack delivery.
-
-Candidate packaging and promotion enforce:
-
-1. The source branch is `release/` plus the numeric version in `packages/extension/package.json`, and its resolved commit matches the manually confirmed full SHA.
-2. The candidate uses production build settings and includes the expected packages: separate mainnet/testnet ZIPs for V1 or one multichain ZIP for V2.
-3. `CHANGELOG.md` has exactly one nonempty `## [version]` section for that version.
-4. `packages/web/public/changelog.json` has a matching entry accepted by the wallet's release-notes parser.
-
-Promotion additionally verifies a successful candidate workflow dispatched from this repository's `main`, the exact run attempt and artifact ID, artifact metadata, every ZIP checksum, and unchanged release branch HEAD. A Beta or PR artifact cannot be promoted. Source code need not be contained in `main`. Existing production tags are never moved, and published assets are never overwritten.
-
-## Workflow Stages
-
-### Prepare
-
-Resolve the selected branch once to a full source SHA and read its extension version and build profile. Candidates additionally confirm the source SHA and matching release branch. The same trusted preparation job maintains [associated PR version labels](../CONTRIBUTING.md#pull-request-targets) and reads recent commit history without executing selected-source code. Release notes include a folded commit log with up to 20 non-merge commits from the pinned source's most recent 100 commits, excluding subjects prefixed with `ci`, `fix(ci)`, `chore`, or `test`. Checkout the pinned source for testing and building. The trusted packaging job validates developer changelog and user-facing notes before exposing a candidate for acceptance.
-
-### Verify
-
-Every preview, Beta, and candidate build installs the frozen dependencies and runs deterministic core tests. V1 additionally verifies the vendored WASM lock:
+Configure `ANKR_API_KEYS` as a Worker runtime secret containing one to eight comma-separated keys. Do not commit the keys or pass them into the extension build. Use interactive input:
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm verify-wasm-pkg
-pnpm test
+pnpm --filter @noir-wallet/evm-history-worker exec wrangler secret put ANKR_API_KEYS
+pnpm --filter @noir-wallet/evm-history-worker deploy
 ```
 
-`verify-wasm-pkg` checks the V1 vendored WASM provenance metadata, file inventory, sizes, and SHA-256 values against `wasm-package.lock.json`. V2 type-checks its EVM history Worker and verifies both packaged WASM engines through its existing build-surface gate after compilation. CI does not build or download WASM. Beta and production use the selected source's deterministic core tests. UI, Playwright, and hardware checks are local development activities, not automated release gates.
+Missing or invalid keys return service-unavailable errors. When using a Cloudflare Git build, select `main` and the repository-relative `packages/evm-history-worker` root. A retry of an old build still uses that build's source revision.
 
-Before promotion, run `pnpm audit --prod` and `pnpm audit` against the frozen lockfile. Review each reported dependency path and affected API against the shipped extension bundles; apply compatible fixes and assess any remaining findings before release.
+Before enabling a new deployment, verify supported chains, native and token history, bounded or partial responses, account isolation, rate limiting, and failure fallback. A remote failure must retain existing cache and locally initiated transactions. Deployment and live-service verification are separate from local unit tests and extension builds.
 
-### Build
-
-After verification, V1 builds both networks in order:
-
-```bash
-pnpm build:extension
-pnpm build:extension:testnet
-```
-
-V2 runs only `pnpm build:extension`; that ZIP includes its runtime mainnet/testnet selection. `BUILD_CHANNEL` is `beta` for manual Betas and V1 PRs, `development` for V2 PRs, or `production` for candidates. Pull requests run tests and builds without publishing or receiving build secrets.
-
-Build jobs keep read-only repository permissions. Manual builds upload their ZIPs to a fresh packaging job that executes tooling from the trusted workflow commit. It downloads ZIPs into a new directory outside the selected wallet checkout and reads only version and release-note data from that checkout. The final artifact contains the ZIP assets, `SHA256SUMS`, `release-metadata.json`, and `release-body.md`. Metadata binds the files to their source commit, build channel, repository, workflow commit, run ID, and attempt. V2 metadata identifies its single asset as `multichain`. Repository retention policies can shorten the requested retention.
-
-V2 manual Beta and candidate builds require the existing `RHEA_SWAP_ACCESS_TOKEN` repository secret. The optional `EVM_HISTORY_API_ORIGIN` repository variable configures its history API and must satisfy V2's existing HTTPS-origin validation. These values are passed only to the selected V2 build. Missing required inputs fail the build; a development PR artifact cannot be published as Beta or promoted to production.
-
-Production mainnet candidate builds require the repository secrets `GA_API_SECRET` and `CUSTOM_ANALYTICS_PASSWORD`. The workflow injects them only into the mainnet build step after the source SHA confirmation; a missing value stops the build. Local default builds, Beta builds, testnet builds, and local browser verification do not embed these values. For a local production mainnet build, supply the same environment variables through your shell and set `BUILD_CHANNEL=production`.
-
-Analytics values embedded in the extension are visible to its users. They must not grant privileged server access or be relied on as confidential authentication. Rotate previously committed values before exposing repository history, and configure the replacements in repository secrets without committing them.
-
-### Publish
-
-The publish job runs in `NoirWallet/noir-wallet` regardless of visibility, and in other public, non-fork repositories. It downloads the exact artifact ID, validates provenance and checksums, and publishes to `github.repository`. Only publication jobs receive `contents: write`; they use the built-in `GITHUB_TOKEN`. Production promotion performs validation and publication in one job, executes no wallet source code, and performs no build. Releases in a private repository are visible only to people with repository access.
-
-- Beta uses a prerelease and is not marked Latest. Its tag points to the wallet source commit that produced the ZIPs.
-- Candidates also publish a prerelease under their `v{version}-rc.{runId}.{attempt}.{shortSha}` label, with direct ZIP downloads and acceptance build details. They are not marked Latest; production promotion still verifies and publishes the original Actions artifact without rebuilding.
-- Production creates `v{version}` at the accepted source SHA and is marked Latest. If that tag already exists, it must resolve to the same source commit. Earlier prereleases remain available.
-- Production notes come from the matching `CHANGELOG.md` section. Each Release includes a source commit link, the ZIPs for its build profile, and `SHA256SUMS`.
-
-V1 production assets are `noir-wallet-v{version}.zip` and `noir-wallet-v{version}-testnet.zip`; V2 has only the first asset. Candidate artifacts already use these filenames. Beta asset names include the Beta label. A promotion retry skips an existing Release only if its tag, all ZIP digests, and `SHA256SUMS` match the accepted candidate. GitHub's automatically attached source archives come from the wallet repository at the release tag.
-
-### Historical Releases
-
-The SDK is maintained in `packages/sdk/` with its own version and [npm staging process](#sdk-npm-staging). For historical stable wallet Releases migrated from [the SDK repository](https://github.com/NoirWallet/noir-wallet-sdk/releases), copy the binary assets byte-for-byte and link each original Release in the migration notes. Preserve wallet source commit links where the original notes provide them, pointing old `NoirWallet/noir-wallet` commit URLs to `NoirWallet/noir-wallet-private` with the same SHA; do not infer missing wallet source commits from the SDK Release target. Migration tags in this repository point to its initial commit (`5d7fcf4`); their source archives are not snapshots of the historical wallet source. This workflow does not modify those Releases.
-
-The wallet source repository is public. Use its Releases for current wallet downloads; existing Releases in the former SDK repository remain historical mirrors. The wallet download and repository entry points are [wallet builds](https://zknoir.com/beta/versions) and [wallet source](https://zknoir.com/github); see the [website build configuration](../README.md#build).
-
-## WASM Package Updates
-
-WASM source and releases are maintained in a separate repository. This wallet repository commits the complete web package at `packages/extension/src/lib/wasm-pkg/`. The root `wasm-package.lock.json` records the source commit and ref, build features, release artifact SHA-256 when available, and individual file hashes. Upstream releases do not automatically update the wallet. Ordinary builds and merges use the committed package without downloading, rebuilding, or synchronizing WASM; merges do not amend commits.
-
-Prefer an immutable published archive with its SHA-256:
-
-```bash
-pnpm update-wasm-pkg -- \
-  --repository https://github.com/NoirWallet/zcash-wallet-wasm \
-  --commit <full-commit-sha> \
-  --ref <release-tag> \
-  --features <comma-separated-features> \
-  --artifact-url <https-url> \
-  --artifact-sha256 <sha256>
-```
-
-For local WASM builds, check out the desired upstream tag or full commit in the separate repository. Start with a clean source checkout, remove its old generated `pkg/`, and rebuild the complete web release package using that repository's build instructions and the features you will record below. Then adopt it explicitly:
-
-```bash
-pnpm update-wasm-pkg:local -- \
-  --ref <tag-or-full-commit-sha> \
-  --features <comma-separated-features>
-```
-
-The local importer rejects tracked or untracked source changes and a ref that does not resolve to the checkout's HEAD. It records the full commit and hashes of the imported files; it does not rebuild or prove that an existing `pkg/` came from that commit. Rebuilding after selecting the source ref is the developer's responsibility. Use `--source <checkout>/pkg` when the separate checkout is outside `packages/zcash-wallet-wasm/`.
-
-Develop and test the extension against that package, then submit the lock file, complete generated package, and related extension changes in one PR. Include the upstream version, build features, and verification performed. Never submit only updated TypeScript bindings without their matching loader, binary, and support files. Generated package files are excluded from formatting to preserve their hashes.
-
-`pnpm sync-wasm-pkg` restores only the locked package and rejects source commits or `pkg/` hashes that differ from the lock; it is not an upgrade command. Run `pnpm verify-wasm-pkg` after an update. Both local extension build commands also verify the package before compilation, and CI verifies it without access to the source checkout. Do not create feature-specific `pkg-voting` directories.
-
-## Beta Procedure
-
-1. Push the intended branch and open a pull request. Relevant changes automatically run **Extension CI**; after it succeeds, download the package from its PR comment or Actions artifact and test it before merging.
-2. For a distributable Beta, open **Actions → Prepare Extension Release → Run workflow** with the workflow branch set to `main`.
-3. Select `mode=beta`, set `source_ref` to the intended repository branch or full lowercase 40-character commit SHA, and choose whether `publish_beta` should create a prerelease. Leave `confirm_sha` empty.
-4. Check the resolved source SHA in the run summary. Download its artifact or published Beta ZIPs and test the affected flows. For V2 use `source_ref=v2` (or the intended V2 branch/full SHA); keep the workflow branch set to `main`.
-
-No merge, version bump, or manually created tag is required for each Beta. Selecting a branch pins its HEAD for that run; later pushes do not change the built source.
-
-The website's `/v2/beta` installation guide uses the pinned version and exact ZIP and release-notes URLs in [v2-beta-release.ts](../packages/web/src/lib/v2-beta-release.ts). These links can be configured before publication; publish and verify that Beta ZIP before merging the website PR that deploys them through the existing Pages integration. Add `releaseDate` once known, or omit it to show only the version. Set the configuration to `null` to disable downloads; do not use a `latest` URL or the mixed V1/V2 Releases list as the download target.
-
-## Production Procedure
-
-### Release notes
-
-`CHANGELOG.md` holds developer-oriented GitHub Release notes; `packages/web/public/changelog.json` holds the concise notes displayed after an extension update. Give each meaningful user-visible feature or important fix its own bullet, but combine minor fixes where appropriate. Do not pad the list or include internal refactors, tests, CI, or dependency updates unless they materially affect users. Keep the wording plain and specific. The changelog schema permits 1–8 bullets of at most 120 characters each; verify the current schema before changing this format.
-
-### 1. Prepare and review the release source
-
-Create a temporary `release/{version}` branch from the source you intend to ship. For a selective release, use the verified stable source commit or an actual production source tag, then cherry-pick the required fixes. Open a preparation PR for review; merging unrelated integration changes is not required.
-
-1. Set a new version in `packages/extension/package.json`, for example `1.0.40`, and use branch `release/1.0.40`.
-2. Add exactly one nonempty `## [1.0.40]` section to `CHANGELOG.md`.
-3. Add the matching user-facing update entry in `packages/web/public/changelog.json`, following the [release notes rules](#release-notes).
-
-Review the exact diff against the stable baseline and run the relevant local checks. For V1:
-
-```bash
-pnpm test
-pnpm build:extension
-pnpm build:extension:testnet
-```
-
-For V2, run `pnpm test` and `pnpm build:extension`; there is no separate testnet build. Use the actual V2 version and corresponding `release/{version}` branch in the steps below.
-
-### 2. Build and accept the production candidate
-
-Open **Actions → Prepare Extension Release → Run workflow** from `main`. Select `mode=candidate`, set `source_ref=release/1.0.40`, and enter the full reviewed release branch HEAD in `confirm_sha`. `publish_beta` is ignored for candidates.
-
-After all jobs succeed, open the `v1.0.40-rc.…` prerelease on the repository's Releases page or follow the download link in the run summary. Download its network ZIPs and `SHA256SUMS`, check the hashes, and validate both V1 network ZIPs or the single V2 multichain ZIP. The same files remain available in the final Actions artifact. Use these ZIPs, not a local rebuild or a previous Beta. Keep the run ID, attempt, and full source SHA from the prerelease notes or run summary for promotion. See [review responsibilities](../CONTRIBUTING.md#review-and-acceptance).
-
-### 3. Promote the accepted artifact
-
-After acceptance, open **Actions → Publish Accepted Extension → Run workflow** from `main`. Leave `operation=publish` selected and enter the accepted `candidate_run_id`, `candidate_run_attempt`, and `confirm_sha`. This separate action is the production publication confirmation.
-
-The workflow verifies the candidate's origin and current release branch before creating the GitHub Release and `v1.0.40` tag. It downloads and publishes the accepted ZIPs without rebuilding. With store automation enabled, separate `sign`, `upload`, `submit`, and `notify` jobs then process the production ZIP. Keep the source branch unchanged and present until publication completes.
-
-### 4. Check publication
-
-Confirm **Publish Accepted Extension** succeeded. In the wallet repository's Releases page, check the source tag/commit, Latest status, the expected ZIP assets, and release notes. Download `SHA256SUMS` beside the ZIPs and run `sha256sum --check SHA256SUMS` (or `shasum -a 256 --check SHA256SUMS` on macOS). Compare those hashes with the accepted candidate. Forks and private repositories other than `NoirWallet/noir-wallet` retain build artifacts only.
-
-### 5. Submit to Chrome Web Store
-
-When `CWS_AUTOMATION_ENABLED=true`, the promotion signs the accepted production ZIP (`noir-wallet-v{version}.zip`, V1 mainnet or V2 multichain) into a CRX3 package without rebuilding it, uploads the CRX, submits it with `STAGED_PUBLISH`, `skipReview=false`, and `blockOnWarnings=true`, then sends the result to the configured Slack channel. The V1 testnet ZIP is excluded. The signed CRX and stage intent/result receipts are separate 30-day Actions artifacts, not GitHub Release assets. Each external write has a persisted intent first; an unconfirmed result is not blindly retried.
-
-Check the workflow's `sign`, `upload`, `submit`, and `notify` results, ZIP and CRX checksums, and the Developer Dashboard status. A successful submission means the item is awaiting review or staged; it is not live. After approval, verify the version, permissions, and release notes in the Dashboard and publish it manually. [Chrome's deferred publication guidance](https://developer.chrome.com/docs/webstore/update#deferred_publishing_option) gives up to 30 days after approval before the staged submission returns to draft. Record the store publication time and retain the submission evidence; a matching version alone does not prove package correspondence. Historical migration tags remain subject to the [source limitations above](#historical-releases).
-
-## Open-Source Publication
-
-Select and review the exact `main` and `v2` commits before changing repository visibility. Confirm the intended public branches, tags, Releases, and retained Actions logs and artifacts, including material outside the default branch. Complete the wallet's licensing, sensitive-information review, clean-source builds, and applicable wallet acceptance on those commits. Repeat the wallet integration checks when the separately maintained WASM source becomes available.
-
-Review repository collaborators and their roles, and retain only the agreed maintainers' administrative and release access. Keep the default Actions token read-only and automatic pull-request review approval disabled. Untrusted PR builds must receive no release credentials; `contents: write` belongs only in the trusted publication jobs.
-
-Protect `main` and `v2` against direct updates, force pushes, and deletion, with pull-request review required. Select required status checks that actually run for the affected PRs; wallet build path filters intentionally exclude documentation-only changes. If the current private-repository plan does not support branch rules, arrange supported protection before publication or enable and verify it immediately after the approved visibility change. Changing visibility still requires maintainer acceptance of the selected source and access settings. Verify signed-out access to the selected source, documentation, and intended Release downloads after publication.
-
-## Failure Recovery
-
-- **Preview or Beta failure:** fix the selected branch and push again for PR artifacts, or dispatch a new Beta. For transient manual build failures, rerun all jobs so the artifact and publication use one matching run attempt; rerunning only Beta publication will reject artifacts from an older attempt. Keep unusable published Betas for traceability.
-- **Candidate validation or build failure:** correct the release source and notes, review its new SHA, and build a new candidate. For an infrastructure retry, rerun all build jobs and accept the resulting attempt before promotion.
-- **Release branch advanced or was removed:** restore the accepted branch HEAD only if it is still the intended source, or build and accept a new candidate. Promotion rejects a candidate whose branch no longer matches.
-- **Candidate artifact expired:** build and accept a new candidate. Promotion never reconstructs the old package from source.
-- **Publication failure:** retry promotion with the same accepted run, attempt, and SHA while its artifact remains available. A completely published Release with identical asset digests is left unchanged. If a partial or conflicting Release exists, inspect it before recovery; the workflow will not overwrite it automatically.
-- **Store stage failure or uncertain result:** inspect the matching Actions intent/result receipts and Developer Dashboard before retrying with the same candidate. The workflow blocks a different candidate for the same version, conflicting review or staged states, and unconfirmed external writes. A confirmed successful notification is not sent again; if only Slack definitely failed, select **Re-run failed jobs** on the original Actions run to retry `notify` only. Missing or expired receipts require manual investigation in the Dashboard and must not be reconstructed from a new package or retried automatically. Do not move the tag or cancel review to recover an ambiguous result.
-- **Incorrect published Release:** stop promoting it and release a new patch version. Do not reuse or move the old tag.
-
-For an urgent fix, start a new `release/{patch-version}` branch from the verified stable wallet source, apply the fix and regression test, update the version and both release notes, then review, build, accept, and promote it independently of unfinished integration changes. Merge the applicable fix back to `main` and `v2` afterward. An extension already published in the browser store cannot be rolled back in place; publish a new patch version.
-
-## Pre-Release Checks
-
-- [ ] The release source and its diff against the stable baseline have been reviewed.
-- [ ] Extension version is new and unpublished.
-- [ ] Changelog has exactly one matching, nonempty version section.
-- [ ] User-facing update notes match the version and visible changes.
-- [ ] The manual candidate workflow succeeded for the confirmed source SHA.
-- [ ] The expected production candidate ZIPs for the selected profile passed acceptance: V1 mainnet and testnet, or V2 multichain.
-- [ ] The recorded run ID, attempt, and SHA identify that accepted artifact.
-- [ ] The release branch is unchanged through promotion.
-- [ ] The separate manual promotion succeeded.
-- [ ] Production tag points to the accepted release source commit.
-- [ ] Wallet source tag/commit, all expected GitHub Release ZIPs, checksums, and release notes were checked.
-- [ ] Final acceptance used the production ZIP intended for Chrome Web Store.
-- [ ] When enabled, the signed production package was submitted for staged review and the store status and Slack result were checked.
-- [ ] After approval, the production version was published manually in the Developer Dashboard.
-
-Final Chrome Web Store go-live, SDK npm staging approval, candidate construction confirmation, and production promotion remain manual. Website and signup Worker operations follow [Website and Signup Worker](#website-and-signup-worker). Do not add unverified secret names or third-party publication actions to the workflow.
+The website Beta guide pins an existing published ZIP in `packages/web/src/lib/v2-beta-release.ts`. Advance that link only after verifying the new Release download; a source merge alone does not make a Beta available.

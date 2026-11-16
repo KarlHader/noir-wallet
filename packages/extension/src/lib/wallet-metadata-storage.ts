@@ -1,10 +1,22 @@
-import type { WalletItem } from '@/types'
+import type { Network, WalletItem } from '@/types'
+import {
+  isAccountChainEnabled,
+  isAccountNetworkEnabled,
+  parseSelectedChainIds,
+  parseSelectedNetworkFamilies,
+  type AccountNetworkFamily
+} from '@/core/wallet/account-network-selection'
+import { parseV1EncryptedCredentialEnvelope } from '@/infrastructure/keyring/migration/v1-credential-envelope'
 
 export const WALLET_STATE_KEY = 'wallet_state'
 const DELETED_WALLETS_KEY = 'wallet_deleted_ids'
-const PENDING_CLEANUP_KEY = 'wallet_cleanup_pending_ids'
+const DELETED_WALLET_RECORDS_KEY = 'wallet_deleted_records'
 const DELETED_ACCOUNTS_KEY = 'wallet_deleted_account_keys'
-const LOCK_NAME = 'noir-wallet-metadata'
+const DELETED_ACCOUNT_INDEXES_KEY = 'wallet_deleted_account_indexes'
+const PENDING_ACCOUNT_CLEANUP_KEY = 'wallet_pending_account_cleanup'
+const LEGACY_PENDING_CLEANUP_KEY = 'wallet_cleanup_pending_ids'
+const METADATA_LOCK = 'noir-wallet-metadata'
+const HYDRATION_LOCK = 'noir-wallet-hydration'
 
 interface WalletSnapshot {
   version?: number
@@ -31,12 +43,13 @@ function parseSnapshot(value: unknown): WalletSnapshot | null {
     !parsed.state.wallets.every(
       wallet => wallet && typeof wallet.id === 'string' && Array.isArray(wallet.accounts)
     )
-  )
+  ) {
     throw new Error('Wallet metadata is unavailable')
+  }
   return parsed as WalletSnapshot
 }
 
-function deletedIds(value: unknown): Set<string> {
+function parseDeletedIds(value: unknown): Set<string> {
   if (value == null) return new Set()
   if (!Array.isArray(value) || !value.every(id => typeof id === 'string')) {
     throw new Error('Wallet deletion records are unavailable')
@@ -44,55 +57,64 @@ function deletedIds(value: unknown): Set<string> {
   return new Set(value)
 }
 
-function stringSet(value: unknown): Set<string> {
-  return Array.isArray(value)
-    ? new Set(value.filter((item): item is string => typeof item === 'string'))
-    : new Set()
+function parseDeletionRecords(value: unknown): Record<string, string[]> {
+  if (value == null) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Wallet deletion records are unavailable')
+  }
+  const records = value as Record<string, unknown>
+  if (
+    Object.entries(records).some(
+      ([id, accountIds]) =>
+        !id ||
+        !Array.isArray(accountIds) ||
+        !accountIds.every(accountId => typeof accountId === 'string' && accountId.length > 0)
+    )
+  ) {
+    throw new Error('Wallet deletion records are unavailable')
+  }
+  return records as Record<string, string[]>
 }
 
-export function setWalletCleanupPending(walletId: string, pending: boolean): Promise<void> {
-  return withMetadataLock(async () => {
-    const storage = chrome.storage.local
-    const saved = await storage.get(PENDING_CLEANUP_KEY)
-    const ids = stringSet(saved[PENDING_CLEANUP_KEY])
-    if (pending) ids.add(walletId)
-    else ids.delete(walletId)
-    await storage.set({ [PENDING_CLEANUP_KEY]: [...ids] })
-  })
+function parsePendingAccounts(value: unknown): Record<string, number> {
+  if (value == null) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Pending account cleanup records are unavailable')
+  }
+  const records = value as Record<string, unknown>
+  if (
+    Object.entries(records).some(
+      ([key, index]) =>
+        !/^(mainnet|testnet)_[^_]+_.+$/.test(key) ||
+        !Number.isSafeInteger(index) ||
+        (index as number) < 0
+    )
+  ) {
+    throw new Error('Pending account cleanup records are unavailable')
+  }
+  return records as Record<string, number>
 }
 
-export function setAccountDeleted(accountKey: string, deleted: boolean): Promise<void> {
-  return withMetadataLock(async () => {
-    const storage = chrome.storage.local
-    const saved = await storage.get(DELETED_ACCOUNTS_KEY)
-    const keys = stringSet(saved[DELETED_ACCOUNTS_KEY])
-    if (deleted) keys.add(accountKey)
-    else keys.delete(accountKey)
-    await storage.set({ [DELETED_ACCOUNTS_KEY]: [...keys] })
-  })
-}
-
-function withoutDeleted(
+function filterDeleted(
   snapshot: WalletSnapshot,
   deleted: Set<string>,
-  deletedAccounts: Set<string>
+  deletedAccounts: Set<string> = new Set()
 ): WalletSnapshot {
-  const accountDeleted = (walletId: string, accountId: string) =>
+  const isDeletedAccount = (walletId: string, accountId: string) =>
     deletedAccounts.has(`mainnet_${walletId}_${accountId}`) ||
     deletedAccounts.has(`testnet_${walletId}_${accountId}`)
   const wallets = snapshot.state.wallets
     .filter(wallet => !deleted.has(wallet.id))
     .map(wallet => ({
       ...wallet,
-      accounts: wallet.accounts.filter(account => !accountDeleted(wallet.id, account.id))
+      accounts: wallet.accounts.filter(account => !isDeletedAccount(wallet.id, account.id))
     }))
   const state = { ...snapshot.state, wallets }
   if (
     state.currentWalletId &&
-    (!wallets.some(wallet => wallet.id === state.currentWalletId) ||
-      !wallets
-        .find(wallet => wallet.id === state.currentWalletId)
-        ?.accounts.some(account => account.id === state.currentAccountId))
+    !wallets
+      .find(wallet => wallet.id === state.currentWalletId)
+      ?.accounts.some(account => account.id === state.currentAccountId)
   ) {
     const next = wallets.find(wallet => wallet.accounts.length > 0)
     state.currentWalletId = next?.id ?? null
@@ -104,8 +126,8 @@ function withoutDeleted(
         ([key]) =>
           ![...deleted].some(id => key.startsWith(`${id}_`)) &&
           ![...deletedAccounts].some(accountKey => {
-            const [, walletId, accountId] = accountKey.split('_')
-            return key === `${walletId}_${accountId}`
+            const suffix = accountKey.replace(/^(mainnet|testnet)_/, '')
+            return key === suffix
           })
       )
     )
@@ -113,87 +135,811 @@ function withoutDeleted(
   return { ...snapshot, state }
 }
 
-export async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
-  // Every extension context shares this lock; a local queue cannot protect a
-  // popup from an older snapshot held by the service worker or hardware tab.
-  if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
-  return await navigator.locks.request(LOCK_NAME, operation)
+function preserveBackupVerification(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const prior = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  return {
+    ...incoming,
+    state: {
+      ...incoming.state,
+      wallets: incoming.state.wallets.map(wallet => {
+        const saved = prior.get(wallet.id)
+        if (
+          !saved ||
+          saved.createdAt !== wallet.createdAt ||
+          saved.seedPhraseKey !== wallet.seedPhraseKey
+        ) {
+          return wallet
+        }
+        const verifiedAt = Math.max(
+          saved.secretPhraseBackupVerifiedAt ?? 0,
+          wallet.secretPhraseBackupVerifiedAt ?? 0
+        )
+        return {
+          ...wallet,
+          ...(saved.secretPhraseOrigin === undefined
+            ? {}
+            : { secretPhraseOrigin: saved.secretPhraseOrigin }),
+          ...(saved.secretPhraseCreationRevision === undefined
+            ? {}
+            : { secretPhraseCreationRevision: saved.secretPhraseCreationRevision }),
+          ...(verifiedAt > 0 ? { secretPhraseBackupVerifiedAt: verifiedAt } : {})
+        }
+      })
+    }
+  }
 }
 
-export function readWalletMetadata(
-  storage: chrome.storage.StorageArea
-): Promise<WalletSnapshot | null> {
+function preserveRetainedNames(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  const priorDisplayNames = current.state.accountDisplayNames ?? {}
+  const accountDisplayNames = { ...incoming.state.accountDisplayNames }
+  const wallets = incoming.state.wallets.map(wallet => {
+    const saved = priorWallets.get(wallet.id)
+    if (
+      !saved ||
+      saved.createdAt !== wallet.createdAt ||
+      saved.seedPhraseKey !== wallet.seedPhraseKey
+    ) {
+      return wallet
+    }
+    const priorAccounts = new Map(saved.accounts.map(account => [account.id, account]))
+    return {
+      ...wallet,
+      name: saved.name,
+      accounts: wallet.accounts.map(account => {
+        const priorAccount = priorAccounts.get(account.id)
+        if (!priorAccount) return account
+        const key = `${wallet.id}_${account.id}`
+        if (Object.prototype.hasOwnProperty.call(priorDisplayNames, key)) {
+          accountDisplayNames[key] = priorDisplayNames[key]
+        } else {
+          delete accountDisplayNames[key]
+        }
+        return { ...account, name: priorAccount.name }
+      })
+    }
+  })
+  return {
+    ...incoming,
+    state: { ...incoming.state, wallets, accountDisplayNames }
+  }
+}
+
+function preserveAccountNetworkSelections(
+  incoming: WalletSnapshot,
+  current: WalletSnapshot | null
+): WalletSnapshot {
+  if (!current) return incoming
+  const priorWallets = new Map(current.state.wallets.map(wallet => [wallet.id, wallet]))
+  return {
+    ...incoming,
+    state: {
+      ...incoming.state,
+      wallets: incoming.state.wallets.map(wallet => {
+        const saved = priorWallets.get(wallet.id)
+        if (
+          !saved ||
+          saved.createdAt !== wallet.createdAt ||
+          saved.seedPhraseKey !== wallet.seedPhraseKey
+        ) {
+          return wallet
+        }
+        const priorAccounts = new Map(saved.accounts.map(account => [account.id, account]))
+        return {
+          ...wallet,
+          accounts: wallet.accounts.map(account => {
+            const prior = priorAccounts.get(account.id)
+            if (!prior?.networkSelections && !prior?.networkChainSelections) return account
+            const activeNetwork = incoming.state.currentNetwork
+            const networkBirthdayHeights = { ...account.networkBirthdayHeights }
+            for (const network of ['mainnet', 'testnet'] as const) {
+              const savedSelection = prior.networkSelections?.[network]
+              const incomingSelection = account.networkSelections?.[network]
+              if (
+                savedSelection &&
+                (!incomingSelection ||
+                  savedSelection.length !== incomingSelection.length ||
+                  savedSelection.some(family => !incomingSelection.includes(family))) &&
+                (prior.networkBirthdayHeights?.[network] ?? 0) > 0
+              ) {
+                networkBirthdayHeights[network] = prior.networkBirthdayHeights![network]
+              }
+            }
+            return {
+              ...account,
+              networkZcashHistoryConfigured: {
+                ...account.networkZcashHistoryConfigured,
+                ...prior.networkZcashHistoryConfigured
+              },
+              networkBirthdayHeights,
+              ...((activeNetwork === 'mainnet' || activeNetwork === 'testnet') &&
+              networkBirthdayHeights[activeNetwork] !== undefined
+                ? { birthdayHeight: networkBirthdayHeights[activeNetwork] }
+                : {}),
+              networkSelections: {
+                ...account.networkSelections,
+                ...prior.networkSelections
+              },
+              networkChainSelections: {
+                ...account.networkChainSelections,
+                ...prior.networkChainSelections
+              }
+            }
+          })
+        }
+      })
+    }
+  }
+}
+
+export async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
+  if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
+  return navigator.locks.request(METADATA_LOCK, operation)
+}
+
+export function withUndeletedWalletAccountMetadata<T>(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet',
+  operation: () => Promise<T>
+): Promise<T> {
   return withMetadataLock(async () => {
-    const saved = await storage.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY, DELETED_ACCOUNTS_KEY])
+    const saved = await chrome.storage.local.get([DELETED_WALLETS_KEY, DELETED_ACCOUNTS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    if (
+      parseDeletedIds(saved[DELETED_WALLETS_KEY]).has(walletId) ||
+      deletedAccounts.has(`${network}_${walletId}_${accountId}`) ||
+      deletedAccounts.has(
+        `${network === 'mainnet' ? 'testnet' : 'mainnet'}_${walletId}_${accountId}`
+      )
+    ) {
+      throw new Error('Wallet Account metadata is unavailable')
+    }
+    return operation()
+  })
+}
+
+export function readWalletMetadata(): Promise<WalletSnapshot | null> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
     const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
     return snapshot
-      ? withoutDeleted(
+      ? filterDeleted(
           snapshot,
-          deletedIds(saved[DELETED_WALLETS_KEY]),
-          stringSet(saved[DELETED_ACCOUNTS_KEY])
+          parseDeletedIds(saved[DELETED_WALLETS_KEY]),
+          parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
         )
       : null
   })
 }
 
-export async function refreshWalletMetadata(
-  hydrate: () => Promise<void> | void,
-  isHydrated: () => boolean
-): Promise<void> {
-  // Zustand cancels overlapping hydrations and absorbs read errors. Serialize
-  // refreshes and check completion so callers cannot authenticate stale state.
-  await navigator.locks.request('noir-wallet-hydration', async () => {
-    await hydrate()
-    if (!isHydrated()) throw new Error('Wallet metadata could not be loaded')
+export function migrateRetainedV1NetworkSelections(): Promise<boolean> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(WALLET_STATE_KEY)
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    if (!snapshot) return false
+
+    const candidates = snapshot.state.wallets.filter(
+      wallet =>
+        wallet.secretPhraseOrigin === undefined &&
+        (wallet.keySource === undefined || wallet.keySource === 'software') &&
+        wallet.accounts.some(
+          account =>
+            account.networkSelections?.mainnet === undefined ||
+            account.networkSelections?.testnet === undefined
+        )
+    )
+    if (candidates.length === 0) return false
+
+    const credentialKeys = candidates.map(wallet => `seed_${wallet.id}`)
+    const credentials = await chrome.storage.local.get(credentialKeys)
+    const retainedWalletIds = new Set<string>()
+    for (const [index, wallet] of candidates.entries()) {
+      try {
+        parseV1EncryptedCredentialEnvelope(credentials[credentialKeys[index]])
+        retainedWalletIds.add(wallet.id)
+      } catch {
+        // An unrecognized credential is not evidence of a retained V1 wallet.
+      }
+    }
+    if (retainedWalletIds.size === 0) return false
+
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          wallets: snapshot.state.wallets.map(wallet =>
+            retainedWalletIds.has(wallet.id)
+              ? {
+                  ...wallet,
+                  accounts: wallet.accounts.map(account => ({
+                    ...account,
+                    networkSelections: {
+                      mainnet: account.networkSelections?.mainnet ?? ['zcash'],
+                      testnet: account.networkSelections?.testnet ?? ['zcash']
+                    }
+                  }))
+                }
+              : wallet
+          )
+        }
+      }
+    })
+    return true
   })
 }
 
-export function writeWalletMetadata(
-  storage: chrome.storage.StorageArea,
-  value: unknown
-): Promise<void> {
+export async function isStoredAccountNetworkEnabled(
+  walletId: string,
+  accountId: string,
+  network: Network,
+  family: AccountNetworkFamily,
+  chainId?: string
+): Promise<boolean> {
+  const snapshot = await readWalletMetadata()
+  const account = snapshot?.state.wallets
+    .find(wallet => wallet.id === walletId)
+    ?.accounts.find(item => item.id === accountId)
+  if (!account) throw new Error('Software Wallet Account metadata is unavailable')
+  return chainId
+    ? isAccountChainEnabled(account, network, family, chainId)
+    : isAccountNetworkEnabled(account, network, family)
+}
+
+export function isStoredAccountNetworkEnabledForSource(
+  source: { readonly kind: string },
+  walletId: string,
+  accountId: string,
+  network: Network,
+  family: AccountNetworkFamily,
+  chainId?: string
+): Promise<boolean> {
+  return source.kind === 'software'
+    ? isStoredAccountNetworkEnabled(walletId, accountId, network, family, chainId)
+    : Promise.resolve(true)
+}
+
+export function writeWalletMetadata(value: unknown): Promise<void> {
   const snapshot = parseSnapshot(value)
   if (!snapshot) return Promise.reject(new Error('Wallet metadata is unavailable'))
   return withMetadataLock(async () => {
-    const saved = await storage.get([DELETED_WALLETS_KEY, DELETED_ACCOUNTS_KEY])
-    await storage.set({
-      [WALLET_STATE_KEY]: withoutDeleted(
-        snapshot,
-        deletedIds(saved[DELETED_WALLETS_KEY]),
-        stringSet(saved[DELETED_ACCOUNTS_KEY])
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const current = parseSnapshot(saved[WALLET_STATE_KEY])
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: filterDeleted(
+        preserveAccountNetworkSelections(
+          preserveRetainedNames(preserveBackupVerification(snapshot, current), current),
+          current
+        ),
+        parseDeletedIds(saved[DELETED_WALLETS_KEY]),
+        parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
       )
     })
   })
 }
 
-export function removeWalletMetadata(walletId: string): Promise<void> {
+export function setAccountNetworkSelection(
+  walletId: string,
+  accountId: string,
+  network: Network,
+  families: readonly AccountNetworkFamily[],
+  birthdayHeight?: number,
+  chainIds?: readonly string[]
+): Promise<void> {
+  if (network !== 'mainnet' && network !== 'testnet') {
+    return Promise.reject(new Error('Invalid wallet network'))
+  }
+  if (
+    birthdayHeight !== undefined &&
+    (!families.includes('zcash') ||
+      !Number.isSafeInteger(birthdayHeight) ||
+      birthdayHeight <= 0 ||
+      birthdayHeight > 0xffffffff)
+  ) {
+    return Promise.reject(new Error('Invalid Zcash birthday height'))
+  }
+  const selected = parseSelectedNetworkFamilies(families)
+  const selectedChains = chainIds === undefined ? undefined : parseSelectedChainIds(chainIds)
+  return withUndeletedWalletAccountMetadata(walletId, accountId, network, async () => {
+    const saved = await chrome.storage.local.get(WALLET_STATE_KEY)
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    if (!snapshot || !wallet?.accounts.some(account => account.id === accountId)) {
+      throw new Error('Wallet Account metadata is unavailable')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          wallets: snapshot.state.wallets.map(item =>
+            item.id === walletId
+              ? {
+                  ...item,
+                  accounts: item.accounts.map(account =>
+                    account.id === accountId
+                      ? {
+                          ...account,
+                          ...(!selected.includes('zcash') &&
+                          isAccountNetworkEnabled(account, network, 'zcash')
+                            ? {
+                                networkZcashHistoryConfigured: {
+                                  ...account.networkZcashHistoryConfigured,
+                                  [network]: true
+                                }
+                              }
+                            : {}),
+                          networkSelections: {
+                            ...account.networkSelections,
+                            [network]: selected
+                          },
+                          ...(selectedChains === undefined
+                            ? {}
+                            : {
+                                networkChainSelections: {
+                                  ...account.networkChainSelections,
+                                  [network]: selectedChains
+                                }
+                              }),
+                          ...(birthdayHeight === undefined
+                            ? {}
+                            : {
+                                networkBirthdayHeights: {
+                                  ...account.networkBirthdayHeights,
+                                  [network]: birthdayHeight
+                                },
+                                ...(snapshot.state.currentNetwork === network
+                                  ? { birthdayHeight }
+                                  : {})
+                              })
+                        }
+                      : account
+                  )
+                }
+              : item
+          )
+        }
+      }
+    })
+  })
+}
+
+export function renameRetainedWalletMetadata(
+  walletId: string,
+  expectedName: string,
+  displayName: string
+): Promise<void> {
   return withMetadataLock(async () => {
-    const storage = chrome.storage.local
-    const saved = await storage.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY, DELETED_ACCOUNTS_KEY])
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    if (!snapshot || deleted.has(walletId) || !wallet || wallet.name !== expectedName) {
+      throw new Error('Wallet changed or was removed. Please try again.')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          wallets: snapshot.state.wallets.map(item =>
+            item.id === walletId ? { ...item, name: displayName } : item
+          )
+        }
+      }
+    })
+  })
+}
+
+export function renameRetainedAccountMetadata(
+  walletId: string,
+  accountId: string,
+  expectedDisplayName: string | null,
+  displayName: string
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deletedWallets = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    const accountKey = `${walletId}_${accountId}`
+    if (
+      !snapshot ||
+      deletedWallets.has(walletId) ||
+      deletedAccounts.has(`mainnet_${accountKey}`) ||
+      deletedAccounts.has(`testnet_${accountKey}`) ||
+      !wallet?.accounts.some(account => account.id === accountId) ||
+      (snapshot.state.accountDisplayNames?.[accountKey] ?? null) !== expectedDisplayName
+    ) {
+      throw new Error('Account changed or was removed. Please try again.')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          accountDisplayNames: {
+            ...snapshot.state.accountDisplayNames,
+            [accountKey]: displayName
+          }
+        }
+      }
+    })
+  })
+}
+
+export function markWalletBackupVerified(
+  walletId: string,
+  createdAt: number,
+  seedPhraseKey: string,
+  verifiedAt: number,
+  isCurrent: () => boolean
+): Promise<void> {
+  return withMetadataLock(async () => {
+    if (!isCurrent()) throw new Error('Wallet changed or locked. Please try again.')
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    if (
+      !isCurrent() ||
+      !snapshot ||
+      deleted.has(walletId) ||
+      !wallet ||
+      wallet.createdAt !== createdAt ||
+      wallet.seedPhraseKey !== seedPhraseKey
+    ) {
+      throw new Error('Wallet changed or was removed. Please try again.')
+    }
+    await chrome.storage.local.set({
+      [WALLET_STATE_KEY]: {
+        ...snapshot,
+        state: {
+          ...snapshot.state,
+          wallets: snapshot.state.wallets.map(item =>
+            item.id === walletId
+              ? {
+                  ...item,
+                  secretPhraseBackupVerifiedAt: Math.max(
+                    item.secretPhraseBackupVerifiedAt ?? 0,
+                    verifiedAt
+                  )
+                }
+              : item
+          )
+        }
+      }
+    })
+  })
+}
+
+export function commitWalletMetadataDeletion(
+  walletId: string,
+  accountIds?: readonly string[]
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_WALLET_RECORDS_KEY
+    ])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY]) ?? {
+      version: 0,
+      state: { wallets: [], currentWalletId: null, currentAccountId: null }
+    }
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const records = parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY])
+    const wallet = snapshot.state.wallets.find(item => item.id === walletId)
+    const deletedAccountIds = accountIds ?? wallet?.accounts.map(account => account.id)
+    if (deletedAccountIds) records[walletId] = [...deletedAccountIds]
+    deleted.add(walletId)
+    await chrome.storage.local.set({
+      [DELETED_WALLETS_KEY]: [...deleted],
+      [DELETED_WALLET_RECORDS_KEY]: records,
+      [WALLET_STATE_KEY]: filterDeleted(snapshot, deleted)
+    })
+  })
+}
+
+export function commitAccountMetadataDeletion(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet',
+  derivationIndex: number
+): Promise<void> {
+  if (!Number.isSafeInteger(derivationIndex) || derivationIndex < 0) {
+    return Promise.reject(new Error('Invalid account derivation index'))
+  }
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY,
+      DELETED_ACCOUNT_INDEXES_KEY,
+      PENDING_ACCOUNT_CLEANUP_KEY
+    ])
     const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
     if (!snapshot) throw new Error('Wallet metadata is unavailable')
-    const deleted = deletedIds(saved[DELETED_WALLETS_KEY])
-    deleted.add(walletId)
-    // Keep tombstones outside wallet_state so stale snapshots cannot erase them.
-    // Commit selection and deletion together before callers erase credentials.
-    await storage.set({
-      [DELETED_WALLETS_KEY]: [...deleted],
-      [WALLET_STATE_KEY]: withoutDeleted(snapshot, deleted, stringSet(saved[DELETED_ACCOUNTS_KEY]))
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    const accountKey = `${network}_${walletId}_${accountId}`
+    deletedAccounts.add(accountKey)
+    const storedIndexes = saved[DELETED_ACCOUNT_INDEXES_KEY]
+    if (
+      storedIndexes != null &&
+      (typeof storedIndexes !== 'object' || Array.isArray(storedIndexes))
+    ) {
+      throw new Error('Deleted account indexes are unavailable')
+    }
+    const indexes = { ...(storedIndexes as Record<string, number> | undefined) }
+    indexes[accountKey] = derivationIndex
+    const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
+    pending[accountKey] = derivationIndex
+    await chrome.storage.local.set({
+      [DELETED_ACCOUNTS_KEY]: [...deletedAccounts],
+      [DELETED_ACCOUNT_INDEXES_KEY]: indexes,
+      [PENDING_ACCOUNT_CLEANUP_KEY]: pending,
+      [WALLET_STATE_KEY]: filterDeleted(
+        snapshot,
+        parseDeletedIds(saved[DELETED_WALLETS_KEY]),
+        deletedAccounts
+      )
+    })
+  })
+}
+
+export function getDeletedAccountIndexes(walletId: string): Promise<number[]> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(DELETED_ACCOUNT_INDEXES_KEY)
+    const value = saved[DELETED_ACCOUNT_INDEXES_KEY]
+    if (value == null) return []
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Deleted account indexes are unavailable')
+    }
+    const indexes = Object.entries(value as Record<string, unknown>)
+      .filter(
+        ([key]) => key.startsWith(`mainnet_${walletId}_`) || key.startsWith(`testnet_${walletId}_`)
+      )
+      .map(([, index]) => index)
+    if (indexes.some(index => !Number.isSafeInteger(index) || (index as number) < 0)) {
+      throw new Error('Deleted account indexes are unavailable')
+    }
+    return indexes as number[]
+  })
+}
+
+export function getAccountDeletionRecord(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet'
+): Promise<number | null> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
+    const key = `${network}_${walletId}_${accountId}`
+    return parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])[key] ?? null
+  })
+}
+
+export function getPendingAccountCleanups(): Promise<
+  { walletId: string; accountId: string; network: 'mainnet' | 'testnet'; derivationIndex: number }[]
+> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
+    return Object.entries(parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])).map(
+      ([key, derivationIndex]) => {
+        const [network, walletId, ...accountId] = key.split('_')
+        return {
+          network: network as 'mainnet' | 'testnet',
+          walletId,
+          accountId: accountId.join('_'),
+          derivationIndex
+        }
+      }
+    )
+  })
+}
+
+export function getLegacyPendingCleanups(): Promise<
+  {
+    walletId: string
+    walletDeleted: boolean
+    walletPresent: boolean
+    accounts: {
+      accountId: string
+      network: 'mainnet' | 'testnet'
+      derivationIndex?: number
+    }[]
+  }[]
+> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      LEGACY_PENDING_CLEANUP_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY,
+      WALLET_STATE_KEY
+    ])
+    const pending = parseDeletedIds(saved[LEGACY_PENDING_CLEANUP_KEY])
+    const deletedWallets = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    return [...pending].map(walletId => {
+      const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+      const accounts = [...deletedAccounts].flatMap(key => {
+        const network: 'mainnet' | 'testnet' | null = key.startsWith(`mainnet_${walletId}_`)
+          ? 'mainnet'
+          : key.startsWith(`testnet_${walletId}_`)
+            ? 'testnet'
+            : null
+        if (!network) return []
+        const accountId = key.slice(`${network}_${walletId}_`.length)
+        if (!accountId) throw new Error('Invalid V1 account deletion record')
+        const derivationIndex = wallet?.accounts.find(
+          item => item.id === accountId
+        )?.derivationIndex
+        if (
+          derivationIndex !== undefined &&
+          (!Number.isSafeInteger(derivationIndex) || derivationIndex < 0)
+        ) {
+          throw new Error('Invalid V1 account derivation index')
+        }
+        return [{ accountId, network, derivationIndex }]
+      })
+      return {
+        walletId,
+        walletDeleted: deletedWallets.has(walletId),
+        walletPresent:
+          wallet !== undefined &&
+          wallet.accounts.length > 0 &&
+          wallet.accounts.every(
+            account =>
+              account &&
+              typeof account.id === 'string' &&
+              account.id.length > 0 &&
+              Number.isSafeInteger(account.derivationIndex) &&
+              account.derivationIndex >= 0
+          ) &&
+          new Set(wallet.accounts.map(account => account.id)).size === wallet.accounts.length &&
+          new Set(wallet.accounts.map(account => account.derivationIndex)).size ===
+            wallet.accounts.length,
+        accounts
+      }
+    })
+  })
+}
+
+export function completeLegacyPendingCleanup(walletId: string): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(LEGACY_PENDING_CLEANUP_KEY)
+    const pending = parseDeletedIds(saved[LEGACY_PENDING_CLEANUP_KEY])
+    pending.delete(walletId)
+    await chrome.storage.local.set({ [LEGACY_PENDING_CLEANUP_KEY]: [...pending] })
+  })
+}
+
+export function finalizeLegacyAccountMetadataDeletion(
+  walletId: string,
+  accounts: readonly { accountId: string; network: 'mainnet' | 'testnet' }[]
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      WALLET_STATE_KEY,
+      DELETED_WALLETS_KEY,
+      DELETED_ACCOUNTS_KEY
+    ])
+    const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
+    const deletedWallets = parseDeletedIds(saved[DELETED_WALLETS_KEY])
+    const deletedAccounts = parseDeletedIds(saved[DELETED_ACCOUNTS_KEY])
+    const wallet = snapshot?.state.wallets.find(item => item.id === walletId)
+    if (
+      !snapshot ||
+      !wallet ||
+      deletedWallets.has(walletId) ||
+      accounts.length === 0 ||
+      accounts.some(
+        account => !deletedAccounts.has(`${account.network}_${walletId}_${account.accountId}`)
+      )
+    ) {
+      throw new Error('Interrupted V1 account cleanup has inconsistent metadata')
+    }
+    const filtered = filterDeleted(snapshot, deletedWallets, deletedAccounts)
+    if (!filtered.state.wallets.some(item => item.id === walletId && item.accounts.length > 0)) {
+      throw new Error('Interrupted V1 account cleanup has no retained account')
+    }
+    await chrome.storage.local.set({ [WALLET_STATE_KEY]: filtered })
+  })
+}
+
+export function completeAccountMetadataDeletion(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet'
+): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(PENDING_ACCOUNT_CLEANUP_KEY)
+    const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
+    delete pending[`${network}_${walletId}_${accountId}`]
+    await chrome.storage.local.set({ [PENDING_ACCOUNT_CLEANUP_KEY]: pending })
+  })
+}
+
+export function getPendingWalletCleanups(): Promise<string[]> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(DELETED_WALLET_RECORDS_KEY)
+    return Object.keys(parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY]))
+  })
+}
+
+export function isAccountMetadataDeleted(
+  walletId: string,
+  accountId: string,
+  network: 'mainnet' | 'testnet'
+): Promise<boolean> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get(DELETED_ACCOUNTS_KEY)
+    return parseDeletedIds(saved[DELETED_ACCOUNTS_KEY]).has(`${network}_${walletId}_${accountId}`)
+  })
+}
+
+export function getWalletDeletionRecord(walletId: string): Promise<readonly string[] | null> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([DELETED_WALLETS_KEY, DELETED_WALLET_RECORDS_KEY])
+    if (!parseDeletedIds(saved[DELETED_WALLETS_KEY]).has(walletId)) return null
+    return parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY])[walletId] ?? null
+  })
+}
+
+export function completeWalletMetadataDeletion(walletId: string): Promise<void> {
+  return withMetadataLock(async () => {
+    const saved = await chrome.storage.local.get([
+      DELETED_WALLET_RECORDS_KEY,
+      PENDING_ACCOUNT_CLEANUP_KEY
+    ])
+    const records = parseDeletionRecords(saved[DELETED_WALLET_RECORDS_KEY])
+    const pending = parsePendingAccounts(saved[PENDING_ACCOUNT_CLEANUP_KEY])
+    delete records[walletId]
+    for (const key of Object.keys(pending)) {
+      if (key.startsWith(`mainnet_${walletId}_`) || key.startsWith(`testnet_${walletId}_`)) {
+        delete pending[key]
+      }
+    }
+    await chrome.storage.local.set({
+      [DELETED_WALLET_RECORDS_KEY]: records,
+      [PENDING_ACCOUNT_CLEANUP_KEY]: pending
     })
   })
 }
 
 export function resetWalletMetadata(): Promise<void> {
   return withMetadataLock(async () => {
-    const storage = chrome.storage.local
-    const saved = await storage.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
+    const saved = await chrome.storage.local.get([WALLET_STATE_KEY, DELETED_WALLETS_KEY])
     const snapshot = parseSnapshot(saved[WALLET_STATE_KEY])
-    const deleted = deletedIds(saved[DELETED_WALLETS_KEY])
+    const deleted = parseDeletedIds(saved[DELETED_WALLETS_KEY])
     for (const wallet of snapshot?.state.wallets ?? []) deleted.add(wallet.id)
-    await storage.set({
+    await chrome.storage.local.set({
       [DELETED_WALLETS_KEY]: [...deleted],
       [WALLET_STATE_KEY]: {
-        ...snapshot,
+        version: snapshot?.version ?? 0,
         state: {
           ...snapshot?.state,
           wallets: [],
@@ -204,5 +950,16 @@ export function resetWalletMetadata(): Promise<void> {
         }
       }
     })
+  })
+}
+
+export async function refreshWalletMetadata(
+  hydrate: () => Promise<void> | void,
+  isHydrated: () => boolean
+): Promise<void> {
+  if (!navigator.locks) throw new Error('Wallet storage coordination is unavailable')
+  await navigator.locks.request(HYDRATION_LOCK, async () => {
+    await hydrate()
+    if (!isHydrated()) throw new Error('Wallet metadata could not be loaded')
   })
 }

@@ -7,7 +7,12 @@ export function isTransparentZcashAddress(recipient: string): boolean {
 
 /** Classifies recognized mainnet and testnet Zcash address prefixes for display. */
 export function detectZcashAddressType(address: string): AddressType {
-  return /^(?:u1|utest1|zs|ztestsapling)/.test(address) ? 'shielded' : 'transparent'
+  return supportsZcashMemo(address) ? 'shielded' : 'transparent'
+}
+
+/** Memo-capable formats supported by this wallet; submission still validates the full address. */
+export function supportsZcashMemo(recipient: string): boolean {
+  return /^(?:u1|utest1|zs|ztestsapling)/.test(recipient)
 }
 
 /**

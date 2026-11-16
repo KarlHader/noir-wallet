@@ -7,18 +7,24 @@ export interface ExactBlockHeightLookup {
   getBlockTime: (height: number) => Promise<number>
 }
 
-/** Finds the first block whose timestamp is at or after the target timestamp. */
+/** Finds the first block whose timestamp is at or after the requested time. */
 export async function findExactBlockHeightByTime({
   targetTimestamp,
   approximateHeight,
   latestHeight,
   getBlockTime
 }: ExactBlockHeightLookup): Promise<number> {
-  if (approximateHeight <= 0 || latestHeight <= 0) return 0
+  if (
+    !Number.isSafeInteger(targetTimestamp) ||
+    !Number.isSafeInteger(approximateHeight) ||
+    !Number.isSafeInteger(latestHeight) ||
+    approximateHeight <= 0 ||
+    latestHeight <= 0
+  ) {
+    return 0
+  }
 
   const approximate = Math.min(approximateHeight, latestHeight)
-  if (approximate === latestHeight) return latestHeight
-
   const approximateTime = await getBlockTime(approximate)
   let lowerHeight: number
   let upperHeight: number
@@ -56,12 +62,8 @@ export async function findExactBlockHeightByTime({
   while (upperHeight - lowerHeight > 1) {
     const middleHeight = lowerHeight + Math.floor((upperHeight - lowerHeight) / 2)
     const middleTime = await getBlockTime(middleHeight)
-
-    if (middleTime < targetTimestamp) {
-      lowerHeight = middleHeight
-    } else {
-      upperHeight = middleHeight
-    }
+    if (middleTime < targetTimestamp) lowerHeight = middleHeight
+    else upperHeight = middleHeight
   }
 
   return upperHeight

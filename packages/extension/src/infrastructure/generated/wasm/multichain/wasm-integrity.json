@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "engine": "multichain",
+  "packageVersion": "0.1.0",
+  "abiVersion": "wallet-engine-cbd8ffb-v5",
+  "sourceCommit": "cbd8ffbb192d67a3bd19eb5a4dcc38669f5e4f7a",
+  "artifacts": [
+    {
+      "path": "package.json",
+      "role": "metadata",
+      "bytes": 384,
+      "sha256": "59f0f89d6c40a42af5650dc0129d634777916c0e77731fbac604e8162cbc8ad5"
+    },
+    {
+      "path": "wallet_wasm.d.ts",
+      "role": "types",
+      "bytes": 11292,
+      "sha256": "397dfbeb64db823602783c8ad85c65db98c7026f0473978f719abb04f48a151b"
+    },
+    {
+      "path": "wallet_wasm.js",
+      "role": "loader",
+      "bytes": 62215,
+      "sha256": "de6045b3d1e098655d71c3d90826783dd70f0e5899a08e4e8b2ee7d97f54748d"
+    },
+    {
+      "path": "wallet_wasm_bg.wasm",
+      "role": "binary",
+      "bytes": 1703890,
+      "sha256": "c79a1fb1107a79984798972aa1e89d253221f2a8202258103190b3f777f0e783"
+    },
+    {
+      "path": "wallet_wasm_bg.wasm.d.ts",
+      "role": "binary-types",
+      "bytes": 6299,
+      "sha256": "e500f00d62eb88ca930803351f44f81da397af8efb1182224f86463e61b728cc"
+    }
+  ],
+  "sourceRepository": "https://github.com/NoirWallet/multichain-wallet-wasm.git",
+  "build": {
+    "rustToolchain": "1.96.1",
+    "wasmPack": "0.14.0",
+    "wasmBindgen": "0.2.126",
+    "llvm": "22.1.4",
+    "target": "web"
+  },
+  "capabilities": [
+    "account.bitcoin.batch-derive",
+    "account.bitcoin.derive",
+    "account.bitcoin.imported",
+    "account.evm.derive",
+    "account.evm.imported",
+    "account.near.derive",
+    "account.near.imported",
+    "account.pea-v1.derive",
+    "account.solana.derive",
+    "account.solana.imported",
+    "bitcoin.bip322.full.sign",
+    "bitcoin.bip322.full.verify",
+    "bitcoin.bip322.sign",
+    "bitcoin.bip322.verify",
+    "bitcoin.psbt-v0.sign",
+    "credential.create-12",
+    "credential.create-24",
+    "credential.export-private-key",
+    "credential.import-12",
+    "credential.import-24",
+    "credential.import-private-key-bip122",
+    "credential.import-private-key-eip155",
+    "credential.import-private-key-near",
+    "credential.import-private-key-solana",
+    "credential.passphrase-empty-only",
+    "evm.eip191.sign",
+    "evm.eip712.sign",
+    "evm.pea-v1.eip191.sign",
+    "evm.pea-v1.eip712.sign",
+    "evm.pea-v1.transaction.sign",
+    "evm.transaction.sign",
+    "near.nep413.sign",
+    "near.nep413.verify",
+    "near.transaction.sign",
+    "solana.message.sign",
+    "solana.message.verify",
+    "solana.transaction.sign",
+    "vault.argon2id-xchacha20poly1305",
+    "vault.private-key-v2"
+  ]
+}

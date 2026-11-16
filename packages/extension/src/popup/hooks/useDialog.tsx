@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useContext, createContext } from 'react'
+import { useState, useCallback, useRef, useContext, createContext, useEffect } from 'react'
+import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { Button } from '../components/ui/button'
 import {
   Dialog,
@@ -68,6 +69,17 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
     resolveRef.current?.(false)
     resolveRef.current = null
   }, [])
+
+  useEffect(() => {
+    const handleSessionChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (didCredentialSessionEnd(changes, areaName)) handleCancel()
+    }
+    chrome.storage.onChanged.addListener(handleSessionChange)
+    return () => chrome.storage.onChanged.removeListener(handleSessionChange)
+  }, [handleCancel])
 
   const confirm = useCallback<DialogContextValue['confirm']>(
     options => openDialog({ cancelText: 'Cancel', ...options }),

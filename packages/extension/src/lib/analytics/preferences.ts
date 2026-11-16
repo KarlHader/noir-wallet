@@ -7,12 +7,27 @@ type GoogleAnalyticsPreferenceListener = (enabled: boolean) => void
 const listeners = new Set<GoogleAnalyticsPreferenceListener>()
 let cachedEnabled: boolean | undefined
 let loadPromise: Promise<boolean> | null = null
+let storageListenerRegistered = false
+let preferenceRevision = 0
+
+function ensureStorageListener(): void {
+  if (storageListenerRegistered || typeof chrome === 'undefined' || !chrome.storage?.onChanged)
+    return
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return
+    const change = changes[GOOGLE_ANALYTICS_STORAGE_KEY]
+    if (!change) return
+    updateCachedPreference(parseStoredPreference(change.newValue))
+  })
+  storageListenerRegistered = true
+}
 
 function parseStoredPreference(value: unknown): boolean {
   return typeof value === 'boolean' ? value : DEFAULT_GOOGLE_ANALYTICS_ENABLED
 }
 
 function updateCachedPreference(enabled: boolean): void {
+  preferenceRevision++
   if (cachedEnabled === enabled) return
   cachedEnabled = enabled
   for (const listener of listeners) {
@@ -21,6 +36,7 @@ function updateCachedPreference(enabled: boolean): void {
 }
 
 export async function isGoogleAnalyticsEnabled(): Promise<boolean> {
+  ensureStorageListener()
   if (cachedEnabled !== undefined) return cachedEnabled
   if (loadPromise) return loadPromise
 
@@ -31,11 +47,12 @@ export async function isGoogleAnalyticsEnabled(): Promise<boolean> {
   loadPromise = chrome.storage.local
     .get(GOOGLE_ANALYTICS_STORAGE_KEY)
     .then(result => {
+      if (cachedEnabled !== undefined) return cachedEnabled
       const enabled = parseStoredPreference(result[GOOGLE_ANALYTICS_STORAGE_KEY])
       updateCachedPreference(enabled)
       return enabled
     })
-    .catch(() => DEFAULT_GOOGLE_ANALYTICS_ENABLED)
+    .catch(() => cachedEnabled ?? DEFAULT_GOOGLE_ANALYTICS_ENABLED)
     .finally(() => {
       loadPromise = null
     })
@@ -44,16 +61,20 @@ export async function isGoogleAnalyticsEnabled(): Promise<boolean> {
 }
 
 export async function setGoogleAnalyticsEnabled(enabled: boolean): Promise<void> {
+  ensureStorageListener()
   const previous = cachedEnabled
   updateCachedPreference(enabled)
+  const setRevision = preferenceRevision
 
   try {
     await chrome.storage.local.set({ [GOOGLE_ANALYTICS_STORAGE_KEY]: enabled })
   } catch (error) {
-    cachedEnabled = previous
-    if (previous !== undefined) {
-      for (const listener of listeners) {
-        listener(previous)
+    if (preferenceRevision === setRevision) {
+      if (previous === undefined) {
+        preferenceRevision++
+        cachedEnabled = undefined
+      } else {
+        updateCachedPreference(previous)
       }
     }
     throw error
@@ -63,15 +84,7 @@ export async function setGoogleAnalyticsEnabled(enabled: boolean): Promise<void>
 export function onGoogleAnalyticsPreferenceChange(
   listener: GoogleAnalyticsPreferenceListener
 ): () => void {
+  ensureStorageListener()
   listeners.add(listener)
   return () => listeners.delete(listener)
-}
-
-if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'local') return
-    const change = changes[GOOGLE_ANALYTICS_STORAGE_KEY]
-    if (!change) return
-    updateCachedPreference(parseStoredPreference(change.newValue))
-  })
 }

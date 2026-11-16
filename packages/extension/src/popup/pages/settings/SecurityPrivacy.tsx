@@ -1,6 +1,8 @@
 import { Icon } from '@iconify/react'
-import { useEffect, useRef, useState } from 'react'
+import { getResponseErrorMessage } from '@/lib/errors'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { useNavigate } from '../../provider/Router'
 import {
   DEFAULT_GOOGLE_ANALYTICS_ENABLED,
@@ -8,26 +10,50 @@ import {
   setGoogleAnalyticsEnabled
 } from '@/lib/analytics/preferences'
 import { Switch } from '@/popup/components/ui/switch'
+import { ZcashBroadcastHelp } from '@/popup/components/settings/ZcashBroadcastHelp'
 import { toast } from '@/store/toast-store'
-import { parseZeroIndexerEnabled } from '@/config/zero-indexer-settings'
-import { SETTINGS_STORAGE_KEY } from '@/config/storage-keys'
+import { SETTINGS_STORAGE_KEY } from '@/lib/wallet-settings-storage'
+import { sendZeroIndexerNodeMessage } from '@/popup/services/zero-indexer-node-client'
+import { selectedZeroIndexerNodeLabel } from '@/popup/services/zero-indexer-node-model'
 import {
-  parseZeroIndexerNodeStatus,
+  parseZeroIndexerEnabled,
   ZERO_INDEXER_NODES_STORAGE_KEY,
-  ZERO_INDEXER_RUNTIME_STORAGE_KEY,
-  type ZeroIndexerNodeStatus
-} from '@/config/zero-indexer-nodes'
+  ZERO_INDEXER_RUNTIME_STORAGE_KEY
+} from '@/infrastructure/chains/zero-indexer-preferences'
 
 export function SecurityPrivacy() {
   const { navigate } = useNavigate()
   const [analyticsEnabled, setAnalyticsEnabled] = useState(DEFAULT_GOOGLE_ANALYTICS_ENABLED)
-  const [zeroIndexerEnabled, setZeroIndexerEnabled] = useState(true)
-  const [zeroIndexerLoaded, setZeroIndexerLoaded] = useState(false)
-  const [zeroIndexerSaving, setZeroIndexerSaving] = useState(false)
-  const [broadcastNode, setBroadcastNode] = useState('Auto')
-  const zeroIndexerRevision = useRef(0)
   const [isLoaded, setIsLoaded] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [zeroIndexerEnabled, setZeroIndexerEnabled] = useState(false)
+  const [zeroIndexerLoaded, setZeroIndexerLoaded] = useState(false)
+  const [zeroIndexerLoading, setZeroIndexerLoading] = useState(false)
+  const [zeroIndexerLoadError, setZeroIndexerLoadError] = useState(false)
+  const [zeroIndexerSaving, setZeroIndexerSaving] = useState(false)
+  const [broadcastNode, setBroadcastNode] = useState('Auto')
+  const enabledRevision = useRef(0)
+  const enabledLoadRevision = useRef(0)
+
+  const loadZeroIndexerEnabled = useCallback(async () => {
+    const requestRevision = ++enabledLoadRevision.current
+    const initialRevision = enabledRevision.current
+    setZeroIndexerLoading(true)
+    setZeroIndexerLoadError(false)
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'GET_ZERO_INDEXER_ENABLED' })
+      if (requestRevision !== enabledLoadRevision.current) return
+      if (!response?.success || typeof response.enabled !== 'boolean') {
+        throw new Error('Could not load private broadcast preference')
+      }
+      if (enabledRevision.current === initialRevision) setZeroIndexerEnabled(response.enabled)
+      setZeroIndexerLoaded(true)
+    } catch {
+      if (requestRevision === enabledLoadRevision.current) setZeroIndexerLoadError(true)
+    } finally {
+      if (requestRevision === enabledLoadRevision.current) setZeroIndexerLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -44,86 +70,65 @@ export function SecurityPrivacy() {
 
   useEffect(() => {
     let active = true
-    let revision = 0
+    let nodeRevision = 0
     const loadNode = async () => {
-      const currentRevision = ++revision
+      const revision = ++nodeRevision
       try {
-        const response = await chrome.runtime.sendMessage({ type: 'GET_ZERO_INDEXER_NODES' })
-        if (!active || currentRevision !== revision || !response?.success) return
-        const status: ZeroIndexerNodeStatus = parseZeroIndexerNodeStatus(response.result)
-        const selected = [...status.managedEndpoints, ...status.customEndpoints].find(
-          endpoint => endpoint.id === status.selectedEndpointId
-        )
-        setBroadcastNode(status.mode === 'fixed' ? selected?.label || 'Auto' : 'Auto')
+        const { status } = await sendZeroIndexerNodeMessage({
+          type: 'GET_ZERO_INDEXER_NODE_STATUS'
+        })
+        if (active && revision === nodeRevision)
+          setBroadcastNode(selectedZeroIndexerNodeLabel(status))
       } catch {
-        // The node page reports load errors when opened.
+        // The node page provides retry and error feedback.
       }
     }
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && changes[SETTINGS_STORAGE_KEY]) {
+        enabledRevision.current += 1
+        enabledLoadRevision.current += 1
+        setZeroIndexerEnabled(parseZeroIndexerEnabled(changes[SETTINGS_STORAGE_KEY].newValue))
+        setZeroIndexerLoaded(true)
+        setZeroIndexerLoading(false)
+        setZeroIndexerLoadError(false)
+      }
       if (
         (area === 'local' &&
           (changes[ZERO_INDEXER_NODES_STORAGE_KEY] || changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY])) ||
-        (area === 'session' && changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY]) ||
-        (area === 'local' && changes[SETTINGS_STORAGE_KEY])
-      ) {
+        (area === 'session' && changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY])
+      )
         void loadNode()
-      }
     }
     chrome.storage.onChanged.addListener(onChanged)
+    void loadZeroIndexerEnabled()
     void loadNode()
     return () => {
       active = false
+      enabledLoadRevision.current += 1
       chrome.storage.onChanged.removeListener(onChanged)
     }
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === 'local' && changes[SETTINGS_STORAGE_KEY] && active) {
-        zeroIndexerRevision.current += 1
-        setZeroIndexerEnabled(parseZeroIndexerEnabled(changes[SETTINGS_STORAGE_KEY].newValue))
-      }
-    }
-    chrome.storage.onChanged.addListener(onChanged)
-    const initialRevision = zeroIndexerRevision.current
-    chrome.runtime
-      .sendMessage({ type: 'GET_ZERO_INDEXER_ENABLED' })
-      .then(response => {
-        if (!active) return
-        if (response?.success && typeof response.enabled === 'boolean') {
-          if (zeroIndexerRevision.current === initialRevision)
-            setZeroIndexerEnabled(response.enabled)
-          setZeroIndexerLoaded(true)
-        } else {
-          toast.error('Could not load privacy broadcast preference')
-        }
-      })
-      .catch(() => {
-        if (active) toast.error('Could not load privacy broadcast preference')
-      })
-    return () => {
-      active = false
-      chrome.storage.onChanged.removeListener(onChanged)
-    }
-  }, [])
+  }, [loadZeroIndexerEnabled])
 
   const handleZeroIndexerToggle = async () => {
     if (!zeroIndexerLoaded || zeroIndexerSaving) return
-    const enabled = !zeroIndexerEnabled
-    const currentRevision = zeroIndexerRevision.current
+    const revision = enabledRevision.current
     setZeroIndexerSaving(true)
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'SET_ZERO_INDEXER_ENABLED',
-        enabled
+        enabled: !zeroIndexerEnabled
       })
-      if (!response?.success)
-        throw new Error(response?.error || 'Could not update privacy broadcast preference')
-      if (zeroIndexerRevision.current === currentRevision) setZeroIndexerEnabled(response.enabled)
+      if (!response?.success || typeof response.enabled !== 'boolean') {
+        throw new Error(
+          getResponseErrorMessage(response) || 'Could not update private broadcast preference'
+        )
+      }
+      if (enabledRevision.current === revision) setZeroIndexerEnabled(response.enabled)
       if (response.warning) toast.error(response.warning)
-    } catch {
-      toast.error('Could not update privacy broadcast preference')
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Could not update private broadcast preference'
+      )
     } finally {
       setZeroIndexerSaving(false)
     }
@@ -164,70 +169,71 @@ export function SecurityPrivacy() {
 
         <div>
           <p className="text-xs text-muted mb-2 px-1">Privacy</p>
-          <div>
-            <section
-              aria-label="ZeroIndexer settings"
-              className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-card"
-            >
+          <section
+            aria-label="Zcash private broadcast settings"
+            className="mb-3 overflow-hidden rounded-lg border border-white/10 bg-card"
+          >
+            <div className="flex items-center gap-2 p-4">
+              <label htmlFor="zcash-private-broadcast" className="min-w-0 cursor-pointer text-sm">
+                Zcash Private Broadcast
+              </label>
+              <ZcashBroadcastHelp />
               <button
+                id="zcash-private-broadcast"
                 type="button"
                 role="switch"
                 aria-checked={zeroIndexerEnabled}
-                aria-label="ZeroIndexer"
-                disabled={!zeroIndexerLoaded || zeroIndexerSaving}
-                onClick={handleZeroIndexerToggle}
-                className="w-full p-4 hover:bg-white/5 cursor-pointer transition-colors disabled:cursor-wait disabled:opacity-70"
+                aria-label="Zcash Private Broadcast"
+                disabled={!zeroIndexerLoaded || zeroIndexerLoading || zeroIndexerSaving}
+                onClick={() => void handleZeroIndexerToggle()}
+                className="ml-auto shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
               >
-                <div className="flex items-start justify-between gap-4 text-left">
-                  <div>
-                    <div className="text-sm">ZeroIndexer</div>
-                    <div className="text-xs text-muted mt-1 leading-relaxed">
-                      Prefer the privacy broadcast service for transactions.
-                    </div>
-                  </div>
-                  <div className="pt-0.5">
-                    <Switch checked={zeroIndexerEnabled} />
-                  </div>
-                </div>
+                <Switch checked={zeroIndexerEnabled} />
               </button>
+            </div>
+            <div className="border-t border-white/10">
               <button
                 type="button"
-                aria-label="ZeroIndexer nodes"
                 onClick={() => navigate('/zero-indexer-nodes')}
-                className="flex w-full items-center justify-between gap-3 border-t border-white/10 px-4 py-3 text-left transition-colors hover:bg-white/5"
+                className="flex w-full min-w-0 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5"
               >
-                <span className="text-sm">Nodes</span>
+                <span className="text-sm">ZeroIndexer nodes</span>
                 <span className="flex min-w-0 items-center gap-2 text-xs text-muted">
                   <span className="max-w-28 truncate">{broadcastNode}</span>
-                  <Icon icon="lucide:chevron-right" width={16} height={16} className="shrink-0" />
+                  <Icon icon="lucide:chevron-right" className="size-4 shrink-0" />
                 </span>
               </button>
-            </section>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={analyticsEnabled}
-              aria-label="Share Google Analytics"
-              disabled={!isLoaded || isSaving}
-              onClick={handleAnalyticsToggle}
-              className="w-full p-4 bg-card rounded-xl border border-white/10 hover:bg-white/5 cursor-pointer transition-colors disabled:cursor-wait disabled:opacity-70"
-            >
-              <div className="flex items-start justify-between gap-4 text-left">
-                <div>
-                  <div className="text-sm">Share Google Analytics</div>
-                  <div className="text-xs text-muted mt-1 leading-relaxed">
-                    Share anonymous feature usage with Google Analytics. Noir Wallet service metrics
-                    remain active and may include transaction amounts and estimated USD values for
-                    aggregate volume reporting. They never include wallet addresses, transaction
-                    hashes, dApp domains, recovery phrases, passwords, or private keys.
-                  </div>
-                </div>
-                <div className="pt-0.5">
-                  <Switch checked={analyticsEnabled} />
+            </div>
+          </section>
+          {zeroIndexerLoadError && (
+            <InlineError
+              message="Could not load private broadcast preference"
+              onRetry={() => void loadZeroIndexerEnabled()}
+              retrying={zeroIndexerLoading}
+              className="mb-3"
+            />
+          )}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={analyticsEnabled}
+            aria-label="Share Google Analytics"
+            disabled={!isLoaded || isSaving}
+            onClick={handleAnalyticsToggle}
+            className="w-full p-4 bg-card rounded-xl border border-white/10 hover:bg-white/5 cursor-pointer transition-colors disabled:cursor-wait disabled:opacity-70"
+          >
+            <div className="flex items-start justify-between gap-4 text-left">
+              <div>
+                <div className="text-sm">Share Google Analytics</div>
+                <div className="text-xs text-muted mt-1 leading-relaxed">
+                  Wallet addresses are never included in analytics.
                 </div>
               </div>
-            </button>
-          </div>
+              <div className="pt-0.5">
+                <Switch checked={analyticsEnabled} />
+              </div>
+            </div>
+          </button>
         </div>
       </div>
     </div>

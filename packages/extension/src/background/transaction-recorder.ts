@@ -1,12 +1,15 @@
 import { mutateTransactions } from '@/lib/indexed-db'
 import type { Transaction } from '@/types'
-import { isDuplicateWasmRow, localTxHashSet } from '@/lib/tx-history-dedup'
+import {
+  isDuplicateWasmRow,
+  localShieldedSendHashSet,
+  localTxHashSet
+} from '@/lib/tx-history-dedup'
 import {
   mergeTransactionUpdate,
   synchronizeInternalTransferConfirmations,
   type ZcashConfirmation
 } from '@/lib/transaction-status'
-import { logger } from '@/lib/logger'
 
 export interface AddTransactionRequest {
   accountKey: string
@@ -22,14 +25,6 @@ export class TransactionRecorder {
 
     await mutateTransactions(accountKey, existingTxs => [...existingTxs, newTx])
 
-    logger.log(`[TransactionRecorder] Transaction added (${transaction.type})`)
-    console.log('[TransactionRecorder] Transaction added:', {
-      accountKey,
-      txId: id,
-      type: transaction.type,
-      amount: transaction.amount
-    })
-
     this.broadcastTransactionAdded(accountKey)
 
     return newTx
@@ -38,22 +33,21 @@ export class TransactionRecorder {
   async updateTransaction(
     accountKey: string,
     transactionId: string,
-    updates: Partial<Transaction>
+    updates: Partial<Transaction>,
+    options: { onlyIfUnsubmitted?: boolean } = {}
   ): Promise<void> {
     await mutateTransactions(accountKey, txs => {
       const updatedTxs = txs.map(tx =>
-        tx.id === transactionId ? mergeTransactionUpdate(tx, updates) : tx
+        tx.id === transactionId && (!options.onlyIfUnsubmitted || !tx.txHash)
+          ? mergeTransactionUpdate(tx, updates)
+          : tx
       )
       const synchronizedTxs = synchronizeInternalTransferConfirmations(updatedTxs)
       const localHashes = localTxHashSet(synchronizedTxs)
-      return synchronizedTxs.filter(tx => !isDuplicateWasmRow(tx, localHashes))
-    })
-
-    logger.log('[TransactionRecorder] Transaction updated')
-    console.log('[TransactionRecorder] Transaction updated:', {
-      accountKey,
-      transactionId,
-      updates
+      const localShieldedSendHashes = localShieldedSendHashSet(synchronizedTxs)
+      return synchronizedTxs.filter(
+        tx => !isDuplicateWasmRow(tx, localHashes, localShieldedSendHashes)
+      )
     })
 
     this.broadcastTransactionUpdated(accountKey, transactionId)
@@ -69,7 +63,7 @@ export class TransactionRecorder {
     let shouldNotify = false
     let statusMatches = false
     await mutateTransactions(accountKey, txs => {
-      const updatedTxs = txs.map(tx => {
+      const updated = txs.map(tx => {
         if (tx.id !== transactionId) return tx
         found = true
         const { txHash: monitoredHash, ...statusUpdates } = updates
@@ -79,10 +73,10 @@ export class TransactionRecorder {
         }
         const updated = mergeTransactionUpdate(tx, mergedUpdates, confirmation)
         statusMatches = updated.status === updates.status
-        shouldNotify = statusMatches && (!tx.notified || updated.status !== tx.status)
+        shouldNotify = statusMatches && (!updated.notified || updated.status !== tx.status)
         return updated
       })
-      return synchronizeInternalTransferConfirmations(updatedTxs)
+      return synchronizeInternalTransferConfirmations(updated)
     })
     if (found) this.broadcastTransactionUpdated(accountKey, transactionId)
     return { found, shouldNotify, statusMatches }
@@ -108,43 +102,22 @@ export class TransactionRecorder {
   }
 
   private broadcastTransactionAdded(accountKey: string) {
-    console.log('[TransactionRecorder] Broadcasting TRANSACTION_ADDED:', accountKey)
-    chrome.runtime
+    void chrome.runtime
       .sendMessage({
         type: 'TRANSACTION_ADDED',
         accountKey
       })
-      .then(() => {
-        console.log('[TransactionRecorder] TRANSACTION_ADDED sent successfully')
-      })
-      .catch(err => {
-        console.log(
-          '[TransactionRecorder] TRANSACTION_ADDED failed (popup may be closed):',
-          err.message
-        )
-      })
+      .catch(() => {})
   }
 
   private broadcastTransactionUpdated(accountKey: string, transactionId: string) {
-    console.log('[TransactionRecorder] Broadcasting TRANSACTION_UPDATED:', {
-      accountKey,
-      transactionId
-    })
-    chrome.runtime
+    void chrome.runtime
       .sendMessage({
         type: 'TRANSACTION_UPDATED',
         accountKey,
         transactionId
       })
-      .then(() => {
-        console.log('[TransactionRecorder] TRANSACTION_UPDATED sent successfully')
-      })
-      .catch(err => {
-        console.log(
-          '[TransactionRecorder] TRANSACTION_UPDATED failed (popup may be closed):',
-          err.message
-        )
-      })
+      .catch(() => {})
   }
 }
 

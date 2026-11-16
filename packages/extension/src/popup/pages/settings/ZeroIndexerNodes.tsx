@@ -1,22 +1,21 @@
 import { Icon } from '@iconify/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  parseZeroIndexerNodeStatus,
   ZERO_INDEXER_NODES_STORAGE_KEY,
-  ZERO_INDEXER_RUNTIME_STORAGE_KEY,
-  type ZeroIndexerEndpoint,
-  type ZeroIndexerNodeStatus
-} from '@/config/zero-indexer-nodes'
-import { SETTINGS_STORAGE_KEY } from '@/config/storage-keys'
+  ZERO_INDEXER_RUNTIME_STORAGE_KEY
+} from '@/infrastructure/chains/zero-indexer-preferences'
+import type { ZeroIndexerEndpoint, ZeroIndexerNodeStatus } from '@/core/zcash/zero-indexer'
+import { SETTINGS_STORAGE_KEY } from '@/lib/wallet-settings-storage'
 import { cn } from '@/lib/utils'
-import { ChainIcon } from '../../components/common/ChainIcon'
 import {
-  EndpointLatencyBadge as PingBadge,
-  EndpointSelectionIndicator as SelectionIndicator
+  EndpointLatencyBadge,
+  EndpointSelectionIndicator
 } from '../../components/common/EndpointStatus'
 import { PageHeader } from '../../components/common/PageHeader'
+import { InlineError } from '../../components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
+import { ListSkeleton } from '../../components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -24,40 +23,20 @@ import {
   DialogHeader,
   DialogTitle
 } from '../../components/ui/dialog'
-
-type NodeMessage =
-  | { type: 'SELECT_ZERO_INDEXER_NODE'; endpointId: string | null }
-  | { type: 'ADD_CUSTOM_ZERO_INDEXER_NODE'; label: string; url: string }
-  | { type: 'REMOVE_CUSTOM_ZERO_INDEXER_NODE'; endpointId: string }
-
-function readStatus(response: unknown): { status: ZeroIndexerNodeStatus; warning?: string } {
-  if (!response || typeof response !== 'object') throw new Error('Could not load broadcast nodes')
-  const result = response as {
-    success?: unknown
-    result?: unknown
-    error?: unknown
-    warning?: unknown
-  }
-  if (result.success !== true) {
-    throw new Error(
-      typeof result.error === 'string' ? result.error : 'Could not load broadcast nodes'
-    )
-  }
-  return {
-    status: parseZeroIndexerNodeStatus(result.result),
-    warning: typeof result.warning === 'string' ? result.warning : undefined
-  }
-}
+import { sendZeroIndexerNodeMessage } from '../../services/zero-indexer-node-client'
+import {
+  validateZeroIndexerNodeUrl,
+  zeroIndexerNodeErrorField
+} from '../../services/zero-indexer-node-model'
 
 export function ZeroIndexerNodes() {
   const [status, setStatus] = useState<ZeroIndexerNodeStatus | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [applyingKey, setApplyingKey] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [customName, setCustomName] = useState('')
-  const [customUrl, setCustomUrl] = useState('')
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
   const [nameError, setNameError] = useState<string | null>(null)
   const [urlError, setUrlError] = useState<string | null>(null)
   const [addError, setAddError] = useState<string | null>(null)
@@ -65,74 +44,70 @@ export function ZeroIndexerNodes() {
   const revision = useRef(0)
   const mounted = useRef(false)
 
-  const loadStatus = useCallback(
-    async (type: 'GET_ZERO_INDEXER_NODES' | 'REFRESH_ZERO_INDEXER_NODES') => {
-      const currentRevision = ++revision.current
-      if (type === 'REFRESH_ZERO_INDEXER_NODES') setRefreshing(true)
-      try {
-        const response = await chrome.runtime.sendMessage({ type })
-        const { status: nextStatus } = readStatus(response)
-        if (mounted.current && currentRevision === revision.current) {
-          setStatus(nextStatus)
-          setLoadError(null)
-        }
-      } catch (error) {
-        if (mounted.current && currentRevision === revision.current) {
-          setLoadError(error instanceof Error ? error.message : 'Could not load broadcast nodes')
-        }
-      } finally {
-        if (mounted.current && currentRevision === revision.current) setRefreshing(false)
+  const loadStatus = useCallback(async (refresh = false) => {
+    const currentRevision = ++revision.current
+    if (refresh) setRefreshing(true)
+    try {
+      const next = await sendZeroIndexerNodeMessage({
+        type: 'GET_ZERO_INDEXER_NODE_STATUS',
+        refresh
+      })
+      if (mounted.current && currentRevision === revision.current) {
+        setStatus(next.status)
+        setError(next.warning ?? null)
       }
-    },
-    []
-  )
+    } catch (cause) {
+      if (mounted.current && currentRevision === revision.current) {
+        setError(cause instanceof Error ? cause.message : 'Could not load broadcast nodes')
+      }
+    } finally {
+      if (mounted.current && currentRevision === revision.current) setRefreshing(false)
+    }
+  }, [])
 
   useEffect(() => {
     mounted.current = true
-    let active = true
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (
         (area === 'local' &&
           (changes[ZERO_INDEXER_NODES_STORAGE_KEY] ||
-            changes[SETTINGS_STORAGE_KEY] ||
-            changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY])) ||
+            changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY] ||
+            changes[SETTINGS_STORAGE_KEY])) ||
         (area === 'session' && changes[ZERO_INDEXER_RUNTIME_STORAGE_KEY])
-      ) {
-        void loadStatus('GET_ZERO_INDEXER_NODES')
-      }
+      )
+        void loadStatus()
     }
     chrome.storage.onChanged.addListener(onChanged)
-    void loadStatus('GET_ZERO_INDEXER_NODES').then(() => {
-      if (active) void loadStatus('REFRESH_ZERO_INDEXER_NODES')
-    })
+    void loadStatus()
     return () => {
-      active = false
       mounted.current = false
       revision.current += 1
       chrome.storage.onChanged.removeListener(onChanged)
     }
   }, [loadStatus])
 
-  const runMutation = async (
+  const mutate = async (
     key: string,
-    message: NodeMessage
+    message:
+      | { type: 'SELECT_ZERO_INDEXER_NODE'; endpointId: string | null }
+      | { type: 'ADD_CUSTOM_ZERO_INDEXER_NODE'; label: string; url: string }
+      | { type: 'REMOVE_CUSTOM_ZERO_INDEXER_NODE'; endpointId: string }
   ): Promise<{ saved: boolean; error?: string }> => {
     if (applyingKey) return { saved: false }
     ++revision.current
     setApplyingKey(key)
-    setActionError(null)
+    setError(null)
     try {
-      const { status: nextStatus, warning } = readStatus(await chrome.runtime.sendMessage(message))
+      const next = await sendZeroIndexerNodeMessage(message)
       if (mounted.current) {
         ++revision.current
-        setStatus(nextStatus)
-        setLoadError(null)
-        if (warning) setActionError(warning)
+        setStatus(next.status)
+        setError(next.warning ?? null)
       }
       return { saved: true }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not update broadcast node'
-      if (mounted.current && key !== 'add') setActionError(message)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Could not update broadcast node'
+      if (mounted.current && key !== 'add') setError(message)
       return { saved: false, error: message }
     } finally {
       if (mounted.current) {
@@ -142,42 +117,35 @@ export function ZeroIndexerNodes() {
     }
   }
 
-  const handleAdd = async () => {
-    const url = customUrl.trim()
-    if (!url) {
-      setUrlError('Enter a URL')
-      return
-    }
-    try {
-      if (new URL(url).protocol !== 'https:') throw new Error('Enter an HTTPS URL')
-    } catch {
-      setUrlError('Enter a valid HTTPS URL')
+  const addNode = async () => {
+    const validationError = validateZeroIndexerNodeUrl(url)
+    if (validationError) {
+      setUrlError(validationError)
       return
     }
     setNameError(null)
     setUrlError(null)
     setAddError(null)
-    const result = await runMutation('add', {
+    const result = await mutate('add', {
       type: 'ADD_CUSTOM_ZERO_INDEXER_NODE',
-      label: customName.trim(),
-      url
+      label: name.trim(),
+      url: url.trim()
     })
     if (result.saved) {
       setAddOpen(false)
-      setCustomName('')
-      setCustomUrl('')
-    } else {
-      if (result.error) {
-        if (/name/i.test(result.error)) setNameError(result.error)
-        else if (/url|https|endpoint|node/i.test(result.error)) setUrlError(result.error)
-        else setAddError(result.error)
-      }
+      setName('')
+      setUrl('')
+    } else if (result.error) {
+      const field = zeroIndexerNodeErrorField(result.error)
+      if (field === 'name') setNameError(result.error)
+      else if (field === 'url') setUrlError(result.error)
+      else setAddError(result.error)
     }
   }
 
-  const handleRemove = async () => {
+  const removeNode = async () => {
     if (!deleteTarget) return
-    const result = await runMutation('remove', {
+    const result = await mutate('remove', {
       type: 'REMOVE_CUSTOM_ZERO_INDEXER_NODE',
       endpointId: deleteTarget.id
     })
@@ -187,28 +155,24 @@ export function ZeroIndexerNodes() {
   const endpoints = status ? [...status.managedEndpoints, ...status.customEndpoints] : []
   const preferred = endpoints.find(endpoint => endpoint.id === status?.orderedEndpointIds[0])
 
-  const renderNode = (endpoint: ZeroIndexerEndpoint, index: number, custom = false) => {
+  const renderNode = (endpoint: ZeroIndexerEndpoint, custom: boolean, index: number) => {
     const selected = status?.mode === 'fixed' && status.selectedEndpointId === endpoint.id
-    const probe = status?.probes[endpoint.id]
     return (
       <div
         key={endpoint.id}
-        className={cn('flex min-h-11 items-center gap-1', index > 0 && 'border-t border-white/10')}
+        className={cn('flex min-h-11 items-center', index > 0 && 'border-t border-white/10')}
       >
         <button
           type="button"
           aria-pressed={selected}
-          disabled={!!applyingKey}
+          disabled={applyingKey !== null}
           onClick={() =>
-            void runMutation(endpoint.id, {
-              type: 'SELECT_ZERO_INDEXER_NODE',
-              endpointId: endpoint.id
-            })
+            void mutate(endpoint.id, { type: 'SELECT_ZERO_INDEXER_NODE', endpointId: endpoint.id })
           }
-          className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5 disabled:cursor-not-allowed"
+          className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5 disabled:opacity-50"
         >
           <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2 text-sm text-white">
+            <span className="flex items-center gap-2 text-sm">
               <span className="truncate">{endpoint.label}</span>
               {custom && (
                 <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
@@ -216,13 +180,16 @@ export function ZeroIndexerNodes() {
                 </span>
               )}
             </span>
-            <span className="block truncate text-xs text-muted">
+            <span className="block truncate font-mono text-[11px] text-muted">
               {endpoint.url.replace(/^https:\/\//, '')}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-3">
-            <PingBadge result={probe} />
-            <SelectionIndicator selected={!!selected} applying={applyingKey === endpoint.id} />
+            <EndpointLatencyBadge result={status?.probes[endpoint.id]} />
+            <EndpointSelectionIndicator
+              selected={!!selected}
+              applying={applyingKey === endpoint.id}
+            />
           </span>
         </button>
         {custom && (
@@ -230,11 +197,11 @@ export function ZeroIndexerNodes() {
             type="button"
             title={`Remove ${endpoint.label}`}
             aria-label={`Remove ${endpoint.label}`}
-            disabled={!!applyingKey}
+            disabled={applyingKey !== null}
             onClick={() => setDeleteTarget(endpoint)}
-            className="mr-2 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+            className="mr-2 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted hover:text-danger disabled:opacity-50"
           >
-            <Icon icon="lucide:trash-2" width={16} height={16} />
+            <Icon icon="lucide:trash-2" className="size-4" />
           </button>
         )}
       </div>
@@ -247,119 +214,87 @@ export function ZeroIndexerNodes() {
         title="ZeroIndexer Nodes"
         showBack
         action={{
+          ariaLabel: 'Refresh broadcast nodes',
           icon: (
-            <Icon
-              icon="lucide:refresh-cw"
-              width={14}
-              height={14}
-              className={cn(refreshing && 'animate-spin')}
-            />
+            <Icon icon="lucide:refresh-cw" className={cn('size-4', refreshing && 'animate-spin')} />
           ),
           onClick: () => {
-            if (!refreshing) void loadStatus('REFRESH_ZERO_INDEXER_NODES')
+            if (!refreshing) void loadStatus(true)
           }
         }}
       />
-      <div className="page-content space-y-6">
-        {loadError && (
+      <div className="page-content space-y-5 pb-5">
+        {error && status && (
           <p role="alert" className="text-xs text-danger">
-            {loadError}
+            {error}
           </p>
         )}
-        {actionError && (
-          <p role="alert" className="text-xs text-danger">
-            {actionError}
-          </p>
-        )}
-        {!status && loadError ? (
-          <Button variant="outline" onClick={() => void loadStatus('GET_ZERO_INDEXER_NODES')}>
-            Retry
-          </Button>
-        ) : !status ? (
-          <div className="flex items-center gap-2 text-sm text-muted">
-            <Icon icon="lucide:loader-2" width={16} height={16} className="animate-spin" />
-            Loading nodes
-          </div>
+        {!status ? (
+          error ? (
+            <InlineError message={error} onRetry={() => void loadStatus()} retrying={refreshing} />
+          ) : (
+            <ListSkeleton rows={4} label="Loading broadcast nodes" card />
+          )
         ) : (
           <>
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="flex size-6 items-center justify-center overflow-hidden rounded-full bg-white">
-                  <ChainIcon chain="zec" className="size-6" />
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-base font-medium text-white">
-                    {status.network === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-                  </h2>
-                </div>
-              </div>
-              <div className="overflow-hidden rounded-xl bg-card">
+            <section className="space-y-2">
+              <h2 className="px-1 text-xs text-muted">
+                {status.network === 'testnet' ? 'Zcash Testnet' : 'Zcash Mainnet'}
+              </h2>
+              <div className="overflow-hidden rounded-lg border border-white/10 bg-card">
                 <button
                   type="button"
                   aria-pressed={status.mode === 'auto'}
-                  disabled={!!applyingKey}
+                  disabled={applyingKey !== null}
                   onClick={() =>
-                    void runMutation('auto', { type: 'SELECT_ZERO_INDEXER_NODE', endpointId: null })
+                    void mutate('auto', { type: 'SELECT_ZERO_INDEXER_NODE', endpointId: null })
                   }
-                  className="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5 disabled:cursor-not-allowed"
+                  className="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/5 disabled:opacity-50"
                 >
                   <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-2 text-sm text-white">
+                    <span className="flex items-center gap-2 text-sm">
                       <span>Auto</span>
                       {status.mode === 'auto' && preferred && (
-                        <span
-                          title={`Preferred: ${preferred.label}`}
-                          className="truncate rounded bg-primary/10 px-1.5 py-0.5 text-[10px] leading-4 text-primary"
-                        >
-                          {preferred.label}
-                        </span>
+                        <span className="truncate text-xs text-muted">{preferred.label}</span>
                       )}
-                    </span>
-                    <span className="block truncate text-xs text-muted">
-                      Automatically switches when a node is unavailable
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-3">
                     {status.mode === 'auto' && (
-                      <PingBadge result={preferred ? status.probes[preferred.id] : undefined} />
+                      <EndpointLatencyBadge
+                        result={preferred ? status.probes[preferred.id] : undefined}
+                      />
                     )}
-                    <SelectionIndicator
+                    <EndpointSelectionIndicator
                       selected={status.mode === 'auto'}
                       applying={applyingKey === 'auto'}
                     />
                   </span>
                 </button>
-                {status.managedEndpoints.map((endpoint, index) => renderNode(endpoint, index + 1))}
+                {status.managedEndpoints.map((endpoint, index) =>
+                  renderNode(endpoint, false, index + 1)
+                )}
               </div>
             </section>
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-medium text-white">Custom Nodes</h2>
+            <section className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <h2 className="text-xs text-muted">Custom Nodes</h2>
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-8"
-                  onClick={() => {
-                    setNameError(null)
-                    setUrlError(null)
-                    setAddError(null)
-                    setAddOpen(true)
-                  }}
+                  disabled={applyingKey !== null}
+                  onClick={() => setAddOpen(true)}
                 >
-                  <Icon icon="lucide:plus" width={15} height={15} />
-                  Add
+                  <Icon icon="lucide:plus" className="size-4" /> Add
                 </Button>
               </div>
-              {status.customEndpoints.length > 0 ? (
-                <div className="overflow-hidden rounded-xl bg-card">
+              {status.customEndpoints.length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-white/10 bg-card">
                   {status.customEndpoints.map((endpoint, index) =>
-                    renderNode(endpoint, index, true)
+                    renderNode(endpoint, true, index)
                   )}
                 </div>
-              ) : (
-                <p className="rounded-xl bg-card/45 px-4 py-3 text-xs text-muted">
-                  No custom endpoints saved.
-                </p>
               )}
             </section>
           </>
@@ -369,29 +304,25 @@ export function ZeroIndexerNodes() {
       <Dialog open={addOpen} onOpenChange={open => !applyingKey && setAddOpen(open)}>
         <DialogContent position="bottom">
           <DialogHeader>
-            <DialogTitle>Add Custom Node</DialogTitle>
-            <DialogDescription className="sr-only">Save a custom broadcast node</DialogDescription>
+            <DialogTitle>Add Broadcast Node</DialogTitle>
+            <DialogDescription className="sr-only">Add a private broadcast node</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div>
               <Input
                 aria-label="Node name"
                 aria-invalid={!!nameError}
-                aria-describedby={nameError ? 'zero-indexer-name-error' : undefined}
-                value={customName}
+                value={name}
+                maxLength={64}
                 onChange={event => {
-                  setCustomName(event.target.value)
+                  setName(event.target.value)
                   setNameError(null)
                 }}
                 placeholder="Name (optional)"
-                className="h-11 rounded-xl"
+                className="h-11 rounded-lg"
               />
               {nameError && (
-                <p
-                  id="zero-indexer-name-error"
-                  role="alert"
-                  className="mt-1 px-1 text-xs text-danger"
-                >
+                <p role="alert" className="mt-1 text-xs text-danger">
                   {nameError}
                 </p>
               )}
@@ -400,22 +331,17 @@ export function ZeroIndexerNodes() {
               <Input
                 aria-label="Node URL"
                 aria-invalid={!!urlError}
-                aria-describedby={urlError ? 'zero-indexer-url-error' : undefined}
                 type="url"
-                value={customUrl}
+                value={url}
                 onChange={event => {
-                  setCustomUrl(event.target.value)
+                  setUrl(event.target.value)
                   setUrlError(null)
                 }}
                 placeholder="https://example.com"
-                className="h-11 rounded-xl font-mono text-xs"
+                className="h-11 rounded-lg font-mono text-xs"
               />
               {urlError && (
-                <p
-                  id="zero-indexer-url-error"
-                  role="alert"
-                  className="mt-1 px-1 text-xs text-danger"
-                >
+                <p role="alert" className="mt-1 text-xs text-danger">
                   {urlError}
                 </p>
               )}
@@ -429,8 +355,8 @@ export function ZeroIndexerNodes() {
           <Button
             className="h-11 w-full"
             isLoading={applyingKey === 'add'}
-            disabled={!customUrl.trim()}
-            onClick={() => void handleAdd()}
+            disabled={applyingKey !== null || !url.trim()}
+            onClick={() => void addNode()}
           >
             Verify & Add
           </Button>
@@ -443,16 +369,16 @@ export function ZeroIndexerNodes() {
       >
         <DialogContent position="bottom">
           <DialogHeader>
-            <DialogTitle>Remove Custom Node?</DialogTitle>
+            <DialogTitle>Remove {deleteTarget?.label}?</DialogTitle>
             <DialogDescription>
               {status?.mode === 'fixed' && status.selectedEndpointId === deleteTarget?.id
-                ? 'Node selection will return to Auto.'
-                : 'Remove this node from your saved list?'}
+                ? 'Auto will be selected.'
+                : 'Remove this saved node?'}
             </DialogDescription>
           </DialogHeader>
-          {actionError && (
+          {error && (
             <p role="alert" className="text-xs text-danger">
-              {actionError}
+              {error}
             </p>
           )}
           <div className="flex gap-3">
@@ -468,7 +394,8 @@ export function ZeroIndexerNodes() {
               variant="destructive"
               className="h-11 flex-1"
               isLoading={applyingKey === 'remove'}
-              onClick={() => void handleRemove()}
+              disabled={applyingKey !== null}
+              onClick={() => void removeNode()}
             >
               Remove
             </Button>

@@ -3,9 +3,16 @@ import type { Transaction, TransactionStatus, TransactionType } from '@/types'
 import type { TxFailureReason } from '@/types/wallet'
 import { isIntentsSettledTransaction } from '@/lib/cross-chain-transaction'
 import { INTENTS_PROGRESS_STALE_MS } from '@/lib/intents-progress'
+import type { TransactionPresentationTone } from '@/lib/transaction-status-presentation'
 
-export type TransactionStatusTone = 'success' | 'warning' | 'error'
-export type TransactionResultStatus = 'loading' | 'submitted' | 'success' | 'warning' | 'failed'
+export type TransactionStatusTone = TransactionPresentationTone
+export type TransactionResultStatus =
+  | 'loading'
+  | 'submitted'
+  | 'neutral'
+  | 'success'
+  | 'warning'
+  | 'failed'
 
 export const TRANSACTION_PENDING_MESSAGE =
   'Transaction status is not available yet. Check Activity before trying again.'
@@ -55,16 +62,16 @@ const INTENTS_STATUS_COPY: Record<
     label: 'Deposit confirming',
     compactLabel: 'Deposit confirming',
     description: 'Deposit transaction detected and waiting for confirmation.',
-    tone: 'warning',
+    tone: 'neutral',
     resultStatus: 'loading'
   }),
   PENDING_DEPOSIT: () => ({
     title: 'Waiting for deposit confirmation',
-    label: 'Waiting for deposit confirmation',
+    label: 'Waiting for deposit',
     compactLabel: 'Waiting for deposit',
     description:
       'Waiting for the deposit transaction to be detected or confirmed. Do not send again.',
-    tone: 'warning',
+    tone: 'neutral',
     resultStatus: 'loading'
   }),
   INCOMPLETE_DEPOSIT: () => ({
@@ -73,27 +80,28 @@ const INTENTS_STATUS_COPY: Record<
     compactLabel: 'Deposit amount too low',
     description: 'The received amount is below the quoted amount. Wait for the refund status.',
     tone: 'warning',
-    resultStatus: 'loading'
+    resultStatus: 'warning'
   }),
   PROCESSING: ({ actionName }) => ({
     title: `${actionName} Processing`,
-    label: 'Processing',
-    compactLabel: 'Processing',
+    label: 'Intents processing',
+    compactLabel: 'Intents processing',
     description: `Your ${actionName.toLowerCase()} is being processed.`,
-    tone: 'warning',
+    tone: 'neutral',
     resultStatus: 'loading'
   }),
   SUCCESS: ({ actionName }) => {
-    const description = `Your ${actionName.toLowerCase()} completed successfully.`
+    const label = `${actionName} complete`
+    const description = 'The transfer is complete. The balance may take time to update.'
     return {
-      title: `${actionName} Complete`,
-      label: 'Success',
-      compactLabel: 'Success',
+      title: label,
+      label,
+      compactLabel: 'Completed',
       description,
       tone: 'success',
       resultStatus: 'success',
       notification: {
-        title: `${actionName} completed`,
+        title: label,
         message: description
       }
     }
@@ -106,8 +114,8 @@ const INTENTS_STATUS_COPY: Record<
       label: 'Refund submitted',
       compactLabel: 'Refund submitted',
       description,
-      tone: 'warning',
-      resultStatus: 'warning',
+      tone: 'neutral',
+      resultStatus: 'submitted',
       notification: {
         title: `${actionName} refund submitted`,
         message: description
@@ -153,7 +161,7 @@ export function getIntentsStatusCopy(
     const description = hasDestinationTxHash
       ? remainingConfirmations == null
         ? 'Waiting for destination Zcash confirmations.'
-        : `Destination ZEC will be final after ${remainingConfirmations} more block${
+        : `Destination ZEC will be spendable after ${remainingConfirmations} more block${
             remainingConfirmations === 1 ? '' : 's'
           }.`
       : 'Waiting for the destination Zcash transaction.'
@@ -163,7 +171,7 @@ export function getIntentsStatusCopy(
       label,
       compactLabel: label,
       description,
-      tone: 'warning',
+      tone: 'neutral',
       resultStatus: 'loading',
       notification: {
         title: `${actionName} Processing`,
@@ -192,37 +200,36 @@ const LOCAL_TRANSACTION_STATUS_COPY: Record<
   TransactionStatusCopy
 > = {
   replaced: {
-    label: 'Replaced by speed-up',
-    compactLabel: 'Replaced by speed-up',
-    tone: 'warning'
+    label: 'Replaced',
+    compactLabel: 'Replaced',
+    tone: 'neutral'
   },
   refund_submitted: {
     label: 'Refund submitted',
     compactLabel: 'Refund submitted',
-    tone: 'warning'
+    tone: 'neutral'
   },
   status_unavailable: {
     label: 'Status unavailable',
     compactLabel: 'Status unavailable',
-    description: 'No status update for over 1 hour',
     tone: 'warning'
   },
   preparing: {
-    label: 'Preparing transaction',
-    compactLabel: 'Preparing transaction',
+    label: 'Preparing',
+    compactLabel: 'Preparing',
     description: 'Preparing and submitting the transaction.',
-    tone: 'warning'
+    tone: 'neutral'
   },
   waiting_confirmation: {
-    label: 'Waiting for confirmation',
-    compactLabel: 'Waiting for confirmation',
+    label: 'Submitted',
+    compactLabel: 'Submitted',
     description: 'The transaction was submitted and is waiting for confirmation.',
-    tone: 'warning'
+    tone: 'neutral'
   },
   destination_sent: {
-    label: 'Destination sent',
-    compactLabel: 'Destination sent',
-    tone: 'warning'
+    label: 'Submitted',
+    compactLabel: 'Submitted',
+    tone: 'neutral'
   },
   confirmed: {
     label: 'Confirmed',
@@ -238,14 +245,8 @@ const LOCAL_TRANSACTION_STATUS_COPY: Record<
     label: 'Pending',
     compactLabel: 'Pending',
     description: 'Waiting for the transaction status to update.',
-    tone: 'warning'
+    tone: 'neutral'
   }
-}
-
-export function getLocalTransactionStatusCopy(
-  key: Exclude<LocalTransactionStatusKey, 'confirming'>
-): TransactionStatusCopy {
-  return LOCAL_TRANSACTION_STATUS_COPY[key]
 }
 
 function getConfirmingStatusCopy(
@@ -253,8 +254,14 @@ function getConfirmingStatusCopy(
   confirmations?: number,
   requiredConfirmations?: number
 ): TransactionStatusCopy {
-  const label = formatConfirmingStatus(type, confirmations, requiredConfirmations)
-  return { label, compactLabel: label, tone: 'warning' }
+  const label =
+    confirmations != null &&
+    requiredConfirmations != null &&
+    requiredConfirmations > 0 &&
+    confirmations >= requiredConfirmations
+      ? `Finalizing · ${confirmations} confirmations`
+      : formatConfirmingStatus(type, confirmations, requiredConfirmations)
+  return { label, compactLabel: label, tone: 'neutral' }
 }
 
 export function formatConfirmingStatus(
@@ -322,13 +329,12 @@ export function getStandardTransactionResultCopy(
   step: 'idle' | 'pending' | 'submitted' | 'confirming' | 'success' | 'failed',
   options: { shield?: boolean; error?: string | null } = {}
 ): TransactionResultCopy {
-  const transactionName = options.shield ? 'Shield Transaction' : 'Transaction'
   switch (step) {
     case 'idle':
       return { title: '', description: '', resultStatus: 'loading' }
     case 'pending':
       return {
-        title: options.error ? 'Transaction Pending' : 'Building Transaction',
+        title: options.error ? 'Transaction Pending' : 'Transaction Submitting',
         description: options.error || '',
         resultStatus: options.error ? 'warning' : 'loading'
       }
@@ -342,11 +348,11 @@ export function getStandardTransactionResultCopy(
       return {
         title: 'Confirming',
         description: '',
-        resultStatus: 'submitted'
+        resultStatus: 'loading'
       }
     case 'success':
       return {
-        title: `${transactionName} Confirmed`,
+        title: options.shield ? 'Shield Confirmed' : 'Transaction Confirmed',
         description: '',
         resultStatus: 'success'
       }
@@ -410,7 +416,8 @@ export function getZcashConfirmationNotificationCopy(
   status: 'success' | 'failed',
   reason: 'confirmed' | 'expired' | 'timeout'
 ): StatusNotificationCopy {
-  const actionName = type === 'shield' ? 'Shielding' : 'Transaction'
+  const actionName =
+    type === 'shield' ? 'Shielding' : type === 'unshield' ? 'Unshielding' : 'Transaction'
   const action = actionName.toLowerCase()
   if (status === 'success') {
     return {

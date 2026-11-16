@@ -4,6 +4,7 @@ import { PageHeader } from '../../components/common/PageHeader'
 import { WordTag } from '../../components/seed-phrase/WordTag'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
+import { shuffleVerificationWordOptions } from '../../utils/recovery-phrase-confirmation'
 
 export function ConfirmPhrasePage() {
   const { navigate } = useNavigate()
@@ -11,19 +12,19 @@ export function ConfirmPhrasePage() {
     flowMode,
     seedPhrase,
     verificationIndices,
-    selectedWords,
-    selectedWordIndices,
+    selectedVerificationWords,
     error,
     isLoading,
-    selectWord,
+    selectVerificationWord,
     verifySeedPhrase,
     createWallet,
     addWallet
   } = useOnboardingStore()
 
-  const shuffledWords = useMemo(() => {
-    return seedPhrase.map((word, index) => ({ word, index })).sort(() => Math.random() - 0.5)
-  }, [seedPhrase])
+  const shuffledWordOptions = useMemo(() => {
+    if (seedPhrase.length === 0 || verificationIndices.length !== 2) return []
+    return shuffleVerificationWordOptions(seedPhrase, verificationIndices)
+  }, [seedPhrase, verificationIndices])
 
   const ordinalSuffix = (n: number) => {
     const s = ['th', 'st', 'nd', 'rd']
@@ -65,24 +66,25 @@ export function ConfirmPhrasePage() {
         </p>
 
         <div className="flex flex-wrap gap-2">
-          {shuffledWords.map(({ word, index }) => (
+          {shuffledWordOptions.map(option => (
             <WordTag
-              key={`${word}-${index}`}
-              word={word}
-              selected={selectedWordIndices.includes(index)}
-              disabled={isLoading}
-              onClick={() => selectWord(index)}
+              key={option.optionId}
+              word={option.word}
+              selected={selectedVerificationWords.some(
+                selected => selected.optionId === option.optionId
+              )}
+              onClick={() => !isLoading && selectVerificationWord(option)}
             />
           ))}
         </div>
 
-        {selectedWords.length > 0 && (
+        {selectedVerificationWords.length > 0 && (
           <div className="mt-4 p-3 bg-card rounded-lg">
             <p className="text-sm text-muted mb-2">Selected words:</p>
             <div className="flex gap-2">
-              {selectedWords.map((word, i) => (
-                <span key={i} className="text-foreground font-mono">
-                  {ordinalSuffix(verificationIndices[i] + 1)}: {word}
+              {selectedVerificationWords.map((option, index) => (
+                <span key={option.optionId} className="text-foreground font-mono">
+                  {ordinalSuffix(verificationIndices[index] + 1)}: {option.word}
                 </span>
               ))}
             </div>
@@ -102,7 +104,7 @@ export function ConfirmPhrasePage() {
       <div className="px-5 pb-5">
         <Button
           onClick={handleNext}
-          disabled={selectedWords.length !== 2 || isLoading}
+          disabled={selectedVerificationWords.length !== 2 || isLoading}
           className="w-full h-[45px]"
         >
           {isLoading ? 'Creating...' : 'Confirm'}

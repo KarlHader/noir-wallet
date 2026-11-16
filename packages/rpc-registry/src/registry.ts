@@ -120,10 +120,10 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       ]
     },
     chain('eip155:1', MAINNET, 'Ethereum', 'eth', EVM, [
-      ['thirdweb', 'thirdweb', 'https://1.rpc.thirdweb.com/6d01b8eb7af1b24d9301b6e96a925d6d'],
       ['deltarpc', 'DeltaRPC', 'https://eth.deltarpc.com'],
       ['publicnode', 'PublicNode', 'https://ethereum-rpc.publicnode.com'],
-      ['drpc', 'dRPC', 'https://eth.drpc.org']
+      ['drpc', 'dRPC', 'https://eth.drpc.org'],
+      ['blockpi', 'BlockPI', 'https://ethereum.public.blockpi.network/v1/rpc/public']
     ]),
     chain('eip155:56', MAINNET, 'BNB Chain', 'bnb', EVM, [
       ['official', 'BNB Chain', 'https://bsc-dataseed.bnbchain.org'],
@@ -131,10 +131,10 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       ['official-2', 'BNB Chain 2', 'https://bsc-dataseed2.bnbchain.org']
     ]),
     chain('eip155:42161', MAINNET, 'Arbitrum', 'arb', EVM, [
-      ['thirdweb', 'thirdweb', 'https://42161.rpc.thirdweb.com/6d01b8eb7af1b24d9301b6e96a925d6d'],
       ['drpc', 'dRPC', 'https://arbitrum.drpc.org'],
       ['publicnode', 'PublicNode', 'https://arbitrum-one-rpc.publicnode.com'],
-      ['zan', 'ZAN', 'https://api.zan.top/arb-one']
+      ['zan', 'ZAN', 'https://api.zan.top/arb-one'],
+      ['official', 'Arbitrum', 'https://arb1.arbitrum.io/rpc']
     ]),
     chain('eip155:8453', MAINNET, 'Base', 'base', EVM, [
       ['official', 'Base', 'https://mainnet.base.org'],
@@ -256,7 +256,7 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
 
 export const ZCASH_RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: RPC_REGISTRY.updatedAt,
+  updatedAt: '2026-10-09T02:55:00.000Z',
   chains: RPC_REGISTRY.chains.filter(chain => chain.id === 'zcash-mainnet')
 }
 

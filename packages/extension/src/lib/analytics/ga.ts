@@ -8,6 +8,7 @@ declare const __APP_VERSION__: string
 import { GA_CONFIG } from '@/config/analytics'
 import { DedupPromise } from '@/lib/async-utils'
 import { sanitizeAnalyticsMetadata } from './payload'
+import { getAnalyticsCountry, stopAnalyticsCountryLookup } from './geo'
 import { isGoogleAnalyticsEnabled } from './preferences'
 import {
   decideAnalyticsSession,
@@ -20,6 +21,8 @@ const clientIdLoad = new DedupPromise<string>()
 let cachedSessionState: AnalyticsSessionState | null | undefined
 let sessionQueue: Promise<unknown> = Promise.resolve()
 const activeRequests = new Set<AbortController>()
+const GA_FETCH_TIMEOUT_MS = 10_000
+let reportingGeneration = 0
 const SESSION_STATE_STORAGE_KEY = 'ga_session_state'
 const LEGACY_SESSION_STORAGE_KEY = 'ga_session_id'
 
@@ -37,8 +40,10 @@ interface GaDeliveryContext {
 
 interface GaDevice {
   browser?: string
+  browser_version?: string
   category?: string
   language?: string
+  model?: string
   operating_system?: string
 }
 
@@ -48,6 +53,11 @@ export function buildGaEventParams(
   context: GaEventContext
 ): Record<string, string | number | boolean> {
   const sanitized = sanitizeAnalyticsMetadata(params)
+  delete sanitized.browser
+  delete sanitized.browser_major_version
+  delete sanitized.device_category
+  delete sanitized.language
+  delete sanitized.operating_system
   if (!context.foreground) {
     delete sanitized.engagement_time_msec
   } else if (name === 'page_view') {
@@ -56,12 +66,19 @@ export function buildGaEventParams(
     sanitized.engagement_time_msec = Math.max(100, measured)
   }
 
-  return {
-    ...sanitized,
+  const common = {
     ...(context.sessionId ? { session_id: context.sessionId } : {}),
     extension_version: context.appVersion,
     build_channel: context.buildChannel,
     network_mode: context.networkMode
+  }
+  return {
+    ...common,
+    ...Object.fromEntries(
+      Object.entries(sanitized)
+        .filter(([key]) => !(key in common))
+        .slice(0, 25 - Object.keys(common).length)
+    )
   }
 }
 
@@ -69,8 +86,11 @@ export function buildGaDevice(params: Record<string, unknown> | undefined): GaDe
   const sanitized = sanitizeAnalyticsMetadata(params)
   return {
     ...(typeof sanitized.browser === 'string' ? { browser: sanitized.browser } : {}),
+    ...(typeof sanitized.browser_major_version === 'string'
+      ? { browser_version: sanitized.browser_major_version }
+      : {}),
     ...(typeof sanitized.device_category === 'string'
-      ? { category: sanitized.device_category }
+      ? { category: sanitized.device_category, model: 'Desktop' }
       : {}),
     ...(typeof sanitized.language === 'string' ? { language: sanitized.language } : {}),
     ...(typeof sanitized.operating_system === 'string'
@@ -96,6 +116,14 @@ export async function getClientId(): Promise<string> {
       cachedClientId = id
     }
   )
+}
+
+/** Keep the persisted install ID intact while using GA's dotted numeric ID format. */
+export async function toGaClientId(installId: string): Promise<string> {
+  if (/^\d+\.\d+$/.test(installId)) return installId
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(installId))
+  const words = new DataView(digest)
+  return `${words.getUint32(0, false)}.${words.getUint32(4, false)}`
 }
 
 function runSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -146,9 +174,10 @@ export async function sendGaEvent(
   params?: Record<string, unknown>,
   delivery: GaDeliveryContext = { foreground: false }
 ): Promise<void> {
+  const currentGeneration = reportingGeneration
   let abortController: AbortController | null = null
+  let timeout: ReturnType<typeof setTimeout> | null = null
   try {
-    if (!__ANALYTICS_REPORTING_ENABLED__) return
     if (!GA_CONFIG.apiSecret) return
     if (!(await isGoogleAnalyticsEnabled())) return
 
@@ -156,9 +185,16 @@ export async function sendGaEvent(
     const sid = await getGaSessionId(delivery.foreground)
     if (!(await isGoogleAnalyticsEnabled())) return
 
+    const country = await getAnalyticsCountry()
+    if (!(await isGoogleAnalyticsEnabled())) return
+
+    const gaClientId = await toGaClientId(clientId)
+    if (currentGeneration !== reportingGeneration || !(await isGoogleAnalyticsEnabled())) return
+
     const body = {
-      client_id: clientId,
+      client_id: gaClientId,
       device: buildGaDevice(params),
+      ...(country ? { user_location: { country_id: country } } : {}),
       events: [
         {
           name,
@@ -173,8 +209,12 @@ export async function sendGaEvent(
       ]
     }
 
+    if (currentGeneration !== reportingGeneration || !(await isGoogleAnalyticsEnabled())) return
+
     abortController = new AbortController()
     activeRequests.add(abortController)
+    const requestController = abortController
+    timeout = setTimeout(() => requestController.abort(), GA_FETCH_TIMEOUT_MS)
     await fetch(
       `${GA_CONFIG.endpoint}?measurement_id=${GA_CONFIG.measurementId}&api_secret=${GA_CONFIG.apiSecret}`,
       {
@@ -187,6 +227,7 @@ export async function sendGaEvent(
   } catch {
     // Silently ignore analytics errors
   } finally {
+    if (timeout) clearTimeout(timeout)
     if (abortController) {
       activeRequests.delete(abortController)
     }
@@ -195,6 +236,8 @@ export async function sendGaEvent(
 
 /** Aborts active Google reports and clears their session after GA is disabled. */
 export async function stopGoogleAnalyticsReporting(): Promise<void> {
+  reportingGeneration++
+  const countryCleanup = stopAnalyticsCountryLookup()
   for (const request of activeRequests) {
     request.abort()
   }
@@ -203,4 +246,5 @@ export async function stopGoogleAnalyticsReporting(): Promise<void> {
     cachedSessionState = null
     await chrome.storage.session.remove([SESSION_STATE_STORAGE_KEY, LEGACY_SESSION_STORAGE_KEY])
   })
+  await countryCleanup
 }

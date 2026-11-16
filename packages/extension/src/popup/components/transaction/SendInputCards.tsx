@@ -1,27 +1,202 @@
 import { Icon } from '@iconify/react'
 import type { ReactNode } from 'react'
-import { safeBig } from '@/lib/big'
-import Big from '@/lib/big'
-import { formatNumber, formatPrice } from '@/lib/format'
+import { formatSortAddress } from '@/lib/format'
+import { formatTokenQuantity } from '@/lib/number-format'
+import { formatSendFiatValue } from './send-input-model'
 import { cn } from '@/lib/utils'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { Input } from '../ui/input'
 import { BalanceHelp } from './BalanceHelp'
+import { safeBig } from '@/lib/big'
+import { Tooltip } from '../ui/tooltip'
+import { BalanceDomainTabs, type BalanceDomain } from '../account/BalanceDomainTabs'
+import { Button } from '../ui/button'
+import { Switch } from '../ui/switch'
 
-function fiatValue(amount: string, priceUsd: string | number | null | undefined): string | null {
-  const normalizedAmount = amount.replace(/,/g, '') || '0'
-  const normalizedPrice = String(priceUsd ?? '')
-  const decimalPattern = /^(?:\d+(?:\.\d*)?|\.\d+)$/
-  if (
-    !decimalPattern.test(normalizedAmount) ||
-    !decimalPattern.test(normalizedPrice) ||
-    safeBig(normalizedPrice).lte(0)
-  ) {
-    return null
-  }
-  return formatPrice(safeBig(normalizedAmount).times(normalizedPrice).toFixed(), {
-    showSign: true
-  })
+export function SendFormView({
+  children,
+  footer,
+  ...source
+}: Parameters<typeof SendSourceSection>[0] & {
+  readonly children?: ReactNode
+  readonly footer: ReactNode
+}) {
+  return (
+    <>
+      <div className="page-content min-h-0 space-y-4 !px-4 pt-4">
+        <SendSourceSection {...source} />
+        {children}
+      </div>
+      <div className="page-footer">{footer}</div>
+    </>
+  )
+}
+
+export function SendFormActions({
+  onContinue,
+  disabled,
+  loading,
+  privacy
+}: {
+  readonly onContinue: () => void
+  readonly disabled: boolean
+  readonly loading?: boolean
+  readonly privacy?: { readonly checked: boolean; readonly onChange: () => void }
+}) {
+  return (
+    <>
+      {privacy && (
+        <button
+          type="button"
+          role="switch"
+          aria-label="Send privately"
+          aria-checked={privacy.checked}
+          onClick={privacy.onChange}
+          className={cn(
+            'mb-4 flex w-full items-center justify-center gap-1.5 text-sm',
+            privacy.checked ? 'text-primary' : 'text-muted'
+          )}
+        >
+          <Icon icon="lucide:shield-check" width={15} height={15} className="text-primary" />
+          Send privately
+          <Switch checked={privacy.checked} size="sm" />
+        </button>
+      )}
+      <Button
+        size="wallet"
+        className="h-[45px] w-full"
+        disabled={disabled}
+        isLoading={loading}
+        onClick={onContinue}
+      >
+        Continue
+      </Button>
+    </>
+  )
+}
+
+/** Keeps source and recipient headings at the same visual level. */
+export function SendFieldLabel({ children }: { readonly children: ReactNode }) {
+  return (
+    <span className="shrink-0 font-sans text-sm font-medium text-wallet-field-label">
+      {children}
+    </span>
+  )
+}
+
+function SendSourceSection({
+  amountInput,
+  assetSelector,
+  balance,
+  maxButton,
+  recipient,
+  sourceAction,
+  domain,
+  availableDomains,
+  onDomainChange,
+  disabled
+}: {
+  readonly amountInput: ReactNode
+  readonly assetSelector: ReactNode
+  readonly balance: ReactNode
+  readonly maxButton: ReactNode
+  readonly recipient?: ReactNode
+  readonly sourceAction?: ReactNode
+  readonly domain: BalanceDomain
+  readonly availableDomains: readonly BalanceDomain[]
+  readonly onDomainChange: (domain: BalanceDomain) => void
+  readonly disabled?: boolean
+}) {
+  return (
+    <>
+      <div className="order-1 flex min-w-0 items-center justify-between gap-3">
+        <SendFieldLabel>Send from</SendFieldLabel>
+        {sourceAction ?? (
+          <BalanceDomainTabs
+            value={domain}
+            available={availableDomains}
+            onChange={onDomainChange}
+            disabled={disabled}
+          />
+        )}
+      </div>
+      {recipient}
+      <div className="order-3">
+        <SendAmountRow
+          amountInput={amountInput}
+          assetSelector={assetSelector}
+          balance={balance}
+          maxButton={maxButton}
+        />
+      </div>
+    </>
+  )
+}
+
+function SendAmountRow({
+  amountInput,
+  assetSelector,
+  balance,
+  maxButton
+}: {
+  readonly amountInput: ReactNode
+  readonly assetSelector: ReactNode
+  readonly balance: ReactNode
+  readonly maxButton: ReactNode
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex min-w-0 items-center justify-between gap-2 text-sm">
+        <SendFieldLabel>Amount</SendFieldLabel>
+        <div className="flex max-w-[70%] min-w-0 items-center gap-2 text-xs text-muted">
+          <span className="min-w-0 truncate">Bal. {balance}</span>
+          <span className="shrink-0">{maxButton}</span>
+        </div>
+      </div>
+      <div className="flex min-h-14 min-w-0 items-center gap-2 rounded-[10px] border border-white/10 bg-wallet-surface px-4 focus-within:border-white/35">
+        <div className="min-w-0 flex-1">{amountInput}</div>
+        <div className="min-w-0 max-w-[55%] shrink-0">{assetSelector}</div>
+      </div>
+    </div>
+  )
+}
+
+export function SendRouteInfoCard({
+  provider,
+  fee,
+  feeLabel = 'Fee',
+  time,
+  extra
+}: {
+  readonly provider?: ReactNode
+  readonly fee?: ReactNode
+  readonly feeLabel?: string
+  readonly time?: ReactNode
+  readonly extra?: ReactNode
+}) {
+  return (
+    <div className="space-y-3 rounded-lg border border-white/15 px-4 py-4 text-xs">
+      {provider !== undefined && (
+        <div className="flex min-h-5 items-center justify-between gap-3">
+          <span className="text-muted">Provider</span>
+          <div className="min-w-0 text-right">{provider}</div>
+        </div>
+      )}
+      {fee !== undefined && (
+        <div className="flex min-h-5 items-center justify-between gap-3">
+          <span className="text-muted">{feeLabel}</span>
+          <div className="min-w-0 text-right">{fee}</div>
+        </div>
+      )}
+      {time !== undefined && (
+        <div className="flex min-h-5 items-center justify-between gap-3">
+          <span className="text-muted">Est. time</span>
+          <div className="min-w-0 text-right">{time}</div>
+        </div>
+      )}
+      {extra}
+    </div>
+  )
 }
 
 export function SendRecipientInputCard({
@@ -29,30 +204,68 @@ export function SendRecipientInputCard({
   value,
   onChange,
   placeholder,
+  label = 'Send to',
+  hideLabel = false,
+  variant = 'outline',
+  invalid = false,
   autoFocus = false,
+  disabled = false,
+  selectedName,
   onSelectRecipient
 }: {
   readonly id: string
   readonly value: string
   readonly onChange: (value: string) => void
   readonly placeholder: string
+  readonly label?: string
+  readonly hideLabel?: boolean
+  readonly variant?: 'outline' | 'filled'
+  readonly invalid?: boolean
   readonly autoFocus?: boolean
+  readonly disabled?: boolean
+  readonly selectedName?: string
   readonly onSelectRecipient?: () => void
 }) {
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="block px-1 text-xs font-medium text-foreground/80">
-        Send to
-      </label>
+    <div className={cn('space-y-1.5', variant === 'filled' && 'space-y-3')}>
+      <div
+        className={cn(
+          'flex min-w-0 items-center justify-between gap-2',
+          hideLabel && !selectedName && 'sr-only'
+        )}
+      >
+        <label
+          htmlFor={id}
+          className={cn(
+            'block px-1 text-xs font-medium text-foreground/80',
+            variant === 'filled' && 'px-0 text-sm leading-[18px]',
+            hideLabel && 'sr-only'
+          )}
+        >
+          {label}
+        </label>
+        {selectedName && (
+          <span className="min-w-0 truncate text-xs text-muted" title={selectedName}>
+            {selectedName}
+          </span>
+        )}
+      </div>
       <Input
         id={id}
-        aria-label="Send To"
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        disabled={disabled}
         value={value}
         onChange={event => onChange(event.target.value)}
         placeholder={placeholder}
         autoFocus={autoFocus}
         spellCheck={false}
-        className="h-14 rounded-2xl border-white/35 bg-transparent px-4 pr-16 font-mono text-sm shadow-none focus-visible:border-white/60 focus-visible:ring-0"
+        className={cn(
+          'pr-16 font-mono text-sm shadow-none focus-visible:ring-0',
+          variant === 'filled'
+            ? 'h-[54px] rounded-[10px] border border-white/10 bg-wallet-surface pl-[15px] pr-12 font-sans font-medium leading-[18px]'
+            : 'h-14 rounded-2xl border-white/35 bg-transparent pl-4 focus-visible:border-white/60'
+        )}
         endContent={
           onSelectRecipient ? (
             <button
@@ -60,15 +273,41 @@ export function SendRecipientInputCard({
               aria-label="Select Recipient"
               title="Select Recipient"
               onClick={onSelectRecipient}
-              className="flex size-10 items-center justify-center rounded-xl bg-white/10 text-foreground transition-colors hover:bg-white/15"
+              className={cn(
+                'flex size-10 items-center justify-center rounded-xl text-foreground transition-colors',
+                variant === 'filled'
+                  ? 'bg-transparent hover:text-primary'
+                  : 'bg-white/10 hover:bg-white/15'
+              )}
             >
               <Icon icon="lucide:book-user" width={22} height={22} />
             </button>
           ) : undefined
         }
-        classNames={{ endContent: 'right-3' }}
+        classNames={{ endContent: variant === 'filled' ? 'right-[3px]' : 'right-3' }}
       />
     </div>
+  )
+}
+
+export function SendRecipientAddress({
+  address,
+  name
+}: {
+  readonly address: string
+  readonly name?: string
+}) {
+  return (
+    <span className="block min-w-0 text-right">
+      {name && (
+        <span className="block truncate font-sans text-foreground" title={name}>
+          {name}
+        </span>
+      )}
+      <span className="block truncate font-mono text-xs text-muted" title={address}>
+        {formatSortAddress(address)}
+      </span>
+    </span>
   )
 }
 
@@ -77,112 +316,210 @@ export function SendAmountInputCard({
   value,
   onChange,
   available,
-  pending,
+  availableLabel = 'Available',
   symbol,
   priceUsd,
   onMax,
   maxDisabled = false,
+  maxDisabledReason,
   maxLoading = false,
   maxSelected = false,
   invalid = false,
   error,
+  pending,
+  showBalanceHelp = false,
+  headerAction,
+  hero = false,
+  inline = false,
+  variant = 'outline',
   title,
   testId,
-  headerAction,
-  footerAction
+  disabled = false
 }: {
   readonly ariaLabel: string
   readonly value: string
   readonly onChange: (value: string) => void
   readonly available: string
-  readonly pending?: string
+  readonly availableLabel?: 'Available' | 'Balance'
   readonly symbol: string
   readonly priceUsd?: string | number | null
   readonly onMax?: () => void
   readonly maxDisabled?: boolean
+  readonly maxDisabledReason?: string
   readonly maxLoading?: boolean
   readonly maxSelected?: boolean
   readonly invalid?: boolean
   readonly error?: string
+  readonly pending?: string
+  readonly showBalanceHelp?: boolean
+  readonly headerAction?: ReactNode
+  readonly hero?: boolean
+  readonly inline?: boolean
+  readonly variant?: 'outline' | 'filled'
   readonly title?: string
   readonly testId?: string
-  readonly headerAction?: ReactNode
-  readonly footerAction?: ReactNode
+  readonly disabled?: boolean
 }) {
-  const amountFiat = fiatValue(value, priceUsd)
-  const availableFiat = fiatValue(available, priceUsd)
-  const hasPending = pending != null && safeBig(pending).gt(0)
+  const amountFiat = formatSendFiatValue(value, priceUsd)
+  const availableFiat = formatSendFiatValue(available, priceUsd)
+  const filled = variant === 'filled' && !hero
+  const maxButton = onMax ? (
+    <button
+      type="button"
+      aria-label="Max"
+      aria-pressed={maxSelected}
+      onClick={onMax}
+      disabled={maxDisabled || Boolean(maxDisabledReason) || maxLoading}
+      className={cn(
+        'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
+        filled && 'h-7 min-w-10 rounded-md bg-white/10 px-2 text-xs text-muted',
+        maxSelected && 'bg-primary/15 text-primary'
+      )}
+    >
+      {maxLoading ? (
+        <Icon icon="lucide:loader-circle" width={15} height={15} className="animate-spin" />
+      ) : (
+        'Max'
+      )}
+    </button>
+  ) : null
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex min-h-7 items-center justify-between gap-3 px-1">
-        <span className="text-xs font-medium text-foreground/80">Amount</span>
-        {headerAction}
-      </div>
+    <div
+      data-testid={filled ? (testId ?? 'send-amount-card') : undefined}
+      className={cn('space-y-1.5', filled && 'space-y-3', (hero || inline) && 'w-full space-y-0')}
+    >
       <div
-        data-testid={testId ?? 'send-amount-card'}
-        title={title}
         className={cn(
-          'rounded-2xl border px-4 py-3 transition-colors focus-within:border-white/60',
-          invalid ? 'border-warning' : 'border-white/35'
+          'flex items-center justify-between gap-2 px-1',
+          filled && 'px-0',
+          (hero || inline) && 'sr-only'
         )}
       >
-        <div className="flex min-h-8 items-center justify-between gap-3">
+        <span
+          className={cn(
+            'text-xs font-medium text-foreground/80',
+            filled && 'text-sm leading-[18px] text-muted'
+          )}
+        >
+          Amount
+        </span>
+        {filled ? (
+          <span className="min-w-0 truncate text-right text-xs text-muted" title={available}>
+            {availableLabel === 'Available' ? 'Bal.' : availableLabel}{' '}
+            <strong className="font-medium text-foreground">
+              {formatTokenQuantity(available)} {symbol}
+            </strong>
+            {showBalanceHelp && <BalanceHelp kind="available" />}
+          </span>
+        ) : (
+          headerAction
+        )}
+      </div>
+      <div
+        data-testid={filled ? undefined : (testId ?? 'send-amount-card')}
+        title={title}
+        className={cn(
+          'min-h-[92px] rounded-2xl border px-4 py-3 transition-colors focus-within:border-white/60',
+          hero || inline
+            ? 'min-h-10 rounded-none border-transparent px-0 py-0 focus-within:border-transparent'
+            : filled
+              ? cn(
+                  'flex min-h-[55px] items-center rounded-[10px] border-white/10 bg-wallet-surface px-[15px] py-0',
+                  invalid && 'border-warning'
+                )
+              : invalid
+                ? 'border-warning'
+                : 'border-white/35'
+        )}
+      >
+        <div
+          className={cn(
+            'flex min-h-8 items-center justify-between gap-3',
+            hero && 'relative',
+            filled && 'w-full'
+          )}
+        >
           <input
             aria-label={ariaLabel}
+            disabled={disabled}
             inputMode="decimal"
             value={value}
+            title={hero && value ? value : undefined}
+            style={
+              hero
+                ? {
+                    fontSize: `${Math.max(16, Math.min(40, Math.floor(500 / Math.max(1, value.length))))}px`
+                  }
+                : undefined
+            }
             aria-invalid={invalid || undefined}
             aria-describedby={error ? `${testId ?? 'send-amount-card'}-error` : undefined}
             onChange={event => onChange(event.target.value)}
             placeholder="0"
-            className="min-w-0 flex-1 bg-transparent font-mono text-2xl text-foreground outline-none placeholder:text-muted/45"
+            className={cn(
+              'min-w-0 flex-1 bg-transparent font-sans text-2xl tabular-nums text-foreground outline-none placeholder:text-muted/45',
+              filled && 'h-[53px] text-base font-medium',
+              hero && 'h-12 px-2 text-center text-[40px] font-semibold leading-tight',
+              inline && 'h-12 text-xl font-medium'
+            )}
           />
           {onMax && (
-            <button
-              type="button"
-              aria-label="Max"
-              aria-pressed={maxSelected}
-              onClick={onMax}
-              disabled={maxDisabled || maxLoading}
-              className={cn(
-                'flex h-8 min-w-12 items-center justify-center rounded-full bg-white/12 px-3 text-sm text-foreground transition-colors hover:bg-white/18 disabled:pointer-events-none disabled:opacity-40',
-                maxSelected && 'bg-primary/15 text-primary'
-              )}
-            >
-              {maxLoading ? (
-                <Icon icon="lucide:loader-circle" width={15} height={15} className="animate-spin" />
+            <span className={cn('shrink-0', hero && 'absolute right-0 top-1/2 -translate-y-1/2')}>
+              {maxDisabledReason ? (
+                <Tooltip content={maxDisabledReason}>
+                  <span
+                    tabIndex={0}
+                    aria-label={maxDisabledReason}
+                    className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    {maxButton}
+                  </span>
+                </Tooltip>
               ) : (
-                'Max'
+                maxButton
               )}
-            </button>
+            </span>
           )}
         </div>
-        <div className="mt-2.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-end gap-3 text-xs leading-4">
-          <span className="flex min-w-0 items-center gap-2 text-muted">
-            <span className="shrink-0">{amountFiat ? `~${amountFiat}` : '-'}</span>
-            {footerAction}
-          </span>
-          <span className="min-w-0 text-right">
-            <span className="flex min-w-0 items-center justify-end gap-1 text-muted">
-              <span className="truncate">
-                Available <strong className="font-semibold text-foreground">{available}</strong>{' '}
+        <div
+          className={cn(
+            'mt-3 flex min-w-0 items-center justify-between gap-3 text-xs leading-4',
+            (hero || inline || filled) && 'hidden'
+          )}
+        >
+          <span className="shrink-0 text-muted">{amountFiat ? `~${amountFiat}` : '—'}</span>
+          <div className="min-w-0 text-right text-muted">
+            <div className="flex min-w-0 items-center justify-end gap-1">
+              <span className="min-w-0 break-all" title={available}>
+                {availableLabel}{' '}
+                <strong className="font-semibold text-foreground">
+                  {formatTokenQuantity(available)}
+                </strong>{' '}
                 {symbol}
                 {availableFiat ? ` (${availableFiat})` : ''}
               </span>
-              <BalanceHelp kind="available" />
-            </span>
-            {hasPending && (
-              <span className="mt-0.5 flex min-w-0 items-center justify-end gap-1 text-[11px] text-muted">
-                <span className="truncate">
-                  {formatNumber(pending, { rm: Big.roundDown })} {symbol} pending
+              {showBalanceHelp && <BalanceHelp kind="available" />}
+            </div>
+            {pending != null && safeBig(pending).gt(0) && (
+              <div className="mt-0.5 flex min-w-0 items-center justify-end gap-1 text-[11px]">
+                <span className="min-w-0 break-all" title={pending}>
+                  {formatTokenQuantity(pending)} {symbol} pending
                 </span>
                 <BalanceHelp kind="pending" />
-              </span>
+              </div>
             )}
-          </span>
+          </div>
         </div>
       </div>
+      {filled && pending != null && safeBig(pending).gt(0) && (
+        <div className="flex min-w-0 items-center justify-end gap-1 text-[11px] text-muted">
+          <span className="min-w-0 break-all" title={pending}>
+            {formatTokenQuantity(pending)} {symbol} pending
+          </span>
+          <BalanceHelp kind="pending" />
+        </div>
+      )}
       {error && (
         <p
           id={`${testId ?? 'send-amount-card'}-error`}
@@ -196,29 +533,108 @@ export function SendAmountInputCard({
   )
 }
 
-export function SendAssetHeader({ symbol, networkName }: { symbol: string; networkName: string }) {
+export function SendAssetHeader({
+  assetId,
+  symbol,
+  icon,
+  networkName,
+  nativeChain,
+  blockchain,
+  onSelectAsset,
+  variant = 'default'
+}: {
+  readonly assetId?: string
+  readonly symbol: string
+  readonly icon?: string
+  readonly networkName: string
+  readonly nativeChain?: 'zcash' | 'bitcoin' | 'solana' | 'near'
+  readonly blockchain?: string
+  readonly onSelectAsset?: () => void
+  readonly variant?: 'default' | 'compact' | 'pill'
+}) {
+  if (variant === 'pill') {
+    const content = (
+      <>
+        <TokenIcon
+          assetId={assetId}
+          symbol={symbol}
+          icon={icon}
+          nativeChain={nativeChain}
+          blockchain={blockchain ?? nativeChain}
+          size={24}
+        />
+        <span className="max-w-28 truncate">{symbol}</span>
+        {onSelectAsset && <Icon icon="lucide:chevron-down" width={15} height={15} />}
+      </>
+    )
+    return (
+      <div data-testid="send-asset-header" className="flex justify-center">
+        {onSelectAsset ? (
+          <button
+            type="button"
+            onClick={onSelectAsset}
+            aria-label={`Select send asset, ${symbol} on ${networkName}`}
+            className="inline-flex h-9 max-w-full items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-sm font-medium hover:bg-wallet-selected"
+          >
+            {content}
+          </button>
+        ) : (
+          <div className="inline-flex h-9 max-w-full items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-sm font-medium">
+            {content}
+          </div>
+        )}
+      </div>
+    )
+  }
+  if (variant === 'compact') {
+    const content = (
+      <>
+        <TokenIcon
+          assetId={assetId}
+          symbol={symbol}
+          icon={icon}
+          nativeChain={nativeChain}
+          blockchain={blockchain ?? nativeChain}
+          size={42}
+        />
+        <span className="flex max-w-full items-center gap-1.5 text-base font-medium leading-5">
+          <span className="max-w-32 truncate">{symbol}</span>
+          {onSelectAsset && <Icon icon="lucide:chevron-down" width={15} height={15} />}
+        </span>
+      </>
+    )
+    return (
+      <div data-testid="send-asset-header" className="flex justify-center py-1">
+        {onSelectAsset ? (
+          <button
+            type="button"
+            onClick={onSelectAsset}
+            aria-label={`Select send asset, ${symbol} on ${networkName}`}
+            className="flex min-w-0 flex-col items-center gap-2 text-center"
+          >
+            {content}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-col items-center gap-2 text-center">{content}</div>
+        )}
+      </div>
+    )
+  }
   return (
     <div
       data-testid="send-asset-header"
       className="flex flex-col items-center pb-0.5 pt-0.5 text-center"
     >
-      <TokenIcon symbol={symbol} size={48} />
+      <TokenIcon
+        assetId={assetId}
+        symbol={symbol}
+        icon={icon}
+        nativeChain={nativeChain}
+        blockchain={blockchain ?? nativeChain}
+        size={48}
+      />
       <p className="mt-2 text-base font-semibold leading-5">{symbol}</p>
       <p className="mt-0.5 text-[11px] leading-4 text-muted">{networkName}</p>
-    </div>
-  )
-}
-
-export function SendNetworkFeeCard({ children }: { readonly children: ReactNode }) {
-  return (
-    <div
-      data-testid="send-network-fee"
-      className="flex min-h-12 items-center justify-between gap-4 rounded-xl bg-card/45 px-4 py-3"
-    >
-      <span className="shrink-0 text-xs text-muted">Network fee</span>
-      <div className="flex min-w-0 items-center gap-1.5 text-right text-xs font-medium">
-        {children}
-      </div>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Icon } from '@iconify/react'
+import { PageHeader } from '../../components/common/PageHeader'
 import { Button } from '../../components/ui/button'
 import WalletIcon from '@/images/wallet-icon.svg'
 import { useNavigate } from '../../provider/Router'
@@ -21,7 +22,7 @@ export function WelcomePage() {
 
   const handleImportWallet = () => {
     setMode('import')
-    navigate('/onboarding/import')
+    navigate('/onboarding/import-word-count')
   }
 
   const handleConnectHardware = () => {
@@ -31,9 +32,7 @@ export function WelcomePage() {
 
   return (
     <div className="page-container">
-      <header className="h-14 flex items-center justify-center shadow-header">
-        <span className="text-base font-medium">Noir Wallet</span>
-      </header>
+      <PageHeader />
 
       <div className="flex-1 flex flex-col items-center px-5">
         <div className="my-20">

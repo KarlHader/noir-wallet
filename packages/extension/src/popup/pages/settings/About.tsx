@@ -2,6 +2,7 @@ import { Icon } from '@iconify/react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { useNavigate } from '../../provider/Router'
 import WalletIcon from '@/images/wallet-icon.svg'
+import { license } from '../../../../package.json'
 import { SocialLinks } from '@/popup/components/common/SocialLinks'
 
 declare const __APP_VERSION__: string
@@ -48,7 +49,7 @@ export function About() {
             <div className="p-4 bg-card rounded-xl">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted">License</span>
-                <span className="text-sm">MIT</span>
+                <span className="text-sm">{license}</span>
               </div>
             </div>
 

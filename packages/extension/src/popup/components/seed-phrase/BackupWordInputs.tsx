@@ -1,52 +1,47 @@
-import { useId } from 'react'
 import { Input } from '../ui/input'
-import type { useWalletBackupVerification } from '../../hooks/useWalletBackupVerification'
+import { Skeleton } from '../ui/skeleton'
+import type { useWalletBackupVerification } from '@/popup/hooks/useWalletBackupVerification'
 
-type VerificationFields = Pick<
-  ReturnType<typeof useWalletBackupVerification>,
-  'wordIndices' | 'words' | 'error' | 'isPreparing' | 'isSubmitting' | 'setWord'
->
-
-export function BackupWordInputs({ verification }: { verification: VerificationFields }) {
-  const id = useId()
-  const { wordIndices, words, error, isPreparing, isSubmitting, setWord } = verification
-  const errorId = `${id}-error`
-
+export function BackupWordInputs({
+  verification
+}: {
+  verification: ReturnType<typeof useWalletBackupVerification>
+}) {
+  if (verification.isPreparing)
+    return (
+      <div role="status" aria-label="Preparing backup check" className="space-y-4">
+        {Array.from({ length: 2 }, (_, index) => (
+          <div key={index} className="space-y-2">
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-[46px] w-full rounded-lg" />
+          </div>
+        ))}
+      </div>
+    )
+  if (!verification.wordIndices) {
+    return verification.error ? (
+      <p role="alert" className="text-sm text-danger">
+        {verification.error}
+      </p>
+    ) : null
+  }
   return (
     <div className="space-y-4">
-      {isPreparing && (
-        <p role="status" className="text-sm text-muted">
-          Preparing confirmation...
-        </p>
-      )}
-      {wordIndices && (
-        <div className="grid grid-cols-2 gap-3">
-          {wordIndices.map((index, position) => (
-            <div key={index}>
-              <label htmlFor={`${id}-${position}`} className="block text-sm text-muted mb-2">
-                Word #{index + 1}
-              </label>
-              <Input
-                id={`${id}-${position}`}
-                type="password"
-                value={words[position]}
-                onChange={event => setWord(position, event.target.value)}
-                autoComplete="off"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                disabled={isSubmitting}
-                aria-invalid={Boolean(error)}
-                aria-describedby={error ? errorId : undefined}
-                className="h-[46px] rounded-xl"
-              />
-            </div>
-          ))}
-        </div>
-      )}
-      {error && (
-        <p id={errorId} role="alert" className="text-sm text-destructive">
-          {error}
+      {verification.wordIndices.map((wordIndex, position) => (
+        <label key={wordIndex} className="block text-sm text-muted">
+          Word {wordIndex + 1}
+          <Input
+            value={verification.words[position]}
+            onChange={event => verification.setWord(position, event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="mt-2 h-[46px]"
+          />
+        </label>
+      ))}
+      {verification.error && (
+        <p role="alert" className="text-sm text-danger">
+          {verification.error}
         </p>
       )}
     </div>

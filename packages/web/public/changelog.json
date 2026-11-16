@@ -1,6 +1,18 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "2.0.0": {
+      "notifyUpdate": false,
+      "changes": [
+        "Shield native Zcash and NEAR Confidential balances, and track external Shield deposits.",
+        "Choose Directly or Cluster routes for Public and Private transfers, with fees and arrival estimates.",
+        "Review optional private routes for supported dApp transfers from Private accounts.",
+        "Navigate redesigned Home, assets, accounts, Send, Receive, Move, Swap, and Settings.",
+        "View Total, Public, Shield, and Private balances and activity in separate asset views.",
+        "Use network-aware wallet import and contacts, with clearer Private-address copying.",
+        "Improved Max, fee quotes, balance loading, and recovery of interrupted transactions."
+      ]
+    },
     "1.0.41": {
       "notifyUpdate": true,
       "changes": [

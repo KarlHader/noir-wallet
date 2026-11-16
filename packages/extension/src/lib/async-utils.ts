@@ -69,6 +69,20 @@ export class DedupPromise<T> {
   }
 }
 
+/** Runs each task after the previous task settles, including after failures. */
+export class SerialTaskQueue {
+  private tail: Promise<void> = Promise.resolve()
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.catch(() => {}).then(operation)
+    this.tail = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+}
+
 /**
  * Promise-based readiness flag that allows waiting for
  * a condition to be marked as ready.
@@ -164,6 +178,20 @@ export class TimeoutError extends Error {
     super(message)
     this.name = 'TimeoutError'
   }
+}
+
+/** Ends a polling delay early on cancellation; the caller handles the abort. */
+export function waitForDelayOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, ms)
+    signal?.addEventListener('abort', finish, { once: true })
+  })
 }
 
 /**

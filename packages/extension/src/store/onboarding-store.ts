@@ -1,26 +1,42 @@
 import { create } from 'zustand'
-import { accountManager } from '@/core/wallet/account-manager'
-import { MnemonicGenerator } from '@/core/wallet/mnemonic'
-import { WALLET_CONFIG } from '@/config/wallet'
+import { WALLET_CONFIG, type MnemonicWordCount } from '@/config/wallet'
+import { getNewPasswordValidationError } from '@/core/wallet/password-policy'
 import { ANALYTICS_EVENTS, sendAnalyticsEvent } from '@/lib/analytics'
-import { DedupPromise, LatestAttempt } from '@/lib/async-utils'
+import { LatestAttempt } from '@/lib/async-utils'
 import { classifyError } from '@/lib/errors'
+import {
+  generateAddWalletMnemonic,
+  provisionAdditionalSoftwareWallet
+} from '@/core/wallet/software-wallet-provisioning-client'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
+import { rehydrateWalletStore } from '@/store/wallet-store'
+import {
+  selectDifferentVerificationIndices,
+  type VerificationWordOption
+} from '@/popup/utils/recovery-phrase-confirmation'
+import { DEFAULT_ACCOUNT_NAME, normalizeAccountName } from '@/core/wallet/account-name'
+import type { ImportZcashHistorySelection } from '@/popup/services/import-zcash-history-selection'
+import type { AccountNetworkFamily } from '@/core/wallet/account-network-selection'
 
 export type FlowMode = 'onboarding' | 'addWallet'
 
 export interface OnboardingState {
   flowMode: FlowMode
   mode: 'create' | 'import'
+  mnemonicWordCount: MnemonicWordCount
+  accountName: string
   password: string
   confirmPassword: string
   seedPhrase: string[]
   importedSeedPhrase: string
+  selectedNetworkFamilies: readonly AccountNetworkFamily[] | null
   birthdayHeight?: number
+  importZcashHistorySelection: ImportZcashHistorySelection | null
   agreedToTerms: boolean
   acknowledgedWarning: boolean
-  selectedWords: string[]
-  selectedWordIndices: number[]
+  selectedVerificationWords: VerificationWordOption[]
   verificationIndices: number[]
+  verificationPassed: boolean
   isLoading: boolean
   error: string | null
   dappRequestId: string | null // Store dApp request ID if onboarding triggered by dApp
@@ -28,15 +44,20 @@ export interface OnboardingState {
   // Actions
   setFlowMode: (mode: FlowMode) => void
   setMode: (mode: 'create' | 'import') => void
+  setMnemonicWordCount: (wordCount: MnemonicWordCount) => void
+  setAccountName: (accountName: string) => void
   setPassword: (password: string) => void
   setConfirmPassword: (password: string) => void
   setSeedPhrase: (phrase: string[]) => void
   setImportedSeedPhrase: (phrase: string) => void
+  setSelectedNetworkFamilies: (families: readonly AccountNetworkFamily[] | null) => void
   setBirthdayHeight: (height?: number) => void
+  setImportZcashHistorySelection: (selection: ImportZcashHistorySelection | null) => void
   setAgreedToTerms: (agreed: boolean) => void
   setAcknowledgedWarning: (acknowledged: boolean) => void
   setDappRequestId: (requestId: string | null) => void
-  selectWord: (index: number) => void
+  selectVerificationWord: (option: VerificationWordOption) => void
+  refreshVerificationChallenge: () => void
   generateSeedPhrase: () => Promise<void>
   verifySeedPhrase: () => boolean
   createWallet: () => Promise<boolean>
@@ -49,149 +70,225 @@ export interface OnboardingState {
 
 const importAttempts = new LatestAttempt()
 const generationAttempts = new LatestAttempt()
-let generationDedup = new DedupPromise<void>()
 
-function invalidateGeneration() {
-  generationAttempts.invalidate()
-  // A cancelled flow must not share the previous flow's pending generation.
-  generationDedup = new DedupPromise<void>()
+function clearedSensitiveOnboardingState(): Pick<
+  OnboardingState,
+  | 'password'
+  | 'confirmPassword'
+  | 'seedPhrase'
+  | 'importedSeedPhrase'
+  | 'selectedNetworkFamilies'
+  | 'birthdayHeight'
+  | 'importZcashHistorySelection'
+  | 'acknowledgedWarning'
+  | 'selectedVerificationWords'
+  | 'verificationIndices'
+  | 'verificationPassed'
+  | 'isLoading'
+  | 'error'
+> {
+  return {
+    password: '',
+    confirmPassword: '',
+    seedPhrase: [],
+    importedSeedPhrase: '',
+    selectedNetworkFamilies: null,
+    birthdayHeight: undefined,
+    importZcashHistorySelection: null,
+    acknowledgedWarning: false,
+    selectedVerificationWords: [],
+    verificationIndices: [],
+    verificationPassed: false,
+    isLoading: false,
+    error: null
+  }
 }
 
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   flowMode: 'onboarding',
   mode: 'create',
+  mnemonicWordCount: WALLET_CONFIG.MNEMONIC_LENGTH,
+  accountName: DEFAULT_ACCOUNT_NAME,
   password: '',
   confirmPassword: '',
   seedPhrase: [],
   importedSeedPhrase: '',
+  selectedNetworkFamilies: null,
   birthdayHeight: undefined,
+  importZcashHistorySelection: null,
   agreedToTerms: false,
   acknowledgedWarning: false,
-  selectedWords: [],
-  selectedWordIndices: [],
+  selectedVerificationWords: [],
   verificationIndices: [],
+  verificationPassed: false,
   isLoading: false,
   error: null,
   dappRequestId: null,
 
-  setFlowMode: flowMode => set({ flowMode }),
-  setMode: mode => set({ mode }),
-  setPassword: password => set({ password, error: null }),
-  setConfirmPassword: confirmPassword => set({ confirmPassword, error: null }),
-  setSeedPhrase: seedPhrase => {
-    invalidateGeneration()
+  setFlowMode: flowMode => {
+    generationAttempts.invalidate()
     set({
-      seedPhrase,
-      selectedWords: [],
-      selectedWordIndices: [],
+      flowMode,
+      seedPhrase: [],
+      verificationPassed: false,
+      selectedNetworkFamilies: null,
+      importZcashHistorySelection: null
+    })
+  },
+  setMode: mode => {
+    generationAttempts.invalidate()
+    set({ mode, seedPhrase: [], verificationPassed: false, selectedNetworkFamilies: null })
+  },
+  setMnemonicWordCount: mnemonicWordCount => {
+    importAttempts.invalidate()
+    generationAttempts.invalidate()
+    set({
+      mnemonicWordCount,
+      seedPhrase: [],
+      importedSeedPhrase: '',
+      selectedNetworkFamilies: null,
+      selectedVerificationWords: [],
       verificationIndices: [],
-      acknowledgedWarning: false,
+      verificationPassed: false,
+      birthdayHeight: undefined,
+      importZcashHistorySelection: null,
       isLoading: false,
       error: null
     })
   },
+  setAccountName: accountName => set({ accountName, error: null }),
+  setPassword: password => set({ password, error: null }),
+  setConfirmPassword: confirmPassword => set({ confirmPassword, error: null }),
+  setSeedPhrase: seedPhrase => set({ seedPhrase, verificationPassed: false }),
   setImportedSeedPhrase: importedSeedPhrase => {
     importAttempts.invalidate()
     set({
       importedSeedPhrase,
+      selectedNetworkFamilies:
+        importedSeedPhrase === get().importedSeedPhrase ? get().selectedNetworkFamilies : null,
       error: null,
       isLoading: false
     })
   },
+  setSelectedNetworkFamilies: selectedNetworkFamilies => set({ selectedNetworkFamilies }),
   setBirthdayHeight: birthdayHeight => set({ birthdayHeight }),
+  setImportZcashHistorySelection: importZcashHistorySelection =>
+    set({ importZcashHistorySelection }),
   setAgreedToTerms: agreedToTerms => set({ agreedToTerms, error: null }),
   setAcknowledgedWarning: acknowledgedWarning => set({ acknowledgedWarning }),
   setDappRequestId: dappRequestId => set({ dappRequestId }),
 
-  selectWord: index =>
+  selectVerificationWord: option =>
     set(state => {
+      const isDistractor =
+        option.optionId < 0 &&
+        option.optionId >= 2 - state.seedPhrase.length &&
+        typeof option.word === 'string' &&
+        option.word.length > 0 &&
+        !state.seedPhrase.includes(option.word)
       if (
-        state.isLoading ||
-        !Number.isInteger(index) ||
-        index < 0 ||
-        index >= state.seedPhrase.length
+        !Number.isSafeInteger(option.optionId) ||
+        (!isDistractor && state.seedPhrase[option.optionId] !== option.word)
       ) {
         return state
       }
-      const selectedWordIndices = state.selectedWordIndices.includes(index)
-        ? state.selectedWordIndices.filter(selectedIndex => selectedIndex !== index)
-        : [...state.selectedWordIndices, index].slice(0, 2)
-      return {
-        selectedWordIndices,
-        selectedWords: selectedWordIndices.map(selectedIndex => state.seedPhrase[selectedIndex]),
-        error: null
-      }
+
+      const isSelected = state.selectedVerificationWords.some(
+        selected => selected.optionId === option.optionId
+      )
+      const selectedVerificationWords = isSelected
+        ? state.selectedVerificationWords.filter(selected => selected.optionId !== option.optionId)
+        : [...state.selectedVerificationWords, option].slice(0, 2)
+      return { selectedVerificationWords, verificationPassed: false, error: null }
     }),
 
-  generateSeedPhrase: () =>
-    generationDedup.run(async () => {
-      const attemptId = generationAttempts.begin()
-      set({ isLoading: true, error: null })
-      try {
-        const words = await MnemonicGenerator.generateSecurePhrase()
-        if (!generationAttempts.isCurrent(attemptId)) return
-        if (
-          !Array.isArray(words) ||
-          words.length !== WALLET_CONFIG.MNEMONIC_LENGTH ||
-          !Array.from(words).every(word => typeof word === 'string' && /^\S+$/.test(word))
-        ) {
-          throw new Error('Failed to generate seed phrase')
-        }
-        const random = crypto.getRandomValues(new Uint32Array(2))
-        const first = random[0] % words.length
-        const second = random[1] % (words.length - 1)
-        const indices = [first, second >= first ? second + 1 : second].sort((a, b) => a - b)
-        set({
-          seedPhrase: words,
-          verificationIndices: indices,
-          selectedWords: [],
-          selectedWordIndices: [],
-          acknowledgedWarning: false,
-          isLoading: false
-        })
-      } catch (err) {
-        if (!generationAttempts.isCurrent(attemptId)) return
-        set({ isLoading: false, error: classifyError(err).userMessage })
+  refreshVerificationChallenge: () =>
+    set(state => ({
+      verificationIndices: selectDifferentVerificationIndices(
+        state.seedPhrase.length,
+        state.verificationIndices
+      ),
+      selectedVerificationWords: [],
+      verificationPassed: false,
+      error: null
+    })),
+
+  generateSeedPhrase: async () => {
+    if (get().isLoading) return
+    const attempt = generationAttempts.begin()
+    set({ isLoading: true, error: null })
+    try {
+      const { flowMode, mnemonicWordCount, password } = get()
+      const words =
+        flowMode === 'addWallet'
+          ? await generateAddWalletMnemonic(mnemonicWordCount)
+          : await zcashWalletRuntimeClient.generatePrimaryMnemonic(mnemonicWordCount, password)
+      if (words.length !== mnemonicWordCount) {
+        throw new Error('Secure module returned an unexpected recovery phrase length')
       }
-    }),
+      if (!generationAttempts.isCurrent(attempt)) return
+      set({
+        seedPhrase: words,
+        verificationIndices: [],
+        selectedVerificationWords: [],
+        verificationPassed: false,
+        isLoading: false
+      })
+    } catch (err) {
+      if (!generationAttempts.isCurrent(attempt)) return
+      set({ isLoading: false, error: (err as Error).message || 'Failed to generate seed phrase' })
+    }
+  },
 
   verifySeedPhrase: () => {
-    const { verificationIndices, seedPhrase, selectedWords } = get()
+    const { verificationIndices, seedPhrase, selectedVerificationWords } = get()
     const isCorrect =
       verificationIndices.length === 2 &&
       verificationIndices[0] !== verificationIndices[1] &&
-      Number.isInteger(verificationIndices[0]) &&
-      Number.isInteger(verificationIndices[1]) &&
-      verificationIndices[0] >= 0 &&
-      verificationIndices[1] >= 0 &&
-      verificationIndices[0] < seedPhrase.length &&
-      verificationIndices[1] < seedPhrase.length &&
-      selectedWords.length === 2 &&
-      typeof selectedWords[0] === 'string' &&
-      typeof selectedWords[1] === 'string' &&
-      Boolean(selectedWords[0]) &&
-      Boolean(selectedWords[1]) &&
-      selectedWords[0] === seedPhrase[verificationIndices[0]] &&
-      selectedWords[1] === seedPhrase[verificationIndices[1]]
+      selectedVerificationWords.length === 2 &&
+      selectedVerificationWords.every(
+        (option, index) =>
+          option.optionId === verificationIndices[index] &&
+          option.word === seedPhrase[verificationIndices[index]]
+      )
     if (!isCorrect) {
-      set({ error: 'Selected words do not match. Please try again.' })
+      set({
+        selectedVerificationWords: [],
+        verificationPassed: false,
+        error: 'Selected words do not match. Please try again.'
+      })
       return false
     }
-    set({ error: null })
+    set({ verificationPassed: true, error: null })
     return true
   },
 
   createWallet: async () => {
-    if (get().isLoading || !get().verifySeedPhrase()) return false
     set({ isLoading: true, error: null })
     try {
-      const { seedPhrase, password } = get()
-      await accountManager.importWallet(seedPhrase.join(' '), password, 'Account 1')
-
-      chrome.runtime.sendMessage({ type: 'WALLET_CREATED' }).catch(console.error)
+      const {
+        seedPhrase,
+        password,
+        accountName,
+        verificationPassed,
+        mnemonicWordCount,
+        selectedNetworkFamilies
+      } = get()
+      if (!verificationPassed || seedPhrase.length !== mnemonicWordCount) {
+        throw new Error('Confirm your recovery phrase before creating the wallet')
+      }
+      if (!selectedNetworkFamilies?.length) throw new Error('Select at least one network')
+      await zcashWalletRuntimeClient.provisionPrimarySoftwareWallet({
+        mode: 'create',
+        mnemonic: seedPhrase.join(' '),
+        password,
+        accountName: normalizeAccountName(accountName),
+        selectedNetworkFamilies
+      })
+      await rehydrateWalletStore()
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
 
-      set({ isLoading: false })
+      set(clearedSensitiveOnboardingState())
       return true
     } catch (err) {
       const { userMessage } = classifyError(err)
@@ -204,25 +301,27 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     const importAttemptId = importAttempts.begin()
     set({ isLoading: true, error: null })
     try {
-      const { importedSeedPhrase, password, birthdayHeight } = get()
-      await accountManager.importWallet(
-        importedSeedPhrase,
+      const { importedSeedPhrase, password, birthdayHeight, accountName, selectedNetworkFamilies } =
+        get()
+      await zcashWalletRuntimeClient.provisionPrimarySoftwareWallet({
+        mode: 'import',
+        mnemonic: importedSeedPhrase,
         password,
-        'Imported Account',
-        birthdayHeight
-      )
+        accountName: normalizeAccountName(accountName),
+        ...(birthdayHeight === undefined ? {} : { birthdayHeight }),
+        ...(selectedNetworkFamilies === null ? {} : { selectedNetworkFamilies })
+      })
+      await rehydrateWalletStore()
 
       if (!importAttempts.isCurrent(importAttemptId)) {
         return false
       }
-
-      chrome.runtime.sendMessage({ type: 'WALLET_CREATED' }).catch(console.error)
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, {
         params: { method: 'import' },
         extra: { has_birthday_height: get().birthdayHeight !== undefined }
       })
 
-      set({ isLoading: false })
+      set(clearedSensitiveOnboardingState())
       return true
     } catch (err) {
       if (!importAttempts.isCurrent(importAttemptId)) {
@@ -236,10 +335,9 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
 
   validatePassword: () => {
     const { password, confirmPassword, agreedToTerms } = get()
-    if (password.length < WALLET_CONFIG.SECURITY.MIN_PASSWORD_LENGTH) {
-      set({
-        error: `Password must be at least ${WALLET_CONFIG.SECURITY.MIN_PASSWORD_LENGTH} characters`
-      })
+    const passwordError = getNewPasswordValidationError(password)
+    if (passwordError) {
+      set({ error: passwordError })
       return false
     }
     if (password !== confirmPassword) {
@@ -257,20 +355,24 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     // Preserve dappRequestId when resetting - it's set before onboarding and needed after
     const currentDappRequestId = get().dappRequestId
     importAttempts.invalidate()
-    invalidateGeneration()
+    generationAttempts.invalidate()
     set({
       flowMode: 'onboarding',
       mode: 'create',
+      mnemonicWordCount: WALLET_CONFIG.MNEMONIC_LENGTH,
+      accountName: DEFAULT_ACCOUNT_NAME,
       password: '',
       confirmPassword: '',
       seedPhrase: [],
       importedSeedPhrase: '',
+      selectedNetworkFamilies: null,
       birthdayHeight: undefined,
+      importZcashHistorySelection: null,
       agreedToTerms: false,
       acknowledgedWarning: false,
-      selectedWords: [],
-      selectedWordIndices: [],
+      selectedVerificationWords: [],
       verificationIndices: [],
+      verificationPassed: false,
       isLoading: false,
       error: null,
       dappRequestId: currentDappRequestId // Keep dappRequestId
@@ -278,16 +380,29 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   },
 
   addWallet: async () => {
-    if (get().isLoading || !get().verifySeedPhrase()) return false
     set({ isLoading: true, error: null })
     try {
-      const { seedPhrase } = get()
-      await accountManager.addNewWallet(seedPhrase.join(' '))
-
-      chrome.runtime.sendMessage({ type: 'WALLET_CREATED' }).catch(console.error)
+      const {
+        seedPhrase,
+        accountName,
+        verificationPassed,
+        mnemonicWordCount,
+        selectedNetworkFamilies
+      } = get()
+      if (!verificationPassed || seedPhrase.length !== mnemonicWordCount) {
+        throw new Error('Confirm your recovery phrase before creating the wallet')
+      }
+      if (!selectedNetworkFamilies?.length) throw new Error('Select at least one network')
+      await provisionAdditionalSoftwareWallet({
+        mode: 'create',
+        mnemonic: seedPhrase.join(' '),
+        accountName: normalizeAccountName(accountName),
+        selectedNetworkFamilies
+      })
+      await rehydrateWalletStore()
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, { params: { method: 'create' } })
 
-      set({ isLoading: false })
+      set(clearedSensitiveOnboardingState())
       return true
     } catch (err) {
       const { userMessage } = classifyError(err)
@@ -300,20 +415,25 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     const importAttemptId = importAttempts.begin()
     set({ isLoading: true, error: null })
     try {
-      const { importedSeedPhrase, birthdayHeight } = get()
-      await accountManager.addImportedWallet(importedSeedPhrase, undefined, birthdayHeight)
+      const { importedSeedPhrase, birthdayHeight, accountName, selectedNetworkFamilies } = get()
+      await provisionAdditionalSoftwareWallet({
+        mode: 'import',
+        mnemonic: importedSeedPhrase,
+        accountName: normalizeAccountName(accountName),
+        ...(birthdayHeight === undefined ? {} : { birthdayHeight }),
+        ...(selectedNetworkFamilies === null ? {} : { selectedNetworkFamilies })
+      })
+      await rehydrateWalletStore()
 
       if (!importAttempts.isCurrent(importAttemptId)) {
         return false
       }
-
-      chrome.runtime.sendMessage({ type: 'WALLET_CREATED' }).catch(console.error)
       sendAnalyticsEvent(ANALYTICS_EVENTS.WALLET_CREATED, {
         params: { method: 'import' },
         extra: { has_birthday_height: birthdayHeight !== undefined }
       })
 
-      set({ isLoading: false })
+      set(clearedSensitiveOnboardingState())
       return true
     } catch (err) {
       if (!importAttempts.isCurrent(importAttemptId)) {

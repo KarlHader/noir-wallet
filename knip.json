@@ -2,6 +2,9 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "exclude": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "duplicates"],
   "workspaces": {
+    "packages/docs": {
+      "entry": ["examples/*.ts"]
+    },
     "packages/extension": {
       "entry": [
         "src/background/index.ts",
@@ -14,5 +17,5 @@
     }
   },
   "ignore": ["packages/extension/src/lib/wasm-pkg/**"],
-  "ignoreDependencies": ["@types/chrome", "tailwindcss", "tw-animate-css"]
+  "ignoreDependencies": ["@types/chrome", "buffer", "tailwindcss", "tw-animate-css", "util"]
 }

@@ -1,5 +1,5 @@
-import { getNetworkConfig } from '../../config/networks'
-import { fetchBlockTime, fetchLatestBlockHeight } from '../../config/rpc-registry-client'
+import { getNetworkConfig } from '@/lib/runtime-network'
+import { fetchBlockTime, fetchLatestBlockHeight } from '@/infrastructure/chains/rpc-registry-client'
 import type { Network } from '../../types'
 
 export const DATE_BLOCK_LOOKUP_TIMEOUT_MS = 60_000

@@ -7,16 +7,18 @@
 import { getOffscreenClient } from '../worker/client'
 
 const zcashWorkerClient = getOffscreenClient()
-import { WALLET_CONFIG } from '@/config/wallet'
-import { DEFAULT_NETWORK } from '@/config/networks'
+import { WALLET_CONFIG, type MnemonicWordCount } from '@/config/wallet'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { Network } from '@/types'
 
 export class MnemonicGenerator {
   /**
    * Generate a BIP-39 mnemonic phrase
-   * @param wordCount The packaged WASM supports generating 24 words.
+   * @param wordCount Number of words (12 or 24)
    */
-  static async generate(wordCount = WALLET_CONFIG.MNEMONIC_LENGTH): Promise<string> {
+  static async generate(
+    wordCount: MnemonicWordCount = WALLET_CONFIG.MNEMONIC_LENGTH
+  ): Promise<string> {
     return zcashWorkerClient.generateMnemonic(wordCount)
   }
 
@@ -30,9 +32,11 @@ export class MnemonicGenerator {
 
   /**
    * Generate a cryptographically secure mnemonic phrase
-   * @param wordCount The packaged WASM supports generating 24 words.
+   * @param wordCount Number of words (12 or 24)
    */
-  static async generateSecurePhrase(wordCount = WALLET_CONFIG.MNEMONIC_LENGTH): Promise<string[]> {
+  static async generateSecurePhrase(
+    wordCount: MnemonicWordCount = WALLET_CONFIG.MNEMONIC_LENGTH
+  ): Promise<string[]> {
     const phrase = await this.generate(wordCount)
     return phrase.split(' ')
   }
@@ -40,8 +44,8 @@ export class MnemonicGenerator {
   /**
    * Convert mnemonic to encryption seed
    */
-  static async toSeed(mnemonic: string, passphrase: string = ''): Promise<Uint8Array> {
-    return zcashWorkerClient.mnemonicToSeed(mnemonic.trim(), passphrase)
+  static async toSeed(mnemonic: string): Promise<Uint8Array> {
+    return zcashWorkerClient.mnemonicToSeed(mnemonic.trim())
   }
 
   /**

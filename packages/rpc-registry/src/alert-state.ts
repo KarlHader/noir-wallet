@@ -79,11 +79,6 @@ export function advanceMonitorState(
   now: number
 ): StateTransition {
   const snapshot = cloneSnapshot(previous)
-  const activeKeys = new Set(results.map(result => resultKey(result)))
-
-  for (const key of Object.keys(snapshot.checks)) {
-    if (!activeKeys.has(key)) delete snapshot.checks[key]
-  }
 
   for (const result of results) {
     if (result.outcome === 'skipped') continue

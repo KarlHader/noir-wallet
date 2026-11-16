@@ -1,0 +1,19 @@
+<svg width="343" height="97" viewBox="0 0 343 97" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<use xlink:href="#stroke0_2035_5445" fill="#202029"/>
+<use xlink:href="#stroke0_2035_5445" fill="url(#paint0_radial_2035_5445)" fill-opacity="0.2"/>
+<mask id="stroke1_2035_5445" fill="white">
+<use xlink:href="#stroke0_2035_5445"/>
+</mask>
+<path d="M303.191 0.412109C303.591 -0.136995 304.409 -0.136995 304.809 0.412109L308.513 5.5054C310.019 7.57522 312.423 8.7998 314.983 8.7998H335C339.418 8.7998 343 12.3815 343 16.7998V88.7998C343 93.2181 339.418 96.7998 335 96.7998H8C3.58172 96.7998 0 93.2181 0 88.7998V16.7998C0 12.3815 3.58172 8.7998 8 8.7998H293.017C295.577 8.7998 297.981 7.57522 299.487 5.5054L303.191 0.412109Z" stroke-width="2" stroke="url(#paint1_linear_2035_5445)" mask="url(#stroke1_2035_5445)"/>
+<defs>
+<radialGradient id="paint0_radial_2035_5445" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(307.5 7.30078) rotate(-180) scale(263.5 65.1441)">
+<stop stop-color="#00D18A"/>
+<stop offset="1" stop-color="#00D18A" stop-opacity="0"/>
+</radialGradient>
+<linearGradient id="paint1_linear_2035_5445" x1="343" y1="9.30078" x2="316.975" y2="103.316" gradientUnits="userSpaceOnUse">
+<stop stop-color="#43A986"/>
+<stop offset="1" stop-color="#000D09"/>
+</linearGradient>
+<path id="stroke0_2035_5445" d="M303.191 0.412109C303.591 -0.136995 304.409 -0.136995 304.809 0.412109L308.513 5.5054C310.019 7.57522 312.423 8.7998 314.983 8.7998H335C339.418 8.7998 343 12.3815 343 16.7998V88.7998C343 93.2181 339.418 96.7998 335 96.7998H8C3.58172 96.7998 0 93.2181 0 88.7998V16.7998C0 12.3815 3.58172 8.7998 8 8.7998H293.017C295.577 8.7998 297.981 7.57522 299.487 5.5054L303.191 0.412109Z"/>
+</defs>
+</svg>

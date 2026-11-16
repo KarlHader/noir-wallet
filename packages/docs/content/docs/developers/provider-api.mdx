@@ -1,11 +1,11 @@
 ---
 title: Provider API
-description: Typed reference for the Zcash API exposed by the Noir Wallet SDK.
+description: Typed reference for Noir Wallet's Zcash API and EVM network requests.
 icon: Braces
 ---
 
-All methods are available on `wallet.zcash`. Detecting the provider does not connect an account or
-open the wallet.
+The Zcash methods below are available on `wallet.zcash`. Detecting the provider does not connect an
+account or open the wallet. EVM network requests are covered at the end of this guide.
 
 ```ts
 import { getNoirWallet } from '@noir-wallet/sdk'
@@ -38,9 +38,6 @@ if (!wallet) throw new Error('Noir Wallet is not installed')
 
 Account reads do not open approval windows. `connect()` is the exception: it always lets the user
 review the accounts shared with your site.
-
-The `fundingSource` option in `getMaxTransfer()` and `sendTransaction()` requires Noir Wallet
-extension 1.0.27 or later. Omit it on older builds to use shielded funding.
 
 <Accordions type="single">
   <Accordion title="connect() — Request account access" id="connect">
@@ -83,7 +80,9 @@ getAccounts(): Promise<ZcashConnectResult | null>
 ```
 
 Returns the same shape as `connect()` without opening the wallet. It returns `null` when the wallet
-is locked, the origin is disconnected, or the active account is not authorized.
+is locked or the active account is not authorized. Official Noir applications can reconnect
+automatically after disconnect while the wallet is unlocked. Other disconnected sites must call
+`connect()` for approval again; a silent restore cannot reconnect them.
 
 ```ts
 const connection = await wallet.zcash.getAccounts()
@@ -109,7 +108,7 @@ of every authorized account.
 
   </Accordion>
 
-  <Accordion title="getBalance(accountId?) — Read wallet balances" id="getbalanceaccountid">
+  <Accordion title="getBalance(accountId?) — Read spendable balances" id="getbalanceaccountid">
 
 ```ts
 getBalance(accountId?: string): Promise<ZcashBalanceResult>
@@ -136,11 +135,11 @@ type ZcashBalanceResult = {
 ```
 
 All amounts are decimal ZEC strings. `synced: false` marks a zero fallback without current synced
-data. When the wallet is locked, the top-level balance is zero and `accounts` is empty.
+data. When the wallet is locked, `getBalance()` rejects.
 
 <Callout type="warn">
-  `total` includes pending funds. `available` and `spendable` are currently selectable amounts
-  before transaction-specific fees. Use `getMaxTransfer()` for an exact send limit.
+  `available` and `spendable` exclude pending funds but are not destination-specific post-fee Max
+  values. Use `getMaxTransfer()` for an exact send limit.
 </Callout>
 
 <include cwd lang="ts" meta='title="provider-account-balances.ts"'>
@@ -176,12 +175,6 @@ const estimate = await wallet.zcash.getMaxTransfer({
 Use the same destination, memo, and funding source with `sendTransaction()`. Choosing a different
 fee tier during approval can change the final maximum. A Max estimate does not establish hardware
 signing support: Keystone cannot complete a send from transparent funds.
-
-Standard uses the connected wallet RPC's recommended marginal fee; Fast uses four times that rate.
-If the RPC does not support recommendations, times out after five seconds, or returns an invalid
-rate, the wallet uses 5,000 or 20,000 zat/action, respectively. Approval keeps the estimated rate
-for up to five minutes. An expired estimate or a change of account, network, or RPC requires a
-new estimate before confirmation. These internal fee snapshots do not change the SDK response.
 
   </Accordion>
 </Accordions>
@@ -231,6 +224,7 @@ excluded. Ledger completes hardware signing in a separate tab. Keystone cannot s
 inputs required to complete a shield transaction.
 
   </Accordion>
+
 </Accordions>
 
 ## Identity methods
@@ -291,9 +285,8 @@ It returns `null` while the wallet is locked or when there is no active account.
 </Accordions>
 
 <Callout type="warn">
-  Ledger and Keystone accounts can connect to dApps and sign supported Zcash transactions. Identity
-  and arbitrary message-signing methods are not currently supported; rejecting one of these methods
-  does not disconnect the wallet.
+  Identity methods are not supported for Keystone or Ledger accounts. Their Zcash flows sign
+  supported transactions, not arbitrary messages.
 </Callout>
 
 ## Connection lifecycle
@@ -324,15 +317,14 @@ disconnect(): Promise<void>
 ```
 
 Revokes the current origin and emits `accountsChanged` with `null`. It does not lock Noir Wallet or
-affect other connected sites. Revocation persists after restarting the extension, including for
-first-party sites. Reconnecting requires user approval through `requestAccounts()`.
+affect other connected sites.
 
   </Accordion>
 
   <Accordion title="switchNetwork() — Deprecated" id="switchnetworknetwork">
 
-`switchNetwork()` always rejects. Mainnet and testnet are separate Noir Wallet extension builds;
-direct users to install the appropriate build.
+`switchNetwork()` always rejects. Direct users to change the global Mainnet/Testnet Mode in the
+wallet's Developer Settings. The wallet locks and reloads when the mode changes.
 
   </Accordion>
 </Accordions>
@@ -379,3 +371,73 @@ The typed SDK is recommended. These are the raw method names used internally:
 
   </Accordion>
 </Accordions>
+
+## EVM network requests
+
+When multiple EVM wallets are installed, users can select **Ask every time**, **Use Noir Wallet**,
+or **Use another wallet** under **Settings > Default EVM Wallet**. The initial preference is
+**Ask every time**. This preference controls Noir's legacy `window.ethereum` routing after the
+site reloads. Explicit EIP-6963 selections and `window.noirwallet.ethereum` always refer directly
+to Noir. Wallet choices use EIP-6963 metadata and wallet-specific namespaces; `isMetaMask` alone
+is a compatibility flag, not a wallet identity. An unidentified legacy provider is offered only
+when no named alternative is discoverable. If another extension has locked the legacy entry, use EIP-6963 or a separate browser
+profile. A wallet choice does not connect an account or approve a request; the selected wallet
+still handles its own permissions.
+
+The EVM provider supports `wallet_addEthereumChain` and `wallet_switchEthereumChain` in the
+wallet's active Mainnet/Testnet Mode. The SDK exposes `addEvmNetwork(provider, network)` and
+`switchEvmChain(provider, chainId)` for these requests.
+
+```ts
+import { addEvmNetwork, detectEvmProvider, switchEvmChain } from '@noir-wallet/sdk'
+
+const provider = await detectEvmProvider()
+await addEvmNetwork(provider, {
+  chainId: '0x7a69',
+  chainName: 'My EVM Chain',
+  nativeCurrency: { name: 'My Ether', symbol: 'METH', decimals: 18 },
+  rpcUrls: ['https://rpc.my-chain.example']
+})
+await switchEvmChain(provider, '0x7a69')
+```
+
+Adding an unknown chain opens a wallet approval with its chain ID, name, native currency, selected
+RPC URL, and optional explorer URL. The wallet verifies that the RPC reports the requested chain ID
+before saving it. The first supported HTTP endpoint in `rpcUrls` is selected; secure WebSocket
+alternatives are skipped. HTTPS is required except for local development endpoints. Adding an already configured
+chain leaves its settings unchanged. Adding a network does not make it active; request a separate
+switch when needed. A switch to an unconfigured chain rejects with code `4902`, and a rejected
+approval returns `4001`. Built-in chains in the other global network mode cannot be added.
+EVM network selection is independent for each connected site. Switching to a network already
+approved for that site does not prompt again; a new network permission requires confirmation.
+Switching cancels that site's pending chain-specific requests and emits `chainChanged` to that site.
+
+For `eth_requestAccounts`, closing the wallet's unlock window cancels the request with `4001`.
+An `eth_sendTransaction` request with insufficient funds returns `-32000` before opening
+transaction approval; the error identifies insufficient funds for the transaction and network fee.
+
+For a connected Private EVM account, ordinary transfers default to a direct on-chain transfer.
+The user can select **Send privately** in wallet approval for a supported transfer. This route
+keeps the requested recipient amount fixed and charges route costs and gas to the sender. It
+returns the destination transaction hash after settlement, so the request can take longer than
+a direct transfer. The destination transaction is not sent from the connected Private address;
+do not use its sender as proof of the connected account's identity. Contract calls remain direct.
+After a processing timeout, check Wallet Activity before requesting another payment.
+
+For Chainlist compatibility, `wallet_addEthereumChain` also accepts an optional account address
+as the second positional parameter. This hint is ignored and never grants account permissions.
+`wallet_switchEthereumChain` still accepts exactly one chain parameter.
+
+## Wallet token metadata
+
+With an established `wallet.multichain` session, `getTokenList()` returns the current unlocked
+account's visible tokens on authorized chains. Each entry contains `assetId`, `chainId`,
+`contractAddress` (`null` for native assets), `symbol`, `decimals`, and `enabled`. The response
+contains no balances or private-account holdings. Re-read it after `wallet_sessionChanged`
+and after returning from Token Manager. An unauthorized current account or a context change
+during the request rejects with `4100`.
+
+Call `wallet.multichain.openTokenManager()` from a user action to open the existing wallet
+management page; it resolves to `null`. These methods are also available through `request()`
+as `wallet_getTokenList` and `wallet_openTokenManager`, without parameters. Older providers may
+not support them; feature-detect the convenience methods before rendering the action.

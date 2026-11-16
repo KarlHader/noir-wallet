@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { Button } from '../../components/ui/button'
 import { PasswordInput } from '../../components/common/PasswordInput'
 import { PageHeader } from '../../components/common/PageHeader'
-import { accountManager } from '@/core/wallet/account-manager'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import { useNavigate } from '../../provider/Router'
+import { getNewPasswordValidationError } from '@/core/wallet/password-policy'
+import { classifyError } from '@/lib/errors'
 
 export function ChangePassword() {
   const { goBack } = useNavigate()
@@ -12,18 +14,21 @@ export function ChangePassword() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [currentPasswordError, setCurrentPasswordError] = useState('')
+  const [newPasswordError, setNewPasswordError] = useState('')
   const [confirmPasswordError, setConfirmPasswordError] = useState('')
 
   const handleSubmit = async () => {
     setCurrentPasswordError('')
+    setNewPasswordError('')
     setConfirmPasswordError('')
 
     if (!currentPassword) {
       setCurrentPasswordError('Current password is required')
       return
     }
-    if (!newPassword) {
-      setCurrentPasswordError('New password is required')
+    const passwordError = getNewPasswordValidationError(newPassword)
+    if (passwordError) {
+      setNewPasswordError(passwordError)
       return
     }
     if (newPassword !== confirmPassword) {
@@ -33,15 +38,10 @@ export function ChangePassword() {
 
     setIsLoading(true)
     try {
-      const success = await accountManager.changePassword(currentPassword, newPassword)
-
-      if (success) {
-        goBack()
-      } else {
-        setCurrentPasswordError('Failed to change password')
-      }
-    } catch (error: any) {
-      setCurrentPasswordError(error.message || 'Failed to change password')
+      await zcashWalletRuntimeClient.changePassword(currentPassword, newPassword)
+      goBack()
+    } catch (error: unknown) {
+      setCurrentPasswordError(classifyError(error).userMessage)
     } finally {
       setIsLoading(false)
     }
@@ -59,7 +59,15 @@ export function ChangePassword() {
             placeholder="Current Password"
             error={currentPasswordError}
           />
-          <PasswordInput value={newPassword} onChange={setNewPassword} placeholder="New Password" />
+          <PasswordInput
+            value={newPassword}
+            onChange={value => {
+              setNewPassword(value)
+              setNewPasswordError(value ? (getNewPasswordValidationError(value) ?? '') : '')
+            }}
+            placeholder="New Password"
+            error={newPasswordError}
+          />
           <PasswordInput
             value={confirmPassword}
             onChange={setConfirmPassword}
@@ -72,7 +80,12 @@ export function ChangePassword() {
       <div className="px-5 pb-5">
         <Button
           onClick={handleSubmit}
-          disabled={!currentPassword || !newPassword || !confirmPassword}
+          disabled={
+            !currentPassword ||
+            !newPassword ||
+            !confirmPassword ||
+            getNewPasswordValidationError(newPassword) !== null
+          }
           isLoading={isLoading}
           className="w-full h-[45px]"
         >

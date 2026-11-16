@@ -28,7 +28,6 @@ export function DatePicker({
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [viewMonth, setViewMonth] = useState(() => (value ?? dayjs()).startOf('month'))
-
   const effectiveMax = (maxDate ?? dayjs()).endOf('day')
   const effectiveMin = (minDate ?? dayjs('2018-10-01')).startOf('day')
 
@@ -43,7 +42,6 @@ export function DatePicker({
 
   const isDisabled = (date: dayjs.Dayjs) =>
     date.isBefore(effectiveMin, 'day') || date.isAfter(effectiveMax, 'day')
-
   const previousMonth = viewMonth.subtract(1, 'month')
   const nextMonth = viewMonth.add(1, 'month')
   const canGoPrevious = previousMonth.endOf('month').isSameOrAfter(effectiveMin, 'day')
@@ -73,7 +71,7 @@ export function DatePicker({
         </button>
       </PopoverTrigger>
       <PopoverContent className="z-[60] w-[280px] p-3" align="start">
-        <div className="flex items-center justify-between mb-2">
+        <div className="mb-2 flex items-center justify-between">
           <Button
             type="button"
             variant="ghost"
@@ -98,15 +96,13 @@ export function DatePicker({
             <Icon icon="lucide:chevron-right" width={16} height={16} />
           </Button>
         </div>
-
-        <div className="grid grid-cols-7 mb-1" aria-hidden="true">
+        <div className="mb-1 grid grid-cols-7" aria-hidden="true">
           {WEEKDAYS.map(day => (
             <span key={day} className="flex h-7 items-center justify-center text-[11px] text-muted">
               {day}
             </span>
           ))}
         </div>
-
         <div className="grid grid-cols-7 gap-y-0.5">
           {days.map(date => {
             const disabled = isDisabled(date)
@@ -124,10 +120,10 @@ export function DatePicker({
                 onClick={() => handleSelect(date)}
                 className={cn(
                   'h-8 w-8 rounded-md text-xs transition-colors',
-                  disabled && 'opacity-25 cursor-not-allowed',
+                  disabled && 'cursor-not-allowed opacity-25',
                   outsideMonth && !selected && 'text-muted/40',
-                  !disabled && !selected && 'hover:bg-accent cursor-pointer',
-                  selected && 'bg-primary text-primary-foreground font-semibold'
+                  !disabled && !selected && 'cursor-pointer hover:bg-accent',
+                  selected && 'bg-primary font-semibold text-primary-foreground'
                 )}
               >
                 {date.date()}

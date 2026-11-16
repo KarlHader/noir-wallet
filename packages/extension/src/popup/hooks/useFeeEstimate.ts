@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { accountManager } from '@/core/wallet/account-manager'
-import {
-  marginalFeeForTier,
-  type FeeQuote,
-  type FeeTier,
-  type QuotedFeeEstimate
-} from '@/config/fee'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
+import { marginalFeeForTier } from '@/core/zcash/fee-policy'
+import type { FeeQuote, FeeTier, QuotedFeeEstimate } from '@/config/fee'
 import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useWalletStore } from '@/store/wallet-store'
 import type { FundingSource } from '@/types'
+import { classifyError } from '@/lib/errors'
 
-export interface FeeEstimateState {
+interface TierEstimate {
   feeZats: number | null
   feeQuote: FeeQuote | null
   loading: boolean
   error: boolean
-  refresh: () => void
+  errorMessage: string | null
+  retry: () => void
+}
+
+export interface FeeEstimateState extends TierEstimate {
   feeByTier: Record<FeeTier, number | null>
   loadingByTier: Record<FeeTier, boolean>
 }
@@ -27,40 +29,22 @@ interface UseFeeEstimateArgs {
   memo?: string
   fundingSource?: FundingSource
   feeTier?: FeeTier
-  /** Gate estimation until inputs are valid (e.g. review screen open). */
   enabled?: boolean
   debounceMs?: number
-  refreshKey?: number
   estimate?: (tier: FeeTier) => Promise<QuotedFeeEstimate>
+  scopeKey?: string
 }
 
-const emptyEstimate = { feeZats: null, feeQuote: null, loading: false, error: false }
-type EstimateCallback = UseFeeEstimateArgs['estimate']
-type SingleTierState = Omit<FeeEstimateState, 'feeByTier' | 'loadingByTier'>
-type InternalState = Omit<SingleTierState, 'refresh'> & {
-  requestKey: string
-  estimateCallback?: EstimateCallback
+type EstimateState = Omit<TierEstimate, 'retry'> & { key: string }
+const emptyEstimate = {
+  feeZats: null,
+  feeQuote: null,
+  loading: false,
+  error: false,
+  errorMessage: null
 }
 
-/** Keep both proposal estimates available when the user switches fee tiers. */
-export function useFeeEstimate(args: UseFeeEstimateArgs): FeeEstimateState {
-  const standard = useFeeEstimateForTier({ ...args, feeTier: 'standard' })
-  const fast = useFeeEstimateForTier({ ...args, feeTier: 'fast' })
-  const refresh = useCallback(() => {
-    standard.refresh()
-    fast.refresh()
-  }, [standard.refresh, fast.refresh])
-
-  return {
-    ...(args.feeTier === 'fast' ? fast : standard),
-    refresh,
-    feeByTier: { standard: standard.feeZats, fast: fast.feeZats },
-    loadingByTier: { standard: standard.loading, fast: fast.loading }
-  }
-}
-
-/** Retain the quote used to build this tier's proposal. */
-function useFeeEstimateForTier({
+function useEstimateForTier({
   type,
   to,
   amount,
@@ -69,26 +53,22 @@ function useFeeEstimateForTier({
   feeTier = 'standard',
   enabled = true,
   debounceMs = 500,
-  refreshKey = 0,
-  estimate
-}: UseFeeEstimateArgs): SingleTierState {
+  estimate,
+  scopeKey
+}: UseFeeEstimateArgs): TierEstimate {
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
-  const rpcMode = useSettingsStore(state => state.rpcEndpointModes.zcash)
   const rpcPreference = useSettingsStore(state => state.rpcEndpointPreferences.zcash)
-  const customRpc = useSettingsStore(state => state.customRpcEndpoints.zcash)
+  const rpcScope = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
+  )
   const [generation, setGeneration] = useState(0)
-  const [state, setState] = useState<InternalState>({
-    ...emptyEstimate,
-    requestKey: '',
-    estimateCallback: estimate
-  })
-  const refresh = useCallback(() => setGeneration(value => value + 1), [])
-  const requestSeq = useRef(0)
-
+  const [state, setState] = useState<EstimateState>({ ...emptyEstimate, key: '' })
+  const sequence = useRef(0)
+  const retry = useCallback(() => setGeneration(value => value + 1), [])
   const active = enabled && (type === 'shield' || (!!to && !!amount && Number(amount) > 0))
-  const requestKey = JSON.stringify([
+  const key = JSON.stringify([
     type,
     to,
     amount,
@@ -99,107 +79,102 @@ function useFeeEstimateForTier({
     walletId,
     accountId,
     network,
-    rpcMode,
     rpcPreference,
-    customRpc,
-    refreshKey,
+    rpcScope,
+    scopeKey,
     generation
   ])
 
   useEffect(() => {
-    const seq = ++requestSeq.current
+    const current = ++sequence.current
     if (!active) {
-      setState({ ...emptyEstimate, requestKey, estimateCallback: estimate })
+      setState({ ...emptyEstimate, key })
       return
     }
-
-    setState({ ...emptyEstimate, loading: true, requestKey, estimateCallback: estimate })
+    setState({ ...emptyEstimate, loading: true, key })
     let expiryTimer: ReturnType<typeof setTimeout> | undefined
-
     const timer = setTimeout(async () => {
       try {
-        let result: QuotedFeeEstimate
-        if (estimate) {
-          result = await estimate(feeTier)
-        } else {
-          const quote = await accountManager.getFeeQuote()
-          const marginalFeeZats = marginalFeeForTier(feeTier, quote.standardMarginalFeeZats)
-          result =
-            type === 'shield'
-              ? await accountManager.estimateShieldFee(marginalFeeZats, quote.id)
-              : await accountManager.estimateTransferFee(
-                  to!,
-                  amount!,
-                  memo,
-                  marginalFeeZats,
-                  fundingSource,
-                  quote.id
-                )
-          if (result.feeQuote.id !== quote.id) throw new Error('Network fee quote changed')
-        }
-
-        if (seq !== requestSeq.current) return
-        if (result.feeQuote.expiresAt <= Date.now()) {
-          throw new Error('Network fee quote expired')
-        }
+        let expectedQuoteId: string | undefined
+        const result = estimate
+          ? await estimate(feeTier)
+          : await (async () => {
+              const quote = await zcashWalletRuntimeClient.getFeeQuote()
+              expectedQuoteId = quote.id
+              const marginalFeeZats = marginalFeeForTier(feeTier, quote.standardMarginalFeeZats)
+              return type === 'shield'
+                ? zcashWalletRuntimeClient.estimateShieldFee(marginalFeeZats, quote.id)
+                : zcashWalletRuntimeClient.estimateTransferFee({
+                    to: to!,
+                    amount: amount!,
+                    memo,
+                    fundingSource,
+                    marginalFeeZats,
+                    feeQuoteId: quote.id
+                  })
+            })()
+        if (current !== sequence.current) return
+        const feeZats = Number(result.feeZats)
         if (
+          !Number.isSafeInteger(feeZats) ||
+          feeZats <= 0 ||
+          (expectedQuoteId !== undefined && result.feeQuote.id !== expectedQuoteId) ||
+          result.feeQuote.expiresAt <= Date.now() ||
           Number(result.marginalFeeZats) !==
-          marginalFeeForTier(feeTier, result.feeQuote.standardMarginalFeeZats)
-        ) {
-          throw new Error('Estimate does not use the selected network fee')
-        }
+            marginalFeeForTier(feeTier, result.feeQuote.standardMarginalFeeZats)
+        )
+          throw new Error('Invalid network fee estimate')
         setState({
-          feeZats: Number(result.feeZats),
+          feeZats,
           feeQuote: result.feeQuote,
           loading: false,
           error: false,
-          requestKey,
-          estimateCallback: estimate
+          errorMessage: null,
+          key
         })
-        expiryTimer = setTimeout(
-          () => setGeneration(value => value + 1),
-          Math.max(0, result.feeQuote.expiresAt - Date.now())
-        )
-      } catch {
-        if (seq !== requestSeq.current) return
-        setState({ ...emptyEstimate, error: true, requestKey, estimateCallback: estimate })
+        expiryTimer = setTimeout(retry, Math.max(0, result.feeQuote.expiresAt - Date.now()))
+      } catch (error) {
+        if (current === sequence.current)
+          setState({
+            ...emptyEstimate,
+            error: true,
+            errorMessage: classifyError(error).userMessage,
+            key
+          })
       }
     }, debounceMs)
-
     return () => {
       clearTimeout(timer)
       clearTimeout(expiryTimer)
-      requestSeq.current++
+      sequence.current += 1
     }
-  }, [
-    type,
-    to,
-    amount,
-    memo,
-    fundingSource,
-    feeTier,
-    active,
-    debounceMs,
-    estimate,
-    walletId,
-    accountId,
-    network,
-    rpcMode,
-    rpcPreference,
-    customRpc,
-    refreshKey,
-    generation,
-    requestKey
-  ])
+  }, [active, debounceMs, estimate, feeTier, key, retry, to, amount, memo, fundingSource, type])
 
-  if (state.requestKey !== requestKey || state.estimateCallback !== estimate) {
-    return { ...emptyEstimate, loading: active, refresh }
-  }
+  return state.key === key
+    ? {
+        feeZats: state.feeZats,
+        feeQuote: state.feeQuote,
+        loading: state.loading,
+        error: state.error,
+        errorMessage: state.errorMessage,
+        retry
+      }
+    : { ...emptyEstimate, loading: active, retry }
+}
+
+/** Each tier keeps the fee produced by its own WASM proposal. */
+export function useFeeEstimate(args: UseFeeEstimateArgs): FeeEstimateState {
+  const standard = useEstimateForTier({ ...args, feeTier: 'standard' })
+  const fast = useEstimateForTier({ ...args, feeTier: 'fast' })
+  const selected = args.feeTier === 'fast' ? fast : standard
+  const retry = useCallback(() => {
+    standard.retry()
+    fast.retry()
+  }, [standard.retry, fast.retry])
   return {
-    feeZats: state.feeZats,
-    feeQuote: state.feeQuote,
-    loading: state.loading,
-    error: state.error,
-    refresh
+    ...selected,
+    retry,
+    feeByTier: { standard: standard.feeZats, fast: fast.feeZats },
+    loadingByTier: { standard: standard.loading, fast: fast.loading }
   }
 }

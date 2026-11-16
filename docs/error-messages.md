@@ -1,133 +1,91 @@
 # Error Message Reference
 
-Shared classification and message mapping are defined in [errors.ts](../packages/extension/src/lib/errors.ts). Pages also have field validation and operation-specific feedback, so this is not a complete list of UI copy. The classifier uses the first matching rule in source order; check the classifier and call site for a specific result.
+The shared classifier and exact user-facing messages are defined in [errors.ts](../packages/extension/src/lib/errors.ts). It uses the first matching rule in source order. Pages also perform field validation and operation-specific error handling, so check the call site before assuming that a message below is always displayed.
 
-The “Retryable” column is the classifier's `retryable` flag. It does not mean every call site retries automatically.
+RHEA Swap uses [rhea-swap-client.ts](../packages/extension/src/popup/services/rhea-swap-client.ts) to show a provider minimum as `Minimum swap amount is $1,000.` (using the amount returned by the provider) and an explicit unavailable route as `No swap route is available for this transfer.` Unknown or invalid quote responses retain the shared generic error.
 
-Mapped errors show the user guidance below followed by `Original error: …`, so screenshots retain the underlying reason. Already formatted errors are not appended again; identical and unmapped messages appear once. Error details use the shared credential and recovery-phrase redaction before display. `technicalMessage` retains the original reason for diagnostics. Input validation messages do not receive this suffix.
+`classifyError()` returns a safe `userMessage`, the original raw `technicalMessage`, and a `retryable` flag. The raw cause is retained for internal diagnosis; it must not be copied into user-facing text or analytics. The retryable flag does not itself start a retry.
 
-## Network
+## Shared Classifier
 
-| User message                                                         | Trigger                                     | Retryable |
-| -------------------------------------------------------------------- | ------------------------------------------- | --------- |
-| Network connection failed. Please check your internet and try again. | Connection failed; gRPC service unreachable | Yes       |
-| Request timed out. The server may be busy — please try again.        | Request timeout                             | Yes       |
-| Network error. Please check your internet connection.                | Network request error                       | Yes       |
-| Could not reach the server. Please try again later.                  | Server unreachable                          | Yes       |
-| Server is busy. Please wait a moment and try again.                  | Server rate limit                           | Yes       |
-| Service is temporarily unavailable. Please try again shortly.        | HTTP 5xx                                    | Yes       |
+| User message                                                                    | Matched cause                                                                                                                                         | Retryable |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Swap quote expired. Get a new quote and review it again.                        | RHEA quote expired before the Zcash transfer or PCZT prove-and-send operation                                                                         | No        |
+| Network connection failed. Please check your internet and try again.            | gRPC or transport failure                                                                                                                             | Yes       |
+| Request timed out.                                                              | Request or deadline timeout                                                                                                                           | Yes       |
+| Network error. Please check your internet connection.                           | Fetch or browser network failure                                                                                                                      | Yes       |
+| Could not reach the server. Please try again later.                             | Refused, unresolved, or reset connection                                                                                                              | Yes       |
+| Server is busy. Please wait a moment and try again.                             | Rate limit                                                                                                                                            | Yes       |
+| Service is temporarily unavailable. Please try again shortly.                   | HTTP 5xx                                                                                                                                              | Yes       |
+| The transaction failed simulation. Check the transaction details and try again. | EVM transaction simulation failure                                                                                                                    | No        |
+| Amount is below the current minimum for this Swap route.                        | Swap route minimum                                                                                                                                    | No        |
+| No Swap route is available for this asset pair.                                 | Missing route or liquidity                                                                                                                            | No        |
+| This asset is not supported for this Swap route.                                | Unsupported swap token                                                                                                                                | No        |
+| The Swap provider is temporarily unavailable. Please try again later.           | Upstream quote or provider unavailable                                                                                                                | Yes       |
+| Wallet engine error. Please restart the extension.                              | Worker crashed or did not initialize                                                                                                                  | No        |
+| Operation timed out. Please try again.                                          | Offscreen or Worker RPC timeout                                                                                                                       | Yes       |
+| Wallet engine is not responding. Please restart the extension.                  | Repeated Offscreen RPC failure                                                                                                                        | No        |
+| Wallet engine crashed. Please restart the extension.                            | WASM panic or health-check timeout                                                                                                                    | No        |
+| Your browser does not support this feature.                                     | Web Worker unavailable                                                                                                                                | No        |
+| Wallet is syncing. Please try again after sync completes.                       | Sync or reload in progress                                                                                                                            | Yes       |
+| Wallet data needs to be resynced before sending again.                          | Confirmed snapshot corruption, incompatible snapshot, or quarantined wallet recovery data                                                             | No        |
+| Wallet state changed. Please retry the operation.                               | Stale wallet request, or changed/removed/locked wallet during backup verification                                                                     | Yes       |
+| Backup words do not match this wallet. View your secret phrase and try again.   | Backup words mismatch                                                                                                                                 | No        |
+| Unlock and view this wallet's secret phrase before verifying its backup.        | Target wallet backup cannot be verified                                                                                                               | No        |
+| Incorrect password. Please try again.                                           | Password authentication failure                                                                                                                       | No        |
+| Invalid password. Please try again.                                             | Invalid password input                                                                                                                                | No        |
+| Invalid recovery phrase. Please check and try again.                            | Malformed recovery phrase                                                                                                                             | No        |
+| Account data conflict. Please re-import your wallet.                            | Account key mismatch                                                                                                                                  | No        |
+| Wallet is locked. Please unlock and try again.                                  | Locked wallet                                                                                                                                         | No        |
+| Wallet is initializing. Please wait a moment and try again.                     | Wallet runtime not initialized                                                                                                                        | Yes       |
+| Account is loading. Please wait a moment and try again.                         | Account not ready                                                                                                                                     | Yes       |
+| Account initialization timed out. Please restart and try again.                 | Account initialization timeout                                                                                                                        | No        |
+| No password set. Please set up your wallet first.                               | Password not configured                                                                                                                               | No        |
+| Wallet not found. Please create or import a wallet.                             | Wallet data missing                                                                                                                                   | No        |
+| No account available. Please select or create an account.                       | Account missing or not selected                                                                                                                       | No        |
+| Failed to load wallet data. Please try unlocking again.                         | Credential load failure                                                                                                                               | No        |
+| Cannot remove the last account. Each wallet needs at least one account.         | Attempt to remove the only account                                                                                                                    | No        |
+| Too many failed attempts. Account temporarily locked.                           | Temporary lock after repeated password failures                                                                                                       | No        |
+| Insufficient balance for this transaction.                                      | Insufficient funds                                                                                                                                    | No        |
+| Insufficient native balance for the amount and network fee.                     | EVM native balance cannot cover the amount and maximum gas                                                                                            | No        |
+| Amount is too small to send.                                                    | Dust threshold                                                                                                                                        | No        |
+| Invalid recipient address. Please check and try again.                          | Invalid address                                                                                                                                       | No        |
+| No transparent funds available to shield.                                       | No eligible transparent funds                                                                                                                         | No        |
+| Transaction timed out. Please check your transaction history and try again.     | Transaction timeout                                                                                                                                   | No        |
+| Failed to create transaction. Please try again.                                 | Transaction creation failure                                                                                                                          | Yes       |
+| Invalid request parameters from the dApp.                                       | Invalid dApp parameters                                                                                                                               | No        |
+| Not authorized. Please connect the dApp first.                                  | dApp request lacks authorization                                                                                                                      | No        |
+| No active connection. Please reconnect the dApp.                                | Connection missing                                                                                                                                    | No        |
+| Network switching is deprecated. Install the testnet extension instead.         | Deprecated `zcash_switchNetwork` request; the classifier still contains this message, while the wallet now switches global mode in Developer Settings | No        |
+| Unsupported operation requested.                                                | Unknown RPC method                                                                                                                                    | No        |
+| This operation requires hardware wallet signing.                                | Watch-only account requires device signing                                                                                                            | No        |
+| This operation is not supported by hardware wallets.                            | Hardware operation unsupported                                                                                                                        | No        |
+| Please unlock your wallet before adding a hardware wallet.                      | Wallet locked during hardware setup                                                                                                                   | No        |
+| No Zcash accounts found in the QR code.                                         | QR contains no Zcash account                                                                                                                          | No        |
+| Unrecognized QR code format. Please scan a valid Zcash QR code.                 | Invalid or unexpected QR content                                                                                                                      | No        |
+| Request cancelled by user.                                                      | User denied or cancelled                                                                                                                              | No        |
+| Failed to save wallet data. Please try again.                                   | Persistence timeout                                                                                                                                   | Yes       |
+| ZNS name not found.                                                             | Name does not exist                                                                                                                                   | No        |
+| ZNS name resolution failed. Please try again.                                   | Resolution failure                                                                                                                                    | Yes       |
+| An unexpected error occurred. Please try again.                                 | No rule matched                                                                                                                                       | Yes       |
 
-## Wallet Engine
+## Unlock And Backup
 
-| User message                                                   | Trigger                                   | Retryable |
-| -------------------------------------------------------------- | ----------------------------------------- | --------- |
-| Wallet engine error. Please restart the extension.             | Wallet engine error or crash              | No        |
-| Operation timed out. Please try again.                         | Engine operation timeout                  | Yes       |
-| Wallet engine is not responding. Please restart the extension. | Repeated unresponsiveness                 | No        |
-| Wallet engine crashed. Please restart the extension.           | Severe engine crash                       | No        |
-| Your browser does not support this feature.                    | Browser lacks Web Worker support          | No        |
-| Wallet is syncing. Please try again after sync completes.      | Blockchain sync in progress               | Yes       |
-| Wallet state changed. Please retry the operation.              | Wallet state changed during the operation | Yes       |
+The unlock form uses the structured result from [unlock-failure-message.ts](../packages/extension/src/popup/services/unlock-failure-message.ts). Only authentication failures increment the incorrect-password count. Missing or damaged credentials and operation failures follow separate recovery paths.
 
-## Passwords and Accounts
+| User message                                                                  | Cause                                                                                |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Wallet access data is missing. Restore from your secret phrase.               | The selected wallet's local credential is missing.                                   |
+| Wallet access data is damaged. Restore from your secret phrase.               | The selected credential structure is invalid.                                        |
+| Wallet could not be unlocked. Try again.                                      | Unlock operation failed for another reason.                                          |
+| Incorrect password / Incorrect password. N attempts remaining.                | Authentication failed; the remaining count appears when at most two attempts remain. |
+| Backup words do not match this wallet. View your secret phrase and try again. | Backup or deletion verification words do not match the selected wallet.              |
+| Unlock and view this wallet's secret phrase before verifying its backup.      | Backup credential cannot be read.                                                    |
 
-| User message                                                            | Trigger                                         | Retryable |
-| ----------------------------------------------------------------------- | ----------------------------------------------- | --------- |
-| Incorrect password. Please try again.                                   | Incorrect password                              | No        |
-| Invalid password. Please try again.                                     | Invalid password                                | No        |
-| Invalid recovery phrase. Please check and try again.                    | Malformed recovery phrase                       | No        |
-| Account data conflict. Please re-import your wallet.                    | Account data does not match the recovery phrase | No        |
-| Wallet is locked. Please unlock and try again.                          | Wallet locked                                   | No        |
-| Wallet is initializing. Please wait a moment and try again.             | Wallet initializing                             | Yes       |
-| Account is loading. Please wait a moment and try again.                 | Account loading                                 | Yes       |
-| Account initialization timed out. Please restart and try again.         | Account initialization timeout                  | No        |
-| No password set. Please set up your wallet first.                       | No password configured                          | No        |
-| Wallet not found. Please create or import a wallet.                     | Wallet missing                                  | No        |
-| No account available. Please select or create an account.               | No account available                            | No        |
-| Failed to load wallet data. Please try unlocking again.                 | Wallet data load failed                         | No        |
-| Cannot remove the last account. Each wallet needs at least one account. | Attempt to remove the only account              | No        |
-| Too many failed attempts. Account temporarily locked.                   | Temporary lock after repeated password failures | No        |
+The backup and deletion flows classify failures before displaying them; unrecognized internal errors are not shown verbatim. Locking, changing the selected wallet, or aborting deletion cancels an in-progress backup confirmation. Interrupted deletion keeps its cleanup record until a successful retry.
 
-The unlock page reports missing credentials, malformed credential data, and unlock failures separately. These cases do not increment the wrong-password counter. AES-GCM authentication failure cannot distinguish a wrong password from tampered ciphertext and is handled as password verification failure.
+## Retries And Transaction Safety
 
-When the current wallet entry or its credentials are missing, the unlock page can check the entered password against other wallets and switch to one that unlocks. It does not delete the broken entry or require resetting the extension. This recovery does not run when the current credentials exist but the password does not match. Target-wallet verification for backup or password changes does not use it. If all usable credentials are missing, recovery requires the recovery phrase or hardware device.
+Only operations explicitly wrapped in `withRetry()` use the classifier's retryable flag. The default is three attempts total, with 1- and 2-second waits; callers may override the attempt count and base delay. A nonretryable error or the last failure ends with the mapped user message.
 
-## Transactions
-
-| User message                                                                | Trigger                         | Retryable |
-| --------------------------------------------------------------------------- | ------------------------------- | --------- |
-| Insufficient balance for this transaction.                                  | Insufficient balance            | No        |
-| Amount is too small to send.                                                | Below the minimum send amount   | No        |
-| Invalid recipient address. Please check and try again.                      | Invalid recipient address       | No        |
-| No transparent funds available to shield.                                   | No transparent funds to shield  | No        |
-| Transaction timed out. Please check your transaction history and try again. | Transaction timeout             | No        |
-| Failed to create transaction. Please try again.                             | Transaction construction failed | Yes       |
-
-## dApp Connections
-
-| User message                                                            | Trigger                                    | Retryable |
-| ----------------------------------------------------------------------- | ------------------------------------------ | --------- |
-| Invalid request parameters from the dApp.                               | Invalid dApp parameters                    | No        |
-| Not authorized. Please connect the dApp first.                          | dApp not authorized                        | No        |
-| No active connection. Please reconnect the dApp.                        | No active dApp connection                  | No        |
-| Network switching is deprecated. Install the testnet extension instead. | dApp requests deprecated network switching | No        |
-| Unsupported operation requested.                                        | Unsupported operation                      | No        |
-
-## Hardware Wallets
-
-| User message                                                    | Trigger                                | Retryable |
-| --------------------------------------------------------------- | -------------------------------------- | --------- |
-| This operation requires hardware wallet signing.                | Hardware signing required              | No        |
-| This operation is not supported by hardware wallets.            | Unsupported hardware operation         | No        |
-| Please unlock your wallet before adding a hardware wallet.      | Wallet must be unlocked before pairing | No        |
-| No Zcash accounts found in the QR code.                         | QR code has no Zcash accounts          | No        |
-| Unrecognized QR code format. Please scan a valid Zcash QR code. | Unrecognized QR format                 | No        |
-
-## User Action
-
-| User message               | Trigger                 | Retryable |
-| -------------------------- | ----------------------- | --------- |
-| Request cancelled by user. | User rejects or cancels | No        |
-
-## Storage
-
-| User message                                                        | Trigger                                                        | Retryable |
-| ------------------------------------------------------------------- | -------------------------------------------------------------- | --------- |
-| Wallet data is incomplete. Resync this wallet before sending again. | Persisted snapshot integrity failure confirmed by a fresh read | No        |
-| Failed to save wallet data. Please try again.                       | Wallet data save timeout or invalid/empty serialization        | Yes       |
-
-Snapshot reads validate the manifest, chunk types and sizes, and stored bytes. A missing or invalid chunk, inconsistent manifest, or invalid stored bytes are read again in a new transaction before requiring recovery. Storage availability errors and failed serialization do not imply that the persisted snapshot is corrupt. Failed writes preserve the previous snapshot.
-
-On a transaction failure caused by a confirmed incomplete snapshot, the result page offers the existing Resync confirmation when the transaction record identifies one wallet and account on the active network and has no broadcast hash. Confirmation checks the snapshot again and stops if it is now readable or absent, or if storage is unavailable. If the transaction record cannot identify the affected account, the page directs the user to select it and open its account details. Resync requires an unlocked wallet and a valid start height; it rebuilds the wallet snapshot by scanning from that height. The original storage error remains visible after privacy redaction.
-
-Unavailable balance metadata first reloads a persisted snapshot and starts catch-up sync. If no snapshot is available or metadata remains unavailable after that attempt, the message asks for an extension restart. Paused sync similarly recommends checking the connection and restarting the extension, without assuming scan corruption.
-
-## ZNS Names
-
-| User message                                  | Trigger          | Retryable |
-| --------------------------------------------- | ---------------- | --------- |
-| ZNS name not found.                           | Name not found   | No        |
-| ZNS name resolution failed. Please try again. | Resolution error | Yes       |
-
-## Fallback
-
-| User message                                     | Trigger               | Retryable |
-| ------------------------------------------------ | --------------------- | --------- |
-| Original error text, or `Unknown error` if empty | No known rule matched | Yes       |
-
-## Automatic Retry
-
-Only operations that explicitly call `withRetry()` act on the retryable flag. The default is at most **3 attempts** (initial call plus 2 retries), with **1-second and 2-second** waits; callers can override the count and base interval. A non-retryable error or the final failure ends the operation. Other call sites may display the error directly or use their own recovery policy.
-
-If a transaction has been broadcast or its outcome is unknown, check Activity and existing records before trying again. The flag does not authorize automatic rebroadcast. See the [transaction lifecycle rules](../AGENTS.md#async-and-transaction-lifecycle).
-
-## Form Validation
-
-These messages are shown directly for input validation and are not system errors:
-
-- `Please enter your password`: empty password
-- `Passwords do not match`: confirmation differs
-- `Selected words do not match. Please try again.`: recovery phrase verification differs
-- `Please agree to the Terms of Use`: terms not accepted
-- `Please enter amount`: empty Swap amount
-- `Please enter receive/refund address`: empty Swap address
+Do not interpret retryable as permission to rebroadcast a transaction when broadcast may have succeeded. Check Activity and local records first. See the [transaction lifecycle](./mutil-chain/architecture/transaction-lifecycle.md).

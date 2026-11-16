@@ -1,17 +1,23 @@
 export interface AnalyticsDeviceMetadata {
   browser: string
+  browser_major_version?: string
   device_category: 'desktop'
   language: string
   operating_system: string
 }
 
-function detectBrowser(userAgent: string): string {
-  if (/Edg\//.test(userAgent)) return 'Edge'
-  if (/OPR\//.test(userAgent)) return 'Opera'
-  if (/Firefox\//.test(userAgent)) return 'Firefox'
-  if (/Chrome\//.test(userAgent)) return 'Chrome'
-  if (/Safari\//.test(userAgent)) return 'Safari'
-  return 'Other'
+function detectBrowser(userAgent: string): { name: string; major?: string } {
+  for (const [name, marker] of [
+    ['Edge', 'Edg'],
+    ['Opera', 'OPR'],
+    ['Firefox', 'Firefox'],
+    ['Chrome', 'Chrome'],
+    ['Safari', 'Version']
+  ]) {
+    const match = userAgent.match(new RegExp(`(?:^|\\s)${marker}/(\\d{1,3})(?:\\.|\\s|$)`))
+    if (match) return { name, major: match[1] }
+  }
+  return { name: 'Other' }
 }
 
 function detectOperatingSystem(userAgent: string): string {
@@ -37,8 +43,10 @@ function normalizeLanguage(language: string): string {
 export function getAnalyticsDeviceMetadata(
   source: Pick<Navigator, 'language' | 'userAgent'> = navigator
 ): AnalyticsDeviceMetadata {
+  const browser = detectBrowser(source.userAgent)
   return {
-    browser: detectBrowser(source.userAgent),
+    browser: browser.name,
+    ...(browser.major ? { browser_major_version: browser.major } : {}),
     device_category: 'desktop',
     language: normalizeLanguage(source.language),
     operating_system: detectOperatingSystem(source.userAgent)

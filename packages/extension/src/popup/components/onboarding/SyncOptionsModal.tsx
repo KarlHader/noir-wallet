@@ -3,9 +3,9 @@ import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { DatePicker } from '../ui/date-picker'
 import { lookupBlockHeightByTime } from '@/core/zcash/date-block-lookup'
-import { useWalletStore } from '@/store/wallet-store'
-import dayjs from '@/lib/dayjs'
 import { getUtcDayStartTimestamp } from '@/lib/zcash-birthday'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import dayjs from '@/lib/dayjs'
 
 type SyncType = 'height' | 'date'
 
@@ -22,13 +22,7 @@ export function SyncOptionsModal({ onConfirm, initialHeight }: SyncOptionsModalP
   const [error, setError] = useState<string | null>(null)
   const activeRequest = useRef<AbortController | null>(null)
 
-  useEffect(
-    () => () => {
-      activeRequest.current?.abort()
-      activeRequest.current = null
-    },
-    []
-  )
+  useEffect(() => () => activeRequest.current?.abort(), [])
 
   const cancelLookup = () => {
     activeRequest.current?.abort()
@@ -53,11 +47,9 @@ export function SyncOptionsModal({ onConfirm, initialHeight }: SyncOptionsModalP
           height = undefined
         } else {
           const timestamp = getUtcDayStartTimestamp(syncDate)
-          height = await lookupBlockHeightByTime(
-            timestamp,
-            useWalletStore.getState().currentNetwork,
-            { signal: controller.signal }
-          )
+          height = await lookupBlockHeightByTime(timestamp, DEFAULT_NETWORK, {
+            signal: controller.signal
+          })
         }
       }
 
@@ -117,10 +109,12 @@ export function SyncOptionsModal({ onConfirm, initialHeight }: SyncOptionsModalP
               setSyncDate(value)
             }}
             ariaLabel="Wallet creation date"
+            minDate={dayjs(DEFAULT_NETWORK === 'mainnet' ? '2018-10-01' : '2018-01-01')}
             placeholder="Select wallet creation date"
           />
           <p className="text-xs text-muted">
-            Date when this wallet was first used. Choose an earlier date if you are unsure.
+            Approximate date when this wallet was first created. Defaults to today; choose an
+            earlier date if the wallet is older.
           </p>
         </div>
       ) : (

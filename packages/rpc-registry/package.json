@@ -6,12 +6,13 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev --test-scheduled",
-    "test": "node ../../scripts/run-core-tests.mjs",
+    "test": "playwright test",
     "type-check": "tsc --noEmit",
     "verify": "pnpm type-check && pnpm test && wrangler deploy --dry-run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260904.1",
+    "@playwright/test": "1.61.1",
     "typescript": "5.9.3",
     "wrangler": "4.129.0"
   }

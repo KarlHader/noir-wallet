@@ -7,7 +7,7 @@ import {
   getNoirWallet,
   getZcashProvider,
   isNoirWalletInstalled
-} from '../src/index.ts'
+} from '../dist/index.mjs'
 
 test('provider discovery handles server and uninstalled environments', async () => {
   const previousWindow = globalThis.window

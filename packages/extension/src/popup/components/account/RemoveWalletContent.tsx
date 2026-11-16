@@ -1,22 +1,20 @@
 import { useEffect } from 'react'
 import { Button } from '../ui/button'
 import { BackupWordInputs } from '../seed-phrase/BackupWordInputs'
-import { useWalletBackupVerification } from '../../hooks/useWalletBackupVerification'
-import type { WalletBackupVerification } from '@/core/wallet/account-manager'
-
-interface RemoveWalletContentProps {
-  walletId: string
-  onRemove: (verification: WalletBackupVerification) => Promise<void>
-  onCancel: () => void
-  onViewBackup: () => void
-}
+import { useWalletBackupVerification } from '@/popup/hooks/useWalletBackupVerification'
+import type { WalletBackupVerification } from '@/core/wallet/secret-phrase-backup'
 
 export function RemoveWalletContent({
   walletId,
   onRemove,
   onCancel,
   onViewBackup
-}: RemoveWalletContentProps) {
+}: {
+  walletId: string
+  onRemove: (verification: WalletBackupVerification) => Promise<void>
+  onCancel: () => void
+  onViewBackup: () => void
+}) {
   const verification = useWalletBackupVerification(walletId)
   const { prepare, isSubmitting } = verification
 
@@ -24,35 +22,29 @@ export function RemoveWalletContent({
     void prepare()
   }, [prepare])
 
-  const handleRemove = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    await verification.submit(onRemove)
-  }
-
   return (
-    <form onSubmit={handleRemove} className="space-y-4" autoComplete="off">
+    <form
+      autoComplete="off"
+      className="space-y-4"
+      onSubmit={event => {
+        event.preventDefault()
+        void verification.submit(onRemove)
+      }}
+    >
       <p className="text-sm text-muted">
-        Enter these words from your saved backup to remove this wallet.{' '}
-        <Button
-          type="button"
-          variant="link"
-          onClick={onViewBackup}
-          disabled={isSubmitting}
-          className="inline h-auto p-0 text-sm"
-        >
+        Enter two words from your saved secret phrase to remove this wallet.{' '}
+        <button type="button" className="text-primary underline" onClick={onViewBackup}>
           View secret phrase
-        </Button>
+        </button>
       </p>
-
       <BackupWordInputs verification={verification} />
-
       <div className="flex gap-3">
         <Button
           type="button"
           variant="outline"
           onClick={onCancel}
           disabled={isSubmitting}
-          className="flex-1 h-[45px]"
+          className="flex-1"
         >
           Cancel
         </Button>
@@ -61,7 +53,7 @@ export function RemoveWalletContent({
           variant="destructive"
           disabled={!verification.canSubmit}
           isLoading={isSubmitting}
-          className="flex-1 h-[45px]"
+          className="flex-1"
         >
           Remove
         </Button>

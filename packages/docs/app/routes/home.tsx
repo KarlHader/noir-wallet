@@ -177,7 +177,7 @@ export default function HomePage() {
             </span>
             <ArrowRight aria-hidden="true" />
           </a>
-          <a href="https://github.com/NoirWallet/noir-wallet" target="_blank" rel="noreferrer">
+          <a href="https://zknoir.com/github" target="_blank" rel="noreferrer">
             <Github aria-hidden="true" />
             <span>
               <strong>GitHub</strong>

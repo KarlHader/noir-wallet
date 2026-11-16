@@ -1,6 +1,16 @@
 import { WALLET_CONFIG } from '@/config/wallet'
 import type { HardwareWalletData } from '@/types'
-import { SESSION_PASSWORD_STORAGE_KEY } from './session-state'
+import {
+  createZcashHardwareCredential,
+  legacyZcashHardwareWalletData,
+  parseKeystoneHardwareCredential,
+  parseLedgerHardwareCredential,
+  parseStoredHardwareCredential,
+  parseStoredKeystoneHardwareCredential,
+  type KeystoneHardwareCredential,
+  type LedgerHardwareCredential,
+  type StoredHardwareCredential
+} from './hardware-wallet-data'
 
 interface StoredData {
   encryptedData: string
@@ -8,7 +18,7 @@ interface StoredData {
   iv: string
 }
 
-export type EncryptedCredentialResult =
+export type CredentialInspection =
   | { status: 'valid'; data: unknown }
   | { status: 'missing' | 'invalid' | 'wrong_password' }
 
@@ -102,52 +112,45 @@ export class SecureStorage {
   static async inspectEncryptedCredential(
     key: string,
     password: string
-  ): Promise<EncryptedCredentialResult> {
-    const result = await chrome.storage.local.get(key)
-    const stored: unknown = result[key]
-    if (stored === undefined || stored === null) return { status: 'missing' }
-    if (!stored || typeof stored !== 'object') return { status: 'invalid' }
-    const fields = stored as Record<string, unknown>
+  ): Promise<CredentialInspection> {
+    const saved = (await chrome.storage.local.get(key))[key]
+    if (saved == null) return { status: 'missing' }
     if (
-      typeof fields.salt !== 'string' ||
-      typeof fields.iv !== 'string' ||
-      typeof fields.encryptedData !== 'string'
+      !saved ||
+      typeof saved !== 'object' ||
+      typeof saved.salt !== 'string' ||
+      typeof saved.iv !== 'string' ||
+      typeof saved.encryptedData !== 'string'
     ) {
       return { status: 'invalid' }
     }
-
+    let salt: Uint8Array
+    let iv: Uint8Array
+    let ciphertext: Uint8Array
     try {
-      if (
-        this.base64ToBuffer(fields.salt).length !== 16 ||
-        this.base64ToBuffer(fields.iv).length !== 12 ||
-        this.base64ToBuffer(fields.encryptedData).length < 16
-      ) {
-        return { status: 'invalid' }
-      }
+      salt = new Uint8Array(this.base64ToBuffer(saved.salt))
+      iv = new Uint8Array(this.base64ToBuffer(saved.iv))
+      ciphertext = new Uint8Array(this.base64ToBuffer(saved.encryptedData))
     } catch {
       return { status: 'invalid' }
     }
-
-    const salt = this.base64ToBuffer(fields.salt)
-    const iv = this.base64ToBuffer(fields.iv)
-    const encryptedData = this.base64ToBuffer(fields.encryptedData)
-    const derivedKey = await this.deriveKey(password, salt)
-    let decryptedBuffer: ArrayBuffer
+    if (salt.length !== 16 || iv.length !== 12 || ciphertext.length < 16) {
+      return { status: 'invalid' }
+    }
+    const cryptoKey = await this.deriveKey(password, salt)
+    let plaintext: ArrayBuffer
     try {
-      decryptedBuffer = await crypto.subtle.decrypt(
+      plaintext = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: iv as BufferSource },
-        derivedKey,
-        encryptedData as BufferSource
+        cryptoKey,
+        ciphertext as BufferSource
       )
-    } catch {
-      // AES-GCM cannot distinguish a wrong password from altered ciphertext.
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'OperationError') throw error
       return { status: 'wrong_password' }
     }
     try {
-      return {
-        status: 'valid',
-        data: JSON.parse(new TextDecoder().decode(decryptedBuffer)) as unknown
-      }
+      return { status: 'valid', data: JSON.parse(new TextDecoder().decode(plaintext)) as unknown }
     } catch {
       return { status: 'invalid' }
     }
@@ -165,7 +168,7 @@ export class SecureStorage {
   static async loadWalletSeedPhrase(walletId: string, password: string): Promise<string | null> {
     const key = `seed_${walletId}`
     const data = await this.loadEncrypted(key, password)
-    return typeof data?.seedPhrase === 'string' && data.seedPhrase.trim() ? data.seedPhrase : null
+    return data?.seedPhrase || null
   }
 
   static async removeWalletSeedPhrase(walletId: string): Promise<void> {
@@ -181,15 +184,67 @@ export class SecureStorage {
     data: HardwareWalletData,
     password: string
   ): Promise<void> {
-    await this.saveEncrypted(`hw_${walletId}`, data, password)
+    await this.saveKeystoneHardwareCredential(
+      walletId,
+      createZcashHardwareCredential(data),
+      password
+    )
+  }
+
+  static async saveKeystoneHardwareCredential(
+    walletId: string,
+    credential: KeystoneHardwareCredential,
+    password: string
+  ): Promise<void> {
+    await this.saveEncrypted(
+      `hw_${walletId}`,
+      parseKeystoneHardwareCredential(credential),
+      password
+    )
+  }
+
+  static async loadKeystoneHardwareCredential(
+    walletId: string,
+    password: string
+  ): Promise<KeystoneHardwareCredential | null> {
+    const data = await this.loadEncrypted(`hw_${walletId}`, password)
+    if (!data) return null
+    try {
+      return parseStoredKeystoneHardwareCredential(data)
+    } catch {
+      console.warn('[SecureStorage] Invalid hardware wallet data for key:', `hw_${walletId}`)
+      return null
+    }
+  }
+
+  static async saveLedgerHardwareCredential(
+    walletId: string,
+    credential: LedgerHardwareCredential,
+    password: string
+  ): Promise<void> {
+    await this.saveEncrypted(`hw_${walletId}`, parseLedgerHardwareCredential(credential), password)
+  }
+
+  static async loadStoredHardwareCredential(
+    walletId: string,
+    password: string
+  ): Promise<StoredHardwareCredential | null> {
+    const data = await this.loadEncrypted(`hw_${walletId}`, password)
+    if (!data) return null
+    try {
+      return parseStoredHardwareCredential(data)
+    } catch {
+      console.warn('[SecureStorage] Invalid hardware wallet data for key:', `hw_${walletId}`)
+      return null
+    }
   }
 
   static async loadHardwareWalletData(
     walletId: string,
     password: string
   ): Promise<HardwareWalletData | null> {
-    const data = await this.loadEncrypted(`hw_${walletId}`, password)
-    return data?.ufvk ? (data as HardwareWalletData) : null
+    const credential = await this.loadStoredHardwareCredential(walletId, password)
+    return credential ? legacyZcashHardwareWalletData(credential) : null
   }
 
   static async removeHardwareWalletData(walletId: string): Promise<void> {
@@ -282,7 +337,7 @@ export class SecureStorage {
 
   // ==================== Activity Time Tracking ====================
 
-  private static readonly LAST_ACTIVITY_KEY = 'last_activity_time'
+  static readonly LAST_ACTIVITY_KEY = 'last_activity_time'
 
   static async saveLastActivityTime(): Promise<void> {
     await chrome.storage.local.set({ [this.LAST_ACTIVITY_KEY]: Date.now() })
@@ -297,127 +352,9 @@ export class SecureStorage {
     await chrome.storage.local.remove(this.LAST_ACTIVITY_KEY)
   }
 
-  // ==================== Session Password Management ====================
-  //
-  // Security design:
-  // The unlock password is AES-GCM encrypted before being stored in
-  // chrome.storage.session. The encryption key material is also kept in session
-  // storage so that all extension contexts (popup, background, offscreen) can
-  // decrypt it — this is an inherent constraint of Chrome Extension's
-  // multi-process architecture where popup and background run in separate JS
-  // contexts with no shared memory.
-  //
-  // Threat model & mitigations:
-  // 1. chrome.storage.session is accessible ONLY to this extension's contexts
-  //    (not to web pages or other extensions) and is cleared on browser close.
-  // 2. The encryption prevents the password from appearing as a readable string
-  //    in session storage dumps / DevTools inspection, adding a practical layer
-  //    of defense against casual exposure (e.g. screenshots, shoulder surfing,
-  //    debug logs that dump storage).
-  // 3. A full extension-context compromise (e.g. malicious code running inside
-  //    this extension) would allow reading both key and ciphertext. This is a
-  //    known limitation accepted by all major browser wallets (MetaMask, Phantom,
-  //    etc.) — at that point the attacker already has full access to the DOM and
-  //    can intercept the password at entry time.
-  // 4. setAccessLevel is kept at the default (TRUSTED_CONTEXTS only) to prevent
-  //    content scripts from reading session storage.
-
-  private static readonly SESSION_PASSWORD_KEY = SESSION_PASSWORD_STORAGE_KEY
-  private static readonly SESSION_KEY_MATERIAL_KEY = 'session_key_material'
-  private static sessionEncryptionKey: CryptoKey | null = null
-
-  private static async getSessionKey(): Promise<CryptoKey> {
-    if (this.sessionEncryptionKey) {
-      return this.sessionEncryptionKey
-    }
-
-    const result = await chrome.storage.session.get(this.SESSION_KEY_MATERIAL_KEY)
-    let keyMaterial: Uint8Array
-
-    if (result[this.SESSION_KEY_MATERIAL_KEY]) {
-      keyMaterial = new Uint8Array(result[this.SESSION_KEY_MATERIAL_KEY])
-    } else {
-      keyMaterial = crypto.getRandomValues(new Uint8Array(32))
-      await chrome.storage.session.set({
-        [this.SESSION_KEY_MATERIAL_KEY]: Array.from(keyMaterial)
-      })
-    }
-
-    this.sessionEncryptionKey = await crypto.subtle.importKey(
-      'raw',
-      keyMaterial as BufferSource,
-      { name: 'AES-GCM' },
-      false,
-      ['encrypt', 'decrypt']
-    )
-
-    return this.sessionEncryptionKey
-  }
-
-  /**
-   * Save password encrypted to chrome.storage.session.
-   * Shared across all extension contexts (popup, background, offscreen).
-   * Auto-clears when browser closes.
-   */
-  static async saveSessionPassword(password: string): Promise<void> {
-    const key = await this.getSessionKey()
-    const iv = crypto.getRandomValues(new Uint8Array(12))
-    const encoder = new TextEncoder()
-
-    const encryptedBuffer = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      encoder.encode(password)
-    )
-
-    await chrome.storage.session.set({
-      [this.SESSION_PASSWORD_KEY]: {
-        encrypted: this.bufferToBase64(encryptedBuffer),
-        iv: this.bufferToBase64(iv.buffer)
-      }
-    })
-  }
-
-  /**
-   * Get session password from chrome.storage.session (decrypted).
-   * Returns null if data is missing or decryption fails.
-   */
-  static async getSessionPassword(): Promise<string | null> {
-    const result = await chrome.storage.session.get(this.SESSION_PASSWORD_KEY)
-    const data = result[this.SESSION_PASSWORD_KEY]
-
-    if (!data) return null
-
-    if (typeof data === 'string') {
-      await chrome.storage.session.remove(this.SESSION_PASSWORD_KEY)
-      return null
-    }
-
-    if (!data.encrypted || !data.iv) return null
-
-    try {
-      const key = await this.getSessionKey()
-      const encryptedData = this.base64ToBuffer(data.encrypted)
-      const ivData = this.base64ToBuffer(data.iv)
-
-      const decryptedBuffer = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: ivData as BufferSource },
-        key,
-        encryptedData as BufferSource
-      )
-
-      return new TextDecoder().decode(decryptedBuffer)
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * Clear session password and key material from chrome.storage.session
-   */
-  static async clearSessionPassword(): Promise<void> {
-    this.sessionEncryptionKey = null
-    await chrome.storage.session.remove([this.SESSION_PASSWORD_KEY, this.SESSION_KEY_MATERIAL_KEY])
+  /** Remove credentials written by pre-V2 builds; current sessions never create these keys. */
+  static async clearLegacySessionPasswordArtifacts(): Promise<void> {
+    await chrome.storage.session.remove(['session_password', 'session_key_material'])
   }
 
   // ==================== Secure Memory ====================

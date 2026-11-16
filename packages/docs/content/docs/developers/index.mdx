@@ -6,24 +6,28 @@ icon: CodeXml
 
 The Noir Wallet SDK wraps the provider injected at `window.noirwallet` and exposes a typed Zcash API.
 
-## Choose an extension build
+## Install the extension
 
 <Cards>
   <Card
-    title="Mainnet — Chrome Web Store"
+    title="Chrome Web Store"
     href="https://chromewebstore.google.com/detail/noir-wallet/mfoghjbpfanobmnoemoepenjjcmfpmdn"
     icon="Chrome"
   >
-    Install the production extension for real ZEC.
+    Install the currently published wallet.
   </Card>
-  <Card title="Testnet — GitHub Releases" href="https://zknoir.com/beta/versions" icon="Download">
-    Download the official asset whose filename ends with `-testnet.zip`.
+  <Card
+    title="V2 beta builds"
+    href="https://github.com/NoirWallet/noir-wallet/blob/main/docs/release-workflow.md#routine-previews"
+    icon="Download"
+  >
+    Find the reviewed Beta artifact and load its ZIP locally.
   </Card>
 </Cards>
 
-<Callout type="info" title="Mainnet and testnet are separate extensions">
-  The SDK does not switch networks at runtime. Install the build for the network you are testing;
-  each build has a different extension ID and isolated wallet data. See the [installation
+<Callout type="info" title="Choose a network in the wallet">
+  V2 uses one extension with a global Mainnet/Testnet Mode in Developer Settings. Changing mode
+  locks and reloads the wallet. The SDK cannot change this setting. See the [installation
   steps](/noir-sdk-integration#install-the-extension).
 </Callout>
 
@@ -47,7 +51,7 @@ The Noir Wallet SDK wraps the provider injected at `window.noirwallet` and expos
 ## Package
 
 ```bash title="Install with pnpm"
-pnpm add @noir-wallet/sdk
+pnpm add @noir-wallet/sdk@beta --save-exact
 ```
 
 The public entry point is `getNoirWallet()`. It returns `null` when the provider is not available.

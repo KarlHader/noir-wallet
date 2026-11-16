@@ -4,9 +4,29 @@
  * Raw errors from WASM/gRPC/Worker are matched against patterns and
  * converted to actionable messages the user can understand.
  */
-
-import { redactSensitiveText } from './diagnostic-log'
 import { isWalletSnapshotIntegrityError } from './wallet-snapshot-errors'
+
+export const WALLET_SNAPSHOT_RECOVERY_MESSAGE =
+  'Wallet data needs to be resynced before sending again.'
+
+export function getResponseErrorMessage(response: unknown): string | undefined {
+  if (
+    typeof response !== 'object' ||
+    response === null ||
+    Array.isArray(response) ||
+    !('error' in response)
+  )
+    return undefined
+  return typeof response.error === 'string' ? response.error : undefined
+}
+
+export function isWalletSnapshotRecoveryError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const prefix = `${WALLET_SNAPSHOT_RECOVERY_MESSAGE}\n\nOriginal error: `
+  return isWalletSnapshotIntegrityError(
+    message.startsWith(prefix) ? message.slice(prefix.length) : message
+  )
+}
 
 interface ErrorMapping {
   pattern: RegExp
@@ -18,18 +38,11 @@ const RPC_ENDPOINT_ERROR_PATTERN =
   /gRPC|grpc|StatusCode::|UNAVAILABLE|transport error|connect error|deadline exceeded|fetch.*failed|network.*error|ERR_NETWORK|net::ERR_|ECONNREFUSED|ENOTFOUND|ECONNRESET|rate.?limit|InvalidContentType|invalid content type|MalformedResponse|malformed response|Failed to resolve chain height from network|HTTP\s+(?:408|425|429|5\d{2})\b/i
 const LOCAL_WALLET_RPC_ERROR_PATTERN =
   /Offscreen RPC|Worker RPC|Worker crashed|Worker not initialized|SYNC_BUSY|STALE_WALLET_RPC|WALLET_DIRTY/i
+const WALLET_LOCKED_ERROR_PATTERN = /Wallet is locked|Wallet not unlocked|Wallet locked/i
 
-export const WALLET_SNAPSHOT_RECOVERY_MESSAGE =
-  'Wallet data is incomplete. Resync this wallet before sending again.'
-
-const ORIGINAL_ERROR_SEPARATOR = '\n\nOriginal error: '
-
-export function isWalletSnapshotRecoveryError(error: unknown): boolean {
+export function isWalletLockedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  const prefix = `${WALLET_SNAPSHOT_RECOVERY_MESSAGE}${ORIGINAL_ERROR_SEPARATOR}`
-  return isWalletSnapshotIntegrityError(
-    message.startsWith(prefix) ? message.slice(prefix.length) : message
-  )
+  return WALLET_LOCKED_ERROR_PATTERN.test(message)
 }
 
 export function isRpcEndpointError(error: unknown): boolean {
@@ -47,7 +60,7 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
   },
   {
     pattern: /timeout|timed out|deadline exceeded/i,
-    message: 'Request timed out. The server may be busy — please try again.',
+    message: 'Request timed out.',
     retryable: true
   },
   {
@@ -61,13 +74,46 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
     retryable: true
   },
   {
-    pattern: /rate.?limit/i,
+    pattern: /rate.?limit|\bHTTP\s+429\b/i,
     message: 'Server is busy. Please wait a moment and try again.',
     retryable: true
   },
   {
     pattern: /HTTP\s+5\d{2}\b/i,
     message: 'Service is temporarily unavailable. Please try again shortly.',
+    retryable: true
+  },
+  {
+    pattern: /EVM transaction failed simulation/i,
+    message: 'The transaction failed simulation. Check the transaction details and try again.',
+    retryable: false
+  },
+
+  // --- Swap routing ---
+  {
+    pattern: /RHEA Swap quote expired/i,
+    message: 'Swap quote expired. Get a new quote and review it again.',
+    retryable: false
+  },
+  {
+    pattern: /minimum (?:swap )?amount|amount.*(?:below|less than).*minimum/i,
+    message: 'Amount is below the current minimum for this Swap route.',
+    retryable: false
+  },
+  {
+    pattern: /no liquidity|no (?:swap )?route|route not found|failed to find.*route/i,
+    message: 'No Swap route is available for this asset pair.',
+    retryable: false
+  },
+  {
+    pattern:
+      /token .*not found on chain|token .*not supported by 1click|unsupported (?:destination )?token/i,
+    message: 'This asset is not supported for this Swap route.',
+    retryable: false
+  },
+  {
+    pattern: /1click upstream|swap provider.*unavailable|quote endpoint.*unavailable/i,
+    message: 'The Swap provider is temporarily unavailable. Please try again later.',
     retryable: true
   },
 
@@ -110,6 +156,21 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
 
   // --- Authentication / Account ---
   {
+    pattern: /^Backup words do not match this wallet\./i,
+    message: 'Backup words do not match this wallet. View your secret phrase and try again.',
+    retryable: false
+  },
+  {
+    pattern: /^Unable to verify this wallet backup\./i,
+    message: "Unlock and view this wallet's secret phrase before verifying its backup.",
+    retryable: false
+  },
+  {
+    pattern: /^Wallet changed or (?:was removed|locked)\. Please try again\./i,
+    message: 'Wallet state changed. Please retry the operation.',
+    retryable: true
+  },
+  {
     pattern: /Incorrect password|Current password is incorrect/i,
     message: 'Incorrect password. Please try again.',
     retryable: false
@@ -130,12 +191,12 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
     retryable: false
   },
   {
-    pattern: /Wallet is locked|Wallet not unlocked|Wallet locked/i,
+    pattern: WALLET_LOCKED_ERROR_PATTERN,
     message: 'Wallet is locked. Please unlock and try again.',
     retryable: false
   },
   {
-    pattern: /AccountManager not initialized|Wallet not initialized/i,
+    pattern: /Zcash wallet runtime not initialized|Wallet not initialized/i,
     message: 'Wallet is initializing. Please wait a moment and try again.',
     retryable: true
   },
@@ -182,7 +243,13 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
 
   // --- Transaction ---
   {
-    pattern: /insufficient.*balance|not enough.*fund/i,
+    pattern:
+      /The EVM balance (?:is insufficient|does not cover the transfer and network fee)|(?:EVM account|Private Execution Address) needs \d+ more wei for transaction value and maximum Gas/i,
+    message: 'Insufficient native balance for the amount and network fee.',
+    retryable: false
+  },
+  {
+    pattern: /InsufficientFunds|insufficient.*(?:balance|fund)|not enough.*fund/i,
     message: 'Insufficient balance for this transaction.',
     retryable: false
   },
@@ -261,18 +328,6 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
     retryable: false
   },
   {
-    pattern: /LedgerPcztTransparentInputDataError/i,
-    message:
-      'Transparent funds changed or are still syncing. Try again to refresh and rebuild the transaction.',
-    retryable: true
-  },
-  {
-    pattern: /IncorrectDataError|ZcashAppCommandError\/6a80/i,
-    message:
-      'Ledger rejected the transaction data (0x6a80). Rebuild the transaction and try again.',
-    retryable: true
-  },
-  {
     pattern: /Unrecognized QR code|Unexpected QR content/i,
     message: 'Unrecognized QR code format. Please scan a valid Zcash QR code.',
     retryable: false
@@ -287,7 +342,7 @@ const ERROR_MAPPINGS: ErrorMapping[] = [
 
   // --- Persist / Storage ---
   {
-    pattern: /persist timeout|Failed to serialize wallet database snapshot:/i,
+    pattern: /persist timeout/i,
     message: 'Failed to save wallet data. Please try again.',
     retryable: true
   },
@@ -311,46 +366,30 @@ export interface ClassifiedError {
   retryable: boolean
 }
 
-export function formatErrorMessage(message: string, originalError: string): string {
-  const detail = redactSensitiveText(originalError)
-  return detail && detail !== message ? `${message}${ORIGINAL_ERROR_SEPARATOR}${detail}` : message
-}
-
 export function classifyError(error: unknown): ClassifiedError {
   const raw =
     error instanceof Error ? error.message : typeof error === 'string' ? error : String(error)
 
-  // Errors cross Worker and UI boundaries as strings, sometimes after classification.
-  const previousMessage = [
-    WALLET_SNAPSHOT_RECOVERY_MESSAGE,
-    ...ERROR_MAPPINGS.map(m => m.message)
-  ].find(message => raw === message || raw.startsWith(`${message}${ORIGINAL_ERROR_SEPARATOR}`))
-  const technicalMessage =
-    previousMessage && raw !== previousMessage
-      ? raw.slice(previousMessage.length + ORIGINAL_ERROR_SEPARATOR.length)
-      : raw
-
-  const classify = (message: string, retryable: boolean): ClassifiedError => ({
-    userMessage: formatErrorMessage(message, technicalMessage),
-    technicalMessage,
-    retryable
-  })
-
-  if (isWalletSnapshotRecoveryError(raw)) {
-    return classify(WALLET_SNAPSHOT_RECOVERY_MESSAGE, false)
+  if (isWalletSnapshotRecoveryError(error)) {
+    return {
+      userMessage: WALLET_SNAPSHOT_RECOVERY_MESSAGE,
+      technicalMessage: raw,
+      retryable: false
+    }
   }
-
-  const previousMapping = ERROR_MAPPINGS.find(mapping => mapping.message === previousMessage)
-  if (previousMapping) return classify(previousMapping.message, previousMapping.retryable)
 
   for (const mapping of ERROR_MAPPINGS) {
     if (mapping.pattern.test(raw)) {
-      return classify(mapping.message, mapping.retryable)
+      return {
+        userMessage: mapping.message,
+        technicalMessage: raw,
+        retryable: mapping.retryable
+      }
     }
   }
 
   return {
-    userMessage: redactSensitiveText(raw) || 'Unknown error',
+    userMessage: 'An unexpected error occurred. Please try again.',
     technicalMessage: raw,
     retryable: true
   }

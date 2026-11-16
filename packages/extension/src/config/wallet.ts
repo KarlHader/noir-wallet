@@ -4,6 +4,21 @@
 
 export const ZEC_DECIMALS = 8
 export const SHIELDING_THRESHOLD_ZATOSHIS = 100_000
+export const MNEMONIC_WORD_COUNTS = [12, 24] as const
+export type MnemonicWordCount = (typeof MNEMONIC_WORD_COUNTS)[number]
+
+/**
+ * Applies only when a password is created or changed. Existing V1 passwords
+ * must remain byte-for-byte compatible and are never rejected by this policy.
+ */
+export const PASSWORD_POLICY = Object.freeze({
+  MIN_LENGTH: 8,
+  MAX_LENGTH: 64
+})
+
+export function isMnemonicWordCount(value: number): value is MnemonicWordCount {
+  return MNEMONIC_WORD_COUNTS.some(wordCount => wordCount === value)
+}
 
 /**
  * HD account index reserved for privacy-preserving message signing.
@@ -15,13 +30,13 @@ export const SIGNING_ACCOUNT_INDEX = 2147483647
 const MAX_BLOCKING_WAIT_MS = 10 * 60 * 1000
 
 export const WALLET_CONFIG = {
-  /** BIP-39 mnemonic word count */
-  MNEMONIC_LENGTH: 24,
+  /** Default BIP-39 mnemonic word count */
+  MNEMONIC_LENGTH: 24 as MnemonicWordCount,
   /** Minimum block confirmations for outbound transaction finality */
   MIN_CONFIRMATIONS: 3,
   /** Confirmations before an external incoming transaction reaches Activity finality. */
   SPENDABILITY_CONFIRMATIONS: 10,
-  /** Balance queries and WASM input selection use the same confirmation depth. */
+  /** Balance queries use the same depth as WASM input selection. */
   WASM_CONFIRMATIONS_POLICY: {
     trusted: 3,
     untrusted: 3
@@ -34,7 +49,8 @@ export const WALLET_CONFIG = {
   NETWORK_FEE: 0.00015,
 
   SECURITY: {
-    MIN_PASSWORD_LENGTH: 8,
+    MIN_PASSWORD_LENGTH: PASSWORD_POLICY.MIN_LENGTH,
+    MAX_PASSWORD_LENGTH: PASSWORD_POLICY.MAX_LENGTH,
     /** Brute-force protection: lock wallet after repeated failures */
     LOGIN_ATTEMPTS: {
       MAX_ATTEMPTS: 5,
@@ -87,17 +103,12 @@ export const WALLET_CONFIG = {
     SESSION_SETUP_REFRESH_EVERY_N_BATCHES: 20,
     /** Home balance polling interval (ms) */
     BALANCE_POLL_MS: 1 * 60 * 1000,
-    /** Base interval for low-frequency background chain-tip probes (minutes) */
+    /** Base interval for background chain-tip probes (minutes) */
     BACKGROUND_POLL_MINUTES: 30,
-    /** Random spread applied to background probes to avoid synchronized clients */
     BACKGROUND_POLL_JITTER_MINUTES: 5,
-    /** Maximum delay after repeated background probe failures */
     BACKGROUND_POLL_MAX_BACKOFF_MINUTES: 120,
-    /** Minimum chain-tip gap that warrants an inactive-wallet catch-up */
     BACKGROUND_MIN_GAP_BLOCKS: 10,
-    /** Force an inactive-wallet refresh when cached state is older than this */
     BACKGROUND_MAX_STALE_MS: 60 * 60 * 1000,
-    /** Soft budget for background scans; an in-flight WASM batch is allowed to finish */
     BACKGROUND_SYNC_BUDGET_MS: 90 * 1000,
     /** Minimum age of cached wallet state before a dApp balance read requests a sync */
     DAPP_BALANCE_SYNC_STALE_MS: 30 * 1000,
@@ -143,26 +154,5 @@ export const WALLET_CONFIG = {
     }
   }
 } as const
-
-/** Confirmation depth used by WASM input selection for both trusted and untrusted funds. */
-export const WASM_SELECTION_CONFIRMATIONS = Math.min(
-  WALLET_CONFIG.WASM_CONFIRMATIONS_POLICY.trusted,
-  WALLET_CONFIG.WASM_CONFIRMATIONS_POLICY.untrusted
-)
-
-/**
- * Returns the maximum shielded amount that can be safely spent while reserving
- * fee headroom and dust threshold required by the wallet builder.
- *
- * The reserve uses the ZIP-317 Standard-tier fee on purpose. This is only a
- * conservative seed for Max before a destination-specific WASM estimate is
- * available; displayed Available balances exclude pending funds but not fees.
- */
-export function getMaxSpendableZec(shieldedBalance: string | number): string {
-  const rawBalance =
-    typeof shieldedBalance === 'number' ? shieldedBalance : Number(shieldedBalance || 0)
-  const reserve = WALLET_CONFIG.NETWORK_FEE * 2 + WALLET_CONFIG.DUST_THRESHOLD
-  return Math.max(0, rawBalance - reserve).toFixed(ZEC_DECIMALS)
-}
 
 export type AutoLockMs = (typeof WALLET_CONFIG.SECURITY.AUTO_LOCK.OPTIONS)[number]['value']

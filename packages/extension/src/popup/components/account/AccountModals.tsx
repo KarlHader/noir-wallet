@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { DatePicker } from '../ui/date-picker'
-import { accountManager } from '@/core/wallet/account-manager'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import dayjs from '@/lib/dayjs'
 import {
   formatBirthdayResyncHint,
@@ -11,79 +12,32 @@ import {
   type BirthdayHeightSource
 } from '@/lib/zcash-birthday'
 import { classifyError } from '@/lib/errors'
-
-interface RenameAccountContentProps {
-  walletId: string
-  accountId: string
-  currentName: string
-  close: () => void
-}
-
-export function RenameAccountContent({
-  walletId,
-  accountId,
-  currentName,
-  close
-}: RenameAccountContentProps) {
-  const [name, setName] = useState(currentName)
-  const [isSaving, setIsSaving] = useState(false)
-
-  const handleSave = async () => {
-    const trimmedName = name.trim()
-    if (trimmedName && trimmedName !== currentName) {
-      setIsSaving(true)
-      try {
-        await accountManager.renameAccount(walletId, accountId, trimmedName)
-        close()
-      } catch (e) {
-        console.error('Failed to rename account:', e)
-        setIsSaving(false)
-      }
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm text-muted mb-2">Account name</label>
-        <Input
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="Enter account name"
-          className="h-[46px] rounded-xl"
-          autoFocus
-        />
-      </div>
-
-      <Button
-        disabled={!name.trim() || name.trim() === currentName || isSaving}
-        onClick={handleSave}
-        isLoading={isSaving}
-        className="w-full h-[45px]"
-      >
-        Confirm
-      </Button>
-    </div>
-  )
-}
+import {
+  isValidZcashBirthdayHeight,
+  parseZcashBirthdayHeightInput
+} from '@/core/wallet/birthday-height'
 
 type ResyncEditMode = 'height' | 'date'
 
-interface ResyncWalletContentProps {
+interface ResyncZcashContentProps {
   walletId: string
   accountId: string
   birthdayHeight: number
+  recovery?: boolean
+  onGetHelp?: () => void
   onConfirm: (height: number) => Promise<void>
   close: () => void
 }
 
-export function ResyncWalletContent({
+export function ResyncZcashContent({
   walletId,
   accountId,
   birthdayHeight,
+  recovery = false,
+  onGetHelp,
   onConfirm,
   close
-}: ResyncWalletContentProps) {
+}: ResyncZcashContentProps) {
   const [editMode, setEditMode] = useState<ResyncEditMode>('height')
   const [resolvedHeight, setResolvedHeight] = useState(birthdayHeight)
   const [editHeight, setEditHeight] = useState(birthdayHeight > 0 ? birthdayHeight.toString() : '')
@@ -92,6 +46,7 @@ export function ResyncWalletContent({
   const [blockTimestamp, setBlockTimestamp] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const parsedHeight = parseZcashBirthdayHeightInput(editHeight)
 
   useEffect(() => {
     let cancelled = false
@@ -101,7 +56,7 @@ export function ResyncWalletContent({
       let source: BirthdayHeightSource = birthdayHeight > 0 ? 'stored' : 'none'
 
       if (height <= 0) {
-        const resolved = await accountManager.resolveBirthdayHeight(walletId, accountId)
+        const resolved = await zcashWalletRuntimeClient.resolveBirthdayHeight(walletId, accountId)
         height = resolved.height
         source = resolved.source
       }
@@ -128,7 +83,7 @@ export function ResyncWalletContent({
       }
 
       try {
-        const timestamp = await accountManager.getBlockTime(height)
+        const timestamp = await zcashWalletRuntimeClient.getBlockTime(height)
         if (cancelled) return
         setBlockTimestamp(timestamp)
         setSyncDate(getBirthdayDateFromBlockTimestamp(timestamp))
@@ -140,7 +95,9 @@ export function ResyncWalletContent({
       }
     }
 
-    void load()
+    void load().catch(error => {
+      if (!cancelled) setError(classifyError(error).userMessage)
+    })
 
     return () => {
       cancelled = true
@@ -159,11 +116,19 @@ export function ResyncWalletContent({
           height = resolvedHeight
         } else {
           const timestamp = getUtcDayStartTimestamp(syncDate)
-          height = await accountManager.getBlockByTime(timestamp)
+          height = await zcashWalletRuntimeClient.getBlockByTime(timestamp)
         }
       } else {
-        height = parseInt(editHeight, 10)
-        if (isNaN(height) || height < 0) return
+        if (parsedHeight === null) {
+          setError('Enter a valid whole-number Zcash block height.')
+          return
+        }
+        height = parsedHeight
+      }
+
+      if (!isValidZcashBirthdayHeight(height)) {
+        setError('Enter a valid whole-number Zcash block height.')
+        return
       }
 
       await onConfirm(height)
@@ -177,6 +142,19 @@ export function ResyncWalletContent({
 
   return (
     <div className="space-y-4">
+      {recovery && (
+        <p className="text-sm text-muted">
+          Zcash data could not be loaded. Resync to restore your balance and transaction history.
+        </p>
+      )}
+      <div className="p-3 bg-warning-surface rounded-lg border border-warning/20">
+        <p className="text-xs text-warning">
+          This rebuilds local Zcash data for every account in this wallet. EVM and Bitcoin data are
+          not changed. Use the earliest block/date any Zcash account may have funds; a too-recent
+          start point can miss older balances.
+        </p>
+      </div>
+
       <div>
         <div className="flex gap-3 mb-3">
           <button
@@ -210,12 +188,22 @@ export function ResyncWalletContent({
         {editMode === 'height' ? (
           <>
             <Input
-              type="number"
+              type="text"
+              inputMode="numeric"
+              aria-label="Zcash resync block height"
               value={editHeight}
-              onChange={e => setEditHeight(e.target.value)}
+              onChange={e => {
+                setEditHeight(e.target.value)
+                setError(null)
+              }}
               placeholder="e.g. 1000000"
               className="h-[46px] rounded-xl"
             />
+            {editHeight && parsedHeight === null && (
+              <p role="alert" className="mt-1.5 text-xs text-destructive">
+                Enter a valid whole-number Zcash block height.
+              </p>
+            )}
             <p className="text-xs text-muted mt-1.5">
               {formatBirthdayResyncHint(resolvedHeight, blockTimestamp, heightSource)}
             </p>
@@ -225,17 +213,28 @@ export function ResyncWalletContent({
             <DatePicker
               value={syncDate}
               onChange={setSyncDate}
-              ariaLabel="Wallet birthday date"
+              ariaLabel="Wallet creation date"
+              minDate={dayjs(DEFAULT_NETWORK === 'mainnet' ? '2018-10-01' : '2018-01-01')}
               placeholder="Select wallet creation date"
             />
             <p className="text-xs text-muted mt-1.5">
-              Resyncs all accounts from this date; choose an earlier date if you are unsure.
+              Approximate date when this wallet was first created. The block height will be
+              calculated automatically.
             </p>
           </>
         )}
       </div>
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && (
+        <div role="alert" className="space-y-2">
+          <p className="text-xs text-destructive">{error}</p>
+          {onGetHelp && (
+            <button type="button" onClick={onGetHelp} className="text-xs text-primary">
+              Get help
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-3 pt-1">
         <Button variant="outline" onClick={close} disabled={isLoading} className="flex-1 h-[45px]">
@@ -245,7 +244,11 @@ export function ResyncWalletContent({
           variant="destructive"
           onClick={handleResync}
           isLoading={isLoading}
-          disabled={editMode === 'height' && (!editHeight || parseInt(editHeight, 10) < 0)}
+          disabled={
+            editMode === 'height'
+              ? parsedHeight === null
+              : !syncDate && !isValidZcashBirthdayHeight(resolvedHeight)
+          }
           className="flex-1 h-[45px]"
         >
           Resync

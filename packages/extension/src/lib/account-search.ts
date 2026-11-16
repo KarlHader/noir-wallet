@@ -1,7 +1,7 @@
 interface SearchableAccount {
   name: string
   walletName: string
-  addresses: { address: string }[]
+  addresses: readonly { readonly address: string }[]
 }
 
 export function matchesAccountSearch(account: SearchableAccount, query: string): boolean {

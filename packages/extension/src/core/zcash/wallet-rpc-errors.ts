@@ -17,6 +17,10 @@ export function isWalletDirtyError(message: string): boolean {
   return message.includes('WALLET_DIRTY')
 }
 
+export function isWalletNotInitializedError(message: string): boolean {
+  return message.includes('Wallet not initialized:')
+}
+
 /**
  * WASM rejects creating an account whose name already exists. This surfaces when
  * concurrent unlock/sync flows both try to create the same account; the account
@@ -27,7 +31,12 @@ export function isAccountAlreadyExistsError(message: string): boolean {
 }
 
 export function isRetryableWalletRpcError(message: string): boolean {
-  return isSyncBusyError(message) || isStaleWalletRpcError(message) || isWalletDirtyError(message)
+  return (
+    isSyncBusyError(message) ||
+    isStaleWalletRpcError(message) ||
+    isWalletDirtyError(message) ||
+    isWalletNotInitializedError(message)
+  )
 }
 
 export function getRetryableWalletRpcUserMessage(message: string): string {

@@ -108,7 +108,6 @@ export type TxLookup =
 export async function lookupTransaction(baseUrl: string, txid: string): Promise<TxLookup> {
   try {
     const tx = await getVerboseTransaction(baseUrl, txid)
-    // A successful RPC response is evidence only for the requested transaction.
     if (
       !txid.trim() ||
       typeof tx?.txid !== 'string' ||

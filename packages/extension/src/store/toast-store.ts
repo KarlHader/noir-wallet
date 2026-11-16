@@ -1,15 +1,16 @@
 import { create } from 'zustand'
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info'
-export type ToastVariant = 'compact' | 'notification'
+export type ToastVariant = 'compact' | 'notification' | 'bottom-action'
 
-interface ToastAction {
+export interface ToastAction {
   label: string
   onClick: () => void
 }
 
 interface ToastOptions {
   action?: ToastAction
+  secondaryAction?: ToastAction
   variant?: ToastVariant
 }
 
@@ -19,6 +20,7 @@ interface Toast {
   title: string
   description?: string
   action?: ToastAction
+  secondaryAction?: ToastAction
   variant?: ToastVariant
 }
 
@@ -31,8 +33,9 @@ interface ToastStore {
 export const useToastStore = create<ToastStore>((set, get) => ({
   toasts: [],
   addToast: toast => {
-    const id = Date.now().toString()
-    const durationMs = toast.variant === 'notification' ? 8000 : 4000
+    const id = `${Date.now()}-${crypto.randomUUID()}`
+    const durationMs =
+      toast.variant === 'bottom-action' ? 12_000 : toast.variant === 'notification' ? 8000 : 4000
     set({ toasts: [...get().toasts, { ...toast, id }] })
     setTimeout(() => get().removeToast(id), durationMs)
   },
@@ -54,5 +57,19 @@ export const toast = {
   },
   info: (title: string, description?: string, options?: ToastOptions) => {
     useToastStore.getState().addToast({ type: 'info', title, description, ...options })
+  },
+  action: (
+    title: string,
+    description: string,
+    options: Pick<ToastOptions, 'action' | 'secondaryAction'> &
+      Required<Pick<ToastOptions, 'action'>>
+  ) => {
+    useToastStore.getState().addToast({
+      type: 'info',
+      title,
+      description,
+      variant: 'bottom-action',
+      ...options
+    })
   }
 }
