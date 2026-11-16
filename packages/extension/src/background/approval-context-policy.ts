@@ -6,8 +6,8 @@ export interface ApprovalContextSnapshot {
   readonly currentNetwork: Network
   readonly requestWalletId: string
   readonly requestAccountId: string
-  readonly currentWalletId: string | null
-  readonly currentAccountId: string | null
+  readonly boundWalletId: string | null
+  readonly boundAccountId: string | null
   readonly accountExists: boolean
   readonly locked: boolean
   readonly authorizationRevision: number
@@ -20,11 +20,12 @@ export function approvalContextMatches(snapshot: ApprovalContextSnapshot): boole
   return (
     !snapshot.locked &&
     snapshot.currentNetwork === snapshot.requestNetwork &&
-    snapshot.currentWalletId === snapshot.requestWalletId &&
-    snapshot.currentAccountId === snapshot.requestAccountId &&
-    snapshot.accountExists &&
     snapshot.currentAuthorizationRevision === snapshot.authorizationRevision &&
-    (snapshot.action === 'connect' || snapshot.accountAuthorized) &&
+    (snapshot.action === 'connect' ||
+      (snapshot.boundWalletId === snapshot.requestWalletId &&
+        snapshot.boundAccountId === snapshot.requestAccountId &&
+        snapshot.accountExists &&
+        snapshot.accountAuthorized)) &&
     snapshot.requestStillPending
   )
 }

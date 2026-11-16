@@ -5780,8 +5780,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           throw new Error('Hardware signing request expired or does not match this transaction.')
         }
         await clearPreparedHardwareSignRequest(message.requestId)
-        const built = await handleHardwarePcztBuild(message)
+        if (request.dappRequestId) await assertHardwareDAppBinding(request)
+        const built = await handleHardwarePcztBuild(message, Boolean(request.dappRequestId))
         if (!built.success) return built
+        if (request.dappRequestId) await assertHardwareDAppBinding(request)
         await writePreparedHardwareSignRequest(message.requestId, {
           request,
           fullPcztBase64: built.full,
@@ -5833,31 +5835,19 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         if (!isHardwareSignRequestFresh(request)) {
           throw new Error('Hardware signing request expired.')
         }
-        await assertActiveBackgroundAccountScope(request.walletId, request.accountId)
-        if (request.dappRequestId) {
-          if (request.kind !== 'send' || !request.origin) {
-            throw new Error('Invalid dApp hardware signing request.')
-          }
-          if (
-            !isHardwareDAppAuthorizationCurrent(
-              request,
-              await dappManager.getAuthorization(request.origin)
-            )
-          ) {
-            throw new Error('This site authorization changed. Review the request again.')
-          }
-          const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(request.origin)
-          if (!snapshot) {
-            throw new Error('This site is no longer authorized. Review the request again.')
-          }
-        }
+        if (request.dappRequestId) await assertHardwareDAppBinding(request)
+        else await assertActiveBackgroundAccountScope(request.walletId, request.accountId)
         return withTxSyncPause(request.walletId, async () => {
           await ensurePendingHardwareTransactionRecord(
             request.walletId,
             request.accountId,
             message.transactionId
           )
-          const walletCore = await prepareWalletCoreForTx(request.walletId, request.accountId)
+          const walletCore = await prepareWalletCoreForTx(
+            request.walletId,
+            request.accountId,
+            Boolean(request.dappRequestId)
+          )
           try {
             const deadline =
               request.quoteBinding?.provider === 'near-intents'
@@ -5886,6 +5876,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 { depositAddress: request.quoteBinding.depositAddress }
               )
             }
+            if (request.dappRequestId) await assertHardwareDAppBinding(request)
+            if (walletLockCleanupPending) throw new Error('Wallet is locked')
             return await walletCore.pcztProveSend(
               prepared.fullPcztBase64,
               message.signedPcztBase64,
@@ -5938,28 +5930,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         consumed = true
         const { request, redactedPcztBase64 } = prepared
         if (!isHardwareSignRequestFresh(request)) throw new Error('Ledger signing request expired.')
-        await assertActiveBackgroundAccountScope(request.walletId, request.accountId)
+        if (request.dappRequestId) await assertHardwareDAppBinding(request)
+        else await assertActiveBackgroundAccountScope(request.walletId, request.accountId)
         const wallet = useWalletStore.getState().getWallet(request.walletId)
         const account = wallet?.accounts.find(item => item.id === request.accountId)
         if (wallet?.keySource !== 'ledger' || !account) {
           throw new Error('Ledger account is no longer active')
-        }
-        if (request.dappRequestId) {
-          if (request.kind !== 'send' || !request.origin) {
-            throw new Error('Invalid dApp hardware signing request.')
-          }
-          if (
-            !isHardwareDAppAuthorizationCurrent(
-              request,
-              await dappManager.getAuthorization(request.origin)
-            )
-          ) {
-            throw new Error('This site authorization changed. Review the request again.')
-          }
-          const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(request.origin)
-          if (!snapshot) {
-            throw new Error('This site is no longer authorized. Review the request again.')
-          }
         }
         const signatures = parseLedgerPcztSignatures(message.signatures)
         return withTxSyncPause(request.walletId, async () => {
@@ -5968,7 +5944,11 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             request.accountId,
             message.transactionId
           )
-          const walletCore = await prepareWalletCoreForTx(request.walletId, request.accountId)
+          const walletCore = await prepareWalletCoreForTx(
+            request.walletId,
+            request.accountId,
+            Boolean(request.dappRequestId)
+          )
           const signed = await walletCore.pcztApplyLedgerSignatures(
             redactedPcztBase64,
             account.derivationIndex,
@@ -6002,6 +5982,8 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 { depositAddress: request.quoteBinding.depositAddress }
               )
             }
+            if (request.dappRequestId) await assertHardwareDAppBinding(request)
+            if (walletLockCleanupPending) throw new Error('Wallet is locked')
             return await walletCore.pcztProveSend(prepared.fullPcztBase64, signed, deadline)
           } catch (error) {
             if (isTransactionSubmissionUnknown(error)) {
@@ -6350,13 +6332,6 @@ async function handleDAppRequest(
     await ensureDAppHandlerReady()
 
     if (request.method === 'zcash_getAccounts') {
-      await rehydrateWalletStore()
-      const { currentWalletId, currentAccountId, currentNetwork } = useWalletStore.getState()
-      const account =
-        currentWalletId && currentAccountId
-          ? useWalletStore.getState().getAccount(currentWalletId, currentAccountId)
-          : null
-      if (!account || !isAccountNetworkEnabled(account, currentNetwork, 'zcash')) return null
       // This silent read needs only an attested unlock session and persisted
       // public addresses. Avoid restoring WASM here: an existing wallet sync
       // may legitimately hold the core lock while the service worker restarts.
@@ -6405,13 +6380,6 @@ async function handleDAppRequest(
     }
 
     if (
-      (await credentialSession.hasUnlockSession()) &&
-      (await credentialLifecycle.activeAccountSupportsChain('zcash')) === false
-    ) {
-      throw new Error('The active Wallet does not support Zcash.')
-    }
-
-    if (
       request.method === 'zcash_requestAccounts' &&
       useWalletStore.getState().wallets.length === 0
     ) {
@@ -6421,22 +6389,6 @@ async function handleDAppRequest(
         origin,
         tabInfo
       })
-    }
-
-    if (backgroundZcashWalletRuntime.isLocked()) {
-      logger.log(
-        'Background Zcash wallet runtime is locked, attempting session restore...',
-        useWalletStore.getState().currentWalletId || undefined
-      )
-      if (!(await restoreBackgroundZcashRuntimeFromSession())) {
-        logger.error('No attested credential session available')
-        throw new Error('Wallet not unlocked')
-      }
-      await backgroundZcashWalletRuntime.waitForAccountReady(20000)
-      logger.log(
-        'Background Zcash wallet runtime restored from credential session',
-        useWalletStore.getState().currentWalletId || undefined
-      )
     }
 
     // Process request
@@ -7180,7 +7132,7 @@ async function handleImportPrivateKeyWallet(input: {
  * the wallet core and return it ready for a transaction. Must run inside
  * withTxSyncPause so the account restore isn't blocked by an active sync.
  */
-async function prepareWalletCoreForTx(walletId?: string, accountId?: string) {
+async function prepareWalletCoreForTx(walletId?: string, accountId?: string, siteBound = false) {
   await rehydrateWalletStore()
   const state = useWalletStore.getState()
   const targetWalletId = walletId || state.currentWalletId
@@ -7193,6 +7145,10 @@ async function prepareWalletCoreForTx(walletId?: string, accountId?: string) {
     !isAccountNetworkEnabled(selectedAccount, state.currentNetwork, 'zcash')
   ) {
     throw new Error('Zcash is not enabled for this account')
+  }
+  if (siteBound) {
+    await backgroundZcashWalletRuntime.prepareDAppAccount(targetWalletId, targetAccountId)
+    return backgroundZcashWalletRuntime.getWalletCore(targetWalletId, targetAccountId)
   }
   await credentialLifecycle.assertActiveAccountSupportsChain(
     targetWalletId,
@@ -7235,6 +7191,36 @@ async function prepareWalletCoreForTx(walletId?: string, accountId?: string) {
   await backgroundZcashWalletRuntime.waitForAccountReady(30000)
 
   return backgroundZcashWalletRuntime.getWalletCore(targetWalletId, targetAccountId || undefined)
+}
+
+async function assertHardwareDAppBinding(
+  request: NonNullable<Awaited<ReturnType<typeof readHardwareSignRequest>>>
+): Promise<void> {
+  if (walletLockCleanupPending) throw new Error('Wallet is locked')
+  if (request.kind !== 'send' || !request.origin || !request.dappRequestId) {
+    throw new Error('Invalid dApp hardware signing request.')
+  }
+  if (
+    !isHardwareDAppAuthorizationCurrent(request, await dappManager.getAuthorization(request.origin))
+  ) {
+    throw new Error('This site authorization changed. Review the request again.')
+  }
+  const snapshot = await dappHandler.getAuthorizedActiveAccountSnapshot(request.origin)
+  const connection = await dappManager.getConnection(request.origin)
+  const boundAccount =
+    connection?.boundWalletId && connection.boundAccountId
+      ? useWalletStore.getState().getAccount(connection.boundWalletId, connection.boundAccountId)
+      : null
+  if (
+    connection?.boundWalletId !== request.walletId ||
+    connection.boundAccountId !== request.accountId ||
+    !boundAccount ||
+    snapshot?.transparent !== boundAccount.addresses.transparent ||
+    snapshot.shielded !== boundAccount.addresses.shielded ||
+    !isHardwareDAppAuthorizationCurrent(request, await dappManager.getAuthorization(request.origin))
+  ) {
+    throw new Error('This site is no longer authorized. Review the request again.')
+  }
 }
 
 async function assertCurrentZcashNetworkEnabled(): Promise<void> {
@@ -7313,18 +7299,21 @@ async function recordUncertainBroadcast(
  * persists the full PCZT in its trusted session binding and returns signer-only
  * data, so building during sync waits instead of failing with an uninitialized account.
  */
-async function handleHardwarePcztBuild(params: {
-  walletId: string
-  accountId: string
-  kind: HardwareSignKind
-  to?: string
-  amount?: string
-  maxTransfer?: boolean
-  memo?: string
-  fundingSource?: 'shielded' | 'transparent'
-  marginalFeeZats?: number
-  feeQuoteId?: string
-}): Promise<
+async function handleHardwarePcztBuild(
+  params: {
+    walletId: string
+    accountId: string
+    kind: HardwareSignKind
+    to?: string
+    amount?: string
+    maxTransfer?: boolean
+    memo?: string
+    fundingSource?: 'shielded' | 'transparent'
+    marginalFeeZats?: number
+    feeQuoteId?: string
+  },
+  siteBound = false
+): Promise<
   | {
       success: true
       full: string
@@ -7352,7 +7341,7 @@ async function handleHardwarePcztBuild(params: {
     feeQuoteId
   } = params
   try {
-    await assertActiveBackgroundAccountScope(walletId, accountId)
+    if (!siteBound) await assertActiveBackgroundAccountScope(walletId, accountId)
     const wallet = useWalletStore.getState().getWallet(walletId)
     const account = wallet?.accounts.find(item => item.id === accountId)
     if (!wallet || !account || !isZcashHardwareKeySource(wallet.keySource)) {
@@ -7365,7 +7354,7 @@ async function handleHardwarePcztBuild(params: {
       throw new Error('Transparent funding is not supported by Keystone hardware wallets')
     }
     const built = await withTxSyncPause(walletId, async () => {
-      const walletCore = await prepareWalletCoreForTx(walletId, accountId)
+      const walletCore = await prepareWalletCoreForTx(walletId, accountId, siteBound)
       if (kind === 'shield' || fundingSource === 'transparent') {
         await prepareTransparentSpend(
           walletCore,

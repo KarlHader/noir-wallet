@@ -10,8 +10,8 @@ function approval(overrides = {}) {
     currentNetwork: 'mainnet',
     requestWalletId: 'wallet-1',
     requestAccountId: 'account-1',
-    currentWalletId: 'wallet-1',
-    currentAccountId: 'account-1',
+    boundWalletId: 'wallet-1',
+    boundAccountId: 'account-1',
     accountExists: true,
     locked: false,
     authorizationRevision: 4,
@@ -25,8 +25,8 @@ function approval(overrides = {}) {
 test('approval context expires on account, network, authorization, lock or request changes', () => {
   assert.equal(approvalContextMatches(approval()), true)
   for (const changed of [
-    { currentWalletId: 'wallet-2' },
-    { currentAccountId: 'account-2' },
+    { boundWalletId: 'wallet-2' },
+    { boundAccountId: 'account-2' },
     { currentNetwork: 'testnet' },
     { accountExists: false },
     { locked: true },
@@ -38,6 +38,20 @@ test('approval context expires on account, network, authorization, lock or reque
   }
   assert.equal(
     approvalContextMatches(approval({ action: 'connect', accountAuthorized: false })),
+    true
+  )
+  assert.equal(
+    approvalContextMatches(
+      approval({
+        action: 'connect',
+        requestWalletId: '',
+        requestAccountId: '',
+        accountExists: false,
+        boundWalletId: null,
+        boundAccountId: null,
+        accountAuthorized: false
+      })
+    ),
     true
   )
   assert.equal(

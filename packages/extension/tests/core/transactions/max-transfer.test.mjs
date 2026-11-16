@@ -348,7 +348,7 @@ describe('dynamic maximum transfer regressions', () => {
 
     assert.match(runtimeMessageSecurity, /'zcash_getMaxTransfer'/)
     assert.match(handler, /case 'zcash_getMaxTransfer'/)
-    assert.match(handler, /Current account is not authorized/)
+    assert.match(handler, /Not authorized\. Call zcash_requestAccounts first\./)
     assert.match(sdkApi, /async getMaxTransfer\(params: MaxTransferParams\)/)
     assert.match(sdkTypes, /feeTier\?: FeeTier/)
     assert.doesNotMatch(sdkTypes, /interface MaxTransferParams\s*\{[^}]*accountId\?: string/)

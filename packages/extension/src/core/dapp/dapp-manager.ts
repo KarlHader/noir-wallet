@@ -1253,10 +1253,17 @@ export class DAppManager {
       const next = new Map(this.connectedDApps)
       next.set(origin, replacement)
       const states = { ...this.authorizationState }
+      const bindingChanged =
+        existing?.boundWalletId !== undefined &&
+        (existing.boundWalletId !== binding.walletId ||
+          existing.boundAccountId !== binding.accountId)
+      const revision = bindingChanged
+        ? this.advanceAuthorizationRevision(origin)[origin].revision
+        : (state?.revision ?? 0)
       if (!authorization?.automatic) {
-        states[origin] = { ...state, revision: state?.revision ?? 0, mode: 'approved' }
+        states[origin] = { ...state, revision, mode: 'approved' }
       } else if (automaticState !== undefined) {
-        states[origin] = automaticState
+        states[origin] = { ...automaticState, revision }
       }
       await this.commitConnections(next, states)
     })
@@ -1873,6 +1880,9 @@ export class DAppManager {
       if (!connectionAuthorizesAccount(dapp, binding)) {
         throw new Error('Cannot bind a dApp connection to an unauthorized Account')
       }
+      if (dapp.boundWalletId === binding.walletId && dapp.boundAccountId === binding.accountId) {
+        return
+      }
       const next = new Map(this.connectedDApps)
       next.set(origin, {
         ...dapp,
@@ -1880,7 +1890,7 @@ export class DAppManager {
         boundAccountId: binding.accountId,
         lastActiveAt: nextActivityTime(dapp)
       })
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceAuthorizationRevision(origin))
     })
   }
 
