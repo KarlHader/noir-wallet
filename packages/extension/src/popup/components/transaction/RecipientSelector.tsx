@@ -78,6 +78,7 @@ export function RecipientSelector({
   includeCurrentAccount = false,
   sendingAddress,
   disablePrivateExecutionAddresses = false,
+  recipientExecutionMode,
   onShieldedMove,
   onSelect
 }: {
@@ -87,6 +88,7 @@ export function RecipientSelector({
   readonly includeCurrentAccount?: boolean
   readonly sendingAddress?: string
   readonly disablePrivateExecutionAddresses?: boolean
+  readonly recipientExecutionMode?: 'main' | 'private'
   readonly onShieldedMove?: () => void
   readonly onSelect: (address: string, displayName?: string) => void
 }) {
@@ -166,42 +168,27 @@ export function RecipientSelector({
     [chainId, contacts, excludeAddresses]
   )
   const normalizedQuery = query.trim().toLowerCase()
-  const selectableAccountGroups = accountGroups.flatMap(account => {
-    const addresses = disablePrivateExecutionAddresses
-      ? account.addresses.filter(address => address.executionMode !== 'private')
-      : account.addresses
-    return addresses.length > 0 || account.addresses.length === 0 ? [{ ...account, addresses }] : []
+  const visibleWalletGroups = buildMyWalletRecipientGroups(accountGroups).flatMap(wallet => {
+    const walletMatches = wallet.walletDisplayName.toLowerCase().includes(normalizedQuery)
+    const accounts = walletMatches
+      ? wallet.accounts
+      : wallet.accounts.filter(account => {
+          const displayName = getAccountDisplayName(
+            account.walletId,
+            account.accountId,
+            account.accountDisplayName,
+            accountDisplayNames
+          )
+          return `${displayName} ${account.addresses.map(address => address.value).join(' ')}`
+            .toLowerCase()
+            .includes(normalizedQuery)
+        })
+    return accounts.length > 0 ? [{ ...wallet, accounts }] : []
   })
-  const visibleWalletGroups = buildMyWalletRecipientGroups(selectableAccountGroups).flatMap(
-    wallet => {
-      const walletMatches = wallet.walletDisplayName.toLowerCase().includes(normalizedQuery)
-      const accounts = walletMatches
-        ? wallet.accounts
-        : wallet.accounts.filter(account => {
-            const displayName = getAccountDisplayName(
-              account.walletId,
-              account.accountId,
-              account.accountDisplayName,
-              accountDisplayNames
-            )
-            return `${displayName} ${account.addresses.map(address => address.value).join(' ')}`
-              .toLowerCase()
-              .includes(normalizedQuery)
-          })
-      return accounts.length > 0 ? [{ ...wallet, accounts }] : []
-    }
-  )
   const isEvm = chainId.startsWith('eip155:')
-  const visibleRecipients = savedRecipients.filter(contact => {
-    if (
-      isEvm &&
-      disablePrivateExecutionAddresses &&
-      resolveEvmAddressRole(contact.address, chainId, catalog?.accounts) === 'confidential'
-    ) {
-      return false
-    }
-    return `${contact.name} ${contact.address}`.toLowerCase().includes(normalizedQuery)
-  })
+  const visibleRecipients = savedRecipients.filter(contact =>
+    `${contact.name} ${contact.address}`.toLowerCase().includes(normalizedQuery)
+  )
 
   return (
     <Tabs defaultValue="accounts" className="min-h-0 gap-0">
@@ -298,7 +285,8 @@ export function RecipientSelector({
                               const unavailableReason = getMyAccountRecipientUnavailableReason(
                                 address,
                                 sendingAddress,
-                                disablePrivateExecutionAddresses
+                                disablePrivateExecutionAddresses,
+                                isEvm ? recipientExecutionMode : undefined
                               )
                               const addressButton = (
                                 <button
@@ -336,9 +324,8 @@ export function RecipientSelector({
                                       {address.executionMode === 'private' ? 'Private' : 'Public'}
                                     </span>
                                   )}
-                                  {unavailableReason &&
-                                    isEvm &&
-                                    disablePrivateExecutionAddresses && (
+                                  {unavailableReason === 'This is the sending address.' &&
+                                    isEvm && (
                                       <span className="min-w-0 truncate text-xs text-muted">
                                         (Sending account)
                                       </span>
@@ -417,13 +404,22 @@ export function RecipientSelector({
               </button>
             )}
             {visibleRecipients.map(contact => {
+              const recipientRole = isEvm
+                ? resolveEvmAddressRole(contact.address, chainId, catalog?.accounts)
+                : 'unknown'
               const unavailableReason = getMyAccountRecipientUnavailableReason(
                 {
                   value: contact.address,
-                  executionMode: undefined
+                  executionMode:
+                    recipientRole === 'public'
+                      ? 'main'
+                      : recipientRole === 'confidential'
+                        ? 'private'
+                        : undefined
                 },
                 sendingAddress,
-                disablePrivateExecutionAddresses
+                disablePrivateExecutionAddresses,
+                isEvm ? recipientExecutionMode : undefined
               )
               const addressButton = (
                 <button

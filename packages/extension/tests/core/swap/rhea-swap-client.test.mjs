@@ -7,6 +7,7 @@ import {
 } from '../../../src/popup/services/rhea-swap-client.ts'
 import { RHEA_SWAP_CHAIN_CATALOG } from '../../../src/core/services/rhea-swap/index.ts'
 import { EvmWalletClientError } from '../../../src/popup/services/evm-wallet-client.ts'
+import { isSwapQuotePriceMoved } from '../../../src/popup/services/swap-quote-error-message.ts'
 
 function token() {
   return {
@@ -45,6 +46,11 @@ test('shows the useful minimum from RHEA quote and swap errors', () => {
       )
     )
   ).toBe('Swap quote expired. Get a new quote and review it again.')
+  const moved = new RheaSwapClientError('Price moved too much, please re-quote')
+  expect(isSwapQuotePriceMoved(moved)).toBe(true)
+  expect(getRheaSwapErrorMessage(moved)).toBe('Price moved too much, please re-quote')
+  expect(getRheaSwapErrorMessage(new Error(moved.message))).toBe(moved.message)
+  expect(isSwapQuotePriceMoved(new RheaSwapClientError('Slippage tolerance exceeded'))).toBe(false)
 })
 
 test('retains both directions for every supported chain without evicting source catalogs', async () => {

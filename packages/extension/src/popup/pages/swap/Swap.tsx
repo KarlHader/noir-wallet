@@ -228,6 +228,7 @@ import {
 } from '@/popup/services/rhea-swap-client'
 import {
   getSwapQuoteFailureMessage,
+  isSwapQuotePriceMoved,
   isSwapQuoteTimeout,
   SWAP_QUOTE_DISPLAY_ERROR
 } from '@/popup/services/swap-quote-error-message'
@@ -3939,8 +3940,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           if (requestSequence !== quoteRequestSequence.current) return
           if (
             failedStage === 'rhea-prepare' &&
-            /quote.{0,32}expir|expir.{0,32}quote/i.test(error instanceof Error ? error.message : '')
+            (isSwapQuotePriceMoved(error) ||
+              /quote.{0,32}expir|expir.{0,32}quote/i.test(
+                error instanceof Error ? error.message : ''
+              ))
           ) {
+            const priceMoved = isSwapQuotePriceMoved(error)
             const retry = expiredPrepareRetryKey.current !== requestKey
             expiredPrepareRetryKey.current = requestKey ?? null
             reviewAfterQuoteRefresh.current = retry
@@ -3956,7 +3961,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             swap.setDepositAddress('')
             if (retry) setQuoteRefreshTick(current => current + 1)
             else {
-              swap.setQuoteError('Swap quote expired. Refresh it and try again.')
+              swap.setQuoteError(
+                priceMoved
+                  ? getRheaSwapErrorMessage(error)
+                  : 'Swap quote expired. Refresh it and try again.'
+              )
               setQuoteRetryable(true)
             }
             return
@@ -5674,6 +5683,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           chainId={recipientChainId}
           includeCurrentAccount
           includeUnavailableAccounts
+          recipientExecutionMode={crossChainSendRequested ? executionSourceMode : undefined}
           onSelect={address => {
             if (
               activeRecipientContext.current !== context ||
@@ -6092,6 +6102,42 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const renderContent = () => {
     if (viewStep === 'input' && resumingApprovalReview) {
       const message = swap.quoteError || transferPreparationError
+      const retryPreparation = () => {
+        if (!liveQuoteRequest) return
+        reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
+        setTransferPreparationError(null)
+        swap.setQuoteError(null)
+        setQuoteRefreshTick(current => current + 1)
+      }
+      if (!crossChainSendRequested && swap.tokenIn && swap.tokenOut) {
+        return (
+          <SwapReviewView
+            tokenIn={swap.tokenIn}
+            tokenOut={swap.tokenOut}
+            amountIn={swap.amountIn}
+            amountOut={swap.amountOut}
+            fromFiat={swap.fromFiat}
+            toFiat={swap.toFiat}
+            recipient={resolvedRecipientAddress ?? ''}
+            minAmountOut="0"
+            priceImpact={0}
+            slippage={swap.slippage}
+            quoteRefreshing
+            isLoading={!message}
+            feeUnavailable
+            onRefreshQuote={retryPreparation}
+            onConfirm={() => {}}
+            onCancel={handleReturnToInput}
+            preparationError={message}
+            onRetryPreparation={retryPreparation}
+            actionStatus={
+              <p role="status" className="mb-3 text-center text-xs text-muted">
+                Approval confirmed · Step 2 of 2
+              </p>
+            }
+          />
+        )
+      }
       return (
         <div className="flex min-h-0 flex-1 flex-col px-5 pt-6">
           <p className="text-sm font-medium">

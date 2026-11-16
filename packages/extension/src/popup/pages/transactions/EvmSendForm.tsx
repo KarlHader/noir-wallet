@@ -699,7 +699,8 @@ export function EvmSendForm({
         <RecipientSelector
           chainId={chain.chain.id}
           sendingAddress={sourceAddress}
-          disablePrivateExecutionAddresses
+          disablePrivateExecutionAddresses={sourceMode === 'main'}
+          recipientExecutionMode={sourceMode}
           onShieldedMove={
             sourceMode === 'main' && onFundPrivate
               ? () => {

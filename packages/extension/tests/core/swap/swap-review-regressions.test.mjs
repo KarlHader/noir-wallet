@@ -332,7 +332,7 @@ it('keeps minimum amounts while removing nested provider metadata without changi
   assert.deepEqual(classifyError(error), before)
   assert.equal(
     getRheaSwapErrorMessage(new RheaSwapClientError('{invalid response')),
-    'An unexpected error occurred. Please try again.'
+    'Request failed. Error details unavailable.'
   )
   assert.equal(
     getSwapQuoteFailureMessage(

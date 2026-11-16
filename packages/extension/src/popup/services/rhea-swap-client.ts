@@ -30,6 +30,7 @@ import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
 import { classifyError } from '@/lib/errors'
 import {
   getSwapQuoteFailureMessage,
+  isSwapQuotePriceMoved,
   isSwapQuoteTimeout,
   readSwapErrorReason,
   SWAP_QUOTE_DISPLAY_ERROR
@@ -43,6 +44,8 @@ export class RheaSwapClientError extends Error {
 }
 
 export function getRheaSwapErrorMessage(error: unknown): string {
+  if (isSwapQuotePriceMoved(error))
+    return getSwapQuoteFailureMessage(error) ?? classifyError(error).userMessage
   if (!(error instanceof RheaSwapClientError)) return classifyError(error).userMessage
   if (error.message === 'RHEA Swap returned an invalid response') {
     return 'Swap provider returned an invalid quote. Try again.'
