@@ -1,5 +1,6 @@
 import {
   SwapClient,
+  normalizeCrossChainToTokenList,
   normalizeFromTokenList,
   type ApiRequestOptions,
   type SwapClientConfig,
@@ -12,11 +13,8 @@ import { createRheaSwapFetch } from './rhea-swap-fetch'
 
 /** SDK 2.0.6 drops malformed rows and caches empty lists; neither proves exclusion. */
 export class RheaSwapCatalogClient extends SwapClient {
-  private readonly sourceCatalogs = new Map<
-    number,
-    { tokens: SwapTokenListItem[]; expiresAt: number }
-  >()
-  private readonly sourceRequests = new Map<number, DedupPromise<SwapTokenListItem[]>>()
+  private readonly catalogs = new Map<string, { tokens: SwapTokenListItem[]; expiresAt: number }>()
+  private readonly requests = new Map<string, DedupPromise<SwapTokenListItem[]>>()
   private readonly catalogNow: () => number
 
   constructor(config: SwapClientConfig) {
@@ -28,14 +26,43 @@ export class RheaSwapCatalogClient extends SwapClient {
     request: TokenListRequest,
     options: ApiRequestOptions = {}
   ): Promise<SwapTokenListItem[]> {
-    const cached = this.sourceCatalogs.get(request.chainId)
+    return this.getCatalog('from', request, options)
+  }
+
+  override async getCrossChainToTokens(
+    request: TokenListRequest,
+    options: ApiRequestOptions = {}
+  ): Promise<SwapTokenListItem[]> {
+    return this.getCatalog('cross-chain-to', request, options)
+  }
+
+  private async getCatalog(
+    direction: 'from' | 'cross-chain-to',
+    request: TokenListRequest,
+    options: ApiRequestOptions
+  ): Promise<SwapTokenListItem[]> {
+    const key = `${direction}:${request.chainId}`
+    const cached = this.catalogs.get(key)
     if (cached && cached.expiresAt > this.catalogNow()) return structuredClone(cached.tokens)
-    this.sourceCatalogs.delete(request.chainId)
+    this.catalogs.delete(key)
     const load = async () => {
-      const raw = await this.api.getFromTokenRows(request.chainId, options)
-      const tokens = normalizeFromTokenList(raw, request.chainId)
-      if (tokens.length !== Object.keys(raw).length)
-        throw new Error('RHEA source catalog is incomplete')
+      let tokens: SwapTokenListItem[]
+      let rawCount: number
+      if (direction === 'from') {
+        const raw = await this.api.getFromTokenRows(request.chainId, options)
+        tokens = normalizeFromTokenList(raw, request.chainId)
+        rawCount = Object.keys(raw).length
+      } else {
+        const raw = await this.api.getCrossChainToTokenRows(request.chainId, options)
+        tokens = normalizeCrossChainToTokenList(raw, request.chainId)
+        rawCount = raw.tokens.length
+      }
+      if (tokens.length !== rawCount)
+        throw new Error(
+          direction === 'from'
+            ? 'RHEA source catalog is incomplete'
+            : 'RHEA destination catalog is incomplete'
+        )
       // Retry must reach the service when capability metadata or executable rows are missing.
       const complete =
         tokens.length > 0 &&
@@ -47,23 +74,22 @@ export class RheaSwapCatalogClient extends SwapClient {
           }
         })
       if (complete)
-        this.sourceCatalogs.set(request.chainId, {
+        this.catalogs.set(key, {
           tokens: structuredClone(tokens),
           expiresAt: this.catalogNow() + RHEA_SWAP_TOKEN_CATALOG_TTL_MS
         })
       return tokens
     }
     if (options.signal) return load()
-    let pending = this.sourceRequests.get(request.chainId)
+    let pending = this.requests.get(key)
     if (!pending) {
       pending = new DedupPromise()
-      this.sourceRequests.set(request.chainId, pending)
+      this.requests.set(key, pending)
     }
     try {
       return structuredClone(await pending.run(load))
     } finally {
-      if (!pending.isPending && this.sourceRequests.get(request.chainId) === pending)
-        this.sourceRequests.delete(request.chainId)
+      if (!pending.isPending && this.requests.get(key) === pending) this.requests.delete(key)
     }
   }
 }

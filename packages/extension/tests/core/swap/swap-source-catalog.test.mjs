@@ -6,6 +6,7 @@ import {
   RheaSwapService,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
+import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
 import {
   findSwapTokenInCatalog,
   mergeSelectedSwapSourceCatalog
@@ -193,4 +194,47 @@ it('does not treat a protocol native asset ID from another EVM chain as Arbitrum
       }),
     /quote token address is invalid/
   )
+})
+
+it('retries a partially valid destination catalog and caches its repaired response', async () => {
+  const first = {
+    address: '0x1111111111111111111111111111111111111111',
+    symbol: 'ONE',
+    decimals: 18,
+    price: 1,
+    sources: ['nearIntents']
+  }
+  const second = {
+    ...first,
+    address: '0x2222222222222222222222222222222222222222',
+    symbol: 'TWO'
+  }
+  let calls = 0
+  const client = new RheaSwapCatalogClient({
+    baseUrl: 'https://catalog.example',
+    now: () => 0,
+    retry: { maxRetries: 0 },
+    fetch: async () => {
+      calls++
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          msg: 'success',
+          data: { tokens: [first, calls === 1 ? { ...second, price: -1 } : second] }
+        })
+      )
+    }
+  })
+  const service = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore())
+  const request = { direction: 'cross-chain-to', tokenListChainIds: [1] }
+
+  const partial = await service.listTokens(request)
+  assert.equal(partial.tokens.length, 1)
+  assert.deepEqual(partial.failedChainIds, [1])
+
+  const repaired = await service.listTokens(request)
+  assert.equal(repaired.tokens.length, 2)
+  assert.deepEqual(repaired.failedChainIds, [])
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 2)
 })
