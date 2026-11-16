@@ -57,6 +57,7 @@ import {
   getActivitySwapPresentation,
   getClusterSettledDestination,
   buildActivityExecutionAddressModes,
+  isLegacyPrivateShieldWithdrawDestination,
   isActivityRecoveryTransition
 } from './multichain-activity-presentation'
 import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
@@ -351,12 +352,19 @@ export function MultichainActivityDetail({
     confidentialPlan.accountId === visibleItem.scope.accountId
       ? confidentialPlan
       : null
+  const legacyPrivateShieldWithdrawDestination = isLegacyPrivateShieldWithdrawDestination(
+    visibleItem,
+    activeConfidentialPlan,
+    currentNetwork === network ? activeSwapAccount : null,
+    network
+  )
   const swap = getActivitySwapPresentation(
     visibleItem,
     assetMetadata,
     chainMetadata,
     executionAddressModes,
-    getClusterSettledDestination(visibleItem, activeConfidentialPlan)
+    getClusterSettledDestination(visibleItem, activeConfidentialPlan),
+    legacyPrivateShieldWithdrawDestination
   )
   const swapSourceMethod = getActivitySwapSourceMethodLabel(visibleItem, swap?.source?.symbol)
   const amount = visibleItem.snapshot?.primaryAmount
@@ -660,6 +668,7 @@ export function MultichainActivityDetail({
     chainMetadata,
     executionAddressModes,
     settledDestination: getClusterSettledDestination(visibleItem, activeConfidentialPlan),
+    legacyPrivateShieldWithdrawDestination,
     confidentialPlan: activeConfidentialPlan,
     refunded: activeConfidentialPlan?.phase === 'refunded',
     replacementHash: scopedZcashRecord?.replacedByTxHash,
@@ -669,9 +678,11 @@ export function MultichainActivityDetail({
         ? getClusterBatchStatusLabel(activeConfidentialPlan)
         : undefined,
     statusTone: needsSubmissionCheck ? 'warning' : undefined,
-    fallback: scopedZcashRecord?.fee
-      ? { fee: { value: scopedZcashRecord.fee, symbol: 'ZEC' } }
-      : undefined
+    fallback:
+      scopedZcashRecord?.fee &&
+      (scopedZcashRecord.type !== 'receive' || Number(scopedZcashRecord.fee) > 0)
+        ? { fee: { value: scopedZcashRecord.fee, symbol: 'ZEC' } }
+        : undefined
   })
 
   return (
