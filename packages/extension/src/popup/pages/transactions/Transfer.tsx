@@ -22,6 +22,7 @@ import { classifyError } from '@/lib/errors'
 import { getSwapQuoteFailureMessage } from '@/popup/services/swap-quote-error-message'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { useWalletStore } from '@/store/wallet-store'
+import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -42,6 +43,12 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import {
+  shieldSourceSelectionItem,
+  type ShieldSourceTokenPickerItem
+} from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
+import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { ExecutionAccountIcon } from '@/popup/components/account/ExecutionAccountSelector'
@@ -115,6 +122,11 @@ import {
   getEvmTokenFeeBalanceError
 } from './evm-send-validation'
 import { initialMoveDraft, readMoveAssetHint, readMoveDraft } from './move-draft'
+import { getFundingBalance } from '@/core/wallet/funding-balance'
+import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { resolveZcashSelfMove } from '@/popup/services/zcash-self-move'
+import { ZEC_DECIMALS } from '@/config/wallet'
+import type { FundingSource } from '@/types/wallet'
 import {
   readShieldMovePreference,
   selectShieldMoveAssetId,
@@ -348,6 +360,11 @@ function TransferForm() {
   const wallets = useWalletStore(state => state.wallets)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const currentAccount = useWalletStore(state => state.getCurrentAccount())
+  const currentWallet = useWalletStore(state => state.getCurrentWallet())
+  const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
+  const zecPrice = useWalletStore(state => state.zecPrice)
+  const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const endpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
@@ -408,6 +425,7 @@ function TransferForm() {
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
   const [assetChainId, setAssetChainId] = useState('all')
+  const [assetProvider, setAssetProvider] = useState<ShieldProvider>('near-confidential')
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [destinationAssetId, setDestinationAssetId] = useState<string | null>(
     initialDraft.destinationAssetId ?? null
@@ -833,6 +851,55 @@ function TransferForm() {
       catalogTokens
     ]
   )
+  const shieldAssetPicker = shieldEntry || from === 'shield' || to === 'shield'
+  const zcashMoveSources = (['transparent', 'shielded'] as const).filter(
+    source =>
+      activeAccount?.networks.some(item => item.chain.family === 'zcash') &&
+      resolveZcashSelfMove(currentAccount?.addresses, source, currentNetwork) !== null &&
+      !getFundingSourceUnavailableReason(currentWallet?.keySource, source)
+  )
+  const availableProviders: ShieldProvider[] = [
+    ...(canLoadShield ? (['near-confidential'] as const) : []),
+    ...(zcashMoveSources.length > 0 ? (['zcash-shield'] as const) : [])
+  ]
+  const activeAssetProvider = availableProviders.includes(assetProvider)
+    ? assetProvider
+    : (availableProviders[0] ?? 'near-confidential')
+  const zcashPickerRows: ShieldSourceTokenPickerItem[] = zcashMoveSources.map(source => ({
+    key: `zcash-move:${source}`,
+    assetId: 'zec',
+    symbol: 'ZEC',
+    chainName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+    chainId: 'zec',
+    badgeBlockchain: 'zec',
+    nativeIconChain: 'zcash',
+    zcashFundingSource: source,
+    availableRaw: parseDisplayUnitAmount(
+      getFundingBalance(zcashBalance, source).available,
+      ZEC_DECIMALS
+    ),
+    decimals: ZEC_DECIMALS,
+    priceUsd: zecPrice
+  }))
+  const shieldPickerRows: ShieldSourceTokenPickerItem[] =
+    activeAssetProvider === 'zcash-shield'
+      ? zcashPickerRows
+      : pickerRows.map(item => ({
+          key: item.asset.asset.id,
+          assetId: item.asset.asset.id,
+          symbol: item.asset.metadata.symbol,
+          iconUrl: item.asset.metadata.iconUrl,
+          chainName: item.chain.chain.displayName,
+          chainId: item.chain.chain.id,
+          badgeBlockchain: resolveChainIconAlias(
+            item.chain.chain.family,
+            item.chain.chain.displayName,
+            item.chain.chain.id
+          ),
+          availableRaw: item.sourceRaw,
+          decimals: item.asset.metadata.decimals,
+          priceUsd: findAssetPrice(assetPrices, item.asset.asset.id)?.priceUsd
+        }))
   const rankPickerAsset = (item: TransferAsset) =>
     rankTokenSearchFields(
       {
@@ -1035,10 +1102,6 @@ function TransferForm() {
       setRouteSnapshot({ key: routeKey, status: 'unsupported' })
       return
     }
-    if (!amount.trim()) {
-      setRouteSnapshot(null)
-      return
-    }
     const match = /^eip155:([1-9][0-9]*)$/.exec(selected.chain.chain.id)
     if (!match) {
       setRouteSnapshot({ key: routeKey, status: 'unsupported' })
@@ -1083,7 +1146,7 @@ function TransferForm() {
     return () => {
       cancelled = true
     }
-  }, [routeKey, selected?.chain.chain.id, eligible, supportedPair, retry, amount])
+  }, [routeKey, selected?.chain.chain.id, eligible, supportedPair, retry])
 
   const nativeMaximumEnabled = Boolean(
     selected &&
@@ -1405,6 +1468,18 @@ function TransferForm() {
             maximum: maxSelected
           })
     )
+  }
+  const openZcashMove = (source: FundingSource) => {
+    if (!effective || !zcashMoveSources.includes(source)) return
+    const query = new URLSearchParams({
+      move: '1',
+      from: source,
+      originPath: `${location.pathname}${location.search}`,
+      sourceWalletId: effective.walletId,
+      sourceAccountId: effective.accountId
+    })
+    setAssetPickerOpen(false)
+    navigate(`/send/zcash?${query.toString()}`)
   }
   const symbol = formatSymbol(selected?.asset.metadata.symbol)
   const sourceBalance =
@@ -2242,53 +2317,108 @@ function TransferForm() {
         <TokenSelectorView
           search={assetSearch}
           onSearchChange={setAssetSearch}
-          networks={Array.from(
-            new Map(pickerRows.map(item => [item.chain.chain.id, item.chain])).values()
-          ).map(chain => ({
-            id: chain.chain.id,
-            label: chain.chain.displayName,
-            iconChain: resolveChainIconAlias(
-              chain.chain.family,
-              chain.chain.displayName,
-              chain.chain.id
-            )
-          }))}
+          networks={
+            shieldAssetPicker
+              ? Array.from(
+                  new Map(
+                    shieldPickerRows.map(item => [
+                      item.chainId,
+                      {
+                        id: item.chainId ?? 'zec',
+                        label: item.chainId === 'zec' ? 'Zcash' : (item.chainName ?? ''),
+                        iconChain: item.badgeBlockchain ?? item.chainId ?? 'zec'
+                      }
+                    ])
+                  ).values()
+                )
+              : Array.from(
+                  new Map(pickerRows.map(item => [item.chain.chain.id, item.chain])).values()
+                ).map(chain => ({
+                  id: chain.chain.id,
+                  label: chain.chain.displayName,
+                  iconChain: resolveChainIconAlias(
+                    chain.chain.family,
+                    chain.chain.displayName,
+                    chain.chain.id
+                  )
+                }))
+          }
           selectedNetwork={assetChainId}
           onNetworkChange={setAssetChainId}
-          selectedKey={selected?.asset.asset.id}
-          items={pickerRows
-            .filter(item => assetChainId === 'all' || item.chain.chain.id === assetChainId)
-            .filter(item => rankPickerAsset(item) < 99)
-            .sort((left, right) => rankPickerAsset(left) - rankPickerAsset(right))
-            .map(item => ({
-              key: item.asset.asset.id,
-              symbol: formatSymbol(item.asset.metadata.symbol),
-              icon: (
-                <TokenIcon
-                  assetId={item.asset.asset.id}
-                  symbol={formatSymbol(item.asset.metadata.symbol)}
-                  icon={item.asset.metadata.iconUrl}
-                  blockchain={resolveChainIconAlias(
-                    item.chain.chain.family,
-                    item.chain.chain.displayName,
-                    item.chain.chain.id
-                  )}
-                  size={32}
+          toolbar={
+            shieldAssetPicker ? (
+              <div className="-mx-4 mt-3">
+                <ShieldSendProviderTabs
+                  value={activeAssetProvider}
+                  availableProviders={availableProviders}
+                  onChange={provider => {
+                    setAssetChainId('all')
+                    setAssetProvider(provider)
+                  }}
                 />
-              ),
-              subtitle: item.chain.chain.displayName,
-              balance: (
-                <span className="block truncate text-base tabular-nums">
-                  {formatTokenQuantity(
-                    formatBaseUnitAmount(item.sourceRaw, item.asset.metadata.decimals)
-                  )}
-                  <span className="block truncate text-xs text-muted">
-                    {item.valueUsd !== null ? formatFiatAmount(item.valueUsd) : '—'}
-                  </span>
-                </span>
-              )
-            }))}
+              </div>
+            ) : undefined
+          }
+          selectedKey={
+            shieldAssetPicker && activeAssetProvider === 'zcash-shield'
+              ? undefined
+              : selected?.asset.asset.id
+          }
+          items={
+            shieldAssetPicker
+              ? shieldPickerRows
+                  .filter(item => assetChainId === 'all' || item.chainId === assetChainId)
+                  .filter(
+                    item =>
+                      rankTokenSearchFields(
+                        {
+                          symbol: item.symbol,
+                          name: item.chainName,
+                          searchTerms: [item.zcashFundingSource ?? '']
+                        },
+                        assetSearch
+                      ) < 99
+                  )
+                  .map(item => shieldSourceSelectionItem(item, balancesHidden))
+              : pickerRows
+                  .filter(item => assetChainId === 'all' || item.chain.chain.id === assetChainId)
+                  .filter(item => rankPickerAsset(item) < 99)
+                  .sort((left, right) => rankPickerAsset(left) - rankPickerAsset(right))
+                  .map(item => ({
+                    key: item.asset.asset.id,
+                    symbol: formatSymbol(item.asset.metadata.symbol),
+                    icon: (
+                      <TokenIcon
+                        assetId={item.asset.asset.id}
+                        symbol={formatSymbol(item.asset.metadata.symbol)}
+                        icon={item.asset.metadata.iconUrl}
+                        blockchain={resolveChainIconAlias(
+                          item.chain.chain.family,
+                          item.chain.chain.displayName,
+                          item.chain.chain.id
+                        )}
+                        size={32}
+                      />
+                    ),
+                    subtitle: item.chain.chain.displayName,
+                    balance: (
+                      <span className="block truncate text-base tabular-nums">
+                        {formatTokenQuantity(
+                          formatBaseUnitAmount(item.sourceRaw, item.asset.metadata.decimals)
+                        )}
+                        <span className="block truncate text-xs text-muted">
+                          {item.valueUsd !== null ? formatFiatAmount(item.valueUsd) : '—'}
+                        </span>
+                      </span>
+                    )
+                  }))
+          }
           onSelect={key => {
+            if (shieldAssetPicker && activeAssetProvider === 'zcash-shield') {
+              const source = zcashMoveSources.find(item => key === `zcash-move:${item}`)
+              if (source) openZcashMove(source)
+              return
+            }
             const item = pickerRows.find(row => row.asset.asset.id === key)
             if (!item) return
             userEditedMove.current = true
@@ -2299,7 +2429,7 @@ function TransferForm() {
             setAssetPickerOpen(false)
           }}
           emptyMessage={
-            pickerRows.length === 0
+            (shieldAssetPicker ? shieldPickerRows.length : pickerRows.length) === 0
               ? loadState === 'loading' || (from === 'shield' && shieldConnection === 'checking')
                 ? 'Loading assets…'
                 : 'No assets available'
