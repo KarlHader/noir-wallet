@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
-import zamaLogo from '@/images/figma-zama.png'
-import privacyPoolsLogo from '@/images/figma-privacy-pools.png'
 import { formatFiatAmount } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
@@ -428,30 +426,6 @@ function ShieldFundsContent() {
                 </button>
               )
             })}
-          {(
-            [
-              ['ZAMA', zamaLogo],
-              ['Privacy Pools', privacyPoolsLogo]
-            ] as const
-          ).map(([name, icon]) => (
-            <div
-              key={name}
-              className="flex h-[154px] min-w-0 flex-col items-center justify-between rounded-lg bg-wallet-surface px-2 pb-3 pt-6 text-center"
-            >
-              <img
-                src={icon}
-                alt=""
-                aria-hidden="true"
-                width={36}
-                height={36}
-                className="rounded-md brightness-50"
-              />
-              <span className="text-sm font-medium">{name}</span>
-              <span className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-muted">
-                Coming soon
-              </span>
-            </div>
-          ))}
         </div>
         <section aria-labelledby="shield-explanation" className="mt-8">
           <h2 id="shield-explanation" className="text-sm text-wallet-secondary">

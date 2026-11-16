@@ -40,6 +40,7 @@ interface CrossChainSendFormViewProps {
   readonly catalogError: boolean
   readonly sourceAssetsLoading: boolean
   readonly destinationAssetsLoading: boolean
+  readonly destinationNetworksLoading?: boolean
   readonly hasInsufficientFunds: boolean
   readonly insufficientMessage?: string
   readonly maxLoading: boolean
@@ -82,6 +83,7 @@ export function CrossChainSendFormView({
   catalogError,
   sourceAssetsLoading,
   destinationAssetsLoading,
+  destinationNetworksLoading = false,
   hasInsufficientFunds,
   insufficientMessage,
   maxLoading,
@@ -129,7 +131,9 @@ export function CrossChainSendFormView({
                 type="button"
                 onClick={() => setNetworkPickerOpen(true)}
                 disabled={
-                  initializing || (destinationAssetsLoading && destinationOptions.length === 0)
+                  initializing ||
+                  destinationNetworksLoading ||
+                  (destinationAssetsLoading && destinationOptions.length === 0)
                 }
                 aria-label={`Select destination network, ${destinationName}`}
                 className="inline-flex min-w-0 items-center gap-1.5 text-xs hover:text-primary disabled:opacity-50"
@@ -262,6 +266,7 @@ export function CrossChainSendFormView({
         open={networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={destinationOptions}
+        loading={destinationNetworksLoading}
         selectedId={tokenOut?.rheaChainId ?? null}
         onSelect={onSelectDestination}
       />

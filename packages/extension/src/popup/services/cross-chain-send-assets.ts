@@ -4,6 +4,10 @@ import { parseSolanaPublicKey } from '@/core/chains/solana'
 import { getInitialProductChainDefinitions, parseAssetId } from '@/core/chains/registry'
 import type { Network } from '@/types'
 import { getSendRouteCostFromAmounts } from './send-route-cost'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
+import { isSelectableChainFamily } from './chain-selection-availability'
+import { getEnabledSwapChains } from './swap-catalog-loading'
 
 type SendAssetIdentity = Readonly<{
   chainId: string
@@ -13,6 +17,36 @@ type SendAssetIdentity = Readonly<{
 
 export type CrossChainSendAssetGroup = 'ETH' | 'USDC'
 export type CrossChainSendCapabilities = Readonly<{ evm: boolean; solana: boolean }>
+
+export function getCrossChainSendDestinationCandidates(
+  input: Readonly<{
+    sourceChainId: string
+    group: CrossChainSendAssetGroup
+    chains: PortfolioReadModel['chains']
+    enabledChainIds: readonly string[]
+    capabilities: CrossChainSendCapabilities
+    enabledFlags: readonly ChainFeatureFlagValue[]
+  }>
+) {
+  const enabledChainIds = new Set(input.enabledChainIds)
+  return input.chains.flatMap(chain => {
+    if (
+      chain.chain.id === input.sourceChainId ||
+      !enabledChainIds.has(chain.chain.id) ||
+      !isSelectableChainFamily(chain.chain.family, input.enabledFlags) ||
+      chain.chain.capabilities.transaction.status !== 'available'
+    )
+      return []
+    const assetId = getCrossChainSendDestinationAssetId(chain.chain.id, input.group)
+    const descriptor = getEnabledSwapChains([chain.chain])[0]
+    return assetId &&
+      descriptor &&
+      ((descriptor.walletFamily === 'evm' && input.capabilities.evm) ||
+        (descriptor.walletFamily === 'solana' && input.capabilities.solana))
+      ? [{ assetId, chain, descriptor }]
+      : []
+  })
+}
 
 export function resolveCrossChainSendRouteAssetDisplay(
   input: Readonly<{

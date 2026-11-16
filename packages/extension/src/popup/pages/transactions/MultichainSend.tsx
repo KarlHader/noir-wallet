@@ -60,6 +60,7 @@ import { parsePublicPrivateEvmSendDraft } from './evm-send-validation'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
   getCrossChainSendAssetGroup,
+  getCrossChainSendDestinationCandidates,
   getCrossChainSendDestinationAssetId,
   getCrossChainSendTokenGroup,
   isCrossChainSendDestination
@@ -67,7 +68,10 @@ import {
 import { prefetchEvmSendCatalogs } from '@/popup/services/evm-send-catalog'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
-import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import {
+  getSwapDestinationTokens,
+  rankTokenSearchFields
+} from '@/popup/services/swap-token-selection'
 import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
@@ -755,22 +759,13 @@ export function MultichainSend({
   const destinationCandidates = useMemo(
     () =>
       crossChainGroup && selection && visibleModel
-        ? visibleModel.chains.flatMap(chain => {
-            if (
-              chain.chain.id === selection.chain.chain.id ||
-              !storageV2Account?.networks.some(network => network.chain.id === chain.chain.id) ||
-              !isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) ||
-              chain.chain.capabilities.transaction.status !== 'available'
-            )
-              return []
-            const assetId = getCrossChainSendDestinationAssetId(chain.chain.id, crossChainGroup)
-            const descriptor = getEnabledSwapChains([chain.chain])[0]
-            return assetId &&
-              descriptor &&
-              ((descriptor.walletFamily === 'evm' && crossChainCapabilities.evm) ||
-                (descriptor.walletFamily === 'solana' && crossChainCapabilities.solana))
-              ? [{ assetId, chain }]
-              : []
+        ? getCrossChainSendDestinationCandidates({
+            sourceChainId: selection.chain.chain.id,
+            group: crossChainGroup,
+            chains: visibleModel.chains,
+            enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
+            capabilities: crossChainCapabilities,
+            enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
           })
         : [],
     [crossChainGroup, selection, storageV2Account, visibleModel]
@@ -787,10 +782,8 @@ export function MultichainSend({
       return
     }
     const sourceDescriptor = getEnabledSwapChains([selection.chain.chain])[0]
-    const destinationDescriptors = destinationCandidates.map(
-      item => getEnabledSwapChains([item.chain.chain])[0]
-    )
-    if (!sourceDescriptor || destinationDescriptors.some(descriptor => !descriptor)) return
+    const destinationDescriptors = destinationCandidates.map(item => item.descriptor)
+    if (!sourceDescriptor) return
     let cancelled = false
     void Promise.all([
       rheaSwapClient.listTokens({
@@ -799,7 +792,7 @@ export function MultichainSend({
       }),
       rheaSwapClient.listTokens({
         direction: 'cross-chain-to',
-        tokenListChainIds: destinationDescriptors.map(descriptor => descriptor!.tokenListChainId)
+        tokenListChainIds: destinationDescriptors.map(descriptor => descriptor.tokenListChainId)
       })
     ])
       .then(([sourceCatalog, destinationCatalog]) => {
@@ -809,9 +802,14 @@ export function MultichainSend({
             token.rheaChainId === sourceDescriptor.apiChainId &&
             getCrossChainSendTokenGroup(token) === crossChainGroup
         )
+        const destinations = getSwapDestinationTokens(
+          sourceToken ?? null,
+          sourceCatalog.tokens,
+          destinationCatalog.tokens
+        )
         const assetIds = sourceToken
           ? destinationCandidates.flatMap((item, index) => {
-              const destinationToken = destinationCatalog.tokens.find(
+              const destinationToken = destinations.find(
                 token =>
                   token.rheaChainId === destinationDescriptors[index]?.apiChainId &&
                   getCrossChainSendTokenGroup(token) === crossChainGroup &&
