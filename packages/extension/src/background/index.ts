@@ -250,7 +250,7 @@ import { getConfidentialFundingMessageHandler } from './confidential-funding-mes
 import { ExternalShieldDepositError } from '@/core/services/confidential-funding/confidential-external-deposit'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 import { createEvmWalletRuntimeError } from '@/core/chains/evm'
-import { hidePortfolioAssets } from '@/core/portfolio'
+import { hidePortfolioAssets, type PortfolioScope } from '@/core/portfolio'
 import { mapEvmWalletRuntimeError } from './evm-wallet-runtime-error'
 import {
   isNewWalletFamilyEnabled,
@@ -419,7 +419,7 @@ import {
 } from './extension-display-mode'
 import { computePassiveSyncDelayMinutes, shouldRequestPeriodicSync } from './passive-sync-policy'
 import { fetchLatestBlockHeight } from '@/infrastructure/chains/rpc-registry-client'
-import { SerialTaskQueue, TimeoutError, withTimeout } from '@/lib/async-utils'
+import { DedupPromise, SerialTaskQueue, TimeoutError, withTimeout } from '@/lib/async-utils'
 
 import {
   getPreferredRpcEndpointOption,
@@ -1602,11 +1602,16 @@ async function refreshMultichainRuntimeForUserAssets(
   })
 }
 
-async function refreshDetectedEvmAssetsForActiveAccount(force = false): Promise<void> {
+const tokenDiscoveryRefreshes = new Map<string, DedupPromise<void>>()
+
+async function refreshDetectedEvmAssetsForActiveAccount(
+  scope: PortfolioScope,
+  force = false
+): Promise<void> {
   const coordinator = detectedEvmAssetCoordinator
   if (!coordinator) return
-  const active = await additionalReceiveTargetsCoordinator.readCurrentActive()
-  if (!active) return
+  const active = await additionalReceiveTargetsCoordinator.readActive(scope)
+  if (!active || coordinator !== detectedEvmAssetCoordinator) return
   const byAddress = new Map<string, Set<string>>()
   for (const target of active.targets) {
     if (target.kind !== 'evm') continue
@@ -1615,13 +1620,34 @@ async function refreshDetectedEvmAssetsForActiveAccount(force = false): Promise<
     chainIds.add(target.chainId)
     byAddress.set(key, chainIds)
   }
-  const changed = await coordinator.refresh(
-    [...byAddress].map(([address, chainIds]) =>
-      Object.freeze({ address, chainIds: Object.freeze([...chainIds]) })
-    ),
-    { force }
-  )
-  if (changed) await refreshMultichainRuntimeForUserAssets(false)
+  const key = JSON.stringify([active.generationId, active.keyDomainId, active.accountId])
+  const refresh = tokenDiscoveryRefreshes.get(key) ?? new DedupPromise<void>()
+  tokenDiscoveryRefreshes.set(key, refresh)
+  try {
+    await refresh.run(async () => {
+      const changed = await coordinator.refresh(
+        [...byAddress].map(([address, chainIds]) =>
+          Object.freeze({ address, chainIds: Object.freeze([...chainIds]) })
+        ),
+        { force }
+      )
+      if (!changed) return
+      await refreshMultichainRuntimeForUserAssets(false)
+      const model = await portfolioCoordinator?.readCachedActive()
+      if (!model) return
+      await chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: model.scope.keyDomainId,
+          accountId: model.scope.accountId
+        })
+        .catch(() => {})
+    })
+  } finally {
+    if (!refresh.isPending && tokenDiscoveryRefreshes.get(key) === refresh) {
+      tokenDiscoveryRefreshes.delete(key)
+    }
+  }
 }
 
 async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<void> {
@@ -3740,12 +3766,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         ? (message.chainIds as readonly string[])
         : undefined
       if (message.action === 'refresh' && refreshChainIds === undefined) {
-        await Promise.all([
-          refreshIntentsProtocolAssets().catch(error => {
-            console.warn('[Portfolio] Intents token catalog refresh failed', error)
-          }),
-          refreshDetectedEvmAssetsForActiveAccount(message.forceDiscovery === true).catch(() => {})
-        ])
+        await refreshIntentsProtocolAssets().catch(error => {
+          console.warn('[Portfolio] Intents token catalog refresh failed', error)
+        })
       }
       const coordinator = portfolioCoordinator
       if (!coordinator) throw new Error('Portfolio runtime is unavailable')
@@ -3799,7 +3822,16 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       }
     }
     void operation()
-      .then(result => sendResponse({ result }))
+      .then(result => {
+        sendResponse({ result })
+        // Discovery may wait on an indexer; return RPC balances before starting it.
+        if (message.action === 'refresh' && !Array.isArray(message.chainIds) && result.model) {
+          void refreshDetectedEvmAssetsForActiveAccount(
+            result.model.scope,
+            message.forceDiscovery === true
+          ).catch(() => {})
+        }
+      })
       .catch(error => {
         const bitcoinStage =
           error instanceof PortfolioCoordinatorError &&

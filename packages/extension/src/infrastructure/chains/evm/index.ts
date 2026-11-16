@@ -194,6 +194,7 @@ export {
 } from './detected-evm-asset-coordinator'
 export {
   EvmTokenDiscoveryClient,
+  type EvmTokenDiscoverySource,
   type DetectedEvmTokenCandidate
 } from './evm-token-discovery-client'
 export {

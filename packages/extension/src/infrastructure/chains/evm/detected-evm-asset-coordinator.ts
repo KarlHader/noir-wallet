@@ -6,7 +6,7 @@ import {
 import { readErc20Metadata } from './evm-erc20-metadata-reader'
 import type { EvmContractRpc } from './evm-rpc-client'
 import type { ChromeDetectedEvmAssetCatalogRepository } from './chrome-detected-evm-asset-catalog'
-import type { EvmTokenDiscoveryClient } from './evm-token-discovery-client'
+import type { EvmTokenDiscoverySource } from './evm-token-discovery-client'
 
 const DISCOVERY_COOLDOWN_MS = 5 * 60_000
 const METADATA_CONCURRENCY = 3
@@ -24,7 +24,7 @@ export class DetectedEvmAssetCoordinator {
     private readonly options: {
       readonly chains: ChainRegistry
       readonly repository: ChromeDetectedEvmAssetCatalogRepository
-      readonly discovery: EvmTokenDiscoveryClient
+      readonly discovery: EvmTokenDiscoverySource
       readonly resolveRpc: (chainId: string) => EvmContractRpc
       readonly resolveIconUrl?: (assetId: string) => Promise<string | undefined>
       readonly isExcluded?: (assetId: string) => boolean
