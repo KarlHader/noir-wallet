@@ -638,7 +638,33 @@ export function Send({
   const retryFeeEstimate = () => {
     if (moveUnavailable) return
     if (isMaxFeeMode) void maxTransfer.request()
-    else feeEstimate.retry()
+    else if (maxSelected) {
+      const retryAccountScope = getActiveAccountScopeKey()
+      const retryTarget = effectiveToAddress
+      const retryAmount = amount
+      const retryMemo = effectiveMemo
+      const retryTier = feeTier
+      const retrySource = fundingSource
+      const retryNetwork = currentNetwork
+      void maxTransfer.estimateForTarget(retryTarget).then(estimate => {
+        const latest = latestFee.current
+        if (
+          estimate ||
+          !retryAccountScope ||
+          !activeRef.current ||
+          getActiveAccountScopeKey() !== retryAccountScope ||
+          useWalletStore.getState().currentNetwork !== retryNetwork ||
+          !latest.maxSelected ||
+          latest.effectiveToAddress !== retryTarget ||
+          latest.amount !== retryAmount ||
+          latest.effectiveMemo !== retryMemo ||
+          latest.feeTier !== retryTier ||
+          latest.fundingSource !== retrySource
+        )
+          return
+        feeEstimate.retry()
+      })
+    } else feeEstimate.retry()
   }
 
   const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
