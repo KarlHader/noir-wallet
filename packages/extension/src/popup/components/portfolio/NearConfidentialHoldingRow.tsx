@@ -1,6 +1,9 @@
 import { formatFiatAmount, formatTokenPrice, formatTokenQuantity } from '@/lib/number-format'
 import { formatSymbol } from '@/lib/format'
-import type { NearConfidentialHolding } from '@/popup/services/near-confidential-holdings'
+import {
+  getNearConfidentialIconChain,
+  type NearConfidentialHolding
+} from '@/popup/services/near-confidential-holdings'
 import type { PortfolioChainView } from '@/core/portfolio'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
@@ -35,6 +38,7 @@ export function NearConfidentialHoldingRow({
         symbol={symbol}
         icon={asset.iconUrl}
         blockchain={
+          getNearConfidentialIconChain(asset) ??
           iconChain ??
           (chain ? resolveChainIconAlias(chain.family, chain.displayName, chain.id) : undefined)
         }

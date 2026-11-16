@@ -44,10 +44,7 @@ export function selectShieldActions(input: {
     near.entries.some(
       entry => entry.asset.assetId === zcashAssetId && safeBig(entry.asset.availableRaw).gt(0)
     )
-  const hasZcash =
-    account?.networks.some(item => item.chain.family === 'zcash') ??
-    model?.chains.some(chain => chain.chain.family === 'zcash') ??
-    false
+  const hasZcash = account?.networks.some(item => item.chain.family === 'zcash') ?? false
   const zcashMoveSources = hasZcash
     ? getAvailableZcashSelfMoveSources({
         addresses: zcashAddresses,

@@ -16,7 +16,7 @@ function asset({ kind = 'native', symbol, totalRaw = '0' }) {
 }
 
 test.describe('Portfolio asset-mode visibility', () => {
-  test('shows every held asset and hides other zero-balance assets', () => {
+  test('shows held assets and registered zero-balance Tokens', () => {
     expect(
       isAssetVisibleInAssetView(
         chain('near:mainnet', 'near', 'NEAR'),
@@ -31,7 +31,7 @@ test.describe('Portfolio asset-mode visibility', () => {
         chain('eip155:1', 'evm', 'Ethereum'),
         asset({ kind: 'token', symbol: 'USDC' })
       )
-    ).toBe(false)
+    ).toBe(true)
   })
 
   test('keeps zero-balance native ZEC, BTC and Ethereum ETH as empty-state actions', () => {
@@ -67,14 +67,14 @@ test.describe('Portfolio asset-mode visibility', () => {
     ).toBe(false)
   })
 
-  test('shows a selected network native asset at zero without exposing empty tokens', () => {
+  test('shows a selected network native asset and registered empty tokens', () => {
     const arbitrum = chain('eip155:42161', 'evm', 'Arbitrum')
     const options = { includeZeroBalanceNativeAssets: true }
     expect(isAssetVisibleInAssetView(arbitrum, asset({ symbol: 'ETH' }), options)).toBe(true)
     expect(
       isAssetVisibleInAssetView(arbitrum, asset({ kind: 'token', symbol: 'USDC' }), options)
-    ).toBe(false)
-    expect(isAssetVisibleInAssetView(arbitrum, asset({ kind: 'token', symbol: 'ZEC' }))).toBe(false)
+    ).toBe(true)
+    expect(isAssetVisibleInAssetView(arbitrum, asset({ kind: 'token', symbol: 'ZEC' }))).toBe(true)
     expect(
       isAssetVisibleInAssetView(
         chain('eip155:11155111', 'evm', 'Ethereum Sepolia'),

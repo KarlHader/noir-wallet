@@ -33,7 +33,6 @@ import {
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 import {
   listStandaloneNearConfidentialHoldings,
-  projectNearConfidentialZecForHome,
   sumNearConfidentialChainFiat
 } from '@/popup/services/near-confidential-holdings'
 import {
@@ -284,8 +283,7 @@ export function PortfolioShell({
   const [localView, setLocalView] = useState<PortfolioViewMode>(initialView)
   const view = controlledView ?? localView
   const setView = onViewChange ?? setLocalView
-  const zecProjection = projectNearConfidentialZecForHome(model, sourceModel ?? model, domain)
-  const displayModel = zecProjection?.model ?? model
+  const displayModel = model
   const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
     displayModel.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
@@ -309,9 +307,7 @@ export function PortfolioShell({
   const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
   const standaloneConfidential =
     domain === 'all' || domain === 'shield'
-      ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices).filter(
-          item => item.entry.asset.protocolAssetId !== zecProjection?.protocolAssetId
-        )
+      ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
       : []
   const visibleConfidential = standaloneConfidential.filter(
     item =>

@@ -181,6 +181,7 @@ export interface ConfidentialFundingPlan {
   readonly requestFingerprint?: string
   readonly orderId?: string
   readonly batchSubmissionAttemptedAt?: number
+  readonly settlementCheckedAt?: number
   readonly backendStatus?: string
   readonly errorStatus?: string
   readonly dedupKey?: string
@@ -366,18 +367,25 @@ export function mergeConfidentialWithdrawObservation(
 ): ConfidentialWithdrawRow {
   if (!observation) return row
   const current = normalizeChildStatus(row.status)
+  const observed = normalizeChildStatus(observation.status)
   if (current !== 'pending') {
-    // A stale poll must not change a settled child while its siblings are pending.
-    if (normalizeChildStatus(observation.status) !== current) return row
+    // A failed withdrawal can still settle as refunded; other terminal changes are stale.
+    if (
+      observed !== current &&
+      !(observed === 'refunded' && ['failed', 'expired', 'cancelled'].includes(current))
+    ) {
+      return row
+    }
     return Object.freeze({
       ...row,
-      ...(!row.transactionHash && observation.transactionHash
+      ...(observed !== current ? { status: observation.status } : {}),
+      ...(!row.transactionHash && observation.transactionHash && observed !== 'refunded'
         ? { transactionHash: observation.transactionHash }
         : {}),
       ...(!row.errorStatus && observation.errorStatus
         ? { errorStatus: observation.errorStatus }
         : {}),
-      ...(!row.settledOutputRaw && observation.settledOutputRaw && current === 'success'
+      ...(!row.settledOutputRaw && observation.settledOutputRaw && observed === 'success'
         ? { settledOutputRaw: observation.settledOutputRaw }
         : {})
     })
@@ -385,9 +393,11 @@ export function mergeConfidentialWithdrawObservation(
   return Object.freeze({
     ...row,
     status: observation.status,
-    ...(observation.transactionHash ? { transactionHash: observation.transactionHash } : {}),
+    ...(observation.transactionHash && observed !== 'refunded'
+      ? { transactionHash: observation.transactionHash }
+      : {}),
     ...(observation.errorStatus ? { errorStatus: observation.errorStatus } : {}),
-    ...(observation.settledOutputRaw && normalizeChildStatus(observation.status) === 'success'
+    ...(observation.settledOutputRaw && observed === 'success'
       ? { settledOutputRaw: observation.settledOutputRaw }
       : {})
   })

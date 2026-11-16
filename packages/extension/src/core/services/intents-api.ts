@@ -17,6 +17,8 @@ import {
 } from '@/lib/fetch-utils'
 import { DedupPromise } from '@/lib/async-utils'
 import { assertMainnetProtocolFeature } from '@/lib/runtime-network'
+import Big from 'big.js'
+import type { QuoteBinding } from '@/types/wallet'
 
 const INTENTS_API_BASE = 'https://api.rhea.finance/api/1click'
 const ONECLICK_TOKENS_API = 'https://1click.chaindefuser.com/v0/tokens'
@@ -34,6 +36,7 @@ export interface SwapToken {
   price: number
   priceUpdatedAt: string
   symbol: string
+  name?: string
   coingeckoId?: string | null
   coingeckoIcon?: string | null
 }
@@ -49,6 +52,7 @@ export interface QuoteParams {
   refundTo: string
   recipient: string
   slippageTolerance?: number
+  validateQuoteRequest?: boolean
   signal?: AbortSignal
 }
 
@@ -98,6 +102,36 @@ export interface SwapStatus {
   }
   originAsset?: string
   destinationAsset?: string
+}
+
+export function evaluateIntentsStatusQuoteBinding(
+  binding: QuoteBinding,
+  status: SwapStatus,
+  destinationDecimals?: number
+): 'valid' | 'mismatch' | 'unknown' {
+  if (binding.originAsset && status.originAsset && status.originAsset !== binding.originAsset) {
+    return 'mismatch'
+  }
+  if (
+    binding.destinationAsset &&
+    status.destinationAsset &&
+    status.destinationAsset !== binding.destinationAsset
+  ) {
+    return 'mismatch'
+  }
+  const actualAmount = status.swapDetails?.amountOutFormatted
+  if (!binding.minAmountOut || !actualAmount) return 'valid'
+  if (
+    destinationDecimals === undefined ||
+    !Number.isSafeInteger(destinationDecimals) ||
+    destinationDecimals < 0 ||
+    !/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(actualAmount)
+  ) {
+    return 'unknown'
+  }
+  return new Big(actualAmount).times(new Big(10).pow(destinationDecimals)).lt(binding.minAmountOut)
+    ? 'mismatch'
+    : 'valid'
 }
 
 const QUOTE_RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
@@ -665,7 +699,7 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
       deadline: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(),
       referral: NOIR_SWAP_REFERRAL,
       quoteWaitingTimeMs: 3000,
-      slippageTolerance: params.slippageTolerance || 50,
+      slippageTolerance: params.slippageTolerance ?? 50,
       appFees: NOIR_SWAP_APP_FEES
     }
 
@@ -681,6 +715,31 @@ export async function fetchQuote(params: QuoteParams): Promise<QuoteResult> {
     const data = await response.json()
 
     if (data?.quote) {
+      if (params.validateQuoteRequest && data.quoteRequest !== undefined) {
+        const echoed = data.quoteRequest
+        const sameAddress = (left: unknown, right: string) =>
+          typeof left === 'string' &&
+          (/^0x[0-9a-fA-F]{40}$/.test(right)
+            ? left.toLowerCase() === right.toLowerCase()
+            : left === right)
+        if (
+          !isRecord(echoed) ||
+          [
+            'originAsset',
+            'destinationAsset',
+            'amount',
+            'swapType',
+            'refundType',
+            'recipientType',
+            'depositType'
+          ].some(key => echoed[key] !== requestBody[key as keyof typeof requestBody]) ||
+          !sameAddress(echoed.refundTo, requestBody.refundTo) ||
+          !sameAddress(echoed.recipient, requestBody.recipient) ||
+          Number(echoed.slippageTolerance) !== requestBody.slippageTolerance
+        ) {
+          throw new Error('Near Intents quote changed its request')
+        }
+      }
       return parseQuoteSuccessResponse(data)
     } else {
       return {

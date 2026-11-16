@@ -50,10 +50,17 @@ export function getZcashIntentsOriginStatus(
  * monitor before a destination Zcash transaction hash is available.
  */
 export function needsRelayStatusRecovery(
-  transaction: Pick<Transaction, 'type' | 'status' | 'depositAddress' | 'destinationTxHash'>
+  transaction: Pick<Transaction, 'type' | 'status' | 'depositAddress' | 'destinationTxHash'> &
+    Partial<Pick<Transaction, 'quoteBinding'>>
 ): boolean {
   if (
-    (transaction.type !== 'withdraw' && transaction.type !== 'claim') ||
+    (transaction.type !== 'withdraw' &&
+      transaction.type !== 'claim' &&
+      !(
+        transaction.type === 'swap' &&
+        transaction.quoteBinding?.provider === 'near-intents' &&
+        transaction.quoteBinding.quoteHandle
+      )) ||
     !transaction.depositAddress ||
     transaction.destinationTxHash
   ) {

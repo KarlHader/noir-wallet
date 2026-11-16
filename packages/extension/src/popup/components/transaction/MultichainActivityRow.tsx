@@ -196,11 +196,6 @@ function SwapActivityRow({
         <div className="w-full min-w-0 justify-self-end text-right">
           {presentation.isExternalDeposit ? (
             <p
-              title={
-                presentation.destination
-                  ? `${presentation.destinationIsSettled ? 'Received +' : 'Expected +'}${presentation.destination.exact} ${destinationSymbol}`
-                  : undefined
-              }
               className={cn(
                 'truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums',
                 presentation.destinationIsSettled && 'text-primary'
@@ -212,19 +207,11 @@ function SwapActivityRow({
             </p>
           ) : (
             <>
-              <p
-                className="truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums"
-                title={
-                  presentation.source ? `−${presentation.source.exact} ${sourceSymbol}` : undefined
-                }
-              >
+              <p className="truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums">
                 {presentation.source ? `−${presentation.source.formatted} ${sourceSymbol}` : '—'}
               </p>
               {presentation.destination && (
-                <p
-                  className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums"
-                  title={`${presentation.destination.exact} ${destinationSymbol}`}
-                >
+                <p className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums">
                   {isShieldSend
                     ? 'Recipient receives '
                     : `${presentation.destinationIsSettled ? 'Received' : 'Expected'} +`}
@@ -357,11 +344,6 @@ export function MultichainActivityRow({
           {showChanges && summaryChange ? (
             <div data-activity-asset-changes>
               <p
-                title={
-                  summaryChange.assetId.startsWith('bip122:00040fe8')
-                    ? undefined
-                    : `${summaryChange.direction === 'incoming' ? '+' : '−'}${summaryChange.value} ${summaryChange.symbol}`
-                }
                 className={cn(
                   'flex min-w-0 flex-wrap items-baseline justify-end gap-1 font-sans text-sm font-medium tabular-nums',
                   summaryChange.direction === 'incoming' && 'text-primary'

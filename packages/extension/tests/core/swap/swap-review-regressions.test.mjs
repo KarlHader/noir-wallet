@@ -351,6 +351,10 @@ it('keeps minimum amounts while removing nested provider metadata without changi
     message: 'no route',
     retryable: false
   })
+  assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError('quote_timeout')), {
+    message: 'no route',
+    retryable: true
+  })
   assert.deepEqual(getRheaSwapQuoteFailure(new RheaSwapClientError('fetch failed')), {
     message: 'Network error. Please check your internet connection.',
     retryable: true
@@ -587,7 +591,7 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(options.length, 2)
     assert.equal(options[0].selectionId, SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
     assert.equal(options[0].availableRaw, '120000000')
-    assert.equal(options[0].badgeBlockchain, 'near')
+    assert.equal(options[0].badgeBlockchain, 'zec')
     assert.equal(options[1].selectionId, SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
     assert.equal(options[1].availableRaw, '40000000')
     assert.equal(options[1].badgeBlockchain, 'zec')

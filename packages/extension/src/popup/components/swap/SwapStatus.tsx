@@ -1,6 +1,6 @@
+import { useMemo } from 'react'
 import { Button } from '../ui/button'
 import type { SwapStatus } from '@/core/services/intents-api'
-import { formatSortAddress } from '@/lib/format'
 import { TransactionResult, type TransactionStatus } from '../transaction/TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { isZcashDestination } from '@/lib/cross-chain-transaction'
@@ -8,8 +8,16 @@ import { WALLET_CONFIG } from '@/config/wallet'
 import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
 import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 import type { Network } from '@/types'
+import type { ActivityItem } from '@/core/activity'
+import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
+import { useSettingsStore } from '@/store/settings-store'
+import {
+  ActivityTransactionBody,
+  buildActivityTransactionView
+} from '../transaction/ActivityTransactionBody'
 import { getIntentsProgressPresentation } from '@/popup/services/transaction-progress'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
+import { TransactionReferenceValue } from '../transaction/TransactionReferenceValue'
 import {
   getConfidentialFundingStatusCopy,
   getSwapTransactionReference,
@@ -42,41 +50,14 @@ interface SwapStatusDisplayProps {
   onClose: () => void
   onViewActivity: () => void
   viewActivityDisabled?: boolean
+  activityItem?: ActivityItem | null
 }
 
-function TxHashLink({
-  hash,
-  assetId,
-  fallbackChain,
-  network
-}: {
-  hash: string
-  assetId?: string
-  fallbackChain?: string
-  network: Network
-}) {
-  const { label: chainLabel, url: explorerUrl } = getSwapTransactionReference(
-    assetId,
-    fallbackChain,
-    hash,
-    network
-  )
-
+function TxHashLink({ hash, label, url }: { hash: string; label: string; url: string }) {
   return (
     <div className="flex justify-between items-center py-3 border-b border-white/10">
-      <span className="text-sm text-muted">{chainLabel} Tx</span>
-      {explorerUrl ? (
-        <a
-          href={explorerUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm font-mono text-primary cursor-pointer hover:underline"
-        >
-          {formatSortAddress(hash)}
-        </a>
-      ) : (
-        <span className="text-sm font-mono text-muted">{formatSortAddress(hash)}</span>
-      )}
+      <span className="text-sm text-muted">{label}</span>
+      <TransactionReferenceValue hash={hash} url={url} />
     </div>
   )
 }
@@ -103,7 +84,8 @@ export function SwapStatusDisplay({
   resumingConfidentialFunding,
   onClose,
   onViewActivity,
-  viewActivityDisabled
+  viewActivityDisabled,
+  activityItem
 }: SwapStatusDisplayProps) {
   const currentStatus = status?.status || 'PENDING_DEPOSIT'
   const destinationTxHash = status?.swapDetails?.destinationChainTxHashes?.[0]?.hash
@@ -150,6 +132,71 @@ export function SwapStatusDisplay({
   const labels = getSwapActionLabels(actionName)
   const showExchangeAmounts = !actionName || actionName === 'Swap'
   const showFee = !!fee
+  const showDestinationAmount = showExchangeAmounts && confidentialFunding?.phase !== 'refunded'
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const activityCatalog = useMemo(
+    () =>
+      buildActivityPresentationCatalog({
+        network,
+        endpointSettings,
+        userEvmAssets: []
+      }),
+    [network, endpointSettings]
+  )
+  const activityView = activityItem
+    ? buildActivityTransactionView({
+        item: activityItem,
+        network,
+        assetMetadata: activityCatalog.assetMetadata,
+        chainMetadata: activityCatalog.chainMetadata,
+        refunded: confidentialFunding?.phase === 'refunded',
+        fallback: {
+          source: { value: amountIn, symbol: tokenInSymbol },
+          destination: { value: amountOut, symbol: tokenOutSymbol },
+          ...(originChainHint ? { sourceNetwork: originChainHint } : {}),
+          ...(destinationChainHint ? { destinationNetwork: destinationChainHint } : {}),
+          ...(fee ? { fee: { value: fee, symbol: 'ZEC', label: 'Network fee' } } : {})
+        }
+      })
+    : null
+  const fallbackReferences = [
+    ...(!status?.swapDetails?.originChainTxHashes?.length && originTxHash
+      ? [
+          {
+            role: 'origin' as const,
+            hash: originTxHash,
+            assetId: status?.originAsset,
+            chain: originChainHint
+          }
+        ]
+      : []),
+    ...(status?.swapDetails?.originChainTxHashes?.map(tx => ({
+      role: 'origin' as const,
+      hash: tx.hash,
+      assetId: status.originAsset,
+      chain: originChainHint
+    })) ?? []),
+    ...(status?.swapDetails?.destinationChainTxHashes?.map(tx => ({
+      role: 'destination' as const,
+      hash: tx.hash,
+      assetId: status.destinationAsset,
+      chain: destinationChainHint
+    })) ?? [])
+  ].map(reference => ({
+    role: reference.role,
+    hash: reference.hash,
+    ...getSwapTransactionReference(reference.assetId, reference.chain, reference.hash, network)
+  }))
+  const transactionReferences = fallbackReferences
+    .filter(
+      (reference, index, all) =>
+        all.findIndex(candidate =>
+          reference.url
+            ? candidate.url === reference.url
+            : candidate.role === reference.role && candidate.hash === reference.hash
+        ) === index
+    )
+    .map(reference => ({ ...reference, label: `${reference.label} Tx` }))
 
   return (
     <TransactionResult
@@ -178,73 +225,54 @@ export function SwapStatusDisplay({
         )
       }
     >
-      <div className="w-full space-y-3">
-        <TransactionProgressSteps steps={progress.steps} className="pb-2" />
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
-          <span className="text-sm text-muted">
-            {showExchangeAmounts ? labels.sendLabel : 'Amount'}
-          </span>
-          <AmountDisplay
-            value={amountIn}
-            symbol={tokenInSymbol}
-            prefix={showExchangeAmounts ? '- ' : undefined}
-            className="text-sm font-medium"
-          />
+      {activityView ? (
+        <ActivityTransactionBody view={activityView} />
+      ) : (
+        <div className="w-full space-y-3">
+          <TransactionProgressSteps steps={progress.steps} className="pb-2" />
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
+            <span className="text-sm text-muted">
+              {showExchangeAmounts ? labels.sendLabel : 'Amount'}
+            </span>
+            <AmountDisplay
+              value={amountIn}
+              symbol={tokenInSymbol}
+              prefix={showExchangeAmounts ? '- ' : undefined}
+              showDetails={false}
+              className="text-sm font-medium"
+            />
+          </div>
+          {showDestinationAmount && (
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
+              <span className="text-sm text-muted">{labels.receiveLabel}</span>
+              <AmountDisplay
+                value={amountOut}
+                symbol={tokenOutSymbol}
+                prefix="+ "
+                showDetails={false}
+                className="text-sm font-medium"
+              />
+            </div>
+          )}
+
+          {showFee && (
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
+              <span className="text-sm text-muted">Fee</span>
+              <AmountDisplay
+                value={fee}
+                symbol="ZEC"
+                prefix="≈ "
+                profile="fee"
+                className="text-sm font-medium"
+              />
+            </div>
+          )}
+
+          {transactionReferences.map((reference, index) => (
+            <TxHashLink key={`${reference.url}:${reference.hash}:${index}`} {...reference} />
+          ))}
         </div>
-        {showExchangeAmounts && (
-          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
-            <span className="text-sm text-muted">{labels.receiveLabel}</span>
-            <AmountDisplay
-              value={amountOut}
-              symbol={tokenOutSymbol}
-              prefix="+ "
-              className="text-sm font-medium"
-            />
-          </div>
-        )}
-
-        {showFee && (
-          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-white/10 py-3">
-            <span className="text-sm text-muted">Fee</span>
-            <AmountDisplay
-              value={fee}
-              symbol="ZEC"
-              prefix="≈ "
-              profile="fee"
-              className="text-sm font-medium"
-            />
-          </div>
-        )}
-
-        {originTxHash && !status?.swapDetails?.originChainTxHashes?.length && (
-          <TxHashLink
-            hash={originTxHash}
-            assetId={status?.originAsset}
-            fallbackChain={originChainHint}
-            network={network}
-          />
-        )}
-
-        {status?.swapDetails?.originChainTxHashes?.map((tx, i) => (
-          <TxHashLink
-            key={`origin-${i}`}
-            hash={tx.hash}
-            assetId={status.originAsset}
-            fallbackChain={originChainHint}
-            network={network}
-          />
-        ))}
-
-        {status?.swapDetails?.destinationChainTxHashes?.map((tx, i) => (
-          <TxHashLink
-            key={`dest-${i}`}
-            hash={tx.hash}
-            assetId={status.destinationAsset}
-            fallbackChain={destinationChainHint}
-            network={network}
-          />
-        ))}
-      </div>
+      )}
     </TransactionResult>
   )
 }

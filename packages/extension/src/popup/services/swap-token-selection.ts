@@ -28,10 +28,40 @@ export interface ResolvedSwapTokenSelection {
 }
 
 export function matchesSwapTokenSearch(token: SwapToken, search: string): boolean {
-  const normalizedSearch = search.trim().toLowerCase()
-  if (normalizedSearch.length === 0) return true
-  if (token.symbol.toLowerCase().includes(normalizedSearch)) return true
-  return token.contractAddress?.toLowerCase() === normalizedSearch
+  return rankTokenSearchFields(token, search) < 99
+}
+
+export function rankTokenSearchFields(
+  token: Readonly<{
+    symbol?: string
+    name?: string
+    contractAddress?: string | null
+    assetId?: string
+    searchTerms?: readonly string[]
+  }>,
+  search: string
+): number {
+  const query = search.trim().toLowerCase()
+  if (!query) return 0
+  if (token.contractAddress?.toLowerCase() === query) return 0
+  if (query.startsWith('0x')) return 99
+  if (token.symbol?.toLowerCase() === query) return 1
+  if (token.name?.toLowerCase() === query) return 2
+  const terms = [token.assetId, ...(token.searchTerms ?? [])]
+    .filter((term): term is string => Boolean(term))
+    .map(term => term.toLowerCase())
+  if (terms.includes(query)) return 3
+  if (
+    token.symbol?.toLowerCase().startsWith(query) ||
+    token.name?.toLowerCase().startsWith(query)
+  ) {
+    return 4
+  }
+  if (terms.some(term => term.startsWith(query))) return 5
+  if (token.symbol?.toLowerCase().includes(query) || token.name?.toLowerCase().includes(query)) {
+    return 6
+  }
+  return terms.some(term => term.includes(query)) ? 7 : 99
 }
 
 export function compareSwapTokenSearchRelevance(
@@ -39,17 +69,7 @@ export function compareSwapTokenSearchRelevance(
   right: SwapToken,
   search: string
 ): number {
-  const normalizedSearch = search.trim().toLowerCase()
-  if (!normalizedSearch) return 0
-  const rank = (token: SwapToken): number => {
-    const symbol = token.symbol.toLowerCase()
-    if (symbol === normalizedSearch || token.contractAddress?.toLowerCase() === normalizedSearch) {
-      return 0
-    }
-    if (symbol.startsWith(normalizedSearch)) return 1
-    return 2
-  }
-  return rank(left) - rank(right)
+  return rankTokenSearchFields(left, search) - rankTokenSearchFields(right, search)
 }
 
 export function createSwapTokenPreferenceScope(

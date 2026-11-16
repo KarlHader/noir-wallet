@@ -11,10 +11,23 @@ import { getAssetProtocolSourceMappings } from '@/core/prices/asset-market-mappi
 import Big from '@/lib/big'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { formatSymbol } from '@/lib/format'
+import { resolveEvmChainIconAlias } from '@/config/icons'
 import type { Network } from '@/types'
 import { excludeDeprecatedConfidentialAssets } from '@/core/services/confidential-funding/confidential-funding-portfolio'
 
 type ConfidentialAsset = NonNullable<PortfolioReadModel['confidential']>['assets'][number]
+
+const mainnetChains = createInitialProductChainRegistry('mainnet')
+const mainnetAssets = createAssetRegistry(
+  mainnetChains,
+  getBundledInitialProductAssetDefinitions('mainnet')
+)
+const protocolChainIds = new Map(
+  getAssetProtocolSourceMappings('mainnet', mainnetAssets).map(mapping => [
+    mapping.protocolAssetId,
+    parseAssetId(mapping.assetId).chainId
+  ])
+)
 
 export interface NearConfidentialHolding {
   readonly asset: ConfidentialAsset
@@ -89,68 +102,6 @@ export function resolveNearConfidentialZecHolding(input: {
   })
 }
 
-export function projectNearConfidentialZecForHome(
-  displayedModel: PortfolioReadModel,
-  sourceModel: PortfolioReadModel,
-  domain: 'all' | 'public' | 'shield' | 'private'
-): Readonly<{ model: PortfolioReadModel; protocolAssetId: string }> | null {
-  if (domain !== 'all' && domain !== 'shield') return null
-  if (
-    displayedModel.scope.keyDomainId !== sourceModel.scope.keyDomainId ||
-    displayedModel.scope.accountId !== sourceModel.scope.accountId
-  )
-    return null
-  const holding = resolveNearConfidentialZecHolding({
-    model: sourceModel,
-    network: 'mainnet',
-    walletId: sourceModel.scope.keyDomainId,
-    accountId: sourceModel.scope.accountId
-  })
-  if (!holding || BigInt(holding.availableRaw) === 0n) return null
-  const sourceAsset = sourceModel.assets.find(asset => asset.asset.id === holding.assetId)
-  const displayedChain = displayedModel.chains.find(
-    chain =>
-      chain.assets.some(asset => asset.asset.id === holding.assetId) ||
-      chain.chain.id === sourceAsset?.asset.chainId
-  )
-  if (!sourceAsset || !displayedChain || displayedChain.chain.family !== 'zcash') return null
-  const displayedAsset = displayedModel.assets.find(asset => asset.asset.id === holding.assetId)
-  const asset = displayedAsset ?? sourceAsset
-  const mergedAsset = Object.freeze({
-    ...asset,
-    balance: Object.freeze({
-      ...asset.balance,
-      totalRaw: (
-        BigInt(displayedAsset?.balance.totalRaw ?? '0') + BigInt(holding.availableRaw)
-      ).toString(),
-      pendingRaw: domain === 'shield' ? '0' : asset.balance.pendingRaw
-    })
-  })
-  return Object.freeze({
-    protocolAssetId: holding.protocolAssetId,
-    model: Object.freeze({
-      ...displayedModel,
-      assets: Object.freeze([
-        ...displayedModel.assets.filter(item => item.asset.id !== holding.assetId),
-        mergedAsset
-      ]),
-      chains: Object.freeze(
-        displayedModel.chains.map(chain =>
-          chain.chain.id === displayedChain.chain.id
-            ? Object.freeze({
-                ...chain,
-                assets: Object.freeze([
-                  ...chain.assets.filter(item => item.asset.id !== holding.assetId),
-                  mergedAsset
-                ])
-              })
-            : chain
-        )
-      )
-    })
-  })
-}
-
 export function resolveConfidentialDetailAssetId(
   model: PortfolioReadModel | null,
   tokenId: string
@@ -173,6 +124,8 @@ export function resolveConfidentialDetailAssetId(
 }
 
 export function getNearConfidentialChainId(asset: ConfidentialAsset): string | null {
+  const mapped = protocolChainIds.get(asset.protocolAssetId)
+  if (mapped) return mapped
   if (asset.chainId) return asset.chainId
   if (!asset.assetId) return null
   try {
@@ -180,6 +133,15 @@ export function getNearConfidentialChainId(asset: ConfidentialAsset): string | n
   } catch {
     return null
   }
+}
+
+export function getNearConfidentialIconChain(asset: ConfidentialAsset): string | undefined {
+  const chainId = getNearConfidentialChainId(asset)
+  if (!chainId) return undefined
+  if (chainId.startsWith('eip155:')) return resolveEvmChainIconAlias(chainId)
+  if (chainId === getZcashChainId('mainnet')) return 'zec'
+  const chain = mainnetChains.list().find(candidate => candidate.id === chainId)
+  return chain?.family === 'bitcoin' ? 'btc' : chain?.family === 'near' ? 'near' : undefined
 }
 
 export function listStandaloneNearConfidentialHoldings(

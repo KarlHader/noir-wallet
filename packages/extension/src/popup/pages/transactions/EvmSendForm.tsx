@@ -64,7 +64,6 @@ import {
   type EvmSendSourceMode
 } from './evm-send-validation'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
-import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import {
@@ -92,7 +91,11 @@ import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-setting
 import { LatestAttempt } from '@/lib/async-utils'
 import { getRheaSwapErrorMessage, rheaSwapClient } from '@/popup/services/rhea-swap-client'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
-import { accountNetworksClient } from '@/popup/services/account-networks-client'
+import {
+  accountNetworksClient,
+  type AccountNetworksCatalogView,
+  type AccountNetworksView
+} from '@/popup/services/account-networks-client'
 import { receiveTargetsClient } from '@/popup/services/receive-targets-client'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from '@/popup/services/swap-page-model'
@@ -134,7 +137,10 @@ export function EvmSendForm({
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
+  destinationNetworksLoading,
   onSelectDestinationNetwork,
+  catalogAccount,
+  catalog,
   selection,
   portfolio,
   priceUsd,
@@ -148,17 +154,20 @@ export function EvmSendForm({
   active: boolean
   walletMode: 'public' | 'private'
   onSelectAsset: () => void
-  onSelectShield: (recipient: string) => void
+  onSelectShield: (recipient: string, amount: string) => void
   destinationNetworks: readonly {
     assetId: string
     chainId: string
     name: string
     icon: string
   }[]
+  destinationNetworksLoading: boolean
   onSelectDestinationNetwork: (
     destinationAssetId: string,
     draft: Readonly<{ recipient: string; amount: string }>
   ) => void
+  catalogAccount: AccountNetworksView
+  catalog: AccountNetworksCatalogView | null
   selection: EvmSendAsset
   portfolio: PortfolioReadModel
   priceUsd: string | null
@@ -201,7 +210,6 @@ export function EvmSendForm({
   const { navigate } = useNavigate()
   const asset = selection.asset
   const chain = selection.chain
-  const { activeAccount: catalogAccount, catalog } = useActiveAccountNetworks()
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
@@ -1097,7 +1105,7 @@ export function EvmSendForm({
         disabled={preparing || approving || updatingFee}
         availableDomains={shieldSourceAvailable ? ['public', 'shield'] : ['public']}
         onDomainChange={domain => {
-          if (domain === 'shield') onSelectShield(validRecipient ? recipient : '')
+          if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)
         }}
         amountInput={
           <SendAmountInputCard
@@ -1169,12 +1177,13 @@ export function EvmSendForm({
           <div>
             <div className="mb-2 flex items-center justify-between text-xs">
               <SendFieldLabel>Send to</SendFieldLabel>
-              {!sendPrivately && destinationNetworks.length > 1 ? (
+              {!sendPrivately && (destinationNetworks.length > 1 || destinationNetworksLoading) ? (
                 <>
                   <button
                     type="button"
                     onClick={() => setNetworkPickerOpen(true)}
-                    className="inline-flex items-center gap-1.5 text-foreground hover:text-primary"
+                    disabled={destinationNetworks.length <= 1}
+                    className="inline-flex items-center gap-1.5 text-foreground hover:text-primary disabled:cursor-wait disabled:opacity-60"
                     aria-label={`Select destination network, ${chain.chain.displayName}`}
                   >
                     <ChainIcon
@@ -1189,7 +1198,14 @@ export function EvmSendForm({
                       showTooltip={false}
                     />
                     {chain.chain.displayName}
-                    <Icon icon="lucide:chevron-down" width={13} height={13} />
+                    <Icon
+                      icon={
+                        destinationNetworksLoading ? 'lucide:loader-circle' : 'lucide:chevron-down'
+                      }
+                      width={13}
+                      height={13}
+                      className={destinationNetworksLoading ? 'animate-spin' : undefined}
+                    />
                   </button>
                   <ChainSelector
                     open={networkPickerOpen}

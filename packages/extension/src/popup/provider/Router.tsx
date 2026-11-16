@@ -59,6 +59,13 @@ export function useNavigate() {
     trackActivity()
     return navigate(-1)
   }, [navigate, trackActivity])
+  const goBackSteps = useCallback(
+    (steps: number) => {
+      trackActivity()
+      return navigate(-steps)
+    },
+    [navigate, trackActivity]
+  )
   const replace = useCallback(
     (path: string) => {
       trackActivity(path)
@@ -67,7 +74,10 @@ export function useNavigate() {
     [navigate, trackActivity]
   )
 
-  return useMemo(() => ({ navigate: navigateTo, goBack, replace }), [goBack, navigateTo, replace])
+  return useMemo(
+    () => ({ navigate: navigateTo, goBack, goBackSteps, replace }),
+    [goBack, goBackSteps, navigateTo, replace]
+  )
 }
 
 /**

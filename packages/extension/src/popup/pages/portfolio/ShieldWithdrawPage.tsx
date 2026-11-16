@@ -40,7 +40,10 @@ import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import type { ShieldSourceTokenPickerItem } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
-import { sortSendAssetsByBalanceValue } from '@/popup/pages/transactions/send-asset-order'
+import {
+  sortSendAssetsByBalanceValue,
+  sortSendNetworks
+} from '@/popup/pages/transactions/send-asset-order'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
 import {
   TransactionReviewExchangeSummary,
@@ -63,6 +66,7 @@ import {
   matchesExternalShieldWithdrawReview,
   listShieldFundingAssets,
   listShieldSendDestinations,
+  estimateShieldSendRouteFee,
   isShieldWithdrawRecipient,
   shieldPortfolioBalances,
   shieldFundingAvailableRaw,
@@ -98,6 +102,7 @@ export interface ShieldWithdrawEntry {
   readonly assetId: string | null
   readonly networkId: string | null
   readonly recipient: string
+  readonly amount?: string
   readonly provider: string | null
 }
 
@@ -128,7 +133,12 @@ export function ShieldWithdrawForm({
   readonly initialAsset: PortfolioAssetView | null
   readonly refresh: (force?: boolean) => Promise<void>
   readonly readProjection: () => Promise<void>
-  readonly onSelectPublic: (assetId: string | null, recipient: string) => void
+  readonly onSelectPublic: (
+    assetId: string | null,
+    recipient: string,
+    amount: string,
+    destinationAssetId: string | null
+  ) => void
   readonly onOpenSourcePicker: () => void
   readonly onSourcePickerState?: (state: ShieldWithdrawSourcePickerState) => void
   readonly sourceSelectorActive?: boolean
@@ -138,6 +148,7 @@ export function ShieldWithdrawForm({
   const routeAssetId = entry.assetId ?? ''
   const routeNetworkId = entry.networkId
   const routeRecipient = entry.recipient
+  const routeAmount = entry.amount ?? ''
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const network = useWalletStore(state => state.currentNetwork)
@@ -153,7 +164,13 @@ export function ShieldWithdrawForm({
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
-  const entryKey = JSON.stringify([routeAssetId, routeNetworkId, routeRecipient, entry.provider])
+  const entryKey = JSON.stringify([
+    routeAssetId,
+    routeNetworkId,
+    routeRecipient,
+    routeAmount,
+    entry.provider
+  ])
   const latestEntry = useRef(entryKey)
   latestEntry.current = entryKey
   const activeRef = useRef(active)
@@ -170,7 +187,7 @@ export function ShieldWithdrawForm({
   } | null>(null)
   const [sourceId, setSourceId] = useState(routeAssetId)
   const [destinationNetworkId, setDestinationNetworkId] = useState<string | null>(routeNetworkId)
-  const [amount, setAmount] = useState('')
+  const [amount, setAmount] = useState(routeAmount)
   const [recipient, setRecipient] = useState(routeRecipient)
   const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
@@ -185,6 +202,16 @@ export function ShieldWithdrawForm({
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const draftKey = JSON.stringify([
+    scopeKey,
+    sourceId,
+    destinationNetworkId,
+    recipient,
+    amount,
+    slippage
+  ])
+  const latestDraftKey = useRef(draftKey)
+  latestDraftKey.current = draftKey
   const confirmationAttempt = useRef<string | null>(null)
   const {
     balances: currentBalances,
@@ -238,7 +265,7 @@ export function ShieldWithdrawForm({
   useEffect(() => {
     setSourceId(routeAssetId)
     setDestinationNetworkId(routeNetworkId)
-    setAmount('')
+    setAmount(routeAmount)
     setRecipient(routeRecipient)
     setPicker(null)
     setNetworkPickerOpen(false)
@@ -247,7 +274,11 @@ export function ShieldWithdrawForm({
     setUncertain(false)
     setError(null)
     confirmationAttempt.current = null
-  }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient])
+  }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient, routeAmount])
+
+  useEffect(() => {
+    setError(null)
+  }, [draftKey])
 
   useEffect(() => {
     if (!active && !sourceSelectorActive) return
@@ -383,13 +414,14 @@ export function ShieldWithdrawForm({
     if (!sourceId && source) setSourceId(source.asset.asset.id)
   }
   const destinations = source ? listShieldSendDestinations(source, options, network) : []
-  const networkOptions: ChainSelectorOption[] = [
-    ...new Map(destinations.map(item => [item.chain.chain.id, item])).values()
-  ].map(item => ({
-    id: item.chain.chain.id,
-    name: item.chain.chain.displayName,
-    icon: withdrawChainIconAlias(item.chain.chain)
-  }))
+  const networkOptions: ChainSelectorOption[] = sortSendNetworks(
+    [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(item => ({
+      id: item.chain.chain.id,
+      name: item.chain.chain.displayName,
+      icon: withdrawChainIconAlias(item.chain.chain)
+    })),
+    option => option
+  )
   const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
   const destination =
     source && selectedDestinationNetworkId
@@ -460,6 +492,15 @@ export function ShieldWithdrawForm({
     error: previewError,
     retry: retryPreview
   } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
+  const previewFee =
+    source && destination && previewRequest && preview && preview.expiresAt > Date.now()
+      ? estimateShieldSendRouteFee(
+          source,
+          destination,
+          previewRequest.source.amountRaw,
+          preview.amountOutRaw
+        )
+      : null
 
   const scopeStillCurrent = () => {
     const wallet = useWalletStore.getState()
@@ -475,6 +516,7 @@ export function ShieldWithdrawForm({
   }
   const openActivity = (transactionId: string) => {
     if (!scopeStillCurrent() || !account) return
+    void loadBalances(true, false)
     setPrepared(null)
     setAmount('')
     setUncertain(false)
@@ -527,10 +569,11 @@ export function ShieldWithdrawForm({
       return
     setBusy(true)
     setError(null)
+    const submittedDraftKey = draftKey
     try {
       const request = previewRequest
       const review = await confidentialFundingClient.prepare(request)
-      if (!scopeStillCurrent()) {
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) {
         if (review.phase === 'prepared')
           void confidentialFundingClient.cancel(review.planId).catch(() => {})
         return
@@ -547,7 +590,7 @@ export function ShieldWithdrawForm({
       setUncertain(false)
       setPrepared({ review, request, source, destination, amount })
     } catch (cause) {
-      if (scopeStillCurrent())
+      if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
         setError(cause instanceof Error ? cause.message : 'Send quote unavailable')
     } finally {
       if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey)
@@ -664,7 +707,8 @@ export function ShieldWithdrawForm({
           asset={{
             assetId: prepared.source.asset.asset.id,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
-            icon: prepared.source.asset.metadata.iconUrl
+            icon: prepared.source.asset.metadata.iconUrl,
+            blockchain: withdrawChainIconAlias(prepared.source.chain.chain)
           }}
           amount={prepared.amount}
           network={prepared.destination.chain.chain.displayName}
@@ -677,7 +721,8 @@ export function ShieldWithdrawForm({
                 asset: {
                   assetId: prepared.source.asset.asset.id,
                   symbol: formatSymbol(prepared.source.asset.metadata.symbol),
-                  icon: prepared.source.asset.metadata.iconUrl
+                  icon: prepared.source.asset.metadata.iconUrl,
+                  blockchain: withdrawChainIconAlias(prepared.source.chain.chain)
                 },
                 amount: prepared.amount
               }}
@@ -685,7 +730,8 @@ export function ShieldWithdrawForm({
                 asset: {
                   assetId: prepared.destination.asset.asset.id,
                   symbol: formatSymbol(prepared.destination.asset.metadata.symbol),
-                  icon: prepared.destination.asset.metadata.iconUrl
+                  icon: prepared.destination.asset.metadata.iconUrl,
+                  blockchain: withdrawChainIconAlias(prepared.destination.chain.chain)
                 },
                 amount: output
               }}
@@ -753,7 +799,27 @@ export function ShieldWithdrawForm({
                     )
                   }
                 ]
-              : [])
+              : []),
+            {
+              label: 'Fee (est.)',
+              content: (() => {
+                const fee = estimateShieldSendRouteFee(
+                  prepared.source,
+                  prepared.destination,
+                  prepared.request.source.amountRaw,
+                  prepared.review.expectedOutputRaw
+                )
+                return fee ? (
+                  <AmountDisplay
+                    value={formatBaseUnitDecimalAmount(fee.raw, fee.decimals)}
+                    symbol={formatSymbol(prepared.source.asset.metadata.symbol)}
+                    profile="fee"
+                  />
+                ) : (
+                  'Unavailable'
+                )
+              })()
+            }
           ]}
           error={
             error ? (
@@ -783,7 +849,12 @@ export function ShieldWithdrawForm({
             const publicAssetId = [source?.asset, destination?.asset, initialAsset]
               .map(asset => asset?.asset.id)
               .find(id => model?.assets.some(item => item.asset.id === id))
-            onSelectPublic(publicAssetId ?? null, recipientValid ? recipient : '')
+            onSelectPublic(
+              publicAssetId ?? null,
+              recipientValid ? recipient : '',
+              amount,
+              destination?.asset.asset.id ?? null
+            )
           }
         }}
         recipient={
@@ -869,6 +940,7 @@ export function ShieldWithdrawForm({
                 assetId={displayedAsset.asset.id}
                 symbol={formatSymbol(displayedAsset.metadata.symbol)}
                 icon={displayedAsset.metadata.iconUrl}
+                blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
                 size={24}
               />
             )}
@@ -876,7 +948,9 @@ export function ShieldWithdrawForm({
               <span className="max-w-[7ch] truncate">
                 {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
               </span>
-              {displayedAsset && <span className="text-[10px] text-muted">Confidential</span>}
+              {source && (
+                <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
+              )}
             </span>
             <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
           </button>
@@ -933,6 +1007,20 @@ export function ShieldWithdrawForm({
       >
         <div>
           <SendRouteInfoCard
+            feeLabel="Fee (est.)"
+            fee={
+              preview && previewRequest && !previewLoading && !previewError ? (
+                previewFee ? (
+                  <AmountDisplay
+                    value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
+                    symbol={formatSymbol(source?.asset.metadata.symbol)}
+                    profile="fee"
+                  />
+                ) : (
+                  'Unavailable'
+                )
+              ) : undefined
+            }
             provider={
               <span className="inline-flex items-center gap-2">
                 <img src={nearLogo} alt="" className="size-5 rounded" />
@@ -1002,9 +1090,9 @@ export function ShieldWithdrawForm({
             Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
           </p>
         )}
-        {(error || balanceError) && (
+        {(balanceError || (error && !amountState?.error)) && (
           <p role="alert" className="text-xs text-warning">
-            {error ?? balanceError}
+            {balanceError ?? error}
           </p>
         )}
         {!currentBalances && canManageNear && connecting && (

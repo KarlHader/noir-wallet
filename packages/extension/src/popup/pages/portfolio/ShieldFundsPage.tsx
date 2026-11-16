@@ -139,15 +139,9 @@ function ShieldFundsContent() {
     [model, prices]
   )
   const hasNear = canManageNear || near.entries.length > 0
-  const zcashAccountData = useWalletStore(state =>
-    currentWalletId && currentAccountId
-      ? state.getAccount(currentWalletId, currentAccountId)
-      : undefined
-  )
   const zcashVaultEntry = resolveShieldZcashVaultEntry({
     network: currentNetwork,
-    keySource: zcashKeySource,
-    account: zcashAccountData,
+    walletSource: activeAccount?.walletSource ?? null,
     hasPortfolioZcash: hasZcash,
     enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
   })
@@ -179,11 +173,23 @@ function ShieldFundsContent() {
       : providersFor(action)
   const mode = new URLSearchParams(location.search).get('mode') === 'private' ? 'private' : 'public'
   const requestedAssetId = new URLSearchParams(location.search).get('assetId')
+  const originParams = new URLSearchParams(location.search)
+  originParams.delete('action')
+  const originSearch = originParams.toString()
+  const sendOriginPath = encodeURIComponent(
+    `${location.pathname}${originSearch ? `?${originSearch}` : ''}`
+  )
+  const zcashSendScopeQuery =
+    currentWalletId && currentAccountId
+      ? `&sourceWalletId=${encodeURIComponent(currentWalletId)}&sourceAccountId=${encodeURIComponent(currentAccountId)}`
+      : ''
   const movePath = withShieldAsset(
     `/transfer?entry=shield&provider=near-confidential&mode=${mode}${requestedAssetId ? `&from=${mode}&to=shield` : ''}`,
     requestedAssetId
   )
-  const zcashMovePath = zcashMoveSource ? `/send/zcash?move=1&from=${zcashMoveSource}` : null
+  const zcashMovePath = zcashMoveSource
+    ? `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
+    : null
   const runAction = (provider: ShieldProvider, action: ShieldAction, auto = false) => {
     setPendingAction(null)
     const go = (path: string) =>
@@ -204,12 +210,32 @@ function ShieldFundsContent() {
       return
     }
     if (provider === 'zcash-shield') {
-      if (action === 'send') go('/send/zcash?from=shielded')
+      if (action === 'send') {
+        const path = withShieldAsset(
+          `/send/zcash?from=shielded&originPath=${sendOriginPath}${zcashSendScopeQuery}`,
+          requestedAssetId
+        )
+        navigate(path, {
+          replace: auto,
+          state:
+            !auto && account
+              ? {
+                  sendOriginHistory: {
+                    originPath: decodeURIComponent(sendOriginPath),
+                    network: currentNetwork,
+                    walletId: account.walletId,
+                    accountId: account.accountId,
+                    entryKey: location.key
+                  }
+                }
+              : undefined
+        })
+      }
       return
     }
     go(
       action === 'send'
-        ? '/shield-withdraw?provider=near-confidential'
+        ? `/shield-withdraw?provider=near-confidential&originPath=${sendOriginPath}`
         : '/shield-deposit?provider=near-confidential'
     )
   }

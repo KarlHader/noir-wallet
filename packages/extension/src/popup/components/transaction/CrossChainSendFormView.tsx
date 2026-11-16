@@ -6,6 +6,7 @@ import { formatTokenQuantity } from '@/lib/number-format'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import {
   SendAmountInputCard,
   SendFieldLabel,
@@ -23,9 +24,12 @@ interface CrossChainSendFormViewProps {
   readonly onSelectDestination: (chainId: string) => void
   readonly amount: string
   readonly estimatedOut: string
+  readonly routeCost?: string | null
   readonly recipient: string
   readonly spendableBalance: string
   readonly sourceBadge?: string
+  readonly onSelectSourceAsset?: () => void
+  readonly onSelectShieldSource?: () => void
   readonly initializing?: boolean
   readonly destinationNameFallback?: string
   readonly sourceSymbolFallback?: string
@@ -62,9 +66,12 @@ export function CrossChainSendFormView({
   onSelectDestination,
   amount,
   estimatedOut,
+  routeCost,
   recipient,
   spendableBalance,
   sourceBadge,
+  onSelectSourceAsset,
+  onSelectShieldSource,
   initializing = false,
   destinationNameFallback,
   sourceSymbolFallback,
@@ -103,8 +110,16 @@ export function CrossChainSendFormView({
     <>
       <SendFormView
         domain={sourceBadge === 'Private' ? 'private' : 'public'}
-        availableDomains={[sourceBadge === 'Private' ? 'private' : 'public']}
-        onDomainChange={() => {}}
+        availableDomains={
+          sourceBadge === 'Private'
+            ? ['private']
+            : onSelectShieldSource
+              ? ['public', 'shield']
+              : ['public']
+        }
+        onDomainChange={domain => {
+          if (domain === 'shield') onSelectShieldSource?.()
+        }}
         disabled={initializing}
         recipient={
           <div className="order-2">
@@ -166,6 +181,7 @@ export function CrossChainSendFormView({
             }
             blockchain={tokenIn?.blockchain ?? sourceNetworkNameFallback}
             variant="pill"
+            onSelectAsset={onSelectSourceAsset}
           />
         }
         balance={formatTokenQuantity(spendableBalance)}
@@ -199,8 +215,16 @@ export function CrossChainSendFormView({
 
         <SendRouteInfoCard
           provider={providerName ?? '—'}
-          fee="—"
-          time="—"
+          feeLabel="Route cost (est.)"
+          fee={
+            routeCost === undefined ? (
+              '—'
+            ) : routeCost === null ? (
+              'Unavailable'
+            ) : (
+              <AmountDisplay value={routeCost} symbol={sourceSymbol} profile="fee" />
+            )
+          }
           extra={
             <>
               <div className="flex min-h-5 items-center justify-between gap-3">

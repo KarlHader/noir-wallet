@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../ui/button'
 import { DialogTitle } from '../ui/dialog'
 import { TransactionResult } from './TransactionResult'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { openModal } from '@/popup/provider/ModalManager'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
-import { formatSortAddress, formatSymbol } from '@/lib/format'
-import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
-import { getActivityTransactionReferences } from '@/popup/services/activity-transaction-references'
+import { formatSymbol } from '@/lib/format'
 import { useWalletStore } from '@/store/wallet-store'
+import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
+import { selectActivityObservation } from '@/popup/services/activity-observation'
+import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
 import type { ActivityItem } from '@/core/activity'
 import type { Network } from '@/types'
 
@@ -57,13 +59,37 @@ export function ConfidentialActivityView({
     nativeAccount: activeAccount
   })
   const [activity, setActivity] = useState<ActivityItem | null>(null)
+  const activityRef = useRef<ActivityItem | null>(null)
+  const targetRef = useRef('')
   const [stillLoading, setStillLoading] = useState(false)
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const catalog = useMemo(
+    () =>
+      buildActivityPresentationCatalog({
+        network: plan.network,
+        endpointSettings,
+        userEvmAssets: []
+      }),
+    [plan.network, endpointSettings]
+  )
   const matchesAccount =
     currentNetwork === plan.network &&
     effectiveAccount?.walletId === plan.keyDomainId &&
     effectiveAccount.accountId === plan.accountId
 
   useEffect(() => {
+    const target = JSON.stringify([
+      plan.network,
+      plan.keyDomainId,
+      plan.accountId,
+      plan.transactionId
+    ])
+    if (targetRef.current !== target) {
+      targetRef.current = target
+      activityRef.current = null
+      setActivity(null)
+      setStillLoading(false)
+    }
     if (!matchesAccount && !accountLoading) {
       onDone()
       return
@@ -85,12 +111,16 @@ export function ConfidentialActivityView({
           item?.scope.keyDomainId === plan.keyDomainId &&
           item.scope.accountId === plan.accountId
         ) {
-          setActivity(item)
+          const next = activityRef.current
+            ? selectActivityObservation(activityRef.current, item)
+            : item
+          activityRef.current = next
+          setActivity(next)
           if (
-            (item.status === 'final' &&
-              item.completeness === 'complete' &&
-              item.reconfirming !== true) ||
-            item.status === 'failed'
+            (next.status === 'final' &&
+              next.completeness === 'complete' &&
+              next.reconfirming !== true) ||
+            next.status === 'failed'
           )
             return
         }
@@ -105,16 +135,52 @@ export function ConfidentialActivityView({
       clearTimeout(delayTimer)
       if (retryTimer !== undefined) clearTimeout(retryTimer)
     }
-  }, [matchesAccount, accountLoading, onDone, plan.accountId, plan.keyDomainId, plan.transactionId])
+  }, [
+    matchesAccount,
+    accountLoading,
+    onDone,
+    plan.accountId,
+    plan.keyDomainId,
+    plan.network,
+    plan.transactionId
+  ])
 
+  const scopedActivity =
+    matchesAccount &&
+    activity?.id === plan.transactionId &&
+    activity.scope.keyDomainId === plan.keyDomainId &&
+    activity.scope.accountId === plan.accountId
+      ? activity
+      : null
+  const activityView = scopedActivity
+    ? buildActivityTransactionView({
+        item: scopedActivity,
+        network: plan.network,
+        assetMetadata: catalog.assetMetadata,
+        chainMetadata: catalog.chainMetadata,
+        fallback: display
+          ? {
+              source: { value: display.amount, symbol: formatSymbol(display.symbol) },
+              ...(display.receiveAmount && display.receiveSymbol
+                ? {
+                    destination: {
+                      value: display.receiveAmount,
+                      symbol: formatSymbol(display.receiveSymbol)
+                    }
+                  }
+                : {}),
+              ...(display.network ? { sourceNetwork: display.network } : {})
+            }
+          : undefined
+      })
+    : null
   const confirmed =
-    activity?.status === 'final' &&
-    activity.reconfirming !== true &&
-    activity.completeness === 'complete'
-  const failed = activity?.status === 'failed'
-  const references = activity ? getActivityTransactionReferences(activity) : []
-  const origin = activity?.segments.find(segment => segment.role === 'origin')
-  const destination = activity?.segments.find(segment => segment.role === 'destination')
+    scopedActivity?.status === 'final' &&
+    scopedActivity.reconfirming !== true &&
+    scopedActivity.completeness === 'complete'
+  const failed = scopedActivity?.status === 'failed'
+  const origin = scopedActivity?.segments.find(segment => segment.role === 'origin')
+  const destination = scopedActivity?.segments.find(segment => segment.role === 'destination')
   const progressTitle =
     destination && ['broadcast', 'confirming'].includes(destination.status)
       ? 'Destination processing'
@@ -149,72 +215,55 @@ export function ConfidentialActivityView({
           ) : undefined
         }
       >
-        <div className="divide-y divide-border/60 border-y border-border/60 text-sm">
-          {display && (
-            <div className="flex justify-between gap-4 py-4">
-              <span className="text-muted">Amount</span>
-              <span className="min-w-0 text-right font-medium">
-                <AmountDisplay
-                  value={display.amount}
-                  symbol={formatSymbol(display.symbol)}
-                  prefix={display.operation === 'swap' ? '-' : ''}
-                />
-                {display.operation === 'swap' && display.receiveAmount && display.receiveSymbol && (
-                  <span className="block">
-                    <AmountDisplay
-                      value={display.receiveAmount}
-                      symbol={formatSymbol(display.receiveSymbol)}
-                      prefix="+"
-                    />
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
-          {display?.from && (
-            <div className="flex justify-between gap-4 py-4">
-              <span className="text-muted">From</span>
-              <span className="min-w-0 break-all text-right">{display.from}</span>
-            </div>
-          )}
-          {display?.recipient && (
-            <div className="flex justify-between gap-4 py-4">
-              <span className="text-muted">Recipient</span>
-              <span className="min-w-0 break-all text-right">{display.recipient}</span>
-            </div>
-          )}
-          {display?.network && (
-            <div className="flex justify-between gap-4 py-4">
-              <span className="text-muted">Network</span>
-              <span className="text-right">{display.network}</span>
-            </div>
-          )}
-          {references.map(reference => {
-            const url = reference.chainId
-              ? formatChainTransactionExplorerUrl(reference.chainId, reference.hash, plan.network)
-              : ''
-            return (
-              <div key={reference.id} className="flex justify-between gap-4 py-4">
-                <span className="shrink-0 text-muted">{reference.label}</span>
-                {url ? (
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={reference.hash}
-                    className="break-all text-right text-primary hover:underline"
-                  >
-                    {formatSortAddress(reference.hash)}
-                  </a>
-                ) : (
-                  <span title={reference.hash} className="break-all text-right">
-                    {formatSortAddress(reference.hash)}
-                  </span>
-                )}
+        {activityView ? (
+          <ActivityTransactionBody view={activityView} />
+        ) : (
+          <div className="divide-y divide-border/60 border-y border-border/60 text-sm">
+            {display && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">Amount</span>
+                <span className="min-w-0 text-right font-medium">
+                  <AmountDisplay
+                    value={display.amount}
+                    symbol={formatSymbol(display.symbol)}
+                    prefix={display.operation === 'swap' ? '-' : ''}
+                    showDetails={false}
+                  />
+                  {display.operation === 'swap' &&
+                    display.receiveAmount &&
+                    display.receiveSymbol && (
+                      <span className="block">
+                        <AmountDisplay
+                          value={display.receiveAmount}
+                          symbol={formatSymbol(display.receiveSymbol)}
+                          prefix="+"
+                          showDetails={false}
+                        />
+                      </span>
+                    )}
+                </span>
               </div>
-            )
-          })}
-        </div>
+            )}
+            {display?.from && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">From</span>
+                <span className="min-w-0 break-all text-right">{display.from}</span>
+              </div>
+            )}
+            {display?.recipient && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">Recipient</span>
+                <span className="min-w-0 break-all text-right">{display.recipient}</span>
+              </div>
+            )}
+            {display?.network && (
+              <div className="flex justify-between gap-4 py-4">
+                <span className="text-muted">Network</span>
+                <span className="text-right">{display.network}</span>
+              </div>
+            )}
+          </div>
+        )}
       </TransactionResult>
     </>
   )

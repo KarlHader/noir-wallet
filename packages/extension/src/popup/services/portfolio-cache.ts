@@ -125,9 +125,18 @@ export async function refreshPortfolioFromCache(
     const claimed = await automaticRefreshSession.claim(refreshScope(scope), [
       ...(selectedChainIds ?? [FULL_PORTFOLIO_RESOURCE])
     ])
-    if (claimed.length === 0) return null
+    if (claimed.length === 0) {
+      const latest = await readCachedPortfolio(scope).catch(() => null)
+      if (latest) return latest
+      // A refresh lease is not a cached balance. Join the background source's
+      // in-flight refresh when another page has claimed the cold-cache request.
+    }
     claimedResources = claimed
-    requestedChainIds = selectedChainIds ? claimed : undefined
+    requestedChainIds = selectedChainIds
+      ? claimed.length > 0
+        ? claimed
+        : selectedChainIds
+      : undefined
   }
 
   try {

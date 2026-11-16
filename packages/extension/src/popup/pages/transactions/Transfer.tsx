@@ -20,6 +20,7 @@ import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { classifyError } from '@/lib/errors'
 import { getSwapQuoteFailureMessage } from '@/popup/services/swap-quote-error-message'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useNavigate } from '@/popup/provider/Router'
@@ -27,6 +28,7 @@ import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { useMoveMethodEstimate } from '@/popup/hooks/useMoveMethodEstimate'
+import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import {
   clusterMoveEstimate,
   estimateDirectMove,
@@ -67,10 +69,7 @@ import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { listMoveAssetPickerRows } from '@/popup/services/move-asset-picker'
-import {
-  confidentialFundingClient,
-  type ConfidentialBalance
-} from '@/popup/services/confidential-funding-client'
+import { confidentialFundingClient } from '@/popup/services/confidential-funding-client'
 import type {
   ConfidentialFundingPlan,
   ConfidentialFundingReview
@@ -352,7 +351,12 @@ function TransferForm() {
   const endpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
-  const { activeAccount, catalog } = useActiveAccountNetworks()
+  const {
+    activeAccount,
+    catalog,
+    loading: accountLoading,
+    refresh: refreshAccountNetworks
+  } = useActiveAccountNetworks()
   const effective = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -438,10 +442,25 @@ function TransferForm() {
   } | null>(null)
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
-  const [shieldSnapshot, setShieldSnapshot] = useState<{
-    key: string
-    balances: readonly ConfidentialBalance[]
-  } | null>(null)
+  const canLoadShield =
+    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
+  const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
+  const {
+    balances: shieldBalances,
+    error: shieldBalanceError,
+    errorCode: shieldBalanceErrorCode,
+    refreshBalances: loadShieldBalances
+  } = useShieldBalances({
+    active: true,
+    enabled: canLoadShield,
+    scopeKey: shieldBalanceKey,
+    scope: effective
+      ? { network: currentNetwork, keyDomainId: effective.walletId, accountId: effective.accountId }
+      : null,
+    refreshPortfolio,
+    readProjection: readLatestPortfolio,
+    authorizeOnMount: false
+  })
   const [shieldConnection, setShieldConnection] = useState<
     'checking' | 'connected' | 'required' | 'busy'
   >('checking')
@@ -455,8 +474,6 @@ function TransferForm() {
     key: string
     review: ConfidentialFundingReview
   } | null>(null)
-  const canLoadShield =
-    getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
 
   useEffect(() => {
     let cancelled = false
@@ -529,33 +546,27 @@ function TransferForm() {
   }, [assetPickerOpen, currentNetwork])
 
   useEffect(() => {
-    let cancelled = false
-    setShieldSnapshot(null)
     setShieldConnection('checking')
-    if (!effective || !canLoadShield) return
-    const scope = {
-      network: currentNetwork,
-      keyDomainId: effective.walletId,
-      accountId: effective.accountId
-    }
-    void confidentialFundingClient
-      .refreshBalances(scope, false)
-      .then(balances => {
-        if (cancelled) return
-        setShieldSnapshot({ key: scopeKey, balances })
-        setShieldConnection('connected')
-        void readLatestPortfolio()
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setShieldConnection('required')
-          setShieldError('Unable to load Shield balances. Please try again.')
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [scopeKey, canLoadShield])
+    setShieldError(null)
+  }, [shieldBalanceKey])
+
+  useEffect(() => {
+    if (canLoadShield || accountLoading || !effective) return
+    setShieldConnection('required')
+    setShieldError('Confidential account is unavailable. Try again.')
+  }, [canLoadShield, accountLoading, effective?.walletId, effective?.accountId])
+
+  useEffect(() => {
+    if (!shieldBalances) return
+    setShieldConnection('connected')
+    setShieldError(null)
+  }, [shieldBalances])
+
+  useEffect(() => {
+    if (!shieldBalanceError) return
+    setShieldConnection('required')
+    setShieldError(shieldBalanceError)
+  }, [shieldBalanceError])
 
   useEffect(() => {
     userEditedMove.current = false
@@ -633,11 +644,8 @@ function TransferForm() {
     [activeAccount, currentNetwork]
   )
   const currentShieldBalances = useMemo(
-    () =>
-      shieldSnapshot?.key === scopeKey
-        ? shieldSnapshot.balances
-        : shieldPortfolioBalances(portfolio),
-    [shieldSnapshot, scopeKey, portfolio]
+    () => shieldBalances ?? shieldPortfolioBalances(portfolio),
+    [shieldBalances, portfolio]
   )
   const assets = useMemo<TransferAsset[]>(() => {
     if (!portfolio) return []
@@ -825,6 +833,17 @@ function TransferForm() {
       catalogTokens
     ]
   )
+  const rankPickerAsset = (item: TransferAsset) =>
+    rankTokenSearchFields(
+      {
+        symbol: item.asset.metadata.symbol,
+        name: item.asset.metadata.name,
+        contractAddress: item.asset.asset.namespace === 'erc20' ? item.asset.asset.reference : null,
+        assetId: item.asset.asset.id,
+        searchTerms: [item.chain.chain.displayName]
+      },
+      assetSearch
+    )
   const accountNetwork = activeAccount?.networks.find(
     item => item.chain.id === selected?.chain.chain.id
   )
@@ -991,13 +1010,21 @@ function TransferForm() {
     to === 'private'
       ? (targetNetwork?.privateExecutionAddress ?? '')
       : (targetNetwork?.addresses.find(address => address.preferredForReceive)?.value ?? '')
-  const hasShieldSnapshot = shieldSnapshot?.key === scopeKey
+  const hasShieldSnapshot = shieldBalances !== null
   const refreshedShieldRaw =
     managedAsset && hasShieldSnapshot
-      ? (getConfidentialAvailableForAsset(shieldSnapshot.balances, managedAsset.protocolAssetId) ??
-        '0')
+      ? (getConfidentialAvailableForAsset(shieldBalances, managedAsset.protocolAssetId) ?? '0')
       : null
-  const shieldSourceRaw = from === 'shield' ? refreshedShieldRaw : sourceRaw
+  const shieldSourceRaw =
+    from === 'shield'
+      ? (refreshedShieldRaw ??
+        (managedAsset && currentShieldBalances
+          ? (getConfidentialAvailableForAsset(
+              currentShieldBalances,
+              managedAsset.protocolAssetId
+            ) ?? null)
+          : null))
+      : sourceRaw
   const routeKey = `${scopeKey}:${selected?.asset.asset.id ?? ''}:${from}:${to}:${destination?.asset.asset.id ?? ''}`
   const routeState = routeSnapshot?.key === routeKey ? routeSnapshot.status : 'loading'
   const methodAvailable = supportedPair && routeState === 'supported'
@@ -1467,30 +1494,22 @@ function TransferForm() {
       wallet.currentNetwork === currentNetwork
     )
   }
-  const refreshShield = async () => {
+  const shieldNeedsAuthorization = shieldBalanceErrorCode === 'authorization_required'
+  const refreshShield = async (authorize = false) => {
     if (!effective || !scopeStillCurrent()) return
     setShieldConnection('busy')
     setShieldError(null)
-    try {
-      const balances = await confidentialFundingClient.refreshBalances(
-        {
-          network: currentNetwork,
-          keyDomainId: effective.walletId,
-          accountId: effective.accountId
-        },
-        true
-      )
-      if (!scopeStillCurrent()) return
-      setShieldSnapshot({ key: scopeKey, balances })
-      setShieldConnection('connected')
-      void readLatestPortfolio()
-    } catch (error) {
-      if (!scopeStillCurrent()) return
-      setShieldConnection('required')
-      setShieldError(
-        error instanceof Error ? error.message : 'Unable to load Shield balances. Please try again.'
-      )
+    if (!canLoadShield) {
+      await refreshAccountNetworks()
+      if (scopeStillCurrent()) {
+        setShieldConnection('required')
+        setShieldError('Confidential account is unavailable. Try again.')
+      }
+      return
     }
+    const updated = await loadShieldBalances(true, authorize)
+    if (!scopeStillCurrent()) return
+    setShieldConnection(updated ? 'connected' : 'required')
   }
   const prepareShield = async () => {
     if (
@@ -1566,6 +1585,7 @@ function TransferForm() {
       setMaxSelected(false)
       setShieldError(null)
       setConfirmUncertain(false)
+      void loadShieldBalances(true, false)
       void openConfidentialActivity(
         plan,
         () => navigate(`/?tab=activity&transactionId=${encodeURIComponent(plan.transactionId)}`),
@@ -2194,7 +2214,7 @@ function TransferForm() {
           }
           onClick={
             fundingRoute && shieldConnection !== 'connected'
-              ? () => void refreshShield()
+              ? () => void refreshShield(shieldNeedsAuthorization)
               : fundingRoute
                 ? () => void prepareShield()
                 : review
@@ -2202,7 +2222,9 @@ function TransferForm() {
         >
           {fundingRoute && shieldConnection !== 'connected'
             ? shieldConnection === 'required'
-              ? 'Retry'
+              ? shieldNeedsAuthorization
+                ? 'Connect'
+                : 'Retry'
               : 'Loading balances…'
             : clusterSelected
               ? 'Review Cluster'
@@ -2236,13 +2258,9 @@ function TransferForm() {
           onNetworkChange={setAssetChainId}
           selectedKey={selected?.asset.asset.id}
           items={pickerRows
-            .filter(
-              item =>
-                (assetChainId === 'all' || item.chain.chain.id === assetChainId) &&
-                `${item.asset.metadata.symbol} ${item.asset.metadata.name} ${item.chain.chain.displayName}`
-                  .toLowerCase()
-                  .includes(assetSearch.trim().toLowerCase())
-            )
+            .filter(item => assetChainId === 'all' || item.chain.chain.id === assetChainId)
+            .filter(item => rankPickerAsset(item) < 99)
+            .sort((left, right) => rankPickerAsset(left) - rankPickerAsset(right))
             .map(item => ({
               key: item.asset.asset.id,
               symbol: formatSymbol(item.asset.metadata.symbol),

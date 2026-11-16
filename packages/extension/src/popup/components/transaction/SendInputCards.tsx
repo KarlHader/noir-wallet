@@ -164,11 +164,13 @@ function SendAmountRow({
 export function SendRouteInfoCard({
   provider,
   fee,
+  feeLabel = 'Fee',
   time,
   extra
 }: {
   readonly provider?: ReactNode
   readonly fee?: ReactNode
+  readonly feeLabel?: string
   readonly time?: ReactNode
   readonly extra?: ReactNode
 }) {
@@ -182,7 +184,7 @@ export function SendRouteInfoCard({
       )}
       {fee !== undefined && (
         <div className="flex min-h-5 items-center justify-between gap-3">
-          <span className="text-muted">Fee</span>
+          <span className="text-muted">{feeLabel}</span>
           <div className="min-w-0 text-right">{fee}</div>
         </div>
       )}

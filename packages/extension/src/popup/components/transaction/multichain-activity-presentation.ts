@@ -164,7 +164,21 @@ export function getActivityRouteTitle(item: ActivityItem, route: ActivitySwapPre
   return 'Swap'
 }
 
-export function getClusterChildStatusLabel(row: ConfidentialWithdrawRow): string {
+export function getClusterChildStatusLabel(
+  row: ConfidentialWithdrawRow,
+  plan?: ConfidentialFundingPlan
+): string {
+  if (
+    plan &&
+    ['failed', 'expired', 'cancelled', 'refunded'].includes(plan.phase) &&
+    !plan.orderId &&
+    !plan.batchSubmissionAttemptedAt &&
+    !row.intentHash &&
+    !row.transactionHash &&
+    ['PREPARED', 'SIGNED'].includes(row.status.trim().toUpperCase())
+  )
+    return 'Not sent'
+
   switch (row.status.trim().toUpperCase()) {
     case 'SUCCESS':
     case 'COMPLETED':
@@ -314,11 +328,14 @@ export function getActivitySwapPresentation(
     : originSegment?.target.kind === 'onchain'
       ? originSegment.target.chainId
       : item.snapshot?.sender?.chainId
-  const destinationChainId = item.snapshot?.counterAmount
-    ? parseAssetId(item.snapshot.counterAmount.assetId).chainId
-    : destinationSegment?.target.kind === 'onchain'
-      ? destinationSegment.target.chainId
-      : item.snapshot?.recipient?.chainId
+  const destinationChainId =
+    item.source === 'zcash-v1' && item.snapshot?.recipient
+      ? item.snapshot.recipient.chainId
+      : item.snapshot?.counterAmount
+        ? parseAssetId(item.snapshot.counterAmount.assetId).chainId
+        : destinationSegment?.target.kind === 'onchain'
+          ? destinationSegment.target.chainId
+          : item.snapshot?.recipient?.chainId
   const sourceChain = resolveActivityChainMetadata(sourceChainId, chainMetadata)
   const destinationChain = resolveActivityChainMetadata(destinationChainId, chainMetadata)
   const shield = item.snapshot?.shield

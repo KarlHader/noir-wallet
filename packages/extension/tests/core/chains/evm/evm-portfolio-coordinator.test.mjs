@@ -264,4 +264,81 @@ test.describe('EVM active Portfolio coordinator', () => {
     await expect(coordinator.refreshActive()).resolves.toBeNull()
     expect(reads).toBe(0)
   })
+
+  test('normalizes legacy Ledger Public cache and refreshes without a Private address', async () => {
+    const cacheRepository = cache()
+    const ledgerChainAccount = {
+      ...chainAccount,
+      derivation: { scheme: 'bip44', path: "m/44'/60'/0'/7" }
+    }
+    const softwareWithLedgerPath = new EvmPortfolioCoordinator({
+      storageRepository: storage({
+        getSnapshot: async () => ({ ...snapshot, chainAccounts: [ledgerChainAccount] })
+      }),
+      cacheRepository,
+      chainId: 'eip155:1',
+      chains,
+      assets,
+      rpc: rpc()
+    })
+    await expect(softwareWithLedgerPath.refreshActive()).rejects.toThrow(/Ledger KeyDomain/)
+    const hardwareSnapshot = {
+      ...snapshot,
+      chainAccounts: [ledgerChainAccount],
+      keyDomains: snapshot.keyDomains.map(keyDomain => ({
+        ...keyDomain,
+        source: {
+          kind: 'hardware',
+          vendor: 'ledger',
+          firmwareProfile: 'multi-coin',
+          capabilities: ['evm']
+        }
+      }))
+    }
+    await cacheRepository.put({
+      generationId: pointer.generationId,
+      cachedAt: 1_500,
+      source: {
+        chainAccount: ledgerChainAccount,
+        status: 'ready',
+        balances: [
+          {
+            assetId: 'eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+            totalRaw: '4496200',
+            spendableRaw: '4496200',
+            availableRaw: '4496200',
+            pendingRaw: '0',
+            updatedAt: 1_500
+          }
+        ]
+      }
+    })
+    let privateAddressCalls = 0
+    const coordinator = new EvmPortfolioCoordinator({
+      storageRepository: storage({ getSnapshot: async () => hardwareSnapshot }),
+      cacheRepository,
+      chainId: 'eip155:1',
+      chains,
+      assets,
+      rpc: rpc(),
+      resolvePrivateExecutionAddress: async () => {
+        privateAddressCalls += 1
+        return '0x2222222222222222222222222222222222222222'
+      },
+      now: () => 2_000
+    })
+    const cached = await coordinator.readCachedActiveSource()
+    expect(cached.source.balances[0]).toMatchObject({
+      totalRaw: '4496200',
+      mainRaw: '4496200',
+      privateRaw: '0'
+    })
+    const refreshed = await coordinator.refreshActiveSource()
+    expect(refreshed.source.balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ totalRaw: '2000000', mainRaw: '2000000', privateRaw: '0' })
+      ])
+    )
+    expect(privateAddressCalls).toBe(0)
+  })
 })

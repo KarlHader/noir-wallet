@@ -330,6 +330,13 @@ it('accepts only canonical bounded EVM BIP-44 hardware paths', () => {
     identity: { kind: 'account-identifier', value: address }
   }
   assert.deepEqual(parseEvmAccountBinding(chainAccount, chainId), { address, addressIndex: 2 })
+  assert.deepEqual(
+    parseEvmAccountBinding(
+      { ...chainAccount, derivation: { scheme: 'bip44', path: "m/44'/60'/0'/7" } },
+      chainId
+    ),
+    { address, addressIndex: 7 }
+  )
   for (const malformed of [
     "m/44'/60'/07'/0/2",
     "m/44'/60'/7'/0/02",
@@ -337,7 +344,10 @@ it('accepts only canonical bounded EVM BIP-44 hardware paths', () => {
     "m/44'/61'/7'/0/2",
     "m/44'/60'/7'/1/2",
     "m/44'/60'/2147483648'/0/2",
-    "m/44'/60'/7'/0/2147483648"
+    "m/44'/60'/7'/0/2147483648",
+    "m/44'/60'/0'/07",
+    "m/44'/60'/1'/7",
+    "m/44'/60'/0'/2147483648"
   ]) {
     assert.throws(
       () =>

@@ -177,7 +177,7 @@ test.describe('Portfolio read model', () => {
     expect(model.ignoredAssetCount).toBe(0)
   })
 
-  test('does not surface a previously detected Token after its verified on-chain balance reaches zero', () => {
+  test('keeps a registered detected Token visible after its verified balance reaches zero', () => {
     const model = buildPortfolioReadModel(
       scope,
       [
@@ -195,7 +195,10 @@ test.describe('Portfolio read model', () => {
       assetRegistry
     )
 
-    expect(model.assets.map(asset => asset.asset.id)).toEqual([`${ethereumId}/slip44:60`])
+    expect(model.assets.map(asset => asset.asset.id)).toEqual([
+      `${ethereumId}/slip44:60`,
+      `${ethereumId}/erc20:${spamReference}`
+    ])
   })
 
   test('strictly decodes a serialized read model against trusted chain and asset registries', () => {
@@ -223,22 +226,26 @@ test.describe('Portfolio read model', () => {
     )
     const confidential = {
       status: 'ready',
-      assets: [{
-        tokenId: 'nep141:usdc.omft.near',
-        protocolAssetId: 'nep141:usdc.omft.near',
-        availableRaw: '42',
-        assetId: `${ethereumId}/erc20:0x1111111111111111111111111111111111111111`,
-        chainId: ethereumId,
-        blockchain: 'eth',
-        symbol: 'USDC',
-        name: 'USDC',
-        decimals: 6
-      }]
+      assets: [
+        {
+          tokenId: 'nep141:usdc.omft.near',
+          protocolAssetId: 'nep141:usdc.omft.near',
+          availableRaw: '42',
+          assetId: `${ethereumId}/erc20:0x1111111111111111111111111111111111111111`,
+          chainId: ethereumId,
+          blockchain: 'eth',
+          symbol: 'USDC',
+          name: 'USDC',
+          decimals: 6
+        }
+      ]
     }
-    expect(parsePortfolioReadModel({ ...model, confidential }, visibleChains, assetRegistry).confidential)
-      .toEqual(confidential)
-    expect(parsePortfolioReadModel(structuredClone(model), visibleChains, assetRegistry).confidential)
-      .toBeUndefined()
+    expect(
+      parsePortfolioReadModel({ ...model, confidential }, visibleChains, assetRegistry).confidential
+    ).toEqual(confidential)
+    expect(
+      parsePortfolioReadModel(structuredClone(model), visibleChains, assetRegistry).confidential
+    ).toBeUndefined()
   })
 
   test('keeps exact Main and Private balances while exposing their combined total', () => {

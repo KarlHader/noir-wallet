@@ -1,9 +1,11 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { isZecToken } from '@/core/services/intents-api'
+import { ASSET_PRICE_SOURCE_ASSETS } from '@/config/asset-market-assets'
 import { type RheaSwapToken } from '@/core/services/rhea-swap'
 import { useSwapPreferences } from '@/store/swap-store'
 import {
   getEnabledSwapChains,
+  getSwapCatalogDisplaySeeds,
   ALL_DESTINATION_CHAIN_IDS,
   mergeTokenCatalogs,
   readCachedTokenCatalogByChain,
@@ -54,21 +56,40 @@ export function useSwapState(
       savedSourceAssetId,
       savedDestinationAssetId: destinationAssetId
     })
-    const sources = readCachedTokenCatalogByChain('from', plan.sourceChainIds)
-    const destinations = readCachedTokenCatalogByChain('cross-chain-to', plan.destinationChainIds)
+    const cachedSources = readCachedTokenCatalogByChain('from', plan.sourceChainIds)
+    const sources =
+      cachedSources.length > 0 ? cachedSources : getSwapCatalogDisplaySeeds(plan.sourceChainIds)
+    const cachedDestinations = readCachedTokenCatalogByChain(
+      'cross-chain-to',
+      plan.destinationChainIds
+    )
+    const destinations =
+      cachedDestinations.length > 0
+        ? cachedDestinations
+        : getSwapCatalogDisplaySeeds(plan.destinationChainIds)
+    const requestedSourceId = options.sourceAssetId ?? savedSourceAssetId
     const tokenIn = preferenceScope
-      ? pickProvisionalSwapSource(sources, options.sourceAssetId ?? savedSourceAssetId)
+      ? requestedSourceId
+        ? (sources.find(token => token.assetId === requestedSourceId) ?? null)
+        : pickProvisionalSwapSource(sources)
       : null
     const tokenOut = tokenIn
       ? (destinations.find(token => token.assetId === destinationAssetId) ??
         sources.find(token => token.assetId === destinationAssetId) ??
         null)
       : null
+    const defaultTokenOut =
+      tokenIn?.assetId === ASSET_PRICE_SOURCE_ASSETS.eth
+        ? sources.find(token => token.assetId === ASSET_PRICE_SOURCE_ASSETS.usdc)
+        : tokenIn?.assetId === ASSET_PRICE_SOURCE_ASSETS.zec
+          ? destinations.find(token => token.assetId === ASSET_PRICE_SOURCE_ASSETS.eth)
+          : null
     return {
       sources,
       destinations,
       tokenIn,
-      tokenOut: tokenOut?.assetId === tokenIn?.assetId ? null : tokenOut
+      tokenOut:
+        tokenOut?.assetId === tokenIn?.assetId ? null : (tokenOut ?? defaultTokenOut ?? null)
     }
   })
   const [tokenIn, setTokenIn] = useState<RheaSwapToken | null>(initialState.tokenIn)
@@ -126,26 +147,39 @@ export function useSwapState(
       : undefined
     const sources = sourceCatalog
     const destinations = crossChainDestinationCatalog
+    const validSavedSourceId = isSwapAssetOnEnabledChain(saved?.tokenInId, options.enabledChains)
+      ? saved?.tokenInId
+      : undefined
     const plan = buildInitialSwapCatalogPlan({
       ...options,
-      savedSourceAssetId: saved?.tokenInId,
-      savedDestinationAssetId: getSavedSwapDestinationAssetId(saved)
+      savedSourceAssetId: validSavedSourceId,
+      savedDestinationAssetId: getSavedSwapDestinationAssetId(saved, validSavedSourceId)
     })
+    const plannedSources = sources.filter(token =>
+      plan.sourceChainIds.includes(token.tokenListChainId)
+    )
     const source = preferenceScope
-      ? pickProvisionalSwapSource(
-          sources.filter(token => plan.sourceChainIds.includes(token.tokenListChainId)),
-          saved?.tokenInId ?? undefined
-        )
+      ? validSavedSourceId
+        ? (plannedSources.find(token => token.assetId === validSavedSourceId) ?? null)
+        : pickProvisionalSwapSource(plannedSources)
       : null
     const destinationId =
-      source?.assetId === saved?.tokenInId
+      source?.assetId === validSavedSourceId
         ? getSavedSwapDestinationAssetId(saved, source?.assetId)
         : undefined
+    const defaultDestinationId =
+      source?.assetId === ASSET_PRICE_SOURCE_ASSETS.eth
+        ? ASSET_PRICE_SOURCE_ASSETS.usdc
+        : source?.assetId === ASSET_PRICE_SOURCE_ASSETS.zec
+          ? ASSET_PRICE_SOURCE_ASSETS.eth
+          : undefined
     setTokenIn(source)
     // Restored preferences are defaults, not an explicit selection in this visit.
     setSelectedSourceAssetId(null)
     setTokenOut(
-      [...sources, ...destinations].find(token => token.assetId === destinationId) ?? null
+      [...sources, ...destinations].find(token => token.assetId === destinationId) ??
+        [...sources, ...destinations].find(token => token.assetId === defaultDestinationId) ??
+        null
     )
     setAmountIn('')
     setAmountOut('')
@@ -202,6 +236,14 @@ export function useSwapState(
         savedSourceAssetId: readSavedSourceAssetId(),
         savedDestinationAssetId: readSavedDestinationAssetId()
       })
+      const defaultSourceAssetId =
+        options.sourceAssetId ??
+        readSavedSourceAssetId() ??
+        (plan.sourceChainIds.includes(1)
+          ? ASSET_PRICE_SOURCE_ASSETS.eth
+          : plan.sourceChainIds.includes(900010)
+            ? ASSET_PRICE_SOURCE_ASSETS.zec
+            : undefined)
       if (plan.sourceChainIds.length === 0) {
         setSourceCatalog([])
         setCrossChainDestinationCatalog([])
@@ -213,10 +255,16 @@ export function useSwapState(
       }
       const cachedSources = readCachedTokenCatalogByChain('from', plan.sourceChainIds)
       const cachedPlannedSources = cachedSources
+      const displaySources =
+        cachedSources.length > 0 ? cachedSources : getSwapCatalogDisplaySeeds(plan.sourceChainIds)
       const cachedDestinations = readCachedTokenCatalogByChain(
         'cross-chain-to',
         plan.destinationChainIds
       )
+      const displayDestinations =
+        cachedDestinations.length > 0
+          ? cachedDestinations
+          : getSwapCatalogDisplaySeeds(plan.destinationChainIds)
       const knownSources = new Set(sourceCatalog)
       const knownDestinations = new Set(crossChainDestinationCatalog)
       const catalogContext = JSON.stringify([
@@ -249,16 +297,18 @@ export function useSwapState(
       setCatalogError(false)
       if (sourcesReady && destinationsReady) return
       if (!sourcesReady) {
-        setSourceCatalog(cachedSources ?? [])
+        setSourceCatalog(displaySources)
         setTokenIn(previous =>
           previous && isSwapAssetOnEnabledChain(previous.assetId, options.enabledChains)
             ? previous
             : activePreferenceScope.current
-              ? pickProvisionalSwapSource(cachedPlannedSources, readSavedSourceAssetId())
+              ? readSavedSourceAssetId()
+                ? (displaySources.find(token => token.assetId === readSavedSourceAssetId()) ?? null)
+                : pickProvisionalSwapSource(displaySources)
               : null
         )
       }
-      if (!canReuseCatalog) setCrossChainDestinationCatalog(cachedDestinations ?? [])
+      if (!canReuseCatalog) setCrossChainDestinationCatalog(displayDestinations)
       const destinationsRequest = destinationsReady
         ? Promise.resolve()
         : loadTokenCatalogByChain(
@@ -269,8 +319,14 @@ export function useSwapState(
               setCrossChainDestinationCatalog(previous => mergeTokenCatalogs(previous, tokens))
               setTokenOut(
                 previous =>
-                  previous ??
+                  (previous?.isDisplaySeed
+                    ? (tokens.find(token => token.assetId === previous.assetId) ?? previous)
+                    : previous) ??
                   tokens.find(token => token.assetId === readSavedDestinationAssetId()) ??
+                  (defaultSourceAssetId === ASSET_PRICE_SOURCE_ASSETS.zec &&
+                  !readSavedDestinationAssetId()
+                    ? tokens.find(token => token.assetId === ASSET_PRICE_SOURCE_ASSETS.eth)
+                    : null) ??
                   null
               )
             },
@@ -286,9 +342,21 @@ export function useSwapState(
           catalogRequestId > 0,
           tokens => {
             setSourceCatalog(previous => mergeTokenCatalogs(previous, tokens))
+            setTokenOut(previous =>
+              previous?.isDisplaySeed
+                ? (tokens.find(token => token.assetId === previous.assetId) ?? previous)
+                : (previous ??
+                  (defaultSourceAssetId === ASSET_PRICE_SOURCE_ASSETS.eth &&
+                  !readSavedDestinationAssetId()
+                    ? (tokens.find(token => token.assetId === ASSET_PRICE_SOURCE_ASSETS.usdc) ??
+                      null)
+                    : null))
+            )
             setTokenIn(
               previous =>
-                previous ??
+                (previous?.isDisplaySeed
+                  ? (tokens.find(token => token.assetId === previous.assetId) ?? previous)
+                  : previous) ??
                 (activePreferenceScope.current
                   ? pickProvisionalSwapSource(tokens, readSavedSourceAssetId())
                   : null)
@@ -301,9 +369,20 @@ export function useSwapState(
           throw new Error('RHEA Swap source assets are unavailable')
         }
         setSourceCatalog(previous => mergeTokenCatalogs(previous, sources))
+        setTokenOut(previous =>
+          previous?.isDisplaySeed
+            ? (sources.find(token => token.assetId === previous.assetId) ?? previous)
+            : (previous ??
+              (defaultSourceAssetId === ASSET_PRICE_SOURCE_ASSETS.eth &&
+              !readSavedDestinationAssetId()
+                ? (sources.find(token => token.assetId === ASSET_PRICE_SOURCE_ASSETS.usdc) ?? null)
+                : null))
+        )
         setTokenIn(
           previous =>
-            previous ??
+            (previous?.isDisplaySeed
+              ? (sources.find(token => token.assetId === previous.assetId) ?? previous)
+              : previous) ??
             (activePreferenceScope.current
               ? pickProvisionalSwapSource(
                   sources.length > 0 ? sources : cachedPlannedSources,
@@ -315,8 +394,7 @@ export function useSwapState(
       } catch {
         if (!cancelled) {
           if (cachedPlannedSources.length === 0) {
-            setSourceCatalog([])
-            setTokenIn(null)
+            setSourceCatalog(displaySources)
             setAmountOut('')
             setQuoteError(null)
           }
@@ -575,6 +653,22 @@ export function useSwapState(
     [preferenceScope, setSavedTokenSelection]
   )
 
+  const selectTokenPairForModeChange = useCallback(
+    (nextTokenIn: RheaSwapToken, nextTokenOut: RheaSwapToken | null) => {
+      inputRevision.current += 1
+      switchRequestSequence.current += 1
+      setTokenIn(nextTokenIn)
+      setSelectedSourceAssetId(nextTokenIn.assetId)
+      setTokenOut(nextTokenOut?.assetId === nextTokenIn.assetId ? null : nextTokenOut)
+      setAmountIn('')
+      setAmountOut('')
+      setRecipientAddressState('')
+      setDepositAddress('')
+      setQuoteError(null)
+    },
+    []
+  )
+
   const setProvisionalTokenIn = useCallback((token: RheaSwapToken) => {
     inputRevision.current += 1
     setTokenIn(token)
@@ -740,6 +834,7 @@ export function useSwapState(
     retryTokenCatalog,
     resetSwap,
     setTokenPair,
+    selectTokenPairForModeChange,
     setProvisionalTokenIn,
     selectTokenIn,
     selectTokenOut,

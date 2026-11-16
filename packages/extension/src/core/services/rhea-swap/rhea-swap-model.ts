@@ -376,6 +376,7 @@ export interface RheaSwapToken extends SwapToken {
   readonly rheaAddress: string
   readonly isNative: boolean
   readonly sources: readonly string[]
+  readonly isDisplaySeed?: true
 }
 
 export interface RheaSwapQuoteRequest {

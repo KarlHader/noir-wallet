@@ -704,11 +704,14 @@ export function SwapInputView({
           <div className="relative border-t border-white/10 pt-2">
             {!hideSwitchAssets && (
               <span
+                tabIndex={reverseUnavailableReason ? 0 : undefined}
+                aria-label={reverseUnavailableReason ?? undefined}
+                aria-describedby={reverseUnavailableReason ? 'swap-reverse-reason' : undefined}
                 title={
                   reverseUnavailableReason ??
                   (switchingTokens ? 'Switching assets' : 'Switch assets')
                 }
-                className="absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
+                className="group absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
               >
                 <Button
                   type="button"
@@ -730,6 +733,15 @@ export function SwapInputView({
                     height={16}
                   />
                 </Button>
+                {reverseUnavailableReason && (
+                  <span
+                    id="swap-reverse-reason"
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded bg-popover p-2 text-center text-xs text-foreground opacity-0 shadow-md group-hover:opacity-100 group-focus:opacity-100"
+                  >
+                    {reverseUnavailableReason}
+                  </span>
+                )}
               </span>
             )}
 

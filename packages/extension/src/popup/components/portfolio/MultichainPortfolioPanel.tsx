@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
+import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { PortfolioShell } from './PortfolioShell'
 import { resolvePortfolioChainSelection } from '@/popup/services/portfolio-presentation'
 import type { AssetPriceReadModel } from '@/core/prices'
@@ -23,6 +25,7 @@ interface MultichainPortfolioPanelProps {
   walletId: string | null
   accountId: string | null
   model: PortfolioReadModel | null
+  activeAccount?: AccountNetworksView | null
   status: 'loading' | 'ready' | 'error'
   prices: AssetPriceReadModel | null
   priceStatus?: 'loading' | 'ready' | 'error'
@@ -60,6 +63,7 @@ export function MultichainPortfolioPanel({
   walletId,
   accountId,
   model,
+  activeAccount,
   status,
   prices,
   priceStatus,
@@ -107,7 +111,15 @@ export function MultichainPortfolioPanel({
   }, [accountId, walletId])
 
   const visibleModel = isPortfolioModelForScope(model, walletId, accountId) ? model : null
-  const domainModel = visibleModel ? projectPortfolioForDomain(visibleModel, domain) : null
+  const scopedAccount =
+    activeAccount?.walletId === walletId && activeAccount?.accountId === accountId
+      ? activeAccount
+      : null
+  const domainModel = visibleModel
+    ? projectPortfolioForDomain(visibleModel, domain, {
+        evmPrivateAvailable: supportsEvmPrivateExecution(scopedAccount?.walletSource)
+      })
+    : null
   const availableChainIds = resolvePortfolioChainSelection(
     domainModel,
     null,

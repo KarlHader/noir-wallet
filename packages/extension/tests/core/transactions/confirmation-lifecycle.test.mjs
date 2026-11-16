@@ -284,6 +284,26 @@ test.describe('Withdraw monitor continuation', () => {
         tx({ type: 'claim', status: 'relay_confirmed', depositAddress: 'deposit-2' })
       )
     ).toBe(true)
+    expect(
+      needsRelayStatusRecovery(
+        tx({
+          type: 'swap',
+          status: 'pending',
+          depositAddress: 'deposit-3',
+          quoteBinding: { provider: 'near-intents', quoteHandle: 'quote-1' }
+        })
+      )
+    ).toBe(true)
+    expect(
+      needsRelayStatusRecovery(
+        tx({
+          type: 'swap',
+          status: 'pending',
+          depositAddress: 'deposit-3',
+          quoteBinding: { provider: 'rhea-cross-chain-dex', quoteHandle: 'quote-1' }
+        })
+      )
+    ).toBe(false)
   })
 
   test('terminal or destination-bound records do not recover a relay monitor', () => {

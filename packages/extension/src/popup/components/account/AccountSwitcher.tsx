@@ -406,6 +406,8 @@ export function AccountSwitcher({
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [addressesOpen, setAddressesOpen] = useState(false)
   const [catalogAccounts, setCatalogAccounts] = useState<readonly AccountNetworksView[]>([])
+  const selectedWalletId = accountIdentity?.walletId ?? null
+  const selectedAccountId = accountIdentity?.accountId ?? null
   const [switching, setSwitching] = useState<string | null>(null)
   const [preview, setPreview] = useState<SwitcherAccount | null>(null)
   const [previewTop, setPreviewTop] = useState(72)
@@ -482,7 +484,6 @@ export function AccountSwitcher({
   }, [drawerOpen, cancelPreviewTimer])
 
   useEffect(() => {
-    if (!drawerOpen && !addressesOpen) return
     let cancelled = false
     void accountNetworksClient
       .getCatalog()
@@ -493,7 +494,7 @@ export function AccountSwitcher({
     return () => {
       cancelled = true
     }
-  }, [drawerOpen, addressesOpen])
+  }, [drawerOpen, addressesOpen, selectedWalletId, selectedAccountId])
 
   const groups = useMemo(
     () =>
@@ -501,10 +502,16 @@ export function AccountSwitcher({
         wallets,
         catalogAccounts,
         accountDisplayNames,
-        currentWalletId,
-        currentAccountId
-      }),
-    [wallets, catalogAccounts, accountDisplayNames, currentWalletId, currentAccountId]
+        currentWalletId: selectedWalletId,
+        currentAccountId: selectedAccountId
+      }).map(group => ({
+        ...group,
+        accounts: group.accounts.map(account => ({
+          ...account,
+          active: account.walletId === selectedWalletId && account.accountId === selectedAccountId
+        }))
+      })),
+    [wallets, catalogAccounts, accountDisplayNames, selectedWalletId, selectedAccountId]
   )
   const accounts = groups.flatMap(group => group.accounts)
   const previewAccount = preview
@@ -529,14 +536,14 @@ export function AccountSwitcher({
   }, [previewAccount, positionPreview])
   const active = accounts.find(account => account.active)
   const retainedActive = wallets
-    .find(wallet => wallet.id === currentWalletId)
-    ?.accounts.find(account => account.id === currentAccountId)
+    .find(wallet => wallet.id === selectedWalletId)
+    ?.accounts.find(account => account.id === selectedAccountId)
   const activeName =
     active?.name ??
-    (retainedActive && currentWalletId && currentAccountId
+    (retainedActive && selectedWalletId && selectedAccountId
       ? getAccountDisplayName(
-          currentWalletId,
-          currentAccountId,
+          selectedWalletId,
+          selectedAccountId,
           retainedActive.name,
           accountDisplayNames
         )
@@ -544,15 +551,15 @@ export function AccountSwitcher({
     'Accounts'
   const activeAccount =
     active ??
-    (currentWalletId && currentAccountId
+    (selectedWalletId && selectedAccountId
       ? {
-          walletId: currentWalletId,
-          accountId: currentAccountId,
+          walletId: selectedWalletId,
+          accountId: selectedAccountId,
           name: activeName,
           networks:
             catalogAccounts.find(
               account =>
-                account.walletId === currentWalletId && account.accountId === currentAccountId
+                account.walletId === selectedWalletId && account.accountId === selectedAccountId
             )?.networks ?? [],
           active: true
         }

@@ -25,7 +25,6 @@ export function SolanaTransactionResult({
       chain={chain}
       submission={submission}
       client={solanaWalletClient}
-      explorerBaseUrl=""
       feeDecimals={9}
       feeSymbol="SOL"
       feeLabel="Network fee"

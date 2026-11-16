@@ -1,4 +1,10 @@
-import { fetchSwapStatus, type SwapStatus } from '@/core/services/intents-api'
+import {
+  fetchSwapStatus,
+  getCachedTokens,
+  refreshSwapTokenCatalog,
+  evaluateIntentsStatusQuoteBinding,
+  type SwapStatus
+} from '@/core/services/intents-api'
 import { transactionRecorder } from './transaction-recorder'
 import { zcashTxMonitor } from './zcash-tx-monitor'
 import { formatChainName } from '@/lib/format'
@@ -24,6 +30,7 @@ import {
   type IntentsProgressInput
 } from '@/lib/intents-progress'
 import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
+import { readNativeZecIntentsSwapMetadata } from './native-zec-intents-swap'
 
 export type PendingTransaction = IntentsProgressEntry &
   Partial<Pick<AccountScope, 'walletId' | 'accountId'>>
@@ -105,9 +112,13 @@ export class TransactionMonitor {
         const { accountKey } = accountScope
         const transactions = await loadTransactions(accountKey)
         for (const transaction of transactions) {
-          const depositAddress = transaction.depositAddress
+          const depositAddress =
+            transaction.depositAddress ??
+            (transaction.quoteBinding?.provider === 'near-intents' && transaction.type === 'swap'
+              ? transaction.quoteBinding.depositAddress
+              : undefined)
           if (
-            !needsRelayStatusRecovery(transaction) ||
+            !needsRelayStatusRecovery({ ...transaction, depositAddress }) ||
             !depositAddress ||
             Date.now() - transaction.timestamp >= INTENTS_PROGRESS_STALE_MS ||
             alreadyMonitored.has(depositAddress)
@@ -115,18 +126,53 @@ export class TransactionMonitor {
             continue
           }
 
+          const nativeSwap =
+            transaction.type === 'swap' && transaction.quoteBinding?.provider === 'near-intents'
+          const nativeQuote =
+            nativeSwap && transaction.quoteBinding
+              ? await readNativeZecIntentsSwapMetadata(transaction.quoteBinding).catch(() => null)
+              : null
+          const boundNativeQuote =
+            nativeQuote?.walletId === accountScope.walletId &&
+            nativeQuote.accountId === accountScope.accountId &&
+            nativeQuote.depositAddress === depositAddress
+              ? nativeQuote
+              : null
+          const destinationToken = nativeSwap
+            ? getCachedTokens().find(
+                token => token.assetId === transaction.quoteBinding?.destinationAsset
+              )
+            : undefined
           const restored = registerIntentsProgress(
             {
               depositAddress,
               tokenInSymbol: 'ZEC',
-              tokenOutSymbol: 'ZEC',
+              tokenOutSymbol:
+                boundNativeQuote?.destinationSymbol ??
+                destinationToken?.symbol ??
+                (nativeSwap ? 'Token' : 'ZEC'),
               amountIn: transaction.amount,
-              amountOut: transaction.amount,
-              actionName: transaction.type === 'claim' ? 'Claim' : 'Withdraw',
+              amountOut: nativeSwap
+                ? transaction.quoteBinding?.expectedAmountOut &&
+                  (boundNativeQuote || destinationToken)
+                  ? safeBig(transaction.quoteBinding.expectedAmountOut)
+                      .div(
+                        safeBig(10).pow(
+                          boundNativeQuote?.destinationDecimals ?? destinationToken!.decimals
+                        )
+                      )
+                      .toString()
+                  : '?'
+                : transaction.amount,
+              actionName: nativeSwap ? 'Swap' : transaction.type === 'claim' ? 'Claim' : 'Withdraw',
               accountKey,
               transactionId: transaction.id,
-              originChain: 'near',
-              destinationChain: 'zec'
+              originChain: nativeSwap ? 'zcash' : 'near',
+              destinationChain: nativeSwap
+                ? (boundNativeQuote?.destinationBlockchain ??
+                  destinationToken?.blockchain ??
+                  transaction.quoteBinding?.destinationChain)
+                : 'zec'
             },
             this.pendingTransactions.get(depositAddress),
             transaction.timestamp
@@ -255,7 +301,8 @@ export class TransactionMonitor {
     }
   }
 
-  private async handleCompletion(pendingTx: PendingTransaction, status: SwapStatus) {
+  private async handleCompletion(pendingTx: PendingTransaction, providerStatus: SwapStatus) {
+    let status = providerStatus
     const originChain = pendingTx.originChain || 'zcash'
     const destinationChain = pendingTx.destinationChain || ''
 
@@ -299,15 +346,24 @@ export class TransactionMonitor {
 
       let updates: Partial<Transaction> = {}
       if (status.status === 'SUCCESS') {
-        const bindingFailed =
-          !!tx.quoteBinding && !this.isStatusBoundToQuote(tx.quoteBinding, status)
-        if (bindingFailed) {
-          console.warn(
-            '[TransactionMonitor] Quote binding below estimate but relay succeeded',
-            transactionId
-          )
+        const bindingCheck = tx.quoteBinding
+          ? await this.checkStatusQuoteBinding(tx.quoteBinding, status)
+          : 'valid'
+        if (bindingCheck === 'unknown') {
+          this.scheduleNextCheck()
+          return
         }
-
+        if (bindingCheck === 'mismatch') {
+          status = { ...status, status: 'FAILED' }
+          updates = {
+            status: 'failed',
+            memo: 'Provider settlement did not match the reviewed quote',
+            notified: true,
+            chainHashes
+          }
+        }
+      }
+      if (status.status === 'SUCCESS') {
         const realAmount = status.swapDetails?.amountOutFormatted
         const shouldUpdateAmount = (tx.type === 'withdraw' || tx.type === 'claim') && realAmount
 
@@ -340,7 +396,9 @@ export class TransactionMonitor {
           return
         }
       } else if (status.status === 'FAILED') {
-        updates = { status: 'failed' as const, notified: true, chainHashes }
+        if (!updates.status) {
+          updates = { status: 'failed' as const, notified: true, chainHashes }
+        }
       } else if (status.status === 'REFUNDED') {
         updates = {
           status: 'failed' as const,
@@ -440,27 +498,35 @@ export class TransactionMonitor {
       .catch(() => {})
   }
 
-  private isStatusBoundToQuote(binding: QuoteBinding, status: SwapStatus): boolean {
-    if (binding.originAsset && status.originAsset && status.originAsset !== binding.originAsset) {
-      return false
-    }
-
-    if (
-      binding.destinationAsset &&
-      status.destinationAsset &&
-      status.destinationAsset !== binding.destinationAsset
-    ) {
-      return false
-    }
-
+  private async checkStatusQuoteBinding(
+    binding: QuoteBinding,
+    status: SwapStatus
+  ): Promise<'valid' | 'mismatch' | 'unknown'> {
+    const preliminary = evaluateIntentsStatusQuoteBinding(binding, status)
+    if (preliminary === 'mismatch') return 'mismatch'
     const actualAmount = status.swapDetails?.amountOutFormatted
     if (binding.minAmountOut && actualAmount) {
-      if (safeBig(actualAmount).lt(binding.minAmountOut)) {
-        return false
+      const nativeQuote = await readNativeZecIntentsSwapMetadata(binding).catch(() => null)
+      let destinationToken = getCachedTokens().find(
+        token => token.assetId === binding.destinationAsset
+      )
+      if (
+        !nativeQuote &&
+        !destinationToken &&
+        binding.provider === 'near-intents' &&
+        binding.quoteHandle
+      ) {
+        destinationToken = (await refreshSwapTokenCatalog().catch(() => [])).find(
+          token => token.assetId === binding.destinationAsset
+        )
       }
+      const decimals = nativeQuote?.destinationDecimals ?? destinationToken?.decimals
+      if (decimals === undefined) {
+        return binding.provider === 'near-intents' && binding.quoteHandle ? 'unknown' : 'valid'
+      }
+      return evaluateIntentsStatusQuoteBinding(binding, status, decimals)
     }
-
-    return true
+    return evaluateIntentsStatusQuoteBinding(binding, status)
   }
 
   private async registerZcashDestinationMonitor(

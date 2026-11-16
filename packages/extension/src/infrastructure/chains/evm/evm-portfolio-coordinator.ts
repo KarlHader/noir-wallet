@@ -15,7 +15,7 @@ import type {
   StorageV2GenerationId,
   StorageV2ReadRepository
 } from '@/ports/repositories'
-import { readEvmPortfolioSource } from './evm-balance-reader'
+import { completePublicOnlyEvmBalance, readEvmPortfolioSource } from './evm-balance-reader'
 import type { EvmBalanceRpc } from './evm-rpc-client'
 
 export type EvmPortfolioStorageRepository = Pick<
@@ -77,6 +77,12 @@ export async function loadActiveEvmPortfolioContext(
   )
   if (candidates.length === 0) return null
   if (candidates.length !== 1) throw new Error('Active Account has ambiguous EVM ChainAccounts')
+  if (
+    /^m\/44'\/60'\/0'\/(0|[1-9][0-9]*)$/.test(candidates[0].derivation.path) &&
+    (keyDomain.source.kind !== 'hardware' || keyDomain.source.vendor !== 'ledger')
+  ) {
+    throw new Error('Ledger legacy EVM path requires a Ledger KeyDomain')
+  }
   return Object.freeze({
     generationId: pointer.generationId,
     chainAccount: candidates[0],
@@ -147,7 +153,12 @@ export class EvmPortfolioCoordinator {
             status: cached.source.status === 'ready' ? ('loading' as const) : cached.source.status,
             balances: Object.freeze([])
           }
-        : cached.source
+        : supportsEvmPrivateExecution(context.keyDomainSource)
+          ? cached.source
+          : Object.freeze({
+              ...cached.source,
+              balances: Object.freeze(cached.source.balances.map(completePublicOnlyEvmBalance))
+            })
       : {
           chainAccount: context.chainAccount,
           status: 'loading' as const,
@@ -215,6 +226,7 @@ export class EvmPortfolioCoordinator {
             chainAccount: context.chainAccount,
             assets: this.options.assets,
             rpc: this.options.rpc,
+            publicOnly: !supportsEvmPrivateExecution(context.keyDomainSource),
             ...(privateAddress === undefined ? {} : { privateAddress }),
             now: () => refreshedAt
           })
@@ -225,7 +237,15 @@ export class EvmPortfolioCoordinator {
     if (cached && !chainAccountsEqual(cached.source.chainAccount, context.chainAccount)) {
       throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
     }
-    const source = preserveCachedBalances(refreshedSource, cached?.source)
+    const source = preserveCachedBalances(
+      refreshedSource,
+      cached && !supportsEvmPrivateExecution(context.keyDomainSource)
+        ? Object.freeze({
+            ...cached.source,
+            balances: Object.freeze(cached.source.balances.map(completePublicOnlyEvmBalance))
+          })
+        : cached?.source
+    )
     await this.options.cacheRepository.put({
       generationId: context.generationId,
       cachedAt: refreshedAt,

@@ -5,6 +5,7 @@ import {
   fetchQuote,
   fetchIntentsWalletTokens,
   fetchSwapStatus,
+  evaluateIntentsStatusQuoteBinding,
   getCachedTokens,
   parseCoinGeckoIconCatalogResponse,
   parseQuoteSuccessResponse,
@@ -13,6 +14,42 @@ import {
   refreshSwapTokenIcons,
   refreshSwapTokenCatalog
 } from '../../../src/core/services/intents-api.ts'
+
+test('Intents settlement checks the quoted raw minimum with destination precision', () => {
+  const binding = {
+    originAsset: 'nep141:zec.omft.near',
+    destinationAsset: 'nep141:usdc.omft.near',
+    minAmountOut: '900000'
+  }
+  const status = {
+    status: 'SUCCESS',
+    originAsset: binding.originAsset,
+    destinationAsset: binding.destinationAsset,
+    swapDetails: { amountOutFormatted: '0.9' }
+  }
+  expect(evaluateIntentsStatusQuoteBinding(binding, status, 6)).toBe('valid')
+  expect(
+    evaluateIntentsStatusQuoteBinding(
+      binding,
+      {
+        ...status,
+        swapDetails: { amountOutFormatted: '0.89' }
+      },
+      6
+    )
+  ).toBe('mismatch')
+  expect(evaluateIntentsStatusQuoteBinding(binding, status)).toBe('unknown')
+  expect(
+    evaluateIntentsStatusQuoteBinding(
+      binding,
+      {
+        ...status,
+        destinationAsset: 'nep141:other.omft.near'
+      },
+      6
+    )
+  ).toBe('mismatch')
+})
 
 test('swap quote sends the configured 35 bps app fee', async () => {
   const originalFetch = globalThis.fetch

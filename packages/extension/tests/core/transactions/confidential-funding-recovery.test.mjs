@@ -151,6 +151,8 @@ async function harness(
     monitoring: 0,
     refreshes: 0,
     refreshTargets: [],
+    statusRequests: [],
+    originStatus: 'FAILED',
     statuses: withdraws.map(() => (phase === 'processing' ? 'PROCESSING' : 'PENDING_DEPOSIT')),
     settledOutputs: new Map(),
     session: {
@@ -243,7 +245,9 @@ async function harness(
       return { intentHash: `intent-${sequence}`, correlationId: `submit-${sequence}` }
     },
     async getStatus(address) {
+      state.statusRequests.push(address)
       if (state.statusError) throw state.statusError
+      if (address === 'origin-deposit.near') return { status: state.originStatus }
       const sequence = initial.withdraws.find(row => row.depositAddress === address).sequence
       const status = state.statuses[sequence]
       if (state.switchAccountAfterStatus) {
@@ -1762,6 +1766,63 @@ test.describe('confidential funding persisted recovery', () => {
     expect(h.state.refreshTargets.at(-1)).toBeNull()
     await h.restart().resumeAll()
     expect(h.state.refreshes).toBe(3)
+  })
+
+  test('reopens a failed Cluster read-only and resumes late refunds after worker restart', async () => {
+    const h = await harness('processing', false, true)
+    h.state.statuses = ['FAILED', 'FAILED', 'FAILED']
+    expect((await h.restart().continuePlan(h.initial.planId)).phase).toBe('failed')
+    h.state.historyToken = null
+    h.state.session = null
+    const reopened = await h.restart().getPlan(h.initial.planId)
+    expect(reopened.phase).toBe('failed')
+    const checked = h.state.statusRequests.length
+    await Promise.all([h.restart().getPlan(h.initial.planId), h.restart().resumeAll()])
+    expect(h.state.statusRequests.length).toBe(checked)
+    h.state.now += 60_000
+    h.state.statuses = ['REFUNDED', 'REFUNDED', 'REFUNDED']
+    await h.restart().resumeAll()
+    const refunded = await h.store.getPlan(h.initial.planId)
+    expect(refunded.phase).toBe('refunded')
+    expect(refunded.withdraws.map(row => row.status)).toEqual(['REFUNDED', 'REFUNDED', 'REFUNDED'])
+    expect((await h.repository.get(scope, h.initial.transactionId)).root.status).toBe('failed')
+    h.state.now += 60_000
+    const settledChecks = h.state.statusRequests.length
+    await h.restart().resumeAll()
+    expect(h.state.statusRequests.length).toBe(settledChecks)
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.submissions).toEqual([])
+    expect(h.state.intentSignatures + h.state.authSignatures + h.state.historySignatures).toBe(0)
+  })
+
+  test('tracks a funded origin refund without sending prepared Cluster children', async () => {
+    const h = await harness('failed', false, true, true)
+    const coordinator = h.restart()
+    // A credited/uncertain origin is not proof that a later refund cannot occur.
+    h.state.originStatus = 'SUCCESS'
+    expect((await coordinator.getPlan(h.initial.planId)).phase).toBe('failed')
+    h.state.now += 60_000
+    h.state.statusError = new ConfidentialFundingApiError('unavailable', 503, false)
+    await h.restart().resumeAll()
+    expect((await h.store.getPlan(h.initial.planId)).phase).toBe('failed')
+    const checked = h.state.statusRequests.length
+    await h.restart().resumeAll()
+    expect(h.state.statusRequests.length).toBe(checked)
+    h.state.now += 60_000
+    h.state.statusError = null
+    h.state.originStatus = 'REFUNDED'
+    const refunded = await h.restart().getPlan(h.initial.planId)
+    expect(refunded.phase).toBe('refunded')
+    expect(refunded.withdraws.every(row => row.status === 'SIGNED')).toBe(true)
+    expect(h.state.statusRequests.every(address => address === 'origin-deposit.near')).toBe(true)
+    expect(h.state.batchSubmissions).toBe(0)
+    expect(h.state.submissions).toEqual([])
+    expect(
+      h.state.depositSignatures +
+        h.state.intentSignatures +
+        h.state.authSignatures +
+        h.state.historySignatures
+    ).toBe(0)
   })
 
   test('keeps a destination hash visible while a confidential withdraw is processing', async () => {

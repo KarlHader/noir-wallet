@@ -47,7 +47,13 @@ import {
   type PrepareConfidentialFundingRequest
 } from '@/popup/services/confidential-funding-client'
 import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-manager-client'
-import { SWAP_QUOTE_DISPLAY_ERROR } from '@/popup/services/swap-quote-error-message'
+import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
+import {
+  getSwapQuoteFailureMessage,
+  isSwapQuoteTimeout,
+  SWAP_QUOTE_DISPLAY_ERROR
+} from '@/popup/services/swap-quote-error-message'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import {
   hasShieldTransferStarted,
   formatShieldQuoteTime,
@@ -76,6 +82,14 @@ import {
   SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
 } from '@/popup/services/shield-swap-zec-sources'
 import { ZEC_DECIMALS } from '@/config/wallet'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+
+function shieldSwapQuoteErrorMessage(cause: unknown): string {
+  const quoteMessage = getSwapQuoteFailureMessage(cause)
+  if (isSwapQuoteTimeout(cause) || quoteMessage === SWAP_QUOTE_DISPLAY_ERROR)
+    return SWAP_QUOTE_DISPLAY_ERROR
+  return quoteMessage ?? (cause instanceof Error ? cause.message : 'Swap quote unavailable')
+}
 
 interface ShieldSwapPageProps {
   readonly active: boolean
@@ -144,10 +158,31 @@ function ShieldSwapForm({
   const mounted = useRef(false)
   const status = model ? 'ready' : portfolioLoading ? 'loading' : 'error'
   const hidden = useSettingsStore(state => state.balancesHidden)
+  const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
+  useEffect(() => {
+    if (!active) return
+    let current = true
+    void swapTokenCatalogClient
+      .readCached()
+      .then(cached => {
+        if (current && cached.length > 0) setDirectoryTokens(cached)
+      })
+      .catch(() => {})
+    void swapTokenCatalogClient
+      .refresh()
+      .then(refreshed => {
+        if (current) setDirectoryTokens(refreshed)
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [active])
   const tokens = useMemo(() => {
-    const parentIds = new Set(parentTokens.map(token => token.assetId))
-    return [...parentTokens, ...getCachedTokens().filter(token => !parentIds.has(token.assetId))]
-  }, [parentTokens])
+    const available = directoryTokens ?? getCachedTokens()
+    const directoryIds = new Set(available.map(token => token.assetId))
+    return [...available, ...parentTokens.filter(token => !directoryIds.has(token.assetId))]
+  }, [parentTokens, directoryTokens])
   const managedAssets = useMemo(() => resolveManagedIntentsCatalog(tokens), [tokens])
   const [fromId, setFromId] = useState<string | null>(routeSourceAssetId)
   const [toId, setToId] = useState<string | null>(routeDestinationAssetId)
@@ -300,9 +335,13 @@ function ShieldSwapForm({
       ) ??
       options.find(asset => asset.asset.asset.id !== from?.asset.asset.id) ??
       null)
-  const canReverse = Boolean(
-    to && sourceChoices.some(asset => asset.asset.asset.id === to.asset.asset.id)
-  )
+  const reverseUnavailableReason =
+    fromId === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+      ? 'This route cannot receive the reverse swap to Zcash Shield'
+      : null
+  const canReverse =
+    reverseUnavailableReason === null &&
+    Boolean(to && sourceChoices.some(asset => asset.asset.asset.id === to.asset.asset.id))
   const balance = shieldSwapFormBalance(from, displayBalances)
   const currentBalance = shieldSwapFormBalance(from, trustedBalances)
   const amountError = shieldSwapFormAmountError(amount, from, trustedBalances ?? displayBalances)
@@ -359,14 +398,19 @@ function ShieldSwapForm({
   const pickable = useMemo(() => {
     if (picker === null) return []
     const excluded = picker === 'from' ? to?.managed.protocolAssetId : from?.managed.protocolAssetId
-    const needle = search.trim().toLowerCase()
-    return (picker === 'from' ? sourceChoices : options).filter(
-      asset =>
-        asset.managed.protocolAssetId !== excluded &&
-        `${asset.asset.metadata.symbol} ${asset.asset.metadata.name} ${asset.asset.asset.reference}`
-          .toLowerCase()
-          .includes(needle)
-    )
+    const rank = (asset: ShieldFundingAsset) =>
+      rankTokenSearchFields(
+        {
+          symbol: asset.asset.metadata.symbol,
+          name: asset.asset.metadata.name,
+          contractAddress: asset.asset.asset.reference,
+          assetId: asset.asset.asset.id
+        },
+        search
+      )
+    return (picker === 'from' ? sourceChoices : options)
+      .filter(asset => asset.managed.protocolAssetId !== excluded && rank(asset) < 99)
+      .sort((left, right) => rank(left) - rank(right))
   }, [
     picker,
     to?.managed.protocolAssetId,
@@ -377,11 +421,10 @@ function ShieldSwapForm({
   ])
   const fromPickerItems = useMemo((): readonly ShieldSourceTokenPickerItem[] => {
     if (picker !== 'from') return []
-    const needle = search.trim().toLowerCase()
-    const matchesSearch = (parts: readonly string[]) =>
-      !needle || parts.join(' ').toLowerCase().includes(needle)
+    const rank = (symbol: string, searchTerms: readonly string[]) =>
+      rankTokenSearchFields({ symbol, searchTerms }, search)
     const transparentZecRow: ShieldSourceTokenPickerItem[] =
-      nativeZecTransparentRaw !== null && matchesSearch(['ZEC', 'transparent'])
+      nativeZecTransparentRaw !== null && rank('ZEC', ['Zcash', 'transparent']) < 99
         ? [
             {
               key: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
@@ -398,8 +441,12 @@ function ShieldSwapForm({
           ]
         : []
     const zecRows = zecSourceOptions
-      .filter(option =>
-        matchesSearch([option.symbol, option.kind === 'intents' ? 'confidential' : ''])
+      .filter(
+        option =>
+          rank(option.symbol, [
+            option.chainName,
+            option.kind === 'intents' ? 'confidential' : 'shield'
+          ]) < 99
       )
       .map(option =>
         Object.freeze({
@@ -425,7 +472,7 @@ function ShieldSwapForm({
         })
       )
     const nonZecRows = pickable
-      .filter(asset => asset.asset.metadata.symbol.toUpperCase() !== 'ZEC')
+      .filter(asset => asset.managed.protocolAssetId !== ZEC_ZCASH_ASSET)
       .map(asset =>
         Object.freeze({
           key: asset.asset.asset.id,
@@ -444,8 +491,12 @@ function ShieldSwapForm({
           priceUsd: tokenPrices.get(asset.managed.protocolAssetId) ?? null
         })
       )
-      .filter(row => matchesSearch([row.symbol]))
-    return Object.freeze([...transparentZecRow, ...zecRows, ...nonZecRows])
+    return Object.freeze(
+      [...transparentZecRow, ...zecRows, ...nonZecRows].sort(
+        (left, right) =>
+          rank(left.symbol, [left.chainName ?? '']) - rank(right.symbol, [right.chainName ?? ''])
+      )
+    )
   }, [
     picker,
     pickable,
@@ -461,15 +512,21 @@ function ShieldSwapForm({
     [fromPickerItems, pickerProvider]
   )
   const pickerNetworks = useMemo(() => {
-    if (picker === 'from' && pickerProvider === 'zcash-shield') {
-      return [{ id: 'zec', label: 'Zcash', iconChain: 'zec' }]
-    }
-    const choices = picker === 'from' ? sourceChoices : options
     const networks = new Map<string, { id: string; label: string; iconChain: string }>()
-    for (const asset of choices) {
-      if (picker === 'from' && asset.asset.metadata.symbol.toUpperCase() === 'ZEC') continue
-      const id = asset.chain.chain.id
-      if (!networks.has(id)) {
+    if (picker === 'from') {
+      for (const row of visibleFromPickerItems) {
+        const id = row.chainId ?? row.badgeBlockchain
+        if (!id || networks.has(id)) continue
+        networks.set(id, {
+          id,
+          label: id === 'zec' ? 'Zcash' : (row.chainName ?? id),
+          iconChain: row.badgeBlockchain ?? id
+        })
+      }
+    } else {
+      for (const asset of pickable) {
+        const id = asset.chain.chain.id
+        if (networks.has(id)) continue
         networks.set(id, {
           id,
           label: asset.chain.chain.displayName,
@@ -481,19 +538,8 @@ function ShieldSwapForm({
         })
       }
     }
-    if (picker === 'from') {
-      for (const option of zecSourceOptions) {
-        if (option.kind === 'intents' && !networks.has(option.badgeBlockchain)) {
-          networks.set(option.badgeBlockchain, {
-            id: option.badgeBlockchain,
-            label: option.chainName,
-            iconChain: option.badgeBlockchain
-          })
-        }
-      }
-    }
     return [...networks.values()]
-  }, [picker, pickerProvider, sourceChoices, options, zecSourceOptions])
+  }, [picker, visibleFromPickerItems, pickable])
   const pickerItems = useMemo(() => {
     if (picker === null) return []
     return picker === 'from'
@@ -657,8 +703,7 @@ function ShieldSwapForm({
       cancelledPlanId.current = null
       setPrepared({ review, request, from, to, amount })
     } catch (cause) {
-      if (scopeStillCurrent())
-        setError(cause instanceof Error ? cause.message : 'Swap quote unavailable')
+      if (scopeStillCurrent()) setError(shieldSwapQuoteErrorMessage(cause))
     } finally {
       if (scopeStillCurrent()) setBusy(false)
     }
@@ -728,8 +773,7 @@ function ShieldSwapForm({
       setPrepared({ ...current, review })
       if (!changed) setAcceptedPlanId(review.planId)
     } catch (cause) {
-      if (scopeStillCurrent())
-        setError(cause instanceof Error ? cause.message : 'Swap quote unavailable')
+      if (scopeStillCurrent()) setError(shieldSwapQuoteErrorMessage(cause))
     } finally {
       if (scopeStillCurrent()) {
         setBusy(false)
@@ -1112,23 +1156,52 @@ function ShieldSwapForm({
           maxDisabledReason={!trustedBalances ? 'Refresh Shield balance' : 'No available balance'}
         />
         <div className="relative border-t border-white/10 pt-2">
-          <Button
-            type="button"
-            aria-label="Switch assets"
-            disabled={busy || !from || !to || !canReverse}
-            title={!canReverse ? 'Destination has no available Shield balance' : 'Switch assets'}
-            onClick={() => {
-              if (!from || !to || !canReverse) return
-              setFromId(to.asset.asset.id)
-              setToId(from.asset.asset.id)
-              setAmount('')
-              setError(null)
-            }}
-            className="absolute -top-3.5 left-1/2 z-10 size-7 -translate-x-1/2 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
-            variant="secondary"
+          <span
+            className="group absolute -top-3.5 left-1/2 z-10 -translate-x-1/2"
+            tabIndex={!canReverse ? 0 : undefined}
+            aria-describedby={!canReverse ? 'shield-swap-reverse-reason' : undefined}
+            aria-label={
+              !canReverse
+                ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
+                : undefined
+            }
+            title={
+              !canReverse
+                ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
+                : 'Switch assets'
+            }
           >
-            <Icon icon="lucide:arrow-down-up" width={16} height={16} />
-          </Button>
+            <Button
+              type="button"
+              aria-label="Switch assets"
+              disabled={busy || !from || !to || !canReverse}
+              title={
+                !canReverse
+                  ? (reverseUnavailableReason ?? 'Reverse source asset is unavailable')
+                  : 'Switch assets'
+              }
+              onClick={() => {
+                if (!from || !to || !canReverse) return
+                setFromId(to.asset.asset.id)
+                setToId(from.asset.asset.id)
+                setAmount('')
+                setError(null)
+              }}
+              className="size-7 rounded-md bg-[#373741] p-0 text-foreground hover:bg-popover disabled:opacity-40"
+              variant="secondary"
+            >
+              <Icon icon="lucide:arrow-down-up" width={16} height={16} />
+            </Button>
+            {!canReverse && (
+              <span
+                id="shield-swap-reverse-reason"
+                role="tooltip"
+                className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded bg-popover p-2 text-center text-xs text-foreground opacity-0 shadow-md group-hover:opacity-100 group-focus:opacity-100"
+              >
+                {reverseUnavailableReason ?? 'Reverse source asset is unavailable'}
+              </span>
+            )}
+          </span>
           <SwapAssetCard
             direction="To"
             token={toToken}

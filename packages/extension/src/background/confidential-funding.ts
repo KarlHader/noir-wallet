@@ -39,7 +39,8 @@ export function createBackgroundConfidentialFundingCoordinator(
   protocolTokens: readonly SwapToken[],
   endpointSettings: ChainEndpointSettings,
   refreshPortfolio: NonNullable<ConfidentialFundingCoordinatorOptions['refreshPortfolio']>,
-  store: ChromeConfidentialFundingStore = new ChromeConfidentialFundingStore()
+  store: ChromeConfidentialFundingStore = new ChromeConfidentialFundingStore(),
+  getNativeZecActiveAccount?: ConfidentialFundingCoordinatorOptions['getNativeZecActiveAccount']
 ): ConfidentialFundingCoordinator | null {
   const config = getConfidentialFundingNetworkConfig(DEFAULT_NETWORK)
   if (!config) return null
@@ -120,9 +121,18 @@ export function createBackgroundConfidentialFundingCoordinator(
       const cached = getCachedTokens()
       return cached.length > 0 ? cached : protocolTokens
     },
+    getNativeZecActiveAccount,
     assetMappings: Object.freeze([...mappings.values()]),
-    scheduleMonitoring: () =>
-      chrome.alarms.create(CONFIDENTIAL_FUNDING_MONITOR_ALARM, { delayInMinutes: 0.1 }),
+    scheduleMonitoring: async (delayInMinutes = 0.1) => {
+      const alarm = await chrome.alarms.get(CONFIDENTIAL_FUNDING_MONITOR_ALARM)
+      if (
+        alarm &&
+        alarm.scheduledTime > Date.now() &&
+        alarm.scheduledTime <= Date.now() + delayInMinutes * 60_000
+      )
+        return
+      await chrome.alarms.create(CONFIDENTIAL_FUNDING_MONITOR_ALARM, { delayInMinutes })
+    },
     onActivityChanged: async scope => {
       await chrome.runtime.sendMessage({
         type: 'TRANSACTION_UPDATED',

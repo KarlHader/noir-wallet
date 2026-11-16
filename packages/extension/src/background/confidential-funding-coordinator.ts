@@ -8,6 +8,7 @@ import {
 } from '@/config/intents'
 import { trackEvent } from '@/background/analytics/reporter'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
+import { withMetadataLock } from '@/lib/wallet-metadata-storage'
 import {
   projectConfidentialPlanResult,
   projectExternalDepositResult
@@ -104,6 +105,12 @@ import {
   type ConfidentialSigningIdentity
 } from './confidential-funding-signer'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
+import {
+  NativeZecIntentsSwapCoordinator,
+  type NativeZecActiveAccountSnapshot
+} from './native-zec-intents-swap'
+import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-zec-intents-swap'
+import type { QuoteBinding } from '@/types/wallet'
 
 const SESSION_REFRESH_BUFFER_MS = 60_000
 export const CONFIDENTIAL_FUNDING_MONITOR_ALARM = 'confidential-funding-monitor'
@@ -136,6 +143,34 @@ function isExplicitAppFeeRejection(error: unknown): boolean {
     !error.ambiguous &&
     error.status === 200 &&
     error.businessCode === 2002
+  )
+}
+
+const confidentialMonitoringQueue = new SerialTaskQueue()
+const REFUND_STATUS_CHECK_INTERVAL_MS = 60_000
+
+function refundStatusCheckInterval(plan: ConfidentialFundingPlan, now: number): number {
+  const days = Math.max(0, Math.floor((now - plan.createdAt) / 86_400_000))
+  return Math.min(3_600_000, REFUND_STATUS_CHECK_INTERVAL_MS * 2 ** Math.min(days, 6))
+}
+
+// Execution failure does not prove that the protocol has finished returning funds.
+function needsRefundObservation(plan: ConfidentialFundingPlan): boolean {
+  if (
+    !['failed', 'expired', 'cancelled', 'partial'].includes(plan.phase) ||
+    isRecoverableLocalFailure(plan)
+  )
+    return false
+  if (plan.orderId || plan.withdraws.some(row => row.intentHash)) {
+    return plan.withdraws.some(
+      row => !['SUCCESS', 'COMPLETED', 'REFUNDED'].includes(normalizeStatus(row.status))
+    )
+  }
+  return Boolean(
+    plan.requiresDeposit &&
+    plan.preparedDeposit?.transactionHash &&
+    plan.depositQuote &&
+    plan.errorStatus !== 'DEPOSIT_REVERTED'
   )
 }
 
@@ -228,7 +263,8 @@ export interface ConfidentialFundingCoordinatorOptions {
   readonly assetMappings: readonly ConfidentialPortfolioAssetMapping[]
   readonly protocolTokens?: readonly SwapToken[]
   readonly getProtocolTokens?: () => readonly SwapToken[]
-  readonly scheduleMonitoring?: () => Promise<void>
+  readonly getNativeZecActiveAccount?: () => NativeZecActiveAccountSnapshot
+  readonly scheduleMonitoring?: (delayInMinutes?: number) => Promise<void>
   readonly refreshPortfolio?: (
     target?: Readonly<{
       keyDomainId: string
@@ -530,15 +566,46 @@ export class ConfidentialFundingCoordinator {
   private readonly reconciledTerminalExternalDeposits = new Set<string>()
   private readonly prepareQueue = new SerialTaskQueue()
   private readonly reservationQueue = new SerialTaskQueue()
+  private readonly nativeZecIntents: NativeZecIntentsSwapCoordinator
   private readonly now: () => number
   private readonly createId: () => string
 
   constructor(private readonly options: ConfidentialFundingCoordinatorOptions) {
     this.now = options.now ?? Date.now
     this.createId = options.createId ?? (() => crypto.randomUUID())
+    this.nativeZecIntents = new NativeZecIntentsSwapCoordinator({
+      ...options,
+      getActiveAccount: options.getNativeZecActiveAccount
+    })
     for (const network of options.evmNetworks) {
       this.rpcByChain.set(network.chainId, createConfiguredEvmRpcClient(options.network, network))
     }
+  }
+
+  prepareNativeZecIntentsSwap(input: PrepareNativeZecIntentsSwapInput) {
+    return this.nativeZecIntents.prepare(input)
+  }
+
+  getNativeZecIntentsSwap(quoteId: string) {
+    return this.nativeZecIntents.get(quoteId)
+  }
+
+  cancelNativeZecIntentsSwap(quoteId: string) {
+    return this.nativeZecIntents.cancel(quoteId)
+  }
+
+  claimNativeZecIntentsSpend(
+    input: Readonly<{
+      walletId: string
+      accountId: string
+      transactionId: string
+      binding: QuoteBinding
+      to: string
+      amount: string
+      fundingSource: string
+    }>
+  ) {
+    return this.nativeZecIntents.claimSpend(input)
   }
 
   async createExternalDeposit(
@@ -2370,7 +2437,9 @@ export class ConfidentialFundingCoordinator {
   }
 
   async getPlan(planId: string): Promise<ConfidentialFundingPlan> {
-    return this.requirePlan(planId)
+    const plan = await this.requirePlan(planId)
+    if (needsRefundObservation(plan)) return this.continuePlan(planId, true)
+    return plan
   }
 
   async finalizeRejectedCluster(
@@ -2490,7 +2559,31 @@ export class ConfidentialFundingCoordinator {
       throw new Error('Active Wallet Account changed')
     const session = await this.ensureSession(identity, authorize)
     if (!session) throw new Error('Confidential authorization is required')
-    return this.refreshPortfolioBalances(identity, session.accessToken)
+    try {
+      return await this.refreshPortfolioBalances(identity, session.accessToken)
+    } catch (error) {
+      if (error instanceof ConfidentialFundingApiError && error.status === 401) {
+        await withMetadataLock(async () => {
+          const current = await this.options.store.getSession(
+            scope.network,
+            scope.keyDomainId,
+            scope.accountId
+          )
+          if (
+            current?.accessToken === session.accessToken &&
+            current.refreshToken === session.refreshToken &&
+            current.expiresAt === session.expiresAt &&
+            current.refreshExpiresAt === session.refreshExpiresAt
+          )
+            await this.options.store.deleteSession(
+              scope.network,
+              scope.keyDomainId,
+              scope.accountId
+            )
+        })
+      }
+      throw error
+    }
   }
 
   async cancel(planId: string): Promise<void> {
@@ -2521,7 +2614,9 @@ export class ConfidentialFundingCoordinator {
         plan.network === this.options.network &&
         plan.phase !== 'prepared' &&
         !needsConfidentialSubmissionCheck(plan) &&
-        (!isTerminalPhase(plan.phase) || isRecoverableLocalFailure(plan))
+        (!isTerminalPhase(plan.phase) ||
+          isRecoverableLocalFailure(plan) ||
+          needsRefundObservation(plan))
     )
     const results = await Promise.allSettled(plans.map(plan => this.continuePlan(plan.planId)))
     const external = (await this.options.store.listExternalDeposits()).filter(
@@ -2556,11 +2651,19 @@ export class ConfidentialFundingCoordinator {
     return [...results, ...externalResults].filter(result => result.status === 'fulfilled').length
   }
 
-  async continuePlan(planId: string): Promise<ConfidentialFundingPlan> {
+  async continuePlan(planId: string, refreshRefund = false): Promise<ConfidentialFundingPlan> {
     const existing = this.continuingByPlan.get(planId)
     if (existing) return existing
-    const operation = this.continuePlanExclusive(planId)
+    const operation = this.continuePlanExclusive(planId, refreshRefund)
       .catch(error => this.handleContinuationError(planId, error))
+      .then(async plan => {
+        if (needsRefundObservation(plan)) {
+          const due =
+            (plan.settlementCheckedAt ?? this.now()) + refundStatusCheckInterval(plan, this.now())
+          await this.scheduleMonitoring(Math.max(0.1, (due - this.now()) / 60_000))
+        }
+        return plan
+      })
       .finally(() => {
         if (this.continuingByPlan.get(planId) === operation) {
           this.continuingByPlan.delete(planId)
@@ -2570,14 +2673,19 @@ export class ConfidentialFundingCoordinator {
     return operation
   }
 
-  private async continuePlanExclusive(planId: string): Promise<ConfidentialFundingPlan> {
+  private async continuePlanExclusive(
+    planId: string,
+    refreshRefund: boolean
+  ): Promise<ConfidentialFundingPlan> {
     let plan = await this.requirePlan(planId)
     if (isRecoverableLocalFailure(plan)) {
       plan = await this.updatePlan(plan, {
         phase: 'deposit-confirming',
         errorStatus: undefined
       })
-    } else if (isTerminalPhase(plan.phase)) return plan
+    } else if (isTerminalPhase(plan.phase)) {
+      return needsRefundObservation(plan) ? this.observeRefund(plan, refreshRefund) : plan
+    }
     if (isClusterRejectionReason(plan.errorStatus)) return this.finishRejectedCluster(plan)
     if (isUnsignedDirectWithdraw(plan) && !this.confirmingByPlan.has(planId)) {
       return this.updatePlan(plan, {
@@ -3767,6 +3875,41 @@ export class ConfidentialFundingCoordinator {
     })
   }
 
+  private async observeRefund(
+    plan: ConfidentialFundingPlan,
+    refresh: boolean
+  ): Promise<ConfidentialFundingPlan> {
+    const interval = refresh
+      ? REFUND_STATUS_CHECK_INTERVAL_MS
+      : refundStatusCheckInterval(plan, this.now())
+    if (plan.settlementCheckedAt !== undefined && this.now() - plan.settlementCheckedAt < interval)
+      return plan
+    // Persist throttling across service-worker restarts without emitting an activity update.
+    plan = Object.freeze({ ...plan, settlementCheckedAt: this.now() })
+    await this.options.store.putPlan(plan)
+    try {
+      if (plan.orderId || plan.withdraws.some(row => row.intentHash)) {
+        plan = await this.refreshSettlement(plan, undefined, true)
+      } else if (plan.depositQuote) {
+        const status = await this.readStatus(
+          plan,
+          plan.depositQuote.quote.depositAddress,
+          'deposit'
+        )
+        if (status) {
+          const depositSettlementStatus = normalizeStatus(status.status)
+          if (depositSettlementStatus === 'REFUNDED') {
+            plan = await this.updatePlan(plan, { phase: 'refunded' })
+            await this.options.refreshPortfolio?.().catch(() => {})
+          }
+        }
+      }
+    } catch {
+      // Preserve the execution outcome. Observation must never request signatures or resubmit.
+    }
+    return plan
+  }
+
   private async updateClusterOrderObservation(
     plan: ConfidentialFundingPlan,
     order: ConfidentialPrivateOrder
@@ -3782,22 +3925,20 @@ export class ConfidentialFundingCoordinator {
       const canSettleWithoutBroadcast =
         !observed.intentHash && ['FAILED', 'EXPIRED', 'CANCELLED'].includes(serviceStatus)
       return Object.freeze({
-        ...row,
-        status: ['SUCCESS', 'COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED', 'REFUNDED'].includes(
-          normalizeStatus(row.status)
-        )
-          ? row.status
-          : serviceRefunded || canSettleWithoutBroadcast
-            ? observed.status
-            : 'PROCESSING',
+        ...mergeConfidentialWithdrawObservation(row, {
+          status: serviceRefunded || canSettleWithoutBroadcast ? observed.status : 'PROCESSING',
+          // The private-order hash is not specified as a destination hash on refunds.
+          ...(!serviceRefunded && observed.transactionHash
+            ? { transactionHash: observed.transactionHash }
+            : {}),
+          ...(observed.errorStatus ? { errorStatus: observed.errorStatus } : {})
+        }),
         ...(observed.scheduledAt !== undefined ? { scheduledAt: observed.scheduledAt } : {}),
-        ...(observed.intentHash ? { intentHash: observed.intentHash } : {}),
-        ...(observed.transactionHash ? { transactionHash: observed.transactionHash } : {}),
-        ...(observed.errorStatus ? { errorStatus: observed.errorStatus } : {})
+        ...(observed.intentHash ? { intentHash: observed.intentHash } : {})
       })
     })
     return this.updatePlan(plan, {
-      phase: 'processing',
+      phase: isTerminalPhase(plan.phase) ? plan.phase : 'processing',
       orderId: order.orderId,
       backendStatus: order.status,
       withdraws: Object.freeze(rows)
@@ -3806,16 +3947,29 @@ export class ConfidentialFundingCoordinator {
 
   private async refreshSettlement(
     plan: ConfidentialFundingPlan,
-    accessToken: string
+    accessToken?: string,
+    observationOnly = false
   ): Promise<ConfidentialFundingPlan> {
+    const previousPhase = plan.phase
+    const previousRows = plan.withdraws
     if (plan.operation === 'cluster' && plan.orderId) {
-      const walletToken = await this.ensureOrderHistoryToken(plan)
+      const stored = observationOnly
+        ? await this.options.store.getHistorySession(plan.network, plan.keyDomainId, plan.accountId)
+        : null
+      const walletToken = observationOnly
+        ? stored?.principalType === 'wallet' &&
+          stored.queryAddress.toLowerCase() === plan.signerId.toLowerCase() &&
+          Date.parse(stored.expiresAt) > this.now() + SESSION_REFRESH_BUFFER_MS
+          ? stored.token
+          : undefined
+        : await this.ensureOrderHistoryToken(plan)
       let details: readonly ConfidentialPrivateOrder[] = []
       try {
-        details = await this.options.api.getPrivateOrderDetails({
-          walletToken,
-          orderIds: [plan.orderId]
-        })
+        if (walletToken)
+          details = await this.options.api.getPrivateOrderDetails({
+            walletToken,
+            orderIds: [plan.orderId]
+          })
       } catch (error) {
         if (
           error instanceof ConfidentialFundingApiError &&
@@ -3826,12 +3980,20 @@ export class ConfidentialFundingCoordinator {
             plan.keyDomainId,
             plan.accountId
           )
-          throw new Error('Wallet history authorization is required')
+          if (!observationOnly) throw new Error('Wallet history authorization is required')
         }
-        throw error
+        if (!observationOnly) throw error
       }
       const order = details.find(item => item.orderId === plan.orderId)
-      if (order) plan = await this.updateClusterOrderObservation(plan, order)
+      if (order) {
+        if (observationOnly) {
+          try {
+            plan = await this.updateClusterOrderObservation(plan, order)
+          } catch {
+            // An unbound history response cannot block independent settlement evidence.
+          }
+        } else plan = await this.updateClusterOrderObservation(plan, order)
+      }
     }
     const statuses = await Promise.all(
       plan.withdraws.map(row =>
@@ -3852,7 +4014,7 @@ export class ConfidentialFundingCoordinator {
     })
     const newlySettled = rows.some((row, index) => {
       const current = normalizeStatus(row.status)
-      const previous = normalizeStatus(plan.withdraws[index].status)
+      const previous = normalizeStatus(previousRows[index].status)
       return (
         (current === 'SUCCESS' || current === 'COMPLETED') &&
         previous !== 'SUCCESS' &&
@@ -3884,10 +4046,13 @@ export class ConfidentialFundingCoordinator {
       }
     }
     const next = await this.updatePlan(plan, {
-      phase: phaseForSettlement(settlement),
+      phase:
+        observationOnly && settlement === 'confirming'
+          ? previousPhase
+          : phaseForSettlement(settlement),
       withdraws: Object.freeze(rows),
       backendStatus: undefined,
-      errorStatus: undefined
+      errorStatus: observationOnly ? plan.errorStatus : undefined
     })
     if (settlement === 'success') {
       await this.applyGraphStatus(next, 'relay', 'final')
@@ -3902,8 +4067,13 @@ export class ConfidentialFundingCoordinator {
               : 'relay-failed'
       await this.applyGraphStatus(next, 'relay', 'failed', undefined, aggregateFailure)
     }
-    if (isTerminalPhase(next.phase)) {
-      await this.readAndCacheBalancesForPlan(next, accessToken).catch(() => [])
+    if (
+      isTerminalPhase(next.phase) &&
+      (!observationOnly ||
+        next.phase !== previousPhase ||
+        rows.some((row, index) => row.status !== previousRows[index].status))
+    ) {
+      if (accessToken) await this.readAndCacheBalancesForPlan(next, accessToken).catch(() => [])
       await this.options.refreshPortfolio?.().catch(() => {})
     } else if (newlySettled) {
       await this.options
@@ -4352,10 +4522,21 @@ export class ConfidentialFundingCoordinator {
       .catch(() => {})
   }
 
-  private async scheduleMonitoring(): Promise<void> {
-    await (this.options.scheduleMonitoring?.() ??
-      chrome.alarms.create(CONFIDENTIAL_FUNDING_MONITOR_ALARM, {
-        delayInMinutes: CONFIDENTIAL_FUNDING_MONITOR_DELAY_MINUTES
-      }))
+  private async scheduleMonitoring(delayInMinutes?: number): Promise<void> {
+    await confidentialMonitoringQueue.run(async () => {
+      if (this.options.scheduleMonitoring) {
+        await this.options.scheduleMonitoring(delayInMinutes)
+        return
+      }
+      const delay = delayInMinutes ?? CONFIDENTIAL_FUNDING_MONITOR_DELAY_MINUTES
+      const alarm = await chrome.alarms.get(CONFIDENTIAL_FUNDING_MONITOR_ALARM)
+      if (
+        alarm &&
+        alarm.scheduledTime > this.now() &&
+        alarm.scheduledTime <= this.now() + delay * 60_000
+      )
+        return
+      await chrome.alarms.create(CONFIDENTIAL_FUNDING_MONITOR_ALARM, { delayInMinutes: delay })
+    })
   }
 }

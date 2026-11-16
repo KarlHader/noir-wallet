@@ -4,9 +4,8 @@ import {
   createBuildAddressGatedChainRegistry,
   createInitialProductChainRegistry
 } from '@/core/chains/registry'
-import { isAccountNetworkEnabled } from '@/core/wallet/account-network-selection'
-import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
-import type { AccountData, KeySource, Network } from '@/types'
+import type { Network } from '@/types'
+import type { AccountNetworksView } from './account-networks-client'
 import { availableSoftwareAccountFamilies } from './account-network-selection-client'
 
 export interface ShieldZcashVaultEntry {
@@ -17,16 +16,20 @@ export interface ShieldZcashVaultEntry {
 
 export function resolveShieldZcashVaultEntry(input: {
   readonly network: Network
-  readonly keySource: KeySource | undefined
-  readonly account: AccountData | null | undefined
+  readonly walletSource: AccountNetworksView['walletSource'] | null
   readonly hasPortfolioZcash: boolean
   readonly enabledFlags: readonly ChainFeatureFlagValue[]
 }): ShieldZcashVaultEntry {
-  const { network, keySource, account, hasPortfolioZcash, enabledFlags } = input
+  const { network, walletSource, hasPortfolioZcash, enabledFlags } = input
   const zcashReleased = isNewWalletFamilyEnabled('zcash', enabledFlags)
   const registry = createBuildAddressGatedChainRegistry(createInitialProductChainRegistry(network))
   const zcashInProduct = registry.list().some(chain => chain.family === 'zcash')
-  const showVaultCard = zcashReleased && zcashInProduct && keySource !== 'private-key'
+  const supportsZcash =
+    walletSource?.kind === 'software' ||
+    (walletSource?.kind === 'hardware' &&
+      walletSource.hardware.capabilities.includes('zcash') &&
+      hasPortfolioZcash)
+  const showVaultCard = zcashReleased && zcashInProduct && supportsZcash
 
   const hasActiveZcash = hasPortfolioZcash
   if (!showVaultCard) {
@@ -36,16 +39,9 @@ export function resolveShieldZcashVaultEntry(input: {
     return Object.freeze({ showVaultCard: true, hasActiveZcash: true, canEnableZcash: false })
   }
 
-  const softwareWallet = keySource === undefined || keySource === 'software'
+  const softwareWallet = walletSource?.kind === 'software'
   const zcashSelectable = availableSoftwareAccountFamilies().includes('zcash')
-  const zcashSelected =
-    account !== undefined && account !== null && isAccountNetworkEnabled(account, network, 'zcash')
-  const canEnableZcash =
-    softwareWallet &&
-    zcashSelectable &&
-    account != null &&
-    !zcashSelected &&
-    !isZcashHardwareKeySource(keySource)
+  const canEnableZcash = softwareWallet && zcashSelectable && !hasActiveZcash
 
   return Object.freeze({
     showVaultCard: true,

@@ -1,7 +1,7 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { getSendRouteCostFromAmounts } from './send-route-cost'
 import {
   resolveWalletOwnedQuoteAsset,
   resolveWalletSwapSourceToken,
@@ -184,9 +184,7 @@ export function getPublicPrivateSendRouteCost(input: {
   readonly amountInRaw: string
   readonly estimatedOutRaw: string
   readonly decimals: number
+  readonly outputDecimals?: number
 }): string | null {
-  if (!/^\d+$/.test(input.amountInRaw) || !/^\d+$/.test(input.estimatedOutRaw)) return null
-  const difference = BigInt(input.amountInRaw) - BigInt(input.estimatedOutRaw)
-  if (difference < 0n) return null
-  return formatBaseUnitDecimalAmount(difference.toString(), input.decimals)
+  return getSendRouteCostFromAmounts(input)
 }

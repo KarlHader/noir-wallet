@@ -1,5 +1,3 @@
-import { getNearNetworkConfig } from '@/config/networks'
-import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { nearWalletClient, type NearTransferSubmission } from '@/popup/services/near-wallet-client'
 
@@ -25,8 +23,6 @@ export function NearTransactionResult({
       chain={chain}
       submission={submission}
       client={nearWalletClient}
-      explorerBaseUrl={getNearNetworkConfig(DEFAULT_NETWORK).explorerUrl}
-      explorerTransactionPath="txns"
       feeDecimals={24}
       feeSymbol="NEAR"
       feeLabel="Network fee"

@@ -93,10 +93,16 @@ export function AssetDetail() {
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const zcashSendScopeQuery =
+    effectiveWalletId && effectiveAccountId
+      ? `&sourceWalletId=${encodeURIComponent(effectiveWalletId)}&sourceAccountId=${encodeURIComponent(effectiveAccountId)}`
+      : ''
   const chainEndpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
   const requestSequence = useRef(0)
+  const cacheReadSequence = useRef(0)
+  const availableModel = useRef<PortfolioReadModel | null>(null)
   const historyRequestSequence = useRef(0)
   const [model, setModel] = useState<PortfolioReadModel | null>(null)
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
@@ -126,10 +132,12 @@ export function AssetDetail() {
   const load = useCallback(
     async (forceRefresh = false) => {
       const request = ++requestSequence.current
-      setStatus('loading')
+      cacheReadSequence.current += 1
+      const hasAvailableModel = () =>
+        isPortfolioModelForScope(availableModel.current, effectiveWalletId, effectiveAccountId)
+      setStatus(hasAvailableModel() ? 'ready' : 'loading')
       try {
         if (!effectiveWalletId || !effectiveAccountId) {
-          setStatus('error')
           return
         }
         const scope = {
@@ -137,9 +145,13 @@ export function AssetDetail() {
           accountId: effectiveAccountId,
           endpointRuntimeKey: chainEndpointRuntimeKey
         }
-        const cached = await readCachedPortfolio(scope)
+        const cached = await readCachedPortfolio(scope).catch(() => null)
         if (request !== requestSequence.current) return
-        if (cached) setModel(cached)
+        if (cached) {
+          availableModel.current = cached
+          setModel(cached)
+          setStatus('ready')
+        }
         const selectedChainId = cached?.assets.find(item => item.asset.id === requestedAssetId)
           ?.asset.chainId
         const refreshed = await refreshPortfolioFromCache(scope, cached, {
@@ -147,16 +159,23 @@ export function AssetDetail() {
           refreshChainIds: selectedChainId ? [selectedChainId] : []
         })
         if (request !== requestSequence.current) return
-        setModel(refreshed)
-        setStatus(refreshed ? 'ready' : 'error')
+        cacheReadSequence.current += 1
+        if (refreshed) {
+          availableModel.current = refreshed
+          setModel(refreshed)
+        }
+        setStatus(hasAvailableModel() ? 'ready' : 'error')
       } catch {
-        if (request === requestSequence.current) setStatus('error')
+        if (request === requestSequence.current) {
+          setStatus(hasAvailableModel() ? 'ready' : 'error')
+        }
       }
     },
     [chainEndpointRuntimeKey, effectiveAccountId, effectiveWalletId, requestedAssetId]
   )
 
   useEffect(() => {
+    availableModel.current = null
     setModel(null)
     void load()
     return () => {
@@ -166,13 +185,16 @@ export function AssetDetail() {
 
   const readLatest = useCallback(async () => {
     const request = requestSequence.current
+    const cacheRequest = ++cacheReadSequence.current
     try {
       if (!effectiveWalletId || !effectiveAccountId) return
       const latest = await readCachedPortfolio({
         walletId: effectiveWalletId,
         accountId: effectiveAccountId
       })
-      if (request !== requestSequence.current) return
+      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
+      if (!isPortfolioModelForScope(latest, effectiveWalletId, effectiveAccountId)) return
+      availableModel.current = latest
       setModel(latest)
       const latestAsset = latest?.assets.find(item => item.asset.id === requestedAssetId)
       const latestChain = latestAsset
@@ -188,12 +210,13 @@ export function AssetDetail() {
           setBitcoinCatalog(catalog)
         }
       }
-      if (request !== requestSequence.current) return
+      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
       setStatus('ready')
     } catch {
-      if (request === requestSequence.current && !model) setStatus('error')
+      // Notifications are opportunistic cache reads. Initial load/retry owns
+      // connection errors; a transient notification must not replace its UI.
     }
-  }, [effectiveAccountId, effectiveWalletId, model, requestedAssetId])
+  }, [effectiveAccountId, effectiveWalletId, requestedAssetId])
 
   usePortfolioUpdates(effectiveWalletId, effectiveAccountId, readLatest)
 
@@ -443,11 +466,18 @@ export function AssetDetail() {
     }
     if (chain.chain.family === 'zcash') {
       navigate(
-        `/send/zcash?from=${zcashFundingSource}&originPath=${encodeURIComponent(sendOriginPath)}`
+        `/send/zcash?from=${zcashFundingSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
       )
       return
     }
-    const query = new URLSearchParams({ assetId: asset.asset.id })
+    const query = new URLSearchParams({
+      assetId: asset.asset.id,
+      originPath: sendOriginPath
+    })
+    if (effectiveWalletId && effectiveAccountId) {
+      query.set('sourceWalletId', effectiveWalletId)
+      query.set('sourceAccountId', effectiveAccountId)
+    }
     if (domain === 'private') query.set('mode', 'private')
     if (chain.chain.family === 'evm') {
       if (domain === 'public') query.set('sourceMode', 'main')
@@ -591,7 +621,9 @@ export function AssetDetail() {
         label: 'Send',
         disabled: Boolean(getFundingSourceUnavailableReason(zcashKeySource, privacy)),
         onClick: () =>
-          navigate(`/send/zcash?from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}`)
+          navigate(
+            `/send/zcash?from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+          )
       },
       {
         action: 'receive' as const,
@@ -608,7 +640,7 @@ export function AssetDetail() {
         disabled: Boolean(getFundingSourceUnavailableReason(zcashKeySource, privacy)),
         onClick: () =>
           navigate(
-            `/send/zcash?move=1&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}`
+            `/send/zcash?move=1&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
           )
       },
       {

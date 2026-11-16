@@ -33,7 +33,10 @@ import {
   availableDepositTokens,
   depositSourceNetworks
 } from '@/popup/services/shield-deposit-options'
-import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
+import {
+  getNearConfidentialIconChain,
+  summarizeNearConfidentialHoldings
+} from '@/popup/services/near-confidential-holdings'
 import { formatSymbol } from '@/lib/format'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { buildShieldProviderGroups, type ShieldProvider } from '@/popup/services/asset-domains'
@@ -79,12 +82,15 @@ function ShieldProviderContent() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const { activeAccount } = useActiveAccountNetworks()
+  const { activeAccount, loading: accountLoading } = useActiveAccountNetworks()
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
     nativeAccount: activeAccount
   })
+  const zcashSendScopeQuery = account
+    ? `&sourceWalletId=${encodeURIComponent(account.walletId)}&sourceAccountId=${encodeURIComponent(account.accountId)}`
+    : ''
   const scopeKey = `${currentNetwork}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
@@ -131,9 +137,7 @@ function ShieldProviderContent() {
   }, [account?.walletId, account?.accountId, currentNetwork])
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const hasZcashAccount =
-    activeAccount?.networks.some(network => network.chain.family === 'zcash') ??
-    model?.chains.some(chain => chain.chain.family === 'zcash') ??
-    false
+    activeAccount?.networks.some(network => network.chain.family === 'zcash') ?? false
 
   useEffect(() => {
     let active = true
@@ -183,8 +187,7 @@ function ShieldProviderContent() {
     getPrivateTransferChainIds(activeAccount, currentNetwork === 'mainnet').length > 0
   const zcashVaultEntry = resolveShieldZcashVaultEntry({
     network: currentNetwork,
-    keySource: currentWallet?.keySource,
-    account: walletAccount,
+    walletSource: activeAccount?.walletSource ?? null,
     hasPortfolioZcash: hasZcashAccount,
     enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
   })
@@ -342,7 +345,19 @@ function ShieldProviderContent() {
     })
   }
 
-  if (!provider || (activeAccount && !providerAvailable)) {
+  if (provider && !activeAccount && accountLoading) {
+    return (
+      <div
+        className="page-container items-center justify-center"
+        role="status"
+        aria-label="Loading account"
+      >
+        <Icon icon="lucide:loader-circle" width={22} className="animate-spin text-muted" />
+      </div>
+    )
+  }
+
+  if (!provider || !activeAccount || !providerAvailable) {
     return (
       <div className="page-container items-center justify-center">
         <p className="text-sm text-muted">Shield account unavailable</p>
@@ -514,7 +529,20 @@ function ShieldProviderContent() {
                   type="button"
                   onClick={() =>
                     navigate(
-                      `/send/zcash?from=shielded&originPath=${encodeURIComponent(sendOriginPath)}`
+                      `/send/zcash?from=shielded&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+                      {
+                        state: account
+                          ? {
+                              sendOriginHistory: {
+                                originPath: sendOriginPath,
+                                network: currentNetwork,
+                                walletId: account.walletId,
+                                accountId: account.accountId,
+                                entryKey: location.key
+                              }
+                            }
+                          : undefined
+                      }
                     )
                   }
                   disabled={!hasZcashAccount}
@@ -537,7 +565,7 @@ function ShieldProviderContent() {
                   onClick={() => {
                     if (zcashMoveSource)
                       navigate(
-                        `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}`
+                        `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
                       )
                   }}
                   disabled={!hasZcashAccount || !zcashMoveSource}
@@ -714,6 +742,7 @@ function ShieldProviderContent() {
                 filterDomain="shield"
                 shieldProvider={provider}
                 confidentialIntentsOnly={provider === 'near-confidential'}
+                localPagination={provider === 'near-confidential'}
                 showToolbar={false}
                 compact
                 heading={undefined}
@@ -747,7 +776,10 @@ function ShieldProviderContent() {
                 assetId={selectedNearEntry.asset.assetId ?? selectedNearEntry.asset.protocolAssetId}
                 symbol={selectedNearEntry.asset.symbol ?? '?'}
                 icon={selectedNearEntry.asset.iconUrl}
-                blockchain={selectedNearManagedAsset?.blockchain}
+                blockchain={
+                  getNearConfidentialIconChain(selectedNearEntry.asset) ??
+                  selectedNearManagedAsset?.blockchain
+                }
                 size={32}
               />
               <div className="min-w-0 flex-1">

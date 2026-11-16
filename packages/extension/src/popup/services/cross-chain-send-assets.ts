@@ -1,8 +1,9 @@
-import { getEvmNetworkConfigs } from '@/config/networks'
+import { getEvmNetworkConfigs, getSolanaNetworkConfig } from '@/config/networks'
 import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import { getInitialProductChainDefinitions, parseAssetId } from '@/core/chains/registry'
 import type { Network } from '@/types'
+import { getSendRouteCostFromAmounts } from './send-route-cost'
 
 type SendAssetIdentity = Readonly<{
   chainId: string
@@ -166,6 +167,16 @@ export function getCrossChainSendTokenGroup(token: RheaSwapToken): CrossChainSen
   return null
 }
 
+export function getCrossChainSendWalletAssetId(token: RheaSwapToken): string | null {
+  const group = getCrossChainSendTokenGroup(token)
+  if (!group) return null
+  const chainId =
+    token.rheaChainId === 'solana'
+      ? getSolanaNetworkConfig('mainnet').chainId
+      : `eip155:${token.rheaChainId}`
+  return getCrossChainSendDestinationAssetId(chainId, group)
+}
+
 export function isCrossChainSendDestination(
   source: RheaSwapToken | null,
   destination: RheaSwapToken,
@@ -180,6 +191,32 @@ export function isCrossChainSendDestination(
   const group = getCrossChainSendTokenGroup(source)
   if (!group || getCrossChainSendTokenGroup(destination) !== group) return false
   return isCrossChainSendChainEnabled(destination, capabilities)
+}
+
+export function getCrossChainSendRouteCost(
+  input: Readonly<{
+    source: RheaSwapToken | null
+    destination: RheaSwapToken | null
+    amountInRaw: string
+    estimatedOutRaw: string
+  }>
+): string | null {
+  const { source, destination } = input
+  if (
+    !source ||
+    !destination ||
+    source.rheaChainId === destination.rheaChainId ||
+    !getCrossChainSendTokenGroup(source) ||
+    getCrossChainSendTokenGroup(source) !== getCrossChainSendTokenGroup(destination)
+  )
+    return null
+  return getSendRouteCostFromAmounts({
+    amountInRaw: input.amountInRaw,
+    estimatedOutRaw: input.estimatedOutRaw,
+    decimals: source.decimals,
+    outputDecimals: destination.decimals,
+    clampNegative: true
+  })
 }
 
 export function filterCrossChainSendDestinations(

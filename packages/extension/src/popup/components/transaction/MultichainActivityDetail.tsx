@@ -1,15 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
+import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '@iconify/react'
-import {
-  getActivityAssetEffects,
-  mapTransactionGraphToActivityItem,
-  type ActivityItem
-} from '@/core/activity'
+import { mapTransactionGraphToActivityItem, type ActivityItem } from '@/core/activity'
 import { getBitcoinNetworkConfig } from '@/config/networks'
 import { parseTransactionId } from '@/core/transactions/domain'
-import { getZcashChainId } from '@/core/chains/registry'
-import { formatSortAddress } from '@/lib/format'
 import { loadTransactions } from '@/lib/indexed-db'
 import { getTransactionRecoveryAction } from '@/lib/transaction-replacement'
 import { cn } from '@/lib/utils'
@@ -23,18 +16,12 @@ import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { bitcoinWalletClient } from '@/popup/services/bitcoin-wallet-client'
-import {
-  formatChainAddressExplorerUrl,
-  formatChainTransactionExplorerUrl
-} from '@/popup/services/chain-explorer'
+import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { useSettingsStore } from '@/store/settings-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { buildAccountKey } from '@/store/account-data-store'
 import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
-import {
-  buildActivityPresentationCatalog,
-  type ActivityChainMetadata
-} from '@/popup/services/activity-presentation-catalog'
+import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
 import {
   confidentialFundingClient,
   getConfidentialFundingPlanId
@@ -47,50 +34,38 @@ import {
 import { toast } from '@/store/toast-store'
 import { DetailRow } from '../common/DetailRow'
 import { AmountDisplay } from '../common/AmountDisplay'
-import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
-import { ChainIcon } from '../common/ChainIcon'
 import { AccountDomainBadge } from '../account/AccountDomainBadge'
 import { formatBaseUnitAmount } from '@/lib/number-format'
-import { TokenIcon } from '../tokens/TokenIcon'
 import { Button } from '../ui/button'
-import { ActivityInteractionIcon } from './ActivityInteractionIcon'
-import { TransactionProgressSteps } from './TransactionProgressSteps'
 import {
   getActivityApprovalDetails,
   getActivityInteractionPresentation
 } from './activity-interaction-adapters'
 import { resolveActivityChainId } from './activity-chain'
-import {
-  getActivityTransactionReferences,
-  isActivityTransactionHash
-} from '@/popup/services/activity-transaction-references'
+import { getActivityTransactionReferences } from '@/popup/services/activity-transaction-references'
 import {
   getActivityDetailTitle,
   getActivityRouteTitle,
   isDirectAccountMove,
   getClusterBatchStatusLabel,
   getClusterChildStatusLabel,
-  getActivityTransferRecipient,
   getActivitySwapSourceMethodLabel,
-  getActivityDisplayChanges,
   canCancelEvmActivity,
   getActivityFailureLabel,
   getActivityRecoveryAction,
-  getActivityProgressSteps,
   getActivityStatusPresentation,
   getActivitySwapPresentation,
   getClusterSettledDestination,
   buildActivityExecutionAddressModes,
-  isOwnedAccountTransfer,
-  isActivityRecoveryTransition,
-  resolveActivityChainMetadata
+  isActivityRecoveryTransition
 } from './multichain-activity-presentation'
-import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
+import { ActivityTransactionBody, buildActivityTransactionView } from './ActivityTransactionBody'
 import { resolveScopedZcashActivityTransaction } from '@/popup/services/zcash-activity-detail'
 import { InlineError } from '../common/InlineError'
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { selectActivityObservation } from '@/popup/services/activity-observation'
 
 interface MultichainActivityDetailProps {
   readonly item: ActivityItem
@@ -102,54 +77,6 @@ interface MultichainActivityDetailProps {
   readonly onContinueSwap?: (transactionId: string) => void
 }
 
-function TransactionReference({
-  value,
-  url,
-  compact = false
-}: {
-  readonly value: string
-  readonly url: string
-  readonly compact?: boolean
-}) {
-  const content = <span className="font-mono">{formatSortAddress(value)}</span>
-  return url ? (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={value}
-      className={cn(
-        'cursor-pointer break-all text-primary hover:underline',
-        compact ? 'text-xs' : 'text-sm'
-      )}
-    >
-      {content}
-    </a>
-  ) : (
-    <span title={value} className={cn('break-all', compact ? 'text-xs' : 'text-sm')}>
-      {content}
-    </span>
-  )
-}
-
-function chainDisplayName(
-  chainId: string,
-  metadata: ReadonlyMap<string, ActivityChainMetadata>
-): string {
-  if (chainId === 'near:mainnet') return 'NEAR'
-  return resolveActivityChainMetadata(chainId, metadata)?.displayName ?? 'Unknown network'
-}
-
-function SwapChainIcon({ alias }: { readonly alias?: string }) {
-  return alias ? (
-    <ChainIcon chain={alias} width={18} height={18} className="size-[18px]" showTooltip={false} />
-  ) : (
-    <div className="flex size-[18px] items-center justify-center rounded-full bg-foreground/8">
-      <Icon icon="lucide:network" width={13} height={13} />
-    </div>
-  )
-}
-
 export function MultichainActivityDetail({
   item,
   network,
@@ -159,7 +86,8 @@ export function MultichainActivityDetail({
   onClose,
   onContinueSwap
 }: MultichainActivityDetailProps) {
-  const [visibleItem, setVisibleItem] = useState(item)
+  const [observedItem, setVisibleItem] = useState(item)
+  const visibleItem = selectActivityObservation(observedItem, item)
   const [retrying, setRetrying] = useState(false)
   const [retryOutcome, setRetryOutcome] = useState<'broadcast' | 'pending' | 'failed' | null>(null)
   const [privateFundingNeedsAuth, setPrivateFundingNeedsAuth] = useState(false)
@@ -170,8 +98,6 @@ export function MultichainActivityDetail({
   const [zcashRecord, setZcashRecord] = useState<Transaction | null>(null)
   const [swapApprovalAvailable, setSwapApprovalAvailable] = useState(false)
   const { activeAccount: activeSwapAccount } = useActiveAccountNetworks()
-  const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
-  const [privateCopyAddress, setPrivateCopyAddress] = useState<string | null>(null)
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const {
     userAssets: userEvmAssets,
@@ -228,7 +154,7 @@ export function MultichainActivityDetail({
   }, [currentAccountId, currentNetwork, currentWalletId, item, network])
 
   useEffect(() => {
-    setVisibleItem(current => (item.updatedAt >= current.updatedAt ? item : current))
+    setVisibleItem(current => selectActivityObservation(current, item))
   }, [item])
 
   useEffect(() => {
@@ -304,7 +230,7 @@ export function MultichainActivityDetail({
             next?.scope.keyDomainId === item.scope.keyDomainId &&
             next.scope.accountId === item.scope.accountId
           ) {
-            setVisibleItem(current => (next.updatedAt >= current.updatedAt ? next : current))
+            setVisibleItem(current => selectActivityObservation(current, next))
           }
         })
         .catch(() => {})
@@ -367,7 +293,7 @@ export function MultichainActivityDetail({
           next?.scope.keyDomainId === item.scope.keyDomainId &&
           next.scope.accountId === item.scope.accountId
         ) {
-          setVisibleItem(current => (next.updatedAt >= current.updatedAt ? next : current))
+          setVisibleItem(current => selectActivityObservation(current, next))
         }
       } catch {
         // Retry while the transaction is still pending.
@@ -432,27 +358,9 @@ export function MultichainActivityDetail({
     executionAddressModes,
     getClusterSettledDestination(visibleItem, activeConfidentialPlan)
   )
-  const transferRecipient = getActivityTransferRecipient(visibleItem)
   const swapSourceMethod = getActivitySwapSourceMethodLabel(visibleItem, swap?.source?.symbol)
-  const assetEffects =
-    visibleItem.kind === 'transfer' && visibleItem.snapshot?.direction === 'self'
-      ? undefined
-      : getActivityAssetEffects(visibleItem)
-  const assetChanges = getActivityDisplayChanges(visibleItem, assetMetadata)
-  const displayedChanges = assetChanges.filter(change => !change.isRaw).slice(0, 2)
-
   const amount = visibleItem.snapshot?.primaryAmount
   const asset = amount ? assetMetadata.get(amount.assetId) : undefined
-  const displayMetadata = asset?.metadata ?? amount?.metadata
-  const symbol = displayMetadata?.symbol ?? 'Asset'
-  const formattedAmount =
-    amount && displayMetadata
-      ? formatBaseUnitAmount(amount.amountRaw, displayMetadata.decimals)
-      : null
-  const swapSourceAmount = visibleItem.snapshot?.primaryAmount
-  const swapSourceDecimals = swapSourceAmount
-    ? (assetMetadata.get(swapSourceAmount.assetId)?.metadata ?? swapSourceAmount.metadata)?.decimals
-    : undefined
   const direction = visibleItem.snapshot?.direction
   const isShieldMove = Boolean(
     visibleItem.snapshot?.shield &&
@@ -460,11 +368,6 @@ export function MultichainActivityDetail({
     visibleItem.snapshot.shield.operation !== 'swap'
   )
   const isMove = isShieldMove || (swap !== null && isDirectAccountMove(visibleItem, swap))
-  const isShieldSend =
-    visibleItem.snapshot?.shield?.operation === 'withdraw' && direction === 'outgoing'
-  const isIncoming = visibleItem.kind === 'receive' || direction === 'incoming'
-  const sign = isIncoming ? '+' : direction === 'outgoing' ? '−' : ''
-  const displayedSign = visibleItem.failureCode === 'refunded' ? '+' : sign
   const status = getActivityStatusPresentation(visibleItem)
   const primaryOnchainSegment = visibleItem.segments.find(
     segment => segment.target.kind === 'onchain'
@@ -488,17 +391,6 @@ export function MultichainActivityDetail({
   const title = swap
     ? getActivityRouteTitle(visibleItem, swap)
     : getActivityDetailTitle(visibleItem, interaction?.title)
-  const sameNetworkAccountTransfer =
-    swap && isOwnedAccountTransfer(swap) && swap.sourceNetwork === swap.destinationNetwork
-  const primaryNetworkName = primaryChainId
-    ? (resolveActivityChainMetadata(primaryChainId, chainMetadata)?.displayName ??
-      interaction?.fallbackNetworkName ??
-      'Unknown network')
-    : 'Wallet'
-  const primaryChainIconAlias = primaryChainId
-    ? (resolveActivityChainMetadata(primaryChainId, chainMetadata)?.iconAlias ??
-      interaction?.fallbackChainIconAlias)
-    : interaction?.fallbackChainIconAlias
   const fee = visibleItem.snapshot?.feeLimit
   const feeAsset = fee ? assetMetadata.get(fee.assetId) : undefined
   const recoveryAction = getActivityRecoveryAction(
@@ -513,15 +405,6 @@ export function MultichainActivityDetail({
   const explorerUrl = explorerReference?.chainId
     ? formatChainTransactionExplorerUrl(explorerReference.chainId, explorerReference.hash, network)
     : ''
-  const sender = visibleItem.snapshot?.sender
-  const senderExplorerUrl = sender
-    ? formatChainAddressExplorerUrl(sender.chainId, sender.address, network)
-    : ''
-  const usesShieldedPoolSource =
-    visibleItem.source === 'zcash-v1' &&
-    visibleItem.kind === 'transfer' &&
-    direction === 'outgoing' &&
-    visibleItem.snapshot?.sender === undefined
   const needsSubmissionCheck =
     activeConfidentialPlan !== null && needsConfidentialSubmissionCheck(activeConfidentialPlan)
   const canCheckSubmission =
@@ -770,76 +653,25 @@ export function MultichainActivityDetail({
     }
   }
 
-  const progressReferences = new Map<string, ReactNode>()
-  if (isCrossChain) {
-    const originHash = transactionReferences.find(candidate =>
-      visibleItem.segments.some(segment => segment.id === candidate.id && segment.role === 'origin')
-    )?.hash
-    for (const segment of visibleItem.segments) {
-      const reference = transactionReferences.find(candidate => candidate.id === segment.id)
-      const distinctReference =
-        segment.role === 'relay' && reference?.hash === originHash ? undefined : reference
-      const unverifiedReplacementHash = segment.evidence?.replacementTransactionHash
-      const chainId = segment.target.kind === 'onchain' ? segment.target.chainId : null
-      const replacementHash =
-        unverifiedReplacementHash && isActivityTransactionHash(unverifiedReplacementHash, chainId)
-          ? unverifiedReplacementHash
-          : undefined
-      if (!distinctReference && !replacementHash) continue
-      progressReferences.set(
-        segment.id,
-        <div className="space-y-1">
-          {distinctReference && (
-            <TransactionReference
-              value={distinctReference.hash}
-              url={
-                distinctReference.chainId
-                  ? formatChainTransactionExplorerUrl(
-                      distinctReference.chainId,
-                      distinctReference.hash,
-                      network
-                    )
-                  : ''
-              }
-              compact
-            />
-          )}
-          {replacementHash && (
-            <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className="text-muted">Replacement</span>
-              <TransactionReference
-                value={replacementHash}
-                url={
-                  chainId
-                    ? formatChainTransactionExplorerUrl(chainId, replacementHash, network)
-                    : ''
-                }
-                compact
-              />
-            </div>
-          )}
-        </div>
-      )
-    }
-  }
-
-  const statusRow = (
-    <DetailRow label="Status">
-      <span
-        data-activity-status-value
-        className={cn(
-          'text-sm',
-          getTransactionStatusToneClassName(needsSubmissionCheck ? 'warning' : status.tone)
-        )}
-      >
-        {needsSubmissionCheck
-          ? 'Needs attention'
-          : activeConfidentialPlan?.operation === 'cluster'
-            ? getClusterBatchStatusLabel(activeConfidentialPlan)
-            : status.label}
-      </span>
-    </DetailRow>
-  )
+  const sharedView = buildActivityTransactionView({
+    item: visibleItem,
+    network,
+    assetMetadata,
+    chainMetadata,
+    executionAddressModes,
+    settledDestination: getClusterSettledDestination(visibleItem, activeConfidentialPlan),
+    refunded: activeConfidentialPlan?.phase === 'refunded',
+    replacementHash: scopedZcashRecord?.replacedByTxHash,
+    statusLabel: needsSubmissionCheck
+      ? 'Needs attention'
+      : activeConfidentialPlan?.operation === 'cluster'
+        ? getClusterBatchStatusLabel(activeConfidentialPlan)
+        : undefined,
+    statusTone: needsSubmissionCheck ? 'warning' : undefined,
+    fallback: scopedZcashRecord?.fee
+      ? { fee: { value: scopedZcashRecord.fee, symbol: 'ZEC' } }
+      : undefined
+  })
 
   return (
     <article
@@ -851,216 +683,56 @@ export function MultichainActivityDetail({
         {title}
       </h2>
 
-      {swap ? (
-        <div className="flex flex-col items-center py-7 text-center" data-activity-swap-detail>
-          <ActivityRouteTokenIcons route={swap} size="detail" />
-          {swap.isExternalDeposit ? (
-            <div className="mt-4 max-w-full">
-              <p className="text-sm text-muted">
-                {swap.destinationIsSettled ? 'Received' : 'Expected'}
-              </p>
-              <div
-                className={cn(
-                  'mt-1 break-all font-sans text-3xl font-bold tabular-nums',
-                  swap.destinationIsSettled && 'text-primary'
-                )}
-              >
-                {swap.destination ? (
-                  <AmountDisplay
-                    value={swap.destination.exact}
-                    prefix="+"
-                    symbol={swap.destination.symbol}
-                  />
-                ) : (
-                  '—'
-                )}
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 max-w-full break-all font-sans text-3xl font-bold tabular-nums">
-                {swap.source && swapSourceAmount && swapSourceDecimals !== undefined ? (
-                  <AmountDisplay
-                    value={formatBaseUnitAmount(swapSourceAmount.amountRaw, swapSourceDecimals)}
-                    prefix="−"
-                    symbol={swap.source.symbol}
-                  />
-                ) : (
-                  '—'
-                )}
-              </div>
-              {swap.destination && (
-                <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
-                  {isShieldSend
-                    ? 'Recipient receives'
-                    : swap.destinationIsSettled
-                      ? 'Received'
-                      : 'Expected'}{' '}
-                  <AmountDisplay
-                    value={swap.destination.exact}
-                    prefix={isShieldSend ? '' : '+'}
-                    symbol={swap.destination.symbol}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-col items-center py-8 text-center">
-          <div className="relative mb-4">
-            {interaction ? (
-              <ActivityInteractionIcon
-                presentation={interaction}
-                chainIconAlias={primaryChainIconAlias}
-                size="hero"
-              />
-            ) : displayMetadata && amount ? (
-              <TokenIcon
-                assetId={amount.assetId}
-                symbol={symbol}
-                icon={displayMetadata.iconUrl}
-                size="xl"
-                showBadge
-                badgeType={isIncoming ? 'receive' : 'send'}
-              />
-            ) : (
-              <div className="flex size-16 items-center justify-center rounded-full bg-card">
-                <Icon
-                  icon={direction === 'incoming' ? 'radix-icons:arrow-bottom-left' : 'lucide:send'}
-                  width={26}
-                  height={26}
-                />
-              </div>
-            )}
-          </div>
-          {assetEffects && displayedChanges.length > 0 ? (
-            <div className="w-full space-y-1" data-activity-asset-changes>
-              {displayedChanges.map((change, index) => (
-                <div
-                  key={change.assetId}
-                  className={cn(
-                    'max-w-full font-sans tabular-nums',
-                    index === 0 ? 'text-3xl font-bold' : 'text-sm',
-                    change.direction === 'incoming' && 'text-primary'
-                  )}
-                >
-                  <AmountDisplay
-                    value={change.value}
-                    prefix={change.direction === 'incoming' ? '+' : '−'}
-                    symbol={change.symbol}
-                    className="[&>span:first-child]:truncate [&>span:last-child]:max-w-24 [&>span:last-child]:truncate"
-                  />
-                </div>
-              ))}
-            </div>
-          ) : formattedAmount !== null ? (
-            <div className="max-w-full break-all font-sans text-3xl font-bold tabular-nums">
-              <AmountDisplay value={formattedAmount} prefix={displayedSign} symbol={symbol} />
-            </div>
-          ) : assetEffects || interaction ? null : (
-            <p className="max-w-full break-all font-sans text-3xl font-bold">—</p>
-          )}
-        </div>
-      )}
-
+      <ActivityTransactionBody view={sharedView} showDate />
       <div className="mb-6 space-y-4">
-        {swap ? (
-          <>
-            {sameNetworkAccountTransfer ? (
-              <DetailRow label="Network">
-                <span className="flex items-center justify-end gap-1.5 text-sm">
-                  <SwapChainIcon alias={swap.sourceChainIconAlias} />
-                  {swap.sourceNetwork}
-                </span>
-              </DetailRow>
-            ) : (
-              <DetailRow label="Route">
-                <span className="flex min-w-0 max-w-[calc(100vw-110px)] items-center justify-end gap-1 whitespace-nowrap text-right text-xs">
-                  <SwapChainIcon alias={swap.sourceChainIconAlias} />
-                  <span className="min-w-0 truncate" title={swap.sourceNetwork}>
-                    {swap.sourceNetwork}
-                  </span>
-                  <Icon
-                    icon="lucide:arrow-right"
-                    width={13}
-                    height={13}
-                    className="shrink-0 text-muted"
+        {swap?.sourceAccountMode &&
+          swap.destinationAccountMode &&
+          swap.sourceAccountMode !== swap.destinationAccountMode && (
+            <DetailRow label={isMove ? 'Move direction' : 'Account'}>
+              <span className="flex items-center gap-1.5">
+                {swap.sourceAccountMode === 'External' ? (
+                  <span className="text-sm">External</span>
+                ) : (
+                  <AccountDomainBadge
+                    domain={
+                      swap.sourceAccountMode === 'Confidential'
+                        ? 'private'
+                        : swap.sourceAccountMode === 'Shield'
+                          ? 'shield'
+                          : 'public'
+                    }
                   />
-                  <SwapChainIcon alias={swap.destinationChainIconAlias} />
-                  <span className="min-w-0 truncate" title={swap.destinationNetwork}>
-                    {swap.destinationNetwork}
-                  </span>
-                </span>
-              </DetailRow>
-            )}
-            {swap.sourceAccountMode &&
-              swap.destinationAccountMode &&
-              swap.sourceAccountMode !== swap.destinationAccountMode && (
-                <DetailRow label={isMove ? 'Move direction' : 'Account'}>
-                  <span className="flex items-center gap-1.5">
-                    {swap.sourceAccountMode === 'External' ? (
-                      <span className="text-sm">External</span>
-                    ) : (
-                      <AccountDomainBadge
-                        domain={
-                          swap.sourceAccountMode === 'Confidential'
-                            ? 'private'
-                            : swap.sourceAccountMode === 'Shield'
-                              ? 'shield'
-                              : 'public'
-                        }
-                      />
-                    )}
-                    <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
-                    <AccountDomainBadge
-                      domain={
-                        swap.destinationAccountMode === 'Confidential'
-                          ? 'private'
-                          : swap.destinationAccountMode === 'Shield'
-                            ? 'shield'
-                            : 'public'
-                      }
-                    />
-                  </span>
-                </DetailRow>
-              )}
-          </>
-        ) : (
-          <>
-            <DetailRow label="Network">
-              <span className="max-w-[220px] text-right text-sm">{primaryNetworkName}</span>
+                )}
+                <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+                <AccountDomainBadge
+                  domain={
+                    swap.destinationAccountMode === 'Confidential'
+                      ? 'private'
+                      : swap.destinationAccountMode === 'Shield'
+                        ? 'shield'
+                        : 'public'
+                  }
+                />
+              </span>
             </DetailRow>
-            {primaryChainId?.startsWith('eip155:') && (
-              <DetailRow label="Account">
-                <span className="flex items-center gap-1.5">
-                  {accountRoute ? (
-                    <>
-                      <AccountDomainBadge domain={accountRoute[0]} />
-                      <Icon
-                        icon="lucide:arrow-right"
-                        width={13}
-                        height={13}
-                        className="text-muted"
-                      />
-                      <AccountDomainBadge domain={accountRoute[1]} />
-                    </>
-                  ) : (
-                    <AccountDomainBadge
-                      domain={visibleItem.accountMode === 'private' ? 'private' : 'public'}
-                    />
-                  )}
-                </span>
-              </DetailRow>
-            )}
-          </>
+          )}
+        {!swap && primaryChainId?.startsWith('eip155:') && (
+          <DetailRow label="Account">
+            <span className="flex items-center gap-1.5">
+              {accountRoute ? (
+                <>
+                  <AccountDomainBadge domain={accountRoute[0]} />
+                  <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
+                  <AccountDomainBadge domain={accountRoute[1]} />
+                </>
+              ) : (
+                <AccountDomainBadge
+                  domain={visibleItem.accountMode === 'private' ? 'private' : 'public'}
+                />
+              )}
+            </span>
+          </DetailRow>
         )}
-        <DetailRow label="Date">
-          <span className="max-w-[220px] text-right text-sm">
-            {new Date(visibleItem.createdAt).toLocaleString()}
-          </span>
-        </DetailRow>
-        {!isShieldMove && statusRow}
         {activeConfidentialPlan?.operation === 'cluster' && (
           <>
             <DetailRow label="Method">
@@ -1074,7 +746,7 @@ export function MultichainActivityDetail({
                 <div key={row.sequence} className="flex items-start justify-between gap-3 text-sm">
                   <span className="text-muted">Transfer {row.sequence + 1}</span>
                   <div className="min-w-0 text-right">
-                    <div>{getClusterChildStatusLabel(row)}</div>
+                    <div>{getClusterChildStatusLabel(row, activeConfidentialPlan)}</div>
                     {row.scheduledAt && Number.isSafeInteger(row.scheduledAt) && (
                       <div className="text-xs text-muted">
                         Earliest broadcast {new Date(row.scheduledAt).toLocaleString()}
@@ -1095,89 +767,6 @@ export function MultichainActivityDetail({
             </span>
           </DetailRow>
         )}
-        {(visibleItem.kind !== 'shield' || visibleItem.snapshot?.shield) &&
-          sender &&
-          visibleItem.snapshot?.shield?.sourceDomain !== 'shield' && (
-            <DetailRow label="From">
-              <span className="flex min-w-0 max-w-[220px] items-center gap-1.5">
-                {senderExplorerUrl ? (
-                  <a
-                    href={senderExplorerUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={sender.address}
-                    className="min-w-0 truncate font-mono text-sm text-primary hover:underline"
-                  >
-                    {formatSortAddress(sender.address)}
-                  </a>
-                ) : (
-                  <span className="min-w-0 truncate font-mono text-sm" title={sender.address}>
-                    {formatSortAddress(sender.address)}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  aria-label="Copy sender address"
-                  title="Copy sender address"
-                  className="shrink-0 text-muted hover:text-foreground"
-                  onClick={() => void copyToClipboard(sender.address, 'sender')}
-                >
-                  <CopyFeedbackIcon copied={isCopied('sender')} width={14} height={14} />
-                </button>
-              </span>
-            </DetailRow>
-          )}
-        {usesShieldedPoolSource && (
-          <DetailRow label="From">
-            <span className="text-sm">Shielded Pool</span>
-          </DetailRow>
-        )}
-        {visibleItem.snapshot?.shield?.sourceDomain === 'shield' && (
-          <DetailRow label="From">
-            <span className="text-sm">NEAR Confidential</span>
-          </DetailRow>
-        )}
-        {visibleItem.snapshot?.shield?.destinationDomain === 'shield' && (
-          <DetailRow label="To">
-            <span className="text-sm">NEAR Confidential</span>
-          </DetailRow>
-        )}
-        {swap?.recipientAddress ? (
-          <DetailRow label="To">
-            <span className="flex min-w-0 max-w-[220px] items-center gap-1.5">
-              <span className="min-w-0 truncate font-mono text-sm" title={swap.recipientAddress}>
-                {formatSortAddress(swap.recipientAddress)}
-              </span>
-              <button
-                type="button"
-                aria-label="Copy recipient address"
-                title="Copy recipient address"
-                className="shrink-0 text-muted hover:text-foreground"
-                onClick={() => {
-                  if (!swap.recipientAddress) return
-                  if (swap.destinationAccountMode === 'Confidential') {
-                    setPrivateCopyAddress(swap.recipientAddress)
-                  } else {
-                    void copyToClipboard(swap.recipientAddress)
-                  }
-                }}
-              >
-                <CopyFeedbackIcon copied={isCopied()} width={14} height={14} />
-              </button>
-            </span>
-          </DetailRow>
-        ) : visibleItem.kind !== 'shield' && !swap && transferRecipient ? (
-          <DetailRow label={interaction?.targetLabel ?? 'To'}>
-            <span className="inline-flex min-w-0 max-w-[220px] items-center gap-2">
-              {approval?.tokenSymbol && (
-                <span className="shrink-0 text-sm">{approval.tokenSymbol}</span>
-              )}
-              <span className="truncate font-mono text-sm" title={transferRecipient}>
-                {formatSortAddress(transferRecipient)}
-              </span>
-            </span>
-          </DetailRow>
-        ) : null}
         {visibleItem.snapshot?.evm?.methodSelector &&
           (approval?.methodLabel || swapSourceMethod) && (
             <DetailRow label="Method">
@@ -1186,79 +775,6 @@ export function MultichainActivityDetail({
               </span>
             </DetailRow>
           )}
-        {fee && feeAsset && (
-          <DetailRow label={visibleItem.snapshot?.evm ? 'Fee limit' : 'Network fee'}>
-            <AmountDisplay
-              value={formatBaseUnitAmount(fee.amountRaw, feeAsset.metadata.decimals)}
-              symbol={feeAsset.metadata.symbol}
-              profile="fee"
-              className="text-sm"
-            />
-          </DetailRow>
-        )}
-        {visibleItem.source === 'zcash-v1' && scopedZcashRecord?.fee && !fee && (
-          <DetailRow label="Network fee">
-            <AmountDisplay
-              value={scopedZcashRecord.fee}
-              symbol="ZEC"
-              profile="fee"
-              className="text-sm"
-            />
-          </DetailRow>
-        )}
-        {isShieldMove && statusRow}
-        {!isCrossChain &&
-          transactionReferences.map(reference => (
-            <DetailRow key={reference.id} label={reference.label}>
-              <TransactionReference
-                value={reference.hash}
-                url={
-                  reference.chainId
-                    ? formatChainTransactionExplorerUrl(reference.chainId, reference.hash, network)
-                    : ''
-                }
-              />
-            </DetailRow>
-          ))}
-        {visibleItem.segments.flatMap(segment => {
-          if (isCrossChain) return []
-          const unverifiedReplacementHash = segment.evidence?.replacementTransactionHash
-          const segmentChainId =
-            segment.target.kind === 'onchain' ? segment.target.chainId : undefined
-          const replacementTransactionHash =
-            unverifiedReplacementHash &&
-            isActivityTransactionHash(unverifiedReplacementHash, segmentChainId ?? null)
-              ? unverifiedReplacementHash
-              : undefined
-          const replacementUrl =
-            segmentChainId && replacementTransactionHash
-              ? formatChainTransactionExplorerUrl(
-                  segmentChainId,
-                  replacementTransactionHash,
-                  network
-                )
-              : ''
-
-          return [
-            replacementTransactionHash ? (
-              <DetailRow key={`${segment.id}:replacement`} label="Replacement Hash">
-                <TransactionReference value={replacementTransactionHash} url={replacementUrl} />
-              </DetailRow>
-            ) : null
-          ]
-        })}
-        {visibleItem.source === 'zcash-v1' && scopedZcashRecord?.replacedByTxHash && (
-          <DetailRow label="Replacement Hash">
-            <TransactionReference
-              value={scopedZcashRecord.replacedByTxHash}
-              url={formatChainTransactionExplorerUrl(
-                getZcashChainId(network),
-                scopedZcashRecord.replacedByTxHash,
-                network
-              )}
-            />
-          </DetailRow>
-        )}
         {visibleItem.failureCode && (
           <DetailRow label="Reason">
             <span
@@ -1297,30 +813,6 @@ export function MultichainActivityDetail({
           <Icon icon="lucide:arrow-up-right" width={15} height={15} />
         </a>
       )}
-      <CopyToast show={showToast} error={copyFailed} message="Address copied" />
-      <PrivateAddressWarningDialog
-        address={privateCopyAddress}
-        onClose={() => setPrivateCopyAddress(null)}
-        onConfirm={() => {
-          if (!privateCopyAddress) return
-          void copyToClipboard(privateCopyAddress, 'default', { toastOnSuccess: true }).then(
-            copied => {
-              if (copied) setPrivateCopyAddress(null)
-            }
-          )
-        }}
-      />
-
-      {isCrossChain && (
-        <TransactionProgressSteps
-          steps={getActivityProgressSteps(visibleItem, chainId =>
-            chainDisplayName(chainId, chainMetadata)
-          )}
-          referenceByStepId={progressReferences}
-          className="mt-5"
-        />
-      )}
-
       {retryOutcome === 'broadcast' && (
         <p role="status" className="mt-4 text-center text-xs text-muted">
           Broadcast submitted. Background monitoring will continue.

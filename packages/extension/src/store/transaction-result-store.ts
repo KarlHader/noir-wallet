@@ -3,6 +3,7 @@ import type { TransactionStep } from '@/popup/hooks/useTransaction'
 import type { SwapStatus } from '@/core/services/intents-api'
 import { mergeSwapProgressStatus } from '@/lib/swap-progress'
 import type { CreateAddressBookContactInput } from '@/core/address-book/address-book'
+import type { FundingSource, Network } from '@/types'
 import type {
   ConfidentialFundingPhase,
   ConfidentialFundingProgress
@@ -65,10 +66,27 @@ interface SwapTransactionResult {
 
 export type TransactionResultData = ZcashTransactionResult | SwapTransactionResult
 
+export interface ZcashSendRetryDraft {
+  readonly network: Network
+  readonly walletId: string
+  readonly accountId: string
+  readonly fundingSource: FundingSource
+  readonly toAddress: string
+  readonly amount: string
+  readonly memo: string
+  readonly maxSelected: boolean
+}
+
+interface ZcashSendRetry {
+  readonly path: string
+  readonly draft: ZcashSendRetryDraft
+}
+
 interface TransactionResultStore {
   data: TransactionResultData | null
   returnPath: string
-  setResult: (data: TransactionResultData, returnPath?: string) => void
+  retry: ZcashSendRetry | null
+  setResult: (data: TransactionResultData, returnPath?: string, retry?: ZcashSendRetry) => void
   updateStep: (
     step: TransactionStep,
     updates?: Partial<ZcashTransactionResult>,
@@ -96,9 +114,10 @@ interface TransactionResultStore {
 export const useTransactionResultStore = create<TransactionResultStore>()((set, get) => ({
   data: null,
   returnPath: '/',
+  retry: null,
 
-  setResult: (data, returnPath = '/') => {
-    set({ data, returnPath })
+  setResult: (data, returnPath = '/', retry) => {
+    set({ data, returnPath, retry: retry ?? null })
   },
 
   updateStep: (step, updates, accountKey, transactionId) => {
@@ -161,6 +180,6 @@ export const useTransactionResultStore = create<TransactionResultStore>()((set, 
   },
 
   clear: () => {
-    set({ data: null, returnPath: '/' })
+    set({ data: null, returnPath: '/', retry: null })
   }
 }))

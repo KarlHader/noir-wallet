@@ -5,7 +5,7 @@ import { SwapStatusDisplay } from '../../components/swap/SwapStatus'
 import { useTransactionResultStore } from '@/store/transaction-result-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
-import { useNavigate } from '../../provider/Router'
+import { useLocation, useNavigate } from '../../provider/Router'
 import { pollingSwapStatus } from '@/core/services/intents-api'
 import {
   getConfirmationFailureResultCopy,
@@ -47,28 +47,97 @@ import {
 } from '@/popup/services/transaction-progress'
 import { resolveZcashResultView } from '@/lib/transaction-result-model'
 import { getRheaSwapProgressStatus } from '@/lib/swap-progress'
+import { selectActivityObservation } from '@/popup/services/activity-observation'
+import { mapZcashV1TransactionToActivityItem } from '@/infrastructure/activity/zcash-v1-activity-source'
+import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
+import { buildActivityTransactionView } from '../../components/transaction/ActivityTransactionBody'
+import { useSettingsStore } from '@/store/settings-store'
+import { buildAccountKey } from '@/store/account-data-store'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import { parseAccountId } from '@/core/accounts/domain'
+import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 
 const RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000
 
 export function TransactionResultPage() {
-  const { navigate, goBack } = useNavigate()
+  const { navigate, goBack, goBackSteps } = useNavigate()
+  const location = useLocation()
   const { requestSpeedUp, speedUpSheet } = useSpeedUp()
-  const { data, returnPath, clear, updateStep, updateSwapStatus, updateConfidentialFunding } =
-    useTransactionResultStore()
+  const {
+    data,
+    returnPath,
+    retry,
+    clear,
+    updateStep,
+    updateSwapStatus,
+    updateConfidentialFunding
+  } = useTransactionResultStore()
   const dataRef = useRef(data)
   const leavingResultRef = useRef(false)
   const [destinationConfirmations, setDestinationConfirmations] = useState<number | null>(null)
   const [resumingConfidentialFunding, setResumingConfidentialFunding] = useState(false)
   const [originActivity, setOriginActivity] = useState<ActivityItem | null>(null)
+  const [originActivityNetwork, setOriginActivityNetwork] = useState<string | null>(null)
+  const originActivityRef = useRef<ActivityItem | null>(null)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
+  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const { activeAccount } = useActiveAccountNetworks()
+  const effectiveAccount = resolveEffectiveActiveAccountIdentity({
+    currentWalletId,
+    currentAccountId,
+    nativeAccount: activeAccount
+  })
+  const effectiveWalletId = effectiveAccount?.walletId ?? null
+  const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
   const wallets = useWalletStore(state => state.wallets)
   const resultAccountKey = data?.type === 'zcash' ? data.accountKey : undefined
   const resultTransactionId = data?.type === 'zcash' ? data.transactionId : undefined
   const resultTransaction = useAccountDataStore(state => {
-    if (!resultAccountKey || !resultTransactionId) return undefined
+    if (
+      !resultAccountKey ||
+      !resultTransactionId ||
+      !currentWalletId ||
+      !currentAccountId ||
+      resultAccountKey !== buildAccountKey(currentNetwork, currentWalletId, currentAccountId)
+    )
+      return undefined
     return state.getTransactions(resultAccountKey).find(tx => tx.id === resultTransactionId)
   })
+  const resultActivityView = (() => {
+    if (
+      !resultTransaction ||
+      !currentWalletId ||
+      !currentAccountId ||
+      resultTransaction.network !== currentNetwork
+    )
+      return null
+    try {
+      const item = mapZcashV1TransactionToActivityItem(resultTransaction, {
+        keyDomainId: parseKeyDomainId(currentWalletId),
+        accountId: parseAccountId(currentAccountId)
+      })
+      const catalog = buildActivityPresentationCatalog({
+        network: currentNetwork,
+        endpointSettings,
+        userEvmAssets: []
+      })
+      return buildActivityTransactionView({
+        item,
+        network: currentNetwork,
+        assetMetadata: catalog.assetMetadata,
+        chainMetadata: catalog.chainMetadata,
+        replacementHash: resultTransaction.replacedByTxHash,
+        fallback: resultTransaction.fee
+          ? { fee: { value: resultTransaction.fee, symbol: 'ZEC' } }
+          : undefined
+      })
+    } catch {
+      return null
+    }
+  })()
   const resultView =
     data?.type === 'zcash' ? resolveZcashResultView(data, resultTransaction) : undefined
   const resultStep = resultView?.step ?? 'idle'
@@ -81,6 +150,14 @@ export function TransactionResultPage() {
       .find(transaction => transaction.id === swapZcashTransactionId)
   })
   const activityTransactionId = data?.type === 'swap' ? data.activityTransactionId : undefined
+  const scopedOriginActivity =
+    originActivity &&
+    originActivityNetwork === currentNetwork &&
+    originActivity.id === activityTransactionId &&
+    originActivity.scope.keyDomainId === effectiveWalletId &&
+    originActivity.scope.accountId === effectiveAccountId
+      ? originActivity
+      : null
   const sourceExecutionMode = data?.type === 'swap' ? (data.sourceExecutionMode ?? 'main') : 'main'
   const recoveryAction = getTransactionRecoveryAction(resultTransaction)
   const snapshotRecoveryTarget =
@@ -128,16 +205,42 @@ export function TransactionResultPage() {
 
   useEffect(() => {
     setOriginActivity(null)
-    if (!activityTransactionId) return
+    setOriginActivityNetwork(null)
+    originActivityRef.current = null
+    if (!activityTransactionId || !effectiveWalletId || !effectiveAccountId) return
     let active = true
     const refresh = () => {
       void evmWalletClient
         .getActivity('read', sourceExecutionMode)
         .then(model => {
           if (!active) return
-          const item = model?.items.find(candidate => candidate.id === activityTransactionId)
-          if (!item) return
-          setOriginActivity(item)
+          const walletState = useWalletStore.getState()
+          const latestAccount = resolveEffectiveActiveAccountIdentity({
+            currentWalletId: walletState.currentWalletId,
+            currentAccountId: walletState.currentAccountId,
+            nativeAccount: activeAccount
+          })
+          const item = model?.items.find(
+            candidate =>
+              candidate.id === activityTransactionId &&
+              candidate.scope.keyDomainId === effectiveWalletId &&
+              candidate.scope.accountId === effectiveAccountId
+          )
+          if (
+            !item ||
+            model?.scope.keyDomainId !== effectiveWalletId ||
+            model.scope.accountId !== effectiveAccountId ||
+            walletState.currentNetwork !== currentNetwork ||
+            latestAccount?.walletId !== effectiveWalletId ||
+            latestAccount.accountId !== effectiveAccountId
+          )
+            return
+          const latestItem = originActivityRef.current
+            ? selectActivityObservation(originActivityRef.current, item)
+            : item
+          originActivityRef.current = latestItem
+          setOriginActivity(latestItem)
+          setOriginActivityNetwork(currentNetwork)
           const current = useTransactionResultStore.getState().data
           if (
             current?.type === 'swap' &&
@@ -146,7 +249,7 @@ export function TransactionResultPage() {
           ) {
             updateSwapStatus(
               getRheaSwapProgressStatus(
-                item.segments,
+                latestItem.segments,
                 current.status ?? { status: 'PENDING_DEPOSIT' }
               )
             )
@@ -174,7 +277,15 @@ export function TransactionResultPage() {
       clearInterval(timer)
       chrome.runtime.onMessage.removeListener(listener)
     }
-  }, [activityTransactionId, sourceExecutionMode, updateSwapStatus])
+  }, [
+    activeAccount,
+    activityTransactionId,
+    effectiveAccountId,
+    currentNetwork,
+    effectiveWalletId,
+    sourceExecutionMode,
+    updateSwapStatus
+  ])
 
   useEffect(() => {
     if (!data && !leavingResultRef.current) {
@@ -393,7 +504,31 @@ export function TransactionResultPage() {
       (resultStep === 'submitted' || resultStep === 'confirming' || resultStep === 'success')
         ? data.saveRecipient
         : null
-    navigate(path, { replace: true })
+    const sendOriginHistory = (
+      location.state as {
+        sendOriginHistory?: {
+          originPath?: unknown
+          network?: unknown
+          walletId?: unknown
+          accountId?: unknown
+          entryKey?: unknown
+          sendKey?: unknown
+        }
+      } | null
+    )?.sendOriginHistory
+    const returnToPreviousEntry =
+      data.type === 'zcash' &&
+      path === returnPath &&
+      sendOriginHistory?.originPath === returnPath &&
+      sendOriginHistory.network === currentNetwork &&
+      sendOriginHistory.walletId === currentWalletId &&
+      sendOriginHistory.accountId === currentAccountId &&
+      typeof sendOriginHistory.entryKey === 'string' &&
+      sendOriginHistory.entryKey.length > 0 &&
+      typeof sendOriginHistory.sendKey === 'string' &&
+      sendOriginHistory.sendKey.length > 0
+    if (returnToPreviousEntry) goBackSteps(2)
+    else navigate(path, { replace: true })
     clear()
     if (saveRecipient) void offerSaveRecipient(saveRecipient)
   }
@@ -410,9 +545,21 @@ export function TransactionResultPage() {
   }
 
   const handleRetry = () => {
+    const retrySend =
+      data?.type === 'zcash' &&
+      retry &&
+      retry.draft.network === currentNetwork &&
+      retry.draft.walletId === currentWalletId &&
+      retry.draft.accountId === currentAccountId
+        ? retry
+        : null
     leavingResultRef.current = true
     clear()
-    goBack()
+    if (retrySend)
+      navigate(retrySend.path, { replace: true, state: { retryDraft: retrySend.draft } })
+    else if (data?.type === 'zcash' && retry)
+      navigate(retry.draft.fundingSource === 'shielded' ? '/shield-funds' : '/', { replace: true })
+    else goBack()
   }
 
   const handleSpeedUp = () => {
@@ -562,6 +709,7 @@ export function TransactionResultPage() {
       <div className="page-container">
         <PageHeader title="" />
         <StandardTransactionResult
+          activityView={resultActivityView}
           step={resultStep}
           operation={
             data.operation ??
@@ -609,21 +757,20 @@ export function TransactionResultPage() {
           originChain={data.originChain}
           originTxHash={
             data.originTxHash ??
-            (originActivity && originActivity.id === data.activityTransactionId
-              ? getActivityOriginHash(originActivity)
-              : undefined)
+            (scopedOriginActivity ? getActivityOriginHash(scopedOriginActivity) : undefined)
           }
           originStatus={
             swapZcashTransaction
               ? getZcashIntentsOriginStatus(swapZcashTransaction)
-              : originActivity && originActivity.id === data.activityTransactionId
-                ? getActivityOriginStatus(originActivity)
+              : scopedOriginActivity
+                ? getActivityOriginStatus(scopedOriginActivity)
                 : undefined
           }
           originConfirmations={swapZcashTransaction?.confirmations}
           signedOrder={data.signedOrder}
           fee={data.fee}
           confidentialFunding={data.confidentialFunding}
+          activityItem={scopedOriginActivity}
           onResumeConfidentialFunding={handleResumeConfidentialFunding}
           resumingConfidentialFunding={resumingConfidentialFunding}
           onClose={handleDone}

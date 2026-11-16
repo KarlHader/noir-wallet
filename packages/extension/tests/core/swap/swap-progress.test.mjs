@@ -74,6 +74,33 @@ test('binds a Zcash Swap activity before broadcast and ignores callbacks for a d
   assert.equal(useTransactionResultStore.getState().data, null)
 })
 
+test('keeps Zcash retry input separate from Done and clears it for another result', () => {
+  const store = useTransactionResultStore.getState()
+  const result = { type: 'zcash', operation: 'send', step: 'failed', amount: '1' }
+  const retry = {
+    path: '/send/zcash?from=shielded',
+    draft: {
+      network: 'mainnet',
+      walletId: 'wallet',
+      accountId: 'account',
+      fundingSource: 'shielded',
+      toAddress: 'recipient',
+      amount: '1',
+      memo: 'draft memo',
+      maxSelected: false
+    }
+  }
+  store.setResult(result, '/shield-funds', retry)
+  assert.equal(useTransactionResultStore.getState().returnPath, '/shield-funds')
+  assert.deepEqual(useTransactionResultStore.getState().retry, retry)
+
+  store.setResult({ ...result, amount: '2' }, '/')
+  assert.equal(useTransactionResultStore.getState().retry, null)
+  store.setResult(result, '/shield-funds', retry)
+  store.clear()
+  assert.equal(useTransactionResultStore.getState().retry, null)
+})
+
 test('RHEA completion recovers both explorer hashes before origin confirmation', () => {
   const result = getRheaSwapProgressStatus(
     [

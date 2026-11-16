@@ -193,6 +193,45 @@ const isEvmChainId: RuntimeFieldValidator = value =>
   typeof value === 'string' && /^eip155:(0|[1-9][0-9]{0,19})$/.test(value)
 const isScopedAccountId: RuntimeFieldValidator = value =>
   typeof value === 'string' && value.length > 0 && value.length <= 256
+const isNativeZecIntentsQuoteId: RuntimeFieldValidator = value =>
+  typeof value === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(value)
+const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
+  if (!isRuntimeRecord(value)) return false
+  const fields = [
+    'network',
+    'walletId',
+    'accountId',
+    'amountZats',
+    'destination',
+    'refundAddress',
+    'slippageBps',
+    ...(value.requestId === undefined ? [] : ['requestId'])
+  ]
+  if (!hasExactRuntimeKeys(value, fields) || !isRuntimeRecord(value.destination)) return false
+  const destination = value.destination
+  return (
+    value.network === 'mainnet' &&
+    isNativeZecIntentsQuoteId(value.walletId) &&
+    isNativeZecIntentsQuoteId(value.accountId) &&
+    typeof value.amountZats === 'string' &&
+    /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
+    hasExactRuntimeKeys(destination, ['chainId', 'assetId', 'protocolAssetId', 'recipient']) &&
+    [destination.chainId, destination.assetId, destination.protocolAssetId].every(
+      field => typeof field === 'string' && field.length > 0 && field.length <= 256
+    ) &&
+    typeof destination.recipient === 'string' &&
+    destination.recipient.length > 0 &&
+    destination.recipient.length <= 1024 &&
+    typeof value.refundAddress === 'string' &&
+    value.refundAddress.length > 0 &&
+    value.refundAddress.length <= 512 &&
+    typeof value.slippageBps === 'number' &&
+    Number.isSafeInteger(value.slippageBps) &&
+    value.slippageBps >= 0 &&
+    value.slippageBps <= 10_000 &&
+    (value.requestId === undefined || isNativeZecIntentsQuoteId(value.requestId))
+  )
+}
 const isEvmWeiFeeCap: RuntimeFieldValidator = value =>
   typeof value === 'string' &&
   /^(?:0|[1-9][0-9]{0,77})$/.test(value) &&
@@ -654,6 +693,9 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_RHEA_SWAP_ORDER_STATUS: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   START_RHEA_SWAP_MONITOR: { required: { transaction: isRecord } },
   DISCARD_RHEA_SWAP: { required: { quoteHandle: isRheaSwapQuoteHandle } },
+  PREPARE_NATIVE_ZEC_INTENTS_SWAP: { required: { request: isNativeZecIntentsSwapRequest } },
+  GET_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
+  CANCEL_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
   PREPARE_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
   PREVIEW_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
   CREATE_EXTERNAL_SHIELD_DEPOSIT: { required: { request: isRecord } },
@@ -1078,6 +1120,9 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     GET_RHEA_SWAP_ORDER_STATUS: ['extension-page'],
     START_RHEA_SWAP_MONITOR: ['extension-page'],
     DISCARD_RHEA_SWAP: ['extension-page'],
+    PREPARE_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
+    GET_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
+    CANCEL_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
     PREPARE_CONFIDENTIAL_FUNDING: ['extension-page'],
     PREVIEW_CONFIDENTIAL_FUNDING: ['extension-page'],
     CREATE_EXTERNAL_SHIELD_DEPOSIT: ['extension-page'],

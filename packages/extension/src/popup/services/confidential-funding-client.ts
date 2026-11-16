@@ -16,6 +16,10 @@ import type { Network } from '@/types'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
+export type ConfidentialBalanceErrorCode =
+  | 'authorization_required'
+  | 'account_unavailable'
+  | 'balance_unavailable'
 export type ExternalShieldDeposit = Omit<StoredExternalShieldDeposit, 'quote'>
 export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 
@@ -116,6 +120,12 @@ function unwrap(value: unknown): unknown {
   if (!isRecord(value)) throw new Error('Confidential funding returned an invalid response')
   if (typeof value.error === 'string') {
     const error = new Error(value.error)
+    if (
+      value.balanceErrorCode === 'authorization_required' ||
+      value.balanceErrorCode === 'account_unavailable' ||
+      value.balanceErrorCode === 'balance_unavailable'
+    )
+      Object.assign(error, { balanceErrorCode: value.balanceErrorCode })
     if (
       ['request', 'account', 'quote', 'authorization', 'storage'].includes(
         String(value.depositStage)

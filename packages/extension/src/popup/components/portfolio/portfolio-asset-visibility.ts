@@ -15,8 +15,7 @@ export function isAssetVisibleInAssetView(
   options: { readonly includeZeroBalanceNativeAssets?: boolean } = {}
 ): boolean {
   if (BigInt(asset.balance.totalRaw) !== 0n) return true
-  if (asset.source === 'user-added') return true
-  if (asset.asset.kind !== 'native') return false
+  if (asset.asset.kind === 'token') return true
   if (options.includeZeroBalanceNativeAssets) return true
 
   const symbol = asset.metadata.symbol.toUpperCase()

@@ -4,6 +4,7 @@ import {
 } from '@/popup/components/tokens/token-balance-format'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getAssetDomainRaw } from '@/popup/services/asset-domains'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
@@ -47,6 +48,28 @@ export interface SendAssetOrderCandidate {
   readonly key: string
   readonly amount: string | null
   readonly priceUsd: string | number | null
+}
+
+const SEND_CHAIN_ORDER = [
+  'zcash',
+  'eip155:1',
+  'eip155:56',
+  'eip155:8453',
+  'eip155:42161',
+  'eip155:137'
+]
+
+export function sortSendNetworks<T>(
+  options: readonly T[],
+  chain: (option: T) => Readonly<{ id: string; name: string }>
+): T[] {
+  const rank = (option: T): number => {
+    const { id, name } = chain(option)
+    const normalized = id === 'zec' || name.toLowerCase().startsWith('zcash') ? 'zcash' : id
+    const index = SEND_CHAIN_ORDER.indexOf(normalized)
+    return index === -1 ? SEND_CHAIN_ORDER.length : index
+  }
+  return [...options].sort((left, right) => rank(left) - rank(right))
 }
 
 interface RankedSendAsset<T extends SendAssetOrderCandidate> {
@@ -124,7 +147,10 @@ export function buildSendAssetSelectionModel(input: {
       )
     })
   }
-  const selectableOptions = [...networkOptions].map(([id, option]) => ({ id, ...option }))
+  const selectableOptions = sortSendNetworks(
+    [...networkOptions].map(([id, option]) => ({ id, ...option })),
+    option => ({ id: option.id, name: option.label })
+  )
   const options: readonly SendAssetNetworkOption[] = [
     ...selectableOptions,
     ...deferredChainChoices(enabledFlags).map(option => ({
@@ -139,45 +165,64 @@ export function buildSendAssetSelectionModel(input: {
   )
   const selectedNetwork = selectedNetworkOption ? input.selectedNetwork : 'all'
   const query = input.searchQuery.trim().toLowerCase()
+  const zcashRank = rankTokenSearchFields(
+    { symbol: 'ZEC', name: 'Zcash', searchTerms: ['Zcash Testnet'] },
+    query
+  )
   const zcashMatches =
     input.zcashEnabled &&
     isSelectableChainFamily('zcash', enabledFlags) &&
     (selectedNetwork === 'all' || selectedNetwork === 'zcash') &&
-    (!query || 'zec'.includes(query) || 'zcash'.includes(query) || 'zcash testnet'.includes(query))
+    zcashRank < 99
+  const assetRank = (entry: SendAsset) =>
+    rankTokenSearchFields(
+      {
+        symbol: entry.asset.metadata.symbol,
+        name: entry.asset.metadata.name,
+        contractAddress:
+          entry.asset.asset.namespace === 'erc20' ? entry.asset.asset.reference : null,
+        assetId: entry.asset.asset.id,
+        searchTerms: [entry.chain.chain.displayName]
+      },
+      query
+    )
   const filteredAssets = selectableAssets.filter(entry => {
     if (selectedNetwork !== 'all' && selectedNetwork !== entry.chain.chain.id) {
       return false
     }
-    if (!query) return true
-    return [
-      entry.asset.metadata.symbol,
-      entry.asset.metadata.name,
-      entry.chain.chain.displayName,
-      entry.asset.asset.reference
-    ].some(value => value.toLowerCase().includes(query))
+    return assetRank(entry) < 99
   })
-  const orderedRows = sortSendAssetsByBalanceValue<SendAssetSelectionRow>([
-    ...filteredAssets.map(entry => ({
-      kind: 'portfolio' as const,
-      key: entry.asset.asset.id,
-      amount: (() => {
-        const raw = getAssetDomainRaw(entry.asset, 'public')
-        return raw === null ? null : formatBaseUnitDecimalAmount(raw, entry.asset.metadata.decimals)
-      })(),
-      priceUsd: findAssetPrice(input.prices, entry.asset.asset.id)?.priceUsd ?? null,
-      entry
-    })),
-    ...(zcashMatches
-      ? [
-          {
-            kind: 'zcash' as const,
-            key: 'zcash' as const,
-            amount: input.zcashTotal,
-            priceUsd: input.zecPrice
-          }
-        ]
-      : [])
-  ])
+  const orderedRows = [
+    ...sortSendAssetsByBalanceValue<SendAssetSelectionRow>([
+      ...filteredAssets.map(entry => ({
+        kind: 'portfolio' as const,
+        key: entry.asset.asset.id,
+        amount: (() => {
+          const raw = getAssetDomainRaw(entry.asset, 'public')
+          return raw === null
+            ? null
+            : formatBaseUnitDecimalAmount(raw, entry.asset.metadata.decimals)
+        })(),
+        priceUsd: findAssetPrice(input.prices, entry.asset.asset.id)?.priceUsd ?? null,
+        entry
+      })),
+      ...(zcashMatches
+        ? [
+            {
+              kind: 'zcash' as const,
+              key: 'zcash' as const,
+              amount: input.zcashTotal,
+              priceUsd: input.zecPrice
+            }
+          ]
+        : [])
+    ])
+  ].sort((left, right) => {
+    if (!query) return 0
+    const rank = (row: SendAssetSelectionRow) =>
+      row.kind === 'zcash' ? zcashRank : assetRank(row.entry)
+    return rank(left) - rank(right)
+  })
   return Object.freeze({
     networkOptions: Object.freeze(options),
     selectedNetworkOption,

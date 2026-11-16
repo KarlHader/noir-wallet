@@ -187,7 +187,7 @@ export function TransactionDetailContent({
             />
           </div>
           <div className="max-w-full text-center text-3xl font-bold">
-            <AmountDisplay value={zecAmount} prefix={isIncoming ? '+' : '-'} />
+            <AmountDisplay value={zecAmount} prefix={isIncoming ? '+' : '-'} showDetails={false} />
           </div>
         </div>
         <div className="space-y-4 mb-6">
@@ -280,7 +280,11 @@ export function TransactionDetailContent({
           />
         </div>
         <div className="max-w-full text-center text-3xl font-bold">
-          <AmountDisplay value={localTx.amount} prefix={isIncoming ? '+' : '-'} />
+          <AmountDisplay
+            value={localTx.amount}
+            prefix={isIncoming ? '+' : '-'}
+            showDetails={false}
+          />
         </div>
       </div>
 
@@ -298,11 +302,13 @@ export function TransactionDetailContent({
                 <AmountDisplay
                   value={intentsProgress.amountIn}
                   symbol={intentsProgress.tokenInSymbol}
+                  showDetails={false}
                 />
                 <span>→</span>
                 <AmountDisplay
                   value={intentsProgress.amountOut}
                   symbol={intentsProgress.tokenOutSymbol}
+                  showDetails={false}
                 />
               </span>
             </DetailRow>

@@ -30,12 +30,19 @@ export function getSwapTransactionReference(
       }
     }
   }
-  const configuredChain = chainId
-    ? getEvmNetworkConfigs(network).find(chain => chain.chainId === chainId)
-    : undefined
-  const legacyChain = getChainFromAssetId(assetId ?? '') || fallbackChain || ''
-  const chainUrl = chainId ? formatChainTransactionExplorerUrl(chainId, hash, network) : ''
-  const legacyUrl = formatExplorerUrl(legacyChain, hash)
+  const inferredChain = getChainFromAssetId(assetId ?? '')
+  const legacyChain =
+    assetId?.startsWith('nep141:') && inferredChain === 'near' && fallbackChain
+      ? fallbackChain
+      : inferredChain || fallbackChain || ''
+  const configuredChain = getEvmNetworkConfigs(network).find(
+    chain => chain.chainId === chainId || (!chainId && chain.iconChain === legacyChain)
+  )
+  const resolvedChainId = chainId ?? configuredChain?.chainId
+  const chainUrl = resolvedChainId
+    ? formatChainTransactionExplorerUrl(resolvedChainId, hash, network)
+    : ''
+  const legacyUrl = !chainId && network === 'mainnet' ? formatExplorerUrl(legacyChain, hash) : ''
   const fallbackUrl = fallbackChain ? formatExplorerUrl(fallbackChain, hash) : ''
   const useFallback =
     network === 'mainnet' &&

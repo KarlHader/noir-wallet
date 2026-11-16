@@ -1,14 +1,17 @@
 import { InlineError } from '@/popup/components/common/InlineError'
 import { useEffect, useMemo, useState } from 'react'
-import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import type { TransactionGraph, TransactionId } from '@/core/transactions/domain'
-import { formatSortAddress } from '@/lib/format'
-import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
+import { mapTransactionGraphToActivityItem } from '@/core/activity'
+import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
+import { useWalletStore } from '@/store/wallet-store'
+import {
+  ActivityTransactionBody,
+  buildActivityTransactionView
+} from '@/popup/components/transaction/ActivityTransactionBody'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { Button } from '@/popup/components/ui/button'
 import { PageHeader } from '@/popup/components/common/PageHeader'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import {
   TransactionResult,
@@ -17,7 +20,6 @@ import {
 import type { EvmTransferActivity } from '@/popup/services/evm-transfer-activity'
 import { shouldApplyOnchainTransactionStatus } from '@/popup/services/evm-transaction-result-status'
 import { formatBaseUnitAmount } from '@/lib/number-format'
-import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import {
   getOnchainTransactionFailureLabel,
   getOnchainResultAction,
@@ -44,8 +46,6 @@ interface OnchainTransactionResultProps {
   readonly chain: PortfolioChainView
   readonly submission: OnchainTransferSubmission
   readonly client: OnchainTransferClient
-  readonly explorerBaseUrl: string
-  readonly explorerTransactionPath?: string
   readonly feeDecimals: number
   readonly feeSymbol: string
   readonly feeLabel: string
@@ -60,8 +60,6 @@ export function OnchainTransactionResult({
   chain,
   submission,
   client,
-  explorerBaseUrl,
-  explorerTransactionPath = 'tx',
   feeDecimals,
   feeSymbol,
   feeLabel,
@@ -70,6 +68,7 @@ export function OnchainTransactionResult({
   onDone,
   onViewActivity
 }: OnchainTransactionResultProps) {
+  const network = useWalletStore(state => state.currentNetwork)
   const [graph, setGraph] = useState(submission.graph)
   const [activity, setActivity] = useState<EvmTransferActivity | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
@@ -128,7 +127,6 @@ export function OnchainTransactionResult({
 
   const amountRaw = graph.root.intent?.primaryAmount?.amountRaw ?? '0'
   const feeRaw = graph.root.intent?.feeLimit?.amountRaw ?? '0'
-  const amount = formatBaseUnitAmount(amountRaw, asset.metadata.decimals)
   const fee = formatBaseUnitAmount(feeRaw, feeDecimals)
   const total = useMemo(
     () => getOnchainResultTotal(amountRaw, feeRaw, asset.metadata.decimals, showTotal),
@@ -137,16 +135,65 @@ export function OnchainTransactionResult({
   const transactionHash = activity?.transactionHash ?? segmentEvidence?.transactionHash
   const replacementTransactionHash =
     activity?.replacementTransactionHash ?? segmentEvidence?.replacementTransactionHash
-  const sender = graph.root.intent?.sender?.address
-  const recipient = graph.root.intent?.recipient?.address
+  const transactionChainId = graph.segments.find(
+    segment => segment.role === 'origin' && segment.target.kind === 'onchain'
+  )?.target
+  const chainId = transactionChainId?.kind === 'onchain' ? transactionChainId.chainId : null
+  const graphItem = mapTransactionGraphToActivityItem(graph)
+  const observedItem = {
+    ...graphItem,
+    status,
+    updatedAt: activity?.updatedAt ?? graphItem.updatedAt,
+    ...(activity?.failureCode ? { failureCode: activity.failureCode } : {}),
+    ...(activity?.reconfirming ? { reconfirming: true as const } : {}),
+    segments: graphItem.segments.map(segment =>
+      segment.role === 'origin' &&
+      segment.target.kind === 'onchain' &&
+      segment.target.chainId === chainId &&
+      activity
+        ? {
+            ...segment,
+            status: activity.status,
+            evidence: {
+              ...segment.evidence,
+              ...(activity.transactionHash ? { transactionHash: activity.transactionHash } : {}),
+              ...(activity.replacementTransactionHash
+                ? { replacementTransactionHash: activity.replacementTransactionHash }
+                : {}),
+              ...(activity.confirmations === undefined
+                ? {}
+                : { confirmations: activity.confirmations }),
+              ...(activity.requiredConfirmations === undefined
+                ? {}
+                : { requiredConfirmations: activity.requiredConfirmations })
+            }
+          }
+        : segment
+    )
+  }
+  const activityView = buildActivityTransactionView({
+    item: observedItem,
+    network,
+    assetMetadata: new Map([...chain.assets, asset].map(entry => [entry.asset.id, entry] as const)),
+    chainMetadata: new Map([
+      [
+        chain.chain.id,
+        {
+          displayName: chain.chain.displayName,
+          iconAlias: resolveChainIconAlias(
+            chain.chain.family,
+            chain.chain.displayName,
+            chain.chain.id
+          )
+        }
+      ]
+    ]),
+    fallback: { fee: { value: fee, symbol: feeSymbol, label: feeLabel } }
+  })
   const explorerUrl =
-    transactionHash && explorerBaseUrl
-      ? `${explorerBaseUrl}/${explorerTransactionPath}/${transactionHash}`
-      : null
-  const replacementExplorerUrl =
-    replacementTransactionHash && explorerBaseUrl
-      ? `${explorerBaseUrl}/${explorerTransactionPath}/${replacementTransactionHash}`
-      : null
+    transactionHash && chainId
+      ? formatChainTransactionExplorerUrl(chainId, transactionHash, network)
+      : ''
   const compactDetails = reconfirming || replacementTransactionHash !== undefined
   const resultAction = getOnchainResultAction(status, explorerUrl)
 
@@ -201,84 +248,17 @@ export function OnchainTransactionResult({
         }
       >
         <div className="w-full">
-          <div>
-            <TransactionResultDetailRow label="Amount">
-              <AmountDisplay value={amount} symbol={asset.metadata.symbol} />
+          <ActivityTransactionBody view={activityView} />
+          {status === 'failed' && presentation.tone === 'error' && (
+            <TransactionResultDetailRow label="Reason">
+              {getOnchainTransactionFailureLabel(activity?.failureCode)}
             </TransactionResultDetailRow>
-            {sender && (
-              <TransactionResultDetailRow label="Send from">
-                <span className="font-mono" title={sender}>
-                  {formatSortAddress(sender)}
-                </span>
-              </TransactionResultDetailRow>
-            )}
-            {recipient && (
-              <TransactionResultDetailRow label="Recipient">
-                <span className="font-mono" title={recipient}>
-                  {formatSortAddress(recipient)}
-                </span>
-              </TransactionResultDetailRow>
-            )}
-            <TransactionResultDetailRow label="Network">
-              <span className="inline-flex items-center justify-end gap-1.5">
-                <ChainIcon
-                  chain={resolveChainIconAlias(
-                    chain.chain.family,
-                    chain.chain.displayName,
-                    chain.chain.id
-                  )}
-                  className="size-4"
-                />
-                {formatPortfolioNetworkName(chain)}
-              </span>
+          )}
+          {total && (
+            <TransactionResultDetailRow label={totalLabel}>
+              <AmountDisplay value={total} symbol={asset.metadata.symbol} showDetails={false} />
             </TransactionResultDetailRow>
-            {transactionHash && (
-              <TransactionResultDetailRow label="Transaction Hash">
-                <a
-                  href={explorerUrl ?? undefined}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-primary hover:underline"
-                  title={transactionHash}
-                >
-                  {formatSortAddress(transactionHash)}
-                  <Icon icon="lucide:external-link" width={12} height={12} />
-                </a>
-              </TransactionResultDetailRow>
-            )}
-            {replacementTransactionHash && replacementExplorerUrl && (
-              <TransactionResultDetailRow label="Replacement">
-                <a
-                  href={replacementExplorerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-primary hover:underline"
-                  title={replacementTransactionHash}
-                >
-                  {formatSortAddress(replacementTransactionHash)}
-                  <Icon icon="lucide:external-link" width={12} height={12} />
-                </a>
-              </TransactionResultDetailRow>
-            )}
-            <TransactionResultDetailRow label="Status">
-              <span className={getTransactionStatusToneClassName(presentation.tone)}>
-                {presentation.label}
-              </span>
-            </TransactionResultDetailRow>
-            {status === 'failed' && presentation.tone === 'error' && (
-              <TransactionResultDetailRow label="Reason">
-                {getOnchainTransactionFailureLabel(activity?.failureCode)}
-              </TransactionResultDetailRow>
-            )}
-            <TransactionResultDetailRow label={feeLabel}>
-              <AmountDisplay value={fee} symbol={feeSymbol} profile="fee" />
-            </TransactionResultDetailRow>
-            {total && (
-              <TransactionResultDetailRow label={totalLabel}>
-                <AmountDisplay value={total} symbol={asset.metadata.symbol} />
-              </TransactionResultDetailRow>
-            )}
-          </div>
+          )}
 
           {refreshFailed && status !== 'final' && status !== 'failed' && (
             <p role="status" className="mt-3 text-center text-xs text-muted">

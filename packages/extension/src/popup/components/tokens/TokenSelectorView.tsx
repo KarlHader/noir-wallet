@@ -32,6 +32,7 @@ export interface TokenSelectorNetwork {
 }
 
 interface TokenSelectorViewProps {
+  readonly fixedNetworkOrder?: boolean
   readonly accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   readonly search: string
   readonly onSearchChange: (value: string) => void
@@ -58,6 +59,7 @@ interface TokenSelectorViewProps {
 }
 
 export function TokenSelectorView({
+  fixedNetworkOrder = false,
   accountScope,
   search,
   onSearchChange,
@@ -125,7 +127,7 @@ export function TokenSelectorView({
   }, [chainOrderKey])
   const selectNetwork = (id: string) => {
     onNetworkChange(id)
-    if (chainOrderKey) {
+    if (chainOrderKey && !fixedNetworkOrder) {
       pendingRecentChainIds.current = recordRecentChainSelection(
         pendingRecentChainIds.current ?? recentChainIds,
         networks.find(network => network.id === id)?.iconChain ?? id
@@ -189,13 +191,17 @@ export function TokenSelectorView({
   const availableIdByIconChain = new Map(
     [...availableById.values()].map(network => [network.iconChain, network.id])
   )
-  const available = orderNetworkIdsByRecency(
-    [...availableById.keys()],
-    recentChainIds.map(id => {
-      if (availableById.has(id)) return id
-      const iconChain = id.startsWith('eip155:') ? resolveEvmChainIconAlias(id) : id
-      return availableIdByIconChain.get(iconChain) ?? id
-    })
+  const available = (
+    fixedNetworkOrder
+      ? [...availableById.keys()]
+      : orderNetworkIdsByRecency(
+          [...availableById.keys()],
+          recentChainIds.map(id => {
+            if (availableById.has(id)) return id
+            const iconChain = id.startsWith('eip155:') ? resolveEvmChainIconAlias(id) : id
+            return availableIdByIconChain.get(iconChain) ?? id
+          })
+        )
   ).map(id => availableById.get(id)!)
   const primary = available.slice(0, 5)
   const more = available.slice(5)
@@ -204,7 +210,8 @@ export function TokenSelectorView({
     selectedNetwork === 'all' || available.some(network => network.id === selectedNetwork)
       ? selectedNetwork
       : 'all'
-  const lowBalance = lowBalanceKeys ? items.filter(item => lowBalanceKeys.has(item.key)) : []
+  const lowBalance =
+    lowBalanceKeys && !search.trim() ? items.filter(item => lowBalanceKeys.has(item.key)) : []
   const inspectedResult =
     items.length === 0 && inspected?.key === discoveryKey ? inspected.result : null
   const discoveredAddress = inspectedResult?.candidate.contractAddress
@@ -224,9 +231,10 @@ export function TokenSelectorView({
       ]
     : []
   const displayedItems = [...items, ...discoveryItems]
-  const displayedFunded = lowBalanceKeys
-    ? displayedItems.filter(item => !lowBalanceKeys.has(item.key))
-    : displayedItems
+  const displayedFunded =
+    lowBalanceKeys && !search.trim()
+      ? displayedItems.filter(item => !lowBalanceKeys.has(item.key))
+      : displayedItems
 
   return (
     <div

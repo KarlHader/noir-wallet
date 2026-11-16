@@ -3,10 +3,34 @@ import type {
   ExternalShieldDepositScope
 } from '@/core/services/confidential-funding'
 import type { AccountContextTransitionCoordinator } from './account-context-transition'
+import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-zec-intents-swap'
 import type {
   ConfidentialFundingCoordinator,
   PrepareConfidentialFundingInput
 } from './confidential-funding-coordinator'
+import { CONFIDENTIAL_SESSION_REQUIRED_ERROR } from '@/core/services/confidential-funding'
+import { ConfidentialFundingApiError } from './confidential-funding-api'
+
+export type ConfidentialBalanceErrorCode =
+  | 'authorization_required'
+  | 'account_unavailable'
+  | 'balance_unavailable'
+
+function classifyBalanceReadError(error: unknown): ConfidentialBalanceErrorCode {
+  if (error instanceof ConfidentialFundingApiError && error.status === 401)
+    return 'authorization_required'
+  if (error instanceof ConfidentialFundingApiError && error.status === 403)
+    return 'account_unavailable'
+  const message = error instanceof Error ? error.message : ''
+  if (
+    message === 'Confidential authorization is required' ||
+    message === CONFIDENTIAL_SESSION_REQUIRED_ERROR
+  )
+    return 'authorization_required'
+  if (/account|wallet|network changed|locked|unlock|credential/i.test(message))
+    return 'account_unavailable'
+  return 'balance_unavailable'
+}
 
 interface FundingContext {
   readonly coordinator: ConfidentialFundingCoordinator
@@ -27,6 +51,21 @@ interface ExternalDepositMessage {
 }
 
 const handlers = {
+  PREPARE_NATIVE_ZEC_INTENTS_SWAP: (
+    { coordinator, accountContextTransition }: FundingContext,
+    message: Readonly<{ request: PrepareNativeZecIntentsSwapInput }>
+  ) =>
+    accountContextTransition.runActiveOperation(() =>
+      coordinator.prepareNativeZecIntentsSwap(message.request)
+    ),
+  GET_NATIVE_ZEC_INTENTS_SWAP: (
+    { coordinator }: FundingContext,
+    message: Readonly<{ quoteId: string }>
+  ) => coordinator.getNativeZecIntentsSwap(message.quoteId),
+  CANCEL_NATIVE_ZEC_INTENTS_SWAP: (
+    { coordinator }: FundingContext,
+    message: Readonly<{ quoteId: string }>
+  ) => coordinator.cancelNativeZecIntentsSwap(message.quoteId),
   PREPARE_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
     coordinator.prepare(message.request),
   PREVIEW_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
@@ -60,10 +99,18 @@ const handlers = {
     await coordinator.cancel(message.planId)
     return true
   },
-  REFRESH_CONFIDENTIAL_BALANCES: (
+  REFRESH_CONFIDENTIAL_BALANCES: async (
     { coordinator }: FundingContext,
     message: Readonly<{ scope: ExternalShieldDepositScope; authorize: boolean }>
-  ) => coordinator.refreshBalances(message.scope, message.authorize)
+  ) => {
+    try {
+      return await coordinator.refreshBalances(message.scope, message.authorize)
+    } catch (error) {
+      const cause = error instanceof Error ? error : new Error('Shield balance unavailable')
+      Object.assign(cause, { balanceErrorCode: classifyBalanceReadError(error) })
+      throw cause
+    }
+  }
 }
 
 export function getConfidentialFundingMessageHandler(type: string) {

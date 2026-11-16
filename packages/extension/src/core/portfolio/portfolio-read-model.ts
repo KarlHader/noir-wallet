@@ -244,9 +244,6 @@ export function buildPortfolioReadModel(
         ignoredAssetCount += 1
         continue
       }
-      if (entry.source === 'discovered' && balance.totalRaw === '0') {
-        continue
-      }
       if (entry.asset.chainId !== chainId) {
         throw new Error('Portfolio asset does not match its ChainAccount')
       }

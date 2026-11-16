@@ -151,6 +151,72 @@ test.describe('Runtime message security', () => {
     expect(() => parseTrustedExtensionRuntimeMessage({ ...message, request: null })).toThrow()
   })
 
+  test('restricts native ZEC Intents quote lifecycle to bounded extension-page requests', () => {
+    const prepare = {
+      type: 'PREPARE_NATIVE_ZEC_INTENTS_SWAP',
+      request: {
+        network: 'mainnet',
+        walletId: 'wallet-one',
+        accountId: 'account-one',
+        amountZats: '30000',
+        destination: {
+          chainId: 'eip155:1',
+          assetId: 'eip155:1/slip44:60',
+          protocolAssetId: 'nep141:eth.omft.near',
+          recipient: '0x1111111111111111111111111111111111111111'
+        },
+        refundAddress: 't1fixture',
+        slippageBps: 50
+      }
+    }
+    const messages = [
+      prepare,
+      { type: 'GET_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' },
+      { type: 'CANCEL_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' }
+    ]
+    for (const message of messages) {
+      expect(parseTrustedExtensionRuntimeMessage(message)).toEqual(message)
+      expect(
+        isTrustedRuntimeMessageSender(
+          message.type,
+          {
+            id: extensionId,
+            url: `chrome-extension://${extensionId}/index.html`
+          },
+          extensionId
+        )
+      ).toBe(true)
+      for (const sender of [
+        { id: extensionId, url: 'https://dapp.example/', tab: { id: 1 } },
+        { id: extensionId, url: `chrome-extension://${extensionId}/src/offscreen/index.html` },
+        { id: 'other-extension', url: 'chrome-extension://other-extension/index.html' }
+      ]) {
+        expect(isTrustedRuntimeMessageSender(message.type, sender, extensionId)).toBe(false)
+      }
+    }
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        ...prepare,
+        request: {
+          ...prepare.request,
+          destination: { ...prepare.request.destination, recipient: '' }
+        }
+      })
+    ).toThrow()
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        ...prepare,
+        request: { ...prepare.request, extra: true }
+      })
+    ).toThrow()
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({
+        type: 'GET_NATIVE_ZEC_INTENTS_SWAP',
+        quoteId: 'x'.repeat(161)
+      })
+    ).toThrow()
+  })
+
   test('keeps backup verification inside extension pages and bounds its word payload', () => {
     const verification = { wordIndices: [0, 11], words: ['abandon', 'about'] }
     const message = { type: 'CONFIRM_WALLET_BACKUP', walletId: 'wallet:1', verification }

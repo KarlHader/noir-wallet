@@ -62,6 +62,13 @@ test('RHEA protocol references use a known mainnet chain hint without overriding
     label: 'Ethereum',
     url: 'https://etherscan.io/tx/0x123'
   })
+  assert.deepEqual(
+    getSwapTransactionReference('nep141:hype.base.near', 'base', '0x123', 'mainnet'),
+    {
+      label: 'Base',
+      url: 'https://base.blockscout.com/tx/0x123'
+    }
+  )
   assert.deepEqual(getSwapTransactionReference('eip155:777/slip44:60', 'bsc', '0x123', 'mainnet'), {
     label: 'eip155',
     url: ''

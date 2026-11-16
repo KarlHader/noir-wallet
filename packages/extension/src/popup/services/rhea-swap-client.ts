@@ -28,7 +28,12 @@ import {
 } from '@/core/services/rhea-swap'
 import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
 import { classifyError } from '@/lib/errors'
-import { getSwapQuoteFailureMessage, readSwapErrorReason } from './swap-quote-error-message'
+import {
+  getSwapQuoteFailureMessage,
+  isSwapQuoteTimeout,
+  readSwapErrorReason,
+  SWAP_QUOTE_DISPLAY_ERROR
+} from './swap-quote-error-message'
 
 export class RheaSwapClientError extends Error {
   constructor(message: string) {
@@ -54,10 +59,11 @@ export function getRheaSwapQuoteFailure(error: unknown): {
 } {
   const specific = getSwapQuoteFailureMessage(error)
   return {
-    message: getRheaSwapErrorMessage(error),
-    retryable: specific
-      ? specific === 'Request timed out.' || specific === 'Quote unavailable. Please try again.'
-      : classifyError(error).retryable
+    message: isSwapQuoteTimeout(error) ? SWAP_QUOTE_DISPLAY_ERROR : getRheaSwapErrorMessage(error),
+    retryable:
+      isSwapQuoteTimeout(error) ||
+      specific === 'Quote unavailable. Please try again.' ||
+      (!specific && classifyError(error).retryable)
   }
 }
 

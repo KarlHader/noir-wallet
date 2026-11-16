@@ -15,10 +15,17 @@ export function parseEvmAccountBinding(
   const path = /^m\/44'\/60'\/(0|[1-9][0-9]*)'\/0\/(0|[1-9][0-9]*)$/.exec(
     chainAccount.derivation.path
   )
+  const ledgerLegacyPath = /^m\/44'\/60'\/0'\/(0|[1-9][0-9]*)$/.exec(chainAccount.derivation.path)
   const imported =
     chainAccount.derivation.scheme === 'imported' && chainAccount.derivation.path === 'm'
-  const accountIndex = imported ? 0 : path === null ? Number.NaN : Number(path[1])
-  const addressIndex = imported ? 0 : path === null ? Number.NaN : Number(path[2])
+  const accountIndex = imported ? 0 : path ? Number(path[1]) : ledgerLegacyPath ? 0 : Number.NaN
+  const addressIndex = imported
+    ? 0
+    : path
+      ? Number(path[2])
+      : ledgerLegacyPath
+        ? Number(ledgerLegacyPath[1])
+        : Number.NaN
   if (
     chainAccount.scope.chainId !== expectedChainId ||
     (!imported && chainAccount.derivation.scheme !== 'bip44') ||

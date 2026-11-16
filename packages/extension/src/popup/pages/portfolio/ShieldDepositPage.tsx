@@ -46,6 +46,7 @@ import { ChainSelector, type ChainSelectorOption } from '@/popup/components/comm
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { ShieldProviderLogo, SHIELD_PROVIDERS } from '@/popup/components/portfolio/shield-providers'
 import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
@@ -1260,8 +1261,11 @@ function ShieldDepositContent() {
           selectedNetwork="all"
           onNetworkChange={() => {}}
           items={tokenChoices
-            .filter(choice =>
-              choice.token.symbol.toLowerCase().includes(tokenSearch.trim().toLowerCase())
+            .filter(choice => rankTokenSearchFields(choice.token, tokenSearch) < 99)
+            .sort(
+              (left, right) =>
+                rankTokenSearchFields(left.token, tokenSearch) -
+                rankTokenSearchFields(right.token, tokenSearch)
             )
             .map(choice => ({
               key: choice.id,

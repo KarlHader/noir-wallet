@@ -429,6 +429,33 @@ export function listShieldSendDestinations(
   return options.filter(option => isShieldSendDestination(source, option, network))
 }
 
+export function estimateShieldSendRouteFee(
+  source: ShieldFundingAsset,
+  destination: ShieldFundingAsset,
+  inputRaw: string,
+  outputRaw: string
+): Readonly<{ raw: string; decimals: number }> | null {
+  const sourceGroup = getCrossChainSendAssetGroup(source.asset.asset)
+  const destinationGroup = getCrossChainSendAssetGroup(destination.asset.asset)
+  const sameAsset =
+    source.asset.asset.id === destination.asset.asset.id ||
+    (sourceGroup !== null && sourceGroup === destinationGroup) ||
+    (source.marketAssetId !== undefined && source.marketAssetId === destination.marketAssetId)
+  if (
+    !sameAsset ||
+    source.asset.metadata.symbol.toUpperCase() !==
+      destination.asset.metadata.symbol.toUpperCase() ||
+    !/^\d+$/.test(inputRaw) ||
+    !/^\d+$/.test(outputRaw)
+  )
+    return null
+  const decimals = Math.max(source.asset.metadata.decimals, destination.asset.metadata.decimals)
+  const input = BigInt(inputRaw) * 10n ** BigInt(decimals - source.asset.metadata.decimals)
+  const output = BigInt(outputRaw) * 10n ** BigInt(decimals - destination.asset.metadata.decimals)
+  if (output > input) return null
+  return { raw: (input - output).toString(), decimals }
+}
+
 export function isShieldWithdrawRecipient(
   recipient: string,
   destination: ShieldFundingAsset | null,

@@ -16,7 +16,8 @@ import type { TokenSelectionItem } from './TokenSelectionList'
 import { sortTokensByBalanceValue } from './token-balance-order'
 import {
   compareSwapTokenSearchRelevance,
-  matchesSwapTokenSearch
+  matchesSwapTokenSearch,
+  rankTokenSearchFields
 } from '@/popup/services/swap-token-selection'
 import { createDebugRequestId, logDebugTiming } from '@/lib/debug-performance'
 import {
@@ -184,13 +185,19 @@ export function TokenSelector({
   )
   const visibleExtraItems = extraItems.filter(item => {
     if (effectiveBlockchain !== 'all' && item.blockchain !== effectiveBlockchain) return false
-    const query = search.trim().toLowerCase()
-    return !query || item.searchTerms.some(term => term.toLowerCase().includes(query))
+    return rankTokenSearchFields(item, search) < 99
   })
   useEffect(() => {
     onVisibleTokensChange?.(visibleTokens, { search, network: effectiveBlockchain })
   }, [onVisibleTokensChange, visibleTokens, search, effectiveBlockchain])
 
+  const searchRanks = new Map<string, number>([
+    ...visibleExtraItems.map(item => [item.key, rankTokenSearchFields(item, search)] as const),
+    ...visibleTokens.map(
+      token =>
+        [`${token.blockchain}:${token.assetId}`, rankTokenSearchFields(token, search)] as const
+    )
+  ])
   const selectorItems = [
     ...visibleExtraItems,
     ...visibleTokens.map(token => {
@@ -222,7 +229,9 @@ export function TokenSelector({
           )
       }
     })
-  ]
+  ].sort((left, right) =>
+    search.trim() ? (searchRanks.get(left.key) ?? 99) - (searchRanks.get(right.key) ?? 99) : 0
+  )
   const discoveryChain = RHEA_SWAP_CHAIN_CATALOG.find(
     chain => chain.walletFamily === 'evm' && chain.blockchain === effectiveBlockchain
   )

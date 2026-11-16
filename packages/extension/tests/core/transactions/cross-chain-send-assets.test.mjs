@@ -3,12 +3,15 @@ import { expect } from '@playwright/test'
 import {
   getCrossChainSendAssetGroup,
   getCrossChainSendDestinationAssetId,
+  getCrossChainSendRouteCost,
+  getCrossChainSendWalletAssetId,
   isCrossChainSendDestination,
   isCrossChainSendRecipientValid,
   resolveCrossChainSendDestinationByWalletAssetId,
   resolveCrossChainSendRouteAssetDisplay,
   resolveCrossChainSendRouteDraft
 } from '../../../src/popup/services/cross-chain-send-assets.ts'
+import { getSwapDestinationTokens } from '../../../src/popup/services/swap-token-selection.ts'
 
 const eth = {
   assetId: 'nep141:eth.omft.near',
@@ -125,6 +128,48 @@ test('cross-chain Send uses verified asset identities and excludes the source ne
     })
   ).toBe(null)
   expect(getCrossChainSendDestinationAssetId('eip155:8453', 'ETH')).toBe('eip155:8453/slip44:60')
+
+  const arbitrumEth = {
+    ...eth,
+    assetId: 'nep141:arb.omft.near',
+    blockchain: 'arb',
+    rheaChainId: '42161',
+    tokenListChainId: 42161
+  }
+  const aliasEth = { ...eth, rheaAddress: 'eth', sources: [] }
+  const quoteEth = { ...eth, sources: ['nearintents'] }
+  const canonicalDestinations = getSwapDestinationTokens(
+    arbitrumEth,
+    [arbitrumEth],
+    [aliasEth, quoteEth]
+  )
+  const routeDestination = resolveCrossChainSendDestinationByWalletAssetId(
+    arbitrumEth,
+    'eip155:1/slip44:60',
+    canonicalDestinations,
+    enabledChains
+  )
+  expect(routeDestination).toBe(quoteEth)
+  expect(canonicalDestinations).toContain(routeDestination)
+  expect(getCrossChainSendWalletAssetId(routeDestination)).toBe('eip155:1/slip44:60')
+  expect(getCrossChainSendWalletAssetId(baseEth)).toBe('eip155:8453/slip44:60')
+  expect(getCrossChainSendWalletAssetId({ ...baseEth, isNative: false })).toBeNull()
+  expect(
+    getCrossChainSendRouteCost({
+      source: arbitrumEth,
+      destination: eth,
+      amountInRaw: '100000000000000',
+      estimatedOutRaw: '77630000000000'
+    })
+  ).toBe('0.00002237')
+  expect(
+    getCrossChainSendRouteCost({
+      source: arbitrumEth,
+      destination: eth,
+      amountInRaw: '100000000000000',
+      estimatedOutRaw: '100073653903600'
+    })
+  ).toBe('0')
 })
 
 test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', () => {
@@ -156,6 +201,38 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
     contractAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
     rheaAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
   }
+  expect(
+    getCrossChainSendRouteCost({
+      source: { ...ethereumUsdc, decimals: 6 },
+      destination: { ...usdc, decimals: 18 },
+      amountInRaw: '2000000',
+      estimatedOutRaw: '1979000000000000000'
+    })
+  ).toBe('0.021')
+  expect(
+    getCrossChainSendRouteCost({
+      source: { ...ethereumUsdc, decimals: 6 },
+      destination: { ...usdc, decimals: 18 },
+      amountInRaw: '2000000',
+      estimatedOutRaw: '2001000000000000000'
+    })
+  ).toBe('0')
+  expect(
+    getCrossChainSendRouteCost({
+      source: ethereumUsdc,
+      destination: eth,
+      amountInRaw: '2000000',
+      estimatedOutRaw: '1979000'
+    })
+  ).toBeNull()
+  expect(
+    getCrossChainSendRouteCost({
+      source: ethereumUsdc,
+      destination: usdc,
+      amountInRaw: 'invalid',
+      estimatedOutRaw: '1979000'
+    })
+  ).toBeNull()
   const polygonUsdc = {
     ...usdc,
     assetId: 'nep245:v2_1.omni.hot.tg:137_qiStmoQJDQPTebaPjgx5VBxZv6L',
@@ -208,6 +285,9 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
   expect(
     getCrossChainSendDestinationAssetId('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'USDC')
   ).toBe(
+    'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+  )
+  expect(getCrossChainSendWalletAssetId(solanaUsdc)).toBe(
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   )
 })

@@ -9,8 +9,10 @@ import { useAddressBookStore } from '@/store/address-book-store'
 import type { TransactionStep } from '@/popup/hooks/useTransaction'
 import { getStandardTransactionResultCopy } from '@/lib/transaction-status-copy'
 import { InlineError } from '@/popup/components/common/InlineError'
+import { ActivityTransactionBody, type ActivityTransactionView } from './ActivityTransactionBody'
 
 export interface StandardTransactionResultProps {
+  activityView?: ActivityTransactionView | null
   step: TransactionStep
   operation?: 'send' | 'move'
   amount: string
@@ -41,6 +43,7 @@ export interface StandardTransactionResultProps {
 }
 
 export function StandardTransactionResult({
+  activityView,
   step,
   operation = 'send',
   amount,
@@ -104,68 +107,72 @@ export function StandardTransactionResult({
       {step === 'failed' && failureAction?.retry && (
         <InlineError message={description || error || title} onRetry={failureAction.onClick} />
       )}
-      {step !== 'failed' && (
-        <div className="w-full">
-          <TransactionResultDetailRow label="Amount">
-            <AmountDisplay value={amount} symbol="ZEC" />
-          </TransactionResultDetailRow>
-
-          {showFrom && fromAddress && (
-            <TransactionResultDetailRow label={operation === 'send' ? 'Send from' : 'From'}>
-              <span className="font-mono" title={fromAddress}>
-                {formatSortAddress(fromAddress)}
-              </span>
+      {activityView ? (
+        <ActivityTransactionBody view={activityView} showDate={showTime} />
+      ) : (
+        step !== 'failed' && (
+          <div className="w-full">
+            <TransactionResultDetailRow label="Amount">
+              <AmountDisplay value={amount} symbol="ZEC" />
             </TransactionResultDetailRow>
-          )}
 
-          {showTo && toAddress && (
-            <TransactionResultDetailRow label={operation === 'send' ? 'Recipient' : 'To'}>
-              <span className="flex flex-col items-end">
-                {toContact?.znsName && (
-                  <span className="text-xs text-primary">{toContact.znsName}</span>
-                )}
-                <span className="font-mono" title={toAddress}>
-                  {formatSortAddress(toAddress)}
+            {showFrom && fromAddress && (
+              <TransactionResultDetailRow label={operation === 'send' ? 'Send from' : 'From'}>
+                <span className="font-mono" title={fromAddress}>
+                  {formatSortAddress(fromAddress)}
                 </span>
-              </span>
-            </TransactionResultDetailRow>
-          )}
-
-          <TransactionResultDetailRow label="Network">
-            {DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-          </TransactionResultDetailRow>
-
-          {extraDetails?.map(detail => (
-            <TransactionResultDetailRow key={detail.label} label={detail.label}>
-              {detail.value}
-            </TransactionResultDetailRow>
-          ))}
-
-          {(step === 'success' || step === 'submitted' || step === 'confirming') &&
-            showTime &&
-            timestamp && (
-              <TransactionResultDetailRow label="Time">
-                <span className="text-muted">{new Date(timestamp).toLocaleString()}</span>
               </TransactionResultDetailRow>
             )}
 
-          {showTxHash && txHash && (
-            <TransactionResultDetailRow label="Transaction Hash">
-              <a
-                href={formatChainTransactionExplorerUrl(
-                  getZcashChainId(DEFAULT_NETWORK),
-                  txHash,
-                  DEFAULT_NETWORK
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-primary cursor-pointer hover:underline"
-              >
-                {formatSortAddress(txHash)}
-              </a>
+            {showTo && toAddress && (
+              <TransactionResultDetailRow label={operation === 'send' ? 'Recipient' : 'To'}>
+                <span className="flex flex-col items-end">
+                  {toContact?.znsName && (
+                    <span className="text-xs text-primary">{toContact.znsName}</span>
+                  )}
+                  <span className="font-mono" title={toAddress}>
+                    {formatSortAddress(toAddress)}
+                  </span>
+                </span>
+              </TransactionResultDetailRow>
+            )}
+
+            <TransactionResultDetailRow label="Network">
+              {DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
             </TransactionResultDetailRow>
-          )}
-        </div>
+
+            {extraDetails?.map(detail => (
+              <TransactionResultDetailRow key={detail.label} label={detail.label}>
+                {detail.value}
+              </TransactionResultDetailRow>
+            ))}
+
+            {(step === 'success' || step === 'submitted' || step === 'confirming') &&
+              showTime &&
+              timestamp && (
+                <TransactionResultDetailRow label="Time">
+                  <span className="text-muted">{new Date(timestamp).toLocaleString()}</span>
+                </TransactionResultDetailRow>
+              )}
+
+            {showTxHash && txHash && (
+              <TransactionResultDetailRow label="Transaction Hash">
+                <a
+                  href={formatChainTransactionExplorerUrl(
+                    getZcashChainId(DEFAULT_NETWORK),
+                    txHash,
+                    DEFAULT_NETWORK
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-primary cursor-pointer hover:underline"
+                >
+                  {formatSortAddress(txHash)}
+                </a>
+              </TransactionResultDetailRow>
+            )}
+          </div>
+        )
       )}
     </TransactionResult>
   )

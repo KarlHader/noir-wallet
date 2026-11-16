@@ -106,6 +106,25 @@ function externalChainId(chain: string, transaction: Transaction): ChainId | nul
   return null
 }
 
+function boundDestinationChainId(
+  transaction: Transaction,
+  destinationAssetId: ReturnType<typeof resolveRheaSwapCanonicalAssetId>
+): ChainId | null {
+  const assetChainId = destinationAssetId ? parseAssetId(destinationAssetId).chainId : null
+  const boundChainId = transaction.quoteBinding?.destinationChain
+    ? externalChainId(transaction.quoteBinding.destinationChain, transaction)
+    : null
+  // Unmapped NEAR protocol tokens can represent assets selected on an external chain.
+  if (
+    boundChainId &&
+    assetChainId === parseChainId('near:mainnet').id &&
+    transaction.quoteBinding?.destinationAsset?.startsWith('nep141:')
+  ) {
+    return boundChainId
+  }
+  return assetChainId ?? boundChainId
+}
+
 function originStatus(transaction: Transaction): TransactionLifecycleStatus {
   if (!transaction.txHash) return transaction.status === 'failed' ? 'failed' : 'created'
   if (transaction.status === 'success' || transaction.status === 'relay_confirmed') return 'final'
@@ -222,9 +241,7 @@ function crossChainSegments(
     const destinationChainId =
       transaction.type === 'withdraw' || transaction.type === 'claim'
         ? zcashChainId
-        : destinationAssetId
-          ? parseAssetId(destinationAssetId).chainId
-          : undefined
+        : boundDestinationChainId(transaction, destinationAssetId)
     destinationHashes.set(transaction.destinationTxHash.toLowerCase(), {
       hash: transaction.destinationTxHash,
       chain: transaction.quoteBinding?.destinationChain ?? 'Destination chain',
@@ -269,11 +286,7 @@ function crossChainSegments(
           transaction.network
         )
       : null
-    const destinationChainId = destinationAssetId
-      ? parseAssetId(destinationAssetId).chainId
-      : transaction.quoteBinding?.destinationChain
-        ? externalChainId(transaction.quoteBinding.destinationChain, transaction)
-        : null
+    const destinationChainId = boundDestinationChainId(transaction, destinationAssetId)
     if (destinationChainId) {
       segments.push(
         Object.freeze({
@@ -321,11 +334,7 @@ export function mapZcashV1TransactionToActivityItem(
           amountRaw: transaction.quoteBinding.expectedAmountOut
         })
       : undefined
-  const finalRecipientChainId = counterAssetId
-    ? parseAssetId(counterAssetId).chainId
-    : transaction.quoteBinding?.destinationChain
-      ? externalChainId(transaction.quoteBinding.destinationChain, transaction)
-      : null
+  const finalRecipientChainId = boundDestinationChainId(transaction, counterAssetId)
   const finalRecipient =
     transaction.type === 'swap' && transaction.quoteBinding?.recipient && finalRecipientChainId
       ? Object.freeze({

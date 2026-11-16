@@ -239,6 +239,27 @@ test.describe('Zcash V1 Activity source', () => {
       target: { kind: 'onchain', chainId: 'eip155:1' },
       evidence: { transactionHash: 'evm-destination-hash' }
     })
+
+    const base = mapZcashV1TransactionToActivityItem(
+      transaction({
+        type: 'swap',
+        status: 'success',
+        txHash: 'zcash-origin-hash',
+        destinationTxHash: `0x${'b'.repeat(64)}`,
+        quoteBinding: {
+          destinationAsset: 'nep141:hype.base.near',
+          destinationChain: 'Base',
+          recipient: '0x2222222222222222222222222222222222222222',
+          expectedAmountOut: '1000000000000000000'
+        }
+      }),
+      scope
+    )
+    expect(base.snapshot.recipient.chainId).toBe('eip155:8453')
+    expect(base.segments.find(segment => segment.role === 'destination')).toMatchObject({
+      target: { kind: 'onchain', chainId: 'eip155:8453' },
+      evidence: { transactionHash: `0x${'b'.repeat(64)}` }
+    })
   })
 
   test('uses the quote binding as the complete cross-chain swap snapshot', () => {

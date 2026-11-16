@@ -1,4 +1,3 @@
-import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { zcashWalletRuntimeClient } from './zcash-wallet-runtime-client'
 import type { DialogOptions } from '../hooks/useDialog'
 
@@ -20,27 +19,9 @@ export async function switchWalletAccount(options: SwitchAccountOptions): Promis
     })
     if (syncState?.isSyncing) {
       const progress = syncState.syncProgress || 0
-      if (progress >= 95) {
-        await new Promise<void>(resolve => {
-          const listener = (message: any, sender: chrome.runtime.MessageSender) => {
-            if (
-              getOwnExtensionSenderContext(sender, chrome.runtime.id) === 'service-worker' &&
-              message.type === 'SYNC_PROGRESS' &&
-              message.walletId === currentWalletId &&
-              !message.isSyncing
-            ) {
-              chrome.runtime.onMessage.removeListener(listener)
-              clearTimeout(timeout)
-              resolve()
-            }
-          }
-          chrome.runtime.onMessage.addListener(listener)
-          const timeout = setTimeout(() => {
-            chrome.runtime.onMessage.removeListener(listener)
-            resolve()
-          }, 30000)
-        })
-      } else {
+      // The background owns sync quiescence and account activation. Waiting for
+      // another progress event here can miss completion and add a 30s delay.
+      if (progress < 95) {
         const proceed = await confirm({
           title: 'Switch Account',
           message: `Blockchain sync is in progress (${progress}%). Switching now will interrupt the sync. Continue?`,

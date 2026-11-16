@@ -57,16 +57,7 @@ function isZecSymbol(symbol: string): boolean {
 function findIntentsZecFundingAsset(
   sources: readonly ShieldFundingAsset[]
 ): ShieldFundingAsset | null {
-  return (
-    sources.find(
-      asset =>
-        asset.managed.protocolAssetId === ZEC_ZCASH_ASSET ||
-        (isZecSymbol(asset.asset.metadata.symbol) &&
-          asset.managed.protocolAssetId === ZEC_ZCASH_ASSET)
-    ) ??
-    sources.find(asset => isZecSymbol(asset.asset.metadata.symbol)) ??
-    null
-  )
+  return sources.find(asset => asset.managed.protocolAssetId === ZEC_ZCASH_ASSET) ?? null
 }
 
 function zcashShieldNativeAsset(model: PortfolioReadModel | null, network: Network) {
@@ -115,8 +106,8 @@ export function buildShieldSwapZecSourceOptions(input: {
         kind: 'intents',
         symbol: intentsAsset.asset.metadata.symbol,
         iconUrl: intentsAsset.asset.metadata.iconUrl,
-        badgeBlockchain: 'near',
-        chainName: 'NEAR Confidential',
+        badgeBlockchain: 'zec',
+        chainName: 'Zcash',
         availableRaw,
         decimals: intentsAsset.asset.metadata.decimals,
         intentsWalletAssetId: intentsAsset.asset.asset.id

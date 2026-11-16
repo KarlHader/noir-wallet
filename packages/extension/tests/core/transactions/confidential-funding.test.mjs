@@ -1164,6 +1164,33 @@ test.describe('confidential funding safety rules', () => {
     ).toEqual({ status: 'SUCCESS', transactionHash: 'destination-hash' })
   })
 
+  test('records a later refund without treating its hash as destination evidence', () => {
+    for (const status of ['FAILED', 'EXPIRED', 'CANCELLED']) {
+      const refunded = mergeConfidentialWithdrawObservation(
+        { status, errorStatus: 'original-reason' },
+        {
+          status: 'REFUNDED',
+          transactionHash: 'not-destination-hash'
+        }
+      )
+      expect(refunded).toEqual({
+        status: 'REFUNDED',
+        errorStatus: 'original-reason'
+      })
+      expect(mergeConfidentialWithdrawObservation(refunded, { status: 'PROCESSING' })).toBe(
+        refunded
+      )
+      expect(mergeConfidentialWithdrawObservation(refunded, { status: 'SUCCESS' })).toBe(refunded)
+    }
+    expect(
+      mergeConfidentialWithdrawObservation(
+        { status: 'PROCESSING' },
+        { status: 'REFUNDED', transactionHash: 'not-destination-hash' }
+      )
+    ).toEqual({ status: 'REFUNDED' })
+    expect(aggregateConfidentialSettlement(['REFUNDED', 'REFUNDED'])).toBe('refunded')
+  })
+
   test('refuses to sign when the generated intent or quote no longer matches the frozen plan', () => {
     const deadline = new Date(Date.now() + 60_000).toISOString()
     const quote = {

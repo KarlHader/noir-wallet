@@ -251,6 +251,7 @@ import {
   createBackgroundConfidentialFundingCoordinator
 } from './confidential-funding'
 import type { ConfidentialFundingCoordinator } from './confidential-funding-coordinator'
+import type { NativeZecIntentsSwapReview } from '@/core/services/native-zec-intents-swap'
 import { getConfidentialFundingMessageHandler } from './confidential-funding-messages'
 import { ExternalShieldDepositError } from '@/core/services/confidential-funding/confidential-external-deposit'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
@@ -1312,7 +1313,24 @@ async function reloadMultichainRuntime(
             })
             .catch(() => {})
         },
-        confidentialFundingStore
+        confidentialFundingStore,
+        () => {
+          const state = useWalletStore.getState()
+          const walletId = state.currentWalletId
+          const accountId = state.currentAccountId
+          const addresses =
+            walletId && accountId ? state.getAccount(walletId, accountId)?.addresses : undefined
+          return {
+            network: state.currentNetwork,
+            walletId,
+            accountId,
+            refundAddresses: [
+              addresses?.transparent,
+              addresses?.shielded,
+              addresses?.fullUnified
+            ].filter((address): address is string => Boolean(address))
+          }
+        }
       )
     : null
   if (!isRuntimeReconfiguration) {
@@ -4337,6 +4355,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   const confidentialFundingHandler = getConfidentialFundingMessageHandler(message.type)
   if (confidentialFundingHandler) {
+    if (
+      (message.type === 'PREPARE_NATIVE_ZEC_INTENTS_SWAP' ||
+        message.type === 'GET_NATIVE_ZEC_INTENTS_SWAP' ||
+        message.type === 'CANCEL_NATIVE_ZEC_INTENTS_SWAP') &&
+      getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page'
+    ) {
+      sendResponse({ error: 'Unauthorized native ZEC Intents Swap request' })
+      return true
+    }
     const coordinator = confidentialFundingCoordinator
     if (!coordinator) {
       sendResponse({ error: 'Confidential funding is unavailable in this network' })
@@ -4382,6 +4409,14 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         })
         sendResponse({
           error: error instanceof Error ? error.message : 'Confidential funding request failed',
+          ...(message.type === 'REFRESH_CONFIDENTIAL_BALANCES' &&
+          error instanceof Error &&
+          'balanceErrorCode' in error &&
+          ['authorization_required', 'account_unavailable', 'balance_unavailable'].includes(
+            String(error.balanceErrorCode)
+          )
+            ? { balanceErrorCode: error.balanceErrorCode }
+            : {}),
           ...(error instanceof ExternalShieldDepositError ? { depositStage: error.stage } : {})
         })
       })
@@ -5876,12 +5911,33 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           )
           const walletCore = await prepareWalletCoreForTx(request.walletId, request.accountId)
           try {
-            const deadline = await readRheaZcashTransferDeadline(
-              request.quoteBinding,
-              request.to,
-              request.amount,
-              request.fundingSource
-            )
+            const deadline =
+              request.quoteBinding?.provider === 'near-intents'
+                ? await confidentialFundingCoordinator?.claimNativeZecIntentsSpend({
+                    walletId: request.walletId,
+                    accountId: request.accountId,
+                    transactionId: message.transactionId,
+                    binding: request.quoteBinding,
+                    to: request.to ?? '',
+                    amount: request.amount,
+                    fundingSource: request.fundingSource ?? ''
+                  })
+                : await readRheaZcashTransferDeadline(
+                    request.quoteBinding,
+                    request.to,
+                    request.amount,
+                    request.fundingSource
+                  )
+            if (request.quoteBinding?.provider === 'near-intents' && !deadline) {
+              throw new Error('Native ZEC Intents quote is unavailable')
+            }
+            if (request.quoteBinding?.provider === 'near-intents') {
+              await transactionRecorder.updateTransaction(
+                buildAccountKey(DEFAULT_NETWORK, request.walletId, request.accountId),
+                message.transactionId,
+                { depositAddress: request.quoteBinding.depositAddress }
+              )
+            }
             return await walletCore.pcztProveSend(
               prepared.fullPcztBase64,
               message.signedPcztBase64,
@@ -5963,12 +6019,33 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             signatures
           )
           try {
-            const deadline = await readRheaZcashTransferDeadline(
-              request.quoteBinding,
-              request.to,
-              request.amount,
-              request.fundingSource
-            )
+            const deadline =
+              request.quoteBinding?.provider === 'near-intents'
+                ? await confidentialFundingCoordinator?.claimNativeZecIntentsSpend({
+                    walletId: request.walletId,
+                    accountId: request.accountId,
+                    transactionId: message.transactionId,
+                    binding: request.quoteBinding,
+                    to: request.to ?? '',
+                    amount: request.amount,
+                    fundingSource: request.fundingSource ?? ''
+                  })
+                : await readRheaZcashTransferDeadline(
+                    request.quoteBinding,
+                    request.to,
+                    request.amount,
+                    request.fundingSource
+                  )
+            if (request.quoteBinding?.provider === 'near-intents' && !deadline) {
+              throw new Error('Native ZEC Intents quote is unavailable')
+            }
+            if (request.quoteBinding?.provider === 'near-intents') {
+              await transactionRecorder.updateTransaction(
+                buildAccountKey(DEFAULT_NETWORK, request.walletId, request.accountId),
+                message.transactionId,
+                { depositAddress: request.quoteBinding.depositAddress }
+              )
+            }
             return await walletCore.pcztProveSend(prepared.fullPcztBase64, signed, deadline)
           } catch (error) {
             if (isTransactionSubmissionUnknown(error)) {
@@ -6864,19 +6941,18 @@ async function handleAccountSwitched({
   try {
     const account = backgroundZcashWalletRuntime.getCurrentAccount()
 
-    if (account && isAccountNetworkEnabled(account, DEFAULT_NETWORK, 'zcash')) {
-      await dappHandler.notifyAccountsChanged({
-        transparent: account.addresses.transparent,
-        shielded: account.addresses.shielded
-      })
-    } else {
-      await dappHandler.notifyAccountsChanged([])
-    }
-    await notifyEvmAccountsChanged()
-    await bitcoinDAppHandler.notifyAccountsChanged()
-    await solanaDAppHandler?.notifyAccountsChanged()
-    await nearDAppHandler?.notifyAccountsChanged()
-    await multichainSessionDAppHandler?.notifyAllSessionsChanged()
+    await Promise.allSettled([
+      dappHandler.notifyAccountsChanged(
+        account && isAccountNetworkEnabled(account, DEFAULT_NETWORK, 'zcash')
+          ? { transparent: account.addresses.transparent, shielded: account.addresses.shielded }
+          : []
+      ),
+      notifyEvmAccountsChanged(),
+      bitcoinDAppHandler.notifyAccountsChanged(),
+      solanaDAppHandler?.notifyAccountsChanged(),
+      nearDAppHandler?.notifyAccountsChanged(),
+      multichainSessionDAppHandler?.notifyAllSessionsChanged()
+    ])
     if (refreshPortfolio) {
       portfolioCoordinator?.refreshActive().catch(error => {
         console.warn('[Portfolio] Account refresh failed:', error)
@@ -7502,6 +7578,7 @@ async function handleBackgroundZcashTx(params: {
         await prepareTransparentSpend(walletCore, sendParams.amount)
       }
 
+      let nativeIntentsQuote: NativeZecIntentsSwapReview | null | undefined
       let txid: string
       let txHashes: string[]
       const transactionContext = { accountKey, transactionId }
@@ -7519,12 +7596,39 @@ async function handleBackgroundZcashTx(params: {
           onChainAmount = shieldResult.amount
         }
       } else {
-        const submissionDeadline = await readRheaZcashTransferDeadline(
-          pendingRecord.quoteBinding,
-          sendParams!.to,
-          sendParams!.amount,
-          sendParams!.fundingSource
-        )
+        nativeIntentsQuote =
+          pendingRecord.quoteBinding?.provider === 'near-intents'
+            ? await confidentialFundingCoordinator?.getNativeZecIntentsSwap(
+                pendingRecord.quoteBinding.quoteHandle ?? ''
+              )
+            : null
+        if (
+          pendingRecord.quoteBinding?.provider === 'near-intents' &&
+          (!nativeIntentsQuote || txType !== 'swap' || !confidentialFundingCoordinator)
+        ) {
+          throw new Error('Native ZEC Intents quote is unavailable')
+        }
+        const submissionDeadline = nativeIntentsQuote
+          ? await confidentialFundingCoordinator!.claimNativeZecIntentsSpend({
+              walletId,
+              accountId,
+              transactionId,
+              binding: pendingRecord.quoteBinding!,
+              to: sendParams!.to,
+              amount: sendParams!.amount,
+              fundingSource: sendParams!.fundingSource ?? 'shielded'
+            })
+          : await readRheaZcashTransferDeadline(
+              pendingRecord.quoteBinding,
+              sendParams!.to,
+              sendParams!.amount,
+              sendParams!.fundingSource
+            )
+        if (nativeIntentsQuote) {
+          await transactionRecorder.updateTransaction(accountKey, transactionId, {
+            depositAddress: nativeIntentsQuote.depositAddress
+          })
+        }
         const transferResult = await walletCore.sendTransaction(
           { ...sendParams!, marginalFeeZats, feeQuoteId },
           submissionDeadline,
@@ -7588,20 +7692,34 @@ async function handleBackgroundZcashTx(params: {
       }
 
       try {
-        if (isCrossChain && monitorParams) {
+        const effectiveMonitorParams = nativeIntentsQuote
+          ? {
+              depositAddress: nativeIntentsQuote.depositAddress,
+              tokenInSymbol: 'ZEC',
+              tokenOutSymbol: nativeIntentsQuote.destinationSymbol,
+              amountIn: nativeIntentsQuote.amountZec,
+              amountOut: safeBig(nativeIntentsQuote.expectedOutputRaw)
+                .div(safeBig(10).pow(nativeIntentsQuote.destinationDecimals))
+                .toString(),
+              actionName: 'Swap',
+              originChain: 'zcash',
+              destinationChain: nativeIntentsQuote.destinationBlockchain
+            }
+          : monitorParams
+        if (isCrossChain && effectiveMonitorParams) {
           await transactionMonitor.addTransaction({
-            depositAddress: monitorParams.depositAddress,
-            tokenInSymbol: monitorParams.tokenInSymbol,
-            tokenOutSymbol: monitorParams.tokenOutSymbol,
-            amountIn: monitorParams.amountIn,
-            amountOut: monitorParams.amountOut,
-            actionName: monitorParams.actionName,
+            depositAddress: effectiveMonitorParams.depositAddress,
+            tokenInSymbol: effectiveMonitorParams.tokenInSymbol,
+            tokenOutSymbol: effectiveMonitorParams.tokenOutSymbol,
+            amountIn: effectiveMonitorParams.amountIn,
+            amountOut: effectiveMonitorParams.amountOut,
+            actionName: effectiveMonitorParams.actionName,
             accountKey,
             walletId,
             accountId,
             transactionId,
-            originChain: monitorParams.originChain,
-            destinationChain: monitorParams.destinationChain
+            originChain: effectiveMonitorParams.originChain,
+            destinationChain: effectiveMonitorParams.destinationChain
           })
         }
       } catch {

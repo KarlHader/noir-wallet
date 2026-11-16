@@ -19,6 +19,7 @@ export interface ReadEvmPortfolioInput {
   readonly assets: AssetRegistry
   readonly rpc: EvmBalanceRpc
   readonly privateAddress?: string
+  readonly publicOnly?: boolean
   readonly signal?: AbortSignal
   readonly now?: () => number
 }
@@ -135,6 +136,13 @@ function combineAccountBalances(
   })
 }
 
+export function completePublicOnlyEvmBalance(
+  balance: PortfolioBalanceSnapshot
+): PortfolioBalanceSnapshot {
+  if (balance.mainRaw !== undefined || balance.privateRaw !== undefined) return balance
+  return Object.freeze({ ...balance, mainRaw: balance.totalRaw, privateRaw: '0' })
+}
+
 export async function readEvmPortfolioSource(
   input: ReadEvmPortfolioInput
 ): Promise<PortfolioSourceSnapshot> {
@@ -185,7 +193,9 @@ export async function readEvmPortfolioSource(
               main,
               await readAsset(assets[index], privateAddress, input.rpc, input.signal, updatedAt)
             )
-          : main
+          : input.publicOnly
+            ? completePublicOnlyEvmBalance(main)
+            : main
       } catch (error) {
         if (error instanceof EvmRpcError && error.code === 'cancelled') throw error
         errors.push(error instanceof EvmRpcError ? mapErrorCode(error.code) : 'unknown')

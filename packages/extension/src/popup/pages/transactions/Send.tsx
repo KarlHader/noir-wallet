@@ -40,7 +40,10 @@ import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent, type TrackOptions } fro
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../../components/ui/dialog'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
-import { useTransactionResultStore } from '@/store/transaction-result-store'
+import {
+  useTransactionResultStore,
+  type ZcashSendRetryDraft
+} from '@/store/transaction-result-store'
 import {
   retryZcashBalanceRead,
   useZcashBalanceReadStatus,
@@ -215,29 +218,76 @@ export function Send({
   readonly fundingSourceSelection?: Readonly<{ source: FundingSource; revision: number }> | null
   readonly onSelectAsset?: (fundingSource: FundingSource) => void
 } = {}) {
-  const { goBack, navigate } = useNavigate()
+  const { navigate, goBack } = useNavigate()
   const location = useLocation()
   const routeParams = new URLSearchParams(location.search)
+  const currentWalletId = useWalletStore(state => state.currentWalletId)
+  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const sourceWalletId = routeParams.get('sourceWalletId')
+  const sourceAccountId = routeParams.get('sourceAccountId')
+  const sourceScopeValid =
+    (!sourceWalletId || sourceWalletId === currentWalletId) &&
+    (!sourceAccountId || sourceAccountId === currentAccountId)
   const requestedOriginPath = routeParams.get('originPath')
   const originPath =
     requestedOriginPath?.startsWith('/') &&
     !requestedOriginPath.startsWith('//') &&
-    !requestedOriginPath.startsWith('/send/zcash') &&
-    !requestedOriginPath.startsWith('/transaction-result')
+    !requestedOriginPath.includes('\\') &&
+    !requestedOriginPath.startsWith('/send') &&
+    !requestedOriginPath.startsWith('/transaction-result') &&
+    sourceScopeValid
       ? requestedOriginPath
       : null
-  const leaveSend = () => (originPath ? navigate(originPath, { replace: true }) : goBack())
+  const sendOriginHistory = (
+    location.state as {
+      sendOriginHistory?: {
+        originPath?: unknown
+        network?: unknown
+        walletId?: unknown
+        accountId?: unknown
+        entryKey?: unknown
+      }
+    } | null
+  )?.sendOriginHistory
+  const canReturnToOriginHistory = Boolean(
+    originPath &&
+    sendOriginHistory?.originPath === originPath &&
+    sendOriginHistory.network === currentNetwork &&
+    sendOriginHistory.walletId === currentWalletId &&
+    sendOriginHistory.accountId === currentAccountId &&
+    typeof sendOriginHistory.entryKey === 'string' &&
+    sendOriginHistory.entryKey.length > 0
+  )
+  const leaveSend = () =>
+    canReturnToOriginHistory
+      ? goBack()
+      : navigate(originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/'), {
+          replace: true
+        })
   const isSelfMove = routeParams.get('move') === '1'
   const moveSource =
     routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
       ? (routeParams.get('from') as FundingSource)
       : null
   const walletMode = 'public' as const
+  const requestedRetryDraft = (location.state as { retryDraft?: ZcashSendRetryDraft } | null)
+    ?.retryDraft
+  const retryDraft =
+    requestedRetryDraft?.network === currentNetwork &&
+    requestedRetryDraft.walletId === currentWalletId &&
+    requestedRetryDraft.accountId === currentAccountId &&
+    requestedRetryDraft.fundingSource === routeParams.get('from')
+      ? requestedRetryDraft
+      : null
   const routeIdentity = JSON.stringify([isSelfMove, routeParams.get('from'), walletMode])
   const previousRouteIdentity = useRef(routeIdentity)
   const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() => {
     const source = routeParams.get('from')
-    return source === 'shielded' || source === 'transparent' ? source : initialFundingSource
+    return (
+      retryDraft?.fundingSource ??
+      (source === 'shielded' || source === 'transparent' ? source : initialFundingSource)
+    )
   })
   const [privateSendScope, setPrivateSendScope] = useState<string | null>(null)
   const [privatePreview, setPrivatePreview] = useState<{
@@ -247,14 +297,14 @@ export function Send({
   } | null>(null)
   const [privatePreviewError, setPrivatePreviewError] = useState<string | null>(null)
   const [privatePreviewRetry, setPrivatePreviewRetry] = useState(0)
-  const [toAddress, setToAddress] = useState('')
+  const [toAddress, setToAddress] = useState(retryDraft?.toAddress ?? '')
   const [selectedRecipient, setSelectedRecipient] = useState<{
     address: string
     name: string
   } | null>(null)
-  const [amount, setAmount] = useState('')
-  const [maxSelected, setMaxSelected] = useState(false)
-  const [memo, setMemo] = useState('')
+  const [amount, setAmount] = useState(retryDraft?.amount ?? '')
+  const [maxSelected, setMaxSelected] = useState(retryDraft?.maxSelected ?? false)
+  const [memo, setMemo] = useState(retryDraft?.memo ?? '')
   const [showReview, setShowReview] = useState(false)
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
@@ -269,9 +319,6 @@ export function Send({
   } = useShieldFunds(PAGE_IDS.SEND)
 
   const currentAccount = useWalletStore(state => state.getCurrentAccount())
-  const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const activeScopeRef = useRef<string | null | undefined>(undefined)
   const balance = useAccountDataStore(state => state.getCurrentBalance())
@@ -319,12 +366,43 @@ export function Send({
       ? 'shielded'
       : selectedFundingSource
   const isTransparentToShieldMove = isSelfMove && fundingSource === 'transparent'
-  const resultReturnPath = `${embedded ? '/send/zcash' : location.pathname}?${new URLSearchParams({
+  const sendDraftPath = `${embedded ? '/send/zcash' : location.pathname}?${new URLSearchParams({
     ...(isSelfMove ? { move: '1' } : {}),
     ...(originPath ? { originPath } : {}),
+    ...(sourceWalletId ? { sourceWalletId } : {}),
+    ...(sourceAccountId ? { sourceAccountId } : {}),
     from: fundingSource,
     mode: walletMode
   })}`
+  const resultReturnPath = originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/')
+  const resultNavigationState = canReturnToOriginHistory
+    ? {
+        sendOriginHistory: {
+          originPath,
+          network: currentNetwork,
+          walletId: currentWalletId,
+          accountId: currentAccountId,
+          entryKey: sendOriginHistory?.entryKey,
+          sendKey: location.key
+        }
+      }
+    : undefined
+  const retrySend =
+    currentWalletId && currentAccountId
+      ? {
+          path: sendDraftPath,
+          draft: {
+            network: currentNetwork,
+            walletId: currentWalletId,
+            accountId: currentAccountId,
+            fundingSource,
+            toAddress,
+            amount,
+            memo,
+            maxSelected
+          }
+        }
+      : undefined
   const selfMove = isSelfMove
     ? resolveZcashSelfMove(currentAccount?.addresses, fundingSource, currentNetwork)
     : null
@@ -375,7 +453,9 @@ export function Send({
       move: '1',
       from: reverseSource,
       mode: walletMode,
-      ...(originPath ? { originPath } : {})
+      ...(originPath ? { originPath } : {}),
+      ...(sourceWalletId ? { sourceWalletId } : {}),
+      ...(sourceAccountId ? { sourceAccountId } : {})
     })
     navigate(`/send/zcash?${params.toString()}`, { replace: true })
   }
@@ -840,9 +920,10 @@ export function Send({
                 showFrom: true,
                 showTo: true
               },
-              resultReturnPath
+              resultReturnPath,
+              retrySend
             )
-            navigate('/transaction-result')
+            navigate('/transaction-result', { state: resultNavigationState })
           } else if (result.status === 'timeout') {
             toast.error('Hardware signing timed out', 'The transaction form has been restored.')
           }
@@ -878,8 +959,8 @@ export function Send({
           selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
         }
       } as const
-      setResult(pendingResult, resultReturnPath)
-      navigate('/transaction-result')
+      setResult(pendingResult, resultReturnPath, retrySend)
+      navigate('/transaction-result', { state: resultNavigationState })
 
       const result = await sendTransaction({
         to: effectiveToAddress,

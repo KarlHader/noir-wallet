@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { selectActivityObservation } from '../../../src/popup/services/activity-observation.ts'
 
 import {
   buildActivityExecutionAddressModes,
@@ -21,6 +22,31 @@ import {
 
 const transactionHash = `0x${'a'.repeat(64)}`
 const replacementTransactionHash = `0x${'b'.repeat(64)}`
+
+test('Activity observations stay scoped and never regress a terminal transaction', () => {
+  const current = {
+    id: 'tx:1',
+    source: 'wallet-v2',
+    scope: { keyDomainId: 'wallet:1', accountId: 'account:1' },
+    status: 'final',
+    updatedAt: 10
+  }
+  expect(
+    selectActivityObservation(current, { ...current, status: 'confirming', updatedAt: 9 })
+  ).toBe(current)
+  expect(
+    selectActivityObservation(current, { ...current, status: 'confirming', updatedAt: 11 })
+  ).toBe(current)
+  const other = { ...current, id: 'tx:2', status: 'broadcast', updatedAt: 1 }
+  expect(selectActivityObservation(current, other)).toBe(other)
+  const otherAccount = {
+    ...current,
+    scope: { keyDomainId: 'wallet:1', accountId: 'account:2' },
+    status: 'broadcast',
+    updatedAt: 1
+  }
+  expect(selectActivityObservation(current, otherAccount)).toBe(otherAccount)
+})
 
 function failedItem(evidence) {
   return {

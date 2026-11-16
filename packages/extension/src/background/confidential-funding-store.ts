@@ -160,6 +160,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
     (plan.batchSubmissionAttemptedAt !== undefined &&
       (!Number.isSafeInteger(plan.batchSubmissionAttemptedAt) ||
         plan.batchSubmissionAttemptedAt < plan.createdAt)) ||
+    (plan.settlementCheckedAt !== undefined &&
+      (!Number.isSafeInteger(plan.settlementCheckedAt) || plan.settlementCheckedAt < 0)) ||
     (plan.backendStatus !== undefined && !isBoundedString(plan.backendStatus, 128)) ||
     (plan.errorStatus !== undefined && !isBoundedString(plan.errorStatus, 256)) ||
     (plan.operation !== undefined &&

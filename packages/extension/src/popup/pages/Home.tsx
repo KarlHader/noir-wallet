@@ -89,6 +89,9 @@ import {
 } from '../services/asset-domains'
 import { selectShieldActions, type ShieldAction } from '../services/shield-action-selection'
 import { getPrivateTransferChainIds } from '../services/private-balance-transfer'
+import { prewarmInitialSwapCatalog } from '../services/swap-catalog-loading'
+import { createSwapTokenPreferenceScope } from '../services/swap-token-selection'
+import { useSwapPreferences } from '@/store/swap-store'
 import { isRetainedV1ZcashOnlyAccount } from '@/core/wallet/account-network-selection'
 import shieldYourFundsTitle from '@/images/figma-shield-your-funds.svg'
 import shieldGuideBackground from '@/images/figma-shield-guide-background.svg'
@@ -185,6 +188,51 @@ export function Home() {
   })
   const effectiveWalletId = effectiveAccount?.walletId ?? null
   const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const swapSelections = useSwapPreferences(state => state.tokenSelections)
+  const swapEnabledChains = storageV2Account?.networks.map(network => network.chain)
+  const swapEnabledChainKey = swapEnabledChains?.map(chain => chain.id).join('|')
+  useEffect(() => {
+    if (
+      !effectiveWalletId ||
+      !effectiveAccountId ||
+      !swapEnabledChains?.length ||
+      !useSwapPreferences.persist.hasHydrated()
+    )
+      return
+    const evmChain =
+      swapEnabledChains.find(chain => chain.id === 'eip155:1') ??
+      swapEnabledChains.find(chain => chain.family === 'evm')
+    const zcashChain = swapEnabledChains.find(chain => chain.family === 'zcash')
+    const plans = (['main', 'shield', 'private'] as const).flatMap(mode => {
+      const scope = createSwapTokenPreferenceScope(
+        effectiveWalletId,
+        effectiveAccountId,
+        currentNetwork,
+        mode
+      )
+      const selection = scope ? swapSelections[scope] : undefined
+      if (mode === 'private' && !selection) return []
+      return [
+        {
+          enabledChains: swapEnabledChains,
+          defaultSourceChainId: mode === 'shield' ? zcashChain?.id : evmChain?.id,
+          savedSourceAssetId: selection?.tokenInId,
+          savedDestinationAssetId: selection?.tokenOutId
+        }
+      ]
+    })
+    let active = true
+    const warm = () => {
+      if (active) void Promise.all(plans.map(prewarmInitialSwapCatalog))
+    }
+    const idleId = window.requestIdleCallback?.(warm, { timeout: 1500 })
+    const timeoutId = idleId === undefined ? window.setTimeout(warm, 250) : undefined
+    return () => {
+      active = false
+      if (idleId !== undefined) window.cancelIdleCallback(idleId)
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+    }
+  }, [effectiveWalletId, effectiveAccountId, currentNetwork, swapEnabledChainKey, swapSelections])
   const portfolioScopeKey = JSON.stringify([effectiveWalletId ?? '', effectiveAccountId ?? ''])
   const persistedChainSelection = useSettingsStore(
     state => state.portfolioChainSelectionByAccount[portfolioScopeKey]
@@ -1158,6 +1206,7 @@ export function Home() {
             {multichainPortfolioEnabled ? (
               <MultichainPortfolioPanel
                 domain={assetDomain}
+                activeAccount={storageV2Account}
                 walletId={effectiveWalletId}
                 accountId={effectiveAccountId}
                 model={multichainPortfolio}

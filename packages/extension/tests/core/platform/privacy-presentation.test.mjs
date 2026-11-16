@@ -18,11 +18,78 @@ import {
 } from '../../../src/popup/services/asset-domains.ts'
 import { projectPortfolioForChains } from '../../../src/popup/services/portfolio-presentation.ts'
 import {
-  projectNearConfidentialZecForHome,
+  getNearConfidentialChainId,
+  getNearConfidentialIconChain,
+  listStandaloneNearConfidentialHoldings,
   resolveConfidentialDetailAssetId,
   resolveNearConfidentialZecHolding
 } from '../../../src/popup/services/near-confidential-holdings.ts'
 import { getAssetDetailCategories } from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+import { resolveShieldZcashVaultEntry } from '../../../src/popup/services/shield-zcash-entry.ts'
+
+test('Zcash Shield requires the active V2 account source and network capability', () => {
+  const previousFlags = globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__
+  globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = ['chain.zcash']
+  try {
+    const input = {
+      network: 'mainnet',
+      enabledFlags: ['chain.zcash'],
+      hasPortfolioZcash: false
+    }
+    expect(resolveShieldZcashVaultEntry({ ...input, walletSource: null }).showVaultCard).toBe(false)
+    expect(
+      resolveShieldZcashVaultEntry({
+        ...input,
+        walletSource: { kind: 'private-key', chainFamily: 'eip155' }
+      }).showVaultCard
+    ).toBe(false)
+    expect(
+      resolveShieldZcashVaultEntry({
+        ...input,
+        walletSource: { kind: 'software' }
+      }).canEnableZcash
+    ).toBe(true)
+    expect(
+      resolveShieldZcashVaultEntry({
+        ...input,
+        walletSource: {
+          kind: 'hardware',
+          hardware: { vendor: 'ledger', firmwareProfile: 'multi-coin', capabilities: ['evm'] }
+        }
+      }).showVaultCard
+    ).toBe(false)
+  } finally {
+    globalThis.__ENABLED_CHAIN_FEATURE_FLAGS__ = previousFlags
+  }
+})
+
+test('Confidential chain badges follow asset identity instead of a token symbol', () => {
+  expect(
+    getNearConfidentialIconChain({
+      protocolAssetId: 'nep141:zec.omft.near',
+      symbol: 'ZEC'
+    })
+  ).toBe('zec')
+  expect(
+    getNearConfidentialIconChain({
+      protocolAssetId: 'nep141:eth.omft.near',
+      symbol: 'ETH'
+    })
+  ).toBe('eth')
+  expect(
+    getNearConfidentialIconChain({
+      protocolAssetId: 'nep141:unrelated.near',
+      symbol: 'ZEC',
+      chainId: 'eip155:42161'
+    })
+  ).toBe('arbitrum')
+  expect(
+    getNearConfidentialChainId({
+      protocolAssetId: 'nep141:unrelated.near',
+      symbol: 'ZEC'
+    })
+  ).toBeNull()
+})
 
 test('Home action source follows the selected balance domain', () => {
   const evm = {
@@ -183,7 +250,7 @@ test('NEAR Confidential ZEC stays separate from on-chain ZEC and inside its acco
   ).toBeNull()
 })
 
-test('Home ZEC display combines on-chain and NEAR Confidential balances without changing source balances', () => {
+test('Home keeps native and Confidential ZEC as separate balances', () => {
   const assetId = 'bip122:00040fe8ec8471911baa1db1266ea15d/slip44:133'
   const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const asset = {
@@ -215,26 +282,14 @@ test('Home ZEC display combines on-chain and NEAR Confidential balances without 
       ]
     }
   }
-  const total = projectNearConfidentialZecForHome(model, model, 'all')
-  const shield = projectNearConfidentialZecForHome(
-    projectPortfolioForDomain(model, 'shield'),
-    model,
-    'shield'
-  )
-  expect(total?.model.assets[0].balance.totalRaw).toBe('425000000')
-  expect(shield?.model.assets[0].balance.totalRaw).toBe('325000000')
-  expect(total?.model.assets[0].balance.availableRaw).toBe('250000000')
+  const confidential = listStandaloneNearConfidentialHoldings(model, model, null)
+  expect(confidential).toHaveLength(1)
+  expect(confidential[0].entry.asset.protocolAssetId).toBe('nep141:zec.omft.near')
+  expect(confidential[0].entry.asset.availableRaw).toBe('125000000')
+  expect(confidential[0].chain.chain.id).toBe(chainId)
   expect(model.assets[0].balance.totalRaw).toBe('300000000')
-  expect(
-    projectNearConfidentialZecForHome(projectPortfolioForDomain(model, 'public'), model, 'public')
-  ).toBeNull()
-  expect(
-    projectNearConfidentialZecForHome(
-      model,
-      { ...model, scope: { ...model.scope, accountId: 'other' } },
-      'all'
-    )
-  ).toBeNull()
+  expect(getAssetDomainRaw(model.assets[0], 'public')).toBe('100000000')
+  expect(getAssetDomainRaw(model.assets[0], 'shield')).toBe('200000000')
 })
 
 test('Home domain projection keeps pending balances on their own networks', () => {
@@ -266,6 +321,31 @@ test('Home domain projection keeps pending balances on their own networks', () =
       'private'
     ).status
   ).toBe('loading')
+})
+
+test('Public-only EVM accounts do not expose empty Private or Shield source rows', () => {
+  const asset = {
+    asset: { id: 'eip155:1/erc20:0x1111111111111111111111111111111111111111', chainId: 'eip155:1' },
+    source: 'user-added',
+    balance: { totalRaw: '200', mainRaw: '200', privateRaw: '0', pendingRaw: '0' }
+  }
+  const model = {
+    status: 'ready',
+    assets: [asset],
+    chains: [{ chain: { id: 'eip155:1', family: 'evm' }, status: 'ready', assets: [asset] }]
+  }
+  expect(
+    projectPortfolioForDomain(model, 'public', { evmPrivateAvailable: false }).assets
+  ).toHaveLength(1)
+  expect(
+    projectPortfolioForDomain(model, 'shield', { evmPrivateAvailable: false }).assets
+  ).toHaveLength(0)
+  expect(
+    projectPortfolioForDomain(model, 'private', { evmPrivateAvailable: false }).assets
+  ).toHaveLength(0)
+  expect(
+    projectPortfolioForDomain(model, 'shield', { evmPrivateAvailable: true }).assets
+  ).toHaveLength(1)
 })
 
 test('Home total requires a complete current-account Portfolio and ready prices', () => {
