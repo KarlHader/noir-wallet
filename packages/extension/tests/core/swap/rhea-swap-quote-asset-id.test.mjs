@@ -183,9 +183,24 @@ it('keeps EVM Private destinations available for a quote regardless of catalog r
 })
 
 it('keeps eligible cross-chain Send destinations available for a Private quote', () => {
-  const sourceToken = { rheaChainId: '1', isNative: true, sources: ['lifi'] }
-  const near = { rheaChainId: '8453', isNative: true, sources: ['nearintents'] }
-  const ordinary = { rheaChainId: '8453', isNative: true, sources: ['lifi'] }
+  const nativeToken = chainId =>
+    toRheaSwapToken(
+      normalizeFromTokenList(
+        {
+          native: {
+            chainId,
+            address: `0x${'0'.repeat(40)}`,
+            symbol: 'ETH',
+            decimals: 18,
+            isNative: true
+          }
+        },
+        chainId
+      )[0]
+    )
+  const sourceToken = { ...nativeToken(1), sources: ['lifi'] }
+  const near = { ...nativeToken(8453), sources: ['nearintents'] }
+  const ordinary = { ...nativeToken(8453), sources: ['lifi'] }
   const options = {
     tokens: [near, ordinary],
     sourceToken,
