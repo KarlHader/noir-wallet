@@ -480,7 +480,7 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
   expect(knownZero.confidential).toEqual({ status: 'ready', assets: [] })
 })
 
-test('notifies Portfolio only after a successful Confidential refresh for the active account', async () => {
+test('notifies Portfolio only after a successful Confidential refresh for the active account', { timeout: 5000 }, async () => {
   const previousChrome = globalThis.chrome
   const storage = { get: async () => ({}), set: async () => {}, remove: async () => {} }
   const updates = []
@@ -501,9 +501,13 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
   const scope = { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
   const message = { scope, authorize: true }
   const handler = getConfidentialFundingMessageHandler('REFRESH_CONFIDENTIAL_BALANCES')
+  const { AccountContextTransitionCoordinator } = await import(
+    '../../../src/background/account-context-transition.ts'
+  )
+  const accountContextTransition = new AccountContextTransitionCoordinator()
   const context = refreshBalances => ({
     coordinator: { refreshBalances },
-    accountContextTransition: { runActiveOperation: operation => operation() }
+    accountContextTransition
   })
   try {
     Object.assign(wallet, {
@@ -512,7 +516,14 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
       currentAccountId: scope.accountId
     })
     const balances = [{ tokenId: 'token', available: '1', source: 'api' }]
-    expect(await handler(context(async () => balances), message)).toBe(balances)
+    // A refresh may authorize through the signer, which serializes its own
+    // account validation/signature. It must not wait behind its caller.
+    expect(
+      await handler(
+        context(() => accountContextTransition.runActiveOperation(async () => balances)),
+        message
+      )
+    ).toBe(balances)
     expect(updates).toEqual([
       { type: 'PORTFOLIO_UPDATED', walletId: scope.keyDomainId, accountId: scope.accountId }
     ])
