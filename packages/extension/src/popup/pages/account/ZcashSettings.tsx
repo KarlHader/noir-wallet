@@ -25,8 +25,8 @@ import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { getZcashDerivationPaths } from '@/lib/zcash-derivation'
 import { DedupPromise } from '@/lib/async-utils'
 
-function privacyLabel(address: AccountNetworkAddressView): 'Shielded' | 'Transparent' {
-  return address.privacy === 'transparent' ? 'Transparent' : 'Shielded'
+function privacyLabel(address: AccountNetworkAddressView): 'Shield' | 'Transparent' {
+  return address.privacy === 'transparent' ? 'Transparent' : 'Shield'
 }
 
 const BLOCK_TIME_CACHE_TTL_MS = 60_000
@@ -476,8 +476,8 @@ export function ZcashSettings() {
                 type="button"
                 variant="outline"
                 className="h-8 w-8 shrink-0 border-border bg-white/[0.03] p-0 text-muted"
-                aria-label="Shielded address history"
-                title="Shielded address history"
+                aria-label="Shield address history"
+                title="Shield address history"
                 aria-haspopup="dialog"
                 onClick={() => {
                   setHistoryError(null)

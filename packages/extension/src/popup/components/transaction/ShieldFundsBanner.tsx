@@ -59,7 +59,7 @@ export function ShieldFundsBanner({
 
   const handleWhyMigrate = async () => {
     await openModal({
-      title: 'Why shielded?',
+      title: 'Why shield?',
       showCloseButton: true,
       body: () => <WhyMigrateContent />
     })

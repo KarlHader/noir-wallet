@@ -1080,7 +1080,7 @@ export function Home() {
           >
             <WalletActionButton
               icon={<WalletShieldFundsIcon />}
-              label="Shielded"
+              label="Shield"
               active={showShieldIntro}
               disabled={!modeActionsReady || modeSwitchPending}
               onClick={() => {
@@ -1110,7 +1110,7 @@ export function Home() {
                 className="h-[18px] w-[195px]"
               />
               <p className="mt-2 text-xs font-light leading-[18px] text-wallet-secondary">
-                Shielded moves your assets into private vaults, so your balance can’t be traced back
+                Shield moves your assets into private vaults, so your balance can’t be traced back
                 to you.
               </p>
             </div>

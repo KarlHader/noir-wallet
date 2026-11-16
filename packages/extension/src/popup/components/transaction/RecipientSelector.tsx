@@ -36,7 +36,7 @@ const RECIPIENT_TAB_CLASS =
 
 function addressSchemeLabel(scheme: string): string | null {
   const labels: Readonly<Record<string, string>> = Object.freeze({
-    'zcash-shielded-unified': 'Shielded',
+    'zcash-shielded-unified': 'Shield',
     'zcash-transparent-p2pkh': 'Transparent',
     'bitcoin-p2pkh': 'Legacy',
     'bitcoin-p2sh-p2wpkh': 'Nested SegWit',
@@ -301,7 +301,7 @@ export function RecipientSelector({
                                   {schemeLabel && (
                                     <span
                                       className={
-                                        schemeLabel === 'Shielded'
+                                        schemeLabel === 'Shield'
                                           ? 'shrink-0 rounded-md bg-success/10 px-2 py-1 text-[10px] text-success'
                                           : 'shrink-0 rounded-md bg-white/5 px-2 py-1 text-[10px] text-muted'
                                       }

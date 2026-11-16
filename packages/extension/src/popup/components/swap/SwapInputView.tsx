@@ -391,7 +391,7 @@ export function SwapAssetCard({
                   <span
                     className={cn(
                       'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
-                      accountBadge === 'Shielded' || accountBadge === 'Shield'
+                      accountBadge === 'Shield'
                         ? 'bg-success/10 text-success'
                         : 'bg-white/7 text-muted'
                     )}
@@ -657,7 +657,7 @@ export function SwapInputView({
     destinationBadgeOverride ??
     (isZecDestination && !requiresRecipientAddress
       ? addressType === 'shielded'
-        ? 'Shielded'
+        ? 'Shield'
         : 'Transparent'
       : undefined)
   const balanceValidationMessage = hasInsufficientFunds
@@ -681,9 +681,7 @@ export function SwapInputView({
             fiatValue={fromFiat}
             accountAddress={hideAccountDetails ? undefined : sourceAddress}
             accountBadge={
-              hideAccountDetails
-                ? undefined
-                : (sourceBadge ?? (isZecSource ? 'Shielded' : undefined))
+              hideAccountDetails ? undefined : (sourceBadge ?? (isZecSource ? 'Shield' : undefined))
             }
             accountAction={hideAccountDetails && !isZecSource ? undefined : sourceAccountAction}
             balance={isZecSource ? (availableBalance ?? spendableBalance) : spendableBalance}
@@ -794,7 +792,7 @@ export function SwapInputView({
                         <span
                           className={cn(
                             'shrink-0 rounded px-1.5 text-[10px] font-medium leading-[17px]',
-                            destinationBadge === 'Shield' || destinationBadge === 'Shielded'
+                            destinationBadge === 'Shield'
                               ? 'bg-success/10 text-success'
                               : 'bg-white/7 text-muted'
                           )}

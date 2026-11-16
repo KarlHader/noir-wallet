@@ -291,7 +291,7 @@ function ShieldFundsContent() {
   return (
     <div className="page-container min-h-0 overflow-hidden">
       <div className="shrink-0 border-b border-white/[0.08]">
-        <PageHeader title="Shielded" showBack />
+        <PageHeader title="Shield" showBack />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
         <div className="pb-5 pt-4 text-center">
@@ -429,7 +429,7 @@ function ShieldFundsContent() {
         </div>
         <section aria-labelledby="shield-explanation" className="mt-8">
           <h2 id="shield-explanation" className="text-sm text-wallet-secondary">
-            How Shielded Works?
+            How Shield Works
           </h2>
           <div className="mt-5 space-y-7">
             {[

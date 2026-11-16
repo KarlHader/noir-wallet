@@ -26,7 +26,7 @@ import type { FundingSource } from '@/types/wallet'
 export interface SwapReviewAccount {
   readonly name?: string
   readonly address?: string
-  readonly badge?: 'Public' | 'Private' | 'Shield' | 'Transparent' | 'Shielded' | 'Confidential'
+  readonly badge?: 'Public' | 'Private' | 'Shield' | 'Transparent' | 'Confidential'
 }
 
 interface SwapReviewViewProps {
@@ -537,7 +537,7 @@ function QuoteAssetRow({
                 {badge && (
                   <span
                     className={
-                      badge === 'Shield' || badge === 'Shielded'
+                      badge === 'Shield'
                         ? 'shrink-0 rounded bg-success/15 px-2 py-0.5 text-[11px] text-success'
                         : badge === 'Private' || badge === 'Confidential'
                           ? 'shrink-0 rounded bg-private/12 px-2 py-0.5 text-[11px] text-private'

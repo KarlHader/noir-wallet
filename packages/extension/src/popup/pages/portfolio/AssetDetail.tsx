@@ -1103,7 +1103,7 @@ export function AssetDetail() {
           {(isZcashAsset || privateTransferEligible) && (
             <WalletActionButton
               icon={<WalletShieldFundsIcon />}
-              label="Shielded"
+              label="Shield"
               onClick={() =>
                 navigate(
                   `/shield-funds?mode=${actionDomain}&assetId=${encodeURIComponent(asset.asset.id)}`
@@ -1128,7 +1128,7 @@ export function AssetDetail() {
                   <AssetBalanceRow
                     key={domain}
                     label={
-                      domain === 'shield' ? 'Shielded' : domain === 'private' ? 'Private' : 'Public'
+                      domain === 'shield' ? 'Shield' : domain === 'private' ? 'Private' : 'Public'
                     }
                     subtitle={
                       domain === 'shield'
@@ -1224,7 +1224,7 @@ export function AssetDetail() {
             />
             {nearConfidentialZec && (
               <AssetBalanceRow
-                label="Shielded"
+                label="Shield"
                 actions={confidentialActions()}
                 subtitle="NEAR Confidential Intents"
                 balance={`${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`}
