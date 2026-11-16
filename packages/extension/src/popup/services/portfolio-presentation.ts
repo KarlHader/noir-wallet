@@ -189,15 +189,24 @@ export function sortPortfolioAssets(
 
 export function partitionPortfolioAssets(
   assets: readonly PortfolioAssetView[],
-  _prices: AssetPriceReadModel | null,
-  _lowValueUsdThreshold: Big
+  prices: AssetPriceReadModel | null,
+  lowValueUsdThreshold: Big
 ): Readonly<{
   primaryAssets: readonly PortfolioAssetView[]
   lowValueAssets: readonly PortfolioAssetView[]
 }> {
+  const lowValueAssets = assets.filter(asset => {
+    const fiat = getPortfolioAssetUsdValue(asset, prices)
+    return (
+      asset.asset.kind === 'token' &&
+      asset.source !== 'user-added' &&
+      fiat !== null &&
+      new Big(fiat).lt(lowValueUsdThreshold)
+    )
+  })
   return Object.freeze({
-    primaryAssets: Object.freeze([...assets]),
-    lowValueAssets: Object.freeze([])
+    primaryAssets: Object.freeze(assets.filter(asset => !lowValueAssets.includes(asset))),
+    lowValueAssets: Object.freeze(lowValueAssets)
   })
 }
 
@@ -294,14 +303,30 @@ export function buildPortfolioAssetGroups(
 
 export function partitionPortfolioAssetGroups(
   groups: readonly PortfolioAssetGroup[],
-  _prices: AssetPriceReadModel | null,
-  _lowValueUsdThreshold: Big
+  prices: AssetPriceReadModel | null,
+  lowValueUsdThreshold: Big
 ): Readonly<{
   primaryAssetGroups: readonly PortfolioAssetGroup[]
   lowValueAssetGroups: readonly PortfolioAssetGroup[]
 }> {
+  const primaryAssetGroups: PortfolioAssetGroup[] = []
+  const lowValueAssetGroups: PortfolioAssetGroup[] = []
+  for (const group of groups) {
+    const fiat = getCompletePortfolioAssetGroupUsdValue(group, prices)
+    const onlyTokens = group.entries.every(entry => entry.asset.asset.kind === 'token')
+    if (
+      onlyTokens &&
+      group.entries.every(entry => entry.asset.source !== 'user-added') &&
+      fiat !== null &&
+      new Big(fiat).lt(lowValueUsdThreshold)
+    ) {
+      lowValueAssetGroups.push(group)
+    } else {
+      primaryAssetGroups.push(group)
+    }
+  }
   return Object.freeze({
-    primaryAssetGroups: Object.freeze([...groups]),
-    lowValueAssetGroups: Object.freeze([])
+    primaryAssetGroups: Object.freeze(primaryAssetGroups),
+    lowValueAssetGroups: Object.freeze(lowValueAssetGroups)
   })
 }
