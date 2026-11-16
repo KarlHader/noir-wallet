@@ -1379,7 +1379,9 @@ function TransferForm() {
       setMethod('cluster')
     }
   }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
-  const shieldReviewKey = `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(evmMoveFee)}`
+  const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
+    `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(feeSelection)}`
+  const shieldReviewKey = shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
   const activeShieldReview = preparedShield?.key === shieldReviewKey ? preparedShield.review : null
@@ -1586,17 +1588,21 @@ function TransferForm() {
     if (!scopeStillCurrent()) return
     setShieldConnection(updated ? 'connected' : 'required')
   }
-  const prepareShield = async () => {
+  const prepareShield = async (
+    feeSelection: EvmFeeSelection = evmMoveFee,
+    replacingReview = false
+  ): Promise<boolean> => {
     if (
-      !canReviewShield ||
+      (!replacingReview && !canReviewShield) ||
       !selected ||
       !managedAsset ||
       !effective ||
       !shieldAmountState?.amountRaw ||
       !scopeStillCurrent()
     )
-      return
-    const key = shieldReviewKey
+      return false
+    const key = shieldReviewKeyForFee(feeSelection)
+    const expectedKey = shieldReviewKey
     setPreparingShield(true)
     setShieldError(null)
     try {
@@ -1611,18 +1617,23 @@ function TransferForm() {
         asset: selected.asset,
         chain: selected.chain,
         managed: managedAsset,
-        ...(from === 'shield' ? {} : { feeSelection: evmMoveFee }),
+        ...(from === 'shield' ? {} : { feeSelection }),
         ...(from === 'shield' && destination ? { destination } : {})
       })
       const result = await confidentialFundingClient.prepare(request)
-      if (!scopeStillCurrent() || latestShieldReviewKey.current !== key) {
+      if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
         if (result.phase === 'prepared')
           void confidentialFundingClient.cancel(result.planId).catch(() => {})
-        return
+        return false
       }
       if (result.phase !== 'prepared') {
-        await checkShieldPlan(result.planId)
-        return
+        const status = await checkShieldPlan(result.planId)
+        if (replacingReview && scopeStillCurrent()) {
+          setPreparedShield(null)
+          if (status !== 'started')
+            throw new Error('Transfer review could not be prepared. Try again.')
+        }
+        return false
       }
       if (!matchesShieldReview(result, request)) {
         void confidentialFundingClient.cancel(result.planId).catch(() => {})
@@ -1630,20 +1641,27 @@ function TransferForm() {
       }
       confirmAttemptedPlanId.current = null
       setConfirmUncertain(false)
+      if (replacingReview) setEvmMoveFee(feeSelection)
       setPreparedShield({ key, review: result })
+      return true
     } catch (error) {
       if (scopeStillCurrent()) {
         const message = error instanceof Error ? error.message : ''
         const classifiedMessage = classifyError(error).userMessage
-        setShieldError(
+        const userMessage =
           message === 'Gas limit is below the estimated gas required'
             ? 'Gas limit is below the estimated gas required. Edit the network fee and try again.'
             : classifiedMessage === 'Insufficient native balance for the amount and network fee.' &&
                 nativeFeeAsset
               ? `Insufficient ${formatSymbol(nativeFeeAsset.metadata.symbol)} balance for the amount and network fee.`
               : classifiedMessage
-        )
+        setShieldError(userMessage)
+        if (replacingReview) {
+          setPreparedShield(null)
+          throw new Error(userMessage)
+        }
       }
+      return false
     } finally {
       if (scopeStillCurrent()) setPreparingShield(false)
     }
@@ -1776,15 +1794,22 @@ function TransferForm() {
   const changeShieldFee = async (next: EvmFeeSelection) => {
     const review = activeShieldReview
     if (!review?.sourceEvmFee || areEvmFeeSelectionsEqual(next, evmMoveFee)) return
+    if (cancellingShield || confirmingShield || preparingShield || !scopeStillCurrent()) return
     if (confirmAttemptedPlanId.current === review.planId)
       throw new Error('Check transfer status before changing network fee.')
     setCancellingShield(true)
     try {
-      await confidentialFundingClient.cancel(review.planId)
-      if (!scopeStillCurrent()) return
-      setPreparedShield(null)
-      setShieldError(null)
-      setEvmMoveFee(next)
+      try {
+        await confidentialFundingClient.cancel(review.planId)
+      } catch (error) {
+        if (scopeStillCurrent() && latestShieldReviewKey.current === shieldReviewKey) {
+          setPreparedShield(null)
+          setShieldError(classifyError(error).userMessage)
+        }
+        throw error
+      }
+      if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
+      await prepareShield(next, true)
     } finally {
       if (scopeStillCurrent()) setCancellingShield(false)
     }
