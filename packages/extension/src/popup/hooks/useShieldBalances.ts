@@ -102,5 +102,5 @@ export function useShieldBalances({
     if (!balances) void refreshBalances(false, true)
   }, [active, authorizeOnMount, settled, Boolean(balances), scopeKey])
 
-  return { balances, connecting, error, errorCode, refreshBalances }
+  return { balances, settled, connecting, error, errorCode, refreshBalances }
 }

@@ -459,6 +459,7 @@ function TransferForm() {
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
+    settled: shieldBalanceSettled,
     error: shieldBalanceError,
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
@@ -573,6 +574,27 @@ function TransferForm() {
     setShieldConnection('connected')
     setShieldError(null)
   }, [shieldBalances])
+
+  useEffect(() => {
+    if (
+      canLoadShield &&
+      effective?.walletId &&
+      effective.accountId &&
+      shieldBalanceSettled &&
+      !shieldBalances &&
+      !shieldBalanceError &&
+      shieldConnection === 'checking'
+    )
+      setShieldConnection('required')
+  }, [
+    canLoadShield,
+    effective?.walletId,
+    effective?.accountId,
+    shieldBalanceSettled,
+    shieldBalances,
+    shieldBalanceError,
+    shieldConnection
+  ])
 
   useEffect(() => {
     if (!shieldBalanceError) return
@@ -1519,7 +1541,9 @@ function TransferForm() {
       wallet.currentNetwork === currentNetwork
     )
   }
-  const shieldNeedsAuthorization = shieldBalanceErrorCode === 'authorization_required'
+  const shieldNeedsAuthorization =
+    shieldBalanceErrorCode === 'authorization_required' ||
+    (canLoadShield && shieldBalances === null && shieldBalanceError === null)
   const refreshShield = async (authorize = false) => {
     if (!effective || !scopeStillCurrent()) return
     setShieldConnection('busy')
