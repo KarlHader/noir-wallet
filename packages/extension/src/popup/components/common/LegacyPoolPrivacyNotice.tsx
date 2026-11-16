@@ -68,6 +68,7 @@ export function LegacyPoolPrivacyNotice({ open, onDismiss }: LegacyPoolPrivacyNo
                 aria-hidden
                 alt=""
                 src="https://www.google.com/s2/favicons?domain=nym.com&sz=128"
+                crossOrigin="anonymous"
                 className="size-4"
                 onError={event => {
                   event.currentTarget.style.display = 'none'
@@ -85,6 +86,7 @@ export function LegacyPoolPrivacyNotice({ open, onDismiss }: LegacyPoolPrivacyNo
                 aria-hidden
                 alt=""
                 src="https://www.google.com/s2/favicons?domain=torproject.org&sz=128"
+                crossOrigin="anonymous"
                 className="size-4"
                 onError={event => {
                   event.currentTarget.style.display = 'none'

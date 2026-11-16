@@ -147,6 +147,7 @@ export function TokenIcon({
         <img
           key={iconIdentity}
           src={iconUrl}
+          crossOrigin="anonymous"
           alt={symbol}
           className="absolute inset-0 h-full w-full rounded-full object-cover"
           onLoad={() => {

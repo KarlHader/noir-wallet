@@ -75,6 +75,7 @@ function ProviderMark({ router, size }: { readonly router: string; readonly size
     return (
       <img
         src={`https://cdn.jsdelivr.net/npm/simple-icons@v15/icons/${mark.slug}.svg`}
+        crossOrigin="anonymous"
         alt=""
         width={size}
         height={size}

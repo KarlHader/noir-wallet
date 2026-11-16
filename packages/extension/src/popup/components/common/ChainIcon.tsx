@@ -14,7 +14,8 @@ export function ChainIcon({
   className,
   showTooltip = true,
   alt,
-  crossOrigin,
+  // CORS mode avoids credentialless COEP bypassing the HTTP cache.
+  crossOrigin = 'anonymous',
   onLoad,
   onError,
   ...props
