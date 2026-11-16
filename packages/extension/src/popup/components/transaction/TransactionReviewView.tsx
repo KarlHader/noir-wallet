@@ -241,7 +241,9 @@ export function TransactionReviewView({
         <Button
           variant="outline"
           size={figma ? 'wallet' : 'default'}
-          className={figma ? 'h-[45px] flex-1 border-white/10 bg-card' : 'h-[45px] flex-1'}
+          className={
+            figma ? 'h-[45px] min-w-0 flex-1 border-white/10 bg-card' : 'h-[45px] min-w-0 flex-1'
+          }
           disabled={cancelDisabled || confirming}
           onClick={onCancel}
         >
@@ -249,7 +251,7 @@ export function TransactionReviewView({
         </Button>
         <Button
           size={figma ? 'wallet' : 'default'}
-          className={`${figma ? 'h-[45px] flex-[2]' : 'h-[45px] flex-1'} ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
+          className={`${figma ? 'h-[45px] min-w-0 flex-[2]' : 'h-[45px] min-w-0 flex-1'} whitespace-normal text-center leading-tight ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
           disabled={confirmDisabled || preparing}
           isLoading={confirming}
           onClick={onConfirm}

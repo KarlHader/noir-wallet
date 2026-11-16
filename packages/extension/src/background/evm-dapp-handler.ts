@@ -3,7 +3,7 @@ import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
 import type { TrackOptions } from '../lib/analytics/types'
-import { classifyError } from '../lib/errors'
+import { classifyError, isUnmappedError } from '../lib/errors'
 import {
   emitDAppEvent,
   formatKnownAssetAmount,
@@ -162,7 +162,7 @@ function describePrivateTransferPreparationError(error: unknown): string {
   ) {
     return 'Balance cannot cover the exact receive amount and fees. Enter a smaller amount in the dApp or choose a direct transfer.'
   }
-  if (classified.userMessage !== 'An unexpected error occurred. Please try again.') {
+  if (!isUnmappedError(error)) {
     return classified.userMessage
   }
   return 'Unable to quote the exact receive amount. If you used Max, reduce the amount in the dApp to leave room for route costs; otherwise retry or choose a direct transfer.'

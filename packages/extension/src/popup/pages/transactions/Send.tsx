@@ -1597,7 +1597,7 @@ export function Send({
                 />
               ) : undefined
             }
-            confirmLabel={isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}
+            confirmLabel={isHardwareSigning ? 'Waiting for wallet...' : 'Confirm'}
             confirming={isConfirming}
             submitting={isConfirming && !isHardwareWallet}
             confirmDisabled={
