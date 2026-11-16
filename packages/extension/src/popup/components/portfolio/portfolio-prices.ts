@@ -5,9 +5,7 @@ import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import { isBundledWalletAsset } from '@/popup/components/tokens/token-display-policy'
 import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
 
-const MIN_LOW_VALUE_USD = new Big('0.01')
-const MAX_LOW_VALUE_USD = new Big('1')
-const LOW_VALUE_PORTFOLIO_RATIO = new Big('0.01')
+export const LOW_VALUE_USD_THRESHOLD = new Big('0.1')
 
 export interface PortfolioFiatSummary {
   readonly totalUsd: string
@@ -130,16 +128,4 @@ export function summarizePortfolioFiat(
     missingAssetCount,
     staleAssetCount
   })
-}
-
-export function resolveLowValueUsdThreshold(
-  portfolio: PortfolioReadModel,
-  prices: AssetPriceReadModel | null
-): string {
-  const proportional = new Big(summarizePortfolioFiat(portfolio, prices).totalUsd).times(
-    LOW_VALUE_PORTFOLIO_RATIO
-  )
-  if (proportional.lt(MIN_LOW_VALUE_USD)) return MIN_LOW_VALUE_USD.toFixed()
-  if (proportional.gt(MAX_LOW_VALUE_USD)) return MAX_LOW_VALUE_USD.toFixed()
-  return proportional.toFixed()
 }

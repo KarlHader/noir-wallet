@@ -22,7 +22,6 @@ import {
 import { createIntentsWalletAssetCatalog } from '../../../src/core/services/intents-wallet-assets.ts'
 import {
   hasRetryablePortfolioPriceGap,
-  resolveLowValueUsdThreshold,
   summarizePortfolioFiat
 } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
 
@@ -855,43 +854,4 @@ test('portfolio fiat summary excludes non-zero assets with missing prices', () =
     metadata: { name: 'Custom Token', symbol: 'CUSTOM', decimals: 18 }
   }
   expect(hasRetryablePortfolioPriceGap({ assets: [customAsset] }, prices)).toBe(false)
-})
-
-test('scales the Low value threshold to one percent of priced portfolio value', () => {
-  const { assets, mappings } = createMappings()
-  const zec = assets.list()[0]
-  const asset = totalRaw => ({
-    asset: zec.asset,
-    metadata: zec.metadata,
-    balance: {
-      totalRaw,
-      spendableRaw: totalRaw,
-      availableRaw: totalRaw,
-      pendingRaw: '0'
-    },
-    chainAccountIds: [],
-    freshness: 'fresh',
-    updatedAt: 1
-  })
-  const prices = parseAssetPriceReadModel({
-    source: 'wallet-market-data',
-    status: 'ready',
-    fetchedAt: 1,
-    quotes: [
-      {
-        assetId: mappings[0].assetId,
-        source: 'near-intents-1click',
-        priceUsd: '50',
-        sourceUpdatedAt: 1,
-        fetchedAt: 1,
-        freshness: 'fresh'
-      }
-    ],
-    missingAssetIds: []
-  })
-
-  expect(resolveLowValueUsdThreshold({ assets: [] }, prices)).toBe('0.01')
-  expect(resolveLowValueUsdThreshold({ assets: [asset('20000000')] }, prices)).toBe('0.1')
-  expect(resolveLowValueUsdThreshold({ assets: [asset('200000000')] }, prices)).toBe('1')
-  expect(resolveLowValueUsdThreshold({ assets: [asset('20000000000')] }, prices)).toBe('1')
 })

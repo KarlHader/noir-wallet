@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SwapToken } from '@/core/services/intents-api'
 import { swapTokenCatalogClient } from '@/popup/services/swap-token-catalog-client'
 import { Icon } from '@iconify/react'
-import Big from '@/lib/big'
 import { formatFiatAmount } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import tokenViewIcon from '@/images/portfolio-token-view.svg'
@@ -23,7 +22,7 @@ import {
 import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import { resolveLowValueUsdThreshold } from './portfolio-prices'
+import { LOW_VALUE_USD_THRESHOLD } from './portfolio-prices'
 import {
   PortfolioAssetGroupCard,
   PortfolioChainAssetRow,
@@ -362,13 +361,9 @@ export function PortfolioShell({
       }),
     [prices, visibleChains]
   )
-  const lowValueUsdThreshold = useMemo(
-    () => new Big(resolveLowValueUsdThreshold(model, prices)),
-    [model, prices]
-  )
   const { primaryAssetGroups, lowValueAssetGroups } = useMemo(
-    () => partitionPortfolioAssetGroups(assetGroups, prices, lowValueUsdThreshold),
-    [assetGroups, lowValueUsdThreshold, prices]
+    () => partitionPortfolioAssetGroups(assetGroups, prices, LOW_VALUE_USD_THRESHOLD),
+    [assetGroups, prices]
   )
   const sortedChains = useMemo(
     () => sortPortfolioChains(visibleChains, prices),
@@ -591,7 +586,7 @@ export function PortfolioShell({
               const { primaryAssets, lowValueAssets } = partitionPortfolioAssets(
                 sortedAssets,
                 prices,
-                lowValueUsdThreshold
+                LOW_VALUE_USD_THRESHOLD
               )
               const chainLowValueExpanded = expandedLowValueChainIds.has(chain.chain.id)
               return (
