@@ -21,6 +21,7 @@ import { ActivityTransactionBody, buildActivityTransactionView } from './Activit
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
+import { isLegacyPrivateShieldWithdrawDestination } from './multichain-activity-presentation'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network
@@ -223,6 +224,12 @@ export function ConfidentialActivityView({
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
+        legacyPrivateShieldWithdrawDestination: isLegacyPrivateShieldWithdrawDestination(
+          scopedActivity,
+          scopedPlan,
+          activeAccount,
+          plan.network
+        ),
         refunded,
         ...(refunded ? { statusLabel: 'Refunded', statusTone: 'neutral' as const } : {}),
         fallback: display

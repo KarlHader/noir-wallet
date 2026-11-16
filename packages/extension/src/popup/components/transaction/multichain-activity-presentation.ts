@@ -13,7 +13,11 @@ import type {
   ActivityAssetMetadata,
   ActivityChainMetadata
 } from '@/popup/services/activity-presentation-catalog'
-import type { AccountNetworkView } from '@/popup/services/account-networks-client'
+import type {
+  AccountNetworkView,
+  AccountNetworksView
+} from '@/popup/services/account-networks-client'
+import type { Network } from '@/types'
 import { formatBaseUnitAmount, formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { formatActivityTokenAmount } from '../portfolio/portfolio-format'
 import type {
@@ -239,6 +243,39 @@ export function buildActivityExecutionAddressModes(
   return modes
 }
 
+export function isLegacyPrivateShieldWithdrawDestination(
+  item: ActivityItem,
+  plan: ConfidentialFundingPlan | null | undefined,
+  account: AccountNetworksView | null | undefined,
+  network: Network
+): boolean {
+  const recipient = item.snapshot?.recipient
+  return Boolean(
+    item.source === 'wallet-v2' &&
+    item.snapshot?.direction === 'outgoing' &&
+    item.snapshot.shield?.operation === 'withdraw' &&
+    item.snapshot.shield.destinationDomain === 'public' &&
+    recipient?.chainId.startsWith('eip155:') &&
+    plan?.operation === 'withdraw' &&
+    plan.destinationDomain === 'public' &&
+    plan.externalRecipient &&
+    plan.transactionId === item.id &&
+    plan.network === network &&
+    plan.keyDomainId === item.scope.keyDomainId &&
+    plan.accountId === item.scope.accountId &&
+    plan.destination.chainId === recipient.chainId &&
+    plan.destination.address.toLowerCase() === recipient.address.toLowerCase() &&
+    plan.externalRecipient.toLowerCase() === recipient.address.toLowerCase() &&
+    account?.walletId === item.scope.keyDomainId &&
+    account.accountId === item.scope.accountId &&
+    account.networks.some(
+      entry =>
+        entry.chain.id === recipient.chainId &&
+        entry.privateExecutionAddress?.toLowerCase() === recipient.address.toLowerCase()
+    )
+  )
+}
+
 export function getClusterSettledDestination(
   item: ActivityItem,
   plan: ConfidentialFundingPlan | null
@@ -281,7 +318,8 @@ export function getActivitySwapPresentation(
   assetMetadata: ReadonlyMap<string, ActivityAssetMetadata>,
   chainMetadata: ReadonlyMap<string, ActivityChainMetadata>,
   executionAddressModes: ReadonlyMap<string, 'Public' | 'Confidential'> = new Map(),
-  confirmedDestination?: TransactionAssetAmount
+  confirmedDestination?: TransactionAssetAmount,
+  legacyPrivateShieldWithdrawDestination = false
 ): ActivitySwapPresentation | null {
   if (
     item.snapshot?.shield === undefined &&
@@ -355,7 +393,9 @@ export function getActivitySwapPresentation(
         ? executionAddressModes.get(senderAddress.toLowerCase())
         : undefined
   const destinationAccountMode = shield
-    ? shieldDomainLabel(shield.destinationDomain)
+    ? legacyPrivateShieldWithdrawDestination
+      ? 'Confidential'
+      : shieldDomainLabel(shield.destinationDomain)
     : recipientAddress
       ? executionAddressModes.get(recipientAddress.toLowerCase())
       : undefined

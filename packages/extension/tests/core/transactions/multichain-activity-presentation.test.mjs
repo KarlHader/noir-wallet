@@ -17,7 +17,8 @@ import {
   getClusterSettledDestination,
   getActivitySwapSourceMethodLabel,
   hasMatchingActivityTokenIcons,
-  isAccountModeTransfer
+  isAccountModeTransfer,
+  isLegacyPrivateShieldWithdrawDestination
 } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
 
 const transactionHash = `0x${'a'.repeat(64)}`
@@ -73,6 +74,88 @@ function failedItem(evidence) {
 }
 
 test.describe('Multichain Activity presentation', () => {
+  test('labels a legacy Shield send to the scoped Private address without relabeling other recipients', () => {
+    const chainId = 'eip155:137'
+    const privateAddress = `0x${'2'.repeat(40)}`
+    const publicAddress = `0x${'3'.repeat(40)}`
+    const assetId = `${chainId}/slip44:60`
+    const item = {
+      ...failedItem({ transactionHash }),
+      id: 'tx:confidential:legacy-send',
+      kind: 'withdraw',
+      snapshot: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        shield: {
+          schemaVersion: 1,
+          operation: 'withdraw',
+          sourceDomain: 'shield',
+          destinationDomain: 'public'
+        },
+        primaryAmount: { assetId, amountRaw: '100' },
+        counterAmount: { assetId, amountRaw: '90' },
+        recipient: { chainId, address: privateAddress }
+      }
+    }
+    const plan = {
+      operation: 'withdraw',
+      destinationDomain: 'public',
+      transactionId: item.id,
+      network: 'mainnet',
+      keyDomainId: item.scope.keyDomainId,
+      accountId: item.scope.accountId,
+      destination: { chainId, address: privateAddress },
+      externalRecipient: privateAddress
+    }
+    const account = {
+      walletId: item.scope.keyDomainId,
+      accountId: item.scope.accountId,
+      networks: [
+        { chain: { id: chainId }, privateExecutionAddress: privateAddress },
+        { chain: { id: 'eip155:1' }, privateExecutionAddress: publicAddress }
+      ]
+    }
+    const assets = new Map([[assetId, { metadata: { symbol: 'POL', decimals: 18 } }]])
+    const route = (activity, fundingPlan = plan, activeAccount = account, network = 'mainnet') =>
+      getActivitySwapPresentation(
+        activity,
+        assets,
+        new Map(),
+        new Map(),
+        undefined,
+        isLegacyPrivateShieldWithdrawDestination(activity, fundingPlan, activeAccount, network)
+      )
+
+    expect(route(item)?.destinationAccountMode).toBe('Confidential')
+    expect(route(item, { ...plan, externalRecipient: publicAddress })?.destinationAccountMode).toBe(
+      'Public'
+    )
+    expect(route(item, { ...plan, transactionId: 'other' })?.destinationAccountMode).toBe('Public')
+    expect(route(item, { ...plan, network: 'testnet' })?.destinationAccountMode).toBe('Public')
+    expect(
+      route(item, { ...plan, destination: { ...plan.destination, chainId: 'eip155:1' } })
+        ?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route(item, plan, { ...account, accountId: 'account:other' })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route(item, plan, { ...account, networks: account.networks.slice(1) })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route({ ...item, snapshot: { ...item.snapshot, direction: 'self' } })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route({
+        ...item,
+        snapshot: {
+          ...item.snapshot,
+          shield: { ...item.snapshot.shield, destinationDomain: 'private' }
+        }
+      })?.destinationAccountMode
+    ).toBe('Confidential')
+  })
+
   test('shows the owned account route for a Confidential transfer without labeling external recipients', () => {
     const publicAddress = `0x${'1'.repeat(40)}`
     const privateAddress = `0x${'2'.repeat(40)}`

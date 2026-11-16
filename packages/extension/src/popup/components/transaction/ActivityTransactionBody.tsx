@@ -106,6 +106,7 @@ export function buildActivityTransactionView(input: {
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
   readonly settledDestination?: Parameters<typeof getActivitySwapPresentation>[4]
+  readonly legacyPrivateShieldWithdrawDestination?: boolean
   readonly fallback?: ActivityTransactionFallback
   readonly refunded?: boolean
   readonly replacementHash?: string
@@ -119,7 +120,8 @@ export function buildActivityTransactionView(input: {
     assetMetadata,
     chainMetadata,
     input.executionAddressModes,
-    input.settledDestination
+    input.settledDestination,
+    input.legacyPrivateShieldWithdrawDestination
   )
   const sourceAmount = item.snapshot?.primaryAmount
   const destinationAmount = item.snapshot?.counterAmount
