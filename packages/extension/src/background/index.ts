@@ -3782,8 +3782,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       }
       await tokenVisibility?.revealHeldProtocolAssets(
         model?.assets.flatMap(asset =>
-          asset.asset.kind === 'token' &&
-          BigInt(asset.balance.totalRaw) > BigInt(asset.balance.confidentialRaw ?? '0')
+          asset.asset.kind === 'token' && BigInt(asset.balance.totalRaw) > 0n
             ? [asset.asset.id]
             : []
         ) ?? []
@@ -3793,7 +3792,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         model: model ? hidePortfolioAssets(model, hiddenAssetIds ?? []) : null,
         userAssets: userEvmAssetRecords,
         detectedAssets: detectedEvmAssetRecords,
-        protocolAssets: intentsProtocolAssets
+        protocolAssets: Object.freeze([
+          ...intentsProtocolAssets,
+          ...(confidentialFundingCoordinator?.getPortfolioAssetDefinitions(model) ?? [])
+        ])
       }
     }
     void operation()

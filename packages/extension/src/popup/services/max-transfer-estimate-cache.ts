@@ -1,6 +1,9 @@
 import { DedupPromise } from '@/lib/async-utils'
 import { safeBig } from '@/lib/big'
 import { marginalFeeForTier } from '@/core/zcash/fee-policy'
+import { classifyError } from '@/lib/errors'
+import { sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
+import { logger } from '@/lib/logger'
 import type { FeeQuote, FeeTier } from '@/config/fee'
 import type { FundingSource } from '@/types'
 import { zcashWalletRuntimeClient, type MaxTransferEstimate } from './zcash-wallet-runtime-client'
@@ -66,7 +69,7 @@ export class MaxTransferEstimateCache {
   private quoteRequest = new DedupPromise<FeeQuote>()
   private estimates = new Map<string, MaxTransferEstimate>()
   private pending = new Map<string, Promise<MaxTransferEstimate | null>>()
-  private errors = new Set<string>()
+  private errors = new Map<string, string>()
   private revisions = new Map<string, number>()
 
   constructor(
@@ -108,6 +111,7 @@ export class MaxTransferEstimateCache {
     estimate: MaxTransferEstimate | null
     pending: boolean
     error: boolean
+    errorMessage: string | null
   } {
     const key = entryKey(to, tier)
     const estimate = this.estimates.get(key)
@@ -117,7 +121,8 @@ export class MaxTransferEstimateCache {
           ? estimate
           : null,
       pending: this.pending.has(key),
-      error: this.errors.has(key)
+      error: this.errors.has(key),
+      errorMessage: this.errors.get(key) ?? null
     }
   }
 
@@ -141,6 +146,7 @@ export class MaxTransferEstimateCache {
     const revision = this.revisions.get(key) ?? 0
     const { memo, fundingSource } = this.context
     const promise = (async () => {
+      let stage = 'network fee quote'
       try {
         let quote = await this.getQuote(generation)
         if (!quote || generation !== this.generation) return null
@@ -154,6 +160,7 @@ export class MaxTransferEstimateCache {
           })
         let estimate: MaxTransferEstimate
         try {
+          stage = 'maximum transfer proposal'
           estimate = await estimateWithQuote(quote)
         } catch (cause) {
           if (
@@ -167,20 +174,30 @@ export class MaxTransferEstimateCache {
           // A Worker/RPC reload can invalidate an otherwise unexpired quote.
           // Refresh this read-only preview once; execution still reviews its fee.
           if (this.quote?.id === quote.id) this.quote = null
+          stage = 'network fee quote refresh'
           quote = await this.getQuote(generation)
           if (!quote || generation !== this.generation) return null
+          stage = 'maximum transfer proposal'
           estimate = await estimateWithQuote(quote)
         }
         if (generation !== this.generation) return null
         if ((this.revisions.get(key) ?? 0) !== revision) return this.peek(to, tier).estimate
+        stage = 'maximum transfer validation'
         if (!validEstimate(estimate, tier, this.now(), quote.id) || this.quote?.id !== quote.id)
           throw new Error('Invalid maximum transfer fee estimate')
         this.estimates.set(key, estimate)
         this.onChange()
         return estimate
-      } catch {
+      } catch (cause) {
         if (generation === this.generation && (this.revisions.get(key) ?? 0) === revision) {
-          this.errors.add(key)
+          const classified = classifyError(cause)
+          this.errors.set(key, sanitizeDiagnosticMessage(classified.technicalMessage))
+          logger.warn(
+            `Zcash Max estimate failed at ${stage}`,
+            this.context.walletId ?? undefined,
+            this.context.accountId ?? undefined,
+            cause
+          )
           this.onChange()
         }
         return null
@@ -202,7 +219,7 @@ export class MaxTransferEstimateCache {
     this.revisions.set(key, (this.revisions.get(key) ?? 0) + 1)
     if (!validEstimate(estimate, tier, this.now())) {
       this.estimates.delete(key)
-      this.errors.add(key)
+      this.errors.set(key, 'Invalid maximum transfer fee estimate')
     } else {
       if (this.quote?.id !== estimate.feeQuote.id) {
         this.estimates.clear()

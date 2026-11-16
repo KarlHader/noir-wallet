@@ -22,7 +22,7 @@ import {
 import { NetworkFilter } from '@/popup/components/common/NetworkFilter'
 import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
 import type { AssetDomain } from '@/popup/services/asset-domains'
-import { LOW_VALUE_USD_THRESHOLD } from './portfolio-prices'
+import { LOW_VALUE_USD_THRESHOLD, withConfidentialAssetPrices } from './portfolio-prices'
 import {
   PortfolioAssetGroupCard,
   PortfolioChainAssetRow,
@@ -262,7 +262,7 @@ export function PortfolioShell({
   sourceModel,
   domain = 'all',
   hideToolbar = false,
-  prices,
+  prices: sourcePrices,
   priceStatus = 'ready',
   balancesHidden = false,
   initialView = 'assets',
@@ -283,6 +283,10 @@ export function PortfolioShell({
   const view = controlledView ?? localView
   const setView = onViewChange ?? setLocalView
   const displayModel = model
+  const prices = useMemo(
+    () => withConfidentialAssetPrices(sourceModel ?? model, sourcePrices),
+    [model, sourceModel, sourcePrices]
+  )
   const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
     displayModel.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))

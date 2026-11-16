@@ -325,7 +325,6 @@ export function MultichainSend({
   const zcashTotal = zcashBalance?.transparent ?? '0'
   const requestSequence = useRef(0)
   const appliedRequestedAssetRef = useRef<string | null>(null)
-  const openedReturnPickerRef = useRef<string | null>(null)
   const [modelSnapshot, setModelSnapshot] = useState<{
     scopeKey: string
     value: PortfolioReadModel | null
@@ -342,7 +341,10 @@ export function MultichainSend({
     value: SendAsset | null
   } | null>(null)
   const [submission, setSubmission] = useState<SendSubmission | null>(null)
-  const [assetPickerOpen, setAssetPickerOpen] = useState(false)
+  const [assetPickerState, setAssetPickerState] = useState<{
+    key: string
+    open: boolean
+  } | null>(null)
   const [sourcePicker, setSourcePicker] = useState<{
     mode: 'shield' | 'zcash-public'
     provider: ShieldProvider
@@ -435,6 +437,35 @@ export function MultichainSend({
     chainEndpointRuntimeKey
   ])
   const sendEntryKey = `${location.key}:${scopeKey}`
+  const navigationSnapshot = location.state as {
+    initialPortfolio?: PortfolioReadModel | null
+    initialPrices?: AssetPriceReadModel | null
+    walletId?: string | null
+    accountId?: string | null
+    network?: string
+    endpointRuntimeKey?: string
+    sendEntry?: 'asset-detail' | 'shield'
+    openSourceAssetPicker?: boolean
+    crossChainReturnDraft?: {
+      sourceAssetId: string
+      walletId: string
+      accountId: string
+      recipient: string
+      amount: string
+      destinationAssetId?: string
+      destinationChainId?: string
+    }
+  } | null
+  const returnedSourcePickerRequested =
+    navigationSnapshot?.openSourceAssetPicker === true &&
+    entryScopeValid &&
+    Boolean(effectiveWalletId && effectiveAccountId) &&
+    navigationSnapshot.crossChainReturnDraft?.sourceAssetId === requestedAssetId &&
+    navigationSnapshot.crossChainReturnDraft.walletId === effectiveWalletId &&
+    navigationSnapshot.crossChainReturnDraft.accountId === effectiveAccountId
+  const assetPickerOpen =
+    assetPickerState?.key === sendEntryKey ? assetPickerState.open : returnedSourcePickerRequested
+  const setAssetPickerOpen = (open: boolean) => setAssetPickerState({ key: sendEntryKey, open })
   const handleNonEvmDraftChange = useCallback(
     (assetId: string, draft: Readonly<{ recipient: string; amount: string }>) => {
       setNonEvmDraft(previous =>
@@ -543,25 +574,6 @@ export function MultichainSend({
   )
   const setSelection = (value: SendAsset | null) =>
     setSelectionSnapshot({ scopeKey, entryKey: location.key, requestedAssetId, value })
-  const navigationSnapshot = location.state as {
-    initialPortfolio?: PortfolioReadModel | null
-    initialPrices?: AssetPriceReadModel | null
-    walletId?: string | null
-    accountId?: string | null
-    network?: string
-    endpointRuntimeKey?: string
-    sendEntry?: 'asset-detail' | 'shield'
-    openSourceAssetPicker?: boolean
-    crossChainReturnDraft?: {
-      sourceAssetId: string
-      walletId: string
-      accountId: string
-      recipient: string
-      amount: string
-      destinationAssetId?: string
-      destinationChainId?: string
-    }
-  } | null
   const sendEntry =
     entryScopeValid &&
     (navigationSnapshot?.sendEntry === 'asset-detail' || navigationSnapshot?.sendEntry === 'shield')
@@ -688,7 +700,7 @@ export function MultichainSend({
   useEffect(() => {
     setSelectionSnapshot(null)
     setSubmission(null)
-    setAssetPickerOpen(false)
+    setAssetPickerState(null)
     setModelSnapshot(null)
     void load()
     return () => {
@@ -742,18 +754,6 @@ export function MultichainSend({
     navigationSnapshot?.crossChainReturnDraft?.accountId === effectiveAccountId
       ? navigationSnapshot.crossChainReturnDraft
       : null
-  const returnedSourcePickerRequested =
-    navigationSnapshot?.openSourceAssetPicker === true &&
-    entryScopeValid &&
-    Boolean(effectiveWalletId && effectiveAccountId) &&
-    navigationSnapshot.crossChainReturnDraft?.sourceAssetId === requestedAssetId &&
-    navigationSnapshot.crossChainReturnDraft.walletId === effectiveWalletId &&
-    navigationSnapshot.crossChainReturnDraft.accountId === effectiveAccountId
-  useEffect(() => {
-    if (!returnedSourcePickerRequested || openedReturnPickerRef.current === location.key) return
-    openedReturnPickerRef.current = location.key
-    setAssetPickerOpen(true)
-  }, [location.key, returnedSourcePickerRequested])
   const crossChainGroup =
     selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet'
       ? getCrossChainSendAssetGroup(selection.asset.asset)
@@ -910,7 +910,6 @@ export function MultichainSend({
         : null
     const recipient = draft?.recipient ?? requestedRecipient ?? ''
     const amount = draft?.amount ?? requestedAmount
-    setAssetPickerOpen(false)
     if (validDestination && asset && asset.chain.chain.id !== destinationChainId) {
       navigate(
         `/send/cross-chain?${new URLSearchParams({
@@ -939,6 +938,7 @@ export function MultichainSend({
       )
       return
     }
+    setAssetPickerOpen(false)
     const params = new URLSearchParams({
       assetId: sourceAssetId,
       sourceMode: asset ? 'main' : 'shield',

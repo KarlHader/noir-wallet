@@ -709,7 +709,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
   CHECK_CONFIDENTIAL_FUNDING_SUBMISSION: { required: { planId: isShortString } },
   CANCEL_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
-  REFRESH_CONFIDENTIAL_BALANCES: { required: { scope: isRecord, authorize: isBoolean } },
+  REFRESH_CONFIDENTIAL_BALANCES: {
+    required: { scope: isRecord, authorize: isBoolean },
+    optional: { notifyPortfolio: isBoolean }
+  },
   GET_ASSET_MARKET_HISTORY: {
     required: {
       assetId: isShortString,

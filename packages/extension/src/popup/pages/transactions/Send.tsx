@@ -603,11 +603,11 @@ export function Send({
         )) &&
       !!effectiveToAddress &&
       !recipientFormatError &&
-      !maxSelected &&
+      (!maxSelected || maxTransfer.maxAmount === null) &&
       !isMaxTransferAmount
   })
 
-  const isMaxFeeMode = maxSelected || isMaxTransferAmount
+  const isMaxFeeMode = (maxSelected && maxTransfer.maxAmount !== null) || isMaxTransferAmount
   const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
   const displayedFeeLoadingByTier = isMaxFeeMode
     ? maxTransfer.loadingByTier
@@ -618,6 +618,9 @@ export function Send({
     safeBig(amount || '0').gt(0) &&
     recipientFormatError === null
   const feeError = feeRequired && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
+  const feeErrorMessage = isMaxFeeMode
+    ? (maxTransfer.errorMessage ?? 'Could not calculate maximum amount')
+    : (feeEstimate.errorMessage ?? 'Could not estimate network fee')
   const feeReady =
     feeRequired &&
     !feeError &&
@@ -640,11 +643,31 @@ export function Send({
 
   const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
   const standardFeeZats = feeEstimate.feeByTier.standard ?? staticFeeFallbackZats('standard')
+  const fallbackFeeScope = JSON.stringify([
+    currentWalletId,
+    currentAccountId,
+    currentNetwork,
+    fundingSource,
+    effectiveToAddress,
+    effectiveMemo,
+    feeTier,
+    sourceBalance.available
+  ])
+  const fallbackFeeRef = useRef({ scope: fallbackFeeScope, zats: staticFeeFallbackZats(feeTier) })
+  if (fallbackFeeRef.current.scope !== fallbackFeeScope) {
+    fallbackFeeRef.current = { scope: fallbackFeeScope, zats: staticFeeFallbackZats(feeTier) }
+  }
+  if (!maxSelected || isMaxFeeMode) fallbackFeeRef.current.zats = staticFeeFallbackZats(feeTier)
+  if (maxSelected && !isMaxFeeMode && feeEstimate.feeZats !== null) {
+    fallbackFeeRef.current.zats = Math.max(fallbackFeeRef.current.zats, feeEstimate.feeZats)
+  }
+  const maximumFeeReserveZats =
+    maxSelected && !isMaxFeeMode ? fallbackFeeRef.current.zats : selectedFeeZats
   const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
   const { amount: effectiveMaxStr } = resolveZcashFundingAvailability({
     balance,
     fundingSource,
-    selectedFeeZats,
+    selectedFeeZats: maximumFeeReserveZats,
     standardFeeZats,
     maximumAmount: maxTransfer.maxAmount,
     capTransparentToShieldable: isTransparentToShieldMove
@@ -890,7 +913,7 @@ export function Send({
           to: effectiveToAddress,
           amount,
           fundingSource,
-          maxTransfer: maxSelected,
+          maxTransfer: maxSelected && isMaxFeeMode,
           memo: effectiveMemo,
           marginalFeeZats,
           feeQuoteId: selectedFeeQuote.id,
@@ -1111,7 +1134,6 @@ export function Send({
                   !effectiveToAddress ||
                   moveUnavailable ||
                   safeBig(effectiveMaxStr).lte(0) ||
-                  maxTransfer.loading ||
                   (isTransparentToShieldMove &&
                     !hasEnoughTransparentBalanceToShield(shieldableBalance))
                 }
@@ -1256,17 +1278,17 @@ export function Send({
           />
         </div>
       )}
-      {!sendPrivately && maxTransfer.error && !isMaxFeeMode && (
+      {!sendPrivately && maxTransfer.error && !isMaxFeeMode && !maxSelected && !feeRequired && (
         <InlineError
           className="order-3 px-1"
-          message="Could not calculate maximum amount"
+          message={maxTransfer.errorMessage ?? 'Could not calculate maximum amount'}
           onRetry={() => void maxTransfer.request()}
         />
       )}
       {!sendPrivately && !amountErrorCopy && feeError && (
         <InlineError
           className="order-6 px-1"
-          message={(!isMaxFeeMode && feeEstimate.errorMessage) || 'Could not estimate network fee'}
+          message={feeErrorMessage}
           onRetry={retryFeeEstimate}
         />
       )}
@@ -1449,8 +1471,7 @@ export function Send({
                 !balanceKnown ||
                 safeBig(effectiveMaxStr).lte(0) ||
                 !effectiveToAddress ||
-                zns.loading ||
-                maxTransfer.loading
+                zns.loading
               }
               onClick={() => {
                 setMaxSelected(true)
@@ -1590,9 +1611,7 @@ export function Send({
               feeError ? (
                 <InlineError
                   className="mt-3"
-                  message={
-                    (!isMaxFeeMode && feeEstimate.errorMessage) || 'Could not estimate network fee'
-                  }
+                  message={feeErrorMessage}
                   onRetry={retryFeeEstimate}
                 />
               ) : undefined

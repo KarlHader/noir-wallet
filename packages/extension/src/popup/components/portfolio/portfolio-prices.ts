@@ -1,11 +1,78 @@
 import Big from 'big.js'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import type { PortfolioAssetView, PortfolioReadModel } from '@/core/portfolio'
-import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
+import {
+  ASSET_PRICE_FRESH_MS,
+  ASSET_PRICE_QUOTE_SOURCES,
+  ASSET_PRICE_SOURCE,
+  findAssetPrice,
+  type AssetPriceReadModel,
+  type AssetPriceQuote
+} from '@/core/prices'
 import { isBundledWalletAsset } from '@/popup/components/tokens/token-display-policy'
 import { summarizeNearConfidentialHoldings } from '@/popup/services/near-confidential-holdings'
 
 export const LOW_VALUE_USD_THRESHOLD = new Big('0.1')
+
+export function withConfidentialAssetPrices(
+  portfolio: PortfolioReadModel | null,
+  prices: AssetPriceReadModel | null
+): AssetPriceReadModel | null {
+  if (portfolio?.confidential?.status !== 'ready') return prices
+  const now = Date.now()
+  const holdings = portfolio.confidential.assets
+  const quotes: AssetPriceQuote[] = []
+  for (const asset of portfolio.assets) {
+    if (findAssetPrice(prices, asset.asset.id)) continue
+    const matches = holdings.filter(holding => holding.assetId === asset.asset.id)
+    if (matches.length !== 1) continue
+    const holding = matches[0]!
+    if (
+      holding.chainId !== asset.asset.chainId ||
+      holding.decimals !== asset.metadata.decimals ||
+      asset.balance.confidentialRaw !== holding.availableRaw ||
+      !holding.priceUsd ||
+      !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(holding.priceUsd)
+    )
+      continue
+    let price: Big
+    try {
+      price = new Big(holding.priceUsd)
+    } catch {
+      continue
+    }
+    if (price.lte(0)) continue
+    const updatedAt = holding.priceUpdatedAt ? Date.parse(holding.priceUpdatedAt) : NaN
+    const sourceUpdatedAt = Number.isSafeInteger(updatedAt) && updatedAt >= 0 ? updatedAt : 0
+    quotes.push(
+      Object.freeze({
+        assetId: asset.asset.id,
+        source: ASSET_PRICE_QUOTE_SOURCES.oneClick,
+        priceUsd: holding.priceUsd,
+        sourceUpdatedAt,
+        fetchedAt: now,
+        freshness:
+          sourceUpdatedAt > 0 && now - sourceUpdatedAt < ASSET_PRICE_FRESH_MS
+            ? ('fresh' as const)
+            : ('stale' as const)
+      })
+    )
+  }
+  if (quotes.length === 0) return prices
+  const allQuotes = [...(prices?.quotes ?? []), ...quotes]
+  return Object.freeze({
+    source: ASSET_PRICE_SOURCE,
+    status:
+      prices?.status === 'ready' && quotes.every(quote => quote.freshness === 'fresh')
+        ? 'ready'
+        : 'partial',
+    fetchedAt: prices?.fetchedAt ?? now,
+    quotes: Object.freeze(allQuotes),
+    missingAssetIds: Object.freeze(
+      (prices?.missingAssetIds ?? []).filter(id => !quotes.some(quote => quote.assetId === id))
+    )
+  })
+}
 
 export interface PortfolioFiatSummary {
   readonly totalUsd: string

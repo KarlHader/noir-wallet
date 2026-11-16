@@ -58,7 +58,8 @@ describe('dynamic maximum transfer regressions', () => {
     assert.deepEqual(cache.peek('recipient-a', 'standard'), {
       estimate: null,
       pending: false,
-      error: false
+      error: false,
+      errorMessage: null
     })
     cache.setContext(maxContext())
     assert.equal(cache.canEstimate, true)
@@ -246,9 +247,11 @@ describe('dynamic maximum transfer regressions', () => {
     }
     const cache = new MaxTransferEstimateCache(maxContext(), undefined, client)
     assert.equal(await cache.get('recipient-a', 'standard'), null)
+    assert.equal(cache.peek('recipient-a', 'standard').errorMessage, 'RPC unavailable')
     assert.equal(await cache.get('recipient-a', 'standard'), null)
     assert.equal(calls, 1)
     assert.ok(await cache.get('recipient-a', 'standard', true))
+    assert.equal(cache.peek('recipient-a', 'standard').errorMessage, null)
     assert.equal(calls, 2)
   })
 

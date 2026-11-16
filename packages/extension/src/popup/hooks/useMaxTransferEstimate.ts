@@ -21,6 +21,7 @@ interface TierEstimate {
   feeQuote: FeeQuote | null
   loading: boolean
   error: boolean
+  errorMessage: string | null
   request: (refresh?: boolean) => Promise<void>
   update: (estimate: MaxTransferEstimate, to: string) => void
   estimateForTarget: (to: string) => Promise<MaxTransferEstimate | null>
@@ -45,16 +46,24 @@ function tierState(
   to: string | undefined,
   tier: FeeTier,
   active: boolean
-): Pick<TierEstimate, 'maxAmount' | 'fee' | 'feeQuote' | 'loading' | 'error'> {
+): Pick<TierEstimate, 'maxAmount' | 'fee' | 'feeQuote' | 'loading' | 'error' | 'errorMessage'> {
   if (!active || !to)
-    return { maxAmount: null, fee: null, feeQuote: null, loading: false, error: false }
-  const { estimate, error } = cache.peek(to, tier)
+    return {
+      maxAmount: null,
+      fee: null,
+      feeQuote: null,
+      loading: false,
+      error: false,
+      errorMessage: null
+    }
+  const { estimate, error, errorMessage } = cache.peek(to, tier)
   return {
     maxAmount: estimate ? formatBaseUnitDecimalAmount(estimate.maxAmountZats, ZEC_DECIMALS) : null,
     fee: estimate ? formatBaseUnitDecimalAmount(estimate.feeZats, ZEC_DECIMALS) : null,
     feeQuote: estimate?.feeQuote ?? null,
     loading: !estimate && !error,
-    error
+    error,
+    errorMessage
   }
 }
 

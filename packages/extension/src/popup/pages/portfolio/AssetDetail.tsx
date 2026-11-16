@@ -4,6 +4,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
 import type { PortfolioReadModel } from '@/core/portfolio'
+import { parseAssetId } from '@/core/chains/registry'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActivityItem } from '@/core/activity'
 import {
@@ -37,6 +38,7 @@ import {
 } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AssetBalanceRow } from '@/popup/components/portfolio/AssetBalanceRow'
+import { withConfidentialAssetPrices } from '@/popup/components/portfolio/portfolio-prices'
 import { PrivateAddressWarningDialog } from '@/popup/components/account/PrivateAddressWarningDialog'
 import { confidentialFundingClient } from '@/popup/services/confidential-funding-client'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
@@ -135,7 +137,12 @@ export function AssetDetail() {
       cacheReadSequence.current += 1
       const hasAvailableModel = () =>
         isPortfolioModelForScope(availableModel.current, effectiveWalletId, effectiveAccountId)
-      setStatus(hasAvailableModel() ? 'ready' : 'loading')
+      setStatus(
+        hasAvailableModel() &&
+          availableModel.current?.assets.some(item => item.asset.id === requestedAssetId)
+          ? 'ready'
+          : 'loading'
+      )
       try {
         if (!effectiveWalletId || !effectiveAccountId) {
           return
@@ -147,15 +154,29 @@ export function AssetDetail() {
         }
         const cached = await readCachedPortfolio(scope).catch(() => null)
         if (request !== requestSequence.current) return
+        const cachedAsset = cached?.assets.find(item => item.asset.id === requestedAssetId)
+        let missingChainId: string | null = null
+        if (
+          cached &&
+          !cachedAsset &&
+          requestedAssetId &&
+          storageV2Account?.walletId === effectiveWalletId &&
+          storageV2Account.accountId === effectiveAccountId
+        ) {
+          try {
+            const chainId = parseAssetId(requestedAssetId).chainId
+            if (storageV2Account.networks.some(network => network.chain.id === chainId))
+              missingChainId = chainId
+          } catch {}
+        }
         if (cached) {
           availableModel.current = cached
           setModel(cached)
-          setStatus('ready')
+          setStatus(cachedAsset ? 'ready' : 'loading')
         }
-        const selectedChainId = cached?.assets.find(item => item.asset.id === requestedAssetId)
-          ?.asset.chainId
+        const selectedChainId = cachedAsset?.asset.chainId ?? missingChainId
         const refreshed = await refreshPortfolioFromCache(scope, cached, {
-          forceRefresh,
+          forceRefresh: forceRefresh || missingChainId !== null,
           refreshChainIds: selectedChainId ? [selectedChainId] : []
         })
         if (request !== requestSequence.current) return
@@ -171,7 +192,13 @@ export function AssetDetail() {
         }
       }
     },
-    [chainEndpointRuntimeKey, effectiveAccountId, effectiveWalletId, requestedAssetId]
+    [
+      chainEndpointRuntimeKey,
+      effectiveAccountId,
+      effectiveWalletId,
+      requestedAssetId,
+      storageV2Account
+    ]
   )
 
   useEffect(() => {
@@ -248,6 +275,10 @@ export function AssetDetail() {
   const visibleModel = isPortfolioModelForScope(model, effectiveWalletId, effectiveAccountId)
     ? model
     : null
+  const displayPrices = useMemo(
+    () => withConfidentialAssetPrices(visibleModel, prices),
+    [visibleModel, prices]
+  )
   const asset = visibleModel?.assets.find(item => item.asset.id === requestedAssetId) ?? null
   const chain = asset
     ? (visibleModel?.chains.find(item => item.chain.id === asset.asset.chainId) ?? null)
@@ -274,7 +305,7 @@ export function AssetDetail() {
           asset,
           visibleModel,
           privateTransferEligible,
-          findAssetPrice(prices, asset.asset.id)?.priceUsd
+          findAssetPrice(displayPrices, asset.asset.id)?.priceUsd
         )
       : null
   const nearConfidentialZec = asset
@@ -287,7 +318,8 @@ export function AssetDetail() {
       })
     : null
   const actionDomain =
-    searchParams.get('mode') === 'private' &&
+    (searchParams.get('domain') === 'private' ||
+      (searchParams.get('domain') !== 'public' && searchParams.get('mode') === 'private')) &&
     (chain?.chain.family !== 'evm' || privateTransferEligible)
       ? 'private'
       : 'public'
@@ -302,7 +334,7 @@ export function AssetDetail() {
           keyDomainId: effectiveWalletId,
           accountId: effectiveAccountId
         },
-        true
+        false
       )
       .then(async () => {
         if (active) await readLatest()
@@ -334,7 +366,7 @@ export function AssetDetail() {
         entry: 'asset-detail',
         from,
         to: 'shield',
-        mode: searchParams.get('mode') === 'private' ? 'private' : 'public'
+        mode: actionDomain
       })}`,
       { state: { moveAssetHint } }
     )
@@ -365,7 +397,7 @@ export function AssetDetail() {
       cancelled = true
     }
   }, [chain?.chain.family, effectiveWalletId, effectiveAccountId])
-  const quote = asset ? findAssetPrice(prices, asset.asset.id) : undefined
+  const quote = asset ? findAssetPrice(displayPrices, asset.asset.id) : undefined
   const explorerUrl =
     asset && chain ? formatChainAssetExplorerUrl(chain.chain.id, asset.asset, currentNetwork) : ''
   const zcashKeySource: KeySource | undefined = storageV2Account
@@ -689,7 +721,7 @@ export function AssetDetail() {
     [currentNetwork, visibleModel, navigate, storageV2Account?.networks]
   )
 
-  if (status === 'loading' && !visibleModel) {
+  if (status === 'loading' && (!visibleModel || !asset)) {
     return (
       <div className="page-container">
         <PageHeader title="Asset details" showBack />
@@ -970,10 +1002,7 @@ export function AssetDetail() {
     )
   }
   return (
-    <div
-      className="page-container"
-      data-wallet-mode={searchParams.get('mode') === 'private' ? 'private' : 'public'}
-    >
+    <div className="page-container" data-wallet-mode={actionDomain}>
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
       <PrivateAddressWarningDialog
         address={privateCopyAddress}

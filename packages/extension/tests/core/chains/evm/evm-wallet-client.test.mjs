@@ -116,6 +116,54 @@ function solanaProtocolPortfolioEnvelope() {
   return { result: { model, userAssets: [], detectedAssets: [], protocolAssets: [protocolAsset] } }
 }
 
+function evmProtocolPortfolioEnvelope() {
+  const protocolAsset = Object.freeze({
+    chainId,
+    namespace: 'erc20',
+    reference: customContract,
+    kind: 'token',
+    metadata: { name: 'RHEA', symbol: 'RHEA', decimals: 18 },
+    source: 'protocol',
+    verification: 'trusted'
+  })
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    protocolAsset
+  ])
+  const scope = { keyDomainId: 'key-domain:evm', accountId: 'account:evm' }
+  const model = buildPortfolioReadModel(
+    scope,
+    [
+      {
+        chainAccount: {
+          id: 'chain-account:evm:portfolio',
+          scope: { ...scope, chainId },
+          derivation: { scheme: 'bip44', path: "m/44'/60'/0'/0/0" },
+          identity: { kind: 'account-identifier', value: from },
+          createdAt: 1
+        },
+        status: 'ready',
+        balances: [
+          {
+            assetId: customAssetId,
+            totalRaw: '0',
+            spendableRaw: '0',
+            availableRaw: '0',
+            pendingRaw: '0',
+            mainRaw: '0',
+            privateRaw: '0',
+            updatedAt: 10
+          }
+        ]
+      }
+    ],
+    chains,
+    assets
+  )
+  return { result: { model, userAssets: [], detectedAssets: [], protocolAssets: [protocolAsset] } }
+}
+
 function graph(status = 'prepared', ids = { transactionId, segmentId }) {
   return {
     root: {
@@ -431,6 +479,19 @@ test.describe('Popup EVM wallet client', () => {
     })
 
     const substituted = solanaProtocolPortfolioEnvelope()
+    substituted.result.protocolAssets = []
+    const invalid = createEvmWalletClient(async () => substituted)
+    await expect(invalid.getPortfolio('read')).rejects.toMatchObject({ code: 'invalid-response' })
+  })
+
+  test('atomically validates protocol EVM Tokens with the Portfolio model', async () => {
+    const client = createEvmWalletClient(async () => evmProtocolPortfolioEnvelope())
+    await expect(client.getPortfolio('read')).resolves.toMatchObject({
+      status: 'ready',
+      assets: [{ asset: { id: customAssetId }, metadata: { symbol: 'RHEA' } }]
+    })
+
+    const substituted = evmProtocolPortfolioEnvelope()
     substituted.result.protocolAssets = []
     const invalid = createEvmWalletClient(async () => substituted)
     await expect(invalid.getPortfolio('read')).rejects.toMatchObject({ code: 'invalid-response' })

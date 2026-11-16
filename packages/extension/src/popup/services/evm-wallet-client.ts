@@ -227,12 +227,19 @@ function resolveProductRegistries(
   const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings())
   const custom = catalog.filter(network => network.source === 'custom')
   const chains = createInitialProductChainRegistry(DEFAULT_NETWORK, custom)
+  const protocolAssetIds = new Set(
+    protocolAssets.map(
+      asset => `${asset.chainId}/${asset.namespace}:${asset.reference.toLowerCase()}`
+    )
+  )
   return Object.freeze({
     chains,
     assets: createAssetRegistry(chains, [
       ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, custom),
       ...userAssets.map(userEvmAssetToDefinition),
-      ...detectedAssets.map(detectedEvmAssetToDefinition),
+      ...detectedAssets
+        .filter(asset => !protocolAssetIds.has(asset.assetId.toLowerCase()))
+        .map(detectedEvmAssetToDefinition),
       ...protocolAssets
     ])
   })
@@ -381,9 +388,11 @@ function parseProtocolAssetDefinitions(
     registry.list().map(entry => {
       const chain = chains.resolve(entry.asset.chainId)
       if (
-        (chain.family !== 'solana' && chain.family !== 'near') ||
+        (chain.family !== 'solana' && chain.family !== 'near' && chain.family !== 'evm') ||
         entry.asset.kind !== 'token' ||
-        (entry.asset.namespace !== 'token' && entry.asset.namespace !== 'nep141') ||
+        (chain.family === 'evm'
+          ? entry.asset.namespace !== 'erc20'
+          : entry.asset.namespace !== 'token' && entry.asset.namespace !== 'nep141') ||
         entry.source !== 'protocol' ||
         entry.verification !== 'trusted'
       ) {

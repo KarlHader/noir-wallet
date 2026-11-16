@@ -17,6 +17,18 @@ export function hidePortfolioAssets(
   return Object.freeze({
     ...model,
     chains,
-    assets: Object.freeze(chains.flatMap(chain => chain.assets))
+    assets: Object.freeze(chains.flatMap(chain => chain.assets)),
+    ...(model.confidential
+      ? {
+          confidential: Object.freeze({
+            ...model.confidential,
+            assets: Object.freeze(
+              model.confidential.assets.filter(
+                asset => !asset.assetId || !hidden.has(asset.assetId)
+              )
+            )
+          })
+        }
+      : {})
   })
 }

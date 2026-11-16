@@ -465,8 +465,14 @@ test.describe('Runtime message security', () => {
       authorize: true
     }
     expect(parseTrustedExtensionRuntimeMessage(shieldRefresh)).toEqual(shieldRefresh)
+    expect(
+      parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, notifyPortfolio: false })
+    ).toEqual({ ...shieldRefresh, notifyPortfolio: false })
     expect(() =>
       parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, authorize: 'true' })
+    ).toThrow()
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, notifyPortfolio: 'false' })
     ).toThrow()
     expect(isTrustedRuntimeMessageSender(shieldRefresh.type, popupSender, extensionId)).toBe(true)
     expect(

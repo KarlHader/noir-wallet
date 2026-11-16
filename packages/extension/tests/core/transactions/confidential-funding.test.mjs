@@ -38,6 +38,74 @@ import {
   listDepositTokenChoices
 } from '../../../src/popup/services/shield-deposit-options.ts'
 
+test('passive Confidential balance reads skip identity setup without a session', async () => {
+  const scope = { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
+  const usableSession = { accessToken: 'synthetic', expiresAt: 1_000_000_000 }
+  let session = null
+  let identityAccountId = scope.accountId
+  let identityReads = 0
+  let balanceReads = 0
+  let signingCalls = 0
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
+    now: () => 1_000,
+    store: {
+      getSession: async () => session,
+      putSession: async (_network, _domain, _account, value) => {
+        session = value
+      },
+      putBalances: async () => {}
+    },
+    signer: {
+      resolveIdentity: async () => {
+        identityReads += 1
+        return {
+          address: '0x1111111111111111111111111111111111111111',
+          context: {
+            chainAccount: {
+              scope: { keyDomainId: scope.keyDomainId, accountId: identityAccountId }
+            }
+          }
+        }
+      },
+      signMessage: async () => {
+        signingCalls += 1
+        return 'signed'
+      }
+    },
+    api: {
+      createAuthPayload: async () => ({ payload: 'challenge' }),
+      authenticate: async () => usableSession,
+      getBalances: async () => {
+        balanceReads += 1
+        return []
+      }
+    }
+  })
+
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow(
+    'Confidential authorization is required'
+  )
+  expect(identityReads).toBe(0)
+  expect(balanceReads).toBe(0)
+
+  session = usableSession
+  identityAccountId = 'account:other'
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow('Active Wallet Account changed')
+  expect(balanceReads).toBe(0)
+
+  identityAccountId = scope.accountId
+  await expect(coordinator.refreshBalances(scope, false)).resolves.toEqual([])
+  expect(balanceReads).toBe(1)
+  expect(signingCalls).toBe(0)
+
+  session = null
+  await expect(coordinator.refreshBalances(scope, true)).resolves.toEqual([])
+  expect(signingCalls).toBe(1)
+  expect(balanceReads).toBe(2)
+})
+
 test('minimum deposit display rounds up without changing the exact payment amount', () => {
   const raw = '8000000000000000001'
   expect(formatMinimumDepositPaymentAmount(raw, 18)).toBe('8.000001')

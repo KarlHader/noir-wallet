@@ -34,7 +34,7 @@ import { resolveManagedIntentsAssets } from '@/core/services/intents-managed-ass
 import type { ChainId } from '@/core/chains/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId } from '@/core/keyring/domain'
-import type { AssetRegistry } from '@/core/chains/registry'
+import type { AssetDefinitionInput, AssetRegistry } from '@/core/chains/registry'
 import { parseAssetId, parseChainId } from '@/core/chains/registry'
 import { getZcashChainId } from '@/core/chains/registry'
 import {
@@ -53,6 +53,7 @@ import {
   filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
+  projectConfidentialOnlyEvmAssets,
   mergeConfidentialWithdrawObservation,
   needsConfidentialSubmissionCheck,
   normalizeConfidentialWithdrawRequest,
@@ -580,6 +581,28 @@ export class ConfidentialFundingCoordinator {
     for (const network of options.evmNetworks) {
       this.rpcByChain.set(network.chainId, createConfiguredEvmRpcClient(options.network, network))
     }
+  }
+
+  getPortfolioAssetDefinitions(model: PortfolioReadModel | null): readonly AssetDefinitionInput[] {
+    if (!model) return []
+    return Object.freeze(
+      model.assets.flatMap(asset => {
+        if (asset.source !== 'protocol' || !asset.asset.chainId.startsWith('eip155:')) return []
+        const entry = this.options.assets.get(asset.asset.id)
+        if (!entry || entry.source !== 'protocol' || entry.verification !== 'trusted') return []
+        return [
+          Object.freeze({
+            chainId: entry.asset.chainId,
+            namespace: entry.asset.namespace,
+            reference: entry.asset.reference,
+            kind: entry.asset.kind,
+            metadata: entry.metadata,
+            source: entry.source,
+            verification: entry.verification
+          })
+        ]
+      })
+    )
   }
 
   prepareNativeZecIntentsSwap(input: PrepareNativeZecIntentsSwapInput) {
@@ -2514,7 +2537,13 @@ export class ConfidentialFundingCoordinator {
               portfolioMappings,
               this.options.assets
             )
-      return Object.freeze({ ...merged, confidential })
+      const projected = projectConfidentialOnlyEvmAssets(
+        merged,
+        confidential,
+        portfolioMappings,
+        this.options.assets
+      )
+      return Object.freeze({ ...projected, confidential })
     }
     if (!refresh || (refresh === 'if-stale' && snapshot.fresh)) return project(cached)
     const firstEvm = this.options.evmNetworks[0]
@@ -2551,13 +2580,17 @@ export class ConfidentialFundingCoordinator {
     if (scope.network !== this.options.network) throw new Error('Confidential network changed')
     const firstEvm = this.options.evmNetworks[0]
     if (!firstEvm) throw new Error('Confidential EVM network is unavailable')
+    const existingSession = authorize
+      ? null
+      : await this.readUsableSessionForScope(scope.keyDomainId, scope.accountId)
+    if (!authorize && !existingSession) throw new Error('Confidential authorization is required')
     const identity = await this.options.signer.resolveIdentity(parseChainId(firstEvm.chainId).id)
     if (
       identity.context.chainAccount.scope.keyDomainId !== scope.keyDomainId ||
       identity.context.chainAccount.scope.accountId !== scope.accountId
     )
       throw new Error('Active Wallet Account changed')
-    const session = await this.ensureSession(identity, authorize)
+    const session = existingSession ?? (await this.ensureSession(identity, authorize))
     if (!session) throw new Error('Confidential authorization is required')
     try {
       return await this.refreshPortfolioBalances(identity, session.accessToken)

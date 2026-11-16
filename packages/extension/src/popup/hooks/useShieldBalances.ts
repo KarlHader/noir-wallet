@@ -116,7 +116,7 @@ export function useShieldBalances({
   }, [scopeKey])
 
   const refreshBalances = useCallback(
-    async (force = true, authorize = true) => {
+    async (force = true, authorize = true, notifyPortfolio = true) => {
       if (!scope || !enabled || !activeRef.current) return false
       const age = Date.now() - cache.refreshedAt
       if (!force && cache.balances && age >= 0 && age < BALANCE_REUSE_MS) return true
@@ -128,7 +128,7 @@ export function useShieldBalances({
       }
       try {
         await cache.request.run(
-          () => confidentialFundingClient.refreshBalances(scope, authorize),
+          () => confidentialFundingClient.refreshBalances(scope, authorize, notifyPortfolio),
           value => {
             if (cache.version !== version) return
             cache.balances = value
@@ -136,14 +136,14 @@ export function useShieldBalances({
             for (const notify of cache.listeners) notify()
           }
         )
-        if (cache.refreshedAt === 0) return await refreshBalances(true, false)
+        if (cache.refreshedAt === 0) return await refreshBalances(true, false, false)
         if (mounted.current && currentKey.current === scopeKey && activeRef.current) {
           if (readProjectionRef.current) void readProjectionRef.current().catch(() => {})
           else void refreshPortfolioRef.current(force).catch(() => {})
         }
         return true
       } catch (cause) {
-        if (cache.version !== version) return await refreshBalances(true, false)
+        if (cache.version !== version) return await refreshBalances(true, false, false)
         if (mounted.current && currentKey.current === scopeKey) {
           setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
           const code =
@@ -169,7 +169,7 @@ export function useShieldBalances({
   }, [active, authorizeOnMount, refreshBalances])
 
   usePortfolioUpdates(scope?.keyDomainId ?? null, scope?.accountId ?? null, () => {
-    if (activeRef.current) return refreshBalances(true, false).then(() => {})
+    if (activeRef.current) return refreshBalances(true, false, false).then(() => {})
   })
 
   return { balances: cache.balances, connecting, error, errorCode, refreshBalances }

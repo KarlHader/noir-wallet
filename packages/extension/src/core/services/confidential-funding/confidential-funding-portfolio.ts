@@ -178,6 +178,91 @@ export function mergeConfidentialBalancesIntoPortfolio(
   return Object.freeze({ ...model, assets: Object.freeze(assets), chains: Object.freeze(chains) })
 }
 
+export function projectConfidentialOnlyEvmAssets(
+  model: PortfolioReadModel,
+  confidential: ConfidentialPortfolioView,
+  mappings: readonly ConfidentialPortfolioAssetMapping[],
+  assets: AssetRegistry
+): PortfolioReadModel {
+  if (confidential.status !== 'ready') return model
+  const existing = new Set<string>(model.assets.map(asset => asset.asset.id))
+  const mappedByProtocolId = new Map(
+    mappings.map(mapping => [mapping.protocolAssetId, mapping.assetId])
+  )
+  const holdingCountByAssetId = new Map<string, number>()
+  for (const holding of confidential.assets) {
+    if (holding.assetId) {
+      holdingCountByAssetId.set(
+        holding.assetId,
+        (holdingCountByAssetId.get(holding.assetId) ?? 0) + 1
+      )
+    }
+  }
+  const projected = confidential.assets.flatMap(holding => {
+    const assetId = holding.assetId
+    if (
+      !assetId ||
+      existing.has(assetId) ||
+      mappedByProtocolId.get(holding.protocolAssetId) !== assetId ||
+      holdingCountByAssetId.get(assetId) !== 1 ||
+      !assetId.startsWith('eip155:')
+    )
+      return []
+    const entry = assets.get(assetId)
+    const chain = model.chains.find(item => item.chain.id === holding.chainId)
+    const chainAccountIds = chain?.assets.find(
+      asset => asset.chainAccountIds.length > 0
+    )?.chainAccountIds
+    if (
+      !entry ||
+      entry.asset.kind !== 'token' ||
+      entry.asset.chainId !== holding.chainId ||
+      entry.metadata.decimals !== holding.decimals ||
+      !chain ||
+      chain.chain.family !== 'evm' ||
+      chain.status !== 'ready' ||
+      !chainAccountIds
+    )
+      return []
+    existing.add(assetId)
+    return [
+      Object.freeze({
+        asset: entry.asset,
+        metadata: entry.metadata,
+        source: entry.source,
+        balance: Object.freeze({
+          totalRaw: holding.availableRaw,
+          spendableRaw: '0',
+          availableRaw: '0',
+          pendingRaw: '0',
+          mainRaw: '0',
+          privateRaw: holding.availableRaw,
+          privateOnchainRaw: '0',
+          confidentialRaw: holding.availableRaw
+        }),
+        chainAccountIds,
+        freshness: 'fresh' as const,
+        updatedAt: Date.now()
+      }) satisfies PortfolioAssetView
+    ]
+  })
+  if (projected.length === 0) return model
+  const chains = model.chains.map(chain =>
+    Object.freeze({
+      ...chain,
+      assets: Object.freeze([
+        ...chain.assets,
+        ...projected.filter(asset => asset.asset.chainId === chain.chain.id)
+      ])
+    })
+  )
+  return Object.freeze({
+    ...model,
+    chains: Object.freeze(chains),
+    assets: Object.freeze(chains.flatMap(chain => chain.assets))
+  })
+}
+
 export function excludeDeprecatedConfidentialAssets(model: PortfolioReadModel): PortfolioReadModel {
   const confidential = model.confidential
   if (!confidential) return model

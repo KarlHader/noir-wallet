@@ -378,9 +378,12 @@ export function createConfidentialFundingClient(
     },
     refreshBalances: async (
       scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>,
-      authorize: boolean
+      authorize: boolean,
+      notifyPortfolio = true
     ): Promise<readonly ConfidentialBalance[]> => {
-      const result = unwrap(await send({ type: 'REFRESH_CONFIDENTIAL_BALANCES', scope, authorize }))
+      const result = unwrap(
+        await send({ type: 'REFRESH_CONFIDENTIAL_BALANCES', scope, authorize, notifyPortfolio })
+      )
       if (
         !Array.isArray(result) ||
         result.some(

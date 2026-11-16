@@ -10,6 +10,7 @@ import type {
 } from './confidential-funding-coordinator'
 import { CONFIDENTIAL_SESSION_REQUIRED_ERROR } from '@/core/services/confidential-funding'
 import { ConfidentialFundingApiError } from './confidential-funding-api'
+import { useWalletStore } from '@/store/wallet-store'
 
 export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
@@ -100,11 +101,33 @@ const handlers = {
     return true
   },
   REFRESH_CONFIDENTIAL_BALANCES: async (
-    { coordinator }: FundingContext,
-    message: Readonly<{ scope: ExternalShieldDepositScope; authorize: boolean }>
+    { coordinator, accountContextTransition }: FundingContext,
+    message: Readonly<{
+      scope: ExternalShieldDepositScope
+      authorize: boolean
+      notifyPortfolio?: boolean
+    }>
   ) => {
     try {
-      return await coordinator.refreshBalances(message.scope, message.authorize)
+      return await accountContextTransition.runActiveOperation(async () => {
+        const balances = await coordinator.refreshBalances(message.scope, message.authorize)
+        const { currentNetwork, currentWalletId, currentAccountId } = useWalletStore.getState()
+        if (
+          message.notifyPortfolio !== false &&
+          currentNetwork === message.scope.network &&
+          currentWalletId === message.scope.keyDomainId &&
+          currentAccountId === message.scope.accountId
+        ) {
+          void chrome.runtime
+            .sendMessage({
+              type: 'PORTFOLIO_UPDATED',
+              walletId: message.scope.keyDomainId,
+              accountId: message.scope.accountId
+            })
+            .catch(() => {})
+        }
+        return balances
+      })
     } catch (error) {
       const cause = error instanceof Error ? error : new Error('Shield balance unavailable')
       Object.assign(cause, { balanceErrorCode: classifyBalanceReadError(error) })

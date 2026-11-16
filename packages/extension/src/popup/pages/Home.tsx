@@ -1220,7 +1220,7 @@ export function Home() {
                   modeActionsReady
                     ? assetId => {
                         navigate.navigate(
-                          `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${privateMode ? 'private' : 'public'}`
+                          `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${assetDomain === 'public' || assetDomain === 'private' ? assetDomain : privateMode ? 'private' : 'public'}`
                         )
                       }
                     : undefined

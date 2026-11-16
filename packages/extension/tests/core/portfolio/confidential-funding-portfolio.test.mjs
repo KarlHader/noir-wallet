@@ -8,9 +8,21 @@ import {
   confidentialPrivateTokenId,
   filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
-  mergeConfidentialBalancesIntoPortfolio
+  mergeConfidentialBalancesIntoPortfolio,
+  projectConfidentialOnlyEvmAssets
 } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
-import { getBitcoinChainId } from '../../../src/core/chains/registry/index.ts'
+import {
+  createAssetRegistry,
+  createInitialProductChainRegistry,
+  getBitcoinChainId,
+  getBundledInitialProductAssetDefinitions
+} from '../../../src/core/chains/registry/index.ts'
+import { hidePortfolioAssets } from '../../../src/core/portfolio/portfolio-visibility.ts'
+import { buildPortfolioReadModel, parsePortfolioReadModel } from '../../../src/core/portfolio/index.ts'
+import { findAssetPrice } from '../../../src/core/prices/asset-price.ts'
+import { listStandaloneNearConfidentialHoldings } from '../../../src/popup/services/near-confidential-holdings.ts'
+import { withConfidentialAssetPrices } from '../../../src/popup/components/portfolio/portfolio-prices.ts'
+import { getAssetDetailCategories } from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
 
 test('projects Shield-only holdings independently of Public assets and preserves unknown tokens', () => {
   const protocolAssetId = 'nep141:usdc.omft.near'
@@ -274,6 +286,126 @@ test('keeps Confidential balances out of directly spendable on-chain balances', 
   expect(merged.assets[1].balance).toEqual(zcashAsset.balance)
 })
 
+test('projects a Confidential-only EVM token as its registered portfolio asset', () => {
+  const chainId = 'eip155:56'
+  const assetId = `${chainId}/erc20:0x1111111111111111111111111111111111111111`
+  const nativeAssetId = `${chainId}/slip44:714`
+  const protocolAssetId = 'nep141:rhea.omft.near'
+  const holding = {
+    tokenId: confidentialPrivateTokenId(protocolAssetId),
+    protocolAssetId,
+    assetId,
+    chainId,
+    decimals: 18,
+    symbol: 'RHEA',
+    availableRaw: '16533370000000000000',
+    priceUsd: '0.032',
+    priceUpdatedAt: new Date().toISOString()
+  }
+  const definition = {
+    chainId,
+    namespace: 'erc20',
+    reference: '0x1111111111111111111111111111111111111111',
+    kind: 'token',
+    metadata: { name: 'RHEA', symbol: 'RHEA', decimals: 18 },
+    source: 'protocol',
+    verification: 'trusted'
+  }
+  const chains = createInitialProductChainRegistry('mainnet')
+  const registry = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    definition
+  ])
+  const entry = registry.resolve(assetId)
+  const baseModel = buildPortfolioReadModel(
+    { keyDomainId: 'key-domain:1', accountId: 'account:1' },
+    [
+      {
+        chainAccount: {
+          id: `chain-account:${chainId}`,
+          scope: { keyDomainId: 'key-domain:1', accountId: 'account:1', chainId },
+          derivation: { scheme: 'test', path: 'm/0' },
+          identity: { kind: 'account-identifier', value: 'public-only' },
+          createdAt: 1_700_000_000_000
+        },
+        status: 'ready',
+        balances: [
+          {
+            assetId: nativeAssetId,
+            totalRaw: '0',
+            spendableRaw: '0',
+            availableRaw: '0',
+            pendingRaw: '0',
+            mainRaw: '0',
+            privateRaw: '0',
+            updatedAt: 1_700_000_000_000
+          }
+        ]
+      }
+    ],
+    chains,
+    registry
+  )
+  const model = {
+    ...baseModel,
+    confidential: { status: 'ready', assets: [holding] }
+  }
+  const mappings = [{ assetId, protocolAssetId }]
+  const projected = projectConfidentialOnlyEvmAssets(model, model.confidential, mappings, registry)
+  const projectedAsset = projected.assets.find(asset => asset.asset.id === assetId)
+  expect(projectedAsset).toBeDefined()
+  expect(projected.chains[0].assets.at(-1)).toBe(projectedAsset)
+  expect(projectedAsset.metadata).toBe(entry.metadata)
+  expect(projectedAsset.chainAccountIds).toEqual(baseModel.assets[0].chainAccountIds)
+  expect(projectedAsset.balance).toMatchObject({
+    totalRaw: holding.availableRaw,
+    mainRaw: '0',
+    privateRaw: holding.availableRaw,
+    privateOnchainRaw: '0',
+    confidentialRaw: holding.availableRaw,
+    spendableRaw: '0',
+    availableRaw: '0'
+  })
+  expect(parsePortfolioReadModel(structuredClone(projected), chains, registry)).toEqual(projected)
+  expect(listStandaloneNearConfidentialHoldings(projected, projected, null)).toEqual([])
+  expect(findAssetPrice(withConfidentialAssetPrices(projected, null), assetId)?.priceUsd).toBe(
+    '0.032'
+  )
+  expect(getAssetDetailCategories(projectedAsset, projected, true, '0.032').raw).toEqual({
+    all: holding.availableRaw,
+    public: '0',
+    shield: holding.availableRaw,
+    private: '0'
+  })
+  const hidden = hidePortfolioAssets({ ...projected, confidential: model.confidential }, [assetId])
+  expect(hidden.assets.map(asset => asset.asset.id)).toEqual([nativeAssetId])
+  expect(hidden.confidential.assets).toEqual([])
+  expect(
+    projectConfidentialOnlyEvmAssets(
+      model,
+      { status: 'ready', assets: [{ ...holding, chainId: 'eip155:1' }] },
+      mappings,
+      registry
+    ).assets.map(asset => asset.asset.id)
+  ).toEqual([nativeAssetId])
+  expect(
+    projectConfidentialOnlyEvmAssets(
+      model,
+      { status: 'ready', assets: [{ ...holding, decimals: 6 }] },
+      mappings,
+      registry
+    ).assets.map(asset => asset.asset.id)
+  ).toEqual([nativeAssetId])
+  expect(
+    projectConfidentialOnlyEvmAssets(
+      model,
+      { status: 'ready', assets: [{ ...holding, protocolAssetId: 'different' }] },
+      mappings,
+      registry
+    ).assets.map(asset => asset.asset.id)
+  ).toEqual([nativeAssetId])
+})
+
 test('only projects Confidential zero after a confirmed empty balance read', async () => {
   const asset = {
     asset: { id: 'eip155:1/erc20:0x1111111111111111111111111111111111111111' },
@@ -346,4 +478,71 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
     confidentialRaw: '0'
   })
   expect(knownZero.confidential).toEqual({ status: 'ready', assets: [] })
+})
+
+test('notifies Portfolio only after a successful Confidential refresh for the active account', async () => {
+  const previousChrome = globalThis.chrome
+  const storage = { get: async () => ({}), set: async () => {}, remove: async () => {} }
+  const updates = []
+  globalThis.chrome = {
+    storage: { local: storage, session: storage },
+    runtime: { sendMessage: async message => updates.push(message) }
+  }
+  const { useWalletStore } = await import('../../../src/store/wallet-store.ts')
+  const { getConfidentialFundingMessageHandler } = await import(
+    '../../../src/background/confidential-funding-messages.ts'
+  )
+  const wallet = useWalletStore.getState()
+  const previousScope = {
+    currentNetwork: wallet.currentNetwork,
+    currentWalletId: wallet.currentWalletId,
+    currentAccountId: wallet.currentAccountId
+  }
+  const scope = { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
+  const message = { scope, authorize: true }
+  const handler = getConfidentialFundingMessageHandler('REFRESH_CONFIDENTIAL_BALANCES')
+  const context = refreshBalances => ({
+    coordinator: { refreshBalances },
+    accountContextTransition: { runActiveOperation: operation => operation() }
+  })
+  try {
+    Object.assign(wallet, {
+      currentNetwork: 'mainnet',
+      currentWalletId: scope.keyDomainId,
+      currentAccountId: scope.accountId
+    })
+    const balances = [{ tokenId: 'token', available: '1', source: 'api' }]
+    expect(await handler(context(async () => balances), message)).toBe(balances)
+    expect(updates).toEqual([
+      { type: 'PORTFOLIO_UPDATED', walletId: scope.keyDomainId, accountId: scope.accountId }
+    ])
+
+    updates.length = 0
+    await handler(context(async () => balances), { ...message, notifyPortfolio: false })
+    expect(updates).toEqual([])
+
+    await expect(
+      handler(
+        context(async () => {
+          throw new Error('balance unavailable')
+        }),
+        message
+      )
+    ).rejects.toThrow('balance unavailable')
+    expect(updates).toEqual([])
+
+    await handler(
+      context(async () => {
+        wallet.currentAccountId = 'account:two'
+        return balances
+      }),
+      message
+    )
+    expect(updates).toEqual([])
+
+  } finally {
+    Object.assign(wallet, previousScope)
+    if (previousChrome === undefined) delete globalThis.chrome
+    else globalThis.chrome = previousChrome
+  }
 })
