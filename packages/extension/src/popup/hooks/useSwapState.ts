@@ -454,7 +454,7 @@ export function useSwapState(
           direction,
           direction === 'from'
             ? getEnabledSwapChains(options.enabledChains).map(chain => chain.tokenListChainId)
-            : ALL_DESTINATION_CHAIN_IDS.filter(chainId => chainId !== tokenIn?.tokenListChainId),
+            : ALL_DESTINATION_CHAIN_IDS,
           false,
           next => {
             pending = mergeTokenCatalogs(pending, next)
