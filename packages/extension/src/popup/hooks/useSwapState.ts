@@ -95,6 +95,8 @@ export function useSwapState(
   const [tokenIn, setTokenIn] = useState<RheaSwapToken | null>(initialState.tokenIn)
   const [selectedSourceAssetId, setSelectedSourceAssetId] = useState<string | null>(null)
   const [tokenOut, setTokenOut] = useState<RheaSwapToken | null>(initialState.tokenOut)
+  const currentSelectionContext = useRef({ catalogScope, preferenceScope, tokenIn })
+  currentSelectionContext.current = { catalogScope, preferenceScope, tokenIn }
   const [sourceCatalog, setSourceCatalog] = useState<readonly RheaSwapToken[]>(initialState.sources)
   const [crossChainDestinationCatalog, setCrossChainDestinationCatalog] = useState<
     readonly RheaSwapToken[]
@@ -669,23 +671,27 @@ export function useSwapState(
 
   const selectTokenIn = useCallback(
     (token: RheaSwapToken) => {
+      const current = currentSelectionContext.current
+      if (current.catalogScope !== catalogScope) return
       markSelectionEdited()
       setSourceCatalog(previous =>
         mergeSelectedSwapSourceCatalog(previous, selectorSourceCatalog.current, token)
       )
       setTokenIn(token)
       setSelectedSourceAssetId(token.assetId)
-      if (preferenceScope) setSavedTokenInId(preferenceScope, token.assetId)
+      if (current.preferenceScope) setSavedTokenInId(current.preferenceScope, token.assetId)
       setAmountOut('')
       setQuoteError(null)
     },
-    [markSelectionEdited, preferenceScope, setSavedTokenInId]
+    [catalogScope, markSelectionEdited, setSavedTokenInId]
   )
 
   const selectTokenOut = useCallback(
     (token: RheaSwapToken) => {
+      const current = currentSelectionContext.current
+      if (current.catalogScope !== catalogScope) return
       markSelectionEdited()
-      if (token.blockchain === tokenIn?.blockchain) {
+      if (token.blockchain === current.tokenIn?.blockchain) {
         setSourceCatalog(previous =>
           previous.includes(token) ? previous : mergeTokenCatalogs(previous, [token])
         )
@@ -695,15 +701,15 @@ export function useSwapState(
         )
       }
       setTokenOut(token)
-      if (preferenceScope)
-        setSavedTokenSelection(preferenceScope, {
-          tokenInId: tokenIn?.assetId ?? null,
+      if (current.preferenceScope)
+        setSavedTokenSelection(current.preferenceScope, {
+          tokenInId: current.tokenIn?.assetId ?? null,
           tokenOutId: token.assetId
         })
       setAmountOut('')
       setQuoteError(null)
     },
-    [markSelectionEdited, preferenceScope, setSavedTokenSelection, tokenIn]
+    [catalogScope, markSelectionEdited, setSavedTokenSelection]
   )
 
   const selectTokenOutForFlow = useCallback((token: RheaSwapToken) => {

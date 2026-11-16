@@ -664,14 +664,49 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     effectiveWalletId,
     effectiveAccountId
   )
-  const swapPreferenceScope = walletActionMode.loading
-    ? null
-    : createSwapTokenPreferenceScope(
-        effectiveWalletId,
-        effectiveAccountId,
-        currentNetwork,
-        shieldSwapSelected ? 'shield' : walletActionMode.mode
-      )
+  const [sourceModeSelection, setSourceModeSelection] = useState<{
+    readonly scope: string
+    readonly mode: QuoteDepositExecutionMode
+  } | null>(null)
+  const requestedBalanceDomain = searchParams.get('balanceDomain')
+  const requestedSwapMode: QuoteDepositExecutionMode | null =
+    requestedBalanceDomain === 'private'
+      ? 'private'
+      : requestedBalanceDomain === 'public'
+        ? 'main'
+        : requestedCrossChainSourceMode === 'main' || requestedCrossChainSourceMode === 'private'
+          ? requestedCrossChainSourceMode
+          : null
+  const routeSourceMode =
+    !privateTransferRequested &&
+    !isPrivateFunding &&
+    (requestedSourceAssetId || searchParams.has('balanceDomain')) &&
+    requestedSwapMode &&
+    searchParams.get('sourceWalletId') === effectiveWalletId &&
+    searchParams.get('sourceAccountId') === effectiveAccountId
+      ? requestedSwapMode
+      : null
+  const requestedSourceMode = publicPrivacySendRequested
+    ? 'main'
+    : sourceModeSelection?.scope === walletSourcesScope
+      ? sourceModeSelection.mode
+      : (routeSourceMode ?? walletActionMode.mode)
+  const sourceMode: QuoteDepositExecutionMode =
+    requestedSourceMode === 'private' && !privateExecutionSupported ? 'main' : requestedSourceMode
+  const sourceModeReady =
+    !walletActionMode.loading ||
+    publicPrivacySendRequested ||
+    sourceModeSelection?.scope === walletSourcesScope ||
+    routeSourceMode !== null
+  const swapPreferenceScope =
+    !accountNetworksReady || (!shieldSwapSelected && !sourceModeReady)
+      ? null
+      : createSwapTokenPreferenceScope(
+          effectiveWalletId,
+          effectiveAccountId,
+          currentNetwork,
+          shieldSwapSelected ? 'shield' : sourceMode
+        )
   const savedTokenSelection = useSwapPreferences(state =>
     swapPreferenceScope ? state.tokenSelections[swapPreferenceScope] : undefined
   )
@@ -756,7 +791,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 !privateTransferRequested &&
                 !isPrivateFunding &&
                 !publicPrivacySendRequested &&
-                walletActionMode.mode === 'private'
+                sourceMode === 'private'
               ? privateSwapChainId
               : defaultSwapChainId
     }
@@ -1205,40 +1240,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const crossChainDraftPending =
     crossChainDraftScope !== null && hydratedCrossChainSendScope !== crossChainDraftScope
   const autoReviewStartedScope = useRef<string | null>(null)
-  const [sourceModeSelection, setSourceModeSelection] = useState<{
-    readonly scope: string
-    readonly mode: QuoteDepositExecutionMode
-  } | null>(null)
   const [destinationModeSelection, setDestinationModeSelection] = useState<{
     readonly scope: string
     readonly mode: QuoteDepositExecutionMode
   } | null>(null)
   const [destinationSelectorOpen, setDestinationSelectorOpen] = useState(false)
-  const requestedBalanceDomain = searchParams.get('balanceDomain')
-  const requestedSwapMode: QuoteDepositExecutionMode | null =
-    requestedBalanceDomain === 'private'
-      ? 'private'
-      : requestedBalanceDomain === 'public'
-        ? 'main'
-        : requestedCrossChainSourceMode === 'main' || requestedCrossChainSourceMode === 'private'
-          ? requestedCrossChainSourceMode
-          : null
-  const routeSourceMode =
-    !privateTransferRequested &&
-    !isPrivateFunding &&
-    (requestedSourceAssetId || searchParams.has('balanceDomain')) &&
-    requestedSwapMode &&
-    searchParams.get('sourceWalletId') === effectiveWalletId &&
-    searchParams.get('sourceAccountId') === effectiveAccountId
-      ? requestedSwapMode
-      : null
-  const requestedSourceMode = publicPrivacySendRequested
-    ? 'main'
-    : sourceModeSelection?.scope === walletSourcesScope
-      ? sourceModeSelection.mode
-      : (routeSourceMode ?? walletActionMode.mode)
-  const sourceMode: QuoteDepositExecutionMode =
-    requestedSourceMode === 'private' && !privateExecutionSupported ? 'main' : requestedSourceMode
   const setSourceMode = useCallback(
     (mode: QuoteDepositExecutionMode) => {
       if (mode === 'private' && !privateExecutionSupported) return
@@ -2347,21 +2353,25 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         ? requestedDestinationToken?.assetId
         : null
     const availableSourceTokens = privateSwapRequested ? privateSwapSourceTokens : swap.sourceTokens
+    const availableDestinationTokens = filterSwapDestinationTokens(
+      swap.destinationTokens,
+      privateDestinationSelectionRequested ? 'basic' : undefined
+    ).filter(
+      token =>
+        !ordinarySwapRequested ||
+        enabledSwapChains?.some(
+          chain => chain.id === resolveSwapRecipientChainId(token, currentNetwork)
+        )
+    )
     const resolved = resolveSwapTokenSelection({
       tokens: swap.tokens,
       sourceTokens: availableSourceTokens,
       sameChainDestinationTokens: privateSwapRequested
         ? privateSwapDestinationCatalogs.sameChain
-        : filterSwapDestinationTokens(
-            swap.sourceTokens,
-            privateDestinationSelectionRequested ? 'basic' : undefined
-          ),
+        : availableDestinationTokens,
       crossChainDestinationTokens: privateSwapRequested
         ? privateSwapDestinationCatalogs.crossChain
-        : filterSwapDestinationTokens(
-            swap.crossChainDestinationTokens,
-            privateDestinationSelectionRequested ? 'basic' : undefined
-          ),
+        : availableDestinationTokens,
       walletSourceTokens: privateSwapRequested
         ? privateWalletSwapSourceTokens
         : walletSwapSourceTokens,
