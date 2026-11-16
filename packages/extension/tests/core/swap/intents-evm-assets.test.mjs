@@ -63,7 +63,8 @@ test('maps only canonical supported Intents ERC-20 assets to wallet AssetIds', (
       symbol: 'USDC'
     })
   ])
-  expect(getDefaultIntentsEvmAssets(assets)).toEqual(assets)
+  expect(getDefaultIntentsEvmAssets(assets)).toEqual([])
+  expect(getDefaultIntentsEvmAssets(assets, new Set([assets[0].assetId]))).toEqual([assets[0]])
 })
 
 test('prefers the current BSC representation when a deprecated row shares its contract', () => {

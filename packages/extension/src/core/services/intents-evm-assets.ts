@@ -136,9 +136,8 @@ export function resolveIntentsEvmAssets(
 }
 
 export function getDefaultIntentsEvmAssets(
-  assets: readonly IntentsEvmAsset[]
+  assets: readonly IntentsEvmAsset[],
+  defaultVisibleAssetIds: ReadonlySet<string> = new Set()
 ): readonly IntentsEvmAsset[] {
-  return Object.freeze(
-    assets.filter(asset => ['USDC', 'USDT'].includes(asset.symbol.toUpperCase()))
-  )
+  return Object.freeze(assets.filter(asset => defaultVisibleAssetIds.has(asset.assetId)))
 }

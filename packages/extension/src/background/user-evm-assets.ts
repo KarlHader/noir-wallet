@@ -21,6 +21,7 @@ import {
   createConfiguredEvmRpcClient
 } from '@/infrastructure/chains/evm'
 import { ChromeTokenVisibilityRepository } from '@/infrastructure/portfolio/chrome-token-visibility'
+import { tokenRegistryClient } from '@/infrastructure/portfolio/token-registry-client'
 import { ChromeUserAssetDexPoolCacheRepository } from '@/infrastructure/prices'
 import { FourMemeMarketClient } from '@/infrastructure/prices/four-meme-market-client'
 
@@ -70,7 +71,9 @@ export async function createBackgroundUserEvmAssetRuntime(
     chains,
     repository: detectedRepository,
     discovery: new EvmTokenDiscoveryClient({ chains }),
-    isExcluded: assetId => bundledAssets.inspect(assetId) !== undefined,
+    isExcluded: assetId =>
+      bundledAssets.inspect(assetId) !== undefined ||
+      !tokenRegistryClient.getEntries(DEFAULT_NETWORK).some(entry => entry.assetId === assetId),
     resolveIconUrl: async assetId => (await fourMeme.getToken(assetId))?.iconUrl,
     resolveRpc: chainId => {
       const rpc = rpcByChainId.get(chainId)

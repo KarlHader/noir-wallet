@@ -187,7 +187,11 @@ test('refreshes protocol assets even when default EVM Token activation fails', a
               userAssets: [],
               detectedAssets: [],
               hiddenAssetIds: [],
-              protocolAssetIds: []
+              protocolAssetIds: [],
+              defaultAssetIds: [
+                `eip155:100/erc20:${GNOSIS_USDC.contractAddress}`,
+                'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+              ]
             }
           }
         }
@@ -247,7 +251,8 @@ test('does not re-enable persisted default Tokens when a Popup is reopened', asy
             ],
             detectedAssets: [],
             hiddenAssetIds: [],
-            protocolAssetIds: [protocolAsset.assetId, rnearAsset.assetId]
+            protocolAssetIds: [protocolAsset.assetId, rnearAsset.assetId],
+            defaultAssetIds: [evmAsset.assetId, protocolAsset.assetId]
           }
         }
       }
@@ -256,7 +261,7 @@ test('does not re-enable persisted default Tokens when a Popup is reopened', asy
 
   try {
     await expect(
-      intentsAssetManagerClient.ensureDefaults([GNOSIS_USDC, SOLANA_USDC])
+      intentsAssetManagerClient.ensureDefaults([GNOSIS_USDC, SOLANA_USDC, POLYGON_USDT])
     ).resolves.toEqual([])
     expect(messages.map(message => message.type)).toEqual(['GET_MANAGED_TOKEN_ASSETS'])
   } finally {

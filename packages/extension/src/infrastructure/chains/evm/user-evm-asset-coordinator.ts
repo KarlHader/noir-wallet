@@ -194,10 +194,7 @@ export class UserEvmAssetCoordinator {
     const existing = await this.options.repository.get(identity.assetId)
     if (existing) {
       assertIntentsCatalogDecimals(existing.metadata.decimals, input.expectedDecimals)
-      if (existing.source === 'intents-catalog') return existing
-      const catalogRecord = Object.freeze({ ...existing, source: 'intents-catalog' as const })
-      await this.options.repository.update(catalogRecord)
-      return catalogRecord
+      return existing
     }
 
     const inspected = await this.inspectInternal(identity, false)
@@ -222,10 +219,7 @@ export class UserEvmAssetCoordinator {
       const concurrent = await this.options.repository.get(identity.assetId)
       if (concurrent) {
         assertIntentsCatalogDecimals(concurrent.metadata.decimals, input.expectedDecimals)
-        if (concurrent.source === 'intents-catalog') return concurrent
-        const catalogRecord = Object.freeze({ ...concurrent, source: 'intents-catalog' as const })
-        await this.options.repository.update(catalogRecord)
-        return catalogRecord
+        return concurrent
       }
       throw error
     }

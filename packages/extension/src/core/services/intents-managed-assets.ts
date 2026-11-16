@@ -18,10 +18,6 @@ export interface IntentsManagedAsset {
   readonly management: 'evm' | 'protocol'
 }
 
-export function isDefaultVisibleIntentsAsset(asset: Pick<IntentsManagedAsset, 'symbol'>): boolean {
-  return asset.symbol.toUpperCase() === 'USDC' || asset.symbol.toUpperCase() === 'USDT'
-}
-
 export function resolveManagedIntentsAssets(
   tokens: readonly SwapToken[],
   network: Network,

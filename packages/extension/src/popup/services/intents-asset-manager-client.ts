@@ -5,7 +5,6 @@ import { createInitialProductChainRegistry } from '@/core/chains/registry'
 import { parseUserEvmAssetRecord, type UserEvmAssetRecord } from '@/core/chains/user-assets'
 import type { SwapToken } from '@/core/services/intents-api'
 import {
-  isDefaultVisibleIntentsAsset,
   resolveManagedIntentsAsset,
   resolveManagedIntentsAssets,
   type IntentsManagedAsset
@@ -115,16 +114,20 @@ export const intentsAssetManagerClient = Object.freeze({
   ): Promise<readonly UserEvmAssetRecord[]> => {
     const assets = resolveManagedIntentsCatalog(tokens)
     const managed = await userEvmAssetsClient.listManaged()
+    const defaultAssetIds = new Set(managed.defaultAssetIds)
     const existingEvmAssetIds = new Set(managed.userAssets.map(asset => asset.assetId))
     const existingProtocolAssetIds = new Set(managed.protocolAssetIds)
     const missingDefaultEvmAssets = assets.filter(
       asset =>
         asset.management === 'evm' &&
-        isDefaultVisibleIntentsAsset(asset) &&
+        defaultAssetIds.has(asset.assetId) &&
         !existingEvmAssetIds.has(asset.assetId)
     )
     const missingProtocolAssets = assets.some(
-      asset => asset.management === 'protocol' && !existingProtocolAssetIds.has(asset.assetId)
+      asset =>
+        asset.management === 'protocol' &&
+        defaultAssetIds.has(asset.assetId) &&
+        !existingProtocolAssetIds.has(asset.assetId)
     )
     const [evmResult] = await Promise.all([
       enableEvmAssets(missingDefaultEvmAssets, false),

@@ -135,7 +135,8 @@ export function resolveIntentsWalletAsset(
 
 export function createIntentsWalletAssetCatalog(
   tokens: readonly SwapToken[],
-  network: Network
+  network: Network,
+  defaultVisibleAssetIds: ReadonlySet<string> = new Set()
 ): IntentsWalletAssetCatalog {
   const entries = new Map<string, IntentsWalletAssetCatalogEntry>()
   const tokensByProtocolAssetId = new Map(tokens.map(token => [token.assetId, token]))
@@ -150,7 +151,7 @@ export function createIntentsWalletAssetCatalog(
       symbol: token.symbol,
       decimals: token.decimals,
       ...(iconUrl ? { iconUrl } : {}),
-      visibleByDefault: ['USDC', 'USDT'].includes(token.symbol.toUpperCase())
+      visibleByDefault: defaultVisibleAssetIds.has(descriptor.assetId)
     })
     const existing = entries.get(descriptor.assetId)
     if (existing && (existing.symbol !== entry.symbol || existing.decimals !== entry.decimals)) {
@@ -160,7 +161,13 @@ export function createIntentsWalletAssetCatalog(
   }
 
   if (network === 'mainnet' && !entries.has(RHEA_LIQUID_NEAR_ASSET.assetId)) {
-    entries.set(RHEA_LIQUID_NEAR_ASSET.assetId, RHEA_LIQUID_NEAR_ASSET)
+    entries.set(
+      RHEA_LIQUID_NEAR_ASSET.assetId,
+      Object.freeze({
+        ...RHEA_LIQUID_NEAR_ASSET,
+        visibleByDefault: defaultVisibleAssetIds.has(RHEA_LIQUID_NEAR_ASSET.assetId)
+      })
+    )
   }
 
   const catalogEntries = Object.freeze([...entries.values()])

@@ -250,7 +250,13 @@ import { getConfidentialFundingMessageHandler } from './confidential-funding-mes
 import { ExternalShieldDepositError } from '@/core/services/confidential-funding/confidential-external-deposit'
 import { ChromeConfidentialFundingStore } from './confidential-funding-store'
 import { createEvmWalletRuntimeError } from '@/core/chains/evm'
-import { hidePortfolioAssets, type PortfolioScope } from '@/core/portfolio'
+import {
+  applyTokenDisplayPolicy,
+  isPortfolioTokenVisible,
+  type TokenDisplayPolicy,
+  type PortfolioScope
+} from '@/core/portfolio'
+import { tokenRegistryClient } from '@/infrastructure/portfolio/token-registry-client'
 import { mapEvmWalletRuntimeError } from './evm-wallet-runtime-error'
 import {
   isNewWalletFamilyEnabled,
@@ -1408,9 +1414,9 @@ async function reloadMultichainRuntime(
       ) {
         throw new Error('Wallet account changed')
       }
-      const hidden = new Set((await tokenVisibility?.list()) ?? [])
-      return model.assets
-        .filter(row => scope.chainIds.includes(row.asset.chainId) && !hidden.has(row.asset.id))
+      const visible = applyTokenDisplayPolicy(model, await readTokenDisplayPolicy())
+      return visible.assets
+        .filter(row => scope.chainIds.includes(row.asset.chainId))
         .map(row => ({
           assetId: row.asset.id,
           chainId: row.asset.chainId,
@@ -1523,7 +1529,11 @@ function refreshIntentsProtocolAssets(force = false): Promise<void> {
       throw new Error('Intents wallet token catalog is unavailable')
     }
     if (walletTokens.length > 0) {
-      const catalog = createIntentsWalletAssetCatalog(walletTokens, DEFAULT_NETWORK)
+      const catalog = createIntentsWalletAssetCatalog(
+        walletTokens,
+        DEFAULT_NETWORK,
+        getDefaultTokenAssetIds()
+      )
       intentsProtocolAssets = catalog.definitions
       intentsProtocolAssetIds = Object.freeze(
         catalog.preferences.map(preference => preference.assetId)
@@ -1589,7 +1599,7 @@ async function revealSettledSwapDestinationAsset(assetId: string): Promise<void>
     })
     await refreshMultichainRuntimeForUserAssets(false, [asset.chainId])
   }
-  await tokenVisibility?.revealHeldProtocolAssets([asset.assetId])
+  await tokenVisibility?.revealUserSelectedAsset(asset.assetId)
 }
 
 async function refreshMultichainRuntimeForUserAssets(
@@ -1599,6 +1609,94 @@ async function refreshMultichainRuntimeForUserAssets(
   await scheduleMultichainRuntimeReload(undefined, true, cancelAwaitingApprovals)
   await portfolioCoordinator?.refreshActive(chainIds).catch(error => {
     console.warn('[User EVM Assets] Portfolio refresh after catalog change failed', error)
+  })
+}
+
+function getDefaultTokenAssetIds(): ReadonlySet<string> {
+  return new Set(
+    tokenRegistryClient
+      .getEntries(DEFAULT_NETWORK)
+      .flatMap(entry => (entry.defaultVisible ? [entry.assetId] : []))
+  )
+}
+
+async function readTokenDisplayPolicy(): Promise<TokenDisplayPolicy> {
+  const overrides = await tokenVisibility?.readUserOverrides().catch(() => undefined)
+  return {
+    allowedAssetIds: new Set(
+      tokenRegistryClient.getEntries(DEFAULT_NETWORK).map(entry => entry.assetId)
+    ),
+    defaultAssetIds: getDefaultTokenAssetIds(),
+    visibleAssetIds: new Set([
+      ...(overrides?.visibleAssetIds ?? []),
+      ...userEvmAssetRecords.flatMap(record =>
+        record.source === 'user-added' ? [record.assetId] : []
+      )
+    ]),
+    hiddenAssetIds: new Set(overrides?.hiddenAssetIds ?? [])
+  }
+}
+
+const tokenRegistryRefresh = new DedupPromise<void>()
+
+function refreshTokenRegistryConfiguration(): Promise<void> {
+  return tokenRegistryRefresh.run(async () => {
+    const network = DEFAULT_NETWORK
+    const changed = await tokenRegistryClient.refresh()
+    if (network !== DEFAULT_NETWORK) return
+    const defaultAssetIds = getDefaultTokenAssetIds()
+    const coordinator = userEvmAssetCoordinator
+    const bundledIds = new Set(
+      getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK).map(
+        asset => `${asset.chainId}/${asset.namespace}:${asset.reference}`
+      )
+    )
+    const existingIds = new Set(userEvmAssetRecords.map(record => record.assetId))
+    const chainIds = new Set<string>(
+      resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings()).map(
+        chain => chain.chainId
+      )
+    )
+    const missing = [...defaultAssetIds].filter(id => {
+      const asset = parseAssetId(id)
+      return (
+        asset.namespace === 'erc20' &&
+        chainIds.has(asset.chainId) &&
+        !bundledIds.has(id) &&
+        !existingIds.has(id)
+      )
+    })
+    const registered = coordinator
+      ? await Promise.allSettled(
+          missing.map(id => {
+            const asset = parseAssetId(id)
+            return coordinator.ensure({ chainId: asset.chainId, contractAddress: asset.reference })
+          })
+        )
+      : []
+    // A parallel runtime reload may have read the catalog before these inserts finished.
+    // Rebuild from persisted records using the current settings, even if its coordinator changed.
+    if (network !== DEFAULT_NETWORK) return
+    if (!changed && !registered.some(result => result.status === 'fulfilled')) return
+    if (intentsFullCatalogTokens.length > 0) {
+      const catalog = createIntentsWalletAssetCatalog(
+        intentsFullCatalogTokens,
+        DEFAULT_NETWORK,
+        defaultAssetIds
+      )
+      await tokenVisibility?.synchronizeProtocolDefaults(catalog.preferences)
+    }
+    await refreshMultichainRuntimeForUserAssets(false)
+    const model = await portfolioCoordinator?.readCachedActive()
+    if (model) {
+      await chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: model.scope.keyDomainId,
+          accountId: model.scope.accountId
+        })
+        .catch(() => {})
+    }
   })
 }
 
@@ -2013,7 +2111,9 @@ enqueueExtensionDisplayModeUpdate(initializeExtensionDisplayMode).catch(error =>
 // Network-bound services start only after the persisted global mode is resolved.
 const multichainStartupReady = runtimeNetworkReady.then(async () => {
   await prepareWalletStoreForUse()
+  await tokenRegistryClient.loadCached()
   await scheduleMultichainRuntimeReload()
+  void refreshTokenRegistryConfiguration().catch(() => {})
 })
 
 function rheaSignedRecoveryJobs() {
@@ -3504,19 +3604,42 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       sendResponse({ error: 'Managed Tokens are unavailable' })
       return true
     }
-    void tokenVisibility
-      .list()
-      .then(hiddenAssetIds =>
-        sendResponse({
-          result: {
-            userAssets: userEvmAssetRecords,
-            detectedAssets: detectedEvmAssetRecords,
-            hiddenAssetIds,
-            protocolAssetIds: intentsProtocolAssetIds
-          }
-        })
+    void (async () => {
+      const policy = await readTokenDisplayPolicy()
+      const model = await portfolioCoordinator?.readCachedActive()
+      const held = new Set<string>(
+        model?.assets.flatMap(row => (BigInt(row.balance.totalRaw) > 0n ? [row.asset.id] : [])) ??
+          []
       )
-      .catch(() => sendResponse({ error: 'Managed Tokens could not be loaded' }))
+      for (const row of model?.confidential?.assets ?? []) {
+        if (row.assetId && BigInt(row.availableRaw) > 0n) held.add(row.assetId)
+      }
+      const ids = new Set([
+        ...policy.hiddenAssetIds,
+        ...userEvmAssetRecords.map(record => record.assetId),
+        ...detectedEvmAssetRecords.map(record => record.assetId),
+        ...intentsProtocolAssetIds,
+        ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK)
+          .filter(asset => asset.kind === 'token')
+          .map(asset => `${asset.chainId}/${asset.namespace}:${asset.reference}`)
+      ])
+      const hiddenAssetIds = [...ids].filter(
+        id => !isPortfolioTokenVisible(id, held.has(id), policy)
+      )
+      sendResponse({
+        result: {
+          userAssets: userEvmAssetRecords,
+          detectedAssets: detectedEvmAssetRecords.filter(
+            record =>
+              policy.allowedAssetIds.has(record.assetId) ||
+              policy.visibleAssetIds.has(record.assetId)
+          ),
+          hiddenAssetIds,
+          protocolAssetIds: intentsProtocolAssetIds,
+          defaultAssetIds: [...policy.defaultAssetIds]
+        }
+      })
+    })().catch(() => sendResponse({ error: 'Managed Tokens could not be loaded' }))
     return true
   }
 
@@ -3810,9 +3933,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             : []
         ) ?? []
       )
-      const hiddenAssetIds = await tokenVisibility?.list().catch(() => [])
+      const policy = await readTokenDisplayPolicy()
       return {
-        model: model ? hidePortfolioAssets(model, hiddenAssetIds ?? []) : null,
+        model: model ? applyTokenDisplayPolicy(model, policy) : null,
         userAssets: userEvmAssetRecords,
         detectedAssets: detectedEvmAssetRecords,
         protocolAssets: Object.freeze([
@@ -3826,6 +3949,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         sendResponse({ result })
         // Discovery may wait on an indexer; return RPC balances before starting it.
         if (message.action === 'refresh' && !Array.isArray(message.chainIds) && result.model) {
+          void refreshTokenRegistryConfiguration().catch(() => {})
           void refreshDetectedEvmAssetsForActiveAccount(
             result.model.scope,
             message.forceDiscovery === true

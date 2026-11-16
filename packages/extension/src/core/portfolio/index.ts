@@ -2,6 +2,11 @@ export { buildPortfolioReadModel } from './portfolio-read-model'
 export { parsePortfolioReadModel } from './portfolio-read-model-parsing'
 export { hidePortfolioAssets } from './portfolio-visibility'
 export {
+  applyTokenDisplayPolicy,
+  isPortfolioTokenVisible,
+  type TokenDisplayPolicy
+} from './portfolio-visibility'
+export {
   parsePortfolioBalanceSnapshot,
   parsePortfolioSourceState,
   type PortfolioSourceState

@@ -243,6 +243,7 @@ test('persists detected inventory and exact hidden AssetIds in network-isolated 
     await visibility.revealHeldProtocolAssets([
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
     ])
+    await visibility.revealUserSelectedAsset(ASSET_ID)
     await expect(visibility.list()).resolves.toEqual([ASSET_ID])
     await visibility.setHidden(
       'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -261,6 +262,10 @@ test('persists detected inventory and exact hidden AssetIds in network-isolated 
     )
     await visibility.setHidden(ASSET_ID, false)
     await expect(visibility.list()).resolves.toEqual([])
+    await expect(visibility.readUserOverrides()).resolves.toEqual({
+      hiddenAssetIds: [],
+      visibleAssetIds: expect.arrayContaining([ASSET_ID])
+    })
     const futureChainAssetId = 'tron:mainnet/trc20:TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj'
     await visibility.setHidden(futureChainAssetId, true)
     await expect(visibility.list()).resolves.toEqual([futureChainAssetId])
@@ -282,7 +287,8 @@ test('migrates legacy protocol defaults without overriding an explicit hidden pr
     version: 1,
     preferences: [
       { assetId: solanaAssetId, visible: false },
-      { assetId: nearAssetId, visible: false }
+      { assetId: nearAssetId, visible: false },
+      { assetId: ASSET_ID, visible: true }
     ]
   })
   globalThis.chrome = memory.chrome
@@ -290,11 +296,16 @@ test('migrates legacy protocol defaults without overriding an explicit hidden pr
     const visibility = new ChromeTokenVisibilityRepository('mainnet')
     await visibility.synchronizeProtocolDefaults([
       { assetId: solanaAssetId, visibleByDefault: false },
-      { assetId: nearAssetId, visibleByDefault: true }
+      { assetId: nearAssetId, visibleByDefault: true },
+      { assetId: ASSET_ID, visibleByDefault: false }
     ])
     await visibility.revealHeldProtocolAssets([solanaAssetId, nearAssetId])
 
-    await expect(visibility.list()).resolves.toEqual([nearAssetId])
+    await expect(visibility.list()).resolves.toEqual([ASSET_ID, nearAssetId].sort())
+    await expect(visibility.readUserOverrides()).resolves.toEqual({
+      hiddenAssetIds: [nearAssetId],
+      visibleAssetIds: []
+    })
     expect(memory.storage.get(getTokenVisibilityStorageKey('mainnet'))).toMatchObject({
       version: 2,
       preferences: expect.arrayContaining([

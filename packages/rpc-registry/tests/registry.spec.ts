@@ -2,6 +2,39 @@ import { expect, test } from '@playwright/test'
 import { handleRegistryRequest } from '../src/api'
 import { getMonitorTargets, RPC_REGISTRY, ZCASH_RPC_REGISTRY } from '../src/registry'
 import { ZERO_INDEXER_REGISTRY } from '../src/zero-indexer-registry'
+import { TOKEN_REGISTRY } from '../src/token-registry'
+
+test('serves canonical, unique token identities with CORS and preflight', async () => {
+  const url = 'https://rpc.zknoir.com/v1/token-registry'
+  const response = handleRegistryRequest(new Request(url))
+  const preflight = handleRegistryRequest(new Request(url, { method: 'OPTIONS' }))
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('access-control-allow-origin')).toBe('*')
+  expect(response.headers.get('cache-control')).toContain('max-age=300')
+  expect(preflight.status).toBe(204)
+  expect(preflight.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS')
+  await expect(response.json()).resolves.toEqual(TOKEN_REGISTRY)
+  expect(TOKEN_REGISTRY.version).toBe(1)
+  expect(Number.isNaN(Date.parse(TOKEN_REGISTRY.updatedAt))).toBe(false)
+  expect(TOKEN_REGISTRY.assets.length).toBeGreaterThan(0)
+  expect(new Set(TOKEN_REGISTRY.assets.map(asset => asset.assetId)).size).toBe(
+    TOKEN_REGISTRY.assets.length
+  )
+  for (const asset of TOKEN_REGISTRY.assets) {
+    expect(asset).toEqual({
+      assetId: expect.any(String),
+      network: expect.stringMatching(/^(mainnet|testnet)$/),
+      defaultVisible: expect.any(Boolean)
+    })
+    expect(asset.assetId).toMatch(
+      /^(?:eip155:[0-9]+\/erc20:0x[0-9a-f]{40}|solana:[1-9A-HJ-NP-Za-km-z]{32}\/token:[1-9A-HJ-NP-Za-km-z]{32,44}|near:(?:mainnet|testnet)\/nep141:[a-z0-9]+(?:[._-][a-z0-9]+)*)$/
+    )
+    if (asset.assetId.startsWith('near:mainnet/') || asset.assetId.startsWith('solana:')) {
+      expect(asset.network).toBe('mainnet')
+    }
+  }
+})
 
 test('serves broadcast nodes separately from sync RPC monitoring', async () => {
   const response = handleRegistryRequest(
