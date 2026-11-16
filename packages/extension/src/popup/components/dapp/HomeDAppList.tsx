@@ -61,9 +61,9 @@ export function HomeDAppList({
   }, [])
 
   return (
-    <div className="flex flex-col gap-9 px-4 py-5" aria-label="DApps">
+    <div className="flex flex-col gap-3 px-4 py-5" aria-label="DApps">
       {dapps === null && loading && (
-        <div className="flex flex-col gap-9" aria-label="Loading DApps">
+        <div className="flex flex-col gap-3" aria-label="Loading DApps">
           {Array.from({ length: 3 }, (_, index) => (
             <div key={index} className="flex items-center gap-2" aria-hidden="true">
               <span className="size-11 shrink-0 animate-pulse rounded-lg bg-wallet-surface" />
@@ -118,7 +118,7 @@ export function HomeDAppList({
                 <span className="min-w-0 truncate text-lg font-semibold leading-6">
                   {dapp.name}
                 </span>
-                <span className="max-w-24 shrink-0 truncate rounded-lg bg-wallet-selected px-1.5 py-1 text-xs leading-4 text-muted">
+                <span className="max-w-24 shrink-0 truncate rounded-md bg-wallet-selected px-1.5 py-0.5 text-[10px] leading-3 text-muted">
                   {dapp.category}
                 </span>
               </span>
