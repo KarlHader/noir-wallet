@@ -6,6 +6,7 @@ import { AmountDisplay } from '../common/AmountDisplay'
 import { openModal } from '@/popup/provider/ModalManager'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { formatSymbol } from '@/lib/format'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
@@ -103,58 +104,89 @@ export function ConfidentialActivityView({
     }
     let active = true
     let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let inFlight: Promise<void> | null = null
+    let pendingUpdate = false
     const delayTimer = setTimeout(() => {
       if (active) setStillLoading(true)
     }, 10_000)
 
-    const load = async () => {
-      const planId = getConfidentialFundingPlanId(plan.transactionId)
-      if (planId) {
-        void confidentialFundingClient
-          .get(planId)
-          .then(next => {
-            if (
-              active &&
-              next.transactionId === plan.transactionId &&
-              next.network === plan.network &&
-              next.keyDomainId === plan.keyDomainId &&
-              next.accountId === plan.accountId
-            )
-              setConfidentialPlan(next)
-          })
-          .catch(() => {})
+    const planId = getConfidentialFundingPlanId(plan.transactionId)
+    const load = () => {
+      if (!active) return
+      if (inFlight) {
+        pendingUpdate = true
+        return
       }
-      try {
-        const model = await evmWalletClient.getActivity('read', 'all')
-        const item = model?.items.find(candidate => candidate.id === plan.transactionId)
-        if (
-          active &&
-          model?.scope.keyDomainId === plan.keyDomainId &&
-          model.scope.accountId === plan.accountId &&
-          item?.scope.keyDomainId === plan.keyDomainId &&
-          item.scope.accountId === plan.accountId
-        ) {
-          const next = activityRef.current
-            ? selectActivityObservation(activityRef.current, item)
-            : item
-          activityRef.current = next
-          setActivity(next)
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+      retryTimer = undefined
+      inFlight = Promise.allSettled([
+        planId ? confidentialFundingClient.get(planId) : Promise.resolve(null),
+        evmWalletClient.getActivity('read', 'all')
+      ])
+        .then(([planResult, activityResult]) => {
+          if (!active) return
+          const nextPlan = planResult.status === 'fulfilled' ? planResult.value : null
+          const scopedPlan =
+            nextPlan?.transactionId === plan.transactionId &&
+            nextPlan.network === plan.network &&
+            nextPlan.keyDomainId === plan.keyDomainId &&
+            nextPlan.accountId === plan.accountId
+              ? nextPlan
+              : null
+          if (scopedPlan) setConfidentialPlan(scopedPlan)
+
+          const model = activityResult.status === 'fulfilled' ? activityResult.value : null
+          const item = model?.items.find(candidate => candidate.id === plan.transactionId)
           if (
-            (next.status === 'final' &&
-              next.completeness === 'complete' &&
-              next.reconfirming !== true) ||
-            next.status === 'failed'
-          )
-            return
-        }
-      } catch {
-        // The local activity projection may lag a newly started transfer.
-      }
-      if (active) retryTimer = setTimeout(() => void load(), 3_000)
+            model?.scope.keyDomainId === plan.keyDomainId &&
+            model.scope.accountId === plan.accountId &&
+            item?.scope.keyDomainId === plan.keyDomainId &&
+            item.scope.accountId === plan.accountId
+          ) {
+            const next = activityRef.current
+              ? selectActivityObservation(activityRef.current, item)
+              : item
+            activityRef.current = next
+            setActivity(next)
+          }
+          const current = activityRef.current
+          if (
+            scopedPlan?.phase !== 'refunded' &&
+            !(
+              current?.status === 'failed' ||
+              (current?.status === 'final' &&
+                current.completeness === 'complete' &&
+                current.reconfirming !== true)
+            )
+          ) {
+            retryTimer = setTimeout(load, 3_000)
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight = null
+          if (active && pendingUpdate) {
+            pendingUpdate = false
+            load()
+          }
+        })
     }
-    void load()
+    const listener = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      if (!message || typeof message !== 'object' || !('type' in message)) return
+      if (
+        message.type === 'TRANSACTION_ADDED' ||
+        message.type === 'TRANSACTION_UPDATED' ||
+        message.type === 'TRANSACTION_STATUS_UPDATED' ||
+        message.type === 'CROSS_CHAIN_STATUS_UPDATED'
+      )
+        load()
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    load()
     return () => {
       active = false
+      chrome.runtime.onMessage.removeListener(listener)
       clearTimeout(delayTimer)
       if (retryTimer !== undefined) clearTimeout(retryTimer)
     }
@@ -183,6 +215,7 @@ export function ConfidentialActivityView({
     confidentialPlan.accountId === plan.accountId
       ? confidentialPlan
       : null
+  const refunded = scopedPlan?.phase === 'refunded' || scopedActivity?.failureCode === 'refunded'
   const activityView = scopedActivity
     ? buildActivityTransactionView({
         item: scopedActivity,
@@ -190,6 +223,8 @@ export function ConfidentialActivityView({
         assetMetadata: catalog.assetMetadata,
         chainMetadata: catalog.chainMetadata,
         confidentialPlan: scopedPlan,
+        refunded,
+        ...(refunded ? { statusLabel: 'Refunded', statusTone: 'neutral' as const } : {}),
         fallback: display
           ? {
               source: { value: display.amount, symbol: formatSymbol(display.symbol) },
@@ -210,7 +245,7 @@ export function ConfidentialActivityView({
     scopedActivity?.status === 'final' &&
     scopedActivity.reconfirming !== true &&
     scopedActivity.completeness === 'complete'
-  const failed = scopedActivity?.status === 'failed'
+  const failed = scopedActivity?.status === 'failed' && !refunded
   const origin = scopedActivity?.segments.find(segment => segment.role === 'origin')
   const destination = scopedActivity?.segments.find(segment => segment.role === 'destination')
   const progressTitle =
@@ -226,10 +261,18 @@ export function ConfidentialActivityView({
     <>
       {inDialog && <DialogTitle className="sr-only">Transaction activity</DialogTitle>}
       <TransactionResult
-        status={confirmed ? 'success' : failed ? 'failed' : 'loading'}
-        title={confirmed ? 'Transaction Confirmed' : failed ? 'Transaction Failed' : progressTitle}
+        status={refunded ? 'neutral' : confirmed ? 'success' : failed ? 'failed' : 'loading'}
+        title={
+          refunded
+            ? 'Transaction Refunded'
+            : confirmed
+              ? 'Transaction Confirmed'
+              : failed
+                ? 'Transaction Failed'
+                : progressTitle
+        }
         footer={
-          confirmed || failed ? (
+          confirmed || failed || refunded ? (
             <Button onClick={onDone} className="h-[45px] w-full">
               Done
             </Button>
