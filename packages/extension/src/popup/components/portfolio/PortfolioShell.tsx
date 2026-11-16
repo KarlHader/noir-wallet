@@ -545,29 +545,31 @@ export function PortfolioShell({
               />
             ))}
             {lowValueAssetGroups.length > 0 && (
-              <section className="mx-4 overflow-hidden rounded-xl border border-border/60 bg-card/40">
-                <button
-                  type="button"
-                  aria-expanded={lowValueExpanded}
-                  aria-label={`${lowValueExpanded ? 'Collapse' : 'Expand'} low value assets`}
-                  onClick={() => setLowValueExpanded(current => !current)}
-                  className="wallet-interactive flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-                >
-                  <Icon icon="lucide:archive" width={16} height={16} className="text-muted" />
-                  <span className="min-w-0 flex-1 text-sm font-medium">Low value</span>
-                  <span className="text-xs text-muted">{lowValueAssetGroups.length} Assets</span>
-                  <Icon
-                    icon="lucide:chevron-down"
-                    width={13}
-                    height={13}
-                    className={cn(
-                      'text-muted transition-transform',
-                      lowValueExpanded && 'rotate-180'
-                    )}
-                  />
-                </button>
+              <section>
+                <div className="mx-4">
+                  <button
+                    type="button"
+                    aria-expanded={lowValueExpanded}
+                    aria-label={`${lowValueExpanded ? 'Collapse' : 'Expand'} low value assets`}
+                    onClick={() => setLowValueExpanded(current => !current)}
+                    className="wallet-interactive flex min-h-11 w-full items-center gap-2 rounded-xl border border-border/60 bg-card/40 px-3 py-2 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                  >
+                    <Icon icon="lucide:archive" width={16} height={16} className="text-muted" />
+                    <span className="min-w-0 flex-1 text-sm font-medium">Low value</span>
+                    <span className="text-xs text-muted">{lowValueAssetGroups.length} Assets</span>
+                    <Icon
+                      icon="lucide:chevron-down"
+                      width={13}
+                      height={13}
+                      className={cn(
+                        'text-muted transition-transform',
+                        lowValueExpanded && 'rotate-180'
+                      )}
+                    />
+                  </button>
+                </div>
                 {lowValueExpanded && (
-                  <div className="space-y-2 border-t border-border/60 p-2">
+                  <div className="space-y-2">
                     {lowValueAssetGroups.map(group => renderAssetGroup(group, 'assets:low-value'))}
                   </div>
                 )}
