@@ -69,9 +69,7 @@ import {
   DialogTitle
 } from '@/popup/components/ui/dialog'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
-import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
-import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
-import { resolveConfidentialEvmAssetSupport } from '@/core/services/rhea-swap/rhea-confidential-support'
+import { toWalletEvmQuoteToken } from '@/popup/services/token-address-discovery'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -454,10 +452,6 @@ function TransferForm() {
   const userEditedMove = useRef(false)
   const userPickedMethod = useRef(launchHasDraft)
   const [catalogReady, setCatalogReady] = useState(false)
-  const [routeSnapshot, setRouteSnapshot] = useState<{
-    key: string
-    status: 'supported' | 'unsupported' | 'error'
-  } | null>(null)
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
   const canLoadShield =
@@ -1093,60 +1087,14 @@ function TransferForm() {
           : null))
       : sourceRaw
   const routeKey = `${scopeKey}:${selected?.asset.asset.id ?? ''}:${from}:${to}:${destination?.asset.asset.id ?? ''}`
-  const routeState = routeSnapshot?.key === routeKey ? routeSnapshot.status : 'loading'
+  const routeState =
+    selected?.chain.chain.family === 'evm' &&
+    eligible &&
+    supportedPair &&
+    toWalletEvmQuoteToken(selected.asset)
+      ? 'supported'
+      : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
-
-  useEffect(() => {
-    let cancelled = false
-    if (!selected || selected.chain.chain.family !== 'evm' || !eligible || !supportedPair) {
-      setRouteSnapshot({ key: routeKey, status: 'unsupported' })
-      return
-    }
-    const match = /^eip155:([1-9][0-9]*)$/.exec(selected.chain.chain.id)
-    if (!match) {
-      setRouteSnapshot({ key: routeKey, status: 'unsupported' })
-      return
-    }
-    setRouteSnapshot(null)
-    void rheaSwapClient
-      .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
-      .then(catalog => {
-        if (cancelled) return
-        const contract =
-          selected.asset.asset.kind === 'token'
-            ? selected.asset.asset.reference.toLowerCase()
-            : null
-        if (!resolveRheaPrivateTransferToken(catalog.tokens, contract)) {
-          setRouteSnapshot({
-            key: routeKey,
-            status: catalog.failedChainIds.includes(Number(match[1])) ? 'error' : 'unsupported'
-          })
-          return
-        }
-        const confidentialSupport = resolveConfidentialEvmAssetSupport({
-          chain: selected.chain.chain,
-          asset: selected.asset.asset,
-          catalog
-        })
-        setRouteSnapshot({
-          key: routeKey,
-          status:
-            confidentialSupport === 'supported'
-              ? 'supported'
-              : confidentialSupport === 'unsupported'
-                ? 'unsupported'
-                : catalog.failedChainIds.includes(Number(match[1]))
-                  ? 'error'
-                  : 'unsupported'
-        })
-      })
-      .catch(() => {
-        if (!cancelled) setRouteSnapshot({ key: routeKey, status: 'error' })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [routeKey, selected?.chain.chain.id, eligible, supportedPair, retry])
 
   const nativeMaximumEnabled = Boolean(
     selected &&
@@ -2275,12 +2223,6 @@ function TransferForm() {
         {showGenericEstimateError && (
           <InlineError
             message="Transfer estimate unavailable. Try again."
-            onRetry={() => setRetry(value => value + 1)}
-          />
-        )}
-        {supportedPair && amount.trim() && routeState === 'error' && (
-          <InlineError
-            message="Transfer availability could not be checked."
             onRetry={() => setRetry(value => value + 1)}
           />
         )}

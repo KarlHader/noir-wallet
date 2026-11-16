@@ -6,7 +6,10 @@ import {
   RheaSwapService,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
-import { mergeSelectedSwapSourceCatalog } from '../../../src/popup/services/swap-catalog-loading.ts'
+import {
+  findSwapTokenInCatalog,
+  mergeSelectedSwapSourceCatalog
+} from '../../../src/popup/services/swap-catalog-loading.ts'
 import { filterSwapDestinationTokens } from '../../../src/popup/services/swap-page-model.ts'
 import { getSwapDestinationTokens } from '../../../src/popup/services/swap-token-selection.ts'
 
@@ -38,6 +41,13 @@ it('keeps same-chain destinations after selecting Ethereum USDC from a progressi
   assert.deepEqual(destinations, [ETH, USDT, ZEC])
   assert.deepEqual(sources, [ZEC, ETH, USDC, USDT])
   assert.deepEqual(current, [ZEC])
+})
+
+it('retains a same-chain destination found only in the destination catalog', () => {
+  const custom = { ...USDC, assetId: 'eip155:1/erc20:0x3333333333333333333333333333333333333333' }
+  const destinations = getSwapDestinationTokens(custom, [custom], [ETH])
+
+  assert.equal(findSwapTokenInCatalog(destinations, { ...ETH, rheaAddress: '0x0' }), ETH)
 })
 
 it('completes a partially retained source chain even when the selected token is already present', () => {

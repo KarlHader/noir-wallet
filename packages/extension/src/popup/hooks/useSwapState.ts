@@ -504,10 +504,7 @@ export function useSwapState(
       !areTokensLoading &&
       !destinationTokensLoading &&
       selectionScope === preferenceScope &&
-      !destinationTokens.some(
-        token =>
-          token.rheaChainId === tokenOut.rheaChainId && token.rheaAddress === tokenOut.rheaAddress
-      )
+      !findSwapTokenInCatalog(destinationTokens, tokenOut)
     ) {
       setTokenOut(null)
       setAmountOut('')

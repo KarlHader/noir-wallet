@@ -4,6 +4,7 @@ import {
   type RheaSwapQuoteRequest,
   type RheaSwapToken
 } from '@/core/services/rhea-swap'
+import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import {
@@ -202,15 +203,18 @@ export async function estimateConfidentialTransferMaximum(input: {
   readonly executionMode: 'main' | 'private'
   readonly purpose: 'public-private-send' | 'confidential-funding' | 'private-transfer'
 }) {
-  const catalog = await rheaSwapClient.listTokens({
-    direction: 'from',
-    tokenListChainIds: [Number(input.chain.chain.id.split(':')[1])]
-  })
-  const token = resolveRheaPrivateTransferToken(
-    catalog.tokens,
+  const catalog = await rheaSwapClient
+    .listTokens({
+      direction: 'from',
+      tokenListChainIds: [Number(input.chain.chain.id.split(':')[1])]
+    })
+    .catch(() => null)
+  const catalogToken = resolveRheaPrivateTransferToken(
+    catalog?.tokens ?? [],
     input.asset.asset.kind === 'native' ? null : input.asset.asset.reference
   )
-  if (!token) throw new Error('Confidential transfer is unavailable for this asset')
+  const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
+  if (!token) throw new Error('Move source asset could not be mapped to a quote token')
   return estimateRheaRouteMaximum({
     source: createNativeTransferSource(input),
     tokenIn: token,

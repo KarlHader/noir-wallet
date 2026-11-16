@@ -157,9 +157,16 @@ export function getSwapDestinationTokens<T extends SwapToken>(
   sourceTokens: readonly T[],
   crossChainTokens: readonly T[]
 ): readonly T[] {
+  const sameChainSources = tokenIn
+    ? sourceTokens.filter(token => token.blockchain === tokenIn.blockchain)
+    : sourceTokens
+  const sameChainSourceIds = new Set(sameChainSources.map(token => token.assetId))
   const eligible = tokenIn
     ? [
-        ...sourceTokens.filter(token => token.blockchain === tokenIn.blockchain),
+        ...sameChainSources,
+        ...crossChainTokens.filter(
+          token => token.blockchain === tokenIn.blockchain && !sameChainSourceIds.has(token.assetId)
+        ),
         ...crossChainTokens.filter(token => token.blockchain !== tokenIn.blockchain)
       ]
     : [...sourceTokens, ...crossChainTokens]

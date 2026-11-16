@@ -166,17 +166,23 @@ it('quotes an EVM ERC-20 by its on-chain contract while retaining the catalog as
   assert.notEqual(serialized.tokenOut, assetId)
 })
 
-it('keeps Main destinations while limiting Private to declared NearIntents sources', () => {
-  const near = { assetId: 'near', sources: ['nearIntents'] }
-  const preSwap = { assetId: 'pre', sources: ['preswap-nearintents'] }
-  const ordinary = { assetId: 'ordinary', sources: ['lifi', 'okx'] }
-  const unknown = { assetId: 'unknown' }
-  const catalog = [near, preSwap, ordinary, unknown]
+it('keeps EVM Private destinations available for a quote regardless of catalog route hints', () => {
+  const near = { assetId: 'near', rheaChainId: '1', sources: ['nearIntents'] }
+  const preSwap = { assetId: 'pre', rheaChainId: '8453', sources: ['preswap-nearintents'] }
+  const ordinary = { assetId: 'ordinary', rheaChainId: '1', sources: ['lifi', 'okx'] }
+  const unknown = { assetId: 'unknown', rheaChainId: '1', sources: [] }
+  const external = { assetId: 'external', rheaChainId: 'btc', sources: ['nearIntents'] }
+  const catalog = [near, preSwap, ordinary, unknown, external]
   assert.equal(filterSwapDestinationTokens(catalog, undefined), catalog)
-  assert.deepEqual(filterSwapDestinationTokens(catalog, 'basic'), [near, preSwap])
+  assert.deepEqual(filterSwapDestinationTokens(catalog, 'basic'), [
+    near,
+    preSwap,
+    ordinary,
+    unknown
+  ])
 })
 
-it('applies the Private route limit before cross-chain Send destination grouping', () => {
+it('keeps eligible cross-chain Send destinations available for a Private quote', () => {
   const sourceToken = { rheaChainId: '1', isNative: true, sources: ['lifi'] }
   const near = { rheaChainId: '8453', isNative: true, sources: ['nearintents'] }
   const ordinary = { rheaChainId: '8453', isNative: true, sources: ['lifi'] }
@@ -192,11 +198,11 @@ it('applies the Private route limit before cross-chain Send destination grouping
   )
   assert.deepEqual(
     filterSelectableSwapDestinationTokens({ ...options, confidentiality: 'basic' }),
-    [near]
+    [near, ordinary]
   )
 })
 
-it('treats a legacy token without route sources as unknown in Private', () => {
+it('allows a legacy EVM token without route sources to request a Private quote', () => {
   const token = toRheaSwapToken({
     chain: '8453',
     address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
@@ -218,7 +224,7 @@ it('treats a legacy token without route sources as unknown in Private', () => {
   const { sources: _sources, ...legacy } = token
   const parsed = parseRheaSwapToken(legacy)
   assert.deepEqual(parsed.sources, [])
-  assert.deepEqual(filterSwapDestinationTokens([parsed], 'basic'), [])
+  assert.deepEqual(filterSwapDestinationTokens([parsed], 'basic'), [parsed])
   assert.deepEqual(filterSwapDestinationTokens([parsed], undefined), [parsed])
 })
 

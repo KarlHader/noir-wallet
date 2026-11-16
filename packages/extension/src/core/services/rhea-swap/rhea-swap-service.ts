@@ -38,6 +38,16 @@ import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 
 const MAXIMUM_SESSION_RECORDS = 16
 
+function sameQuoteAssetAddress(left: string, right: string, chain: string): boolean {
+  if (left === right) return true
+  return (
+    /^[1-9]\d*$/.test(chain) &&
+    /^0x[0-9a-fA-F]{40}$/.test(left) &&
+    /^0x[0-9a-fA-F]{40}$/.test(right) &&
+    left.toLowerCase() === right.toLowerCase()
+  )
+}
+
 function toEvmCallView(tx: EvmTx): RheaSwapEvmTransactionPlan['transaction'] {
   return Object.freeze({
     chainId: tx.chainId,
@@ -997,8 +1007,8 @@ export class RheaSwapService {
     if (
       build.fromChain !== quote.fromChain ||
       build.toChain !== quote.toChain ||
-      build.tokenIn.address !== quote.tokenIn.address ||
-      build.tokenOut.address !== quote.tokenOut.address ||
+      !sameQuoteAssetAddress(build.tokenIn.address, quote.tokenIn.address, quote.fromChain) ||
+      !sameQuoteAssetAddress(build.tokenOut.address, quote.tokenOut.address, quote.toChain) ||
       (quote.tokenIn.decimals !== undefined && build.tokenIn.decimals !== quote.tokenIn.decimals) ||
       (quote.tokenOut.decimals !== undefined &&
         build.tokenOut.decimals !== quote.tokenOut.decimals) ||

@@ -20,6 +20,7 @@ export function useTransferMaximum(options: {
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
   const requestKey = JSON.stringify([walletId, accountId, network, endpoints, options.requestKey])
+  const activeRequestKey = options.enabled ? requestKey : null
   const latest = useRef({ ...options, key: requestKey })
   latest.current = { ...options, key: requestKey }
   const sequence = useRef(0)
@@ -34,13 +35,19 @@ export function useTransferMaximum(options: {
   }>({ key: '', value: null, loading: false, fallbackUsed: false, error: null })
   useLayoutEffect(() => {
     sequence.current += 1
-    cache.current!.setScope(options.enabled ? requestKey : null)
-    setState({ key: requestKey, value: null, loading: false, fallbackUsed: false, error: null })
+    cache.current!.setScope(activeRequestKey)
+    setState({
+      key: activeRequestKey ?? '',
+      value: null,
+      loading: false,
+      fallbackUsed: false,
+      error: null
+    })
     return () => {
       sequence.current += 1
       cache.current!.setScope(null)
     }
-  }, [options.enabled, requestKey])
+  }, [activeRequestKey])
 
   const request = useCallback(async () => {
     if (!latest.current.enabled || latest.current.key !== requestKey) return

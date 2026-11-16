@@ -2,6 +2,7 @@ import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
 import { getSendRouteCostFromAmounts } from './send-route-cost'
+import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import {
   resolveWalletOwnedQuoteAsset,
   resolveWalletSwapSourceToken,
@@ -31,9 +32,12 @@ export function resolvePublicPrivateSendQuotePair(input: {
     input.portfolio,
     input.receiveTargets
   )
-  const sourceToken = input.sourceTokens.find(
-    token => token.assetId === requested?.assetId && token.blockchain === requested.blockchain
+  const asset = input.portfolio.assets.find(candidate => candidate.asset.id === input.assetId)
+  const catalogToken = input.sourceTokens.find(
+    token => token.assetId === requested?.assetId && token.blockchain === requested?.blockchain
   )
+  const sourceToken =
+    asset?.asset.chainId === input.chainId ? preferWalletEvmQuoteToken(asset, catalogToken) : null
   if (!sourceToken) return null
   const source = resolveWalletOwnedQuoteAsset(sourceToken, input.portfolio, input.receiveTargets)
   const publicSource = source
@@ -47,15 +51,16 @@ export function resolvePublicPrivateSendQuotePair(input: {
   ) {
     return null
   }
-  const destinationToken = input.destinationTokens.find(
-    token =>
-      token.assetId === sourceToken.assetId &&
-      token.blockchain === sourceToken.blockchain &&
-      token.rheaChainId === sourceToken.rheaChainId &&
-      token.rheaAddress === sourceToken.rheaAddress &&
-      token.decimals === sourceToken.decimals &&
-      isConfidentialSwapDestinationSupported(token)
-  )
+  const destinationToken =
+    input.destinationTokens.find(
+      token =>
+        token.assetId === sourceToken.assetId &&
+        token.blockchain === sourceToken.blockchain &&
+        token.rheaChainId === sourceToken.rheaChainId &&
+        token.rheaAddress === sourceToken.rheaAddress &&
+        token.decimals === sourceToken.decimals &&
+        isConfidentialSwapDestinationSupported(token)
+    ) ?? sourceToken
   return destinationToken ? Object.freeze({ sourceToken, destinationToken }) : null
 }
 

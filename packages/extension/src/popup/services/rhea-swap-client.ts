@@ -47,6 +47,12 @@ export function getRheaSwapErrorMessage(error: unknown): string {
   if (isSwapQuotePriceMoved(error))
     return getSwapQuoteFailureMessage(error) ?? classifyError(error).userMessage
   if (!(error instanceof RheaSwapClientError)) return classifyError(error).userMessage
+  if (error.message === 'RHEA Swap quote does not match its request') {
+    return 'Swap quote details could not be verified. Get a new quote.'
+  }
+  if (error.message === 'RHEA Swap build does not match its quote') {
+    return 'Swap transaction details differ from the quote. Get a new quote.'
+  }
   if (error.message === 'RHEA Swap returned an invalid response') {
     return 'Swap provider returned an invalid quote. Try again.'
   }

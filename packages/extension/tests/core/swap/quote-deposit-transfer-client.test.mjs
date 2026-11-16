@@ -13,6 +13,7 @@ import {
 } from '../../../src/popup/services/quote-deposit-transfer-client.ts'
 import { parseAssetId } from '../../../src/core/chains/registry/asset-id.ts'
 import { mergeTokenCatalogs } from '../../../src/popup/services/swap-catalog-loading.ts'
+import { resolvePublicPrivateSendQuotePair } from '../../../src/popup/services/public-private-send-preview.ts'
 import {
   isPreparedSwapFeeUnaffordable,
   isPrivateSwapDestinationSupported,
@@ -298,9 +299,11 @@ test.describe('quote deposit transfer client', () => {
         ...input,
         tokens: [{ ...eth, sources: ['lifi'] }]
       })
-    ).toBeNull()
+    ).toMatchObject({ assetId: eth.assetId })
     const { sources: _sources, ...legacyEth } = eth
-    expect(resolveConfidentialFundingDestinationToken({ ...input, tokens: [legacyEth] })).toBeNull()
+    expect(resolveConfidentialFundingDestinationToken({ ...input, tokens: [legacyEth] })).toBe(
+      legacyEth
+    )
   })
 
   test('never falls back from a locked BNB transfer to a different wallet asset', () => {
@@ -1006,12 +1009,28 @@ test.describe('quote deposit transfer client', () => {
   })
 
   test('allows Private swap destinations at the Account EVM Main or PEA address', () => {
-    const evm = { ...token('nep141:eth.omft.near', 'eth', 18), sources: ['nearintents'] }
-    const zec = { ...token('nep141:zec.omft.near', 'zec', 8), sources: ['nearintents'] }
+    const evm = {
+      ...token('nep141:eth.omft.near', 'eth', 18),
+      rheaChainId: '1',
+      sources: ['nearintents']
+    }
+    const zec = {
+      ...token('nep141:zec.omft.near', 'zec', 8),
+      rheaChainId: 'zcash',
+      sources: ['nearintents']
+    }
     const privateAddresses = new Map([[EVM_CHAIN_ID, '0x3333333333333333333333333333333333333333']])
 
     expect(
       isPrivateSwapDestinationSupported(evm, portfolio(), receiveTargets, privateAddresses)
+    ).toBe(true)
+    expect(
+      isPrivateSwapDestinationSupported(
+        { ...evm, sources: [] },
+        portfolio(),
+        receiveTargets,
+        privateAddresses
+      )
     ).toBe(true)
     expect(
       isPrivateSwapDestinationSupported(evm, portfolio(), receiveTargets, new Map(), 'main')
@@ -1040,6 +1059,44 @@ test.describe('quote deposit transfer client', () => {
         new Map([[EVM_CHAIN_ID, '0x1111111111111111111111111111111111111111']])
       )
     ).toBe(false)
+  })
+
+  test('builds a same-asset quote pair for a wallet ERC-20 absent from the RHEA catalog', () => {
+    const model = portfolio()
+    model.assets[0].balance = { mainRaw: '1000000000000000000' }
+    model.assets[1].balance = { mainRaw: '1000000' }
+    const pair = resolvePublicPrivateSendQuotePair({
+      assetId: USER_TOKEN_ASSET_ID,
+      chainId: EVM_CHAIN_ID,
+      sender: receiveTargets.targets[0].address,
+      portfolio: model,
+      receiveTargets,
+      sourceTokens: [],
+      destinationTokens: []
+    })
+    expect(pair?.sourceToken).toMatchObject({
+      rheaChainId: '1',
+      rheaAddress: USER_TOKEN_CONTRACT,
+      decimals: 6,
+      sources: []
+    })
+    expect(pair?.destinationToken).toBe(pair?.sourceToken)
+
+    const mismatchedCatalogToken = {
+      ...pair.sourceToken,
+      contractAddress: '0x4444444444444444444444444444444444444444'
+    }
+    const withMismatchedCatalog = resolvePublicPrivateSendQuotePair({
+      assetId: USER_TOKEN_ASSET_ID,
+      chainId: EVM_CHAIN_ID,
+      sender: receiveTargets.targets[0].address,
+      portfolio: model,
+      receiveTargets,
+      sourceTokens: [mismatchedCatalogToken],
+      destinationTokens: []
+    })
+    expect(withMismatchedCatalog?.sourceToken.rheaAddress).toBe(USER_TOKEN_CONTRACT)
+    expect(withMismatchedCatalog?.sourceToken.contractAddress).toBe(USER_TOKEN_CONTRACT)
   })
 
   test('maps an Asset details wallet ID back to its Intents Swap source', () => {

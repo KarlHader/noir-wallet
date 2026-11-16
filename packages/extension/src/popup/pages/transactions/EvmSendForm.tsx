@@ -562,10 +562,12 @@ export function EvmSendForm({
           const descriptor = getEnabledSwapChains([chain.chain])[0]
           if (!descriptor) throw new Error('Confidential route unavailable')
           const [catalog, targets] = await Promise.all([
-            rheaSwapClient.listTokens({
-              direction: 'from',
-              tokenListChainIds: [descriptor.tokenListChainId]
-            }),
+            rheaSwapClient
+              .listTokens({
+                direction: 'from',
+                tokenListChainIds: [descriptor.tokenListChainId]
+              })
+              .catch(() => null),
             receiveTargetsClient.getAdditionalTargets({ keyDomainId: walletId, accountId })
           ])
           if (cancelled || currentPrivatePreviewKey.current !== privatePreviewKey) return
@@ -576,31 +578,30 @@ export function EvmSendForm({
             sender,
             portfolio,
             receiveTargets: targets,
-            sourceTokens: catalog.tokens,
-            destinationTokens: catalog.tokens
+            sourceTokens: catalog?.tokens ?? [],
+            destinationTokens: catalog?.tokens ?? []
           })
-          const request = pair
-            ? buildPublicPrivateSendPreviewRequest({
-                network,
-                walletId,
-                accountId,
-                endpointKey,
-                portfolioWalletId: portfolio.scope.keyDomainId,
-                portfolioAccountId: portfolio.scope.accountId,
-                assetId: asset.asset.id,
-                assetReference: asset.asset.reference,
-                assetDecimals: asset.metadata.decimals,
-                chainId: chain.chain.id,
-                sender,
-                recipient,
-                amount,
-                amountRaw,
-                slippage,
-                feeSelectionKey,
-                sourceToken: pair.sourceToken,
-                destinationToken: pair.destinationToken
-              })
-            : null
+          if (!pair) throw new Error('Wallet asset could not be mapped to a Swap quote.')
+          const request = buildPublicPrivateSendPreviewRequest({
+            network,
+            walletId,
+            accountId,
+            endpointKey,
+            portfolioWalletId: portfolio.scope.keyDomainId,
+            portfolioAccountId: portfolio.scope.accountId,
+            assetId: asset.asset.id,
+            assetReference: asset.asset.reference,
+            assetDecimals: asset.metadata.decimals,
+            chainId: chain.chain.id,
+            sender,
+            recipient,
+            amount,
+            amountRaw,
+            slippage,
+            feeSelectionKey,
+            sourceToken: pair.sourceToken,
+            destinationToken: pair.destinationToken
+          })
           if (!request || request.key !== privatePreviewKey) {
             throw new Error('Confidential route unavailable')
           }
@@ -1303,7 +1304,9 @@ export function EvmSendForm({
         footer={
           <SendFormActions
             privacy={
-              sourceMode === 'main' && networkMode === 'mainnet' && support.support === 'supported'
+              sourceMode === 'main' &&
+              networkMode === 'mainnet' &&
+              support.support !== 'unsupported'
                 ? {
                     checked: sendPrivately,
                     onChange: () => changePrivacyRoute(sendPrivately ? null : privacyScope)

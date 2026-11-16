@@ -439,11 +439,7 @@ export function filterConfidentialFundingSourceTokens(
 }
 
 export function isConfidentialSwapDestinationSupported(token: RheaSwapToken): boolean {
-  return (
-    token.sources?.some(source =>
-      ['nearintents', 'preswap-nearintents'].includes(source.toLowerCase())
-    ) ?? false
-  )
+  return token.rheaChainId === 'zcash' || /^[1-9]\d*$/.test(token.rheaChainId)
 }
 
 export function filterSwapDestinationTokens(

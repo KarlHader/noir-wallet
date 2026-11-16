@@ -1,5 +1,6 @@
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
+import { preferWalletEvmQuoteToken } from './token-address-discovery'
 import type { ConfidentialFundingPreview } from '@/core/services/confidential-funding'
 import { formatBaseUnitDecimalAmount, formatFeeAmount } from '@/lib/number-format'
 import { evmWalletClient, type EvmFeeEstimate } from './evm-wallet-client'
@@ -52,17 +53,16 @@ export async function estimateDirectMove(input: {
 }): Promise<MoveMethodEstimate> {
   const match = /^eip155:([1-9][0-9]*)$/.exec(input.chain.chain.id)
   if (!match) throw new Error('Unsupported Move network')
-  const catalog = await rheaSwapClient.listTokens({
-    direction: 'from',
-    tokenListChainIds: [Number(match[1])]
-  })
+  const catalog = await rheaSwapClient
+    .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
+    .catch(() => null)
   input.signal.throwIfAborted()
-  const token = resolveRheaPrivateTransferToken(
-    catalog.tokens,
+  const catalogToken = resolveRheaPrivateTransferToken(
+    catalog?.tokens ?? [],
     input.asset.asset.kind === 'token' ? input.asset.asset.reference : null
   )
-  if (!token || token.decimals !== input.asset.metadata.decimals)
-    throw new Error('Move route unavailable')
+  const token = preferWalletEvmQuoteToken(input.asset, catalogToken)
+  if (!token) throw new Error('Move source asset could not be mapped to a quote token')
   const asset = {
     chain: token.rheaChainId,
     address: token.rheaAddress,

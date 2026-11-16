@@ -35,13 +35,9 @@ export function resolveEvmSendRoute(
   support: ConfidentialAssetSupport,
   sendPrivately = false
 ): EvmSendRoute {
-  if (sendPrivately) return support === 'supported' ? 'confidential' : 'pending'
+  if (sendPrivately) return support === 'unsupported' ? 'pending' : 'confidential'
   if (sourceMode === 'main') return 'onchain'
-  return support === 'supported'
-    ? 'confidential'
-    : support === 'unsupported'
-      ? 'onchain'
-      : 'pending'
+  return support === 'unsupported' ? 'onchain' : 'confidential'
 }
 
 export function getEvmSendRecipientError(

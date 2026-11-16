@@ -66,9 +66,9 @@ const support = (value, asset = native, network = chain) =>
 it('distinguishes explicit support, explicit exclusion, and unknown capability metadata', () => {
   assert.equal(support(catalog(token())), 'supported')
   assert.equal(support(catalog(token({ sources: ['preswap-nearintents'] }))), 'supported')
-  assert.equal(support(catalog(token({ sources: ['lifi'] }))), 'unsupported')
+  assert.equal(support(catalog(token({ sources: ['lifi'] }))), 'unknown')
   assert.equal(support(catalog(token({ sources: [] }))), 'unknown')
-  assert.equal(support(catalog(token()), erc20), 'unsupported')
+  assert.equal(support(catalog(token()), erc20), 'unknown')
   for (const value of [null, catalog(), { ...catalog(token()), failedChainIds: [1] }]) {
     assert.equal(support(value), 'unknown')
   }
@@ -82,8 +82,8 @@ it('matches contracts case-insensitively, never by symbol, catalog ID, or anothe
     symbol: 'ETH'
   })
   assert.equal(support(catalog(row), erc20), 'supported')
-  assert.equal(support(catalog(row), native), 'unsupported')
-  assert.equal(support(catalog(token({ contractAddress: contract })), erc20), 'unsupported')
+  assert.equal(support(catalog(row), native), 'unknown')
+  assert.equal(support(catalog(token({ contractAddress: contract })), erc20), 'unknown')
   assert.equal(support(catalog({ ...row, contractAddress: null }), erc20), 'supported')
   for (const overrides of [
     { rheaChainId: '56' },
@@ -159,16 +159,15 @@ it('derives address roles from chain-scoped local identities and gives PEA prece
     assert.match(getEvmSendPrivacyWarning('private', role), /direct on-chain/)
 })
 
-it('chooses the route before any quote and keeps unknown private assets blocked', () => {
+it('lets unknown EVM assets request a confidential quote before declaring route support', () => {
   for (const state of ['supported', 'unsupported', 'unknown'])
     assert.equal(resolveEvmSendRoute('main', state), 'onchain')
   assert.equal(resolveEvmSendRoute('private', 'supported'), 'confidential')
   assert.equal(resolveEvmSendRoute('private', 'unsupported'), 'onchain')
-  assert.equal(resolveEvmSendRoute('private', 'unknown'), 'pending')
+  assert.equal(resolveEvmSendRoute('private', 'unknown'), 'confidential')
   assert.equal(resolveEvmSendRoute('main', 'supported', true), 'confidential')
-  for (const state of ['unsupported', 'unknown']) {
-    assert.equal(resolveEvmSendRoute('main', state, true), 'pending')
-  }
+  assert.equal(resolveEvmSendRoute('main', 'unsupported', true), 'pending')
+  assert.equal(resolveEvmSendRoute('main', 'unknown', true), 'confidential')
   assert.equal(getEvmSendRecipientError('main', 'confidential', true), null)
 })
 

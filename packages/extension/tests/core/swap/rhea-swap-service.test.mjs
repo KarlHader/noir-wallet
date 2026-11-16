@@ -1184,7 +1184,7 @@ test('quote and build remain bound across a session-store reload', async () => {
 test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap transaction', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const sender = '0x52908400098527886E0F7030069857D2E4169EE7'
-  const token = '0x2222222222222222222222222222222222222222'
+  const token = '0xaabbccddaabbccddaabbccddaabbccddaabbccdd'
   const spender = '0x3333333333333333333333333333333333333333'
   const router = '0x4444444444444444444444444444444444444444'
   const amount = 1_000_000n
@@ -1213,7 +1213,7 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     router: 'odos',
     fromChain: '1',
     toChain: 'near',
-    tokenIn: { address: token, symbol: 'USDC', decimals: 6 },
+    tokenIn: { address: `0x${token.slice(2).toUpperCase()}`, symbol: 'USDC', decimals: 6 },
     tokenOut: { address: 'wrap.near', symbol: 'NEAR', decimals: 24 },
     amountIn: amount.toString(),
     estimatedOut: request.expectedOut,
@@ -1261,6 +1261,22 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     transaction: { chainId: 1, to: router, value: '0' },
     approval: { spender, amountRaw: amount.toString() }
   })
+
+  const boundSession = await sessions.get('rhea-quote:evm')
+  await sessions.put({
+    ...boundSession,
+    build: {
+      ...boundSession.build,
+      raw: {
+        ...raw,
+        tokenIn: { ...raw.tokenIn, address: '0x1111111111111111111111111111111111111111' }
+      }
+    }
+  })
+  await expect(service.readEvmTransactionPlan('rhea-quote:evm')).rejects.toThrow(
+    /does not match its quote/
+  )
+  await sessions.put(boundSession)
 
   await sessions.put({
     ...(await sessions.get('rhea-quote:evm')),
