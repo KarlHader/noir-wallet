@@ -62,7 +62,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-11-02T00:00:00.000Z',
+  updatedAt: '2026-11-16T00:00:00.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -116,6 +116,21 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
           id: 'deltarpc-web-eu-3',
           label: 'DeltaRPC Europe 3',
           url: 'https://zcashwebrpceu3.deltarpc.com'
+        }
+      ]
+    },
+    {
+      id: 'zcash-testnet',
+      chain: 'zcash',
+      network: TESTNET,
+      label: 'Zcash Testnet',
+      iconChain: 'zec',
+      probe: 'zcash-lightwalletd-grpc-web',
+      endpoints: [
+        {
+          id: 'deltarpc',
+          label: 'DeltaRPC',
+          url: 'https://zcash-wallet-grpc-testnet.deltarpc.com'
         }
       ]
     },

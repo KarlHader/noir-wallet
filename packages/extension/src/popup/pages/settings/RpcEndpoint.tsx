@@ -7,7 +7,6 @@ import {
   refreshRpcEndpointRegistry
 } from '@/infrastructure/chains/rpc-endpoints'
 import {
-  RPC_DEFAULT_ENDPOINTS,
   type RpcEndpointChain,
   type RpcEndpointGroup,
   type RpcEndpointOption
@@ -55,18 +54,6 @@ type PingResult =
   | { readonly status: 'pending' }
   | { readonly status: 'ok'; readonly latencyMs: number }
   | { readonly status: 'unreachable' }
-
-const testnetEndpointGroups: readonly RpcEndpointGroup[] | null =
-  DEFAULT_NETWORK === 'testnet'
-    ? [
-        {
-          chain: 'zcash',
-          label: 'Zcash Testnet',
-          iconChain: 'zec',
-          options: [RPC_DEFAULT_ENDPOINTS.zcash.testnet]
-        }
-      ]
-    : null
 
 function pingKey(chain: RpcEndpointChain, optionId: string): string {
   return `${chain}:${optionId}`
@@ -155,9 +142,8 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
     readonly rpc: CustomChainRpcEndpoint
   } | null>(null)
   const [saving, setSaving] = useState(false)
-  const [displayedRpcEndpointGroups, setDisplayedRpcEndpointGroups] = useState<
-    readonly RpcEndpointGroup[]
-  >(testnetEndpointGroups ?? getRpcEndpointGroups())
+  const [displayedRpcEndpointGroups, setDisplayedRpcEndpointGroups] =
+    useState<readonly RpcEndpointGroup[]>(getRpcEndpointGroups())
   const [editingRegistryChain, setEditingRegistryChain] = useState<RpcEndpointChain | null>(null)
   const [pings, setPings] = useState<Record<string, PingResult>>({})
   const [applyingKey, setApplyingKey] = useState<string | null>(null)
@@ -168,7 +154,6 @@ export function RpcEndpoint({ chainId }: { readonly chainId: string }) {
 
   useEffect(() => {
     loadSettings().catch(() => {})
-    if (testnetEndpointGroups) return
     let active = true
     ensureRpcEndpointPreferencesLoaded()
       .then(preferences => {

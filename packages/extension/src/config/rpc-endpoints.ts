@@ -27,9 +27,9 @@ export const RPC_DEFAULT_ENDPOINTS = {
       url: 'https://zcashwebrpcsg.deltarpc.com'
     },
     testnet: {
-      id: 'chainsafe',
-      label: 'ChainSafe',
-      url: 'https://zcash-testnet.chainsafe.dev'
+      id: 'deltarpc',
+      label: 'DeltaRPC',
+      url: 'https://zcash-wallet-grpc-testnet.deltarpc.com'
     }
   },
   evm: {
