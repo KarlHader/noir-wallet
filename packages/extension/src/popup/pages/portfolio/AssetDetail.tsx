@@ -264,6 +264,10 @@ export function AssetDetail() {
     evmAccountNetwork?.privateExecutionAddress &&
     evmMainAddress
   )
+  const refreshConfidentialBalances =
+    privateTransferEligible ||
+    (chain?.chain.family === 'zcash' &&
+      getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0)
   const categories =
     asset && visibleModel
       ? getAssetDetailCategories(
@@ -289,7 +293,7 @@ export function AssetDetail() {
       : 'public'
   const activityFilterDomain = searchParams.get('history') === 'shield' ? 'shield' : undefined
   useEffect(() => {
-    if (!privateTransferEligible || !effectiveWalletId || !effectiveAccountId) return
+    if (!refreshConfidentialBalances || !effectiveWalletId || !effectiveAccountId) return
     let active = true
     void confidentialFundingClient
       .refreshBalances(
@@ -307,7 +311,13 @@ export function AssetDetail() {
     return () => {
       active = false
     }
-  }, [privateTransferEligible, effectiveWalletId, effectiveAccountId, currentNetwork])
+  }, [
+    refreshConfidentialBalances,
+    effectiveWalletId,
+    effectiveAccountId,
+    currentNetwork,
+    readLatest
+  ])
 
   const handleMove = (from: 'public' | 'private' = actionDomain) => {
     if (!asset) return
