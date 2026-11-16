@@ -1,22 +1,12 @@
-import { useEffect, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { UnlockForm } from '../../components/common/UnlockForm'
 import { useNavigate, useLocation } from '../../provider/Router'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent } from '@/lib/analytics'
-import { useBetaInviteBinding } from '../../hooks/useBetaInviteBinding'
 
 export function UnlockPage() {
   const { replace } = useNavigate()
   const location = useLocation()
-  const [pendingRedirect, setPendingRedirect] = useState<string | null>(null)
-  const { status, changeCode, error, activate } = useBetaInviteBinding(!!pendingRedirect)
-
-  useEffect(() => {
-    if (pendingRedirect && (!status.required || status.state.phase === 'activated')) {
-      replace(pendingRedirect)
-    }
-  }, [pendingRedirect, replace, status])
 
   const handleUnlockSuccess = async () => {
     // In-app navigation uses MemoryRouter and never updates the real URL
@@ -56,11 +46,7 @@ export function UnlockPage() {
       targetUrl = `${targetUrl}${separator}requestId=${requestId}`
     }
 
-    if (status.required && status.state.phase !== 'activated') {
-      setPendingRedirect(targetUrl)
-    } else {
-      replace(targetUrl)
-    }
+    replace(targetUrl)
   }
 
   return (
@@ -70,16 +56,6 @@ export function UnlockPage() {
         showWalletIcon={true}
         showForgotPassword={true}
         onUnlockSuccess={handleUnlockSuccess}
-        activation={
-          pendingRedirect
-            ? {
-                pending: true,
-                error,
-                onRetry: () => void activate(),
-                onChangeCode: changeCode
-              }
-            : undefined
-        }
       />
     </div>
   )

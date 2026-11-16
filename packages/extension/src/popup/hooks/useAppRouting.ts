@@ -10,11 +10,6 @@ import { SecureStorage } from '@/core/wallet/secure-storage'
 import { accountNetworksClient } from '../services/account-networks-client'
 import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
-import { useBetaInviteActivation } from './useBetaInviteActivation'
-import {
-  canUseRouteBeforeBetaActivation,
-  getPendingBetaInviteReturnRoute
-} from '../services/beta-invite-route-policy'
 
 /**
  * Custom hook for application routing logic
@@ -51,32 +46,6 @@ export function useAppRouting() {
   const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
   const isTokenManagerEntry = useRef(window.location.hash === '#/manage-tokens')
-  const { status: betaInviteStatus } = useBetaInviteActivation()
-  const inviteReturnRoute = useRef(
-    getPendingBetaInviteReturnRoute(
-      location.pathname,
-      location.search,
-      betaInviteStatus.required && betaInviteStatus.state.phase !== 'activated',
-      isDApp.current || isHardwareTab.current
-    )
-  )
-  const restoredInviteRoute = useRef(false)
-
-  useEffect(() => {
-    if (
-      isLoading ||
-      betaInviteStatus.state.phase !== 'activated' ||
-      !inviteReturnRoute.current ||
-      restoredInviteRoute.current ||
-      canUseRouteBeforeBetaActivation(location.pathname)
-    ) {
-      return
-    }
-    restoredInviteRoute.current = true
-    if (`${location.pathname}${location.search}` !== inviteReturnRoute.current) {
-      replace(inviteReturnRoute.current)
-    }
-  }, [betaInviteStatus.state.phase, isLoading, location.pathname, location.search, replace])
 
   const routeToUnlock = useCallback(() => {
     // Import/create can complete without remounting the app. Read the current
@@ -285,10 +254,7 @@ export function useAppRouting() {
           // Hardware tabs must return to their flow (with query, e.g. sign request id)
           redirectParams.set('redirect', `${currentPath}${location.search || ''}`)
         } else {
-          redirectParams.set(
-            'redirect',
-            inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/')
-          )
+          redirectParams.set('redirect', isTokenManagerEntry.current ? '/manage-tokens' : '/')
         }
 
         replace(`/unlock?${redirectParams.toString()}`)
@@ -314,7 +280,7 @@ export function useAppRouting() {
 
       // dApp windows and hardware tabs stay on their route; normal popup goes home
       if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
-        replace(inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/'))
+        replace(isTokenManagerEntry.current ? '/manage-tokens' : '/')
       }
     } catch (error) {
       console.error('[useAppRouting] Initialization error:', error)

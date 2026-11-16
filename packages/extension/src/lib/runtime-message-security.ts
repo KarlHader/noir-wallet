@@ -435,9 +435,6 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   WALLET_UNLOCK: { required: { password: isLegacyPasswordString } },
-  GET_BETA_INVITE_ACTIVATION: {},
-  CHECK_BETA_INVITE_CODE: { required: { inviteCode: isShortString } },
-  BIND_BETA_INVITE_WALLET: {},
   CHANGE_WALLET_PASSWORD: {
     required: { currentPassword: isLegacyPasswordString, newPassword: isShortString }
   },
@@ -1041,9 +1038,6 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     ANALYTICS_EVENT: ['extension-page'],
     ANALYTICS_PAGE_VIEW: ['extension-page'],
     WALLET_UNLOCK: ['extension-page'],
-    GET_BETA_INVITE_ACTIVATION: ['extension-page'],
-    CHECK_BETA_INVITE_CODE: ['extension-page'],
-    BIND_BETA_INVITE_WALLET: ['extension-page'],
     CHANGE_WALLET_PASSWORD: ['extension-page'],
     GET_CONNECTED_DAPPS: ['extension-page'],
     GET_CURRENT_TAB_DAPP: ['extension-page'],

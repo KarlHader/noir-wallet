@@ -7,16 +7,9 @@ import {
   trackEvent
 } from '@/background/analytics/reporter'
 import '@/lib/buffer-polyfill'
-import { betaInviteActivation } from './beta-invite'
 import { lookupTokenContractIcon } from './token-contract-icon'
 import { openTokenManager } from './token-manager-window'
-import { getBetaInviteErrorMessage } from '@/core/wallet/beta-invite'
-import { promptBetaInviteActivation } from './beta-invite-window'
 import { handleEvmWalletChoiceMessage } from './evm-wallet-choice'
-import {
-  BETA_INVITE_REQUIRED_MESSAGE,
-  resolveUnactivatedBetaDAppRequest
-} from '@/core/dapp/beta-invite-policy'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import {
   isAccountNetworkEnabled,
@@ -2517,35 +2510,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
       try {
         const { chainId, request } = parsedMessage
-        if (!(await betaInviteActivation.isActivated())) {
-          const decision = resolveUnactivatedBetaDAppRequest(chainId, request.method)
-          if (decision.kind === 'silent') {
-            respond({ result: decision.result })
-            return
-          }
-          if (decision.kind === 'activate') {
-            try {
-              await promptBetaInviteActivation()
-            } catch {
-              respond({
-                error:
-                  chainId === 'zcash'
-                    ? 'Beta activation was not completed.'
-                    : { code: 4001, message: 'Beta activation was not completed.' }
-              })
-              return
-            }
-          }
-          if (!(await betaInviteActivation.isActivated())) {
-            respond({
-              error:
-                chainId === 'zcash'
-                  ? BETA_INVITE_REQUIRED_MESSAGE
-                  : { code: 4100, message: BETA_INVITE_REQUIRED_MESSAGE }
-            })
-            return
-          }
-        }
         if (
           chainId === 'evm' ||
           chainId === 'bitcoin' ||
@@ -3142,27 +3106,6 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message = parseTrustedExtensionRuntimeMessage(runtimeMessage)
   } catch {
     sendResponse({ error: 'Invalid or unsupported runtime message' })
-    return true
-  }
-
-  if (
-    message.type === 'GET_BETA_INVITE_ACTIVATION' ||
-    message.type === 'CHECK_BETA_INVITE_CODE' ||
-    message.type === 'BIND_BETA_INVITE_WALLET'
-  ) {
-    void trustedStorageAccessReady
-      .then(async ready => {
-        if (!ready) throw new Error('Beta activation is unavailable. Please try again.')
-        if (message.type === 'GET_BETA_INVITE_ACTIVATION') return betaInviteActivation.getStatus()
-        if (message.type === 'CHECK_BETA_INVITE_CODE') {
-          return betaInviteActivation.check(message.inviteCode as string)
-        }
-        return betaInviteActivation.bind()
-      })
-      .then(result => sendResponse({ result }))
-      .catch(error => {
-        sendResponse({ error: getBetaInviteErrorMessage(error) })
-      })
     return true
   }
 
@@ -4902,11 +4845,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'CONNECT_CURRENT_ACCOUNT_TO_DAPP') {
     Promise.resolve()
-      .then(async () => {
-        if (!(await betaInviteActivation.isActivated()))
-          throw new Error(BETA_INVITE_REQUIRED_MESSAGE)
-        return walletDAppConnection.connectCurrentAccount(message.origin)
-      })
+      .then(() => walletDAppConnection.connectCurrentAccount(message.origin))
       .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ error: error.message }))
     return true

@@ -10,9 +10,6 @@ import { WalletInitializing } from './components/ui/wallet-initializing'
 import { BlockingWalletFailure } from './components/common/BlockingWalletFailure'
 import { PageHeader } from './components/common/PageHeader'
 import { useAppRouting } from './hooks/useAppRouting'
-import { BetaInviteActivationGate } from './hooks/useBetaInviteActivation'
-import { BetaInviteProtectedRoute } from './components/onboarding/BetaInviteBinding'
-import { canUseRouteBeforeBetaActivation } from './services/beta-invite-route-policy'
 import { usePersistedExtensionContextSync } from './hooks/usePersistedExtensionContextSync'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
@@ -436,11 +433,7 @@ function AppContent() {
     </div>
   )
 
-  return canUseRouteBeforeBetaActivation(location.pathname) ? (
-    content
-  ) : (
-    <BetaInviteProtectedRoute>{content}</BetaInviteProtectedRoute>
-  )
+  return content
 }
 
 function App() {
@@ -475,9 +468,7 @@ function App() {
             </div>
           ) : (
             <>
-              <BetaInviteActivationGate>
-                <AppContent />
-              </BetaInviteActivationGate>
+              <AppContent />
               <ToastContainer />
             </>
           )}

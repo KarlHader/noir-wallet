@@ -75,7 +75,6 @@ jobs:
           BUILD_CHANNEL: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'beta' || 'development' }}
           GA_API_SECRET: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GA_API_SECRET || '' }}
           CUSTOM_ANALYTICS_PASSWORD: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.CUSTOM_ANALYTICS_PASSWORD || '' }}
-          BETA_INVITE_REQUIRED: '1'
           EVM_HISTORY_API_ORIGIN: ${{ vars.EVM_HISTORY_API_ORIGIN }}
           RHEA_SWAP_ACCESS_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.RHEA_SWAP_ACCESS_TOKEN || '' }}
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}

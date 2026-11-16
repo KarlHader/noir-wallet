@@ -151,7 +151,7 @@ export default function V2BetaPage() {
                 05
               </span>
               <p className="text-base leading-relaxed text-white">
-                Pin and open Noir Wallet. Enter your invite code, then create or import a wallet.
+                Pin and open Noir Wallet, then create or import a wallet.
               </p>
             </li>
           </ol>

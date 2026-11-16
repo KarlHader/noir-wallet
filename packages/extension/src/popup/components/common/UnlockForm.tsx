@@ -1,4 +1,3 @@
-import { InlineError } from './InlineError'
 import { useState, useEffect } from 'react'
 import { Button } from '../ui/button'
 import { WarningBox } from '../ui/WarningBox'
@@ -15,12 +14,6 @@ import { getUnlockFailureMessage } from '@/popup/services/unlock-failure-message
 
 interface UnlockFormProps {
   onUnlockSuccess?: () => void | Promise<void>
-  activation?: {
-    pending: boolean
-    error: string
-    onRetry: () => void
-    onChangeCode: () => void
-  }
   onCancel?: () => void
   showCancelButton?: boolean
   showForgotPassword?: boolean
@@ -32,7 +25,6 @@ interface UnlockFormProps {
 
 export function UnlockForm({
   onUnlockSuccess,
-  activation,
   onCancel,
   showCancelButton = false,
   showForgotPassword = true,
@@ -84,7 +76,7 @@ export function UnlockForm({
   }
 
   const handleUnlock = async () => {
-    if (activation?.pending || isLoading) return
+    if (isLoading) return
     if (!password) {
       setError('Please enter your password')
       return
@@ -215,16 +207,8 @@ export function UnlockForm({
             placeholder="Enter Password"
             error={error}
             onEnter={handleUnlock}
-            disabled={isAccountLocked || isLoading || activation?.pending}
+            disabled={isAccountLocked || isLoading}
           />
-
-          {activation?.error && (
-            <InlineError
-              message={activation.error}
-              onRetry={activation.onRetry}
-              retrying={isLoading}
-            />
-          )}
 
           {isAccountLocked && lockRemainingSeconds > 0 && (
             <div className="p-3 bg-destructive/10 rounded-lg border border-destructive/20">
@@ -242,38 +226,25 @@ export function UnlockForm({
             <Button
               variant="outline"
               onClick={onCancel}
-              disabled={isLoading || activation?.pending}
+              disabled={isLoading}
               className="flex-1 h-[45px]"
             >
               Cancel
             </Button>
           )}
-          {!activation?.error && (
-            <Button
-              onClick={handleUnlock}
-              disabled={activation?.pending ? !activation.error : !password || isAccountLocked}
-              isLoading={isLoading || (activation?.pending && !activation.error)}
-              className={`h-[45px] ${showCancelButton ? 'flex-1' : 'w-full'}`}
-            >
-              {activation?.pending
-                ? 'Activating wallet'
-                : isAccountLocked
-                  ? `Locked (${lockRemainingSeconds}s)`
-                  : 'Unlock'}
-            </Button>
-          )}
-        </div>
-
-        {activation?.error && (
-          <Button variant="ghost" className="h-10 w-full" onClick={activation.onChangeCode}>
-            Use another code
+          <Button
+            onClick={handleUnlock}
+            disabled={!password || isAccountLocked}
+            isLoading={isLoading}
+            className={`h-[45px] ${showCancelButton ? 'flex-1' : 'w-full'}`}
+          >
+            {isAccountLocked ? `Locked (${lockRemainingSeconds}s)` : 'Unlock'}
           </Button>
-        )}
+        </div>
 
         {showForgotPassword && (
           <button
             onClick={handleForgotPassword}
-            disabled={activation?.pending}
             className="w-full text-center text-sm text-primary hover:text-primary/80 transition-colors py-2 disabled:pointer-events-none disabled:opacity-50"
           >
             Forgot password?

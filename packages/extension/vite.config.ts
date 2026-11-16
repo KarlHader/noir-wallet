@@ -21,7 +21,6 @@ import {
   resolveHistoryApiOrigin,
   shouldEnableAnalyticsReporting
 } from './scripts/lib/extension-build-config'
-import { resolveBetaInviteRequired } from './src/config/beta-invite'
 
 const require = createRequire(import.meta.url)
 const generatedWasmRoots = [
@@ -38,7 +37,6 @@ if (
 }
 const networkMode = requestedNetworkMode ?? 'mainnet'
 const buildChannel = process.env.BUILD_CHANNEL || 'development'
-const betaInviteRequired = resolveBetaInviteRequired(buildChannel, process.env.BETA_INVITE_REQUIRED)
 const debugLogsEnabled = buildChannel !== 'production'
 const isPlaywrightBuild = process.env.PLAYWRIGHT_E2E === '1'
 const analyticsReportingEnabled = shouldEnableAnalyticsReporting(
@@ -157,7 +155,6 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
     __BUILD_CHANNEL__: JSON.stringify(buildChannel),
     __NETWORK_MODE__: JSON.stringify(networkMode),
-    __BETA_INVITE_REQUIRED__: JSON.stringify(betaInviteRequired),
     __DEBUG_LOGS__: JSON.stringify(debugLogsEnabled),
     __EXTENSION_UPDATES_ENABLED__: JSON.stringify(extensionUpdatesEnabled),
     __MULTICHAIN_CONFORMANCE_RPC_ENABLED__: JSON.stringify(isPlaywrightBuild),
