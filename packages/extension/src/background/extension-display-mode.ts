@@ -1,5 +1,6 @@
 import { EXTENSION_POPUP_PATH, EXTENSION_SIDE_PANEL_PATH } from '@/config/extension'
 import {
+  DEFAULT_SIDE_PANEL_MODE,
   EXTENSION_DISPLAY_MODE_STORAGE_KEY,
   readStoredExtensionDisplayMode
 } from '@/lib/extension-display-mode'
@@ -18,7 +19,9 @@ function getSidePanelApi(): SidePanelApi | undefined {
 }
 
 export function readSidePanelMode(value: unknown): boolean {
-  return decodePersistedWalletSettings(value)?.sidePanelMode === true
+  return (
+    readStoredExtensionDisplayMode(decodePersistedWalletSettings(value)) ?? DEFAULT_SIDE_PANEL_MODE
+  )
 }
 
 export function getAppliedSidePanelMode(): boolean {
@@ -88,5 +91,6 @@ export async function applyExtensionDisplayMode(sidePanelMode: boolean): Promise
 }
 
 export async function initializeExtensionDisplayMode(): Promise<void> {
-  await applyExtensionDisplayMode(await readPersistedSidePanelMode())
+  const preferredSidePanelMode = await readPersistedSidePanelMode()
+  await applyExtensionDisplayMode(preferredSidePanelMode && Boolean(getSidePanelApi()))
 }

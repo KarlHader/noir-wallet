@@ -36,8 +36,8 @@ test.describe('extension display mode', () => {
         JSON.stringify({ state: { autoLockMs: 300000, sidePanelMode: true }, version: 0 })
       )
     ).toBe(true)
-    expect(readSidePanelMode(JSON.stringify({ state: {}, version: 0 }))).toBe(false)
-    expect(readSidePanelMode('{invalid')).toBe(false)
+    expect(readSidePanelMode(JSON.stringify({ state: {}, version: 0 }))).toBe(true)
+    expect(readSidePanelMode('{invalid')).toBe(true)
   })
 
   test('does not let a manifest popup override side panel action clicks', () => {
