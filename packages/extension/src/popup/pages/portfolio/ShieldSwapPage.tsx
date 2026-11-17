@@ -1274,27 +1274,23 @@ function ShieldSwapForm({
             tone="warning"
             role="alert"
             message={classifyError(error || balanceError).userMessage}
+            onRetry={balanceError && !error ? () => void refreshBalances() : undefined}
+            retrying={connecting}
           />
         )}
-        {status === 'error' && trustedBalances && (
-          <Button variant="ghost" onClick={() => void onRefreshPortfolio()} className="w-full">
-            Refresh Shield balances
-          </Button>
+        {status === 'error' && trustedBalances && !error && !balanceError && (
+          <InlineError
+            className="mt-3"
+            tone="warning"
+            role="alert"
+            message="Shield assets are unavailable"
+            onRetry={() => void onRefreshPortfolio()}
+          />
         )}
         {!trustedBalances && canManageNear && connecting && (
           <p role="status" className="mt-4 text-center text-sm text-muted">
             Loading Shield balances…
           </p>
-        )}
-        {!trustedBalances && canManageNear && !connecting && (
-          <Button
-            variant="outline"
-            size="wallet"
-            onClick={() => void refreshBalances()}
-            className="mt-4 w-full"
-          >
-            Refresh Shield balance
-          </Button>
         )}
       </div>
       <div className="page-footer">
