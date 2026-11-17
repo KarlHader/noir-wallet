@@ -2809,17 +2809,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       'resumeRound',
       'clearRound'
     ])
+    const readActions = new Set(['discoverRounds', 'roundStatus', 'roundProposals'])
     const roundActions = new Set([...actions].filter(value => value !== 'discoverRounds'))
     const expectedKeys =
       action === 'discoverRounds'
-        ? ['type', 'action']
+        ? ['type', 'action', 'walletId', 'accountId']
         : action === 'submitBallot'
-          ? ['type', 'action', 'roundId', 'decisions']
-          : ['type', 'action', 'roundId']
+          ? ['type', 'action', 'walletId', 'accountId', 'roundId', 'decisions']
+          : ['type', 'action', 'walletId', 'accountId', 'roundId']
     if (
       typeof action !== 'string' ||
       !actions.has(action) ||
       !hasExactRuntimeKeys(runtimeMessage, expectedKeys) ||
+      typeof runtimeMessage.walletId !== 'string' ||
+      runtimeMessage.walletId.length === 0 ||
+      typeof runtimeMessage.accountId !== 'string' ||
+      runtimeMessage.accountId.length === 0 ||
       (roundActions.has(action) &&
         (typeof runtimeMessage.roundId !== 'string' ||
           runtimeMessage.roundId.length === 0 ||
@@ -2837,6 +2842,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         const walletId = state.currentWalletId
         const accountId = state.currentAccountId
         if (!walletId || !accountId) throw new Error('Select an active Zcash account')
+        if (runtimeMessage.walletId !== walletId || runtimeMessage.accountId !== accountId) {
+          throw new Error('Active account changed. Review this action again.')
+        }
         const wallet = state.getWallet(walletId)
         if (!wallet || isZcashHardwareKeySource(wallet.keySource)) {
           throw new Error('Voting requires a software wallet')
@@ -2859,39 +2867,51 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
           throw new Error('The active account does not support Zcash voting')
         }
 
-        const core = await prepareWalletCoreForTx(walletId, accountId)
-        switch (action) {
-          case 'discoverRounds':
-            return core.discoverVotingRounds()
-          case 'checkEligibility':
-            return core.checkVotingEligibility(runtimeMessage.roundId as string)
-          case 'roundStatus':
-            return core.getVotingRoundStatus(runtimeMessage.roundId as string)
-          case 'prepareRound':
-            return core.prepareVotingRound(runtimeMessage.roundId as string)
-          case 'roundProposals':
-            return core.getVotingRoundProposals(runtimeMessage.roundId as string)
-          case 'submitDelegation': {
-            const binding = await credentialSession.getCredentialBinding(walletId)
-            return core.submitVotingDelegation(runtimeMessage.roundId as string, {
-              credentialGenerationId: binding.credentialGenerationId,
-              globalUnlockEpoch: binding.globalUnlockEpoch
-            })
-          }
-          case 'submitBallot':
-            return core
-              .getVotingRoundProposals(runtimeMessage.roundId as string)
-              .then(proposals =>
-                core.submitVotingBallot(
-                  runtimeMessage.roundId as string,
-                  validateVotingDecisions(proposals, runtimeMessage.decisions)
+        const readyReadCore = readActions.has(action)
+          ? backgroundZcashWalletRuntime.getReadyVotingReadCore(walletId, accountId)
+          : null
+        const execute = async () => {
+          const core = readyReadCore ?? (await prepareWalletCoreForTx(walletId, accountId))
+          switch (action) {
+            case 'discoverRounds':
+              return core.discoverVotingRounds()
+            case 'checkEligibility':
+              return core.checkVotingEligibility(runtimeMessage.roundId as string)
+            case 'roundStatus':
+              return core.getVotingRoundStatus(runtimeMessage.roundId as string)
+            case 'prepareRound':
+              return core.prepareVotingRound(runtimeMessage.roundId as string)
+            case 'roundProposals':
+              return core.getVotingRoundProposals(runtimeMessage.roundId as string)
+            case 'submitDelegation': {
+              const binding = await credentialSession.getCredentialBinding(walletId)
+              return core.submitVotingDelegation(runtimeMessage.roundId as string, {
+                credentialGenerationId: binding.credentialGenerationId,
+                globalUnlockEpoch: binding.globalUnlockEpoch
+              })
+            }
+            case 'submitBallot':
+              return core
+                .getVotingRoundProposals(runtimeMessage.roundId as string)
+                .then(proposals =>
+                  core.submitVotingBallot(
+                    runtimeMessage.roundId as string,
+                    validateVotingDecisions(proposals, runtimeMessage.decisions)
+                  )
                 )
-              )
-          case 'resumeRound':
-            return core.resumeVotingRound(runtimeMessage.roundId as string)
-          case 'clearRound':
-            return core.clearVotingRound(runtimeMessage.roundId as string)
+            case 'resumeRound':
+              return core.resumeVotingRound(runtimeMessage.roundId as string)
+            case 'clearRound':
+              return core.clearVotingRound(runtimeMessage.roundId as string)
+          }
         }
+        if (readyReadCore) {
+          if (!(await credentialSession.hasUnlockSession())) {
+            throw new Error('Wallet locked and no attested credential session is available')
+          }
+          return execute()
+        }
+        return withTxSyncPause(walletId, execute)
       })
       .then(result => sendResponse({ success: true, result }))
       .catch(error =>

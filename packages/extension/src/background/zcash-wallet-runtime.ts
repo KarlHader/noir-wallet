@@ -3170,6 +3170,28 @@ export class BackgroundZcashWalletRuntime {
     return core
   }
 
+  getReadyVotingReadCore(walletId: string, accountId: string): ZcashWalletCore | null {
+    const account = this.store.getAccount(walletId, accountId)
+    const core = this.walletCores.get(walletId)
+    if (
+      this.isLocked() ||
+      this.network !== this.store.currentNetwork ||
+      (this.password === null && !this.hasSessionCredentialFor(walletId)) ||
+      this.activeRestorePromise !== null ||
+      this.walletCoreLocks.has(walletId) ||
+      !account ||
+      !isAccountNetworkEnabled(account, this.network, 'zcash') ||
+      !core?.hasWasmInitialized() ||
+      !core.isReady() ||
+      core.accountIndex !== account.derivationIndex
+    ) {
+      return null
+    }
+    // Account identity was established during restore; rechecking it through
+    // wallet.getAccountHdIndex is a soft read rejected throughout active sync.
+    return core
+  }
+
   /**
    * Ensure all accounts in the wallet are registered in WASM
    * Ensures every plugin account exists in WASM before sync or balance refresh.

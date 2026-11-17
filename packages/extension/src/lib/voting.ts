@@ -14,7 +14,7 @@ import type {
   VotingRoundStatus
 } from '@/core/worker/types'
 
-export type VotingDisplayStatus = 'active' | 'voted' | 'closed'
+export type VotingDisplayStatus = 'active' | 'voted' | 'completed' | 'closed'
 
 const VOTING_PHASES: readonly VotingRoundPhase[] = [
   'uninitialized',
@@ -86,7 +86,7 @@ export function getVotingDisplayStatus(
   status: VotingRoundStatus | null,
   now = Date.now()
 ): VotingDisplayStatus {
-  if (status?.phase === 'shares_confirmed') return 'voted'
+  if (status?.phase === 'shares_confirmed') return status.totalVotes > 0 ? 'voted' : 'completed'
   if (status?.phase === 'expired' || parseVotingDate(round.endsAt).getTime() <= now) return 'closed'
   return 'active'
 }
@@ -101,37 +101,45 @@ export function getPopulatedVotingStatuses(
   const populated = new Set(
     rounds.map(({ round, status }) => getVotingDisplayStatus(round, status, now))
   )
-  return (['active', 'voted', 'closed'] as const).filter(status => populated.has(status))
-}
-
-export function canResumeVoting(status: VotingRoundStatus | null): boolean {
-  return (
-    !!status &&
-    [
-      'round_prepared',
-      'delegation_pending',
-      'delegation_confirmed',
-      'vote_pending',
-      'vote_confirmed'
-    ].includes(status.phase)
+  return (['active', 'voted', 'completed', 'closed'] as const).filter(status =>
+    populated.has(status)
   )
 }
 
-export function formatVotingPower(value: string | undefined): string {
-  if (!value) return '-'
-  if (/^\d+$/.test(value)) return BigInt(value).toLocaleString('en-US')
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? new Intl.NumberFormat('en-US').format(parsed) : value
+export function formatVotingDate(value: string): string {
+  const date = parseVotingDate(value)
+  if (!Number.isFinite(date.getTime())) return '—'
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  })
 }
 
 export function formatVotingZec(valueZats: string | undefined): string {
-  if (!valueZats || !/^\d+$/.test(valueZats)) return '-'
+  if (!valueZats || !/^\d+$/.test(valueZats)) return '—'
   return formatBaseUnitAmount(BigInt(valueZats).toString(), ZEC_DECIMALS)
 }
 
-export function votingProgress(result: VotingActionResult): number {
-  if (result.totalBundles <= 0) return result.phase === 'shares_confirmed' ? 100 : 0
-  return Math.min(100, Math.round((result.completedBundles / result.totalBundles) * 100))
+export function votingStatusLabel(status: VotingRoundStatus): string {
+  const labels: Record<VotingRoundPhase, string> = {
+    uninitialized: 'Checking poll',
+    config_authenticated: 'Ready to vote',
+    eligible: 'Ready to vote',
+    round_prepared: 'Voting power prepared',
+    delegation_pending: 'Registering voting power',
+    delegation_confirmed: 'Ready to submit vote',
+    vote_pending: 'Confirming vote',
+    vote_confirmed: 'Finishing vote',
+    shares_confirmed: status.totalVotes > 0 ? 'Vote confirmed' : 'No votes submitted',
+    not_eligible: 'Not eligible',
+    round_rejected: 'Poll unavailable',
+    expired: 'Poll ended'
+  }
+  return labels[status.phase]
 }
 
 export function votingErrorMessage(error: unknown): string {
@@ -139,6 +147,7 @@ export function votingErrorMessage(error: unknown): string {
   const code = raw.split(':', 1)[0]
   const messages: Record<string, string> = {
     WALLET_NOT_SYNCED: 'Zcash sync must finish before this vote can continue.',
+    SYNC_BUSY: 'Zcash is syncing. Try again when sync finishes.',
     NOT_ELIGIBLE: 'This account is not eligible for the round.',
     ROUND_EXPIRED: 'This voting round has ended.',
     NETWORK_MISMATCH: 'This round belongs to a different Zcash network.',
@@ -149,7 +158,94 @@ export function votingErrorMessage(error: unknown): string {
     SUBMISSION_UNKNOWN: 'Submission status is unknown. Resume the round to check it.',
     PERSISTENCE_FAILED: 'Voting recovery state could not be saved. Reload the wallet.'
   }
-  return messages[code] ?? raw
+  return messages[code] ?? 'Voting could not continue. Please try again.'
+}
+
+export type VotingChoices = Readonly<Record<number, number | 'skip' | undefined>>
+
+type VotingSubmissionRequest = {
+  action: 'roundStatus' | 'prepareRound' | 'submitDelegation' | 'submitBallot' | 'resumeRound'
+  roundId: string
+  decisions?: readonly BallotDecision[]
+}
+
+/** Advance only the reviewed ballot; confirmation recovery uses the engine's saved intent. */
+export async function advanceVotingBallot(
+  roundId: string,
+  decisions: readonly BallotDecision[] | null,
+  request: (input: VotingSubmissionRequest) => Promise<unknown>,
+  onProgress: (message: string) => void
+): Promise<VotingRoundStatus> {
+  let status = parseVotingRoundStatus(await request({ action: 'roundStatus', roundId }))
+  for (let step = 0; step < 3; step++) {
+    const phase = status.phase
+    if (['shares_confirmed', 'expired', 'not_eligible', 'round_rejected'].includes(phase)) break
+    if (
+      [
+        'uninitialized',
+        'config_authenticated',
+        'eligible',
+        'round_prepared',
+        'delegation_confirmed'
+      ].includes(phase) &&
+      !decisions
+    )
+      break
+    if (['uninitialized', 'config_authenticated', 'eligible'].includes(phase)) {
+      onProgress('Preparing voting power…')
+      parsePreparedVotingRound(await request({ action: 'prepareRound', roundId }))
+    } else {
+      const action =
+        phase === 'round_prepared' ||
+        (phase === 'delegation_pending' && status.nextAction === 'submit_delegation')
+          ? 'submitDelegation'
+          : phase === 'delegation_confirmed'
+            ? 'submitBallot'
+            : 'resumeRound'
+      onProgress(
+        action === 'submitDelegation'
+          ? 'Registering voting power…'
+          : action === 'submitBallot'
+            ? 'Submitting vote…'
+            : 'Checking confirmation…'
+      )
+      parseVotingActionResult(
+        await request({
+          action,
+          roundId,
+          ...(action === 'submitBallot' && decisions ? { decisions } : {})
+        })
+      )
+    }
+    status = parseVotingRoundStatus(await request({ action: 'roundStatus', roundId }))
+    if (
+      status.phase === phase ||
+      ['delegation_pending', 'vote_pending', 'vote_confirmed'].includes(status.phase)
+    )
+      break
+  }
+  return status
+}
+
+/** Only explicit, reviewed decisions may become a ballot; an empty ballot casts no vote. */
+export function createVotingBallot(
+  proposals: readonly VotingProposal[],
+  choices: VotingChoices
+): BallotDecision[] {
+  const decisions = validateVotingDecisions(
+    proposals,
+    proposals.map(proposal => {
+      const choice = choices[proposal.proposalId]
+      if (choice === undefined) throw new Error('Choose an option or skip each proposal.')
+      return choice === 'skip'
+        ? { kind: 'skip', proposalId: proposal.proposalId }
+        : { kind: 'choice', proposalId: proposal.proposalId, option: choice }
+    })
+  )
+  if (!decisions.some(decision => decision.kind === 'choice')) {
+    throw new Error('Choose an option for at least one proposal.')
+  }
+  return decisions
 }
 
 export function parseVotingDiscovery(value: unknown): VotingDiscovery {
