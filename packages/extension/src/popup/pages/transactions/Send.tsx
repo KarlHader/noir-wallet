@@ -12,10 +12,14 @@ import {
   getPublicPrivateSendRouteCost
 } from '@/popup/services/public-private-send-preview'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
+import {
+  ZcashMoveLayout,
+  ZcashMoveAccountCard
+} from '@/popup/components/transaction/ZcashMoveLayout'
 import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanner'
 import { openModal } from '../../provider/ModalManager'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
@@ -60,7 +64,6 @@ import { cn } from '@/lib/utils'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import { BalanceDomainTabs } from '@/popup/components/account/BalanceDomainTabs'
-import { TokenIcon } from '../../components/tokens/TokenIcon'
 import { ChainIcon } from '../../components/common/ChainIcon'
 import nearLogo from '@/images/figma-near-confidential.svg'
 import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
@@ -113,97 +116,6 @@ import {
   resolveZcashSendRecipientInput,
   shouldRetainZcashSendRecipient
 } from './zcash-send-validation'
-
-function MoveLayout({
-  amount,
-  balance,
-  max,
-  accountName,
-  fromAddress,
-  toAddress,
-  from,
-  onReverse,
-  canReverse
-}: {
-  amount: ReactNode
-  balance: string
-  max: ReactNode
-  accountName: string
-  fromAddress: string
-  toAddress: string
-  from: FundingSource
-  onReverse: () => void
-  canReverse: boolean
-}) {
-  const accountCard = (label: 'From' | 'To', source: FundingSource, address: string) => (
-    <div className="min-w-0 rounded-xl border border-white/5 bg-wallet-surface px-4 py-4">
-      <span className="text-xs font-medium text-muted">{label}</span>
-      <div className="mt-3 flex min-w-0 items-center gap-3">
-        {source === 'shielded' ? (
-          <img src={zcashShieldLogo} alt="" className="size-8 shrink-0 rounded" />
-        ) : (
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-muted">
-            <Icon icon="lucide:wallet" width={19} height={19} />
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
-            <span className="truncate" title={source === 'shielded' ? 'Shield' : accountName}>
-              {source === 'shielded' ? 'Shield' : accountName}
-            </span>
-            {source === 'transparent' && (
-              <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[11px] text-muted">
-                Transparent
-              </span>
-            )}
-          </div>
-          <span className="mt-1 block truncate text-base font-medium" title={address}>
-            {source === 'shielded'
-              ? 'Zcash Shield'
-              : address
-                ? formatSortAddress(address)
-                : 'Address unavailable'}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-
-  return (
-    <>
-      <div className="flex min-w-0 flex-col items-center pb-6 pt-5 text-center">
-        {amount}
-        <span className="mt-3 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-base font-medium">
-          <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={26} />
-          ZEC
-        </span>
-        <div className="mt-4 flex min-w-0 items-center justify-center gap-3 text-xs text-muted">
-          <span className="min-w-0 truncate" title={balance}>
-            {formatTokenQuantity(balance)}
-          </span>
-          {max}
-        </div>
-      </div>
-      <div>
-        {accountCard('From', from, fromAddress)}
-        <div className="relative h-2.5">
-          {canReverse && (
-            <button
-              type="button"
-              aria-label="Switch move direction"
-              title="Switch move direction"
-              onClick={onReverse}
-              className="absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card text-foreground transition-colors hover:bg-wallet-selected"
-            >
-              <Icon icon="lucide:arrow-down-up" width={18} height={18} />
-            </button>
-          )}
-        </div>
-        {accountCard('To', from === 'transparent' ? 'shielded' : 'transparent', toAddress)}
-      </div>
-    </>
-  )
-}
 
 export function Send({
   active = true,
@@ -457,7 +369,7 @@ export function Send({
       ...(sourceWalletId ? { sourceWalletId } : {}),
       ...(sourceAccountId ? { sourceAccountId } : {})
     })
-    navigate(`/send/zcash?${params.toString()}`, { replace: true })
+    navigate(`/send/zcash?${params.toString()}`, { replace: true, state: location.state })
   }
 
   const recipientSupportsMemo = supportsZcashMemo(effectiveToAddress)
@@ -1122,7 +1034,7 @@ export function Send({
     <div className={cn('space-y-2', !isSelfMove && 'flex flex-col gap-4 space-y-0')}>
       {isSelfMove && (
         <>
-          <MoveLayout
+          <ZcashMoveLayout
             amount={
               <input
                 aria-label="ZEC amount"
@@ -1176,10 +1088,22 @@ export function Send({
                 Max
               </button>
             }
-            accountName={accountDisplayName}
-            fromAddress={fromAddress}
-            toAddress={effectiveToAddress}
-            from={fundingSource}
+            source={
+              <ZcashMoveAccountCard
+                label="From"
+                source={fundingSource}
+                accountName={accountDisplayName}
+                address={fromAddress}
+              />
+            }
+            destination={
+              <ZcashMoveAccountCard
+                label="To"
+                source={fundingSource === 'transparent' ? 'shielded' : 'transparent'}
+                accountName={accountDisplayName}
+                address={effectiveToAddress}
+              />
+            }
             onReverse={reverseMove}
             canReverse={canReverseMove}
           />

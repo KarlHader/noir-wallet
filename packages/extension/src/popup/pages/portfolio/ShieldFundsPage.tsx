@@ -188,13 +188,28 @@ function ShieldFundsContent() {
   const zcashMovePath = zcashMoveSource
     ? `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
     : null
+  const zcashSendOriginState = account
+    ? {
+        sendOriginHistory: {
+          originPath: decodeURIComponent(sendOriginPath),
+          network: currentNetwork,
+          walletId: account.walletId,
+          accountId: account.accountId,
+          entryKey: location.key
+        }
+      }
+    : undefined
   const runAction = (provider: ShieldProvider, action: ShieldAction, auto = false) => {
     setPendingAction(null)
     const go = (path: string) =>
       (auto ? replace : navigate)(withShieldAsset(path, requestedAssetId))
     if (action === 'move') {
       if (provider === 'zcash-shield') {
-        if (zcashMovePath) go(zcashMovePath)
+        if (zcashMovePath)
+          navigate(withShieldAsset(zcashMovePath, requestedAssetId), {
+            replace: auto,
+            state: auto ? undefined : zcashSendOriginState
+          })
       } else go(movePath)
       return
     }
@@ -215,18 +230,7 @@ function ShieldFundsContent() {
         )
         navigate(path, {
           replace: auto,
-          state:
-            !auto && account
-              ? {
-                  sendOriginHistory: {
-                    originPath: decodeURIComponent(sendOriginPath),
-                    network: currentNetwork,
-                    walletId: account.walletId,
-                    accountId: account.accountId,
-                    entryKey: location.key
-                  }
-                }
-              : undefined
+          state: auto ? undefined : zcashSendOriginState
         })
       }
       return
@@ -240,7 +244,7 @@ function ShieldFundsContent() {
   const openAction = (action: ShieldAction) => {
     if (action === 'move') {
       if (canManageNear) navigate(movePath)
-      else if (zcashMovePath) navigate(zcashMovePath)
+      else if (zcashMovePath) navigate(zcashMovePath, { state: zcashSendOriginState })
       return
     }
     if (action === 'receive') {

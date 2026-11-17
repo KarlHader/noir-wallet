@@ -81,6 +81,10 @@ import {
   resolvePrivateBalanceTransferAmount
 } from '@/popup/services/private-balance-transfer'
 import { estimateConfidentialSendTime } from '@/popup/services/send-time-estimate'
+import {
+  ZcashMoveLayout,
+  ZcashMoveAccountCard
+} from '@/popup/components/transaction/ZcashMoveLayout'
 import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 
 function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): string {
@@ -202,7 +206,7 @@ export function ShieldWithdrawForm({
       ownZcashRecipients[0]?.address ??
       '')
     : recipientDraft
-  const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
+  const [picker, setPicker] = useState<'recipient' | 'slippage' | 'move-destination' | null>(null)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [slippage, setSlippage] = useState(0.5)
   const [prepared, setPrepared] = useState<Readonly<{
@@ -862,55 +866,223 @@ export function ShieldWithdrawForm({
     )
   }
 
+  const routeDetails = (
+    <>
+      <div>
+        <SendRouteInfoCard
+          feeLabel="Fee (est.)"
+          fee={
+            preview && previewRequest && !previewLoading && !previewError ? (
+              previewFee ? (
+                <AmountDisplay
+                  value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
+                  symbol={formatSymbol(source?.asset.metadata.symbol)}
+                  profile="fee"
+                />
+              ) : (
+                'Unavailable'
+              )
+            ) : undefined
+          }
+          provider={
+            <span className="inline-flex items-center gap-2">
+              <img src={nearLogo} alt="" className="size-5 rounded" />
+              Confidential
+            </span>
+          }
+          extra={
+            <div className="flex min-h-5 items-center justify-between gap-3">
+              <span className="text-muted">Slippage</span>
+              <button
+                type="button"
+                aria-label={`Slippage settings, currently ${slippage}%`}
+                disabled={busy}
+                onClick={() => setPicker('slippage')}
+                className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary disabled:opacity-45"
+              >
+                {slippage}%
+                <Icon icon="lucide:settings-2" width={15} height={15} />
+              </button>
+            </div>
+          }
+          time={
+            previewRequest && destination && !previewError && preview?.timeEstimateSeconds ? (
+              <span>{estimateConfidentialSendTime(preview?.timeEstimateSeconds, undefined)}</span>
+            ) : undefined
+          }
+        />
+      </div>
+      {source && destinations.length === 0 && (
+        <p role="alert" className="text-xs text-warning">
+          No supported network for this token
+        </p>
+      )}
+      {!error && !balanceError && previewError && (
+        <div role="alert" className="flex items-center justify-between gap-2 text-xs text-warning">
+          <span>
+            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+              ? 'Refresh Shield balances to get a quote.'
+              : previewError}
+          </span>
+          <button
+            type="button"
+            disabled={connecting}
+            onClick={
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                ? () => void refreshBalances()
+                : retryPreview
+            }
+            className="shrink-0 text-primary disabled:opacity-45"
+          >
+            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'}
+          </button>
+        </div>
+      )}
+      {amountState?.error && (
+        <p role="alert" className="text-xs text-warning">
+          {amountState.error}
+        </p>
+      )}
+      {recipient && !recipientValid && (
+        <p role="alert" className="text-xs text-warning">
+          Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
+        </p>
+      )}
+      {(balanceError || (error && !amountState?.error)) && (
+        <p role="alert" className="text-xs text-warning">
+          {balanceError ?? error}
+        </p>
+      )}
+      {!currentBalances && canManageNear && connecting && (
+        <p role="status" className="text-center text-sm text-muted">
+          Loading Shield balances…
+        </p>
+      )}
+      {!currentBalances && canManageNear && !connecting && balanceError && (
+        <Button
+          variant="outline"
+          size="wallet"
+          onClick={() => void refreshBalances()}
+          className="w-full"
+        >
+          Retry
+        </Button>
+      )}
+    </>
+  )
+  const moveRecipient = ownZcashRecipients.find(item => item.address === recipient)
+  const canContinue = Boolean(
+    canManageNear &&
+    currentBalances &&
+    source &&
+    destination &&
+    amountState?.amountRaw &&
+    recipientValid &&
+    preview &&
+    !previewLoading
+  )
+  const moveBalance = balancesHidden
+    ? '••••'
+    : source
+      ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+      : '—'
+
   return (
     <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <SendFormView
-        domain="shield"
-        availableDomains={moveToOwnZcash ? ['shield'] : ['public', 'shield']}
-        sourceLabel={moveToOwnZcash ? 'From' : undefined}
-        disabled={busy}
-        onDomainChange={domain => {
-          if (domain === 'public') {
-            const publicAssetId = [source?.asset, destination?.asset, initialAsset]
-              .map(asset => asset?.asset.id)
-              .find(id => model?.assets.some(item => item.asset.id === id))
-            onSelectPublic(
-              publicAssetId ?? null,
-              recipientValid ? recipient : '',
-              amount,
-              destination?.asset.asset.id ?? null
-            )
-          }
-        }}
-        recipient={
-          moveToOwnZcash ? (
-            <fieldset className="space-y-2" disabled={busy}>
-              <legend className="mb-2">
-                <SendFieldLabel>To</SendFieldLabel>
-              </legend>
-              {ownZcashRecipients.map(item => (
-                <label
-                  key={item.address}
-                  className="flex min-w-0 items-center gap-3 rounded-[10px] border border-white/10 bg-wallet-surface p-3"
+      {moveToOwnZcash ? (
+        <>
+          <div className="page-content min-h-0 !px-4 pt-4 space-y-2">
+            <ZcashMoveLayout
+              amount={
+                <input
+                  aria-label="ZEC amount"
+                  inputMode="decimal"
+                  value={amount}
+                  disabled={busy}
+                  placeholder="0"
+                  onChange={event => {
+                    const next = normalizePrivateBalanceTransferInput(event.target.value)
+                    if (next !== null) setAmount(next)
+                  }}
+                  className="h-12 w-full max-w-[280px] bg-transparent px-2 text-center text-[40px] font-semibold leading-tight tabular-nums outline-none placeholder:text-muted/45"
+                  style={{
+                    fontSize: `${Math.max(18, Math.min(40, Math.floor(440 / Math.max(1, amount.length))))}px`
+                  }}
+                />
+              }
+              balance={moveBalance}
+              max={
+                <button
+                  type="button"
+                  aria-label="Max"
+                  disabled={
+                    busy || connecting || !source || !currentBalances || availableRaw === '0'
+                  }
+                  onClick={() => {
+                    if (source)
+                      setAmount(
+                        formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                      )
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
                 >
-                  <input
-                    type="radio"
-                    name="zcash-move-recipient"
-                    value={item.address}
-                    checked={recipient === item.address}
-                    onChange={() => setRecipient(item.address)}
-                    className="accent-primary"
-                  />
-                  <span className="flex min-w-0 flex-col gap-1">
-                    <span className="text-sm">
-                      {item.privacy === 'transparent' ? 'Transparent' : 'Zcash Shield'}
-                    </span>
-                    <span className="break-all text-xs text-muted">{item.address}</span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          ) : (
+                  Max
+                </button>
+              }
+              source={
+                <ZcashMoveAccountCard
+                  label="From"
+                  source="confidential"
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address=""
+                />
+              }
+              destination={
+                <ZcashMoveAccountCard
+                  label="To"
+                  source={moveRecipient?.privacy ?? 'transparent'}
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address={recipient}
+                  disabled={busy}
+                  onClick={
+                    ownZcashRecipients.length > 1 ? () => setPicker('move-destination') : undefined
+                  }
+                />
+              }
+            />
+            {routeDetails}
+          </div>
+          <div className="page-footer">
+            <Button
+              size="wallet"
+              className="w-full h-[45px]"
+              isLoading={busy}
+              disabled={!canContinue || busy}
+              onClick={() => void prepare()}
+            >
+              Move
+            </Button>
+          </div>
+        </>
+      ) : (
+        <SendFormView
+          domain="shield"
+          availableDomains={['public', 'shield']}
+          disabled={busy}
+          onDomainChange={domain => {
+            if (domain === 'public') {
+              const publicAssetId = [source?.asset, destination?.asset, initialAsset]
+                .map(asset => asset?.asset.id)
+                .find(id => model?.assets.some(item => item.asset.id === id))
+              onSelectPublic(
+                publicAssetId ?? null,
+                recipientValid ? recipient : '',
+                amount,
+                destination?.asset.asset.id ?? null
+              )
+            }
+          }}
+          recipient={
             <div className="space-y-2">
               <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
                 <SendFieldLabel>Send to</SendFieldLabel>
@@ -962,217 +1134,117 @@ export function ShieldWithdrawForm({
                 />
               </div>
             </div>
-          )
-        }
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel={moveToOwnZcash ? 'Move amount' : 'Send amount'}
-            disabled={busy}
-            available={availableRaw}
-            symbol={formatSymbol(displayedAsset?.metadata.symbol)}
-            inline
-            value={amount}
-            onChange={value => {
-              const next = normalizePrivateBalanceTransferInput(value)
-              if (next !== null) {
-                keepSelectedSource()
-                setAmount(next)
-              }
-            }}
-          />
-        }
-        assetSelector={
-          <button
-            type="button"
-            disabled={busy || moveToOwnZcash}
-            onClick={onOpenSourcePicker}
-            className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-            aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
-          >
-            {displayedAsset && (
-              <TokenIcon
-                assetId={displayedAsset.asset.id}
-                symbol={formatSymbol(displayedAsset.metadata.symbol)}
-                icon={displayedAsset.metadata.iconUrl}
-                blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
-                size={24}
-              />
-            )}
-            <span className="flex min-w-0 flex-col items-start gap-0.5 leading-none">
-              <span className="max-w-[7ch] truncate">
-                {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
-              </span>
-              {source && (
-                <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
-              )}
-            </span>
-            {!moveToOwnZcash && (
-              <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
-            )}
-          </button>
-        }
-        balance={
-          <span
-            className="min-w-0 truncate"
-            title={
-              source && !balancesHidden
-                ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                : undefined
-            }
-          >
-            {balancesHidden
-              ? '••••'
-              : source
-                ? formatTokenQuantity(
-                    formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                  )
-                : '—'}
-          </span>
-        }
-        maxButton={
-          <button
-            type="button"
-            disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
-            title={!currentBalances ? 'Shield balance unavailable' : 'Use maximum balance'}
-            onClick={() => {
-              if (!source) return
-              keepSelectedSource()
-              setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
-            }}
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted disabled:opacity-40"
-          >
-            Max
-          </button>
-        }
-        footer={
-          <SendFormActions
-            loading={busy}
-            disabled={
-              !canManageNear ||
-              !currentBalances ||
-              !source ||
-              !destination ||
-              !amountState?.amountRaw ||
-              !recipientValid ||
-              !preview ||
-              previewLoading
-            }
-            onContinue={() => void prepare()}
-          />
-        }
-      >
-        <div>
-          <SendRouteInfoCard
-            feeLabel="Fee (est.)"
-            fee={
-              preview && previewRequest && !previewLoading && !previewError ? (
-                previewFee ? (
-                  <AmountDisplay
-                    value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
-                    symbol={formatSymbol(source?.asset.metadata.symbol)}
-                    profile="fee"
-                  />
-                ) : (
-                  'Unavailable'
-                )
-              ) : undefined
-            }
-            provider={
-              <span className="inline-flex items-center gap-2">
-                <img src={nearLogo} alt="" className="size-5 rounded" />
-                Confidential
-              </span>
-            }
-            extra={
-              <div className="flex min-h-5 items-center justify-between gap-3">
-                <span className="text-muted">Slippage</span>
-                <button
-                  type="button"
-                  aria-label={`Slippage settings, currently ${slippage}%`}
-                  disabled={busy}
-                  onClick={() => setPicker('slippage')}
-                  className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary disabled:opacity-45"
-                >
-                  {slippage}%
-                  <Icon icon="lucide:settings-2" width={15} height={15} />
-                </button>
-              </div>
-            }
-            time={
-              previewRequest && destination && !previewError && preview?.timeEstimateSeconds ? (
-                <span>{estimateConfidentialSendTime(preview?.timeEstimateSeconds, undefined)}</span>
-              ) : undefined
-            }
-          />
-        </div>
-        {source && destinations.length === 0 && (
-          <p role="alert" className="text-xs text-warning">
-            No supported network for this token
-          </p>
-        )}
-        {!error && !balanceError && previewError && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-2 text-xs text-warning"
-          >
-            <span>
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh Shield balances to get a quote.'
-                : previewError}
-            </span>
+          }
+          amountInput={
+            <SendAmountInputCard
+              ariaLabel="Send amount"
+              disabled={busy}
+              available={availableRaw}
+              symbol={formatSymbol(displayedAsset?.metadata.symbol)}
+              inline
+              value={amount}
+              onChange={value => {
+                const next = normalizePrivateBalanceTransferInput(value)
+                if (next !== null) {
+                  keepSelectedSource()
+                  setAmount(next)
+                }
+              }}
+            />
+          }
+          assetSelector={
             <button
               type="button"
-              disabled={connecting}
-              onClick={
-                previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                  ? () => void refreshBalances()
-                  : retryPreview
-              }
-              className="shrink-0 text-primary disabled:opacity-45"
+              disabled={busy}
+              onClick={onOpenSourcePicker}
+              className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+              aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
             >
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh balances'
-                : 'Retry'}
+              {displayedAsset && (
+                <TokenIcon
+                  assetId={displayedAsset.asset.id}
+                  symbol={formatSymbol(displayedAsset.metadata.symbol)}
+                  icon={displayedAsset.metadata.iconUrl}
+                  blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
+                  size={24}
+                />
+              )}
+              <span className="flex min-w-0 flex-col items-start gap-0.5 leading-none">
+                <span className="max-w-[7ch] truncate">
+                  {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
+                </span>
+                {source && (
+                  <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
+                )}
+              </span>
+              <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
             </button>
-          </div>
-        )}
-        {amountState?.error && (
-          <p role="alert" className="text-xs text-warning">
-            {amountState.error}
-          </p>
-        )}
-        {recipient && !recipientValid && (
-          <p role="alert" className="text-xs text-warning">
-            Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
-          </p>
-        )}
-        {(balanceError || (error && !amountState?.error)) && (
-          <p role="alert" className="text-xs text-warning">
-            {balanceError ?? error}
-          </p>
-        )}
-        {!currentBalances && canManageNear && connecting && (
-          <p role="status" className="text-center text-sm text-muted">
-            Loading Shield balances…
-          </p>
-        )}
-        {!currentBalances && canManageNear && !connecting && balanceError && (
-          <Button
-            variant="outline"
-            size="wallet"
-            onClick={() => void refreshBalances()}
-            className="w-full"
-          >
-            Retry
-          </Button>
-        )}
-      </SendFormView>
+          }
+          balance={
+            <span
+              className="min-w-0 truncate"
+              title={
+                source && !balancesHidden
+                  ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                  : undefined
+              }
+            >
+              {balancesHidden
+                ? '••••'
+                : source
+                  ? formatTokenQuantity(
+                      formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                    )
+                  : '—'}
+            </span>
+          }
+          maxButton={
+            <button
+              type="button"
+              disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
+              title={!currentBalances ? 'Shield balance unavailable' : 'Use maximum balance'}
+              onClick={() => {
+                if (!source) return
+                keepSelectedSource()
+                setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
+              }}
+              className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted disabled:opacity-40"
+            >
+              Max
+            </button>
+          }
+          footer={
+            <SendFormActions
+              loading={busy}
+              disabled={
+                !canManageNear ||
+                !currentBalances ||
+                !source ||
+                !destination ||
+                !amountState?.amountRaw ||
+                !recipientValid ||
+                !preview ||
+                previewLoading
+              }
+              onContinue={() => void prepare()}
+            />
+          }
+        >
+          {routeDetails}
+        </SendFormView>
+      )}
       <Dialog open={active && picker !== null} onOpenChange={open => !open && setPicker(null)}>
         <DialogContent
           position="bottom"
           className="max-h-[80vh] min-h-0 overflow-y-auto bg-wallet-surface p-4 pb-6"
         >
-          <DialogTitle>{picker === 'slippage' ? 'Slippage' : 'Recipient'}</DialogTitle>
+          <DialogTitle>
+            {picker === 'slippage'
+              ? 'Slippage'
+              : picker === 'move-destination'
+                ? 'Move to'
+                : 'Recipient'}
+          </DialogTitle>
           <DialogDescription className="sr-only">
             Set {actionLabel} {picker}
           </DialogDescription>
@@ -1185,6 +1257,24 @@ export function ShieldWithdrawForm({
                 setPicker(null)
               }}
             />
+          ) : picker === 'move-destination' ? (
+            <div className="space-y-2">
+              {ownZcashRecipients.map(item => (
+                <ZcashMoveAccountCard
+                  key={item.address}
+                  label="To"
+                  source={item.privacy}
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address={item.address}
+                  selected={recipient === item.address}
+                  disabled={busy}
+                  onClick={() => {
+                    setRecipient(item.address)
+                    setPicker(null)
+                  }}
+                />
+              ))}
+            </div>
           ) : picker === 'recipient' && destination ? (
             <RecipientSelector
               chainId={destination.chain.chain.id}
