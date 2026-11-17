@@ -97,7 +97,12 @@ export function SpeedUpConfirmSheet({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
+      <DialogContent
+        position="bottom"
+        showCloseButton={false}
+        className="p-0 gap-0"
+        style={open ? { animation: 'none' } : undefined}
+      >
         <DialogHeader className="px-5 pt-5 pb-4">
           <DialogTitle className="text-center">Speed Up</DialogTitle>
           <DialogDescription className="sr-only">
@@ -113,12 +118,14 @@ export function SpeedUpConfirmSheet({
             <AmountDisplay value={retryAmount} symbol="ZEC" />
           </div>
           {tx?.to && <p className="text-sm text-muted mt-0.5">To {formatSortAddress(tx.to)}</p>}
-          {amountAdjusted && (
-            <div className="text-xs text-muted mt-2 px-8 text-center">
-              Amount reduced from <AmountDisplay value={tx.amount} symbol="ZEC" /> to cover the
-              higher network fee.
-            </div>
-          )}
+          <div className="mt-2 min-h-12 px-8 text-center text-xs text-muted">
+            {amountAdjusted && (
+              <>
+                Amount reduced from <AmountDisplay value={tx.amount} symbol="ZEC" /> to cover the
+                higher network fee.
+              </>
+            )}
+          </div>
         </div>
 
         <div className="mx-5 bg-card rounded-xl p-4">

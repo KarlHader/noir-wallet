@@ -125,16 +125,19 @@ function parsePolicy(policy: UserAssetDexPoolDiscoveryPolicy): UserAssetDexPoolD
   ) {
     throw new Error('Invalid Pool discovery allowlist')
   }
-  const positiveThresholds = [
+  const nonNegativeThresholds = [
     policy.minimumLiquidityUsd,
     policy.minimumVolume24hUsd,
-    policy.minimumPairAgeMs,
     policy.singlePoolMinimumLiquidityUsd,
-    policy.singlePoolMinimumVolume24hUsd,
+    policy.singlePoolMinimumVolume24hUsd
+  ]
+  const positiveThresholds = [
+    policy.minimumPairAgeMs,
     policy.singlePoolMinimumPairAgeMs,
     policy.mappingTtlMs
   ]
   if (
+    nonNegativeThresholds.some(value => !Number.isSafeInteger(value) || value < 0) ||
     positiveThresholds.some(value => !Number.isSafeInteger(value) || value <= 0) ||
     policy.singlePoolMinimumLiquidityUsd < policy.minimumLiquidityUsd ||
     policy.singlePoolMinimumVolume24hUsd < policy.minimumVolume24hUsd ||

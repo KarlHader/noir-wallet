@@ -293,9 +293,9 @@ export class DexScreenerMarketChangeService {
         !REMOTE_ID_PATTERN.test(pool.baseTokenAddress) ||
         !REMOTE_ID_PATTERN.test(pool.quoteTokenAddress) ||
         !Number.isFinite(pool.minimumLiquidityUsd) ||
-        pool.minimumLiquidityUsd <= 0 ||
+        pool.minimumLiquidityUsd < 0 ||
         !Number.isFinite(pool.minimumVolume24hUsd) ||
-        pool.minimumVolume24hUsd <= 0
+        pool.minimumVolume24hUsd < 0
       ) {
         throw new Error('Invalid trusted market change mapping')
       }

@@ -61,8 +61,11 @@ export function TokenIcon({
 }: TokenIconProps) {
   const symbol = formatSymbol(token?.symbol || symbolProp)
   const assetId = token?.assetId || assetIdProp
+  const contractIdentity =
+    (token ? resolveTokenContractIconIdentity(token) : null) ??
+    resolveAssetIdContractIconIdentity(assetId)
   const catalogIcon = useSyncExternalStore(swapTokenCatalogClient.subscribeIcons, () =>
-    swapTokenCatalogClient.getIcon(assetId)
+    swapTokenCatalogClient.getIcon(assetId, contractIdentity)
   )
   const blockchain = blockchainProp || token?.blockchain
   const bundledIconForSymbol = bundledTokenIcons[symbol.toUpperCase()]
@@ -79,9 +82,6 @@ export function TokenIcon({
   const bundledIcon =
     mappedIcon ??
     ((assetId && isBundledWalletAsset(assetId)) || nativeToken ? bundledIconForSymbol : undefined)
-  const contractIdentity =
-    (token ? resolveTokenContractIconIdentity(token) : null) ??
-    resolveAssetIdContractIconIdentity(assetId)
   const [contractIcon, setContractIcon] = useState<{
     identity: string
     icon: string
