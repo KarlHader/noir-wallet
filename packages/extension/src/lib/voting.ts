@@ -109,14 +109,8 @@ export function getPopulatedVotingStatuses(
 export function formatVotingDate(value: string): string {
   const date = parseVotingDate(value)
   if (!Number.isFinite(date.getTime())) return '—'
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  })
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}.${pad(date.getMinutes())}`
 }
 
 export function formatVotingZec(valueZats: string | undefined): string {
