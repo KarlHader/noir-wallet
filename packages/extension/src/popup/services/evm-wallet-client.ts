@@ -515,6 +515,19 @@ function assertGraphSigningContext(graph: TransactionGraph, chainId: string): vo
     throw new Error('EVM signing review does not match its transaction graph')
   }
   const protocol = graph.root.intent.protocol
+  if (graph.root.relation?.kind === 'replacement-of' && graph.root.kind !== 'cancel') {
+    const transaction = graph.root.intent.evm?.unsignedTransaction
+    if (
+      graph.segments.length !== 1 ||
+      !transaction ||
+      `eip155:${transaction.chainId}` !== chainId ||
+      (protocol !== undefined && protocol.origin.chainId !== chainId)
+    ) {
+      throw new Error('EVM signing review has an invalid replacement graph')
+    }
+    // A speed-up keeps the original business intent but signs only its source transaction.
+    return
+  }
   if (protocol === undefined) {
     if (graph.root.kind === 'contract-call' || graph.root.kind === 'approve') {
       if (
@@ -608,6 +621,26 @@ function parseTransferReview(
     operation: 'transaction'
   })
   assertGraphSigningContext(graph, chainId.id)
+  if (graph.root.relation?.kind === 'replacement-of' && graph.root.kind !== 'cancel') {
+    const transaction = graph.root.intent!.evm!.unsignedTransaction!
+    if (
+      summary.schema !== 'evm.transaction.v1' ||
+      summary.fields.from.toLowerCase() !== graph.root.intent!.sender!.address.toLowerCase() ||
+      summary.fields.to?.toLowerCase() !== transaction.to.toLowerCase() ||
+      summary.fields.transactionType !== transaction.type ||
+      summary.fields.nonce !== transaction.nonce ||
+      summary.fields.valueWei !== transaction.value ||
+      summary.fields.gasLimit !== transaction.gasLimit ||
+      summary.fields.calldata.value !== transaction.input ||
+      summary.fields.maximumFeeWei !== graph.root.intent!.feeLimit?.amountRaw ||
+      (transaction.type === 'legacy'
+        ? summary.fields.gasPriceWei !== transaction.gasPrice
+        : summary.fields.maxFeePerGasWei !== transaction.maxFeePerGas ||
+          summary.fields.maxPriorityFeePerGasWei !== transaction.maxPriorityFeePerGas)
+    ) {
+      throw new Error('EVM replacement graph does not match its signing summary')
+    }
+  }
   if (graph.root.kind === 'contract-call' || graph.root.kind === 'approve') {
     const intent = graph.root.intent
     if (
@@ -1236,7 +1269,7 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
             prepared.graph.root.relation?.kind !== 'replacement-of' ||
             prepared.graph.root.relation.transactionId !== parsedTransactionId
           ) {
-            throw new Error('EVM speed-uplation review does not match its request')
+            throw new Error('EVM speed-up review does not match its request')
           }
           return prepared
         }

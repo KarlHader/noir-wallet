@@ -256,6 +256,31 @@ function cancellationReview(originalTransactionId = 'transaction:evm:original') 
   return value
 }
 
+function speedUpReview(originalTransactionId = 'transaction:evm:original') {
+  const value = review()
+  value.graph.root.relation = { kind: 'replacement-of', transactionId: originalTransactionId }
+  value.graph.root.intent.evm = {
+    schemaVersion: 1,
+    nonce: '0',
+    maxFeePerGasWei: '3',
+    maxPriorityFeePerGasWei: '1',
+    gasLimit: '21000',
+    unsignedTransaction: {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '0',
+      to: recipient,
+      value: '1',
+      input: '0x',
+      gasLimit: '21000',
+      maxFeePerGas: '3',
+      maxPriorityFeePerGas: '1',
+      accessList: []
+    }
+  }
+  return value
+}
+
 function activity(status = 'confirming') {
   const value = graph('broadcast')
   return {
@@ -636,7 +661,9 @@ test.describe('Popup EVM wallet client', () => {
       const client = createEvmWalletClient(async message => {
         messages.push(message)
         const value =
-          method === 'prepareCancel' ? cancellationReview(originalTransactionId) : review()
+          method === 'prepareCancel'
+            ? cancellationReview(originalTransactionId)
+            : speedUpReview(originalTransactionId)
         value.graph.root.relation = { kind: 'replacement-of', transactionId: originalTransactionId }
         return { result: value }
       })
@@ -667,6 +694,29 @@ test.describe('Popup EVM wallet client', () => {
         code: 'invalid-response'
       })
     })
+
+  test('accepts a single-origin Shield speed-up and rejects a changed signing recipient', async () => {
+    const value = speedUpReview()
+    value.graph.root.kind = 'shield'
+    value.graph.root.intent.direction = 'self'
+    value.graph.root.intent.shield = {
+      schemaVersion: 1,
+      operation: 'deposit',
+      sourceDomain: 'private',
+      destinationDomain: 'shield'
+    }
+    const client = createEvmWalletClient(async () => ({ result: value }))
+    await expect(
+      client.prepareSpeedUp(chainId, 'transaction:evm:original', 'private')
+    ).resolves.toMatchObject({ graph: { root: { kind: 'shield' } } })
+    await expect(client.getPendingTransfer(transactionId)).resolves.toMatchObject({
+      graph: { root: { kind: 'shield' } }
+    })
+    value.review.summary.fields.to = from
+    await expect(
+      client.prepareSpeedUp(chainId, 'transaction:evm:original', 'private')
+    ).rejects.toMatchObject({ code: 'invalid-response' })
+  })
 
   test('binds approval to the transaction ID and exact Background fingerprint', async () => {
     const messages = []
