@@ -1713,14 +1713,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           throw new Error('Selected token balance is temporarily unavailable')
         }
       })
-      .catch(error => {
+      .catch(() => {
         if (
           selectedAssetRegistrationKey.current !== registrationKey ||
           activeScopeRef.current !== walletSourcesScope ||
           useWalletStore.getState().currentNetwork !== currentNetwork
         )
           return
-        toast.error(getRheaSwapErrorMessage(error))
         const attempts = selectedAssetRegistrationAttempts.current
         if (attempts?.key !== registrationKey || attempts.count >= 3) return
         selectedAssetRegistrationTimer.current = window.setTimeout(() => {
@@ -1971,18 +1970,29 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : null,
     [requestedSourceAssetId, requestedSourceToken, swap.sourceTokens, walletSwapSourceTokens]
   )
+  const sendDestinationRows =
+    sendDestinationCatalog?.key === sendDestinationCatalogKey
+      ? sendDestinationCatalog.tokens
+      : swap.destinationTokens
+  const crossChainSendDestinations = useMemo(
+    () =>
+      crossChainSendRequested
+        ? getSwapDestinationTokens(
+            lockedSourceToken,
+            swap.sourceTokens,
+            sendDestinationRows
+          ).filter(token =>
+            isCrossChainSendDestination(lockedSourceToken, token, CROSS_CHAIN_SEND_CAPABILITIES)
+          )
+        : [],
+    [crossChainSendRequested, lockedSourceToken, swap.sourceTokens, sendDestinationRows]
+  )
   const requestedCrossChainDestinationToken =
     crossChainSendRouteScopeMatches && requestedDestinationAssetId
       ? resolveCrossChainSendDestinationByWalletAssetId(
           lockedSourceToken,
           requestedDestinationAssetId,
-          sendDestinationCatalog?.key === sendDestinationCatalogKey
-            ? getSwapDestinationTokens(
-                lockedSourceToken,
-                swap.sourceTokens,
-                sendDestinationCatalog.tokens
-              )
-            : swap.destinationTokens,
+          crossChainSendDestinations,
           CROSS_CHAIN_SEND_CAPABILITIES
         )
       : null
@@ -7586,16 +7596,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         !destinationCatalogLoading &&
         !destinationCatalogError
       )
-      const destinations =
-        sendDestinationCatalog?.key === sendDestinationCatalogKey
-          ? getSwapDestinationTokens(
-              swap.tokenIn,
-              swap.sourceTokens,
-              sendDestinationCatalog.tokens
-            ).filter(token =>
-              isCrossChainSendDestination(swap.tokenIn, token, CROSS_CHAIN_SEND_CAPABILITIES)
-            )
-          : []
+      const destinations = crossChainSendDestinations
       const availableDestinationOptions = sortSendNetworks(
         [
           ...(sourceChain && swap.tokenIn
