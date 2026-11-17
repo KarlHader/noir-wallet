@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
 import { Button } from '@/popup/components/ui/button'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ListSkeleton } from '@/popup/components/ui/skeleton'
+import { InlineError } from '@/popup/components/common/InlineError'
+import { useWalletStore } from '@/store/wallet-store'
 import { useNavigate } from '@/popup/provider/Router'
 import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
 import {
   getVotingDisplayStatus,
+  formatVotingDate,
   parseVotingDiscovery,
   parseVotingRoundStatus,
   votingErrorMessage
@@ -14,22 +17,46 @@ import {
 import type { VotingDiscovery, VotingRoundStatus } from '@/core/worker/types'
 
 export function VotingRounds() {
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const network = useWalletStore(state => state.currentNetwork)
+  if (!walletId || !accountId) return null
+  return (
+    <VotingRoundsContent
+      key={`${network}:${walletId}:${accountId}`}
+      walletId={walletId}
+      accountId={accountId}
+    />
+  )
+}
+
+function VotingRoundsContent({ walletId, accountId }: { walletId: string; accountId: string }) {
   const { navigate } = useNavigate()
   const [discovery, setDiscovery] = useState<VotingDiscovery | null>(null)
   const [statuses, setStatuses] = useState<Record<string, VotingRoundStatus | null>>({})
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const sequence = useRef(0)
 
   const refresh = useCallback(async () => {
+    const request = ++sequence.current
     setLoading(true)
     setError(null)
     try {
-      const raw = await zcashWalletRuntimeClient.voting<unknown>({ action: 'discoverRounds' })
+      const raw = await zcashWalletRuntimeClient.voting<unknown>({
+        walletId,
+        accountId,
+        action: 'discoverRounds'
+      })
       const result = parseVotingDiscovery(raw)
+      if (request !== sequence.current) return
+      setDiscovery(result)
       const entries = await Promise.all(
         result.accepted.map(async round => {
           try {
             const value = await zcashWalletRuntimeClient.voting<unknown>({
+              walletId,
+              accountId,
               action: 'roundStatus',
               roundId: round.roundId
             })
@@ -39,17 +66,20 @@ export function VotingRounds() {
           }
         })
       )
-      setDiscovery(result)
+      if (request !== sequence.current) return
       setStatuses(Object.fromEntries(entries))
     } catch (cause) {
-      setError(votingErrorMessage(cause))
+      if (request === sequence.current) setError(votingErrorMessage(cause))
     } finally {
-      setLoading(false)
+      if (request === sequence.current) setLoading(false)
     }
-  }, [])
+  }, [walletId, accountId])
 
   useEffect(() => {
     void refresh()
+    return () => {
+      sequence.current++
+    }
   }, [refresh])
 
   return (
@@ -75,11 +105,7 @@ export function VotingRounds() {
         }
       />
       <div className="page-content space-y-3">
-        {error && (
-          <p role="alert" className="text-sm text-danger">
-            {error}
-          </p>
-        )}
+        {error && <InlineError message={error} onRetry={refresh} retrying={loading} />}
         {loading && !discovery && <ListSkeleton rows={3} label="Loading voting rounds" card />}
         {discovery?.accepted.length === 0 && (
           <p className="text-sm text-muted">No voting rounds are available.</p>
@@ -100,15 +126,15 @@ export function VotingRounds() {
               </div>
               <div className="mt-2 flex justify-between gap-3 text-xs text-muted">
                 <span>{round.proposalCount} proposals</span>
-                <span>Ends {new Date(round.endsAt).toLocaleDateString()}</span>
+                <span className="text-right">Ends {formatVotingDate(round.endsAt)}</span>
               </div>
             </button>
           )
         })}
         {discovery?.rejected.map(round => (
           <div key={round.roundId} className="rounded-lg border border-border px-4 py-3">
-            <div className="text-sm font-medium">{round.roundId}</div>
-            <p className="mt-1 text-xs text-muted">{round.message}</p>
+            <div className="text-sm font-medium">Poll unavailable</div>
+            <p className="mt-1 text-xs text-muted">{votingErrorMessage(new Error(round.code))}</p>
           </div>
         ))}
       </div>
