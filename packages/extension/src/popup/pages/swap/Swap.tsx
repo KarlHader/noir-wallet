@@ -2270,6 +2270,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     nativeIntentsCatalogSettled,
     savedTokenSelection?.tokenOutId
   ])
+  const awaitingNativeDestinationRestore =
+    shieldNativeZecSwap &&
+    (!swapPreferencesHydrated ||
+      !swap.selectionReady ||
+      (initializedNativeDestinationScope.current !== swapPreferenceScope &&
+        Boolean(savedTokenSelection?.tokenOutId) &&
+        swap.tokenOut?.assetId !== savedTokenSelection?.tokenOutId &&
+        (!nativeIntentsCatalogSettled ||
+          nativeConfidentialDestinationTokens.some(
+            token => token.assetId === savedTokenSelection?.tokenOutId
+          ))))
 
   useEffect(() => {
     if (
@@ -3630,6 +3641,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const nativeIntentsRequest = useMemo(() => {
     if (
       !shieldNativeZecSwap ||
+      awaitingNativeDestinationRestore ||
       !swap.selectionReady ||
       !swap.isZecSource ||
       !swap.tokenOut ||
@@ -3697,6 +3709,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     nativeIntentsManagedAssets,
     nativeIntentsCatalog,
     nativeConfidentialDestinations,
+    awaitingNativeDestinationRestore,
+    fundingSource,
     quoteRefreshTick
   ])
   const nativeIntentsRequestKey = nativeIntentsRequest?.key ?? null
@@ -8021,7 +8035,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     return (
       <SwapInputView
         tokenIn={swap.tokenIn}
-        tokenOut={swap.tokenOut}
+        tokenOut={awaitingNativeDestinationRestore ? null : swap.tokenOut}
         isZecSource={swap.isZecSource}
         isZecDestination={isZecDestination && !shieldNativeZecSwap}
         requiresRecipientAddress={requiresRecipientAddress}
@@ -8182,7 +8196,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         sourceAssetsLoading={swap.areTokensLoading && swap.sourceTokens.length === 0}
         destinationAssetsLoading={
           shieldNativeZecSwap && swap.isZecSource
-            ? nativeIntentsCatalog.length === 0
+            ? awaitingNativeDestinationRestore || nativeIntentsCatalog.length === 0
             : crossChainSendRequested
               ? swap.destinationTokensLoading && swap.destinationTokens.length === 0
               : swap.destinationTokensLoading && swap.destinationTokens.length === 0
