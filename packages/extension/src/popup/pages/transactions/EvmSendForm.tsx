@@ -156,7 +156,7 @@ export function EvmSendForm({
 }: {
   active: boolean
   walletMode: 'public' | 'private'
-  onSelectAsset: () => void
+  onSelectAsset: (draft: Readonly<{ recipient: string; amount: string }>) => void
   onSelectShield: (recipient: string, amount: string) => void
   destinationNetworks: readonly {
     assetId: string
@@ -1148,7 +1148,7 @@ export function EvmSendForm({
               chain.chain.displayName,
               chain.chain.id
             )}
-            onSelectAsset={onSelectAsset}
+            onSelectAsset={() => onSelectAsset({ recipient, amount: maxSelected ? '' : amount })}
             variant="pill"
           />
         }

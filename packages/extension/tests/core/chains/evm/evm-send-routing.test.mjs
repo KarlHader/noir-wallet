@@ -311,9 +311,18 @@ it('normalizes and shares ten-minute Send catalogs while allowing a forced retry
   let now = 0
   let requests = 0
   const client = createRheaSwapClient(
-    async () => {
+    async message => {
       requests++
-      return { result: catalog(token()) }
+      const chainId = message.tokenListChainIds[0]
+      return {
+        result: catalog(
+          token({
+            rheaChainId: String(chainId),
+            tokenListChainId: chainId,
+            blockchain: chainId === 1 ? 'eth' : 'op'
+          })
+        )
+      }
     },
     { now: () => now }
   )
@@ -324,23 +333,23 @@ it('normalizes and shares ten-minute Send catalogs while allowing a forced retry
     client.listTokens(normalized)
   ])
   assert.deepEqual(first, second)
-  assert.equal(requests, 1)
+  assert.equal(requests, 2)
   assert.deepEqual(client.readCachedTokens(normalized), first)
-  assert.equal(support(first), 'supported')
+  assert.equal(support(client.readCachedTokens(evmSendCatalogRequest(chain))), 'supported')
   await client.listTokens(normalized)
-  assert.equal(requests, 1)
+  assert.equal(requests, 2)
   now = 10 * 60 * 1000
   assert.equal(client.readCachedTokens(request), null)
   await client.listTokens(normalized)
-  assert.equal(requests, 2)
+  assert.equal(requests, 4)
   await client.listTokens(request, { bypassCache: true })
-  assert.equal(requests, 3)
+  assert.equal(requests, 6)
 })
 
 it('does not cache partial/empty catalogs and lets a retry recover', async () => {
-  const results = [{ ...catalog(token()), failedChainIds: [10] }, catalog(), catalog(token())]
+  const results = [{ ...catalog(token()), failedChainIds: [1] }, catalog(), catalog(token())]
   const client = createRheaSwapClient(async () => ({ result: results.shift() }))
-  const request = { ...evmSendCatalogRequest(chain), tokenListChainIds: [1, 10] }
+  const request = evmSendCatalogRequest(chain)
   for (let i = 0; i < 2; i++) {
     await client.listTokens(request)
     assert.equal(client.readCachedTokens(request), null)

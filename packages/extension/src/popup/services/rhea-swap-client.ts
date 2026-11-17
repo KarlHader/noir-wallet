@@ -81,6 +81,7 @@ interface RuntimeMessenger {
 }
 
 const MAXIMUM_TOKEN_CATALOG_ENTRIES = RHEA_SWAP_CHAIN_CATALOG.length * 2
+const MAXIMUM_CONCURRENT_TOKEN_CATALOG_REQUESTS = 4
 
 function tokenCatalogKey(input: {
   readonly direction: 'from' | 'cross-chain-to'
@@ -122,6 +123,18 @@ export function createRheaSwapClient(
     readonly direction: 'from' | 'cross-chain-to'
     readonly tokenListChainIds: readonly number[]
   }): RheaSwapCatalogResult | null => {
+    if (input.tokenListChainIds.length > 1) {
+      const catalogs = [...input.tokenListChainIds]
+        .sort((left, right) => left - right)
+        .map(chainId =>
+          readCachedTokens({ direction: input.direction, tokenListChainIds: [chainId] })
+        )
+      if (catalogs.some(catalog => !catalog)) return null
+      return Object.freeze({
+        tokens: Object.freeze(catalogs.flatMap(catalog => catalog?.tokens ?? [])),
+        failedChainIds: Object.freeze([])
+      })
+    }
     const key = tokenCatalogKey(input)
     const cached = tokenCatalog.get(key)
     if (!cached || cached.expiresAt <= now()) {
@@ -173,6 +186,36 @@ export function createRheaSwapClient(
     },
     options: { readonly bypassCache?: boolean } = {}
   ): Promise<RheaSwapCatalogResult> => {
+    if (input.tokenListChainIds.length > 1) {
+      const chainIds = [...input.tokenListChainIds].sort((left, right) => left - right)
+      const results: RheaSwapCatalogResult[] = new Array(chainIds.length)
+      let cursor = 0
+      const worker = async () => {
+        while (cursor < chainIds.length) {
+          const index = cursor++
+          const chainId = chainIds[index]
+          try {
+            results[index] = await getTokens(
+              { direction: input.direction, tokenListChainIds: [chainId] },
+              options
+            )
+          } catch {
+            results[index] = { tokens: [], failedChainIds: [chainId] }
+          }
+        }
+      }
+      return Promise.all(
+        Array.from(
+          { length: Math.min(MAXIMUM_CONCURRENT_TOKEN_CATALOG_REQUESTS, chainIds.length) },
+          worker
+        )
+      ).then(() =>
+        Object.freeze({
+          tokens: Object.freeze(results.flatMap(result => result.tokens)),
+          failedChainIds: Object.freeze(results.flatMap(result => result.failedChainIds))
+        })
+      )
+    }
     const key = tokenCatalogKey(input)
     const existing = tokenCatalogRequests.get(key)
     if (existing) return existing

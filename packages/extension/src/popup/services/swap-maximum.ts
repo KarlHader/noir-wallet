@@ -159,16 +159,16 @@ export async function resolveSwapMaximumAdjustment(
 ): Promise<SwapMaximumAdjustment | null> {
   const { source, review } = input
   if (!review.execution.target) return null
+  // A new fee tier starts a new adjustment budget, but the reviewed call can
+  // still be used to measure its fee before requesting another router quote.
+  const adjustmentInput = input.refreshFees ? { ...input, adjustmentCount: 0 } : input
   let evmTransaction: RheaSwapEvmTransactionPlan['transaction'] | undefined
   if (source.family === 'evm') {
     // Tokens retain their full token balance; signature routes have no origin-chain transaction fee.
     if (source.asset.asset.kind !== 'native' || review.execution.kind !== 'evm-transaction')
       return null
     const availableRaw = BigInt(source.asset.balance.availableRaw)
-    if (
-      (BigInt(review.amountIn) >= availableRaw && input.adjustmentCount === 0) ||
-      input.refreshFees
-    ) {
+    if (BigInt(review.amountIn) >= availableRaw && adjustmentInput.adjustmentCount === 0) {
       // Request a real smaller quote, never alter value independently of the router's calldata.
       const halfBalance = availableRaw / 2n
       const probeRaw = halfBalance === BigInt(review.amountIn) ? halfBalance / 2n : halfBalance
@@ -191,13 +191,17 @@ export async function resolveSwapMaximumAdjustment(
       executionMode: input.executionMode,
       ...(evmTransaction ? { evmTransaction, quotedAmountRaw: review.amountIn } : {})
     })
-    if (evmTransaction && input.adjustmentCount > 0) {
+    if (evmTransaction && adjustmentInput.adjustmentCount > 0) {
       const quotedAmount = BigInt(review.amountIn)
       const unreservedMaximum =
         BigInt(maximum.amountRaw) + (BigInt(maximum.networkFeeRaw) + 3n) / 4n
       if (quotedAmount <= unreservedMaximum) return null
     }
-    const adjustment = maximumAdjustment(input, maximum.amountRaw, input.adjustmentCount)
+    const adjustment = maximumAdjustment(
+      adjustmentInput,
+      maximum.amountRaw,
+      adjustmentInput.adjustmentCount
+    )
     return adjustment ? { ...adjustment, maximum } : null
   } catch (error) {
     if (
@@ -205,13 +209,13 @@ export async function resolveSwapMaximumAdjustment(
       error instanceof EvmWalletClientError &&
       error.code === 'insufficient-funds'
     ) {
-      return resolveEvmSwapMaximumInsufficientFundsAdjustment(input, error)
+      return resolveEvmSwapMaximumInsufficientFundsAdjustment(adjustmentInput, error)
     }
     if (!isFeeServiceFailure(error)) throw error
     return maximumAdjustment(
-      input,
+      adjustmentInput,
       fallbackTransferMaximum(source).amountRaw,
-      input.adjustmentCount
+      adjustmentInput.adjustmentCount
     )
   }
 }

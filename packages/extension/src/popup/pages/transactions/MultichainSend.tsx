@@ -337,6 +337,12 @@ export function MultichainSend({
   const [assetPickerState, setAssetPickerState] = useState<{
     key: string
     open: boolean
+    draft?: {
+      recipient: string
+      amount: string
+      destinationAssetId: string
+      destinationChainId: string
+    }
   } | null>(null)
   const [sourcePicker, setSourcePicker] = useState<{
     mode: 'shield' | 'zcash-public'
@@ -904,7 +910,10 @@ export function MultichainSend({
   )
 
   const selectReturnedSource = (asset: SendAsset | null) => {
-    if (!returnedSourcePickerRequested || !effectiveWalletId || !effectiveAccountId) {
+    const draft =
+      (assetPickerState?.key === sendEntryKey ? assetPickerState.draft : undefined) ??
+      (returnedSourcePickerRequested ? navigationSnapshot?.crossChainReturnDraft : undefined)
+    if (!draft || !effectiveWalletId || !effectiveAccountId) {
       if (asset) {
         setSelection(asset)
         setAssetPickerOpen(false)
@@ -914,7 +923,6 @@ export function MultichainSend({
       return
     }
 
-    const draft = navigationSnapshot?.crossChainReturnDraft
     const sourceAssetId = asset?.asset.asset.id ?? ZEC_ZCASH_ASSET
     const destinationChainId = draft?.destinationChainId
     const destinationChain = visibleModel?.chains.find(
@@ -1001,6 +1009,8 @@ export function MultichainSend({
         sendEntry,
         crossChainReturnDraft: {
           sourceAssetId,
+          destinationAssetId: validDestination ?? destinationAssetId ?? undefined,
+          destinationChainId,
           walletId: effectiveWalletId,
           accountId: effectiveAccountId,
           recipient,
@@ -1325,7 +1335,10 @@ export function MultichainSend({
                     if (!nearActive || !shieldBusy) returnToEntry()
                   }
                 : assetPickerOpen && selection
-                  ? () => setAssetPickerOpen(false)
+                  ? () => {
+                      if (returnedSourcePickerRequested) selectReturnedSource(selection)
+                      else setAssetPickerOpen(false)
+                    }
                   : selection
                     ? returnToEntry
                     : goBack
@@ -1513,7 +1526,17 @@ export function MultichainSend({
                 walletMode={walletMode}
                 catalogAccount={storageV2Account}
                 catalog={accountCatalog}
-                onSelectAsset={() => setAssetPickerOpen(true)}
+                onSelectAsset={draft =>
+                  setAssetPickerState({
+                    key: sendEntryKey,
+                    open: true,
+                    draft: {
+                      ...draft,
+                      destinationAssetId: selection.asset.asset.id,
+                      destinationChainId: selection.chain.chain.id
+                    }
+                  })
+                }
                 onSelectShield={(recipient, amount) =>
                   switchSource(
                     'shield',

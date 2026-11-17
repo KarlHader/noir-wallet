@@ -90,3 +90,66 @@ test('retains both directions for every supported chain without evicting source 
   }
   expect(calls).toBe(initialCalls)
 })
+
+test('reads large multi-chain catalogs while isolating and retrying a failed chain', async () => {
+  const calls = new Map()
+  let failPolygon = true
+  const rows = new Map(
+    [
+      [1, 'eth'],
+      [10, 'op']
+    ].map(([chainId, blockchain]) => [
+      chainId,
+      Array.from({ length: 8_200 }, (_, index) => ({
+        ...token(),
+        assetId: `asset:${chainId}:${index}`,
+        blockchain,
+        contractAddress: `0x${index.toString(16).padStart(40, '0')}`,
+        rheaChainId: String(chainId),
+        tokenListChainId: chainId,
+        rheaAddress: `0x${index.toString(16).padStart(40, '0')}`,
+        isNative: false,
+        sources: ['nearintents']
+      }))
+    ])
+  )
+  const client = createRheaSwapClient(async message => {
+    const [chainId] = message.tokenListChainIds
+    expect(message.tokenListChainIds).toHaveLength(1)
+    calls.set(chainId, (calls.get(chainId) ?? 0) + 1)
+    if (chainId === 137 && failPolygon) throw new Error('Network unavailable')
+    return {
+      result: {
+        tokens: rows.get(chainId) ?? [
+          { ...token(), blockchain: 'pol', rheaChainId: '137', tokenListChainId: 137 }
+        ],
+        failedChainIds: []
+      }
+    }
+  })
+  const request = { direction: 'cross-chain-to', tokenListChainIds: [137, 10, 1] }
+  const [first, overlapping] = await Promise.all([
+    client.listTokens(request),
+    client.listTokens({ direction: request.direction, tokenListChainIds: [10, 1] })
+  ])
+  expect(first.tokens).toHaveLength(16_400)
+  expect(first.failedChainIds).toEqual([137])
+  expect(overlapping.tokens).toHaveLength(16_400)
+  expect(client.readCachedTokens(request)).toBeNull()
+  expect([...calls].sort((left, right) => left[0] - right[0])).toEqual([
+    [1, 1],
+    [10, 1],
+    [137, 1]
+  ])
+
+  failPolygon = false
+  const retried = await client.listTokens(request)
+  expect(retried.tokens).toHaveLength(16_401)
+  expect(retried.failedChainIds).toEqual([])
+  expect(client.readCachedTokens(request)).toEqual(retried)
+  expect([...calls].sort((left, right) => left[0] - right[0])).toEqual([
+    [1, 1],
+    [10, 1],
+    [137, 2]
+  ])
+})

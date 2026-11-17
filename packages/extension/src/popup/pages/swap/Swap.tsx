@@ -3211,6 +3211,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     quotePurpose,
     liveQuoteRequest?.key ?? null
   ])
+  const lastRequestedQuoteRefreshTick = useRef(quoteRefreshTick)
   useEffect(() => {
     const refreshingMaximumReview =
       viewStep === 'review' && reviewAfterQuoteRefresh.current !== null
@@ -3221,7 +3222,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     const requestSequence = ++quoteRequestSequence.current
     const quoteRequest = liveQuoteRequestRef.current
     const requestChanged = lastRequestedQuoteKey.current !== liveQuoteEffectKey
+    const refreshRequested = lastRequestedQuoteRefreshTick.current !== quoteRefreshTick
     lastRequestedQuoteKey.current = liveQuoteEffectKey
+    lastRequestedQuoteRefreshTick.current = quoteRefreshTick
 
     if (requestChanged) {
       if (
@@ -3245,6 +3248,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     setQuoteRetryable(false)
 
     if (!quoteRequest || !swap.tokenIn || !swap.tokenOut) {
+      swap.setIsQuoting(false)
+      return
+    }
+    if (
+      !requestChanged &&
+      !refreshRequested &&
+      !refreshingMaximumReview &&
+      liveQuoteKey === quoteRequest.key &&
+      quoteResult &&
+      isRheaSwapQuoteFresh(quoteResult)
+    ) {
       swap.setIsQuoting(false)
       return
     }
@@ -3889,6 +3903,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             refreshingFees: feeTierOverride !== undefined
           })
         ) {
+          if (feeTierOverride !== undefined) maxQuoteAdjustmentCount.current = 0
           const adjustment = await measure('resolve-maximum', () =>
             resolveSwapMaximumAdjustment(
               {
@@ -6983,7 +6998,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                                 setEvmMoveFeeSelection(selection)
                                 await reviewLiveQuote(
                                   selection.kind === 'tier' ? selection.tier : networkFeeTier,
-                                  true,
+                                  false,
                                   selection
                                 )
                               }
