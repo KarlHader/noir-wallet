@@ -1642,12 +1642,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       )
     return {
       sameChain: eligible(swap.sourceTokens),
-      crossChain: eligible(swap.crossChainDestinationTokens)
+      crossChain: [
+        ...eligible(swap.crossChainDestinationTokens),
+        ...(swap.tokenOut ? eligible([swap.tokenOut]) : [])
+      ]
     }
   }, [
     privateSwapRequested,
     swap.sourceTokens,
     swap.crossChainDestinationTokens,
+    swap.tokenOut,
     supportsPrivateDestination
   ])
   const isSelectablePrivateSource = useCallback(
