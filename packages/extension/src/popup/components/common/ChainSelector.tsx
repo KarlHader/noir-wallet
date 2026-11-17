@@ -13,6 +13,7 @@ export interface ChainSelectorOption {
   readonly icon?: string
   readonly disabled?: boolean
   readonly note?: string
+  readonly priority?: number
 }
 
 interface ChainSelectorProps {
@@ -27,6 +28,7 @@ interface ChainSelectorProps {
   readonly allowSelectionWhileLoading?: boolean
   readonly error?: string
   readonly onRetry?: () => void
+  readonly enabledFirst?: boolean
 }
 
 export function ChainSelector({
@@ -40,7 +42,8 @@ export function ChainSelector({
   loading = false,
   allowSelectionWhileLoading = false,
   error,
-  onRetry
+  onRetry,
+  enabledFirst = false
 }: ChainSelectorProps) {
   const [search, setSearch] = useState('')
   const [pendingId, setPendingId] = useState<string | null>(null)
@@ -55,6 +58,13 @@ export function ChainSelector({
     options.filter(option => option.name.toLowerCase().includes(search.trim().toLowerCase())),
     option => option
   )
+  filtered.sort((left, right) => {
+    const priority = (left.priority ?? 0) - (right.priority ?? 0)
+    return (
+      priority ||
+      (enabledFirst ? Number(Boolean(left.disabled)) - Number(Boolean(right.disabled)) : 0)
+    )
+  })
   const busy = (loading && !allowSelectionWhileLoading) || pendingId !== null
   const select = async (id: string) => {
     if (busy) return

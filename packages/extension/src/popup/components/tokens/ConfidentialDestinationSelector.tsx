@@ -109,15 +109,6 @@ export function ConfidentialDestinationSelector({
       })),
     [visible, origins, balances, prices, hidden]
   )
-  const lowBalanceKeys = useMemo(
-    () =>
-      new Set(
-        available
-          .filter(asset => shieldSwapFormBalance(asset, balances) === '0')
-          .map(asset => asset.asset.asset.id)
-      ),
-    [available, balances]
-  )
   return (
     <TokenSelectorDialog open onOpenChange={open => !open && onClose()}>
       <TokenSelectorView
@@ -128,7 +119,6 @@ export function ConfidentialDestinationSelector({
         selectedNetwork={network}
         onNetworkChange={setNetwork}
         items={items}
-        lowBalanceKeys={lowBalanceKeys}
         selectedKey={selectedAssetId}
         onSelect={key => {
           const asset = available.find(item => item.asset.asset.id === key)

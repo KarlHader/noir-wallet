@@ -278,14 +278,6 @@ export function TokenSelector({
         const selected = visibleTokens.find(token => tokenKey(token) === key)
         if (selected) onSelect(selected)
       }}
-      lowBalanceKeys={
-        balances || visibleExtraItems.some(item => item.lowBalance)
-          ? new Set([
-              ...visibleTokens.filter(token => balances?.get(token.assetId) === '0').map(tokenKey),
-              ...visibleExtraItems.filter(item => item.lowBalance).map(item => item.key)
-            ])
-          : undefined
-      }
       loading={
         filteredTokens.length === 0 &&
         visibleExtraItems.length === 0 &&
@@ -304,11 +296,6 @@ export function TokenSelector({
       }
       status={
         <>
-          {onFilterChange && search.trim().length > 0 && effectiveBlockchain === 'all' && (
-            <p role="status" className="mt-2 text-xs text-muted">
-              Choose a network for more results
-            </p>
-          )}
           {catalogLoading && search.trim().length > 0 && (
             <p role="status" className="mt-2 text-xs text-muted">
               Searching tokens...

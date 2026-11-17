@@ -148,6 +148,7 @@ function publicCatalogStorage() {
 }
 
 test('shares public RHEA catalogs across callers and Background lifetimes, keeping chain and direction separate', async () => {
+  expect(RHEA_SWAP_TOKEN_CATALOG_TTL_MS).toBe(60 * 60 * 1_000)
   const storage = publicCatalogStorage()
   let now = NOW
   const calls = []
@@ -160,6 +161,11 @@ test('shares public RHEA catalogs across callers and Background lifetimes, keepi
   const [a, b] = await Promise.all([first.read(request), first.read(request)])
   expect(a.tokens).toEqual(b.tokens)
   expect(calls).toHaveLength(1)
+  expect(await first.readFresh(request)).toEqual({
+    result: a,
+    expiresAt: NOW + RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  })
+  expect(calls).toHaveLength(1)
 
   const restarted = new PersistentRheaSwapCatalogCache(load, storage, () => now)
   expect((await restarted.read(request)).tokens).toEqual(a.tokens)
@@ -167,8 +173,12 @@ test('shares public RHEA catalogs across callers and Background lifetimes, keepi
   await restarted.read({ ...request, direction: 'cross-chain-to' })
   await restarted.read({ ...request, tokenListChainIds: [8453] })
   expect(calls).toHaveLength(3)
-  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS - 1
+  await restarted.read(request)
+  expect(calls).toHaveLength(3)
+  now += 1
   const expiredWorker = new PersistentRheaSwapCatalogCache(load, storage, () => now)
+  expect(await expiredWorker.readFresh(request)).toBeNull()
   expect(await expiredWorker.readLastGood(request)).toEqual(a)
   expect(calls).toHaveLength(3)
   await restarted.read(request)

@@ -18,6 +18,11 @@ interface CatalogSnapshot {
   readonly result: RheaSwapCatalogResult
 }
 
+export interface FreshRheaSwapCatalog {
+  readonly result: RheaSwapCatalogResult
+  readonly expiresAt: number
+}
+
 /** Public metadata only; quotes, balances and account preferences never enter this cache. */
 export class PersistentRheaSwapCatalogCache {
   private readonly memory = new Map<string, CatalogSnapshot>()
@@ -31,6 +36,25 @@ export class PersistentRheaSwapCatalogCache {
 
   async read(input: CatalogRequest): Promise<RheaSwapCatalogResult> {
     return this.collect(input, (direction, chainId) => this.readChain(direction, chainId))
+  }
+
+  /** Reads extension-origin public metadata only; it never loads or writes a catalog. */
+  async readFresh(input: CatalogRequest): Promise<FreshRheaSwapCatalog | null> {
+    const chainIds = this.parseRequest(input)
+    const snapshots = await Promise.all(
+      chainIds.map(chainId => this.readCachedChain(input.direction, chainId))
+    )
+    if (snapshots.some(snapshot => !snapshot || !this.fresh(snapshot.fetchedAt))) return null
+    const complete = snapshots as CatalogSnapshot[]
+    return Object.freeze({
+      result: Object.freeze({
+        tokens: Object.freeze(complete.flatMap(snapshot => snapshot.result.tokens)),
+        failedChainIds: Object.freeze([])
+      }),
+      expiresAt: Math.min(
+        ...complete.map(snapshot => snapshot.fetchedAt + RHEA_SWAP_TOKEN_CATALOG_TTL_MS)
+      )
+    })
   }
 
   /** Restores complete public metadata for display without making a network request. */

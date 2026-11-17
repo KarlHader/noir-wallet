@@ -8,6 +8,7 @@ import {
   isCrossChainSendDestination,
   isCrossChainSendRecipientValid,
   resolveCrossChainSendDestinationByWalletAssetId,
+  resolveCrossChainSendDestinationSupport,
   resolveCrossChainSendRouteAssetDisplay,
   resolveCrossChainSendRouteDraft
 } from '../../../src/popup/services/cross-chain-send-assets.ts'
@@ -249,6 +250,83 @@ test('cross-chain Send uses verified asset identities and excludes the source ne
       estimatedOutRaw: '100073653903600'
     })
   ).toBe('0')
+})
+
+test('Send network availability uses canonical identities and keeps missing or failed catalogs unknown', () => {
+  const sourceAssetId = 'eip155:1/slip44:60'
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      sourceAssetId,
+      destinationChainId: 'eip155:8453'
+    })
+  ).toEqual({ status: 'available', destinationAssetId: 'eip155:8453/slip44:60' })
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      sourceAssetId,
+      destinationChainId: 'eip155:56'
+    })
+  ).toMatchObject({ status: 'unavailable', destinationAssetId: null })
+  const custom = {
+    ...eth,
+    assetId: 'nep141:custom.token',
+    isNative: false,
+    contractAddress: `0x${'ab'.repeat(20)}`,
+    rheaAddress: `0x${'ab'.repeat(20)}`
+  }
+  const target = {
+    ...custom,
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base',
+    contractAddress: `0x${'cd'.repeat(20)}`,
+    rheaAddress: `0x${'cd'.repeat(20)}`
+  }
+  const request = {
+    sourceAssetId: `eip155:1/erc20:${custom.contractAddress}`,
+    destinationChainId: 'eip155:8453',
+    sourceCatalog: { tokens: [custom], failedChainIds: [] }
+  }
+  for (const destinationCatalog of [
+    null,
+    { tokens: [], failedChainIds: [] },
+    { tokens: [target], failedChainIds: [8453] }
+  ]) {
+    expect(resolveCrossChainSendDestinationSupport({ ...request, destinationCatalog }).status).toBe(
+      'unknown'
+    )
+  }
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      ...request,
+      destinationCatalog: { tokens: [target], failedChainIds: [] }
+    })
+  ).toEqual({
+    status: 'available',
+    destinationAssetId: `eip155:8453/erc20:${target.contractAddress}`
+  })
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      ...request,
+      destinationCatalog: {
+        tokens: [{ ...target, assetId: 'nep141:other.token' }],
+        failedChainIds: []
+      }
+    }).status
+  ).toBe('unavailable')
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      ...request,
+      sourceCatalog: { tokens: [custom], failedChainIds: [1] },
+      destinationCatalog: { tokens: [target], failedChainIds: [] }
+    }).status
+  ).toBe('unknown')
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      ...request,
+      sourceAssetId,
+      destinationChainId: 'eip155:1'
+    })
+  ).toEqual({ status: 'available', destinationAssetId: sourceAssetId })
 })
 
 test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', () => {

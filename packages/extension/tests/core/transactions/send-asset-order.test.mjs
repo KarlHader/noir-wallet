@@ -3,9 +3,13 @@ import { expect } from '@playwright/test'
 
 import {
   buildSendAssetSelectionModel,
+  prepareManagedSendAsset,
+  resolveSendAssetSelection,
   sortSendAssetsByBalanceValue
 } from '../../../src/popup/pages/transactions/send-asset-order.ts'
 import { estimateShieldSendRouteFee } from '../../../src/popup/services/shield-transfer.ts'
+import { createInitialProductChainRegistry } from '../../../src/core/chains/registry/index.ts'
+import { resolveEvmSendAvailableRaw } from '../../../src/popup/services/evm-send-routing.ts'
 
 function candidate(key, amount, priceUsd) {
   return Object.freeze({ key, amount, priceUsd })
@@ -133,4 +137,186 @@ test('shows only the Public EVM balance and leaves an unknown split unavailable'
       ]
     }).orderedRows[0]
   ).toMatchObject({ amount: null })
+})
+
+function managedEntry() {
+  const chainId = 'eip155:1'
+  const reference = `0x${'ab'.repeat(20)}`
+  const assetId = `${chainId}/erc20:${reference}`
+  const metadata = { name: 'Directory Token', symbol: 'DIR', decimals: 6 }
+  const token = {
+    assetId,
+    chainId,
+    reference,
+    metadata,
+    source: 'intents',
+    registered: false,
+    catalogAsset: {
+      protocolAssetId: 'nep141:directory.omft.near',
+      assetId,
+      chainId,
+      namespace: 'erc20',
+      reference,
+      blockchain: 'eth',
+      symbol: metadata.symbol,
+      decimals: metadata.decimals,
+      management: 'evm'
+    }
+  }
+  return {
+    token,
+    chain: {
+      chain: createInitialProductChainRegistry('mainnet').resolve(chainId),
+      status: 'ready',
+      assets: [],
+      errorCodes: []
+    }
+  }
+}
+
+test('includes searchable enabled-chain directory metadata without fabricating balances or hidden rows', () => {
+  const entry = managedEntry()
+  const hiddenReference = `0x${'cd'.repeat(20)}`
+  const hidden = {
+    ...entry.token,
+    assetId: `eip155:1/erc20:${hiddenReference}`,
+    reference: hiddenReference
+  }
+  const otherChain = {
+    ...entry.token,
+    assetId: `eip155:56/erc20:${entry.token.reference}`,
+    chainId: 'eip155:56'
+  }
+  const input = {
+    assets: [],
+    chains: [entry.chain],
+    catalog: [entry.token, hidden, otherChain],
+    hiddenAssetIds: new Set([hidden.assetId]),
+    zcashTotal: '0',
+    zcashEnabled: false,
+    zcashNetwork: 'mainnet',
+    zecPrice: 0,
+    prices: null,
+    selectedNetwork: 'eip155:1',
+    searchQuery: ''
+  }
+  expect(buildSendAssetSelectionModel(input).orderedRows).toEqual([
+    expect.objectContaining({ kind: 'catalog', key: entry.token.assetId, amount: null })
+  ])
+  expect(
+    buildSendAssetSelectionModel({
+      ...input,
+      hiddenAssetIds: new Set([entry.token.assetId, hidden.assetId])
+    }).orderedRows
+  ).toEqual([])
+  expect(
+    buildSendAssetSelectionModel({ ...input, searchQuery: entry.token.reference }).orderedRows
+  ).toHaveLength(1)
+})
+
+test('prepares only the selected token using a verified definition and a real Public balance including zero', async () => {
+  const entry = managedEntry()
+  const record = {
+    assetId: entry.token.assetId,
+    chainId: entry.token.chainId,
+    contractAddress: entry.token.reference,
+    metadata: entry.token.metadata,
+    source: 'intents-catalog',
+    addedAt: 1
+  }
+  const calls = []
+  const input = {
+    entry,
+    isCurrent: () => true,
+    register: async token => {
+      calls.push(['register', token.assetId])
+      return record
+    },
+    readPublicBalance: async (chainId, contract) => {
+      calls.push(['balance', chainId, contract])
+      return '0'
+    }
+  }
+  const selected = await prepareManagedSendAsset(input)
+  expect(calls).toEqual([
+    ['register', entry.token.assetId],
+    ['balance', entry.token.chainId, entry.token.reference]
+  ])
+  expect(selected.asset.asset.id).toBe(entry.token.assetId)
+  expect(resolveEvmSendAvailableRaw(selected.asset.balance, 'main')).toBe('0')
+  expect(resolveEvmSendAvailableRaw(selected.asset.balance, 'private')).toBeNull()
+  expect(resolveSendAssetSelection([], entry.token.assetId, selected)).toBe(selected)
+  const loading = {
+    ...selected,
+    asset: { ...selected.asset, balance: { ...selected.asset.balance, mainRaw: undefined } }
+  }
+  expect(resolveSendAssetSelection([loading], entry.token.assetId, selected)).toBe(selected)
+  const old = { ...selected, asset: { ...selected.asset, updatedAt: selected.asset.updatedAt - 1 } }
+  expect(resolveSendAssetSelection([old], entry.token.assetId, selected)).toBe(selected)
+  const refreshed = {
+    ...selected,
+    asset: {
+      ...selected.asset,
+      updatedAt: selected.asset.updatedAt + 1,
+      balance: { ...selected.asset.balance, mainRaw: '100' }
+    }
+  }
+  expect(resolveSendAssetSelection([refreshed], entry.token.assetId, selected)).toBe(refreshed)
+  calls.length = 0
+  await expect(
+    prepareManagedSendAsset({
+      ...input,
+      register: async () => ({ ...record, metadata: { ...record.metadata, decimals: 18 } })
+    })
+  ).rejects.toThrow('does not match')
+  expect(calls).toEqual([])
+})
+
+test('discards stale directory selections and propagates a failed balance read instead of selecting zero', async () => {
+  const entry = managedEntry()
+  const record = {
+    assetId: entry.token.assetId,
+    chainId: entry.token.chainId,
+    contractAddress: entry.token.reference,
+    metadata: entry.token.metadata,
+    source: 'intents-catalog',
+    addedAt: 1
+  }
+  let current = true
+  let balanceCalls = 0
+  const input = {
+    entry,
+    isCurrent: () => current,
+    register: async () => {
+      current = false
+      return record
+    },
+    readPublicBalance: async () => {
+      balanceCalls++
+      return '100'
+    }
+  }
+  expect(await prepareManagedSendAsset(input)).toBeNull()
+  expect(balanceCalls).toBe(0)
+  current = true
+  expect(
+    await prepareManagedSendAsset({
+      ...input,
+      register: async () => record,
+      readPublicBalance: async () => {
+        current = false
+        return '100'
+      }
+    })
+  ).toBeNull()
+  current = true
+  await expect(
+    prepareManagedSendAsset({
+      ...input,
+      register: async () => record,
+      readPublicBalance: async () => {
+        throw new Error('RPC offline')
+      }
+    })
+  ).rejects.toThrow('RPC offline')
 })

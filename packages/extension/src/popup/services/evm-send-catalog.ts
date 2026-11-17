@@ -1,13 +1,9 @@
-import type { ChainDefinition } from '@/core/chains/registry'
+import { parseAssetId, type ChainDefinition } from '@/core/chains/registry'
+import { RHEA_SWAP_CHAIN_CATALOG } from '@/core/services/rhea-swap'
+import { getSolanaNetworkConfig } from '@/config/networks'
 import { getConfidentialEvmChain } from '@/core/services/rhea-swap/rhea-confidential-support'
-import {
-  getCrossChainSendTokenGroup,
-  getCrossChainSendWalletAssetId,
-  isCrossChainSendDestination,
-  type CrossChainSendCapabilities
-} from './cross-chain-send-assets'
+import { resolveCrossChainSendDestinationSupport } from './cross-chain-send-assets'
 import { getEnabledSwapChains } from './swap-catalog-loading'
-import { getSwapDestinationTokens } from './swap-token-selection'
 import { rheaSwapClient } from './rhea-swap-client'
 
 export function evmSendCatalogRequest(chain: Pick<ChainDefinition, 'id' | 'family' | 'network'>) {
@@ -31,45 +27,62 @@ export async function loadEvmSendCatalog(
   if (isCurrent()) onSettled()
 }
 
-export async function loadEvmSendDestinationAsset(
+/** Reads already available single-chain catalogs without starting network requests. */
+export function readEvmSendDestinationSupport(
+  input: Parameters<typeof resolveCrossChainSendDestinationSupport>[0],
+  client: Pick<typeof rheaSwapClient, 'readCachedTokens'> = rheaSwapClient
+) {
+  const local = resolveCrossChainSendDestinationSupport(input)
+  if (local.status !== 'unknown' || !input.sourceAssetId) return local
+  let sourceChainId: string
+  try {
+    sourceChainId = parseAssetId(input.sourceAssetId).chainId
+  } catch {
+    return local
+  }
+  const descriptorFor = (chainId: string) =>
+    RHEA_SWAP_CHAIN_CATALOG.find(chain =>
+      chain.walletFamily === 'evm'
+        ? chainId === `eip155:${chain.apiChainId}`
+        : chain.walletFamily === 'solana' && chainId === getSolanaNetworkConfig('mainnet').chainId
+    )
+  const source = descriptorFor(sourceChainId)
+  const destination = descriptorFor(input.destinationChainId)
+  if (!source || !destination) return local
+  return resolveCrossChainSendDestinationSupport({
+    ...input,
+    sourceCatalog:
+      input.sourceCatalog ??
+      client.readCachedTokens({
+        direction: 'from',
+        tokenListChainIds: [source.tokenListChainId]
+      }),
+    destinationCatalog:
+      input.destinationCatalog ??
+      client.readCachedTokens({
+        direction: 'cross-chain-to',
+        tokenListChainIds: [destination.tokenListChainId]
+      })
+  })
+}
+
+/** Hydrates shared disk caches in the background; this never fetches catalogs. */
+export async function hydrateEvmSendDestinationCatalogs(
   input: Readonly<{
     sourceChain: ChainDefinition
-    sourceAssetId: string
-    destinationChain: ChainDefinition
-    capabilities: CrossChainSendCapabilities
+    destinationChains: readonly ChainDefinition[]
   }>,
-  client: Pick<typeof rheaSwapClient, 'listTokens'> = rheaSwapClient
-): Promise<string | null> {
+  client: Pick<typeof rheaSwapClient, 'hydrateCachedTokens'> = rheaSwapClient
+): Promise<void> {
   const source = getEnabledSwapChains([input.sourceChain])[0]
-  const destination = getEnabledSwapChains([input.destinationChain])[0]
-  if (!source || !destination) return null
-  const sourceCatalog = await client.listTokens({
-    direction: 'from',
-    tokenListChainIds: [source.tokenListChainId]
-  })
-  const sourceToken = sourceCatalog.tokens.find(
-    token =>
-      token.rheaChainId === source.apiChainId &&
-      getCrossChainSendWalletAssetId(token) === input.sourceAssetId
-  )
-  if (!sourceToken || !getCrossChainSendTokenGroup(sourceToken)) {
-    if (sourceCatalog.failedChainIds.includes(source.tokenListChainId)) {
-      throw new Error(`Unable to load tokens on ${input.sourceChain.displayName}`)
-    }
-    return null
-  }
-  const targetCatalog = await client.listTokens({
-    direction: 'cross-chain-to',
-    tokenListChainIds: [destination.tokenListChainId]
-  })
-  const tokens = getSwapDestinationTokens(sourceToken, sourceCatalog.tokens, targetCatalog.tokens)
-  const target = tokens.find(
-    token =>
-      token.rheaChainId === destination.apiChainId &&
-      isCrossChainSendDestination(sourceToken, token, input.capabilities)
-  )
-  if (!target && targetCatalog.failedChainIds.includes(destination.tokenListChainId)) {
-    throw new Error(`Unable to load tokens on ${input.destinationChain.displayName}`)
-  }
-  return target ? getCrossChainSendWalletAssetId(target) : null
+  if (!source) return
+  await Promise.allSettled([
+    client.hydrateCachedTokens({ direction: 'from', tokenListChainIds: [source.tokenListChainId] }),
+    ...getEnabledSwapChains(input.destinationChains).map(destination =>
+      client.hydrateCachedTokens({
+        direction: 'cross-chain-to',
+        tokenListChainIds: [destination.tokenListChainId]
+      })
+    )
+  ])
 }

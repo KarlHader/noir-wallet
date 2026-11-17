@@ -180,6 +180,7 @@ import {
   createBackgroundRheaSwapService,
   readBackgroundRheaSwapCatalog,
   hydrateBackgroundRheaSwapCatalog,
+  prewarmBackgroundRheaSwapCatalog,
   getCachedBackgroundRheaSwapTokens,
   readRheaZcashTransferDeadline
 } from './rhea-swap'
@@ -1562,6 +1563,19 @@ function getPortfolioSwapChainIds(): readonly number[] {
   ).map(chain => chain.tokenListChainId)
 }
 
+function getStartupSwapChainIds(): readonly number[] {
+  const enabled = new Set(getPortfolioSwapChainIds())
+  for (const chain of RHEA_SWAP_CHAIN_CATALOG) {
+    if (
+      chain.walletFamily === 'zcash' ||
+      (chain.walletFamily === 'bitcoin' && bitcoinFeatureRuntimePolicy.newOperationsEnabled)
+    ) {
+      enabled.add(chain.tokenListChainId)
+    }
+  }
+  return [...enabled]
+}
+
 function refreshIntentsProtocolAssets(force = false): Promise<void> {
   if (
     DEFAULT_NETWORK !== 'mainnet' ||
@@ -2138,6 +2152,22 @@ const multichainStartupReady = runtimeNetworkReady.then(async () => {
       tokenListChainIds: getPortfolioSwapChainIds()
     })
   await scheduleMultichainRuntimeReload()
+  if (DEFAULT_NETWORK === 'mainnet' && rheaSwapService) {
+    void prewarmBackgroundRheaSwapCatalog(getStartupSwapChainIds()).catch(error => {
+      console.warn(
+        '[RHEA Swap] Token catalog prewarm failed:',
+        error instanceof Error ? error.name : 'UnknownError'
+      )
+    })
+  }
+  if (DEFAULT_NETWORK === 'mainnet') {
+    void refreshBackgroundSwapCatalog().catch(error => {
+      console.warn(
+        '[Intents assets] Startup token catalog prewarm failed:',
+        error instanceof Error ? error.name : 'UnknownError'
+      )
+    })
+  }
 })
 
 function rheaSignedRecoveryJobs() {

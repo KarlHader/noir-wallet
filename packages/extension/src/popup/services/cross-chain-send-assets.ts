@@ -1,5 +1,9 @@
 import { getEvmNetworkConfigs, getSolanaNetworkConfig } from '@/config/networks'
-import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
+import {
+  RHEA_SWAP_CHAIN_CATALOG,
+  type RheaSwapCatalogResult,
+  type RheaSwapToken
+} from '@/core/services/rhea-swap'
 import { parseSolanaPublicKey } from '@/core/chains/solana'
 import {
   createAssetRegistry,
@@ -251,6 +255,121 @@ export function isCrossChainSendDestination(
   const group = getCrossChainSendTokenGroup(source)
   if (!group || getCrossChainSendTokenGroup(destination) !== group) return false
   return isCrossChainSendChainEnabled(destination, capabilities)
+}
+
+export interface CrossChainSendDestinationSupport {
+  readonly status: 'available' | 'unavailable' | 'unknown'
+  readonly destinationAssetId: string | null
+  readonly disabledReason?: string
+}
+
+/** Resolves asset identity only; a quote still determines route availability. */
+export function resolveCrossChainSendDestinationSupport(
+  input: Readonly<{
+    sourceAssetId: string | null
+    sourceToken?: RheaSwapToken | null
+    destinationChainId: string
+    sourceCatalog?: RheaSwapCatalogResult | null
+    destinationCatalog?: RheaSwapCatalogResult | null
+    capabilities?: CrossChainSendCapabilities
+  }>
+): CrossChainSendDestinationSupport {
+  const unknown: CrossChainSendDestinationSupport = {
+    status: 'unknown',
+    destinationAssetId: null
+  }
+  if (!input.sourceAssetId) return unknown
+  let source: ReturnType<typeof parseAssetId>
+  try {
+    source = parseAssetId(input.sourceAssetId)
+  } catch {
+    return unknown
+  }
+  const sourceAssetId =
+    source.namespace === 'erc20'
+      ? `${source.chainId}/erc20:${source.reference.toLowerCase()}`
+      : source.id
+  if (source.chainId === input.destinationChainId)
+    return { status: 'available', destinationAssetId: sourceAssetId }
+  const unavailable: CrossChainSendDestinationSupport = {
+    status: 'unavailable',
+    destinationAssetId: null,
+    disabledReason: 'Same asset unavailable'
+  }
+  const capabilities = input.capabilities ?? { evm: true, solana: true }
+  const descriptorFor = (chainId: string) =>
+    RHEA_SWAP_CHAIN_CATALOG.find(chain =>
+      chain.walletFamily === 'evm'
+        ? chainId === `eip155:${chain.apiChainId}`
+        : chain.walletFamily === 'solana' && chainId === getSolanaNetworkConfig('mainnet').chainId
+    )
+  const sourceDescriptor = descriptorFor(source.chainId)
+  const destinationDescriptor = descriptorFor(input.destinationChainId)
+  const enabled = (descriptor: typeof sourceDescriptor) =>
+    descriptor?.walletFamily === 'evm'
+      ? capabilities.evm
+      : descriptor?.walletFamily === 'solana' && capabilities.solana
+  if (
+    !sourceDescriptor ||
+    !destinationDescriptor ||
+    !enabled(sourceDescriptor) ||
+    !enabled(destinationDescriptor)
+  )
+    return unavailable
+
+  // Bundled canonical identities are authoritative for the supported native/USDC set.
+  const canonicalGroup = getCrossChainSendAssetGroup(source)
+  if (canonicalGroup) {
+    const destinationAssetId = getCrossChainSendDestinationAssetId(
+      input.destinationChainId,
+      canonicalGroup
+    )
+    return destinationAssetId ? { status: 'available', destinationAssetId } : unavailable
+  }
+
+  const complete = (
+    catalog: RheaSwapCatalogResult | null | undefined,
+    descriptor: NonNullable<typeof sourceDescriptor>
+  ): catalog is RheaSwapCatalogResult =>
+    Boolean(
+      catalog &&
+      catalog.failedChainIds.length === 0 &&
+      catalog.tokens.length > 0 &&
+      catalog.tokens.every(
+        token =>
+          token.rheaChainId === descriptor.apiChainId &&
+          token.tokenListChainId === descriptor.tokenListChainId &&
+          !token.isDisplaySeed
+      )
+    )
+  const providedSource = input.sourceToken
+  const sourceToken =
+    providedSource &&
+    !providedSource.isDisplaySeed &&
+    providedSource.rheaChainId === sourceDescriptor.apiChainId &&
+    providedSource.tokenListChainId === sourceDescriptor.tokenListChainId &&
+    getCrossChainSendWalletAssetId(providedSource) === sourceAssetId
+      ? providedSource
+      : complete(input.sourceCatalog, sourceDescriptor)
+        ? input.sourceCatalog.tokens.find(
+            token => getCrossChainSendWalletAssetId(token) === sourceAssetId
+          )
+        : null
+  if (
+    !sourceToken ||
+    !getCrossChainSendTokenGroup(sourceToken) ||
+    (input.sourceCatalog && !complete(input.sourceCatalog, sourceDescriptor)) ||
+    !complete(input.destinationCatalog, destinationDescriptor)
+  )
+    return unknown
+  const destination = input.destinationCatalog.tokens.find(
+    token =>
+      token.assetId === sourceToken.assetId &&
+      isCrossChainSendDestination(sourceToken, token, capabilities)
+  )
+  return destination
+    ? { status: 'available', destinationAssetId: getCrossChainSendWalletAssetId(destination) }
+    : unavailable
 }
 
 export function getCrossChainSendRouteCost(

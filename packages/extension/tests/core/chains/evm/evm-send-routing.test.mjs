@@ -15,7 +15,7 @@ import {
 import {
   evmSendCatalogRequest,
   loadEvmSendCatalog,
-  loadEvmSendDestinationAsset
+  readEvmSendDestinationSupport
 } from '../../../../src/popup/services/evm-send-catalog.ts'
 import { createRheaSwapClient } from '../../../../src/popup/services/rhea-swap-client.ts'
 import {
@@ -29,6 +29,7 @@ import {
   RheaSwapService
 } from '../../../../src/core/services/rhea-swap/rhea-swap-service.ts'
 import { RheaSwapCatalogClient } from '../../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import { RHEA_SWAP_TOKEN_CATALOG_TTL_MS } from '../../../../src/core/services/rhea-swap/rhea-swap-model.ts'
 import { createEvmWalletClient } from '../../../../src/popup/services/evm-wallet-client.ts'
 
 const chain = { id: 'eip155:1', family: 'evm', network: { kind: 'mainnet' } }
@@ -307,7 +308,7 @@ it('accepts a same-address transfer review while rejecting a falsely marked self
   )
 })
 
-it('normalizes and shares ten-minute Send catalogs while allowing a forced retry', async () => {
+it('normalizes and shares cached Send catalogs while allowing a forced retry', async () => {
   let now = 0
   let requests = 0
   const client = createRheaSwapClient(
@@ -338,7 +339,7 @@ it('normalizes and shares ten-minute Send catalogs while allowing a forced retry
   assert.equal(support(client.readCachedTokens(evmSendCatalogRequest(chain))), 'supported')
   await client.listTokens(normalized)
   assert.equal(requests, 2)
-  now = 10 * 60 * 1000
+  now = RHEA_SWAP_TOKEN_CATALOG_TTL_MS
   assert.equal(client.readCachedTokens(request), null)
   await client.listTokens(normalized)
   assert.equal(requests, 4)
@@ -397,7 +398,7 @@ it('does not let SDK row filtering prove exclusion or cache an empty/metadata-in
   assert.equal(support(supported), 'supported')
   await service.listTokens(request)
   assert.equal(calls, 4)
-  now = 600_000
+  now = RHEA_SWAP_TOKEN_CATALOG_TTL_MS
   await service.listTokens(request)
   assert.equal(calls, 5)
 })
@@ -429,43 +430,52 @@ it('ignores a previous context completion after switching account, network, or a
   assert.deepEqual(applied, ['new'])
 })
 
-it('resolves Send destinations only from the selected chain and exact source identity', async () => {
-  const destinationChain = { ...chain, id: 'eip155:8453', displayName: 'Base' }
-  const target = token({
-    assetId: 'nep141:base.omft.near',
-    blockchain: 'base',
-    rheaChainId: '8453',
-    tokenListChainId: 8453
+it('reads Send network support from existing single-chain caches without fetching catalogs', () => {
+  const source = token({
+    assetId: 'nep141:custom.token',
+    isNative: false,
+    contractAddress: contract,
+    rheaAddress: contract
   })
-  const input = {
-    sourceChain: chain,
-    sourceAssetId: native.id,
-    destinationChain,
-    capabilities: { evm: true, solana: false }
+  const target = {
+    ...source,
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base',
+    contractAddress: `0x${'cd'.repeat(20)}`,
+    rheaAddress: `0x${'cd'.repeat(20)}`
   }
-  const requests = []
-  let destination = catalog(target)
+  const reads = []
+  let targetCatalog = catalog(target)
   const client = {
-    listTokens: async request => {
-      requests.push(request)
-      return request.direction === 'from' ? catalog(token()) : destination
+    readCachedTokens: request => {
+      reads.push(request)
+      return request.direction === 'from' ? catalog(source) : targetCatalog
     }
   }
-  assert.equal(await loadEvmSendDestinationAsset(input, client), 'eip155:8453/slip44:60')
-  assert.deepEqual(requests, [
+  const input = { sourceAssetId: erc20.id, destinationChainId: 'eip155:8453' }
+  assert.deepEqual(readEvmSendDestinationSupport(input, client), {
+    status: 'available',
+    destinationAssetId: `eip155:8453/erc20:0x${'cd'.repeat(20)}`
+  })
+  assert.deepEqual(reads, [
     { direction: 'from', tokenListChainIds: [1] },
     { direction: 'cross-chain-to', tokenListChainIds: [8453] }
   ])
-  requests.length = 0
+  targetCatalog = null
+  assert.equal(readEvmSendDestinationSupport(input, client).status, 'unknown')
+  reads.length = 0
   assert.equal(
-    await loadEvmSendDestinationAsset({ ...input, sourceAssetId: erc20.id }, client),
-    null
+    readEvmSendDestinationSupport(
+      {
+        sourceAssetId: native.id,
+        destinationChainId: 'eip155:56'
+      },
+      client
+    ).status,
+    'unavailable'
   )
-  assert.equal(requests.length, 1)
-  destination = catalog()
-  assert.equal(await loadEvmSendDestinationAsset(input, client), null)
-  destination = { tokens: [], failedChainIds: [8453] }
-  await assert.rejects(loadEvmSendDestinationAsset(input, client), /Unable to load tokens on Base/)
+  assert.deepEqual(reads, [])
 })
 
 it('prepares native and ERC-20 direct Max probes from PEA without a privacy quote or approval', async () => {

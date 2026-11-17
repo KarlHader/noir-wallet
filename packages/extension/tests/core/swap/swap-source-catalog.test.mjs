@@ -4,6 +4,7 @@ import { normalizeFromTokenList } from '@rhea-finance/cross-chain-aggregation-de
 import {
   MemoryRheaSwapQuoteSessionStore,
   RheaSwapService,
+  RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
 import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
@@ -210,9 +211,10 @@ it('retries a partially valid destination catalog and caches its repaired respon
     symbol: 'TWO'
   }
   let calls = 0
+  let now = 0
   const client = new RheaSwapCatalogClient({
     baseUrl: 'https://catalog.example',
-    now: () => 0,
+    now: () => now,
     retry: { maxRetries: 0 },
     fetch: async () => {
       calls++
@@ -237,4 +239,10 @@ it('retries a partially valid destination catalog and caches its repaired respon
   assert.deepEqual(repaired.failedChainIds, [])
   assert.equal((await service.listTokens(request)).tokens.length, 2)
   assert.equal(calls, 2)
+  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS - 1
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 2)
+  now += 1
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 3)
 })

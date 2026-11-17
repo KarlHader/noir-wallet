@@ -476,6 +476,17 @@ export async function readBackgroundRheaSwapCatalog(
   return result
 }
 
+export async function prewarmBackgroundRheaSwapCatalog(chainIds: readonly number[]): Promise<void> {
+  const unique = [...new Set(chainIds)]
+  for (let index = 0; index < unique.length; index += 2) {
+    const tokenListChainIds = unique.slice(index, index + 2)
+    await Promise.all([
+      readBackgroundRheaSwapCatalog({ direction: 'from', tokenListChainIds }),
+      readBackgroundRheaSwapCatalog({ direction: 'cross-chain-to', tokenListChainIds })
+    ])
+  }
+}
+
 export async function recordRheaSwapGraphBroadcast(graph: TransactionGraph): Promise<void> {
   const binding = graph.root.intent?.protocol
   if (!binding || binding.provider !== 'rhea-cross-chain-dex') return

@@ -20,15 +20,12 @@ import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targ
 import { receiveTargetsClient } from '@/popup/services/receive-targets-client'
 import { buildWalletSwapSourceBalances } from '@/popup/services/swap-page-model'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
-import type { UserEvmAssetRecord } from '@/core/chains/user-assets'
-import { userEvmAssetsClient } from '@/popup/services/user-evm-assets-client'
-import {
-  readCachedCuratedSwapTokens,
-  selectDefaultSwapTokens
-} from '@/popup/services/swap-curated-catalog'
+import { filterManuallyHiddenSwapTokens } from '@/popup/services/swap-token-visibility'
+import { useManagedTokenCatalog } from '@/popup/hooks/useManagedTokenCatalog'
 import {
   getSwapCatalogDisplaySeeds,
-  mergeTokenCatalogs
+  mergeTokenCatalogs,
+  readCachedTokenCatalogByChain
 } from '@/popup/services/swap-catalog-loading'
 
 interface SelectorFilter {
@@ -77,6 +74,7 @@ interface SwapTokenSelectorProps extends Omit<
   readonly scopeNetwork?: Network
   readonly openingWalletPointer?: Readonly<{ walletId: string | null; accountId: string | null }>
   readonly onScopeInvalidated?: () => void
+  readonly catalogDirection?: 'from' | 'cross-chain-to'
 }
 
 export function SwapTokenSelector({
@@ -89,6 +87,7 @@ export function SwapTokenSelector({
   scopeNetwork,
   openingWalletPointer,
   onScopeInvalidated,
+  catalogDirection,
   ...props
 }: SwapTokenSelectorProps) {
   const scopeInvalidated = useRef(false)
@@ -180,21 +179,22 @@ export function SwapTokenSelector({
     () => (chainIdsKey ? chainIdsKey.split(',').map(Number) : []),
     [chainIdsKey]
   )
-  const curatedRows = useMemo(() => readCachedCuratedSwapTokens(chainIds), [chainIds])
-  const [customAssets, setCustomAssets] = useState<readonly UserEvmAssetRecord[]>([])
   useEffect(() => {
-    let cancelled = false
-    setCustomAssets([])
-    void userEvmAssetsClient
-      .list()
-      .then(assets => {
-        if (!cancelled) setCustomAssets(assets)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [balanceScope?.scopeKey])
+    if (!catalogDirection || chainIds.length === 0) return
+    const cached = readCachedTokenCatalogByChain(catalogDirection, chainIds)
+    if (cached.length > 0)
+      startTransition(() => setTokens(current => mergeTokenCatalogs(current, cached)))
+  }, [catalogDirection, chainIds])
+  const activeNetwork = useWalletStore(state => state.currentNetwork)
+  const {
+    rows: managedRows,
+    hiddenAssetIds,
+    ready: managedReady
+  } = useManagedTokenCatalog({
+    network: scopeNetwork ?? activeNetwork,
+    walletId: props.accountScope?.walletId ?? balanceScope?.walletId ?? null,
+    accountId: props.accountScope?.accountId ?? balanceScope?.accountId ?? null
+  })
   const [receiveTargetsSnapshot, setReceiveTargetsSnapshot] = useState(() => ({
     scope: balanceScope?.scopeKey,
     value: balanceScope?.receiveTargets ?? null
@@ -217,8 +217,9 @@ export function SwapTokenSelector({
     scopedPortfolio?.scope.keyDomainId === walletId && scopedPortfolio.scope.accountId === accountId
       ? scopedPortfolio
       : null
-  const tokens = useMemo(() => {
+  const { tokens, defaultRoutes } = useMemo(() => {
     const configured = new Set(chainIds)
+    const defaultRoutes = new Set<string>()
     const catalog = catalogTokens.filter(token => !token.isDisplaySeed)
     const byRoute = new Map<string, RheaSwapToken>()
     for (const token of catalog) {
@@ -240,16 +241,23 @@ export function SwapTokenSelector({
         const walletToken = toWalletEvmQuoteToken(asset)
         if (!walletToken || !configured.has(walletToken.tokenListChainId)) continue
         const route = swapTokenAssetRoute(walletToken)
+        defaultRoutes.add(route)
         const preferred = preferWalletEvmQuoteToken(asset, byRoute.get(route))
         if (!preferred || byRoute.get(route) === preferred) continue
         held.push(preferred)
         byRoute.set(route, preferred)
       }
     }
-    const custom = customAssets.flatMap(asset => {
-      const token = toWalletEvmSwapToken(asset)
+    const managed = managedRows.flatMap(asset => {
+      const token = toWalletEvmSwapToken({
+        assetId: asset.assetId,
+        chainId: asset.chainId,
+        contractAddress: asset.reference,
+        metadata: asset.metadata
+      })
       if (!token || !configured.has(token.tokenListChainId)) return []
       const route = swapTokenAssetRoute(token)
+      defaultRoutes.add(route)
       if (byRoute.has(route)) return []
       byRoute.set(route, token)
       return [token]
@@ -263,11 +271,18 @@ export function SwapTokenSelector({
       byRoute.set(route, seed)
       return [seed]
     })
-    return mergeTokenCatalogs(catalog, held, custom, seeds)
-  }, [catalogTokens, chainIds, scopedAccountPortfolio, balanceScope, customAssets])
+    return { tokens: mergeTokenCatalogs(catalog, held, managed, seeds), defaultRoutes }
+  }, [catalogTokens, chainIds, scopedAccountPortfolio, balanceScope, managedRows])
+  const visibleTokens = useMemo(
+    () =>
+      !managedReady
+        ? tokens.filter(token => token.isNative)
+        : filterManuallyHiddenSwapTokens(tokens, hiddenAssetIds),
+    [tokens, hiddenAssetIds, managedReady]
+  )
   const localTokens = useMemo(
-    () => filterLocalTokens?.(tokens) ?? tokens,
-    [filterLocalTokens, tokens]
+    () => filterLocalTokens?.(visibleTokens) ?? visibleTokens,
+    [filterLocalTokens, visibleTokens]
   )
   const resolvedItems = useMemo(
     () =>
@@ -313,18 +328,19 @@ export function SwapTokenSelector({
     [resolvedItems.tokens, scopedPortfolio, scopedReceiveTargets, zcashAvailable, evmExecutionMode]
   )
   const defaultTokens = useMemo(
-    () => selectDefaultSwapTokens(resolvedItems.tokens, curatedRows, { balances, customAssets }),
-    [resolvedItems.tokens, curatedRows, balances, customAssets]
+    () =>
+      resolvedItems.tokens.filter(
+        token =>
+          token.isNative ||
+          defaultRoutes.has(swapTokenAssetRoute(token)) ||
+          (props.selectedToken && swapTokenKey(token) === swapTokenKey(props.selectedToken))
+      ),
+    [resolvedItems.tokens, defaultRoutes, props.selectedToken]
   )
   useEffect(() => {
     const { search, network } = filter
     const requestKey = `${network}:${search}`
-    if (
-      scopeInvalidated.current ||
-      !search ||
-      network === 'all' ||
-      loadedNetworks.current.has(network)
-    ) {
+    if (scopeInvalidated.current || !search || loadedNetworks.current.has(network)) {
       setLoadingNetwork(null)
       return
     }
@@ -332,9 +348,13 @@ export function SwapTokenSelector({
     setLoadingNetwork(network)
     setCatalogErrorKey(null)
     let received = false
+    const returnedNetworks = new Set<string>()
     const accept = (next: readonly RheaSwapToken[]) => {
       if (cancelled || scopeInvalidated.current) return
       received = true
+      for (const token of next) {
+        if (!token.isDisplaySeed) returnedNetworks.add(token.blockchain)
+      }
       if (next.length === 0) return
       startTransition(() => setTokens(current => mergeTokenCatalogs(current, next)))
     }
@@ -342,8 +362,17 @@ export function SwapTokenSelector({
       .current(filter, accept, () => cancelled || scopeInvalidated.current)
       .then(next => {
         if (cancelled || scopeInvalidated.current) return
-        loadedNetworks.current.add(network)
         if (!received) accept(next)
+        for (const returned of returnedNetworks) loadedNetworks.current.add(returned)
+        const availableNetworks = (props.availableNetworks ?? []).filter(
+          option => !option.disabledReason
+        )
+        if (
+          network === 'all' &&
+          availableNetworks.length > 0 &&
+          availableNetworks.every(option => returnedNetworks.has(option.id))
+        )
+          loadedNetworks.current.add('all')
       })
       .catch(() => {
         if (!cancelled && !scopeInvalidated.current) setCatalogErrorKey(requestKey)

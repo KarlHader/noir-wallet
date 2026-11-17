@@ -6,7 +6,7 @@ import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getAssetDomainRaw } from '@/popup/services/asset-domains'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import type { PortfolioReadModel } from '@/core/portfolio'
-import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
+import type { AssetPriceReadModel } from '@/core/prices'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import {
   DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS,
@@ -17,13 +17,49 @@ import {
   isSelectableChainFamily
 } from '@/popup/services/chain-selection-availability'
 import { sortTokenSelectorNetworks } from '@/popup/components/tokens/token-selector-chain-order'
+import {
+  createAssetRegistry,
+  createChainRegistry,
+  type AssetDefinitionInput
+} from '@/core/chains/registry'
+import { userEvmAssetToDefinition, type UserEvmAssetRecord } from '@/core/chains/user-assets'
+import type { ManagedTokenRow } from '@/popup/services/managed-token-list'
 
 export interface SendAsset {
   readonly asset: PortfolioReadModel['assets'][number]
   readonly chain: PortfolioReadModel['chains'][number]
 }
 
+export interface ManagedSendAsset {
+  readonly token: ManagedTokenRow
+  readonly chain: SendAsset['chain']
+}
+
+export function resolveSendAssetSelection(
+  assets: readonly SendAsset[],
+  selectedAssetId: string | null,
+  snapshot: SendAsset | null
+): SendAsset | null {
+  const live = assets.find(entry => entry.asset.asset.id === selectedAssetId) ?? null
+  if (!snapshot || snapshot.asset.asset.id !== selectedAssetId) return live
+  if (!live) return snapshot
+  if (
+    snapshot.chain.chain.family === 'evm' &&
+    snapshot.asset.balance.mainRaw !== undefined &&
+    (live.asset.balance.mainRaw === undefined || live.asset.updatedAt < snapshot.asset.updatedAt)
+  )
+    return snapshot
+  return live
+}
+
 export type SendAssetSelectionRow =
+  | Readonly<{
+      kind: 'catalog'
+      key: string
+      amount: null
+      priceUsd: string | null
+      entry: ManagedSendAsset
+    }>
   | Readonly<{
       kind: 'portfolio'
       key: string
@@ -87,6 +123,9 @@ export function sortSendAssetsByBalanceValue<T extends SendAssetOrderCandidate>(
 
 export function buildSendAssetSelectionModel(input: {
   readonly assets: readonly SendAsset[]
+  readonly catalog?: readonly ManagedTokenRow[]
+  readonly chains?: readonly SendAsset['chain'][]
+  readonly hiddenAssetIds?: ReadonlySet<string>
   readonly zcashTotal: string
   readonly zcashEnabled: boolean
   readonly zcashNetwork: 'mainnet' | 'testnet'
@@ -102,9 +141,27 @@ export function buildSendAssetSelectionModel(input: {
   orderedRows: readonly SendAssetSelectionRow[]
 }> {
   const enabledFlags = input.enabledFlags ?? DEFAULT_ENABLED_CHAIN_FEATURE_FLAGS
-  const selectableAssets = input.assets.filter(entry =>
-    isSelectableChainFamily(entry.chain.chain.family, enabledFlags)
+  const selectableAssets = input.assets.filter(
+    entry =>
+      isSelectableChainFamily(entry.chain.chain.family, enabledFlags) &&
+      !input.hiddenAssetIds?.has(entry.asset.asset.id)
   )
+  const chainById = new Map<string, SendAsset['chain']>(
+    (input.chains ?? []).map(chain => [chain.chain.id, chain])
+  )
+  const portfolioIds = new Set<string>(selectableAssets.map(entry => entry.asset.asset.id))
+  const catalogEntries: ManagedSendAsset[] = (input.catalog ?? []).flatMap(token => {
+    const chain = chainById.get(token.chainId)
+    return chain?.chain.family === 'evm' &&
+      chain.chain.capabilities.transaction.status === 'available' &&
+      isSelectableChainFamily('evm', enabledFlags) &&
+      !portfolioIds.has(token.assetId) &&
+      !input.hiddenAssetIds?.has(token.assetId) &&
+      /^0x[0-9a-fA-F]{40}$/.test(token.reference) &&
+      token.assetId === `${token.chainId}/erc20:${token.reference.toLowerCase()}`
+      ? [{ token, chain }]
+      : []
+  })
   const networkOptions = new Map<string, Omit<SendAssetNetworkOption, 'id'>>(
     input.zcashEnabled && isSelectableChainFamily('zcash', enabledFlags)
       ? [
@@ -118,7 +175,7 @@ export function buildSendAssetSelectionModel(input: {
         ]
       : []
   )
-  for (const entry of selectableAssets) {
+  for (const entry of [...selectableAssets, ...catalogEntries]) {
     networkOptions.set(entry.chain.chain.id, {
       label: entry.chain.chain.displayName,
       iconAlias: resolveChainIconAlias(
@@ -146,6 +203,10 @@ export function buildSendAssetSelectionModel(input: {
   )
   const selectedNetwork = selectedNetworkOption ? input.selectedNetwork : 'all'
   const query = input.searchQuery.trim().toLowerCase()
+  const searchRanks = new Map<string, number>()
+  const priceById = new Map(
+    input.prices?.quotes.map(quote => [quote.assetId, quote.priceUsd]) ?? []
+  )
   const zcashRank = rankTokenSearchFields(
     { symbol: 'ZEC', name: 'Zcash', searchTerms: ['Zcash Testnet'] },
     query
@@ -155,8 +216,9 @@ export function buildSendAssetSelectionModel(input: {
     isSelectableChainFamily('zcash', enabledFlags) &&
     (selectedNetwork === 'all' || selectedNetwork === 'zcash') &&
     zcashRank < 99
-  const assetRank = (entry: SendAsset) =>
-    rankTokenSearchFields(
+  const assetRank = (entry: SendAsset) => {
+    if (!query) return 0
+    const rank = rankTokenSearchFields(
       {
         symbol: entry.asset.metadata.symbol,
         name: entry.asset.metadata.name,
@@ -167,12 +229,35 @@ export function buildSendAssetSelectionModel(input: {
       },
       query
     )
+    searchRanks.set(entry.asset.asset.id, rank)
+    return rank
+  }
   const filteredAssets = selectableAssets.filter(entry => {
     if (selectedNetwork !== 'all' && selectedNetwork !== entry.chain.chain.id) {
       return false
     }
     return assetRank(entry) < 99
   })
+  const catalogRank = (entry: ManagedSendAsset) => {
+    if (!query) return 0
+    const rank = rankTokenSearchFields(
+      {
+        symbol: entry.token.metadata.symbol,
+        name: entry.token.metadata.name,
+        contractAddress: entry.token.reference,
+        assetId: entry.token.assetId,
+        searchTerms: [entry.chain.chain.displayName]
+      },
+      query
+    )
+    searchRanks.set(entry.token.assetId, rank)
+    return rank
+  }
+  const filteredCatalog = catalogEntries.filter(
+    entry =>
+      (selectedNetwork === 'all' || selectedNetwork === entry.chain.chain.id) &&
+      catalogRank(entry) < 99
+  )
   const orderedRows = [
     ...sortSendAssetsByBalanceValue<SendAssetSelectionRow>([
       ...filteredAssets.map(entry => ({
@@ -184,7 +269,14 @@ export function buildSendAssetSelectionModel(input: {
             ? null
             : formatBaseUnitDecimalAmount(raw, entry.asset.metadata.decimals)
         })(),
-        priceUsd: findAssetPrice(input.prices, entry.asset.asset.id)?.priceUsd ?? null,
+        priceUsd: priceById.get(entry.asset.asset.id) ?? null,
+        entry
+      })),
+      ...filteredCatalog.map(entry => ({
+        kind: 'catalog' as const,
+        key: entry.token.assetId,
+        amount: null,
+        priceUsd: priceById.get(entry.token.assetId) ?? null,
         entry
       })),
       ...(zcashMatches
@@ -201,7 +293,7 @@ export function buildSendAssetSelectionModel(input: {
   ].sort((left, right) => {
     if (!query) return 0
     const rank = (row: SendAssetSelectionRow) =>
-      row.kind === 'zcash' ? zcashRank : assetRank(row.entry)
+      row.kind === 'zcash' ? zcashRank : (searchRanks.get(row.key) ?? 99)
     return rank(left) - rank(right)
   })
   return Object.freeze({
@@ -210,5 +302,89 @@ export function buildSendAssetSelectionModel(input: {
     selectedNetworkLabel:
       selectedNetwork === 'all' ? 'All Networks' : (selectedNetworkOption?.label ?? 'All Networks'),
     orderedRows
+  })
+}
+
+/** Prepare only the chosen directory token; an absent balance is never a zero balance. */
+export async function prepareManagedSendAsset(input: {
+  readonly entry: ManagedSendAsset
+  readonly isCurrent: () => boolean
+  readonly register: (
+    token: NonNullable<ManagedTokenRow['catalogAsset']>
+  ) => Promise<UserEvmAssetRecord | null>
+  readonly readPublicBalance: (chainId: string, contract: string) => Promise<string>
+}): Promise<SendAsset | null> {
+  if (!input.isCurrent()) return null
+  const { token, chain } = input.entry
+  if (chain.chain.family !== 'evm' || chain.chain.id !== token.chainId)
+    throw new Error('Selected token network changed')
+  let definition: AssetDefinitionInput = {
+    chainId: token.chainId,
+    namespace: 'erc20',
+    reference: token.reference,
+    kind: 'token',
+    metadata: token.metadata,
+    source:
+      token.source === 'custom'
+        ? 'user-added'
+        : token.source === 'bundled'
+          ? 'bundled'
+          : 'discovered',
+    verification:
+      token.source === 'custom'
+        ? 'user-approved'
+        : token.source === 'bundled'
+          ? 'trusted'
+          : 'unverified'
+  }
+  if (!token.registered) {
+    if (token.catalogAsset?.management !== 'evm')
+      throw new Error('Token registration is unavailable')
+    if (
+      token.catalogAsset.assetId !== token.assetId ||
+      token.catalogAsset.chainId !== token.chainId ||
+      token.catalogAsset.reference.toLowerCase() !== token.reference.toLowerCase() ||
+      token.catalogAsset.decimals !== token.metadata.decimals
+    )
+      throw new Error('Selected token registration does not match the directory')
+    const registered = await input.register(token.catalogAsset)
+    if (!input.isCurrent()) return null
+    if (
+      !registered ||
+      registered.assetId !== token.assetId ||
+      registered.metadata.decimals !== token.metadata.decimals
+    )
+      throw new Error('Selected token registration does not match the directory')
+    definition = userEvmAssetToDefinition(registered)
+  }
+  const registry = createAssetRegistry(createChainRegistry([chain.chain]), [definition])
+  const validated = registry.inspect(token.assetId)
+  if (!validated || validated.asset.id !== token.assetId) throw new Error('Invalid selected token')
+  if (!input.isCurrent()) return null
+  const raw = await input.readPublicBalance(chain.chain.id, validated.asset.reference)
+  if (!input.isCurrent()) return null
+  if (!/^(0|[1-9][0-9]{0,77})$/.test(raw) || BigInt(raw) > (1n << 256n) - 1n)
+    throw new Error('Invalid token balance response')
+  return Object.freeze({
+    chain,
+    asset: Object.freeze({
+      asset: validated.asset,
+      metadata: validated.metadata,
+      source: validated.source,
+      // This is a temporary Public-send projection, never a persisted portfolio total.
+      // Private/Confidential fields remain absent until their owner reads them.
+      balance: Object.freeze({
+        totalRaw: raw,
+        spendableRaw: raw,
+        availableRaw: raw,
+        mainRaw: raw,
+        pendingRaw: '0'
+      }),
+      chainAccountIds: Object.freeze([
+        ...new Set(chain.assets.flatMap(asset => asset.chainAccountIds))
+      ]),
+      freshness: 'fresh',
+      updatedAt: Date.now()
+    })
   })
 }

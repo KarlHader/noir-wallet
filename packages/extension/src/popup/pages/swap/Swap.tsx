@@ -121,6 +121,7 @@ import {
   resolveCrossChainSendRouteAssetDisplay,
   resolveCrossChainSendRouteDraft
 } from '@/popup/services/cross-chain-send-assets'
+import { readEvmSendDestinationSupport } from '@/popup/services/evm-send-catalog'
 import {
   FundingSourceSelector,
   fundingSourceSheetClassName
@@ -876,6 +877,52 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     requestedDestinationAssetId,
     requestedSendDestinationChainId
   ])
+  const [sendSupportRevision, refreshSendSupport] = useState(0)
+  const sendSupportCacheKey = JSON.stringify([
+    crossChainSendRequested,
+    walletSourcesScope,
+    swap.tokenIn?.tokenListChainId,
+    sendDestinationCandidates.map(item => item.descriptor.tokenListChainId)
+  ])
+  useEffect(() => {
+    const [enabled, , sourceChainId, destinationChainIds] = JSON.parse(sendSupportCacheKey) as [
+      boolean,
+      string | null,
+      number | null,
+      number[]
+    ]
+    if (!enabled || sourceChainId === null) return
+    let cancelled = false
+    void Promise.allSettled([
+      rheaSwapClient.hydrateCachedTokens({ direction: 'from', tokenListChainIds: [sourceChainId] }),
+      ...destinationChainIds.map(chainId =>
+        rheaSwapClient.hydrateCachedTokens({
+          direction: 'cross-chain-to',
+          tokenListChainIds: [chainId]
+        })
+      )
+    ]).then(() => {
+      if (!cancelled) refreshSendSupport(revision => revision + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sendSupportCacheKey])
+  const sendDestinationSupport = useMemo(
+    () =>
+      new Map(
+        sendDestinationCandidates.map(item => [
+          item.chain.chain.id,
+          readEvmSendDestinationSupport({
+            sourceAssetId: sendSourceAssetId,
+            sourceToken: swap.tokenIn,
+            destinationChainId: item.chain.chain.id,
+            capabilities: CROSS_CHAIN_SEND_CAPABILITIES
+          })
+        ])
+      ),
+    [sendDestinationCandidates, sendSourceAssetId, swap.tokenIn, sendSupportRevision]
+  )
   const [sendDestinationSelection, setSendDestinationSelection] = useState<{
     scope: string
     chainId: string
@@ -6365,6 +6412,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   ? filterSources(swap.sourceTokens)
                   : filterDestinations(swap.destinationTokens)
               }
+              catalogDirection={type === 'in' ? 'from' : 'cross-chain-to'}
               loadTokens={(filter, onTokens, isCancelled) =>
                 swap
                   .loadSelectorTokens(
@@ -6373,7 +6421,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                       onTokens(type === 'out' ? filterDestinations(tokens) : filterSources(tokens)),
                     isCancelled,
                     getEnabledSwapChains(selectionSwapChains)
-                      .filter(chain => chain.blockchain === filter.network)
+                      .filter(
+                        chain => filter.network === 'all' || chain.blockchain === filter.network
+                      )
                       .map(chain => chain.tokenListChainId)
                   )
                   .then(tokens =>
@@ -7926,7 +7976,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }))
         ],
         option => ({ id: option.chainId, name: option.name })
-      )
+      ).map(option => {
+        const support = sendDestinationSupport.get(option.chainId) ?? {
+          status: option.chainId === sourceChain?.chain.id ? 'available' : 'unknown'
+        }
+        return {
+          ...option,
+          disabled: support.status === 'unavailable',
+          note: 'disabledReason' in support ? support.disabledReason : undefined,
+          priority: support.status === 'available' ? 0 : support.status === 'unknown' ? 1 : 2
+        }
+      })
       const destinationOptions =
         destinationChain &&
         requestedDestinationChainId &&
@@ -8779,13 +8839,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 )
             )
             .map(row => shieldSourceSelectionItem(row, balancesHidden))}
-          lowBalanceKeys={
-            new Set(
-              visibleShieldPickerRows
-                .filter(row => BigInt(row.availableRaw) <= 0n)
-                .map(row => row.key)
-            )
-          }
           selectedKey={
             shieldZecSource === 'native-shielded'
               ? SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID

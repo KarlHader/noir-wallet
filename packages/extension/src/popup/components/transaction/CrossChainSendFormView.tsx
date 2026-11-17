@@ -266,6 +266,7 @@ export function CrossChainSendFormView({
         open={networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={destinationOptions}
+        enabledFirst
         loading={destinationNetworksLoading}
         allowSelectionWhileLoading
         selectedId={tokenOut?.rheaChainId ?? selectedDestinationChainId ?? null}

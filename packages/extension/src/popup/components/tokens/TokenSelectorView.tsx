@@ -10,7 +10,6 @@ import {
   type TokenSelectionItem
 } from './TokenSelectionList'
 import { TokenIcon } from './TokenIcon'
-import { useWalletStore } from '@/store/wallet-store'
 import { sortTokenSelectorNetworks } from './token-selector-chain-order'
 import {
   addInspectedToken,
@@ -36,7 +35,6 @@ interface TokenSelectorViewProps {
   readonly items: readonly TokenSelectionItem[]
   readonly selectedKey?: string
   readonly onSelect: (key: string) => void
-  readonly lowBalanceKeys?: ReadonlySet<string>
   readonly emptyMessage?: string
   readonly loading?: boolean
   readonly fullHeight?: boolean
@@ -53,7 +51,6 @@ interface TokenSelectorViewProps {
 }
 
 export function TokenSelectorView({
-  accountScope,
   search,
   onSearchChange,
   networks,
@@ -62,7 +59,6 @@ export function TokenSelectorView({
   items,
   selectedKey,
   onSelect,
-  lowBalanceKeys,
   emptyMessage = 'No tokens found',
   loading = false,
   fullHeight = true,
@@ -73,15 +69,6 @@ export function TokenSelectorView({
   onScroll,
   discovery
 }: TokenSelectorViewProps) {
-  const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const walletId = accountScope?.walletId ?? currentWalletId
-  const accountId = accountScope?.accountId ?? currentAccountId
-  const lowBalancePreferenceKey =
-    walletId && accountId
-      ? `token-selector-low-balance:${currentNetwork}:${walletId}:${accountId}`
-      : null
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const selectNetwork = (id: string) => {
     onNetworkChange(id)
@@ -149,8 +136,6 @@ export function TokenSelectorView({
     selectedNetwork === 'all' || available.some(network => network.id === selectedNetwork)
       ? selectedNetwork
       : 'all'
-  const lowBalance =
-    lowBalanceKeys && !search.trim() ? items.filter(item => lowBalanceKeys.has(item.key)) : []
   const inspectedResult =
     items.length === 0 && inspected?.key === discoveryKey ? inspected.result : null
   const discoveredAddress = inspectedResult?.candidate.contractAddress
@@ -175,10 +160,6 @@ export function TokenSelectorView({
       ]
     : []
   const displayedItems = [...items, ...discoveryItems]
-  const displayedFunded =
-    lowBalanceKeys && !search.trim()
-      ? displayedItems.filter(item => !lowBalanceKeys.has(item.key))
-      : displayedItems
 
   return (
     <div
@@ -305,7 +286,7 @@ export function TokenSelectorView({
         ) : (
           <>
             <TokenSelectionList
-              items={displayedFunded}
+              items={displayedItems}
               selectedKey={selectedKey}
               onSelect={key => {
                 if (key !== discoveryItems[0]?.key) {
@@ -341,92 +322,10 @@ export function TokenSelectorView({
                   })
               }}
             />
-            {lowBalance.length > 0 && (
-              <LowBalanceRows
-                items={lowBalance}
-                selectedKey={selectedKey}
-                onSelect={onSelect}
-                preferenceKey={lowBalancePreferenceKey}
-              />
-            )}
           </>
         )}
         {afterRows}
       </div>
     </div>
-  )
-}
-
-function LowBalanceRows({
-  items,
-  selectedKey,
-  onSelect,
-  preferenceKey
-}: {
-  readonly items: readonly TokenSelectionItem[]
-  readonly selectedKey?: string
-  readonly onSelect: (key: string) => void
-  readonly preferenceKey: string | null
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const [visibleCount, setVisibleCount] = useState(100)
-  const changedByUser = useRef(false)
-  useEffect(() => {
-    changedByUser.current = false
-    setExpanded(false)
-    if (!preferenceKey) return
-    let active = true
-    void chrome.storage.local
-      .get(preferenceKey)
-      .then(result => {
-        if (active && !changedByUser.current) setExpanded(result[preferenceKey] === true)
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-    }
-  }, [preferenceKey])
-  return (
-    <section className="pt-2">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => {
-          changedByUser.current = true
-          const next = !expanded
-          if (next) setVisibleCount(100)
-          setExpanded(next)
-          if (preferenceKey)
-            void chrome.storage.local.set({ [preferenceKey]: next }).catch(() => {})
-        }}
-        className="wallet-interactive flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-muted hover:text-foreground"
-      >
-        <span className="min-w-0 flex-1">Low balance tokens ({items.length})</span>
-        <Icon
-          icon={expanded ? 'lucide:chevron-up' : 'lucide:chevron-down'}
-          width={16}
-          height={16}
-          aria-hidden="true"
-        />
-      </button>
-      {expanded && (
-        <>
-          <TokenSelectionList
-            items={items.slice(0, visibleCount)}
-            selectedKey={selectedKey}
-            onSelect={onSelect}
-          />
-          {items.length > visibleCount && (
-            <button
-              type="button"
-              onClick={() => setVisibleCount(current => Math.min(items.length, current + 100))}
-              className="wallet-interactive w-full py-3 text-center text-sm text-primary hover:bg-card focus-visible:outline-2 focus-visible:outline-primary"
-            >
-              Show more
-            </button>
-          )}
-        </>
-      )}
-    </section>
   )
 }

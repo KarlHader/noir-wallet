@@ -2,6 +2,7 @@ import {
   getCachedTokens,
   getSwapIconRefreshState,
   hydrateSwapTokenCatalog,
+  INTENTS_SWAP_TOKEN_CATALOG_TTL_MS,
   refreshSwapTokenCatalog,
   refreshSwapTokenIcons,
   type SwapToken
@@ -11,7 +12,6 @@ import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 import { assertMainnetProtocolFeature } from '@/lib/runtime-network'
 
 export const SWAP_CATALOG_REFRESH_ALARM = 'swap-token-catalog-refresh'
-const REFRESH_INTERVAL_MS = 5 * 60_000
 const cache = new ChromeSwapTokenCatalogCacheRepository()
 const requests = new DedupPromise<readonly SwapToken[]>()
 const icons = new DedupPromise<void>()
@@ -57,8 +57,13 @@ function updateIcons(): void {
 export async function refreshBackgroundSwapCatalog(force = false): Promise<readonly SwapToken[]> {
   assertMainnetProtocolFeature('Swap')
   await hydrate()
+  // The five-minute alarm also retries failed icon enrichment independently of catalog freshness.
   await chrome.alarms.create(SWAP_CATALOG_REFRESH_ALARM, { periodInMinutes: 5 })
-  if (getCachedTokens().length > 0 && !force && Date.now() - fetchedAt < REFRESH_INTERVAL_MS) {
+  if (
+    getCachedTokens().length > 0 &&
+    !force &&
+    Date.now() - fetchedAt < INTENTS_SWAP_TOKEN_CATALOG_TTL_MS
+  ) {
     updateIcons()
     return getCachedTokens()
   }

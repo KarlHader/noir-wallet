@@ -106,6 +106,7 @@ import {
   resolvePublicPrivateSendQuotePair
 } from '@/popup/services/public-private-send-preview'
 import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
+import { readEvmSendDestinationSupport } from '@/popup/services/evm-send-catalog'
 
 export interface EvmSendAsset {
   readonly asset: PortfolioAssetView
@@ -137,6 +138,7 @@ export function EvmSendForm({
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
+  onOpenDestinationNetworks,
   onSelectDestinationNetwork,
   catalogAccount,
   catalog,
@@ -159,6 +161,7 @@ export function EvmSendForm({
     name: string
     icon: string
   }[]
+  onOpenDestinationNetworks: () => void
   onSelectDestinationNetwork: (
     destinationChainId: string,
     draft: Readonly<{ recipient: string; amount: string }>
@@ -271,6 +274,27 @@ export function EvmSendForm({
     sourceAddress
   ])
   const support = useEvmSendSupport(chain.chain, asset.asset, accountContextKey, active)
+  const destinationNetworkOptions = useMemo(
+    () =>
+      networkPickerOpen
+        ? destinationNetworks.map(option => {
+            const availability = readEvmSendDestinationSupport({
+              sourceAssetId: asset.asset.id,
+              destinationChainId: option.chainId
+            })
+            return {
+              id: option.chainId,
+              name: option.name,
+              icon: option.icon,
+              disabled: availability.status === 'unavailable',
+              priority:
+                availability.status === 'available' ? 0 : availability.status === 'unknown' ? 1 : 2,
+              note: availability.disabledReason
+            }
+          })
+        : [],
+    [networkPickerOpen, destinationNetworks, asset.asset.id, support.loading]
+  )
   const privacyScope = `${accountContextKey}:${asset.asset.id}`
   const sendPrivately = sourceMode === 'main' && privateSendScope === privacyScope
   const route = resolveEvmSendRoute(sourceMode, support.support, sendPrivately)
@@ -1186,7 +1210,10 @@ export function EvmSendForm({
                 <>
                   <button
                     type="button"
-                    onClick={() => setNetworkPickerOpen(true)}
+                    onClick={() => {
+                      setNetworkPickerOpen(true)
+                      onOpenDestinationNetworks()
+                    }}
                     className="inline-flex items-center gap-1.5 text-foreground hover:text-primary"
                     aria-label={`Select destination network, ${chain.chain.displayName}`}
                   >
@@ -1208,12 +1235,9 @@ export function EvmSendForm({
                     open={networkPickerOpen}
                     onOpenChange={setNetworkPickerOpen}
                     selectedId={chain.chain.id}
+                    enabledFirst
                     label={`Networks for ${asset.metadata.symbol}`}
-                    options={destinationNetworks.map(option => ({
-                      id: option.chainId,
-                      name: option.name,
-                      icon: option.icon
-                    }))}
+                    options={destinationNetworkOptions}
                     onSelect={destinationChainId =>
                       onSelectDestinationNetwork(destinationChainId, {
                         recipient,

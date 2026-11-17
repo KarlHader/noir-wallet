@@ -4,9 +4,11 @@ import { expect } from '@playwright/test'
 import {
   fetchQuote,
   fetchIntentsWalletTokens,
+  fetchSwapTokens,
   fetchSwapStatus,
   evaluateIntentsStatusQuoteBinding,
   getCachedTokens,
+  INTENTS_SWAP_TOKEN_CATALOG_TTL_MS,
   parseCoinGeckoIconCatalogResponse,
   parseQuoteSuccessResponse,
   parseSwapStatusResponse,
@@ -14,6 +16,44 @@ import {
   refreshSwapTokenIcons,
   refreshSwapTokenCatalog
 } from '../../../src/core/services/intents-api.ts'
+
+test('Intents token directory stays cached for one hour', async () => {
+  const originalFetch = globalThis.fetch
+  const originalNow = Date.now
+  let now = originalNow()
+  let calls = 0
+  const token = {
+    assetId: 'nep141:eth.omft.near',
+    blockchain: 'eth',
+    contractAddress: null,
+    decimals: 18,
+    icon: null,
+    price: 1,
+    priceUpdatedAt: new Date(now).toISOString(),
+    symbol: 'ETH'
+  }
+  Date.now = () => now
+  globalThis.fetch = async input => {
+    expect(String(input)).toBe('https://1click.chaindefuser.com/v0/tokens')
+    calls++
+    return Response.json([token])
+  }
+  try {
+    getCachedTokens().splice(0)
+    expect(INTENTS_SWAP_TOKEN_CATALOG_TTL_MS).toBe(60 * 60 * 1_000)
+    await fetchSwapTokens()
+    now += INTENTS_SWAP_TOKEN_CATALOG_TTL_MS - 1
+    await fetchSwapTokens()
+    expect(calls).toBe(1)
+    now += 1
+    await fetchSwapTokens()
+    expect(calls).toBe(2)
+  } finally {
+    getCachedTokens().splice(0)
+    Date.now = originalNow
+    globalThis.fetch = originalFetch
+  }
+})
 
 test('Intents settlement checks the quoted raw minimum with destination precision', () => {
   const binding = {

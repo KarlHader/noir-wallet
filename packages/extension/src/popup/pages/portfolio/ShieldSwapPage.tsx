@@ -528,17 +528,6 @@ function ShieldSwapForm({
         .map(item => shieldSourceSelectionItem(item, hidden)),
     [visibleFromPickerItems, pickerNetwork, hidden]
   )
-  const lowBalanceKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const item of visibleFromPickerItems) {
-      try {
-        if (BigInt(item.availableRaw) <= 0n) keys.add(item.key)
-      } catch {
-        keys.add(item.key)
-      }
-    }
-    return keys
-  }, [visibleFromPickerItems])
   const fromZecSource =
     from?.asset.metadata.symbol.toUpperCase() === 'ZEC'
       ? zecSourceOptions.find(option => option.intentsWalletAssetId === from?.asset.asset.id)
@@ -1286,7 +1275,6 @@ function ShieldSwapForm({
             fromId ??
             undefined
           }
-          lowBalanceKeys={lowBalanceKeys}
           onSelect={key => {
             if (key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID) {
               onSelectTransparentZecSwap?.()

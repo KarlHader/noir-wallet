@@ -21,7 +21,7 @@ import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chain
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
 const MAXIMUM_STRING_LENGTH = 512
-export const RHEA_SWAP_TOKEN_CATALOG_TTL_MS = 10 * 60 * 1_000
+export const RHEA_SWAP_TOKEN_CATALOG_TTL_MS = 60 * 60 * 1_000
 
 export interface PrivateSwapAccountRoute {
   readonly walletId: string

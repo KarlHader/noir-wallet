@@ -56,6 +56,39 @@ test('shows the useful minimum from RHEA quote and swap errors', () => {
   expect(isSwapQuotePriceMoved(new RheaSwapClientError('Slippage tolerance exceeded'))).toBe(false)
 })
 
+test('hydrates a prewarmed public catalog without a token request and keeps its expiry', async () => {
+  let now = 100
+  let reads = 0
+  let sends = 0
+  const request = { direction: 'from', tokenListChainIds: [1] }
+  const result = { tokens: [{ ...token(), sources: ['nearintents'] }], failedChainIds: [] }
+  const client = createRheaSwapClient(
+    async () => {
+      sends++
+      return { result }
+    },
+    {
+      now: () => now,
+      readPersistentCatalog: async () => {
+        reads++
+        return { result, expiresAt: 200 }
+      }
+    }
+  )
+  const [first, second] = await Promise.all([
+    client.hydrateCachedTokens(request),
+    client.hydrateCachedTokens(request)
+  ])
+  expect(first).toEqual(result)
+  expect(second).toEqual(result)
+  expect(reads).toBe(1)
+  expect(await client.listTokens(request)).toEqual(result)
+  expect(sends).toBe(0)
+  now = 200
+  expect(await client.listTokens(request)).toEqual(result)
+  expect(sends).toBe(1)
+})
+
 test('retains both directions for every supported chain without evicting source catalogs', async () => {
   let calls = 0
   const client = createRheaSwapClient(async message => {

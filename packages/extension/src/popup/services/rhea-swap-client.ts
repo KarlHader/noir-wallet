@@ -27,6 +27,10 @@ import {
   type RheaSwapSubmissionView
 } from '@/core/services/rhea-swap'
 import type { RheaSwapTransactionBinding } from '@/core/transactions/domain'
+import {
+  PersistentRheaSwapCatalogCache,
+  type FreshRheaSwapCatalog
+} from '@/infrastructure/persistence/rhea-swap-catalog-cache'
 import { classifyError } from '@/lib/errors'
 import {
   getSwapQuoteFailureMessage,
@@ -111,14 +115,30 @@ function unwrap<T>(value: unknown, parse: (input: unknown) => T): T {
 
 export function createRheaSwapClient(
   send: RuntimeMessenger,
-  options: { readonly now?: () => number } = {}
+  options: {
+    readonly now?: () => number
+    readonly readPersistentCatalog?: (input: {
+      direction: 'from' | 'cross-chain-to'
+      tokenListChainIds: readonly number[]
+    }) => Promise<FreshRheaSwapCatalog | null>
+  } = {}
 ) {
   const now = options.now ?? Date.now
+  const publicCatalogReader = new PersistentRheaSwapCatalogCache(
+    async () => {
+      throw new Error('Popup catalog access is read-only')
+    },
+    undefined,
+    now
+  )
+  const readPersistentCatalog =
+    options.readPersistentCatalog ?? (input => publicCatalogReader.readFresh(input))
   const tokenCatalog = new Map<
     string,
     Readonly<{ value: RheaSwapCatalogResult; expiresAt: number }>
   >()
   const tokenCatalogRequests = new Map<string, Promise<RheaSwapCatalogResult>>()
+  const hydrationRequests = new Map<string, Promise<RheaSwapCatalogResult | null>>()
   const readCachedTokens = (input: {
     readonly direction: 'from' | 'cross-chain-to'
     readonly tokenListChainIds: readonly number[]
@@ -143,6 +163,38 @@ export function createRheaSwapClient(
     }
     return cached.value
   }
+  const hydrateCachedTokens = (input: {
+    readonly direction: 'from' | 'cross-chain-to'
+    readonly tokenListChainIds: readonly number[]
+  }): Promise<RheaSwapCatalogResult | null> => {
+    const cached = readCachedTokens(input)
+    if (cached) return Promise.resolve(cached)
+    const key = tokenCatalogKey(input)
+    const pending = hydrationRequests.get(key)
+    if (pending) return pending
+    const hydrate = (async () => {
+      const snapshot = await readPersistentCatalog(input)
+      if (!snapshot || snapshot.expiresAt <= now()) return null
+      for (const chainId of input.tokenListChainIds) {
+        const chainInput = { direction: input.direction, tokenListChainIds: [chainId] }
+        const chainKey = tokenCatalogKey(chainInput)
+        const existing = tokenCatalog.get(chainKey)
+        if (existing && existing.expiresAt >= snapshot.expiresAt) continue
+        tokenCatalog.set(chainKey, {
+          value: Object.freeze({
+            tokens: Object.freeze(
+              snapshot.result.tokens.filter(token => token.tokenListChainId === chainId)
+            ),
+            failedChainIds: Object.freeze([])
+          }),
+          expiresAt: snapshot.expiresAt
+        })
+      }
+      return readCachedTokens(input)
+    })().finally(() => hydrationRequests.delete(key))
+    hydrationRequests.set(key, hydrate)
+    return hydrate
+  }
   const listTokens = async (
     input: {
       readonly direction: 'from' | 'cross-chain-to'
@@ -151,11 +203,9 @@ export function createRheaSwapClient(
     options: { readonly bypassCache?: boolean } = {}
   ): Promise<RheaSwapCatalogResult> => {
     const key = tokenCatalogKey(input)
-    const cached = options.bypassCache ? null : readCachedTokens(input)
+    const cached = options.bypassCache ? null : await hydrateCachedTokens(input)
     if (cached) return cached
     tokenCatalog.delete(key)
-    const inFlight = tokenCatalogRequests.get(key)
-    if (inFlight) return inFlight
     const request = unwrap(
       await send({
         type: 'GET_RHEA_SWAP_TOKENS',
@@ -226,6 +276,7 @@ export function createRheaSwapClient(
 
   return Object.freeze({
     readCachedTokens,
+    hydrateCachedTokens,
     listTokens: (
       input: {
         readonly direction: 'from' | 'cross-chain-to'

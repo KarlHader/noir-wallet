@@ -423,7 +423,7 @@ export function parseSwapStatusResponse(value: unknown): SwapStatus {
 // Token list cache (full list + USD prices from the 1Click API)
 let tokenCache: SwapToken[] = []
 let tokenCacheTime = 0
-const TOKEN_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+export const INTENTS_SWAP_TOKEN_CATALOG_TTL_MS = 60 * 60 * 1000
 const ICON_CACHE_TTL = 24 * 60 * 60 * 1000
 const ICON_RETRY_DELAY = 5 * 60 * 1000
 
@@ -613,7 +613,11 @@ export function refreshSwapTokenCatalog(): Promise<SwapToken[]> {
 export async function fetchSwapTokens(forceRefresh = false): Promise<SwapToken[]> {
   assertMainnetProtocolFeature('Swap')
   const now = Date.now()
-  if (!forceRefresh && tokenCache.length > 0 && now - tokenCacheTime < TOKEN_CACHE_TTL) {
+  if (
+    !forceRefresh &&
+    tokenCache.length > 0 &&
+    now - tokenCacheTime < INTENTS_SWAP_TOKEN_CATALOG_TTL_MS
+  ) {
     return tokenCache
   }
 
