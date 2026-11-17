@@ -19,6 +19,7 @@ import { resolveEvmNetworkCatalog } from '@/core/chains/evm-runtime-config'
 import { getActiveChainEndpointSettings } from '@/core/chains/chain-endpoint-settings'
 import { parseStorageV2GenerationId } from '@/infrastructure/persistence/schema'
 import type { StorageV2GenerationId } from '@/ports/repositories'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 
 const ADDRESS_PRIVACY = new Set(['transparent', 'shielded', 'mixed'])
 
@@ -393,6 +394,30 @@ export function createAccountNetworksClient(
 
 let productionClient: ReturnType<typeof createAccountNetworksClient> | undefined
 let productionRegistryKey = ''
+let catalogRevision = 0
+let catalogListenerInstalled = false
+let cachedCatalog: {
+  scope: string
+  registryKey: string
+  value: AccountNetworksCatalogView
+} | null = null
+
+function observeCatalogInvalidation() {
+  if (catalogListenerInstalled) return
+  catalogListenerInstalled = true
+  // This cache belongs to the extension page, including gaps between route mounts.
+  chrome.runtime.onMessage.addListener((message: unknown, sender) => {
+    if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+    if (
+      typeof message !== 'object' ||
+      message === null ||
+      (message as { type?: unknown }).type !== 'ACCOUNT_CONTEXT_CHANGED'
+    )
+      return
+    cachedCatalog = null
+    catalogRevision++
+  })
+}
 
 function resolveProductionChains(): AddressGatedChainRegistry {
   const settings = getActiveChainEndpointSettings()
@@ -418,7 +443,16 @@ export const accountNetworksClient = Object.freeze({
     }
     return (response as { hasWallet: boolean }).hasWallet
   },
-  getCatalog: () => {
+  readCachedCatalog: (scope: string): AccountNetworksCatalogView | null => {
+    observeCatalogInvalidation()
+    return cachedCatalog?.scope === scope &&
+      cachedCatalog.registryKey === JSON.stringify(getActiveChainEndpointSettings())
+      ? cachedCatalog.value
+      : null
+  },
+  getCatalog: async (scope?: string) => {
+    observeCatalogInvalidation()
+    const revision = catalogRevision
     const registryKey = JSON.stringify(getActiveChainEndpointSettings())
     if (!productionClient || productionRegistryKey !== registryKey) {
       productionClient = createAccountNetworksClient(
@@ -427,6 +461,14 @@ export const accountNetworksClient = Object.freeze({
       )
       productionRegistryKey = registryKey
     }
-    return productionClient.getCatalog()
+    const result = await productionClient.getCatalog()
+    const active = result?.accounts.find(account => account.active)
+    if (scope && revision === catalogRevision) {
+      cachedCatalog =
+        result && active && scope === `${DEFAULT_NETWORK}:${active.walletId}:${active.accountId}`
+          ? { scope, registryKey, value: result }
+          : null
+    }
+    return result
   }
 })

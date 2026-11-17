@@ -857,7 +857,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const portfolio = portfolioSnapshot.model
   const receiveTargets =
     receiveTargetsSnapshot.scope === walletSourcesScope ? receiveTargetsSnapshot.value : null
-  const sendSourceAssetId = swap.tokenIn ? getCrossChainSendWalletAssetId(swap.tokenIn) : null
+  const sendSourceAssetId =
+    crossChainSendRequested && requestedSourceAssetId
+      ? requestedSourceAssetId
+      : swap.tokenIn
+        ? getCrossChainSendWalletAssetId(swap.tokenIn)
+        : null
   const sendDestinationCandidates = useMemo(
     () =>
       crossChainSendRequested && sendSourceAssetId && storageV2Account
@@ -2024,6 +2029,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   activeReverseContext.current = reverseContext
   const requestedSourceToken = useMemo(() => {
     if (!requestedSourceAssetId) return null
+    if (!isSwapAssetOnEnabledChain(requestedSourceAssetId, enabledSwapChains)) return null
+    // Managed tokens can be selected before their balance is in the portfolio.
+    // Resolve chain + contract directly instead of requiring that balance first.
+    const catalogToken = swap.sourceTokens.find(
+      token => getCrossChainSendWalletAssetId(token) === requestedSourceAssetId
+    )
+    if (catalogToken) return catalogToken
     const resolved = resolveWalletSwapSourceToken(
       requestedSourceAssetId,
       swap.sourceTokens,
@@ -2037,7 +2049,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         ) ?? null
       )
     }
-    if (!isSwapAssetOnEnabledChain(requestedSourceAssetId, enabledSwapChains)) return null
     const asset = portfolio?.assets.find(candidate => candidate.asset.id === requestedSourceAssetId)
     return asset?.asset.namespace === 'erc20'
       ? toWalletEvmSwapToken({
@@ -2061,13 +2072,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const lockedSourceToken = useMemo(
     () =>
       requestedSourceAssetId
-        ? resolveLockedWalletSwapSourceToken({
-            requestedToken: requestedSourceToken,
-            sourceTokens: swap.sourceTokens,
-            walletSourceTokens: walletSwapSourceTokens
-          })
+        ? crossChainSendRequested
+          ? requestedSourceToken
+          : resolveLockedWalletSwapSourceToken({
+              requestedToken: requestedSourceToken,
+              sourceTokens: swap.sourceTokens,
+              walletSourceTokens: walletSwapSourceTokens
+            })
         : null,
-    [requestedSourceAssetId, requestedSourceToken, swap.sourceTokens, walletSwapSourceTokens]
+    [
+      crossChainSendRequested,
+      requestedSourceAssetId,
+      requestedSourceToken,
+      swap.sourceTokens,
+      walletSwapSourceTokens
+    ]
   )
   const sendDestinationRows =
     sendDestinationCatalog?.key === sendDestinationCatalogKey
@@ -7896,6 +7915,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       const sourceChain = storageV2Account?.networks.find(
         chain => chain.chain.id === sendSourceAssetId?.split('/')[0]
       )
+      const sourceDescriptor = sourceChain ? getEnabledSwapChains([sourceChain.chain])[0] : null
       const destinationChain = storageV2Account?.networks.find(
         chain => chain.chain.id === selectedSendDestinationChainId
       )
@@ -7928,10 +7948,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       )
       const availableDestinationOptions = sortSendNetworks(
         [
-          ...(sourceChain && swap.tokenIn
+          ...(sourceChain && sourceDescriptor
             ? [
                 {
-                  id: swap.tokenIn.rheaChainId,
+                  id: sourceDescriptor.apiChainId,
                   chainId: sourceChain.chain.id,
                   name: sourceChain.chain.displayName,
                   icon: resolveChainIconAlias(
@@ -8000,7 +8020,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           selectedDestinationChainId={requestedDestinationChainId}
           destinationNetworksLoading={destinationCatalogLoading}
           onSelectDestination={chainId => {
-            if (chainId === swap.tokenIn?.rheaChainId) {
+            if (chainId === sourceDescriptor?.apiChainId) {
               returnFromCrossChainSend()
               return
             }

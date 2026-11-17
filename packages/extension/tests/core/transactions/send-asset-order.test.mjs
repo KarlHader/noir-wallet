@@ -95,6 +95,35 @@ test('does not mutate the source list and rejects malformed values as zero-value
   expect(assets.map(asset => asset.key)).toEqual(['invalid', 'valid'])
 })
 
+test('keeps ZEC funding sources distinct and excludes unavailable signing sources', () => {
+  const input = {
+    assets: [],
+    zcashSources: [
+      { type: 'transparent', available: '0.00405' },
+      { type: 'shielded', available: '1.2' }
+    ],
+    zcashEnabled: true,
+    zcashNetwork: 'mainnet',
+    zecPrice: 42,
+    prices: null,
+    selectedNetwork: 'all',
+    searchQuery: ''
+  }
+  expect(buildSendAssetSelectionModel(input).orderedRows).toMatchObject([
+    { key: 'zcash:shielded', source: 'shielded', amount: '1.2' },
+    { key: 'zcash:transparent', source: 'transparent', amount: '0.00405' }
+  ])
+  expect(
+    buildSendAssetSelectionModel({
+      ...input,
+      zcashSources: [
+        { ...input.zcashSources[0], disabledReason: 'Transparent signing unavailable' },
+        input.zcashSources[1]
+      ]
+    }).orderedRows
+  ).toMatchObject([{ key: 'zcash:shielded', source: 'shielded' }])
+})
+
 test('shows only the Public EVM balance and leaves an unknown split unavailable', () => {
   const evmAsset = {
     asset: {
@@ -116,7 +145,7 @@ test('shows only the Public EVM balance and leaves an unknown split unavailable'
   }
   const input = {
     assets: [evmAsset],
-    zcashTotal: '0',
+    zcashSources: [],
     zcashEnabled: false,
     zcashNetwork: 'mainnet',
     zecPrice: 0,
@@ -192,7 +221,7 @@ test('includes searchable enabled-chain directory metadata without fabricating b
     chains: [entry.chain],
     catalog: [entry.token, hidden, otherChain],
     hiddenAssetIds: new Set([hidden.assetId]),
-    zcashTotal: '0',
+    zcashSources: [],
     zcashEnabled: false,
     zcashNetwork: 'mainnet',
     zecPrice: 0,

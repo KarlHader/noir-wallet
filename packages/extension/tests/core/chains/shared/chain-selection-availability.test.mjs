@@ -88,7 +88,7 @@ describe('Chain selection availability', () => {
   it('excludes cached deferred assets from the send picker while listing their disabled networks', () => {
     const model = buildSendAssetSelectionModel({
       assets: [{ chain: { chain: { id: 'bip122:mainnet', family: 'bitcoin' } }, asset: {} }],
-      zcashTotal: '0',
+      zcashSources: [{ type: 'shielded', available: '0' }],
       zcashEnabled: true,
       zcashNetwork: 'mainnet',
       zecPrice: 0,

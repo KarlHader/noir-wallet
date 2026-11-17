@@ -4,6 +4,7 @@ import {
   getCrossChainSendAssetGroup,
   getCrossChainSendDestinationAssetId,
   getCrossChainSendRouteCost,
+  getCrossChainSendTokenGroup,
   getCrossChainSendWalletAssetId,
   isCrossChainSendDestination,
   isCrossChainSendRecipientValid,
@@ -451,6 +452,64 @@ test('cross-chain Send accepts canonical USDC and rejects same-symbol tokens', (
   expect(getCrossChainSendWalletAssetId(solanaUsdc)).toBe(
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   )
+})
+
+test('cross-chain Send identifies official USDT0 contracts without trusting a matching symbol', () => {
+  const polygon = {
+    ...eth,
+    assetId: 'nep141:polygon-0xc2132d05d31c914a87c6611c10748aeb04b58e8f.omft.near',
+    blockchain: 'pol',
+    rheaChainId: '137',
+    tokenListChainId: 137,
+    symbol: 'USDT0',
+    decimals: 6,
+    isNative: false,
+    contractAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+    rheaAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f'
+  }
+  const ethereum = {
+    ...polygon,
+    assetId: 'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near',
+    blockchain: 'eth',
+    rheaChainId: '1',
+    tokenListChainId: 1,
+    contractAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    rheaAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7'
+  }
+  const arbitrum = {
+    ...polygon,
+    assetId: 'nep141:arb-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9.omft.near',
+    blockchain: 'arb',
+    rheaChainId: '42161',
+    tokenListChainId: 42161,
+    contractAddress: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+    rheaAddress: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9'
+  }
+  const counterfeit = {
+    ...ethereum,
+    assetId: 'nep141:eth-0x1111111111111111111111111111111111111111.omft.near',
+    contractAddress: '0x1111111111111111111111111111111111111111',
+    rheaAddress: '0x1111111111111111111111111111111111111111'
+  }
+  expect(getCrossChainSendTokenGroup(polygon)).toBe('protocol:usdt0')
+  expect(isCrossChainSendDestination(polygon, ethereum, enabledChains)).toBe(true)
+  expect(isCrossChainSendDestination(polygon, arbitrum, enabledChains)).toBe(true)
+  expect(isCrossChainSendDestination(polygon, counterfeit, enabledChains)).toBe(false)
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      sourceAssetId: getCrossChainSendWalletAssetId(polygon),
+      destinationChainId: 'eip155:1'
+    })
+  ).toEqual({
+    status: 'available',
+    destinationAssetId: getCrossChainSendWalletAssetId(ethereum)
+  })
+  expect(
+    resolveCrossChainSendDestinationSupport({
+      sourceAssetId: getCrossChainSendWalletAssetId(polygon),
+      destinationChainId: 'eip155:8453'
+    }).status
+  ).toBe('unavailable')
 })
 
 test('cross-chain Send resolves verified native and provider identities without matching symbols', () => {

@@ -42,6 +42,24 @@ const marketByAssetId = new Map(
     mapping.marketAssetId
   ])
 )
+const USDT0_SEND_GROUP = 'protocol:usdt0' as const
+// USDT0 deployments: https://docs.usdt0.to/technical-documentation/deployments
+// Ethereum's USDT is the source asset held by the OFT Adapter.
+const usdt0ContractsByChainId: Readonly<Record<string, string>> = Object.freeze({
+  'eip155:1': '0xdac17f958d2ee523a2206206994597c13d831ec7',
+  'eip155:10': '0x01bff41798a0bcf287b996046ca68b395dbc1071',
+  'eip155:137': '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+  'eip155:143': '0xe7cd86e13ac4309349f30b3435a9d337750fc82d',
+  'eip155:196': '0x779ded0c9e1022225f8e0630b35a9b54be713736',
+  'eip155:9745': '0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb',
+  'eip155:42161': '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+  'eip155:80094': '0x779ded0c9e1022225f8e0630b35a9b54be713736'
+})
+
+function isUsdt0AssetId(assetId: string): boolean {
+  const [chainId, reference] = assetId.split('/erc20:')
+  return Boolean(reference && usdt0ContractsByChainId[chainId] === reference)
+}
 
 export function getCrossChainSendDestinationCandidates<
   T extends { readonly chain: ChainDefinition }
@@ -182,13 +200,18 @@ export function getCrossChainSendAssetGroup(
     return MARKET_ASSETS.usdc
   }
   const reference = asset.namespace === 'erc20' ? asset.reference.toLowerCase() : asset.reference
-  return marketByAssetId.get(`${asset.chainId}/${asset.namespace}:${reference}`) ?? null
+  const assetId = `${asset.chainId}/${asset.namespace}:${reference}`
+  return marketByAssetId.get(assetId) ?? (isUsdt0AssetId(assetId) ? USDT0_SEND_GROUP : null)
 }
 
 export function getCrossChainSendDestinationAssetId(
   chainId: string,
   group: CrossChainSendAssetGroup
 ): string | null {
+  if (group === USDT0_SEND_GROUP)
+    return usdt0ContractsByChainId[chainId]
+      ? `${chainId}/erc20:${usdt0ContractsByChainId[chainId]}`
+      : null
   if (group.startsWith('protocol:')) return null
   if (group === MARKET_ASSETS.usdc && chainId.startsWith('solana:'))
     return `${chainId}/token:${SOLANA_USDC_MINT}`
@@ -209,7 +232,8 @@ export function getCrossChainSendTokenGroup(token: RheaSwapToken): CrossChainSen
     canonicalAssetId !== walletAssetId
   )
     return null
-  const known = marketByAssetId.get(walletAssetId)
+  const known =
+    marketByAssetId.get(walletAssetId) ?? (isUsdt0AssetId(walletAssetId) ? USDT0_SEND_GROUP : null)
   if (known) return known
   if (!token.isNative && token.rheaChainId === 'solana' && token.rheaAddress === SOLANA_USDC_MINT)
     return MARKET_ASSETS.usdc
@@ -317,7 +341,7 @@ export function resolveCrossChainSendDestinationSupport(
   )
     return unavailable
 
-  // Bundled canonical identities are authoritative for the supported native/USDC set.
+  // Bundled canonical identities are authoritative for supported native, USDC, and USDT0 assets.
   const canonicalGroup = getCrossChainSendAssetGroup(source)
   if (canonicalGroup) {
     const destinationAssetId = getCrossChainSendDestinationAssetId(
@@ -362,10 +386,8 @@ export function resolveCrossChainSendDestinationSupport(
     !complete(input.destinationCatalog, destinationDescriptor)
   )
     return unknown
-  const destination = input.destinationCatalog.tokens.find(
-    token =>
-      token.assetId === sourceToken.assetId &&
-      isCrossChainSendDestination(sourceToken, token, capabilities)
+  const destination = input.destinationCatalog.tokens.find(token =>
+    isCrossChainSendDestination(sourceToken, token, capabilities)
   )
   return destination
     ? { status: 'available', destinationAssetId: getCrossChainSendWalletAssetId(destination) }

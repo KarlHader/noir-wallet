@@ -193,6 +193,7 @@ export function ShieldWithdrawForm({
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>(() =>
     resolveManagedIntentsCatalog(getCachedTokens())
   )
+  const [catalogResolved, setCatalogResolved] = useState(false)
   const [priceSnapshot, setPriceSnapshot] = useState<{
     scopeKey: string
     value: AssetPriceReadModel
@@ -230,6 +231,11 @@ export function ShieldWithdrawForm({
   const latestDraftKey = useRef(draftKey)
   latestDraftKey.current = draftKey
   const confirmationAttempt = useRef<string | null>(null)
+  const pendingSourceNetworkCheck = useRef<{
+    sourceAssetId: string
+    networkId: string
+    previousFamily?: string
+  } | null>(null)
   const {
     balances: currentBalances,
     connecting,
@@ -290,6 +296,7 @@ export function ShieldWithdrawForm({
     setBusy(false)
     setUncertain(false)
     setError(null)
+    pendingSourceNetworkCheck.current = null
     confirmationAttempt.current = null
   }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient, routeAmount])
 
@@ -300,10 +307,13 @@ export function ShieldWithdrawForm({
   useEffect(() => {
     if (!active && !sourceSelectorActive) return
     let current = true
+    let directoryAvailable = catalogTokens.length > 0
+    setCatalogResolved(false)
     const load = async () => {
       try {
         const cached = await swapTokenCatalogClient.readCached()
         if (!current) return
+        if (cached.length > 0) directoryAvailable = true
         if (cached.length > 0 && catalogTokens.length === 0) {
           setCatalogTokens(cached)
           setManagedAssets(resolveManagedIntentsCatalog(cached))
@@ -316,11 +326,14 @@ export function ShieldWithdrawForm({
           return
         const refreshed = await swapTokenCatalogClient.refresh()
         if (current && refreshed.length) {
+          directoryAvailable = true
           setCatalogTokens(refreshed)
           setManagedAssets(resolveManagedIntentsCatalog(refreshed))
         }
       } catch {
         // Cached portfolio remains visible while the token catalog is unavailable.
+      } finally {
+        if (current) setCatalogResolved(directoryAvailable)
       }
     }
     void load()
@@ -406,6 +419,13 @@ export function ShieldWithdrawForm({
     selectedAssetId?: string
     balancesHidden: boolean
     callback: typeof onSourcePickerState
+    source: ShieldFundingAsset | null
+    destinationNetworkId: string | null
+    options: readonly ShieldFundingAsset[]
+    catalogResolved: boolean
+    moveToOwnZcash: boolean
+    activeAccount: typeof activeAccount
+    modelChains: PortfolioReadModel['chains'] | undefined
   } | null>(null)
   useEffect(() => {
     if (!sourceSelectorActive || !onSourcePickerState) return
@@ -414,7 +434,14 @@ export function ShieldWithdrawForm({
       reportedPickerState.current?.items === sourcePickerItems &&
       reportedPickerState.current.selectedAssetId === selectedSourceAssetId &&
       reportedPickerState.current.balancesHidden === balancesHidden &&
-      reportedPickerState.current.callback === onSourcePickerState
+      reportedPickerState.current.callback === onSourcePickerState &&
+      reportedPickerState.current.source === source &&
+      reportedPickerState.current.destinationNetworkId === destinationNetworkId &&
+      reportedPickerState.current.options === options &&
+      reportedPickerState.current.catalogResolved === catalogResolved &&
+      reportedPickerState.current.moveToOwnZcash === moveToOwnZcash &&
+      reportedPickerState.current.activeAccount === activeAccount &&
+      reportedPickerState.current.modelChains === model?.chains
     )
       return
     reportedPickerState.current = {
@@ -422,7 +449,14 @@ export function ShieldWithdrawForm({
       items: sourcePickerItems,
       selectedAssetId: selectedSourceAssetId,
       balancesHidden,
-      callback: onSourcePickerState
+      callback: onSourcePickerState,
+      source,
+      destinationNetworkId,
+      options,
+      catalogResolved,
+      moveToOwnZcash,
+      activeAccount,
+      modelChains: model?.chains
     }
     onSourcePickerState({
       items: sourcePickerItems,
@@ -433,9 +467,45 @@ export function ShieldWithdrawForm({
           setPicker(null)
           return
         }
+        const nextSource = sources.find(item => item.asset.asset.id === assetId)
+        if (!nextSource) return
         setSourceId(assetId)
-        setDestinationNetworkId(null)
-        setRecipient('')
+        pendingSourceNetworkCheck.current = null
+        if (moveToOwnZcash) {
+          setDestinationNetworkId(null)
+          setRecipient('')
+        } else {
+          const currentNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
+          const nextDestinations = listShieldSendDestinations(nextSource, options, network)
+          const stillSupported = currentNetworkId
+            ? selectShieldWithdrawDestinationForNetwork(
+                nextDestinations,
+                nextSource,
+                currentNetworkId
+              )
+            : null
+          const previousFamily =
+            (currentNetworkId === source?.chain.chain.id ? source.chain.chain.family : undefined) ??
+            activeAccount?.networks.find(item => item.chain.id === currentNetworkId)?.chain
+              .family ??
+            model?.chains.find(item => item.chain.id === currentNetworkId)?.chain.family
+          if (stillSupported || !catalogResolved) {
+            setDestinationNetworkId(currentNetworkId)
+            if (!stillSupported && currentNetworkId) {
+              pendingSourceNetworkCheck.current = {
+                sourceAssetId: assetId,
+                networkId: currentNetworkId,
+                previousFamily
+              }
+            }
+          } else {
+            const fallback =
+              nextDestinations.find(item => item.chain.chain.id === nextSource.chain.chain.id) ??
+              nextDestinations[0]
+            setDestinationNetworkId(fallback?.chain.chain.id ?? null)
+            if (previousFamily !== fallback?.chain.chain.family) setRecipient('')
+          }
+        }
         setAmount('')
         setPicker(null)
       }
@@ -446,7 +516,16 @@ export function ShieldWithdrawForm({
     scopeKey,
     sourcePickerItems,
     selectedSourceAssetId,
-    balancesHidden
+    balancesHidden,
+    sources,
+    source,
+    destinationNetworkId,
+    options,
+    network,
+    catalogResolved,
+    moveToOwnZcash,
+    activeAccount,
+    model?.chains
   ])
   const keepSelectedSource = () => {
     if (!sourceId && source) setSourceId(source.asset.asset.id)
@@ -455,22 +534,37 @@ export function ShieldWithdrawForm({
     () => (source ? listShieldSendDestinations(source, options, network) : []),
     [source, options, network]
   )
-  const networkOptions: ChainSelectorOption[] = useMemo(
-    () =>
-      networkPickerOpen
-        ? sortSendNetworks(
-            [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(
-              item => ({
-                id: item.chain.chain.id,
-                name: item.chain.chain.displayName,
-                icon: withdrawChainIconAlias(item.chain.chain)
-              })
-            ),
-            option => option
-          )
-        : [],
-    [networkPickerOpen, destinations]
-  )
+  const networkOptions: ChainSelectorOption[] = useMemo(() => {
+    if (!networkPickerOpen) return []
+    const supportedIds = new Set(destinations.map(item => item.chain.chain.id))
+    const chains = new Map<string, ShieldFundingAsset['chain']['chain']>()
+    for (const item of activeAccount?.networks ?? model?.chains ?? []) {
+      chains.set(item.chain.id, item.chain)
+    }
+    for (const item of destinations) chains.set(item.chain.chain.id, item.chain.chain)
+    return sortSendNetworks(
+      [...chains.values()].map(chain => {
+        const supported = supportedIds.has(chain.id)
+        const checkingRoute =
+          !supported && !catalogResolved && (chain.family === 'evm' || chain.family === 'zcash')
+        return {
+          id: chain.id,
+          name: chain.displayName,
+          icon: withdrawChainIconAlias(chain),
+          disabled: !supported,
+          priority: supported ? 0 : checkingRoute ? 1 : 2,
+          note: supported
+            ? undefined
+            : checkingRoute
+              ? 'Checking route'
+              : chain.family === 'evm' || chain.family === 'zcash'
+                ? 'No route for this token'
+                : 'Shield Send unavailable'
+        }
+      }),
+      option => option
+    )
+  }, [networkPickerOpen, activeAccount, model?.chains, destinations, catalogResolved])
   const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
   const destination = moveToOwnZcash
     ? source
@@ -482,6 +576,22 @@ export function ShieldWithdrawForm({
         )
       : null
   const destinationNetwork = destination?.chain.chain
+  useEffect(() => {
+    const pending = pendingSourceNetworkCheck.current
+    if (!catalogResolved || !pending) return
+    pendingSourceNetworkCheck.current = null
+    if (moveToOwnZcash || source?.asset.asset.id !== pending.sourceAssetId) return
+    const currentNetworkId = destinationNetworkId ?? source.chain.chain.id
+    if (
+      currentNetworkId !== pending.networkId ||
+      selectShieldWithdrawDestinationForNetwork(destinations, source, pending.networkId)
+    )
+      return
+    const fallback =
+      destinations.find(item => item.chain.chain.id === source.chain.chain.id) ?? destinations[0]
+    setDestinationNetworkId(fallback?.chain.chain.id ?? null)
+    if (pending.previousFamily !== fallback?.chain.chain.family) setRecipient('')
+  }, [catalogResolved, moveToOwnZcash, source, destinationNetworkId, destinations])
   const availableRaw = shieldFundingAvailableRaw(source, displayBalances)
   const displayedAsset = source?.asset ?? initialAsset
   const amountState = source
@@ -1118,7 +1228,7 @@ export function ShieldWithdrawForm({
                 <SendFieldLabel>Send to</SendFieldLabel>
                 <button
                   type="button"
-                  disabled={busy || destinations.length === 0}
+                  disabled={busy || !source}
                   onClick={() => {
                     keepSelectedSource()
                     setNetworkPickerOpen(true)
@@ -1321,6 +1431,7 @@ export function ShieldWithdrawForm({
         open={active && networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={networkOptions}
+        enabledFirst
         selectedId={selectedDestinationNetworkId}
         onSelect={id => {
           const next = selectShieldWithdrawDestinationForNetwork(destinations, source, id)

@@ -24,6 +24,7 @@ import {
 } from '@/core/chains/registry'
 import { userEvmAssetToDefinition, type UserEvmAssetRecord } from '@/core/chains/user-assets'
 import type { ManagedTokenRow } from '@/popup/services/managed-token-list'
+import type { FundingSource } from '@/types'
 
 export interface SendAsset {
   readonly asset: PortfolioReadModel['assets'][number]
@@ -69,7 +70,8 @@ export type SendAssetSelectionRow =
     }>
   | Readonly<{
       kind: 'zcash'
-      key: 'zcash'
+      key: `zcash:${FundingSource}`
+      source: FundingSource
       amount: string
       priceUsd: number
     }>
@@ -126,7 +128,11 @@ export function buildSendAssetSelectionModel(input: {
   readonly catalog?: readonly ManagedTokenRow[]
   readonly chains?: readonly SendAsset['chain'][]
   readonly hiddenAssetIds?: ReadonlySet<string>
-  readonly zcashTotal: string
+  readonly zcashSources: readonly Readonly<{
+    type: FundingSource
+    available: string
+    disabledReason?: string
+  }>[]
   readonly zcashEnabled: boolean
   readonly zcashNetwork: 'mainnet' | 'testnet'
   readonly zecPrice: number
@@ -207,15 +213,27 @@ export function buildSendAssetSelectionModel(input: {
   const priceById = new Map(
     input.prices?.quotes.map(quote => [quote.assetId, quote.priceUsd]) ?? []
   )
-  const zcashRank = rankTokenSearchFields(
-    { symbol: 'ZEC', name: 'Zcash', searchTerms: ['Zcash Testnet'] },
-    query
-  )
-  const zcashMatches =
+  const zcashSources =
     input.zcashEnabled &&
     isSelectableChainFamily('zcash', enabledFlags) &&
-    (selectedNetwork === 'all' || selectedNetwork === 'zcash') &&
-    zcashRank < 99
+    (selectedNetwork === 'all' || selectedNetwork === 'zcash')
+      ? input.zcashSources.filter(source => {
+          if (source.disabledReason) return false
+          const rank = rankTokenSearchFields(
+            {
+              symbol: 'ZEC',
+              name: 'Zcash',
+              searchTerms: [
+                'Zcash Testnet',
+                source.type === 'shielded' ? 'Shield ZEC' : 'Transparent ZEC'
+              ]
+            },
+            query
+          )
+          searchRanks.set(`zcash:${source.type}`, rank)
+          return rank < 99
+        })
+      : []
   const assetRank = (entry: SendAsset) => {
     if (!query) return 0
     const rank = rankTokenSearchFields(
@@ -279,21 +297,17 @@ export function buildSendAssetSelectionModel(input: {
         priceUsd: priceById.get(entry.token.assetId) ?? null,
         entry
       })),
-      ...(zcashMatches
-        ? [
-            {
-              kind: 'zcash' as const,
-              key: 'zcash' as const,
-              amount: input.zcashTotal,
-              priceUsd: input.zecPrice
-            }
-          ]
-        : [])
+      ...zcashSources.map(source => ({
+        kind: 'zcash' as const,
+        key: `zcash:${source.type}` as const,
+        source: source.type,
+        amount: source.available,
+        priceUsd: input.zecPrice
+      }))
     ])
   ].sort((left, right) => {
     if (!query) return 0
-    const rank = (row: SendAssetSelectionRow) =>
-      row.kind === 'zcash' ? zcashRank : (searchRanks.get(row.key) ?? 99)
+    const rank = (row: SendAssetSelectionRow) => searchRanks.get(row.key) ?? 99
     return rank(left) - rank(right)
   })
   return Object.freeze({
