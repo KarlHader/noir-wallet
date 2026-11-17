@@ -11,6 +11,7 @@ export const EVM_WALLET_RUNTIME_ERROR_CODES = Object.freeze([
   'simulation-failed',
   'network-unavailable',
   'nonce-recovery-required',
+  'replacement-unavailable',
   'request-failed'
 ] as const)
 
@@ -39,6 +40,7 @@ const ERROR_MESSAGES: Readonly<Record<EvmWalletRuntimeErrorCode, string>> = Obje
   'simulation-failed': 'The EVM transaction failed simulation',
   'network-unavailable': 'The EVM network is unavailable',
   'nonce-recovery-required': 'Resolve the current EVM nonce before sending another transaction',
+  'replacement-unavailable': 'This transaction is no longer available for replacement',
   'request-failed': 'The EVM wallet request failed'
 })
 

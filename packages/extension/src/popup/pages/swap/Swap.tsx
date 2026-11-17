@@ -5648,7 +5648,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 !effectiveAccountId ||
                 !swap.tokenIn ||
                 !swap.tokenOut ||
-                !resolvedRecipientAddress
+                !resolvedRecipientAddress ||
+                !quoteResult ||
+                !liveQuoteRequest
               )
                 throw new Error('Swap approval context changed. Review the Swap again.')
               await swapApprovalContinuationClient.save({
@@ -5668,6 +5670,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 sourceMode: executionSourceMode,
                 destinationMode,
                 customRecipient: requiresRecipientAddress,
+                quoteHandle: quoteResult.quoteHandle,
+                quoteRequestKey: liveQuoteRequest.key,
                 ...(publicPrivacySendRequested ? { purpose: 'public-private-send' as const } : {})
               })
             }
@@ -5698,7 +5702,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             toast.error('Token approval is signed but still waiting to broadcast')
             return
           }
-          if (quoteResult) void rheaSwapClient.discard(quoteResult.quoteHandle).catch(() => {})
           setSubmittedApproval({
             graph: submission.value.graph,
             owner: preparedQuoteTransfer.source.refundAddress,
@@ -5707,10 +5710,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           })
           setApprovalError(null)
           setPendingRheaEvmAfterApproval(null)
-          setQuoteResult(null)
-          setRheaReview(null)
-          setLiveQuoteKey(null)
-          setQuoteReceivedAt(null)
           setViewStep('approval-pending')
           return
         }
@@ -5859,8 +5858,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           continuation.destinationMode !== destinationMode)
       )
         throw new Error('Swap details changed. Start a new Swap.')
-      const allowance = continuation
-        ? (await swapApprovalContinuationClient.continue(continuation.transactionId)).amountRaw
+      const resumed = continuation
+        ? await swapApprovalContinuationClient.continue(continuation.transactionId)
+        : null
+      const allowance = resumed
+        ? resumed.amountRaw
         : await evmWalletClient.getTokenAllowance(
             walletOwnedSource.chain.chain.id,
             submittedApproval.token,
@@ -5874,11 +5876,33 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         return
       }
       if (continuation) completedApprovalId.current = continuation.transactionId
+      const restoredQuote =
+        resumed?.quote &&
+        continuation?.quoteHandle === resumed.quote.quoteHandle &&
+        continuation.quoteRequestKey === liveQuoteRequest.key &&
+        resumed.quote.recipient.toLowerCase() === resolvedRecipientAddress?.toLowerCase() &&
+        isRheaSwapQuoteFresh(resumed.quote) &&
+        swap.tokenOut
+          ? resumed.quote
+          : null
+      if (restoredQuote && swap.tokenOut) {
+        setQuoteResult(restoredQuote)
+        setLiveQuoteKey(liveQuoteRequest.key)
+        setQuoteReceivedAt(restoredQuote.receivedAt)
+        swap.setAmountOut(
+          formatBaseUnitDecimalAmount(restoredQuote.estimatedOut, swap.tokenOut.decimals)
+        )
+      }
+      const reuseApprovedQuote =
+        restoredQuote !== null ||
+        (quoteResult !== null &&
+          liveQuoteKey === liveQuoteRequest.key &&
+          isRheaSwapQuoteFresh(quoteResult))
       reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
       setSubmittedApproval(null)
       setApprovalReviewScope(walletSourcesScope)
       setViewStep('input')
-      setQuoteRefreshTick(current => current + 1)
+      if (!reuseApprovedQuote) setQuoteRefreshTick(current => current + 1)
     } catch (error) {
       if (sequence === quoteRequestSequence.current)
         setApprovalError(getRheaSwapErrorMessage(error))

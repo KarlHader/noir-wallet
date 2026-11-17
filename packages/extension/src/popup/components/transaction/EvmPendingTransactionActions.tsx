@@ -6,7 +6,7 @@ import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { cn } from '@/lib/utils'
 import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
 import { openModal } from '@/popup/provider/ModalManager'
-import { evmWalletClient } from '@/popup/services/evm-wallet-client'
+import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { toast } from '@/store/toast-store'
 import { AmountDisplay } from '../common/AmountDisplay'
 import { Button } from '../ui/button'
@@ -37,6 +37,7 @@ export function EvmPendingTransactionActions({
 }) {
   const [busy, setBusy] = useState<PendingAction | null>(null)
   const [submittedFor, setSubmittedFor] = useState<string | null>(null)
+  const [unavailableFor, setUnavailableFor] = useState<string | null>(null)
   const mounted = useRef(true)
   const latest = useRef({ item, evmChainIds, accountMatches, shieldQuoteExpiresAt })
   latest.current = { item, evmChainIds, accountMatches, shieldQuoteExpiresAt }
@@ -49,7 +50,9 @@ export function EvmPendingTransactionActions({
   const canCancel = accountMatches && canCancelEvmActivity(item, evmChainIds)
   const canSpeedUp =
     accountMatches && canSpeedUpEvmActivity(item, evmChainIds, Date.now(), shieldQuoteExpiresAt)
-  if ((!canCancel && !canSpeedUp) || submittedFor === item.id) return null
+  const originKey = `${item.id}:${item.updatedAt}:${getPendingEvmActivityOrigin(item, evmChainIds)?.evidence?.transactionHash ?? ''}`
+  if ((!canCancel && !canSpeedUp) || submittedFor === item.id || unavailableFor === originKey)
+    return null
 
   const handleAction = async (action: PendingAction) => {
     if (busy || !accountMatches) return
@@ -206,8 +209,12 @@ export function EvmPendingTransactionActions({
       }
     } catch (error) {
       if (review) await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
-      if (stillCurrent())
+      if (stillCurrent()) {
+        if (error instanceof EvmWalletClientError && error.code === 'replacement-unavailable') {
+          setUnavailableFor(originKey)
+        }
         toast.error(error instanceof Error ? error.message : 'The transaction could not be updated')
+      }
     } finally {
       if (mounted.current) setBusy(null)
     }

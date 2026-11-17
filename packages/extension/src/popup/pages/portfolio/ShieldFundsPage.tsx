@@ -358,12 +358,7 @@ function ShieldFundsContent() {
                     currentWalletId &&
                     currentAccountId
                       ? navigate(shieldZcashEnablePath(currentWalletId, currentAccountId))
-                      : navigate(
-                          withShieldAsset(
-                            `/shield-provider?provider=${provider}&mode=${mode}`,
-                            requestedAssetId
-                          )
-                        )
+                      : navigate(`/shield-provider?provider=${provider}&mode=${mode}`)
                   }
                   className="wallet-interactive flex h-[154px] min-w-0 flex-col overflow-hidden rounded-lg bg-wallet-surface text-left hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 >

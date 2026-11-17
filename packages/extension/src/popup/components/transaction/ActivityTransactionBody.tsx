@@ -322,7 +322,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
   if (swap) {
     return (
       <div className="flex flex-col items-center py-7 text-center" data-activity-swap-detail>
-        <ActivityRouteTokenIcons route={swap} size="detail" />
+        <ActivityRouteTokenIcons item={item} route={swap} size="detail" />
         {swap.isExternalDeposit ? (
           <div className="mt-4 max-w-full">
             <p className="text-sm text-muted">

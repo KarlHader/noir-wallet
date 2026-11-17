@@ -156,6 +156,49 @@ export function canReverseSwapPair(
   )
 }
 
+export function isSameSwapTokenRouteIdentity(
+  left: RheaSwapToken | null,
+  right: RheaSwapToken | null
+): boolean {
+  if (!left || !right) return left === right
+  const address = (token: RheaSwapToken) =>
+    /^[1-9]\d*$/.test(token.rheaChainId) ? token.rheaAddress.toLowerCase() : token.rheaAddress
+  return (
+    left.assetId === right.assetId &&
+    left.rheaChainId === right.rheaChainId &&
+    address(left) === address(right) &&
+    left.decimals === right.decimals &&
+    left.isNative === right.isNative
+  )
+}
+
+function findReverseCatalogToken(
+  catalog: readonly RheaSwapToken[],
+  token: RheaSwapToken
+): RheaSwapToken | undefined {
+  const sameAddress = (candidate: RheaSwapToken) =>
+    /^[1-9]\d*$/.test(token.rheaChainId)
+      ? candidate.rheaAddress.toLowerCase() === token.rheaAddress.toLowerCase()
+      : candidate.rheaAddress === token.rheaAddress
+  const matchesRoute = (candidate: RheaSwapToken) =>
+    candidate.rheaChainId === token.rheaChainId &&
+    sameAddress(candidate) &&
+    candidate.decimals === token.decimals &&
+    candidate.isNative === token.isNative
+  const exact = findSwapTokenInCatalog(catalog, token)
+  return (exact && matchesRoute(exact) ? exact : undefined) ?? catalog.find(matchesRoute)
+}
+
+function isWalletErc20SwapToken(token: RheaSwapToken): boolean {
+  if (token.isDisplaySeed || token.isNative || !/^[1-9]\d*$/.test(token.rheaChainId)) return false
+  const contract = token.rheaAddress.toLowerCase()
+  return (
+    /^0x[0-9a-f]{40}$/.test(contract) &&
+    token.contractAddress?.toLowerCase() === contract &&
+    token.assetId.toLowerCase() === `eip155:${token.rheaChainId}/erc20:${contract}`
+  )
+}
+
 export async function loadReversedSwapPair(input: {
   readonly tokenIn: RheaSwapToken
   readonly tokenOut: RheaSwapToken
@@ -172,8 +215,12 @@ export async function loadReversedSwapPair(input: {
   const destinations =
     input.tokenIn.rheaChainId === input.tokenOut.rheaChainId ? sources : crossChainDestinations
   if (input.isCancelled()) return null
-  const tokenIn = findSwapTokenInCatalog(sources, input.tokenOut)
-  const tokenOut = findSwapTokenInCatalog(destinations, input.tokenIn)
+  const tokenIn =
+    findReverseCatalogToken(sources, input.tokenOut) ??
+    (isWalletErc20SwapToken(input.tokenOut) ? input.tokenOut : undefined)
+  const tokenOut =
+    findReverseCatalogToken(destinations, input.tokenIn) ??
+    (isWalletErc20SwapToken(input.tokenIn) ? input.tokenIn : undefined)
   if (!tokenIn || !tokenOut)
     throw new Error('This pair is unavailable in the reverse direction. Try another asset.')
   return { tokenIn, tokenOut }

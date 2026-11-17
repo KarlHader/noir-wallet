@@ -252,7 +252,9 @@ it('binds a Swap continuation to the approved Ledger calldata and active account
     recipientAddress: address,
     sourceMode: 'main',
     destinationMode: 'main',
-    customRecipient: false
+    customRecipient: false,
+    quoteHandle: 'rhea-quote:ledger-one',
+    quoteRequestKey: 'bound-request'
   }
   const router = { getExternalSigningRequest: async () => request }
   try {
@@ -263,6 +265,14 @@ it('binds a Swap continuation to the approved Ledger calldata and active account
     await assert.rejects(
       saveSwapApprovalContinuation({ ...input, amountRaw: '124' }, router, async () => active),
       /does not match/
+    )
+    await assert.rejects(
+      saveSwapApprovalContinuation(
+        { ...input, quoteRequestKey: undefined },
+        router,
+        async () => active
+      ),
+      /Invalid Swap continuation/
     )
     assert.equal(values.size, 0)
     let reads = 0
@@ -275,6 +285,8 @@ it('binds a Swap continuation to the approved Ledger calldata and active account
     assert.equal(values.size, 0)
     const saved = await saveSwapApprovalContinuation(input, router, async () => active)
     assert.equal(saved.transactionId, transactionId)
+    assert.equal(saved.quoteHandle, input.quoteHandle)
+    assert.equal(saved.quoteRequestKey, input.quoteRequestKey)
     assert.equal(values.size, 1)
     const confidentialSend = {
       ...input,

@@ -774,7 +774,7 @@ export function getPendingEvmActivityOrigin(
     item.snapshot?.direction !== 'incoming' &&
     item.snapshot?.evm !== undefined &&
     segment !== undefined &&
-    (segment.status === 'broadcast' || segment.status === 'confirming') &&
+    segment.status === 'broadcast' &&
     segment.target.kind === 'onchain' &&
     evmChainIds.includes(segment.target.chainId) &&
     /^0x[0-9a-f]{64}$/.test(segment.evidence?.transactionHash ?? '') &&

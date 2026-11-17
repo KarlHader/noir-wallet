@@ -4,6 +4,7 @@ import { parseTransactionGraph } from '@/core/transactions/domain'
 import { parseChainId } from '@/core/chains/registry'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
+  normalizeRheaSwapEvmTokenAssetId,
   type RheaSwapExecutionView,
   type RheaSwapEvmCallView,
   type RheaSwapEvmSignaturePlan,
@@ -384,7 +385,12 @@ export function parseRheaSwapToken(value: unknown): RheaSwapToken {
     throw new Error('RHEA Swap token metadata is invalid')
   }
   return Object.freeze({
-    assetId: readString(value.assetId, 'RHEA Swap token asset ID'),
+    assetId: normalizeRheaSwapEvmTokenAssetId(
+      readString(value.assetId, 'RHEA Swap token asset ID'),
+      chain,
+      readString(value.rheaAddress, 'RHEA Swap token address'),
+      value.isNative
+    ),
     blockchain: descriptor.blockchain,
     contractAddress: value.contractAddress,
     decimals: value.decimals,

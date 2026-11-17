@@ -81,6 +81,7 @@ import {
   resolvePrivateBalanceTransferAmount
 } from '@/popup/services/private-balance-transfer'
 import { estimateConfidentialSendTime } from '@/popup/services/send-time-estimate'
+import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 
 function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): string {
   return chain.family === 'evm'
@@ -124,7 +125,8 @@ export function ShieldWithdrawForm({
   onSelectPublic,
   onOpenSourcePicker,
   onSourcePickerState,
-  sourceSelectorActive = false
+  sourceSelectorActive = false,
+  moveToOwnZcash = false
 }: {
   readonly active: boolean
   readonly entry: Readonly<ShieldWithdrawEntry>
@@ -142,8 +144,10 @@ export function ShieldWithdrawForm({
   readonly onOpenSourcePicker: () => void
   readonly onSourcePickerState?: (state: ShieldWithdrawSourcePickerState) => void
   readonly sourceSelectorActive?: boolean
+  readonly moveToOwnZcash?: boolean
 }) {
   const { navigate } = useNavigate()
+  const actionLabel = moveToOwnZcash ? 'Move' : 'Send'
   const providerIsNear = entry.provider === null || entry.provider === 'near-confidential'
   const routeAssetId = entry.assetId ?? ''
   const routeNetworkId = entry.networkId
@@ -154,13 +158,16 @@ export function ShieldWithdrawForm({
   const network = useWalletStore(state => state.currentNetwork)
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const { activeAccount } = useActiveAccountNetworks()
+  const ownZcashRecipients = getConfidentialZcashMoveRecipients(activeAccount, network)
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
     nativeAccount: activeAccount
   })
   const canManageNear =
-    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
+    providerIsNear &&
+    getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0 &&
+    (!moveToOwnZcash || ownZcashRecipients.length > 0)
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
@@ -169,7 +176,8 @@ export function ShieldWithdrawForm({
     routeNetworkId,
     routeRecipient,
     routeAmount,
-    entry.provider
+    entry.provider,
+    moveToOwnZcash
   ])
   const latestEntry = useRef(entryKey)
   latestEntry.current = entryKey
@@ -188,7 +196,12 @@ export function ShieldWithdrawForm({
   const [sourceId, setSourceId] = useState(routeAssetId)
   const [destinationNetworkId, setDestinationNetworkId] = useState<string | null>(routeNetworkId)
   const [amount, setAmount] = useState(routeAmount)
-  const [recipient, setRecipient] = useState(routeRecipient)
+  const [recipientDraft, setRecipient] = useState(routeRecipient)
+  const recipient = moveToOwnZcash
+    ? (ownZcashRecipients.find(item => item.address === recipientDraft)?.address ??
+      ownZcashRecipients[0]?.address ??
+      '')
+    : recipientDraft
   const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [slippage, setSlippage] = useState(0.5)
@@ -369,11 +382,13 @@ export function ShieldWithdrawForm({
   const routedManaged = routedPublicAsset
     ? resolveShieldManagedAsset(routedPublicAsset, managedAssets, catalogTokens, network)
     : null
-  const source = sourceId
-    ? (sources.find(item => item.asset.asset.id === sourceId) ??
-      sources.find(item => item.managed.protocolAssetId === routedManaged?.protocolAssetId) ??
-      null)
-    : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
+  const source = moveToOwnZcash
+    ? (sources.find(item => item.asset.asset.id === routeAssetId) ?? null)
+    : sourceId
+      ? (sources.find(item => item.asset.asset.id === sourceId) ??
+        sources.find(item => item.managed.protocolAssetId === routedManaged?.protocolAssetId) ??
+        null)
+      : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
   const selectedSourceAssetId = source?.asset.asset.id
   const pickerStateKey = JSON.stringify([
     scopeKey,
@@ -423,8 +438,9 @@ export function ShieldWithdrawForm({
     option => option
   )
   const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
-  const destination =
-    source && selectedDestinationNetworkId
+  const destination = moveToOwnZcash
+    ? source
+    : source && selectedDestinationNetworkId
       ? selectShieldWithdrawDestinationForNetwork(
           destinations,
           source,
@@ -463,7 +479,7 @@ export function ShieldWithdrawForm({
       !recipientValid
     )
       return null
-    return buildExternalShieldWithdrawRequest({
+    const request = buildExternalShieldWithdrawRequest({
       network,
       keyDomainId: account.walletId,
       accountId: account.accountId,
@@ -473,6 +489,7 @@ export function ShieldWithdrawForm({
       destination,
       slippageBps: Math.round(slippage * 100)
     })
+    return moveToOwnZcash ? { ...request, purpose: 'move' as const } : request
   }, [
     network,
     account?.walletId,
@@ -484,7 +501,8 @@ export function ShieldWithdrawForm({
     previewAmountRaw,
     slippage,
     recipient,
-    recipientValid
+    recipientValid,
+    moveToOwnZcash
   ])
   const {
     preview,
@@ -534,7 +552,7 @@ export function ShieldWithdrawForm({
       },
       prepared
         ? {
-            operation: 'send',
+            operation: moveToOwnZcash ? 'move' : 'send',
             amount: prepared.amount,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
             from: 'Shield · NEAR Confidential',
@@ -582,16 +600,19 @@ export function ShieldWithdrawForm({
         openActivity(review.transactionId)
         return
       }
-      if (!matchesExternalShieldWithdrawReview(review, request)) {
+      if (
+        !matchesExternalShieldWithdrawReview(review, request) ||
+        review.purpose !== request.purpose
+      ) {
         void confidentialFundingClient.cancel(review.planId).catch(() => {})
-        throw new Error('Send review changed. Try again.')
+        throw new Error(`${actionLabel} review changed. Try again.`)
       }
       confirmationAttempt.current = null
       setUncertain(false)
       setPrepared({ review, request, source, destination, amount })
     } catch (cause) {
       if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
-        setError(cause instanceof Error ? cause.message : 'Send quote unavailable')
+        setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
     } finally {
       if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey)
         setBusy(false)
@@ -607,7 +628,7 @@ export function ShieldWithdrawForm({
     if (isUnsignedShieldTerminal(plan)) {
       setPrepared(null)
       setUncertain(false)
-      setError('Send was not started. Try again.')
+      setError(`${actionLabel} was not started. Try again.`)
       return 'failed'
     }
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
@@ -643,12 +664,12 @@ export function ShieldWithdrawForm({
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError('Send was not started. Review and try again.')
+          setError(`${actionLabel} was not started. Review and try again.`)
         }
         return
       }
       if (prepared.review.expiresAt <= Date.now())
-        throw new Error('Send quote expired. Review again.')
+        throw new Error(`${actionLabel} quote expired. Review again.`)
       confirmationAttempt.current = prepared.review.planId
       const plan = await confidentialFundingClient.confirm(
         prepared.review.planId,
@@ -663,15 +684,15 @@ export function ShieldWithdrawForm({
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError(cause instanceof Error ? cause.message : 'Send could not start')
+          setError(cause instanceof Error ? cause.message : `${actionLabel} could not start`)
         } else if (state === 'pending') {
           setUncertain(true)
-          setError('Send status is pending. Check status before trying again.')
+          setError(`${actionLabel} status is pending. Check status before trying again.`)
         }
       } catch {
         if (scopeStillCurrent()) {
           setUncertain(true)
-          setError('Send status unavailable. Check status before trying again.')
+          setError(`${actionLabel} status unavailable. Check status before trying again.`)
         }
       }
     } finally {
@@ -703,7 +724,7 @@ export function ShieldWithdrawForm({
       <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <TransactionReviewView
           variant="figma"
-          title="Confirm Send"
+          title={moveToOwnZcash ? 'Confirm Move' : 'Confirm Send'}
           asset={{
             assetId: prepared.source.asset.asset.id,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
@@ -715,7 +736,7 @@ export function ShieldWithdrawForm({
           summary={
             <TransactionReviewExchangeSummary
               presentation="single"
-              destinationLabel="Recipient receives"
+              destinationLabel={moveToOwnZcash ? 'You receive' : 'Recipient receives'}
               destinationPrefix=""
               source={{
                 asset: {
@@ -739,7 +760,10 @@ export function ShieldWithdrawForm({
           }
           rows={[
             { label: 'From', content: 'Shield · NEAR Confidential' },
-            { label: 'Recipient', content: prepared.review.destinationAddress },
+            {
+              label: moveToOwnZcash ? 'To' : 'Recipient',
+              content: prepared.review.destinationAddress
+            },
             {
               label: 'Network',
               content: (
@@ -755,7 +779,7 @@ export function ShieldWithdrawForm({
               )
             },
             {
-              label: 'Recipient receives',
+              label: moveToOwnZcash ? 'You receive' : 'Recipient receives',
               content: (
                 <AmountDisplay
                   value={output}
@@ -842,7 +866,8 @@ export function ShieldWithdrawForm({
     <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <SendFormView
         domain="shield"
-        availableDomains={['public', 'shield']}
+        availableDomains={moveToOwnZcash ? ['shield'] : ['public', 'shield']}
+        sourceLabel={moveToOwnZcash ? 'From' : undefined}
         disabled={busy}
         onDomainChange={domain => {
           if (domain === 'public') {
@@ -858,61 +883,90 @@ export function ShieldWithdrawForm({
           }
         }}
         recipient={
-          <div className="space-y-2">
-            <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
-              <SendFieldLabel>Send to</SendFieldLabel>
-              <button
-                type="button"
-                disabled={busy || destinations.length === 0}
-                onClick={() => {
-                  keepSelectedSource()
-                  setNetworkPickerOpen(true)
-                }}
-                className="wallet-interactive inline-flex min-w-0 items-center gap-1.5 hover:text-primary disabled:opacity-50"
-                aria-label={`Destination network, ${destinationNetwork?.displayName ?? 'select network'}`}
-              >
-                {destinationNetwork && (
-                  <ChainIcon
-                    chain={withdrawChainIconAlias(destinationNetwork)}
-                    width={16}
-                    height={16}
-                    className="shrink-0 rounded-[4px]"
+          moveToOwnZcash ? (
+            <fieldset className="space-y-2" disabled={busy}>
+              <legend className="mb-2">
+                <SendFieldLabel>To</SendFieldLabel>
+              </legend>
+              {ownZcashRecipients.map(item => (
+                <label
+                  key={item.address}
+                  className="flex min-w-0 items-center gap-3 rounded-[10px] border border-white/10 bg-wallet-surface p-3"
+                >
+                  <input
+                    type="radio"
+                    name="zcash-move-recipient"
+                    value={item.address}
+                    checked={recipient === item.address}
+                    onChange={() => setRecipient(item.address)}
+                    className="accent-primary"
                   />
-                )}
-                <span className="truncate">
-                  {destinationNetwork?.displayName ?? 'Select network'}
-                </span>
-                <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0" />
-              </button>
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <span className="text-sm">
+                      {item.privacy === 'transparent' ? 'Transparent' : 'Zcash Shield'}
+                    </span>
+                    <span className="break-all text-xs text-muted">{item.address}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
+                <SendFieldLabel>Send to</SendFieldLabel>
+                <button
+                  type="button"
+                  disabled={busy || destinations.length === 0}
+                  onClick={() => {
+                    keepSelectedSource()
+                    setNetworkPickerOpen(true)
+                  }}
+                  className="wallet-interactive inline-flex min-w-0 items-center gap-1.5 hover:text-primary disabled:opacity-50"
+                  aria-label={`Destination network, ${destinationNetwork?.displayName ?? 'select network'}`}
+                >
+                  {destinationNetwork && (
+                    <ChainIcon
+                      chain={withdrawChainIconAlias(destinationNetwork)}
+                      width={16}
+                      height={16}
+                      className="shrink-0 rounded-[4px]"
+                    />
+                  )}
+                  <span className="truncate">
+                    {destinationNetwork?.displayName ?? 'Select network'}
+                  </span>
+                  <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0" />
+                </button>
+              </div>
+              <div>
+                <SendRecipientInputCard
+                  id="shield-send-recipient"
+                  label="Recipient address"
+                  value={recipient}
+                  onChange={value => {
+                    keepSelectedSource()
+                    setRecipient(value)
+                  }}
+                  placeholder="Enter address"
+                  variant="filled"
+                  hideLabel
+                  disabled={busy || !destination}
+                  onSelectRecipient={
+                    busy || !destination
+                      ? undefined
+                      : () => {
+                          keepSelectedSource()
+                          setPicker('recipient')
+                        }
+                  }
+                />
+              </div>
             </div>
-            <div>
-              <SendRecipientInputCard
-                id="shield-send-recipient"
-                label="Recipient address"
-                value={recipient}
-                onChange={value => {
-                  keepSelectedSource()
-                  setRecipient(value)
-                }}
-                placeholder="Enter address"
-                variant="filled"
-                hideLabel
-                disabled={busy || !destination}
-                onSelectRecipient={
-                  busy || !destination
-                    ? undefined
-                    : () => {
-                        keepSelectedSource()
-                        setPicker('recipient')
-                      }
-                }
-              />
-            </div>
-          </div>
+          )
         }
         amountInput={
           <SendAmountInputCard
-            ariaLabel="Send amount"
+            ariaLabel={moveToOwnZcash ? 'Move amount' : 'Send amount'}
             disabled={busy}
             available={availableRaw}
             symbol={formatSymbol(displayedAsset?.metadata.symbol)}
@@ -930,7 +984,7 @@ export function ShieldWithdrawForm({
         assetSelector={
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || moveToOwnZcash}
             onClick={onOpenSourcePicker}
             className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
             aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
@@ -952,7 +1006,9 @@ export function ShieldWithdrawForm({
                 <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
               )}
             </span>
-            <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
+            {!moveToOwnZcash && (
+              <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
+            )}
           </button>
         }
         balance={
@@ -1117,7 +1173,9 @@ export function ShieldWithdrawForm({
           className="max-h-[80vh] min-h-0 overflow-y-auto bg-wallet-surface p-4 pb-6"
         >
           <DialogTitle>{picker === 'slippage' ? 'Slippage' : 'Recipient'}</DialogTitle>
-          <DialogDescription className="sr-only">Set Send {picker}</DialogDescription>
+          <DialogDescription className="sr-only">
+            Set {actionLabel} {picker}
+          </DialogDescription>
           {picker === 'slippage' ? (
             <SlippageSettingContent
               key={slippage}

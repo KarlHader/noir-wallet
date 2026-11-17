@@ -16,6 +16,7 @@ import {
   pickProvisionalSwapSource,
   mergeSelectedSwapSourceCatalog,
   loadReversedSwapPair,
+  isSameSwapTokenRouteIdentity,
   type SwapInitialCatalogOptions
 } from '@/popup/services/swap-catalog-loading'
 import {
@@ -597,8 +598,8 @@ export function useSwapState(
         const isCancelled = () =>
           sequence !== switchRequestSequence.current ||
           revision !== inputRevision.current ||
-          activePair.current.tokenIn !== tokenIn ||
-          activePair.current.tokenOut !== tokenOut ||
+          !isSameSwapTokenRouteIdentity(activePair.current.tokenIn, tokenIn) ||
+          !isSameSwapTokenRouteIdentity(activePair.current.tokenOut, tokenOut) ||
           options?.isCancelled?.() === true
         const pair = await loadReversedSwapPair({
           tokenIn,

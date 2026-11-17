@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import { TokenSelectionSearch } from '../tokens/TokenSelectionList'
+import { sortTokenSelectorNetworks } from '../tokens/token-selector-chain-order'
 import { ChainIcon } from './ChainIcon'
 import { PageHeader } from './PageHeader'
 
@@ -50,8 +51,9 @@ export function ChainSelector({
       setSelectionError('')
     }
   }, [open])
-  const filtered = options.filter(option =>
-    option.name.toLowerCase().includes(search.trim().toLowerCase())
+  const filtered = sortTokenSelectorNetworks(
+    options.filter(option => option.name.toLowerCase().includes(search.trim().toLowerCase())),
+    option => option
   )
   const busy = (loading && !allowSelectionWhileLoading) || pendingId !== null
   const select = async (id: string) => {

@@ -26,6 +26,7 @@ import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isValidExternalRecipient } from './confidential-funding-recipient'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { SwapToken } from '@/core/services/intents-api'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import {
   resolveIntentsEvmAssets,
   resolveIntentsEvmChainId
@@ -218,6 +219,7 @@ interface ConfidentialFundingRouteInput {
   readonly feeSelection?: EvmFeeSelection
   readonly dedupKey?: string
   readonly externalRecipient?: string
+  readonly purpose?: 'move'
 }
 
 export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
@@ -251,8 +253,10 @@ export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
 function fundingReferral(input: {
   readonly operation?: 'deposit' | 'withdraw' | 'swap' | 'cluster'
   readonly externalRecipient?: string
+  readonly purpose?: 'move'
 }): NoirIntentsReferral {
   if (input.operation === 'swap') return NOIR_SWAP_REFERRAL
+  if (input.purpose === 'move') return NOIR_MOVE_REFERRAL
   return input.externalRecipient ? NOIR_SEND_REFERRAL : NOIR_MOVE_REFERRAL
 }
 
@@ -429,6 +433,7 @@ function reviewFromPlan(
           : undefined
   return Object.freeze({
     planId: plan.planId,
+    ...(plan.purpose ? { purpose: plan.purpose } : {}),
     ...(plan.operation ? { operation: plan.operation } : {}),
     ...(plan.sourceDomain ? { sourceDomain: plan.sourceDomain } : {}),
     ...(plan.destinationDomain ? { destinationDomain: plan.destinationDomain } : {}),
@@ -530,6 +535,7 @@ function directApprovalIntent(plan: ConfidentialFundingPlan): unknown {
     destination: plan.destination,
     signerId: plan.signerId,
     externalRecipient: plan.externalRecipient,
+    purpose: plan.purpose,
     addressIndex: plan.addressIndex,
     slippageBps: plan.slippageBps,
     expectedOutputRaw: plan.expectedOutputRaw,
@@ -2045,6 +2051,7 @@ export class ConfidentialFundingCoordinator {
       destination: Object.freeze({ ...input.destination, address: destinationAddress }),
       signerId: sourceIdentity.address,
       ...(input.externalRecipient ? { externalRecipient: input.externalRecipient } : {}),
+      ...(input.purpose ? { purpose: input.purpose } : {}),
       addressIndex: sourceIdentity.addressIndex,
       slippageBps: input.slippageBps,
       requiresDeposit: isDeposit,
@@ -3154,6 +3161,7 @@ export class ConfidentialFundingCoordinator {
       readonly chainId: ChainId
     }
   } {
+    this.assertOwnZcashMoveRecipient(value)
     const sourceChain = parseChainId(value.source.chainId)
     const destinationChain = parseChainId(value.destination.chainId)
     const zcashChainId = getZcashChainId(this.options.network)
@@ -3268,6 +3276,7 @@ export class ConfidentialFundingCoordinator {
       }),
       slippageBps: value.slippageBps,
       ...(value.externalRecipient ? { externalRecipient: value.externalRecipient } : {}),
+      ...(value.purpose ? { purpose: value.purpose } : {}),
       ...(value.feeTier ? { feeTier: value.feeTier } : {}),
       ...(value.feeSelection ? { feeSelection: parseEvmFeeSelection(value.feeSelection) } : {}),
       ...(value.dedupKey ? { dedupKey: value.dedupKey } : {})
@@ -4647,7 +4656,7 @@ export class ConfidentialFundingCoordinator {
         expectedAmountRaw: plan.expectedOutputRaw,
         address: plan.destination.address
       },
-      externalRecipient: Boolean(plan.externalRecipient),
+      externalRecipient: Boolean(plan.externalRecipient) && plan.purpose !== 'move',
       withdrawDepositAddresses: plan.withdraws.map(row => row.depositAddress || null),
       requiresDeposit: plan.requiresDeposit,
       signedWithdrawFingerprint: plan.requestFingerprint,
@@ -4778,6 +4787,7 @@ export class ConfidentialFundingCoordinator {
     const identity = await this.options.signer.resolveIdentity(
       confidentialSigningChainId(plan.source.chainId, plan.destination.chainId, plan.network)
     )
+    this.assertOwnZcashMoveRecipient(plan)
     if (
       identity.context.chainAccount.scope.keyDomainId !== plan.keyDomainId ||
       identity.context.chainAccount.scope.accountId !== plan.accountId ||
@@ -4808,6 +4818,46 @@ export class ConfidentialFundingCoordinator {
       throw new Error('Active Wallet Account changed before private funding completed')
     }
     return identity
+  }
+
+  private assertOwnZcashMoveRecipient(value: {
+    readonly purpose?: 'move'
+    readonly operation?: string
+    readonly sourceDomain?: string
+    readonly destinationDomain?: string
+    readonly network?: Network
+    readonly keyDomainId?: string
+    readonly accountId?: string
+    readonly source: { readonly assetId: string; readonly protocolAssetId: string }
+    readonly destination: { readonly assetId: string; readonly protocolAssetId: string }
+    readonly externalRecipient?: string
+  }): void {
+    if (value.purpose === undefined) return
+    const active = this.options.getNativeZecActiveAccount?.()
+    const assetId = `${getZcashChainId(this.options.network)}/slip44:133`
+    if (
+      value.purpose !== 'move' ||
+      value.operation !== 'withdraw' ||
+      value.sourceDomain !== 'shield' ||
+      value.destinationDomain !== 'public' ||
+      value.source.assetId !== assetId ||
+      value.destination.assetId !== assetId ||
+      value.source.protocolAssetId !== ZEC_ZCASH_ASSET ||
+      value.destination.protocolAssetId !== ZEC_ZCASH_ASSET ||
+      !value.externalRecipient ||
+      !active ||
+      active.network !== value.network ||
+      active.walletId !== value.keyDomainId ||
+      active.accountId !== value.accountId ||
+      !active.refundAddresses.includes(value.externalRecipient)
+    )
+      throw new Error('Zcash Move must receive into the current account')
+    const parsed = parseZcashAddress(value.externalRecipient, this.options.network)
+    if (
+      !parsed.scheme.startsWith('zcash-transparent-') &&
+      !value.externalRecipient.startsWith(this.options.network === 'mainnet' ? 'u1' : 'utest1')
+    )
+      throw new Error('Zcash Move requires a transparent or unified receive address')
   }
 
   private assertSameAccount(

@@ -412,6 +412,20 @@ export interface RheaSwapToken extends SwapToken {
   readonly isDisplaySeed?: true
 }
 
+export function normalizeRheaSwapEvmTokenAssetId(
+  assetId: string,
+  chain: ChainRef,
+  quoteAddress: string,
+  isNative: boolean
+): string {
+  return !isNative &&
+    /^[1-9]\d*$/.test(chain) &&
+    /^0x[0-9a-fA-F]{40}$/.test(assetId) &&
+    assetId.toLowerCase() === quoteAddress.toLowerCase()
+    ? `eip155:${chain}/erc20:${quoteAddress.toLowerCase()}`
+    : assetId
+}
+
 export interface RheaSwapQuoteRequest {
   readonly fromChain: ChainRef
   readonly toChain: ChainRef
@@ -745,9 +759,6 @@ export function toRheaSwapToken(item: SwapTokenListItem): RheaSwapToken {
     isEvmChain && !evmNativeAssetId
       ? `eip155:${descriptor.apiChainId}/${isNative ? 'slip44:60' : `erc20:${readEvmQuoteAddress(item)}`}`
       : catalogAssetId
-  const assetId = isNative
-    ? (evmNativeAssetId ?? chainScopedCatalogAssetId)
-    : chainScopedCatalogAssetId
   const quoteAddress = nativeQuoteAddress
     ? nativeQuoteAddress
     : isEvmChain && !isNative
@@ -755,6 +766,9 @@ export function toRheaSwapToken(item: SwapTokenListItem): RheaSwapToken {
       : isRecord(item.raw) && typeof item.raw.address === 'string'
         ? readString(item.raw.address, 'RHEA Swap quote token address')
         : readString(item.address, 'RHEA Swap quote token address')
+  const assetId = isNative
+    ? (evmNativeAssetId ?? chainScopedCatalogAssetId)
+    : normalizeRheaSwapEvmTokenAssetId(chainScopedCatalogAssetId, item.chain, quoteAddress, false)
   return Object.freeze({
     assetId: readString(assetId, 'RHEA Swap asset ID'),
     blockchain: descriptor.blockchain,

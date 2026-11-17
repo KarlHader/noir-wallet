@@ -27,7 +27,7 @@ import {
 import { resolveWalletUnlockPath } from '@/core/wallet/wallet-unlock-path'
 import { parseLedgerPcztSignatures } from '@/lib/ledger/signature'
 import { safeBig } from '@/lib/big'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
+import { formatBaseUnitDecimalAmount, parseDisplayUnitAmount } from '@/lib/number-format'
 import type { LedgerSigningPayload } from '@/core/worker/types'
 import '@/core/services/rhea-sdk-init'
 import { resolveEvmAddressRole } from '@/core/accounts/evm-address-role'
@@ -188,6 +188,7 @@ import {
   assertPrivateQuoteRoute,
   RHEA_SWAP_CHAIN_CATALOG,
   parseRheaSwapQuoteRequest,
+  toSdkQuoteRequest,
   type PrivateQuotePurpose
 } from '@/core/services/rhea-swap/rhea-swap-model'
 import {
@@ -1343,8 +1344,12 @@ async function reloadMultichainRuntime(
           const state = useWalletStore.getState()
           const walletId = state.currentWalletId
           const accountId = state.currentAccountId
+          const nativeAccount =
+            walletId && accountId ? state.getAccount(walletId, accountId) : undefined
           const addresses =
-            walletId && accountId ? state.getAccount(walletId, accountId)?.addresses : undefined
+            nativeAccount && isAccountNetworkEnabled(nativeAccount, state.currentNetwork, 'zcash')
+              ? nativeAccount.addresses
+              : undefined
           return {
             network: state.currentNetwork,
             walletId,
@@ -2940,7 +2945,59 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         return continueSwapAfterApproval(
           runtimeMessage.transactionId,
           evmTransferRouter,
-          readActive
+          readActive,
+          async record => {
+            const quoteHandle = record.quoteHandle
+            const quoteRequestKey = record.quoteRequestKey
+            const service = rheaSwapService
+            if (!quoteHandle || !quoteRequestKey || !service) return null
+            return accountContextTransition.runActiveOperation(async () => {
+              try {
+                await requireCurrentPrivateSwapQuote(quoteHandle, record.sourceMode)
+                const { request } = await service.readQuoteSecurityContext(quoteHandle)
+                const requestKey: unknown = JSON.parse(quoteRequestKey)
+                if (
+                  !Array.isArray(requestKey) ||
+                  requestKey.length !== 4 ||
+                  requestKey[0] !== record.sourceAssetId ||
+                  requestKey[1] !== record.destinationAssetId ||
+                  JSON.stringify(toSdkQuoteRequest(parseRheaSwapQuoteRequest(requestKey[3]))) !==
+                    JSON.stringify(request)
+                )
+                  return null
+                const source = parseAssetId(record.sourceAssetId)
+                if (
+                  typeof request.tokenIn.decimals !== 'number' ||
+                  request.fromChain !== record.chainId.slice('eip155:'.length) ||
+                  request.sender.toLowerCase() !== record.owner.toLowerCase() ||
+                  request.recipient?.toLowerCase() !== record.recipientAddress.toLowerCase() ||
+                  request.tokenIn.address.toLowerCase() !== record.token.toLowerCase() ||
+                  request.amountIn !==
+                    parseDisplayUnitAmount(record.amountIn, request.tokenIn.decimals) ||
+                  source.chainId !== record.chainId ||
+                  source.namespace !== 'erc20' ||
+                  source.reference.toLowerCase() !== record.token.toLowerCase()
+                )
+                  return null
+                let approval
+                try {
+                  approval = (await service.readEvmTransactionPlan(quoteHandle)).approval
+                } catch {
+                  approval = (await service.readEvmSignaturePlan(quoteHandle)).approval
+                }
+                if (
+                  !approval ||
+                  approval.transaction.to.toLowerCase() !== record.token.toLowerCase() ||
+                  approval.spender.toLowerCase() !== record.spender.toLowerCase() ||
+                  approval.amountRaw !== record.amountRaw
+                )
+                  return null
+                return service.readQuoteView(quoteHandle)
+              } catch {
+                return null
+              }
+            })
+          }
         )
       }
       await clearSwapApprovalContinuation(runtimeMessage.transactionId)
@@ -4716,7 +4773,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 }
               : {})
         })
-        sendResponse({ error: mapEvmWalletRuntimeError(error) })
+        sendResponse({ error: mapEvmWalletRuntimeError(error, message.type) })
       })
     return true
   }

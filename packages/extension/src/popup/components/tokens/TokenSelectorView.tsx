@@ -11,12 +11,7 @@ import {
 } from './TokenSelectionList'
 import { TokenIcon } from './TokenIcon'
 import { useWalletStore } from '@/store/wallet-store'
-import { resolveEvmChainIconAlias } from '@/config/icons'
-import {
-  orderNetworkIdsByRecency,
-  recordRecentChainSelection,
-  tokenSelectorChainOrderStorageKey
-} from './token-selector-chain-order'
+import { sortTokenSelectorNetworks } from './token-selector-chain-order'
 import {
   addInspectedToken,
   inspectTokenAddress,
@@ -32,7 +27,6 @@ export interface TokenSelectorNetwork {
 }
 
 interface TokenSelectorViewProps {
-  readonly fixedNetworkOrder?: boolean
   readonly accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   readonly search: string
   readonly onSearchChange: (value: string) => void
@@ -59,7 +53,6 @@ interface TokenSelectorViewProps {
 }
 
 export function TokenSelectorView({
-  fixedNetworkOrder = false,
   accountScope,
   search,
   onSearchChange,
@@ -89,50 +82,9 @@ export function TokenSelectorView({
     walletId && accountId
       ? `token-selector-low-balance:${currentNetwork}:${walletId}:${accountId}`
       : null
-  const chainOrderKey =
-    walletId && accountId
-      ? tokenSelectorChainOrderStorageKey({
-          network: currentNetwork,
-          walletId,
-          accountId
-        })
-      : null
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
-  const [recentChainIds, setRecentChainIds] = useState<readonly string[]>([])
-  const pendingRecentChainIds = useRef<readonly string[] | null>(null)
-  useEffect(() => {
-    pendingRecentChainIds.current = null
-    setRecentChainIds([])
-    if (!chainOrderKey) return
-    let active = true
-    void chrome.storage.session
-      .get(chainOrderKey)
-      .then(result => {
-        if (active && pendingRecentChainIds.current === null) {
-          const saved = result[chainOrderKey]
-          setRecentChainIds(
-            Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : []
-          )
-        }
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-      if (pendingRecentChainIds.current) {
-        void chrome.storage.session
-          .set({ [chainOrderKey]: pendingRecentChainIds.current })
-          .catch(() => {})
-      }
-    }
-  }, [chainOrderKey])
   const selectNetwork = (id: string) => {
     onNetworkChange(id)
-    if (chainOrderKey && !fixedNetworkOrder) {
-      pendingRecentChainIds.current = recordRecentChainSelection(
-        pendingRecentChainIds.current ?? recentChainIds,
-        networks.find(network => network.id === id)?.iconChain ?? id
-      )
-    }
   }
   const discoveryKey = `${discovery?.scopeKey ?? ''}:${discovery?.chainId ?? ''}:${search.trim().toLowerCase()}`
   const latestDiscoveryKey = useRef(discoveryKey)
@@ -185,27 +137,14 @@ export function TokenSelectorView({
       cancelled = true
     }
   }, [addressSearch, discovery?.chainId, discoveryKey, items.length, loading, search])
-  const availableById = new Map(
-    networks.filter(network => !network.disabledReason).map(network => [network.id, network])
-  )
-  const availableIdByIconChain = new Map(
-    [...availableById.values()].map(network => [network.iconChain, network.id])
-  )
-  const available = (
-    fixedNetworkOrder
-      ? [...availableById.keys()]
-      : orderNetworkIdsByRecency(
-          [...availableById.keys()],
-          recentChainIds.map(id => {
-            if (availableById.has(id)) return id
-            const iconChain = id.startsWith('eip155:') ? resolveEvmChainIconAlias(id) : id
-            return availableIdByIconChain.get(iconChain) ?? id
-          })
-        )
-  ).map(id => availableById.get(id)!)
+  const orderedNetworks = sortTokenSelectorNetworks(networks, network => ({
+    id: network.id,
+    name: network.label
+  }))
+  const available = orderedNetworks.filter(network => !network.disabledReason)
   const primary = available.slice(0, 5)
   const more = available.slice(5)
-  const disabled = networks.filter(network => network.disabledReason)
+  const disabled = orderedNetworks.filter(network => network.disabledReason)
   const effectiveNetwork =
     selectedNetwork === 'all' || available.some(network => network.id === selectedNetwork)
       ? selectedNetwork
@@ -251,7 +190,7 @@ export function TokenSelectorView({
         onSelect={selectNetwork}
         options={[
           { id: 'all', name: 'All networks' },
-          ...networks.map(network => ({
+          ...orderedNetworks.map(network => ({
             id: network.id,
             name: network.label,
             icon: network.iconChain,

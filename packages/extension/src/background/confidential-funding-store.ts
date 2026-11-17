@@ -170,6 +170,12 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       plan.operation !== 'withdraw' &&
       plan.operation !== 'cluster' &&
       plan.operation !== 'swap') ||
+    (plan.purpose !== undefined &&
+      (plan.purpose !== 'move' ||
+        plan.operation !== 'withdraw' ||
+        plan.sourceDomain !== 'shield' ||
+        plan.destinationDomain !== 'public' ||
+        plan.externalRecipient === undefined)) ||
     (plan.externalRecipient !== undefined &&
       (plan.operation !== 'withdraw' ||
         plan.destinationDomain !== 'public' ||

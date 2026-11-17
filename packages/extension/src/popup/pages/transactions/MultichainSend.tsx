@@ -157,7 +157,6 @@ function AssetSelection({
   return (
     <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
       <TokenSelectorView
-        fixedNetworkOrder
         accountScope={accountScope}
         search={query}
         onSearchChange={setQuery}
@@ -1375,7 +1374,6 @@ export function MultichainSend({
       {sourcePicker && (
         <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
           <TokenSelectorView
-            fixedNetworkOrder
             accountScope={effectiveAccount}
             search={sourcePickerQuery}
             onSearchChange={setSourcePickerQuery}

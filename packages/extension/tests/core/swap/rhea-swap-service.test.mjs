@@ -185,6 +185,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
   })
   const selectedContext = await service.readQuoteSecurityContext(selected.quoteHandle)
   expect(selectedContext.scope).toEqual(scope)
+  expect(await service.readQuoteView(selected.quoteHandle)).toEqual(selected)
   expect(() =>
     assertPrivateQuoteRoute(
       selectedContext.request,
@@ -204,6 +205,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
   ).toThrow(/alternative index/)
   expect(builtRouter).toBe('alternate')
   now = 20_001
+  await expect(service.readQuoteView(selected.quoteHandle)).rejects.toThrow(/expired/)
   await expect(service.prepare(selected.quoteHandle)).rejects.toThrow(/expired/)
   await expect(service.selectRoute(best.quoteHandle, 1)).rejects.toThrow(/expired/)
 })
@@ -603,18 +605,22 @@ test('Zcash unified source quotes bind the shielded funding source', async () =>
   const service = new RheaSwapService(
     {
       async quote(normalizedRequest) {
-        return normalizeQuote(normalizedRequest, {
-          isCrossChain: true,
-          chainType: 'zcash',
-          bestQuote: {
-            router: 'nearintents',
-            amountOut: '2500',
-            minAmountOut: '2400',
-            expiresAt: 31_000,
-            preSwap: null,
-            bridge: null
-          }
-        }, 1_000)
+        return normalizeQuote(
+          normalizedRequest,
+          {
+            isCrossChain: true,
+            chainType: 'zcash',
+            bestQuote: {
+              router: 'nearintents',
+              amountOut: '2500',
+              minAmountOut: '2400',
+              expiresAt: 31_000,
+              preSwap: null,
+              bridge: null
+            }
+          },
+          1_000
+        )
       }
     },
     sessions,
@@ -641,7 +647,11 @@ test('Zcash unified source quotes bind the shielded funding source', async () =>
     ).rejects.toThrow(/funding source/)
   }
   await expect(
-    service.quote(request, undefined, { ...scope, purpose: 'wallet-swap', zcashFundingSource: undefined })
+    service.quote(request, undefined, {
+      ...scope,
+      purpose: 'wallet-swap',
+      zcashFundingSource: undefined
+    })
   ).rejects.toThrow(/funding source/)
 })
 
@@ -1197,9 +1207,10 @@ test('quote and build remain bound across a session-store reload', async () => {
   )
   buildRecipient = 'alice.near'
   for (const field of ['estimatedOut', 'minAmountOut']) {
-    const updatedAmount = field === 'estimatedOut'
-      ? (BigInt(quote.estimatedOut) + 1n).toString()
-      : (BigInt(quote.minAmountOut) - 1n).toString()
+    const updatedAmount =
+      field === 'estimatedOut'
+        ? (BigInt(quote.estimatedOut) + 1n).toString()
+        : (BigInt(quote.minAmountOut) - 1n).toString()
     const driftedBuildService = new RheaSwapService(
       {
         ...client,
@@ -1219,7 +1230,9 @@ test('quote and build remain bound across a session-store reload', async () => {
     const review = await driftedBuildService.prepare(driftedQuote.quoteHandle)
     expect(review[field]).toBe(updatedAmount)
     expect(review[field]).not.toBe(driftedQuote[field])
-    await expect(driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)).resolves.toMatchObject({
+    await expect(
+      driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)
+    ).resolves.toMatchObject({
       [field]: updatedAmount
     })
   }

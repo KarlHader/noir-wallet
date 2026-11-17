@@ -15,6 +15,7 @@ import { assertPersistableTransactionGraph } from '../../../src/infrastructure/p
 import { parseTransactionGraph } from '../../../src/core/transactions/domain/index.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
+import { createConfidentialFundingClient } from '../../../src/popup/services/confidential-funding-client.ts'
 
 const scope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
 const signerId = '0x1111111111111111111111111111111111111111'
@@ -369,11 +370,12 @@ async function harness(
   return { initial, state, store, repository, restart }
 }
 
-function directPreparationHarness(protocolTokens) {
+function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
   const plans = new Map()
   const state = {
     now: 1_000,
     signatures: 0,
+    allowSigning: false,
     identityChains: [],
     signingChains: [],
     formalQuotes: 0,
@@ -430,10 +432,13 @@ function directPreparationHarness(protocolTokens) {
     signMessage: async input => {
       state.signatures += 1
       state.signingChains.push(input.chainId)
+      if (state.allowSigning)
+        return { standard: 'erc191', payload: input.payload, signature: 'test-signature' }
       throw new Error('unexpected signature')
     }
   }
   const api = {
+    getStatus: async () => ({ status: 'PROCESSING' }),
     getBalances: async () => [
       {
         tokenId: confidentialPrivateTokenId(protocolAssetId),
@@ -512,12 +517,14 @@ function directPreparationHarness(protocolTokens) {
       correlationId: 'intent-one'
     })
   }
+  const repository = new InMemoryTransactionRepository()
   const coordinator = new ConfidentialFundingCoordinator({
     network: 'mainnet',
+    getNativeZecActiveAccount,
     api,
     store,
     signer,
-    repository: new InMemoryTransactionRepository(),
+    repository,
     assets: {
       get: id =>
         id === assetId ? nativeAsset : { metadata: { decimals: id === zcashAssetId ? 8 : 18 } },
@@ -553,6 +560,7 @@ function directPreparationHarness(protocolTokens) {
   })
   return {
     coordinator,
+    repository,
     state,
     plans,
     request,
@@ -631,6 +639,88 @@ test.describe('confidential funding persisted recovery', () => {
       recipientType: 'DESTINATION_CHAIN'
     })
     expect(h.state.identityChains.slice(-2)).toEqual(['eip155:1', 'eip155:1'])
+  })
+
+  test('binds Confidential ZEC Move to the current account native receive address and reviewed purpose', async () => {
+    const transparent = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+    const unified =
+      'u1nvgt6yr35mhc9wdf4wckvl38476vqy96dx3cwkfdwy4jet9300l5v8l2yg27ql7w9qwm0lf8kncnj9nus4mgete06j3cu3mhrqvstg6swvdya6xgzwhh6a9xxdhxkavvvmztqeuaurjtqfk3dzetuzgnu0zjvmdpe8ehvj53sy6yhzxj'
+    let active = {
+      network: 'mainnet',
+      walletId: scope.keyDomainId,
+      accountId: scope.accountId,
+      refundAddresses: [transparent, unified]
+    }
+    const h = directPreparationHarness(undefined, () => active)
+    const zec = {
+      chainId: ZCASH_CHAIN_IDS.mainnet,
+      chainName: 'zec',
+      assetId: h.zcashAssetId,
+      protocolAssetId: h.zcashProtocolId
+    }
+    const request = {
+      ...h.request('10000'),
+      purpose: 'move',
+      source: { ...zec, amountRaw: '10000' },
+      destination: zec,
+      destinationDomain: 'public',
+      externalRecipient: transparent
+    }
+    for (const invalid of [
+      { externalRecipient: signerId },
+      { accountId: 'account:other' },
+      { destination: h.request('10').destination },
+      { purpose: 'send' }
+    ]) {
+      await expect(h.coordinator.prepare({ ...request, ...invalid })).rejects.toThrow(
+        'Zcash Move must receive into the current account'
+      )
+    }
+    expect(h.state.quoteCalls).toHaveLength(0)
+    for (const recipient of [transparent, unified]) {
+      const review = await h.coordinator.prepare({ ...request, externalRecipient: recipient })
+      expect(review).toMatchObject({ purpose: 'move', destinationAddress: recipient })
+      const stored = await h.coordinator.getPlan(review.planId)
+      const client = createConfidentialFundingClient(async message => ({
+        success: true,
+        result: message.type === 'PREPARE_CONFIDENTIAL_FUNDING' ? review : stored
+      }))
+      await expect(client.prepare(request)).resolves.toMatchObject({
+        purpose: 'move',
+        destinationAddress: recipient
+      })
+      await expect(client.get(review.planId)).resolves.toMatchObject({
+        purpose: 'move',
+        externalRecipient: recipient
+      })
+      expect(serializeConfidentialFundingPlan(stored)).toMatchObject({
+        purpose: 'move',
+        externalRecipient: recipient
+      })
+      active = { ...active, accountId: 'account:other' }
+      await expect(h.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+        'Zcash Move must receive into the current account'
+      )
+      active = { ...active, accountId: scope.accountId }
+      h.plans.set(review.planId, { ...stored, purpose: undefined })
+      await expect(h.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+        'approval content changed'
+      )
+      h.plans.set(review.planId, stored)
+      await h.coordinator.cancel(review.planId)
+    }
+    expect(h.state.signatures).toBe(0)
+    const review = await h.coordinator.prepare(request)
+    h.state.allowSigning = true
+    h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
+    await h.coordinator.confirm(review.planId, review.payloadFingerprint)
+    const graph = await h.repository.get(scope, review.transactionId)
+    expect(graph.root.intent).toMatchObject({
+      direction: 'self',
+      shield: { operation: 'withdraw', sourceDomain: 'shield', destinationDomain: 'public' },
+      recipient: { address: transparent },
+      primaryAmount: { assetId: h.zcashAssetId, amountRaw: '10000' }
+    })
   })
 
   test('quotes a Confidential ZEC to EVM swap and an EVM to Confidential ZEC swap', async () => {

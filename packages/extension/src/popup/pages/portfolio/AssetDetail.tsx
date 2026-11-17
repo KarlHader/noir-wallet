@@ -73,6 +73,7 @@ import {
 import { BitcoinAccountTypeSelector } from '@/popup/components/bitcoin/BitcoinAccountTypeSelector'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 import type { KeySource } from '@/types/wallet'
 
 export function AssetDetail() {
@@ -558,18 +559,30 @@ export function AssetDetail() {
         label: 'Receive',
         onClick: () => navigate(`/shield-deposit?${query}`)
       },
-      ...(chain?.chain.family === 'evm'
+      ...(chain?.chain.family === 'zcash' &&
+      getConfidentialZcashMoveRecipients(storageV2Account, currentNetwork).length > 0
         ? [
             {
               action: 'move' as const,
               label: 'Move',
               onClick: () =>
                 navigate(
-                  `/transfer?${query}&entry=asset-detail&from=shield&to=${actionDomain}&mode=${actionDomain}`
+                  `/shield-zcash-move?${query}&sourceWalletId=${encodeURIComponent(effectiveWalletId ?? '')}&sourceAccountId=${encodeURIComponent(effectiveAccountId ?? '')}`
                 )
             }
           ]
-        : []),
+        : chain?.chain.family === 'evm'
+          ? [
+              {
+                action: 'move' as const,
+                label: 'Move',
+                onClick: () =>
+                  navigate(
+                    `/transfer?${query}&entry=asset-detail&from=shield&to=${actionDomain}&mode=${actionDomain}`
+                  )
+              }
+            ]
+          : []),
       { action: 'swap' as const, label: 'Swap', onClick: () => navigate(`/shield-swap?${query}`) }
     ]
   }

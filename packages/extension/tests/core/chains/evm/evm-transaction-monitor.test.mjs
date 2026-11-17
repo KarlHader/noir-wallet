@@ -129,6 +129,42 @@ test.describe('EVM persisted transaction monitor', () => {
     })
   })
 
+  test('records inclusion before its receipt becomes available', async () => {
+    const repository = new InMemoryTransactionRepository()
+    await repository.create(graph('transaction:evm:included-no-receipt'))
+    let currentReceipt = null
+    const monitor = new EvmTransactionMonitor({
+      repository,
+      chainId,
+      rpc: {
+        ...rpc(null),
+        getTransactionReceipt: async () => currentReceipt,
+        getTransactionLocation: async () => ({
+          status: 'included',
+          blockHash,
+          blockNumber: '101'
+        })
+      },
+      now: () => 1_100,
+      createEventId: ids()
+    })
+
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ applied: 1, errors: 0 })
+    await expect(
+      repository.get(scope, parseTransactionId('transaction:evm:included-no-receipt'))
+    ).resolves.toMatchObject({
+      root: { status: 'confirming' },
+      segments: [{ status: 'confirming', evidence: { blockHash, blockHeight: 101 } }]
+    })
+
+    currentReceipt = receipt('success', '101')
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ applied: 1, errors: 0 })
+    expect(
+      (await repository.get(scope, parseTransactionId('transaction:evm:included-no-receipt'))).root
+        .status
+    ).toBe('final')
+  })
+
   test('persists net receipt token movements and known native value with final evidence', async () => {
     const repository = new InMemoryTransactionRepository()
     const contractCall = graph('transaction:evm:receipt-effects')

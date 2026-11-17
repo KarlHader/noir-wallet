@@ -74,6 +74,17 @@ function ShieldProviderContent() {
   const zcashSendScopeQuery = account
     ? `&sourceWalletId=${encodeURIComponent(account.walletId)}&sourceAccountId=${encodeURIComponent(account.accountId)}`
     : ''
+  const zcashSendOriginState = account
+    ? {
+        sendOriginHistory: {
+          originPath: sendOriginPath,
+          network: currentNetwork,
+          walletId: account.walletId,
+          accountId: account.accountId,
+          entryKey: location.key
+        }
+      }
+    : undefined
   const scopeKey = `${currentNetwork}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
@@ -465,19 +476,7 @@ function ShieldProviderContent() {
                   onClick={() =>
                     navigate(
                       `/send/zcash?from=shielded&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
-                      {
-                        state: account
-                          ? {
-                              sendOriginHistory: {
-                                originPath: sendOriginPath,
-                                network: currentNetwork,
-                                walletId: account.walletId,
-                                accountId: account.accountId,
-                                entryKey: location.key
-                              }
-                            }
-                          : undefined
-                      }
+                      { state: zcashSendOriginState }
                     )
                   }
                   disabled={!hasZcashAccount}
@@ -500,7 +499,8 @@ function ShieldProviderContent() {
                   onClick={() => {
                     if (zcashMoveSource)
                       navigate(
-                        `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+                        `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+                        { state: zcashSendOriginState }
                       )
                   }}
                   disabled={!hasZcashAccount || !zcashMoveSource}

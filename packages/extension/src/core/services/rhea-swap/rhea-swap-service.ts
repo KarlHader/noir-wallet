@@ -357,6 +357,13 @@ export class RheaSwapService {
     return Object.freeze({ request: record.request, scope: record.privateSwapScope ?? null })
   }
 
+  async readQuoteView(quoteHandle: string): Promise<RheaSwapQuoteView> {
+    const record = await this.requireSession(quoteHandle)
+    const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
+    this.assertQuoteFresh(record, quote)
+    return this.toQuoteView(record, quote)
+  }
+
   private async prepareOnce(
     quoteHandle: string,
     signal?: AbortSignal

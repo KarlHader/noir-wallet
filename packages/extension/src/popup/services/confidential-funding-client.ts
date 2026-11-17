@@ -13,6 +13,7 @@ import type { SwapStatus } from '@/core/services/intents-api'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
+import { parseZcashAddress } from '@/core/address-book/address-book'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -26,6 +27,7 @@ export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
+  readonly purpose?: 'move'
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
@@ -190,6 +192,23 @@ function parsePreview(value: unknown): ConfidentialFundingPreview {
   })
 }
 
+function matchesExternalRecipient(
+  recipient: unknown,
+  destination: unknown,
+  network: unknown
+): boolean {
+  if (typeof recipient !== 'string' || typeof destination !== 'string') return false
+  if (/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
+    return !/^0x0{40}$/i.test(recipient) && recipient.toLowerCase() === destination.toLowerCase()
+  }
+  if (network !== 'mainnet' && network !== 'testnet') return false
+  try {
+    return parseZcashAddress(recipient, network).address === destination
+  } catch {
+    return false
+  }
+}
+
 function parseReview(value: unknown): ConfidentialFundingReview {
   if (!isRecord(value)) throw new Error('Confidential funding review is invalid')
   const review = value as unknown as ConfidentialFundingReview
@@ -204,13 +223,24 @@ function parseReview(value: unknown): ConfidentialFundingReview {
     !/^\d+$/.test(review.expectedOutputRaw) ||
     !/^\d+$/.test(review.minimumOutputRaw) ||
     !/^0x[0-9a-fA-F]{40}$/.test(review.sourceAddress) ||
-    !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress) ||
+    (review.externalRecipient === undefined &&
+      !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress)) ||
     (review.externalRecipient !== undefined &&
       (review.operation !== 'withdraw' ||
         review.destinationDomain !== 'public' ||
         typeof review.externalRecipient !== 'string' ||
         /^0x0{40}$/i.test(review.externalRecipient) ||
-        review.externalRecipient.toLowerCase() !== review.destinationAddress.toLowerCase())) ||
+        !matchesExternalRecipient(
+          review.externalRecipient,
+          review.destinationAddress,
+          review.network
+        ))) ||
+    (review.purpose !== undefined &&
+      (review.purpose !== 'move' ||
+        review.operation !== 'withdraw' ||
+        review.sourceDomain !== 'shield' ||
+        review.destinationDomain !== 'public' ||
+        review.externalRecipient === undefined)) ||
     !Number.isSafeInteger(review.withdrawCount) ||
     (review.operation !== undefined &&
       !['deposit', 'withdraw', 'cluster', 'swap'].includes(review.operation)) ||
@@ -269,7 +299,17 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.destinationDomain !== 'public' ||
         typeof plan.externalRecipient !== 'string' ||
         /^0x0{40}$/i.test(plan.externalRecipient) ||
-        plan.externalRecipient.toLowerCase() !== plan.destination.address.toLowerCase())) ||
+        !matchesExternalRecipient(
+          plan.externalRecipient,
+          plan.destination.address,
+          plan.network
+        ))) ||
+    (plan.purpose !== undefined &&
+      (plan.purpose !== 'move' ||
+        plan.operation !== 'withdraw' ||
+        plan.sourceDomain !== 'shield' ||
+        plan.destinationDomain !== 'public' ||
+        plan.externalRecipient === undefined)) ||
     (plan.batchSubmissionAttemptedAt !== undefined &&
       (!Number.isSafeInteger(plan.batchSubmissionAttemptedAt) ||
         plan.batchSubmissionAttemptedAt <= 0)) ||

@@ -127,6 +127,7 @@ export function normalizeConfidentialWithdrawRequest(
 
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
+  readonly purpose?: 'move'
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
@@ -211,6 +212,7 @@ export function canRetryConfidentialSubmission(
 
 export interface ConfidentialFundingReview {
   readonly planId: string
+  readonly purpose?: 'move'
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'

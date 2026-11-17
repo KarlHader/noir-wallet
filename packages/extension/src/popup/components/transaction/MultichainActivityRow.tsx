@@ -170,7 +170,7 @@ function SwapActivityRow({
         )}
         disabled={!onClick}
       >
-        <ActivityRouteTokenIcons route={presentation} />
+        <ActivityRouteTokenIcons item={item} route={presentation} />
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5">
             <p className="min-w-0 truncate text-sm font-medium">

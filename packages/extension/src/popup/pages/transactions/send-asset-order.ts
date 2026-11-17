@@ -16,6 +16,7 @@ import {
   deferredChainChoices,
   isSelectableChainFamily
 } from '@/popup/services/chain-selection-availability'
+import { sortTokenSelectorNetworks } from '@/popup/components/tokens/token-selector-chain-order'
 
 export interface SendAsset {
   readonly asset: PortfolioReadModel['assets'][number]
@@ -50,27 +51,7 @@ export interface SendAssetOrderCandidate {
   readonly priceUsd: string | number | null
 }
 
-const SEND_CHAIN_ORDER = [
-  'zcash',
-  'eip155:1',
-  'eip155:56',
-  'eip155:8453',
-  'eip155:42161',
-  'eip155:137'
-]
-
-export function sortSendNetworks<T>(
-  options: readonly T[],
-  chain: (option: T) => Readonly<{ id: string; name: string }>
-): T[] {
-  const rank = (option: T): number => {
-    const { id, name } = chain(option)
-    const normalized = id === 'zec' || name.toLowerCase().startsWith('zcash') ? 'zcash' : id
-    const index = SEND_CHAIN_ORDER.indexOf(normalized)
-    return index === -1 ? SEND_CHAIN_ORDER.length : index
-  }
-  return [...options].sort((left, right) => rank(left) - rank(right))
-}
+export { sortTokenSelectorNetworks as sortSendNetworks }
 
 interface RankedSendAsset<T extends SendAssetOrderCandidate> {
   readonly candidate: T
@@ -147,7 +128,7 @@ export function buildSendAssetSelectionModel(input: {
       )
     })
   }
-  const selectableOptions = sortSendNetworks(
+  const selectableOptions = sortTokenSelectorNetworks(
     [...networkOptions].map(([id, option]) => ({ id, ...option })),
     option => ({ id: option.id, name: option.label })
   )

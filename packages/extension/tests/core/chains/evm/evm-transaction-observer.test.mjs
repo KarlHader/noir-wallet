@@ -63,7 +63,7 @@ test.describe('EVM broadcast and receipt observer', () => {
     })
   })
 
-  test('treats a missing receipt without pending evidence as unresolved', async () => {
+  test('keeps an unknown hash unresolved and an included hash confirming without a receipt', async () => {
     await expect(
       observeEvmTransaction(
         transactionHash,
@@ -81,7 +81,12 @@ test.describe('EVM broadcast and receipt observer', () => {
           })
         })
       )
-    ).resolves.toBeNull()
+    ).resolves.toEqual({
+      status: 'confirming',
+      transactionHash,
+      blockHash,
+      blockNumber: '100'
+    })
   })
 
   test('treats a mined successful receipt as confirmed without waiting for finalized', async () => {

@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import type { ActivityItem } from '@/core/activity'
 import { TokenIcon } from '../tokens/TokenIcon'
 import {
   hasMatchingActivityTokenIcons,
@@ -6,27 +7,39 @@ import {
 } from './multichain-activity-presentation'
 
 export function ActivityRouteTokenIcons({
+  item,
   route,
   size = 'row'
 }: {
+  readonly item: ActivityItem
   readonly route: ActivitySwapPresentation
   readonly size?: 'row' | 'detail'
 }) {
-  const matching = hasMatchingActivityTokenIcons(route)
-  const iconSize = size === 'detail' ? 40 : matching ? 36 : 30
+  const exchange = item.snapshot?.shield
+    ? item.snapshot.shield.operation === 'swap'
+    : item.kind === 'swap' && item.snapshot?.protocol?.userAction !== 'transfer'
+  const singleAsset = !exchange || hasMatchingActivityTokenIcons(route)
+  const primaryAsset =
+    !exchange && route.isExternalDeposit
+      ? (route.destination ?? route.source)
+      : (route.source ?? route.destination)
+  const iconSize = size === 'detail' ? 40 : singleAsset ? 36 : 30
   return (
     <div
       data-activity-avatar="swap"
-      className={cn('relative shrink-0', size === 'detail' ? 'h-10 w-16' : 'size-9')}
+      className={cn(
+        'relative shrink-0',
+        size === 'detail' ? (singleAsset ? 'size-10' : 'h-10 w-16') : 'size-9'
+      )}
     >
       <TokenIcon
-        assetId={route.source?.assetId}
-        symbol={route.source?.symbol ?? 'Asset'}
-        icon={route.source?.iconUrl}
+        assetId={primaryAsset?.assetId}
+        symbol={primaryAsset?.symbol ?? 'Asset'}
+        icon={primaryAsset?.iconUrl}
         size={iconSize}
-        className={cn('absolute top-0', size === 'detail' && matching ? 'left-3' : 'left-0')}
+        className="absolute left-0 top-0"
       />
-      {!matching && (
+      {!singleAsset && (
         <TokenIcon
           assetId={route.destination?.assetId}
           symbol={route.destination?.symbol ?? 'Asset'}

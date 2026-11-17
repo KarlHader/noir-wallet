@@ -537,6 +537,16 @@ test.describe('Multichain Activity presentation', () => {
       ]
     }
     expect(canCancelEvmActivity(item, ['eip155:1'])).toBe(true)
+    expect(
+      canCancelEvmActivity(
+        {
+          ...item,
+          status: 'confirming',
+          segments: [{ ...item.segments[0], status: 'confirming' }]
+        },
+        ['eip155:1']
+      )
+    ).toBe(false)
     expect(canCancelEvmActivity({ ...item, status: 'final' }, ['eip155:1'])).toBe(false)
     expect(canCancelEvmActivity({ ...item, kind: 'cancel' }, ['eip155:1'])).toBe(false)
     const shield = {

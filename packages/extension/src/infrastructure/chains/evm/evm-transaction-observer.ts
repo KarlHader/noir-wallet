@@ -10,7 +10,7 @@ export type EvmTransactionObservation =
       readonly transactionHash: string
       readonly blockHash: string
       readonly blockNumber: string
-      readonly receiptStatus: 'success' | 'failed'
+      readonly receiptStatus?: 'success' | 'failed'
     }
   | {
       readonly status: 'final'
@@ -67,8 +67,17 @@ export async function observeEvmTransaction(
   const receipt = await rpc.getTransactionReceipt(expected, signal)
   if (receipt === null) {
     const location = await rpc.getTransactionLocation(expected, signal)
-    if (location.status !== 'pending') return null
-    return Object.freeze({ status: 'broadcast', transactionHash: expected })
+    if (location.status === 'unknown') return null
+    if (location.status === 'pending') {
+      return Object.freeze({ status: 'broadcast', transactionHash: expected })
+    }
+    parseBlockNumber(location.blockNumber, 'transaction block number')
+    return Object.freeze({
+      status: 'confirming',
+      transactionHash: expected,
+      blockHash: location.blockHash,
+      blockNumber: location.blockNumber
+    })
   }
   if (receipt.transactionHash !== expected) {
     throw new EvmRpcError('invalid-response', 'EVM receipt transaction hash does not match')
