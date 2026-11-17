@@ -6,7 +6,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { shieldOriginIdentifiers, shieldSwapFormBalance } from '@/popup/services/shield-swap-form'
 import type { ShieldFundingAsset } from '@/popup/services/shield-transfer'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
-import { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
+import { useTokenSelectorReady, useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import { TokenSelectorDialog } from './TokenSelectorDialog'
 import { TokenSelectorView } from './TokenSelectorView'
 import { TokenIcon } from './TokenIcon'
@@ -39,7 +39,7 @@ export function ConfidentialDestinationSelector({
   const deferredSearch = useDeferredValue(search)
   const deferredNetwork = useDeferredValue(network)
   const filterKey = `${deferredNetwork}:${deferredSearch}`
-  const { ready, limit, onScroll } = useTokenSelectorWindow(filterKey, options.length)
+  const ready = useTokenSelectorReady()
   const hidden = useSettingsStore(state => state.balancesHidden)
   const prices = useMemo(
     () => new Map((ready ? tokens : []).map(token => [token.assetId, token.price])),
@@ -97,7 +97,11 @@ export function ConfidentialDestinationSelector({
       })
       .sort((left, right) => (ranks.get(left) ?? 99) - (ranks.get(right) ?? 99))
   }, [available, deferredNetwork, deferredSearch])
-  const visibleAssets = useMemo(() => visible.slice(0, limit), [visible, limit])
+  const virtualWindow = useTokenSelectorWindow(filterKey, visible.length)
+  const visibleAssets = useMemo(
+    () => visible.slice(virtualWindow.startIndex, virtualWindow.endIndex),
+    [visible, virtualWindow.startIndex, virtualWindow.endIndex]
+  )
   const items = useMemo(
     () =>
       visibleAssets.map(asset => {
@@ -152,7 +156,7 @@ export function ConfidentialDestinationSelector({
           const asset = visibleAssets.find(item => item.asset.asset.id === key)
           if (asset) onSelect(asset)
         }}
-        onScroll={onScroll}
+        virtualWindow={virtualWindow}
       />
     </TokenSelectorDialog>
   )

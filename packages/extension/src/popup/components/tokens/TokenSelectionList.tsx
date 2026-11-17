@@ -50,19 +50,30 @@ export function TokenSelectionSearch({
 export function TokenSelectionList({
   items,
   selectedKey,
-  onSelect
+  onSelect,
+  virtualWindow
 }: {
   readonly items: readonly TokenSelectionItem[]
   readonly selectedKey?: string
   readonly onSelect: (key: string) => void
+  readonly virtualWindow?: Readonly<{ startIndex: number; total: number; rowHeight: number }>
 }) {
-  if (items.length === 0) return null
+  if (items.length === 0 && !virtualWindow) return null
 
   return (
     <div>
-      {items.map(item => (
+      {virtualWindow && (
+        <div
+          aria-hidden="true"
+          style={{ height: virtualWindow.startIndex * virtualWindow.rowHeight }}
+        />
+      )}
+      {items.map((item, index) => (
         <button
           key={item.key}
+          data-token-index={virtualWindow ? virtualWindow.startIndex + index : undefined}
+          aria-posinset={virtualWindow ? virtualWindow.startIndex + index + 1 : undefined}
+          aria-setsize={virtualWindow?.total}
           type="button"
           disabled={Boolean(item.disabledReason)}
           aria-busy={item.busy || undefined}
@@ -72,9 +83,11 @@ export function TokenSelectionList({
           aria-label={item.ariaLabel}
           className={cn(
             'wallet-interactive flex min-h-[55px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-card active:bg-white/10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed',
+            virtualWindow && 'overflow-hidden py-2',
             item.disabledReason && !item.busy && 'opacity-45',
             selectedKey === item.key && 'bg-primary/[0.08]'
           )}
+          style={virtualWindow ? { height: virtualWindow.rowHeight } : undefined}
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
             {item.icon}
@@ -91,7 +104,13 @@ export function TokenSelectionList({
             </div>
           </div>
           {item.balance !== undefined && (
-            <div className="min-w-0 max-w-[55%] shrink-0 text-right" title={item.balanceTitle}>
+            <div
+              className={cn(
+                'min-w-0 max-w-[55%] shrink-0 text-right',
+                virtualWindow && '[&_p]:truncate'
+              )}
+              title={item.balanceTitle}
+            >
               {item.balance}
             </div>
           )}
@@ -115,6 +134,16 @@ export function TokenSelectionList({
           )}
         </button>
       ))}
+      {virtualWindow && (
+        <div
+          aria-hidden="true"
+          style={{
+            height:
+              Math.max(0, virtualWindow.total - virtualWindow.startIndex - items.length) *
+              virtualWindow.rowHeight
+          }}
+        />
+      )}
     </div>
   )
 }

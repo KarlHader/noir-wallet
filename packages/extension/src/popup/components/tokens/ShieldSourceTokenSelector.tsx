@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react'
-import { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
+import { useTokenSelectorReady, useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { TokenSelectorView } from './TokenSelectorView'
 import {
@@ -27,7 +27,7 @@ export function ShieldSourceTokenSelector({
   const [network, setNetwork] = useState(initialNetwork)
   const deferredNetwork = useDeferredValue(network)
   const filterKey = `${deferredNetwork}:${deferredSearch}`
-  const { ready, limit, onScroll } = useTokenSelectorWindow(filterKey, rows.length)
+  const ready = useTokenSelectorReady()
   const networks = useMemo(() => {
     const result = new Map<string, { id: string; label: string; iconChain: string }>()
     if (ready)
@@ -69,9 +69,15 @@ export function ShieldSourceTokenSelector({
       .sort((a, b) => a.rank - b.rank)
       .map(item => item.row)
   }, [ready, rows, deferredNetwork, deferredSearch])
+  const virtualWindow = useTokenSelectorWindow(filterKey, filtered.length, index =>
+    Boolean(filtered[index]?.disabledReason)
+  )
   const items = useMemo(
-    () => filtered.slice(0, limit).map(row => shieldSourceSelectionItem(row, balancesHidden)),
-    [filtered, limit, balancesHidden]
+    () =>
+      filtered
+        .slice(virtualWindow.startIndex, virtualWindow.endIndex)
+        .map(row => shieldSourceSelectionItem(row, balancesHidden)),
+    [filtered, virtualWindow.startIndex, virtualWindow.endIndex, balancesHidden]
   )
   return (
     <TokenSelectorView
@@ -84,7 +90,7 @@ export function ShieldSourceTokenSelector({
       selectedKey={selectedKey}
       onSelect={onSelect}
       loading={!ready || loading}
-      onScroll={onScroll}
+      virtualWindow={virtualWindow}
       emptyMessage="No Shield tokens found"
     />
   )

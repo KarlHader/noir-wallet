@@ -11,6 +11,7 @@ import {
 } from './TokenSelectionList'
 import { TokenIcon } from './TokenIcon'
 import { sortTokenSelectorNetworks } from './token-selector-chain-order'
+import type { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import {
   addInspectedToken,
   inspectTokenAddress,
@@ -43,6 +44,7 @@ interface TokenSelectorViewProps {
   readonly status?: ReactNode
   readonly afterRows?: ReactNode
   readonly onScroll?: UIEventHandler<HTMLDivElement>
+  readonly virtualWindow?: ReturnType<typeof useTokenSelectorWindow>
   readonly discovery?: {
     readonly scopeKey: string
     readonly chainId: string | null
@@ -67,6 +69,7 @@ export function TokenSelectorView({
   status,
   afterRows,
   onScroll,
+  virtualWindow,
   discovery
 }: TokenSelectorViewProps) {
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
@@ -273,7 +276,13 @@ export function TokenSelectorView({
           </p>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto" onScroll={onScroll}>
+      <div
+        ref={virtualWindow?.scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        style={virtualWindow ? { overflowAnchor: 'none' } : undefined}
+        onScroll={virtualWindow?.onScroll ?? onScroll}
+        onKeyDown={virtualWindow?.onKeyDown}
+      >
         {(loading || inspectingKey === discoveryKey) && displayedItems.length === 0 ? (
           <ListSkeleton rows={5} label="Loading tokens" className="px-1" />
         ) : displayedItems.length === 0 ? (
@@ -287,6 +296,7 @@ export function TokenSelectorView({
           <>
             <TokenSelectionList
               items={displayedItems}
+              virtualWindow={virtualWindow}
               selectedKey={selectedKey}
               onSelect={key => {
                 if (key !== discoveryItems[0]?.key) {
