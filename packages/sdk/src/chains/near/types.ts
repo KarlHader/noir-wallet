@@ -1,10 +1,5 @@
 export type NearProviderListener = (value: unknown) => void
 
-export interface NearRequestSignInParams {
-  readonly contractId?: string
-  readonly methodNames?: readonly string[]
-}
-
 export interface NearSignInResult {
   readonly accountId: string
   readonly accessKey: { readonly publicKey: string }
@@ -66,7 +61,7 @@ export interface NearSignedMessage {
  * transactions; the dApp broadcasts signed bytes through its own NEAR RPC.
  */
 export interface NearProvider {
-  requestSignIn(params?: NearRequestSignInParams): Promise<NearSignInResult>
+  requestSignIn(): Promise<NearSignInResult>
   /** Account IDs explicitly authorized for this site. The current account is first. */
   getAccounts(): Promise<readonly string[]>
   signOut(): Promise<void>

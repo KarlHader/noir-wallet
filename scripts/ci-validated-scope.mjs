@@ -107,7 +107,7 @@ export function isSdkGateSuccessful({
   if (verifyResult !== 'success') return false
   const hasArtifact =
     /^[1-9]\d*$/.test(artifactId ?? '') &&
-    /^(?:0\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)|2\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-beta\.[1-9]\d*)$/.test(
+    /^(?:0\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)|2\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-beta\.[1-9]\d*)?)$/.test(
       version ?? ''
     ) &&
     shaPattern.test(sourceSha ?? '') &&

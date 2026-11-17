@@ -72,7 +72,6 @@ export type {
   NearFunctionCallAction,
   NearProvider,
   NearProviderListener,
-  NearRequestSignInParams,
   NearSignInResult,
   NearSignMessageParams,
   NearSignedMessage,

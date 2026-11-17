@@ -41,11 +41,11 @@ The wallet locks and reloads when its network mode changes. Older V1 downloads, 
 
 ## Install the SDK
 
-Install the V2 prerelease from the `beta` tag and save the resolved version exactly. The `latest` tag remains on the V1 SDK release line.
+Install the V2 stable SDK and save the version exactly. Existing V1 integrations can keep their pinned `0.1.x` version; V2 retains the Zcash entry point and adds optional providers.
 
 ```bash
-pnpm add @noir-wallet/sdk@beta --save-exact
-npm install @noir-wallet/sdk@beta --save-exact
+pnpm add @noir-wallet/sdk@2.0.0 --save-exact
+npm install @noir-wallet/sdk@2.0.0 --save-exact
 ```
 
 ## V2 provider entry points

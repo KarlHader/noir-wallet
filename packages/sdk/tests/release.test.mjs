@@ -167,7 +167,7 @@ test('resolves only a confirmed current branch head from the trusted main workfl
         manifest: { ...manifest, version: '0.2.0-beta.1' },
         env: { ...betaEnv, CONFIRM_VERSION: '0.2.0-beta.1' }
       }),
-    /0.x.y and 2.x.y-beta.N/
+    /SDK versions are supported/
   )
   assert.throws(
     () => resolve({ env: { ...betaEnv, GITHUB_WORKFLOW_REF: 'another/workflow' } }),
@@ -180,9 +180,9 @@ test('resolves only a confirmed current branch head from the trusted main workfl
   assert.deepEqual([resolve().source_branch, resolve().dist_tag], ['main', 'beta'])
   assert.throws(
     () => resolve({ env: { ...betaEnv, RELEASE_LINE: 'stable' } }),
-    /Only the 2.x SDK beta/
+    /SDK version does not match release line/
   )
-  assert.throws(() => resolve({ manifest }), /Confirmed SDK version/)
+  assert.throws(() => resolve({ manifest }), /V1 SDK publication is frozen/)
 })
 
 test('binds packed bytes to the source, run, attempt, manifest and exact file inventory', t => {
@@ -192,7 +192,7 @@ test('binds packed bytes to the source, run, attempt, manifest and exact file in
       packageSdkRelease(path.join(legacy.directory, 'legacy-release'), env, {
         sourceRoot: legacy.source
       }),
-    /Only a main-branch 2.x SDK beta/
+    /Only a main-branch 2.x SDK/
   )
   const f = fixture(t, betaManifest, betaExpected)
   const destination = path.join(f.directory, 'packed')
@@ -373,7 +373,7 @@ test('refuses existing versions, a latest downgrade, registry errors and missing
       fetchImpl: () => assert.fail('V1 artifact must not reach npm'),
       run: () => assert.fail('V1 artifact must not reach npm')
     }),
-    /Only a main-branch 2.x SDK beta/
+    /Only a main-branch 2.x SDK/
   )
   const f = fixture(t, betaManifest, betaExpected)
   const summaryPath = path.join(f.directory, 'stage-summary.md')
@@ -474,7 +474,7 @@ test('beta staging binds a pinned main source to trusted main and advances only 
         { ...firstBetaRegistry, 'dist-tags': { latest: '2.0.0-beta.9' } },
         betaVersion
       ),
-    /V1 stable/
+    /stable SDK version/
   )
   assert.throws(
     () =>
@@ -528,7 +528,7 @@ test('beta verification accepts a later V1 stable release but requires the accep
       fetchImpl: () => assert.fail('Legacy v2 artifact must not reach npm'),
       run: () => assert.fail('Legacy v2 artifact must not reach npm')
     }),
-    /Only a main-branch 2.x SDK beta/
+    /Only a main-branch 2.x SDK/
   )
   const published = {
     ...betaManifest,
@@ -552,7 +552,7 @@ test('beta verification accepts a later V1 stable release but requires the accep
   await assert.rejects(verifyPublishedSdk(f.artifact, {}, { fetchImpl }), /npm beta/)
   packument['dist-tags'].beta = version
   packument['dist-tags'].latest = version
-  await assert.rejects(verifyPublishedSdk(f.artifact, {}, { fetchImpl }), /V1 stable/)
+  await assert.rejects(verifyPublishedSdk(f.artifact, {}, { fetchImpl }), /stable SDK version/)
 })
 
 test('retries upload with the original bytes and build attempt, without npm credentials or package lifecycle scripts', async t => {
@@ -775,10 +775,83 @@ test('locates only a successful build attempt of the trusted workflow and its ex
     workflow_sha: sourceSha,
     build_attempt: '1'
   })
+  artifact = { ...artifact, name: 'noir-sdk-2.0.0-123-1' }
+  assert.equal((await locateSdkArtifact(input, { request })).artifact_id, '456')
   artifact = { ...artifact, expired: true }
   await assert.rejects(locateSdkArtifact(input, { request }), /unexpired/)
   artifact = { ...artifact, expired: false, name: 'noir-sdk-0.2.0-123-2' }
   await assert.rejects(locateSdkArtifact(input, { request }), /unexpired/)
   run = { ...run, head_branch: 'v2' }
   await assert.rejects(locateSdkArtifact(input, { request }), /trusted main/)
+})
+
+test('V2 stable stages and verifies the exact artifact on latest while V1 stays frozen', async t => {
+  const version = '2.0.0'
+  const stableManifest = {
+    ...manifest,
+    version,
+    publishConfig: { access: 'public', tag: 'latest' }
+  }
+  const stableEnv = { ...env, CONFIRM_VERSION: version }
+  const stableExpected = { ...expected, version }
+  assert.equal(
+    resolveSdkRelease({ env: stableEnv, manifest: stableManifest, branchHeadSha: sourceSha })
+      .dist_tag,
+    'latest'
+  )
+  assert.throws(
+    () => resolveSdkRelease({ env, manifest, branchHeadSha: sourceSha }),
+    /V1 SDK publication is frozen/
+  )
+  validateRegistryTarget(registry, version)
+  assert.throws(
+    () => validateRegistryTarget({ ...registry, 'dist-tags': { latest: '2.0.1' } }, version),
+    /advance latest/
+  )
+  validateRegistryTarget({ ...registry, 'dist-tags': { latest: version } }, '2.1.0-beta.1')
+  const f = fixture(t, stableManifest, stableExpected)
+  const destination = path.join(f.directory, 'stable-packed')
+  const packed = packageSdkRelease(destination, stableEnv, {
+    sourceRoot: f.source,
+    run(command) {
+      if (command === 'git') return `${sourceSha}\n`
+      writeFileSync(path.join(destination, f.filename), f.bytes)
+      return JSON.stringify([{ filename: f.filename, integrity: f.metadata.integrity }])
+    }
+  })
+  await stageSdkRelease(destination, stableExpected, stableEnv, {
+    fetchImpl: async () => ({ ok: true, json: async () => registry }),
+    run(_command, args) {
+      if (args[0] === '--version') return `${SDK_NPM_VERSION}\n`
+      assert.ok(args.includes('--tag=latest'))
+      assert.ok(!args.includes('--tag=beta'))
+      return JSON.stringify({
+        name: SDK_PACKAGE,
+        version,
+        integrity: packed.integrity,
+        stageId: 'stable-stage'
+      })
+    }
+  })
+  const published = {
+    ...stableManifest,
+    dist: {
+      integrity: packed.integrity,
+      tarball: 'https://registry.npmjs.org/@noir-wallet/sdk/-/sdk-2.0.0.tgz',
+      attestations: {
+        url: 'https://registry.npmjs.org/-/npm/v1/attestations/@noir-wallet%2Fsdk@2.0.0'
+      }
+    }
+  }
+  const packument = {
+    name: SDK_PACKAGE,
+    versions: { [version]: published },
+    'dist-tags': { latest: version, beta: '2.0.0-beta.1' }
+  }
+  await verifyPublishedSdk(destination, stableExpected, {
+    fetchImpl: async url =>
+      url.endsWith('.tgz')
+        ? { ok: true, arrayBuffer: async () => f.bytes }
+        : { ok: true, json: async () => packument }
+  })
 })
