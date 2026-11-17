@@ -56,7 +56,12 @@ export class MockPhoneDkg {
       this.rosterSlot = payload.rosterSlot
       this.mainnet = payload.mainnet
       this.dkg = this.own(
-        new this.wasm.Dkg(payload.participants, payload.threshold, payload.rosterSlot)
+        new this.wasm.Dkg(
+          payload.participants,
+          payload.threshold,
+          payload.rosterSlot,
+          this.sessionId
+        )
       )
       this.dkg1 = this.own(this.dkg.part1())
       this.round1Secret = this.bin.keep(this.dkg1.secret())

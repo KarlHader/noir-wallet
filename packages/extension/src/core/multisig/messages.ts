@@ -52,8 +52,12 @@ const ROUND_BY_MESSAGE_TYPE: Record<MultisigMessageType, number> = {
   SESSION_ABORT: 3
 }
 
-// Placeholder for the hash and authentication tag until the Rust/WASM package supplies them.
+// Bluetooth mock only: placeholder hash and tag until that path moves to the signed protocol.
 const MOCK_PLACEHOLDER = 'mock'
+
+export function roundOf(messageType: MultisigMessageType): number {
+  return ROUND_BY_MESSAGE_TYPE[messageType]
+}
 
 function isMessageType(value: unknown): value is MultisigMessageType {
   // hasOwnProperty rather than `in`, so inherited keys such as "toString" are not accepted.

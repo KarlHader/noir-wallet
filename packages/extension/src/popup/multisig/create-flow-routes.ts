@@ -1,8 +1,8 @@
 import type { CreateSessionState } from '@/core/multisig/create-session'
 import { buildQrCeremonySteps } from '@/core/multisig/qr-plan'
-import { MULTISIG_ROUTE_PREFIX } from '@/lib/multisig-tab'
-
-export type VerifyStage = 'r1' | 'final'
+import type { VerifyStage } from '@/core/multisig/types'
+import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
+import { MULTISIG_ROUTE_PREFIX, multisigTeamRoute } from '@/lib/multisig-tab'
 
 const CREATE_ROUTE = `${MULTISIG_ROUTE_PREFIX}/create`
 const CONNECT_ROUTE = `${CREATE_ROUTE}/connect`
@@ -17,9 +17,17 @@ export function verifyRoute(stage: VerifyStage): string {
   return `${CREATE_ROUTE}/verify?stage=${stage}`
 }
 
+/** Where an activated session goes: its account's team page, flagged as newly created. */
+export function createdTeamRoute(scope: MultisigGroupScope): string {
+  return `${multisigTeamRoute(scope)}&created=1`
+}
+
+/** The stages the verify page shows; the identity check is part of QR pairing instead. */
+export type FingerprintStage = Exclude<VerifyStage, 'identity'>
+
 /** A missing or unknown stage is the final check, the one every setup ends with. */
-export function parseVerifyStage(value: string | null): VerifyStage {
-  return value === 'r1' ? 'r1' : 'final'
+export function parseVerifyStage(value: string | null): FingerprintStage {
+  return value === 'roster' || value === 'r1' ? value : 'final'
 }
 
 /**
@@ -32,23 +40,30 @@ export function createFlowRoute(session: CreateSessionState): string | null {
   switch (session.phase) {
     case 'ABORTED':
       return null
+    // QR pairing, the identity check included, stays on the connect page.
     case 'CREATED':
     case 'PAIRING':
     case 'ROSTER_LOCKED':
       return CONNECT_ROUTE
-    // Activation only happens on the verify page, which then forwards to the team page.
-    case 'KEYSET_VERIFIED':
+    // The verify page forwards an activated session to the team page.
     case 'ACTIVATED':
       return verifyRoute('final')
+    case 'KEYSET_VERIFIED':
+      // Over Bluetooth activation only happens on the verify page; over QR the shares and the
+      // final confirmation still follow.
+      return session.transportKind === 'ble' ? verifyRoute('final') : qrCeremonyRoute(session)
     case 'DKG_R1':
     case 'R1_VERIFIED':
     case 'DKG_R2':
-    case 'FINALIZED': {
-      if (session.transportKind === 'ble') return CEREMONY_ROUTE
-      const index = session.qrCeremonyIndex
-      const step = buildQrCeremonySteps(session.threshold)[index]
-      if (!step) return null
-      return step.kind === 'verify' ? verifyRoute('r1') : qrStepRoute(index)
-    }
+    case 'FINALIZED':
+      return session.transportKind === 'ble' ? CEREMONY_ROUTE : qrCeremonyRoute(session)
   }
+}
+
+// FINALIZED (the record is being saved) still sits on the round-2 scan step, so it routes there.
+function qrCeremonyRoute(session: CreateSessionState): string | null {
+  const index = session.qrCeremonyIndex
+  const step = buildQrCeremonySteps(session.threshold)[index]
+  if (!step) return null
+  return step.kind === 'verify' ? verifyRoute(step.stage) : qrStepRoute(index)
 }

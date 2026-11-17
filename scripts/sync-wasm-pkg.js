@@ -15,8 +15,8 @@ import {
 } from './lib/wasm-package-integrity.mjs'
 
 const SOURCE_REPOSITORY = 'https://github.com/NoirWallet/zcash-wallet-wasm.git'
-const SOURCE_COMMIT = 'bb1863adcbb01579372d472425659b2435764ff8'
-const ABI_VERSION = 'zcash-wallet-bb1863a-v1'
+const SOURCE_COMMIT = '80be45e5227c29f0221ee53c89170afbb2de4fd1'
+const ABI_VERSION = 'zcash-wallet-80be45e-v1'
 const RUST_TOOLCHAIN = 'nightly-2026-10-20'
 const RUST_VERSION = '1.101.0-nightly'
 const WASM_PACK_VERSION = '0.14.0'

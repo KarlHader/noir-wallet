@@ -101,11 +101,13 @@ export class DkgCoordinatorSession {
     wasm: VaultWasm,
     config: DkgCoordinatorConfig,
     resolveMnemonic: MnemonicResolver,
-    bin: SecretBin = new SecretBin()
+    bin: SecretBin = new SecretBin(),
+    sessionId: Uint8Array = wasm.EnvelopeCodec.new_session_id()
   ): DkgCoordinatorSession {
-    const sessionId = wasm.EnvelopeCodec.new_session_id()
+    // Checked before any wasm object exists, so a refusal leaks nothing.
+    if (sessionId.length !== 16) throw new Error('session id must be 16 bytes')
     const relay = new wasm.DkgRelay(sessionId, config.participants)
-    const dkg = new wasm.Dkg(config.participants, config.threshold, 0)
+    const dkg = new wasm.Dkg(config.participants, config.threshold, 0, sessionId)
     const dkg1 = dkg.part1()
     const broadcasts = new wasm.MessageSet()
     broadcasts.set(0, dkg1.broadcast())

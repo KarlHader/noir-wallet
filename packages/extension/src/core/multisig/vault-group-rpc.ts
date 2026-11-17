@@ -4,7 +4,7 @@
  * these requests are validated here, at the first extension boundary they cross.
  */
 import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
-import { isDkgShape } from './dkg-protocol'
+import { isDkgSessionIdText, isDkgShape } from './dkg-protocol'
 import {
   isVaultGroupId,
   isVaultWalletId,
@@ -19,6 +19,7 @@ export type VaultGroupOpenRequest = {
   mainnet: boolean
   scope: MultisigGroupScope
   groupId: string
+  sessionId?: string
 }
 
 export type VaultGroupSaveRequest = {
@@ -54,18 +55,22 @@ export function isVaultGroupMethod(method: string): method is VaultGroupMethod {
 
 const INVALID_REQUEST = 'Invalid vault group request'
 
-function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+function hasKeys(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = []
+): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const actual = Object.keys(value)
   return (
-    actual.length === keys.length &&
-    keys.every(key => Object.prototype.hasOwnProperty.call(value, key))
+    required.every(key => Object.prototype.hasOwnProperty.call(value, key)) &&
+    actual.every(key => required.includes(key) || optional.includes(key))
   )
 }
 
 function parseScope(value: unknown): MultisigGroupScope {
   if (
-    !hasExactKeys(value, ['network', 'walletId', 'accountId']) ||
+    !hasKeys(value, ['network', 'walletId', 'accountId']) ||
     (value.network !== 'mainnet' && value.network !== 'testnet') ||
     !isVaultWalletId(value.walletId) ||
     !isVaultWalletId(value.accountId)
@@ -76,14 +81,17 @@ function parseScope(value: unknown): MultisigGroupScope {
 }
 
 export function parseVaultGroupOpenRequest(payload: unknown): VaultGroupOpenRequest {
-  if (!hasExactKeys(payload, ['participants', 'threshold', 'mainnet', 'scope', 'groupId'])) {
+  if (
+    !hasKeys(payload, ['participants', 'threshold', 'mainnet', 'scope', 'groupId'], ['sessionId'])
+  ) {
     throw new Error(INVALID_REQUEST)
   }
   const shape = { participants: payload.participants, threshold: payload.threshold }
   if (
     !isDkgShape(shape) ||
     typeof payload.mainnet !== 'boolean' ||
-    !isVaultGroupId(payload.groupId)
+    !isVaultGroupId(payload.groupId) ||
+    (payload.sessionId !== undefined && !isDkgSessionIdText(payload.sessionId))
   ) {
     throw new Error(INVALID_REQUEST)
   }
@@ -92,12 +100,13 @@ export function parseVaultGroupOpenRequest(payload: unknown): VaultGroupOpenRequ
     threshold: shape.threshold,
     mainnet: payload.mainnet,
     scope: parseScope(payload.scope),
-    groupId: payload.groupId
+    groupId: payload.groupId,
+    ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId })
   }
 }
 
 export function parseVaultGroupSaveRequest(payload: unknown): VaultGroupSaveRequest {
-  if (!hasExactKeys(payload, ['scope', 'groupId', 'record']) || !isVaultGroupId(payload.groupId)) {
+  if (!hasKeys(payload, ['scope', 'groupId', 'record']) || !isVaultGroupId(payload.groupId)) {
     throw new Error(INVALID_REQUEST)
   }
   const record = parseSealedVaultRecord(payload.record)
@@ -106,6 +115,6 @@ export function parseVaultGroupSaveRequest(payload: unknown): VaultGroupSaveRequ
 }
 
 export function parseVaultGroupSummaryRequest(payload: unknown): { scope: MultisigGroupScope } {
-  if (!hasExactKeys(payload, ['scope'])) throw new Error(INVALID_REQUEST)
+  if (!hasKeys(payload, ['scope'])) throw new Error(INVALID_REQUEST)
   return { scope: parseScope(payload.scope) }
 }

@@ -87,6 +87,26 @@ test.describe('multisig vault background', () => {
     expect(result).toEqual({ sessionId: 'AAAA' })
   })
 
+  test('open forwards sessionId to the Worker', async () => {
+    const { state, handler } = setup()
+    const sessionId = 'AAAAAAAAAAAAAAAAAAAAAA=='
+    await handler.handle('vault.group.open', { ...OPEN, sessionId })
+    expect(state.forwarded[0]).toEqual([
+      'vault.dkg.open',
+      {
+        participants: 3,
+        threshold: 2,
+        mainnet: false,
+        ownerWalletId: 'w',
+        groupId: RECORD.groupId,
+        sessionId
+      }
+    ])
+    await expect(
+      handler.handle('vault.group.open', { ...OPEN, sessionId: 'AAAA' })
+    ).rejects.toThrow('Invalid vault group request')
+  })
+
   test('open refuses anything but an unlocked, active mnemonic wallet on this network', async () => {
     const cases: Array<[string, unknown, string, (s: ReturnType<typeof setup>['state']) => void]> =
       [

@@ -1,72 +1,62 @@
 import type { MultisigMessageType } from './messages'
-import type { DeviceSlot, MultisigThreshold } from './types'
+import type { DeviceSlot, MultisigThreshold, VerifyStage } from './types'
 
-export type QrStepKind = 'show' | 'scan' | 'verify'
+export type QrStep =
+  | {
+      kind: 'show'
+      /** The phones that scan this code. */
+      slots: readonly DeviceSlot[]
+      messageTypes: readonly MultisigMessageType[]
+      title: string
+    }
+  | {
+      kind: 'scan'
+      /** Every phone whose code is expected; scans are collected in any order. */
+      slots: readonly DeviceSlot[]
+      messageType: MultisigMessageType
+      title: string
+    }
+  | { kind: 'verify'; stage: VerifyStage; title: string }
 
-export interface QrStep {
-  kind: QrStepKind
-  /**
-   * 'show': the phones that scan this code. 'scan': the one phone whose code is scanned.
-   * 'verify': empty.
-   */
-  slots: readonly DeviceSlot[]
-  /** Null for 'verify' steps, which carry no message. */
-  messageType: MultisigMessageType | null
-  /** Set only on 'verify' steps: which stage the user checks by eye. */
-  stage: 'r1' | null
-  title: string
-}
+// Pairing is invite, reply and identity check per phone, regardless of threshold.
+const PAIRING_STEP_COUNT = 3
 
-// Pairing is always one invite and one reply per phone, regardless of threshold.
-const PAIRING_STEP_COUNT = 2
-
-export function buildQrPairingSteps(slot: DeviceSlot): readonly [QrStep, QrStep] {
+export function buildQrPairingSteps(slot: DeviceSlot): readonly [QrStep, QrStep, QrStep] {
   return [
-    { kind: 'show', slots: [slot], messageType: 'PAIR_INVITE', stage: null, title: 'Invite' },
-    { kind: 'scan', slots: [slot], messageType: 'PAIR_RESPONSE', stage: null, title: 'Reply' }
+    { kind: 'show', slots: [slot], messageTypes: ['PAIR_INVITE'], title: 'Invite' },
+    { kind: 'scan', slots: [slot], messageType: 'PAIR_RESPONSE', title: 'Reply' },
+    { kind: 'verify', stage: 'identity', title: 'Confirm device identity' }
   ]
 }
 
 export function buildQrCeremonySteps(threshold: MultisigThreshold): readonly QrStep[] {
-  if (threshold === '2-of-2') {
-    return [
-      { kind: 'show', slots: [2], messageType: 'DKG_R2_INBOX', stage: null, title: 'Shares' },
-      {
-        kind: 'scan',
-        slots: [2],
-        messageType: 'DKG_FINAL',
-        stage: null,
-        title: 'Final Verification'
-      }
-    ]
-  }
-  // With three devices over QR there is no live channel to cross-check round-1 commitments, so
-  // the user verifies them by eye before any round-2 shares are scanned.
+  const guardians: readonly DeviceSlot[] = threshold === '2-of-2' ? [2] : [2, 3]
+  // Over QR with three devices there is no live channel to cross-check the roster and the
+  // round-1 commitments, so the user compares them by eye.
+  const withChecks = threshold !== '2-of-2'
+  const roster: QrStep[] = [
+    { kind: 'show', slots: guardians, messageTypes: ['ROSTER_LOCK'], title: 'Group roster' }
+  ]
+  if (withChecks) roster.push({ kind: 'verify', stage: 'roster', title: 'Verify the roster' })
+  const round1: QrStep[] = [
+    { kind: 'scan', slots: guardians, messageType: 'DKG_R1', title: 'Round 1' },
+    { kind: 'show', slots: guardians, messageTypes: ['DKG_R1_BUNDLE'], title: 'Round 1 bundle' }
+  ]
+  if (withChecks) round1.push({ kind: 'verify', stage: 'r1', title: 'Verify round 1' })
   return [
+    ...roster,
+    ...round1,
+    { kind: 'scan', slots: guardians, messageType: 'DKG_R1_ECHO', title: 'Round 1 check' },
+    { kind: 'show', slots: guardians, messageTypes: ['DKG_R1_CERT'], title: 'Round 1 complete' },
+    { kind: 'scan', slots: guardians, messageType: 'DKG_R2_BATCH', title: 'Round 2' },
     {
       kind: 'show',
-      slots: [2, 3],
-      messageType: 'DKG_R1_BUNDLE',
-      stage: null,
-      title: 'Group setup'
+      slots: guardians,
+      messageTypes: ['DKG_R2_INBOX', 'KEYSET_SETUP'],
+      title: 'Shares'
     },
-    { kind: 'verify', slots: [], messageType: null, stage: 'r1', title: 'Verify setup' },
-    { kind: 'scan', slots: [2], messageType: 'DKG_R2_BATCH', stage: null, title: 'Collect shares' },
-    { kind: 'scan', slots: [3], messageType: 'DKG_R2_BATCH', stage: null, title: 'Collect shares' },
-    {
-      kind: 'show',
-      slots: [2],
-      messageType: 'DKG_R2_INBOX',
-      stage: null,
-      title: 'Encrypted shares'
-    },
-    {
-      kind: 'show',
-      slots: [3],
-      messageType: 'DKG_R2_INBOX',
-      stage: null,
-      title: 'Encrypted shares'
-    }
+    { kind: 'verify', stage: 'final', title: 'Verify the group' },
+    { kind: 'scan', slots: guardians, messageType: 'DKG_FINAL', title: 'Final confirmation' }
   ]
 }
 
@@ -75,19 +65,11 @@ export function qrStepCounter(
   phase: 'pairing' | 'ceremony',
   index: number
 ): { current: number; total: number } {
-  const ceremonyCount = buildQrCeremonySteps(threshold).length
-  const phaseCount = phase === 'pairing' ? PAIRING_STEP_COUNT : ceremonyCount
+  const total = phase === 'pairing' ? PAIRING_STEP_COUNT : buildQrCeremonySteps(threshold).length
   // An out-of-range index means the caller's step state is wrong; fail loudly instead of
-  // showing a made-up "7/6" to the user.
-  if (!Number.isInteger(index) || index < 0 || index >= phaseCount) {
-    throw new RangeError(`QR ${phase} step index ${index} is outside 0..${phaseCount - 1}`)
+  // showing a made-up "12/11" to the user.
+  if (!Number.isInteger(index) || index < 0 || index >= total) {
+    throw new RangeError(`QR ${phase} step index ${index} is outside 0..${total - 1}`)
   }
-  if (threshold === '2-of-2') {
-    // The 2-of-2 mockups number pairing and ceremony as one continuous sequence (1/4 to 4/4).
-    const offset = phase === 'ceremony' ? PAIRING_STEP_COUNT : 0
-    return { current: offset + index + 1, total: PAIRING_STEP_COUNT + ceremonyCount }
-  }
-  // With three devices each phone's pairing is numbered on its own (1/2, 2/2), and the ceremony
-  // is a separate six-step sequence.
-  return { current: index + 1, total: phaseCount }
+  return { current: index + 1, total }
 }

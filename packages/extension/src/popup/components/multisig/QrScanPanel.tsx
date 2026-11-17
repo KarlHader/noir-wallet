@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import type { UR } from '@ngraveio/bc-ur'
 import { QRScanner } from '@/popup/components/hardware/QRScanner'
 import { FlowButton } from './FlowButton'
+import type { ScanOutcome } from '@/popup/multisig/qr-driver'
 import { toast } from '@/store/toast-store'
 import { QrPanelHeading, type QrPanelHeadingProps } from './QrPanelHeading'
 
@@ -16,8 +17,8 @@ interface QrScanPanelProps extends QrPanelHeadingProps {
   scanning: boolean
   /** The reply was accepted and the page is about to move on. */
   accepted?: boolean
-  /** Hands a complete code to the session; 'ignored' when it was not the awaited reply. */
-  onScan: (ur: UR) => 'accepted' | 'ignored'
+  /** Hands a complete code to the session and reports what became of it. */
+  onScan: (ur: UR) => Promise<ScanOutcome>
 }
 
 /** The footer action that opens the camera for a scan panel. */
@@ -53,9 +54,14 @@ export function QrScanPanel({
     return () => window.clearTimeout(timer)
   }, [rejected])
 
-  const handleScan = (ur: UR) => {
-    if (onScan(ur) === 'accepted') return
-    toast.error('Unrecognized code')
+  // Only codes that leave the session where it was restart the scanner here; for the other
+  // outcomes the session's new state moves the page on.
+  const handleScan = async (ur: UR) => {
+    // A check that throws leaves the session untouched, like a code it does not recognise.
+    const outcome = await onScan(ur).catch((): ScanOutcome => 'ignored')
+    if (outcome === 'duplicate') toast.info('Already scanned')
+    else if (outcome === 'ignored') toast.error('Unrecognized code')
+    else return
     setRejected(true)
   }
 
@@ -67,7 +73,11 @@ export function QrScanPanel({
           <p className="mt-2 text-xs text-muted">
             Hold your phone&apos;s QR code up to the camera.
           </p>
-          <QRScanner key={scanAttempt} onScan={handleScan} className="mt-4 w-full max-w-[320px]" />
+          <QRScanner
+            key={scanAttempt}
+            onScan={ur => void handleScan(ur)}
+            className="mt-4 w-full max-w-[320px]"
+          />
         </>
       ) : (
         <p className="mt-2 text-xs text-muted">{description}</p>

@@ -30,8 +30,11 @@ const TRANSPORT_OPTIONS: { value: MultisigTransportKind; label: string }[] = [
   { value: 'qr', label: 'QR code' }
 ]
 
-function pairRoute(slot: DeviceSlot): string {
-  return `${CREATE_ROUTE}/pair/${slot}/1`
+const QR_ONLY: readonly MultisigTransportKind[] = ['qr']
+const NO_DISABLED_TRANSPORTS: readonly MultisigTransportKind[] = []
+
+function pairRoute(slot: DeviceSlot, step: 1 | 3 = 1): string {
+  return `${CREATE_ROUTE}/pair/${slot}/${step}`
 }
 
 function isPairing(entry: DeviceSessionState): boolean {
@@ -109,9 +112,10 @@ function GuardianPairingSheet({ guardians }: { guardians: readonly DeviceSession
 interface GuardianCardProps {
   entry: DeviceSessionState
   onConnect: (slot: DeviceSlot) => void
+  onConfirmIdentity: (slot: DeviceSlot) => void
 }
 
-function GuardianCard({ entry, onConnect }: GuardianCardProps) {
+function GuardianCard({ entry, onConnect, onConfirmIdentity }: GuardianCardProps) {
   const { slot, connection, device } = entry
 
   switch (connection) {
@@ -147,6 +151,19 @@ function GuardianCard({ entry, onConnect }: GuardianCardProps) {
           onClick={() => onConnect(slot)}
         />
       )
+    case 'identity_check':
+      // QR only: the phone has answered; its identity still has to be matched by eye.
+      return (
+        <DeviceCard
+          slot={slot}
+          role="guardian"
+          title={device ? `${device.name} · ${device.model}` : 'Connecting…'}
+          subtitle="Confirm identity"
+          status="pending"
+          highlighted
+          onClick={() => onConfirmIdentity(slot)}
+        />
+      )
     case 'choosing':
     case 'pending':
     case 'code_wait':
@@ -170,6 +187,8 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
   const dispatch = useCreateSessionStore(state => state.dispatch)
   const switchTransport = useCreateSessionStore(state => state.switchTransport)
   const resolveChooser = useCreateSessionStore(state => state.resolveChooser)
+  // QR codes are signed with the device identity, so QR waits until it has loaded.
+  const identityStatus = useCreateSessionStore(state => state.identity.status)
 
   const guardians = session.devices.filter(entry => entry.slot !== 1)
   const ownerDevice = session.devices.find(entry => entry.slot === 1)?.device ?? null
@@ -239,7 +258,13 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
           options={TRANSPORT_OPTIONS}
           value={session.transportKind}
           onChange={kind => void handleTransportChange(kind)}
+          disabledValues={identityStatus === 'ready' ? NO_DISABLED_TRANSPORTS : QR_ONLY}
         />
+        {identityStatus === 'unsupported' && (
+          <p className="mt-2 text-xs text-muted">
+            QR code setup needs a newer Chrome. Update Chrome and try again, or use Bluetooth.
+          </p>
+        )}
       </div>
 
       <div className="mt-7 flex items-center justify-between gap-2">
@@ -261,7 +286,12 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
               status="signed"
             />
           ) : (
-            <GuardianCard key={entry.slot} entry={entry} onConnect={handleConnect} />
+            <GuardianCard
+              key={entry.slot}
+              entry={entry}
+              onConnect={handleConnect}
+              onConfirmIdentity={slot => navigate(pairRoute(slot, 3))}
+            />
           )
         )}
       </div>

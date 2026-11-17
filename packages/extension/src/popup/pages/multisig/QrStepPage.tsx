@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
-import type { CreateSessionState } from '@/core/multisig/create-session'
+import { scanMarked, type CreateSessionState } from '@/core/multisig/create-session'
 import type { QrStep } from '@/core/multisig/qr-plan'
 import type { DeviceSlot, MultisigDevice } from '@/core/multisig/types'
 import { DeviceCard } from '@/popup/components/multisig/DeviceCard'
 import { QrScanButton, QrScanPanel } from '@/popup/components/multisig/QrScanPanel'
 import { QrShowPanel } from '@/popup/components/multisig/QrShowPanel'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
-import { createFlowRoute, qrStepRoute } from '@/popup/multisig/create-flow-routes'
+import { createdTeamRoute, createFlowRoute, qrStepRoute } from '@/popup/multisig/create-flow-routes'
 import {
   currentQrStep,
   useCreateSessionStore,
@@ -18,24 +18,26 @@ import { useNavigate } from '@/popup/provider/Router'
 import { MultisigTabLayout } from './MultisigTabLayout'
 
 type StepCounter = { current: number; total: number }
+type ShowStep = Extract<QrStep, { kind: 'show' }>
+type ScanStep = Extract<QrStep, { kind: 'scan' }>
 
 interface ShowStepCopy {
   description: string
   scanLabel: string
 }
 
+const EVERY_PHONE_COPY: ShowStepCopy = {
+  description: 'Every phone scans this code.',
+  scanLabel: 'Scan your computer'
+}
+
 // Keyed by the plan's step titles (qr-plan.ts).
 const SHOW_STEP_COPY: Readonly<Record<string, ShowStepCopy>> = {
+  'Group roster': EVERY_PHONE_COPY,
+  'Round 1 bundle': EVERY_PHONE_COPY,
+  'Round 1 complete': EVERY_PHONE_COPY,
   Shares: {
-    description: 'This is the full group setup, plus the part only your phone can read.',
-    scanLabel: 'Scan your computer again'
-  },
-  'Group setup': {
-    description: 'Both phones scan this code.',
-    scanLabel: 'Scan your computer'
-  },
-  'Encrypted shares': {
-    description: 'Only this phone can read it.',
+    description: 'Only your phones can read this. Each phone scans it once.',
     scanLabel: 'Scan your computer'
   }
 }
@@ -58,14 +60,17 @@ function StepLabel({ counter }: { counter: StepCounter }) {
   )
 }
 
-/** Holds the page while the next code is prepared or the session moves to another page. */
-function QrStepLoading() {
+/**
+ * Holds the page while the next code is prepared or the session moves to another page; `message`
+ * names a wait the user should know about.
+ */
+function QrStepLoading({ message }: { message?: string }) {
   return (
     <MultisigTabLayout step={3} title="Multisig" showBack={false}>
       <div
         role="status"
-        aria-label="Loading"
-        className="flex min-h-full items-center justify-center"
+        aria-label={message ?? 'Loading'}
+        className="flex min-h-full flex-col items-center justify-center gap-3"
       >
         <Icon
           icon="lucide:loader-2"
@@ -73,6 +78,7 @@ function QrStepLoading() {
           height={32}
           className="animate-spin text-primary motion-reduce:animate-none"
         />
+        {message && <p className="text-xs text-muted">{message}</p>}
       </div>
     </MultisigTabLayout>
   )
@@ -87,10 +93,38 @@ function ScannedMark() {
   )
 }
 
-interface QrStepViewProps {
+interface QrStepViewProps<Step extends QrStep> {
   session: CreateSessionState
-  step: QrStep
+  step: Step
   counter: StepCounter
+}
+
+/** One row per phone in the step, marked once that phone is done with it. */
+function StepDevices({
+  session,
+  slots,
+  isDone
+}: {
+  session: CreateSessionState
+  slots: readonly DeviceSlot[]
+  isDone: (slot: DeviceSlot) => boolean
+}) {
+  return (
+    <div className="mt-5 w-full space-y-3 text-left">
+      {slots.map(slot => (
+        <DeviceCard
+          key={slot}
+          slot={slot}
+          role="guardian"
+          title={deviceTitle(guardianDevice(session, slot), slot)}
+          // The card's own status labels are about connections; here only the scan matters,
+          // and an empty fragment (not null, which falls back to the label) shows nothing.
+          status="connected"
+          trailing={isDone(slot) ? <ScannedMark /> : <></>}
+        />
+      ))}
+    </div>
+  )
 }
 
 /** A code on screen for one or both phones; each phone is marked once it has scanned it. */
@@ -99,7 +133,7 @@ function QrShowStep({
   step,
   counter,
   display
-}: QrStepViewProps & { display: PendingQrDisplay | null }) {
+}: QrStepViewProps<ShowStep> & { display: PendingQrDisplay | null }) {
   const markPhoneScanned = useCreateSessionStore(state => state.markPhoneScanned)
   const refreshDisplay = useCreateSessionStore(state => state.refreshDisplay)
 
@@ -143,34 +177,32 @@ function QrShowStep({
         title={step.title}
         description={copy.description}
         scanLabel={copy.scanLabel}
-        envelope={display.envelope}
+        envelopes={display.envelopes}
         expiresAt={display.expiresAt}
         onRefresh={refreshDisplay}
       >
-        <div className="mt-5 w-full space-y-3 text-left">
-          {step.slots.map(slot => (
-            <DeviceCard
-              key={slot}
-              slot={slot}
-              role="guardian"
-              title={deviceTitle(guardianDevice(session, slot), slot)}
-              // The card's own status labels are about connections; here only the scan matters,
-              // and an empty fragment (not null, which falls back to the label) shows nothing.
-              status="connected"
-              trailing={session.qrShownTo.includes(slot) ? <ScannedMark /> : <></>}
-            />
-          ))}
-        </div>
+        <StepDevices
+          session={session}
+          slots={step.slots}
+          isDone={slot => session.qrShownTo.includes(slot)}
+        />
       </QrShowPanel>
     </MultisigTabLayout>
   )
 }
 
-/** Reads one phone's reply code. The reducer moves on as soon as it accepts the reply. */
-function QrScanStep({ session, step, counter }: QrStepViewProps) {
+/**
+ * Reads every phone's code for this step, in any order. The reducer moves on once it has them
+ * all.
+ */
+function QrScanStep({ session, step, counter }: QrStepViewProps<ScanStep>) {
   const ingestScan = useCreateSessionStore(state => state.ingestScan)
   const [scanning, setScanning] = useState(false)
-  const slot = step.slots[0]
+  const isReceived = (slot: DeviceSlot) => {
+    const entry = session.devices.find(device => device.slot === slot)
+    return entry !== undefined && scanMarked(entry, step.messageType)
+  }
+  const receivedCount = step.slots.filter(isReceived).length
 
   return (
     <MultisigTabLayout
@@ -180,13 +212,16 @@ function QrScanStep({ session, step, counter }: QrStepViewProps) {
       footer={scanning ? undefined : <QrScanButton onClick={() => setScanning(true)} />}
     >
       <QrScanPanel
+        // The scanner stops after each code, so a fresh one opens for the next phone.
+        key={receivedCount}
         counter={counter}
         ringLabel={<StepLabel counter={counter} />}
         title={step.title}
-        description={`Scan ${deviceTitle(guardianDevice(session, slot), slot)}`}
+        description="Scan each phone's code."
         scanning={scanning}
         onScan={ingestScan}
       />
+      <StepDevices session={session} slots={step.slots} isDone={isReceived} />
     </MultisigTabLayout>
   )
 }
@@ -199,6 +234,7 @@ export function QrStepPage() {
   const { index } = useParams()
   const { replace } = useNavigate()
   const session = useCreateSessionStore(state => state.session)
+  const scope = useCreateSessionStore(state => state.scope)
   const pendingDisplay = useCreateSessionStore(state => state.pendingDisplay)
   const pendingScan = useCreateSessionStore(state => state.pendingScan)
   // currentQrStep builds a new object on every call, so it is computed here from the three
@@ -210,14 +246,26 @@ export function QrStepPage() {
 
   // The session decides the step: a finished step moves the URL to the next index, the round-1
   // check and the final check go to the verify page, and a Bluetooth session to its ceremony.
-  const target = session ? createFlowRoute(session) : null
+  const activated = session?.phase === 'ACTIVATED'
+  const target = session && !activated ? createFlowRoute(session) : null
   const here = qrStepRoute(index ?? '')
   useEffect(() => {
+    if (activated) {
+      // The last phone's final confirmation activates the group on this page. The store has
+      // saved the group already, so the team page can show it at once. Without a scope there is
+      // no account to show it for.
+      if (scope) replace(createdTeamRoute(scope))
+      else window.close()
+      return
+    }
     if (target !== null && target !== here) replace(target)
-  }, [target, here, replace])
+  }, [activated, scope, target, here, replace])
 
   // The route guard already redirects when the session is missing or aborted.
   if (!session) return null
+
+  // Round 2 is done and the share is being written; the next code waits for the save.
+  if (session.phase === 'FINALIZED') return <QrStepLoading message="Saving your share…" />
 
   // Rendered from the session even before the URL has caught up, so the next step's content
   // replaces the finished one directly.

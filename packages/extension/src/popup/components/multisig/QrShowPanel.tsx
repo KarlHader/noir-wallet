@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon } from '@iconify/react'
 import type { MultisigEnvelope } from '@/core/multisig/messages'
-import { createEnvelopeUREncoder } from '@/lib/multisig-ur'
+import { createEnvelopesUREncoder } from '@/lib/multisig-ur'
 import { EncoderAnimatedQR } from '@/popup/components/hardware/AnimatedQR'
 import { QrPanelHeading, type QrPanelHeadingProps } from './QrPanelHeading'
 
@@ -42,7 +42,7 @@ interface QrShowPanelProps extends QrPanelHeadingProps {
   /** The line above the code telling the phone what to do, e.g. "Scan your computer". */
   scanLabel: string
   /** Null until the code is ready; a spinner holds its place. */
-  envelope: MultisigEnvelope | null
+  envelopes: readonly MultisigEnvelope[] | null
   expiresAt: number | null
   /** Extends the code's expiry. Also called when it runs out, so it should be stable. */
   onRefresh: () => void
@@ -54,16 +54,19 @@ interface QrShowPanelProps extends QrPanelHeadingProps {
 export function QrShowPanel({
   description,
   scanLabel,
-  envelope,
+  envelopes,
   expiresAt,
   onRefresh,
   children,
   ...heading
 }: QrShowPanelProps) {
   const remainingMs = useRemainingMs(expiresAt, onRefresh)
-  // The encoder carries the frame cycle, so it is rebuilt only for a new envelope. A refresh
-  // that merely extends the expiry keeps the same envelope, and with it the running animation.
-  const encoder = useMemo(() => (envelope ? createEnvelopeUREncoder(envelope) : null), [envelope])
+  // The encoder carries the frame cycle, so it is rebuilt only for new envelopes. A refresh that
+  // merely extends the expiry keeps the same envelopes, and with them the running animation.
+  const encoder = useMemo(
+    () => (envelopes ? createEnvelopesUREncoder(envelopes) : null),
+    [envelopes]
+  )
 
   return (
     <div className="flex flex-col items-center text-center">
@@ -73,11 +76,11 @@ export function QrShowPanel({
 
       {/* A white quiet zone around the code is what phone cameras need to read it. */}
       <div className="mt-3 rounded-2xl bg-white p-4">
-        {envelope && encoder ? (
+        {envelopes && encoder ? (
           <EncoderAnimatedQR
-            // A new envelope is a new code: remount so the frame cycle starts from its first
+            // New envelopes are a new code: remount so the frame cycle starts from its first
             // frame.
-            key={`${envelope.session_id}:${envelope.sequence}`}
+            key={envelopes.map(envelope => envelope.sequence).join('-')}
             encoder={encoder}
             size={QR_SIZE}
           />

@@ -1,155 +1,60 @@
 import {
   dkgShape,
-  parseDkgEnvelopePayload,
   parseDkgFinalPayload,
   parseRound1EchoPayload,
   rosterSlotOf,
   type RosterLockPayload
 } from './dkg-protocol'
-import type {
-  VaultDkgAcceptRequest,
-  VaultDkgRound1Response,
-  VaultDkgRound2Response
-} from './dkg-rpc'
-import { deriveMockFingerprint } from './fingerprint'
-import { deviceId, type MultisigEnvelope, type MultisigMessageType } from './messages'
-import { buildQrCeremonySteps, type QrStep } from './qr-plan'
-import { parseSealedVaultRecord, type SealedVaultRecord } from './vault-record'
+import type { VaultDkgRound1Response, VaultDkgRound2Response } from './dkg-rpc'
+import {
+  abort,
+  acceptRequest,
+  activate,
+  allGuardiansConnected,
+  emptyDevice,
+  everyGuardian,
+  guardians,
+  guardianSlots,
+  guardianSlotsOf,
+  guardianState,
+  ignored,
+  markEveryGuardian,
+  messageSender,
+  parsePayload,
+  perGuardian,
+  resetDevice,
+  result,
+  switchTransport,
+  updateDevice,
+  type CreateSessionEffect,
+  type CreateSessionEvent,
+  type CreateSessionInput,
+  type CreateSessionState,
+  type DeviceSessionState,
+  type MessageReceivedEvent,
+  type ReduceResult
+} from './create-session-shared'
+import { reduceQrSession } from './create-session-qr'
+import type { MultisigMessageType } from './messages'
+import { parseSealedVaultRecord } from './vault-record'
 import {
   PAIRING_CODE_MAX_ATTEMPTS,
-  thresholdDeviceCount,
   thresholdRequiresManualR1Check,
-  type AbortReason,
-  type DeviceConnectionState,
   type DeviceSlot,
-  type MultisigDevice,
-  type MultisigGroupRecord,
-  type MultisigThreshold,
-  type MultisigTransportKind,
-  type SessionPhase
+  type MultisigDevice
 } from './types'
 
-export interface DeviceSessionState {
-  slot: DeviceSlot
-  connection: DeviceConnectionState
-  device: MultisigDevice | null
-  pairingCode: string | null
-  pairingCodeExpiresAt: number | null
-  codeAttempts: number
-  codeError: 'wrong' | 'expired' | null
-  r1Received: boolean
-  r1Echoed: boolean
-  r2Received: boolean
-  finalReceived: boolean
-}
-
-export interface CreateSessionState {
-  groupId: string
-  sessionId: string
-  threshold: MultisigThreshold
-  transportKind: MultisigTransportKind
-  phase: SessionPhase
-  abortReason: AbortReason | null
-  /** Index 0 is slot 1, the extension itself, which is always connected. */
-  devices: readonly DeviceSessionState[]
-  manualR1Check: boolean
-  r1Fingerprint: string | null
-  finalFingerprint: string | null
-  ownerConfirmed: { r1: boolean; final: boolean }
-  /** QR only: the current ceremony step, -1 before the ceremony starts. */
-  qrCeremonyIndex: number
-  /** QR only: phones the user has marked as having scanned the current 'show' step. */
-  qrShownTo: readonly DeviceSlot[]
-  /** Which network the keyset is derived for; the fingerprint differs between the two. */
-  mainnet: boolean
-  /** Bluetooth only: the Worker's DKG session (base64), from DKG_OPENED until the end. */
-  dkgSessionId: string | null
-  /** Bluetooth only: the extension's sealed share from round 2; ciphertext, never the share. */
-  vaultRecord: SealedVaultRecord | null
-  /** Bluetooth only: the record is on its way to storage and activation waits for the answer. */
-  savingRecord: boolean
-}
-
-export type CreateSessionEvent =
-  | { type: 'PAIR_START'; slot: DeviceSlot }
-  | { type: 'PAIR_DEVICE_SELECTED'; slot: DeviceSlot; device: MultisigDevice }
-  | { type: 'PAIR_SELECTION_CANCELLED'; slot: DeviceSlot }
-  | { type: 'PAIR_CODE_ISSUED'; slot: DeviceSlot; code: string; expiresAt: number }
-  | { type: 'PAIR_CODE_EXPIRED'; slot: DeviceSlot }
-  | { type: 'PAIR_CODE_RESEND'; slot: DeviceSlot }
-  | { type: 'PAIR_CANCEL'; slot: DeviceSlot }
-  | { type: 'QR_INVITE_SHOWN'; slot: DeviceSlot }
-  | { type: 'QR_PHONE_SCANNED'; slot: DeviceSlot }
-  | { type: 'MESSAGE_RECEIVED'; slot: DeviceSlot; envelope: MultisigEnvelope; at: number }
-  | { type: 'DEVICE_DISCONNECTED'; slot: DeviceSlot }
-  | { type: 'CONTINUE' }
-  | { type: 'FINGERPRINT_CONFIRMED'; stage: 'r1' | 'final' }
-  | { type: 'FINGERPRINT_REJECTED'; stage: 'r1' | 'final' }
-  | { type: 'SWITCH_TRANSPORT'; kind: MultisigTransportKind }
-  | { type: 'STEP_TIMEOUT' }
-  | { type: 'USER_ABORT' }
-  | { type: 'DKG_OPENED'; sessionId: string }
-  | { type: 'DKG_ROUND1_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound1Response }
-  | { type: 'DKG_ROUND2_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound2Response }
-  | { type: 'DKG_FAILED' }
-  | { type: 'VAULT_RECORD_SAVED' }
-  | { type: 'VAULT_RECORD_SAVE_FAILED' }
-
-export type CreateSessionEffect =
-  | { type: 'requestDevice'; slot: DeviceSlot }
-  | { type: 'issueCode'; slot: DeviceSlot }
-  | {
-      type: 'sendTo'
-      slot: DeviceSlot
-      messageType: MultisigMessageType
-      payload?: Record<string, unknown>
-    }
-  | { type: 'awaitFrom'; slot: DeviceSlot; messageType: MultisigMessageType }
-  | { type: 'display'; slots: readonly DeviceSlot[]; messageType: MultisigMessageType }
-  | { type: 'awaitScan'; slot: DeviceSlot; messageType: MultisigMessageType }
-  | { type: 'disconnect'; slot: DeviceSlot }
-  | { type: 'persistGroup'; record: MultisigGroupRecord }
-  | { type: 'dkgOpen'; participants: 2 | 3; threshold: 2 | 3; mainnet: boolean; groupId: string }
-  | { type: 'dkgAcceptRound1'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
-  | { type: 'dkgAcceptRound2'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
-  | { type: 'dkgClose'; sessionId: string }
-  | { type: 'saveVaultRecord'; groupId: string; record: SealedVaultRecord }
-
-export interface CreateSessionInput {
-  groupId: string
-  sessionId: string
-  threshold: MultisigThreshold
-  transportKind: MultisigTransportKind
-  owner: MultisigDevice
-  mainnet: boolean
-}
-
-interface ReduceResult {
-  state: CreateSessionState
-  effects: readonly CreateSessionEffect[]
-}
-
-type MessageReceivedEvent = Extract<CreateSessionEvent, { type: 'MESSAGE_RECEIVED' }>
-
-const NO_EFFECTS: readonly CreateSessionEffect[] = []
-const TWO_DEVICE_GUARDIANS: readonly DeviceSlot[] = [2]
-const THREE_DEVICE_GUARDIANS: readonly DeviceSlot[] = [2, 3]
-
-function emptyDevice(slot: DeviceSlot): DeviceSessionState {
-  return {
-    slot,
-    connection: 'empty',
-    device: null,
-    pairingCode: null,
-    pairingCodeExpiresAt: null,
-    codeAttempts: 0,
-    codeError: null,
-    r1Received: false,
-    r1Echoed: false,
-    r2Received: false,
-    finalReceived: false
-  }
-}
+export {
+  allGuardiansConnected,
+  guardianSlots,
+  type CreateSessionEffect,
+  type CreateSessionEvent,
+  type CreateSessionInput,
+  type CreateSessionState,
+  type DeviceSessionState,
+  type QrDisplayItem
+} from './create-session-shared'
+export { scanMarked } from './create-session-qr'
 
 export function createInitialSession(input: CreateSessionInput): CreateSessionState {
   const owner: DeviceSessionState = {
@@ -157,8 +62,7 @@ export function createInitialSession(input: CreateSessionInput): CreateSessionSt
     connection: 'connected',
     device: input.owner
   }
-  const slots =
-    thresholdDeviceCount(input.threshold) === 2 ? TWO_DEVICE_GUARDIANS : THREE_DEVICE_GUARDIANS
+  const slots = guardianSlotsOf(input.threshold)
   return {
     groupId: input.groupId,
     sessionId: input.sessionId,
@@ -176,27 +80,12 @@ export function createInitialSession(input: CreateSessionInput): CreateSessionSt
     mainnet: input.mainnet,
     dkgSessionId: null,
     vaultRecord: null,
-    savingRecord: false
+    savingRecord: false,
+    ownerIdentityPublicKey: null,
+    qrDkgSessionId: input.qrDkgSessionId ?? '',
+    roster: null,
+    round2Outputs: null
   }
-}
-
-export function guardianSlots(state: CreateSessionState): readonly DeviceSlot[] {
-  return thresholdDeviceCount(state.threshold) === 2 ? TWO_DEVICE_GUARDIANS : THREE_DEVICE_GUARDIANS
-}
-
-function guardians(state: CreateSessionState): readonly DeviceSessionState[] {
-  return state.devices.filter(device => device.slot !== 1)
-}
-
-function everyGuardian(
-  state: CreateSessionState,
-  predicate: (device: DeviceSessionState) => boolean
-): boolean {
-  return guardians(state).every(predicate)
-}
-
-export function allGuardiansConnected(state: CreateSessionState): boolean {
-  return everyGuardian(state, device => device.connection === 'connected')
 }
 
 export function verifyPageDevices(
@@ -208,46 +97,11 @@ export function verifyPageDevices(
           {
             slot: entry.slot,
             device: entry.device,
-            // Over QR the phones confirm on their own screens with no way to tell the extension,
-            // so there is never a confirmation to show.
-            confirmed: state.transportKind === 'ble' && entry.finalReceived
+            confirmed: entry.finalReceived
           }
         ]
       : []
   )
-}
-
-function result(
-  state: CreateSessionState,
-  effects: readonly CreateSessionEffect[] = NO_EFFECTS
-): ReduceResult {
-  return { state, effects }
-}
-
-// "Ignored" means the caller gets back the very same state object, so it can tell nothing happened.
-function ignored(state: CreateSessionState): ReduceResult {
-  return result(state)
-}
-
-function guardianState(state: CreateSessionState, slot: DeviceSlot): DeviceSessionState | null {
-  if (slot === 1) return null
-  return state.devices.find(device => device.slot === slot) ?? null
-}
-
-function updateDevice(
-  state: CreateSessionState,
-  slot: DeviceSlot,
-  patch: Partial<Omit<DeviceSessionState, 'slot'>>
-): CreateSessionState {
-  return {
-    ...state,
-    devices: state.devices.map(device => (device.slot === slot ? { ...device, ...patch } : device))
-  }
-}
-
-function resetDevice(state: CreateSessionState, slot: DeviceSlot): ReduceResult {
-  const devices = state.devices.map(d => (d.slot === slot ? emptyDevice(slot) : d))
-  return result({ ...state, devices }, [{ type: 'disconnect', slot }])
 }
 
 function toEachGuardian(
@@ -262,42 +116,6 @@ function toEachGuardian(
       (slot): CreateSessionEffect => ({ type: 'awaitFrom', slot, messageType: awaitType })
     )
   ]
-}
-
-function abort(state: CreateSessionState, reason: AbortReason): ReduceResult {
-  // Any failure voids the whole group: no guardian may keep a half-finished pairing or share.
-  const devices = state.devices.map(d => (d.slot === 1 ? d : emptyDevice(d.slot)))
-  // Over Bluetooth every phone already involved is told before its link goes, so none stays on a
-  // setup that no longer exists. QR has no channel back to the phones, so nothing can be sent.
-  const effects: CreateSessionEffect[] =
-    state.transportKind === 'ble'
-      ? guardians(state)
-          .filter(device => device.connection !== 'empty')
-          .flatMap((device): CreateSessionEffect[] => [
-            { type: 'sendTo', slot: device.slot, messageType: 'SESSION_ABORT' },
-            { type: 'disconnect', slot: device.slot }
-          ])
-      : []
-  // The Worker's half of the ceremony must not outlive the session it belonged to.
-  if (state.dkgSessionId !== null) {
-    effects.push({ type: 'dkgClose', sessionId: state.dkgSessionId })
-  }
-  // An aborted session has no save in flight any more; a late save answer is ignored anyway.
-  return result(
-    { ...state, phase: 'ABORTED', abortReason: reason, devices, savingRecord: false },
-    effects
-  )
-}
-
-function parsePayload(envelope: MultisigEnvelope): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(envelope.encrypted_payload)
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
 }
 
 function isFilledString(value: unknown): value is string {
@@ -315,46 +133,13 @@ function asGuardian(slot: DeviceSlot, value: unknown): MultisigDevice | null {
   return { slot, role: 'guardian', name, model, platform }
 }
 
-function buildGroupRecord(state: CreateSessionState, fingerprint: string): MultisigGroupRecord {
-  return {
-    groupId: state.groupId,
-    threshold: state.threshold,
-    transportKind: state.transportKind,
-    devices: state.devices.flatMap(entry => (entry.device ? [entry.device] : [])),
-    fingerprint,
-    // The reducer never reads the clock; the store stamps the real time when it persists.
-    createdAt: 0,
-    mock: true
-  }
-}
-
-function activate(state: CreateSessionState): ReduceResult {
-  const fingerprint = state.finalFingerprint
-  if (fingerprint === null) return ignored(state)
-  const persist: CreateSessionEffect = {
-    type: 'persistGroup',
-    record: buildGroupRecord(state, fingerprint)
-  }
-  // Only Bluetooth has a channel back to the phones; over QR each device activates locally once
-  // its user has matched the fingerprint, so there is nothing to send.
-  const announce: CreateSessionEffect[] =
-    state.transportKind === 'ble'
-      ? guardianSlots(state).map(slot => ({ type: 'sendTo', slot, messageType: 'DKG_ACTIVATE' }))
-      : []
-  // A Worker session exists only on the Bluetooth path, which activates once Background has
-  // confirmed the sealed record is stored: the share now lives in that record, so the session
-  // holds nothing that is still needed.
-  const release: CreateSessionEffect[] =
-    state.dkgSessionId !== null ? [{ type: 'dkgClose', sessionId: state.dkgSessionId }] : []
-  return result({ ...state, phase: 'ACTIVATED' }, [...announce, persist, ...release])
-}
-
 export function reduceCreateSession(
   state: CreateSessionState,
   event: CreateSessionEvent
 ): { state: CreateSessionState; effects: readonly CreateSessionEffect[] } {
   // Both outcomes are final: a new attempt starts a new session.
   if (state.phase === 'ABORTED' || state.phase === 'ACTIVATED') return ignored(state)
+  if (state.transportKind === 'qr') return reduceQrSession(state, event)
 
   switch (event.type) {
     case 'USER_ABORT':
@@ -392,21 +177,7 @@ export function reduceCreateSession(
   }
 
   if (state.phase === 'PAIRING') return reducePairing(state, event)
-  return state.transportKind === 'ble'
-    ? reduceBleCeremony(state, event)
-    : reduceQrCeremony(state, event)
-}
-
-// Accepts a message only from this session, from a guardian slot that is actually in the flow,
-// and from the phone that slot belongs to. Whether its type is expected is decided per phase.
-function messageSender(
-  state: CreateSessionState,
-  event: MessageReceivedEvent
-): DeviceSessionState | null {
-  if (event.envelope.session_id !== state.sessionId) return null
-  if (event.envelope.sender_id !== deviceId(event.slot)) return null
-  const sender = guardianState(state, event.slot)
-  return sender && sender.connection !== 'empty' ? sender : null
+  return reduceBleCeremony(state, event)
 }
 
 function reducePairing(state: CreateSessionState, event: CreateSessionEvent): ReduceResult {
@@ -423,44 +194,17 @@ function reducePairing(state: CreateSessionState, event: CreateSessionEvent): Re
         : ignored(state)
     }
     default:
-      return state.transportKind === 'ble'
-        ? reduceBlePairing(state, event)
-        : reduceQrPairing(state, event)
+      return reduceBlePairing(state, event)
   }
 }
 
-function switchTransport(state: CreateSessionState, kind: MultisigTransportKind): ReduceResult {
-  if (kind === state.transportKind) return ignored(state)
-  // The two transports never mix within one group, so a started pairing cannot carry over.
-  if (!everyGuardian(state, device => device.connection === 'empty')) {
-    return abort(state, 'transport_switched')
-  }
-  const manualR1Check = thresholdRequiresManualR1Check(state.threshold, kind)
-  return result({ ...state, transportKind: kind, manualR1Check })
-}
-
+// The Worker opens the DKG session first; ROSTER_LOCK goes out once its id is known.
 function lockRoster(state: CreateSessionState): ReduceResult {
   if (!allGuardiansConnected(state)) return ignored(state)
-
-  // Bluetooth: the Worker opens the DKG session first; ROSTER_LOCK goes out once its id is known.
-  if (state.transportKind === 'ble') {
-    const shape = dkgShape(state.threshold)
-    return result({ ...state, phase: 'DKG_R1' }, [
-      { type: 'dkgOpen', ...shape, mainnet: state.mainnet, groupId: state.groupId }
-    ])
-  }
-
-  // QR: every phone's round-1 package arrived with its pairing reply, so the round-1 set is
-  // already complete. With two devices nothing needs cross-checking and the ceremony starts at
-  // round 2; with three the user must compare the round-1 fingerprint first.
-  const next: CreateSessionState = {
-    ...state,
-    phase: state.manualR1Check ? 'DKG_R1' : 'DKG_R2',
-    r1Fingerprint: deriveMockFingerprint(state.groupId, 'r1'),
-    qrCeremonyIndex: 0,
-    qrShownTo: []
-  }
-  return result(next, qrStepEffects(buildQrCeremonySteps(state.threshold)[0]))
+  const shape = dkgShape(state.threshold)
+  return result({ ...state, phase: 'DKG_R1' }, [
+    { type: 'dkgOpen', ...shape, mainnet: state.mainnet, groupId: state.groupId }
+  ])
 }
 
 function reduceBlePairing(state: CreateSessionState, event: CreateSessionEvent): ReduceResult {
@@ -562,38 +306,6 @@ function checkPairingCode(state: CreateSessionState, event: MessageReceivedEvent
   ])
 }
 
-function reduceQrPairing(state: CreateSessionState, event: CreateSessionEvent): ReduceResult {
-  switch (event.type) {
-    case 'PAIR_START':
-    case 'QR_INVITE_SHOWN': {
-      const connection = guardianState(state, event.slot)?.connection
-      // Re-entering the invite page shows the invite again; tapping the card only starts once.
-      const canShow =
-        connection === 'empty' ||
-        (event.type === 'QR_INVITE_SHOWN' && connection === 'invite_shown')
-      if (!canShow) return ignored(state)
-      return result(updateDevice(state, event.slot, { connection: 'invite_shown' }), [
-        { type: 'display', slots: [event.slot], messageType: 'PAIR_INVITE' }
-      ])
-    }
-    case 'QR_PHONE_SCANNED':
-      if (guardianState(state, event.slot)?.connection !== 'invite_shown') return ignored(state)
-      return result(state, [{ type: 'awaitScan', slot: event.slot, messageType: 'PAIR_RESPONSE' }])
-    case 'MESSAGE_RECEIVED': {
-      if (event.envelope.message_type !== 'PAIR_RESPONSE') return ignored(state)
-      if (guardianState(state, event.slot)?.connection !== 'invite_shown') return ignored(state)
-      const device = asGuardian(event.slot, parsePayload(event.envelope)?.device)
-      if (!device) return ignored(state)
-      // The reply also carries the phone's round-1 package, so round 1 is in hand already.
-      return result(
-        updateDevice(state, event.slot, { connection: 'connected', device, r1Received: true })
-      )
-    }
-    default:
-      return ignored(state)
-  }
-}
-
 // Bluetooth: every round is a send to all phones and a wait for each one's reply. The extension's
 // own share is computed by the Worker, so each phone's DKG message becomes a dkgAccept* effect and
 // the Worker's answer comes back as a DKG_*_ACCEPTED event.
@@ -652,45 +364,6 @@ function openDkg(state: CreateSessionState, sessionId: string): ReduceResult {
       (slot): CreateSessionEffect => ({ type: 'awaitFrom', slot, messageType: 'DKG_R1' })
     )
   ])
-}
-
-function acceptRequest(
-  state: CreateSessionState,
-  slot: DeviceSlot,
-  envelope: MultisigEnvelope
-): VaultDkgAcceptRequest | null {
-  if (state.dkgSessionId === null) return null
-  const payload = parseDkgEnvelopePayload(parsePayload(envelope))
-  if (!payload) return null
-  return {
-    sessionId: state.dkgSessionId,
-    senderSlot: rosterSlotOf(slot),
-    envelope: payload.envelope
-  }
-}
-
-// The Worker keys its per-phone output by roster slot; every phone in the roster must be there.
-function perGuardian(
-  state: CreateSessionState,
-  values: Record<string, string>
-): Map<DeviceSlot, string> | null {
-  const out = new Map<DeviceSlot, string>()
-  for (const slot of guardianSlots(state)) {
-    const value = values[String(rosterSlotOf(slot))]
-    if (typeof value !== 'string') return null
-    out.set(slot, value)
-  }
-  return out
-}
-
-function markEveryGuardian(
-  state: CreateSessionState,
-  patch: Partial<Omit<DeviceSessionState, 'slot'>>
-): CreateSessionState {
-  return {
-    ...state,
-    devices: state.devices.map(device => (device.slot === 1 ? device : { ...device, ...patch }))
-  }
 }
 
 function round1Accepted(
@@ -840,89 +513,4 @@ function activateWhenAllConfirmed(state: CreateSessionState): ReduceResult {
   return result({ ...state, savingRecord: true }, [
     { type: 'saveVaultRecord', groupId: state.groupId, record: state.vaultRecord }
   ])
-}
-
-// QR: walks the step plan from qr-plan.ts. Phases move as data arrives rather than by step
-// number, so 2-of-2 and x-of-3 share one path.
-
-function reduceQrCeremony(state: CreateSessionState, event: CreateSessionEvent): ReduceResult {
-  if (state.phase === 'KEYSET_VERIFIED') {
-    // No message reaches the extension after the last code, so the owner's match activates.
-    if (event.type !== 'FINGERPRINT_CONFIRMED' || event.stage !== 'final') return ignored(state)
-    return activate({ ...state, ownerConfirmed: { ...state.ownerConfirmed, final: true } })
-  }
-
-  const steps = buildQrCeremonySteps(state.threshold)
-  if (state.qrCeremonyIndex < 0 || state.qrCeremonyIndex >= steps.length) return ignored(state)
-  const step = steps[state.qrCeremonyIndex]
-
-  switch (event.type) {
-    case 'QR_PHONE_SCANNED':
-      return step.kind === 'show' ? markPhoneScanned(state, step, event.slot) : ignored(state)
-    case 'FINGERPRINT_CONFIRMED': {
-      if (step.kind !== 'verify' || event.stage !== 'r1') return ignored(state)
-      // Round 2 may only start after the user has compared the round-1 fingerprint by eye.
-      return completeQrStep({
-        ...state,
-        phase: 'DKG_R2',
-        ownerConfirmed: { ...state.ownerConfirmed, r1: true }
-      })
-    }
-    case 'MESSAGE_RECEIVED':
-      return step.kind === 'scan' ? receiveQrScan(state, step, event) : ignored(state)
-    default:
-      return ignored(state)
-  }
-}
-
-function markPhoneScanned(state: CreateSessionState, step: QrStep, slot: DeviceSlot): ReduceResult {
-  if (!step.slots.includes(slot) || state.qrShownTo.includes(slot)) return ignored(state)
-  const next: CreateSessionState = { ...state, qrShownTo: [...state.qrShownTo, slot] }
-  return step.slots.every(s => next.qrShownTo.includes(s)) ? completeQrStep(next) : result(next)
-}
-
-function receiveQrScan(
-  state: CreateSessionState,
-  step: QrStep,
-  event: MessageReceivedEvent
-): ReduceResult {
-  if (event.slot !== step.slots[0]) return ignored(state)
-  const type = event.envelope.message_type
-  // The 2-of-2 4/4 code carries the phone's round-2 batch and its final result together, so
-  // either name on the envelope is the same answer.
-  const finalStep = step.messageType === 'DKG_FINAL'
-  const accepted = type === step.messageType || (finalStep && type === 'DKG_R2_BATCH')
-  if (!accepted) return ignored(state)
-  const received = finalStep ? { r2Received: true, finalReceived: true } : { r2Received: true }
-  return completeQrStep(updateDevice(state, event.slot, received))
-}
-
-function completeQrStep(state: CreateSessionState): ReduceResult {
-  const steps = buildQrCeremonySteps(state.threshold)
-  let next = state
-  // With every round-2 batch in hand the extension computes its own share right away.
-  if (next.phase === 'DKG_R2' && everyGuardian(next, device => device.r2Received)) {
-    next = {
-      ...next,
-      phase: 'FINALIZED',
-      finalFingerprint: deriveMockFingerprint(state.groupId, 'final')
-    }
-  }
-  const index = next.qrCeremonyIndex + 1
-  // The index stays on the last real step so step counters never see a past-the-end value;
-  // KEYSET_VERIFIED is what tells the pages the codes are done.
-  if (index >= steps.length) return result({ ...next, phase: 'KEYSET_VERIFIED' })
-  return result({ ...next, qrCeremonyIndex: index, qrShownTo: [] }, qrStepEffects(steps[index]))
-}
-
-function qrStepEffects(step: QrStep): readonly CreateSessionEffect[] {
-  if (step.messageType === null) return NO_EFFECTS
-  switch (step.kind) {
-    case 'show':
-      return [{ type: 'display', slots: step.slots, messageType: step.messageType }]
-    case 'scan':
-      return [{ type: 'awaitScan', slot: step.slots[0], messageType: step.messageType }]
-    case 'verify':
-      return NO_EFFECTS
-  }
 }

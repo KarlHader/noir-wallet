@@ -61,7 +61,7 @@ class TestPhone {
     readonly slot: number,
     private readonly sessionId: Uint8Array
   ) {
-    this.dkg = new wasm.Dkg(shape.participants, shape.threshold, slot)
+    this.dkg = new wasm.Dkg(shape.participants, shape.threshold, slot, sessionId)
   }
 
   round1(): Uint8Array {
@@ -163,6 +163,31 @@ async function runRound2(
 }
 
 test.describe('multisig dkg coordinator', () => {
+  test('open adopts a caller-supplied session id', () => {
+    const id = wasm.EnvelopeCodec.new_session_id()
+    const session = DkgCoordinatorSession.open(
+      wasm,
+      { participants: 2, threshold: 2, mainnet: true, walletId: WALLET_ID, groupId: GROUP_ID },
+      () => TEST_MNEMONIC,
+      undefined,
+      id
+    )
+    expect(bytesToBase64(session.sessionId)).toBe(bytesToBase64(id))
+    session.close()
+  })
+
+  test('open rejects a 15-byte session id', () => {
+    expect(() =>
+      DkgCoordinatorSession.open(
+        wasm,
+        { participants: 2, threshold: 2, mainnet: true, walletId: WALLET_ID, groupId: GROUP_ID },
+        () => TEST_MNEMONIC,
+        undefined,
+        new Uint8Array(15)
+      )
+    ).toThrow('session id must be 16 bytes')
+  })
+
   test('completes every supported mode and agrees with every phone', async () => {
     for (const shape of SHAPES) {
       const session = openSession(shape, true)

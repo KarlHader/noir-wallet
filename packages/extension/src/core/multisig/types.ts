@@ -55,6 +55,7 @@ export type DeviceConnectionState =
   | 'pending'
   | 'code_wait'
   | 'invite_shown'
+  | 'identity_check'
   | 'connected'
 
 export const PAIRING_CODE_MAX_ATTEMPTS = 5
@@ -74,3 +75,5 @@ export function thresholdRequiresManualR1Check(
 ): boolean {
   return kind === 'qr' && thresholdDeviceCount(threshold) === 3
 }
+
+export type VerifyStage = 'identity' | 'roster' | 'r1' | 'final'

@@ -1,3 +1,4 @@
+import { deleteMultisigIdentity } from '@/lib/multisig-identity-storage'
 import type { MultisigDevice, MultisigGroupRecord } from '@/core/multisig/types'
 
 export const MULTISIG_GROUPS_STORAGE_KEY = 'multisig_groups_v1'
@@ -143,11 +144,12 @@ export async function dismissMultisigBanner(scope: MultisigGroupScope): Promise<
 }
 
 export async function clearMultisigData(): Promise<void> {
-  await withMultisigStorageLock(() =>
-    chrome.storage.local.remove([
+  await withMultisigStorageLock(async () => {
+    await chrome.storage.local.remove([
       MULTISIG_GROUPS_STORAGE_KEY,
       MULTISIG_BANNER_STORAGE_KEY,
       MULTISIG_VAULT_RECORDS_STORAGE_KEY
     ])
-  )
+    await deleteMultisigIdentity()
+  })
 }

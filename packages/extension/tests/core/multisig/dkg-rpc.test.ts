@@ -176,6 +176,68 @@ test.describe('multisig dkg rpc handler', () => {
     ).rejects.toThrow('Unknown vault DKG session')
   })
 
+  test('open with sessionId returns that id and refuses to open it twice', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const sessionId = bytesToBase64(new Uint8Array(16).fill(7))
+    const opened = await call(handler, 'vault.dkg.open', { ...OPEN_2_OF_3, sessionId })
+    expect(opened.sessionId).toBe(sessionId)
+    await expect(call(handler, 'vault.dkg.open', { ...OPEN_2_OF_3, sessionId })).rejects.toThrow(
+      'Vault DKG session already exists'
+    )
+    expect(handler.sessionCount).toBe(1)
+    await call(handler, 'vault.dkg.close', { sessionId })
+  })
+
+  test('open rejects a sessionId that is not 16 bytes', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    for (const sessionId of [bytesToBase64(new Uint8Array(15)), 'not base64!', '']) {
+      await expect(call(handler, 'vault.dkg.open', { ...OPEN_2_OF_3, sessionId })).rejects.toThrow(
+        'Invalid vault DKG request'
+      )
+    }
+    expect(handler.sessionCount).toBe(0)
+  })
+
+  test('open refuses a non-canonical spelling of an open session id', async () => {
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+    const sessionId = 'AAAAAAAAAAAAAAAAAAAAAA=='
+    await call(handler, 'vault.dkg.open', { ...OPEN_2_OF_3, sessionId })
+    for (const spelling of ['AAAAAAAAAAAAAAAAAAAAAA', 'AAAAAAAAAAAAAAAAAAAAAB==']) {
+      await expect(
+        call(handler, 'vault.dkg.open', { ...OPEN_2_OF_3, sessionId: spelling })
+      ).rejects.toThrow('Invalid vault DKG request')
+    }
+    expect(handler.sessionCount).toBe(1)
+    await call(handler, 'vault.dkg.close', { sessionId })
+    expect(handler.sessionCount).toBe(0)
+  })
+
+  test('a session idles out after 30 minutes, not 10', async () => {
+    let now = 0
+    const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC, {
+      now: () => now,
+      schedule: () => () => {}
+    })
+    const probe = (sessionId: string) =>
+      call(handler, 'vault.dkg.acceptRound1', { sessionId, senderSlot: 1, envelope: 'AAEC' })
+    const stillKnown = async (sessionId: string) => {
+      // A live session rejects the garbage envelope for its own reason, never as unknown.
+      const error = await probe(sessionId).then(
+        () => null,
+        (e: unknown) => e as Error
+      )
+      return error !== null && error.message !== 'Unknown vault DKG session'
+    }
+    const first = (await call(handler, 'vault.dkg.open', OPEN_2_OF_3)).sessionId
+    now = 29 * 60_000
+    expect(await stillKnown(first)).toBe(true)
+
+    // Opened at 29 minutes; 31 minutes of idleness later it is gone.
+    const second = (await call(handler, 'vault.dkg.open', OPEN_2_OF_3)).sessionId
+    now = 29 * 60_000 + 31 * 60_000
+    await expect(probe(second)).rejects.toThrow('Unknown vault DKG session')
+  })
+
   test('expires idle sessions and evicts the oldest beyond the cap', async () => {
     let now = 0
     const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC, {

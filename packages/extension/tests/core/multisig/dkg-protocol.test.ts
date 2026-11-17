@@ -4,17 +4,31 @@ import {
   SecretBin,
   deviceSlotOf,
   dkgShape,
+  isDkgSessionIdText,
   isDkgShape,
   parseDkgEnvelopePayload,
   parseDkgFinalPayload,
   parseKeysetSetupPayload,
+  parsePairInvitePayload,
+  parsePairResponsePayload,
   parseRosterLockPayload,
+  parseRosterLockPayloadStrict,
   parseRound1EchoPayload,
   rosterSlotOf,
   round1Hash
 } from '../../../src/core/multisig/dkg-protocol'
+import { buildRoster } from '../../../src/core/multisig/roster'
+import { bytesToBase64 } from '../../../src/lib/bytes'
 import type { DeviceSlot } from '../../../src/core/multisig/types'
 import { loadVaultWasm } from './helpers/vault-wasm'
+
+test('isDkgSessionIdText accepts only canonical 16-byte base64', () => {
+  expect(isDkgSessionIdText(bytesToBase64(new Uint8Array(16).fill(7)))).toBe(true)
+  expect(isDkgSessionIdText('AAAAAAAAAAAAAAAAAAAAAA')).toBe(false)
+  expect(isDkgSessionIdText('AAAAAAAAAAAAAAAAAAAAAB==')).toBe(false)
+  expect(isDkgSessionIdText(bytesToBase64(new Uint8Array(15)))).toBe(false)
+  expect(isDkgSessionIdText(7)).toBe(false)
+})
 
 test.describe('multisig dkg protocol', () => {
   test('maps thresholds to the shapes the wasm supports', () => {
@@ -47,6 +61,79 @@ test.describe('multisig dkg protocol', () => {
       { ...lock, mainnet: 'no' }
     ])
       expect(parseRosterLockPayload(bad)).toBeNull()
+  })
+
+  test('parses the pairing payloads', () => {
+    const key = (fillByte: number, length = 65) => {
+      const bytes = new Uint8Array(length).fill(fillByte)
+      bytes[0] = 1
+      return bytesToBase64(bytes)
+    }
+    const invite = {
+      identityPublicKey: key(0xa0),
+      device: { name: 'Noir Chrome', model: 'Chrome 157', platform: 'extension' },
+      dkgSessionId: bytesToBase64(new Uint8Array(16).fill(7)),
+      participants: 2,
+      threshold: 2,
+      rosterSlot: 1,
+      mainnet: false
+    }
+    expect(parsePairInvitePayload(invite)).toEqual(invite)
+    for (const bad of [
+      { ...invite, device: { ...invite.device, platform: 'ios' } },
+      { ...invite, rosterSlot: 0 },
+      { ...invite, dkgSessionId: bytesToBase64(new Uint8Array(15)) },
+      { ...invite, identityPublicKey: key(0xa0, 64) },
+      { ...invite, device: { ...invite.device, name: '   ' } },
+      { ...invite, device: { ...invite.device, model: 'x'.repeat(129) } }
+    ])
+      expect(parsePairInvitePayload(bad)).toBeNull()
+
+    const response = {
+      identityPublicKey: key(0xa1),
+      device: { name: 'iPhone', model: 'iPhone 15', platform: 'ios' }
+    }
+    expect(parsePairResponsePayload(response)).toEqual(response)
+    expect(
+      parsePairResponsePayload({ ...response, device: { ...response.device, platform: 'android' } })
+    ).not.toBeNull()
+    expect(
+      parsePairResponsePayload({
+        ...response,
+        device: { ...response.device, platform: 'extension' }
+      })
+    ).toBeNull()
+    expect(parsePairResponsePayload({ ...response, identityPublicKey: key(0xa1, 64) })).toBeNull()
+  })
+
+  test('ROSTER_LOCK carries an optional roster that is validated when present', () => {
+    const id = (fillByte: number) => {
+      const bytes = new Uint8Array(65).fill(fillByte)
+      bytes[0] = 1
+      return bytesToBase64(bytes)
+    }
+    const roster = buildRoster({
+      groupId: '11111111-2222-4333-8444-555555555555',
+      threshold: 2,
+      identities: new Map([
+        [0, id(0xa0)],
+        [1, id(0xa1)]
+      ])
+    })
+    const lock = {
+      dkgSessionId: bytesToBase64(new Uint8Array(16).fill(7)),
+      participants: 2,
+      threshold: 2,
+      rosterSlot: 1,
+      mainnet: false
+    }
+    expect(parseRosterLockPayload({ ...lock, roster })).toEqual({ ...lock, roster })
+    expect(
+      parseRosterLockPayload({ ...lock, roster: { ...roster, rosterHash: '0'.repeat(64) } })
+    ).toBeNull()
+    expect(parseRosterLockPayload(lock)).toEqual(lock)
+    expect(parseRosterLockPayloadStrict({ ...lock, roster })).toEqual({ ...lock, roster })
+    expect(parseRosterLockPayloadStrict(lock)).toBeNull()
   })
 
   test('parses envelopes, echoes, sealed qsks and fingerprints', () => {

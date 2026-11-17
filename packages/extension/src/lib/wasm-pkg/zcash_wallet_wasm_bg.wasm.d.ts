@@ -432,6 +432,8 @@ export const __wbg_dkg3_free: (a: number, b: number) => void
 export const __wbg_dkg_free: (a: number, b: number) => void
 export const __wbg_dkgrelay_free: (a: number, b: number) => void
 export const __wbg_messageset_free: (a: number, b: number) => void
+export const __wbg_noisexx_free: (a: number, b: number) => void
+export const __wbg_rostermanifest_free: (a: number, b: number) => void
 export const __wbg_sharebackup_free: (a: number, b: number) => void
 export const __wbg_signer_free: (a: number, b: number) => void
 export const canary_allows: (a: number, b: number) => number
@@ -441,6 +443,7 @@ export const canary_new: () => number
 export const canary_phase: (a: number, b: number) => void
 export const canary_spend_confirmed: (a: number, b: number) => void
 export const coordinator_accept_commitments: (a: number, b: number, c: number, d: number) => void
+export const coordinator_accept_reject: (a: number, b: number, c: number, d: number) => void
 export const coordinator_accept_share: (a: number, b: number, c: number, d: number) => void
 export const coordinator_actions: (a: number) => number
 export const coordinator_aggregate: (a: number, b: number) => void
@@ -466,6 +469,15 @@ export const coordinator_prepare_payload: (
   d: number,
   e: number,
   f: number
+) => void
+export const coordinator_report_result: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number
 ) => void
 export const deposit_canary_amount: () => number
 export const deposit_denom_cap: () => number
@@ -500,7 +512,7 @@ export const dkg3_public_key_package: (a: number) => number
 export const dkg3_static_public: (a: number) => number
 export const dkg3_static_secret: (a: number) => number
 export const dkg3_statics: (a: number) => number
-export const dkg_new: (a: number, b: number, c: number, d: number) => void
+export const dkg_new: (a: number, b: number, c: number, d: number, e: number, f: number) => void
 export const dkg_part1: (a: number, b: number) => void
 export const dkg_part2: (a: number, b: number, c: number, d: number, e: number) => void
 export const dkg_part3: (a: number, b: number, c: number, d: number, e: number, f: number) => void
@@ -528,12 +540,52 @@ export const envelopecodec_build: (
   i: number,
   j: number
 ) => void
+export const envelopecodec_buildSignReject: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number,
+  i: number
+) => void
+export const envelopecodec_buildSignResult: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number,
+  i: number,
+  j: number,
+  k: number
+) => void
+export const envelopecodec_buildSigning: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number,
+  i: number
+) => void
 export const envelopecodec_coordinator_slot: () => number
 export const envelopecodec_decode: (a: number, b: number, c: number) => void
 export const envelopecodec_defined_msg_types: () => number
 export const envelopecodec_msg_type: (a: number, b: number, c: number) => void
+export const envelopecodec_readSignReject: (a: number, b: number, c: number) => void
+export const envelopecodec_readSignResult: (a: number, b: number, c: number) => void
+export const envelopecodec_readSigning: (a: number, b: number, c: number) => void
+export const envelopecodec_rejectCode: (a: number, b: number, c: number) => void
 export const envelopecodec_reserved_msg_type: (a: number, b: number, c: number) => void
 export const envelopecodec_reserved_msg_types: () => number
+export const envelopecodec_round_of: (a: number, b: number, c: number) => void
 export const keyset_address_is_shielded_only: (a: number, b: number) => number
 export const keyset_derive: (
   a: number,
@@ -557,6 +609,18 @@ export const messageset_new: () => number
 export const messageset_set: (a: number, b: number, c: number, d: number) => void
 export const messageset_slots: (a: number, b: number) => void
 export const messageset_to_bytes: (a: number, b: number) => void
+export const noisexx_decrypt: (a: number, b: number, c: number, d: number) => void
+export const noisexx_encrypt: (a: number, b: number, c: number, d: number) => void
+export const noisexx_handshake_hash: (a: number, b: number) => void
+export const noisexx_initiator: (a: number, b: number, c: number, d: number, e: number) => void
+export const noisexx_is_handshake_finished: (a: number) => number
+export const noisexx_is_poisoned: (a: number) => number
+export const noisexx_read_handshake: (a: number, b: number, c: number, d: number) => void
+export const noisexx_rekey: (a: number, b: number) => void
+export const noisexx_remote_static: (a: number) => number
+export const noisexx_responder: (a: number, b: number, c: number, d: number, e: number) => void
+export const noisexx_static_public_from: (a: number, b: number, c: number) => void
+export const noisexx_write_handshake: (a: number, b: number, c: number, d: number) => void
 export const pczttools_action_alphas: (a: number, b: number, c: number) => void
 export const pczttools_action_rks: (a: number, b: number, c: number) => void
 export const pczttools_apply_signatures: (
@@ -580,6 +644,28 @@ export const pczttools_check_action_bindings: (
 ) => void
 export const pczttools_shielded_sighash: (a: number, b: number, c: number) => void
 export const pczttools_strip_proofs: (a: number, b: number, c: number) => void
+export const rostermanifest_add_participant: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number
+) => void
+export const rostermanifest_canonical_bytes: (a: number, b: number) => void
+export const rostermanifest_hash: (a: number, b: number) => void
+export const rostermanifest_hash_hex: (a: number, b: number) => void
+export const rostermanifest_new: (
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number
+) => void
 export const sealed_open: (
   a: number,
   b: number,
@@ -592,6 +678,7 @@ export const sealed_open: (
   i: number
 ) => void
 export const sealed_prologue: (a: number, b: number) => void
+export const sealed_prologueWithTranscript: (a: number, b: number, c: number) => void
 export const sealed_seal: (
   a: number,
   b: number,
@@ -645,6 +732,7 @@ export const sharebackup_new: (
   i: number,
   j: number
 ) => void
+export const sharebackup_signing_scalar: (a: number, b: number) => void
 export const sharebackup_slot: (a: number) => number
 export const sharebackup_to_bytes: (a: number, b: number) => void
 export const sharebackup_vault_id: (a: number) => number
@@ -660,8 +748,10 @@ export const signer_new: (
   g: number
 ) => void
 export const signer_nonce_states: (a: number, b: number) => void
+export const signer_on_result: (a: number, b: number, c: number, d: number) => void
 export const signer_payload: (a: number, b: number, c: number, d: number) => void
 export const signer_phase: (a: number, b: number) => void
+export const signer_reject: (a: number, b: number, c: number, d: number, e: number) => void
 export const signer_share: (a: number, b: number) => void
 export const signing_phases: () => number
 export const verification_rk: (a: number, b: number, c: number, d: number, e: number) => void
@@ -716,11 +806,11 @@ export const rustsecp256k1_v0_14_default_error_callback_fn: (a: number, b: numbe
 export const rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
 export const rustsecp256k1_v0_14_context_create: (a: number) => number
 export const rustsecp256k1_v0_14_context_destroy: (a: number) => void
-export const __wasm_bindgen_func_elem_16662: (a: number, b: number, c: number, d: number) => void
-export const __wasm_bindgen_func_elem_16679: (a: number, b: number, c: number, d: number) => void
-export const __wasm_bindgen_func_elem_12559: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_16664: (a: number, b: number, c: number) => void
-export const __wasm_bindgen_func_elem_12482: (a: number, b: number) => void
+export const __wasm_bindgen_func_elem_16663: (a: number, b: number, c: number, d: number) => void
+export const __wasm_bindgen_func_elem_16680: (a: number, b: number, c: number, d: number) => void
+export const __wasm_bindgen_func_elem_12560: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_16665: (a: number, b: number, c: number) => void
+export const __wasm_bindgen_func_elem_12483: (a: number, b: number) => void
 export const memory: WebAssembly.Memory
 export const __wbindgen_export: (a: number, b: number) => number
 export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

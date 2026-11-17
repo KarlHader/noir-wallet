@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "bb1863adcbb01579372d472425659b2435764ff8",
+  "sourceCommit": "80be45e5227c29f0221ee53c89170afbb2de4fd1",
   "generatedArtifacts": {
     "LICENSE.md": {
       "bytes": 4200,
@@ -18,20 +18,20 @@
       "sha256": "6982a7a006a69849d666aaf4ac7ea07a42931f850c31006782b1937fd5704f96"
     },
     "zcash_wallet_wasm_bg.wasm": {
-      "bytes": 67046542,
-      "sha256": "634bf8781f1a54a2f4c3226385d8013bc276b4fb4bcb2af276dd40dc5b65b439"
+      "bytes": 67091763,
+      "sha256": "65f20b64dbfb60a845c793b539f01cbad9a850b0d9eb7fbf0830ca71adcec8e7"
     },
     "zcash_wallet_wasm_bg.wasm.d.ts": {
-      "bytes": 24782,
-      "sha256": "0ea6f11d8297095c8d59365802aeccad7f91519e8627f506144c46d22072e72e"
+      "bytes": 27812,
+      "sha256": "872b278c9c60ef56bc34cd3a4d961c55f0148182ca8f8188b0aaaad216d16f0e"
     },
     "zcash_wallet_wasm.d.ts": {
-      "bytes": 80895,
-      "sha256": "0e621942b8040468c9c431d61da5afe0f7c6c64c4afd6492934d3c5a52facb55"
+      "bytes": 91804,
+      "sha256": "b6b52501c2d33837ed2bff0471f18db6c0ee0480ca719b913dafa2ca25e384e7"
     },
     "zcash_wallet_wasm.js": {
-      "bytes": 240238,
-      "sha256": "0bf75cd3374dfed8986a45ba53f820afb13a16032c2ea4429e0cb9a26a230b19"
+      "bytes": 272016,
+      "sha256": "890c019016ef7af46e9efdc407f233cf8454d8e0c234a08b68d56c8f956f8ebb"
     }
   }
 }

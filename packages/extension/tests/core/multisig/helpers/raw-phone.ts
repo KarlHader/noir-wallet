@@ -43,7 +43,7 @@ export class Phone {
     sessionId: string
   ) {
     this.sessionId = base64ToBytes(sessionId)
-    this.dkg = new wasm.Dkg(shape.participants, shape.threshold, slot)
+    this.dkg = new wasm.Dkg(shape.participants, shape.threshold, slot, this.sessionId)
   }
 
   round1(): string {

@@ -8,7 +8,7 @@
  */
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@/lib/bytes'
 import { DkgCoordinatorSession, type MnemonicResolver } from './dkg-coordinator'
-import { isBase64Text, isDkgShape, type VaultWasm } from './dkg-protocol'
+import { isBase64Text, isDkgSessionIdText, isDkgShape, type VaultWasm } from './dkg-protocol'
 import {
   isVaultGroupId,
   isVaultWalletId,
@@ -42,6 +42,7 @@ export interface VaultDkgSchema {
       mainnet: boolean
       ownerWalletId: string
       groupId: string
+      sessionId?: string
     }
     response: { sessionId: string }
   }
@@ -96,7 +97,7 @@ const INVALID_REQUEST = 'Invalid vault DKG request'
 const UNKNOWN_SESSION = 'Unknown vault DKG session'
 const RECORD_UNOPENABLE = 'Vault record cannot be opened'
 const DEFAULT_MAX_SESSIONS = 4
-const DEFAULT_IDLE_MS = 10 * 60_000
+const DEFAULT_IDLE_MS = 30 * 60_000
 
 interface Entry {
   session: DkgCoordinatorSession
@@ -104,18 +105,26 @@ interface Entry {
   disarm: () => void
 }
 
-function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+function hasKeys(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = []
+): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const actual = Object.keys(value)
   return (
-    actual.length === keys.length &&
-    keys.every(key => Object.prototype.hasOwnProperty.call(value, key))
+    required.every(key => Object.prototype.hasOwnProperty.call(value, key)) &&
+    actual.every(key => required.includes(key) || optional.includes(key))
   )
 }
 
 function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'] {
   if (
-    !hasExactKeys(payload, ['participants', 'threshold', 'mainnet', 'ownerWalletId', 'groupId'])
+    !hasKeys(
+      payload,
+      ['participants', 'threshold', 'mainnet', 'ownerWalletId', 'groupId'],
+      ['sessionId']
+    )
   ) {
     throw new Error(INVALID_REQUEST)
   }
@@ -124,7 +133,8 @@ function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'
     !isDkgShape(shape) ||
     typeof payload.mainnet !== 'boolean' ||
     !isVaultWalletId(payload.ownerWalletId) ||
-    !isVaultGroupId(payload.groupId)
+    !isVaultGroupId(payload.groupId) ||
+    (payload.sessionId !== undefined && !isDkgSessionIdText(payload.sessionId))
   ) {
     throw new Error(INVALID_REQUEST)
   }
@@ -133,13 +143,14 @@ function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'
     threshold: shape.threshold,
     mainnet: payload.mainnet,
     ownerWalletId: payload.ownerWalletId,
-    groupId: payload.groupId
+    groupId: payload.groupId,
+    ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId })
   }
 }
 
 function parseAccept(payload: unknown): VaultDkgAcceptRequest {
   if (
-    !hasExactKeys(payload, ['sessionId', 'senderSlot', 'envelope']) ||
+    !hasKeys(payload, ['sessionId', 'senderSlot', 'envelope']) ||
     !isBase64Text(payload.sessionId) ||
     typeof payload.senderSlot !== 'number' ||
     !Number.isInteger(payload.senderSlot) ||
@@ -155,17 +166,14 @@ function parseAccept(payload: unknown): VaultDkgAcceptRequest {
 }
 
 function parseClose(payload: unknown): { sessionId: string } {
-  if (!hasExactKeys(payload, ['sessionId']) || !isBase64Text(payload.sessionId)) {
+  if (!hasKeys(payload, ['sessionId']) || !isBase64Text(payload.sessionId)) {
     throw new Error(INVALID_REQUEST)
   }
   return { sessionId: payload.sessionId }
 }
 
 function parseSummary(payload: unknown): VaultDkgSchema['vault.record.summary']['request'] {
-  if (
-    !hasExactKeys(payload, ['record', 'ownerWalletId']) ||
-    !isVaultWalletId(payload.ownerWalletId)
-  ) {
+  if (!hasKeys(payload, ['record', 'ownerWalletId']) || !isVaultWalletId(payload.ownerWalletId)) {
     throw new Error(INVALID_REQUEST)
   }
   const record = parseSealedVaultRecord(payload.record)
@@ -288,12 +296,17 @@ export function createVaultDkgRpcHandler(
     expireIdle(at)
     switch (method) {
       case 'vault.dkg.open': {
-        const { ownerWalletId, ...rest } = parseOpen(payload)
+        const { ownerWalletId, sessionId: wanted, ...rest } = parseOpen(payload)
+        if (wanted !== undefined && sessions.has(wanted)) {
+          throw new Error('Vault DKG session already exists')
+        }
         if (sessions.size >= maxSessions) evictOldest()
         const session = DkgCoordinatorSession.open(
           wasm,
           { ...rest, walletId: ownerWalletId },
-          resolveMnemonic
+          resolveMnemonic,
+          undefined,
+          wanted === undefined ? undefined : base64ToBytes(wanted)
         )
         const id = bytesToBase64(session.sessionId)
         const entry: Entry = { session, lastUsed: at, disarm: () => {} }

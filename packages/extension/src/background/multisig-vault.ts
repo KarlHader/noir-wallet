@@ -101,7 +101,8 @@ export function createMultisigVaultHandler(deps: MultisigVaultDeps): MultisigVau
       threshold: request.threshold,
       mainnet: request.mainnet,
       ownerWalletId: request.scope.walletId,
-      groupId: request.groupId
+      groupId: request.groupId,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId })
     })
     if (
       typeof reply !== 'object' ||

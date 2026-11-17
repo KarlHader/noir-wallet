@@ -9,6 +9,7 @@ import {
   readAllMultisigGroups,
   type MultisigGroupScope
 } from '@/lib/multisig-group-storage'
+import { forgetSharedIdentity } from './device-identity-cache'
 
 export interface MultisigGroupStore {
   /** Keyed by multisigGroupScopeKey. */
@@ -56,6 +57,8 @@ export const useMultisigGroupStore = create<MultisigGroupStore>()((set, get) => 
   clear: async () => {
     clearCount += 1
     await clearMultisigData()
+    // The device identity was deleted with the rest, so a cached copy must not be reused.
+    forgetSharedIdentity()
     set({ groups: {}, loaded: true })
   }
 }))

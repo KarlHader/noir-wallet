@@ -20,16 +20,21 @@ export type MockResponse = 'approve' | 'reject' | 'timeout' | 'wrong_code' | 'di
 /** 'simulated' keeps the flow usable where no Bluetooth device or real browser is around. */
 type MockChooser = 'native' | 'simulated'
 
+/** 'real' leaves QR sessions to real phones: no reference phone runs alongside them. */
+export type MockQrPhones = 'simulated' | 'real'
+
 export interface MockSettings {
   delayMs: number
   nextResponse: Record<DeviceSlot, MockResponse>
   chooser: MockChooser
+  qrPhones: MockQrPhones
 }
 
 export const DEFAULT_MOCK_SETTINGS: MockSettings = Object.freeze({
   delayMs: 1000,
   nextResponse: Object.freeze({ 1: 'approve', 2: 'approve', 3: 'approve' }),
-  chooser: 'native'
+  chooser: 'native',
+  qrPhones: 'simulated'
 })
 
 // The service UUID the phones will advertise is not agreed yet, so the browser's chooser lists
@@ -72,7 +77,7 @@ function copySettings(settings: MockSettings): MockSettings {
 // Field by field, so a hand edit in devtools that breaks one value keeps the others.
 function normalizeSettings(value: unknown): MockSettings {
   if (typeof value !== 'object' || value === null) return copySettings(DEFAULT_MOCK_SETTINGS)
-  const { delayMs, nextResponse, chooser } = value as Record<string, unknown>
+  const { delayMs, nextResponse, chooser, qrPhones } = value as Record<string, unknown>
   const responses =
     typeof nextResponse === 'object' && nextResponse !== null
       ? (nextResponse as Record<string, unknown>)
@@ -80,6 +85,7 @@ function normalizeSettings(value: unknown): MockSettings {
   const result = copySettings(DEFAULT_MOCK_SETTINGS)
   if (isValidDelay(delayMs)) result.delayMs = delayMs
   if (chooser === 'native' || chooser === 'simulated') result.chooser = chooser
+  if (qrPhones === 'simulated' || qrPhones === 'real') result.qrPhones = qrPhones
   for (const slot of SLOTS) {
     const response = responses[slot]
     if (isMockResponse(response)) result.nextResponse[slot] = response

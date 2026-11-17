@@ -13,7 +13,7 @@ import type {
 import type { SealedVaultRecord } from '../../../../src/core/multisig/vault-record'
 import { multisigGroupScopeKey } from '../../../../src/lib/multisig-group-storage'
 
-type WalletWasmModule = typeof import('../../../../src/lib/wasm-pkg/zcash_wallet_wasm')
+export type WalletWasmModule = typeof import('../../../../src/lib/wasm-pkg/zcash_wallet_wasm')
 
 const packageDir = new URL('../../../../src/lib/wasm-pkg/', import.meta.url)
 
@@ -21,9 +21,14 @@ const packageDir = new URL('../../../../src/lib/wasm-pkg/', import.meta.url)
 export const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
-let loading: Promise<VaultWasm> | null = null
+let loading: Promise<WalletWasmModule> | null = null
 
 export function loadVaultWasm(): Promise<VaultWasm> {
+  return loadWalletWasm()
+}
+
+/** The whole package, for tests that compare the extension's own encoders with the wasm ones. */
+export function loadWalletWasm(): Promise<WalletWasmModule> {
   loading ??= (async () => {
     // The package's thread helper touches these Worker globals while it is being imported.
     const host = globalThis as Record<string, unknown>
@@ -64,7 +69,8 @@ export function createInProcessDkgPort(
         threshold: request.threshold,
         mainnet: request.mainnet,
         ownerWalletId: request.scope.walletId,
-        groupId: request.groupId
+        groupId: request.groupId,
+        ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId })
       }),
     acceptRound1: request => call('vault.dkg.acceptRound1', request),
     acceptRound2: request => call('vault.dkg.acceptRound2', request),

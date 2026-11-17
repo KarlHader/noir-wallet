@@ -10,7 +10,7 @@
  */
 import { useEffect, useId, useState } from 'react'
 import { Icon } from '@iconify/react'
-import { guardianSlots } from '@/core/multisig/create-session'
+import { guardianSlots, scanMarked } from '@/core/multisig/create-session'
 import { formatFingerprint } from '@/core/multisig/fingerprint'
 import type { DeviceSlot } from '@/core/multisig/types'
 import { Button } from '@/popup/components/ui/button'
@@ -22,6 +22,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import {
   readMockSettings,
   writeMockSettings,
+  type MockQrPhones,
   type MockResponse,
   type MockSettings
 } from './mock-settings'
@@ -85,12 +86,14 @@ export function DevPanel() {
   const panelId = useId()
   const delayId = useId()
   const chooserId = useId()
+  const qrPhonesId = useId()
   const session = useCreateSessionStore(state => state.session)
   const pendingDisplay = useCreateSessionStore(state => state.pendingDisplay)
   const pendingScan = useCreateSessionStore(state => state.pendingScan)
   const dispatch = useCreateSessionStore(state => state.dispatch)
   const markPhoneScanned = useCreateSessionStore(state => state.markPhoneScanned)
   const simulateScan = useCreateSessionStore(state => state.simulateScan)
+  const confirmIdentity = useCreateSessionStore(state => state.confirmIdentity)
   const storedScope = useCreateSessionStore(state => state.scope)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
   const { search } = useLocation()
@@ -119,11 +122,20 @@ export function DevPanel() {
   const scannedSlots = session?.qrShownTo ?? []
   const phoneToMark = pendingDisplay?.slots.find(slot => !scannedSlots.includes(slot)) ?? null
 
+  // One simulated reply per phone the camera still waits for.
+  const slotsToSimulate =
+    pendingScan?.slots.filter(slot => {
+      const entry = guardians.find(guardian => guardian.slot === slot)
+      return entry !== undefined && !scanMarked(entry, pendingScan.messageType)
+    }) ?? []
+  const identityChecks = guardians.filter(entry => entry.connection === 'identity_check')
+  const realPhones = settings.qrPhones === 'real'
+
   const pending = [
     pendingDisplay
-      ? `display ${pendingDisplay.messageType} → ${pendingDisplay.slots.join(', ')}`
+      ? `display ${pendingDisplay.messageTypes.join(' + ')} → ${pendingDisplay.slots.join(', ')}`
       : null,
-    pendingScan ? `scan ${pendingScan.messageType} ← ${pendingScan.slot}` : null
+    pendingScan ? `scan ${pendingScan.messageType} ← ${pendingScan.slots.join(', ')}` : null
   ].filter((part): part is string => part !== null)
 
   // Built from a fresh read, not from state: a phone may have consumed a response since the last
@@ -150,6 +162,12 @@ export function DevPanel() {
   const handleChooserChange = (raw: string) => {
     const chooser = raw === 'simulated' ? 'simulated' : 'native'
     updateSettings(current => ({ ...current, chooser }))
+  }
+
+  // Applies from the next QR session: the store decides on attaching its driver.
+  const handleQrPhonesChange = (raw: string) => {
+    const qrPhones: MockQrPhones = raw === 'real' ? 'real' : 'simulated'
+    updateSettings(current => ({ ...current, qrPhones }))
   }
 
   const handleReset = async () => {
@@ -252,6 +270,21 @@ export function DevPanel() {
             </select>
           </div>
 
+          <div>
+            <label htmlFor={qrPhonesId} className="mb-1 block text-muted">
+              QR phones
+            </label>
+            <select
+              id={qrPhonesId}
+              value={settings.qrPhones}
+              onChange={event => handleQrPhonesChange(event.target.value)}
+              className={FIELD_CLASS}
+            >
+              <option value="simulated">Simulated</option>
+              <option value="real">Real</option>
+            </select>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
@@ -263,9 +296,27 @@ export function DevPanel() {
             >
               Phone scanned
             </Button>
-            <Button variant="outline" size="sm" disabled={!pendingScan} onClick={simulateScan}>
-              Simulate scan
-            </Button>
+            {slotsToSimulate.map(slot => (
+              <Button
+                key={slot}
+                variant="outline"
+                size="sm"
+                disabled={realPhones}
+                onClick={() => void simulateScan(slot)}
+              >
+                Simulate scan · Device {slot}
+              </Button>
+            ))}
+            {identityChecks.map(entry => (
+              <Button
+                key={entry.slot}
+                variant="outline"
+                size="sm"
+                onClick={() => confirmIdentity(entry.slot)}
+              >
+                Confirm identity · Device {entry.slot}
+              </Button>
+            ))}
             <Button
               variant="outline"
               size="sm"

@@ -5,6 +5,8 @@ interface SegmentedToggleProps<T extends string> {
   value: T
   onChange: (value: T) => void
   disabled?: boolean
+  /** Options that cannot be chosen right now; the rest stay usable. */
+  disabledValues?: readonly T[]
 }
 
 /** Compact single-choice switch for two or three short options. */
@@ -12,7 +14,8 @@ export function SegmentedToggle<T extends string>({
   options,
   value,
   onChange,
-  disabled = false
+  disabled = false,
+  disabledValues = []
 }: SegmentedToggleProps<T>) {
   return (
     <div
@@ -29,7 +32,7 @@ export function SegmentedToggle<T extends string>({
             type="button"
             role="radio"
             aria-checked={selected}
-            disabled={disabled}
+            disabled={disabled || disabledValues.includes(option.value)}
             onClick={() => onChange(option.value)}
             className={cn(
               'rounded-full px-4 py-1.5 text-sm transition-colors',

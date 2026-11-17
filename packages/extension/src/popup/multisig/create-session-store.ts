@@ -2,14 +2,16 @@ import type { UR } from '@ngraveio/bc-ur'
 import { create } from 'zustand'
 import {
   createInitialSession,
+  guardianSlots,
   reduceCreateSession,
   type CreateSessionEffect,
   type CreateSessionEvent,
   type CreateSessionState,
   type DeviceSessionState
 } from '@/core/multisig/create-session'
+import { multisigDebug } from '@/core/multisig/debug-log'
 import type { SessionDriver } from '@/core/multisig/driver'
-import type { MultisigEnvelope, MultisigMessageType } from '@/core/multisig/messages'
+import type { DeviceIdentity } from '@/core/multisig/identity'
 import {
   buildQrCeremonySteps,
   buildQrPairingSteps,
@@ -26,28 +28,64 @@ import {
 } from '@/core/multisig/types'
 import { createLazyDkgPort, type DkgPort } from '@/core/multisig/dkg-port'
 import type { VaultWasm } from '@/core/multisig/dkg-protocol'
+import { bytesToBase64 } from '@/lib/bytes'
 import { chooseBluetoothDevice, type BluetoothSelection } from '@/lib/multisig-bluetooth'
 import { writeMultisigGroup, type MultisigGroupScope } from '@/lib/multisig-group-storage'
 import { decodeEnvelopeUR } from '@/lib/multisig-ur'
 import { toast } from '@/store/toast-store'
+import {
+  defaultLoadIdentity,
+  forgetSharedIdentity,
+  loadSharedIdentity,
+  peekSharedIdentity
+} from './device-identity-cache'
 import { useMultisigGroupStore } from './group-store'
 import { createMockBleDriver, type ChooserRejection } from './mock/mock-ble-driver'
-import { createMockQrDriver, type MockQrDriver } from './mock/mock-qr-driver'
 import { MOCK_BLUETOOTH_QUERY, readMockSettings } from './mock/mock-settings'
 import { loadMockVaultWasm } from './mock/mock-vault-wasm'
+import { createQrMockHooks } from './mock/qr-mock-hooks'
+import {
+  createQrDriver,
+  type QrDisplay,
+  type QrDriver,
+  type QrDriverOptions,
+  type QrScanRequest,
+  type ScanOutcome
+} from './qr-driver'
 
-/** The two things a Bluetooth ceremony computes on: the Worker's DKG side and the phones' WASM. */
+/** What a simulated set of phones needs to play the other side of a QR session. */
+export interface QrMockContext {
+  loadVault: () => Promise<VaultWasm>
+  slots: readonly DeviceSlot[]
+}
+
+/** The store's hooks into simulated phones; real phones are driven only by what they scan. */
+export interface QrMockHooks {
+  phoneScanned(slot: DeviceSlot, display: QrDisplay): Promise<void>
+  simulateScan(slot: DeviceSlot): Promise<void>
+  identityConfirmed(slot: DeviceSlot): void
+  dispose(): void
+}
+
 export interface CreateSessionDependencies {
   dkgPort: DkgPort
   loadPhoneVault: () => Promise<VaultWasm>
+  /** The extension's long-lived device identity, which signs every QR code it shows. */
+  loadIdentity: () => Promise<DeviceIdentity>
+  createQrDriver: (options: QrDriverOptions) => QrDriver
+  createQrMock: ((driver: QrDriver, context: QrMockContext) => QrMockHooks) | null
 }
 
-// The Worker client is imported on first use only, so Node tests that inject a port never load it.
+// The Worker client and the IndexedDB identity store are imported on first use only, so Node
+// tests that inject their own never load them.
 const defaultDependencies: CreateSessionDependencies = {
   dkgPort: createLazyDkgPort(() =>
     import('@/core/multisig/worker-dkg-port').then(module => module.createWorkerDkgPort())
   ),
-  loadPhoneVault: loadMockVaultWasm
+  loadPhoneVault: loadMockVaultWasm,
+  loadIdentity: defaultLoadIdentity,
+  createQrDriver,
+  createQrMock: createQrMockHooks
 }
 
 let dependencies: CreateSessionDependencies = defaultDependencies
@@ -58,9 +96,23 @@ export function setCreateSessionDependencies(
 ): () => void {
   const previous = dependencies
   dependencies = { ...previous, ...overrides }
+  // An identity cached from the previous loader must not outlive it.
+  if (overrides.loadIdentity) forgetSharedIdentity()
   return () => {
     dependencies = previous
+    if (overrides.loadIdentity) forgetSharedIdentity()
   }
+}
+
+function sharedIdentity(): Promise<DeviceIdentity> {
+  return loadSharedIdentity(() => dependencies.loadIdentity())
+}
+
+function cachedIdentityStatus(): IdentityStatus {
+  const loaded = peekSharedIdentity()
+  return loaded
+    ? { status: 'ready', publicKey: bytesToBase64(loaded.publicKey) }
+    : { status: 'loading' }
 }
 
 type DkgEffect = Extract<
@@ -78,19 +130,17 @@ function isDkgEffect(effect: CreateSessionEffect): effect is DkgEffect {
   )
 }
 
-/** QR: the code on screen and the phones that should scan it. */
-export interface PendingQrDisplay {
-  slots: readonly DeviceSlot[]
-  messageType: MultisigMessageType
-  envelope: MultisigEnvelope
-  expiresAt: number
-}
+/** QR: the codes on screen and the phones that should scan them. */
+export type PendingQrDisplay = QrDisplay & { expiresAt: number }
 
-/** QR: the phone reply the camera is waiting for. */
-export interface PendingQrScan {
-  slot: DeviceSlot
-  messageType: MultisigMessageType
-}
+/** QR: the phone replies the camera is waiting for. */
+export type PendingQrScan = QrScanRequest
+
+/** The device identity's public half; the identity itself never enters the store's state. */
+export type IdentityStatus =
+  | { status: 'loading' }
+  | { status: 'ready'; publicKey: string }
+  | { status: 'unsupported' }
 
 /** Bluetooth: the open simulated chooser. The browser's own never shows up here. */
 export interface PendingChooser {
@@ -104,6 +154,7 @@ export interface CreateSessionStore {
   pendingDisplay: PendingQrDisplay | null
   pendingScan: PendingQrScan | null
   chooser: PendingChooser | null
+  identity: IdentityStatus
   /** Starts a new session and its driver, replacing any earlier one. */
   start(
     scope: MultisigGroupScope,
@@ -116,10 +167,12 @@ export interface CreateSessionStore {
   resolveChooser(selection: BluetoothSelection): void
   /** QR: the user reports that this phone has scanned the code on screen. */
   markPhoneScanned(slot: DeviceSlot): void
-  /** QR: a UR read by the camera; 'accepted' when it moved the session on. */
-  ingestScan(ur: UR): 'accepted' | 'ignored'
-  /** QR dev panel: the awaited phone shows its reply and the camera reads it at once. */
-  simulateScan(): void
+  /** QR: a UR read by the camera, checked by the driver before the session sees it. */
+  ingestScan(ur: UR): Promise<ScanOutcome>
+  /** QR with simulated phones: this phone shows its reply and the camera reads it at once. */
+  simulateScan(slot: DeviceSlot): Promise<void>
+  /** QR: the user has matched this phone's identity on both screens. */
+  confirmIdentity(slot: DeviceSlot): void
   /** QR: restarts the on-screen code's expiry. */
   refreshDisplay(): void
   reset(): void
@@ -133,7 +186,13 @@ export interface CurrentQrStep {
 type Dispatch = (event: CreateSessionEvent) => void
 
 const OWNER_MODEL = 'MacBook'
-const QR_CEREMONY_PHASES: readonly SessionPhase[] = ['DKG_R1', 'R1_VERIFIED', 'DKG_R2', 'FINALIZED']
+const QR_CEREMONY_PHASES: readonly SessionPhase[] = [
+  'DKG_R1',
+  'R1_VERIFIED',
+  'DKG_R2',
+  'FINALIZED',
+  'KEYSET_VERIFIED'
+]
 const CHOOSER_CLOSED: BluetoothSelection = { status: 'cancelled' }
 
 function reportChooserRejection(reason: ChooserRejection): void {
@@ -146,9 +205,12 @@ function guardian(session: CreateSessionState, slot: DeviceSlot): DeviceSessionS
   return session.devices.find(device => device.slot === slot) ?? null
 }
 
-function invitedSlots(session: CreateSessionState): DeviceSlot[] {
+function slotsIn(
+  session: CreateSessionState,
+  connections: readonly DeviceSessionState['connection'][]
+): DeviceSlot[] {
   return session.devices
-    .filter(device => device.slot !== 1 && device.connection === 'invite_shown')
+    .filter(device => device.slot !== 1 && connections.includes(device.connection))
     .map(device => device.slot)
 }
 
@@ -165,41 +227,47 @@ function qrCeremonyStep(session: CreateSessionState): { index: number; step: QrS
 // a step that is over (a cancelled invite, a finished show step, a terminal phase).
 function liveQrSteps(session: CreateSessionState): readonly QrStep[] {
   if (session.transportKind !== 'qr') return []
-  if (session.phase === 'PAIRING') return invitedSlots(session).flatMap(buildQrPairingSteps)
+  if (session.phase === 'PAIRING') {
+    return slotsIn(session, ['invite_shown']).flatMap(buildQrPairingSteps)
+  }
   const current = qrCeremonyStep(session)
   return current ? [current.step] : []
 }
 
-function sameSlots(a: readonly DeviceSlot[], b: readonly DeviceSlot[]): boolean {
-  return a.length === b.length && a.every((slot, index) => slot === b[index])
+function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
+
+function isLiveDisplay(steps: readonly QrStep[], display: QrDisplay): boolean {
+  return steps.some(
+    step =>
+      step.kind === 'show' &&
+      sameItems(step.slots, display.slots) &&
+      sameItems(step.messageTypes, display.messageTypes)
+  )
 }
 
 function liveDisplay(
   steps: readonly QrStep[],
   display: PendingQrDisplay | null
 ): PendingQrDisplay | null {
-  if (!display) return null
-  const live = steps.some(
-    step =>
-      step.kind === 'show' &&
-      step.messageType === display.messageType &&
-      sameSlots(step.slots, display.slots)
-  )
-  return live ? display : null
+  return display && isLiveDisplay(steps, display) ? display : null
 }
 
 function liveScan(steps: readonly QrStep[], scan: PendingQrScan | null): PendingQrScan | null {
   if (!scan) return null
   const live = steps.some(
     step =>
-      step.kind === 'scan' && step.messageType === scan.messageType && step.slots[0] === scan.slot
+      step.kind === 'scan' &&
+      step.messageType === scan.messageType &&
+      sameItems(step.slots, scan.slots)
   )
   return live ? scan : null
 }
 
 /**
- * The QR step the pages should show, with its "n of m" counter. Null whenever no code is in play:
- * Bluetooth, between pairings, KEYSET_VERIFIED and the terminal phases.
+ * The QR step the pages should show, with its "n of m" counter. Null whenever no step is in
+ * play: Bluetooth, between pairings, while the Worker session opens and the terminal phases.
  */
 export function currentQrStep(
   snapshot: Pick<CreateSessionStore, 'session' | 'pendingDisplay' | 'pendingScan'>
@@ -208,15 +276,20 @@ export function currentQrStep(
   if (!session || session.transportKind !== 'qr') return null
 
   if (session.phase === 'PAIRING') {
-    const invited = invitedSlots(session)
-    // Several invites can be open at once; the one the store is working on wins.
+    const pairing = slotsIn(session, ['invite_shown', 'identity_check'])
+    // Several pairings can be open at once; the one the store is working on wins.
     const slot =
-      [pendingScan?.slot, pendingDisplay?.slots[0]].find(
+      [pendingScan?.slots[0], pendingDisplay?.slots[0]].find(
         (candidate): candidate is DeviceSlot =>
-          candidate !== undefined && invited.includes(candidate)
-      ) ?? invited[0]
+          candidate !== undefined && pairing.includes(candidate)
+      ) ?? pairing[0]
     if (slot === undefined) return null
-    const index = pendingScan?.slot === slot ? 1 : 0
+    const index =
+      guardian(session, slot)?.connection === 'identity_check'
+        ? 2
+        : pendingScan?.slots.includes(slot)
+          ? 1
+          : 0
     return {
       step: buildQrPairingSteps(slot)[index],
       counter: qrStepCounter(session.threshold, 'pairing', index)
@@ -236,12 +309,17 @@ const IDLE = {
   session: null,
   pendingDisplay: null,
   pendingScan: null,
-  chooser: null
+  chooser: null,
+  identity: { status: 'loading' }
 } as const
 
 export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => {
   let driver: SessionDriver | null = null
-  let qrDriver: MockQrDriver | null = null
+  let qrDriver: QrDriver | null = null
+  let qrMock: QrMockHooks | null = null
+  // Bumped by every start and reset, so an identity that loads for a replaced
+  // session is dropped.
+  let identityGeneration = 0
   // Handed to the driver as its dispatch. Drivers report asynchronously (phone replies, timers,
   // chooser answers), so each one gets a dispatch tied to its generation; once the driver is
   // replaced or dropped, anything it still reports is discarded instead of reaching a newer
@@ -276,6 +354,7 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     if (!session) return
     const { state, effects } = reduceCreateSession(session, event)
     if (state !== session) {
+      if (state.phase !== session.phase) multisigDebug('phase', { phase: state.phase })
       const steps = liveQrSteps(state)
       set({
         session: state,
@@ -342,7 +421,11 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
   // the requests and answers carry the ceremony's envelopes.
   function runDkgEffect(effect: DkgEffect, report: Dispatch): void {
     const port = dependencies.dkgPort
-    const failed = () => report({ type: 'DKG_FAILED' })
+    const settled = (result: 'ok' | 'failed') => multisigDebug('dkg', { step: effect.type, result })
+    const failed = () => {
+      settled('failed')
+      report({ type: 'DKG_FAILED' })
+    }
     switch (effect.type) {
       case 'dkgOpen': {
         // The share is sealed under the scope's wallet; without a scope there is no wallet to name.
@@ -357,9 +440,12 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
             threshold: effect.threshold,
             mainnet: effect.mainnet,
             scope,
-            groupId: effect.groupId
+            groupId: effect.groupId,
+            // QR invites already named this id, so the Worker must open under it.
+            ...(effect.sessionId !== undefined ? { sessionId: effect.sessionId } : {})
           })
           .then(({ sessionId }) => {
+            settled('ok')
             report({ type: 'DKG_OPENED', sessionId })
             // Not adopted (the session ended, was replaced, or already had an id): the Worker
             // must not keep a ceremony nobody is running.
@@ -370,35 +456,38 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
         break
       }
       case 'dkgAcceptRound1':
-        port
-          .acceptRound1(effect.request)
-          .then(
-            result => report({ type: 'DKG_ROUND1_ACCEPTED', slot: effect.slot, result }),
-            failed
-          )
+        port.acceptRound1(effect.request).then(result => {
+          settled('ok')
+          report({ type: 'DKG_ROUND1_ACCEPTED', slot: effect.slot, result })
+        }, failed)
         break
       case 'dkgAcceptRound2':
-        port
-          .acceptRound2(effect.request)
-          .then(
-            result => report({ type: 'DKG_ROUND2_ACCEPTED', slot: effect.slot, result }),
-            failed
-          )
+        port.acceptRound2(effect.request).then(result => {
+          settled('ok')
+          report({ type: 'DKG_ROUND2_ACCEPTED', slot: effect.slot, result })
+        }, failed)
         break
       case 'dkgClose':
-        void port.close({ sessionId: effect.sessionId }).catch(() => {})
+        port.close({ sessionId: effect.sessionId }).then(
+          () => settled('ok'),
+          () => settled('failed')
+        )
         break
       case 'saveVaultRecord': {
-        const saveFailed = () => report({ type: 'VAULT_RECORD_SAVE_FAILED' })
+        const saveFailed = () => {
+          settled('failed')
+          report({ type: 'VAULT_RECORD_SAVE_FAILED' })
+        }
         // Background files the record under the scope's account; with no scope there is none.
         const { scope } = get()
         if (!scope) {
           saveFailed()
           break
         }
-        port
-          .save({ scope, groupId: effect.groupId, record: effect.record })
-          .then(() => report({ type: 'VAULT_RECORD_SAVED' }), saveFailed)
+        port.save({ scope, groupId: effect.groupId, record: effect.record }).then(() => {
+          settled('ok')
+          report({ type: 'VAULT_RECORD_SAVED' })
+        }, saveFailed)
         break
       }
     }
@@ -406,6 +495,8 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
 
   function dropDriver(): void {
     generation += 1
+    qrMock?.dispose()
+    qrMock = null
     driver?.dispose()
     driver = null
     qrDriver = null
@@ -432,28 +523,63 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
       })
       return
     }
-    qrDriver = createMockQrDriver({
+    // Every QR code is signed with the device identity, so a QR session waits for it.
+    const identity = peekSharedIdentity()
+    if (!identity) return
+    const slots = guardianSlots(session)
+    const created = dependencies.createQrDriver({
       session: ids,
-      onDisplay: ({ slots, messageType, envelope }) => {
+      identity,
+      slots,
+      onDisplay: display => {
         if (!isCurrent()) return
+        // Codes are signed asynchronously; one for a step that has ended meanwhile is not shown.
+        const current = get().session
+        if (!current || !isLiveDisplay(liveQrSteps(current), display)) return
         const expiresAt = Date.now() + QR_DISPLAY_TTL_MS
-        set({ pendingDisplay: { slots, messageType, envelope, expiresAt }, pendingScan: null })
+        set({ pendingDisplay: { ...display, expiresAt }, pendingScan: null })
       },
-      onAwaitScan: ({ slot, messageType }) => {
+      onAwaitScan: scan => {
         if (!isCurrent()) return
-        set({ pendingScan: { slot, messageType }, pendingDisplay: null })
+        set({ pendingScan: scan, pendingDisplay: null })
       }
     })
-    driver = qrDriver
+    driver = created
+    qrDriver = created
+    qrMock =
+      readMockSettings().qrPhones === 'simulated'
+        ? (dependencies.createQrMock?.(created, {
+            loadVault: dependencies.loadPhoneVault,
+            slots
+          }) ?? null)
+        : null
+    dispatch({ type: 'IDENTITY_READY', publicKey: bytesToBase64(identity.publicKey) })
   }
 
-  // Shared by camera and simulated scans: the QR driver dispatches MESSAGE_RECEIVED itself (and
-  // stops the scan's watchdog), so success shows up as a new session object.
-  function settleScan(before: CreateSessionState, scan: PendingQrScan): 'accepted' | 'ignored' {
-    if (get().session === before) return 'ignored'
-    // The scan may have opened the next scan step already; only the answered scan is cleared.
-    if (get().pendingScan === scan) set({ pendingScan: null })
-    return 'accepted'
+  function loadIdentity(): void {
+    const owned = ++identityGeneration
+    const isCurrent = () => owned === identityGeneration
+    sharedIdentity().then(
+      loaded => {
+        if (!isCurrent()) return
+        // Forgotten while loading (the dev panel's reset): 'ready' would name a key nobody holds.
+        if (!peekSharedIdentity()) {
+          loadIdentity()
+          return
+        }
+        set({ identity: { status: 'ready', publicKey: bytesToBase64(loaded.publicKey) } })
+        // A QR session started while the identity was loading gets its driver only now.
+        const { session } = get()
+        if (session?.transportKind === 'qr' && session.phase === 'PAIRING' && !driver) {
+          attachDriver(session)
+        }
+      },
+      () => {
+        if (!isCurrent()) return
+        multisigDebug('identity', { result: 'failed' })
+        set({ identity: { status: 'unsupported' } })
+      }
+    )
   }
 
   return {
@@ -462,23 +588,37 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     start: (scope, threshold, transportKind, name) => {
       dropDriver()
       ownerName = name
+      // Late answers to an earlier session's load must not reach this one.
+      identityGeneration += 1
       const session = createInitialSession({
         groupId: crypto.randomUUID(),
         sessionId: crypto.randomUUID(),
         threshold,
         transportKind,
         owner: { slot: 1, role: 'owner', name, model: OWNER_MODEL, platform: 'extension' },
-        mainnet: scope.network === 'mainnet'
+        mainnet: scope.network === 'mainnet',
+        qrDkgSessionId: bytesToBase64(crypto.getRandomValues(new Uint8Array(16)))
       })
+      // Published first: a QR driver reports the identity to this session as it attaches.
+      set({ ...IDLE, scope, session, identity: cachedIdentityStatus() })
       attachDriver(session)
-      set({ ...IDLE, scope, session })
+      if (!peekSharedIdentity()) loadIdentity()
     },
 
     dispatch,
 
     switchTransport: kind => {
-      const { scope, session } = get()
+      const { scope, session, identity: status } = get()
       if (!scope || !session) return
+      // The page keeps QR disabled until the identity that signs its codes is ready. The cache is
+      // the source of truth: it can be cleared (the dev panel's reset) under a published 'ready'.
+      if (kind === 'qr' && !peekSharedIdentity()) {
+        if (status.status === 'ready') {
+          set({ identity: { status: 'loading' } })
+          loadIdentity()
+        }
+        return
+      }
       const { state, effects } = reduceCreateSession(session, { type: 'SWITCH_TRANSPORT', kind })
       if (state.phase === 'ABORTED' && state.abortReason === 'transport_switched') {
         // A pairing already under way cannot move to the other transport, so the reducer voids
@@ -492,8 +632,8 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
       if (state.transportKind === session.transportKind) return
       // Nothing paired yet: the same session simply continues on the other transport.
       dropDriver()
-      attachDriver(state)
       set({ session: state, pendingDisplay: null, pendingScan: null })
+      attachDriver(state)
     },
 
     resolveChooser: selection => {
@@ -504,35 +644,48 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     },
 
     markPhoneScanned: slot => {
-      const { session, pendingScan } = get()
+      const { session, pendingScan, pendingDisplay } = get()
       if (!session || !qrDriver) return
       // A second tap must not re-arm the reply scan or count the phone twice.
       if (session.phase === 'PAIRING') {
-        const waitingForReply = pendingScan !== null && pendingScan.slot === slot
-        if (guardian(session, slot)?.connection === 'invite_shown' && waitingForReply) return
+        if (guardian(session, slot)?.connection !== 'invite_shown') return
+        if (pendingScan?.slots.includes(slot)) return
       } else {
         const step = qrCeremonyStep(session)?.step
         if (step?.kind === 'show' && session.qrShownTo.includes(slot)) return
       }
-      qrDriver.phoneScanned(slot)
+      if (qrMock && pendingDisplay?.slots.includes(slot)) {
+        qrMock
+          .phoneScanned(slot, pendingDisplay)
+          .catch(() => multisigDebug('mock', { step: 'phone_scanned', slot, result: 'failed' }))
+      }
       dispatch({ type: 'QR_PHONE_SCANNED', slot })
     },
 
-    ingestScan: ur => {
-      const { session, pendingScan } = get()
-      if (!session || !pendingScan || !qrDriver) return 'ignored'
-      // Camera input is untrusted: anything that is not an envelope stops here.
+    ingestScan: async ur => {
+      const scanner = qrDriver
+      if (!scanner) return 'ignored'
+      // Camera input is untrusted: anything that is not a single envelope stops here.
       const envelope = decodeEnvelopeUR(ur)
       if (!envelope) return 'ignored'
-      qrDriver.deliverScan(pendingScan.slot, envelope)
-      return settleScan(session, pendingScan)
+      const outcome = await scanner.deliverScan(envelope)
+      // A transport replaced while the scan was checked no longer owns the slot it was for.
+      if (outcome === 'duplicate_identity' && scanner === qrDriver) {
+        toast.error('Device already added', 'Choose a different device.')
+        // The phone's identity already fills another slot, so this pairing starts over.
+        const { pendingScan } = get()
+        if (pendingScan) dispatch({ type: 'PAIR_CANCEL', slot: pendingScan.slots[0] })
+      }
+      return outcome
     },
 
-    simulateScan: () => {
-      const { session, pendingScan } = get()
-      if (!session || !pendingScan || !qrDriver) return
-      qrDriver.simulateScan(pendingScan.slot)
-      settleScan(session, pendingScan)
+    simulateScan: async slot => {
+      await qrMock?.simulateScan(slot)
+    },
+
+    confirmIdentity: slot => {
+      dispatch({ type: 'IDENTITY_CONFIRMED', slot })
+      qrMock?.identityConfirmed(slot)
     },
 
     refreshDisplay: () => {
@@ -549,7 +702,10 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
       if (session) runOnCurrentDriver(reduceCreateSession(session, { type: 'USER_ABORT' }).effects)
       dropDriver()
       ownerName = ''
-      set(IDLE)
+      // A load still in flight belongs to the session that just ended. The identity itself
+      // outlives sessions, so it stays cached.
+      identityGeneration += 1
+      set({ ...IDLE, identity: cachedIdentityStatus() })
     }
   }
 })

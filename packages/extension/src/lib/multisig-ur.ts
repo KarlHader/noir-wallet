@@ -82,16 +82,35 @@ export function decodeCborByteString(cbor: Buffer): Uint8Array | null {
   return new Uint8Array(cbor.subarray(offset))
 }
 
-export function encodeEnvelopeUR(envelope: MultisigEnvelope): UR {
-  const json = new TextEncoder().encode(JSON.stringify(envelope))
+/** One code carries at most this many envelopes (a 3-party round fans out to 2 peers plus slack). */
+export const MAX_ENVELOPES_PER_CODE = 8
+
+/** One envelope is a JSON object, as before; 2 to 8 are a JSON array. */
+export function encodeEnvelopesUR(envelopes: readonly MultisigEnvelope[]): UR {
+  if (envelopes.length < 1 || envelopes.length > MAX_ENVELOPES_PER_CODE) {
+    throw new RangeError(`a code carries 1 to ${MAX_ENVELOPES_PER_CODE} envelopes`)
+  }
+  const value = envelopes.length === 1 ? envelopes[0] : envelopes
+  const json = new TextEncoder().encode(JSON.stringify(value))
   return new UR(encodeCborByteString(json), MULTISIG_UR_TYPE)
+}
+
+export function encodeEnvelopeUR(envelope: MultisigEnvelope): UR {
+  return encodeEnvelopesUR([envelope])
+}
+
+export function createEnvelopesUREncoder(
+  envelopes: readonly MultisigEnvelope[],
+  maxFragmentLength: number = MULTISIG_UR_FRAGMENT_LENGTH
+): UREncoder {
+  return new UREncoder(encodeEnvelopesUR(envelopes), maxFragmentLength)
 }
 
 export function createEnvelopeUREncoder(
   envelope: MultisigEnvelope,
   maxFragmentLength: number = MULTISIG_UR_FRAGMENT_LENGTH
 ): UREncoder {
-  return new UREncoder(encodeEnvelopeUR(envelope), maxFragmentLength)
+  return createEnvelopesUREncoder([envelope], maxFragmentLength)
 }
 
 /**

@@ -1,22 +1,57 @@
 import { useEffect } from 'react'
 import { Icon } from '@iconify/react'
-import { verifyPageDevices } from '@/core/multisig/create-session'
+import { verifyPageDevices, type CreateSessionState } from '@/core/multisig/create-session'
 import { formatFingerprint } from '@/core/multisig/fingerprint'
 import { DeviceCard, type DeviceCardStatus } from '@/popup/components/multisig/DeviceCard'
 import { FingerprintBlock } from '@/popup/components/multisig/FingerprintBlock'
 import { Button } from '@/popup/components/ui/button'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
 import { useDialog } from '@/popup/hooks/useDialog'
-import { createFlowRoute, parseVerifyStage, verifyRoute } from '@/popup/multisig/create-flow-routes'
+import {
+  createdTeamRoute,
+  createFlowRoute,
+  parseVerifyStage,
+  verifyRoute,
+  type FingerprintStage
+} from '@/popup/multisig/create-flow-routes'
 import { useCreateSessionStore } from '@/popup/multisig/create-session-store'
 import { useLocation, useNavigate } from '@/popup/provider/Router'
-import { multisigTeamRoute } from '@/lib/multisig-tab'
 import { MultisigTabLayout } from './MultisigTabLayout'
 
+interface StageCopy {
+  title: string
+  description: string
+}
+
+const STAGE_COPY: Readonly<Record<FingerprintStage, StageCopy>> = {
+  roster: {
+    title: 'Verify the roster',
+    description:
+      'Put both phones side by side. All three screens must show the same roster fingerprint.'
+  },
+  r1: {
+    title: 'Verify round 1',
+    description:
+      'Put both phones side by side. All three screens must show the same value before continuing.'
+  },
+  final: {
+    title: 'Verify the group',
+    description: 'Every device must show the same value. Confirm on each phone, then scan its code.'
+  }
+}
+// Bluetooth phones report their match themselves, so there is no code to scan afterwards.
+const BLE_FINAL_DESCRIPTION = 'Every device must show the same value.'
+
+function stageFingerprint(session: CreateSessionState, stage: FingerprintStage): string | null {
+  if (stage === 'roster') return session.roster?.rosterHash ?? null
+  if (stage === 'r1') return session.r1Fingerprint
+  return session.finalFingerprint
+}
+
 /**
- * Step 3, the fingerprint check: `/multisig/create/verify?stage=r1|final`. `r1` is the QR round-1
- * check of a three-device group; `final` ends every setup. There is no back arrow: the roster is
- * locked, and leaving means aborting the session.
+ * Step 3, the fingerprint check: `/multisig/create/verify?stage=roster|r1|final`. `roster` and
+ * `r1` are the QR checks of a three-device group; `final` ends every setup. There is no back
+ * arrow: the roster is locked, and leaving means aborting the session.
  */
 export function VerifyPage() {
   const { search } = useLocation()
@@ -35,12 +70,12 @@ export function VerifyPage() {
     if (activated) {
       // The store has saved the group already, so the team page can show it at once. Without a
       // scope there is no account to show it for.
-      if (scope) replace(`${multisigTeamRoute(scope)}&created=1`)
+      if (scope) replace(createdTeamRoute(scope))
       else window.close()
       return
     }
-    // A confirmed round-1 check moves on to the next QR step; a final check opened before the
-    // ceremony finished goes back to it.
+    // A confirmed QR check moves on to the next QR step (after the final one, the scan of each
+    // phone's confirmation); a final check opened before the ceremony finished goes back to it.
     if (target !== null && target !== here) replace(target)
   }, [activated, scope, target, here, replace])
 
@@ -55,10 +90,16 @@ export function VerifyPage() {
     stage === 'final' &&
     session.ownerConfirmed.final &&
     !devices.every(entry => entry.confirmed)
-  const fingerprint = stage === 'r1' ? session.r1Fingerprint : session.finalFingerprint
+  const fingerprint = stageFingerprint(session, stage)
+  const copy = STAGE_COPY[stage]
+  const description = isBle && stage === 'final' ? BLE_FINAL_DESCRIPTION : copy.description
+  // The roster check has no flag of its own: confirming it moves the session straight on.
+  const ownerConfirmed = stage === 'roster' ? false : session.ownerConfirmed[stage]
 
+  // A phone's final confirmation arrives over Bluetooth or, over QR, from its scanned code; the
+  // earlier QR checks happen on each phone's own screen.
   const deviceStatus = (confirmed: boolean): DeviceCardStatus => {
-    if (!isBle) return 'connected'
+    if (!isBle && stage !== 'final') return 'connected'
     return confirmed ? 'confirmed' : 'waiting'
   }
 
@@ -92,7 +133,7 @@ export function VerifyPage() {
                 : 'Matches'}
           </FlowButton>
           {/* Once the owner has said Matches, rejecting is no longer the owner's call here. */}
-          {!session.ownerConfirmed[stage] && (
+          {!ownerConfirmed && (
             <Button variant="link" className="w-full" onClick={() => void handleReject()}>
               Doesn&apos;t match
             </Button>
@@ -110,15 +151,13 @@ export function VerifyPage() {
             aria-hidden="true"
           />
         </div>
-        <h2 className="mt-5 text-lg font-semibold">
-          {stage === 'r1' ? 'Verify setup' : 'Verify the group'}
-        </h2>
+        <h2 className="mt-5 text-lg font-semibold">{copy.title}</h2>
       </div>
 
       <div className="mt-5">
         <FingerprintBlock value={formatFingerprint(fingerprint ?? '')} />
       </div>
-      <p className="mt-3 text-center text-xs text-muted">Every device must show the same value.</p>
+      <p className="mt-3 text-center text-xs text-muted">{description}</p>
 
       <div className="mt-5 space-y-3">
         {devices.map(entry => (

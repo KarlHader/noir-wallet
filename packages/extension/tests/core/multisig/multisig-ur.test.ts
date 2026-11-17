@@ -1,10 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { UR, URDecoder } from '@ngraveio/bc-ur'
-import { createEnvelopeFactory } from '../../../src/core/multisig/messages'
+import { createEnvelopeFactory, parseEnvelope } from '../../../src/core/multisig/messages'
 import {
   createEnvelopeUREncoder,
   decodeCborByteString,
+  encodeEnvelopesUR,
   decodeEnvelopeUR,
   encodeCborByteString,
   encodeEnvelopeUR,
@@ -18,6 +19,34 @@ const envelope = createEnvelopeFactory({
 })('DKG_R1', 'device-2', { commitment: 'a'.repeat(120), note: 'héllo ✓' })
 
 test.describe('multisig ur', () => {
+  test('encodes two envelopes as a JSON array and decodeEnvelopeUR rejects an array', () => {
+    const ur = encodeEnvelopesUR([envelope, envelope])
+    const bytes = decodeCborByteString(ur.cbor)
+    expect(bytes).not.toBeNull()
+    const parsed = JSON.parse(new TextDecoder().decode(bytes!)) as unknown[]
+    expect(Array.isArray(parsed)).toBe(true)
+    expect(parsed).toHaveLength(2)
+    for (const item of parsed) expect(parseEnvelope(item)).not.toBeNull()
+    expect(decodeEnvelopeUR(ur)).toBeNull()
+  })
+
+  test('decodeEnvelopeUR rejects an array', () => {
+    const json = new TextEncoder().encode(JSON.stringify([envelope]))
+    expect(decodeEnvelopeUR(new UR(encodeCborByteString(json), MULTISIG_UR_TYPE))).toBeNull()
+  })
+
+  test('refuses zero and nine envelopes', () => {
+    expect(() => encodeEnvelopesUR([])).toThrow(RangeError)
+    expect(() => encodeEnvelopesUR(Array(9).fill(envelope))).toThrow(RangeError)
+    expect(() => encodeEnvelopesUR(Array(8).fill(envelope))).not.toThrow()
+  })
+
+  test('a single envelope still encodes as an object', () => {
+    const bytes = decodeCborByteString(encodeEnvelopesUR([envelope]).cbor)
+    expect(JSON.parse(new TextDecoder().decode(bytes!))).toEqual(envelope)
+    expect(new TextDecoder().decode(bytes!)).toBe(JSON.stringify(envelope))
+  })
+
   test('envelope survives UR encode → fragment → decode', () => {
     const encoder = createEnvelopeUREncoder(envelope, 50)
     // A single-frame result would let a broken fragment path pass unnoticed.

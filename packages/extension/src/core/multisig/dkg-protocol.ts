@@ -5,7 +5,9 @@
  * slot → roster slot).
  */
 import type * as ZcashWasm from '@/lib/wasm-pkg/zcash_wallet_wasm'
-import { base64ToBytes, bytesToHex } from '@/lib/bytes'
+import { base64ToBytes, bytesToBase64, bytesToHex } from '@/lib/bytes'
+import { parseIdentityPublicKey } from './identity'
+import { parseRosterManifest, type RosterManifest } from './roster'
 import type { DeviceSlot, MultisigThreshold } from './types'
 
 export type VaultWasm = Pick<
@@ -56,7 +58,19 @@ export type RosterLockPayload = {
   threshold: 2 | 3
   rosterSlot: number
   mainnet: boolean
+  roster?: RosterManifest
 }
+export type DeviceInfo = { name: string; model: string; platform: 'ios' | 'android' | 'extension' }
+export type PairInvitePayload = {
+  identityPublicKey: string // base64 of 65 bytes
+  device: DeviceInfo
+  dkgSessionId: string // base64 of 16 bytes
+  participants: 2 | 3
+  threshold: 2 | 3
+  rosterSlot: number
+  mainnet: boolean
+}
+export type PairResponsePayload = { identityPublicKey: string; device: DeviceInfo }
 export type DkgEnvelopePayload = { envelope: string } // base64
 export type Round1EchoPayload = { round1Hash: string } // 64 lowercase hex
 export type KeysetSetupPayload = { sealedQsk: string } // base64
@@ -80,6 +94,20 @@ export function isBase64Text(value: unknown): value is string {
 
 const isBase64 = isBase64Text
 
+/**
+ * A DKG session id as text: canonical base64 of exactly 16 bytes. Canonical matters because the
+ * id is a table key; atob also accepts unpadded or non-zero-trailing-bit spellings of the same bytes.
+ */
+export function isDkgSessionIdText(value: unknown): value is string {
+  if (!isBase64Text(value)) return false
+  try {
+    const bytes = base64ToBytes(value)
+    return bytes.length === DKG_SESSION_ID_BYTES && bytesToBase64(bytes) === value
+  } catch {
+    return false
+  }
+}
+
 function isSha256Hex(value: unknown): value is string {
   return typeof value === 'string' && SHA256_HEX_PATTERN.test(value)
 }
@@ -92,8 +120,35 @@ function base64Length(value: string): number | null {
   }
 }
 
-export function parseRosterLockPayload(value: unknown): RosterLockPayload | null {
+const DEVICE_TEXT_MAX = 128
+
+export function parseDeviceInfo(
+  value: unknown,
+  platforms: readonly DeviceInfo['platform'][]
+): DeviceInfo | null {
   if (!isRecord(value)) return null
+  const { name, model, platform } = value
+  for (const text of [name, model]) {
+    if (typeof text !== 'string' || text.length > DEVICE_TEXT_MAX || text.trim().length === 0) {
+      return null
+    }
+  }
+  if (!platforms.some(allowed => allowed === platform)) return null
+  return {
+    name: name as string,
+    model: model as string,
+    platform: platform as DeviceInfo['platform']
+  }
+}
+
+function isIdentityKeyText(value: unknown): value is string {
+  return typeof value === 'string' && parseIdentityPublicKey(value) !== null
+}
+
+/** The session fields shared by PAIR_INVITE and ROSTER_LOCK. */
+function parseSessionFields(
+  value: Record<string, unknown>
+): Omit<RosterLockPayload, 'roster'> | null {
   const { dkgSessionId, participants, threshold, rosterSlot, mainnet } = value
   if (!isBase64(dkgSessionId) || base64Length(dkgSessionId) !== DKG_SESSION_ID_BYTES) return null
   const shape = { participants, threshold }
@@ -114,6 +169,37 @@ export function parseRosterLockPayload(value: unknown): RosterLockPayload | null
     rosterSlot,
     mainnet
   }
+}
+
+export function parsePairInvitePayload(value: unknown): PairInvitePayload | null {
+  if (!isRecord(value) || !isIdentityKeyText(value.identityPublicKey)) return null
+  const device = parseDeviceInfo(value.device, ['extension'])
+  const session = parseSessionFields(value)
+  if (!device || !session) return null
+  return { identityPublicKey: value.identityPublicKey, device, ...session }
+}
+
+export function parsePairResponsePayload(value: unknown): PairResponsePayload | null {
+  if (!isRecord(value) || !isIdentityKeyText(value.identityPublicKey)) return null
+  const device = parseDeviceInfo(value.device, ['ios', 'android'])
+  return device ? { identityPublicKey: value.identityPublicKey, device } : null
+}
+
+/** Lenient: a lock without `roster` is the Bluetooth mock's, a lock with one must carry a valid roster. */
+export function parseRosterLockPayload(value: unknown): RosterLockPayload | null {
+  if (!isRecord(value)) return null
+  const session = parseSessionFields(value)
+  if (!session) return null
+  if (value.roster === undefined) return session
+  const roster = parseRosterManifest(value.roster)
+  return roster ? { ...session, roster } : null
+}
+
+export function parseRosterLockPayloadStrict(
+  value: unknown
+): (RosterLockPayload & { roster: RosterManifest }) | null {
+  const lock = parseRosterLockPayload(value)
+  return lock?.roster ? { ...lock, roster: lock.roster } : null
 }
 
 export function parseDkgEnvelopePayload(value: unknown): DkgEnvelopePayload | null {

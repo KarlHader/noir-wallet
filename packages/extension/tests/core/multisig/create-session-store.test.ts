@@ -36,6 +36,11 @@ import {
 import { openVaultRecord, type SealedVaultRecord } from '../../../src/core/multisig/vault-record'
 import type { VaultGroupSaveRequest } from '../../../src/core/multisig/vault-group-rpc'
 import { useToastStore } from '../../../src/store/toast-store'
+import type { DeviceIdentity } from '../../../src/core/multisig/identity'
+import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
+import { createQrDriver } from '../../../src/popup/multisig/qr-driver'
+import { forgetSharedIdentity } from '../../../src/popup/multisig/device-identity-cache'
+import { SPEC_SEED, identityFromSeed, signedPhoneEnvelope } from './helpers/identity'
 
 const SCOPE: MultisigGroupScope = { network: 'mainnet', walletId: 'wallet-1', accountId: 'acc-1' }
 const OWNER_NAME = 'My browser'
@@ -85,6 +90,7 @@ let wasm: VaultWasm
 let handler: VaultDkgRpcHandler
 let basePort: DkgPort
 let restoreDependencies = () => {}
+let identity: DeviceIdentity
 // The sealed records the in-process port's save has stored, by account scope key.
 const saved = new Map<string, SealedVaultRecord>()
 
@@ -92,9 +98,12 @@ before(async () => {
   wasm = await loadVaultWasm()
   handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
   basePort = createInProcessDkgPort(handler, saved)
+  identity = await identityFromSeed(SPEC_SEED)
   restoreDependencies = setCreateSessionDependencies({
     dkgPort: basePort,
-    loadPhoneVault: async () => wasm
+    loadPhoneVault: async () => wasm,
+    loadIdentity: async () => identity,
+    createQrMock: null
   })
 })
 
@@ -191,6 +200,14 @@ async function pairOverBluetooth(slot: 2 | 3): Promise<void> {
   store.getState().resolveChooser({ status: 'selected', id: `phone-${slot}`, name: model })
   expect(store.getState().chooser).toBeNull()
   await waitUntil(() => connection(slot) === 'connected', `slot ${slot} to connect`)
+}
+
+function identityReady(): boolean {
+  return store.getState().identity.status === 'ready'
+}
+
+function ownPublicKey(): string {
+  return bytesToBase64(identity.publicKey)
 }
 
 function toastTitles(): string[] {
@@ -543,76 +560,6 @@ test.describe('multisig create-session store', () => {
     })
   })
 
-  test('QR 2-of-2 walks the four codes and activates', async () => {
-    await withFreshStore(async () => {
-      store.getState().start(SCOPE, '2-of-2', 'qr', OWNER_NAME)
-
-      store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
-      expect(store.getState().pendingDisplay?.messageType).toBe('PAIR_INVITE')
-      expect(store.getState().pendingDisplay?.expiresAt).toBeGreaterThan(Date.now())
-      expect(currentQrStep(store.getState())?.step.kind).toBe('show')
-      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 1, total: 4 })
-
-      store.getState().markPhoneScanned(2)
-      const replyScan = store.getState().pendingScan
-      expect(replyScan?.messageType).toBe('PAIR_RESPONSE')
-      expect(store.getState().pendingDisplay).toBeNull()
-      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 2, total: 4 })
-
-      // A second tap on "Phone scanned" must not re-arm the scan.
-      store.getState().markPhoneScanned(2)
-      expect(store.getState().pendingScan).toBe(replyScan)
-
-      store.getState().simulateScan()
-      expect(connection(2)).toBe('connected')
-      expect(store.getState().pendingScan).toBeNull()
-
-      store.getState().dispatch({ type: 'CONTINUE' })
-      expect(store.getState().pendingDisplay?.messageType).toBe('DKG_R2_INBOX')
-      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 3, total: 4 })
-
-      store.getState().markPhoneScanned(2)
-      expect(store.getState().pendingScan?.messageType).toBe('DKG_FINAL')
-      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 4, total: 4 })
-
-      store.getState().simulateScan()
-      expect(phase()).toBe('KEYSET_VERIFIED')
-      expect(currentQrStep(store.getState())).toBeNull()
-
-      store.getState().dispatch({ type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
-      expect(phase()).toBe('ACTIVATED')
-      expect(store.getState().pendingScan).toBeNull()
-      expect(store.getState().pendingDisplay).toBeNull()
-      await waitUntil(async () => (await readMultisigGroup(SCOPE)) !== null, 'the stored group')
-    })
-  })
-
-  test('camera scans are decoded and accepted only once', async () => {
-    await withFreshStore(() => {
-      store.getState().start(SCOPE, '2-of-2', 'qr', OWNER_NAME)
-      store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
-      store.getState().markPhoneScanned(2)
-
-      const session = store.getState().session
-      if (!session) throw new Error('expected a session')
-      const fromPhone = createEnvelopeFactory({
-        groupId: session.groupId,
-        sessionId: session.sessionId,
-        senderId: deviceId(2)
-      })
-      const reply = encodeEnvelopeUR(
-        fromPhone('PAIR_RESPONSE', deviceId(1), { device: MOCK_GUARDIANS[2] })
-      )
-
-      const notJson = new UR(encodeCborByteString(Buffer.from('not json')), 'bytes')
-      expect(store.getState().ingestScan(notJson)).toBe('ignored')
-      expect(store.getState().ingestScan(reply)).toBe('accepted')
-      expect(connection(2)).toBe('connected')
-      expect(store.getState().pendingScan).toBeNull()
-      expect(store.getState().ingestScan(reply)).toBe('ignored')
-    })
-  })
-
   test('switching transport restarts a started pairing without exposing the abort', async () => {
     await withFreshStore(async () => {
       store.getState().start(SCOPE, '2-of-3', 'ble', OWNER_NAME)
@@ -640,9 +587,14 @@ test.describe('multisig create-session store', () => {
       expect(after?.devices.slice(1).map(device => device.connection)).toEqual(['empty', 'empty'])
       expect(store.getState().scope).toEqual(SCOPE)
 
-      // The new session runs on the QR driver.
+      // The new session runs on the QR driver once the identity has loaded again.
+      await waitUntil(
+        () => store.getState().session?.ownerIdentityPublicKey === ownPublicKey(),
+        'the owner identity'
+      )
       store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
-      expect(store.getState().pendingDisplay?.messageType).toBe('PAIR_INVITE')
+      await waitUntil(() => store.getState().pendingDisplay !== null, 'the invite')
+      expect(store.getState().pendingDisplay?.messageTypes).toEqual(['PAIR_INVITE'])
     })
   })
 
@@ -744,5 +696,277 @@ test.describe('multisig create-session store', () => {
         })
       )
     }
+  })
+
+  test('start prepares a 16-byte qrDkgSessionId and loads the identity in the background', async () => {
+    // A fresh loader, so no identity is cached from an earlier case.
+    const restore = setCreateSessionDependencies({ loadIdentity: async () => identity })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'qr', OWNER_NAME)
+        expect(store.getState().identity).toEqual({ status: 'loading' })
+        const session = store.getState().session
+        expect(base64ToBytes(session?.qrDkgSessionId ?? '')).toHaveLength(16)
+        expect(session?.ownerIdentityPublicKey).toBeNull()
+
+        await waitUntil(identityReady, 'the identity')
+        expect(store.getState().identity).toEqual({ status: 'ready', publicKey: ownPublicKey() })
+        // A QR session started before the identity loaded picks it up as soon as it is there.
+        expect(store.getState().session?.ownerIdentityPublicKey).toBe(ownPublicKey())
+        expect(store.getState().session?.qrDkgSessionId).toBe(session?.qrDkgSessionId)
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('switching to QR before the identity is ready does nothing', async () => {
+    let resolveIdentity: (value: DeviceIdentity) => void = () => {}
+    const held = new Promise<DeviceIdentity>(resolve => {
+      resolveIdentity = resolve
+    })
+    const restore = setCreateSessionDependencies({ loadIdentity: () => held })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        const before = store.getState().session
+        store.getState().switchTransport('qr')
+        expect(store.getState().session).toBe(before)
+        expect(store.getState().session?.transportKind).toBe('ble')
+
+        resolveIdentity(identity)
+        await waitUntil(identityReady, 'the identity')
+        // A Bluetooth session never takes the identity.
+        expect(store.getState().session).toBe(before)
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('switching to QR when ready attaches the driver and sets the owner identity', async () => {
+    await withFreshStore(async () => {
+      store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+      await waitUntil(identityReady, 'the identity')
+      store.getState().switchTransport('qr')
+      expect(store.getState().session?.transportKind).toBe('qr')
+      expect(store.getState().session?.ownerIdentityPublicKey).toBe(ownPublicKey())
+
+      store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
+      await waitUntil(() => store.getState().pendingDisplay !== null, 'the invite')
+      const invite = store.getState().pendingDisplay
+      expect(invite?.slots).toEqual([2])
+      expect(invite?.messageTypes).toEqual(['PAIR_INVITE'])
+      expect(invite?.envelopes).toHaveLength(1)
+      expect(invite?.expiresAt).toBeGreaterThan(Date.now())
+      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 1, total: 3 })
+
+      // Refreshing only extends the expiry; the signed code itself is never re-signed.
+      store.getState().refreshDisplay()
+      expect(store.getState().pendingDisplay?.envelopes).toBe(invite?.envelopes)
+
+      store.getState().markPhoneScanned(2)
+      const replyScan = store.getState().pendingScan
+      expect(replyScan).toEqual({ slots: [2], messageType: 'PAIR_RESPONSE' })
+      expect(store.getState().pendingDisplay).toBeNull()
+      expect(currentQrStep(store.getState())?.counter).toEqual({ current: 2, total: 3 })
+
+      // A second tap must not re-arm the reply scan.
+      store.getState().markPhoneScanned(2)
+      expect(store.getState().pendingScan).toBe(replyScan)
+    })
+  })
+
+  test('an unsupported identity marks the store unsupported and leaves Bluetooth usable', async () => {
+    const restore = setCreateSessionDependencies({
+      loadIdentity: () => Promise.reject(new Error('no Ed25519'))
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await waitUntil(
+          () => store.getState().identity.status === 'unsupported',
+          'the identity to fail'
+        )
+        store.getState().switchTransport('qr')
+        expect(store.getState().session?.transportKind).toBe('ble')
+        await pairOverBluetooth(2)
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('ingestScan returns ignored for a non-envelope UR', async () => {
+    await withFreshStore(async () => {
+      store.getState().start(SCOPE, '2-of-2', 'qr', OWNER_NAME)
+      await waitUntil(identityReady, 'the identity')
+      const before = store.getState().session
+      const notJson = new UR(encodeCborByteString(Buffer.from('not json')), 'bytes')
+      expect(await store.getState().ingestScan(notJson)).toBe('ignored')
+      expect(store.getState().session).toBe(before)
+    })
+  })
+
+  test('a duplicate identity toasts and resets only that slot', async () => {
+    const restore = setCreateSessionDependencies({
+      createQrDriver: options => ({
+        ...createQrDriver(options),
+        deliverScan: async () => 'duplicate_identity'
+      })
+    })
+    useToastStore.setState({ toasts: [] })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-3', 'qr', OWNER_NAME)
+        await waitUntil(identityReady, 'the identity')
+        store.getState().dispatch({ type: 'PAIR_START', slot: 3 })
+        store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
+        await waitUntil(
+          () => store.getState().pendingDisplay?.slots[0] === 2,
+          'the invite for slot 2'
+        )
+        store.getState().markPhoneScanned(2)
+        expect(store.getState().pendingScan?.slots).toEqual([2])
+
+        const session = store.getState().session
+        if (!session) throw new Error('expected a session')
+        const fromPhone = createEnvelopeFactory({
+          groupId: session.groupId,
+          sessionId: session.sessionId,
+          senderId: deviceId(2)
+        })
+        const reply = encodeEnvelopeUR(fromPhone('PAIR_RESPONSE', deviceId(1)))
+
+        expect(await store.getState().ingestScan(reply)).toBe('duplicate_identity')
+        expect(toastTitles()).toEqual(['Device already added'])
+        expect(connection(2)).toBe('empty')
+        expect(connection(3)).toBe('invite_shown')
+        expect(phase()).toBe('PAIRING')
+        expect(store.getState().pendingScan).toBeNull()
+      })
+    } finally {
+      useToastStore.setState({ toasts: [] })
+      restore()
+    }
+  })
+
+  test('the identity is loaded once and reused across sessions', async () => {
+    let loads = 0
+    const restore = setCreateSessionDependencies({
+      loadIdentity: async () => {
+        loads += 1
+        return identity
+      }
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        store.getState().reset()
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await waitUntil(identityReady, 'the identity')
+        expect(loads).toBe(1)
+
+        const statuses: string[] = []
+        const unsubscribe = store.subscribe(state => statuses.push(state.identity.status))
+        try {
+          store.getState().start(SCOPE, '2-of-2', 'qr', OWNER_NAME)
+        } finally {
+          unsubscribe()
+        }
+        expect(statuses).not.toContain('loading')
+        expect(store.getState().identity).toEqual({ status: 'ready', publicKey: ownPublicKey() })
+        expect(store.getState().session?.ownerIdentityPublicKey).toBe(ownPublicKey())
+        expect(loads).toBe(1)
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('forgetting the shared identity makes the next start load again', async () => {
+    let loads = 0
+    const restore = setCreateSessionDependencies({
+      loadIdentity: async () => {
+        loads += 1
+        return identity
+      }
+    })
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await waitUntil(identityReady, 'the identity')
+        store.getState().reset()
+        forgetSharedIdentity()
+
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        expect(store.getState().identity).toEqual({ status: 'loading' })
+        await waitUntil(identityReady, 'the identity to load again')
+        expect(loads).toBe(2)
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('a QR switch after the identity was forgotten loads it again before attaching', async () => {
+    await withFreshStore(async () => {
+      store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+      await waitUntil(identityReady, 'the identity')
+      // The dev panel's reset clears the cache under a published 'ready'.
+      forgetSharedIdentity()
+      store.getState().switchTransport('qr')
+      expect(store.getState().identity).toEqual({ status: 'loading' })
+      expect(store.getState().session?.transportKind).toBe('ble')
+
+      await waitUntil(identityReady, 'the identity to load again')
+      store.getState().switchTransport('qr')
+      expect(store.getState().session?.transportKind).toBe('qr')
+      store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
+      await waitUntil(() => store.getState().pendingDisplay !== null, 'the invite')
+    })
+  })
+
+  test('a valid reply from a phone that is not awaited is ignored and accepted once it is', async () => {
+    const phoneC = await identityFromSeed(new Uint8Array(32).fill(0x33))
+    await withFreshStore(async () => {
+      store.getState().start(SCOPE, '2-of-3', 'qr', OWNER_NAME)
+      await waitUntil(identityReady, 'the identity')
+      store.getState().dispatch({ type: 'PAIR_START', slot: 2 })
+      await waitUntil(() => store.getState().pendingDisplay !== null, 'the invite for slot 2')
+      store.getState().markPhoneScanned(2)
+      expect(store.getState().pendingScan).toEqual({ slots: [2], messageType: 'PAIR_RESPONSE' })
+
+      const session = store.getState().session
+      if (!session) throw new Error('expected a session')
+      const reply = encodeEnvelopeUR(
+        await signedPhoneEnvelope(phoneC, {
+          protocol_version: 1,
+          message_type: 'PAIR_RESPONSE',
+          group_id: session.groupId,
+          session_id: session.sessionId,
+          sender_id: deviceId(3),
+          recipient_id: deviceId(1),
+          round: 0,
+          sequence: 1,
+          encrypted_payload: JSON.stringify({
+            identityPublicKey: bytesToBase64(phoneC.publicKey),
+            device: { name: 'Casey', model: 'iPhone 17', platform: 'ios' }
+          })
+        })
+      )
+      expect(await store.getState().ingestScan(reply)).toBe('ignored')
+      expect(connection(3)).toBe('empty')
+
+      store.getState().dispatch({ type: 'PAIR_START', slot: 3 })
+      await waitUntil(
+        () => store.getState().pendingDisplay?.slots[0] === 3,
+        'the invite for slot 3'
+      )
+      store.getState().markPhoneScanned(3)
+      expect(await store.getState().ingestScan(reply)).toBe('accepted')
+      expect(connection(3)).toBe('identity_check')
+      expect(phase()).toBe('PAIRING')
+    })
   })
 })

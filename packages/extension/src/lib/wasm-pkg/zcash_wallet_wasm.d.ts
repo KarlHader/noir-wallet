@@ -193,6 +193,11 @@ export class Coordinator {
    */
   accept_commitments(envelope: Uint8Array): void
   /**
+   * Accept a signer's refusal. The session ends; one signer out means this selection no longer reaches
+   * the threshold.
+   */
+  accept_reject(envelope: Uint8Array): Array<any>
+  /**
    * Collect a `SIGN_SHARE` envelope.
    */
   accept_share(envelope: Uint8Array): void
@@ -226,6 +231,12 @@ export class Coordinator {
    * Hand over the sighash and per-action alphas read from the built transaction.
    */
   prepare_payload(sighash: Uint8Array, alphas: Uint8Array): void
+  /**
+   * Report the outcome to every signer after aggregation.
+   *
+   * `status`: 0 = broadcasted (then `txid` is required), 1 = failed. Returns `[[slot, envelope], ...]`.
+   */
+  report_result(status: number, txid: Uint8Array | null | undefined, note: string): Array<any>
 }
 
 /**
@@ -255,9 +266,12 @@ export class Deposit {
 export class Dkg {
   free(): void
   [Symbol.dispose](): void
-  constructor(participants: number, threshold: number, slot: number)
+  constructor(participants: number, threshold: number, slot: number, session_id: Uint8Array)
   /**
    * Round 1: generate this device's contribution.
+   *
+   * The contribution is bound to this ceremony's session id: a later round refuses a broadcast that
+   * names a different one, so a round-1 secret cannot be carried into a second ceremony.
    */
   part1(): Dkg1
   /**
@@ -416,6 +430,43 @@ export class EnvelopeCodec {
     payload: Uint8Array
   ): Uint8Array
   /**
+   * Build a `SIGN_REJECT` envelope. `code`: 1 user declined, 2 verification failed, 3 malformed, 4 expired.
+   */
+  static buildSignReject(
+    session_id: Uint8Array,
+    sender: number,
+    recipient: number,
+    sequence: number,
+    code: number,
+    note: string
+  ): Uint8Array
+  /**
+   * Build a `SIGN_RESULT` envelope. `status`: 0 broadcasted (txid required), 1 failed (no txid).
+   */
+  static buildSignResult(
+    session_id: Uint8Array,
+    sender: number,
+    recipient: number,
+    sequence: number,
+    status: number,
+    txid: Uint8Array | null | undefined,
+    note: string
+  ): Uint8Array
+  /**
+   * Build a signing-session envelope; the round comes from the message type.
+   *
+   * Use this instead of `build` for signing messages: `build` takes the round as an argument, which is
+   * how a caller ends up sending a round the receiver refuses.
+   */
+  static buildSigning(
+    msg_type: number,
+    sender: number,
+    recipient: number,
+    sequence: number,
+    session_id: Uint8Array,
+    payload: Uint8Array
+  ): Uint8Array
+  /**
    * Decode an envelope into a JSON-ish object: `{ msgType, round, sender, recipient, sequence,
    * sessionId: Uint8Array, payload: Uint8Array }` as a JS array, to keep the surface primitive.
    */
@@ -446,6 +497,23 @@ export class EnvelopeCodec {
    */
   static new_session_id(): Uint8Array
   /**
+   * Decode a `SIGN_REJECT` envelope into `[sender, sequence, sessionId, code, note]`.
+   */
+  static readSignReject(bytes: Uint8Array): Array<any>
+  /**
+   * Decode a `SIGN_RESULT` envelope into `[sender, sequence, sessionId, status, txid|null, note]`.
+   */
+  static readSignResult(bytes: Uint8Array): Array<any>
+  /**
+   * Read a signing-session envelope, refusing a type outside the signing set and a round that disagrees
+   * with its type. Returns the same shape as `decode`.
+   */
+  static readSigning(bytes: Uint8Array): Array<any>
+  /**
+   * Wire value of a reject code, by the name the phone uses.
+   */
+  static rejectCode(name: string): number
+  /**
    * Wire value of a **reserved** type: the number exists in the protocol table, but no payload
    * format is defined for it. Prefer [`Self::msg_type`]; this exists so a caller can decode a
    * message it received rather than invent one it should not send.
@@ -455,6 +523,15 @@ export class EnvelopeCodec {
    * The type names that are reserved without a payload format.
    */
   static reserved_msg_types(): Array<any>
+  /**
+   * The `round` a message type belongs to, per the spec's message table.
+   *
+   * The value is enforced only inside a session: `readSigning` and the signing sessions refuse an
+   * envelope whose round disagrees with its type. Nothing checks the DKG rounds, so this is a lookup
+   * for callers that fill the field themselves — a wrong value produces a message the peer refuses,
+   * not a local error.
+   */
+  static round_of(name: string): number
   /**
    * The slot reserved for the coordinator, which may hold no share.
    */
@@ -581,6 +658,75 @@ export class MessageSet {
    * Pack for transport as one envelope payload.
    */
   to_bytes(): Uint8Array
+}
+
+/**
+ * The Noise XX channel used under BLE.
+ *
+ * WebCrypto has no BLAKE2s, so this cannot be written in the extension: a hand-rolled Noise state
+ * machine in JavaScript would be a third implementation of a security-critical protocol. GATT reads and
+ * writes stay in the host — this only turns plaintext into bytes and back.
+ *
+ * XX is three messages: initiator writes, responder replies, initiator finishes. After that both sides
+ * can `encrypt`/`decrypt`.
+ *
+ * **Message 1's payload is plaintext.** Noise has no key before the first DH, so nothing that matters may
+ * be carried there; the initiator's static key is only revealed and proved in message 3. Use message 1
+ * for nothing, or for data you would be happy to see forged.
+ */
+export class NoiseXx {
+  private constructor()
+  free(): void
+  [Symbol.dispose](): void
+  /**
+   * Decrypt one payload from the peer.
+   */
+  decrypt(ciphertext: Uint8Array): Uint8Array
+  /**
+   * Encrypt one payload. Completes the handshake first if it is finished but not yet converted.
+   */
+  encrypt(plaintext: Uint8Array): Uint8Array
+  /**
+   * The handshake hash. Both ends must agree; unavailable until the handshake completes.
+   */
+  handshake_hash(): Uint8Array
+  /**
+   * Start the channel as the connecting side.
+   */
+  static initiator(static_private: Uint8Array, prologue: Uint8Array): NoiseXx
+  is_handshake_finished(): boolean
+  /**
+   * Whether the channel is dead after an authentication failure.
+   *
+   * Noise advances the nonce before verifying the tag, so one bad message leaves the two sides out of
+   * step permanently. When this is true the host must drop the channel and handshake again — every
+   * later call returns an error.
+   */
+  is_poisoned(): boolean
+  /**
+   * Read a handshake message from the peer, returning its payload.
+   */
+  read_handshake(message: Uint8Array): Uint8Array
+  /**
+   * Rotate the sending and receiving keys, as Noise's `rekey` specifies.
+   */
+  rekey(): void
+  /**
+   * The peer's static public key, once the handshake has revealed it.
+   */
+  remote_static(): Uint8Array | undefined
+  /**
+   * Start the channel as the accepting side.
+   */
+  static responder(static_private: Uint8Array, prologue: Uint8Array): NoiseXx
+  /**
+   * The X25519 public key belonging to a static private key.
+   */
+  static static_public_from(private_key: Uint8Array): Uint8Array
+  /**
+   * Write the next handshake message for this side.
+   */
+  write_handshake(payload: Uint8Array): Uint8Array
 }
 
 export class PaymentRequest {
@@ -725,6 +871,46 @@ export class Proposal {
 }
 
 /**
+ * The roster hash, computed here so no other language keeps its own copy of the encoding.
+ *
+ * The wire format is fixed by agreement with the mobile client; the domain tag is concatenated raw,
+ * every field carries a 4-byte big-endian length, and numbers are canonical decimal text. A different
+ * encoding produces a different hash, and two devices that disagree on the roster hash will refuse to
+ * proceed — which is the point, but makes a silent drift expensive to debug.
+ */
+export class RosterManifest {
+  free(): void
+  [Symbol.dispose](): void
+  /**
+   * Add a participant. Call order does not matter: the encoding sorts by slot.
+   */
+  add_participant(
+    slot: number,
+    identity_public_key: Uint8Array,
+    transport_public_key: Uint8Array
+  ): void
+  /**
+   * The exact bytes that are hashed. For test vectors and debugging.
+   */
+  canonical_bytes(): Uint8Array
+  /**
+   * `SHA-256(canonical_bytes)`.
+   */
+  hash(): Uint8Array
+  /**
+   * Lowercase hex of the hash, for comparing against the agreed vectors.
+   */
+  hash_hex(): string
+  constructor(
+    group_id: string,
+    protocol_version: number,
+    ciphersuite: string,
+    threshold: number,
+    participants: number
+  )
+}
+
+/**
  * Sealed, authenticated messages between ceremony participants.
  *
  * The DKG needs this for its round-2 packages (handled internally), and KEYSET_SETUP needs it for
@@ -752,6 +938,14 @@ export class Sealed {
    * The prologue for a participant set, given their static public keys by slot.
    */
   static prologue(statics: MessageSet): Uint8Array
+  /**
+   * The prologue with the round-1 transcript folded in: the roster plus what each participant said.
+   *
+   * Use this instead of `prologue` once round-1 broadcasts exist. A coordinator that relays a different
+   * round-1 set to different devices then cannot have its round-2 packages opened, because each device
+   * seals under the transcript it was actually shown.
+   */
+  static prologueWithTranscript(statics: MessageSet, round1: MessageSet): Uint8Array
   /**
    * Seal `plaintext` so only the holder of `recipient_public` can read it.
    */
@@ -848,6 +1042,14 @@ export class ShareBackup {
     vault_id: Uint8Array,
     group_verifying_key: Uint8Array
   )
+  /**
+   * The 32-byte signing scalar, for a 24-word backup.
+   *
+   * This is all a BIP39 mnemonic can carry (256 bits); `from_scalar` rebuilds the rest from public
+   * data. **Drop the reference as soon as the words are encoded** — do not keep it, return it, or log
+   * it.
+   */
+  signing_scalar(): Uint8Array
   slot(): number
   /**
    * Bytes for the host to seal and store. The wasm does not encrypt.
@@ -881,11 +1083,20 @@ export class Signer {
    */
   nonce_states(): Uint8Array
   /**
+   * Accept the coordinator's outcome report: `[status, txid | null, note]`.
+   */
+  on_result(envelope: Uint8Array): Array<any>
+  /**
    * Consume `SIGN_PAYLOAD`. Returns `[sighash: Uint8Array, alphas: Uint8Array]` for the caller to
    * verify against the PCZT **before** approving.
    */
   payload(envelope: Uint8Array): Array<any>
   phase(): string
+  /**
+   * Refuse to sign, and end the session. `code`: 1 = user declined, 2 = verification failed,
+   * 3 = malformed payload, 4 = expired.
+   */
+  reject(code: number, note: string): Uint8Array
   /**
    * Produce the `SIGN_SHARE` envelope. Consumes the nonces.
    */
@@ -2163,6 +2374,8 @@ export interface InitOutput {
   readonly __wbg_dkg_free: (a: number, b: number) => void
   readonly __wbg_dkgrelay_free: (a: number, b: number) => void
   readonly __wbg_messageset_free: (a: number, b: number) => void
+  readonly __wbg_noisexx_free: (a: number, b: number) => void
+  readonly __wbg_rostermanifest_free: (a: number, b: number) => void
   readonly __wbg_sharebackup_free: (a: number, b: number) => void
   readonly __wbg_signer_free: (a: number, b: number) => void
   readonly canary_allows: (a: number, b: number) => number
@@ -2172,6 +2385,7 @@ export interface InitOutput {
   readonly canary_phase: (a: number, b: number) => void
   readonly canary_spend_confirmed: (a: number, b: number) => void
   readonly coordinator_accept_commitments: (a: number, b: number, c: number, d: number) => void
+  readonly coordinator_accept_reject: (a: number, b: number, c: number, d: number) => void
   readonly coordinator_accept_share: (a: number, b: number, c: number, d: number) => void
   readonly coordinator_actions: (a: number) => number
   readonly coordinator_aggregate: (a: number, b: number) => void
@@ -2197,6 +2411,15 @@ export interface InitOutput {
     d: number,
     e: number,
     f: number
+  ) => void
+  readonly coordinator_report_result: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number
   ) => void
   readonly deposit_canary_amount: () => number
   readonly deposit_denom_cap: () => number
@@ -2231,7 +2454,7 @@ export interface InitOutput {
   readonly dkg3_static_public: (a: number) => number
   readonly dkg3_static_secret: (a: number) => number
   readonly dkg3_statics: (a: number) => number
-  readonly dkg_new: (a: number, b: number, c: number, d: number) => void
+  readonly dkg_new: (a: number, b: number, c: number, d: number, e: number, f: number) => void
   readonly dkg_part1: (a: number, b: number) => void
   readonly dkg_part2: (a: number, b: number, c: number, d: number, e: number) => void
   readonly dkg_part3: (a: number, b: number, c: number, d: number, e: number, f: number) => void
@@ -2259,12 +2482,52 @@ export interface InitOutput {
     i: number,
     j: number
   ) => void
+  readonly envelopecodec_buildSignReject: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number,
+    h: number,
+    i: number
+  ) => void
+  readonly envelopecodec_buildSignResult: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number,
+    h: number,
+    i: number,
+    j: number,
+    k: number
+  ) => void
+  readonly envelopecodec_buildSigning: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number,
+    h: number,
+    i: number
+  ) => void
   readonly envelopecodec_coordinator_slot: () => number
   readonly envelopecodec_decode: (a: number, b: number, c: number) => void
   readonly envelopecodec_defined_msg_types: () => number
   readonly envelopecodec_msg_type: (a: number, b: number, c: number) => void
+  readonly envelopecodec_readSignReject: (a: number, b: number, c: number) => void
+  readonly envelopecodec_readSignResult: (a: number, b: number, c: number) => void
+  readonly envelopecodec_readSigning: (a: number, b: number, c: number) => void
+  readonly envelopecodec_rejectCode: (a: number, b: number, c: number) => void
   readonly envelopecodec_reserved_msg_type: (a: number, b: number, c: number) => void
   readonly envelopecodec_reserved_msg_types: () => number
+  readonly envelopecodec_round_of: (a: number, b: number, c: number) => void
   readonly keyset_address_is_shielded_only: (a: number, b: number) => number
   readonly keyset_derive: (
     a: number,
@@ -2288,6 +2551,18 @@ export interface InitOutput {
   readonly messageset_set: (a: number, b: number, c: number, d: number) => void
   readonly messageset_slots: (a: number, b: number) => void
   readonly messageset_to_bytes: (a: number, b: number) => void
+  readonly noisexx_decrypt: (a: number, b: number, c: number, d: number) => void
+  readonly noisexx_encrypt: (a: number, b: number, c: number, d: number) => void
+  readonly noisexx_handshake_hash: (a: number, b: number) => void
+  readonly noisexx_initiator: (a: number, b: number, c: number, d: number, e: number) => void
+  readonly noisexx_is_handshake_finished: (a: number) => number
+  readonly noisexx_is_poisoned: (a: number) => number
+  readonly noisexx_read_handshake: (a: number, b: number, c: number, d: number) => void
+  readonly noisexx_rekey: (a: number, b: number) => void
+  readonly noisexx_remote_static: (a: number) => number
+  readonly noisexx_responder: (a: number, b: number, c: number, d: number, e: number) => void
+  readonly noisexx_static_public_from: (a: number, b: number, c: number) => void
+  readonly noisexx_write_handshake: (a: number, b: number, c: number, d: number) => void
   readonly pczttools_action_alphas: (a: number, b: number, c: number) => void
   readonly pczttools_action_rks: (a: number, b: number, c: number) => void
   readonly pczttools_apply_signatures: (
@@ -2311,6 +2586,28 @@ export interface InitOutput {
   ) => void
   readonly pczttools_shielded_sighash: (a: number, b: number, c: number) => void
   readonly pczttools_strip_proofs: (a: number, b: number, c: number) => void
+  readonly rostermanifest_add_participant: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number
+  ) => void
+  readonly rostermanifest_canonical_bytes: (a: number, b: number) => void
+  readonly rostermanifest_hash: (a: number, b: number) => void
+  readonly rostermanifest_hash_hex: (a: number, b: number) => void
+  readonly rostermanifest_new: (
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+    g: number,
+    h: number
+  ) => void
   readonly sealed_open: (
     a: number,
     b: number,
@@ -2323,6 +2620,7 @@ export interface InitOutput {
     i: number
   ) => void
   readonly sealed_prologue: (a: number, b: number) => void
+  readonly sealed_prologueWithTranscript: (a: number, b: number, c: number) => void
   readonly sealed_seal: (
     a: number,
     b: number,
@@ -2376,6 +2674,7 @@ export interface InitOutput {
     i: number,
     j: number
   ) => void
+  readonly sharebackup_signing_scalar: (a: number, b: number) => void
   readonly sharebackup_slot: (a: number) => number
   readonly sharebackup_to_bytes: (a: number, b: number) => void
   readonly sharebackup_vault_id: (a: number) => number
@@ -2391,8 +2690,10 @@ export interface InitOutput {
     g: number
   ) => void
   readonly signer_nonce_states: (a: number, b: number) => void
+  readonly signer_on_result: (a: number, b: number, c: number, d: number) => void
   readonly signer_payload: (a: number, b: number, c: number, d: number) => void
   readonly signer_phase: (a: number, b: number) => void
+  readonly signer_reject: (a: number, b: number, c: number, d: number, e: number) => void
   readonly signer_share: (a: number, b: number) => void
   readonly signing_phases: () => number
   readonly verification_rk: (a: number, b: number, c: number, d: number, e: number) => void
@@ -2447,11 +2748,11 @@ export interface InitOutput {
   readonly rustsecp256k1_v0_14_default_illegal_callback_fn: (a: number, b: number) => void
   readonly rustsecp256k1_v0_14_context_create: (a: number) => number
   readonly rustsecp256k1_v0_14_context_destroy: (a: number) => void
-  readonly __wasm_bindgen_func_elem_16662: (a: number, b: number, c: number, d: number) => void
-  readonly __wasm_bindgen_func_elem_16679: (a: number, b: number, c: number, d: number) => void
-  readonly __wasm_bindgen_func_elem_12559: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_16664: (a: number, b: number, c: number) => void
-  readonly __wasm_bindgen_func_elem_12482: (a: number, b: number) => void
+  readonly __wasm_bindgen_func_elem_16663: (a: number, b: number, c: number, d: number) => void
+  readonly __wasm_bindgen_func_elem_16680: (a: number, b: number, c: number, d: number) => void
+  readonly __wasm_bindgen_func_elem_12560: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_16665: (a: number, b: number, c: number) => void
+  readonly __wasm_bindgen_func_elem_12483: (a: number, b: number) => void
   readonly memory: WebAssembly.Memory
   readonly __wbindgen_export: (a: number, b: number) => number
   readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number

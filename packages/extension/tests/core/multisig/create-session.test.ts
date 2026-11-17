@@ -14,7 +14,6 @@ import type {
   VaultDkgRound1Response,
   VaultDkgRound2Response
 } from '../../../src/core/multisig/dkg-rpc'
-import { deriveMockFingerprint } from '../../../src/core/multisig/fingerprint'
 import {
   createEnvelopeFactory,
   deviceId,
@@ -90,14 +89,6 @@ function blePairing(slot: 2 | 3): CreateSessionEvent[] {
 
 function blePair(slot: 2 | 3): CreateSessionEvent[] {
   return [...blePairing(slot), message(slot, 'PAIR_RESPONSE', { code: CODE, device: PHONES[slot] })]
-}
-
-function qrPair(slot: 2 | 3): CreateSessionEvent[] {
-  return [
-    { type: 'PAIR_START', slot },
-    { type: 'QR_PHONE_SCANNED', slot },
-    message(slot, 'PAIR_RESPONSE', { device: PHONES[slot] })
-  ]
 }
 
 function each(
@@ -211,7 +202,10 @@ function expectGuardiansEmpty(state: CreateSessionState) {
       r1Received: false,
       r1Echoed: false,
       r2Received: false,
-      finalReceived: false
+      finalReceived: false,
+      identityPublicKey: null,
+      identityConfirmed: false,
+      round1Envelope: null
     })
   }
 }
@@ -696,23 +690,6 @@ test.describe('multisig create-session', () => {
     expect(late.effects).toEqual([])
   })
 
-  test('QR activates without a save', () => {
-    const verified = run(
-      start('2-of-2', 'qr'),
-      ...qrPair(2),
-      { type: 'CONTINUE' },
-      { type: 'QR_PHONE_SCANNED', slot: 2 },
-      message(2, 'DKG_FINAL')
-    ).state
-    expect(verified.phase).toBe('KEYSET_VERIFIED')
-    const activated = run(verified, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
-    expect(activated.state.phase).toBe('ACTIVATED')
-    expect(activated.state.savingRecord).toBe(false)
-    expect(activated.state.vaultRecord).toBeNull()
-    expect(activated.effects.map(effect => effect.type)).toEqual(['persistGroup'])
-    expect(activated.effects.some(effect => effect.type === 'saveVaultRecord')).toBe(false)
-  })
-
   test('disconnect during ceremony aborts and clears every guardian', () => {
     const ceremony = run(start('2-of-3', 'ble'), ...blePair(2), ...blePair(3), {
       type: 'CONTINUE'
@@ -906,157 +883,6 @@ test.describe('multisig create-session', () => {
     expect(result.effects).toEqual([])
   })
 
-  test('qr 2-of-2 never requires a manual r1 check', () => {
-    for (const finalType of ['DKG_FINAL', 'DKG_R2_BATCH'] as const) {
-      const initial = start('2-of-2', 'qr')
-      expect(initial.manualR1Check).toBe(false)
-      expect(guardianSlots(initial)).toEqual([2])
-
-      const paired = run(initial, ...qrPair(2))
-      expect(paired.effects).toEqual([
-        { type: 'display', slots: [2], messageType: 'PAIR_INVITE' },
-        { type: 'awaitScan', slot: 2, messageType: 'PAIR_RESPONSE' }
-      ])
-      expect(paired.state.devices[1]).toMatchObject({
-        connection: 'connected',
-        device: PHONES[2],
-        r1Received: true
-      })
-
-      const continued = run(paired.state, { type: 'CONTINUE' })
-      expect(continued.effects).toEqual([
-        { type: 'display', slots: [2], messageType: 'DKG_R2_INBOX' }
-      ])
-      expect(continued.state.phase).toBe('DKG_R2')
-      expect(continued.state.qrCeremonyIndex).toBe(0)
-      expect(continued.state.r1Fingerprint).toBe(deriveMockFingerprint(GROUP_ID, 'r1'))
-
-      const scanned = run(continued.state, { type: 'QR_PHONE_SCANNED', slot: 2 })
-      expect(scanned.effects).toEqual([{ type: 'awaitScan', slot: 2, messageType: 'DKG_FINAL' }])
-      expect(scanned.state.qrCeremonyIndex).toBe(1)
-
-      const r1Check = reduceCreateSession(scanned.state, {
-        type: 'FINGERPRINT_CONFIRMED',
-        stage: 'r1'
-      })
-      expect(r1Check.state).toBe(scanned.state)
-
-      const final = run(scanned.state, message(2, finalType))
-      expect(final.state.phase).toBe('KEYSET_VERIFIED')
-      expect(final.state.finalFingerprint).toBe(deriveMockFingerprint(GROUP_ID, 'final'))
-      expect(final.state.devices[1]).toMatchObject({ r2Received: true, finalReceived: true })
-      expect(verifyPageDevices(final.state)).toEqual([
-        { slot: 2, device: PHONES[2], confirmed: false }
-      ])
-
-      const activated = run(final.state, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
-      expect(activated.state.phase).toBe('ACTIVATED')
-      expect(activated.effects).toEqual([
-        {
-          type: 'persistGroup',
-          record: {
-            groupId: GROUP_ID,
-            threshold: '2-of-2',
-            transportKind: 'qr',
-            devices: [OWNER, PHONES[2]],
-            fingerprint: deriveMockFingerprint(GROUP_ID, 'final'),
-            createdAt: 0,
-            mock: true
-          }
-        }
-      ])
-    }
-  })
-
-  test('qr x-of-3 blocks DKG_R2 until the r1 check is confirmed', () => {
-    for (const threshold of ['2-of-3', '3-of-3'] as const) {
-      const paired = run(start(threshold, 'qr'), ...qrPair(2), ...qrPair(3)).state
-      expect(paired.manualR1Check).toBe(true)
-
-      const continued = run(paired, { type: 'CONTINUE' })
-      expect(continued.effects).toEqual([
-        { type: 'display', slots: [2, 3], messageType: 'DKG_R1_BUNDLE' }
-      ])
-      expect(continued.state.phase).toBe('DKG_R1')
-      expect(continued.state.qrCeremonyIndex).toBe(0)
-
-      const tooEarly = reduceCreateSession(continued.state, {
-        type: 'FINGERPRINT_CONFIRMED',
-        stage: 'r1'
-      })
-      expect(tooEarly.state).toBe(continued.state)
-
-      const oneScanned = run(continued.state, { type: 'QR_PHONE_SCANNED', slot: 2 })
-      expect(oneScanned.state.qrShownTo).toEqual([2])
-      expect(oneScanned.state.qrCeremonyIndex).toBe(0)
-      expect(oneScanned.effects).toEqual([])
-
-      const bothScanned = run(oneScanned.state, { type: 'QR_PHONE_SCANNED', slot: 3 })
-      expect(bothScanned.state.qrCeremonyIndex).toBe(1)
-      expect(bothScanned.state.phase).toBe('DKG_R1')
-      expect(bothScanned.state.r1Fingerprint).toBe(deriveMockFingerprint(GROUP_ID, 'r1'))
-
-      const sharesTooEarly = reduceCreateSession(bothScanned.state, message(2, 'DKG_R2_BATCH'))
-      expect(sharesTooEarly.state).toBe(bothScanned.state)
-      expect(sharesTooEarly.effects).toEqual([])
-
-      const confirmed = run(bothScanned.state, { type: 'FINGERPRINT_CONFIRMED', stage: 'r1' })
-      expect(confirmed.state.phase).toBe('DKG_R2')
-      expect(confirmed.state.ownerConfirmed.r1).toBe(true)
-      expect(confirmed.state.qrCeremonyIndex).toBe(2)
-      expect(confirmed.effects).toEqual([
-        { type: 'awaitScan', slot: 2, messageType: 'DKG_R2_BATCH' }
-      ])
-    }
-  })
-
-  test('qr x-of-3 walks the remaining steps to ACTIVATED', () => {
-    const atShares = run(
-      start('2-of-3', 'qr'),
-      ...qrPair(2),
-      ...qrPair(3),
-      { type: 'CONTINUE' },
-      { type: 'QR_PHONE_SCANNED', slot: 2 },
-      { type: 'QR_PHONE_SCANNED', slot: 3 },
-      { type: 'FINGERPRINT_CONFIRMED', stage: 'r1' }
-    ).state
-
-    // Scanning the other phone first is the wrong code for this step.
-    const wrongPhone = reduceCreateSession(atShares, message(3, 'DKG_R2_BATCH'))
-    expect(wrongPhone.state).toBe(atShares)
-
-    const first = run(atShares, message(2, 'DKG_R2_BATCH'))
-    expect(first.state.qrCeremonyIndex).toBe(3)
-    expect(first.effects).toEqual([{ type: 'awaitScan', slot: 3, messageType: 'DKG_R2_BATCH' }])
-
-    const second = run(first.state, message(3, 'DKG_R2_BATCH'))
-    expect(second.state.phase).toBe('FINALIZED')
-    expect(second.state.finalFingerprint).toBe(deriveMockFingerprint(GROUP_ID, 'final'))
-    expect(second.state.qrCeremonyIndex).toBe(4)
-    expect(second.effects).toEqual([{ type: 'display', slots: [2], messageType: 'DKG_R2_INBOX' }])
-
-    const inboxB = run(second.state, { type: 'QR_PHONE_SCANNED', slot: 2 })
-    expect(inboxB.state.qrCeremonyIndex).toBe(5)
-    expect(inboxB.effects).toEqual([{ type: 'display', slots: [3], messageType: 'DKG_R2_INBOX' }])
-
-    const inboxC = run(inboxB.state, { type: 'QR_PHONE_SCANNED', slot: 3 })
-    expect(inboxC.state.phase).toBe('KEYSET_VERIFIED')
-    expect(inboxC.effects).toEqual([])
-    expect(verifyPageDevices(inboxC.state).map(d => d.confirmed)).toEqual([false, false])
-
-    const activated = run(inboxC.state, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
-    expect(activated.state.phase).toBe('ACTIVATED')
-    expect(activated.effects).toEqual([
-      {
-        type: 'persistGroup',
-        record: expect.objectContaining({
-          transportKind: 'qr',
-          devices: [OWNER, PHONES[2], PHONES[3]]
-        })
-      }
-    ])
-  })
-
   test('ignores foreign or out-of-order messages', () => {
     const waiting = run(start('2-of-3', 'ble'), ...blePairing(2)).state
     const answer = { code: CODE, device: PHONES[2] }
@@ -1113,19 +939,5 @@ test.describe('multisig create-session', () => {
     expect(final.state.phase).toBe('ABORTED')
     expect(final.state.abortReason).toBe('fingerprint_mismatch')
     expectGuardiansEmpty(final.state)
-
-    const atR1Check = run(
-      start('3-of-3', 'qr'),
-      ...qrPair(2),
-      ...qrPair(3),
-      { type: 'CONTINUE' },
-      { type: 'QR_PHONE_SCANNED', slot: 2 },
-      { type: 'QR_PHONE_SCANNED', slot: 3 }
-    ).state
-    const r1 = reduceCreateSession(atR1Check, { type: 'FINGERPRINT_REJECTED', stage: 'r1' })
-    expect(r1.state.phase).toBe('ABORTED')
-    expect(r1.state.abortReason).toBe('fingerprint_mismatch')
-    // QR has no channel back to the phones, so an abort has nothing to send.
-    expect(r1.effects).toEqual([])
   })
 })

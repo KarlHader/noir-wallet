@@ -169,6 +169,29 @@ export class Coordinator {
     }
   }
   /**
+   * Accept a signer's refusal. The session ends; one signer out means this selection no longer reaches
+   * the threshold.
+   * @param {Uint8Array} envelope
+   * @returns {Array<any>}
+   */
+  accept_reject(envelope) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(envelope, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.coordinator_accept_reject(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * Collect a `SIGN_SHARE` envelope.
    * @param {Uint8Array} envelope
    */
@@ -336,6 +359,34 @@ export class Coordinator {
       wasm.__wbindgen_add_to_stack_pointer(16)
     }
   }
+  /**
+   * Report the outcome to every signer after aggregation.
+   *
+   * `status`: 0 = broadcasted (then `txid` is required), 1 = failed. Returns `[[slot, envelope], ...]`.
+   * @param {number} status
+   * @param {Uint8Array | null | undefined} txid
+   * @param {string} note
+   * @returns {Array<any>}
+   */
+  report_result(status, txid, note) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      var ptr0 = isLikeNone(txid) ? 0 : passArray8ToWasm0(txid, wasm.__wbindgen_export)
+      var len0 = WASM_VECTOR_LEN
+      const ptr1 = passStringToWasm0(note, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len1 = WASM_VECTOR_LEN
+      wasm.coordinator_report_result(retptr, this.__wbg_ptr, status, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
 }
 if (Symbol.dispose) Coordinator.prototype[Symbol.dispose] = Coordinator.prototype.free
 
@@ -437,11 +488,14 @@ export class Dkg {
    * @param {number} participants
    * @param {number} threshold
    * @param {number} slot
+   * @param {Uint8Array} session_id
    */
-  constructor(participants, threshold, slot) {
+  constructor(participants, threshold, slot, session_id) {
     try {
       const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-      wasm.dkg_new(retptr, participants, threshold, slot)
+      const ptr0 = passArray8ToWasm0(session_id, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.dkg_new(retptr, participants, threshold, slot, ptr0, len0)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
       var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
@@ -457,6 +511,9 @@ export class Dkg {
   }
   /**
    * Round 1: generate this device's contribution.
+   *
+   * The contribution is bound to this ceremony's session id: a later round refuses a broadcast that
+   * names a different one, so a round-1 secret cannot be carried into a second ceremony.
    * @returns {Dkg1}
    */
   part1() {
@@ -947,6 +1004,131 @@ export class EnvelopeCodec {
     }
   }
   /**
+   * Build a `SIGN_REJECT` envelope. `code`: 1 user declined, 2 verification failed, 3 malformed, 4 expired.
+   * @param {Uint8Array} session_id
+   * @param {number} sender
+   * @param {number} recipient
+   * @param {number} sequence
+   * @param {number} code
+   * @param {string} note
+   * @returns {Uint8Array}
+   */
+  static buildSignReject(session_id, sender, recipient, sequence, code, note) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(session_id, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passStringToWasm0(note, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len1 = WASM_VECTOR_LEN
+      wasm.envelopecodec_buildSignReject(
+        retptr,
+        ptr0,
+        len0,
+        sender,
+        recipient,
+        sequence,
+        code,
+        ptr1,
+        len1
+      )
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Build a `SIGN_RESULT` envelope. `status`: 0 broadcasted (txid required), 1 failed (no txid).
+   * @param {Uint8Array} session_id
+   * @param {number} sender
+   * @param {number} recipient
+   * @param {number} sequence
+   * @param {number} status
+   * @param {Uint8Array | null | undefined} txid
+   * @param {string} note
+   * @returns {Uint8Array}
+   */
+  static buildSignResult(session_id, sender, recipient, sequence, status, txid, note) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(session_id, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      var ptr1 = isLikeNone(txid) ? 0 : passArray8ToWasm0(txid, wasm.__wbindgen_export)
+      var len1 = WASM_VECTOR_LEN
+      const ptr2 = passStringToWasm0(note, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len2 = WASM_VECTOR_LEN
+      wasm.envelopecodec_buildSignResult(
+        retptr,
+        ptr0,
+        len0,
+        sender,
+        recipient,
+        sequence,
+        status,
+        ptr1,
+        len1,
+        ptr2,
+        len2
+      )
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Build a signing-session envelope; the round comes from the message type.
+   *
+   * Use this instead of `build` for signing messages: `build` takes the round as an argument, which is
+   * how a caller ends up sending a round the receiver refuses.
+   * @param {number} msg_type
+   * @param {number} sender
+   * @param {number} recipient
+   * @param {number} sequence
+   * @param {Uint8Array} session_id
+   * @param {Uint8Array} payload
+   * @returns {Uint8Array}
+   */
+  static buildSigning(msg_type, sender, recipient, sequence, session_id, payload) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(session_id, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(payload, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.envelopecodec_buildSigning(
+        retptr,
+        msg_type,
+        sender,
+        recipient,
+        sequence,
+        ptr0,
+        len0,
+        ptr1,
+        len1
+      )
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * The slot reserved for the coordinator, which may hold no share.
    * @returns {number}
    */
@@ -1029,6 +1211,95 @@ export class EnvelopeCodec {
     return takeObject(ret)
   }
   /**
+   * Decode a `SIGN_REJECT` envelope into `[sender, sequence, sessionId, code, note]`.
+   * @param {Uint8Array} bytes
+   * @returns {Array<any>}
+   */
+  static readSignReject(bytes) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.envelopecodec_readSignReject(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Decode a `SIGN_RESULT` envelope into `[sender, sequence, sessionId, status, txid|null, note]`.
+   * @param {Uint8Array} bytes
+   * @returns {Array<any>}
+   */
+  static readSignResult(bytes) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.envelopecodec_readSignResult(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Read a signing-session envelope, refusing a type outside the signing set and a round that disagrees
+   * with its type. Returns the same shape as `decode`.
+   * @param {Uint8Array} bytes
+   * @returns {Array<any>}
+   */
+  static readSigning(bytes) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.envelopecodec_readSigning(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Wire value of a reject code, by the name the phone uses.
+   * @param {string} name
+   * @returns {number}
+   */
+  static rejectCode(name) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      wasm.envelopecodec_rejectCode(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return r0
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * Wire value of a **reserved** type: the number exists in the protocol table, but no payload
    * format is defined for it. Prefer [`Self::msg_type`]; this exists so a caller can decode a
    * message it received rather than invent one it should not send.
@@ -1059,6 +1330,33 @@ export class EnvelopeCodec {
   static reserved_msg_types() {
     const ret = wasm.envelopecodec_reserved_msg_types()
     return takeObject(ret)
+  }
+  /**
+   * The `round` a message type belongs to, per the spec's message table.
+   *
+   * The value is enforced only inside a session: `readSigning` and the signing sessions refuse an
+   * envelope whose round disagrees with its type. Nothing checks the DKG rounds, so this is a lookup
+   * for callers that fill the field themselves — a wrong value produces a message the peer refuses,
+   * not a local error.
+   * @param {string} name
+   * @returns {number}
+   */
+  static round_of(name) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      wasm.envelopecodec_round_of(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return r0
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
   }
 }
 if (Symbol.dispose) EnvelopeCodec.prototype[Symbol.dispose] = EnvelopeCodec.prototype.free
@@ -1476,6 +1774,262 @@ export class MessageSet {
   }
 }
 if (Symbol.dispose) MessageSet.prototype[Symbol.dispose] = MessageSet.prototype.free
+
+/**
+ * The Noise XX channel used under BLE.
+ *
+ * WebCrypto has no BLAKE2s, so this cannot be written in the extension: a hand-rolled Noise state
+ * machine in JavaScript would be a third implementation of a security-critical protocol. GATT reads and
+ * writes stay in the host — this only turns plaintext into bytes and back.
+ *
+ * XX is three messages: initiator writes, responder replies, initiator finishes. After that both sides
+ * can `encrypt`/`decrypt`.
+ *
+ * **Message 1's payload is plaintext.** Noise has no key before the first DH, so nothing that matters may
+ * be carried there; the initiator's static key is only revealed and proved in message 3. Use message 1
+ * for nothing, or for data you would be happy to see forged.
+ */
+export class NoiseXx {
+  static __wrap(ptr) {
+    const obj = Object.create(NoiseXx.prototype)
+    obj.__wbg_ptr = ptr
+    NoiseXxFinalization.register(obj, obj.__wbg_ptr, obj)
+    return obj
+  }
+  __destroy_into_raw() {
+    const ptr = this.__wbg_ptr
+    this.__wbg_ptr = 0
+    NoiseXxFinalization.unregister(this)
+    return ptr
+  }
+  free() {
+    const ptr = this.__destroy_into_raw()
+    wasm.__wbg_noisexx_free(ptr, 0)
+  }
+  /**
+   * Decrypt one payload from the peer.
+   * @param {Uint8Array} ciphertext
+   * @returns {Uint8Array}
+   */
+  decrypt(ciphertext) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.noisexx_decrypt(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Encrypt one payload. Completes the handshake first if it is finished but not yet converted.
+   * @param {Uint8Array} plaintext
+   * @returns {Uint8Array}
+   */
+  encrypt(plaintext) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(plaintext, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.noisexx_encrypt(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The handshake hash. Both ends must agree; unavailable until the handshake completes.
+   * @returns {Uint8Array}
+   */
+  handshake_hash() {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.noisexx_handshake_hash(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Start the channel as the connecting side.
+   * @param {Uint8Array} static_private
+   * @param {Uint8Array} prologue
+   * @returns {NoiseXx}
+   */
+  static initiator(static_private, prologue) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(static_private, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(prologue, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.noisexx_initiator(retptr, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return NoiseXx.__wrap(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * @returns {boolean}
+   */
+  is_handshake_finished() {
+    const ret = wasm.noisexx_is_handshake_finished(this.__wbg_ptr)
+    return ret !== 0
+  }
+  /**
+   * Whether the channel is dead after an authentication failure.
+   *
+   * Noise advances the nonce before verifying the tag, so one bad message leaves the two sides out of
+   * step permanently. When this is true the host must drop the channel and handshake again — every
+   * later call returns an error.
+   * @returns {boolean}
+   */
+  is_poisoned() {
+    const ret = wasm.noisexx_is_poisoned(this.__wbg_ptr)
+    return ret !== 0
+  }
+  /**
+   * Read a handshake message from the peer, returning its payload.
+   * @param {Uint8Array} message
+   * @returns {Uint8Array}
+   */
+  read_handshake(message) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(message, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.noisexx_read_handshake(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Rotate the sending and receiving keys, as Noise's `rekey` specifies.
+   */
+  rekey() {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.noisexx_rekey(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      if (r1) {
+        throw takeObject(r0)
+      }
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The peer's static public key, once the handshake has revealed it.
+   * @returns {Uint8Array | undefined}
+   */
+  remote_static() {
+    const ret = wasm.noisexx_remote_static(this.__wbg_ptr)
+    return takeObject(ret)
+  }
+  /**
+   * Start the channel as the accepting side.
+   * @param {Uint8Array} static_private
+   * @param {Uint8Array} prologue
+   * @returns {NoiseXx}
+   */
+  static responder(static_private, prologue) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(static_private, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(prologue, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.noisexx_responder(retptr, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return NoiseXx.__wrap(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The X25519 public key belonging to a static private key.
+   * @param {Uint8Array} private_key
+   * @returns {Uint8Array}
+   */
+  static static_public_from(private_key) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(private_key, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.noisexx_static_public_from(retptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Write the next handshake message for this side.
+   * @param {Uint8Array} payload
+   * @returns {Uint8Array}
+   */
+  write_handshake(payload) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(payload, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.noisexx_write_handshake(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+}
+if (Symbol.dispose) NoiseXx.prototype[Symbol.dispose] = NoiseXx.prototype.free
 
 export class PaymentRequest {
   static __wrap(ptr) {
@@ -2094,6 +2648,155 @@ export class Proposal {
 if (Symbol.dispose) Proposal.prototype[Symbol.dispose] = Proposal.prototype.free
 
 /**
+ * The roster hash, computed here so no other language keeps its own copy of the encoding.
+ *
+ * The wire format is fixed by agreement with the mobile client; the domain tag is concatenated raw,
+ * every field carries a 4-byte big-endian length, and numbers are canonical decimal text. A different
+ * encoding produces a different hash, and two devices that disagree on the roster hash will refuse to
+ * proceed — which is the point, but makes a silent drift expensive to debug.
+ */
+export class RosterManifest {
+  __destroy_into_raw() {
+    const ptr = this.__wbg_ptr
+    this.__wbg_ptr = 0
+    RosterManifestFinalization.unregister(this)
+    return ptr
+  }
+  free() {
+    const ptr = this.__destroy_into_raw()
+    wasm.__wbg_rostermanifest_free(ptr, 0)
+  }
+  /**
+   * Add a participant. Call order does not matter: the encoding sorts by slot.
+   * @param {number} slot
+   * @param {Uint8Array} identity_public_key
+   * @param {Uint8Array} transport_public_key
+   */
+  add_participant(slot, identity_public_key, transport_public_key) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(identity_public_key, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passArray8ToWasm0(transport_public_key, wasm.__wbindgen_export)
+      const len1 = WASM_VECTOR_LEN
+      wasm.rostermanifest_add_participant(retptr, this.__wbg_ptr, slot, ptr0, len0, ptr1, len1)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      if (r1) {
+        throw takeObject(r0)
+      }
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The exact bytes that are hashed. For test vectors and debugging.
+   * @returns {Uint8Array}
+   */
+  canonical_bytes() {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.rostermanifest_canonical_bytes(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * `SHA-256(canonical_bytes)`.
+   * @returns {Uint8Array}
+   */
+  hash() {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.rostermanifest_hash(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * Lowercase hex of the hash, for comparing against the agreed vectors.
+   * @returns {string}
+   */
+  hash_hex() {
+    let deferred2_0
+    let deferred2_1
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.rostermanifest_hash_hex(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true)
+      var ptr1 = r0
+      var len1 = r1
+      if (r3) {
+        ptr1 = 0
+        len1 = 0
+        throw takeObject(r2)
+      }
+      deferred2_0 = ptr1
+      deferred2_1 = len1
+      return getStringFromWasm0(ptr1, len1)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+      wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1)
+    }
+  }
+  /**
+   * @param {string} group_id
+   * @param {number} protocol_version
+   * @param {string} ciphersuite
+   * @param {number} threshold
+   * @param {number} participants
+   */
+  constructor(group_id, protocol_version, ciphersuite, threshold, participants) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(group_id, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      const ptr1 = passStringToWasm0(ciphersuite, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len1 = WASM_VECTOR_LEN
+      wasm.rostermanifest_new(
+        retptr,
+        ptr0,
+        len0,
+        protocol_version,
+        ptr1,
+        len1,
+        threshold,
+        participants
+      )
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      this.__wbg_ptr = r0
+      RosterManifestFinalization.register(this, this.__wbg_ptr, this)
+      return this
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+}
+if (Symbol.dispose) RosterManifest.prototype[Symbol.dispose] = RosterManifest.prototype.free
+
+/**
  * Sealed, authenticated messages between ceremony participants.
  *
  * The DKG needs this for its round-2 packages (handled internally), and KEYSET_SETUP needs it for
@@ -2156,6 +2859,33 @@ export class Sealed {
       const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
       _assertClass(statics, MessageSet)
       wasm.sealed_prologue(retptr, statics.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
+   * The prologue with the round-1 transcript folded in: the roster plus what each participant said.
+   *
+   * Use this instead of `prologue` once round-1 broadcasts exist. A coordinator that relays a different
+   * round-1 set to different devices then cannot have its round-2 packages opened, because each device
+   * seals under the transcript it was actually shown.
+   * @param {MessageSet} statics
+   * @param {MessageSet} round1
+   * @returns {Uint8Array}
+   */
+  static prologueWithTranscript(statics, round1) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      _assertClass(statics, MessageSet)
+      _assertClass(round1, MessageSet)
+      wasm.sealed_prologueWithTranscript(retptr, statics.__wbg_ptr, round1.__wbg_ptr)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
       var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
@@ -2578,6 +3308,29 @@ export class ShareBackup {
     }
   }
   /**
+   * The 32-byte signing scalar, for a 24-word backup.
+   *
+   * This is all a BIP39 mnemonic can carry (256 bits); `from_scalar` rebuilds the rest from public
+   * data. **Drop the reference as soon as the words are encoded** — do not keep it, return it, or log
+   * it.
+   * @returns {Uint8Array}
+   */
+  signing_scalar() {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      wasm.sharebackup_signing_scalar(retptr, this.__wbg_ptr)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * @returns {number}
    */
   slot() {
@@ -2710,6 +3463,28 @@ export class Signer {
     }
   }
   /**
+   * Accept the coordinator's outcome report: `[status, txid | null, note]`.
+   * @param {Uint8Array} envelope
+   * @returns {Array<any>}
+   */
+  on_result(envelope) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passArray8ToWasm0(envelope, wasm.__wbindgen_export)
+      const len0 = WASM_VECTOR_LEN
+      wasm.signer_on_result(retptr, this.__wbg_ptr, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
+    }
+  }
+  /**
    * Consume `SIGN_PAYLOAD`. Returns `[sighash: Uint8Array, alphas: Uint8Array]` for the caller to
    * verify against the PCZT **before** approving.
    * @param {Uint8Array} envelope
@@ -2749,6 +3524,30 @@ export class Signer {
     } finally {
       wasm.__wbindgen_add_to_stack_pointer(16)
       wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1)
+    }
+  }
+  /**
+   * Refuse to sign, and end the session. `code`: 1 = user declined, 2 = verification failed,
+   * 3 = malformed payload, 4 = expired.
+   * @param {number} code
+   * @param {string} note
+   * @returns {Uint8Array}
+   */
+  reject(code, note) {
+    try {
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const ptr0 = passStringToWasm0(note, wasm.__wbindgen_export, wasm.__wbindgen_export2)
+      const len0 = WASM_VECTOR_LEN
+      wasm.signer_reject(retptr, this.__wbg_ptr, code, ptr0, len0)
+      var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
+      var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
+      var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
+      if (r2) {
+        throw takeObject(r1)
+      }
+      return takeObject(r0)
+    } finally {
+      wasm.__wbindgen_add_to_stack_pointer(16)
     }
   }
   /**
@@ -5680,7 +6479,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16679(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16680(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -5720,7 +6519,7 @@ function __wbg_get_imports(memory) {
           const a = state0.a
           state0.a = 0
           try {
-            return __wasm_bindgen_func_elem_16679(a, state0.b, arg0, arg1)
+            return __wasm_bindgen_func_elem_16680(a, state0.b, arg0, arg1)
           } finally {
             state0.a = a
           }
@@ -6028,22 +6827,22 @@ function __wbg_get_imports(memory) {
     },
     __wbindgen_cast_0000000000000001: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 4216, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12559)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12560)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000002: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5432, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16662)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16663)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000003: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 5434, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16664)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_16665)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000004: function (arg0, arg1) {
       // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 4187, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12482)
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_12483)
       return addHeapObject(ret)
     },
     __wbindgen_cast_0000000000000005: function (arg0) {
@@ -6110,22 +6909,22 @@ function __wbg_get_imports(memory) {
   }
 }
 
-function __wasm_bindgen_func_elem_12482(arg0, arg1) {
-  wasm.__wasm_bindgen_func_elem_12482(arg0, arg1)
+function __wasm_bindgen_func_elem_12483(arg0, arg1) {
+  wasm.__wasm_bindgen_func_elem_12483(arg0, arg1)
 }
 
-function __wasm_bindgen_func_elem_12559(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_12559(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_12560(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_12560(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16664(arg0, arg1, arg2) {
-  wasm.__wasm_bindgen_func_elem_16664(arg0, arg1, addHeapObject(arg2))
+function __wasm_bindgen_func_elem_16665(arg0, arg1, arg2) {
+  wasm.__wasm_bindgen_func_elem_16665(arg0, arg1, addHeapObject(arg2))
 }
 
-function __wasm_bindgen_func_elem_16662(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_16663(arg0, arg1, arg2) {
   try {
     const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    wasm.__wasm_bindgen_func_elem_16662(retptr, arg0, arg1, addHeapObject(arg2))
+    wasm.__wasm_bindgen_func_elem_16663(retptr, arg0, arg1, addHeapObject(arg2))
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
     if (r1) {
@@ -6136,8 +6935,8 @@ function __wasm_bindgen_func_elem_16662(arg0, arg1, arg2) {
   }
 }
 
-function __wasm_bindgen_func_elem_16679(arg0, arg1, arg2, arg3) {
-  wasm.__wasm_bindgen_func_elem_16679(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
+function __wasm_bindgen_func_elem_16680(arg0, arg1, arg2, arg3) {
+  wasm.__wasm_bindgen_func_elem_16680(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3))
 }
 
 const __wbindgen_enum_ReadableStreamType = ['bytes']
@@ -6228,6 +7027,10 @@ const MessageSetFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_messageset_free(ptr, 1))
+const NoiseXxFinalization =
+  typeof FinalizationRegistry === 'undefined'
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_noisexx_free(ptr, 1))
 const PaymentRequestFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
@@ -6248,6 +7051,10 @@ const ProposalFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_proposal_free(ptr, 1))
+const RosterManifestFinalization =
+  typeof FinalizationRegistry === 'undefined'
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_rostermanifest_free(ptr, 1))
 const SealedFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
