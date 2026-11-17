@@ -11,6 +11,8 @@ export interface ShieldSourceTokenPickerItem {
   readonly key: string
   readonly assetId: string
   readonly symbol: string
+  readonly searchTerms?: readonly string[]
+  readonly contractAddress?: string
   readonly iconUrl?: string
   readonly chainName?: string
   readonly chainId?: string

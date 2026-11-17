@@ -3,7 +3,8 @@ import {
   shieldSourceSelectionItem,
   type ShieldSourceTokenPickerItem
 } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
-import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { ShieldSourceTokenSelector } from '@/popup/components/tokens/ShieldSourceTokenSelector'
+import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
 import { ConfidentialDestinationSelector } from '@/popup/components/tokens/ConfidentialDestinationSelector'
 import {
   TokenSelectorContent,
@@ -213,7 +214,6 @@ import {
   createSwapTokenPreferenceScope,
   getDefaultSwapSourceAssetId,
   getSwapDestinationTokens,
-  rankTokenSearchFields,
   resolveSwapTokenSelection,
   shouldWaitForSwapDestination
 } from '@/popup/services/swap-token-selection'
@@ -373,8 +373,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const [shieldZecPickerOpen, setShieldZecPickerOpen] = useState(false)
   const [shieldDestinationPickerOpen, setShieldDestinationPickerOpen] = useState(false)
-  const [shieldPickerSearch, setShieldPickerSearch] = useState('')
   const [shieldPickerNetwork, setShieldPickerNetwork] = useState('all')
+  const shieldPickerReady = useTokenSelectorReady(shieldZecPickerOpen)
   const confidentialShieldSwapActive = shieldConfidentialSwapActive({
     shieldSwapSelected,
     shieldZecSource
@@ -1061,10 +1061,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       shieldNativeZecSwap
         ? nativeIntentsCatalog
         : mergeTokenCatalogs(
-            confidentialShieldSwapActive || privateCatalogRequested || shieldZecPickerOpen
+            confidentialShieldSwapActive || privateCatalogRequested || shieldPickerReady
               ? swap.sourceTokens
               : swap.sourceTokens.filter(isZecToken),
-            confidentialShieldSwapActive || privateCatalogRequested || shieldZecPickerOpen
+            confidentialShieldSwapActive || privateCatalogRequested || shieldPickerReady
               ? swap.crossChainDestinationTokens
               : swap.crossChainDestinationTokens.filter(isZecToken)
           ),
@@ -1073,17 +1073,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       nativeIntentsCatalog,
       confidentialShieldSwapActive,
       privateCatalogRequested,
-      shieldZecPickerOpen,
+      shieldPickerReady,
       swap.sourceTokens,
       swap.crossChainDestinationTokens
     ]
   )
   const shieldManagedAssets = useMemo(
     () =>
-      privateCatalogRequested || shieldZecPickerOpen
+      privateCatalogRequested || shieldPickerReady
         ? resolveManagedIntentsCatalog(shieldCatalogTokens)
         : [],
-    [privateCatalogRequested, shieldZecPickerOpen, shieldCatalogTokens]
+    [privateCatalogRequested, shieldPickerReady, shieldCatalogTokens]
   )
   const managedAssetsByChainAndProtocolId = useMemo(
     () =>
@@ -1094,24 +1094,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
   const shieldDisplayBalances = useMemo(() => shieldPortfolioBalances(portfolio), [portfolio])
   const shieldFundingCatalogTokens = useMemo(
-    () => (shieldZecPickerOpen ? shieldCatalogTokens : shieldCatalogTokens.filter(isZecToken)),
-    [shieldCatalogTokens, shieldZecPickerOpen]
+    () => (shieldPickerReady ? shieldCatalogTokens : shieldCatalogTokens.filter(isZecToken)),
+    [shieldCatalogTokens, shieldPickerReady]
   )
   const shieldFundingOptions = useMemo(
     () =>
       listShieldFundingAssets(
         portfolio,
-        shieldZecPickerOpen ? shieldManagedAssets : [],
+        shieldPickerReady ? shieldManagedAssets : [],
         shieldFundingCatalogTokens,
         currentNetwork
       ),
-    [
-      portfolio,
-      shieldManagedAssets,
-      shieldFundingCatalogTokens,
-      currentNetwork,
-      shieldZecPickerOpen
-    ]
+    [portfolio, shieldManagedAssets, shieldFundingCatalogTokens, currentNetwork, shieldPickerReady]
   )
   const shieldSourceChoices = useMemo(() => {
     const funded = shieldFundingSources(shieldFundingOptions, shieldDisplayBalances)
@@ -1186,6 +1180,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           key: asset.asset.asset.id,
           assetId: asset.asset.asset.id,
           symbol: asset.asset.metadata.symbol,
+          contractAddress: asset.asset.asset.reference,
+          searchTerms: [asset.asset.metadata.name],
           iconUrl: asset.asset.metadata.iconUrl,
           chainName: asset.chain.chain.displayName,
           chainId: asset.chain.chain.id,
@@ -1208,23 +1204,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     shieldDisplayBalances,
     shieldCatalogTokens
   ])
-  const visibleShieldPickerRows = shieldPickerRows
-  const shieldPickerNetworks = useMemo(() => {
-    return [
-      ...new Map(
-        visibleShieldPickerRows
-          .filter(row => row.chainId)
-          .map(row => [
-            row.chainId,
-            {
-              id: row.chainId ?? '',
-              label: row.chainId === 'zec' ? 'Zcash' : (row.chainName ?? ''),
-              iconChain: row.badgeBlockchain ?? row.chainId ?? ''
-            }
-          ])
-      ).values()
-    ]
-  }, [visibleShieldPickerRows])
   const nativeZecPickerRows = useMemo(
     () =>
       shieldPickerRows.filter(
@@ -6234,7 +6213,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         return
       }
       if (type === 'in' && shieldNativeZecSwap) {
-        setShieldPickerSearch('')
         setShieldPickerNetwork(
           swap.isZecSource
             ? 'zec'
@@ -8803,70 +8781,41 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         />
       )}
       <TokenSelectorDialog open={shieldZecPickerOpen} onOpenChange={setShieldZecPickerOpen}>
-        <TokenSelectorView
-          accountScope={effectiveAccount}
-          search={shieldPickerSearch}
-          onSearchChange={setShieldPickerSearch}
-          networks={shieldPickerNetworks}
-          selectedNetwork={shieldPickerNetwork}
-          onNetworkChange={setShieldPickerNetwork}
-          items={visibleShieldPickerRows
-            .filter(row => shieldPickerNetwork === 'all' || row.chainId === shieldPickerNetwork)
-            .filter(
-              row =>
-                rankTokenSearchFields(
-                  { symbol: row.symbol, assetId: row.assetId, searchTerms: [row.chainName ?? ''] },
-                  shieldPickerSearch
-                ) < 99
-            )
-            .sort(
-              (left, right) =>
-                rankTokenSearchFields(
-                  {
-                    symbol: left.symbol,
-                    assetId: left.assetId,
-                    searchTerms: [left.chainName ?? '']
-                  },
-                  shieldPickerSearch
-                ) -
-                rankTokenSearchFields(
-                  {
-                    symbol: right.symbol,
-                    assetId: right.assetId,
-                    searchTerms: [right.chainName ?? '']
-                  },
-                  shieldPickerSearch
-                )
-            )
-            .map(row => shieldSourceSelectionItem(row, balancesHidden))}
-          selectedKey={
-            shieldZecSource === 'native-shielded'
-              ? SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
-              : shieldZecSource === 'native-transparent'
-                ? SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
-                : SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
-          }
-          onSelect={selectionId => {
-            if (selectionId === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID)
-              selectNativeZecSource('transparent')
-            else if (selectionId === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
-              activateShieldNativeZecSwap()
-            else if (selectionId === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
-              activateShieldIntentsZecSwap()
-            else if (shieldNativeZecSwap) {
-              setShieldZecSource('intents')
-              navigate(
-                `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
-              )
-            } else {
-              setShieldZecSource('intents')
-              navigate(
-                `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
-              )
+        {shieldZecPickerOpen && (
+          <ShieldSourceTokenSelector
+            rows={shieldPickerRows}
+            balancesHidden={balancesHidden}
+            initialNetwork={shieldPickerNetwork}
+            loading={!shieldPickerReady}
+            selectedKey={
+              shieldZecSource === 'native-shielded'
+                ? SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+                : shieldZecSource === 'native-transparent'
+                  ? SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
+                  : SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
             }
-            setShieldZecPickerOpen(false)
-          }}
-        />
+            onSelect={selectionId => {
+              if (selectionId === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID)
+                selectNativeZecSource('transparent')
+              else if (selectionId === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
+                activateShieldNativeZecSwap()
+              else if (selectionId === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
+                activateShieldIntentsZecSwap()
+              else if (shieldNativeZecSwap) {
+                setShieldZecSource('intents')
+                navigate(
+                  `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
+                )
+              } else {
+                setShieldZecSource('intents')
+                navigate(
+                  `/shield-swap?${new URLSearchParams({ provider: 'near-confidential', source: selectionId })}`
+                )
+              }
+              setShieldZecPickerOpen(false)
+            }}
+          />
+        )}
       </TokenSelectorDialog>
     </div>
   )

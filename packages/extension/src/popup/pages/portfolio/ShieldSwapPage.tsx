@@ -22,13 +22,11 @@ import { SwapAssetCard, SwapProviderCard } from '@/popup/components/swap/SwapInp
 import { getSwapAmountValues } from '@/popup/components/swap/swap-estimate'
 import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { InlineError } from '@/popup/components/common/InlineError'
-import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { ShieldSourceTokenSelector } from '@/popup/components/tokens/ShieldSourceTokenSelector'
+import { useTokenSelectorReady } from '@/popup/hooks/useTokenSelectorWindow'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { ConfidentialDestinationSelector } from '@/popup/components/tokens/ConfidentialDestinationSelector'
-import {
-  shieldSourceSelectionItem,
-  type ShieldSourceTokenPickerItem
-} from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
+import { type ShieldSourceTokenPickerItem } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
@@ -51,7 +49,6 @@ import {
   isSwapQuoteTimeout,
   SWAP_QUOTE_DISPLAY_ERROR
 } from '@/popup/services/swap-quote-error-message'
-import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import {
   hasShieldTransferStarted,
   formatShieldQuoteTime,
@@ -162,8 +159,7 @@ function ShieldSwapForm({
   const slippage = useSwapPreferences(state => state.slippage)
   const slippageBps = Math.round(slippage * 100)
   const [picker, setPicker] = useState<'from' | 'to' | null>(null)
-  const [search, setSearch] = useState('')
-  const [pickerNetwork, setPickerNetwork] = useState('all')
+  const fromPickerReady = useTokenSelectorReady(active && picker === 'from')
   useEffect(() => {
     if (!active) return
     let current = true
@@ -172,13 +168,6 @@ function ShieldSwapForm({
         const cached = await swapTokenCatalogClient.readCached()
         if (!current) return
         if (cached.length > 0) setDirectoryTokens(previous => previous ?? cached)
-        if (
-          picker !== 'from' &&
-          !routeSourceAssetId &&
-          !routeDestinationAssetId &&
-          (cached.length > 0 || parentTokens.length > 0)
-        )
-          return
         const refreshed = await swapTokenCatalogClient.refresh()
         if (current && refreshed.length > 0) setDirectoryTokens(refreshed)
       } catch {
@@ -189,7 +178,7 @@ function ShieldSwapForm({
     return () => {
       current = false
     }
-  }, [active, picker, parentTokens.length, routeSourceAssetId, routeDestinationAssetId])
+  }, [active])
   const tokens = useMemo(() => {
     const available = directoryTokens ?? getCachedTokens()
     const directoryIds = new Set(available.map(token => token.assetId))
@@ -262,8 +251,6 @@ function ShieldSwapForm({
     setToId(routeDestinationAssetId)
     setAmount('')
     setPicker(null)
-    setSearch('')
-    setPickerNetwork('all')
     setPrepared(null)
     setActiveActivity(null)
     setBalanceRefreshRequired(false)
@@ -396,29 +383,10 @@ function ShieldSwapForm({
     tokenInPrice: fromToken?.price,
     tokenOutPrice: toToken?.price
   })
-  const pickable = useMemo(() => {
-    if (picker !== 'from') return []
-    const excluded = to?.managed.protocolAssetId
-    const rank = (asset: ShieldFundingAsset) =>
-      rankTokenSearchFields(
-        {
-          symbol: asset.asset.metadata.symbol,
-          name: asset.asset.metadata.name,
-          contractAddress: asset.asset.asset.reference,
-          assetId: asset.asset.asset.id
-        },
-        search
-      )
-    return sourceChoices
-      .filter(asset => asset.managed.protocolAssetId !== excluded && rank(asset) < 99)
-      .sort((left, right) => rank(left) - rank(right))
-  }, [picker, to?.managed.protocolAssetId, search, sourceChoices])
   const fromPickerItems = useMemo((): readonly ShieldSourceTokenPickerItem[] => {
-    if (picker !== 'from') return []
-    const rank = (symbol: string, searchTerms: readonly string[]) =>
-      rankTokenSearchFields({ symbol, searchTerms }, search)
+    if (!fromPickerReady) return []
     const transparentZecRow: ShieldSourceTokenPickerItem[] =
-      nativeZecTransparentRaw !== null && rank('ZEC', ['Zcash', 'transparent']) < 99
+      nativeZecTransparentRaw !== null
         ? [
             {
               key: SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID,
@@ -434,44 +402,42 @@ function ShieldSwapForm({
             }
           ]
         : []
-    const zecRows = zecSourceOptions
+    const zecRows = zecSourceOptions.map(option =>
+      Object.freeze({
+        key: option.selectionId,
+        assetId: option.selectionId,
+        symbol: option.symbol,
+        iconUrl: option.iconUrl,
+        chainName: option.chainName,
+        zcashFundingSource: option.kind === 'native-shielded' ? ('shielded' as const) : undefined,
+        chainId: option.badgeBlockchain,
+        badgeBlockchain: option.badgeBlockchain,
+        nativeIconChain: 'zcash',
+        availableRaw: option.availableRaw,
+        decimals: option.decimals,
+        priceUsd:
+          (option.intentsWalletAssetId
+            ? tokenPrices.get(option.intentsWalletAssetId)
+            : undefined) ??
+          (option.kind === 'native-shielded'
+            ? tokens.find(token => token.blockchain === 'zec' && token.symbol === 'ZEC')?.price
+            : null),
+        disabledReason: option.disabledReason
+      })
+    )
+    const nonZecRows = sourceChoices
       .filter(
-        option =>
-          rank(option.symbol, [
-            option.chainName,
-            option.kind === 'intents' ? 'confidential' : 'shield'
-          ]) < 99
+        asset =>
+          asset.managed.protocolAssetId !== ZEC_ZCASH_ASSET &&
+          asset.managed.protocolAssetId !== to?.managed.protocolAssetId
       )
-      .map(option =>
-        Object.freeze({
-          key: option.selectionId,
-          assetId: option.selectionId,
-          symbol: option.symbol,
-          iconUrl: option.iconUrl,
-          chainName: option.chainName,
-          zcashFundingSource: option.kind === 'native-shielded' ? ('shielded' as const) : undefined,
-          chainId: option.badgeBlockchain,
-          badgeBlockchain: option.badgeBlockchain,
-          nativeIconChain: 'zcash',
-          availableRaw: option.availableRaw,
-          decimals: option.decimals,
-          priceUsd:
-            (option.intentsWalletAssetId
-              ? tokenPrices.get(option.intentsWalletAssetId)
-              : undefined) ??
-            (option.kind === 'native-shielded'
-              ? tokens.find(token => token.blockchain === 'zec' && token.symbol === 'ZEC')?.price
-              : null),
-          disabledReason: option.disabledReason
-        })
-      )
-    const nonZecRows = pickable
-      .filter(asset => asset.managed.protocolAssetId !== ZEC_ZCASH_ASSET)
       .map(asset =>
         Object.freeze({
           key: asset.asset.asset.id,
           assetId: asset.asset.asset.id,
           symbol: asset.asset.metadata.symbol,
+          contractAddress: asset.asset.asset.reference,
+          searchTerms: [asset.asset.metadata.name, asset.asset.asset.reference],
           iconUrl: asset.asset.metadata.iconUrl,
           chainName: asset.chain.chain.displayName,
           chainId: asset.chain.chain.id,
@@ -485,49 +451,17 @@ function ShieldSwapForm({
           priceUsd: tokenPrices.get(asset.managed.protocolAssetId) ?? null
         })
       )
-    return Object.freeze(
-      [...transparentZecRow, ...zecRows, ...nonZecRows].sort(
-        (left, right) =>
-          rank(left.symbol, [left.chainName ?? '']) - rank(right.symbol, [right.chainName ?? ''])
-      )
-    )
+    return Object.freeze([...transparentZecRow, ...zecRows, ...nonZecRows])
   }, [
-    picker,
-    pickable,
-    search,
+    fromPickerReady,
+    sourceChoices,
+    to?.managed.protocolAssetId,
     zecSourceOptions,
     displayBalances,
     tokens,
     tokenPrices,
     nativeZecTransparentRaw
   ])
-  const visibleFromPickerItems = fromPickerItems
-  const pickerNetworks = useMemo(() => {
-    const networks = new Map<string, { id: string; label: string; iconChain: string }>()
-    if (picker === 'from') {
-      for (const row of visibleFromPickerItems) {
-        const id = row.chainId ?? row.badgeBlockchain
-        if (!id || networks.has(id)) continue
-        networks.set(id, {
-          id,
-          label: id === 'zec' ? 'Zcash' : (row.chainName ?? id),
-          iconChain: row.badgeBlockchain ?? id
-        })
-      }
-    }
-    return [...networks.values()]
-  }, [picker, visibleFromPickerItems])
-  const pickerItems = useMemo(
-    () =>
-      visibleFromPickerItems
-        .filter(item => {
-          if (pickerNetwork === 'all') return true
-          const chainId = item.chainId ?? item.badgeBlockchain
-          return chainId === pickerNetwork
-        })
-        .map(item => shieldSourceSelectionItem(item, hidden)),
-    [visibleFromPickerItems, pickerNetwork, hidden]
-  )
   const fromZecSource =
     from?.asset.metadata.symbol.toUpperCase() === 'ZEC'
       ? zecSourceOptions.find(option => option.intentsWalletAssetId === from?.asset.asset.id)
@@ -1061,8 +995,6 @@ function ShieldSwapForm({
           balance={hidden ? '••••' : (balance ?? '—')}
           tokenSelectDisabled={tokens.length === 0}
           onTokenSelect={() => {
-            setSearch('')
-            setPickerNetwork('all')
             setPicker('from')
           }}
           tokenSelectLocked={busy}
@@ -1140,8 +1072,6 @@ function ShieldSwapForm({
             amount={previewOutput ?? ''}
             fiatValue={toToken?.price ? toFiat : ''}
             onTokenSelect={() => {
-              setSearch('')
-              setPickerNetwork('all')
               setPicker('to')
             }}
             tokenSelectDisabled={tokens.length === 0}
@@ -1261,39 +1191,37 @@ function ShieldSwapForm({
         open={active && picker === 'from'}
         onOpenChange={open => !open && setPicker(null)}
       >
-        <TokenSelectorView
-          accountScope={account}
-          search={search}
-          onSearchChange={setSearch}
-          networks={pickerNetworks}
-          selectedNetwork={pickerNetwork}
-          onNetworkChange={setPickerNetwork}
-          items={pickerItems}
-          selectedKey={
-            zecSourceOptions.find(option => option.intentsWalletAssetId === confidentialFromAssetId)
-              ?.selectionId ??
-            fromId ??
-            undefined
-          }
-          onSelect={key => {
-            if (key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID) {
-              onSelectTransparentZecSwap?.()
-            } else if (key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID) {
-              onSelectNativeZecSwap?.()
-            } else {
-              const intents = zecSourceOptions.find(option => option.kind === 'intents')
-              setFromId(
-                key === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
-                  ? (intents?.intentsWalletAssetId ?? key)
-                  : key
-              )
-              setAmount('')
-              setError(null)
+        {active && picker === 'from' && (
+          <ShieldSourceTokenSelector
+            rows={fromPickerItems}
+            balancesHidden={hidden}
+            loading={!fromPickerReady || status === 'loading'}
+            selectedKey={
+              zecSourceOptions.find(
+                option => option.intentsWalletAssetId === confidentialFromAssetId
+              )?.selectionId ??
+              fromId ??
+              undefined
             }
-            setPicker(null)
-          }}
-          emptyMessage={status === 'loading' ? 'Loading Shield tokens…' : 'No Shield tokens found'}
-        />
+            onSelect={key => {
+              if (key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID) {
+                onSelectTransparentZecSwap?.()
+              } else if (key === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID) {
+                onSelectNativeZecSwap?.()
+              } else {
+                const intents = zecSourceOptions.find(option => option.kind === 'intents')
+                setFromId(
+                  key === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID
+                    ? (intents?.intentsWalletAssetId ?? key)
+                    : key
+                )
+                setAmount('')
+                setError(null)
+              }
+              setPicker(null)
+            }}
+          />
+        )}
       </TokenSelectorDialog>
     </div>
   )

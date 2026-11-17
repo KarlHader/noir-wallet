@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useDeferredValue, useMemo, useState } from 'react'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSymbol } from '@/lib/format'
@@ -6,6 +6,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { shieldOriginIdentifiers, shieldSwapFormBalance } from '@/popup/services/shield-swap-form'
 import type { ShieldFundingAsset } from '@/popup/services/shield-transfer'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import { TokenSelectorDialog } from './TokenSelectorDialog'
 import { TokenSelectorView } from './TokenSelectorView'
 import { TokenIcon } from './TokenIcon'
@@ -35,12 +36,25 @@ export function ConfidentialDestinationSelector({
 }: Props) {
   const [search, setSearch] = useState('')
   const [network, setNetwork] = useState('all')
+  const deferredSearch = useDeferredValue(search)
+  const deferredNetwork = useDeferredValue(network)
+  const filterKey = `${deferredNetwork}:${deferredSearch}`
+  const { ready, limit, onScroll } = useTokenSelectorWindow(filterKey, options.length)
   const hidden = useSettingsStore(state => state.balancesHidden)
-  const prices = useMemo(() => new Map(tokens.map(token => [token.assetId, token.price])), [tokens])
-  const origins = useMemo(() => shieldOriginIdentifiers(options), [options])
+  const prices = useMemo(
+    () => new Map((ready ? tokens : []).map(token => [token.assetId, token.price])),
+    [ready, tokens]
+  )
+  const origins = useMemo(
+    () => (ready ? shieldOriginIdentifiers(options) : new Map<string, string | null>()),
+    [ready, options]
+  )
   const available = useMemo(
-    () => options.filter(asset => asset.managed.protocolAssetId !== excludedProtocolAssetId),
-    [options, excludedProtocolAssetId]
+    () =>
+      ready
+        ? options.filter(asset => asset.managed.protocolAssetId !== excludedProtocolAssetId)
+        : [],
+    [ready, options, excludedProtocolAssetId]
   )
   const networks = useMemo(
     () => [
@@ -62,52 +76,65 @@ export function ConfidentialDestinationSelector({
     [available]
   )
   const visible = useMemo(() => {
-    const rank = (asset: ShieldFundingAsset) =>
-      rankTokenSearchFields(
-        {
-          symbol: asset.asset.metadata.symbol,
-          name: asset.asset.metadata.name,
-          contractAddress: asset.asset.asset.reference,
-          assetId: asset.asset.asset.id
-        },
-        search
-      )
-    return available
-      .filter(asset => (network === 'all' || asset.chain.chain.id === network) && rank(asset) < 99)
-      .sort((left, right) => rank(left) - rank(right))
-  }, [available, network, search])
+    const onNetwork = available.filter(
+      asset => deferredNetwork === 'all' || asset.chain.chain.id === deferredNetwork
+    )
+    if (!deferredSearch.trim()) return onNetwork
+    const ranks = new Map<ShieldFundingAsset, number>()
+    return onNetwork
+      .filter(asset => {
+        const score = rankTokenSearchFields(
+          {
+            symbol: asset.asset.metadata.symbol,
+            name: asset.asset.metadata.name,
+            contractAddress: asset.asset.asset.reference,
+            assetId: asset.asset.asset.id
+          },
+          deferredSearch
+        )
+        ranks.set(asset, score)
+        return score < 99
+      })
+      .sort((left, right) => (ranks.get(left) ?? 99) - (ranks.get(right) ?? 99))
+  }, [available, deferredNetwork, deferredSearch])
+  const visibleAssets = useMemo(() => visible.slice(0, limit), [visible, limit])
   const items = useMemo(
     () =>
-      visible.map(asset => ({
-        key: asset.asset.asset.id,
-        title: asset.managed.protocolAssetId,
-        symbol: formatSymbol(asset.asset.metadata.symbol),
-        icon: (
-          <TokenIcon
-            assetId={asset.asset.asset.id}
-            symbol={formatSymbol(asset.asset.metadata.symbol)}
-            icon={asset.asset.metadata.iconUrl}
-            blockchain={resolveChainIconAlias(
-              asset.chain.chain.family,
-              asset.chain.chain.displayName,
-              asset.chain.chain.id
-            )}
-            size={32}
-          />
-        ),
-        subtitle: `${asset.chain.chain.displayName}${origins.get(asset.asset.asset.id) ? ` · ${origins.get(asset.asset.asset.id)}` : ''}`,
-        balance: (
-          <TokenBalanceDisplay
-            amount={shieldSwapFormBalance(asset, balances) ?? '—'}
-            symbol={formatSymbol(asset.asset.metadata.symbol)}
-            priceUsd={prices.get(asset.managed.protocolAssetId)}
-            approximateFiat
-            balancesHidden={hidden}
-          />
-        ),
-        balanceTitle: hidden ? undefined : (shieldSwapFormBalance(asset, balances) ?? undefined)
-      })),
-    [visible, origins, balances, prices, hidden]
+      visibleAssets.map(asset => {
+        const symbol = formatSymbol(asset.asset.metadata.symbol)
+        const balance = shieldSwapFormBalance(asset, balances)
+        const origin = origins.get(asset.asset.asset.id)
+        return {
+          key: asset.asset.asset.id,
+          title: asset.managed.protocolAssetId,
+          symbol,
+          icon: (
+            <TokenIcon
+              assetId={asset.asset.asset.id}
+              symbol={symbol}
+              icon={asset.asset.metadata.iconUrl}
+              blockchain={resolveChainIconAlias(
+                asset.chain.chain.family,
+                asset.chain.chain.displayName,
+                asset.chain.chain.id
+              )}
+              size={32}
+            />
+          ),
+          subtitle: `${asset.chain.chain.displayName}${origin ? ` · ${origin}` : ''}`,
+          balance: (
+            <TokenBalanceDisplay
+              amount={balance ?? '—'}
+              symbol={symbol}
+              priceUsd={prices.get(asset.managed.protocolAssetId)}
+              approximateFiat
+              balancesHidden={hidden}
+            />
+          ),
+          balanceTitle: hidden ? undefined : (balance ?? undefined)
+        }
+      }),
+    [visibleAssets, origins, balances, prices, hidden]
   )
   return (
     <TokenSelectorDialog open onOpenChange={open => !open && onClose()}>
@@ -119,11 +146,13 @@ export function ConfidentialDestinationSelector({
         selectedNetwork={network}
         onNetworkChange={setNetwork}
         items={items}
+        loading={!ready}
         selectedKey={selectedAssetId}
         onSelect={key => {
-          const asset = available.find(item => item.asset.asset.id === key)
+          const asset = visibleAssets.find(item => item.asset.asset.id === key)
           if (asset) onSelect(asset)
         }}
+        onScroll={onScroll}
       />
     </TokenSelectorDialog>
   )
