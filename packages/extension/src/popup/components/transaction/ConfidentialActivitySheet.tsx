@@ -305,6 +305,12 @@ export function ConfidentialActivityView({
                 item={scopedActivity}
                 evmChainIds={catalog.evmChainIds}
                 accountMatches={matchesAccount}
+                amountMetadata={
+                  scopedActivity.snapshot?.primaryAmount
+                    ? (catalog.assetMetadata.get(scopedActivity.snapshot.primaryAmount.assetId)
+                        ?.metadata ?? scopedActivity.snapshot.primaryAmount.metadata)
+                    : undefined
+                }
                 feeDecimals={
                   scopedActivity.snapshot?.feeLimit
                     ? (catalog.assetMetadata.get(scopedActivity.snapshot.feeLimit.assetId)?.metadata

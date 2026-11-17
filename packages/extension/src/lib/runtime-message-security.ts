@@ -842,11 +842,17 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   PREPARE_EVM_CANCEL: {
     required: { chainId: isShortString, originalTransactionId: isShortString },
-    optional: { executionMode: value => value === 'main' || value === 'private' }
+    optional: {
+      executionMode: value => value === 'main' || value === 'private',
+      feeSelection: isEvmFeeSelection
+    }
   },
   PREPARE_EVM_SPEED_UP: {
     required: { chainId: isShortString, originalTransactionId: isShortString },
-    optional: { executionMode: value => value === 'main' || value === 'private' }
+    optional: {
+      executionMode: value => value === 'main' || value === 'private',
+      feeSelection: isEvmFeeSelection
+    }
   },
   GET_EVM_NONCE_RECOVERY: {
     required: { chainId: isShortString },

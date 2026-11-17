@@ -191,12 +191,14 @@ export interface EvmWalletClient {
   readonly prepareCancel: (
     chainId: string,
     originalTransactionId: TransactionId,
-    executionMode?: 'main' | 'private'
+    executionMode?: 'main' | 'private',
+    feeSelection?: EvmFeeSelection
   ) => Promise<EvmTransferReview>
   readonly prepareSpeedUp: (
     chainId: string,
     originalTransactionId: TransactionId,
-    executionMode?: 'main' | 'private'
+    executionMode?: 'main' | 'private',
+    feeSelection?: EvmFeeSelection
   ) => Promise<EvmTransferReview>
   readonly getNonceRecovery: (
     chainId: string,
@@ -1218,10 +1220,15 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
     prepareCancel: async (
       chainId: string,
       originalTransactionId: TransactionId,
-      executionMode: 'main' | 'private' = 'main'
+      executionMode: 'main' | 'private' = 'main',
+      feeSelection?: EvmFeeSelection
     ) => {
       const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
       const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
       if (!parsedChainId.startsWith('eip155:')) {
         throw new EvmWalletClientError('invalid-response', 'EVM cancel requires an EVM chain')
       }
@@ -1230,7 +1237,8 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           type: 'PREPARE_EVM_CANCEL',
           chainId: parsedChainId,
           originalTransactionId: parsedTransactionId,
-          executionMode
+          executionMode,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection })
         },
         value => {
           const prepared = parseTransferReview(value)
@@ -1248,10 +1256,15 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
     prepareSpeedUp: async (
       chainId: string,
       originalTransactionId: TransactionId,
-      executionMode: 'main' | 'private' = 'main'
+      executionMode: 'main' | 'private' = 'main',
+      feeSelection?: EvmFeeSelection
     ) => {
       const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
       const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
       if (!parsedChainId.startsWith('eip155:')) {
         throw new EvmWalletClientError('invalid-response', 'EVM speed-up requires an EVM chain')
       }
@@ -1260,7 +1273,8 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           type: 'PREPARE_EVM_SPEED_UP',
           chainId: parsedChainId,
           originalTransactionId: parsedTransactionId,
-          executionMode
+          executionMode,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection })
         },
         value => {
           const prepared = parseTransferReview(value)

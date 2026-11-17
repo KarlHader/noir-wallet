@@ -776,6 +776,7 @@ export function MultichainActivityDetail({
           effectiveAccountId === visibleItem.scope.accountId &&
           currentNetwork === network
         }
+        amountMetadata={asset?.metadata ?? amount?.metadata}
         feeDecimals={feeAsset?.metadata.decimals ?? fee?.metadata?.decimals}
         feeSymbol={feeAsset?.metadata.symbol ?? fee?.metadata?.symbol}
         shieldQuoteExpiresAt={

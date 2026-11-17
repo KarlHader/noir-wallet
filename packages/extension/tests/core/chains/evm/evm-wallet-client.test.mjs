@@ -669,7 +669,7 @@ test.describe('Popup EVM wallet client', () => {
       })
 
       await expect(
-        client[method](chainId, originalTransactionId, 'private')
+        client[method](chainId, originalTransactionId, 'private', { kind: 'tier', tier: 'fast' })
       ).resolves.toMatchObject({
         graph: {
           root: {
@@ -683,7 +683,8 @@ test.describe('Popup EVM wallet client', () => {
           type: messageType,
           chainId,
           originalTransactionId,
-          executionMode: 'private'
+          executionMode: 'private',
+          feeSelection: { kind: 'tier', tier: 'fast' }
         }
       ])
 

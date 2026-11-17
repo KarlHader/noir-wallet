@@ -4744,7 +4744,12 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               : message.type === 'PREPARE_EVM_CANCEL' || message.type === 'PREPARE_EVM_SPEED_UP'
                 ? evmTransferRouter[
                     message.type === 'PREPARE_EVM_CANCEL' ? 'prepareCancel' : 'prepareSpeedUp'
-                  ](message.chainId, message.originalTransactionId, message.executionMode)
+                  ](
+                    message.chainId,
+                    message.originalTransactionId,
+                    message.executionMode,
+                    message.feeSelection
+                  )
                 : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
                   ? evmTransferRouter.getTokenAllowance(
                       message.chainId,

@@ -128,6 +128,15 @@ test.describe('EVM wallet runtime error mapping', () => {
         message: 'This transaction is no longer available for replacement'
       })
     }
+    for (const message of [
+      'Only a pending EVM transaction can be cancelled',
+      'Pending EVM transaction does not contain replacement metadata',
+      'A cancellation replacement already exists'
+    ]) {
+      expect(mapEvmWalletRuntimeError(new Error(message), 'PREPARE_EVM_CANCEL')).toMatchObject({
+        code: 'replacement-unavailable'
+      })
+    }
     expect(mapEvmWalletRuntimeError(stale, 'PREPARE_EVM_TRANSFER')).toEqual({
       code: 'request-failed',
       message: 'The EVM wallet request failed'

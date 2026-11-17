@@ -7,9 +7,14 @@ export function mapEvmWalletRuntimeError(
   operation?: string
 ): EvmWalletRuntimeError {
   if (
-    error instanceof EvmTransactionError &&
-    error.code === 'stale-nonce' &&
-    (operation === 'PREPARE_EVM_CANCEL' || operation === 'PREPARE_EVM_SPEED_UP')
+    (operation === 'PREPARE_EVM_CANCEL' || operation === 'PREPARE_EVM_SPEED_UP') &&
+    ((error instanceof EvmTransactionError && error.code === 'stale-nonce') ||
+      (error instanceof Error &&
+        [
+          'Only a pending EVM transaction can be cancelled',
+          'Pending EVM transaction does not contain replacement metadata',
+          'A cancellation replacement already exists'
+        ].includes(error.message)))
   ) {
     return createEvmWalletRuntimeError('replacement-unavailable')
   }
