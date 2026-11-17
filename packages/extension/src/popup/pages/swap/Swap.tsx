@@ -4588,6 +4588,22 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     !requestedOriginPath.startsWith('/transaction-result')
       ? requestedOriginPath
       : null
+  const swapReturnPath = (() => {
+    const params = new URLSearchParams({
+      balanceDomain: shieldSwapSelected
+        ? 'shield'
+        : sourceMode === 'private'
+          ? 'private'
+          : 'public',
+      ...(effectiveWalletId && effectiveAccountId
+        ? { sourceWalletId: effectiveWalletId, sourceAccountId: effectiveAccountId }
+        : {}),
+      ...(shieldSwapSelected && shieldZecSource
+        ? { shieldZecSource: shieldSwapZecSourceParam(shieldZecSource) }
+        : {})
+    })
+    return `/swap?${params.toString()}`
+  })()
   const resultReturnPath = privateFundingRequestId
     ? `/approval?requestId=${encodeURIComponent(privateFundingRequestId)}`
     : crossChainSendRequested
@@ -4603,7 +4619,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             })}`
           : privateTransferRequested
             ? sendReturnPath('private')
-            : '/swap'
+            : swapReturnPath
 
   const navigateToSwapResult = useCallback(
     (
@@ -4614,6 +4630,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       zcashTransaction?: { accountKey: string; transactionId?: string }
     ) => {
       setIsPrivateFundingSubmitting(false)
+      if (ordinarySwapRequested && swapPreferenceScope && swap.tokenIn && swap.tokenOut) {
+        useSwapPreferences.getState().setSavedTokenSelection(swapPreferenceScope, {
+          tokenInId: swap.tokenIn.assetId,
+          tokenOutId: swap.tokenOut.assetId
+        })
+      }
       setResult(
         {
           type: 'swap',
@@ -4665,7 +4687,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       crossChainSendRequested,
       privateFundingRequestId,
       resultReturnPath,
-      executionSourceMode
+      executionSourceMode,
+      ordinarySwapRequested,
+      swapPreferenceScope
     ]
   )
 

@@ -2,11 +2,13 @@ import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from 
 
 import { type AssetPriceReadModel, findAssetPrice } from '@/core/prices'
 import Big from '@/lib/big'
+import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfolio-prices'
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
 import { getNearConfidentialChainId } from './near-confidential-holdings'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
+import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
 
@@ -63,6 +65,52 @@ export interface PortfolioAssetGroup {
   readonly bundled: boolean
   readonly representativeAssetId: string
   readonly iconUrl?: string
+}
+
+export function getPortfolioAssetDomainBalances(
+  entries: readonly PortfolioAssetGroupEntry[],
+  domain: AssetDomain,
+  prices: AssetPriceReadModel | null
+): readonly Readonly<{
+  domain: 'public' | 'shield' | 'private'
+  amount: string | null
+  fiat: string | null
+}>[] {
+  const domains = (['public', 'shield', 'private'] as const).filter(category =>
+    domain === 'all'
+      ? category === 'public' ||
+        entries.some(({ chain }) =>
+          category === 'shield'
+            ? chain.chain.family === 'evm' || chain.chain.family === 'zcash'
+            : chain.chain.family === 'evm'
+        )
+      : category === domain
+  )
+  return domains.map(category => {
+    let amount = new Big(0)
+    let fiat = new Big(0)
+    let amountKnown = true
+    let fiatKnown = true
+    for (const { asset } of entries) {
+      const raw = domain === 'all' ? getAssetDomainRaw(asset, category) : asset.balance.totalRaw
+      if (raw === null) {
+        amountKnown = false
+        fiatKnown = false
+        continue
+      }
+      const part = new Big(formatBaseUnitDecimalAmount(raw, asset.metadata.decimals))
+      amount = amount.plus(part)
+      if (part.eq(0)) continue
+      const quote = findAssetPrice(prices, asset.asset.id)
+      if (quote) fiat = fiat.plus(part.times(quote.priceUsd))
+      else fiatKnown = false
+    }
+    return Object.freeze({
+      domain: category,
+      amount: amountKnown ? amount.toFixed() : null,
+      fiat: fiatKnown ? fiat.toFixed() : null
+    })
+  })
 }
 
 export function getPortfolioChainBalanceStatus(

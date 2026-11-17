@@ -760,10 +760,12 @@ export function AccountSwitcher({
             type="button"
             aria-label={`Choose account, current: ${activeName}`}
             onPointerEnter={event => {
-              if (event.pointerType === 'mouse' && !addressesOpen) {
+              if (event.pointerType === 'mouse') {
                 cancelAddressesClose()
-                addressesOpenedByHover.current = true
-                setAddressesOpen(true)
+                if (!addressesOpen) {
+                  addressesOpenedByHover.current = true
+                  setAddressesOpen(true)
+                }
               }
             }}
             onPointerLeave={event => {
@@ -824,6 +826,18 @@ export function AccountSwitcher({
         type="button"
         aria-label="Show account addresses"
         title="Show account addresses"
+        onPointerEnter={event => {
+          if (event.pointerType === 'mouse') {
+            cancelAddressesClose()
+            if (!addressesOpen) {
+              addressesOpenedByHover.current = true
+              setAddressesOpen(true)
+            }
+          }
+        }}
+        onPointerLeave={event => {
+          if (event.pointerType === 'mouse') scheduleAddressesClose()
+        }}
         onClick={() => {
           cancelAddressesClose()
           addressesOpenedByHover.current = false

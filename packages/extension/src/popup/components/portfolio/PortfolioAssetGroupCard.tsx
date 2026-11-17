@@ -26,12 +26,14 @@ import { formatDisplayAmount } from './portfolio-format'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import {
   getAvailablePortfolioAssetGroupUsdValue,
+  getPortfolioAssetDomainBalances,
   getPortfolioAssetGroupUnitQuote,
   type PortfolioAssetGroup,
   type PortfolioAssetGroupEntry
 } from '@/popup/services/portfolio-presentation'
 import type { AssetDomain } from '@/popup/services/asset-domains'
 import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
+import { Tooltip } from '@/popup/components/ui/tooltip'
 
 export const portfolioAssetRowClassName =
   'flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left'
@@ -110,6 +112,63 @@ function assetAmount(asset: PortfolioAssetView): Big {
 
 function assetPendingAmount(asset: PortfolioAssetView): Big {
   return new Big(formatBaseUnitDecimalAmount(asset.balance.pendingRaw, asset.metadata.decimals))
+}
+
+function PortfolioAssetQuantity({
+  entries,
+  domain,
+  prices,
+  balancesHidden,
+  amount,
+  symbol
+}: {
+  readonly entries: readonly PortfolioAssetGroupEntry[]
+  readonly domain: AssetDomain
+  readonly prices: AssetPriceReadModel | null
+  readonly balancesHidden: boolean
+  readonly amount: Big
+  readonly symbol: string
+}) {
+  if (balancesHidden) return <p className="mt-0.5 break-all text-xs text-muted">••••</p>
+
+  const domainBalances = getPortfolioAssetDomainBalances(entries, domain, prices)
+  const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
+  return (
+    <Tooltip
+      side="top"
+      className="max-w-[260px]"
+      content={
+        <div className="space-y-1.5">
+          {domainBalances.map(balance => (
+            <div key={balance.domain} className="flex items-start justify-between gap-4">
+              <span className="shrink-0">
+                {balance.domain === 'public' && isZcash
+                  ? 'Transparent'
+                  : balance.domain === 'public'
+                    ? 'Public'
+                    : balance.domain === 'shield'
+                      ? 'Shield'
+                      : 'Private'}
+              </span>
+              <span className="text-right tabular-nums">
+                <span className="block">
+                  {balance.amount === null ? '—' : formatDisplayAmount(new Big(balance.amount))}{' '}
+                  {formatSymbol(symbol)}
+                </span>
+                <span className="block opacity-70">
+                  {balance.fiat === null ? '—' : formatFiatAmount(balance.fiat, { showSign: true })}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      }
+    >
+      <span className="mt-0.5 inline-block break-all text-xs text-muted underline decoration-dotted underline-offset-2">
+        {formatDisplayAmount(amount)} {formatSymbol(symbol)}
+      </span>
+    </Tooltip>
+  )
 }
 
 function PendingAssetAmount({ amount, symbol }: { readonly amount: Big; readonly symbol: string }) {
@@ -250,11 +309,14 @@ function PortfolioAssetBalanceRow({
                   : formatFiatAmount(fiat, { showSign: true })}
             </p>
           )}
-          <p className="mt-0.5 break-all text-xs text-muted">
-            {balancesHidden
-              ? '••••'
-              : `${formatDisplayAmount(amount)} ${formatSymbol(entry.asset.metadata.symbol)}`}
-          </p>
+          <PortfolioAssetQuantity
+            entries={[entry]}
+            domain={domain ?? 'all'}
+            prices={prices}
+            balancesHidden={balancesHidden}
+            amount={amount}
+            symbol={entry.asset.metadata.symbol}
+          />
         </div>
       </button>
       {!balancesHidden && (
@@ -372,11 +434,14 @@ export function PortfolioAssetGroupCard({
                       : formatFiatAmount(fiat, { showSign: true })}
                 </p>
               )}
-              <p className="mt-0.5 break-all text-xs text-muted">
-                {balancesHidden
-                  ? '••••'
-                  : `${formatDisplayAmount(totalAmount)} ${formatSymbol(group.symbol)}`}
-              </p>
+              <PortfolioAssetQuantity
+                entries={group.entries}
+                domain={domain}
+                prices={prices}
+                balancesHidden={balancesHidden}
+                amount={totalAmount}
+                symbol={group.symbol}
+              />
             </>
           }
         />
