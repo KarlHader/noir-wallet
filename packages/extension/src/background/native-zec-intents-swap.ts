@@ -421,9 +421,14 @@ export class NativeZecIntentsSwapCoordinator {
       const sourceAssetId = `${getZcashChainId(input.network)}/slip44:133`
       if (!this.options.assets.get(sourceAssetId))
         throw new Error('Native ZEC asset is unavailable')
+      const confidentialZecDestination =
+        confidential &&
+        input.destination.chainId === getZcashChainId(input.network) &&
+        input.destination.assetId === sourceAssetId &&
+        input.destination.protocolAssetId === ZEC_ZCASH_ASSET
       if (
         parseAssetId(input.destination.assetId).chainId !== input.destination.chainId ||
-        input.destination.protocolAssetId === ZEC_ZCASH_ASSET
+        (input.destination.protocolAssetId === ZEC_ZCASH_ASSET && !confidentialZecDestination)
       ) {
         throw new Error('Native ZEC Intents destination is invalid')
       }
@@ -507,7 +512,9 @@ export class NativeZecIntentsSwapCoordinator {
       if (
         !token ||
         !asset ||
-        (confidential && parseChainId(input.destination.chainId).namespace !== 'eip155') ||
+        (confidential &&
+          parseChainId(input.destination.chainId).namespace !== 'eip155' &&
+          !confidentialZecDestination) ||
         tokenChainId !== input.destination.chainId ||
         token.decimals !== asset.metadata.decimals ||
         !(

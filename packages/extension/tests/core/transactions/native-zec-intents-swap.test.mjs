@@ -223,3 +223,125 @@ test('native ZEC conversion preserves exact zats', () => {
   expect(zecToZats('1.25000001')).toBe('125000001')
   expect(() => zecToZats('1.000000001')).toThrow()
 })
+
+test('native ZEC Confidential destination binds the internal ZEC asset only', async () => {
+  const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+  const assetId = `${chainId}/slip44:133`
+  const protocolAssetId = 'nep141:zec.omft.near'
+  const refundAddress = `t1${'A'.repeat(33)}`
+  const depositAddress = `t1${'B'.repeat(33)}`
+  const recipient = '0x1111111111111111111111111111111111111111'
+  const destination = { chainId, assetId, protocolAssetId }
+  const values = new Map()
+  const originalChrome = globalThis.chrome
+  const originalFetch = globalThis.fetch
+  const originalLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: async keys =>
+          Object.fromEntries(
+            (Array.isArray(keys) ? keys : [keys])
+              .filter(key => values.has(key))
+              .map(key => [key, structuredClone(values.get(key))])
+          ),
+        set: async entries => {
+          for (const [key, value] of Object.entries(entries)) values.set(key, structuredClone(value))
+        },
+        remove: async keys => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key)
+        }
+      }
+    }
+  }
+  Object.defineProperty(globalThis.navigator, 'locks', {
+    configurable: true,
+    value: { request: async (_name, operation) => operation() }
+  })
+  globalThis.fetch = async () =>
+    Response.json([
+      {
+        assetId: protocolAssetId,
+        blockchain: 'zec',
+        decimals: 8,
+        price: 1,
+        priceUpdatedAt: new Date().toISOString(),
+        symbol: 'ZEC'
+      }
+    ])
+  try {
+    const coordinator = new NativeZecIntentsSwapCoordinator({
+      network: 'mainnet',
+      assets: {
+        get: id => (id === assetId ? { metadata: { decimals: 8 } } : undefined)
+      },
+      evmNetworks: [],
+      assetMappings: [{ assetId, protocolAssetId }],
+      isUnlocked: async () => true,
+      getActiveAccount: () => ({
+        network: 'mainnet',
+        walletId: 'wallet-one',
+        accountId: 'account-one',
+        refundAddresses: [refundAddress]
+      }),
+      resolveConfidentialIdentity: async () => recipient,
+      authorizeConfidentialIdentity: async () => {},
+      quoteConfidential: async input => ({
+        correlationId: 'quote-one',
+        quoteRequest: {
+          swapType: 'EXACT_INPUT',
+          confidentiality: 'basic',
+          originAsset: protocolAssetId,
+          destinationAsset: input.destinationAsset,
+          amount: input.amountRaw,
+          refundTo: input.refundTo,
+          recipient,
+          depositType: 'ORIGIN_CHAIN',
+          refundType: 'ORIGIN_CHAIN',
+          recipientType: 'CONFIDENTIAL_INTENTS',
+          slippageTolerance: input.slippageBps
+        },
+        quote: {
+          amountIn: input.amountRaw,
+          amountOut: input.amountRaw,
+          minAmountOut: input.amountRaw,
+          depositAddress,
+          deadline: new Date(Date.now() + 600_000).toISOString()
+        }
+      })
+    })
+    const request = {
+      network: 'mainnet',
+      walletId: 'wallet-one',
+      accountId: 'account-one',
+      amountZats: '100000000',
+      destination,
+      refundAddress,
+      fundingSource: 'transparent',
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      slippageBps: 50
+    }
+    const review = await coordinator.prepare(request)
+    expect(review.destination).toEqual({ ...destination, recipient })
+    expect(review.quoteBinding).toMatchObject({
+      destinationChain: destination.chainId,
+      destinationAsset: protocolAssetId,
+      recipient,
+      recipientType: 'CONFIDENTIAL_INTENTS'
+    })
+    expect(values.get(`native_zec_intents_swap:${review.quoteId}`).schemaVersion).toBe(2)
+    await expect(
+      coordinator.prepare({
+        ...request,
+        recipientType: 'DESTINATION_CHAIN',
+        fundingSource: undefined,
+        destination: { ...destination, recipient: refundAddress }
+      })
+    ).rejects.toThrow('Native ZEC Intents destination is invalid')
+  } finally {
+    globalThis.chrome = originalChrome
+    globalThis.fetch = originalFetch
+    if (originalLocks === undefined) delete globalThis.navigator.locks
+    else Object.defineProperty(globalThis.navigator, 'locks', originalLocks)
+  }
+})

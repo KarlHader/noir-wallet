@@ -4,6 +4,7 @@ import {
   type ShieldSourceTokenPickerItem
 } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { ConfidentialDestinationSelector } from '@/popup/components/tokens/ConfidentialDestinationSelector'
 import {
   TokenSelectorContent,
   TokenSelectorDialog,
@@ -285,6 +286,7 @@ import {
   resolveScopedSwapZcashRecipient,
   resolveSwapRecipientChainId,
   resolveNativeZecIntentsDestination,
+  confidentialDestinationFormToken,
   resolveManagedSwapRecipient,
   resolveShieldDomainZecFundingSource,
   shieldConfidentialSwapActive
@@ -369,6 +371,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     parseShieldSwapZecSourceParam(searchParams.get('shieldZecSource')) !== null
   )
   const [shieldZecPickerOpen, setShieldZecPickerOpen] = useState(false)
+  const [shieldDestinationPickerOpen, setShieldDestinationPickerOpen] = useState(false)
   const [shieldPickerSearch, setShieldPickerSearch] = useState('')
   const [shieldPickerNetwork, setShieldPickerNetwork] = useState('all')
   const confidentialShieldSwapActive = shieldConfidentialSwapActive({
@@ -378,6 +381,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const shieldNativeZecSwap =
     shieldSwapSelected &&
     (shieldZecSource === 'native-shielded' || shieldZecSource === 'native-transparent')
+  useEffect(() => {
+    if (!shieldNativeZecSwap) setShieldDestinationPickerOpen(false)
+  }, [shieldNativeZecSwap])
   const [{ reviewing: shieldReviewing, busy: shieldBusy }, setShieldFormState] = useState({
     reviewing: false,
     busy: false
@@ -912,15 +918,25 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       searchParams.get('balanceDomain') === 'private' ||
       requestedCrossChainSourceMode === 'private')
   const [nativeIntentsCatalog, setNativeIntentsCatalog] = useState<readonly SwapToken[]>([])
+  const [nativeIntentsCatalogSettled, setNativeIntentsCatalogSettled] = useState(false)
   useEffect(() => {
+    setNativeIntentsCatalogSettled(false)
     if (!shieldNativeZecSwap) {
       setNativeIntentsCatalog([])
       return
     }
     let active = true
+    let refreshed = false
+    void swapTokenCatalogClient
+      .readCached()
+      .then(tokens => {
+        if (active && !refreshed && tokens.length > 0) setNativeIntentsCatalog(tokens)
+      })
+      .catch(() => {})
     void swapTokenCatalogClient
       .refresh()
       .then(tokens => {
+        refreshed = true
         if (active) setNativeIntentsCatalog(tokens)
       })
       .catch(error => {
@@ -933,6 +949,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           )
         }
       })
+      .finally(() => {
+        if (active) setNativeIntentsCatalogSettled(true)
+      })
     return () => {
       active = false
     }
@@ -941,6 +960,32 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     () => resolveManagedIntentsCatalog(nativeIntentsCatalog),
     [nativeIntentsCatalog]
   )
+  const nativeConfidentialDestinations = useMemo(
+    () =>
+      shieldNativeZecSwap
+        ? listShieldFundingAssets(
+            portfolio,
+            nativeIntentsManagedAssets,
+            nativeIntentsCatalog,
+            currentNetwork
+          )
+        : [],
+    [
+      shieldNativeZecSwap,
+      portfolio,
+      nativeIntentsManagedAssets,
+      nativeIntentsCatalog,
+      currentNetwork
+    ]
+  )
+  const nativeConfidentialDestinationTokens = useMemo(() => {
+    const catalog = new Map(nativeIntentsCatalog.map(token => [token.assetId, token]))
+    return nativeConfidentialDestinations.flatMap(asset => {
+      const token = catalog.get(asset.managed.protocolAssetId)
+      const formToken = token ? confidentialDestinationFormToken(asset, token) : null
+      return formToken ? [formToken] : []
+    })
+  }, [nativeConfidentialDestinations, nativeIntentsCatalog])
   const shieldCatalogTokens = useMemo(
     () =>
       shieldNativeZecSwap
@@ -2152,6 +2197,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     autoReviewStartedScope.current = null
     setMaxSelected(false)
     setFundingSource('shielded')
+    setShieldDestinationPickerOpen(false)
     swap.resetSwap()
     setZecRecipientSelection({ scope: activeScope, address: '' })
   }, [
@@ -2163,8 +2209,71 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     swap.resetSwap
   ])
 
+  const initializedNativeDestinationScope = useRef<string | null>(null)
+  useEffect(() => {
+    if (!shieldNativeZecSwap) {
+      initializedNativeDestinationScope.current = null
+      return
+    }
+    if (
+      !swapPreferencesHydrated ||
+      !swapPreferenceScope ||
+      !swap.selectionReady ||
+      !swap.isZecSource ||
+      nativeConfidentialDestinationTokens.length === 0
+    )
+      return
+    const current =
+      swap.tokenOut &&
+      resolveNativeZecIntentsDestination(
+        swap.tokenOut,
+        portfolio,
+        currentNetwork,
+        nativeIntentsManagedAssets,
+        nativeIntentsCatalog,
+        nativeConfidentialDestinations
+      )
+    const saved = nativeConfidentialDestinationTokens.find(
+      token => token.assetId === savedTokenSelection?.tokenOutId
+    )
+    if (
+      initializedNativeDestinationScope.current !== swapPreferenceScope &&
+      savedTokenSelection?.tokenOutId &&
+      !saved &&
+      !nativeIntentsCatalogSettled
+    )
+      return
+    const selected =
+      (initializedNativeDestinationScope.current !== swapPreferenceScope ? saved : undefined) ??
+      nativeConfidentialDestinationTokens.find(token => token.assetId === current?.assetId) ??
+      saved ??
+      nativeConfidentialDestinationTokens.find(
+        token => token.blockchain === 'eth' && token.isNative
+      ) ??
+      nativeConfidentialDestinationTokens[0]
+    initializedNativeDestinationScope.current = swapPreferenceScope
+    if (swap.tokenOut?.assetId !== selected.assetId) swap.selectTokenOutForFlow(selected)
+  }, [
+    shieldNativeZecSwap,
+    swapPreferencesHydrated,
+    swapPreferenceScope,
+    swap.selectionReady,
+    swap.isZecSource,
+    swap.tokenOut,
+    swap.selectTokenOutForFlow,
+    nativeConfidentialDestinationTokens,
+    portfolio,
+    currentNetwork,
+    nativeIntentsManagedAssets,
+    nativeIntentsCatalog,
+    nativeConfidentialDestinations,
+    nativeIntentsCatalogSettled,
+    savedTokenSelection?.tokenOutId
+  ])
+
   useEffect(() => {
     if (
+      (shieldNativeZecSwap && swap.isZecSource) ||
       !swapPreferencesHydrated ||
       !swapPreferenceScope ||
       !swap.selectionReady ||
@@ -3545,7 +3654,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         portfolio,
         currentNetwork,
         nativeIntentsManagedAssets,
-        nativeIntentsCatalog
+        nativeIntentsCatalog,
+        nativeConfidentialDestinations
       )
       if (!destination) return null
       const slippageBps = Math.round(swap.slippage * 100)
@@ -3586,6 +3696,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     portfolio,
     nativeIntentsManagedAssets,
     nativeIntentsCatalog,
+    nativeConfidentialDestinations,
     quoteRefreshTick
   ])
   const nativeIntentsRequestKey = nativeIntentsRequest?.key ?? null
@@ -5921,7 +6032,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       )
       const canKeepTarget = (token: (typeof swap.tokens)[number]) =>
         token.assetId !== zecAssetId &&
-        (!shieldSwapSelected || resolveManagedIntentsCatalogAsset([token], token.assetId) !== null)
+        (!shieldSwapSelected ||
+          resolveNativeZecIntentsDestination(
+            token,
+            portfolio,
+            currentNetwork,
+            nativeIntentsManagedAssets,
+            nativeIntentsCatalog,
+            nativeConfidentialDestinations
+          ) !== null)
       const targetToken = swap.tokenOut && canKeepTarget(swap.tokenOut) ? swap.tokenOut : null
       if (targetScope) {
         useSwapPreferences.getState().setSavedTokenSelection(targetScope, {
@@ -5979,12 +6098,20 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       currentNetwork,
       sourceMode,
       shieldSwapSelected,
+      portfolio,
+      nativeIntentsManagedAssets,
+      nativeIntentsCatalog,
+      nativeConfidentialDestinations,
       navigate
     ]
   )
 
   const handleSelectToken = useCallback(
     async (type: 'in' | 'out') => {
+      if (type === 'out' && shieldNativeZecSwap && swap.isZecSource) {
+        setShieldDestinationPickerOpen(true)
+        return
+      }
       if (type === 'in' && shieldNativeZecSwap) {
         setShieldPickerSearch('')
         setShieldPickerNetwork(
@@ -6041,7 +6168,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     portfolio,
                     currentNetwork,
                     nativeIntentsManagedAssets,
-                    nativeIntentsCatalog
+                    nativeIntentsCatalog,
+                    nativeConfidentialDestinations
                   ) !== null)) &&
             (!privateSwapRequested ||
               ((isZecToken(token) || /^[1-9]\d*$/.test(token.rheaChainId)) &&
@@ -6271,6 +6399,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       shieldZecReverseSwap,
       nativeIntentsManagedAssets,
       nativeIntentsCatalog,
+      nativeConfidentialDestinations,
       balancesHidden,
       shieldNativeZecSwap,
       shieldSwapSelected,
@@ -7894,7 +8023,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         tokenIn={swap.tokenIn}
         tokenOut={swap.tokenOut}
         isZecSource={swap.isZecSource}
-        isZecDestination={isZecDestination}
+        isZecDestination={isZecDestination && !shieldNativeZecSwap}
         requiresRecipientAddress={requiresRecipientAddress}
         canSwitchTokens={canSwitchTokens}
         reverseUnavailableReason={reverseUnavailableReason}
@@ -7998,7 +8127,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                                 portfolio,
                                 currentNetwork,
                                 nativeIntentsManagedAssets,
-                                nativeIntentsCatalog
+                                nativeIntentsCatalog,
+                                nativeConfidentialDestinations
                               )
                             ? SWAP_QUOTE_DISPLAY_ERROR
                             : isPrivateFunding &&
@@ -8051,9 +8181,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         catalogError={swap.catalogError}
         sourceAssetsLoading={swap.areTokensLoading && swap.sourceTokens.length === 0}
         destinationAssetsLoading={
-          crossChainSendRequested
-            ? swap.destinationTokensLoading && swap.destinationTokens.length === 0
-            : swap.destinationTokensLoading && swap.destinationTokens.length === 0
+          shieldNativeZecSwap && swap.isZecSource
+            ? nativeIntentsCatalog.length === 0
+            : crossChainSendRequested
+              ? swap.destinationTokensLoading && swap.destinationTokens.length === 0
+              : swap.destinationTokensLoading && swap.destinationTokens.length === 0
         }
         canGetQuote={
           canGetQuote &&
@@ -8165,17 +8297,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         }}
         sourceAccountAction={sourceAccountAction}
         destinationBadge={
-          isPrivateFunding
-            ? 'Private'
-            : !requiresRecipientAddress && walletDestinationTarget?.kind === 'evm'
-              ? destinationMode === 'private'
-                ? 'Private'
-                : 'Public'
-              : isZecDestination && !requiresRecipientAddress
-                ? zecDestinationType === 'shielded'
-                  ? 'Shield'
-                  : 'Transparent'
-                : undefined
+          shieldNativeZecSwap && swap.isZecSource
+            ? 'Confidential'
+            : isPrivateFunding
+              ? 'Private'
+              : !requiresRecipientAddress && walletDestinationTarget?.kind === 'evm'
+                ? destinationMode === 'private'
+                  ? 'Private'
+                  : 'Public'
+                : isZecDestination && !requiresRecipientAddress
+                  ? zecDestinationType === 'shielded'
+                    ? 'Shield'
+                    : 'Transparent'
+                  : undefined
         }
         destinationAssetLocked={isPrivateFunding || privateTransferRequested}
         sourceAssetLocked={privateTransferRequested || crossChainSendRequested}
@@ -8502,6 +8636,26 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
           privateAddress={destinationPrivateExecutionAddress}
           purpose="destination"
+        />
+      )}
+      {shieldDestinationPickerOpen && shieldNativeZecSwap && swap.isZecSource && (
+        <ConfidentialDestinationSelector
+          accountScope={effectiveAccount}
+          options={nativeConfidentialDestinations}
+          tokens={nativeIntentsCatalog}
+          balances={shieldDisplayBalances}
+          selectedAssetId={swap.tokenOut?.assetId}
+          onClose={() => setShieldDestinationPickerOpen(false)}
+          onSelect={asset => {
+            const token = nativeConfidentialDestinationTokens.find(
+              item => item.assetId === asset.asset.asset.id
+            )
+            if (!token) return
+            reviewAfterQuoteRefresh.current = null
+            setMaxSelected(false)
+            swap.selectTokenOut(token)
+            setShieldDestinationPickerOpen(false)
+          }}
         />
       )}
       <TokenSelectorDialog open={shieldZecPickerOpen} onOpenChange={setShieldZecPickerOpen}>

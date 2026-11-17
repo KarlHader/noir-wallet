@@ -32,6 +32,7 @@ import {
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
 import type { FundingSource, Network } from '@/types'
 import type { ShieldSwapZecSourceKind } from '@/popup/services/shield-swap-zec-sources'
+import type { ShieldFundingAsset } from './shield-transfer'
 import { isRheaSwapQuoteFresh } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import {
@@ -63,8 +64,20 @@ export function resolveNativeZecIntentsDestination(
   portfolio: PortfolioReadModel | null,
   network: Network,
   managedAssets: readonly IntentsManagedAsset[],
-  protocolTokens: readonly SwapToken[]
+  protocolTokens: readonly SwapToken[],
+  destinations: readonly ShieldFundingAsset[] = []
 ): Readonly<{ chainId: string; assetId: string; protocolAssetId: string }> | null {
+  const internal = destinations.find(
+    asset =>
+      asset.asset.metadata.decimals === token.decimals &&
+      (asset.asset.asset.id === token.assetId || asset.managed.protocolAssetId === token.assetId)
+  )
+  if (internal)
+    return Object.freeze({
+      chainId: internal.managed.chainId,
+      assetId: internal.managed.assetId,
+      protocolAssetId: internal.managed.protocolAssetId
+    })
   if (isZecToken(token)) return null
   const chainId = resolveSwapRecipientChainId(token, network)
   if (!chainId) return null
@@ -88,6 +101,27 @@ export function resolveNativeZecIntentsDestination(
       : null)
   if (!assetId || !protocolAssetId || (managed?.chainId ?? native?.chainId) !== chainId) return null
   return Object.freeze({ chainId, assetId, protocolAssetId })
+}
+
+// Adapt internal assets to the shared form model without loading a Public swap catalog.
+export function confidentialDestinationFormToken(
+  asset: ShieldFundingAsset,
+  token: SwapToken
+): RheaSwapToken | null {
+  const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.blockchain === token.blockchain)
+  if (!descriptor || asset.managed.protocolAssetId !== token.assetId) return null
+  return Object.freeze({
+    ...token,
+    assetId: asset.asset.asset.id,
+    rheaChainId: descriptor.apiChainId,
+    tokenListChainId: descriptor.tokenListChainId,
+    rheaAddress:
+      asset.asset.asset.kind === 'native' && asset.chain.chain.family === 'evm'
+        ? '0x0000000000000000000000000000000000000000'
+        : asset.asset.asset.reference,
+    isNative: asset.asset.asset.kind === 'native',
+    sources: Object.freeze(['near-intents'])
+  })
 }
 
 export function resolveManagedSwapRecipient(input: {
