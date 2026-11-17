@@ -15,6 +15,7 @@ import { createEvmTransactionSegmentEvent } from './evm-transaction-lifecycle'
 import { observeEvmTransaction, type EvmTransactionObservation } from './evm-transaction-observer'
 import type { EvmBroadcastRpc } from './evm-rpc-client'
 import type { EvmActivityHistorySource, EvmConfirmedReplacement } from './evm-indexed-activity'
+import { isEvmSpeedUpReplacement } from './evm-speed-up'
 
 export interface EvmTransactionMonitorOptions {
   readonly repository: TransactionRepository
@@ -354,14 +355,13 @@ export class EvmTransactionMonitor {
     retried: boolean
   ): Promise<'applied' | 'unchanged'> {
     const observedAt = this.now()
-    const localCancellation = (
-      await this.repository.list({
-        scope: graph.root.scope,
-        chainId: this.chainId,
-        statuses: ['signed', 'broadcast', 'confirming', 'final'],
-        limit: 200
-      })
-    ).some(
+    const linked = await this.repository.list({
+      scope: graph.root.scope,
+      chainId: this.chainId,
+      statuses: ['signed', 'broadcast', 'confirming', 'final'],
+      limit: 200
+    })
+    const localCancellation = linked.some(
       candidate =>
         candidate.root.kind === 'cancel' &&
         candidate.root.relation?.kind === 'replacement-of' &&
@@ -371,6 +371,34 @@ export class EvmTransactionMonitor {
             candidateSegment.evidence?.transactionHash === replacement.transactionHash
         )
     )
+    const speedUp = linked.find(
+      candidate =>
+        candidate.segments.some(
+          candidateSegment =>
+            candidateSegment.evidence?.transactionHash === replacement.transactionHash
+        ) && isEvmSpeedUpReplacement(graph, candidate)
+    )
+    if (speedUp) {
+      const receipt = await this.rpc.getTransactionReceipt(replacement.transactionHash)
+      if (
+        receipt?.status === 'success' &&
+        receipt.transactionHash === replacement.transactionHash &&
+        receipt.blockHash === replacement.blockHash &&
+        receipt.blockNumber === String(replacement.blockHeight)
+      ) {
+        return this.persistSpeedUpOrigin(
+          graph,
+          segment,
+          {
+            transactionHash: replacement.transactionHash,
+            blockHash: replacement.blockHash,
+            blockHeight: replacement.blockHeight
+          },
+          retried
+        )
+      }
+      if (receipt?.status !== 'failed') return 'unchanged'
+    }
     const result = await this.repository.applySegmentEvent({
       scope: graph.root.scope,
       transactionId: graph.root.id,
@@ -451,6 +479,24 @@ export class EvmTransactionMonitor {
     if (result.status === 'applied') {
       if (graph.root.kind === 'cancel' && observation.status === 'final') {
         await this.persistCancelledNonce(graph, observation.transactionHash)
+      } else if (observation.status === 'final' && graph.root.relation?.kind === 'replacement-of') {
+        const original = await this.repository.get(
+          graph.root.scope,
+          graph.root.relation.transactionId
+        )
+        const origin = original?.segments.find(candidate => candidate.role === 'origin')
+        if (original && origin && isEvmSpeedUpReplacement(original, graph)) {
+          await this.persistSpeedUpOrigin(
+            original,
+            origin,
+            {
+              transactionHash: observation.transactionHash,
+              blockHash: observation.blockHash,
+              blockHeight: Number(observation.blockNumber)
+            },
+            false
+          )
+        }
       }
       return 'applied'
     }
@@ -472,6 +518,56 @@ export class EvmTransactionMonitor {
     const latestSegment = latest?.segments.find(candidate => candidate.id === segment.id)
     if (!latest || !latestSegment) return 'unchanged'
     return this.persistObservation(latest, latestSegment, observation, true)
+  }
+
+  private async persistSpeedUpOrigin(
+    original: TransactionGraph,
+    segment: TransactionSegment,
+    replacement: Readonly<{
+      transactionHash: string
+      blockHash: string
+      blockHeight: number
+    }>,
+    retried: boolean
+  ): Promise<'applied' | 'unchanged'> {
+    if (segment.status === 'final' || segment.status === 'failed') return 'unchanged'
+    const observedAt = this.now()
+    const result = await this.repository.applySegmentEvent({
+      scope: original.root.scope,
+      transactionId: original.root.id,
+      segmentId: segment.id,
+      event: Object.freeze({
+        id: parseTransactionEventId(`event:evm:${this.createEventId()}`),
+        status: 'final' as const,
+        cause: 'progress' as const,
+        observedAt,
+        evidence: Object.freeze({
+          transactionHash: segment.evidence?.transactionHash,
+          replacementTransactionHash: replacement.transactionHash,
+          blockHash: replacement.blockHash,
+          blockHeight: replacement.blockHeight
+        })
+      }),
+      expectedRootRevision: original.root.revision,
+      expectedSegmentRevision: segment.revision
+    })
+    if (result.status === 'applied') return 'applied'
+    if (
+      result.status === 'ignored-stale' ||
+      result.status === 'duplicate-event' ||
+      result.status === 'not-found'
+    )
+      return 'unchanged'
+    if (result.status === 'event-conflict') {
+      throw new Error('EVM speed up event ID conflict')
+    }
+    if (result.status !== 'revision-conflict' || retried) {
+      throw new Error('EVM transaction monitor could not persist speed up')
+    }
+    const latest = await this.repository.get(original.root.scope, original.root.id)
+    const latestSegment = latest?.segments.find(candidate => candidate.id === segment.id)
+    if (!latest || !latestSegment) return 'unchanged'
+    return this.persistSpeedUpOrigin(latest, latestSegment, replacement, true)
   }
 
   private async persistCancelledNonce(

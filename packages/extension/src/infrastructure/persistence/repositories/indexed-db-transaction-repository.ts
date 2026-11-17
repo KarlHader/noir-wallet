@@ -8,6 +8,8 @@ import {
 } from '@/core/transactions/domain'
 import type {
   ApplyTransactionSegmentEventInput,
+  BackfillConfidentialEvmOriginInput,
+  BackfillConfidentialEvmOriginResult,
   TransactionCreateResult,
   TransactionListQuery,
   TransactionMutationResult,
@@ -29,6 +31,7 @@ import {
   TRANSACTION_REPOSITORY_LIMITS,
   assertPersistableTransactionGraph,
   applyParsedTransactionMutation,
+  backfillConfidentialEvmOrigin,
   collectKnownTransactionEvents,
   parseTransactionListQuery,
   parseTransactionMutation,
@@ -366,6 +369,28 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
       }
     }
     return result
+  }
+
+  async backfillConfidentialEvmOrigin(
+    input: BackfillConfidentialEvmOriginInput
+  ): Promise<BackfillConfidentialEvmOriginResult> {
+    return runWithTransactionV2Database(this.databaseName, database =>
+      runTransaction(
+        database,
+        [TRANSACTION_V2_DATABASE_STORES.graphs],
+        'readwrite',
+        async transaction => {
+          const store = transaction.objectStore(TRANSACTION_V2_DATABASE_STORES.graphs)
+          const raw = await requestResult<unknown>(store.get(input.transactionId))
+          const graph = raw === undefined ? undefined : parseStoredTransactionGraphRecord(raw).graph
+          const result = backfillConfidentialEvmOrigin(graph, input)
+          if (result.status === 'applied' && result.graph) {
+            store.put(createStoredTransactionGraphRecord(result.graph))
+          }
+          return result
+        }
+      )
+    )
   }
 
   async hasAppliedEvent(

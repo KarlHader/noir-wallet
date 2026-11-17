@@ -5,6 +5,7 @@ import { selectActivityObservation } from '../../../src/popup/services/activity-
 import {
   buildActivityExecutionAddressModes,
   canCancelEvmActivity,
+  canSpeedUpEvmActivity,
   getActivityDetailTitle,
   getActivityExternalReferenceLabel,
   getActivityFailureLabel,
@@ -510,7 +511,7 @@ test.describe('Multichain Activity presentation', () => {
     expect(getActivitySwapPresentation(item, assets, new Map())).toBeNull()
   })
 
-  test('offers cancellation only for a locally tracked pending EVM transaction', () => {
+  test('offers pending EVM actions for an onchain origin until it finalizes or is replaced', () => {
     const item = {
       ...failedItem({ transactionHash }),
       status: 'broadcast',
@@ -538,6 +539,47 @@ test.describe('Multichain Activity presentation', () => {
     expect(canCancelEvmActivity(item, ['eip155:1'])).toBe(true)
     expect(canCancelEvmActivity({ ...item, status: 'final' }, ['eip155:1'])).toBe(false)
     expect(canCancelEvmActivity({ ...item, kind: 'cancel' }, ['eip155:1'])).toBe(false)
+    const shield = {
+      ...item,
+      kind: 'shield',
+      snapshot: {
+        ...item.snapshot,
+        shield: { operation: 'deposit', sourceDomain: 'private', destinationDomain: 'shield' },
+        evm: { ...item.snapshot.evm, unsignedTransaction: { type: 'eip1559' } },
+        protocol: { expiresAt: 200 }
+      },
+      segments: [
+        ...item.segments,
+        { role: 'relay', status: 'created', target: { kind: 'protocol' } }
+      ]
+    }
+    expect(canCancelEvmActivity(shield, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100)).toBe(true)
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 200)).toBe(false)
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100, 100)).toBe(false)
+    expect(
+      canSpeedUpEvmActivity(
+        { ...shield, snapshot: { ...shield.snapshot, evm: item.snapshot.evm } },
+        ['eip155:1'],
+        100
+      )
+    ).toBe(false)
+    expect(
+      canCancelEvmActivity({ ...shield, segments: [{ ...item.segments[0], status: 'final' }] }, [
+        'eip155:1'
+      ])
+    ).toBe(false)
+    expect(
+      canCancelEvmActivity(
+        {
+          ...shield,
+          segments: [
+            { ...item.segments[0], evidence: { transactionHash, replacementTransactionHash } }
+          ]
+        },
+        ['eip155:1']
+      )
+    ).toBe(false)
   })
 
   test('distinguishes a proven replacement from an unexplained dropped transaction', () => {

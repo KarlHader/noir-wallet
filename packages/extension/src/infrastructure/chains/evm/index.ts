@@ -217,6 +217,7 @@ export {
   buildEvmCancelTransaction,
   buildEvmContractCall,
   buildEvmNonceRecoveryTransaction,
+  buildEvmSpeedUpTransaction,
   buildEvmTransfer,
   estimateEvmContractCallFee,
   estimateEvmTransferFee,
@@ -229,6 +230,7 @@ export {
   type BuildEvmContractCallInput,
   type BuildEvmCancelInput,
   type BuildEvmNonceRecoveryInput,
+  type BuildEvmSpeedUpInput,
   type BuildEvmTransferInput,
   type EvmContractCallIntent,
   type EvmFeeEstimate,
@@ -283,6 +285,7 @@ export {
   type EvmNonceRecoveryState,
   type SubmitEvmExternalSignatureInput
 } from './evm-transfer-orchestrator'
+export { isEvmSpeedUpReplacement } from './evm-speed-up'
 export {
   EvmTransactionMonitor,
   type EvmTransactionMonitorOptions,

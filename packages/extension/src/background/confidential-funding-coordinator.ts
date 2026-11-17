@@ -75,7 +75,8 @@ import {
   parseTransactionSegmentId,
   type TransactionSegmentEvidence,
   type TransactionFailureCode,
-  type TransactionLifecycleStatus
+  type TransactionLifecycleStatus,
+  type TransactionGraph
 } from '@/core/transactions/domain'
 import type { TransactionRepository } from '@/ports/repositories'
 import {
@@ -84,6 +85,8 @@ import {
   createConfiguredEvmRpcClient,
   createEvmTransactionSegmentEvent,
   estimateEvmTransferFee,
+  EvmTransactionError,
+  isEvmSpeedUpReplacement,
   observeEvmTransaction,
   parseEvmFeeSelection,
   parsePreparedEvmTransfer,
@@ -171,7 +174,7 @@ function needsRefundObservation(plan: ConfidentialFundingPlan): boolean {
     plan.requiresDeposit &&
     plan.preparedDeposit?.transactionHash &&
     plan.depositQuote &&
-    plan.errorStatus !== 'DEPOSIT_REVERTED'
+    !['DEPOSIT_REVERTED', 'DEPOSIT_CANCELLED', 'DEPOSIT_REPLACED'].includes(plan.errorStatus ?? '')
   )
 }
 
@@ -2477,6 +2480,60 @@ export class ConfidentialFundingCoordinator {
     return plan
   }
 
+  async assertSpeedUpAllowed(graph: TransactionGraph): Promise<void> {
+    const match = /^tx:confidential:([^:]+)$/.exec(graph.root.id)
+    const plan = match ? await this.options.store.getPlan(match[1]) : null
+    const origin = graph.segments.find(segment => segment.role === 'origin')
+    const intent = graph.root.intent
+    const quote = plan?.depositQuote
+    const preparedDeposit = plan?.preparedDeposit
+    const denied = (): never => {
+      throw new EvmTransactionError('stale-nonce', 'Shield deposit can no longer be sped up')
+    }
+    if (
+      !plan ||
+      plan.network !== this.options.network ||
+      graph.root.id !== plan.transactionId ||
+      graph.root.scope.keyDomainId !== plan.keyDomainId ||
+      graph.root.scope.accountId !== plan.accountId ||
+      !plan.requiresDeposit ||
+      !['deposit', 'cluster'].includes(plan.operation ?? '') ||
+      !['public', 'private'].includes(plan.sourceDomain ?? '') ||
+      !(
+        ['deposit-confirming', 'deposit-signed'].includes(plan.phase) ||
+        (plan.phase === 'needs-auth' &&
+          ['deposit-confirming', 'deposit-signed'].includes(plan.resumePhase ?? ''))
+      ) ||
+      !quote ||
+      !preparedDeposit?.transactionHash ||
+      origin?.evidence?.transactionHash !== preparedDeposit.transactionHash ||
+      !intent?.shield ||
+      intent.shield.operation !== plan.operation ||
+      intent.shield.sourceDomain !== plan.sourceDomain ||
+      !intent.sender ||
+      intent.sender.chainId !== plan.source.chainId ||
+      !intent.primaryAmount ||
+      intent.primaryAmount.assetId !== plan.source.assetId ||
+      intent.primaryAmount.amountRaw !== plan.source.amountRaw ||
+      !intent.evm?.unsignedTransaction
+    ) {
+      throw new EvmTransactionError('stale-nonce', 'Shield deposit can no longer be sped up')
+    }
+    const prepared = parsePreparedEvmTransfer(preparedDeposit.preparedTransfer)
+    if (
+      prepared.chainId !== plan.source.chainId ||
+      prepared.assetId !== plan.source.assetId ||
+      prepared.amountRaw !== plan.source.amountRaw ||
+      prepared.recipient.toLowerCase() !== quote.quote.depositAddress.toLowerCase() ||
+      prepared.from.toLowerCase() !== intent.sender.address.toLowerCase() ||
+      prepared.transaction.nonce !== intent.evm.nonce ||
+      JSON.stringify(prepared.transaction) !== JSON.stringify(intent.evm.unsignedTransaction) ||
+      quoteDeadline(quote) <= this.now()
+    ) {
+      denied()
+    }
+  }
+
   async finalizeRejectedCluster(
     planId: string,
     reason: ClusterRejectionReason
@@ -2746,6 +2803,32 @@ export class ConfidentialFundingCoordinator {
     } else if (isTerminalPhase(plan.phase)) {
       return needsRefundObservation(plan) ? this.observeRefund(plan, refreshRefund) : plan
     }
+    if (
+      plan.requiresDeposit &&
+      (plan.phase === 'deposit-signed' ||
+        plan.phase === 'deposit-confirming' ||
+        (plan.phase === 'needs-auth' &&
+          (plan.resumePhase === 'deposit-signed' || plan.resumePhase === 'deposit-confirming')))
+    ) {
+      await this.ensureGraph(plan)
+      const graph = await this.options.repository.get(
+        {
+          keyDomainId: parseKeyDomainId(plan.keyDomainId),
+          accountId: parseAccountId(plan.accountId)
+        },
+        parseTransactionId(plan.transactionId)
+      )
+      const origin = graph?.segments.find(segment => segment.role === 'origin')
+      if (origin?.status === 'failed' && graph?.root.status === 'failed') {
+        const cancelled = origin.failure?.code === 'cancelled'
+        if (cancelled || origin.failure?.code === 'dropped') {
+          return this.updatePlan(plan, {
+            phase: cancelled ? 'cancelled' : 'failed',
+            errorStatus: cancelled ? 'DEPOSIT_CANCELLED' : 'DEPOSIT_REPLACED'
+          })
+        }
+      }
+    }
     if (isClusterRejectionReason(plan.errorStatus)) return this.finishRejectedCluster(plan)
     if (isUnsignedDirectWithdraw(plan) && !this.confirmingByPlan.has(planId)) {
       return this.updatePlan(plan, {
@@ -2797,6 +2880,30 @@ export class ConfidentialFundingCoordinator {
       plan.preparedDeposit?.rawTransaction &&
       plan.preparedDeposit.transactionHash
     ) {
+      const replacements = await this.options.repository.list({
+        scope: {
+          keyDomainId: parseKeyDomainId(plan.keyDomainId),
+          accountId: parseAccountId(plan.accountId)
+        },
+        chainId: parseChainId(plan.source.chainId).id,
+        statuses: ['signed', 'broadcast', 'confirming', 'final'],
+        limit: 200
+      })
+      if (
+        replacements.some(
+          graph =>
+            graph.root.relation?.kind === 'replacement-of' &&
+            graph.root.relation.transactionId === plan.transactionId
+        )
+      ) {
+        plan = await this.updatePlan(plan, { phase: 'deposit-confirming' })
+      }
+    }
+    if (
+      plan.phase === 'deposit-signed' &&
+      plan.preparedDeposit?.rawTransaction &&
+      plan.preparedDeposit.transactionHash
+    ) {
       try {
         await broadcastSignedEvmTransaction({
           rawTransaction: plan.preparedDeposit.rawTransaction,
@@ -2817,8 +2924,17 @@ export class ConfidentialFundingCoordinator {
     }
 
     if (plan.requiresDeposit && plan.phase === 'deposit-confirming') {
-      const transactionHash = plan.preparedDeposit?.transactionHash
-      if (transactionHash) {
+      const sourceGraph = await this.options.repository.get(
+        {
+          keyDomainId: parseKeyDomainId(plan.keyDomainId),
+          accountId: parseAccountId(plan.accountId)
+        },
+        parseTransactionId(plan.transactionId)
+      )
+      const sourceOrigin = sourceGraph?.segments.find(segment => segment.role === 'origin')
+      const replacementHash = sourceOrigin?.evidence?.replacementTransactionHash
+      const transactionHash = replacementHash ?? plan.preparedDeposit?.transactionHash
+      if (transactionHash && !replacementHash && sourceOrigin?.status !== 'final') {
         const observation = await observeEvmTransaction(
           transactionHash,
           this.requireRpc(plan.source.chainId)
@@ -2869,6 +2985,34 @@ export class ConfidentialFundingCoordinator {
           phase,
           ...(status?.errorStatus ? { errorStatus: status.errorStatus } : {})
         })
+      }
+      const currentGraph = await this.options.repository.get(
+        {
+          keyDomainId: parseKeyDomainId(plan.keyDomainId),
+          accountId: parseAccountId(plan.accountId)
+        },
+        parseTransactionId(plan.transactionId)
+      )
+      const currentOrigin = currentGraph?.segments.find(segment => segment.role === 'origin')
+      let sourceFinal = currentOrigin?.status === 'final'
+      const currentReplacementHash = currentOrigin?.evidence?.replacementTransactionHash
+      if (sourceFinal && currentReplacementHash && currentGraph) {
+        const replacements = await this.options.repository.list({
+          scope: currentGraph.root.scope,
+          chainId: parseChainId(plan.source.chainId).id,
+          statuses: ['final'],
+          limit: 200
+        })
+        sourceFinal = replacements.some(
+          candidate =>
+            candidate.segments.some(
+              segment => segment.evidence?.transactionHash === currentReplacementHash
+            ) && isEvmSpeedUpReplacement(currentGraph, candidate)
+        )
+      }
+      if (!sourceFinal) {
+        await this.scheduleMonitoring()
+        return plan
       }
       if (plan.operation === 'deposit') {
         if (
@@ -4375,7 +4519,39 @@ export class ConfidentialFundingCoordinator {
       keyDomainId: parseKeyDomainId(plan.keyDomainId),
       accountId: parseAccountId(plan.accountId)
     }
-    if (await this.options.repository.get(scope, parseTransactionId(plan.transactionId))) return
+    const existing = await this.options.repository.get(
+      scope,
+      parseTransactionId(plan.transactionId)
+    )
+    if (existing) {
+      const origin = existing.segments.find(segment => segment.role === 'origin')
+      if (
+        !plan.preparedDeposit?.transactionHash ||
+        origin?.status === 'final' ||
+        origin?.status === 'failed'
+      )
+        return
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const current =
+          attempt === 0
+            ? existing
+            : await this.options.repository.get(scope, parseTransactionId(plan.transactionId))
+        if (!current) return
+        const result = await this.options.repository.backfillConfidentialEvmOrigin({
+          scope,
+          transactionId: parseTransactionId(plan.transactionId),
+          expectedRootRevision: current.root.revision,
+          transactionHash: plan.preparedDeposit.transactionHash,
+          legacySenderAddress: plan.source.address,
+          preparedTransfer: plan.preparedDeposit.preparedTransfer,
+          observedAt: this.now()
+        })
+        if (result.status === 'revision-conflict') continue
+        if (result.status === 'applied') this.notifyActivityChanged(plan)
+        return
+      }
+      return
+    }
     const prepared = plan.preparedDeposit
       ? parsePreparedEvmTransfer(plan.preparedDeposit.preparedTransfer)
       : null
@@ -4399,6 +4575,27 @@ export class ConfidentialFundingCoordinator {
         assetId: plan.source.assetId,
         amountRaw: plan.source.amountRaw,
         address: plan.source.address,
+        ...(prepared
+          ? {
+              evmSenderAddress: prepared.from,
+              evm: {
+                nonce: prepared.transaction.nonce,
+                maxFeePerGasWei:
+                  prepared.transaction.type === 'legacy'
+                    ? prepared.transaction.gasPrice
+                    : prepared.transaction.maxFeePerGas,
+                maxPriorityFeePerGasWei:
+                  prepared.transaction.type === 'legacy'
+                    ? '0'
+                    : prepared.transaction.maxPriorityFeePerGas,
+                gasLimit: prepared.transaction.gasLimit,
+                ...(prepared.transaction.input.length >= 10
+                  ? { methodSelector: prepared.transaction.input.slice(0, 10).toLowerCase() }
+                  : {}),
+                unsignedTransaction: prepared.transaction
+              }
+            }
+          : {}),
         ...(feeAsset && prepared
           ? {
               feeAssetId: feeAsset,

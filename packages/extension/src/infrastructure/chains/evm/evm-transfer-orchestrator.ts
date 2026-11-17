@@ -36,10 +36,12 @@ import {
 } from '../pending-transaction-graph'
 import {
   assertEvmSigningSummaryMatchesPrepared,
+  assertEvmReplacementNonceAvailable,
   assertEvmTransferFresh,
   buildEvmCancelTransaction,
   buildEvmContractCall,
   buildEvmNonceRecoveryTransaction,
+  buildEvmSpeedUpTransaction,
   buildEvmTransfer,
   computeEvmSigningPayloadFingerprint,
   createEvmSigningPreparePayload,
@@ -53,6 +55,7 @@ import {
   type EvmTransferIntent
 } from './evm-transaction-builder'
 import { parseEvmAccountBinding } from './evm-account'
+import { isEvmSpeedUpReplacement } from './evm-speed-up'
 import {
   type AwaitingApprovalEvmTransfer,
   type AwaitingExternalSignatureEvmTransfer,
@@ -64,7 +67,7 @@ import {
 } from './evm-pending-transfer-store'
 import { classifyEvmContractCall, createEvmTransferGraph } from './evm-transaction-graph'
 import { broadcastSignedEvmTransaction } from './evm-transaction-observer'
-import type { EvmBroadcastRpc, EvmTransactionRpc } from './evm-rpc-client'
+import type { EvmBroadcastRpc, EvmDAppReadRpc, EvmTransactionRpc } from './evm-rpc-client'
 import {
   assertSignedEvmTransactionMatchesPrepared,
   createKeystoneSignedEvmTransaction,
@@ -99,7 +102,7 @@ export interface EvmTransferOrchestratorOptions {
   readonly repository: TransactionRepository
   readonly pendingStore: EvmPendingTransferStore
   readonly signer: EvmTransferSigningPort
-  readonly rpc: EvmTransactionRpc & EvmBroadcastRpc
+  readonly rpc: EvmTransactionRpc & EvmBroadcastRpc & Pick<EvmDAppReadRpc, 'getTransactionCount'>
   readonly assets: AssetRegistry
   readonly networkMode?: Network
   readonly now?: () => number
@@ -111,6 +114,7 @@ export interface EvmTransferOrchestratorOptions {
     recovered: boolean
   ) => Promise<void> | void
   readonly onMonitoringRequired?: () => Promise<void> | void
+  readonly assertSpeedUpAllowed?: (original: TransactionGraph) => Promise<void>
 }
 
 export interface PrepareEvmTransferInput {
@@ -132,6 +136,7 @@ export interface PrepareEvmTransferInput {
     maxPriorityFeePerGasWei: string
   }>
   readonly replacementMayBeUnknown?: boolean
+  readonly speedUpOf?: TransactionGraph
   readonly nonceRecoveryNonce?: string
 }
 
@@ -228,7 +233,9 @@ export class EvmTransferOrchestrator {
   private readonly repository: TransactionRepository
   private readonly pendingStore: EvmPendingTransferStore
   private readonly signer: EvmTransferSigningPort
-  private readonly rpc: EvmTransactionRpc & EvmBroadcastRpc
+  private readonly rpc: EvmTransactionRpc &
+    EvmBroadcastRpc &
+    Pick<EvmDAppReadRpc, 'getTransactionCount'>
   private readonly assets: AssetRegistry
   private readonly networkMode: Network
   private readonly now: () => number
@@ -240,6 +247,7 @@ export class EvmTransferOrchestrator {
     recovered: boolean
   ) => Promise<void> | void
   private readonly onMonitoringRequired?: () => Promise<void> | void
+  private readonly assertSpeedUpAllowed?: (original: TransactionGraph) => Promise<void>
   private readonly senderApprovalTails = new Map<string, Promise<void>>()
   private readonly senderPreparationTails = new Map<string, Promise<void>>()
 
@@ -256,6 +264,7 @@ export class EvmTransferOrchestrator {
     this.onPendingBroadcast = options.onPendingBroadcast
     this.onBroadcastAccepted = options.onBroadcastAccepted
     this.onMonitoringRequired = options.onMonitoringRequired
+    this.assertSpeedUpAllowed = options.assertSpeedUpAllowed
   }
 
   async prepare(input: PrepareEvmTransferInput): Promise<PreparedEvmTransferApproval> {
@@ -307,7 +316,14 @@ export class EvmTransferOrchestrator {
     const transactionHash = segment?.evidence?.transactionHash
     const evm = original.root.intent?.evm
     const sender = original.root.intent?.sender
-    if (!segment || !transactionHash || !evm || !sender) {
+    if (
+      !segment ||
+      (segment.status !== 'broadcast' && segment.status !== 'confirming') ||
+      segment.evidence?.replacementTransactionHash !== undefined ||
+      !transactionHash ||
+      !evm ||
+      !sender
+    ) {
       throw new Error('Pending EVM transaction does not contain replacement metadata')
     }
     const executionAccount = input.executionAccount
@@ -367,6 +383,79 @@ export class EvmTransferOrchestrator {
         maxFeePerGasWei: evm.maxFeePerGasWei,
         maxPriorityFeePerGasWei: evm.maxPriorityFeePerGasWei
       }),
+      replacementMayBeUnknown: original.root.status === 'broadcast'
+    })
+  }
+
+  async prepareSpeedUp(input: PrepareEvmCancelInput): Promise<PreparedEvmTransferApproval> {
+    const scope = normalizeScope(input.chainAccount.scope)
+    const originalTransactionId = parseTransactionId(input.originalTransactionId)
+    const original = await this.repository.get(scope, originalTransactionId)
+    const segment = original?.segments.find(
+      candidate =>
+        candidate.role === 'origin' &&
+        candidate.target.kind === 'onchain' &&
+        candidate.target.chainId === input.chainAccount.scope.chainId
+    )
+    const transactionHash = segment?.evidence?.transactionHash
+    const unsignedTransaction = original?.root.intent?.evm?.unsignedTransaction
+    const sender = original?.root.intent?.sender
+    const activeSender = (
+      input.executionAccount ??
+      parseEvmAccountBinding(input.chainAccount, input.chainAccount.scope.chainId)
+    ).address
+    if (
+      !original ||
+      original.root.kind === 'cancel' ||
+      (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+      (segment?.status !== 'broadcast' && segment?.status !== 'confirming') ||
+      !transactionHash ||
+      segment.evidence?.replacementTransactionHash !== undefined ||
+      !unsignedTransaction ||
+      !sender ||
+      sender.chainId !== input.chainAccount.scope.chainId ||
+      sender.address.toLowerCase() !== activeSender.toLowerCase() ||
+      unsignedTransaction.chainId !== input.chainAccount.scope.chainId.slice('eip155:'.length) ||
+      (original.root.intent?.protocol !== undefined &&
+        original.root.intent.protocol.expiresAt <= this.now())
+    ) {
+      throw new EvmTransactionError('stale-nonce', 'Pending EVM transaction cannot be sped up')
+    }
+    await this.checkSpeedUpAllowed(original)
+    const existing = await this.repository.list({
+      scope,
+      chainId: input.chainAccount.scope.chainId,
+      statuses: ['prepared', 'approved', 'signed', 'broadcast', 'confirming', 'final'],
+      limit: 200
+    })
+    const pendingGraphs = await Promise.all(
+      (await this.pendingStore.list()).map(pending =>
+        this.pendingStore.getReviewGraph(pending.transactionId)
+      )
+    )
+    if (
+      [...existing, ...pendingGraphs].some(
+        graph =>
+          graph?.root.relation?.kind === 'replacement-of' &&
+          graph.root.relation.transactionId === originalTransactionId
+      )
+    ) {
+      throw new EvmTransactionError('stale-nonce', 'An EVM replacement already exists')
+    }
+    return this.prepare({
+      chainAccount: input.chainAccount,
+      intent: {
+        chainId: input.chainAccount.scope.chainId,
+        contractAddress: unsignedTransaction.to,
+        valueRaw: unsignedTransaction.value,
+        calldata: unsignedTransaction.input
+      },
+      ...(input.executionAccount === undefined ? {} : { executionAccount: input.executionAccount }),
+      ...(input.signingMode === undefined ? {} : { signingMode: input.signingMode }),
+      ...(input.externalSigner === undefined ? {} : { externalSigner: input.externalSigner }),
+      ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
+      signal: input.signal,
+      speedUpOf: original,
       replacementMayBeUnknown: original.root.status === 'broadcast'
     })
   }
@@ -523,6 +612,7 @@ export class EvmTransferOrchestrator {
     sender: string
   ): Promise<PreparedEvmTransferApproval> {
     const isCancel = input.replacementOf !== undefined
+    const isSpeedUp = input.speedUpOf !== undefined
     const isNonceRecovery = input.nonceRecoveryNonce !== undefined
     const isContractCall = 'calldata' in input.intent
     if (input.nearIntentsBinding && input.rheaSwapBinding) {
@@ -559,7 +649,7 @@ export class EvmTransferOrchestrator {
       }
     }
     const nonceFloor =
-      isCancel || isNonceRecovery
+      isCancel || isSpeedUp || isNonceRecovery
         ? undefined
         : await this.readLocalNonceFloor(
             normalizeScope(input.chainAccount.scope),
@@ -578,8 +668,8 @@ export class EvmTransferOrchestrator {
       signal: input.signal,
       now: this.now
     }
-    const prepared = isCancel
-      ? await buildEvmCancelTransaction({
+    const prepared = isSpeedUp
+      ? await buildEvmSpeedUpTransaction({
           chainId: input.chainAccount.scope.chainId,
           chainAccount: input.chainAccount,
           ...(input.executionAccount === undefined
@@ -587,14 +677,18 @@ export class EvmTransferOrchestrator {
             : { executionAccount: input.executionAccount }),
           assets: this.assets,
           rpc: this.rpc,
-          original: input.replacementOf,
+          original: {
+            transactionHash: input.speedUpOf!.segments.find(segment => segment.role === 'origin')!
+              .evidence!.transactionHash!,
+            transaction: input.speedUpOf!.root.intent!.evm!.unsignedTransaction!
+          },
           ...(input.replacementMayBeUnknown ? { allowUnknownAtNonce: true } : {}),
           ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
           signal: input.signal,
           now: this.now
         })
-      : isNonceRecovery
-        ? await buildEvmNonceRecoveryTransaction({
+      : isCancel
+        ? await buildEvmCancelTransaction({
             chainId: input.chainAccount.scope.chainId,
             chainAccount: input.chainAccount,
             ...(input.executionAccount === undefined
@@ -602,14 +696,29 @@ export class EvmTransferOrchestrator {
               : { executionAccount: input.executionAccount }),
             assets: this.assets,
             rpc: this.rpc,
-            nonce: input.nonceRecoveryNonce ?? '',
+            original: input.replacementOf,
+            ...(input.replacementMayBeUnknown ? { allowUnknownAtNonce: true } : {}),
             ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
             signal: input.signal,
             now: this.now
           })
-        : isContractCall
-          ? await buildEvmContractCall({ ...sharedBuildInput, intent: input.intent })
-          : await buildEvmTransfer({ ...sharedBuildInput, intent: input.intent })
+        : isNonceRecovery
+          ? await buildEvmNonceRecoveryTransaction({
+              chainId: input.chainAccount.scope.chainId,
+              chainAccount: input.chainAccount,
+              ...(input.executionAccount === undefined
+                ? {}
+                : { executionAccount: input.executionAccount }),
+              assets: this.assets,
+              rpc: this.rpc,
+              nonce: input.nonceRecoveryNonce ?? '',
+              ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
+              signal: input.signal,
+              now: this.now
+            })
+          : isContractCall
+            ? await buildEvmContractCall({ ...sharedBuildInput, intent: input.intent })
+            : await buildEvmTransfer({ ...sharedBuildInput, intent: input.intent })
     const expectedFingerprint = await computeEvmSigningPayloadFingerprint(prepared.transaction)
     let externalSigner: EvmExternalSignerBinding | null = null
     const signing =
@@ -729,6 +838,44 @@ export class EvmTransferOrchestrator {
           relation: {
             kind: 'replacement-of',
             transactionId: input.replacementOf.transactionId
+          }
+        }
+      })
+    } else if (input.speedUpOf) {
+      const originalIntent = input.speedUpOf.root.intent!
+      const maximumFee =
+        BigInt(prepared.transaction.gasLimit) *
+        BigInt(
+          prepared.transaction.type === 'legacy'
+            ? prepared.transaction.gasPrice
+            : prepared.transaction.maxFeePerGas
+        )
+      graph = parseTransactionGraph({
+        ...graph,
+        root: {
+          ...graph.root,
+          kind: input.speedUpOf.root.kind,
+          intent: {
+            ...originalIntent,
+            feeLimit: originalIntent.feeLimit
+              ? { ...originalIntent.feeLimit, amountRaw: maximumFee.toString() }
+              : graph.root.intent?.feeLimit,
+            evm: {
+              ...originalIntent.evm,
+              maxFeePerGasWei:
+                prepared.transaction.type === 'legacy'
+                  ? prepared.transaction.gasPrice
+                  : prepared.transaction.maxFeePerGas,
+              maxPriorityFeePerGasWei:
+                prepared.transaction.type === 'legacy'
+                  ? '0'
+                  : prepared.transaction.maxPriorityFeePerGas,
+              unsignedTransaction: prepared.transaction
+            }
+          },
+          relation: {
+            kind: 'replacement-of',
+            transactionId: input.speedUpOf.root.id
           }
         }
       })
@@ -1168,20 +1315,24 @@ export class EvmTransferOrchestrator {
     if (graph.root.kind === 'cancel') {
       const originalId = graph.root.relation?.transactionId
       const original = originalId ? await this.repository.get(graph.root.scope, originalId) : null
-      const originalHash = original?.segments.find(segment => segment.role === 'origin')?.evidence
-        ?.transactionHash
+      const origin = original?.segments.find(segment => segment.role === 'origin')
+      const originalHash = origin?.evidence?.transactionHash
       if (
         !original ||
         !originalHash ||
-        (original.root.status !== 'broadcast' && original.root.status !== 'confirming')
+        (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+        (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
+        origin.evidence?.replacementTransactionHash !== undefined
       ) {
         throw new EvmTransactionError('stale-nonce', 'The original EVM transaction is unavailable')
       }
       await this.rpc.assertExpectedChain(signal)
-      const pendingNonce = await this.rpc.getPendingNonce(prepared.from, signal)
-      if (pendingNonce !== prepared.transaction.nonce) {
-        throw new EvmTransactionError('stale-nonce', 'EVM pending nonce changed')
-      }
+      await assertEvmReplacementNonceAvailable(
+        this.rpc,
+        prepared.from,
+        BigInt(prepared.transaction.nonce),
+        signal
+      )
       const location = await this.rpc.getTransactionLocation(originalHash, signal)
       if (location.status === 'pending') return
       if (location.status !== 'unknown' || original.root.status !== 'broadcast') {
@@ -1189,6 +1340,49 @@ export class EvmTransferOrchestrator {
           'stale-nonce',
           'The original EVM transaction is no longer pending'
         )
+      }
+      if ((await this.rpc.getPendingNonce(prepared.from, signal)) !== prepared.transaction.nonce) {
+        throw new EvmTransactionError('stale-nonce', 'EVM pending nonce changed')
+      }
+      return
+    }
+    if (prepared.kind === 'speed-up') {
+      const originalId = graph.root.relation?.transactionId
+      const original = originalId ? await this.repository.get(graph.root.scope, originalId) : null
+      const origin = original?.segments.find(segment => segment.role === 'origin')
+      const originalHash = origin?.evidence?.transactionHash
+      if (
+        !original ||
+        !originalHash ||
+        (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+        (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
+        origin.evidence?.replacementTransactionHash !== undefined ||
+        (original.root.intent?.protocol !== undefined &&
+          original.root.intent.protocol.expiresAt <= this.now()) ||
+        !isEvmSpeedUpReplacement(original, graph) ||
+        JSON.stringify(graph.root.intent?.evm?.unsignedTransaction) !==
+          JSON.stringify(prepared.transaction)
+      ) {
+        throw new EvmTransactionError('stale-nonce', 'The original EVM transaction is unavailable')
+      }
+      await this.checkSpeedUpAllowed(original)
+      await this.rpc.assertExpectedChain(signal)
+      await assertEvmReplacementNonceAvailable(
+        this.rpc,
+        prepared.from,
+        BigInt(prepared.transaction.nonce),
+        signal
+      )
+      const location = await this.rpc.getTransactionLocation(originalHash, signal)
+      if (location.status === 'pending') return
+      if (location.status !== 'unknown' || original.root.status !== 'broadcast') {
+        throw new EvmTransactionError(
+          'stale-nonce',
+          'The original EVM transaction is no longer pending'
+        )
+      }
+      if ((await this.rpc.getPendingNonce(prepared.from, signal)) !== prepared.transaction.nonce) {
+        throw new EvmTransactionError('stale-nonce', 'EVM pending nonce changed')
       }
       return
     }
@@ -1219,6 +1413,13 @@ export class EvmTransferOrchestrator {
       prepared.from,
       pending.transactionId
     )
+  }
+
+  private async checkSpeedUpAllowed(original: TransactionGraph): Promise<void> {
+    if (original.root.intent?.shield && !this.assertSpeedUpAllowed) {
+      throw new EvmTransactionError('stale-nonce', 'Confidential funding quote is unavailable')
+    }
+    await this.assertSpeedUpAllowed?.(original)
   }
 
   private async runSenderApprovalExclusive<T>(
@@ -1408,7 +1609,7 @@ export class EvmTransferOrchestrator {
       transactionHash: pending.transactionHash
     })
     await this.pendingStore.delete(pending.transactionId)
-    if (graph.root.kind === 'cancel') {
+    if (graph.root.kind === 'cancel' && graph.root.relation?.kind === 'replacement-of') {
       await this.markOriginalReplacementBroadcast(graph, pending.transactionHash).catch(() => {})
     }
     await Promise.all([
@@ -1539,6 +1740,32 @@ export class EvmTransferOrchestrator {
     graph: TransactionGraph
   ): boolean {
     const intent = graph.root.intent
+    if (pending.prepared.kind === 'speed-up') {
+      const transaction = pending.prepared.transaction
+      const evidence = intent?.evm?.unsignedTransaction
+      const segment = graph.segments.find(candidate => candidate.id === pending.segmentId)
+      return (
+        graph.root.id === pending.transactionId &&
+        scopesMatch(graph.root.scope, pending.scope) &&
+        (graph.root.status === 'prepared' || graph.root.status === 'approved') &&
+        graph.root.relation?.kind === 'replacement-of' &&
+        graph.root.relation.transactionId !== graph.root.id &&
+        intent?.sender?.chainId === pending.prepared.chainId &&
+        intent.sender.address.toLowerCase() === pending.prepared.from.toLowerCase() &&
+        evidence !== undefined &&
+        JSON.stringify(evidence) === JSON.stringify(transaction) &&
+        intent.feeLimit?.amountRaw ===
+          (
+            BigInt(transaction.gasLimit) *
+            BigInt(transaction.type === 'legacy' ? transaction.gasPrice : transaction.maxFeePerGas)
+          ).toString() &&
+        graph.segments.length === 1 &&
+        segment?.role === 'origin' &&
+        segment.target.kind === 'onchain' &&
+        segment.target.chainId === pending.prepared.chainId &&
+        (segment.status === 'prepared' || segment.status === 'approved')
+      )
+    }
     const rheaBinding =
       intent?.protocol?.provider === 'rhea-cross-chain-dex' ? intent.protocol : undefined
     const segment = graph.segments.find(candidate => candidate.id === pending.segmentId)

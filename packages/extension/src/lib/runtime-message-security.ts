@@ -831,6 +831,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     required: { chainId: isShortString, originalTransactionId: isShortString },
     optional: { executionMode: value => value === 'main' || value === 'private' }
   },
+  PREPARE_EVM_SPEED_UP: {
+    required: { chainId: isShortString, originalTransactionId: isShortString },
+    optional: { executionMode: value => value === 'main' || value === 'private' }
+  },
   GET_EVM_NONCE_RECOVERY: {
     required: { chainId: isShortString },
     optional: { executionMode: value => value === 'main' || value === 'private' }
@@ -1167,6 +1171,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     ESTIMATE_EVM_CONTRACT_CALL_FEE: ['extension-page'],
     PREPARE_EVM_CONTRACT_CALL: ['extension-page'],
     PREPARE_EVM_CANCEL: ['extension-page'],
+    PREPARE_EVM_SPEED_UP: ['extension-page'],
     GET_EVM_NONCE_RECOVERY: ['extension-page'],
     PREPARE_EVM_NONCE_RECOVERY: ['extension-page'],
     GET_PENDING_EVM_TRANSFER: ['extension-page'],

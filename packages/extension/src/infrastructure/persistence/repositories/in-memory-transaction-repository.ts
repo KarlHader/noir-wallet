@@ -7,6 +7,8 @@ import {
 } from '@/core/transactions/domain'
 import type {
   ApplyTransactionSegmentEventInput,
+  BackfillConfidentialEvmOriginInput,
+  BackfillConfidentialEvmOriginResult,
   TransactionCreateResult,
   TransactionListQuery,
   TransactionMutationResult,
@@ -14,6 +16,7 @@ import type {
 } from '@/ports/repositories'
 import {
   applyParsedTransactionMutation,
+  backfillConfidentialEvmOrigin,
   collectKnownTransactionEvents,
   parseTransactionListQuery,
   parseTransactionMutation,
@@ -157,6 +160,16 @@ export class InMemoryTransactionRepository implements TransactionRepository {
     appliedEvents.set(event.id, fingerprint)
     this.eventFingerprints.set(transactionId, appliedEvents)
     return mutation
+  }
+
+  async backfillConfidentialEvmOrigin(
+    input: BackfillConfidentialEvmOriginInput
+  ): Promise<BackfillConfidentialEvmOriginResult> {
+    const result = backfillConfidentialEvmOrigin(this.graphs.get(input.transactionId), input)
+    if (result.status === 'applied' && result.graph) {
+      this.graphs.set(input.transactionId, result.graph)
+    }
+    return result
   }
 
   async hasAppliedEvent(

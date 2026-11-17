@@ -1,6 +1,7 @@
 import { parseAccountId, type AccountId } from '@/core/accounts/domain'
 import { parseChainId } from '@/core/chains/registry'
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parsePreparedEvmTransfer } from '@/infrastructure/chains/evm/evm-transaction-builder'
 import {
   TRANSACTION_LIFECYCLE_STATUSES,
   applyTransactionSegmentEvent,
@@ -20,6 +21,8 @@ import {
 } from '@/core/transactions/domain'
 import type {
   ApplyTransactionSegmentEventInput,
+  BackfillConfidentialEvmOriginInput,
+  BackfillConfidentialEvmOriginResult,
   TransactionListQuery,
   TransactionMutationResult
 } from '@/ports/repositories'
@@ -99,6 +102,107 @@ export function transactionGraphMatchesScope(
     graph.root.scope.keyDomainId === scope.keyDomainId &&
     graph.root.scope.accountId === scope.accountId
   )
+}
+
+export function backfillConfidentialEvmOrigin(
+  graph: TransactionGraph | undefined,
+  input: BackfillConfidentialEvmOriginInput
+): BackfillConfidentialEvmOriginResult {
+  const scope = parseTransactionRepositoryScope(input.scope)
+  const transactionId = parseTransactionId(input.transactionId)
+  if (!graph || !transactionGraphMatchesScope(graph, scope) || graph.root.id !== transactionId) {
+    return { status: 'not-found' }
+  }
+  const revision = parseTransactionRepositoryRevision(input.expectedRootRevision, 'root revision')
+  if (graph.root.revision !== revision) return { status: 'revision-conflict', graph }
+  if (!Number.isSafeInteger(input.observedAt) || input.observedAt < 0) {
+    throw new Error('Invalid confidential EVM origin observation time')
+  }
+  const prepared = parsePreparedEvmTransfer(input.preparedTransfer)
+  const origin = graph.segments.find(segment => segment.role === 'origin')
+  const intent = graph.root.intent
+  const nonceReference = `evm-nonce:${prepared.transaction.nonce}`
+  if (
+    !/^tx:confidential:[^:]+$/.test(transactionId) ||
+    !['signed', 'broadcast', 'confirming'].includes(graph.root.status) ||
+    !intent?.shield ||
+    !['deposit', 'cluster'].includes(intent.shield.operation) ||
+    !['public', 'private'].includes(intent.shield.sourceDomain) ||
+    origin?.target.kind !== 'onchain' ||
+    !['signed', 'broadcast', 'confirming'].includes(origin.status) ||
+    origin.id !== `segment:confidential:${transactionId.slice('tx:confidential:'.length)}:origin` ||
+    !origin.evidence ||
+    origin.target.chainId !== prepared.chainId ||
+    intent.sender?.chainId !== prepared.chainId ||
+    (intent.sender.address.toLowerCase() !== input.legacySenderAddress.toLowerCase() &&
+      intent.sender.address.toLowerCase() !== prepared.from.toLowerCase()) ||
+    intent.primaryAmount?.assetId !== prepared.assetId ||
+    intent.primaryAmount.amountRaw !== prepared.amountRaw ||
+    origin.evidence?.transactionHash !== input.transactionHash ||
+    !/^0x[0-9a-fA-F]{64}$/.test(input.transactionHash) ||
+    (origin.evidence.externalReference !== undefined &&
+      origin.evidence.externalReference !== nonceReference) ||
+    (intent.evm !== undefined &&
+      (intent.evm.nonce !== prepared.transaction.nonce ||
+        intent.sender.address.toLowerCase() !== prepared.from.toLowerCase()))
+  ) {
+    return { status: 'binding-conflict', graph }
+  }
+  const evm = {
+    schemaVersion: 1 as const,
+    nonce: prepared.transaction.nonce,
+    maxFeePerGasWei:
+      prepared.transaction.type === 'legacy'
+        ? prepared.transaction.gasPrice
+        : prepared.transaction.maxFeePerGas,
+    maxPriorityFeePerGasWei:
+      prepared.transaction.type === 'legacy' ? '0' : prepared.transaction.maxPriorityFeePerGas,
+    gasLimit: prepared.transaction.gasLimit,
+    ...(prepared.transaction.input.length >= 10
+      ? { methodSelector: prepared.transaction.input.slice(0, 10).toLowerCase() }
+      : {}),
+    unsignedTransaction: prepared.transaction
+  }
+  if (
+    intent.evm &&
+    Object.entries(intent.evm).some(([key, value]) => {
+      const expected = evm[key as keyof typeof evm]
+      return JSON.stringify(value) !== JSON.stringify(expected)
+    })
+  ) {
+    return { status: 'binding-conflict', graph }
+  }
+  if (
+    intent.sender.address.toLowerCase() === prepared.from.toLowerCase() &&
+    JSON.stringify(intent.evm) === JSON.stringify(evm) &&
+    origin.evidence.externalReference === nonceReference
+  ) {
+    return { status: 'unchanged', graph }
+  }
+  const observedAt = Math.max(input.observedAt, graph.root.updatedAt, origin.updatedAt)
+  const updated = parseTransactionGraph({
+    root: {
+      ...graph.root,
+      intent: {
+        ...intent,
+        sender: { chainId: prepared.chainId, address: prepared.from },
+        evm
+      },
+      updatedAt: observedAt,
+      revision: graph.root.revision + 1
+    },
+    segments: graph.segments.map(segment =>
+      segment.id === origin.id
+        ? {
+            ...segment,
+            evidence: { ...segment.evidence, externalReference: nonceReference },
+            updatedAt: observedAt,
+            revision: segment.revision + 1
+          }
+        : segment
+    )
+  })
+  return { status: 'applied', graph: updated }
 }
 
 export function assertPersistableTransactionGraph(graph: TransactionGraph): void {

@@ -18,6 +18,7 @@ import {
   assertEvmTransferFresh,
   buildEvmCancelTransaction,
   buildEvmContractCall,
+  buildEvmSpeedUpTransaction,
   buildEvmTransfer,
   createEvmSigningSummary,
   createEvmSigningPreparePayload,
@@ -49,6 +50,7 @@ function transactionRpc(overrides = {}) {
     assertExpectedChain: async () => {},
     getNativeBalance: async () => '1000000000000000000000',
     getPendingNonce: async () => '7',
+    getTransactionCount: async () => '7',
     simulateCall: async () => '0x',
     estimateGas: async () => '21000',
     getMaximumPriorityFeePerGas: async () => '1000000000',
@@ -305,6 +307,31 @@ test.describe('EVM transfer builder', () => {
     })
   })
 
+  test('keeps BNB Low above the RPC gas price baseline', async () => {
+    const bnbChainId = parseChainId('eip155:56').id
+    const prepared = await buildEvmTransfer({
+      chainId: bnbChainId,
+      chainAccount: { ...account, scope: { ...account.scope, chainId: bnbChainId } },
+      assets,
+      intent: {
+        assetId: 'eip155:56/slip44:714',
+        recipient,
+        amountRaw: '123'
+      },
+      feeTier: 'low',
+      rpc: transactionRpc({
+        getLatestBlockFee: async () => ({ blockNumber: '100', baseFeePerGas: '0' }),
+        getMaximumPriorityFeePerGas: async () => '1000000000',
+        getGasPrice: async () => '2000000000'
+      })
+    })
+
+    expect(prepared.transaction).toMatchObject({
+      maxPriorityFeePerGas: '2000000000',
+      maxFeePerGas: '2000000000'
+    })
+  })
+
   test('builds a same-nonce self-transfer with replacement-safe fees for cancellation', async () => {
     const prepared = await buildEvmCancelTransaction({
       chainId,
@@ -317,6 +344,11 @@ test.describe('EVM transfer builder', () => {
         maxPriorityFeePerGasWei: '1000000000'
       },
       rpc: transactionRpc({
+        getPendingNonce: async () => '8',
+        getTransactionCount: async (_address, tag) => {
+          expect(tag).toBe('latest')
+          return '7'
+        },
         getTransactionLocation: async () => ({ status: 'pending' })
       }),
       now: () => 123
@@ -385,7 +417,7 @@ test.describe('EVM transfer builder', () => {
         original,
         allowUnknownAtNonce: true,
         rpc: transactionRpc({
-          getPendingNonce: async () => '6',
+          getTransactionCount: async () => '8',
           getTransactionLocation: async () => ({ status: 'unknown' })
         })
       })
@@ -399,6 +431,47 @@ test.describe('EVM transfer builder', () => {
         rpc: transactionRpc({ getTransactionLocation: async () => ({ status: 'unknown' }) })
       })
     ).rejects.toMatchObject({ code: 'stale-nonce' })
+  })
+
+  test('speeds up a pending contract call with the same payload and nonce', async () => {
+    const original = {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '7',
+      maxFeePerGas: '5000000000',
+      maxPriorityFeePerGas: '1000000000',
+      gasLimit: '52000',
+      to: recipient,
+      value: '123',
+      input: '0x12345678',
+      accessList: []
+    }
+    const prepared = await buildEvmSpeedUpTransaction({
+      chainId,
+      chainAccount: account,
+      assets,
+      original: { transactionHash: `0x${'a'.repeat(64)}`, transaction: original },
+      rpc: transactionRpc({
+        getPendingNonce: async () => '8',
+        getTransactionLocation: async () => ({ status: 'pending' })
+      })
+    })
+
+    expect(prepared.kind).toBe('speed-up')
+    expect(prepared.transaction).toMatchObject({
+      type: original.type,
+      chainId: original.chainId,
+      nonce: original.nonce,
+      gasLimit: original.gasLimit,
+      to: original.to,
+      value: original.value,
+      input: original.input,
+      accessList: []
+    })
+    expect(BigInt(prepared.transaction.maxFeePerGas)).toBeGreaterThan(BigInt(original.maxFeePerGas))
+    expect(BigInt(prepared.transaction.maxPriorityFeePerGas)).toBeGreaterThan(
+      BigInt(original.maxPriorityFeePerGas)
+    )
   })
 
   test('binds PEA preflight and signing to the private execution address', async () => {

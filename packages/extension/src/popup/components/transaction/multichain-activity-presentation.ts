@@ -732,23 +732,44 @@ export function getActivityRecoveryAction(
   return 'none'
 }
 
-export function canCancelEvmActivity(item: ActivityItem, evmChainIds: readonly string[]): boolean {
-  const segment = item.segments[0]
-  return (
-    item.source === 'wallet-v2' &&
+export function getPendingEvmActivityOrigin(
+  item: ActivityItem,
+  evmChainIds: readonly string[]
+): ActivitySegment | null {
+  const segment = item.segments.find(candidate => candidate.role === 'origin')
+  return item.source === 'wallet-v2' &&
     item.completeness === 'complete' &&
     item.kind !== 'cancel' &&
-    (item.kind === 'transfer' || item.kind === 'approve' || item.kind === 'contract-call') &&
-    (item.status === 'broadcast' || item.status === 'confirming') &&
+    item.status !== 'final' &&
+    item.status !== 'failed' &&
     item.failureCode === undefined &&
+    item.snapshot?.direction !== 'incoming' &&
     item.snapshot?.evm !== undefined &&
-    item.segments.length === 1 &&
-    segment?.role === 'origin' &&
+    segment !== undefined &&
     (segment.status === 'broadcast' || segment.status === 'confirming') &&
     segment.target.kind === 'onchain' &&
     evmChainIds.includes(segment.target.chainId) &&
     /^0x[0-9a-f]{64}$/.test(segment.evidence?.transactionHash ?? '') &&
     segment.evidence?.replacementTransactionHash === undefined
+    ? segment
+    : null
+}
+
+export function canCancelEvmActivity(item: ActivityItem, evmChainIds: readonly string[]): boolean {
+  return getPendingEvmActivityOrigin(item, evmChainIds) !== null
+}
+
+export function canSpeedUpEvmActivity(
+  item: ActivityItem,
+  evmChainIds: readonly string[],
+  now = Date.now(),
+  shieldQuoteExpiresAt?: number
+): boolean {
+  return Boolean(
+    getPendingEvmActivityOrigin(item, evmChainIds) &&
+    item.snapshot?.evm?.unsignedTransaction &&
+    (item.snapshot.protocol === undefined || item.snapshot.protocol.expiresAt > now) &&
+    (shieldQuoteExpiresAt === undefined || shieldQuoteExpiresAt > now)
   )
 }
 

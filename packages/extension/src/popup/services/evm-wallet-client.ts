@@ -193,6 +193,11 @@ export interface EvmWalletClient {
     originalTransactionId: TransactionId,
     executionMode?: 'main' | 'private'
   ) => Promise<EvmTransferReview>
+  readonly prepareSpeedUp: (
+    chainId: string,
+    originalTransactionId: TransactionId,
+    executionMode?: 'main' | 'private'
+  ) => Promise<EvmTransferReview>
   readonly getNonceRecovery: (
     chainId: string,
     executionMode?: 'main' | 'private'
@@ -1202,6 +1207,36 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
             prepared.graph.root.relation.transactionId !== parsedTransactionId
           ) {
             throw new Error('EVM cancellation review does not match its request')
+          }
+          return prepared
+        }
+      )
+    },
+    prepareSpeedUp: async (
+      chainId: string,
+      originalTransactionId: TransactionId,
+      executionMode: 'main' | 'private' = 'main'
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      if (!parsedChainId.startsWith('eip155:')) {
+        throw new EvmWalletClientError('invalid-response', 'EVM speed-up requires an EVM chain')
+      }
+      return send(
+        {
+          type: 'PREPARE_EVM_SPEED_UP',
+          chainId: parsedChainId,
+          originalTransactionId: parsedTransactionId,
+          executionMode
+        },
+        value => {
+          const prepared = parseTransferReview(value)
+          if (
+            prepared.review.chainId !== parsedChainId ||
+            prepared.graph.root.relation?.kind !== 'replacement-of' ||
+            prepared.graph.root.relation.transactionId !== parsedTransactionId
+          ) {
+            throw new Error('EVM speed-uplation review does not match its request')
           }
           return prepared
         }

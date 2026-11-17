@@ -1290,7 +1290,13 @@ async function reloadMultichainRuntime(
           catalog,
           activeEvm,
           userAssets.definitions,
-          requireCurrentPrivateSwapQuote
+          requireCurrentPrivateSwapQuote,
+          async graph => {
+            if (!graph.root.intent?.shield) return
+            const coordinator = confidentialFundingCoordinator
+            if (!coordinator) throw new Error('Shield funding is unavailable')
+            await coordinator.assertSpeedUpAllowed(graph)
+          }
         )
       : null
   evmTransferController = evmTransferRuntime?.activeController ?? null
@@ -4520,6 +4526,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'GET_EVM_TOKEN_ALLOWANCE' ||
     message.type === 'GET_EVM_TOKEN_BALANCE' ||
     message.type === 'PREPARE_EVM_CANCEL' ||
+    message.type === 'PREPARE_EVM_SPEED_UP' ||
     message.type === 'GET_EVM_NONCE_RECOVERY' ||
     message.type === 'PREPARE_EVM_NONCE_RECOVERY' ||
     message.type === 'GET_PENDING_EVM_TRANSFER' ||
@@ -4605,12 +4612,10 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                   message.executionMode,
                   debugRequestId
                 )
-              : message.type === 'PREPARE_EVM_CANCEL'
-                ? evmTransferRouter.prepareCancel(
-                    message.chainId,
-                    message.originalTransactionId,
-                    message.executionMode
-                  )
+              : message.type === 'PREPARE_EVM_CANCEL' || message.type === 'PREPARE_EVM_SPEED_UP'
+                ? evmTransferRouter[
+                    message.type === 'PREPARE_EVM_CANCEL' ? 'prepareCancel' : 'prepareSpeedUp'
+                  ](message.chainId, message.originalTransactionId, message.executionMode)
                 : message.type === 'GET_EVM_TOKEN_ALLOWANCE'
                   ? evmTransferRouter.getTokenAllowance(
                       message.chainId,

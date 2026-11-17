@@ -6,6 +6,7 @@ export {
   type TransactionId,
   type TransactionSegmentId
 } from './identity'
+export { isEvmSpeedUpReplacement } from './evm-speed-up'
 export {
   applyTransactionSegmentEvent,
   applyTransactionGraphEvent,

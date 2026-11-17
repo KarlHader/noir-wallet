@@ -241,6 +241,92 @@ test.describe('EVM persisted transaction monitor', () => {
     })
   })
 
+  test('finalizes the original origin when a linked same-payload speed up succeeds', async () => {
+    const repository = new InMemoryTransactionRepository()
+    const original = graph('transaction:evm:original-speed-up', 'broadcast', scope, {
+      transactionHash,
+      externalReference: 'evm-nonce:7'
+    })
+    const originalTransaction = {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '7',
+      maxFeePerGas: '5000000000',
+      maxPriorityFeePerGas: '1000000000',
+      gasLimit: '52000',
+      to: counterparty,
+      value: '12',
+      input: '0x12345678',
+      accessList: []
+    }
+    original.root.intent.evm = {
+      schemaVersion: 1,
+      nonce: '7',
+      maxFeePerGasWei: originalTransaction.maxFeePerGas,
+      maxPriorityFeePerGasWei: originalTransaction.maxPriorityFeePerGas,
+      gasLimit: originalTransaction.gasLimit,
+      methodSelector: '0x12345678',
+      unsignedTransaction: originalTransaction
+    }
+    const speedUp = graph('transaction:evm:linked-speed-up', 'broadcast', scope, {
+      transactionHash: replacementTransactionHash,
+      externalReference: 'evm-nonce:7'
+    })
+    speedUp.root.relation = { kind: 'replacement-of', transactionId: original.root.id }
+    const raisedTransaction = {
+      ...originalTransaction,
+      maxFeePerGas: '6500000000',
+      maxPriorityFeePerGas: '1500000000'
+    }
+    speedUp.root.intent.evm = {
+      ...original.root.intent.evm,
+      maxFeePerGasWei: raisedTransaction.maxFeePerGas,
+      maxPriorityFeePerGasWei: raisedTransaction.maxPriorityFeePerGas,
+      unsignedTransaction: raisedTransaction
+    }
+    await repository.create(original)
+    await repository.create(speedUp)
+    let receiptAvailable = false
+    const monitor = new EvmTransactionMonitor({
+      repository,
+      chainId,
+      rpc: {
+        ...rpc(null),
+        getTransactionLocation: async hash =>
+          hash === transactionHash ? { status: 'unknown' } : { status: 'pending' },
+        getTransactionReceipt: async hash =>
+          receiptAvailable && hash === replacementTransactionHash
+            ? { transactionHash: hash, blockHash, blockNumber: '101', status: 'success' }
+            : null
+      },
+      replacementSource: {
+        findConfirmedReplacement: async () => ({
+          transactionHash: replacementTransactionHash,
+          blockHash,
+          blockHeight: 101,
+          confirmedAt: 1_100
+        })
+      },
+      now: () => 1_100,
+      createEventId: ids()
+    })
+
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ errors: 0 })
+    expect((await repository.get(scope, parseTransactionId(original.root.id))).root.status).toBe(
+      'broadcast'
+    )
+    receiptAvailable = true
+    await expect(monitor.poll([scope])).resolves.toMatchObject({ errors: 0 })
+    const settled = await repository.get(scope, parseTransactionId(original.root.id))
+    expect(settled.root.status).toBe('final')
+    expect(settled.segments[0].evidence).toMatchObject({
+      transactionHash,
+      replacementTransactionHash,
+      blockHash,
+      blockHeight: 101
+    })
+  })
+
   test('settles a replaced Swap origin only after the cancellation receipt succeeds', async () => {
     const repository = new InMemoryTransactionRepository()
     const swap = graph('transaction:evm:swap-origin')

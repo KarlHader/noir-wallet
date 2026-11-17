@@ -21,7 +21,11 @@ import { ActivityTransactionBody, buildActivityTransactionView } from './Activit
 import type { ActivityItem } from '@/core/activity'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import type { Network } from '@/types'
-import { isLegacyPrivateShieldWithdrawDestination } from './multichain-activity-presentation'
+import {
+  getActivityStatusPresentation,
+  isLegacyPrivateShieldWithdrawDestination
+} from './multichain-activity-presentation'
+import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
 
 export interface ConfidentialActivityTarget {
   readonly network: Network
@@ -253,6 +257,9 @@ export function ConfidentialActivityView({
     scopedActivity.reconfirming !== true &&
     scopedActivity.completeness === 'complete'
   const failed = scopedActivity?.status === 'failed' && !refunded
+  const failedPresentation =
+    failed && scopedActivity ? getActivityStatusPresentation(scopedActivity) : null
+  const neutralFailure = failedPresentation?.tone === 'neutral'
   const origin = scopedActivity?.segments.find(segment => segment.role === 'origin')
   const destination = scopedActivity?.segments.find(segment => segment.role === 'destination')
   const progressTitle =
@@ -268,33 +275,68 @@ export function ConfidentialActivityView({
     <>
       {inDialog && <DialogTitle className="sr-only">Transaction activity</DialogTitle>}
       <TransactionResult
-        status={refunded ? 'neutral' : confirmed ? 'success' : failed ? 'failed' : 'loading'}
+        status={
+          refunded
+            ? 'neutral'
+            : confirmed
+              ? 'success'
+              : neutralFailure
+                ? 'neutral'
+                : failed
+                  ? 'failed'
+                  : 'loading'
+        }
         title={
           refunded
             ? 'Transaction Refunded'
             : confirmed
               ? 'Transaction Confirmed'
-              : failed
-                ? 'Transaction Failed'
-                : progressTitle
+              : neutralFailure
+                ? `Transaction ${failedPresentation.label}`
+                : failed
+                  ? 'Transaction Failed'
+                  : progressTitle
         }
         footer={
-          confirmed || failed || refunded ? (
-            <Button onClick={onDone} className="h-[45px] w-full">
-              Done
-            </Button>
-          ) : stillLoading ? (
-            <Button
-              variant="outline"
-              className="h-[45px] w-full"
-              onClick={() => {
-                onDone()
-                onViewActivity()
-              }}
-            >
-              View Activity
-            </Button>
-          ) : undefined
+          <div className="space-y-2">
+            {scopedActivity && (
+              <EvmPendingTransactionActions
+                key={scopedActivity.id}
+                item={scopedActivity}
+                evmChainIds={catalog.evmChainIds}
+                accountMatches={matchesAccount}
+                feeDecimals={
+                  scopedActivity.snapshot?.feeLimit
+                    ? (catalog.assetMetadata.get(scopedActivity.snapshot.feeLimit.assetId)?.metadata
+                        .decimals ?? scopedActivity.snapshot.feeLimit.metadata?.decimals)
+                    : undefined
+                }
+                feeSymbol={
+                  scopedActivity.snapshot?.feeLimit
+                    ? (catalog.assetMetadata.get(scopedActivity.snapshot.feeLimit.assetId)?.metadata
+                        .symbol ?? scopedActivity.snapshot.feeLimit.metadata?.symbol)
+                    : undefined
+                }
+                shieldQuoteExpiresAt={Date.parse(scopedPlan?.depositQuote?.quote.deadline ?? '')}
+              />
+            )}
+            {confirmed || failed || refunded ? (
+              <Button onClick={onDone} className="h-[45px] w-full">
+                Done
+              </Button>
+            ) : stillLoading ? (
+              <Button
+                variant="outline"
+                className="h-[45px] w-full"
+                onClick={() => {
+                  onDone()
+                  onViewActivity()
+                }}
+              >
+                View Activity
+              </Button>
+            ) : null}
+          </div>
         }
       >
         {activityView ? (

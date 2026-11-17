@@ -33,6 +33,21 @@ export interface ApplyTransactionSegmentEventInput {
   readonly expectedSegmentRevision: number
 }
 
+export interface BackfillConfidentialEvmOriginInput {
+  readonly scope: TransactionAccountScope
+  readonly transactionId: TransactionId
+  readonly expectedRootRevision: number
+  readonly transactionHash: string
+  readonly legacySenderAddress: string
+  readonly preparedTransfer: unknown
+  readonly observedAt: number
+}
+
+export interface BackfillConfidentialEvmOriginResult {
+  readonly status: 'applied' | 'unchanged' | 'revision-conflict' | 'binding-conflict' | 'not-found'
+  readonly graph?: TransactionGraph
+}
+
 export type TransactionMutationStatus =
   | 'applied'
   | 'duplicate-event'
@@ -54,6 +69,9 @@ export interface TransactionRepository {
   ): Promise<TransactionGraph | null>
   list(query: TransactionListQuery): Promise<readonly TransactionGraph[]>
   applySegmentEvent(input: ApplyTransactionSegmentEventInput): Promise<TransactionMutationResult>
+  backfillConfidentialEvmOrigin(
+    input: BackfillConfidentialEvmOriginInput
+  ): Promise<BackfillConfidentialEvmOriginResult>
   hasAppliedEvent(
     scope: TransactionAccountScope,
     transactionId: TransactionId,

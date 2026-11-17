@@ -483,6 +483,17 @@ function TransferForm() {
   const [confirmUncertain, setConfirmUncertain] = useState(false)
   const [cancellingShield, setCancellingShield] = useState(false)
   const confirmAttemptedPlanId = useRef<string | null>(null)
+  const reviewAttempt = useRef<{ key: string; dedupKey: string } | null>(null)
+  const [feeRefresh, setFeeRefresh] = useState<{
+    planId: string
+    selection: EvmFeeSelection
+    cancelled: boolean
+  } | null>(null)
+  const feeRefreshRef = useRef(feeRefresh)
+  const updateFeeRefresh = (next: typeof feeRefresh) => {
+    feeRefreshRef.current = next
+    setFeeRefresh(next)
+  }
   const [preparedShield, setPreparedShield] = useState<{
     key: string
     review: ConfidentialFundingReview
@@ -628,6 +639,8 @@ function TransferForm() {
     setCancellingShield(false)
     setShieldError(null)
     setConfirmUncertain(false)
+    reviewAttempt.current = null
+    updateFeeRefresh(null)
     setAssetPickerOpen(false)
     setNetworkPickerOpen(false)
     setDomainPicker(null)
@@ -1360,6 +1373,8 @@ function TransferForm() {
     if (confirmAttemptedPlanId.current !== preparedShield.review.planId)
       void confidentialFundingClient.cancel(preparedShield.review.planId).catch(() => {})
     setPreparedShield(null)
+    reviewAttempt.current = null
+    updateFeeRefresh(null)
   }, [shieldReviewKey, preparedShield])
   const canReview = Boolean(
     draftScope === scopeKey &&
@@ -1575,6 +1590,9 @@ function TransferForm() {
       return false
     const key = shieldReviewKeyForFee(feeSelection)
     const expectedKey = shieldReviewKey
+    if (reviewAttempt.current?.key !== key)
+      reviewAttempt.current = { key, dedupKey: `move:${crypto.randomUUID()}` }
+    const dedupKey = reviewAttempt.current.dedupKey
     setPreparingShield(true)
     setShieldError(null)
     try {
@@ -1590,7 +1608,8 @@ function TransferForm() {
         chain: selected.chain,
         managed: managedAsset,
         ...(from === 'shield' ? {} : { feeSelection }),
-        ...(from === 'shield' && destination ? { destination } : {})
+        ...(from === 'shield' && destination ? { destination } : {}),
+        dedupKey
       })
       const result = await confidentialFundingClient.prepare(request)
       if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
@@ -1601,10 +1620,10 @@ function TransferForm() {
       if (result.phase !== 'prepared') {
         const status = await checkShieldPlan(result.planId)
         if (replacingReview && scopeStillCurrent()) {
-          setPreparedShield(null)
           if (status !== 'started')
             throw new Error('Transfer review could not be prepared. Try again.')
         }
+        if (status === 'started') reviewAttempt.current = null
         return false
       }
       if (!matchesShieldReview(result, request)) {
@@ -1613,6 +1632,7 @@ function TransferForm() {
       }
       confirmAttemptedPlanId.current = null
       setConfirmUncertain(false)
+      reviewAttempt.current = null
       if (replacingReview) setEvmMoveFee(feeSelection)
       setPreparedShield({ key, review: result })
       return true
@@ -1628,10 +1648,7 @@ function TransferForm() {
               ? `Insufficient ${formatSymbol(nativeFeeAsset.metadata.symbol)} balance for the amount and network fee.`
               : classifiedMessage
         setShieldError(userMessage)
-        if (replacingReview) {
-          setPreparedShield(null)
-          throw new Error(userMessage)
-        }
+        if (replacingReview) throw new Error(userMessage)
       }
       return false
     } finally {
@@ -1650,6 +1667,8 @@ function TransferForm() {
       setMaxSelected(false)
       setShieldError(null)
       setConfirmUncertain(false)
+      reviewAttempt.current = null
+      updateFeeRefresh(null)
       void loadShieldBalances(true, false)
       void openConfidentialActivity(
         plan,
@@ -1706,18 +1725,21 @@ function TransferForm() {
         const status = await checkShieldPlan(pending.planId)
         if (status !== 'prepared') return
       }
-      await confidentialFundingClient.cancel(pending.planId)
+      if (feeRefreshRef.current?.planId !== pending.planId || !feeRefreshRef.current.cancelled)
+        await confidentialFundingClient.cancel(pending.planId)
       if (!scopeStillCurrent()) return
       setPreparedShield(null)
     } catch {
       if (scopeStillCurrent()) setPreparedShield(null)
     } finally {
+      reviewAttempt.current = null
+      updateFeeRefresh(null)
       if (scopeStillCurrent()) setCancellingShield(false)
     }
   }
   const confirmShield = async () => {
     const pending = activeShieldReview
-    if (!pending || !scopeStillCurrent()) return
+    if (!pending || feeRefreshRef.current || preparingShield || !scopeStillCurrent()) return
     if (!confirmUncertain && pending.expiresAt <= Date.now()) {
       setShieldError('Shield review expired. Try again.')
       return
@@ -1765,23 +1787,33 @@ function TransferForm() {
 
   const changeShieldFee = async (next: EvmFeeSelection) => {
     const review = activeShieldReview
-    if (!review?.sourceEvmFee || areEvmFeeSelectionsEqual(next, evmMoveFee)) return
+    if (
+      !review?.sourceEvmFee ||
+      (areEvmFeeSelectionsEqual(next, evmMoveFee) && !feeRefreshRef.current)
+    )
+      return
     if (cancellingShield || confirmingShield || preparingShield || !scopeStillCurrent()) return
     if (confirmAttemptedPlanId.current === review.planId)
       throw new Error('Check transfer status before changing network fee.')
+    const previous = feeRefreshRef.current
+    const refresh = {
+      planId: review.planId,
+      selection: next,
+      cancelled: previous?.planId === review.planId && previous.cancelled
+    }
+    updateFeeRefresh(refresh)
     setCancellingShield(true)
     try {
-      try {
+      if (!refresh.cancelled) {
         await confidentialFundingClient.cancel(review.planId)
-      } catch (error) {
-        if (scopeStillCurrent() && latestShieldReviewKey.current === shieldReviewKey) {
-          setPreparedShield(null)
-          setShieldError(classifyError(error).userMessage)
-        }
-        throw error
+        if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
+        updateFeeRefresh({ ...refresh, cancelled: true })
       }
       if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
-      await prepareShield(next, true)
+      if (await prepareShield(next, true)) updateFeeRefresh(null)
+    } catch (error) {
+      if (scopeStillCurrent()) setShieldError(classifyError(error).userMessage)
+      throw error
     } finally {
       if (scopeStillCurrent()) setCancellingShield(false)
     }
@@ -1967,9 +1999,22 @@ function TransferForm() {
           ]}
           error={
             shieldError ? (
-              <p role="alert" className="mt-3 text-xs text-warning">
-                {shieldError}
-              </p>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p role="alert" className="text-xs text-warning">
+                  {shieldError}
+                </p>
+                {feeRefresh && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={cancellingShield || preparingShield}
+                    onClick={() => void changeShieldFee(feeRefresh.selection).catch(() => {})}
+                  >
+                    Retry
+                  </Button>
+                )}
+              </div>
             ) : undefined
           }
           confirmLabel={
@@ -1987,6 +2032,8 @@ function TransferForm() {
           confirmDisabled={
             !scopeStillCurrent() ||
             cancellingShield ||
+            preparingShield ||
+            feeRefresh !== null ||
             (!confirmUncertain && activeShieldReview.expiresAt <= Date.now())
           }
           onCancel={() => void cancelShieldReview()}

@@ -3,6 +3,7 @@ import {
   parseTransactionId,
   parseTransactionSegmentId,
   type TransactionAccountScope,
+  type TransactionIntentSnapshot,
   type TransactionGraph
 } from '@/core/transactions/domain'
 
@@ -17,9 +18,11 @@ export function createConfidentialFundingGraph(input: {
     assetId: string
     amountRaw: string
     address: string
+    evmSenderAddress?: string
     feeAssetId?: string
     maximumFeeRaw?: string
     transactionHash?: string
+    evm?: Omit<NonNullable<TransactionIntentSnapshot['evm']>, 'schemaVersion'>
   }>
   readonly destination: Readonly<{
     chainId: string
@@ -101,7 +104,11 @@ export function createConfidentialFundingGraph(input: {
               }
             }
           : {}),
-        sender: { chainId: input.source.chainId, address: input.source.address },
+        sender: {
+          chainId: input.source.chainId,
+          address: input.source.evmSenderAddress ?? input.source.address
+        },
+        ...(input.source.evm ? { evm: { schemaVersion: 1 as const, ...input.source.evm } } : {}),
         recipient: { chainId: input.destination.chainId, address: input.destination.address }
       }
     },
@@ -117,7 +124,14 @@ export function createConfidentialFundingGraph(input: {
         requiredForFinality: true,
         dependsOn: [],
         ...(input.source.transactionHash
-          ? { evidence: { transactionHash: input.source.transactionHash } }
+          ? {
+              evidence: {
+                transactionHash: input.source.transactionHash,
+                ...(input.source.evm
+                  ? { externalReference: `evm-nonce:${input.source.evm.nonce}` }
+                  : {})
+              }
+            }
           : !input.requiresDeposit
             ? {
                 evidence: {

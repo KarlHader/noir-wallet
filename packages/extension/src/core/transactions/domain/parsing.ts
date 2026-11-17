@@ -15,6 +15,7 @@ import {
   type TransactionAssetEffects,
   type TransactionGraph,
   type TransactionIntentSnapshot,
+  type TransactionEvmUnsignedTransaction,
   type TransactionRoot,
   type TransactionRootReconciliation,
   type TransactionSegment,
@@ -37,6 +38,7 @@ const RAW_AMOUNT_PATTERN = new RegExp(
   `^(0|[1-9][0-9]{0,${TRANSACTION_GRAPH_LIMITS.rawAmountDigits - 1}})$`
 )
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
+const EVM_UNSIGNED_INPUT_LIMIT = 2 + 128 * 1024 * 2
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -161,6 +163,72 @@ function parseParty(value: unknown, label: string) {
   })
 }
 
+function parseEvmUnsignedTransaction(value: unknown): TransactionEvmUnsignedTransaction {
+  if (!isRecord(value)) throw new Error('Invalid EVM unsigned transaction')
+  const common = ['type', 'chainId', 'nonce', 'gasLimit', 'to', 'value', 'input']
+  const eip1559 = value.type === 'eip1559'
+  if (
+    !hasExactKeys(
+      value,
+      eip1559
+        ? [...common, 'maxFeePerGas', 'maxPriorityFeePerGas', 'accessList']
+        : [...common, 'gasPrice']
+    ) ||
+    (value.type !== 'eip1559' && value.type !== 'legacy') ||
+    typeof value.chainId !== 'string' ||
+    !/^[1-9][0-9]*$/.test(value.chainId) ||
+    typeof value.nonce !== 'string' ||
+    typeof value.gasLimit !== 'string' ||
+    typeof value.value !== 'string' ||
+    !RAW_AMOUNT_PATTERN.test(value.nonce) ||
+    !RAW_AMOUNT_PATTERN.test(value.gasLimit) ||
+    !RAW_AMOUNT_PATTERN.test(value.value) ||
+    BigInt(value.gasLimit) === 0n ||
+    BigInt(value.nonce) > (1n << 64n) - 1n ||
+    BigInt(value.gasLimit) > (1n << 64n) - 1n ||
+    BigInt(value.value) > (1n << 256n) - 1n ||
+    typeof value.to !== 'string' ||
+    !/^0x[0-9a-fA-F]{40}$/.test(value.to) ||
+    typeof value.input !== 'string' ||
+    value.input.length > EVM_UNSIGNED_INPUT_LIMIT ||
+    !/^0x(?:[0-9a-f]{2})*$/.test(value.input)
+  ) {
+    throw new Error('Invalid EVM unsigned transaction')
+  }
+  const commonFields = {
+    chainId: value.chainId,
+    nonce: value.nonce,
+    gasLimit: value.gasLimit,
+    to: value.to,
+    value: value.value,
+    input: value.input
+  }
+  if (!eip1559) {
+    if (typeof value.gasPrice !== 'string' || !RAW_AMOUNT_PATTERN.test(value.gasPrice)) {
+      throw new Error('Invalid EVM unsigned transaction gas price')
+    }
+    return Object.freeze({ type: 'legacy', ...commonFields, gasPrice: value.gasPrice })
+  }
+  if (
+    typeof value.maxFeePerGas !== 'string' ||
+    typeof value.maxPriorityFeePerGas !== 'string' ||
+    !RAW_AMOUNT_PATTERN.test(value.maxFeePerGas) ||
+    !RAW_AMOUNT_PATTERN.test(value.maxPriorityFeePerGas) ||
+    BigInt(value.maxPriorityFeePerGas) > BigInt(value.maxFeePerGas) ||
+    !Array.isArray(value.accessList) ||
+    value.accessList.length !== 0
+  ) {
+    throw new Error('Invalid EVM unsigned transaction fees')
+  }
+  return Object.freeze({
+    type: 'eip1559',
+    ...commonFields,
+    maxFeePerGas: value.maxFeePerGas,
+    maxPriorityFeePerGas: value.maxPriorityFeePerGas,
+    accessList: Object.freeze([])
+  })
+}
+
 export function parseTransactionIntentSnapshot(value: unknown): TransactionIntentSnapshot {
   if (
     !isRecord(value) ||
@@ -262,7 +330,7 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
                   'maxPriorityFeePerGasWei',
                   'gasLimit'
                 ],
-                ['methodSelector']
+                ['methodSelector', 'unsignedTransaction']
               ) ||
               value.evm.schemaVersion !== 1 ||
               typeof value.evm.nonce !== 'string' ||
@@ -281,6 +349,30 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
             ) {
               throw new Error('Invalid EVM transaction intent metadata')
             }
+            const unsignedTransaction =
+              value.evm.unsignedTransaction === undefined
+                ? undefined
+                : parseEvmUnsignedTransaction(value.evm.unsignedTransaction)
+            if (
+              unsignedTransaction &&
+              (unsignedTransaction.nonce !== value.evm.nonce ||
+                unsignedTransaction.gasLimit !== value.evm.gasLimit ||
+                (unsignedTransaction.type === 'legacy'
+                  ? unsignedTransaction.gasPrice !== value.evm.maxFeePerGasWei ||
+                    value.evm.maxPriorityFeePerGasWei !== '0'
+                  : unsignedTransaction.maxFeePerGas !== value.evm.maxFeePerGasWei ||
+                    unsignedTransaction.maxPriorityFeePerGas !==
+                      value.evm.maxPriorityFeePerGasWei) ||
+                (value.evm.methodSelector !== undefined &&
+                  value.evm.methodSelector !== unsignedTransaction.input.slice(0, 10)) ||
+                (isRecord(value.sender) &&
+                  unsignedTransaction.chainId !==
+                    String(
+                      parseChainId(parseString(value.sender.chainId, 'EVM sender chain')).reference
+                    )))
+            ) {
+              throw new Error('EVM unsigned transaction does not match intent metadata')
+            }
             return Object.freeze({
               schemaVersion: 1 as const,
               nonce: value.evm.nonce,
@@ -289,7 +381,8 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
               gasLimit: value.evm.gasLimit,
               ...(value.evm.methodSelector === undefined
                 ? {}
-                : { methodSelector: value.evm.methodSelector })
+                : { methodSelector: value.evm.methodSelector }),
+              ...(unsignedTransaction === undefined ? {} : { unsignedTransaction })
             })
           })()
         })

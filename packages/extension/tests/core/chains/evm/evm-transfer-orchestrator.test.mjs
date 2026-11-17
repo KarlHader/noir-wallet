@@ -89,6 +89,7 @@ function rpc(overrides = {}) {
     assertExpectedChain: async () => {},
     getNativeBalance: async () => '1000000000000000000000',
     getPendingNonce: async () => '7',
+    getTransactionCount: async () => '7',
     simulateCall: async () => '0x',
     estimateGas: async () => '21000',
     getMaximumPriorityFeePerGas: async () => '1000000000',
@@ -194,7 +195,8 @@ function harness(options = {}) {
       options.createExternalRequestId ?? (() => '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'),
     onPendingBroadcast: options.onPendingBroadcast,
     onBroadcastAccepted: options.onBroadcastAccepted,
-    onMonitoringRequired: options.onMonitoringRequired
+    onMonitoringRequired: options.onMonitoringRequired,
+    assertSpeedUpAllowed: options.assertSpeedUpAllowed
   })
   return { orchestrator, repository, pendingStore, session, calls }
 }
@@ -1298,8 +1300,16 @@ test('accepts a locally reserved nonce ahead of a lagging RPC pending nonce', as
 
 test('prepares a linked same-nonce cancellation only while the original remains pending', async () => {
   let location = { status: 'pending' }
+  let pendingNonce = '7'
   const testHarness = harness({
-    rpc: rpc({ getTransactionLocation: async () => location })
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async (_address, tag) => {
+        expect(tag).toBe('latest')
+        return '7'
+      },
+      getTransactionLocation: async () => location
+    })
   })
   const original = await prepare(testHarness.orchestrator)
   await testHarness.orchestrator.approve({
@@ -1307,6 +1317,7 @@ test('prepares a linked same-nonce cancellation only while the original remains 
     transactionId: original.graph.root.id,
     payloadFingerprint: original.signing.payloadFingerprint.digestHex
   })
+  pendingNonce = '8'
 
   const cancellation = await testHarness.orchestrator.prepareCancel({
     chainAccount: account,
@@ -1336,6 +1347,159 @@ test('prepares a linked same-nonce cancellation only while the original remains 
   ).rejects.toThrow(/no longer pending/i)
 })
 
+test('passes cancellation nonce review after the original advances the pending nonce', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const original = await prepare(testHarness.orchestrator)
+  await testHarness.orchestrator.approve({
+    scope,
+    transactionId: original.graph.root.id,
+    payloadFingerprint: original.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+  const cancellation = await testHarness.orchestrator.prepareCancel({
+    chainAccount: account,
+    originalTransactionId: original.graph.root.id
+  })
+
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: cancellation.graph.root.id,
+      payloadFingerprint: cancellation.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toThrow(/signed EVM transaction failed integrity validation/i)
+})
+
+test('reviews a same-payload speed up and rejects approval after the origin finalizes', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const original = await prepare(testHarness.orchestrator)
+  await testHarness.orchestrator.approve({
+    scope,
+    transactionId: original.graph.root.id,
+    payloadFingerprint: original.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+
+  const speedUp = await testHarness.orchestrator.prepareSpeedUp({
+    chainAccount: account,
+    originalTransactionId: original.graph.root.id
+  })
+  expect(speedUp.graph.root).toMatchObject({
+    kind: 'transfer',
+    relation: { kind: 'replacement-of', transactionId: original.graph.root.id }
+  })
+  expect(speedUp.graph.root.intent.evm.unsignedTransaction).toMatchObject({
+    nonce: '7',
+    to: recipient,
+    value: '123',
+    input: '0x'
+  })
+  await expect(
+    testHarness.orchestrator.getPendingApproval({ scope, transactionId: speedUp.graph.root.id })
+  ).resolves.toMatchObject({ graph: { root: { status: 'prepared' } } })
+
+  const persisted = await testHarness.repository.get(scope, original.graph.root.id)
+  const origin = persisted.segments[0]
+  await testHarness.repository.applySegmentEvent({
+    scope,
+    transactionId: persisted.root.id,
+    segmentId: origin.id,
+    event: {
+      id: 'event:evm:origin-final-before-speed-up',
+      status: 'final',
+      cause: 'progress',
+      observedAt: 2_000,
+      evidence: {
+        transactionHash: origin.evidence.transactionHash,
+        blockHash: `0x${'b'.repeat(64)}`,
+        blockHeight: 101
+      }
+    },
+    expectedRootRevision: persisted.root.revision,
+    expectedSegmentRevision: origin.revision
+  })
+
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: speedUp.graph.root.id,
+      payloadFingerprint: speedUp.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+})
+
+test('requires a funding plan check before preparing a Shield origin speed up', async () => {
+  const testHarness = harness()
+  const original = localBroadcastGraph(7, 'transaction:evm:shield-speed-up')
+  original.root.kind = 'shield'
+  original.root.intent.shield = {
+    schemaVersion: 1,
+    operation: 'deposit',
+    sourceDomain: 'public',
+    destinationDomain: 'shield'
+  }
+  original.root.intent.evm.unsignedTransaction = {
+    type: 'eip1559',
+    chainId: '1',
+    nonce: '7',
+    maxFeePerGas: '5000000000',
+    maxPriorityFeePerGas: '1000000000',
+    gasLimit: '21000',
+    to: recipient,
+    value: '123',
+    input: '0x',
+    accessList: []
+  }
+  await testHarness.repository.create(original)
+
+  await expect(
+    testHarness.orchestrator.prepareSpeedUp({
+      chainAccount: account,
+      originalTransactionId: original.root.id
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+
+  let checks = 0
+  const guarded = harness({
+    rpc: rpc({
+      getPendingNonce: async () => '8',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    }),
+    assertSpeedUpAllowed: async () => {
+      checks += 1
+      if (checks === 2) throw new Error('Funding quote expired')
+    }
+  })
+  await guarded.repository.create(original)
+  const speedUp = await guarded.orchestrator.prepareSpeedUp({
+    chainAccount: account,
+    originalTransactionId: original.root.id
+  })
+  expect(checks).toBe(1)
+  await expect(
+    guarded.orchestrator.approve({
+      scope,
+      transactionId: speedUp.graph.root.id,
+      payloadFingerprint: speedUp.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toThrow(/quote expired/i)
+  expect(checks).toBe(2)
+})
+
 test('rejects cancellation preparation after the original leaves the pending pool', async () => {
   let location = { status: 'pending' }
   const testHarness = harness({
@@ -1357,6 +1521,38 @@ test('rejects cancellation preparation after the original leaves the pending poo
     })
   ).rejects.toThrow(/no longer pending/i)
   await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
+})
+
+test('does not cancel a completed EVM origin while later graph segments remain pending', async () => {
+  const testHarness = harness()
+  const original = localBroadcastGraph(7, 'transaction:evm:origin-complete')
+  const relayId = 'segment:evm:origin-complete:relay'
+  original.root.kind = 'shield'
+  original.root.status = 'confirming'
+  original.root.segmentIds.push(relayId)
+  original.segments[0].status = 'final'
+  original.segments[0].evidence.blockHash = `0x${'b'.repeat(64)}`
+  original.segments[0].evidence.blockHeight = 101
+  original.segments.push({
+    id: relayId,
+    transactionId: original.root.id,
+    role: 'relay',
+    target: { kind: 'protocol', provider: 'Confidential Intents', account: from },
+    status: 'confirming',
+    requiredForFinality: true,
+    dependsOn: [original.segments[0].id],
+    createdAt: 500,
+    updatedAt: 500,
+    revision: 0
+  })
+  await testHarness.repository.create(original)
+
+  await expect(
+    testHarness.orchestrator.prepareCancel({
+      chainAccount: account,
+      originalTransactionId: original.root.id
+    })
+  ).rejects.toThrow(/replacement metadata/i)
 })
 
 test('rejects a cancellation approval when its original completed during review', async () => {

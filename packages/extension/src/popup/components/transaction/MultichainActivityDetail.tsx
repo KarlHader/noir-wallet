@@ -12,9 +12,6 @@ import type { Network, Transaction } from '@/types'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
 import { evmWalletClient } from '@/popup/services/evm-wallet-client'
-import { formatEvmWeiAsGwei } from '@/infrastructure/chains/evm'
-import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
-import { openModal } from '@/popup/provider/ModalManager'
 import { bitcoinWalletClient } from '@/popup/services/bitcoin-wallet-client'
 import { formatChainTransactionExplorerUrl } from '@/popup/services/chain-explorer'
 import { useSettingsStore } from '@/store/settings-store'
@@ -33,9 +30,7 @@ import {
 } from '@/core/services/confidential-funding'
 import { toast } from '@/store/toast-store'
 import { DetailRow } from '../common/DetailRow'
-import { AmountDisplay } from '../common/AmountDisplay'
 import { AccountDomainBadge } from '../account/AccountDomainBadge'
-import { formatBaseUnitAmount } from '@/lib/number-format'
 import { Button } from '../ui/button'
 import {
   getActivityApprovalDetails,
@@ -50,7 +45,6 @@ import {
   getClusterBatchStatusLabel,
   getClusterChildStatusLabel,
   getActivitySwapSourceMethodLabel,
-  canCancelEvmActivity,
   getActivityFailureLabel,
   getActivityRecoveryAction,
   getActivityStatusPresentation,
@@ -67,6 +61,7 @@ import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-c
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { selectActivityObservation } from '@/popup/services/activity-observation'
+import { EvmPendingTransactionActions } from './EvmPendingTransactionActions'
 
 interface MultichainActivityDetailProps {
   readonly item: ActivityItem
@@ -95,7 +90,6 @@ export function MultichainActivityDetail({
   const [confidentialPlan, setConfidentialPlan] = useState<ConfidentialFundingPlan | null>(null)
   const [resumingPrivateFunding, setResumingPrivateFunding] = useState(false)
   const [checkingPrivateFunding, setCheckingPrivateFunding] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
   const [zcashRecord, setZcashRecord] = useState<Transaction | null>(null)
   const [swapApprovalAvailable, setSwapApprovalAvailable] = useState(false)
   const { activeAccount: activeSwapAccount } = useActiveAccountNetworks()
@@ -406,7 +400,6 @@ export function MultichainActivityDetail({
     evmChainIds,
     getBitcoinNetworkConfig(network).chainId
   )
-  const cancelAvailable = canCancelEvmActivity(visibleItem, evmChainIds)
   const isCrossChain = visibleItem.segments.length > 1
   const transactionReferences = getActivityTransactionReferences(visibleItem)
   const explorerReference = !isCrossChain ? transactionReferences[0] : undefined
@@ -562,102 +555,6 @@ export function MultichainActivityDetail({
       toast.error(error instanceof Error ? error.message : 'Transfer status is unavailable')
     } finally {
       setCheckingPrivateFunding(false)
-    }
-  }
-
-  const handleCancelTransaction = async () => {
-    if (!primaryChainId || cancelling) return
-    setCancelling(true)
-    let review: Awaited<ReturnType<typeof evmWalletClient.prepareCancel>> | null = null
-    try {
-      review = await evmWalletClient.prepareCancel(
-        primaryChainId,
-        parseTransactionId(visibleItem.id),
-        visibleItem.accountMode === 'private' ? 'private' : 'main'
-      )
-      const summary = review.review.summary
-      if (summary.schema !== 'evm.transaction.v1') {
-        throw new Error('The wallet returned an invalid EVM cancellation review')
-      }
-      const confirmed = await openModal<boolean>({
-        title: 'Cancel transaction',
-        showCloseButton: false,
-        body: resolve => (
-          <div className="space-y-4">
-            <p className="text-sm leading-5 text-muted">
-              This sends a zero-value transaction to your own address with the same nonce and a
-              higher fee. Cancellation is not guaranteed until the replacement confirms.
-            </p>
-            <div className="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-xs">
-              <div className="flex justify-between gap-3 py-1">
-                <span className="text-muted">Nonce</span>
-                <span className="font-mono">{summary.fields.nonce}</span>
-              </div>
-              <div className="flex justify-between gap-3 py-1">
-                <span className="text-muted">Maximum network fee</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatBaseUnitAmount(
-                      summary.fields.maximumFeeWei,
-                      feeAsset?.metadata.decimals ?? 18
-                    )}
-                    profile="fee"
-                  />
-                </span>
-              </div>
-              <div className="flex justify-between gap-3 py-1">
-                <span className="text-muted">Max fee per gas</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </span>
-              </div>
-              <div className="flex justify-between gap-3 py-1">
-                <span className="text-muted">Priority fee per gas</span>
-                <span className="font-sans tabular-nums">
-                  <AmountDisplay
-                    value={formatEvmWeiAsGwei(summary.fields.maxPriorityFeePerGasWei ?? '0')}
-                    symbol="GWEI"
-                    profile="fee"
-                  />
-                </span>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => resolve(false)}>
-                Back
-              </Button>
-              <Button className="flex-1" onClick={() => resolve(true)}>
-                Confirm cancel
-              </Button>
-            </div>
-          </div>
-        )
-      })
-      if (!confirmed) {
-        await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
-        return
-      }
-      const submission = await evmWalletClient.approveTransfer(
-        review.graph.root.id,
-        review.review.payloadFingerprint.digestHex
-      )
-      review = null
-      if (submission.status === 'external-signature-required') {
-        await openHardwareEvmSignTab(submission.transactionId)
-        window.close()
-        return
-      }
-      setVisibleItem(mapTransactionGraphToActivityItem(submission.graph))
-      toast.success('Cancellation submitted')
-    } catch (error) {
-      if (review) await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
-      toast.error(error instanceof Error ? error.message : 'Transaction could not be cancelled')
-    } finally {
-      setCancelling(false)
     }
   }
 
@@ -862,16 +759,24 @@ export function MultichainActivityDetail({
           Speed Up
         </Button>
       )}
-      {cancelAvailable && (
-        <Button
-          variant="outline"
-          className="mt-4 h-[45px] w-full"
-          isLoading={cancelling}
-          onClick={() => void handleCancelTransaction()}
-        >
-          Cancel transaction
-        </Button>
-      )}
+      <EvmPendingTransactionActions
+        key={visibleItem.id}
+        className="mt-4"
+        item={visibleItem}
+        evmChainIds={evmChainIds}
+        accountMatches={
+          effectiveWalletId === visibleItem.scope.keyDomainId &&
+          effectiveAccountId === visibleItem.scope.accountId &&
+          currentNetwork === network
+        }
+        feeDecimals={feeAsset?.metadata.decimals ?? fee?.metadata?.decimals}
+        feeSymbol={feeAsset?.metadata.symbol ?? fee?.metadata?.symbol}
+        shieldQuoteExpiresAt={
+          privateFundingPlanId
+            ? Date.parse(activeConfidentialPlan?.depositQuote?.quote.deadline ?? '')
+            : undefined
+        }
+      />
       {privateFundingNeedsAuth && (
         <Button
           className="mt-4 h-[45px] w-full"

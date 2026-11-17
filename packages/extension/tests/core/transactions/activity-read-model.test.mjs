@@ -178,6 +178,93 @@ test.describe('Activity read model', () => {
     })
   })
 
+  test('shows the confirmed EVM speed-up fee limit on the original activity', () => {
+    const original = graph({ id: 'transaction:speed-up-original' })
+    const replacementHash = `0x${'b'.repeat(64)}`
+    const sender = '0x1111111111111111111111111111111111111111'
+    const recipient = '0x2222222222222222222222222222222222222222'
+    const unsigned = {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '7',
+      maxFeePerGas: '100',
+      maxPriorityFeePerGas: '1',
+      gasLimit: '21000',
+      to: recipient,
+      value: '100',
+      input: '0x',
+      accessList: []
+    }
+    original.root.intent = {
+      ...original.root.intent,
+      feeLimit: { assetId: ethAssetId, amountRaw: '2100000' },
+      sender: { chainId: evmChainId, address: sender },
+      recipient: { chainId: evmChainId, address: recipient },
+      evm: {
+        schemaVersion: 1,
+        nonce: '7',
+        maxFeePerGasWei: '100',
+        maxPriorityFeePerGasWei: '1',
+        gasLimit: '21000',
+        unsignedTransaction: unsigned
+      }
+    }
+    original.root.status = 'final'
+    original.segments[0].status = 'final'
+    original.segments[0].evidence.replacementTransactionHash = replacementHash
+
+    const replacement = graph({
+      id: 'transaction:speed-up-replacement',
+      hash: replacementHash
+    })
+    replacement.root.status = 'final'
+    replacement.root.relation = {
+      kind: 'replacement-of',
+      transactionId: original.root.id
+    }
+    replacement.root.intent = {
+      ...original.root.intent,
+      feeLimit: { assetId: ethAssetId, amountRaw: '2520000' },
+      evm: {
+        ...original.root.intent.evm,
+        maxFeePerGasWei: '120',
+        maxPriorityFeePerGasWei: '2',
+        unsignedTransaction: {
+          ...unsigned,
+          maxFeePerGas: '120',
+          maxPriorityFeePerGas: '2'
+        }
+      }
+    }
+    replacement.segments[0].status = 'final'
+
+    const readOriginal = graphs =>
+      buildActivityReadModel({ scope, localGraphs: graphs }).items.find(
+        item => item.id === original.root.id
+      )
+    const model = buildActivityReadModel({ scope, localGraphs: [original, replacement] })
+    const item = model.items.find(candidate => candidate.id === original.root.id)
+    expect(item?.snapshot?.feeLimit?.amountRaw).toBe('2520000')
+    expect(item?.snapshot?.evm?.maxFeePerGasWei).toBe('120')
+    expect(item?.id).toBe(original.root.id)
+    expect(item?.snapshot?.primaryAmount).toEqual(original.root.intent.primaryAmount)
+    expect(original.root.intent.feeLimit.amountRaw).toBe('2100000')
+    expect(
+      parseActivityReadModel(structuredClone(model)).items.find(
+        candidate => candidate.id === original.root.id
+      )?.snapshot?.feeLimit?.amountRaw
+    ).toBe('2520000')
+
+    const mismatchedPayload = structuredClone(replacement)
+    mismatchedPayload.root.intent.evm.unsignedTransaction.value = '101'
+    expect(readOriginal([original, mismatchedPayload])?.snapshot?.feeLimit?.amountRaw).toBe(
+      '2100000'
+    )
+    const unlinked = structuredClone(original)
+    unlinked.segments[0].evidence.replacementTransactionHash = `0x${'c'.repeat(64)}`
+    expect(readOriginal([unlinked, replacement])?.snapshot?.feeLimit?.amountRaw).toBe('2100000')
+  })
+
   test('classifies Global PEA local and supplemental activity without changing Main defaults', () => {
     const privateGraph = graph({ id: 'transaction:private' })
     privateGraph.root.intent.sender = { chainId: evmChainId, address: peaAddress }
@@ -377,7 +464,11 @@ test.describe('Activity read model', () => {
       id: 'older-near-confidential',
       snapshot: { primaryAmount: { assetId: 'eip155:1/slip44:60', amountRaw: '1' } }
     }
-    const selection = { items: [zcash, near, olderNear], selectedChainIds: ['eip155:1'], domain: 'shield' }
+    const selection = {
+      items: [zcash, near, olderNear],
+      selectedChainIds: ['eip155:1'],
+      domain: 'shield'
+    }
     expect(
       filterActivityItems({ ...selection, shieldProvider: 'zcash-shield' }).map(item => item.id)
     ).toEqual(['zcash-shield'])

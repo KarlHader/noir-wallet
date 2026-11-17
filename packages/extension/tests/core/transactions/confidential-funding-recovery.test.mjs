@@ -10,6 +10,7 @@ import {
   fingerprintDirectConfidentialApproval
 } from '../../../src/core/services/confidential-funding/index.ts'
 import { InMemoryTransactionRepository } from '../../../src/infrastructure/persistence/repositories/in-memory-transaction-repository.ts'
+import { createEvmTransferGraph } from '../../../src/infrastructure/chains/evm/evm-transaction-graph.ts'
 import { assertPersistableTransactionGraph } from '../../../src/infrastructure/persistence/repositories/transaction-repository-support.ts'
 import { parseTransactionGraph } from '../../../src/core/transactions/domain/index.ts'
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
@@ -1049,7 +1050,7 @@ test.describe('confidential funding persisted recovery', () => {
     const protocolAssetId = 'nep141:eth.omft.near'
     const depositAddress = '0x3333333333333333333333333333333333333333'
     const transactionHash = `0x${'ab'.repeat(32)}`
-    const state = { prepared: null, broadcasts: 0 }
+    const state = { prepared: null, broadcasts: 0, depositStatus: 'PROCESSING' }
     const reverseKeys = (_key, value) =>
       value && typeof value === 'object' && !Array.isArray(value)
         ? Object.fromEntries(Object.entries(value).reverse())
@@ -1098,7 +1099,10 @@ test.describe('confidential funding persisted recovery', () => {
     }
     const api = {
       getBalances: async () => [],
-      getStatus: async () => ({ status: 'PROCESSING' }),
+      getStatus: async () => ({
+        status: state.depositStatus,
+        ...(state.depositStatus === 'SUCCESS' ? { settledAmountOutRaw: '1000' } : {})
+      }),
       quote: async input => ({
         correlationId: 'quote-one',
         quoteRequest: {
@@ -1123,12 +1127,13 @@ test.describe('confidential funding persisted recovery', () => {
         }
       })
     }
+    const repository = new InMemoryTransactionRepository()
     const coordinator = new ConfidentialFundingCoordinator({
       network: 'mainnet',
       api,
       store,
       signer,
-      repository: new InMemoryTransactionRepository(),
+      repository,
       assets: { get: () => asset, list: () => [asset] },
       evmNetworks: [],
       assetMappings: [{ assetId, protocolAssetId }],
@@ -1206,10 +1211,189 @@ test.describe('confidential funding persisted recovery', () => {
     )
     expect(state.broadcasts).toBe(0)
     await store.putPlan(stored)
+    await repository.create(
+      createConfidentialFundingGraph({
+        planId: review.planId,
+        operation: 'deposit',
+        sourceDomain: 'private',
+        destinationDomain: 'shield',
+        scope,
+        source: { ...stored.source, transactionHash },
+        destination: { ...stored.destination, expectedAmountRaw: stored.expectedOutputRaw },
+        withdrawDepositAddresses: [],
+        requiresDeposit: true,
+        now: stored.createdAt
+      })
+    )
     expect((await coordinator.confirm(review.planId, review.payloadFingerprint)).phase).toBe(
       'deposit-confirming'
     )
     expect(state.broadcasts).toBe(1)
+    await coordinator.continuePlan(review.planId)
+    const backfilled = await repository.get(scope, stored.transactionId)
+    expect(backfilled.root.intent.sender.address.toLowerCase()).toBe(peaAddress)
+    expect(backfilled.root.intent.evm).toMatchObject({
+      nonce: stored.preparedDeposit.preparedTransfer.transaction.nonce,
+      unsignedTransaction: stored.preparedDeposit.preparedTransfer.transaction
+    })
+    expect(backfilled.segments[0].evidence.externalReference).toBe(
+      `evm-nonce:${stored.preparedDeposit.preparedTransfer.transaction.nonce}`
+    )
+    await expect(coordinator.assertSpeedUpAllowed(backfilled)).resolves.toBeUndefined()
+    const pendingPlan = await store.getPlan(review.planId)
+    await store.putPlan({
+      ...pendingPlan,
+      depositQuote: {
+        ...pendingPlan.depositQuote,
+        quote: {
+          ...pendingPlan.depositQuote.quote,
+          deadline: new Date(Date.now() - 1_000).toISOString()
+        }
+      }
+    })
+    await expect(coordinator.assertSpeedUpAllowed(backfilled)).rejects.toThrow(
+      'can no longer be sped up'
+    )
+    await store.putPlan(pendingPlan)
+    expect(
+      (
+        await repository.backfillConfidentialEvmOrigin({
+          scope,
+          transactionId: stored.transactionId,
+          expectedRootRevision: backfilled.root.revision,
+          transactionHash,
+          legacySenderAddress: stored.source.address,
+          preparedTransfer: stored.preparedDeposit.preparedTransfer,
+          observedAt: Date.now()
+        })
+      ).status
+    ).toBe('unchanged')
+    expect(
+      (
+        await repository.backfillConfidentialEvmOrigin({
+          scope,
+          transactionId: stored.transactionId,
+          expectedRootRevision: backfilled.root.revision,
+          transactionHash: `0x${'cd'.repeat(32)}`,
+          legacySenderAddress: stored.source.address,
+          preparedTransfer: stored.preparedDeposit.preparedTransfer,
+          observedAt: Date.now()
+        })
+      ).status
+    ).toBe('binding-conflict')
+    expect(
+      (
+        await repository.backfillConfidentialEvmOrigin({
+          scope: { ...scope, accountId: 'account:other' },
+          transactionId: stored.transactionId,
+          expectedRootRevision: backfilled.root.revision,
+          transactionHash,
+          legacySenderAddress: stored.source.address,
+          preparedTransfer: stored.preparedDeposit.preparedTransfer,
+          observedAt: Date.now()
+        })
+      ).status
+    ).toBe('not-found')
+    expect(
+      (
+        await repository.backfillConfidentialEvmOrigin({
+          scope,
+          transactionId: stored.transactionId,
+          expectedRootRevision: backfilled.root.revision - 1,
+          transactionHash,
+          legacySenderAddress: stored.source.address,
+          preparedTransfer: stored.preparedDeposit.preparedTransfer,
+          observedAt: Date.now()
+        })
+      ).status
+    ).toBe('revision-conflict')
+    const cancelledAt = Date.now()
+    const cancellation = await repository.applySegmentEvent({
+      scope,
+      transactionId: stored.transactionId,
+      segmentId: backfilled.segments[0].id,
+      event: {
+        id: 'event:confidential:cancelled-origin',
+        status: 'failed',
+        cause: 'reconciliation',
+        observedAt: cancelledAt,
+        failure: { code: 'cancelled', occurredAt: cancelledAt }
+      },
+      expectedRootRevision: backfilled.root.revision,
+      expectedSegmentRevision: backfilled.segments[0].revision
+    })
+    expect(cancellation.status).toBe('applied')
+    expect(cancellation.graph.root.status).toBe('failed')
+    expect((await coordinator.continuePlan(review.planId)).phase).toBe('cancelled')
+    expect(state.broadcasts).toBe(1)
+    expect(
+      (await coordinator.confirm(customReview.planId, customReview.payloadFingerprint)).phase
+    ).toBe('deposit-confirming')
+    await coordinator.continuePlan(customPlan.planId)
+    const created = await repository.get(scope, customPlan.transactionId)
+    expect(created.root.intent.sender.address.toLowerCase()).toBe(peaAddress)
+    expect(created.root.intent.evm.unsignedTransaction).toEqual(
+      customPlan.preparedDeposit.preparedTransfer.transaction
+    )
+    const replacementHash = `0x${'ef'.repeat(32)}`
+    const finalizedAt = Date.now()
+    await repository.applySegmentEvent({
+      scope,
+      transactionId: customPlan.transactionId,
+      segmentId: created.segments[0].id,
+      event: {
+        id: 'event:confidential:speedup-origin',
+        status: 'final',
+        cause: 'progress',
+        observedAt: finalizedAt,
+        evidence: { replacementTransactionHash: replacementHash }
+      },
+      expectedRootRevision: created.root.revision,
+      expectedSegmentRevision: created.segments[0].revision
+    })
+    state.depositStatus = 'SUCCESS'
+    expect((await coordinator.continuePlan(customPlan.planId)).phase).toBe('deposit-confirming')
+    const replacementTransactionId = 'tx:confidential-speedup:one'
+    const replacementSegmentId = 'segment:confidential-speedup:one:origin'
+    const originalPrepared = customPlan.preparedDeposit.preparedTransfer
+    const replacementPrepared = {
+      ...originalPrepared,
+      transaction: {
+        ...originalPrepared.transaction,
+        maxFeePerGas: (BigInt(originalPrepared.transaction.maxFeePerGas) + 1n).toString(),
+        maxPriorityFeePerGas: (
+          BigInt(originalPrepared.transaction.maxPriorityFeePerGas) + 1n
+        ).toString()
+      }
+    }
+    const replacementGraph = createEvmTransferGraph({
+      prepared: replacementPrepared,
+      scope,
+      transactionId: replacementTransactionId,
+      segmentId: replacementSegmentId,
+      assets: { get: () => asset, list: () => [asset] }
+    })
+    await repository.create({
+      ...replacementGraph,
+      root: {
+        ...replacementGraph.root,
+        kind: created.root.kind,
+        intent: {
+          ...created.root.intent,
+          feeLimit: replacementGraph.root.intent.feeLimit,
+          evm: replacementGraph.root.intent.evm
+        },
+        relation: { kind: 'replacement-of', transactionId: customPlan.transactionId },
+        status: 'final'
+      },
+      segments: replacementGraph.segments.map(segment => ({
+        ...segment,
+        status: 'final',
+        evidence: { transactionHash: replacementHash }
+      }))
+    })
+    expect((await coordinator.continuePlan(customPlan.planId)).phase).toBe('ready')
+    expect(state.broadcasts).toBe(2)
   })
 
   test('reserves Shield funds across concurrent prepares and releases cancelled or expired reviews', async () => {

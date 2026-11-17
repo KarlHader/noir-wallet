@@ -514,8 +514,11 @@ test('binds a Shield ETH Move to the selected EVM destination asset', () => {
     chain: source.chain,
     managed: source.managed
   }
-  expect(buildShieldTransferRequest({ ...input, destination })).toMatchObject({
+  expect(
+    buildShieldTransferRequest({ ...input, destination, dedupKey: 'move:attempt-1' })
+  ).toMatchObject({
     operation: 'withdraw',
+    dedupKey: 'move:attempt-1',
     sourceDomain: 'shield',
     destinationDomain: 'private',
     source: {

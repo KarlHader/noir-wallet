@@ -603,6 +603,7 @@ export function buildShieldTransferRequest(
     managed: ShieldTransferAsset
     destination?: ShieldFundingAsset
     feeSelection?: EvmFeeSelection
+    dedupKey?: string
   }>
 ): PrepareConfidentialFundingRequest {
   const source: ShieldFundingAsset = {
@@ -650,6 +651,7 @@ export function buildShieldTransferRequest(
     source: Object.freeze({ ...sourceRoute, amountRaw: input.amountRaw }),
     destination: destinationRoute,
     slippageBps: 50,
-    ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection })
+    ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection }),
+    ...(input.dedupKey ? { dedupKey: input.dedupKey } : {})
   })
 }

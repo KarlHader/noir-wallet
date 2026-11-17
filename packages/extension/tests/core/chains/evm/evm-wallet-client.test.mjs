@@ -626,40 +626,47 @@ test.describe('Popup EVM wallet client', () => {
     expect(JSON.stringify(messages)).not.toContain('privateKey')
   })
 
-  test('binds a cancellation review to the requested chain and original transaction', async () => {
-    const originalTransactionId = 'transaction:evm:original'
-    const messages = []
-    const client = createEvmWalletClient(async message => {
-      messages.push(message)
-      return { result: cancellationReview(originalTransactionId) }
-    })
+  for (const [method, messageType] of [
+    ['prepareCancel', 'PREPARE_EVM_CANCEL'],
+    ['prepareSpeedUp', 'PREPARE_EVM_SPEED_UP']
+  ])
+    test(`binds ${method} review to the requested chain and original transaction`, async () => {
+      const originalTransactionId = 'transaction:evm:original'
+      const messages = []
+      const client = createEvmWalletClient(async message => {
+        messages.push(message)
+        const value =
+          method === 'prepareCancel' ? cancellationReview(originalTransactionId) : review()
+        value.graph.root.relation = { kind: 'replacement-of', transactionId: originalTransactionId }
+        return { result: value }
+      })
 
-    await expect(
-      client.prepareCancel(chainId, originalTransactionId, 'private')
-    ).resolves.toMatchObject({
-      graph: {
-        root: {
-          kind: 'cancel',
-          relation: { kind: 'replacement-of', transactionId: originalTransactionId }
+      await expect(
+        client[method](chainId, originalTransactionId, 'private')
+      ).resolves.toMatchObject({
+        graph: {
+          root: {
+            kind: method === 'prepareCancel' ? 'cancel' : 'transfer',
+            relation: { kind: 'replacement-of', transactionId: originalTransactionId }
+          }
         }
-      }
-    })
-    expect(messages).toEqual([
-      {
-        type: 'PREPARE_EVM_CANCEL',
-        chainId,
-        originalTransactionId,
-        executionMode: 'private'
-      }
-    ])
+      })
+      expect(messages).toEqual([
+        {
+          type: messageType,
+          chainId,
+          originalTransactionId,
+          executionMode: 'private'
+        }
+      ])
 
-    const substituted = createEvmWalletClient(async () => ({
-      result: cancellationReview('transaction:evm:other')
-    }))
-    await expect(substituted.prepareCancel(chainId, originalTransactionId)).rejects.toMatchObject({
-      code: 'invalid-response'
+      const substituted = createEvmWalletClient(async () => ({
+        result: cancellationReview('transaction:evm:other')
+      }))
+      await expect(substituted[method](chainId, originalTransactionId)).rejects.toMatchObject({
+        code: 'invalid-response'
+      })
     })
-  })
 
   test('binds approval to the transaction ID and exact Background fingerprint', async () => {
     const messages = []
