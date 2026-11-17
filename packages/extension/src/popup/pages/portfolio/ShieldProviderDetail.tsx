@@ -42,6 +42,7 @@ import {
   shieldZcashEnablePath
 } from '@/popup/services/shield-zcash-entry'
 import { getDefaultZcashSelfMoveSource } from '@/popup/services/zcash-self-move'
+import { getZcashChainId } from '@/core/chains/registry'
 
 export function ShieldProviderDetail() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -447,7 +448,15 @@ function ShieldProviderContent() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate(movePath)}
+                  onClick={() =>
+                    requestedAssetId === `${getZcashChainId(currentNetwork)}/slip44:133` &&
+                    hasZcashAccount
+                      ? navigate(
+                          `/shield-zcash-move?move=1&assetId=${encodeURIComponent(requestedAssetId)}&from=confidential&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+                          { state: zcashSendOriginState }
+                        )
+                      : navigate(movePath)
+                  }
                   disabled={!canManageNear}
                   className="wallet-interactive flex h-[74px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg bg-[var(--color-wallet-surface)] text-xs enabled:hover:bg-[var(--color-wallet-selected)] enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-45"
                 >
@@ -499,7 +508,7 @@ function ShieldProviderContent() {
                   onClick={() => {
                     if (zcashMoveSource)
                       navigate(
-                        `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
+                        `/shield-zcash-move?move=1&assetId=${encodeURIComponent(`${getZcashChainId(currentNetwork)}/slip44:133`)}&from=${zcashMoveSource}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`,
                         { state: zcashSendOriginState }
                       )
                   }}

@@ -1,3 +1,10 @@
+export function formatIntentsConfirmationTime(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return '—'
+  const minimumSeconds = Math.min(Math.ceil(seconds), 300)
+  if (minimumSeconds < 60) return `~${minimumSeconds} sec–5 min`
+  return formatConfirmationTime({ minimumSeconds, maximumSeconds: 300 })
+}
+
 export function formatConfirmationTime(
   estimate: { readonly minimumSeconds: number; readonly maximumSeconds: number } | null
 ): string {

@@ -4,6 +4,7 @@ import { formatTimestamp } from '@/lib/format'
 import { formatTokenPrice } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/popup/components/ui/skeleton'
+import { InlineError } from '@/popup/components/common/InlineError'
 import {
   buildMarketPriceChartModel,
   MARKET_PRICE_CHART_HEIGHT,
@@ -36,6 +37,8 @@ interface MarketPriceChartProps {
   readonly showRanges?: boolean
   readonly availableRanges: readonly AssetMarketHistoryRange[]
   readonly onRangeChange: (range: AssetMarketHistoryRange) => void
+  readonly error?: string | null
+  readonly onRetry?: () => void
 }
 
 export function MarketPriceChart({
@@ -49,7 +52,9 @@ export function MarketPriceChart({
   priceAsOf,
   showRanges = true,
   availableRanges,
-  onRangeChange
+  onRangeChange,
+  error,
+  onRetry
 }: MarketPriceChartProps) {
   const gradientId = useId().replace(/:/g, '')
   const surfaceRef = useRef<HTMLDivElement>(null)
@@ -88,10 +93,7 @@ export function MarketPriceChart({
     <div>
       <div
         ref={surfaceRef}
-        className={cn(
-          'relative touch-none overflow-hidden',
-          chart || loading ? 'h-[148px]' : 'h-16'
-        )}
+        className={cn('relative touch-none overflow-hidden', showRanges ? 'h-[148px]' : 'h-16')}
         aria-live="polite"
         onPointerMove={event => {
           if (chart) updateActiveFromPointer(event.clientX)
@@ -209,23 +211,32 @@ export function MarketPriceChart({
       </div>
 
       {showRanges && (
-        <div className="mt-2 flex gap-1" aria-label="Price history range">
-          {availableRanges.map(item => (
-            <button
-              key={item}
-              type="button"
-              aria-pressed={range === item}
-              onClick={() => onRangeChange(item)}
-              className={cn(
-                'wallet-interactive h-7 flex-1 rounded-md text-[11px] font-medium active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
-                range === item
-                  ? 'bg-white/10 text-foreground'
-                  : 'text-muted hover:bg-white/5 hover:text-foreground'
-              )}
-            >
-              {RANGE_LABELS[item]}
-            </button>
-          ))}
+        <div
+          className="mt-2 flex h-7 items-center gap-1"
+          aria-label={error ? undefined : 'Price history range'}
+        >
+          {error ? (
+            <InlineError message={error} onRetry={onRetry} className="w-full" />
+          ) : availableRanges.length > 0 ? (
+            availableRanges.map(item => (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={range === item}
+                onClick={() => onRangeChange(item)}
+                className={cn(
+                  'wallet-interactive h-7 flex-1 rounded-md text-[11px] font-medium active:bg-white/10 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
+                  range === item
+                    ? 'bg-white/10 text-foreground'
+                    : 'text-muted hover:bg-white/5 hover:text-foreground'
+                )}
+              >
+                {RANGE_LABELS[item]}
+              </button>
+            ))
+          ) : loading ? (
+            <Skeleton className="h-7 w-full rounded-md" />
+          ) : null}
         </div>
       )}
     </div>

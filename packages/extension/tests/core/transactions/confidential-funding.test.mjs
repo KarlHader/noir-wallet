@@ -1167,6 +1167,8 @@ test.describe('confidential funding safety rules', () => {
       })
       expect(quoteRequests[2].appFees).toBeUndefined()
       expect(quoteRequests[2].referral).toBe('noir_move')
+      expect(quoteRequests[2].dry).toBe(true)
+      expect(quoteRequests[3].dry).toBe(false)
       expect(feeReads).toBe(1)
       await api.quote({
         ...withdrawal,
@@ -1175,7 +1177,7 @@ test.describe('confidential funding safety rules', () => {
         recipientType: 'CONFIDENTIAL_INTENTS',
         dry: true
       })
-      expect(quoteRequests[4]).toMatchObject({
+      expect(quoteRequests[5]).toMatchObject({
         referral: 'noir_swap',
         swapType: 'EXACT_INPUT',
         depositType: 'CONFIDENTIAL_INTENTS',
@@ -1215,7 +1217,7 @@ test.describe('confidential funding safety rules', () => {
       ]
       await expect(api.quote(withdrawal)).rejects.toThrow('app fees do not match')
       echoedFees = undefined
-      providerFee = { recipient: 'provider.near', fee: 21 }
+      providerFee = { recipient: 'provider.near', fee: 26 }
       await expect(api.quote(withdrawal)).rejects.toThrow('provider fee quote is invalid')
       feeConfig = { ...feeConfig, confidentialPlatformFeeBps: 10_001 }
       await expect(
@@ -1223,7 +1225,67 @@ test.describe('confidential funding safety rules', () => {
           withdrawal
         )
       ).rejects.toThrow('fee rate is invalid')
-      expect(quoteRequests).toHaveLength(20)
+      expect(quoteRequests).toHaveLength(21)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('binds an external confidential deposit to the automatic 1Click fee', async () => {
+    const originalFetch = globalThis.fetch
+    const requests = []
+    const providerFee = { recipient: 'provider.near', fee: 25 }
+    let formalFees = [providerFee]
+    let formalDestinationAsset
+    globalThis.fetch = async (url, init) => {
+      expect(url).toBe('https://example.test/1click/quote')
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      return Response.json({
+        correlationId: 'zec-deposit-quote',
+        quoteRequest: {
+          ...request,
+          ...(formalDestinationAsset && !request.dry
+            ? { destinationAsset: formalDestinationAsset }
+            : {}),
+          appFees: request.dry ? [providerFee] : formalFees
+        },
+        quote: {
+          amountIn: request.amount,
+          amountOut: '190000',
+          depositAddress: 'deposit-address',
+          deadline: request.deadline
+        }
+      })
+    }
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt')
+      const input = {
+        referral: 'noir_swap',
+        originAsset: 'nep141:zec.omft.near',
+        destinationAsset: 'nep141:arbitrum-usdc.omft.near',
+        amountRaw: '200000',
+        signerId: '0x1111111111111111111111111111111111111111',
+        refundTo: 't1ExampleRefundAddress',
+        recipient: '0x1111111111111111111111111111111111111111',
+        depositType: 'ORIGIN_CHAIN',
+        refundType: 'ORIGIN_CHAIN',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        slippageBps: 50,
+        dry: false
+      }
+      const quote = await api.quote(input)
+      expect(requests.map(request => request.dry)).toEqual([true, false])
+      expect(requests.every(request => request.appFees === undefined)).toBe(true)
+      expect(quote.quoteRequest.appFees).toEqual([providerFee])
+
+      formalFees = [{ ...providerFee, fee: 26 }]
+      await expect(api.quote(input)).rejects.toThrow('app fees do not match')
+      formalFees = [{ recipient: 'other.near', fee: 25 }]
+      await expect(api.quote(input)).rejects.toThrow('app fees do not match')
+      formalFees = [providerFee]
+      formalDestinationAsset = 'nep141:other.omft.near'
+      await expect(api.quote(input)).rejects.toThrow('does not match the requested funding route')
     } finally {
       globalThis.fetch = originalFetch
     }

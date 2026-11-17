@@ -85,6 +85,7 @@ import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-man
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import {
   buildShieldTransferRequest,
+  formatShieldQuoteTime,
   hasShieldTransferStarted,
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
@@ -123,6 +124,7 @@ import { initialMoveDraft, readMoveAssetHint, readMoveDraft } from './move-draft
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
 import { resolveZcashSelfMove } from '@/popup/services/zcash-self-move'
+import { getZcashChainId } from '@/core/chains/registry'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import type { FundingSource } from '@/types/wallet'
 import {
@@ -1460,13 +1462,14 @@ function TransferForm() {
     if (!effective || !zcashMoveSources.includes(source)) return
     const query = new URLSearchParams({
       move: '1',
+      assetId: `${getZcashChainId(currentNetwork)}/slip44:133`,
       from: source,
       originPath: `${location.pathname}${location.search}`,
       sourceWalletId: effective.walletId,
       sourceAccountId: effective.accountId
     })
     setAssetPickerOpen(false)
-    navigate(`/send/zcash?${query.toString()}`)
+    navigate(`/shield-zcash-move?${query.toString()}`)
   }
   const symbol = formatSymbol(selected?.asset.metadata.symbol)
   const sourceBalance =
@@ -1906,7 +1909,7 @@ function TransferForm() {
               ? [
                   {
                     label: 'Estimated time',
-                    content: `${activeShieldReview.quoteTimeEstimateSeconds} sec`
+                    content: formatShieldQuoteTime(activeShieldReview.quoteTimeEstimateSeconds!)
                   }
                 ]
               : []),

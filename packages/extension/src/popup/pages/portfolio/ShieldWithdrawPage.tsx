@@ -51,6 +51,7 @@ import {
 } from '@/popup/components/transaction/TransactionReviewView'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { Button } from '@/popup/components/ui/button'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
   CONFIDENTIAL_PREVIEW_CONNECTION_ERROR,
@@ -129,6 +130,9 @@ export function ShieldWithdrawForm({
   onSelectPublic,
   onOpenSourcePicker,
   onSourcePickerState,
+  onMoveSourceSelect,
+  onMoveDestinationSelect,
+  onMoveReverse,
   sourceSelectorActive = false,
   moveToOwnZcash = false
 }: {
@@ -147,6 +151,9 @@ export function ShieldWithdrawForm({
   ) => void
   readonly onOpenSourcePicker: () => void
   readonly onSourcePickerState?: (state: ShieldWithdrawSourcePickerState) => void
+  readonly onMoveSourceSelect?: () => void
+  readonly onMoveDestinationSelect?: () => void
+  readonly onMoveReverse?: () => void
   readonly sourceSelectorActive?: boolean
   readonly moveToOwnZcash?: boolean
 }) {
@@ -217,6 +224,10 @@ export function ShieldWithdrawForm({
     destination: ShieldFundingAsset
     amount: string
   }> | null>(null)
+  const preparedRef = useRef(prepared)
+  preparedRef.current = prepared
+  const [previewGeneration, setPreviewGeneration] = useState(0)
+  const [recoveryPending, setRecoveryPending] = useState(false)
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -267,6 +278,9 @@ export function ShieldWithdrawForm({
     mounted.current = true
     return () => {
       mounted.current = false
+      const pending = preparedRef.current
+      if (pending && confirmationAttempt.current !== pending.review.planId)
+        void confidentialFundingClient.cancel(pending.review.planId).catch(() => {})
     }
   }, [])
 
@@ -278,6 +292,7 @@ export function ShieldWithdrawForm({
     if (!active) {
       setPicker(null)
       setNetworkPickerOpen(false)
+      setRecoveryPending(false)
     }
   }, [active])
 
@@ -286,6 +301,10 @@ export function ShieldWithdrawForm({
   }, [active, prepared])
 
   useEffect(() => {
+    const pending = preparedRef.current
+    if (pending && confirmationAttempt.current !== pending.review.planId)
+      void confidentialFundingClient.cancel(pending.review.planId).catch(() => {})
+    preparedRef.current = null
     setSourceId(routeAssetId)
     setDestinationNetworkId(routeNetworkId)
     setAmount(routeAmount)
@@ -293,6 +312,7 @@ export function ShieldWithdrawForm({
     setPicker(null)
     setNetworkPickerOpen(false)
     setPrepared(null)
+    setRecoveryPending(false)
     setBusy(false)
     setUncertain(false)
     setError(null)
@@ -302,6 +322,7 @@ export function ShieldWithdrawForm({
 
   useEffect(() => {
     setError(null)
+    setRecoveryPending(false)
   }, [draftKey])
 
   useEffect(() => {
@@ -653,7 +674,10 @@ export function ShieldWithdrawForm({
     loading: previewLoading,
     error: previewError,
     retry: retryPreview
-  } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
+  } = useConfidentialFundingPreview(
+    active ? previewRequest : null,
+    `${scopeKey}:${previewGeneration}`
+  )
   const previewFee =
     source && destination && previewRequest && preview && preview.expiresAt > Date.now()
       ? estimateShieldSendRouteFee(
@@ -679,6 +703,7 @@ export function ShieldWithdrawForm({
   const openActivity = (transactionId: string) => {
     if (!scopeStillCurrent() || !account) return
     void loadBalances(true, false)
+    preparedRef.current = null
     setPrepared(null)
     setAmount('')
     setUncertain(false)
@@ -708,10 +733,21 @@ export function ShieldWithdrawForm({
   }
   const refreshBalances = async () => {
     if (!account || !canManageNear || connecting || !scopeStillCurrent()) return
-    setError(null)
-    if (await loadBalances()) {
-      if (scopeStillCurrent() && previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR)
-        retryPreview()
+    const requestedDraftKey = draftKey
+    setRecoveryPending(true)
+    try {
+      const refreshed = await loadBalances()
+      if (!scopeStillCurrent() || latestDraftKey.current !== requestedDraftKey) return
+      if (refreshed) {
+        setPreviewGeneration(value => value + 1)
+        setError(null)
+      }
+    } catch (cause) {
+      if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
+        setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
+    } finally {
+      if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
+        setRecoveryPending(false)
     }
   }
   const prepare = async () => {
@@ -725,6 +761,9 @@ export function ShieldWithdrawForm({
       !previewRequest ||
       !preview ||
       preview.expiresAt <= Date.now() + 5_000 ||
+      recoveryPending ||
+      Boolean(error) ||
+      Boolean(balanceError) ||
       busy ||
       !scopeStillCurrent()
     )
@@ -753,10 +792,18 @@ export function ShieldWithdrawForm({
       }
       confirmationAttempt.current = null
       setUncertain(false)
-      setPrepared({ review, request, source, destination, amount })
+      const pending = { review, request, source, destination, amount }
+      preparedRef.current = pending
+      setPrepared(pending)
     } catch (cause) {
-      if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
+      if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey) {
+        setRecoveryPending(true)
         setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
+        setPreviewGeneration(value => value + 1)
+        await loadBalances(true, false).catch(() => false)
+        if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
+          setRecoveryPending(false)
+      }
     } finally {
       if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey)
         setBusy(false)
@@ -770,6 +817,7 @@ export function ShieldWithdrawForm({
       return 'started'
     }
     if (isUnsignedShieldTerminal(plan)) {
+      preparedRef.current = null
       setPrepared(null)
       setUncertain(false)
       setError(`${actionLabel} was not started. Try again.`)
@@ -788,6 +836,7 @@ export function ShieldWithdrawForm({
       await confidentialFundingClient.cancel(prepared.review.planId)
       if (!mounted.current || latestScope.current !== scopeKey || latestEntry.current !== entryKey)
         return
+      preparedRef.current = null
       setPrepared(null)
       setUncertain(false)
     } catch (cause) {
@@ -1066,7 +1115,7 @@ export function ShieldWithdrawForm({
           </span>
           <button
             type="button"
-            disabled={connecting}
+            disabled={connecting || recoveryPending}
             onClick={
               previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
                 ? () => void refreshBalances()
@@ -1089,24 +1138,17 @@ export function ShieldWithdrawForm({
         </p>
       )}
       {(balanceError || (error && !amountState?.error)) && (
-        <p role="alert" className="text-xs text-warning">
-          {balanceError ?? error}
-        </p>
+        <InlineError
+          message={!amountState?.error && error ? error : balanceError}
+          tone="warning"
+          onRetry={() => void refreshBalances()}
+          retrying={connecting || recoveryPending}
+        />
       )}
       {!currentBalances && canManageNear && connecting && (
         <p role="status" className="text-center text-sm text-muted">
           Loading Shield balances…
         </p>
-      )}
-      {!currentBalances && canManageNear && !connecting && balanceError && (
-        <Button
-          variant="outline"
-          size="wallet"
-          onClick={() => void refreshBalances()}
-          className="w-full"
-        >
-          Retry
-        </Button>
       )}
     </>
   )
@@ -1119,7 +1161,10 @@ export function ShieldWithdrawForm({
     amountState?.amountRaw &&
     recipientValid &&
     preview &&
-    !previewLoading
+    !previewLoading &&
+    !recoveryPending &&
+    !error &&
+    !balanceError
   )
   const moveBalance = balancesHidden
     ? '••••'
@@ -1155,9 +1200,7 @@ export function ShieldWithdrawForm({
                 <button
                   type="button"
                   aria-label="Max"
-                  disabled={
-                    busy || connecting || !source || !currentBalances || availableRaw === '0'
-                  }
+                  disabled={busy || !source || availableRaw === '0'}
                   onClick={() => {
                     if (source)
                       setAmount(
@@ -1175,6 +1218,8 @@ export function ShieldWithdrawForm({
                   source="confidential"
                   accountName={activeAccount?.accountDisplayName ?? ''}
                   address=""
+                  disabled={busy}
+                  onClick={onMoveSourceSelect}
                 />
               }
               destination={
@@ -1185,10 +1230,15 @@ export function ShieldWithdrawForm({
                   address={recipient}
                   disabled={busy}
                   onClick={
-                    ownZcashRecipients.length > 1 ? () => setPicker('move-destination') : undefined
+                    onMoveDestinationSelect ??
+                    (ownZcashRecipients.length > 1
+                      ? () => setPicker('move-destination')
+                      : undefined)
                   }
                 />
               }
+              onReverse={onMoveReverse}
+              canReverse={Boolean(onMoveReverse)}
             />
             {routeDetails}
           </div>
@@ -1341,8 +1391,8 @@ export function ShieldWithdrawForm({
           maxButton={
             <button
               type="button"
-              disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
-              title={!currentBalances ? 'Shield balance unavailable' : 'Use maximum balance'}
+              disabled={busy || !source || availableRaw === '0'}
+              title={availableRaw === '0' ? 'Shield balance unavailable' : 'Use maximum balance'}
               onClick={() => {
                 if (!source) return
                 keepSelectedSource()
@@ -1364,7 +1414,10 @@ export function ShieldWithdrawForm({
                 !amountState?.amountRaw ||
                 !recipientValid ||
                 !preview ||
-                previewLoading
+                previewLoading ||
+                recoveryPending ||
+                Boolean(error) ||
+                Boolean(balanceError)
               }
               onContinue={() => void prepare()}
             />

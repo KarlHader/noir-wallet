@@ -1,7 +1,7 @@
 import { FEE_TIERS } from '@/config/fee'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
 import { bitcoinFeeTargetBlocks } from '@/infrastructure/chains/bitcoin/bitcoin-fee-tier'
-import { formatConfirmationTime } from './confirmation-time-format'
+import { formatConfirmationTime, formatIntentsConfirmationTime } from './confirmation-time-format'
 
 export function estimateZcashSendTime(): string {
   return FEE_TIERS.find(tier => tier.id === 'standard')?.etaHint ?? '—'
@@ -17,10 +17,7 @@ export function estimateConfidentialSendTime(
   quoteSeconds: number | undefined,
   chainConfirmationTime = '—'
 ): string {
-  const quoted =
-    quoteSeconds !== undefined && Number.isSafeInteger(quoteSeconds)
-      ? formatConfirmationTime({ minimumSeconds: quoteSeconds, maximumSeconds: quoteSeconds })
-      : '—'
+  const quoted = formatIntentsConfirmationTime(quoteSeconds)
   if (quoted !== '—') return quoted
   return chainConfirmationTime === '—' ? '—' : `${chainConfirmationTime}+`
 }

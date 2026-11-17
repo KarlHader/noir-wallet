@@ -565,6 +565,40 @@ test.describe('Multichain Activity presentation', () => {
     }
     expect(canCancelEvmActivity(shield, ['eip155:1'])).toBe(true)
     expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100)).toBe(true)
+    const processing = {
+      ...shield,
+      segments: [
+        { ...shield.segments[0], evidence: { transactionHash, confirmations: 0 } },
+        { ...shield.segments[1], status: 'broadcast' }
+      ]
+    }
+    expect(canCancelEvmActivity(processing, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(processing, ['eip155:1'], 100)).toBe(true)
+    for (const evidence of [
+      { blockHeight: 0 },
+      { blockHash: `0x${'c'.repeat(64)}` },
+      { confirmations: 1 }
+    ]) {
+      const mined = {
+        ...processing,
+        segments: [
+          { ...processing.segments[0], evidence: { transactionHash, ...evidence } },
+          processing.segments[1]
+        ]
+      }
+      expect(canCancelEvmActivity(mined, ['eip155:1'])).toBe(false)
+      expect(canSpeedUpEvmActivity(mined, ['eip155:1'], 100)).toBe(false)
+    }
+    for (const reconfirming of [
+      { ...processing, reconfirming: true },
+      {
+        ...processing,
+        segments: [{ ...processing.segments[0], reconfirming: true }, processing.segments[1]]
+      }
+    ]) {
+      expect(canCancelEvmActivity(reconfirming, ['eip155:1'])).toBe(false)
+      expect(canSpeedUpEvmActivity(reconfirming, ['eip155:1'], 100)).toBe(false)
+    }
     expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 200)).toBe(false)
     expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100, 100)).toBe(false)
     expect(

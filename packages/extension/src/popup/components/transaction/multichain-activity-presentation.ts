@@ -770,14 +770,19 @@ export function getPendingEvmActivityOrigin(
     item.kind !== 'cancel' &&
     item.status !== 'final' &&
     item.status !== 'failed' &&
+    !item.reconfirming &&
     item.failureCode === undefined &&
     item.snapshot?.direction !== 'incoming' &&
     item.snapshot?.evm !== undefined &&
     segment !== undefined &&
     segment.status === 'broadcast' &&
+    !segment.reconfirming &&
     segment.target.kind === 'onchain' &&
     evmChainIds.includes(segment.target.chainId) &&
     /^0x[0-9a-f]{64}$/.test(segment.evidence?.transactionHash ?? '') &&
+    segment.evidence?.blockHeight === undefined &&
+    segment.evidence?.blockHash === undefined &&
+    (segment.evidence?.confirmations ?? 0) === 0 &&
     segment.evidence?.replacementTransactionHash === undefined
     ? segment
     : null

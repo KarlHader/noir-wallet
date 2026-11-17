@@ -714,23 +714,14 @@ export function EvmSendForm({
 
   const handleSelectRecipient = async () => {
     await openModal<string | undefined>({
-      title: 'Send to',
+      title: 'Select Recipient',
       showCloseButton: true,
-      className: 'max-h-[calc(100dvh-16px)] grid-rows-[auto_minmax(0,1fr)] bg-popover px-4',
-      body: (resolve, close) => (
+      body: resolve => (
         <RecipientSelector
           chainId={chain.chain.id}
           sendingAddress={sourceAddress}
           disablePrivateExecutionAddresses={sourceMode === 'main'}
           recipientExecutionMode={sourceMode}
-          onShieldedMove={
-            sourceMode === 'main' && onFundPrivate
-              ? () => {
-                  close()
-                  onFundPrivate()
-                }
-              : undefined
-          }
           onSelect={(address, name) => {
             invalidateMaximum()
             if (maxSelected) setAmount('')

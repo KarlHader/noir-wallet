@@ -1,5 +1,12 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import {
+  prepareNativeZecIntentsSwap,
+  getNativeZecIntentsSwap,
+  cancelNativeZecIntentsSwap,
+  type NativeZecIntentsSwapReview
+} from '@/popup/services/native-zec-intents-swap-client'
+import { zecToZats } from '@/core/services/native-zec-intents-swap'
+import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSendDraft,
   isPublicPrivateSendRecipient
@@ -102,6 +109,7 @@ import {
 } from '@/core/zcash/shielding'
 import {
   assertActiveAccountScope,
+  captureActiveAccountScope,
   getActiveAccountScopeKey
 } from '@/popup/lib/active-account-scope'
 import { getZcashChainId } from '@/core/chains/registry'
@@ -122,13 +130,26 @@ export function Send({
   embedded = false,
   initialFundingSource = 'transparent',
   fundingSourceSelection,
-  onSelectAsset
+  onSelectAsset,
+  moveDestination,
+  onMoveSourceSelect,
+  onMoveDestinationSelect,
+  onMoveReverse,
+  onMoveStateChange
 }: {
   readonly active?: boolean
   readonly embedded?: boolean
   readonly initialFundingSource?: FundingSource
   readonly fundingSourceSelection?: Readonly<{ source: FundingSource; revision: number }> | null
   readonly onSelectAsset?: (fundingSource: FundingSource) => void
+  readonly moveDestination?: FundingSource | 'confidential'
+  readonly onMoveSourceSelect?: () => void
+  readonly onMoveDestinationSelect?: () => void
+  readonly onMoveReverse?: () => void
+  readonly onMoveStateChange?: (state: {
+    readonly reviewing: boolean
+    readonly busy: boolean
+  }) => void
 } = {}) {
   const { navigate, goBack } = useNavigate()
   const location = useLocation()
@@ -178,6 +199,7 @@ export function Send({
           replace: true
         })
   const isSelfMove = routeParams.get('move') === '1'
+  const isConfidentialMove = isSelfMove && moveDestination === 'confidential'
   const moveSource =
     routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
       ? (routeParams.get('from') as FundingSource)
@@ -209,6 +231,15 @@ export function Send({
   } | null>(null)
   const [privatePreviewError, setPrivatePreviewError] = useState<string | null>(null)
   const [privatePreviewRetry, setPrivatePreviewRetry] = useState(0)
+  const [moveQuote, setMoveQuote] = useState<{
+    key: string
+    review: NativeZecIntentsSwapReview
+  } | null>(null)
+  const [reviewedMoveQuote, setReviewedMoveQuote] = useState<NativeZecIntentsSwapReview | null>(
+    null
+  )
+  const [moveQuoteError, setMoveQuoteError] = useState<string | null>(null)
+  const [moveQuoteRetry, setMoveQuoteRetry] = useState(0)
   const [toAddress, setToAddress] = useState(retryDraft?.toAddress ?? '')
   const [selectedRecipient, setSelectedRecipient] = useState<{
     address: string
@@ -220,6 +251,13 @@ export function Send({
   const [showReview, setShowReview] = useState(false)
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
+  useLayoutEffect(() => {
+    onMoveStateChange?.({ reviewing: showReview, busy: isConfirming || isHardwareSigning })
+  }, [showReview, isConfirming, isHardwareSigning, onMoveStateChange])
+  useLayoutEffect(
+    () => () => onMoveStateChange?.({ reviewing: false, busy: false }),
+    [onMoveStateChange]
+  )
   const confirmationInFlight = useRef(false)
   const activeRef = useRef(active)
   activeRef.current = active
@@ -265,6 +303,8 @@ export function Send({
     accountDisplayNames
   )
   const isHardwareWallet = isZcashHardwareKeySource(currentWallet?.keySource)
+  const moveQuoteSubmitting = useRef<string | null>(null)
+  const moveMaxExactSeen = useRef(false)
   // Keep a bare Move route stable while balances refresh; entry points pass a funded source explicitly.
   const defaultMoveSource = getDefaultZcashSelfMoveSource({
     addresses: currentAccount?.addresses,
@@ -277,15 +317,24 @@ export function Send({
     : getFundingSourceUnavailableReason(currentWallet?.keySource, selectedFundingSource)
       ? 'shielded'
       : selectedFundingSource
-  const isTransparentToShieldMove = isSelfMove && fundingSource === 'transparent'
-  const sendDraftPath = `${embedded ? '/send/zcash' : location.pathname}?${new URLSearchParams({
-    ...(isSelfMove ? { move: '1' } : {}),
-    ...(originPath ? { originPath } : {}),
-    ...(sourceWalletId ? { sourceWalletId } : {}),
-    ...(sourceAccountId ? { sourceAccountId } : {}),
-    from: fundingSource,
-    mode: walletMode
-  })}`
+  const isTransparentToShieldMove =
+    isSelfMove && !isConfidentialMove && fundingSource === 'transparent'
+  const sendDraftPath = `${embedded && !isSelfMove ? '/send/zcash' : location.pathname}?${new URLSearchParams(
+    {
+      ...(isSelfMove ? { move: '1' } : {}),
+      ...(originPath ? { originPath } : {}),
+      ...(sourceWalletId ? { sourceWalletId } : {}),
+      ...(sourceAccountId ? { sourceAccountId } : {}),
+      ...(embedded && isSelfMove
+        ? {
+            assetId: `${getZcashChainId(currentNetwork)}/slip44:133`,
+            to: moveDestination ?? 'shielded'
+          }
+        : {}),
+      from: fundingSource,
+      mode: walletMode
+    }
+  )}`
   const resultReturnPath = originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/')
   const resultNavigationState = canReturnToOriginHistory
     ? {
@@ -316,25 +365,143 @@ export function Send({
         }
       : undefined
   const selfMove = isSelfMove
-    ? resolveZcashSelfMove(currentAccount?.addresses, fundingSource, currentNetwork)
+    ? isConfidentialMove
+      ? null
+      : resolveZcashSelfMove(currentAccount?.addresses, fundingSource, currentNetwork)
     : null
   const moveUnavailableReason = getFundingSourceUnavailableReason(
     currentWallet?.keySource,
     fundingSource
   )
-  const moveUnavailable = isSelfMove && (!selfMove || Boolean(moveUnavailableReason))
+  const moveUnavailable =
+    isSelfMove &&
+    (isConfidentialMove
+      ? currentNetwork !== 'mainnet' ||
+        isHardwareWallet ||
+        !currentAccount?.addresses.transparent ||
+        !currentAccount?.addresses[fundingSource] ||
+        Boolean(moveUnavailableReason)
+      : !selfMove || Boolean(moveUnavailableReason))
   const reverseSource = fundingSource === 'transparent' ? 'shielded' : 'transparent'
   const canReverseMove =
     isSelfMove &&
+    !isConfidentialMove &&
     resolveZcashSelfMove(currentAccount?.addresses, reverseSource, currentNetwork) !== null &&
     !getFundingSourceUnavailableReason(currentWallet?.keySource, reverseSource)
 
   const { sendTransaction } = useTransaction()
 
+  const moveQuoteKey =
+    active &&
+    isConfidentialMove &&
+    !moveUnavailable &&
+    currentWalletId &&
+    currentAccountId &&
+    currentAccount?.addresses.transparent &&
+    safeBig(amount || '0').gt(0) &&
+    safeBig(amount || '0').lte(getFundingBalance(balance, fundingSource).available)
+      ? JSON.stringify([
+          currentNetwork,
+          currentWalletId,
+          currentAccountId,
+          fundingSource,
+          currentAccount.addresses.transparent,
+          amount,
+          moveQuoteRetry
+        ])
+      : null
+  const moveQuoteReady = Boolean(
+    moveQuoteKey &&
+    moveQuote?.key === moveQuoteKey &&
+    moveQuote.review.expiresAt > Date.now() + 5_000
+  )
+  const moveReviewReady = Boolean(
+    moveQuoteReady && reviewedMoveQuote?.quoteId === moveQuote?.review.quoteId
+  )
+  useEffect(() => {
+    setMoveQuote(null)
+    setMoveQuoteError(null)
+    if (
+      !moveQuoteKey ||
+      !currentWalletId ||
+      !currentAccountId ||
+      !currentAccount?.addresses.transparent
+    )
+      return
+    let cancelled = false
+    let preparedQuoteId: string | null = null
+    let expiryTimer: number | undefined
+    const timer = window.setTimeout(() => {
+      let amountZats: string
+      try {
+        amountZats = zecToZats(amount)
+        if (BigInt(amountZats) <= 0n) return
+      } catch {
+        return
+      }
+      void prepareNativeZecIntentsSwap({
+        network: currentNetwork,
+        walletId: currentWalletId,
+        accountId: currentAccountId,
+        amountZats,
+        destination: {
+          chainId: getZcashChainId(currentNetwork),
+          assetId: `${getZcashChainId(currentNetwork)}/slip44:133`,
+          protocolAssetId: ZEC_ZCASH_ASSET
+        },
+        refundAddress: currentAccount.addresses.transparent,
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        fundingSource,
+        slippageBps: 50
+      })
+        .then(review => {
+          preparedQuoteId = review.quoteId
+          if (cancelled) {
+            void cancelNativeZecIntentsSwap(review.quoteId).catch(() => {})
+            return
+          }
+          if (
+            review.network !== currentNetwork ||
+            review.walletId !== currentWalletId ||
+            review.accountId !== currentAccountId ||
+            review.amountZats !== amountZats ||
+            review.destination.assetId !== `${getZcashChainId(currentNetwork)}/slip44:133` ||
+            review.recipientType !== 'CONFIDENTIAL_INTENTS' ||
+            review.fundingSource !== fundingSource ||
+            review.expiresAt <= Date.now() + 5_000
+          ) {
+            void cancelNativeZecIntentsSwap(review.quoteId).catch(() => {})
+            setMoveQuoteError('Move quote changed. Try again.')
+            return
+          }
+          setMoveQuote({ key: moveQuoteKey, review })
+          expiryTimer = window.setTimeout(
+            () => setMoveQuoteRetry(value => value + 1),
+            Math.max(0, review.expiresAt - Date.now() - 5_000)
+          )
+        })
+        .catch(cause => {
+          if (!cancelled)
+            setMoveQuoteError(cause instanceof Error ? cause.message : 'Move quote unavailable')
+        })
+    }, 800)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer)
+      if (preparedQuoteId && moveQuoteSubmitting.current !== preparedQuoteId)
+        void cancelNativeZecIntentsSwap(preparedQuoteId).catch(() => {})
+    }
+  }, [moveQuoteKey])
+
   const recipientInput = resolveZcashSendRecipientInput(toAddress, currentNetwork)
   const zns = useZnsResolve(active && !isSelfMove ? recipientInput.znsInput : '')
   const effectiveToAddress = isSelfMove
-    ? (selfMove?.toAddress ?? '')
+    ? isConfidentialMove
+      ? moveQuoteReady
+        ? moveQuote!.review.depositAddress
+        : ''
+      : (selfMove?.toAddress ?? '')
     : recipientInput.formatError
       ? ''
       : zns.address || recipientInput.resolvedAddress
@@ -646,14 +813,23 @@ export function Send({
   }
 
   useEffect(() => {
-    if (showReview && staleSelectedMax && !isConfirming) setShowReview(false)
-  }, [showReview, staleSelectedMax, isConfirming])
+    if (showReview && staleSelectedMax && !isConfirming && !isConfidentialMove) setShowReview(false)
+  }, [showReview, staleSelectedMax, isConfirming, isConfidentialMove])
+
+  useEffect(() => {
+    if (!maxSelected || !isConfidentialMove) moveMaxExactSeen.current = false
+  }, [maxSelected, isConfidentialMove])
 
   useEffect(() => {
     if (active && maxSelected && effectiveMaxStr) {
-      setAmount(effectiveMaxStr)
+      if (isConfidentialMove) {
+        if (showReview) return
+        if (maxTransfer.maxAmount) moveMaxExactSeen.current = true
+        else if (moveMaxExactSeen.current) return
+      }
+      setAmount(current => (current === effectiveMaxStr ? current : effectiveMaxStr))
     }
-  }, [active, maxSelected, effectiveMaxStr])
+  }, [active, maxSelected, effectiveMaxStr, isConfidentialMove, maxTransfer.maxAmount, showReview])
 
   useEffect(() => {
     if (!active) setShowReview(false)
@@ -731,6 +907,7 @@ export function Send({
 
   const handleContinue = () => {
     if (!active || syncBlocked) return
+    if (isConfidentialMove && !moveQuoteReady) return
     if (sendPrivately) {
       if (!privatePreviewReady || !currentWalletId || !currentAccountId || !isValidAmount) return
       navigate(
@@ -758,6 +935,7 @@ export function Send({
       (isSelfMove ||
         isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
     ) {
+      if (isConfidentialMove && moveQuote) setReviewedMoveQuote(moveQuote.review)
       setShowReview(true)
     }
   }
@@ -779,12 +957,14 @@ export function Send({
       !fromAddress ||
       !currentAccount ||
       syncBlocked ||
-      moveUnavailable
+      moveUnavailable ||
+      (isConfidentialMove && !moveReviewReady)
     )
       return
     const activeScope = getActiveAccountScopeKey()
     if (!activeScope) return
     confirmationInFlight.current = true
+    if (isConfidentialMove) moveQuoteSubmitting.current = reviewedMoveQuote?.quoteId ?? null
     setIsConfirming(true)
     try {
       try {
@@ -817,18 +997,41 @@ export function Send({
       assertActiveAccountScope(activeScope)
       if (isSelfMove) {
         const wallet = useWalletStore.getState()
-        const currentMove = resolveZcashSelfMove(
-          wallet.getCurrentAccount()?.addresses,
-          fundingSource,
-          wallet.currentNetwork
-        )
-        if (
-          wallet.currentNetwork !== currentNetwork ||
-          !currentMove ||
-          currentMove.fromAddress !== fromAddress ||
-          currentMove.toAddress !== effectiveToAddress
-        ) {
-          throw new Error('Active account changed. Review this action again.')
+        if (isConfidentialMove) {
+          const review = reviewedMoveQuote
+          if (!review || !moveReviewReady || review.quoteId !== moveQuoteSubmitting.current) {
+            throw new Error('Move quote changed. Review again.')
+          }
+          const current = await getNativeZecIntentsSwap(review.quoteId)
+          if (
+            wallet.currentNetwork !== currentNetwork ||
+            wallet.currentWalletId !== currentWalletId ||
+            wallet.currentAccountId !== currentAccountId ||
+            current.quoteId !== review.quoteId ||
+            current.network !== currentNetwork ||
+            current.walletId !== currentWalletId ||
+            current.accountId !== currentAccountId ||
+            current.amountZats !== zecToZats(amount) ||
+            current.depositAddress !== review.depositAddress ||
+            current.expiresAt <= Date.now() + 5_000 ||
+            JSON.stringify(current.quoteBinding) !== JSON.stringify(review.quoteBinding)
+          ) {
+            throw new Error('Move quote changed. Review again.')
+          }
+        } else {
+          const currentMove = resolveZcashSelfMove(
+            wallet.getCurrentAccount()?.addresses,
+            fundingSource,
+            wallet.currentNetwork
+          )
+          if (
+            wallet.currentNetwork !== currentNetwork ||
+            !currentMove ||
+            currentMove.fromAddress !== fromAddress ||
+            currentMove.toAddress !== effectiveToAddress
+          ) {
+            throw new Error('Active account changed. Review this action again.')
+          }
         }
       }
       const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
@@ -899,6 +1102,9 @@ export function Send({
       setShowReview(false)
 
       assertActiveAccountScope(activeScope)
+      const executionScope = captureActiveAccountScope()
+      if (!executionScope || executionScope.network !== currentNetwork)
+        throw new Error('Active account changed. Review this action again.')
 
       const pendingResult = {
         type: 'zcash',
@@ -909,16 +1115,20 @@ export function Send({
         toAddress: effectiveToAddress,
         showFrom: true,
         showTo: true,
-        saveRecipient: {
-          chainId: getZcashChainId(currentNetwork),
-          chainFamily: 'zcash',
-          network: currentNetwork,
-          networkName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-          address: effectiveToAddress,
-          name: zns.name ?? 'Recipient',
-          znsName: zns.name || undefined,
-          selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
-        }
+        ...(isConfidentialMove
+          ? {}
+          : {
+              saveRecipient: {
+                chainId: getZcashChainId(currentNetwork),
+                chainFamily: 'zcash' as const,
+                network: currentNetwork,
+                networkName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+                address: effectiveToAddress,
+                name: zns.name ?? 'Recipient',
+                znsName: zns.name || undefined,
+                selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
+              }
+            })
       } as const
       setResult(pendingResult, resultReturnPath, retrySend)
       navigate('/transaction-result', { state: resultNavigationState })
@@ -928,6 +1138,26 @@ export function Send({
         amount,
         from: fromAddress,
         fromType: fundingSource,
+        ...(isConfidentialMove && reviewedMoveQuote
+          ? {
+              txType: 'swap' as const,
+              displayTo: reviewedMoveQuote.destination.recipient,
+              quoteBinding: reviewedMoveQuote.quoteBinding,
+              monitorParams: {
+                depositAddress: reviewedMoveQuote.depositAddress,
+                tokenInSymbol: 'ZEC',
+                tokenOutSymbol: 'ZEC',
+                amountOut: formatBaseUnitDecimalAmount(
+                  reviewedMoveQuote.expectedOutputRaw,
+                  ZEC_DECIMALS
+                ),
+                actionName: 'Move',
+                originChain: 'zcash',
+                destinationChain: 'zcash'
+              }
+            }
+          : {}),
+        ...(isConfidentialMove ? { expectedAccountKey: executionScope.accountKey } : {}),
         memo: effectiveMemo,
         fee: selectedFeeZec,
         marginalFeeZats,
@@ -963,7 +1193,21 @@ export function Send({
           updateStep('failed', { error: result.error })
         }
       }
+    } catch (cause) {
+      if (
+        getActiveAccountScopeKey() !== activeScope ||
+        useWalletStore.getState().currentNetwork !== currentNetwork
+      )
+        return
+      if (isConfidentialMove) {
+        setMoveQuoteRetry(value => value + 1)
+      }
+      toast.error(
+        isSelfMove ? 'Could not start Move' : 'Could not send ZEC',
+        classifyError(cause).userMessage
+      )
     } finally {
+      moveQuoteSubmitting.current = null
       confirmationInFlight.current = false
       setIsConfirming(false)
     }
@@ -1069,16 +1313,14 @@ export function Send({
                 disabled={
                   !fromAddress ||
                   !balanceKnown ||
-                  !effectiveToAddress ||
+                  (!isConfidentialMove && !effectiveToAddress) ||
                   moveUnavailable ||
-                  safeBig(effectiveMaxStr).lte(0) ||
-                  (isTransparentToShieldMove &&
-                    !hasEnoughTransparentBalanceToShield(shieldableBalance))
+                  safeBig(effectiveMaxStr).lte(0)
                 }
                 onClick={() => {
                   setMaxSelected(true)
                   setAmount(effectiveMaxStr)
-                  void maxTransfer.request()
+                  if (effectiveToAddress) void maxTransfer.request()
                 }}
                 className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
               >
@@ -1094,24 +1336,37 @@ export function Send({
                 source={fundingSource}
                 accountName={accountDisplayName}
                 address={fromAddress}
+                onClick={onMoveSourceSelect}
               />
             }
             destination={
               <ZcashMoveAccountCard
                 label="To"
-                source={fundingSource === 'transparent' ? 'shielded' : 'transparent'}
+                source={
+                  isConfidentialMove
+                    ? 'confidential'
+                    : fundingSource === 'transparent'
+                      ? 'shielded'
+                      : 'transparent'
+                }
                 accountName={accountDisplayName}
-                address={effectiveToAddress}
+                address={isConfidentialMove ? '' : effectiveToAddress}
+                onClick={onMoveDestinationSelect}
               />
             }
-            onReverse={reverseMove}
-            canReverse={canReverseMove}
+            onReverse={onMoveReverse ?? reverseMove}
+            canReverse={embedded ? Boolean(onMoveReverse) : canReverseMove}
           />
+          {moveQuoteError && (
+            <InlineError
+              message={moveQuoteError}
+              onRetry={() => setMoveQuoteRetry(value => value + 1)}
+            />
+          )}
           {moveUnavailable && (
             <InlineError
               message={
-                moveUnavailableReason ??
-                'This account cannot move ZEC between Transparent and Shield.'
+                moveUnavailableReason ?? 'This account cannot move ZEC from the selected balance.'
               }
             />
           )}
@@ -1209,8 +1464,12 @@ export function Send({
           <SendRouteInfoCard
             provider={
               <span className="inline-flex items-center gap-1.5">
-                <img src={zcashShieldLogo} alt="" className="size-5 rounded" />
-                Zcash
+                <img
+                  src={isConfidentialMove ? nearLogo : zcashShieldLogo}
+                  alt=""
+                  className="size-5 rounded"
+                />
+                {isConfidentialMove ? 'NEAR Confidential Intents' : 'Zcash'}
               </span>
             }
             fee={
@@ -1224,7 +1483,21 @@ export function Send({
                 hideLabel
               />
             }
-            time={estimateZcashSendTime()}
+            time={isConfidentialMove ? undefined : estimateZcashSendTime()}
+            extra={
+              isConfidentialMove && moveQuoteReady && moveQuote ? (
+                <div className="flex justify-between gap-3 border-t border-white/10 pt-3">
+                  <span className="text-muted">Est. receive</span>
+                  <AmountDisplay
+                    value={formatBaseUnitDecimalAmount(
+                      moveQuote.review.expectedOutputRaw,
+                      ZEC_DECIMALS
+                    )}
+                    symbol="ZEC"
+                  />
+                </div>
+              ) : undefined
+            }
           />
         </div>
       )}
@@ -1299,6 +1572,7 @@ export function Send({
     !active ||
     !effectiveToAddress ||
     moveUnavailable ||
+    (isConfidentialMove && !moveQuoteReady) ||
     !amount ||
     !isValidAmount ||
     memoUnsupported ||
@@ -1325,6 +1599,8 @@ export function Send({
         }
       />
     ) : null
+  const reviewAmount =
+    isConfidentialMove && reviewedMoveQuote ? reviewedMoveQuote.amountZec : amount
 
   return (
     <div
@@ -1486,10 +1762,10 @@ export function Send({
             showTitle
             variant="figma"
             asset={{ symbol: 'ZEC', nativeChain: 'zcash' }}
-            amount={amount}
+            amount={reviewAmount}
             amountPrefix={isConfirming && !isHardwareWallet ? '' : isSelfMove ? '' : '-'}
             fiatValue={formatFiatAmount(
-              safeBig(amount || '0')
+              safeBig(reviewAmount || '0')
                 .times(zecPrice || 0)
                 .times(isSelfMove ? 1 : -1)
                 .toFixed(),
@@ -1525,7 +1801,9 @@ export function Send({
               },
               {
                 label: isSelfMove ? 'To' : 'Recipient',
-                content: (
+                content: isConfidentialMove ? (
+                  'NEAR Confidential'
+                ) : (
                   <SendRecipientAddress
                     address={effectiveToAddress}
                     name={
@@ -1537,6 +1815,34 @@ export function Send({
                   />
                 )
               },
+              ...(isConfidentialMove && reviewedMoveQuote
+                ? [
+                    {
+                      label: 'You receive',
+                      content: (
+                        <AmountDisplay
+                          value={formatBaseUnitDecimalAmount(
+                            reviewedMoveQuote.expectedOutputRaw,
+                            ZEC_DECIMALS
+                          )}
+                          symbol="ZEC"
+                        />
+                      )
+                    },
+                    {
+                      label: 'Minimum receive',
+                      content: (
+                        <AmountDisplay
+                          value={formatBaseUnitDecimalAmount(
+                            reviewedMoveQuote.minimumOutputRaw,
+                            ZEC_DECIMALS
+                          )}
+                          symbol="ZEC"
+                        />
+                      )
+                    }
+                  ]
+                : []),
               {
                 label: 'Network',
                 content: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'
@@ -1558,7 +1864,24 @@ export function Send({
               }
             ]}
             error={
-              feeError ? (
+              isConfidentialMove && !moveReviewReady ? (
+                <InlineError
+                  className="mt-3"
+                  message={
+                    moveQuoteReady && moveQuote
+                      ? 'Move quote updated. Review the new amount.'
+                      : (moveQuoteError ?? 'Refreshing Move quote…')
+                  }
+                  onRetry={
+                    moveQuoteReady && moveQuote
+                      ? () => setReviewedMoveQuote(moveQuote.review)
+                      : moveQuoteError
+                        ? () => setMoveQuoteRetry(value => value + 1)
+                        : undefined
+                  }
+                  retryLabel={moveQuoteReady && moveQuote ? 'Review quote' : 'Retry'}
+                />
+              ) : feeError ? (
                 <InlineError
                   className="mt-3"
                   message={feeErrorMessage}
@@ -1572,6 +1895,7 @@ export function Send({
             confirmDisabled={
               !active ||
               moveUnavailable ||
+              (isConfidentialMove && !moveReviewReady) ||
               reviewInsufficient ||
               !feeReady ||
               syncBlocked ||

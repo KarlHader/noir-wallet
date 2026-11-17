@@ -35,6 +35,7 @@ import {
   shieldZcashEnablePath
 } from '@/popup/services/shield-zcash-entry'
 import { getDefaultZcashSelfMoveSource } from '@/popup/services/zcash-self-move'
+import { getZcashChainId } from '@/core/chains/registry'
 
 export function ShieldFundsPage() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -171,6 +172,7 @@ function ShieldFundsContent() {
       : providersFor(action)
   const mode = new URLSearchParams(location.search).get('mode') === 'private' ? 'private' : 'public'
   const requestedAssetId = new URLSearchParams(location.search).get('assetId')
+  const requestedZcashMove = requestedAssetId === `${getZcashChainId(currentNetwork)}/slip44:133`
   const originParams = new URLSearchParams(location.search)
   originParams.delete('action')
   const originSearch = originParams.toString()
@@ -186,7 +188,7 @@ function ShieldFundsContent() {
     requestedAssetId
   )
   const zcashMovePath = zcashMoveSource
-    ? `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
+    ? `/shield-zcash-move?move=1&assetId=${encodeURIComponent(`${getZcashChainId(currentNetwork)}/slip44:133`)}&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
     : null
   const zcashSendOriginState = account
     ? {
@@ -206,7 +208,7 @@ function ShieldFundsContent() {
     if (action === 'move') {
       if (provider === 'zcash-shield') {
         if (zcashMovePath)
-          navigate(withShieldAsset(zcashMovePath, requestedAssetId), {
+          navigate(zcashMovePath, {
             replace: auto,
             state: auto ? undefined : zcashSendOriginState
           })
@@ -243,7 +245,9 @@ function ShieldFundsContent() {
   }
   const openAction = (action: ShieldAction) => {
     if (action === 'move') {
-      if (canManageNear) navigate(movePath)
+      if (requestedZcashMove && zcashMovePath)
+        navigate(zcashMovePath, { state: zcashSendOriginState })
+      else if (canManageNear) navigate(movePath)
       else if (zcashMovePath) navigate(zcashMovePath, { state: zcashSendOriginState })
       return
     }
@@ -280,7 +284,13 @@ function ShieldFundsContent() {
     handledActionQuery.current = location.search
     const providers = availableProviders(requestedAction)
     if (requestedAction === 'move' && (canManageNear || zcashMovePath)) {
-      replace(canManageNear ? movePath : zcashMovePath!)
+      replace(
+        requestedZcashMove && zcashMovePath
+          ? zcashMovePath
+          : canManageNear
+            ? movePath
+            : zcashMovePath!
+      )
     } else if (requestedAction === 'receive' && providers.length > 0) {
       replace(withShieldAsset('/shield-deposit', requestedAssetId))
     } else if (requestedAction === 'send' && canManageNear)

@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react'
 import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
 import type { Network } from '@/types'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
-import { formatSortAddress } from '@/lib/format'
+import { detectAddressType, formatSortAddress } from '@/lib/format'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
@@ -24,6 +24,7 @@ import { ChainIcon } from '../common/ChainIcon'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { DetailRow } from '../common/DetailRow'
 import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
+import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
@@ -537,6 +538,18 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
   const [privateCopyAddress, setPrivateCopyAddress] = useState<string | null>(null)
   const sender = view.senderAddress
   const recipient = view.recipient
+  const zcashReceiveSource =
+    view.item.source === 'zcash-v1' && view.item.kind === 'receive'
+      ? recipient
+        ? detectAddressType(recipient)
+        : view.item.assetDomains?.length === 1
+          ? view.item.assetDomains[0] === 'shield'
+            ? 'shielded'
+            : view.item.assetDomains[0] === 'public'
+              ? 'transparent'
+              : null
+          : null
+      : null
   return (
     <>
       {view.fromLabel ? (
@@ -568,6 +581,7 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
             {view.approvalTokenSymbol && (
               <span className="shrink-0 text-sm">{view.approvalTokenSymbol}</span>
             )}
+            {zcashReceiveSource && <ZcashFundingBadge source={zcashReceiveSource} />}
             <AddressValue
               address={recipient}
               url=""
@@ -580,6 +594,10 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
               copied={isCopied('recipient')}
             />
           </span>
+        </DetailRow>
+      ) : zcashReceiveSource ? (
+        <DetailRow label="To">
+          <ZcashFundingBadge source={zcashReceiveSource} />
         </DetailRow>
       ) : null}
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />

@@ -311,12 +311,14 @@ export function TokenSelectorView({
                 )
                   return
                 const generation = discoveryGeneration.current
+                setDiscoveryError(null)
                 setAddingKey(discoveryKey)
                 void addInspectedToken(inspectedResult.candidate)
                   .then(async () => {
                     if (!mounted.current || discoveryGeneration.current !== generation) return
                     const message = (await discovery.onAdded(inspectedResult)) || 'Added to wallet'
                     if (!mounted.current || discoveryGeneration.current !== generation) return
+                    setDiscoveryError(null)
                     setInspected(null)
                     setAddedStatus({
                       key: discoveryKey,

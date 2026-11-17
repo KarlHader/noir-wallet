@@ -6,7 +6,7 @@ import { formatBaseUnitDecimalAmount, formatFeeAmount } from '@/lib/number-forma
 import { evmWalletClient, type EvmFeeEstimate } from './evm-wallet-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { requiredRheaEvmApproval } from './rhea-evm-approval'
-import { formatConfirmationTime } from './confirmation-time-format'
+import { formatConfirmationTime, formatIntentsConfirmationTime } from './confirmation-time-format'
 
 export interface MoveMethodEstimate {
   readonly expiresAt: number
@@ -34,9 +34,7 @@ export function clusterMoveEstimate(
     expiresAt: preview.expiresAt,
     routeFeeRaw: routeFee(amountRaw, preview.amountOutRaw),
     ...(preview.sourceNetworkFee ? { sourceNetworkFee: preview.sourceNetworkFee } : {}),
-    time: formatConfirmationTime(
-      seconds ? { minimumSeconds: seconds, maximumSeconds: seconds } : null
-    ),
+    time: formatIntentsConfirmationTime(seconds),
     timeScope: 'Excl. scheduling'
   }
 }

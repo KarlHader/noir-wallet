@@ -567,7 +567,7 @@ export function AssetDetail() {
               label: 'Move',
               onClick: () =>
                 navigate(
-                  `/shield-zcash-move?${query}&sourceWalletId=${encodeURIComponent(effectiveWalletId ?? '')}&sourceAccountId=${encodeURIComponent(effectiveAccountId ?? '')}`
+                  `/shield-zcash-move?${query}&from=confidential&originPath=${encodeURIComponent(sendOriginPath)}&sourceWalletId=${encodeURIComponent(effectiveWalletId ?? '')}&sourceAccountId=${encodeURIComponent(effectiveAccountId ?? '')}`
                 )
             }
           ]
@@ -641,7 +641,7 @@ export function AssetDetail() {
         disabled: Boolean(getFundingSourceUnavailableReason(zcashKeySource, privacy)),
         onClick: () =>
           navigate(
-            `/send/zcash?move=1&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+            `/shield-zcash-move?move=1&assetId=${encodeURIComponent(asset?.asset.id ?? '')}&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
           )
       },
       {
@@ -1203,7 +1203,7 @@ export function AssetDetail() {
           </section>
         )}
 
-        {(quote || historyStatus === 'loading' || visibleHistory) && (
+        {(historyStatus !== 'unsupported' || quote) && (
           <section className="border-t border-border py-4">
             <MarketPriceChart
               points={visibleHistory?.points ?? null}
@@ -1219,15 +1219,10 @@ export function AssetDetail() {
                 historyRanges?.assetId === asset.asset.id ? historyRanges.ranges : []
               }
               onRangeChange={setHistoryRange}
+              error={historyStatus === 'error' ? 'Unable to load chart.' : null}
+              onRetry={() => setHistoryRetry(value => value + 1)}
             />
           </section>
-        )}
-        {historyStatus === 'error' && (
-          <InlineError
-            message="Unable to load chart."
-            onRetry={() => setHistoryRetry(value => value + 1)}
-            className="pb-4"
-          />
         )}
 
         {hasPendingBalance && !isZcashAsset && (

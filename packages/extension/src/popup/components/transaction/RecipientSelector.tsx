@@ -74,12 +74,11 @@ function EmptyState({
 export function RecipientSelector({
   chainId,
   excludeAddresses = EMPTY_ADDRESSES,
-  includeUnavailableAccounts = false,
+  includeUnavailableAccounts = true,
   includeCurrentAccount = false,
   sendingAddress,
   disablePrivateExecutionAddresses = false,
   recipientExecutionMode,
-  onShieldedMove,
   onSelect
 }: {
   readonly chainId: string
@@ -89,7 +88,6 @@ export function RecipientSelector({
   readonly sendingAddress?: string
   readonly disablePrivateExecutionAddresses?: boolean
   readonly recipientExecutionMode?: 'main' | 'private'
-  readonly onShieldedMove?: () => void
   readonly onSelect: (address: string, displayName?: string) => void
 }) {
   const contacts = useAddressBookStore(state => state.contacts)
@@ -191,7 +189,7 @@ export function RecipientSelector({
   )
 
   return (
-    <Tabs defaultValue="accounts" className="min-h-0 gap-0">
+    <Tabs defaultValue="accounts" className="min-h-0 min-w-0 w-full max-w-full gap-0">
       <div className="px-1 pb-3">
         <Input
           value={query}
@@ -202,7 +200,7 @@ export function RecipientSelector({
           startContent={<Icon icon="lucide:search" width={18} height={18} className="text-muted" />}
         />
       </div>
-      <TabsList className="h-10 w-full justify-start rounded-none border-b border-border bg-transparent p-0">
+      <TabsList className="grid h-10 min-w-0 w-full grid-cols-2 rounded-none border-b border-border bg-transparent p-0">
         <TabsTrigger value="accounts" className={RECIPIENT_TAB_CLASS}>
           My Wallets
         </TabsTrigger>
@@ -211,21 +209,10 @@ export function RecipientSelector({
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="accounts" className="min-h-0 max-h-[360px] overflow-y-auto px-1 py-4">
-        {isEvm && disablePrivateExecutionAddresses && onShieldedMove && (
-          <div className="mb-5 rounded-lg bg-warning-surface p-3">
-            <div className="flex items-start gap-2 text-warning">
-              <Icon icon="lucide:info" className="mt-0.5 size-4 shrink-0" />
-              <p className="text-sm leading-5">
-                Private Account only accepts{' '}
-                <button type="button" className="font-medium underline" onClick={onShieldedMove}>
-                  Moves from Shield Account
-                </button>
-                .
-              </p>
-            </div>
-          </div>
-        )}
+      <TabsContent
+        value="accounts"
+        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+      >
         {loading ? (
           <ListSkeleton rows={3} label="Loading wallet accounts" className="px-1 py-1" card />
         ) : error ? (
@@ -269,7 +256,7 @@ export function RecipientSelector({
                                 {displayName}
                               </p>
                             </div>
-                            {group.active && !(isEvm && disablePrivateExecutionAddresses) && (
+                            {group.active && (
                               <span className="shrink-0 rounded bg-wallet-selected px-2 py-0.5 text-xs font-medium text-foreground">
                                 Current
                               </span>
@@ -296,7 +283,7 @@ export function RecipientSelector({
                                   onClick={() => {
                                     if (!unavailableReason) onSelect(address.value, displayName)
                                   }}
-                                  className={`flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-transparent bg-card px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-primary ${unavailableReason ? 'cursor-not-allowed opacity-65' : 'hover:border-primary/20 hover:bg-white/5'}`}
+                                  className={`flex min-w-0 w-full flex-1 items-center gap-3 rounded-lg border border-transparent bg-card px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-primary ${unavailableReason ? 'cursor-not-allowed opacity-65' : 'hover:border-primary/20 hover:bg-white/5'}`}
                                 >
                                   {schemeLabel && (
                                     <span
@@ -324,12 +311,6 @@ export function RecipientSelector({
                                       {address.executionMode === 'private' ? 'Private' : 'Public'}
                                     </span>
                                   )}
-                                  {unavailableReason === 'This is the sending address.' &&
-                                    isEvm && (
-                                      <span className="min-w-0 truncate text-xs text-muted">
-                                        (Sending account)
-                                      </span>
-                                    )}
                                   <p
                                     className={`min-w-0 flex-1 truncate font-mono text-xs text-foreground ${isEvm ? 'text-right' : ''}`}
                                     title={address.value}
@@ -349,7 +330,7 @@ export function RecipientSelector({
                               return (
                                 <div
                                   key={`${group.key}:${address.scheme}:${address.value}`}
-                                  className="flex items-center gap-1"
+                                  className="flex min-w-0 items-center gap-1"
                                 >
                                   {unavailableReason ? (
                                     <Tooltip content={unavailableReason} side="top">
@@ -373,7 +354,10 @@ export function RecipientSelector({
         )}
       </TabsContent>
 
-      <TabsContent value="address-book" className="min-h-0 max-h-[360px] overflow-y-auto px-1 py-4">
+      <TabsContent
+        value="address-book"
+        className="min-h-0 min-w-0 max-h-[360px] overflow-y-auto px-1 py-4"
+      >
         {visibleRecipients.length === 0 ? (
           <EmptyState
             icon="lucide:book-user"
