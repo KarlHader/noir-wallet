@@ -48,7 +48,7 @@ interface TokenSelectorViewProps {
   readonly discovery?: {
     readonly scopeKey: string
     readonly chainId: string | null
-    readonly onAdded: (result: InspectedTokenAddress) => string | void
+    readonly onAdded: (result: InspectedTokenAddress) => string | void | Promise<string | void>
   }
 }
 
@@ -109,7 +109,7 @@ export function TokenSelectorView({
     }
   }, [])
   useEffect(() => {
-    if (!addressSearch || !discovery?.chainId || items.length > 0 || loading) return
+    if (!addressSearch || !discovery?.chainId || items.length > 0) return
     let cancelled = false
     const generation = discoveryGeneration.current
     setDiscoveryError(null)
@@ -136,7 +136,7 @@ export function TokenSelectorView({
     return () => {
       cancelled = true
     }
-  }, [addressSearch, discovery?.chainId, discoveryKey, items.length, loading, search])
+  }, [addressSearch, discovery?.chainId, discoveryKey, items.length, search])
   const orderedNetworks = sortTokenSelectorNetworks(networks, network => ({
     id: network.id,
     name: network.label
@@ -162,10 +162,15 @@ export function TokenSelectorView({
           symbol: inspectedResult.token.symbol,
           subtitle: `${discoveredNetwork ?? 'Selected network'} · ${discoveredAddress?.slice(0, 8)}...${discoveredAddress?.slice(-6)}`,
           title: discoveredAddress,
-          ariaLabel: `Add ${inspectedResult.token.symbol} on ${discoveredNetwork ?? 'selected network'} to wallet`,
+          ariaLabel: `${addingKey === discoveryKey ? 'Adding' : 'Add'} ${inspectedResult.token.symbol} on ${discoveredNetwork ?? 'selected network'} to wallet`,
           icon: <TokenIcon token={inspectedResult.token} size={32} />,
-          symbolSuffix: <span className="text-xs text-primary">Add</span>,
-          disabledReason: addingKey === discoveryKey ? 'Adding token' : undefined
+          symbolSuffix: (
+            <span className="text-xs text-primary">
+              {addingKey === discoveryKey ? 'Adding' : 'Add'}
+            </span>
+          ),
+          disabledReason: addingKey === discoveryKey ? 'Adding token' : undefined,
+          busy: addingKey === discoveryKey
         }
       ]
     : []
@@ -288,7 +293,7 @@ export function TokenSelectorView({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" onScroll={onScroll}>
-        {loading || inspectingKey === discoveryKey ? (
+        {(loading || inspectingKey === discoveryKey) && displayedItems.length === 0 ? (
           <ListSkeleton rows={5} label="Loading tokens" className="px-1" />
         ) : displayedItems.length === 0 ? (
           <p
@@ -317,11 +322,11 @@ export function TokenSelectorView({
                 const generation = discoveryGeneration.current
                 setAddingKey(discoveryKey)
                 void addInspectedToken(inspectedResult.candidate)
-                  .then(() => {
+                  .then(async () => {
+                    if (!mounted.current || discoveryGeneration.current !== generation) return
+                    const message = (await discovery.onAdded(inspectedResult)) || 'Added to wallet'
                     if (!mounted.current || discoveryGeneration.current !== generation) return
                     setInspected(null)
-                    const message = discovery.onAdded(inspectedResult) || 'Added to wallet'
-                    if (!mounted.current) return
                     setAddedStatus({
                       key: discoveryKey,
                       message

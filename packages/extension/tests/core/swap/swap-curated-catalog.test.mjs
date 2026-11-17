@@ -3,6 +3,7 @@ import { expect } from '@playwright/test'
 import {
   getCuratedSwapChainIds,
   loadCuratedSwapTokens,
+  readCachedCuratedSwapTokens,
   selectDefaultSwapTokens
 } from '../../../src/popup/services/swap-curated-catalog.ts'
 
@@ -78,38 +79,24 @@ test('registered EVM contracts stay visible when curated catalog is unavailable'
   ).toEqual([native, otherChain])
 })
 
-test('publishes completed chain catalogs while another chain is still loading', async t => {
+test('local Swap defaults use exact configured contracts without fetching a recommendation list', async t => {
   const originalFetch = globalThis.fetch
   t.after(() => {
     globalThis.fetch = originalFetch
   })
-  let releaseFirst
-  const first = new Promise(resolve => {
-    releaseFirst = resolve
-  })
-  globalThis.fetch = async input => {
-    const chainId = Number(new URL(String(input)).searchParams.get('chain'))
-    if (chainId === 1) await first
-    return new Response(
-      JSON.stringify({
-        code: 0,
-        data: [{ chainId, address: `chain-${chainId}` }]
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } }
-    )
+  globalThis.fetch = () => {
+    throw new Error('Recommendation list must stay local')
   }
   const updates = []
-  let receivedFirst
-  const firstUpdate = new Promise(resolve => {
-    receivedFirst = resolve
-  })
-  const loading = loadCuratedSwapTokens([1, 8453], rows => {
-    updates.push(rows.map(row => row.chainId))
-    receivedFirst()
-  })
-  await firstUpdate
-  releaseFirst()
-  const rows = await loading
-  expect(updates).toEqual([[8453], [1, 8453]])
-  expect(rows.map(row => row.chainId)).toEqual([1, 8453])
+  const rows = readCachedCuratedSwapTokens([1, 8453])
+  expect(await loadCuratedSwapTokens([1, 8453], value => updates.push(value))).toEqual(rows)
+  expect(updates).toEqual([rows])
+  expect(rows.some(row => row.chainId === 1 && row.address === curated.contractAddress)).toBe(false)
+  const configured = token(
+    'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
+    1,
+    '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    'USDC'
+  )
+  expect(selectDefaultSwapTokens([impostor, configured], rows)).toEqual([configured])
 })

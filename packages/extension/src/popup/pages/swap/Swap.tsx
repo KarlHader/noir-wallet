@@ -399,6 +399,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const crossChainSendRequested = purpose === 'cross-chain-send'
   const requestedSourceAssetId = searchParams.get('source')
   const requestedDestinationAssetId = searchParams.get('destination')
+  const requestedSendDestinationChainId = crossChainSendRequested
+    ? searchParams.get('destinationChainId')
+    : null
   const requestedCrossChainRecipient = crossChainSendRequested
     ? searchParams.get('recipient')
     : null
@@ -426,7 +429,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : swap.tokenOut
           ? getCrossChainSendWalletAssetId(swap.tokenOut)
           : requestedDestinationAssetId
-      const destinationChainId = destinationAssetId?.split('/')[0] ?? null
+      const destinationChainId =
+        selectedSendDestinationChainId ?? destinationAssetId?.split('/')[0] ?? null
       const recipient = crossChainDraftPending
         ? (crossChainRouteDraft?.recipient ?? requestedCrossChainRecipient ?? '')
         : swap.recipientAddress
@@ -562,7 +566,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     ? resolveCrossChainSendRouteAssetDisplay({
         network: currentNetwork,
         sourceAssetId: requestedSourceAssetId,
-        destinationAssetId: requestedDestinationAssetId
+        destinationAssetId: requestedDestinationAssetId,
+        destinationChainId: requestedSendDestinationChainId
       })
     : null
   const crossChainRouteDraft = resolveCrossChainSendRouteDraft({
@@ -576,6 +581,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     navigationState: location.state,
     sourceAssetId: requestedSourceAssetId,
     destinationAssetId: requestedDestinationAssetId,
+    destinationChainId: requestedSendDestinationChainId,
     recipient: requestedCrossChainRecipient,
     amount: requestedCrossChainAmount
   })
@@ -853,21 +859,38 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const sendSourceAssetId = swap.tokenIn ? getCrossChainSendWalletAssetId(swap.tokenIn) : null
   const sendDestinationCandidates = useMemo(
     () =>
-      crossChainSendRequested && sendSourceAssetId && portfolio
+      crossChainSendRequested && sendSourceAssetId && storageV2Account
         ? getCrossChainSendDestinationCandidates({
             sourceChainId: sendSourceAssetId.split('/')[0],
-            chains: portfolio.chains,
+            chains: storageV2Account.networks,
             enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
             capabilities: CROSS_CHAIN_SEND_CAPABILITIES,
             enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
           })
         : [],
-    [crossChainSendRequested, sendSourceAssetId, portfolio, storageV2Account]
+    [crossChainSendRequested, sendSourceAssetId, storageV2Account]
+  )
+  const sendDestinationSelectionScope = JSON.stringify([
+    walletSourcesScope,
+    requestedSourceAssetId,
+    requestedDestinationAssetId,
+    requestedSendDestinationChainId
+  ])
+  const [sendDestinationSelection, setSendDestinationSelection] = useState<{
+    scope: string
+    chainId: string
+  } | null>(null)
+  const selectedSendDestinationChainId =
+    sendDestinationSelection?.scope === sendDestinationSelectionScope
+      ? sendDestinationSelection.chainId
+      : (requestedSendDestinationChainId ?? requestedDestinationAssetId?.split('/')[0] ?? null)
+  const selectedSendDestination = sendDestinationCandidates.find(
+    item => item.chain.chain.id === selectedSendDestinationChainId
   )
   const sendDestinationCatalogKey = JSON.stringify([
     walletSourcesScope,
     swap.tokenIn?.assetId,
-    sendDestinationCandidates.map(item => item.chain.chain.id)
+    selectedSendDestinationChainId
   ])
   const [sendDestinationCatalogRevision, setSendDestinationCatalogRevision] = useState(0)
   const [sendDestinationCatalog, setSendDestinationCatalog] = useState<{
@@ -878,13 +901,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     error: string | null
   } | null>(null)
   useEffect(() => {
-    if (!crossChainSendRequested || sendDestinationCandidates.length === 0) return
+    if (!crossChainSendRequested || !selectedSendDestination) return
     let cancelled = false
     void rheaSwapClient
       .listTokens(
         {
           direction: 'cross-chain-to',
-          tokenListChainIds: sendDestinationCandidates.map(item => item.descriptor.tokenListChainId)
+          tokenListChainIds: [selectedSendDestination.descriptor.tokenListChainId]
         },
         { bypassCache: sendDestinationCatalogRevision > 0 }
       )
@@ -904,7 +927,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             key: sendDestinationCatalogKey,
             revision: sendDestinationCatalogRevision,
             tokens: [],
-            failedChainIds: sendDestinationCandidates.map(item => item.descriptor.tokenListChainId),
+            failedChainIds: [selectedSendDestination.descriptor.tokenListChainId],
             error: getRheaSwapErrorMessage(error)
           })
       })
@@ -1263,6 +1286,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         walletSourcesScope ?? 'route-pending',
         requestedSourceAssetId,
         requestedDestinationAssetId,
+        requestedSendDestinationChainId,
         requestedCrossChainRecipient,
         requestedCrossChainAmount
       ].join(':')
@@ -2036,15 +2060,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         : [],
     [crossChainSendRequested, lockedSourceToken, swap.sourceTokens, sendDestinationRows]
   )
-  const requestedCrossChainDestinationToken =
-    crossChainSendRouteScopeMatches && requestedDestinationAssetId
-      ? resolveCrossChainSendDestinationByWalletAssetId(
-          lockedSourceToken,
-          requestedDestinationAssetId,
-          crossChainSendDestinations,
-          CROSS_CHAIN_SEND_CAPABILITIES
-        )
-      : null
+  const requestedCrossChainDestinationToken = crossChainSendRouteScopeMatches
+    ? sendDestinationSelection?.scope === sendDestinationSelectionScope ||
+      Boolean(requestedSendDestinationChainId)
+      ? (crossChainSendDestinations.find(
+          token => token.rheaChainId === selectedSendDestination?.descriptor.apiChainId
+        ) ?? null)
+      : requestedDestinationAssetId
+        ? resolveCrossChainSendDestinationByWalletAssetId(
+            lockedSourceToken,
+            requestedDestinationAssetId,
+            crossChainSendDestinations,
+            CROSS_CHAIN_SEND_CAPABILITIES
+          )
+        : null
+    : null
   const privateTransferDestinationToken = useMemo(
     () =>
       privateTransferRequested && lockedSourceToken
@@ -2446,7 +2476,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         if (
           !requestedCrossChainDestinationToken &&
           (swap.destinationTokensLoading ||
-            (sendDestinationCandidates.length > 0 &&
+            (selectedSendDestination &&
               (sendDestinationCatalog?.key !== sendDestinationCatalogKey ||
                 sendDestinationCatalog.revision !== sendDestinationCatalogRevision)))
         )
@@ -6137,6 +6167,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       searchParams,
       effectiveWalletId,
       effectiveAccountId,
+      currentWalletId,
+      currentAccountId,
       currentNetwork,
       sourceMode,
       shieldSwapSelected,
@@ -6167,12 +6199,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         return
       }
       if (crossChainSendRequested && type === 'in') return
-      if (
-        (type === 'in' && swap.sourceTokens.length === 0) ||
-        (type === 'out' && swap.destinationTokens.length === 0 && !crossChainSendRequested)
-      ) {
-        return
-      }
       const selectorConfidentiality = privateDestinationSelectionRequested ? 'basic' : undefined
       const allowPairSwitch = !crossChainSendRequested && canSwitchTokens
       const selectorBalanceMode = resolveSwapSelectorBalanceMode({
@@ -6235,6 +6261,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           >
             <SwapTokenSelector
               fullHeight
+              scopeNetwork={currentNetwork}
+              onScopeInvalidated={() => resolve(undefined)}
+              openingWalletPointer={{ walletId: currentWalletId, accountId: currentAccountId }}
+              filterLocalTokens={type === 'out' ? filterDestinations : filterSources}
+              availableNetworks={getEnabledSwapChains(selectionSwapChains).map(chain => ({
+                id: chain.blockchain,
+                label: formatChainName(chain.blockchain),
+                iconChain: chain.blockchain
+              }))}
               zcashFundingSource={selectorZcashFundingSource}
               accountScope={effectiveAccount}
               extraItems={
@@ -6330,13 +6365,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   ? filterSources(swap.sourceTokens)
                   : filterDestinations(swap.destinationTokens)
               }
-              loadTokens={(onTokens, isCancelled) =>
+              loadTokens={(filter, onTokens, isCancelled) =>
                 swap
                   .loadSelectorTokens(
                     type === 'in' ? 'from' : 'cross-chain-to',
                     tokens =>
                       onTokens(type === 'out' ? filterDestinations(tokens) : filterSources(tokens)),
-                    isCancelled
+                    isCancelled,
+                    getEnabledSwapChains(selectionSwapChains)
+                      .filter(chain => chain.blockchain === filter.network)
+                      .map(chain => chain.tokenListChainId)
                   )
                   .then(tokens =>
                     type === 'out' ? filterDestinations(tokens) : filterSources(tokens)
@@ -6416,6 +6454,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       handleSwitchTokens,
       effectiveWalletId,
       effectiveAccountId,
+      currentWalletId,
+      currentAccountId,
       currentNetwork,
       portfolio,
       receiveTargets,
@@ -6433,6 +6473,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       supportsPrivateDestination,
       isSelectablePrivateSource,
       enabledSwapChains,
+      selectionSwapChains,
       shieldPickerRows,
       nativeZecPickerRows,
       zecDestinationPickerRows,
@@ -7824,18 +7865,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               estimatedOutRaw: activeQuote.estimatedOut
             })
           : undefined
-      const sourceChain = portfolio?.chains.find(
+      const sourceChain = storageV2Account?.networks.find(
         chain => chain.chain.id === sendSourceAssetId?.split('/')[0]
       )
-      const destinationChain = portfolio?.chains.find(
-        chain => chain.chain.id === requestedDestinationAssetId?.split('/')[0]
+      const destinationChain = storageV2Account?.networks.find(
+        chain => chain.chain.id === selectedSendDestinationChainId
       )
       const requestedDestinationChainId = destinationChain
         ? getEnabledSwapChains([destinationChain.chain])[0]?.apiChainId
         : null
       const sourceAsset = portfolio?.assets.find(asset => asset.asset.id === requestedSourceAssetId)
       const destinationCatalogLoading =
-        sendDestinationCandidates.length > 0 &&
+        Boolean(selectedSendDestination) &&
         (sendDestinationCatalog?.key !== sendDestinationCatalogKey ||
           sendDestinationCatalog.revision !== sendDestinationCatalogRevision)
       const destinationDescriptor = sendDestinationCandidates.find(
@@ -7849,7 +7890,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           ? (sendDestinationCatalog.error ?? 'Could not load tokens on this network.')
           : null
       const destinationTokenMissing = Boolean(
-        requestedDestinationAssetId &&
+        selectedSendDestination &&
         lockedSourceToken &&
         !crossChainSendDestinationReady &&
         !requestedCrossChainDestinationToken &&
@@ -7857,7 +7898,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         !destinationCatalogLoading &&
         !destinationCatalogError
       )
-      const destinations = crossChainSendDestinations
       const availableDestinationOptions = sortSendNetworks(
         [
           ...(sourceChain && swap.tokenIn
@@ -7874,22 +7914,16 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 }
               ]
             : []),
-          ...sendDestinationCandidates.flatMap(item =>
-            destinations.some(token => token.rheaChainId === item.descriptor.apiChainId)
-              ? [
-                  {
-                    id: item.descriptor.apiChainId,
-                    chainId: item.chain.chain.id,
-                    name: item.chain.chain.displayName,
-                    icon: resolveChainIconAlias(
-                      item.chain.chain.family,
-                      item.chain.chain.displayName,
-                      item.chain.chain.id
-                    )
-                  }
-                ]
-              : []
-          )
+          ...sendDestinationCandidates.map(item => ({
+            id: item.descriptor.apiChainId,
+            chainId: item.chain.chain.id,
+            name: item.chain.chain.displayName,
+            icon: resolveChainIconAlias(
+              item.chain.chain.family,
+              item.chain.chain.displayName,
+              item.chain.chain.id
+            )
+          }))
         ],
         option => ({ id: option.chainId, name: option.name })
       )
@@ -7921,7 +7955,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             crossChainRouteDisplay?.sourceSymbol ?? sourceAsset?.metadata.symbol
           }
           sourceNetworkNameFallback={crossChainRouteDisplay?.sourceNetworkName}
-          destinationNameFallback={crossChainRouteDisplay?.destinationName}
+          destinationNameFallback={
+            destinationChain?.chain.displayName ?? crossChainRouteDisplay?.destinationName
+          }
           destinationOptions={destinationOptions}
           selectedDestinationChainId={requestedDestinationChainId}
           destinationNetworksLoading={destinationCatalogLoading}
@@ -7930,11 +7966,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               returnFromCrossChainSend()
               return
             }
-            const destination = destinations.find(token => token.rheaChainId === chainId)
+            const destination = sendDestinationCandidates.find(
+              item => item.descriptor.apiChainId === chainId
+            )
             if (!destination) return
             reviewAfterQuoteRefresh.current = null
             setMaxSelected(false)
-            swap.selectTokenOut(destination)
+            setSendDestinationSelection({
+              scope: sendDestinationSelectionScope,
+              chainId: destination.chain.chain.id
+            })
+            swap.clearTokenOutForFlow()
           }}
           amount={
             crossChainDraftPending ? (crossChainRouteDraft?.amount ?? swap.amountIn) : swap.amountIn

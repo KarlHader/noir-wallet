@@ -52,6 +52,73 @@ test('cross-chain Send keeps the selected network draft bound to its source acco
     destinationName: 'Ethereum'
   })
   expect(resolveCrossChainSendRouteDraft({ ...route, accountId: 'account-2' })).toBeNull()
+  const chainOnlyRoute = {
+    ...route,
+    destinationAssetId: undefined,
+    destinationChainId: 'eip155:1'
+  }
+  expect(resolveCrossChainSendRouteDraft(chainOnlyRoute)).toMatchObject({
+    recipient: route.recipient,
+    amount: route.amount,
+    sourceSymbol: 'ETH',
+    destinationName: 'Ethereum'
+  })
+  const chainOnlyNavigation = {
+    ...chainOnlyRoute,
+    walletId: null,
+    accountId: null,
+    currentWalletId: null,
+    currentAccountId: null,
+    navigationState: {
+      crossChainSendRouteAccount: {
+        walletId: route.routeWalletId,
+        accountId: route.routeAccountId,
+        sourceAssetId: route.sourceAssetId,
+        destinationChainId: chainOnlyRoute.destinationChainId
+      }
+    }
+  }
+  expect(resolveCrossChainSendRouteDraft(chainOnlyNavigation)).toMatchObject({
+    recipient: route.recipient,
+    amount: route.amount,
+    destinationName: 'Ethereum'
+  })
+  for (const binding of [
+    { walletId: 'wallet-2' },
+    { accountId: 'account-2' },
+    { sourceAssetId: 'eip155:8453/slip44:60' },
+    { destinationChainId: 'eip155:8453' },
+    { destinationAssetId: route.destinationAssetId }
+  ]) {
+    expect(
+      resolveCrossChainSendRouteDraft({
+        ...chainOnlyNavigation,
+        navigationState: {
+          crossChainSendRouteAccount: {
+            ...chainOnlyNavigation.navigationState.crossChainSendRouteAccount,
+            ...binding
+          }
+        }
+      })
+    ).toBeNull()
+  }
+  expect(
+    resolveCrossChainSendRouteDraft({ ...chainOnlyNavigation, navigationState: null })
+  ).toBeNull()
+  expect(
+    resolveCrossChainSendRouteDraft({
+      ...chainOnlyNavigation,
+      currentWalletId: 'wallet-2',
+      currentAccountId: 'account-2'
+    })
+  ).toBeNull()
+  expect(
+    resolveCrossChainSendRouteDraft({ ...chainOnlyRoute, destinationChainId: 'eip155:999999' })
+  ).toBeNull()
+  expect(
+    resolveCrossChainSendRouteDraft({ ...route, destinationChainId: 'eip155:8453' })
+  ).toBeNull()
+
   const navigationState = {
     crossChainSendRouteAccount: {
       walletId: route.routeWalletId,

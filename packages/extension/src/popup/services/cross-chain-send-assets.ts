@@ -6,7 +6,8 @@ import {
   createInitialProductChainRegistry,
   getBundledInitialProductAssetDefinitions,
   getInitialProductChainDefinitions,
-  parseAssetId
+  parseAssetId,
+  type ChainDefinition
 } from '@/core/chains/registry'
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
 import { getAssetMarketMappings } from '@/core/prices/asset-market-mappings'
@@ -14,7 +15,6 @@ import type { MarketAssetId } from '@/core/prices/market-asset'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import type { Network } from '@/types'
 import { getSendRouteCostFromAmounts } from './send-route-cost'
-import type { PortfolioReadModel } from '@/core/portfolio'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import { getEnabledSwapChains } from './swap-catalog-loading'
@@ -39,10 +39,12 @@ const marketByAssetId = new Map(
   ])
 )
 
-export function getCrossChainSendDestinationCandidates(
+export function getCrossChainSendDestinationCandidates<
+  T extends { readonly chain: ChainDefinition }
+>(
   input: Readonly<{
     sourceChainId: string
-    chains: PortfolioReadModel['chains']
+    chains: readonly T[]
     enabledChainIds: readonly string[]
     capabilities: CrossChainSendCapabilities
     enabledFlags: readonly ChainFeatureFlagValue[]
@@ -70,16 +72,20 @@ export function resolveCrossChainSendRouteAssetDisplay(
   input: Readonly<{
     network: Network
     sourceAssetId: string | null
-    destinationAssetId: string | null
+    destinationAssetId?: string | null
+    destinationChainId?: string | null
   }>
 ) {
-  if (input.network !== 'mainnet' || !input.sourceAssetId || !input.destinationAssetId) return null
+  if (input.network !== 'mainnet' || !input.sourceAssetId) return null
   try {
     const source = parseAssetId(input.sourceAssetId)
-    const destination = parseAssetId(input.destinationAssetId)
+    const destination = input.destinationAssetId ? parseAssetId(input.destinationAssetId) : null
+    if (destination && input.destinationChainId && destination.chainId !== input.destinationChainId)
+      return null
+    const destinationChainId = input.destinationChainId ?? destination?.chainId
     const chains = getInitialProductChainDefinitions(input.network)
     const sourceChain = chains.find(chain => chain.id === source.chainId)
-    const destinationChain = chains.find(chain => chain.id === destination.chainId)
+    const destinationChain = chains.find(chain => chain.id === destinationChainId)
     if (!sourceChain || !destinationChain) return null
     return {
       sourceSymbol: mainnetAssets.get(source.id)?.metadata.symbol,
@@ -102,7 +108,8 @@ export function resolveCrossChainSendRouteDraft(
     routeAccountId: string | null
     navigationState: unknown
     sourceAssetId: string | null
-    destinationAssetId: string | null
+    destinationAssetId?: string | null
+    destinationChainId?: string | null
     recipient: string | null
     amount: string | null
   }>
@@ -114,6 +121,8 @@ export function resolveCrossChainSendRouteDraft(
     'crossChainSendRouteAccount' in input.navigationState
       ? input.navigationState.crossChainSendRouteAccount
       : null
+  const destinationChainId =
+    input.destinationChainId ?? input.destinationAssetId?.split('/')[0] ?? null
   const navigationMatches =
     !input.walletId &&
     !input.accountId &&
@@ -127,8 +136,15 @@ export function resolveCrossChainSendRouteDraft(
     routeAccount.accountId === input.routeAccountId &&
     'sourceAssetId' in routeAccount &&
     routeAccount.sourceAssetId === input.sourceAssetId &&
-    'destinationAssetId' in routeAccount &&
-    routeAccount.destinationAssetId === input.destinationAssetId
+    (input.destinationAssetId
+      ? 'destinationAssetId' in routeAccount &&
+        routeAccount.destinationAssetId === input.destinationAssetId &&
+        (!('destinationChainId' in routeAccount) ||
+          routeAccount.destinationChainId === destinationChainId)
+      : Boolean(destinationChainId) &&
+        'destinationChainId' in routeAccount &&
+        routeAccount.destinationChainId === destinationChainId &&
+        (!('destinationAssetId' in routeAccount) || routeAccount.destinationAssetId == null))
   if (
     !display ||
     !input.routeWalletId ||

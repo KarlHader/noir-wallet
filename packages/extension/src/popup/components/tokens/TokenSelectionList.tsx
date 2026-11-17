@@ -15,6 +15,7 @@ export interface TokenSelectionItem {
   readonly ariaLabel?: string
   readonly title?: string
   readonly disabledReason?: string
+  readonly busy?: boolean
 }
 
 export function TokenSelectionSearch({
@@ -64,12 +65,14 @@ export function TokenSelectionList({
           key={item.key}
           type="button"
           disabled={Boolean(item.disabledReason)}
+          aria-busy={item.busy || undefined}
           title={item.disabledReason ?? item.title}
           onClick={() => onSelect(item.key)}
           aria-pressed={selectedKey === item.key}
           aria-label={item.ariaLabel}
           className={cn(
-            'wallet-interactive flex min-h-[55px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-card active:bg-white/10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45',
+            'wallet-interactive flex min-h-[55px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-card active:bg-white/10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed',
+            item.disabledReason && !item.busy && 'opacity-45',
             selectedKey === item.key && 'bg-primary/[0.08]'
           )}
         >
@@ -91,6 +94,15 @@ export function TokenSelectionList({
             <div className="min-w-0 max-w-[55%] shrink-0 text-right" title={item.balanceTitle}>
               {item.balance}
             </div>
+          )}
+          {item.busy && (
+            <Icon
+              icon="lucide:loader-2"
+              width={16}
+              height={16}
+              className="shrink-0 animate-spin text-primary"
+              aria-hidden="true"
+            />
           )}
           {selectedKey === item.key && (
             <Icon

@@ -1,5 +1,13 @@
 import type { ChainDefinition } from '@/core/chains/registry'
 import { getConfidentialEvmChain } from '@/core/services/rhea-swap/rhea-confidential-support'
+import {
+  getCrossChainSendTokenGroup,
+  getCrossChainSendWalletAssetId,
+  isCrossChainSendDestination,
+  type CrossChainSendCapabilities
+} from './cross-chain-send-assets'
+import { getEnabledSwapChains } from './swap-catalog-loading'
+import { getSwapDestinationTokens } from './swap-token-selection'
 import { rheaSwapClient } from './rhea-swap-client'
 
 export function evmSendCatalogRequest(chain: Pick<ChainDefinition, 'id' | 'family' | 'network'>) {
@@ -23,30 +31,45 @@ export async function loadEvmSendCatalog(
   if (isCurrent()) onSettled()
 }
 
-export async function prefetchEvmSendCatalogs(
-  chains: readonly ChainDefinition[],
-  preferredChainId: string | undefined,
-  isCancelled: () => boolean,
+export async function loadEvmSendDestinationAsset(
+  input: Readonly<{
+    sourceChain: ChainDefinition
+    sourceAssetId: string
+    destinationChain: ChainDefinition
+    capabilities: CrossChainSendCapabilities
+  }>,
   client: Pick<typeof rheaSwapClient, 'listTokens'> = rheaSwapClient
-): Promise<void> {
-  const requests = [...new Map(chains.map(chain => [chain.id, chain])).values()]
-    .sort(
-      (left, right) => Number(right.id === preferredChainId) - Number(left.id === preferredChainId)
-    )
-    .flatMap(chain => {
-      const request = evmSendCatalogRequest(chain)
-      return request ? [request] : []
-    })
-  let cursor = 0
-  const worker = async () => {
-    while (!isCancelled() && cursor < requests.length) {
-      const request = requests[cursor++]
-      try {
-        await client.listTokens(request)
-      } catch {
-        /* The selected asset exposes retry. */
-      }
+): Promise<string | null> {
+  const source = getEnabledSwapChains([input.sourceChain])[0]
+  const destination = getEnabledSwapChains([input.destinationChain])[0]
+  if (!source || !destination) return null
+  const sourceCatalog = await client.listTokens({
+    direction: 'from',
+    tokenListChainIds: [source.tokenListChainId]
+  })
+  const sourceToken = sourceCatalog.tokens.find(
+    token =>
+      token.rheaChainId === source.apiChainId &&
+      getCrossChainSendWalletAssetId(token) === input.sourceAssetId
+  )
+  if (!sourceToken || !getCrossChainSendTokenGroup(sourceToken)) {
+    if (sourceCatalog.failedChainIds.includes(source.tokenListChainId)) {
+      throw new Error(`Unable to load tokens on ${input.sourceChain.displayName}`)
     }
+    return null
   }
-  await Promise.all(Array.from({ length: Math.min(2, requests.length) }, worker))
+  const targetCatalog = await client.listTokens({
+    direction: 'cross-chain-to',
+    tokenListChainIds: [destination.tokenListChainId]
+  })
+  const tokens = getSwapDestinationTokens(sourceToken, sourceCatalog.tokens, targetCatalog.tokens)
+  const target = tokens.find(
+    token =>
+      token.rheaChainId === destination.apiChainId &&
+      isCrossChainSendDestination(sourceToken, token, input.capabilities)
+  )
+  if (!target && targetCatalog.failedChainIds.includes(destination.tokenListChainId)) {
+    throw new Error(`Unable to load tokens on ${input.destinationChain.displayName}`)
+  }
+  return target ? getCrossChainSendWalletAssetId(target) : null
 }

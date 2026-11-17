@@ -133,9 +133,7 @@ export function CrossChainSendFormView({
                 type="button"
                 onClick={() => setNetworkPickerOpen(true)}
                 disabled={
-                  initializing ||
-                  destinationNetworksLoading ||
-                  (destinationAssetsLoading && destinationOptions.length === 0)
+                  initializing || (destinationAssetsLoading && destinationOptions.length === 0)
                 }
                 aria-label={`Select destination network, ${destinationName}`}
                 className="inline-flex min-w-0 items-center gap-1.5 text-xs hover:text-primary disabled:opacity-50"
@@ -269,6 +267,7 @@ export function CrossChainSendFormView({
         onOpenChange={setNetworkPickerOpen}
         options={destinationOptions}
         loading={destinationNetworksLoading}
+        allowSelectionWhileLoading
         selectedId={tokenOut?.rheaChainId ?? selectedDestinationChainId ?? null}
         onSelect={onSelectDestination}
       />

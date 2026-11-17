@@ -1,5 +1,5 @@
 import { MARKET_ASSETS } from '@/config/asset-market-assets'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import type { PortfolioReadModel } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
@@ -18,15 +18,15 @@ import type { EvmTransferSubmission } from '@/popup/services/evm-wallet-client'
 import { useNavigate } from '@/popup/provider/Router'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
+import { getFundingBalance } from '@/core/wallet/funding-balance'
+import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
-import type { FundingSource } from '@/types'
+import type { FundingSource, KeySource } from '@/types'
 import { getAssetDomainRaw, type ShieldProvider } from '@/popup/services/asset-domains'
 import { Send } from './Send'
 import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
-import {
-  shieldSourceSelectionItem,
-  type ShieldSourceTokenPickerItem
-} from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
+import { shieldSourceSelectionItem } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { EvmSendForm } from './EvmSendForm'
 import {
@@ -58,19 +58,11 @@ import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-act
 import {
   getCrossChainSendAssetGroup,
   getCrossChainSendDestinationCandidates,
-  getCrossChainSendDestinationAssetId,
-  getCrossChainSendTokenGroup,
-  getCrossChainSendWalletAssetId,
-  isCrossChainSendDestination
+  getCrossChainSendDestinationAssetId
 } from '@/popup/services/cross-chain-send-assets'
-import { prefetchEvmSendCatalogs } from '@/popup/services/evm-send-catalog'
+import { loadEvmSendDestinationAsset } from '@/popup/services/evm-send-catalog'
 import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
-import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
-import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import {
-  getSwapDestinationTokens,
-  rankTokenSearchFields
-} from '@/popup/services/swap-token-selection'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import {
   resolveEvmFeatureRuntimePolicy,
   resolveSolanaFeatureRuntimePolicy
@@ -132,10 +124,13 @@ function AssetSelection({
   additionalError: boolean
   onSelectZcash: () => void
   onSelect: (asset: SendAsset) => void
-  onRetry: (chainId?: string) => void
+  onRetry: (chainId?: string) => Promise<void>
 }) {
   const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredValue(query)
   const [selectedNetwork, setSelectedNetwork] = useState('all')
+  const [renderWindow, setRenderWindow] = useState({ filter: '', count: 100 })
+  const filterKey = `${selectedNetwork}:${deferredQuery}`
   const walletId = useWalletStore(state => state.currentWalletId)
   const accountId = useWalletStore(state => state.currentAccountId)
   const runtimeNetwork = useWalletStore(state => state.currentNetwork)
@@ -149,11 +144,22 @@ function AssetSelection({
         zecPrice,
         prices,
         selectedNetwork,
-        searchQuery: query,
+        searchQuery: deferredQuery,
         enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
       }),
-    [assets, prices, query, selectedNetwork, zcashTotal, zcashEnabled, zcashNetwork, zecPrice]
+    [
+      assets,
+      prices,
+      deferredQuery,
+      selectedNetwork,
+      zcashTotal,
+      zcashEnabled,
+      zcashNetwork,
+      zecPrice
+    ]
   )
+  const visibleLimit = renderWindow.filter === filterKey ? renderWindow.count : 100
+  const visibleRows = orderedRows.slice(0, visibleLimit)
   return (
     <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
       <TokenSelectorView
@@ -184,14 +190,19 @@ function AssetSelection({
             ? {
                 scopeKey: `${runtimeNetwork}:${walletId}:${accountId}`,
                 chainId: selectedNetwork.startsWith('eip155:') ? selectedNetwork : null,
-                onAdded: () => {
-                  onRetry()
+                onAdded: async () => {
+                  await onRetry()
                   return 'Added to wallet'
                 }
               }
             : undefined
         }
-        items={orderedRows.map((row): TokenSelectionItem => {
+        onScroll={event => {
+          const { scrollTop, clientHeight, scrollHeight } = event.currentTarget
+          if (scrollHeight - scrollTop - clientHeight < 200 && visibleLimit < orderedRows.length)
+            setRenderWindow({ filter: filterKey, count: visibleLimit + 100 })
+        }}
+        items={visibleRows.map((row): TokenSelectionItem => {
           if (row.kind === 'zcash') {
             const networkName = zcashNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'
             return {
@@ -271,7 +282,7 @@ function AssetSelection({
           else if (row) onSelect(row.entry)
         }}
         emptyMessage={!loadingAdditional && !additionalError ? 'No assets found' : 'Loading tokens'}
-        lowBalanceKeys={new Set(orderedRows.filter(row => row.amount === '0').map(row => row.key))}
+        lowBalanceKeys={new Set(visibleRows.filter(row => row.amount === '0').map(row => row.key))}
         afterRows={
           <>
             {loadingAdditional && (
@@ -320,7 +331,7 @@ export function MultichainSend({
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
   const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
-  const zcashTotal = zcashBalance?.transparent ?? '0'
+  const currentWallet = useWalletStore(state => state.getCurrentWallet())
   const appliedRequestedAssetRef = useRef<string | null>(null)
   const [assetPriceSnapshot, setAssetPriceSnapshot] = useState<{
     scopeKey: string
@@ -339,7 +350,7 @@ export function MultichainSend({
     draft?: {
       recipient: string
       amount: string
-      destinationAssetId: string
+      destinationAssetId?: string
       destinationChainId: string
     }
   } | null>(null)
@@ -348,6 +359,8 @@ export function MultichainSend({
     provider: ShieldProvider
   } | null>(null)
   const [sourcePickerQuery, setSourcePickerQuery] = useState('')
+  const deferredSourcePickerQuery = useDeferredValue(sourcePickerQuery)
+  const [sourceRenderWindow, setSourceRenderWindow] = useState({ filter: '', count: 100 })
   const [sourcePickerNetwork, setSourcePickerNetwork] = useState('all')
   const [nearSourceOptions, setNearSourceOptions] = useState<{
     key: string
@@ -356,25 +369,6 @@ export function MultichainSend({
   const [zcashFundingSelection, setZcashFundingSelection] = useState<{
     key: string
     source: FundingSource
-    revision: number
-  } | null>(null)
-  const [destinationCatalog, setDestinationCatalog] = useState<{
-    key: string
-    revision: number
-    status: 'loading' | 'ready' | 'error'
-  } | null>(null)
-  const verifiedDestinationCatalog = useRef(
-    new Map<
-      string,
-      {
-        sourceToken: RheaSwapToken | null
-        available: readonly { chainId: string; assetId: string }[]
-        failedDestinationChainIds: readonly number[]
-      }
-    >()
-  )
-  const [destinationCatalogRetry, retryDestinationCatalog] = useState<{
-    key: string
     revision: number
   } | null>(null)
   const [nonEvmDraft, setNonEvmDraft] = useState<{
@@ -389,6 +383,20 @@ export function MultichainSend({
     loading: accountCatalogLoading,
     refresh: refreshAccountCatalog
   } = useActiveAccountNetworks()
+  const zcashKeySource: KeySource | undefined = storageV2Account
+    ? storageV2Account.walletSource.kind === 'hardware'
+      ? isZcashHardwareKeySource(storageV2Account.walletSource.hardware.vendor)
+        ? storageV2Account.walletSource.hardware.vendor
+        : undefined
+      : storageV2Account.walletSource.kind
+    : currentWallet?.keySource
+  const defaultZcashFundingSource: FundingSource = getFundingSourceUnavailableReason(
+    zcashKeySource,
+    'transparent'
+  )
+    ? 'shielded'
+    : 'transparent'
+  const zcashTotal = getFundingBalance(zcashBalance, defaultZcashFundingSource).available
   const effectiveAccount = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
@@ -526,7 +534,7 @@ export function MultichainSend({
             searchParams.get('from') === 'shielded' ||
             (requestedZcashProvider && !initialZcashProvider)
               ? 'shielded'
-              : 'transparent',
+              : defaultZcashFundingSource,
           shieldEntry:
             initialSource === 'shield'
               ? {
@@ -567,8 +575,20 @@ export function MultichainSend({
     })
   }
   const openSourcePicker = (mode: 'shield' | 'zcash-public', provider: ShieldProvider) => {
+    setSourceRenderWindow({ filter: '', count: 100 })
     setSourcePickerQuery('')
     setSourcePickerNetwork('all')
+    if (mode === 'shield' && !currentSession.shieldEntry) {
+      setDomainSession({
+        ...currentSession,
+        shieldEntry: {
+          assetId: ZEC_ZCASH_ASSET,
+          networkId: null,
+          recipient: '',
+          provider: 'near-confidential'
+        }
+      })
+    }
     setSourcePicker({ mode, provider })
   }
   const [{ reviewing: shieldReviewing, busy: shieldBusy }, setShieldState] = useState({
@@ -649,18 +669,6 @@ export function MultichainSend({
     ...(zcashEnabled ? (['zcash-shield'] as const) : [])
   ]
 
-  useEffect(() => {
-    let cancelled = false
-    void prefetchEvmSendCatalogs(
-      storageV2Account?.networks.map(network => network.chain) ?? [],
-      requestedAssetId?.split('/')[0],
-      () => cancelled
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [storageV2Account, requestedAssetId])
-
   const load = useCallback(
     async (forceRefresh = false, refreshChainId?: string) => {
       await refresh(forceRefresh, refreshChainId ? { chainIds: [refreshChainId] } : {})
@@ -720,193 +728,24 @@ export function MultichainSend({
       : null
   const destinationCandidates = useMemo(
     () =>
-      selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet' && visibleModel
+      selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet' && storageV2Account
         ? getCrossChainSendDestinationCandidates({
             sourceChainId: selection.chain.chain.id,
-            chains: visibleModel.chains,
+            chains: storageV2Account.networks,
             enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
             capabilities: crossChainCapabilities,
             enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
           })
         : [],
-    [currentNetwork, selection, storageV2Account, visibleModel]
+    [currentNetwork, selection, storageV2Account]
   )
-  const destinationCatalogKey = JSON.stringify([
-    scopeKey,
+  const destinationContext = JSON.stringify([
+    sendEntryKey,
     selection?.asset.asset.id,
     destinationCandidates.map(item => item.chain.chain.id)
   ])
-  const destinationCatalogRevision =
-    destinationCatalogRetry?.key === destinationCatalogKey ? destinationCatalogRetry.revision : 0
-  useEffect(() => {
-    if (shieldActive) return
-    if (!selection || destinationCandidates.length === 0) {
-      setDestinationCatalog(null)
-      return
-    }
-    const sourceDescriptor = getEnabledSwapChains([selection.chain.chain])[0]
-    const destinationDescriptors = destinationCandidates.map(item => item.descriptor)
-    if (!sourceDescriptor) {
-      verifiedDestinationCatalog.current.set(destinationCatalogKey, {
-        sourceToken: null,
-        available: [],
-        failedDestinationChainIds: []
-      })
-      setDestinationCatalog({
-        key: destinationCatalogKey,
-        revision: destinationCatalogRevision,
-        status: 'ready'
-      })
-      return
-    }
-    let cancelled = false
-    setDestinationCatalog({
-      key: destinationCatalogKey,
-      revision: destinationCatalogRevision,
-      status: 'loading'
-    })
-    const bypassCache = destinationCatalogRevision > 0
-    const previous = verifiedDestinationCatalog.current.get(destinationCatalogKey)
-    const retryFailedDestinations =
-      bypassCache && previous?.sourceToken && previous.failedDestinationChainIds.length > 0
-    const requestedDestinationDescriptors = retryFailedDestinations
-      ? destinationDescriptors.filter(descriptor =>
-          previous.failedDestinationChainIds.includes(descriptor.tokenListChainId)
-        )
-      : destinationDescriptors
-    let resolvedSourceToken: RheaSwapToken | null = previous?.sourceToken ?? null
-    void (async () => {
-      try {
-        const sourceCatalog = retryFailedDestinations
-          ? null
-          : await rheaSwapClient.listTokens(
-              { direction: 'from', tokenListChainIds: [sourceDescriptor.tokenListChainId] },
-              { bypassCache }
-            )
-        if (cancelled) return
-        const sourceToken = retryFailedDestinations
-          ? previous.sourceToken
-          : (sourceCatalog?.tokens.find(
-              token =>
-                token.rheaChainId === sourceDescriptor.apiChainId &&
-                getCrossChainSendWalletAssetId(token) === selection.asset.asset.id
-            ) ?? null)
-        resolvedSourceToken = sourceToken
-        if (!sourceToken || !getCrossChainSendTokenGroup(sourceToken)) {
-          verifiedDestinationCatalog.current.set(destinationCatalogKey, {
-            sourceToken: null,
-            available: [],
-            failedDestinationChainIds: []
-          })
-          setDestinationCatalog({
-            key: destinationCatalogKey,
-            revision: destinationCatalogRevision,
-            status: sourceCatalog?.failedChainIds.includes(sourceDescriptor.tokenListChainId)
-              ? 'error'
-              : 'ready'
-          })
-          return
-        }
-        const destinationCatalog = await rheaSwapClient.listTokens(
-          {
-            direction: 'cross-chain-to',
-            tokenListChainIds: requestedDestinationDescriptors.map(
-              descriptor => descriptor.tokenListChainId
-            )
-          },
-          { bypassCache }
-        )
-        if (cancelled) return
-        const destinations = getSwapDestinationTokens(
-          sourceToken,
-          sourceCatalog?.tokens ?? [sourceToken],
-          destinationCatalog.tokens
-        )
-        const refreshedChainIds = new Set(
-          requestedDestinationDescriptors.map(descriptor => descriptor.tokenListChainId)
-        )
-        const available = destinationCandidates.flatMap(item => {
-          if (!refreshedChainIds.has(item.descriptor.tokenListChainId)) return []
-          const destinationToken = destinations.find(
-            token =>
-              token.rheaChainId === item.descriptor.apiChainId &&
-              isCrossChainSendDestination(sourceToken, token, crossChainCapabilities)
-          )
-          const assetId = destinationToken ? getCrossChainSendWalletAssetId(destinationToken) : null
-          return assetId?.startsWith(`${item.chain.chain.id}/`)
-            ? [{ chainId: item.chain.chain.id, assetId }]
-            : []
-        })
-        const failedDestinationChainIds = destinationCatalog.failedChainIds.filter(chainId =>
-          refreshedChainIds.has(chainId)
-        )
-        const retained = retryFailedDestinations
-          ? previous.available.filter(destination => {
-              const candidate = destinationCandidates.find(
-                item => item.chain.chain.id === destination.chainId
-              )
-              if (!candidate || !refreshedChainIds.has(candidate.descriptor.tokenListChainId))
-                return true
-              return (
-                failedDestinationChainIds.includes(candidate.descriptor.tokenListChainId) &&
-                !available.some(item => item.chainId === destination.chainId)
-              )
-            })
-          : []
-        verifiedDestinationCatalog.current.set(destinationCatalogKey, {
-          sourceToken,
-          available: [...retained, ...available],
-          failedDestinationChainIds
-        })
-        setDestinationCatalog({
-          key: destinationCatalogKey,
-          revision: destinationCatalogRevision,
-          status: failedDestinationChainIds.length > 0 ? 'error' : 'ready'
-        })
-      } catch {
-        if (!cancelled) {
-          verifiedDestinationCatalog.current.set(destinationCatalogKey, {
-            sourceToken: resolvedSourceToken,
-            available: previous?.available ?? [],
-            failedDestinationChainIds: requestedDestinationDescriptors.map(
-              descriptor => descriptor.tokenListChainId
-            )
-          })
-          setDestinationCatalog({
-            key: destinationCatalogKey,
-            revision: destinationCatalogRevision,
-            status: 'error'
-          })
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [shieldActive, destinationCatalogKey, destinationCatalogRevision])
-  const verifiedDestinationState = verifiedDestinationCatalog.current.get(destinationCatalogKey)
-  const verifiedDestinations = verifiedDestinationState?.available
-  const availableDestinationNetworks = destinationCandidates.flatMap(item => {
-    const verified = verifiedDestinations?.find(
-      destination => destination.chainId === item.chain.chain.id
-    )
-    return verified ? [{ ...item, assetId: verified.assetId }] : []
-  })
-  const destinationNetworksLoading =
-    destinationCandidates.length > 0 &&
-    (destinationCatalog?.key !== destinationCatalogKey ||
-      destinationCatalog.revision !== destinationCatalogRevision ||
-      destinationCatalog.status === 'loading')
-  const destinationNetworksError =
-    destinationCatalog?.key === destinationCatalogKey &&
-    destinationCatalog.revision === destinationCatalogRevision &&
-    destinationCatalog.status === 'error'
-  const destinationNetworksPartialError = Boolean(
-    destinationNetworksError &&
-    verifiedDestinationState?.sourceToken &&
-    verifiedDestinationState.failedDestinationChainIds.length > 0 &&
-    verifiedDestinationState.failedDestinationChainIds.length < destinationCandidates.length
-  )
+  const activeDestinationContext = useRef(destinationContext)
+  activeDestinationContext.current = destinationContext
 
   const selectReturnedSource = (asset: SendAsset | null) => {
     const draft =
@@ -917,30 +756,21 @@ export function MultichainSend({
         setSelection(asset)
         setAssetPickerOpen(false)
       } else {
-        selectZcash('transparent')
+        selectZcash(defaultZcashFundingSource)
       }
       return
     }
 
     const sourceAssetId = asset?.asset.asset.id ?? ZEC_ZCASH_ASSET
     const destinationChainId = draft?.destinationChainId
-    const destinationChain = visibleModel?.chains.find(
-      chain => chain.chain.id === destinationChainId
+    const destinationChain = storageV2Account?.networks.find(
+      network => network.chain.id === destinationChainId
     )
     const group = asset ? getCrossChainSendAssetGroup(asset.asset.asset) : null
     const matchingDestinationAssetId =
       destinationChainId && group
         ? getCrossChainSendDestinationAssetId(destinationChainId, group)
         : null
-    let preservedDestinationAssetId: string | null = null
-    try {
-      if (
-        draft?.destinationAssetId &&
-        parseAssetId(draft.destinationAssetId).chainId === destinationChainId
-      )
-        preservedDestinationAssetId = draft.destinationAssetId
-    } catch {}
-    const destinationAssetId = matchingDestinationAssetId ?? preservedDestinationAssetId
     const destinationDescriptor = destinationChain
       ? getEnabledSwapChains([destinationChain.chain])[0]
       : null
@@ -948,26 +778,26 @@ export function MultichainSend({
       descriptor &&
       ((descriptor.walletFamily === 'evm' && crossChainCapabilities.evm) ||
         (descriptor.walletFamily === 'solana' && crossChainCapabilities.solana))
-    const validDestination =
+    const validDestinationChain =
       currentNetwork === 'mainnet' &&
       asset &&
       destinationChainId &&
-      destinationAssetId &&
       storageV2Account?.networks.some(network => network.chain.id === asset.chain.chain.id) &&
       storageV2Account?.networks.some(network => network.chain.id === destinationChainId) &&
       destinationChain &&
       isSelectableChainFamily(destinationChain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
       destinationChain?.chain.capabilities.transaction.status === 'available' &&
       enabledDescriptor(destinationDescriptor)
-        ? destinationAssetId
+        ? destinationChain
         : null
     const recipient = draft?.recipient ?? requestedRecipient ?? ''
     const amount = draft?.amount ?? requestedAmount
-    if (validDestination && asset && asset.chain.chain.id !== destinationChainId) {
+    if (validDestinationChain && asset && asset.chain.chain.id !== destinationChainId) {
       navigate(
         `/send/cross-chain?${new URLSearchParams({
           source: sourceAssetId,
-          destination: validDestination,
+          destinationChainId: validDestinationChain.chain.id,
+          ...(matchingDestinationAssetId ? { destination: matchingDestinationAssetId } : {}),
           sourceMode: 'main',
           sourceWalletId: effectiveWalletId,
           sourceAccountId: effectiveAccountId,
@@ -984,7 +814,10 @@ export function MultichainSend({
               walletId: effectiveWalletId,
               accountId: effectiveAccountId,
               sourceAssetId,
-              destinationAssetId: validDestination
+              destinationChainId: validDestinationChain.chain.id,
+              ...(matchingDestinationAssetId
+                ? { destinationAssetId: matchingDestinationAssetId }
+                : {})
             }
           }
         }
@@ -997,7 +830,7 @@ export function MultichainSend({
       sourceMode: asset ? 'main' : 'shield',
       sourceWalletId: effectiveWalletId,
       sourceAccountId: effectiveAccountId,
-      ...(asset ? {} : { provider: 'zcash-shield', from: 'transparent' }),
+      ...(asset ? {} : { provider: 'zcash-shield', from: defaultZcashFundingSource }),
       ...(recipient ? { recipient } : {}),
       ...(amount ? { amount } : {}),
       ...(originPath ? { originPath } : {})
@@ -1008,7 +841,10 @@ export function MultichainSend({
         sendEntry,
         crossChainReturnDraft: {
           sourceAssetId,
-          destinationAssetId: validDestination ?? destinationAssetId ?? undefined,
+          destinationAssetId:
+            asset?.chain.chain.id === destinationChainId
+              ? sourceAssetId
+              : (matchingDestinationAssetId ?? undefined),
           destinationChainId,
           walletId: effectiveWalletId,
           accountId: effectiveAccountId,
@@ -1095,10 +931,117 @@ export function MultichainSend({
     const chain = visibleModel.chains.find(item => item.chain.id === requested.asset.chainId)
     appliedRequestedAssetRef.current = `${sendEntryKey}:${selectedAssetId}`
     if (chain?.chain.family === 'zcash') {
-      selectZcash('transparent')
+      selectZcash(defaultZcashFundingSource)
       return
     }
   }, [loadStatus, visibleModel, selectedAssetId, shieldActive, sendEntryKey])
+
+  const nearPicker = nearSourceOptions?.key === sendEntryKey ? nearSourceOptions.value : null
+  const nearSourceVisible =
+    sourcePicker?.mode === 'shield' && sourcePicker.provider === 'near-confidential'
+  const sourceFilterKey = `${sendEntryKey}:${sourcePicker?.provider}:${sourcePickerNetwork}:${deferredSourcePickerQuery}`
+  const sourceVisibleLimit =
+    sourceRenderWindow.filter === sourceFilterKey ? sourceRenderWindow.count : 100
+  const searchedNearItems = useMemo(() => {
+    if (!nearSourceVisible) return []
+    const items = (nearPicker?.items ?? []).filter(
+      item =>
+        sourcePickerNetwork === 'all' ||
+        (item.chainId ?? item.badgeBlockchain ?? 'near') === sourcePickerNetwork
+    )
+    if (!deferredSourcePickerQuery.trim()) return items
+    return items
+      .map(item => {
+        let contractAddress: string | null = null
+        try {
+          const asset = parseAssetId(item.assetId)
+          if (asset.namespace === 'erc20') contractAddress = asset.reference
+        } catch {}
+        return {
+          item,
+          rank: rankTokenSearchFields(
+            {
+              symbol: item.symbol,
+              contractAddress,
+              assetId: item.assetId,
+              searchTerms: item.chainName ? [item.chainName] : []
+            },
+            deferredSourcePickerQuery
+          )
+        }
+      })
+      .filter(row => row.rank < 99)
+      .sort((left, right) => left.rank - right.rank)
+      .map(row => row.item)
+  }, [nearSourceVisible, nearPicker?.items, sourcePickerNetwork, deferredSourcePickerQuery])
+  const visibleNearItems = searchedNearItems.slice(0, sourceVisibleLimit)
+  const zcashPickerVisible =
+    zcashEnabled &&
+    rankTokenSearchFields(
+      { symbol: 'ZEC', name: 'Zcash', searchTerms: ['Zcash Testnet'] },
+      deferredSourcePickerQuery
+    ) < 99
+  const sourcePickerNetworks = useMemo(
+    () =>
+      nearSourceVisible
+        ? sortSendNetworks(
+            [
+              ...new Map(
+                (nearPicker?.items ?? []).map(item => {
+                  const id = item.chainId ?? item.badgeBlockchain ?? 'near'
+                  return [
+                    id,
+                    {
+                      id,
+                      label: item.chainName ?? 'NEAR Confidential',
+                      iconChain: item.badgeBlockchain ?? id
+                    }
+                  ] as const
+                })
+              ).values()
+            ],
+            option => ({ id: option.id, name: option.label })
+          )
+        : [
+            {
+              id: 'zec',
+              label: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+              iconChain: 'zec'
+            }
+          ],
+    [nearSourceVisible, nearPicker?.items, currentNetwork]
+  )
+  const sourcePickerRows = nearSourceVisible
+    ? visibleNearItems.map(item =>
+        shieldSourceSelectionItem(item, nearPicker?.balancesHidden ?? false)
+      )
+    : zcashPickerVisible && (sourcePickerNetwork === 'all' || sourcePickerNetwork === 'zec')
+      ? [
+          {
+            key: ZEC_ZCASH_ASSET,
+            symbol: 'ZEC',
+            symbolSuffix: (
+              <ZcashFundingBadge
+                source={sourcePicker?.mode === 'zcash-public' ? 'transparent' : 'shielded'}
+              />
+            ),
+            subtitle: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+            icon: <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={32} />,
+            balance: (
+              <TokenBalanceDisplay
+                amount={
+                  getFundingBalance(
+                    zcashBalance,
+                    sourcePicker?.mode === 'zcash-public' ? 'transparent' : 'shielded'
+                  ).available
+                }
+                symbol="ZEC"
+                priceUsd={zecPrice}
+              />
+            )
+          }
+        ]
+      : []
 
   if (submission?.family === 'evm' && selection?.chain.chain.family === 'evm') {
     return (
@@ -1231,95 +1174,6 @@ export function MultichainSend({
           : null)
     })
   }
-  const nearPicker = nearSourceOptions?.key === sendEntryKey ? nearSourceOptions.value : null
-  const nearSourceRank = (item: ShieldSourceTokenPickerItem) => {
-    let contractAddress: string | null = null
-    try {
-      const asset = parseAssetId(item.assetId)
-      if (asset.namespace === 'erc20') contractAddress = asset.reference
-    } catch {}
-    return rankTokenSearchFields(
-      {
-        symbol: item.symbol,
-        contractAddress,
-        assetId: item.assetId,
-        searchTerms: item.chainName ? [item.chainName] : []
-      },
-      sourcePickerQuery
-    )
-  }
-  const searchedNearItems = nearPicker?.items
-    .filter(
-      item =>
-        sourcePickerNetwork === 'all' ||
-        (item.chainId ?? item.badgeBlockchain ?? 'near') === sourcePickerNetwork
-    )
-    .filter(item => nearSourceRank(item) < 99)
-    .sort((left, right) => nearSourceRank(left) - nearSourceRank(right))
-  const zcashPickerVisible =
-    zcashEnabled &&
-    rankTokenSearchFields(
-      { symbol: 'ZEC', name: 'Zcash', searchTerms: ['Zcash Testnet'] },
-      sourcePickerQuery
-    ) < 99
-  const nearSourceVisible =
-    sourcePicker?.mode === 'shield' && sourcePicker.provider === 'near-confidential'
-  const sourcePickerNetworks = nearSourceVisible
-    ? sortSendNetworks(
-        [
-          ...new Map(
-            (nearPicker?.items ?? []).map(item => {
-              const id = item.chainId ?? item.badgeBlockchain ?? 'near'
-              return [
-                id,
-                {
-                  id,
-                  label: item.chainName ?? 'NEAR Confidential',
-                  iconChain: item.badgeBlockchain ?? id
-                }
-              ] as const
-            })
-          ).values()
-        ],
-        option => ({ id: option.id, name: option.label })
-      )
-    : [
-        {
-          id: 'zec',
-          label: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-          iconChain: 'zec'
-        }
-      ]
-  const sourcePickerRows = nearSourceVisible
-    ? (searchedNearItems ?? []).map(item =>
-        shieldSourceSelectionItem(item, nearPicker?.balancesHidden ?? false)
-      )
-    : zcashPickerVisible && (sourcePickerNetwork === 'all' || sourcePickerNetwork === 'zec')
-      ? [
-          {
-            key: ZEC_ZCASH_ASSET,
-            symbol: 'ZEC',
-            symbolSuffix: (
-              <ZcashFundingBadge
-                source={sourcePicker?.mode === 'zcash-public' ? 'transparent' : 'shielded'}
-              />
-            ),
-            subtitle: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-            icon: <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={32} />,
-            balance: (
-              <TokenBalanceDisplay
-                amount={
-                  sourcePicker?.mode === 'zcash-public'
-                    ? (zcashBalance?.transparent ?? '0')
-                    : (zcashBalance?.shielded ?? '0')
-                }
-                symbol="ZEC"
-                priceUsd={zecPrice}
-              />
-            )
-          }
-        ]
-      : []
   return (
     <div className="page-container" data-wallet-mode={walletMode}>
       {!(nearActive && shieldReviewing) && (
@@ -1394,6 +1248,14 @@ export function MultichainSend({
                 </div>
               ) : undefined
             }
+            onScroll={event => {
+              const { scrollTop, clientHeight, scrollHeight } = event.currentTarget
+              if (
+                scrollHeight - scrollTop - clientHeight < 200 &&
+                sourceVisibleLimit < searchedNearItems.length
+              )
+                setSourceRenderWindow({ filter: sourceFilterKey, count: sourceVisibleLimit + 100 })
+            }}
             items={sourcePickerRows}
             selectedKey={
               nearSourceVisible
@@ -1403,7 +1265,7 @@ export function MultichainSend({
             lowBalanceKeys={
               nearSourceVisible
                 ? new Set(
-                    (nearPicker?.items ?? [])
+                    visibleNearItems
                       .filter(item => {
                         try {
                           return BigInt(item.availableRaw) <= 0n
@@ -1420,7 +1282,11 @@ export function MultichainSend({
                 const item = nearPicker?.items.find(row => row.key === key)
                 if (!item) return
                 nearPicker?.onSelect(item.assetId)
-                setDomainSession({ ...currentSession, shieldProvider: 'near-confidential' })
+                setDomainSession({
+                  ...currentSession,
+                  source: 'shield',
+                  shieldProvider: 'near-confidential'
+                })
               } else {
                 if (sourcePicker.mode === 'shield') selectZcash('shielded')
               }
@@ -1547,7 +1413,6 @@ export function MultichainSend({
                 destinationNetworks={sortSendNetworks(
                   [
                     {
-                      assetId: selection.asset.asset.id,
                       chainId: selection.chain.chain.id,
                       name: selection.chain.chain.displayName,
                       icon: resolveChainIconAlias(
@@ -1556,8 +1421,7 @@ export function MultichainSend({
                         selection.chain.chain.id
                       )
                     },
-                    ...availableDestinationNetworks.map(item => ({
-                      assetId: item.assetId,
+                    ...destinationCandidates.map(item => ({
                       chainId: item.chain.chain.id,
                       name: item.chain.chain.displayName,
                       icon: resolveChainIconAlias(
@@ -1569,21 +1433,26 @@ export function MultichainSend({
                   ],
                   option => ({ id: option.chainId, name: option.name })
                 )}
-                destinationNetworksLoading={destinationNetworksLoading}
-                destinationNetworksError={destinationNetworksError}
-                destinationNetworksPartialError={destinationNetworksPartialError}
-                onRetryDestinationNetworks={() =>
-                  retryDestinationCatalog(previous => ({
-                    key: destinationCatalogKey,
-                    revision: previous?.key === destinationCatalogKey ? previous.revision + 1 : 1
-                  }))
-                }
-                onSelectDestinationNetwork={(destinationAssetId, draft) => {
+                onSelectDestinationNetwork={async (destinationChainId, draft) => {
+                  if (destinationChainId === selection.chain.chain.id) return
                   if (!effectiveWalletId || !effectiveAccountId) return
-                  const destination = availableDestinationNetworks.find(
-                    item => item.assetId === destinationAssetId
+                  const destination = destinationCandidates.find(
+                    item => item.chain.chain.id === destinationChainId
                   )
                   if (!destination) return
+                  const context = destinationContext
+                  const destinationAssetId = await loadEvmSendDestinationAsset({
+                    sourceChain: selection.chain.chain,
+                    sourceAssetId: selection.asset.asset.id,
+                    destinationChain: destination.chain.chain,
+                    capabilities: crossChainCapabilities
+                  })
+                  if (activeDestinationContext.current !== context) return
+                  if (!destinationAssetId) {
+                    throw new Error(
+                      `${selection.asset.metadata.symbol} is not available on ${destination.chain.chain.displayName}`
+                    )
+                  }
                   navigate(
                     `/send/cross-chain?${new URLSearchParams({
                       source: selection.asset.asset.id,
@@ -1690,7 +1559,9 @@ export function MultichainSend({
           loadingAdditional={loadStatus === 'loading'}
           additionalError={loadStatus === 'error' && !visibleModel}
           onSelectZcash={() => selectReturnedSource(null)}
-          onRetry={chainId => void load(true, chainId)}
+          onRetry={async chainId => {
+            await load(true, chainId)
+          }}
           onSelect={asset => selectReturnedSource(asset)}
         />
       )}

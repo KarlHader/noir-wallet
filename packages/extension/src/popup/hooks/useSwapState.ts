@@ -4,14 +4,13 @@ import { ASSET_PRICE_SOURCE_ASSETS } from '@/config/asset-market-assets'
 import { type RheaSwapToken } from '@/core/services/rhea-swap'
 import { useSwapPreferences } from '@/store/swap-store'
 import {
-  getEnabledSwapChains,
   getSwapCatalogDisplaySeeds,
-  ALL_DESTINATION_CHAIN_IDS,
   mergeTokenCatalogs,
   readCachedTokenCatalogByChain,
   loadTokenCatalogByChain,
   buildInitialSwapCatalogPlan,
   findSwapTokenInCatalog,
+  findSwapTokenForDisplaySeed,
   isSwapAssetOnEnabledChain,
   pickProvisionalSwapSource,
   mergeSelectedSwapSourceCatalog,
@@ -27,6 +26,7 @@ import {
   getSavedSwapDestinationAssetId,
   getSwapDestinationTokens
 } from '@/popup/services/swap-token-selection'
+import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
 
 export function useSwapState(
   preferenceScope: string | null,
@@ -98,11 +98,17 @@ export function useSwapState(
   const [tokenOut, setTokenOut] = useState<RheaSwapToken | null>(initialState.tokenOut)
   const currentSelectionContext = useRef({ catalogScope, preferenceScope, tokenIn, tokenOut })
   currentSelectionContext.current = { catalogScope, preferenceScope, tokenIn, tokenOut }
+  const selectorContextKey = JSON.stringify([catalogScope, preferenceScope, enabledChainKey])
+  const activeSelectorContextKey = useRef(selectorContextKey)
+  activeSelectorContextKey.current = selectorContextKey
   const [sourceCatalog, setSourceCatalog] = useState<readonly RheaSwapToken[]>(initialState.sources)
   const [crossChainDestinationCatalog, setCrossChainDestinationCatalog] = useState<
     readonly RheaSwapToken[]
   >(initialState.destinations)
   const selectorSourceCatalog = useRef<readonly RheaSwapToken[]>([])
+  useEffect(() => {
+    selectorSourceCatalog.current = []
+  }, [selectorContextKey])
   const [amountIn, setAmountIn] = useState('')
   const [amountOut, setAmountOut] = useState('')
   const [recipientAddress, setRecipientAddressState] = useState('')
@@ -458,17 +464,22 @@ export function useSwapState(
     async (
       direction: 'from' | 'cross-chain-to',
       onTokens: (tokens: readonly RheaSwapToken[]) => void,
-      isCancelled: () => boolean
+      isCancelled: () => boolean,
+      chainIds: readonly number[]
     ) => {
+      const requestScope = selectorContextKey
+      const cancelled = () => isCancelled() || activeSelectorContextKey.current !== requestScope
       let loaded = direction === 'from' ? sourceCatalog : crossChainDestinationCatalog
+      let requested: readonly RheaSwapToken[] = []
       let pending: readonly RheaSwapToken[] = []
       let publishTimer: ReturnType<typeof setTimeout> | null = null
       const publish = () => {
         publishTimer = null
-        if (isCancelled() || pending.length === 0) return
+        if (cancelled() || pending.length === 0) return
         const next = pending
         pending = []
         loaded = mergeTokenCatalogs(loaded, next)
+        requested = mergeTokenCatalogs(requested, next)
         if (direction === 'from') {
           selectorSourceCatalog.current = loaded
           if (tokenOut && findSwapTokenInCatalog(next, tokenOut)) {
@@ -479,33 +490,75 @@ export function useSwapState(
             )
           }
         }
-        onTokens(
-          direction === 'from' ? loaded : getSwapDestinationTokens(tokenIn, sourceCatalog, loaded)
-        )
+        onTokens(requested)
       }
       try {
         await loadTokenCatalogByChain(
           direction,
-          direction === 'from'
-            ? getEnabledSwapChains(options.enabledChains).map(chain => chain.tokenListChainId)
-            : ALL_DESTINATION_CHAIN_IDS,
+          chainIds,
           false,
           next => {
             pending = mergeTokenCatalogs(pending, next)
             if (publishTimer === null) publishTimer = setTimeout(publish, 120)
           },
-          isCancelled
+          cancelled,
+          rheaSwapClient,
+          { strict: true }
         )
       } finally {
         if (publishTimer !== null) clearTimeout(publishTimer)
         publish()
       }
-      return direction === 'from'
-        ? loaded
-        : getSwapDestinationTokens(tokenIn, sourceCatalog, loaded)
+      if (cancelled()) return []
+      return requested
     },
-    [sourceCatalog, crossChainDestinationCatalog, tokenIn, tokenOut, enabledChainKey]
+    [sourceCatalog, crossChainDestinationCatalog, tokenIn, tokenOut, selectorContextKey]
   )
+
+  useEffect(() => {
+    const seeds = [
+      tokenIn?.isDisplaySeed ? { token: tokenIn, direction: 'from' as const } : null,
+      tokenOut?.isDisplaySeed
+        ? {
+            token: tokenOut,
+            direction:
+              tokenIn?.rheaChainId === tokenOut.rheaChainId
+                ? ('from' as const)
+                : ('cross-chain-to' as const)
+          }
+        : null
+    ].filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    if (seeds.length === 0) return
+    let stopped = false
+    const requestScope = selectorContextKey
+    const cancelled = () => stopped || activeSelectorContextKey.current !== requestScope
+    for (const { token, direction } of seeds) {
+      void loadTokenCatalogByChain(
+        direction,
+        [token.tokenListChainId],
+        false,
+        tokens => {
+          if (cancelled()) return
+          const resolved = findSwapTokenForDisplaySeed(tokens, token)
+          if (!resolved) return
+          if (token === tokenIn) {
+            setSourceCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            setTokenIn(previous => (previous === token ? resolved : previous))
+          } else {
+            if (direction === 'from')
+              setSourceCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            else
+              setCrossChainDestinationCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            setTokenOut(previous => (previous === token ? resolved : previous))
+          }
+        },
+        cancelled
+      )
+    }
+    return () => {
+      stopped = true
+    }
+  }, [tokenIn, tokenOut, selectorContextKey])
 
   const destinationTokens = useMemo(() => {
     const catalog = getSwapDestinationTokens(tokenIn, sourceCatalog, crossChainDestinationCatalog)

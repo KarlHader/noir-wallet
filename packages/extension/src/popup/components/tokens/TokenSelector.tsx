@@ -11,7 +11,7 @@ import type { InspectedTokenAddress } from '@/popup/services/token-address-disco
 import { formatChainName, formatSymbol } from '@/lib/format'
 import { TokenIcon } from './TokenIcon'
 import { TokenBalanceDisplay } from './TokenBalanceDisplay'
-import { TokenSelectorView } from './TokenSelectorView'
+import { TokenSelectorView, type TokenSelectorNetwork } from './TokenSelectorView'
 import type { TokenSelectionItem } from './TokenSelectionList'
 import { sortTokensByBalanceValue } from './token-balance-order'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
@@ -23,6 +23,7 @@ import {
 import { useWalletStore } from '@/store/wallet-store'
 
 const MAX_RENDERED_TOKENS = 100
+const defaultTokenKey = (token: SwapToken) => `${token.blockchain}:${token.assetId}`
 
 export interface TokenSelectorExtraItem extends TokenSelectionItem {
   readonly blockchain: string
@@ -36,17 +37,22 @@ export interface TokenSelectorProps {
   accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   selectedToken?: SwapToken
   onSelect: (token: SwapToken) => void
+  tokenKey?: (token: SwapToken) => string
   tokens: readonly SwapToken[]
   defaultTokens?: readonly SwapToken[]
   defaultCatalogLoading?: boolean
   balances?: ReadonlyMap<string, string>
   zcashFundingSource?: FundingSource
   catalogLoading?: boolean
+  catalogError?: boolean
+  onRetryCatalog?: () => void
   stableCatalogOrder?: boolean
   fullHeight?: boolean
   excludeAssetId?: string
   emptyMessage?: string
   unavailableNetworks?: readonly Readonly<{ id: string; label: string; iconChain: string }>[]
+  availableNetworks?: readonly TokenSelectorNetwork[]
+  onFilterChange?: (filter: { readonly search: string; readonly network: string }) => void
   onDiscoveredToken?: (result: InspectedTokenAddress) => string | void
   onVisibleTokensChange?: (
     tokens: readonly SwapToken[],
@@ -61,17 +67,22 @@ export function TokenSelector({
   accountScope,
   selectedToken,
   onSelect,
+  tokenKey = defaultTokenKey,
   tokens: providedTokens,
   defaultTokens,
   defaultCatalogLoading = false,
   balances,
   zcashFundingSource,
   catalogLoading = false,
+  catalogError = false,
+  onRetryCatalog,
   stableCatalogOrder = false,
   fullHeight = false,
   excludeAssetId,
   emptyMessage = 'No tokens found',
   unavailableNetworks = [],
+  availableNetworks,
+  onFilterChange,
   onDiscoveredToken,
   onVisibleTokensChange,
   balanceLoadStates,
@@ -84,6 +95,8 @@ export function TokenSelector({
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [selectedBlockchain, setSelectedBlockchain] = useState('all')
+  const onFilterChangeRef = useRef(onFilterChange)
+  onFilterChangeRef.current = onFilterChange
   const [selectionTraceId] = useState(() => createDebugRequestId('token-selector'))
   const previousRows = useRef<{ filter: string; keys: readonly string[] } | null>(null)
   const [renderWindow, setRenderWindow] = useState({ filter: 'all:', count: MAX_RENDERED_TOKENS })
@@ -96,6 +109,7 @@ export function TokenSelector({
   )
 
   const networkOptions = useMemo(() => {
+    if (availableNetworks) return []
     const options = new Map<string, string>()
     for (const token of tokens) {
       if (!options.has(token.blockchain)) {
@@ -107,17 +121,19 @@ export function TokenSelector({
         options.set(item.blockchain, formatChainName(item.blockchain))
       }
     }
-    const base = [...options].map(([id, label]) => ({ id, label }))
-    return base
-  }, [tokens, extraItems])
+    return [...options].map(([id, label]) => ({ id, label }))
+  }, [tokens, extraItems, availableNetworks])
+  const configuredNetworks: readonly TokenSelectorNetwork[] =
+    availableNetworks ?? networkOptions.map(option => ({ ...option, iconChain: option.id }))
   const effectiveBlockchain =
-    selectedBlockchain === 'all' || networkOptions.some(option => option.id === selectedBlockchain)
+    selectedBlockchain === 'all' ||
+    configuredNetworks.some(option => option.id === selectedBlockchain && !option.disabledReason)
       ? selectedBlockchain
       : 'all'
   const selectorNetworks = [
-    ...networkOptions.map(option => ({ ...option, iconChain: option.id })),
+    ...configuredNetworks,
     ...unavailableNetworks
-      .filter(option => !networkOptions.some(available => available.id === option.id))
+      .filter(option => !configuredNetworks.some(available => available.id === option.id))
       .map(option => ({ ...option, disabledReason: 'Swaps are not supported on this network' })),
     ...deferredChainChoices(__ENABLED_CHAIN_FEATURE_FLAGS__).map(option => ({
       id: `coming-soon:${option.family}`,
@@ -126,10 +142,10 @@ export function TokenSelector({
       disabledReason: 'Coming soon'
     }))
   ]
-  const availableTokenKeys = useMemo(
-    () => new Set(tokens.map(token => `${token.blockchain}:${token.assetId}`)),
-    [tokens]
-  )
+  useEffect(() => {
+    onFilterChangeRef.current?.({ search: deferredSearch.trim(), network: effectiveBlockchain })
+  }, [deferredSearch, effectiveBlockchain])
+  const availableTokenKeys = useMemo(() => new Set(tokens.map(tokenKey)), [tokens, tokenKey])
   const filterKey = `${effectiveBlockchain}:${deferredSearch}`
   const filteredTokens = useMemo(() => {
     const startedAt = performance.now()
@@ -142,7 +158,7 @@ export function TokenSelector({
     const ranked = [
       ...sortTokensByBalanceValue(
         (searching ? tokens : (defaultTokens ?? tokens)).filter(token => {
-          if (!availableTokenKeys.has(`${token.blockchain}:${token.assetId}`)) return false
+          if (!availableTokenKeys.has(tokenKey(token))) return false
           if (token.assetId === excludeAssetId) return false
           if (effectiveBlockchain !== 'all' && token.blockchain !== effectiveBlockchain)
             return false
@@ -177,14 +193,15 @@ export function TokenSelector({
     balances,
     selectionTraceId,
     stableCatalogOrder,
-    filterKey
+    filterKey,
+    tokenKey
   ])
   useEffect(() => {
     previousRows.current = {
       filter: filterKey,
       keys: filteredTokens.map(token => `${token.blockchain}:${token.assetId}`)
     }
-  }, [filterKey, filteredTokens])
+  }, [filterKey, filteredTokens, tokenKey])
   const visibleLimit = renderWindow.filter === filterKey ? renderWindow.count : MAX_RENDERED_TOKENS
   const visibleTokens = useMemo(
     () => filteredTokens.slice(0, visibleLimit),
@@ -200,10 +217,7 @@ export function TokenSelector({
 
   const searchRanks = new Map<string, number>([
     ...visibleExtraItems.map(item => [item.key, rankTokenSearchFields(item, search)] as const),
-    ...visibleTokens.map(
-      token =>
-        [`${token.blockchain}:${token.assetId}`, rankTokenSearchFields(token, search)] as const
-    )
+    ...visibleTokens.map(token => [tokenKey(token), rankTokenSearchFields(token, search)] as const)
   ])
   const selectorItems = [
     ...visibleExtraItems,
@@ -212,7 +226,7 @@ export function TokenSelector({
       const symbol = formatSymbol(token.symbol)
       const chainName = formatChainName(token.blockchain)
       return {
-        key: token.blockchain + ':' + token.assetId,
+        key: tokenKey(token),
         symbol,
         symbolSuffix:
           token.blockchain === 'zec' && zcashFundingSource ? (
@@ -253,7 +267,7 @@ export function TokenSelector({
       items={selectorItems}
       selectedKey={
         visibleExtraItems.find(item => item.selected)?.key ??
-        (selectedToken ? selectedToken.blockchain + ':' + selectedToken.assetId : undefined)
+        (selectedToken ? tokenKey(selectedToken) : undefined)
       }
       onSelect={key => {
         const extra = visibleExtraItems.find(item => item.key === key)
@@ -261,15 +275,13 @@ export function TokenSelector({
           extra.onSelect()
           return
         }
-        const selected = visibleTokens.find(token => token.blockchain + ':' + token.assetId === key)
+        const selected = visibleTokens.find(token => tokenKey(token) === key)
         if (selected) onSelect(selected)
       }}
       lowBalanceKeys={
         balances || visibleExtraItems.some(item => item.lowBalance)
           ? new Set([
-              ...visibleTokens
-                .filter(token => balances?.get(token.assetId) === '0')
-                .map(token => token.blockchain + ':' + token.assetId),
+              ...visibleTokens.filter(token => balances?.get(token.assetId) === '0').map(tokenKey),
               ...visibleExtraItems.filter(item => item.lowBalance).map(item => item.key)
             ])
           : undefined
@@ -292,10 +304,24 @@ export function TokenSelector({
       }
       status={
         <>
+          {onFilterChange && search.trim().length > 0 && effectiveBlockchain === 'all' && (
+            <p role="status" className="mt-2 text-xs text-muted">
+              Choose a network for more results
+            </p>
+          )}
           {catalogLoading && search.trim().length > 0 && (
             <p role="status" className="mt-2 text-xs text-muted">
-              Searching more networks...
+              Searching tokens...
             </p>
+          )}
+          {catalogError && onRetryCatalog && (
+            <button
+              type="button"
+              onClick={onRetryCatalog}
+              className="mt-2 flex items-center gap-1 text-xs text-primary"
+            >
+              <Icon icon="lucide:refresh-cw" width={14} height={14} /> Retry token search
+            </button>
           )}
           {onRetryBalances && [...(balanceLoadStates?.values() ?? [])].includes('error') && (
             <button

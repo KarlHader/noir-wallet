@@ -156,31 +156,6 @@ function ShieldSwapForm({
   const status = model ? 'ready' : portfolioLoading ? 'loading' : 'error'
   const hidden = useSettingsStore(state => state.balancesHidden)
   const [directoryTokens, setDirectoryTokens] = useState<readonly SwapToken[] | null>(null)
-  useEffect(() => {
-    if (!active) return
-    let current = true
-    void swapTokenCatalogClient
-      .readCached()
-      .then(cached => {
-        if (current && cached.length > 0) setDirectoryTokens(cached)
-      })
-      .catch(() => {})
-    void swapTokenCatalogClient
-      .refresh()
-      .then(refreshed => {
-        if (current) setDirectoryTokens(refreshed)
-      })
-      .catch(() => {})
-    return () => {
-      current = false
-    }
-  }, [active])
-  const tokens = useMemo(() => {
-    const available = directoryTokens ?? getCachedTokens()
-    const directoryIds = new Set(available.map(token => token.assetId))
-    return [...available, ...parentTokens.filter(token => !directoryIds.has(token.assetId))]
-  }, [parentTokens, directoryTokens])
-  const managedAssets = useMemo(() => resolveManagedIntentsCatalog(tokens), [tokens])
   const [fromId, setFromId] = useState<string | null>(routeSourceAssetId)
   const [toId, setToId] = useState<string | null>(routeDestinationAssetId)
   const [amount, setAmount] = useState('')
@@ -189,6 +164,38 @@ function ShieldSwapForm({
   const [picker, setPicker] = useState<'from' | 'to' | null>(null)
   const [search, setSearch] = useState('')
   const [pickerNetwork, setPickerNetwork] = useState('all')
+  useEffect(() => {
+    if (!active) return
+    let current = true
+    const load = async () => {
+      try {
+        const cached = await swapTokenCatalogClient.readCached()
+        if (!current) return
+        if (cached.length > 0) setDirectoryTokens(previous => previous ?? cached)
+        if (
+          picker !== 'from' &&
+          !routeSourceAssetId &&
+          !routeDestinationAssetId &&
+          (cached.length > 0 || parentTokens.length > 0)
+        )
+          return
+        const refreshed = await swapTokenCatalogClient.refresh()
+        if (current && refreshed.length > 0) setDirectoryTokens(refreshed)
+      } catch {
+        // The local catalog remains usable while its refresh is unavailable.
+      }
+    }
+    void load()
+    return () => {
+      current = false
+    }
+  }, [active, picker, parentTokens.length, routeSourceAssetId, routeDestinationAssetId])
+  const tokens = useMemo(() => {
+    const available = directoryTokens ?? getCachedTokens()
+    const directoryIds = new Set(available.map(token => token.assetId))
+    return [...available, ...parentTokens.filter(token => !directoryIds.has(token.assetId))]
+  }, [parentTokens, directoryTokens])
+  const managedAssets = useMemo(() => resolveManagedIntentsCatalog(tokens), [tokens])
   const [prepared, setPrepared] = useState<Readonly<{
     review: ConfidentialFundingReview
     request: PrepareConfidentialFundingRequest
@@ -509,21 +516,29 @@ function ShieldSwapForm({
       }
     }
     return [...networks.values()]
-  }, [picker, visibleFromPickerItems, pickable])
+  }, [picker, visibleFromPickerItems])
   const pickerItems = useMemo(
     () =>
       visibleFromPickerItems
         .filter(item => {
           if (pickerNetwork === 'all') return true
-          const chainId =
-            item.chainId ??
-            item.badgeBlockchain ??
-            sourceChoices.find(asset => asset.asset.asset.id === item.assetId)?.chain.chain.id
+          const chainId = item.chainId ?? item.badgeBlockchain
           return chainId === pickerNetwork
         })
         .map(item => shieldSourceSelectionItem(item, hidden)),
-    [visibleFromPickerItems, pickerNetwork, sourceChoices, hidden]
+    [visibleFromPickerItems, pickerNetwork, hidden]
   )
+  const lowBalanceKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const item of visibleFromPickerItems) {
+      try {
+        if (BigInt(item.availableRaw) <= 0n) keys.add(item.key)
+      } catch {
+        keys.add(item.key)
+      }
+    }
+    return keys
+  }, [visibleFromPickerItems])
   const fromZecSource =
     from?.asset.metadata.symbol.toUpperCase() === 'ZEC'
       ? zecSourceOptions.find(option => option.intentsWalletAssetId === from?.asset.asset.id)
@@ -1271,19 +1286,7 @@ function ShieldSwapForm({
             fromId ??
             undefined
           }
-          lowBalanceKeys={
-            new Set(
-              visibleFromPickerItems
-                .filter(item => {
-                  try {
-                    return BigInt(item.availableRaw) <= 0n
-                  } catch {
-                    return true
-                  }
-                })
-                .map(item => item.key)
-            )
-          }
+          lowBalanceKeys={lowBalanceKeys}
           onSelect={key => {
             if (key === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID) {
               onSelectTransparentZecSwap?.()

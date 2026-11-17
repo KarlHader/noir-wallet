@@ -302,13 +302,18 @@ export function ShieldWithdrawForm({
     let current = true
     const load = async () => {
       try {
-        if (getCachedTokens().length === 0) {
-          const cached = await swapTokenCatalogClient.readCached()
-          if (current && cached.length) {
-            setCatalogTokens(cached)
-            setManagedAssets(resolveManagedIntentsCatalog(cached))
-          }
+        const cached = await swapTokenCatalogClient.readCached()
+        if (!current) return
+        if (cached.length > 0 && catalogTokens.length === 0) {
+          setCatalogTokens(cached)
+          setManagedAssets(resolveManagedIntentsCatalog(cached))
         }
+        if (
+          !sourceSelectorActive &&
+          !routeAssetId &&
+          (cached.length > 0 || catalogTokens.length > 0)
+        )
+          return
         const refreshed = await swapTokenCatalogClient.refresh()
         if (current && refreshed.length) {
           setCatalogTokens(refreshed)
@@ -322,7 +327,7 @@ export function ShieldWithdrawForm({
     return () => {
       current = false
     }
-  }, [active, sourceSelectorActive, network])
+  }, [active, sourceSelectorActive, network, routeAssetId])
 
   useEffect(() => {
     if (!active) return
@@ -342,46 +347,47 @@ export function ShieldWithdrawForm({
     () => listShieldFundingAssets(model, managedAssets, catalogTokens, network),
     [model, managedAssets, catalogTokens, network]
   )
-  const displayBalances = currentBalances ?? shieldPortfolioBalances(model)
-  const fundedSources = shieldFundingSources(options, displayBalances)
-  const prices = priceSnapshot?.scopeKey === scopeKey ? priceSnapshot.value : null
-  const fundedAssetIds = new Set(fundedSources.map(item => item.asset.asset.id))
-  const sources = [
-    ...fundedSources,
-    ...options.filter(item => !fundedAssetIds.has(item.asset.asset.id))
-  ]
-  const sourcePickerItems = useMemo(
-    () =>
-      sortSendAssetsByBalanceValue(
-        sources.map(item => ({
-          key: item.asset.asset.id,
-          amount: formatBaseUnitDecimalAmount(
-            shieldFundingAvailableRaw(item, displayBalances),
-            item.asset.metadata.decimals
-          ),
-          priceUsd: findAssetPrice(prices, item.asset.asset.id)?.priceUsd ?? null,
-          item
-        }))
-      ).map(row => ({
-        key: row.item.asset.asset.id,
-        assetId: row.item.asset.asset.id,
-        symbol: row.item.asset.metadata.symbol,
-        iconUrl: row.item.asset.metadata.iconUrl,
-        chainName: row.item.chain.chain.displayName,
-        chainId: row.item.chain.chain.id,
-        badgeBlockchain: resolveChainIconAlias(
-          row.item.chain.chain.family,
-          row.item.chain.chain.displayName,
-          row.item.chain.chain.id
-        ),
-        nativeIconChain:
-          row.item.asset.metadata.symbol.toUpperCase() === 'ZEC' ? 'zcash' : undefined,
-        availableRaw: shieldFundingAvailableRaw(row.item, displayBalances),
-        decimals: row.item.asset.metadata.decimals,
-        priceUsd: row.priceUsd
-      })),
-    [displayBalances, prices, sources]
+  const portfolioBalances = useMemo(() => shieldPortfolioBalances(model), [model])
+  const displayBalances = currentBalances ?? portfolioBalances
+  const fundedSources = useMemo(
+    () => shieldFundingSources(options, displayBalances),
+    [options, displayBalances]
   )
+  const prices = priceSnapshot?.scopeKey === scopeKey ? priceSnapshot.value : null
+  const sources = useMemo(() => {
+    const fundedAssetIds = new Set(fundedSources.map(item => item.asset.asset.id))
+    return [...fundedSources, ...options.filter(item => !fundedAssetIds.has(item.asset.asset.id))]
+  }, [fundedSources, options])
+  const sourcePickerItems = useMemo(() => {
+    if (!sourceSelectorActive) return []
+    return sortSendAssetsByBalanceValue(
+      sources.map(item => ({
+        key: item.asset.asset.id,
+        amount: formatBaseUnitDecimalAmount(
+          shieldFundingAvailableRaw(item, displayBalances),
+          item.asset.metadata.decimals
+        ),
+        priceUsd: findAssetPrice(prices, item.asset.asset.id)?.priceUsd ?? null,
+        item
+      }))
+    ).map(row => ({
+      key: row.item.asset.asset.id,
+      assetId: row.item.asset.asset.id,
+      symbol: row.item.asset.metadata.symbol,
+      iconUrl: row.item.asset.metadata.iconUrl,
+      chainName: row.item.chain.chain.displayName,
+      chainId: row.item.chain.chain.id,
+      badgeBlockchain: resolveChainIconAlias(
+        row.item.chain.chain.family,
+        row.item.chain.chain.displayName,
+        row.item.chain.chain.id
+      ),
+      nativeIconChain: row.item.asset.metadata.symbol.toUpperCase() === 'ZEC' ? 'zcash' : undefined,
+      availableRaw: shieldFundingAvailableRaw(row.item, displayBalances),
+      decimals: row.item.asset.metadata.decimals,
+      priceUsd: row.priceUsd
+    }))
+  }, [sourceSelectorActive, displayBalances, prices, sources])
   const routedPublicAsset = model?.assets.find(item => item.asset.id === sourceId)
   const routedManaged = routedPublicAsset
     ? resolveShieldManagedAsset(routedPublicAsset, managedAssets, catalogTokens, network)
@@ -394,24 +400,30 @@ export function ShieldWithdrawForm({
         null)
       : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
   const selectedSourceAssetId = source?.asset.asset.id
-  const pickerStateKey = JSON.stringify([
-    scopeKey,
-    sourcePickerItems,
-    selectedSourceAssetId,
-    balancesHidden
-  ])
   const reportedPickerState = useRef<{
-    key: string
+    scopeKey: string
+    items: readonly ShieldSourceTokenPickerItem[]
+    selectedAssetId?: string
+    balancesHidden: boolean
     callback: typeof onSourcePickerState
   } | null>(null)
   useEffect(() => {
-    if (!onSourcePickerState) return
+    if (!sourceSelectorActive || !onSourcePickerState) return
     if (
-      reportedPickerState.current?.key === pickerStateKey &&
+      reportedPickerState.current?.scopeKey === scopeKey &&
+      reportedPickerState.current?.items === sourcePickerItems &&
+      reportedPickerState.current.selectedAssetId === selectedSourceAssetId &&
+      reportedPickerState.current.balancesHidden === balancesHidden &&
       reportedPickerState.current.callback === onSourcePickerState
     )
       return
-    reportedPickerState.current = { key: pickerStateKey, callback: onSourcePickerState }
+    reportedPickerState.current = {
+      scopeKey,
+      items: sourcePickerItems,
+      selectedAssetId: selectedSourceAssetId,
+      balancesHidden,
+      callback: onSourcePickerState
+    }
     onSourcePickerState({
       items: sourcePickerItems,
       selectedAssetId: selectedSourceAssetId,
@@ -428,18 +440,36 @@ export function ShieldWithdrawForm({
         setPicker(null)
       }
     })
-  }, [onSourcePickerState, pickerStateKey])
+  }, [
+    sourceSelectorActive,
+    onSourcePickerState,
+    scopeKey,
+    sourcePickerItems,
+    selectedSourceAssetId,
+    balancesHidden
+  ])
   const keepSelectedSource = () => {
     if (!sourceId && source) setSourceId(source.asset.asset.id)
   }
-  const destinations = source ? listShieldSendDestinations(source, options, network) : []
-  const networkOptions: ChainSelectorOption[] = sortSendNetworks(
-    [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(item => ({
-      id: item.chain.chain.id,
-      name: item.chain.chain.displayName,
-      icon: withdrawChainIconAlias(item.chain.chain)
-    })),
-    option => option
+  const destinations = useMemo(
+    () => (source ? listShieldSendDestinations(source, options, network) : []),
+    [source, options, network]
+  )
+  const networkOptions: ChainSelectorOption[] = useMemo(
+    () =>
+      networkPickerOpen
+        ? sortSendNetworks(
+            [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(
+              item => ({
+                id: item.chain.chain.id,
+                name: item.chain.chain.displayName,
+                icon: withdrawChainIconAlias(item.chain.chain)
+              })
+            ),
+            option => option
+          )
+        : [],
+    [networkPickerOpen, destinations]
   )
   const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
   const destination = moveToOwnZcash

@@ -63,8 +63,8 @@ export function ChainSelector({
     try {
       await onSelect(id)
       onOpenChange(false)
-    } catch {
-      setSelectionError('Unable to switch network. Try again.')
+    } catch (cause) {
+      setSelectionError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setPendingId(null)
     }

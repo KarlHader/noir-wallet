@@ -137,10 +137,6 @@ export function EvmSendForm({
   onSelectAsset,
   onSelectShield,
   destinationNetworks,
-  destinationNetworksLoading,
-  destinationNetworksError,
-  destinationNetworksPartialError,
-  onRetryDestinationNetworks,
   onSelectDestinationNetwork,
   catalogAccount,
   catalog,
@@ -159,19 +155,14 @@ export function EvmSendForm({
   onSelectAsset: (draft: Readonly<{ recipient: string; amount: string }>) => void
   onSelectShield: (recipient: string, amount: string) => void
   destinationNetworks: readonly {
-    assetId: string
     chainId: string
     name: string
     icon: string
   }[]
-  destinationNetworksLoading: boolean
-  destinationNetworksError: boolean
-  destinationNetworksPartialError: boolean
-  onRetryDestinationNetworks: () => void
   onSelectDestinationNetwork: (
-    destinationAssetId: string,
+    destinationChainId: string,
     draft: Readonly<{ recipient: string; amount: string }>
-  ) => void
+  ) => void | Promise<void>
   catalogAccount: AccountNetworksView
   catalog: AccountNetworksCatalogView | null
   selection: EvmSendAsset
@@ -1191,21 +1182,12 @@ export function EvmSendForm({
           <div>
             <div className="mb-2 flex items-center justify-between text-xs">
               <SendFieldLabel>Send to</SendFieldLabel>
-              {!sendPrivately &&
-              (destinationNetworks.length > 1 ||
-                destinationNetworksLoading ||
-                destinationNetworksError ||
-                networkPickerOpen) ? (
+              {!sendPrivately && (destinationNetworks.length > 1 || networkPickerOpen) ? (
                 <>
                   <button
                     type="button"
                     onClick={() => setNetworkPickerOpen(true)}
-                    disabled={
-                      destinationNetworks.length <= 1 &&
-                      !destinationNetworksLoading &&
-                      !destinationNetworksError
-                    }
-                    className="inline-flex items-center gap-1.5 text-foreground hover:text-primary disabled:cursor-wait disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 text-foreground hover:text-primary"
                     aria-label={`Select destination network, ${chain.chain.displayName}`}
                   >
                     <ChainIcon
@@ -1220,37 +1202,20 @@ export function EvmSendForm({
                       showTooltip={false}
                     />
                     {chain.chain.displayName}
-                    <Icon
-                      icon={
-                        destinationNetworksLoading ? 'lucide:loader-circle' : 'lucide:chevron-down'
-                      }
-                      width={13}
-                      height={13}
-                      className={destinationNetworksLoading ? 'animate-spin' : undefined}
-                    />
+                    <Icon icon="lucide:chevron-down" width={13} height={13} />
                   </button>
                   <ChainSelector
                     open={networkPickerOpen}
                     onOpenChange={setNetworkPickerOpen}
-                    selectedId={asset.asset.id}
+                    selectedId={chain.chain.id}
                     label={`Networks for ${asset.metadata.symbol}`}
                     options={destinationNetworks.map(option => ({
-                      id: option.assetId,
+                      id: option.chainId,
                       name: option.name,
                       icon: option.icon
                     }))}
-                    loading={destinationNetworksLoading}
-                    allowSelectionWhileLoading
-                    error={
-                      destinationNetworksError
-                        ? destinationNetworksPartialError
-                          ? 'Could not load some networks.'
-                          : 'Unable to load networks'
-                        : undefined
-                    }
-                    onRetry={onRetryDestinationNetworks}
-                    onSelect={destinationAssetId =>
-                      onSelectDestinationNetwork(destinationAssetId, {
+                    onSelect={destinationChainId =>
+                      onSelectDestinationNetwork(destinationChainId, {
                         recipient,
                         amount: maxSelected ? '' : amount
                       })

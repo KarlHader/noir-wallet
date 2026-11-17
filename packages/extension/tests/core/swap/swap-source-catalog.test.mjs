@@ -48,7 +48,7 @@ it('retains a same-chain destination found only in the destination catalog', () 
   const custom = { ...USDC, assetId: 'eip155:1/erc20:0x3333333333333333333333333333333333333333' }
   const destinations = getSwapDestinationTokens(custom, [custom], [ETH])
 
-  assert.equal(findSwapTokenInCatalog(destinations, { ...ETH, rheaAddress: '0x0' }), ETH)
+  assert.equal(findSwapTokenInCatalog(destinations, { ...ETH }), ETH)
 })
 
 it('completes a partially retained source chain even when the selected token is already present', () => {
