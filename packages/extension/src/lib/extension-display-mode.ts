@@ -1,4 +1,5 @@
 export const EXTENSION_DISPLAY_MODE_STORAGE_KEY = 'extension_display_mode'
+export const DEFAULT_SIDE_PANEL_MODE = true
 
 export interface StoredExtensionDisplayMode {
   sidePanelMode: boolean
