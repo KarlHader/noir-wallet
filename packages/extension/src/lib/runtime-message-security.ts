@@ -205,6 +205,8 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     'destination',
     'refundAddress',
     'slippageBps',
+    ...(value.recipientType === undefined ? [] : ['recipientType']),
+    ...(value.fundingSource === undefined ? [] : ['fundingSource']),
     ...(value.requestId === undefined ? [] : ['requestId'])
   ]
   if (!hasExactRuntimeKeys(value, fields) || !isRuntimeRecord(value.destination)) return false
@@ -215,13 +217,23 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     isNativeZecIntentsQuoteId(value.accountId) &&
     typeof value.amountZats === 'string' &&
     /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
-    hasExactRuntimeKeys(destination, ['chainId', 'assetId', 'protocolAssetId', 'recipient']) &&
+    hasExactRuntimeKeys(destination, [
+      'chainId',
+      'assetId',
+      'protocolAssetId',
+      ...(value.recipientType === 'CONFIDENTIAL_INTENTS' ? [] : ['recipient'])
+    ]) &&
     [destination.chainId, destination.assetId, destination.protocolAssetId].every(
       field => typeof field === 'string' && field.length > 0 && field.length <= 256
     ) &&
-    typeof destination.recipient === 'string' &&
-    destination.recipient.length > 0 &&
-    destination.recipient.length <= 1024 &&
+    (value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? destination.recipient === undefined &&
+        (value.fundingSource === 'transparent' || value.fundingSource === 'shielded')
+      : (value.recipientType === undefined || value.recipientType === 'DESTINATION_CHAIN') &&
+        (value.fundingSource === undefined || value.fundingSource === 'shielded') &&
+        typeof destination.recipient === 'string' &&
+        destination.recipient.length > 0 &&
+        destination.recipient.length <= 1024) &&
     typeof value.refundAddress === 'string' &&
     value.refundAddress.length > 0 &&
     value.refundAddress.length <= 512 &&
@@ -693,6 +705,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   DISCARD_RHEA_SWAP: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   PREPARE_NATIVE_ZEC_INTENTS_SWAP: { required: { request: isNativeZecIntentsSwapRequest } },
   GET_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
+  GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: { required: { quoteId: isNativeZecIntentsQuoteId } },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
   PREPARE_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
   PREVIEW_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
@@ -1130,6 +1143,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     DISCARD_RHEA_SWAP: ['extension-page'],
     PREPARE_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
     GET_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
+    GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: ['extension-page'],
     CANCEL_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
     PREPARE_CONFIDENTIAL_FUNDING: ['extension-page'],
     PREVIEW_CONFIDENTIAL_FUNDING: ['extension-page'],

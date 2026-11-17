@@ -301,16 +301,22 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       }
     ]
   }
-  for (const recipient of ['u1own', 't1own']) {
-    expect(() =>
-      assertPrivateQuoteRoute(
-        { ...route, toChain: 'zcash', recipient },
-        zcashAccount,
-        'private-swap',
-        account
-      )
-    ).toThrow(/this Account/)
-  }
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: 'zcash', recipient: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      account
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: 'zcash', recipient: 't1own' },
+      zcashAccount,
+      'private-swap',
+      account
+    )
+  ).toThrow(/this Account/)
   for (const recipient of ['u1external', 'U1OWN']) {
     expect(() =>
       assertPrivateQuoteRoute(
@@ -340,9 +346,9 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       { ...publicSwap, fromChain: 'zcash', sender: 'u1own', recipient: publicDestination },
       zcashAccount,
       'wallet-swap',
-      account
+      { ...account, zcashFundingSource: 'shielded' }
     )
-  ).toThrow(/Swap/)
+  ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
       { ...publicSwap, fromChain: 'zcash', sender: 't1own', recipient: publicDestination },
@@ -358,7 +364,41 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       'wallet-swap',
       account
     )
-  ).toThrow(/Swap/)
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      { ...account, zcashFundingSource: 'shielded' }
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own', recipient: publicDestination },
+      zcashAccount,
+      'private-swap',
+      { ...account, zcashFundingSource: 'shielded' }
+    )
+  ).toThrow(/this Account/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      { ...account, accountId: 'another-account', zcashFundingSource: 'shielded' }
+    )
+  ).toThrow(/account changed/)
+  for (const sender of ['t1own', 'u1external']) {
+    expect(() =>
+      assertPrivateQuoteRoute(
+        { ...route, fromChain: 'zcash', sender },
+        zcashAccount,
+        'private-swap',
+        { ...account, zcashFundingSource: 'shielded' }
+      )
+    ).toThrow(/source/)
+  }
   expect(() =>
     assertPrivateQuoteRoute(
       { ...publicSwap, toChain: 'zcash', recipient: 't1own' },
@@ -555,6 +595,54 @@ test('Private Swap quote remains bound to the same Account and its managed desti
 test('RHEA Swap quote sends the Noir Swap referral', () => {
   const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(quoteRequest))
   expect(serializeQuoteRequest(request)).toMatchObject({ referral: 'noir_swap' })
+})
+
+test('Zcash unified source quotes bind the shielded funding source', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const request = { ...quoteRequest, sender: 'u1own' }
+  const service = new RheaSwapService(
+    {
+      async quote(normalizedRequest) {
+        return normalizeQuote(normalizedRequest, {
+          isCrossChain: true,
+          chainType: 'zcash',
+          bestQuote: {
+            router: 'nearintents',
+            amountOut: '2500',
+            minAmountOut: '2400',
+            expiresAt: 31_000,
+            preSwap: null,
+            bridge: null
+          }
+        }, 1_000)
+      }
+    },
+    sessions,
+    { createHandle: () => 'unified-source' }
+  )
+  const scope = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    purpose: 'private-swap',
+    zcashFundingSource: 'shielded'
+  }
+  const quote = await service.quote(request, undefined, scope)
+  await expect(service.readQuoteSecurityContext(quote.quoteHandle)).resolves.toMatchObject({
+    scope,
+    request: { sender: 'u1own' }
+  })
+  for (const purpose of ['wallet-swap', 'private-swap']) {
+    await expect(
+      service.quote(request, undefined, {
+        ...scope,
+        purpose,
+        zcashFundingSource: 'transparent'
+      })
+    ).rejects.toThrow(/funding source/)
+  }
+  await expect(
+    service.quote(request, undefined, { ...scope, purpose: 'wallet-swap', zcashFundingSource: undefined })
+  ).rejects.toThrow(/funding source/)
 })
 
 test('token adapter preserves the RHEA protocol identity', () => {
@@ -1222,30 +1310,13 @@ test('quote and build remain bound across a session-store reload', async () => {
       fundingSource: 'transparent'
     })
   ).resolves.toBe(31_000)
-  const shieldedSwapService = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore(), {
-    now: () => 2_000,
-    createHandle: () => 'wallet-swap-shielded-source'
-  })
-  const shieldedSwapQuote = await shieldedSwapService.quote(confidentialQuoteRequest, undefined, {
-    ...privateSwapScope,
-    purpose: 'wallet-swap',
-    zcashFundingSource: 'shielded'
-  })
-  await shieldedSwapService.prepare(shieldedSwapQuote.quoteHandle)
   await expect(
-    shieldedSwapService.readZcashTransferDeadline(shieldedSwapQuote.quoteHandle, {
-      ...depositTransfer,
-      fundingSource: 'shielded'
+    walletSwapService.quote(confidentialQuoteRequest, undefined, {
+      ...privateSwapScope,
+      purpose: 'wallet-swap',
+      zcashFundingSource: 'shielded'
     })
-  ).resolves.toBe(31_000)
-  for (const fundingSource of [undefined, 'transparent']) {
-    await expect(
-      shieldedSwapService.readZcashTransferDeadline(shieldedSwapQuote.quoteHandle, {
-        ...depositTransfer,
-        fundingSource
-      })
-    ).rejects.toThrow(/funding source/)
-  }
+  ).rejects.toThrow(/funding source/)
   for (const altered of [
     { executionId: 'another-execution' },
     { to: 't1anotherdeposit' },

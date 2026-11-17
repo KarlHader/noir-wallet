@@ -59,6 +59,7 @@ import { parseAccountId } from '@/core/accounts/domain'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import { getNativeZecIntentsSwapStatus } from '@/popup/services/native-zec-intents-swap-client'
 
 const RHEA_STATUS_RECHECK_INTERVAL_MS = 15_000
 
@@ -194,8 +195,15 @@ export function TransactionResultPage() {
   )
   const swapDepositAddress = data?.type === 'swap' ? data.depositAddress : undefined
   const rheaQuoteHandle = data?.type === 'swap' ? data.rheaQuoteHandle : undefined
+  const nativeIntentsInternalDestination =
+    data?.type === 'swap' && data.nativeIntentsInternalDestination === true
+  const nativeIntentsQuoteHandle =
+    nativeIntentsInternalDestination && data.type === 'swap'
+      ? data.nativeIntentsQuoteHandle
+      : undefined
   const waitsForZcashDestination =
     data?.type === 'swap' &&
+    !nativeIntentsInternalDestination &&
     data.status?.status === 'SUCCESS' &&
     isZcashDestination({
       destinationAsset: data.status.destinationAsset,
@@ -347,7 +355,12 @@ export function TransactionResultPage() {
   }, [confidentialFundingPlanId, updateConfidentialFunding])
 
   useEffect(() => {
-    if (swapStatusPollingProvider !== 'near-intents' || !swapDepositAddress) return
+    if (
+      nativeIntentsInternalDestination ||
+      swapStatusPollingProvider !== 'near-intents' ||
+      !swapDepositAddress
+    )
+      return
 
     const controller = new AbortController()
     void pollingSwapStatus(swapDepositAddress, status => updateSwapStatus(status), {
@@ -359,7 +372,54 @@ export function TransactionResultPage() {
     })
 
     return () => controller.abort()
-  }, [swapDepositAddress, swapStatusPollingProvider, updateSwapStatus])
+  }, [
+    nativeIntentsInternalDestination,
+    swapDepositAddress,
+    swapStatusPollingProvider,
+    updateSwapStatus
+  ])
+
+  useEffect(() => {
+    if (!nativeIntentsInternalDestination || !nativeIntentsQuoteHandle) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const recheck = async () => {
+      try {
+        const status = await getNativeZecIntentsSwapStatus(nativeIntentsQuoteHandle)
+        if (!active) return
+        const current = useTransactionResultStore.getState().data
+        const wallet = useWalletStore.getState()
+        if (
+          current?.type !== 'swap' ||
+          !current.nativeIntentsInternalDestination ||
+          current.nativeIntentsQuoteHandle !== nativeIntentsQuoteHandle ||
+          wallet.currentNetwork !== currentNetwork ||
+          wallet.currentWalletId !== effectiveWalletId ||
+          wallet.currentAccountId !== effectiveAccountId
+        )
+          return
+        if (status) {
+          updateSwapStatus(status)
+          if (['SUCCESS', 'FAILED', 'REFUNDED'].includes(status.status)) return
+        }
+      } catch {
+        // A later check can recover after temporary service worker or provider failures.
+      }
+      if (active) timer = setTimeout(() => void recheck(), 5_000)
+    }
+    void recheck()
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [
+    nativeIntentsInternalDestination,
+    nativeIntentsQuoteHandle,
+    currentNetwork,
+    effectiveWalletId,
+    effectiveAccountId,
+    updateSwapStatus
+  ])
 
   useEffect(() => {
     if (swapStatusPollingProvider !== 'rhea-swap') return
@@ -490,7 +550,11 @@ export function TransactionResultPage() {
         void useAccountDataStore.getState().reloadTransactions(message.accountKey)
       }
 
-      if (message.type === 'CROSS_CHAIN_STATUS_UPDATED' && currentData?.type === 'swap') {
+      if (
+        message.type === 'CROSS_CHAIN_STATUS_UPDATED' &&
+        currentData?.type === 'swap' &&
+        !currentData.nativeIntentsInternalDestination
+      ) {
         if (
           (typeof message.quoteHandle === 'string' &&
             message.quoteHandle !== currentData.rheaQuoteHandle) ||
@@ -776,6 +840,7 @@ export function TransactionResultPage() {
           actionName={data.actionName}
           router={data.router}
           destinationChain={data.destinationChain}
+          internalDestination={nativeIntentsInternalDestination}
           destinationConfirmations={destinationConfirmations}
           originChain={data.originChain}
           originTxHash={

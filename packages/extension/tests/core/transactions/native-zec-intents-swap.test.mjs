@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { zatsToZec, zecToZats } from '../../../src/core/services/native-zec-intents-swap.ts'
-import { NativeZecIntentsSwapCoordinator } from '../../../src/background/native-zec-intents-swap.ts'
+import {
+  markNativeZecIntentsSwapTerminal,
+  NativeZecIntentsSwapCoordinator
+} from '../../../src/background/native-zec-intents-swap.ts'
 
 test('native ZEC Intents spend binds the approved quote and survives coordinator recreation', async () => {
   const walletId = 'wallet-one'
@@ -61,7 +64,23 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
         quoteBinding: { ...quoteBinding, quoteHandle: 'quote-two' }
       }
     ],
-    ['native_zec_intents_swap:index', [quoteId, 'quote-two']]
+    [
+      'native_zec_intents_swap:quote-three',
+      {
+        ...structuredClone(record),
+        schemaVersion: 2,
+        quoteId: 'quote-three',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        fundingSource: 'transparent',
+        quoteBinding: {
+          ...quoteBinding,
+          quoteHandle: 'quote-three',
+          recipientType: 'CONFIDENTIAL_INTENTS',
+          fundingSource: 'transparent'
+        }
+      }
+    ],
+    ['native_zec_intents_swap:index', [quoteId, 'quote-two', 'quote-three']]
   ])
   const previousChrome = globalThis.chrome
   const previousLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
@@ -82,7 +101,7 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
             values.set(key, structuredClone(value))
         },
         remove: async key => {
-          values.delete(key)
+          for (const item of Array.isArray(key) ? key : [key]) values.delete(item)
         }
       }
     }
@@ -94,10 +113,11 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
   try {
     const options = {
       network: 'mainnet',
-      assets: {},
+      assets: { get: () => undefined },
       evmNetworks: [],
       assetMappings: [],
       isUnlocked: async () => true,
+      resolveConfidentialIdentity: async () => destination.recipient,
       getActiveAccount: () => ({
         network: 'mainnet',
         walletId,
@@ -132,18 +152,65 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
       })
     ).rejects.toThrow()
     expect(await coordinator.claimSpend(spend)).toBe(expiresAt)
+    expect(await coordinator.claimSpend(spend)).toBe(expiresAt)
     expect(values.get(`native_zec_intents_swap:${quoteId}`).claimedTransactionId).toBe(
       'transaction-one'
     )
     expect(await coordinator.cancel(quoteId)).toBe(false)
     expect(await coordinator.cancel('quote-two')).toBe(true)
-    expect(values.get('native_zec_intents_swap:index')).toEqual([quoteId])
+    expect(values.get('native_zec_intents_swap:index')).toEqual([quoteId, 'quote-three'])
+    const confidentialSpend = {
+      ...spend,
+      transactionId: 'transaction-three',
+      binding: values.get('native_zec_intents_swap:quote-three').quoteBinding,
+      fundingSource: 'transparent'
+    }
+    await expect(
+      coordinator.claimSpend({ ...confidentialSpend, fundingSource: 'shielded' })
+    ).rejects.toThrow()
+    await expect(
+      coordinator.claimSpend({
+        ...confidentialSpend,
+        binding: { ...confidentialSpend.binding, recipientType: 'DESTINATION_CHAIN' }
+      })
+    ).rejects.toThrow()
+    expect(await coordinator.claimSpend(confidentialSpend)).toBe(expiresAt)
+    expect(await coordinator.claimSpend(confidentialSpend)).toBe(expiresAt)
     await expect(
       new NativeZecIntentsSwapCoordinator(options).claimSpend({
         ...spend,
         transactionId: 'transaction-two'
       })
     ).rejects.toThrow()
+    const expiredAt = Date.now() - 26 * 60 * 60_000
+    for (const id of [quoteId, 'quote-three']) {
+      const key = `native_zec_intents_swap:${id}`
+      const stored = values.get(key)
+      values.set(key, {
+        ...stored,
+        expiresAt: expiredAt,
+        quoteBinding: { ...stored.quoteBinding, deadline: expiredAt }
+      })
+    }
+    const newRequest = {
+      network: 'mainnet',
+      walletId,
+      accountId,
+      amountZats: '1',
+      destination,
+      refundAddress,
+      slippageBps: 50
+    }
+    await expect(coordinator.prepare(newRequest)).rejects.toThrow('Native ZEC asset is unavailable')
+    expect(values.has(`native_zec_intents_swap:${quoteId}`)).toBe(false)
+    expect(values.has('native_zec_intents_swap:quote-three')).toBe(true)
+    const terminalBinding = values.get('native_zec_intents_swap:quote-three').quoteBinding
+    await markNativeZecIntentsSwapTerminal(terminalBinding, 'transaction-three', 'SUCCESS')
+    expect(values.get('native_zec_intents_swap:quote-three').terminalStatus).toBe('SUCCESS')
+    const settled = values.get('native_zec_intents_swap:quote-three')
+    values.set('native_zec_intents_swap:quote-three', { ...settled, terminalAt: expiredAt })
+    await expect(coordinator.prepare(newRequest)).rejects.toThrow('Native ZEC asset is unavailable')
+    expect(values.has('native_zec_intents_swap:quote-three')).toBe(false)
   } finally {
     globalThis.chrome = previousChrome
     if (previousLocks === undefined) delete globalThis.navigator.locks

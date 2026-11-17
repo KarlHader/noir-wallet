@@ -35,6 +35,7 @@ interface SwapReviewViewProps {
   amountIn: string
   amountOut: string
   recipient: string
+  recipientLabel?: string
   fromFiat: string
   toFiat: string
   /** Output token units received for one input token unit. */
@@ -80,7 +81,7 @@ interface SwapReviewViewProps {
       readonly address: string
     } | null
   } | null
-  destinationDetails?: { readonly network: string }
+  destinationDetails?: { readonly network: string; readonly chainIcon?: string }
   approvalDetails?: {
     readonly spender: string
     readonly amount: string
@@ -100,6 +101,7 @@ export function SwapReviewView({
   amountIn,
   amountOut,
   recipient,
+  recipientLabel = 'Recipient',
   minAmountOut,
   priceImpact,
   arrivalEstimate,
@@ -202,7 +204,7 @@ export function SwapReviewView({
                   <Icon icon="lucide:arrow-right" width={12} className="shrink-0 text-muted" />
                   <span className="inline-flex items-center gap-1.5">
                     <ChainIcon
-                      chain={tokenOut.blockchain}
+                      chain={destinationDetails?.chainIcon ?? tokenOut.blockchain}
                       alt=""
                       showTooltip={false}
                       className="size-4 shrink-0 rounded-[4px]"
@@ -322,7 +324,7 @@ export function SwapReviewView({
                   '—'
                 )}
               </DetailItem>
-              <DetailItem label="Recipient">
+              <DetailItem label={recipientLabel}>
                 <span className="block break-all text-xs" title={recipient}>
                   {recipient}
                 </span>

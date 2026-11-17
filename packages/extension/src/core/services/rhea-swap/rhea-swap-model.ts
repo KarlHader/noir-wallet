@@ -50,7 +50,9 @@ export function assertPrivateQuoteRoute(
   >,
   account: PrivateSwapAccountRoute | null,
   purpose: PrivateQuotePurpose,
-  scope?: Pick<PrivateSwapAccountRoute, 'walletId' | 'accountId'>
+  scope?: Pick<PrivateSwapAccountRoute, 'walletId' | 'accountId'> & {
+    readonly zcashFundingSource?: 'transparent' | 'shielded'
+  }
 ): void {
   if (
     !account ||
@@ -58,12 +60,21 @@ export function assertPrivateQuoteRoute(
     (purpose !== 'wallet-swap' &&
       purpose !== 'public-cross-chain-send' &&
       ((!/^[1-9]\d*$/.test(request.fromChain) &&
-        !(purpose === 'public-private-send' && request.fromChain === 'zcash')) ||
+        !(purpose === 'public-private-send' && request.fromChain === 'zcash') &&
+        !(purpose === 'private-swap' && request.fromChain === 'zcash')) ||
         (purpose === 'private-swap'
           ? request.confidentiality !== undefined
           : request.confidentiality !== 'basic')))
   ) {
     throw new Error('Private quote account changed. Get a new quote.')
+  }
+  if (
+    request.fromChain === 'zcash' &&
+    (purpose === 'wallet-swap' || purpose === 'private-swap') &&
+    (scope?.zcashFundingSource !== undefined || request.sender.startsWith('u1')) &&
+    scope?.zcashFundingSource !== (request.sender.startsWith('u1') ? 'shielded' : 'transparent')
+  ) {
+    throw new Error('Swap funding source does not match the quoted Zcash account.')
   }
   const source = account.networks.find(network => network.chainId === `eip155:${request.fromChain}`)
   if (purpose === 'public-private-send') {
@@ -153,11 +164,11 @@ export function assertPrivateQuoteRoute(
     )
     if (
       !sourceIsPublic ||
-      (request.fromChain === 'zcash' && !/^t[13]/.test(request.sender)) ||
+      (request.fromChain === 'zcash' && !/^(?:t[13]|u1)/.test(request.sender)) ||
       !destinationNetwork ||
       !recipient ||
       !publicDestination ||
-      (request.toChain === 'zcash' && !/^t[13]/.test(recipient)) ||
+      (request.toChain === 'zcash' && !/^(?:t[13]|u1)/.test(recipient)) ||
       (/^[1-9]\d*$/.test(request.fromChain) &&
         /^[1-9]\d*$/.test(request.toChain) &&
         request.confidentiality !== undefined)
@@ -166,9 +177,18 @@ export function assertPrivateQuoteRoute(
     }
     return
   }
+  const privateZcashSource =
+    purpose === 'private-swap' &&
+    request.fromChain === 'zcash' &&
+    account.networks
+      .find(network => network.chainId === getZcashChainId('mainnet'))
+      ?.addresses?.some(
+        address => address.value === request.sender && address.value.startsWith('u1')
+      )
   if (
-    !source?.privateExecutionAddress ||
-    source.privateExecutionAddress.toLowerCase() !== request.sender.toLowerCase()
+    !privateZcashSource &&
+    (!source?.privateExecutionAddress ||
+      source.privateExecutionAddress.toLowerCase() !== request.sender.toLowerCase())
   ) {
     throw new Error('Private quote source does not match this Account.')
   }
@@ -193,7 +213,7 @@ export function assertPrivateQuoteRoute(
     if (
       request.fromChain !== request.toChain ||
       request.tokenIn.address.toLowerCase() !== request.tokenOut.address.toLowerCase() ||
-      !source.addresses?.some(
+      !source?.addresses?.some(
         address => address.value.toLowerCase() === request.recipient?.toLowerCase()
       )
     ) {
@@ -201,8 +221,19 @@ export function assertPrivateQuoteRoute(
     }
     return
   }
-  if (purpose === 'private-swap' && !/^[1-9]\d*$/.test(request.toChain))
-    throw new Error('Private Swap must stay in this Account.')
+  if (purpose === 'private-swap' && request.toChain === 'zcash') {
+    const destination = account.networks.find(
+      network => network.chainId === getZcashChainId('mainnet')
+    )
+    if (
+      !destination?.addresses?.some(
+        address => address.value === request.recipient && address.value.startsWith('u1')
+      )
+    ) {
+      throw new Error('Private Swap must stay in this Account.')
+    }
+    return
+  }
   const destination = account.networks.find(
     network => network.chainId === `eip155:${request.toChain}`
   )

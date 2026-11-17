@@ -172,6 +172,7 @@ test.describe('Runtime message security', () => {
     const messages = [
       prepare,
       { type: 'GET_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' },
+      { type: 'GET_NATIVE_ZEC_INTENTS_SWAP_STATUS', quoteId: 'quote-one' },
       { type: 'CANCEL_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' }
     ]
     for (const message of messages) {

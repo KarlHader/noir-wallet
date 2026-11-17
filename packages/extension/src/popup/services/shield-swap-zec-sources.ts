@@ -19,22 +19,27 @@ export const SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID = 'shield-swap-source:zec:nativ
 export const SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID =
   'shield-swap-source:zec:transparent' as const
 
-export type ShieldSwapZecSourceKind = 'intents' | 'native-shielded'
+export type ShieldSwapZecSourceKind = 'intents' | 'native-shielded' | 'native-transparent'
 
 export function parseShieldSwapZecSourceParam(
   value: string | null | undefined
 ): ShieldSwapZecSourceKind | null {
   if (value === 'intents') return 'intents'
   if (value === 'native' || value === 'native-shielded') return 'native-shielded'
+  if (value === 'native-transparent') return 'native-transparent'
   return null
 }
 
-export function shieldSwapZecSourceParam(kind: ShieldSwapZecSourceKind): 'intents' | 'native' {
-  return kind === 'native-shielded' ? 'native' : 'intents'
+export function shieldSwapZecSourceParam(kind: ShieldSwapZecSourceKind): string {
+  return kind === 'native-shielded' ? 'native' : kind
 }
 
 export function isShieldSwapZecSelectionId(id: string | null | undefined): boolean {
-  return id === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID || id === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+  return (
+    id === SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID ||
+    id === SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID ||
+    id === SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
+  )
 }
 
 export interface ShieldSwapZecSourceOption {
@@ -106,8 +111,8 @@ export function buildShieldSwapZecSourceOptions(input: {
         kind: 'intents',
         symbol: intentsAsset.asset.metadata.symbol,
         iconUrl: intentsAsset.asset.metadata.iconUrl,
-        badgeBlockchain: 'zec',
-        chainName: 'Zcash',
+        badgeBlockchain: 'near',
+        chainName: 'NEAR Confidential',
         availableRaw,
         decimals: intentsAsset.asset.metadata.decimals,
         intentsWalletAssetId: intentsAsset.asset.asset.id

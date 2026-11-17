@@ -579,9 +579,37 @@ export class ConfidentialFundingCoordinator {
   constructor(private readonly options: ConfidentialFundingCoordinatorOptions) {
     this.now = options.now ?? Date.now
     this.createId = options.createId ?? (() => crypto.randomUUID())
+    const nativeIdentity = async (scope: { walletId: string; accountId: string }) => {
+      const chainId = options.evmNetworks[0]?.chainId
+      if (!chainId) throw new Error('Native ZEC Confidential identity is unavailable')
+      const identity = await options.signer.resolveIdentity(parseChainId(chainId).id)
+      if (
+        identity.context.chainAccount.scope.keyDomainId !== scope.walletId ||
+        identity.context.chainAccount.scope.accountId !== scope.accountId
+      )
+        throw new Error('Native ZEC Confidential account changed')
+      return identity
+    }
     this.nativeZecIntents = new NativeZecIntentsSwapCoordinator({
       ...options,
-      getActiveAccount: options.getNativeZecActiveAccount
+      getActiveAccount: options.getNativeZecActiveAccount,
+      resolveConfidentialIdentity: async scope => (await nativeIdentity(scope)).address,
+      authorizeConfidentialIdentity: async scope => {
+        const identity = await nativeIdentity(scope)
+        if (identity.address !== scope.recipient)
+          throw new Error('Native ZEC Confidential account changed')
+        await this.ensureSession(identity, true)
+      },
+      quoteConfidential: input =>
+        options.api.quote({
+          referral: NOIR_SWAP_REFERRAL,
+          ...input,
+          recipient: input.signerId,
+          depositType: 'ORIGIN_CHAIN',
+          refundType: 'ORIGIN_CHAIN',
+          recipientType: 'CONFIDENTIAL_INTENTS',
+          dry: false
+        })
     })
     for (const network of options.evmNetworks) {
       this.rpcByChain.set(network.chainId, createConfiguredEvmRpcClient(options.network, network))

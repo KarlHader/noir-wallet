@@ -24,7 +24,10 @@ import {
   resolveConfidentialDetailAssetId,
   resolveNearConfidentialZecHolding
 } from '../../../src/popup/services/near-confidential-holdings.ts'
-import { getAssetDetailCategories } from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+import {
+  getAssetDetailCategories,
+  sumZcashDetailBalanceRaw
+} from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
 import { resolveShieldZcashVaultEntry } from '../../../src/popup/services/shield-zcash-entry.ts'
 
 test('Zcash Shield requires the active V2 account source and network capability', () => {
@@ -234,6 +237,14 @@ test('NEAR Confidential ZEC stays separate from on-chain ZEC and inside its acco
     public: '0',
     shield: '0'
   })
+  expect(sumZcashDetailBalanceRaw('300000000', '125000000')).toBe('425000000')
+  expect(sumZcashDetailBalanceRaw('300000000', null)).toBeNull()
+  expect(
+    resolveNearConfidentialZecHolding({
+      ...input,
+      model: { ...model, confidential: { status: 'ready', assets: [] } }
+    })?.availableRaw
+  ).toBe('0')
   expect(resolveNearConfidentialZecHolding({ ...input, accountId: 'account-b' })).toBeNull()
   expect(resolveNearConfidentialZecHolding({ ...input, network: 'testnet' })).toBeNull()
   expect(

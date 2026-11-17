@@ -39,6 +39,7 @@ interface SwapStatusDisplayProps {
   actionName?: string
   router?: string
   destinationChain?: string
+  internalDestination?: boolean
   destinationConfirmations?: number | null
   originChain?: string
   originTxHash?: string
@@ -77,6 +78,7 @@ export function SwapStatusDisplay({
   actionName,
   router,
   destinationChain: destinationChainHint,
+  internalDestination = false,
   destinationConfirmations,
   originChain: originChainHint,
   originTxHash,
@@ -98,6 +100,7 @@ export function SwapStatusDisplay({
   const destinationTxHash = status?.swapDetails?.destinationChainTxHashes?.[0]?.hash
   const requiredConfirmations = WALLET_CONFIG.SPENDABILITY_CONFIRMATIONS
   const waitsForZcashDestination =
+    !internalDestination &&
     currentStatus === 'SUCCESS' &&
     isZcashDestination({
       destinationAsset: status?.destinationAsset,
@@ -124,6 +127,7 @@ export function SwapStatusDisplay({
     originTxHash: originTxHash ?? status?.swapDetails?.originChainTxHashes?.[0]?.hash,
     originConfirmations,
     destinationTxHash,
+    internalDestination,
     waitsForDestinationConfirmations: waitsForSpendability,
     destinationConfirmations,
     requiredConfirmations,

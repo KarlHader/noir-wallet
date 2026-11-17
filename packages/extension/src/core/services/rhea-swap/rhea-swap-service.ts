@@ -249,6 +249,20 @@ export class RheaSwapService {
     if (this.clearingSessions) throw new Error('RHEA Swap sessions are being cleared')
     const epoch = this.sessionEpoch
     const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(value))
+    if (request.fromChain === 'zcash' && privateSwapScope) {
+      const expectedFundingSource = request.sender.startsWith('u1') ? 'shielded' : 'transparent'
+      if (
+        (privateSwapScope.purpose === 'wallet-swap' &&
+          (privateSwapScope.zcashFundingSource !== undefined ||
+            expectedFundingSource === 'shielded') &&
+          privateSwapScope.zcashFundingSource !== expectedFundingSource) ||
+        (privateSwapScope.purpose === 'private-swap' &&
+          (expectedFundingSource !== 'shielded' ||
+            privateSwapScope.zcashFundingSource !== 'shielded'))
+      ) {
+        throw new Error('Swap funding source does not match the quoted Zcash account.')
+      }
+    }
     const quote = await this.client.quote(request, { signal })
     this.assertQuoteMatchesRequest(quote, request)
     const quoteHandle = `rhea-quote:${this.createHandle()}`
@@ -399,7 +413,9 @@ export class RheaSwapService {
   ): Promise<number> {
     const record = await this.requireSession(quoteHandle)
     if (
-      record.privateSwapScope?.purpose === 'wallet-swap' &&
+      (record.privateSwapScope?.purpose === 'wallet-swap' ||
+        (record.privateSwapScope?.purpose === 'private-swap' &&
+          record.request.fromChain === 'zcash')) &&
       transfer.fundingSource !== (record.privateSwapScope.zcashFundingSource ?? 'transparent')
     ) {
       throw new Error('Swap funding source has changed. Get a new quote.')

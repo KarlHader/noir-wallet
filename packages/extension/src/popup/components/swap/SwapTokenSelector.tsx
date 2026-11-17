@@ -1,6 +1,10 @@
 import { startTransition, useEffect, useMemo, useState } from 'react'
 import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import { TokenSelector, type TokenSelectorProps } from '../tokens/TokenSelector'
+import {
+  TokenSelector,
+  type TokenSelectorExtraItem,
+  type TokenSelectorProps
+} from '../tokens/TokenSelector'
 import {
   findVerifiedRheaSwapToken,
   toWalletEvmSwapToken
@@ -39,6 +43,10 @@ interface SwapTokenSelectorProps extends Omit<
   ) => Promise<readonly RheaSwapToken[]>
   readonly onSelect: (token: RheaSwapToken) => void
   readonly balanceScope?: SwapBalanceScope
+  readonly resolveItems?: (tokens: readonly RheaSwapToken[]) => Readonly<{
+    tokens: readonly RheaSwapToken[]
+    extraItems: readonly TokenSelectorExtraItem[]
+  }>
 }
 
 export function SwapTokenSelector({
@@ -46,6 +54,7 @@ export function SwapTokenSelector({
   loadTokens,
   onSelect,
   balanceScope,
+  resolveItems,
   ...props
 }: SwapTokenSelectorProps) {
   const [catalogTokens, setTokens] = useState(initialTokens)
@@ -80,6 +89,10 @@ export function SwapTokenSelector({
     })
     return custom.length ? [...catalogTokens, ...custom] : catalogTokens
   }, [catalogTokens, customAssets, chainIds])
+  const resolvedItems = useMemo(
+    () => resolveItems?.(tokens) ?? { tokens, extraItems: props.extraItems ?? [] },
+    [resolveItems, tokens, props.extraItems]
+  )
   useEffect(() => {
     let cancelled = false
     setCuratedRows(readCachedCuratedSwapTokens(chainIds))
@@ -148,18 +161,18 @@ export function SwapTokenSelector({
     () =>
       zcashAvailable !== undefined && evmExecutionMode
         ? buildWalletSwapSourceBalances({
-            tokens,
+            tokens: resolvedItems.tokens,
             portfolio: scopedPortfolio,
             receiveTargets: scopedReceiveTargets,
             zcashAvailable,
             evmExecutionMode
           })
         : undefined,
-    [tokens, scopedPortfolio, scopedReceiveTargets, zcashAvailable, evmExecutionMode]
+    [resolvedItems.tokens, scopedPortfolio, scopedReceiveTargets, zcashAvailable, evmExecutionMode]
   )
   const defaultTokens = useMemo(
-    () => selectDefaultSwapTokens(tokens, curatedRows, { balances, customAssets }),
-    [tokens, curatedRows, balances, customAssets]
+    () => selectDefaultSwapTokens(resolvedItems.tokens, curatedRows, { balances, customAssets }),
+    [resolvedItems.tokens, curatedRows, balances, customAssets]
   )
   useEffect(() => {
     let cancelled = false
@@ -190,7 +203,8 @@ export function SwapTokenSelector({
             : null)
         }
         stableCatalogOrder
-        tokens={tokens}
+        tokens={resolvedItems.tokens}
+        extraItems={resolvedItems.extraItems}
         defaultTokens={defaultTokens}
         defaultCatalogLoading={curatedLoading}
         balances={balances}
@@ -202,13 +216,7 @@ export function SwapTokenSelector({
           if (!matched) return 'Select an available EVM network'
           onSelect(matched)
         }}
-        onSelect={token => {
-          const selected = tokens.find(
-            candidate =>
-              candidate.assetId === token.assetId && candidate.blockchain === token.blockchain
-          )
-          if (selected) onSelect(selected)
-        }}
+        onSelect={token => onSelect(token as RheaSwapToken)}
       />
     </div>
   )

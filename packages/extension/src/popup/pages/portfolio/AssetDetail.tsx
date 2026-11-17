@@ -23,7 +23,11 @@ import {
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
-import { getAssetDetailCategories, getZcashPrivacyBalanceDisplay } from './asset-detail-balance'
+import {
+  getAssetDetailCategories,
+  getZcashPrivacyBalanceDisplay,
+  sumZcashDetailBalanceRaw
+} from './asset-detail-balance'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -257,6 +261,8 @@ export function AssetDetail() {
         assetId: asset.asset.id
       })
     : null
+  const hasConfidentialCapability =
+    currentNetwork === 'mainnet' && getPrivateTransferChainIds(storageV2Account, true).length > 0
   const actionDomain =
     (searchParams.get('domain') === 'private' ||
       (searchParams.get('domain') !== 'public' && searchParams.get('mode') === 'private')) &&
@@ -718,9 +724,12 @@ export function AssetDetail() {
     chain.chain.id
   )
   const displayRaw =
-    categories?.raw.all == null
-      ? null
-      : (BigInt(categories.raw.all) + BigInt(nearConfidentialZec?.availableRaw ?? '0')).toString()
+    chain.chain.family === 'zcash' && hasConfidentialCapability
+      ? sumZcashDetailBalanceRaw(
+          categories?.raw.all ?? null,
+          nearConfidentialZec?.availableRaw ?? null
+        )
+      : (categories?.raw.all ?? null)
   const detailAmount =
     displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
   const detailFiat =
@@ -1162,14 +1171,19 @@ export function AssetDetail() {
                   : undefined
               }
             />
-            {nearConfidentialZec && (
+            {hasConfidentialCapability && (
               <AssetBalanceRow
-                label="Shield"
+                label="NEAR Confidential"
                 actions={confidentialActions()}
-                subtitle="NEAR Confidential Intents"
-                balance={`${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`}
+                balance={
+                  nearConfidentialZec
+                    ? `${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`
+                    : '—'
+                }
                 fiat={formatBalanceFiat(
-                  quote ? new Big(nearConfidentialZec.amount).times(quote.priceUsd).toFixed() : null
+                  nearConfidentialZec && quote
+                    ? new Big(nearConfidentialZec.amount).times(quote.priceUsd).toFixed()
+                    : null
                 )}
               />
             )}

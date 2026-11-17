@@ -178,7 +178,14 @@ export function resolveShieldDomainZecFundingSource(input: {
   ) {
     return 'shielded'
   }
-  if (input.ordinarySwapRequested && input.isZecSource) return 'transparent'
+  if (
+    input.ordinarySwapRequested &&
+    input.shieldZecSource === 'native-transparent' &&
+    input.isZecSource
+  ) {
+    return 'transparent'
+  }
+  if (input.ordinarySwapRequested && input.isZecSource) return input.selectedFundingSource
   return input.selectedFundingSource
 }
 
@@ -186,7 +193,7 @@ export function shieldConfidentialSwapActive(input: {
   readonly shieldSwapSelected: boolean
   readonly shieldZecSource: ShieldSwapZecSourceKind | null
 }): boolean {
-  return input.shieldSwapSelected && input.shieldZecSource !== 'native-shielded'
+  return input.shieldSwapSelected && input.shieldZecSource === 'intents'
 }
 
 export function resolveSwapReviewAction(input: {

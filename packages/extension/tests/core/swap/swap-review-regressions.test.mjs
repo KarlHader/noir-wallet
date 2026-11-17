@@ -13,8 +13,11 @@ import {
 } from '../../../src/popup/services/swap-page-model.ts'
 import {
   buildShieldSwapZecSourceOptions,
+  isShieldSwapZecSelectionId,
+  parseShieldSwapZecSourceParam,
   SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID,
-  SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+  SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID,
+  SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
 } from '../../../src/popup/services/shield-swap-zec-sources.ts'
 import {
   getRheaSwapErrorMessage,
@@ -561,6 +564,24 @@ it('keeps Shield native ZEC swap on shielded funding without merging confidentia
   assert.equal(
     resolveShieldDomainZecFundingSource({
       ordinarySwapRequested: true,
+      shieldZecSource: 'native-transparent',
+      isZecSource: true,
+      selectedFundingSource: 'shielded'
+    }),
+    'transparent'
+  )
+  assert.equal(
+    resolveShieldDomainZecFundingSource({
+      ordinarySwapRequested: true,
+      shieldZecSource: null,
+      isZecSource: true,
+      selectedFundingSource: 'shielded'
+    }),
+    'shielded'
+  )
+  assert.equal(
+    resolveShieldDomainZecFundingSource({
+      ordinarySwapRequested: true,
       shieldZecSource: 'intents',
       isZecSource: true,
       selectedFundingSource: 'transparent'
@@ -575,6 +596,8 @@ it('keeps Shield native ZEC swap on shielded funding without merging confidentia
     shieldConfidentialSwapActive({ shieldSwapSelected: true, shieldZecSource: 'intents' }),
     true
   )
+  assert.equal(parseShieldSwapZecSourceParam('native-transparent'), 'native-transparent')
+  assert.equal(isShieldSwapZecSelectionId(SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID), true)
 })
 
 it('lists Intents and native Shield ZEC as separate selectable sources with distinct balances', () => {
@@ -622,7 +645,8 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(options.length, 2)
     assert.equal(options[0].selectionId, SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
     assert.equal(options[0].availableRaw, '120000000')
-    assert.equal(options[0].badgeBlockchain, 'zec')
+    assert.equal(options[0].badgeBlockchain, 'near')
+    assert.equal(options[0].chainName, 'NEAR Confidential')
     assert.equal(options[1].selectionId, SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
     assert.equal(options[1].availableRaw, '40000000')
     assert.equal(options[1].badgeBlockchain, 'zec')

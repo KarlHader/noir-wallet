@@ -9,6 +9,15 @@ import {
   type AssetDomain
 } from '@/popup/services/asset-domains'
 
+export function sumZcashDetailBalanceRaw(
+  nativeRaw: string | null,
+  confidentialRaw: string | null
+): string | null {
+  return nativeRaw === null || confidentialRaw === null
+    ? null
+    : (BigInt(nativeRaw) + BigInt(confidentialRaw)).toString()
+}
+
 export function getAssetDetailCategories(
   asset: PortfolioAssetView,
   model: PortfolioReadModel,

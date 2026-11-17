@@ -89,6 +89,7 @@ export interface ActivitySwapPresentation {
   readonly sourceChainIconAlias?: string
   readonly destinationChainIconAlias?: string
   readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield' | 'External'
+  readonly sourceFundingSource?: 'transparent' | 'shielded'
   readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
 }
 
@@ -146,7 +147,13 @@ export function isDirectAccountMove(item: ActivityItem, route: ActivitySwapPrese
 export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): string {
   const label = (mode: ActivitySwapPresentation['sourceAccountMode']) =>
     mode === 'Confidential' ? 'Private' : (mode ?? '')
-  return `${label(route.sourceAccountMode)} → ${label(route.destinationAccountMode)}`
+  const source =
+    route.sourceFundingSource === 'transparent'
+      ? 'Transparent'
+      : route.sourceFundingSource === 'shielded'
+        ? 'Zcash Shield'
+        : label(route.sourceAccountMode)
+  return `${source} → ${route.sourceFundingSource ? 'NEAR Confidential' : label(route.destinationAccountMode)}`
 }
 
 export function getActivityRouteTitle(item: ActivityItem, route: ActivitySwapPresentation): string {
@@ -377,28 +384,42 @@ export function getActivitySwapPresentation(
   const sourceChain = resolveActivityChainMetadata(sourceChainId, chainMetadata)
   const destinationChain = resolveActivityChainMetadata(destinationChainId, chainMetadata)
   const shield = item.snapshot?.shield
+  const confidentialDestination =
+    item.source === 'zcash-v1' &&
+    item.segments.some(
+      segment =>
+        segment.role === 'destination' &&
+        segment.target.kind === 'protocol' &&
+        segment.target.provider === 'NEAR Confidential'
+    )
   const recipientAddress =
-    shield?.destinationDomain === 'shield'
+    confidentialDestination || shield?.destinationDomain === 'shield'
       ? undefined
       : (item.snapshot?.protocol?.destination.recipient ??
         (item.source === 'zcash-v1' || shield ? item.snapshot?.recipient?.address : undefined))
   const senderAddress = item.snapshot?.sender?.address
   const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
     domain === 'shield' ? 'Shield' : domain === 'private' ? 'Confidential' : 'Public'
-  const sourceAccountMode = isExternalDeposit
-    ? 'External'
+  const sourceAccountMode = confidentialDestination
+    ? item.assetDomains?.includes('shield')
+      ? 'Shield'
+      : 'Public'
+    : isExternalDeposit
+      ? 'External'
+      : shield
+        ? shieldDomainLabel(shield.sourceDomain)
+        : senderAddress
+          ? executionAddressModes.get(senderAddress.toLowerCase())
+          : undefined
+  const destinationAccountMode = confidentialDestination
+    ? 'Confidential'
     : shield
-      ? shieldDomainLabel(shield.sourceDomain)
-      : senderAddress
-        ? executionAddressModes.get(senderAddress.toLowerCase())
+      ? legacyPrivateShieldWithdrawDestination
+        ? 'Confidential'
+        : shieldDomainLabel(shield.destinationDomain)
+      : recipientAddress
+        ? executionAddressModes.get(recipientAddress.toLowerCase())
         : undefined
-  const destinationAccountMode = shield
-    ? legacyPrivateShieldWithdrawDestination
-      ? 'Confidential'
-      : shieldDomainLabel(shield.destinationDomain)
-    : recipientAddress
-      ? executionAddressModes.get(recipientAddress.toLowerCase())
-      : undefined
 
   return Object.freeze({
     ...(source ? { source } : {}),
@@ -411,7 +432,7 @@ export function getActivitySwapPresentation(
         ? 'NEAR Confidential'
         : (sourceChain?.displayName ?? 'Unknown network'),
     destinationNetwork:
-      shield?.destinationDomain === 'shield'
+      confidentialDestination || shield?.destinationDomain === 'shield'
         ? 'NEAR Confidential'
         : (destinationChain?.displayName ?? 'Unknown network'),
     ...(shield?.sourceDomain === 'shield'
@@ -419,12 +440,19 @@ export function getActivitySwapPresentation(
       : sourceChain?.iconAlias
         ? { sourceChainIconAlias: sourceChain.iconAlias }
         : {}),
-    ...(shield?.destinationDomain === 'shield'
+    ...(confidentialDestination || shield?.destinationDomain === 'shield'
       ? { destinationChainIconAlias: 'near' }
       : destinationChain?.iconAlias
         ? { destinationChainIconAlias: destinationChain.iconAlias }
         : {}),
     ...(sourceAccountMode ? { sourceAccountMode } : {}),
+    ...(confidentialDestination && item.assetDomains
+      ? {
+          sourceFundingSource: item.assetDomains.includes('shield')
+            ? ('shielded' as const)
+            : ('transparent' as const)
+        }
+      : {}),
     ...(destinationAccountMode ? { destinationAccountMode } : {})
   })
 }

@@ -599,10 +599,13 @@ export function MultichainActivityDetail({
           swap.sourceAccountMode !== swap.destinationAccountMode && (
             <DetailRow label={isMove ? 'Move direction' : 'Account'}>
               <span className="flex items-center gap-1.5">
-                {swap.sourceAccountMode === 'External' ? (
+                {swap.sourceFundingSource === 'shielded' ? (
+                  <span className="text-sm">Zcash Shield</span>
+                ) : swap.sourceAccountMode === 'External' ? (
                   <span className="text-sm">External</span>
                 ) : (
                   <AccountDomainBadge
+                    {...(swap.sourceFundingSource ? { chainFamily: 'zcash' as const } : {})}
                     domain={
                       swap.sourceAccountMode === 'Confidential'
                         ? 'private'
@@ -613,15 +616,19 @@ export function MultichainActivityDetail({
                   />
                 )}
                 <Icon icon="lucide:arrow-right" width={13} height={13} className="text-muted" />
-                <AccountDomainBadge
-                  domain={
-                    swap.destinationAccountMode === 'Confidential'
-                      ? 'private'
-                      : swap.destinationAccountMode === 'Shield'
-                        ? 'shield'
-                        : 'public'
-                  }
-                />
+                {swap.sourceFundingSource ? (
+                  <span className="text-sm">NEAR Confidential</span>
+                ) : (
+                  <AccountDomainBadge
+                    domain={
+                      swap.destinationAccountMode === 'Confidential'
+                        ? 'private'
+                        : swap.destinationAccountMode === 'Shield'
+                          ? 'shield'
+                          : 'public'
+                    }
+                  />
+                )}
               </span>
             </DetailRow>
           )}

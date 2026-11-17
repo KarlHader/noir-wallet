@@ -11,6 +11,7 @@ import type {
 import { CONFIDENTIAL_SESSION_REQUIRED_ERROR } from '@/core/services/confidential-funding'
 import { ConfidentialFundingApiError } from './confidential-funding-api'
 import { useWalletStore } from '@/store/wallet-store'
+import { readNativeZecIntentsSwapStatus } from './native-zec-intents-swap'
 
 export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
@@ -63,6 +64,16 @@ const handlers = {
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>
   ) => coordinator.getNativeZecIntentsSwap(message.quoteId),
+  GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: async (
+    { coordinator }: FundingContext,
+    message: Readonly<{ quoteId: string }>
+  ) => {
+    const review = await coordinator.getNativeZecIntentsSwap(message.quoteId)
+    if (review.quoteBinding.recipientType !== 'CONFIDENTIAL_INTENTS') {
+      throw new Error('Native ZEC Confidential status is unavailable')
+    }
+    return readNativeZecIntentsSwapStatus(review.quoteBinding)
+  },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: (
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>

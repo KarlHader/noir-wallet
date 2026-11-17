@@ -1358,6 +1358,20 @@ async function reloadMultichainRuntime(
         }
       )
     : null
+  const nativeSwapBalanceCoordinator = confidentialFundingCoordinator
+  transactionMonitor.setConfidentialBalanceRefresher(
+    nativeSwapBalanceCoordinator
+      ? scope =>
+          nativeSwapBalanceCoordinator.refreshBalances(
+            {
+              network: DEFAULT_NETWORK,
+              keyDomainId: scope.walletId,
+              accountId: scope.accountId
+            },
+            false
+          )
+      : undefined
+  )
   if (!isRuntimeReconfiguration) {
     void confidentialFundingCoordinator?.resumeAll().catch(error => {
       console.warn(
@@ -4131,10 +4145,11 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
               const requestedZcashFundingSource = message.zcashFundingSource
               if (
                 requestedZcashFundingSource !== undefined &&
-                (purpose !== 'wallet-swap' ||
+                ((purpose !== 'wallet-swap' && purpose !== 'private-swap') ||
                   request.fromChain !== 'zcash' ||
                   (requestedZcashFundingSource !== 'transparent' &&
-                    requestedZcashFundingSource !== 'shielded'))
+                    requestedZcashFundingSource !== 'shielded') ||
+                  (purpose === 'private-swap' && requestedZcashFundingSource !== 'shielded'))
               ) {
                 throw new Error('Swap funding source is invalid.')
               }
@@ -4144,18 +4159,21 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 purpose === 'confidential-funding'
               ) {
                 if (privateSender) throw new Error('Swap source mode changed.')
-                assertPrivateQuoteRoute(request, account ?? null, purpose)
-                return rheaSwapService.quote(request, undefined, {
-                  walletId: account!.walletId,
-                  accountId: account!.accountId,
+                const scope = {
+                  walletId: account?.walletId ?? '',
+                  accountId: account?.accountId ?? '',
                   purpose,
                   ...(purpose === 'wallet-swap' && request.fromChain === 'zcash'
                     ? {
                         zcashFundingSource:
-                          requestedZcashFundingSource === 'shielded' ? 'shielded' : 'transparent'
+                          requestedZcashFundingSource === 'shielded'
+                            ? ('shielded' as const)
+                            : ('transparent' as const)
                       }
                     : {})
-                })
+                }
+                assertPrivateQuoteRoute(request, account ?? null, purpose, scope)
+                return rheaSwapService.quote(request, undefined, scope)
               }
               if (purpose === 'public-private-send') {
                 if (privateSender)
@@ -4168,15 +4186,18 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
                 })
               }
               if (!purpose) throw new Error('Swap quote requires a reviewed route.')
-              if (!privateSender || !purpose) {
+              const privateZcashSource = purpose === 'private-swap' && request.fromChain === 'zcash'
+              if (!privateSender && !privateZcashSource) {
                 throw new Error('Private quote needs a reviewed route.')
               }
-              assertPrivateQuoteRoute(request, account ?? null, purpose)
-              return rheaSwapService.quote(request, undefined, {
-                walletId: account!.walletId,
-                accountId: account!.accountId,
-                purpose
-              })
+              const scope = {
+                walletId: account?.walletId ?? '',
+                accountId: account?.accountId ?? '',
+                purpose,
+                ...(privateZcashSource ? { zcashFundingSource: 'shielded' as const } : {})
+              }
+              assertPrivateQuoteRoute(request, account ?? null, purpose, scope)
+              return rheaSwapService.quote(request, undefined, scope)
             })
           : message.type === 'PREPARE_RHEA_SWAP'
             ? runScopedSwap(message.quoteHandle as string, () =>
@@ -4453,6 +4474,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     if (
       (message.type === 'PREPARE_NATIVE_ZEC_INTENTS_SWAP' ||
         message.type === 'GET_NATIVE_ZEC_INTENTS_SWAP' ||
+        message.type === 'GET_NATIVE_ZEC_INTENTS_SWAP_STATUS' ||
         message.type === 'CANCEL_NATIVE_ZEC_INTENTS_SWAP') &&
       getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'extension-page'
     ) {

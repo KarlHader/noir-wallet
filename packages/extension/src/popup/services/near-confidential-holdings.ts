@@ -86,6 +86,16 @@ export function resolveNearConfidentialZecHolding(input: {
   const matches = model.confidential.assets.filter(
     holding => holding.protocolAssetId === mapping.protocolAssetId
   )
+  if (matches.length === 0) {
+    // The portfolio omits zero balances; a conflicting asset identity is not a zero balance.
+    if (model.confidential.assets.some(holding => holding.assetId === mapping.assetId)) return null
+    return Object.freeze({
+      assetId: mapping.assetId,
+      protocolAssetId: mapping.protocolAssetId,
+      availableRaw: '0',
+      amount: '0'
+    })
+  }
   if (matches.length !== 1) return null
   const holding = matches[0]!
   if (

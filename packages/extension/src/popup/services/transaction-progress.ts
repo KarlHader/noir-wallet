@@ -51,6 +51,7 @@ interface IntentsProgressInput {
   readonly originTxHash?: string
   readonly originConfirmations?: number
   readonly destinationTxHash?: string
+  readonly internalDestination?: boolean
   readonly waitsForDestinationConfirmations?: boolean
   readonly destinationConfirmations?: number | null
   readonly requiredConfirmations?: number
@@ -65,6 +66,7 @@ export function getIntentsProgressPresentation({
   originTxHash,
   originConfirmations,
   destinationTxHash,
+  internalDestination = false,
   waitsForDestinationConfirmations = false,
   destinationConfirmations,
   requiredConfirmations,
@@ -162,7 +164,9 @@ export function getIntentsProgressPresentation({
           ? 'Refund transfer'
           : actionName === 'Supply'
             ? 'Protocol settlement'
-            : 'Destination transfer',
+            : internalDestination
+              ? 'Confidential balance'
+              : 'Destination transfer',
       state: destinationState,
       statusLabel:
         status === 'REFUNDED'

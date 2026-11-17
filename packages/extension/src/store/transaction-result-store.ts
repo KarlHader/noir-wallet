@@ -50,6 +50,8 @@ interface SwapTransactionResult {
   signedOrder?: boolean
   sourceExecutionMode?: 'main' | 'private'
   rheaQuoteHandle?: string
+  nativeIntentsQuoteHandle?: string
+  nativeIntentsInternalDestination?: boolean
   router?: string
   approvalRequestIdAfterFunding?: string
   confidentialFunding?: Readonly<{
