@@ -27,11 +27,15 @@ import {
   resolveRheaSwapDestinationIdentity,
   resolveWalletQuoteReceiveTarget,
   type PreparedQuoteDepositTransfer,
+  type QuoteDepositExecutionMode,
   type WalletOwnedQuoteAsset
 } from '@/popup/services/quote-deposit-transfer-client'
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
 import type { FundingSource, Network } from '@/types'
-import type { ShieldSwapZecSourceKind } from '@/popup/services/shield-swap-zec-sources'
+import {
+  shieldSwapZecSourceParam,
+  type ShieldSwapZecSourceKind
+} from '@/popup/services/shield-swap-zec-sources'
 import type { ShieldFundingAsset } from './shield-transfer'
 import { isRheaSwapQuoteFresh } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
@@ -43,6 +47,71 @@ import {
 const ERC20_TRANSFER_ABI = parseAbi([
   'function transfer(address to, uint256 amount) returns (bool)'
 ])
+
+export function resolveSwapResultReturnPaths(input: {
+  sourceAssetId?: string | null
+  originPath: string | null
+  crossChainScopeMatches: boolean
+  crossChainSend: boolean
+  publicPrivacySend: boolean
+  privateBalanceTransfer: boolean
+  privateTransfer: boolean
+  privateFundingRequestId: string | null
+  walletId: string | null
+  accountId: string | null
+  sourceMode: QuoteDepositExecutionMode
+  shieldSelected: boolean
+  shieldSource: ShieldSwapZecSourceKind | null
+}): { crossChainOriginPath: string | null; resultReturnPath: string } {
+  const { sourceAssetId, originPath } = input
+  const crossChainOriginPath =
+    input.crossChainScopeMatches &&
+    originPath?.startsWith('/') &&
+    !originPath.startsWith('//') &&
+    !originPath.includes('\\') &&
+    !originPath.startsWith('/send') &&
+    !originPath.startsWith('/transaction-result')
+      ? originPath
+      : null
+  const sendPath = (sourceMode: 'main' | 'private') =>
+    sourceAssetId ? `/send?${new URLSearchParams({ assetId: sourceAssetId, sourceMode })}` : '/send'
+
+  let resultReturnPath: string
+  if (input.privateFundingRequestId) {
+    resultReturnPath = `/approval?requestId=${encodeURIComponent(input.privateFundingRequestId)}`
+  } else if (input.crossChainSend) {
+    resultReturnPath = crossChainOriginPath ?? sendPath('main')
+  } else if (input.publicPrivacySend) {
+    resultReturnPath = sendPath('main')
+  } else if (input.privateBalanceTransfer) {
+    const from = input.privateTransfer ? 'private' : 'public'
+    const to = input.privateTransfer ? 'public' : 'private'
+    resultReturnPath = `/transfer?${new URLSearchParams({
+      ...(sourceAssetId ? { assetId: sourceAssetId } : {}),
+      from,
+      to,
+      mode: from
+    })}`
+  } else if (input.privateTransfer) {
+    resultReturnPath = sendPath('private')
+  } else {
+    const params = new URLSearchParams({
+      balanceDomain: input.shieldSelected
+        ? 'shield'
+        : input.sourceMode === 'private'
+          ? 'private'
+          : 'public',
+      ...(input.walletId && input.accountId
+        ? { sourceWalletId: input.walletId, sourceAccountId: input.accountId }
+        : {}),
+      ...(input.shieldSelected && input.shieldSource
+        ? { shieldZecSource: shieldSwapZecSourceParam(input.shieldSource) }
+        : {})
+    })
+    resultReturnPath = `/swap?${params}`
+  }
+  return { crossChainOriginPath, resultReturnPath }
+}
 
 export function resolveSwapRecipientChainId(
   token: RheaSwapToken | null,

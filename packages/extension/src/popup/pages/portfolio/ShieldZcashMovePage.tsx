@@ -12,7 +12,7 @@ import { useNavigate } from '@/popup/provider/Router'
 import { PageHeader } from '@/popup/components/common/PageHeader'
 import { ZcashMoveAccountCard } from '@/popup/components/transaction/ZcashMoveLayout'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
-import { Send } from '@/popup/pages/transactions/Send'
+import { ZcashTransfer } from '@/popup/components/transaction/ZcashTransfer'
 import { ShieldWithdrawForm } from './ShieldWithdrawPage'
 
 type ZcashMoveDomain = 'transparent' | 'shielded' | 'confidential'
@@ -154,7 +154,7 @@ function ShieldZcashMoveContent() {
             onMoveReverse={canReverse ? () => updateDirection(destination, source) : undefined}
           />
         ) : (
-          <Send
+          <ZcashTransfer
             key={`${source}:${destination}`}
             embedded
             moveDestination={destination}

@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import {
   parseSupportedBitcoinAddress,
   type BitcoinSupportedAddressType
 } from '@/core/chains/bitcoin'
-import { formatSortAddress } from '@/lib/format'
-import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
-import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import {
   BitcoinWalletClientError,
   bitcoinWalletClient,
@@ -19,7 +14,6 @@ import type { BitcoinTransferAmount } from '@/infrastructure/chains/bitcoin'
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatTokenQuantity,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
 import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
@@ -33,30 +27,18 @@ import {
   formatBitcoinInputAddressType,
   isBitcoinBalanceKnown,
   isBitcoinSendAmountValid
-} from './bitcoin-send-display'
+} from '@/popup/pages/transactions/bitcoin-send-display'
 import { openModal } from '@/popup/provider/ModalManager'
 import {
   bitcoinAddressBalancesClient,
   type BitcoinAddressBalanceCatalogView
 } from '@/popup/services/bitcoin-address-balances-client'
-import { bitcoinAccountTypeDescription } from '@/popup/components/bitcoin/BitcoinAccountTypeSelector'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
-import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
-import {
-  SendAssetHeader,
-  SendAmountInputCard,
-  SendFormActions,
-  SendFormView,
-  SendFieldLabel,
-  SendRouteInfoCard,
-  SendRecipientAddress,
-  SendRecipientInputCard
-} from '@/popup/components/transaction/SendInputCards'
+import type { SendTransferViewState } from '@/popup/components/transaction/SendTransferView'
 import { DEFAULT_NETWORK_FEE_TIER, type NetworkFeeTier } from '@/core/transactions/domain'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
-import { estimateBitcoinSendTime } from '@/popup/services/send-time-estimate'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import {
@@ -64,9 +46,12 @@ import {
   estimateNativeTransferMaximum,
   fallbackTransferMaximum
 } from '@/popup/services/transfer-maximum'
-import { getBitcoinSendApprovalError, getBitcoinSendPrepareError } from './bitcoin-send-validation'
+import {
+  getBitcoinSendApprovalError,
+  getBitcoinSendPrepareError
+} from '@/popup/pages/transactions/bitcoin-send-validation'
 
-export interface BitcoinSendAsset {
+interface BitcoinSendAsset {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
 }
@@ -78,13 +63,11 @@ interface PreparedReview {
   readonly value: BitcoinTransferReview
 }
 
-export function BitcoinSendForm({
+export function useBitcoinSendTransfer({
   selection,
-  priceUsd,
   onSubmitted
 }: {
   readonly selection: BitcoinSendAsset
-  readonly priceUsd: string | null
   readonly onSubmitted: (submission: BitcoinTransferSubmission) => void
 }) {
   const [amount, setAmount] = useState('')
@@ -446,236 +429,89 @@ export function BitcoinSendForm({
     ? formatBaseUnitAmount((BigInt(review.amountRaw) + BigInt(feeRaw)).toString(), 8)
     : '0'
 
-  return (
-    <>
-      <SendFormView
-        domain="public"
-        availableDomains={['public']}
-        onDomainChange={() => {}}
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel="BTC amount"
-            value={amount}
-            onChange={value => {
-              if (/^\d*\.?\d*$/.test(value)) {
-                setAmount(value)
-                setSendMaximum(false)
-              }
-            }}
-            available={availableDisplay}
-            symbol="BTC"
-            priceUsd={balanceKnown ? priceUsd : null}
-            inline
-          />
-        }
-        assetSelector={
-          <SendAssetHeader
-            assetId={asset.asset.id}
-            symbol="BTC"
-            icon={asset.metadata.iconUrl}
-            networkName={formatPortfolioNetworkName(chain)}
-            nativeChain="bitcoin"
-            variant="pill"
-          />
-        }
-        balance={
-          <span title={balanceKnown ? availableDisplay : undefined}>
-            {balanceKnown ? formatTokenQuantity(availableDisplay) : '—'}
-          </span>
-        }
-        maxButton={
-          <button
-            type="button"
-            aria-label="Max"
-            aria-pressed={sendMaximum}
-            disabled={
-              !balanceKnown ||
-              BigInt(selectedAvailableRaw) <= 0n ||
-              !parsedRecipient ||
-              maximum.loading
-            }
-            onClick={() => {
-              setSendMaximum(true)
-              void maximum.request()
-            }}
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted aria-pressed:bg-primary/15 aria-pressed:text-primary disabled:opacity-40"
-          >
-            Max
-          </button>
-        }
-        recipient={
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <SendFieldLabel>Send to</SendFieldLabel>
-              <span>{formatPortfolioNetworkName(chain)}</span>
-            </div>
-            <SendRecipientInputCard
-              id="bitcoin-send-recipient"
-              value={recipient}
-              onChange={value => {
-                setRecipient(value.trim())
-                setSelectedRecipient(null)
-              }}
-              placeholder={
-                chain.chain.network.kind === 'testnet'
-                  ? 'Bitcoin testnet address'
-                  : 'Bitcoin address'
-              }
-              variant="filled"
-              hideLabel
-              onSelectRecipient={() => void handleSelectRecipient()}
-            />
-            {recipient && !parsedRecipient && (
-              <p className="mt-2 px-1 text-xs text-danger">
-                {chain.chain.network.kind === 'testnet'
-                  ? 'Enter a valid Bitcoin testnet address.'
-                  : 'Enter a valid Bitcoin address.'}
-              </p>
-            )}
-          </div>
-        }
-        footer={
-          <SendFormActions
-            disabled={!validAmount || !parsedRecipient || maximum.loading || feePreview.loading}
-            loading={preparing || maximum.loading || feePreview.loading}
-            onContinue={handleContinue}
-          />
-        }
-      >
-        <div>
-          <SendRouteInfoCard
-            fee={
-              <div className="flex min-w-0 items-center gap-1.5">
-                {feePreview.loading && (
-                  <Icon
-                    icon="lucide:loader-circle"
-                    width={14}
-                    height={14}
-                    className="animate-spin text-muted"
-                  />
-                )}
-                <NetworkFeeTierPicker
-                  chainFamily="bitcoin"
-                  tier={feeTier}
-                  amount={previewFee}
-                  symbol="BTC"
-                  layout="inline"
-                  onTierChange={nextTier => {
-                    setFeeTier(nextTier)
-                    if (sendMaximum) {
-                      setSendMaximum(false)
-                      setAmount('')
-                    }
-                  }}
-                />
-              </div>
-            }
-            time={estimateBitcoinSendTime(feeTier)}
-            extra={
-              <div className="border-t border-white/10 pt-3 text-muted">
-                {bitcoinAccountTypeDescription(bitcoinAddressType)}
-              </div>
-            }
-          />
-        </div>
+  const testnet = chain.chain.network.kind === 'testnet'
+  const input: Omit<SendTransferViewState, 'priceUsd' | 'review'> = {
+    family: 'bitcoin',
+    asset: {
+      assetId: asset.asset.id,
+      symbol: 'BTC',
+      icon: asset.metadata.iconUrl,
+      nativeChain: 'bitcoin'
+    },
+    networkName: formatPortfolioNetworkName(chain),
+    recipientPlaceholder: testnet ? 'Bitcoin testnet address' : 'Bitcoin address',
+    invalidRecipientMessage: testnet
+      ? 'Enter a valid Bitcoin testnet address.'
+      : 'Enter a valid Bitcoin address.',
+    reviewDescription:
+      'Review the Bitcoin recipient, inputs, and exact network fee before sending.',
+    feeSymbol: 'BTC',
+    totalLabel: 'Total',
+    amount,
+    recipient,
+    selectedRecipient,
+    recipientInvalid: Boolean(recipient && !parsedRecipient),
+    availableDisplay,
+    balanceKnown,
+    insufficientBalance:
+      balanceKnown &&
+      !sendMaximum &&
+      amountRaw !== null &&
+      BigInt(amountRaw) > BigInt(selectedAvailableRaw),
+    maxSelected: sendMaximum,
+    maxDisabled:
+      !balanceKnown || BigInt(selectedAvailableRaw) <= 0n || !parsedRecipient || maximum.loading,
+    feePreviewLoading: feePreview.loading,
+    previewFee,
+    continueDisabled: !validAmount || !parsedRecipient || maximum.loading || feePreview.loading,
+    continueLoading: preparing || maximum.loading || feePreview.loading,
+    approving,
+    error,
+    setInputAmount: value => {
+      if (/^\d*\.?\d*$/.test(value)) {
+        setAmount(value)
+        setSendMaximum(false)
+      }
+    },
+    setInputRecipient: value => {
+      setRecipient(value.trim())
+      setSelectedRecipient(null)
+    },
+    selectRecipient: handleSelectRecipient,
+    selectMaximum: () => {
+      setSendMaximum(true)
+      void maximum.request()
+    },
+    continueTransfer: handleContinue,
+    closeReview: handleCloseReview,
+    approveTransfer: handleApprove
+  }
 
-        {balanceKnown &&
-          !sendMaximum &&
-          amountRaw !== null &&
-          BigInt(amountRaw) > BigInt(selectedAvailableRaw) && (
-            <p role="alert" className="mt-3 text-xs text-danger">
-              Insufficient BTC balance.
-            </p>
-          )}
-        {error && (
-          <p role="alert" className="mt-3 text-xs text-danger">
-            {error}
-          </p>
-        )}
-      </SendFormView>
-
-      <Dialog
-        open={review !== null}
-        onOpenChange={open => {
-          if (!open && !approving) void handleCloseReview()
-        }}
-      >
-        <DialogContent
-          position="bottom"
-          className="flex h-dvh max-h-dvh flex-col gap-0 overflow-hidden rounded-none border-0 bg-background p-0 shadow-none"
-          showCloseButton={false}
-          aria-labelledby="bitcoin-send-review-title"
-        >
-          <DialogTitle className="sr-only" aria-hidden="true">
-            Confirm Send
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Review the Bitcoin recipient, inputs, and exact network fee before sending.
-          </DialogDescription>
-
-          {review && summary?.schema === 'bitcoin.psbt.v1' && (
-            <TransactionReviewView
-              title="Confirm Send"
-              titleId="bitcoin-send-review-title"
-              variant="figma"
-              asset={{ symbol: 'BTC', nativeChain: 'bitcoin' }}
-              amount={reviewAmount}
-              amountPrefix="-"
-              network={formatPortfolioNetworkName(chain)}
-              rows={[
-                {
-                  label: 'Recipient',
-                  content: (
-                    <SendRecipientAddress
-                      address={review.recipient}
-                      name={
-                        selectedRecipient?.address === review.recipient
-                          ? selectedRecipient.name
-                          : undefined
-                      }
-                    />
-                  )
-                },
-                { label: 'Network', content: formatPortfolioNetworkName(chain) },
-                {
-                  label: 'From',
-                  content: (
-                    <span className="font-mono text-muted" title={summary.fields.signer}>
-                      {formatSortAddress(summary.fields.signer)}
-                    </span>
-                  )
-                },
-                { label: 'Inputs', content: summary.fields.inputs.length },
-                {
-                  label: 'Network fee',
-                  content: (
-                    <NetworkFeeTierPicker
-                      chainFamily="bitcoin"
-                      tier={review.feeTier}
-                      amount={fee}
-                      symbol="BTC"
-                      onTierChange={handleReviewFeeTierChange}
-                      disabled={updatingFee || approving}
-                    />
-                  )
-                },
-                { label: 'Total', content: <AmountDisplay value={total} symbol="BTC" /> },
-                {
-                  label: 'Address type',
-                  content: formatBitcoinInputAddressType(summary.fields.inputs)
-                }
-              ]}
-              confirmLabel="Confirm"
-              confirming={approving}
-              submitting={approving}
-              preparing={updatingFee}
-              cancelDisabled={approving}
-              onCancel={() => void handleCloseReview()}
-              onConfirm={handleApprove}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
-  )
+  return {
+    input,
+    feeTier,
+    bitcoinAddressType,
+    changeFeeTier: (nextTier: NetworkFeeTier) => {
+      setFeeTier(nextTier)
+      if (sendMaximum) {
+        setSendMaximum(false)
+        setAmount('')
+      }
+    },
+    review:
+      review && summary?.schema === 'bitcoin.psbt.v1'
+        ? {
+            recipient: review.recipient,
+            sender: summary.fields.signer,
+            amount: reviewAmount,
+            fee,
+            total,
+            feeTier: review.feeTier,
+            inputCount: summary.fields.inputs.length,
+            inputAddressType: formatBitcoinInputAddressType(summary.fields.inputs)
+          }
+        : null,
+    updatingFee,
+    changeReviewFeeTier: handleReviewFeeTierChange
+  }
 }

@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
-import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
-import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { ChainIcon } from '@/popup/components/common/ChainIcon'
-import { InlineError } from '@/popup/components/common/InlineError'
+import { getAccountDisplayName } from '@/lib/format'
 import { formatSendFiatValue } from '@/popup/components/transaction/send-input-model'
-import { resolveChainIconAlias } from '@/lib/chain-icon'
-import nearLogo from '@/images/figma-near-confidential.svg'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
-import { ChainSelector } from '@/popup/components/common/ChainSelector'
 import {
   EvmWalletClientError,
   evmWalletClient,
@@ -19,31 +11,14 @@ import {
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatTokenQuantity,
   parseDisplayUnitAmount
 } from '@/lib/number-format'
-import { formatPortfolioNetworkName } from '@/popup/components/portfolio/portfolio-format'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
 import { openModal } from '@/popup/provider/ModalManager'
 import { useNavigate } from '@/popup/provider/Router'
 import { RecipientSelector } from '@/popup/components/transaction/RecipientSelector'
-import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
-import {
-  SendAmountInputCard,
-  SendRouteInfoCard,
-  SendFormView,
-  SendFormActions,
-  SendFieldLabel,
-  SendAssetHeader,
-  SendRecipientAddress,
-  SendRecipientInputCard
-} from '@/popup/components/transaction/SendInputCards'
 import { DEFAULT_NETWORK_FEE_TIER } from '@/core/transactions/domain'
-import {
-  areEvmFeeSelectionsEqual,
-  formatEvmWeiAsGwei,
-  type EvmFeeSelection
-} from '@/infrastructure/chains/evm'
+import { areEvmFeeSelectionsEqual, type EvmFeeSelection } from '@/infrastructure/chains/evm'
 import { useTransferFeePreview } from '@/popup/hooks/useTransferFeePreview'
 import { useEvmConfirmationEstimate } from '@/popup/hooks/useEvmConfirmationEstimate'
 import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
@@ -62,10 +37,8 @@ import {
   buildPublicPrivateEvmSendPath,
   resolveEvmNativeMaximumAmount,
   type EvmSendSourceMode
-} from './evm-send-validation'
+} from '@/popup/pages/transactions/evm-send-validation'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
-import { ExecutionAccountBadge } from '@/popup/components/account/ExecutionAccountSelector'
-import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import {
   recordSendApprovalFailure,
   recordSendResult,
@@ -132,7 +105,7 @@ interface PrivateSendPreview {
   readonly estimatedReceive: string
 }
 
-export function EvmSendForm({
+export function useEvmSendTransfer({
   active,
   walletMode,
   onSelectAsset,
@@ -1118,521 +1091,119 @@ export function EvmSendForm({
     setError(null)
   }
 
-  return (
-    <>
-      <SendFormView
-        domain="public"
-        disabled={preparing || approving || updatingFee}
-        availableDomains={shieldSourceAvailable ? ['public', 'shield'] : ['public']}
-        onDomainChange={domain => {
-          if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)
-        }}
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel={`${asset.metadata.symbol} amount`}
-            value={amount}
-            onChange={value => {
-              if (/^\d*\.?\d*$/.test(value)) {
-                invalidateMaximum()
-                setAmount(value)
-              }
-            }}
-            available={transferAvailability.display}
-            symbol={asset.metadata.symbol}
-            priceUsd={priceUsd}
-            inline
-          />
-        }
-        assetSelector={
-          <SendAssetHeader
-            assetId={asset.asset.id}
-            symbol={asset.metadata.symbol}
-            icon={asset.metadata.iconUrl}
-            networkName={chain.chain.displayName}
-            blockchain={resolveChainIconAlias(
-              chain.chain.family,
-              chain.chain.displayName,
-              chain.chain.id
-            )}
-            onSelectAsset={() => onSelectAsset({ recipient, amount: maxSelected ? '' : amount })}
-            variant="pill"
-          />
-        }
-        balance={
-          <span
-            data-testid="send-available-balance"
-            className="min-w-0 truncate"
-            title={transferAvailability.display}
-          >
-            {domainAvailableRaw === null ? '—' : formatTokenQuantity(transferAvailability.display)}
-          </span>
-        }
-        maxButton={
-          <button
-            type="button"
-            aria-label="Max"
-            aria-pressed={maxHighlighted}
-            disabled={
-              route === 'pending' ||
-              !sourceAddress ||
-              BigInt(availableRaw) <= 0n ||
-              (asset.asset.kind === 'native' && !validRecipient) ||
-              maximum.loading
-            }
-            onClick={
-              asset.asset.kind === 'token'
-                ? () => {
-                    setError(null)
-                    setMaxSelected(true)
-                    setAmount(transferAvailability.display)
-                  }
-                : handleMaximum
-            }
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted aria-pressed:bg-primary/15 aria-pressed:text-primary disabled:opacity-40"
-          >
-            Max
-          </button>
-        }
-        recipient={
-          <div>
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <SendFieldLabel>Send to</SendFieldLabel>
-              {!sendPrivately && (destinationNetworks.length > 1 || networkPickerOpen) ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNetworkPickerOpen(true)
-                      onOpenDestinationNetworks()
-                    }}
-                    className="inline-flex items-center gap-1.5 text-foreground hover:text-primary"
-                    aria-label={`Select destination network, ${chain.chain.displayName}`}
-                  >
-                    <ChainIcon
-                      chain={resolveChainIconAlias(
-                        chain.chain.family,
-                        chain.chain.displayName,
-                        chain.chain.id
-                      )}
-                      width={16}
-                      height={16}
-                      className="rounded-[4px]"
-                      showTooltip={false}
-                    />
-                    {chain.chain.displayName}
-                    <Icon icon="lucide:chevron-down" width={13} height={13} />
-                  </button>
-                  <ChainSelector
-                    open={networkPickerOpen}
-                    onOpenChange={setNetworkPickerOpen}
-                    selectedId={chain.chain.id}
-                    enabledFirst
-                    label={`Networks for ${asset.metadata.symbol}`}
-                    options={destinationNetworkOptions}
-                    onSelect={destinationChainId =>
-                      onSelectDestinationNetwork(destinationChainId, {
-                        recipient,
-                        amount: maxSelected ? '' : amount
-                      })
-                    }
-                  />
-                </>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 text-foreground">
-                  <ChainIcon
-                    chain={resolveChainIconAlias(
-                      chain.chain.family,
-                      chain.chain.displayName,
-                      chain.chain.id
-                    )}
-                    width={16}
-                    height={16}
-                    className="rounded-[4px]"
-                    showTooltip={false}
-                  />
-                  {chain.chain.displayName}
-                </span>
-              )}
-            </div>
-            <SendRecipientInputCard
-              id="evm-send-recipient"
-              value={recipient}
-              onChange={value => {
-                invalidateMaximum()
-                if (maxSelected) setAmount('')
-                setRecipient(value.trim())
-                setSelectedRecipient(null)
-              }}
-              placeholder="Enter address"
-              variant="filled"
-              hideLabel
-              onSelectRecipient={() => void handleSelectRecipient()}
-            />
-            {recipient && !validRecipient && (
-              <div className="mt-2 flex items-start justify-between gap-3 px-1 text-xs text-danger">
-                <p className="min-w-0 flex-1">
-                  {recipientPolicyError ?? 'Enter a valid non-zero EVM address.'}
-                </p>
-                {canMoveRecipient && recipientPolicyError && (
-                  <button
-                    type="button"
-                    onClick={() => void handleMoveRecipient()}
-                    className="inline-flex shrink-0 items-center gap-1 font-medium text-primary"
-                  >
-                    <Icon
-                      icon="lucide:arrow-right-left"
-                      width={13}
-                      height={13}
-                      aria-hidden="true"
-                    />
-                    Move
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        }
-        footer={
-          <SendFormActions
-            privacy={
-              sourceMode === 'main' &&
-              networkMode === 'mainnet' &&
-              support.support !== 'unsupported'
-                ? {
-                    checked: sendPrivately,
-                    onChange: () => changePrivacyRoute(sendPrivately ? null : privacyScope)
-                  }
-                : undefined
-            }
-            disabled={
-              !validAmount ||
-              !validRecipient ||
-              maximumPending ||
-              !sourceAddress ||
-              route === 'pending' ||
-              (sendPrivately && !privatePreviewReady) ||
-              tokenFeeBalanceError !== null ||
-              (route === 'onchain' && feePreview.loading)
-            }
-            loading={
-              preparing ||
-              (maxSelected && maximum.loading) ||
-              (route === 'onchain' && feePreview.loading) ||
-              (privatePreviewKey !== null && privatePreviewLoading)
-            }
-            onContinue={handleContinue}
-          />
-        }
-      >
-        {sendPrivately && (
-          <SendRouteInfoCard
-            provider={
-              <span className="inline-flex items-center gap-2">
-                <img src={nearLogo} alt="" className="size-5 rounded" />
-                NEAR Confidential Intents
-                {privatePreviewLoading && (
-                  <Icon
-                    icon="lucide:loader-circle"
-                    width={14}
-                    height={14}
-                    className="animate-spin text-muted"
-                  />
-                )}
-              </span>
-            }
-            fee={
-              privatePreviewReady && privatePreview ? (
-                privateRouteCostFiat ? (
-                  `~${privateRouteCostFiat}`
-                ) : privatePreview.routeCost === null ? (
-                  '—'
-                ) : (
-                  <AmountDisplay
-                    value={privatePreview.routeCost}
-                    symbol={asset.metadata.symbol}
-                    profile="fee"
-                  />
-                )
-              ) : (
-                '—'
-              )
-            }
-            extra={
-              privatePreviewReady && privatePreview ? (
-                <div className="flex justify-between gap-3 border-t border-white/10 pt-3">
-                  <span className="text-muted">Est. receive</span>
-                  <AmountDisplay
-                    value={privatePreview.estimatedReceive}
-                    symbol={asset.metadata.symbol}
-                  />
-                </div>
-              ) : undefined
-            }
-          />
-        )}
-        {sendPrivately && privatePreviewError && (
-          <InlineError
-            message={privatePreviewError}
-            onRetry={() => setPrivatePreviewRetry(current => current + 1)}
-            className="px-1"
-          />
-        )}
+  const setInputAmount = (value: string) => {
+    if (!/^\d*\.?\d*$/.test(value)) return
+    invalidateMaximum()
+    setAmount(value)
+  }
+  const setInputRecipient = (value: string) => {
+    invalidateMaximum()
+    if (maxSelected) setAmount('')
+    setRecipient(value.trim())
+    setSelectedRecipient(null)
+  }
+  const selectMaximum = () => {
+    if (asset.asset.kind !== 'token') {
+      handleMaximum()
+      return
+    }
+    setError(null)
+    setMaxSelected(true)
+    setAmount(transferAvailability.display)
+  }
+  const selectShield = (domain: string) => {
+    if (domain === 'shield') onSelectShield(validRecipient ? recipient : '', amount)
+  }
+  const selectAsset = () => onSelectAsset({ recipient, amount: maxSelected ? '' : amount })
+  const openDestinationNetworks = () => {
+    setNetworkPickerOpen(true)
+    onOpenDestinationNetworks()
+  }
+  const selectDestinationNetwork = (destinationChainId: string) =>
+    onSelectDestinationNetwork(destinationChainId, {
+      recipient,
+      amount: maxSelected ? '' : amount
+    })
+  const togglePrivacyRoute = () => changePrivacyRoute(sendPrivately ? null : privacyScope)
+  const retryPrivatePreview = () => setPrivatePreviewRetry(current => current + 1)
 
-        {route === 'onchain' && (
-          <SendRouteInfoCard
-            fee={
-              <NetworkFeeTierPicker
-                chainFamily="evm"
-                tier={feeSelection.kind === 'tier' ? feeSelection.tier : 'standard'}
-                selection={feeSelection}
-                customDefaults={feePreview.details}
-                feeModel={
-                  feePreview.details?.transactionType ??
-                  (feeSelection.kind === 'legacy' ? 'legacy' : 'eip1559')
-                }
-                amount={previewFee}
-                symbol={nativeSymbol}
-                layout="inline"
-                disabled={feePreview.loading}
-                onTierChange={tier => handleFormFeeSelectionChange({ kind: 'tier', tier })}
-                onSelectionChange={handleFormFeeSelectionChange}
-              />
-            }
-            time={
-              confirmationTime === '—' ? undefined : (
-                <span title="Approximate first confirmation; actual time depends on network conditions.">
-                  {confirmationTime}
-                </span>
-              )
-            }
-          />
-        )}
-
-        {amountRaw !== null && BigInt(amountRaw) > BigInt(availableRaw) && (
-          <p role="alert" className="mt-3 text-xs text-danger">
-            Insufficient {asset.metadata.symbol} balance.
-          </p>
-        )}
-        {displayedError && (
-          <InlineError
-            message={displayedError}
-            onRetry={maximumError ? handleMaximum : undefined}
-            className="mt-3 px-1"
-          />
-        )}
-        {route === 'pending' &&
-          (support.loading ? (
-            <p role="status" className="px-1 text-xs text-muted">
-              Checking Confidential availability…
-            </p>
-          ) : (
-            <InlineError
-              message={
-                support.support === 'unsupported'
-                  ? 'Confidential transfers are unavailable for this asset.'
-                  : 'Unable to check Confidential availability.'
-              }
-              onRetry={support.retry}
-              className="px-1"
-            />
-          ))}
-      </SendFormView>
-
-      <Dialog
-        open={active && review !== null}
-        onOpenChange={open => {
-          if (!open && !approving) void handleCloseReview()
-        }}
-      >
-        <DialogContent
-          position="bottom"
-          data-wallet-mode={walletMode}
-          className="flex h-dvh max-h-dvh flex-col gap-0 overflow-hidden rounded-none border-0 bg-background p-0 shadow-none"
-          showCloseButton={false}
-          aria-labelledby="evm-send-review-title"
-        >
-          <DialogTitle className="sr-only" aria-hidden="true">
-            Review Send
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Review the asset, recipient, and maximum network fee before sending.
-          </DialogDescription>
-
-          {review && summary?.schema === 'evm.transaction.v1' && (
-            <TransactionReviewView
-              title="Confirm Send"
-              titleId="evm-send-review-title"
-              variant="figma"
-              asset={{
-                assetId: asset.asset.id,
-                symbol: asset.metadata.symbol,
-                icon: asset.metadata.iconUrl
-              }}
-              amount={review.amount}
-              amountPrefix="-"
-              fiatValue={reviewFiat}
-              network={formatPortfolioNetworkName(chain)}
-              notice={
-                review.privacyWarning || (summary.review.level === 'caution' && !bundledAsset) ? (
-                  <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning-surface px-3 py-2.5 text-xs leading-5 text-warning">
-                    <Icon
-                      icon="lucide:triangle-alert"
-                      width={15}
-                      height={15}
-                      className="mt-0.5 shrink-0"
-                    />
-                    <span>
-                      {review.privacyWarning}
-                      {summary.review.level === 'caution' && !bundledAsset && (
-                        <>
-                          {review.privacyWarning ? ' ' : ''}This transfer calls a custom Token
-                          contract you added. Verify the network, Token, and recipient.
-                        </>
-                      )}
-                    </span>
-                  </div>
-                ) : undefined
-              }
-              rows={[
-                {
-                  label: 'Send from',
-                  content: (
-                    <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-                      <ExecutionAccountBadge mode={review.sourceMode} />
-                      <span
-                        className="min-w-0 truncate font-mono text-sm"
-                        title={`${accountDisplayName}: ${summary.fields.from}`}
-                      >
-                        {formatSortAddress(summary.fields.from)}
-                      </span>
-                    </span>
-                  )
-                },
-                {
-                  label: 'Recipient',
-                  content: (
-                    <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
-                      {reviewRecipientRole !== 'unknown' && (
-                        <ExecutionAccountBadge
-                          mode={reviewRecipientRole === 'confidential' ? 'private' : 'main'}
-                        />
-                      )}
-                      <SendRecipientAddress
-                        address={review.recipient}
-                        name={recipientContactName}
-                      />
-                    </span>
-                  )
-                },
-                {
-                  label: 'Network',
-                  content: (
-                    <span className="inline-flex items-center justify-end gap-1.5">
-                      <ChainIcon
-                        chain={resolveChainIconAlias(
-                          chain.chain.family,
-                          chain.chain.displayName,
-                          chain.chain.id
-                        )}
-                        className="size-4"
-                      />
-                      {formatPortfolioNetworkName(chain)}
-                    </span>
-                  )
-                },
-                {
-                  label: 'Network fee',
-                  content: (
-                    <NetworkFeeTierPicker
-                      chainFamily="evm"
-                      tier={
-                        review.feeSelection.kind === 'tier' ? review.feeSelection.tier : 'standard'
-                      }
-                      selection={review.feeSelection}
-                      feeModel={summary.fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'}
-                      customDefaults={{
-                        gasLimit: summary.fields.gasLimit,
-                        maxFeePerGasWei: summary.fields.maxFeePerGasWei ?? '0',
-                        maxPriorityFeePerGasWei: summary.fields.maxPriorityFeePerGasWei ?? '0',
-                        gasPriceWei: summary.fields.gasPriceWei
-                      }}
-                      amount={fee}
-                      symbol={nativeSymbol}
-                      onTierChange={tier => handleReviewFeeSelectionChange({ kind: 'tier', tier })}
-                      onSelectionChange={handleReviewFeeSelectionChange}
-                      disabled={updatingFee || approving}
-                      details={
-                        <div className="space-y-2 border-t border-border/60 pt-3 text-xs">
-                          <div className="flex justify-between gap-3">
-                            <span className="text-muted">Gas limit</span>
-                            <span>{summary.fields.gasLimit}</span>
-                          </div>
-                          {summary.fields.transactionType === 'legacy' ? (
-                            <div className="flex justify-between gap-3">
-                              <span className="text-muted">Gas price</span>
-                              <AmountDisplay
-                                value={formatEvmWeiAsGwei(summary.fields.gasPriceWei ?? '0')}
-                                symbol="GWEI"
-                                profile="fee"
-                              />
-                            </div>
-                          ) : (
-                            <>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-muted">Max fee per gas</span>
-                                <AmountDisplay
-                                  value={formatEvmWeiAsGwei(summary.fields.maxFeePerGasWei ?? '0')}
-                                  symbol="GWEI"
-                                  profile="fee"
-                                />
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-muted">Priority fee per gas</span>
-                                <AmountDisplay
-                                  value={formatEvmWeiAsGwei(
-                                    summary.fields.maxPriorityFeePerGasWei ?? '0'
-                                  )}
-                                  symbol="GWEI"
-                                  profile="fee"
-                                />
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      }
-                    />
-                  )
-                },
-                {
-                  label: 'Est. time',
-                  content: (
-                    <span title="Estimated first confirmation based on recent blocks.">
-                      {confirmationTime}
-                    </span>
-                  )
-                },
-                ...(maximumTotal
-                  ? [
-                      {
-                        label: 'Maximum total',
-                        content: <AmountDisplay value={maximumTotal} symbol={nativeSymbol} />
-                      }
-                    ]
-                  : [])
-              ]}
-              confirmLabel={review.privacyWarning ? 'Send anyway' : 'Confirm'}
-              confirming={approving}
-              submitting={approving}
-              preparing={updatingFee}
-              confirmDisabled={review.intentKey !== intentKey}
-              error={error ? <InlineError message={error} className="mt-3" /> : undefined}
-              cancelDisabled={approving}
-              onCancel={() => void handleCloseReview()}
-              onConfirm={handleApprove}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
-  )
+  return {
+    active,
+    walletMode,
+    destinationNetworks,
+    priceUsd,
+    sourceMode,
+    feeSelection,
+    amount,
+    recipient,
+    error,
+    preparing,
+    approving,
+    updatingFee,
+    review,
+    networkPickerOpen,
+    setNetworkPickerOpen,
+    asset,
+    chain,
+    networkMode,
+    shieldSourceAvailable,
+    accountDisplayName,
+    bundledAsset,
+    nativeSymbol,
+    domainAvailableRaw,
+    availableRaw,
+    tokenFeeBalanceError,
+    sourceAddress,
+    destinationNetworkOptions,
+    privacyScope,
+    sendPrivately,
+    route,
+    support,
+    reviewRecipientRole,
+    canMoveRecipient,
+    recipientContactName,
+    validRecipient,
+    recipientPolicyError,
+    intentKey,
+    amountRaw,
+    maximum,
+    maxSelected,
+    maxHighlighted,
+    transferAvailability,
+    maximumPending,
+    privatePreview,
+    privatePreviewReady,
+    privatePreviewLoading,
+    privatePreviewError,
+    privatePreviewKey,
+    feePreview,
+    previewFee,
+    confirmationTime,
+    displayedError,
+    maximumError,
+    validAmount,
+    handleSelectRecipient,
+    handleMoveRecipient,
+    handleMaximum,
+    handleFormFeeSelectionChange,
+    handleContinue,
+    handleCloseReview,
+    handleReviewFeeSelectionChange,
+    handleApprove,
+    summary,
+    fee,
+    maximumTotal,
+    reviewFiat,
+    privateRouteCostFiat,
+    setInputAmount,
+    setInputRecipient,
+    selectMaximum,
+    selectShield,
+    selectAsset,
+    openDestinationNetworks,
+    selectDestinationNetwork,
+    togglePrivacyRoute,
+    retryPrivatePreview
+  }
 }
+export type EvmSendTransferState = ReturnType<typeof useEvmSendTransfer>
