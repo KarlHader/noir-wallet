@@ -832,7 +832,8 @@ function SendAssetFlow({
       : initialPrices
   const zcashEnabled =
     !contextChanging &&
-    (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ?? true)
+    (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
+      Boolean(currentAccount?.addresses.transparent || currentAccount?.addresses.shielded))
   const confidentialEnabled =
     getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
   const availableShieldProviders: ShieldProvider[] = [
