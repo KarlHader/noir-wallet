@@ -65,6 +65,10 @@ export type AccountNetworksRuntimeMessenger = (
   message: Readonly<Record<string, unknown>>
 ) => Promise<unknown>
 
+interface AccountNetworksCatalogOptions {
+  readonly deriveMissingAddresses?: boolean
+}
+
 export class AccountNetworksClientError extends Error {
   constructor(
     readonly code: 'invalid-response' | 'unavailable',
@@ -385,8 +389,13 @@ export function createAccountNetworksClient(
   chains: AddressGatedChainRegistry
 ) {
   return Object.freeze({
-    getCatalog: async (): Promise<AccountNetworksCatalogView | null> => {
-      const response = await sendMessage({ type: 'GET_ACCOUNT_NETWORKS' })
+    getCatalog: async ({
+      deriveMissingAddresses
+    }: AccountNetworksCatalogOptions = {}): Promise<AccountNetworksCatalogView | null> => {
+      const response = await sendMessage({
+        type: 'GET_ACCOUNT_NETWORKS',
+        ...(deriveMissingAddresses === undefined ? {} : { deriveMissingAddresses })
+      })
       return parseCatalog(response, chains)
     }
   })
@@ -450,7 +459,7 @@ export const accountNetworksClient = Object.freeze({
       ? cachedCatalog.value
       : null
   },
-  getCatalog: async (scope?: string) => {
+  getCatalog: async (options: AccountNetworksCatalogOptions & { readonly scope?: string } = {}) => {
     observeCatalogInvalidation()
     const revision = catalogRevision
     const registryKey = JSON.stringify(getActiveChainEndpointSettings())
@@ -461,9 +470,10 @@ export const accountNetworksClient = Object.freeze({
       )
       productionRegistryKey = registryKey
     }
-    const result = await productionClient.getCatalog()
+    const result = await productionClient.getCatalog(options)
+    const { scope, deriveMissingAddresses } = options
     const active = result?.accounts.find(account => account.active)
-    if (scope && revision === catalogRevision) {
+    if (scope && deriveMissingAddresses !== false && revision === catalogRevision) {
       cachedCatalog =
         result && active && scope === `${DEFAULT_NETWORK}:${active.walletId}:${active.accountId}`
           ? { scope, registryKey, value: result }

@@ -29,7 +29,7 @@ export function useActiveAccountNetworks() {
     setLoading(true)
     setError(false)
     try {
-      const result = await accountNetworksClient.getCatalog(scope)
+      const result = await accountNetworksClient.getCatalog({ scope })
       if (request !== sequence.current) return
       const active = result?.accounts.find(account => account.active)
       if (

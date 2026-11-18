@@ -162,7 +162,7 @@ export function AccountList() {
     const request = ++loadRequest.current
     setNetworksLoading(true)
     try {
-      const nextCatalog = await accountNetworksClient.getCatalog()
+      const nextCatalog = await accountNetworksClient.getCatalog({ deriveMissingAddresses: false })
       if (request !== loadRequest.current) return
       setNetworkCatalog(nextCatalog)
       setCatalogError(false)
@@ -293,12 +293,10 @@ export function AccountList() {
 
   const handleWalletRename = async (walletId: string, name: string) => {
     await nativeHardwareWalletClient.renameWallet(walletId, name)
-    await loadWallets()
   }
 
   const handleAccountRename = async (walletId: string, accountId: string, name: string) => {
     await zcashWalletRuntimeClient.renameAccount(walletId, accountId, name)
-    await loadWallets()
   }
 
   const handleNativeWalletRemove = async (account: AccountNetworksView) => {

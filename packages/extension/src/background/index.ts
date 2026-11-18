@@ -4515,7 +4515,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'GET_ACCOUNT_NETWORKS') {
     void accountNetworksCoordinator
-      .readCatalog()
+      .readCatalog({ deriveMissingAddresses: message.deriveMissingAddresses })
       .then(result => sendResponse({ result }))
       .catch(error => {
         console.warn(
