@@ -7,6 +7,7 @@ import type {
   TransactionSegmentEvidence,
   TransactionSegmentTarget
 } from '@/core/transactions/domain'
+import { hasDestinationSettlementEvidence } from '@/core/transactions/domain'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
 import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { parseAssetId } from '@/core/chains/registry'
@@ -787,6 +788,7 @@ export function getPendingEvmActivityOrigin(
     item.failureCode === undefined &&
     item.snapshot?.direction !== 'incoming' &&
     item.snapshot?.evm !== undefined &&
+    !hasDestinationSettlementEvidence(item.segments) &&
     segment !== undefined &&
     segment.status === 'broadcast' &&
     !segment.reconfirming &&

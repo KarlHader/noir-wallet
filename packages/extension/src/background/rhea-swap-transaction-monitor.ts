@@ -58,6 +58,7 @@ export interface RheaSwapTransactionMonitorOptions {
   readonly refreshPortfolio?: (request: RheaSwapPortfolioRefreshRequest) => Promise<void>
   readonly revealDestinationAsset?: (assetId: string) => Promise<void>
   readonly prepareZcashDestinationCatchUp?: (scope: TransactionAccountScope) => Promise<void>
+  readonly recheckEvmOrigin?: () => Promise<void>
   readonly notifyStatus?: (quoteHandle: string, status: SwapStatus) => void
   readonly loadZcashAccountScopes?: () => readonly AccountScope[]
   readonly loadZcashTransactions?: (accountKey: string) => Promise<readonly Transaction[]>
@@ -707,10 +708,27 @@ export class RheaSwapTransactionMonitor {
       await this.applyGraphSegment(graph.root.scope, graph.root.id, 'relay', 'final', {
         externalReference: binding.quoteHandle
       })
-      await this.applyGraphSegment(graph.root.scope, graph.root.id, 'destination', 'final', {
-        externalReference: binding.executionId,
-        ...(orderStatus.destinationHash ? { transactionHash: orderStatus.destinationHash } : {})
-      })
+      const destinationApplied = await this.applyGraphSegment(
+        graph.root.scope,
+        graph.root.id,
+        'destination',
+        'final',
+        {
+          externalReference: binding.executionId,
+          ...(orderStatus.destinationHash ? { transactionHash: orderStatus.destinationHash } : {})
+        }
+      )
+      if (
+        destinationApplied &&
+        origins.some(
+          origin =>
+            origin.target.kind === 'onchain' &&
+            origin.target.chainId.startsWith('eip155:') &&
+            (origin.status === 'broadcast' || origin.status === 'confirming')
+        )
+      ) {
+        void Promise.resolve(this.options.recheckEvmOrigin?.()).catch(() => {})
+      }
       if (binding.userAction !== 'transfer')
         await this.revealDestinationAsset(binding.destination.assetId)
       await this.refreshPortfolio(graph.root.scope, [

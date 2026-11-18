@@ -516,6 +516,9 @@ const rheaSwapService = DEFAULT_NETWORK === 'mainnet' ? createBackgroundRheaSwap
 const rheaSwapTransactionMonitor = rheaSwapService
   ? new RheaSwapTransactionMonitor(rheaSwapService, {
       loadZcashAccountScopes: getZcashAccountScopes,
+      recheckEvmOrigin: async () => {
+        await evmTransactionMonitor?.init()
+      },
       revealDestinationAsset: revealSettledSwapDestinationAsset,
       prepareZcashDestinationCatchUp: scope =>
         prepareRheaSwapZcashDestinationCatchUp(scope, {

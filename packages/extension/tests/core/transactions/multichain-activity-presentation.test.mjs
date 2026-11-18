@@ -574,6 +574,46 @@ test.describe('Multichain Activity presentation', () => {
     }
     expect(canCancelEvmActivity(processing, ['eip155:1'])).toBe(true)
     expect(canSpeedUpEvmActivity(processing, ['eip155:1'], 100)).toBe(true)
+    const completedDestination = {
+      ...processing,
+      status: 'confirming',
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        { role: 'destination', status: 'final', target: { kind: 'onchain', chainId: 'eip155:56' } }
+      ]
+    }
+    expect(canCancelEvmActivity(completedDestination, ['eip155:1'])).toBe(false)
+    expect(canSpeedUpEvmActivity(completedDestination, ['eip155:1'], 100)).toBe(false)
+    const includedDestination = {
+      ...completedDestination,
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        {
+          role: 'destination',
+          status: 'confirming',
+          target: { kind: 'onchain', chainId: 'eip155:56' },
+          evidence: { transactionHash: `0x${'d'.repeat(64)}`, blockHeight: 0 }
+        }
+      ]
+    }
+    expect(canCancelEvmActivity(includedDestination, ['eip155:1'])).toBe(false)
+    expect(canSpeedUpEvmActivity(includedDestination, ['eip155:1'], 100)).toBe(false)
+    const pendingDestination = {
+      ...includedDestination,
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        {
+          ...includedDestination.segments[2],
+          status: 'broadcast',
+          evidence: { transactionHash: `0x${'d'.repeat(64)}` }
+        }
+      ]
+    }
+    expect(canCancelEvmActivity(pendingDestination, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(pendingDestination, ['eip155:1'], 100)).toBe(true)
     for (const evidence of [
       { blockHeight: 0 },
       { blockHash: `0x${'c'.repeat(64)}` },

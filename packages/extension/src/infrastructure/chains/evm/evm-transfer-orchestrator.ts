@@ -12,6 +12,7 @@ import {
   type SigningResult
 } from '@/core/keyring/ports'
 import {
+  hasDestinationSettlementEvidence,
   parseTransactionEventId,
   parseTransactionGraph,
   parseTransactionId,
@@ -303,7 +304,8 @@ export class EvmTransferOrchestrator {
     const original = await this.repository.get(scope, originalTransactionId)
     if (
       !original ||
-      (original.root.status !== 'broadcast' && original.root.status !== 'confirming')
+      (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+      hasDestinationSettlementEvidence(original.segments)
     ) {
       throw new Error('Only a pending EVM transaction can be cancelled')
     }
@@ -407,6 +409,7 @@ export class EvmTransferOrchestrator {
     if (
       !original ||
       original.root.kind === 'cancel' ||
+      hasDestinationSettlementEvidence(original.segments) ||
       (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
       (segment?.status !== 'broadcast' && segment?.status !== 'confirming') ||
       !transactionHash ||
@@ -1321,6 +1324,7 @@ export class EvmTransferOrchestrator {
         !original ||
         !originalHash ||
         (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+        hasDestinationSettlementEvidence(original.segments) ||
         (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
         origin.evidence?.replacementTransactionHash !== undefined
       ) {
@@ -1355,6 +1359,7 @@ export class EvmTransferOrchestrator {
         !original ||
         !originalHash ||
         (original.root.status !== 'broadcast' && original.root.status !== 'confirming') ||
+        hasDestinationSettlementEvidence(original.segments) ||
         (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
         origin.evidence?.replacementTransactionHash !== undefined ||
         (original.root.intent?.protocol !== undefined &&

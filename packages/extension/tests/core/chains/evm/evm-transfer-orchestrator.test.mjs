@@ -20,6 +20,7 @@ import {
 } from '../../../../src/infrastructure/chains/evm/index.ts'
 import { InMemoryTransactionRepository } from '../../../../src/infrastructure/persistence/repositories/index.ts'
 import { reportBackgroundSendBroadcast } from '../../../../src/background/analytics/send-broadcast.ts'
+import { RheaSwapTransactionMonitor } from '../../../../src/background/rhea-swap-transaction-monitor.ts'
 
 const chainId = parseChainId('eip155:1').id
 const chains = createEvmBitcoinChainRegistry('mainnet')
@@ -853,6 +854,86 @@ test('binds a RHEA ERC-20 swap amount to its EVM contract-call review', async ()
     },
     signing: { payloadFingerprint: prepared.signing.payloadFingerprint }
   })
+})
+
+test('completed RHEA destination rechecks the EVM origin and blocks replacement reviews', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const prepared = await testHarness.orchestrator.prepare({
+    chainAccount: account,
+    intent: { assetId: 'eip155:1/slip44:60', recipient, amountRaw: '123' },
+    rheaSwapBinding: {
+      ...rheaSwapBinding(),
+      origin: {
+        ...rheaSwapBinding().origin,
+        assetId: 'eip155:1/slip44:60',
+        protocolAssetId: 'native'
+      }
+    }
+  })
+  const submitted = await testHarness.orchestrator.approve({
+    scope,
+    transactionId: prepared.graph.root.id,
+    payloadFingerprint: prepared.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+  const cancellationReview = await testHarness.orchestrator.prepareCancel({
+    chainAccount: account,
+    originalTransactionId: submitted.graph.root.id
+  })
+  let rechecks = 0
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status: 'completed', destinationHash: `0x${'b'.repeat(64)}` }
+      },
+      async retireReportedSubmission() {}
+    },
+    {
+      recheckEvmOrigin: async () => {
+        rechecks += 1
+      },
+      notifyStatus: () => {}
+    }
+  )
+  monitor.repository = testHarness.repository
+
+  expect(await monitor.checkGraph(submitted.graph)).toBe(true)
+  const completed = await testHarness.repository.get(scope, submitted.graph.root.id)
+  expect(completed.root.status).toBe('confirming')
+  expect(completed.segments.find(segment => segment.role === 'origin')).toMatchObject({
+    status: 'broadcast',
+    evidence: { transactionHash }
+  })
+  expect(completed.segments.find(segment => segment.role === 'destination').status).toBe('final')
+  expect(rechecks).toBe(1)
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: cancellationReview.graph.root.id,
+      payloadFingerprint: cancellationReview.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+  await expect(
+    testHarness.orchestrator.prepareCancel({
+      chainAccount: account,
+      originalTransactionId: submitted.graph.root.id
+    })
+  ).rejects.toThrow(/pending EVM transaction/i)
+  await expect(
+    testHarness.orchestrator.prepareSpeedUp({
+      chainAccount: account,
+      originalTransactionId: submitted.graph.root.id
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
 })
 
 test('cancels only awaiting approvals from the invalidated Account scope', async () => {

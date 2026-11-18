@@ -34,6 +34,19 @@ export function isTerminalTransactionStatus(
   return status === 'final' || status === 'failed'
 }
 
+export function hasDestinationSettlementEvidence(
+  segments: readonly Pick<TransactionSegment, 'role' | 'status' | 'evidence'>[]
+): boolean {
+  return segments.some(
+    segment =>
+      segment.role === 'destination' &&
+      (segment.status === 'final' ||
+        segment.evidence?.blockHash !== undefined ||
+        segment.evidence?.blockHeight !== undefined ||
+        (segment.evidence?.confirmations ?? 0) > 0)
+  )
+}
+
 export function canTransitionTransactionStatus(
   current: TransactionLifecycleStatus,
   next: TransactionLifecycleStatus,

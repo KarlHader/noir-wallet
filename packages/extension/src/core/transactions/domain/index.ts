@@ -12,6 +12,7 @@ export {
   applyTransactionGraphEvent,
   canTransitionTransactionStatus,
   deriveTransactionRootStatus,
+  hasDestinationSettlementEvidence,
   isTerminalTransactionStatus,
   reconcileTransactionRoot,
   validateTransactionGraph
