@@ -1,10 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react'
 import type { RheaSwapQuoteView, RheaSwapReviewView } from '@/core/services/rhea-swap'
-import {
-  getRheaSwapQuoteDeadline,
-  isRheaSwapQuoteFresh
-} from '@/core/services/rhea-swap/rhea-swap-quote-validity'
-import type { NetworkFeeTier } from '@/core/transactions/domain'
+import { isRheaSwapQuoteFresh } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
 import { logger } from '@/lib/logger'
 import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
 import { getRheaSwapQuoteFailure, rheaSwapClient } from '@/popup/services/rhea-swap-client'
@@ -15,8 +11,6 @@ import {
 } from '@/popup/services/swap-page-model'
 
 const QUOTE_DEBOUNCE_MS = 800
-const REVIEW_REFRESH_MS = 60_000
-const REVIEW_EXPIRY_BUFFER_MS = 5_000
 
 interface RheaSwapQuoteOptions {
   viewStep: 'input' | 'review' | 'approval-pending'
@@ -45,7 +39,6 @@ interface RheaSwapQuoteOptions {
   setQuoteRetryable: (retryable: boolean) => void
   setIsQuoting: (quoting: boolean) => void
   setTransferPreparationError: (message: string | null) => void
-  setAcceptedReviewHandle: (handle: string | null) => void
 }
 
 export function useRheaSwapQuote({
@@ -74,8 +67,7 @@ export function useRheaSwapQuote({
   setQuoteError,
   setQuoteRetryable,
   setIsQuoting,
-  setTransferPreparationError,
-  setAcceptedReviewHandle
+  setTransferPreparationError
 }: RheaSwapQuoteOptions): void {
   const effectKey = JSON.stringify([scopeKey, purpose, request?.key ?? null])
   const lastRefreshTick = useRef(refreshTick)
@@ -155,7 +147,6 @@ export function useRheaSwapQuote({
         reviewRefreshTarget.current = null
         if (refreshingReview) {
           setTransferPreparationError(failure.message)
-          setAcceptedReviewHandle(null)
         } else {
           setQuote(null)
         }
@@ -191,24 +182,8 @@ export function useRheaSwapQuote({
     setQuoteError,
     setQuoteRetryable,
     setIsQuoting,
-    setTransferPreparationError,
-    setAcceptedReviewHandle
+    setTransferPreparationError
   ])
-}
-
-export function useRheaSwapReviewRefresh(
-  acceptedQuote: RheaSwapQuoteView | null,
-  reviewLiveQuote: (feeTier?: NetworkFeeTier, forceQuote?: boolean) => Promise<void>
-): void {
-  useEffect(() => {
-    if (!acceptedQuote) return
-    const remaining = getRheaSwapQuoteDeadline(acceptedQuote) - Date.now() - REVIEW_EXPIRY_BUFFER_MS
-    const timer = window.setTimeout(
-      () => void reviewLiveQuote(undefined, true),
-      Math.max(0, Math.min(REVIEW_REFRESH_MS, remaining))
-    )
-    return () => window.clearTimeout(timer)
-  }, [acceptedQuote, reviewLiveQuote])
 }
 
 export function useResumeRheaSwapReview({

@@ -45,6 +45,8 @@ import {
   recordSendSubmission
 } from '@/popup/services/send-transaction-analytics'
 import { useEvmSendSupport } from '@/popup/hooks/useEvmSendSupport'
+import { carryQuotePreview } from '@/popup/hooks/useQuoteReview'
+import { rheaQuoteTerms } from '@/popup/services/quote-review'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import {
   isCurrentAccountPrivateEvmAddress,
@@ -829,15 +831,18 @@ export function useEvmSendTransfer({
         }
         if (!walletId || !accountId) return
         navigate(
-          buildPublicPrivateEvmSendPath({
-            assetId: asset.asset.id,
-            recipient,
-            amount,
-            maximum: maxSelected,
-            walletId,
-            accountId,
-            network: networkMode
-          })
+          carryQuotePreview(
+            buildPublicPrivateEvmSendPath({
+              assetId: asset.asset.id,
+              recipient,
+              amount,
+              maximum: maxSelected,
+              walletId,
+              accountId,
+              network: networkMode
+            }),
+            { ...rheaQuoteTerms(privatePreview.quote), sourceAmount: amountRaw }
+          )
         )
         return
       }

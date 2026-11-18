@@ -9,6 +9,8 @@ import {
   type NativeZecIntentsSwapReview
 } from '@/popup/services/native-zec-intents-swap-client'
 import type { FundingSource, Network } from '@/types'
+import { useQuoteReview, useQuoteReviewTimer } from './useQuoteReview'
+import { nativeZecQuoteTerms } from '@/popup/services/quote-review'
 
 type MoveQuoteScope = Readonly<{
   network: Network
@@ -34,14 +36,11 @@ export function useZcashMoveQuote({
   const [quote, setQuote] = useState<{ key: string; review: NativeZecIntentsSwapReview } | null>(
     null
   )
-  const [reviewedQuote, setReviewedQuote] = useState<NativeZecIntentsSwapReview | null>(null)
+  const { begin, stage, reset, accept, isAccepted, describe } = useQuoteReview()
   const [error, setError] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
   const submittingQuoteId = useRef<string | null>(null)
-  const reviewingRef = useRef(reviewing)
-  reviewingRef.current = reviewing
-
-  const key =
+  const reviewScope =
     scope && safeBig(amount || '0').gt(0) && (reviewing || safeBig(amount || '0').lte(available))
       ? JSON.stringify([
           scope.network,
@@ -49,13 +48,34 @@ export function useZcashMoveQuote({
           scope.accountId,
           scope.fundingSource,
           scope.refundAddress,
-          amount,
-          retryCount
+          amount
         ])
       : null
+  const key = reviewScope ? JSON.stringify([reviewScope, retryCount]) : null
   const ready = Boolean(key && quote?.key === key && quote.review.expiresAt > Date.now() + 5_000)
-  const reviewReady = Boolean(ready && reviewedQuote?.quoteId === quote?.review.quoteId)
+  const reviewedQuote = reviewing && ready ? (quote?.review ?? null) : null
+  const reviewStatus = describe(reviewScope, reviewedQuote?.quoteId ?? null)
+  const reviewReady = Boolean(reviewedQuote && isAccepted(reviewScope, reviewedQuote.quoteId))
   const loading = Boolean(key && !ready && !error)
+  const retry = () => {
+    if (!confirmationInFlight.current) setRetryCount(value => value + 1)
+  }
+  useQuoteReviewTimer({
+    active: Boolean(quote?.key === key && !confirmationInFlight.current),
+    expiresAt: quote?.review.expiresAt ?? null,
+    refresh: !reviewing || reviewReady ? retry : undefined,
+    autoRefreshMs: Number.POSITIVE_INFINITY
+  })
+  useEffect(() => {
+    if (!reviewing) reset()
+    else if (reviewScope && reviewedQuote) {
+      stage(reviewScope, {
+        id: reviewedQuote.quoteId,
+        terms: nativeZecQuoteTerms(reviewedQuote),
+        expiresAt: reviewedQuote.expiresAt
+      })
+    }
+  }, [reviewing, reviewScope, reviewedQuote, reset, stage])
 
   useEffect(() => {
     setQuote(null)
@@ -65,7 +85,6 @@ export function useZcashMoveQuote({
     const assetId = `${getZcashChainId(network)}/slip44:133`
     let cancelled = false
     let preparedQuoteId: string | null = null
-    let expiryTimer: number | undefined
     const timer = window.setTimeout(() => {
       let amountZats: string
       try {
@@ -110,16 +129,6 @@ export function useZcashMoveQuote({
             return
           }
           setQuote({ key, review })
-          expiryTimer = window.setTimeout(
-            () => {
-              if (reviewingRef.current || confirmationInFlight.current) {
-                setError('Move quote expired. Try again.')
-                return
-              }
-              setRetryCount(value => value + 1)
-            },
-            Math.max(0, review.expiresAt - Date.now() - 5_000)
-          )
         })
         .catch(cause => {
           if (!cancelled)
@@ -129,7 +138,6 @@ export function useZcashMoveQuote({
     return () => {
       cancelled = true
       window.clearTimeout(timer)
-      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer)
       if (preparedQuoteId && submittingQuoteId.current !== preparedQuoteId)
         void cancelNativeZecIntentsSwap(preparedQuoteId).catch(() => {})
     }
@@ -138,7 +146,13 @@ export function useZcashMoveQuote({
   return {
     quote,
     reviewedQuote,
-    setReviewedQuote,
+    reviewStatus,
+    beginReview: () => {
+      if (ready && quote && reviewScope) begin(reviewScope, nativeZecQuoteTerms(quote.review))
+    },
+    acceptReview: () => {
+      if (reviewedQuote) accept(reviewScope, reviewedQuote.quoteId)
+    },
     error,
     ready,
     reviewReady,
@@ -148,6 +162,6 @@ export function useZcashMoveQuote({
       setQuote(null)
       setError('Move quote changed. Try again.')
     },
-    retry: () => setRetryCount(value => value + 1)
+    retry
   }
 }

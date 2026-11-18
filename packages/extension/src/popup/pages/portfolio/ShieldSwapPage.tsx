@@ -15,6 +15,7 @@ import { useSettingsStore } from '@/store/settings-store'
 import { useSwapPreferences } from '@/store/swap-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFundingPreview'
+import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
@@ -34,6 +35,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import {
   ConfidentialActivityView,
   type ConfidentialActivityDisplay,
@@ -80,6 +82,7 @@ import {
 } from '@/popup/services/shield-swap-zec-sources'
 import { ZEC_DECIMALS } from '@/config/wallet'
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { confidentialQuoteTerms } from '@/popup/services/quote-review'
 
 function shieldSwapQuoteErrorMessage(cause: unknown): string {
   const quoteMessage = getSwapQuoteFailureMessage(cause)
@@ -209,8 +212,7 @@ function ShieldSwapForm({
     plan: ConfidentialActivityTarget
     display?: ConfidentialActivityDisplay
   }> | null>(null)
-  const [acceptedPlanId, setAcceptedPlanId] = useState<string | null>(null)
-  const [previousRate, setPreviousRate] = useState<string | null>(null)
+  const quoteReview = useQuoteReview()
   const [refreshingReview, setRefreshingReview] = useState(false)
   const [showReviewMore, setShowReviewMore] = useState(false)
   const cancelledPlanId = useRef<string | null>(null)
@@ -277,6 +279,7 @@ function ShieldSwapForm({
     setAmount('')
     setPicker(null)
     setPrepared(null)
+    quoteReview.reset()
     setActiveActivity(null)
     setBalanceRefreshRequired(false)
     setBusy(false)
@@ -586,6 +589,7 @@ function ShieldSwapForm({
         }
       : undefined
     setPrepared(null)
+    quoteReview.reset()
     setAmount('')
     setUncertain(false)
     setError(null)
@@ -627,6 +631,8 @@ function ShieldSwapForm({
     const requestId = ++reviewRequestId.current
     setBusy(true)
     setError(null)
+    quoteReview.reset()
+    quoteReview.begin(draftKey, confidentialQuoteTerms(preview))
     try {
       const request = buildShieldSwapRequest({
         network,
@@ -655,12 +661,23 @@ function ShieldSwapForm({
       }
       confirmationAttempt.current = null
       setUncertain(false)
-      setAcceptedPlanId(review.planId)
-      setPreviousRate(null)
+      if (
+        !quoteReview.stage(draftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        return
+      }
       cancelledPlanId.current = null
       setPrepared({ review, request, from, to, amount })
     } catch (cause) {
-      if (draftStillCurrent()) setError(shieldSwapQuoteErrorMessage(cause))
+      if (draftStillCurrent()) {
+        quoteReview.reset()
+        setError(shieldSwapQuoteErrorMessage(cause))
+      }
     } finally {
       if (scopeStillCurrent() && reviewRequestId.current === requestId) setBusy(false)
     }
@@ -674,6 +691,7 @@ function ShieldSwapForm({
     }
     if (isUnsignedShieldTerminal(plan)) {
       setPrepared(null)
+      quoteReview.reset()
       setUncertain(false)
       setError('Swap was not started. Try again.')
       return 'failed'
@@ -683,26 +701,44 @@ function ShieldSwapForm({
   const refreshReview = async () => {
     if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return
     if (!previewRequest || JSON.stringify(previewRequest) !== JSON.stringify(prepared.request)) {
-      setAcceptedPlanId(null)
       setError('Swap details changed. Go back and review again.')
       return
     }
     const requestId = ++reviewRequestId.current
     setBusy(true)
     setRefreshingReview(true)
-    setAcceptedPlanId(null)
     setError(null)
     const current = prepared
     try {
+      if (
+        confirmationAttempt.current === current.review.planId &&
+        (await inspectPlan(current.review.planId)) !== 'prepared'
+      )
+        return
+      if (!draftStillCurrent()) return
       if (cancelledPlanId.current !== current.review.planId) {
         await confidentialFundingClient.cancel(current.review.planId)
         cancelledPlanId.current = current.review.planId
       }
-      if (!draftStillCurrent()) return
+      if (!draftStillCurrent()) {
+        setPrepared(previous =>
+          previous?.review.planId === current.review.planId ? null : previous
+        )
+        if (reviewRequestId.current === requestId) {
+          quoteReview.reset()
+        }
+        return
+      }
       const review = await confidentialFundingClient.prepare(current.request)
       if (!draftStillCurrent()) {
         if (review.phase === 'prepared')
           void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        setPrepared(previous =>
+          previous?.review.planId === current.review.planId ? null : previous
+        )
+        if (reviewRequestId.current === requestId) {
+          quoteReview.reset()
+        }
         return
       }
       if (review.phase !== 'prepared') {
@@ -713,25 +749,30 @@ function ShieldSwapForm({
         void confidentialFundingClient.cancel(review.planId).catch(() => {})
         throw new Error('Swap review changed. Try again.')
       }
-      const changed =
-        current.review.expectedOutputRaw !== review.expectedOutputRaw ||
-        current.review.minimumOutputRaw !== review.minimumOutputRaw ||
-        current.review.quoteAppFeeBps !== review.quoteAppFeeBps ||
-        current.review.quoteWithdrawFeeRaw !== review.quoteWithdrawFeeRaw
-      setPreviousRate(
-        changed
-          ? formatShieldSwapPreviewRate(
-              current.amount,
-              current.review.expectedOutputRaw,
-              current.to.asset.metadata.decimals
-            )
-          : null
-      )
+      if (
+        !quoteReview.stage(draftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        setPrepared(previous =>
+          previous?.review.planId === current.review.planId ? null : previous
+        )
+        if (reviewRequestId.current === requestId) quoteReview.reset()
+        return
+      }
       cancelledPlanId.current = null
       setPrepared({ ...current, review })
-      if (!changed) setAcceptedPlanId(review.planId)
     } catch (cause) {
-      if (draftStillCurrent()) setError(shieldSwapQuoteErrorMessage(cause))
+      if (draftStillCurrent()) {
+        if (cancelledPlanId.current === current.review.planId) {
+          setPrepared(null)
+          quoteReview.reset()
+        }
+        setError(shieldSwapQuoteErrorMessage(cause))
+      }
     } finally {
       if (scopeStillCurrent() && reviewRequestId.current === requestId) {
         setBusy(false)
@@ -740,20 +781,18 @@ function ShieldSwapForm({
     }
   }
 
-  useEffect(() => {
-    if (
-      !active ||
-      !prepared ||
-      busy ||
-      uncertain ||
-      error ||
-      acceptedPlanId !== prepared.review.planId
-    )
-      return
-    const wait = Math.max(0, Math.min(60_000, prepared.review.expiresAt - Date.now() - 5_000))
-    const timer = window.setTimeout(() => void refreshReview(), wait)
-    return () => window.clearTimeout(timer)
-  }, [active, prepared, busy, uncertain, error, acceptedPlanId])
+  const reviewId = prepared
+    ? JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+    : null
+  const reviewAccepted = quoteReview.isAccepted(draftKey, reviewId)
+  const reviewDescription = quoteReview.describe(draftKey, reviewId)
+  const reviewExpired = useQuoteReviewTimer({
+    expiresAt: prepared?.review.expiresAt ?? null,
+    active: active && Boolean(prepared),
+    refresh:
+      reviewAccepted && !busy && !uncertain && !error ? () => void refreshReview() : undefined,
+    autoRefreshMs: 60_000
+  })
   const cancelReview = async () => {
     if (!prepared || busy || !scopeStillCurrent()) return
     setBusy(true)
@@ -767,7 +806,7 @@ function ShieldSwapForm({
         await confidentialFundingClient.cancel(prepared.review.planId)
       if (!scopeStillCurrent()) return
       setPrepared(null)
-      setAcceptedPlanId(null)
+      quoteReview.reset()
       setUncertain(false)
     } catch (cause) {
       if (scopeStillCurrent())
@@ -778,9 +817,16 @@ function ShieldSwapForm({
   }
   const confirm = async () => {
     if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
+    if (!uncertain && prepared.review.expiresAt <= Date.now()) {
+      setError('Quote expired. Refresh quote.')
+      return
+    }
     if (
       !uncertain &&
-      (acceptedPlanId !== prepared.review.planId ||
+      (!quoteReview.isAccepted(
+        draftKey,
+        JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+      ) ||
         !previewRequest ||
         JSON.stringify(previewRequest) !== JSON.stringify(prepared.request) ||
         Boolean(error))
@@ -796,11 +842,6 @@ function ShieldSwapForm({
           setUncertain(false)
           setError('Swap was not started. Review and try again.')
         }
-        return
-      }
-      if (prepared.review.expiresAt <= Date.now()) {
-        setBusy(false)
-        void refreshReview()
         return
       }
       confirmationAttempt.current = prepared.review.planId
@@ -868,7 +909,7 @@ function ShieldSwapForm({
   }
 
   if (prepared) {
-    const priceAcceptanceRequired = acceptedPlanId !== prepared.review.planId
+    const priceAcceptanceRequired = reviewDescription.changes.length > 0 && !reviewAccepted
     const output = formatBaseUnitDecimalAmount(
       prepared.review.expectedOutputRaw,
       prepared.to.asset.metadata.decimals
@@ -957,12 +998,6 @@ function ShieldSwapForm({
               label: 'Rate',
               content: (
                 <span className="inline-flex max-w-full flex-col items-end gap-0.5 tabular-nums">
-                  {priceAcceptanceRequired && previousRate && !refreshingReview && (
-                    <span className="text-xs text-muted line-through">
-                      1 {formatSymbol(prepared.from.asset.metadata.symbol)} = {previousRate}{' '}
-                      {formatSymbol(prepared.to.asset.metadata.symbol)}
-                    </span>
-                  )}
                   <span>
                     1 {formatSymbol(prepared.from.asset.metadata.symbol)} = {currentRate}{' '}
                     {formatSymbol(prepared.to.asset.metadata.symbol)}
@@ -1025,39 +1060,50 @@ function ShieldSwapForm({
               : [])
           ]}
           afterRows={
-            <div className="flex items-center justify-between gap-3 pt-3">
-              <button
-                type="button"
-                onClick={() => setShowReviewMore(value => !value)}
-                aria-expanded={showReviewMore}
-                className="inline-flex min-h-8 items-center gap-1 text-sm text-muted hover:text-foreground"
-              >
-                {showReviewMore ? 'Show less' : 'Show more'}
-                <Icon
-                  icon={showReviewMore ? 'lucide:chevron-up' : 'lucide:chevron-down'}
-                  width={14}
+            <div className="pt-3">
+              {!refreshingReview && (
+                <QuoteReviewChanges
+                  changes={reviewDescription.changes}
+                  output={{
+                    decimals: prepared.to.asset.metadata.decimals,
+                    symbol: formatSymbol(prepared.to.asset.metadata.symbol)
+                  }}
                 />
-              </button>
-              <button
-                type="button"
-                onClick={() => void refreshReview()}
-                disabled={busy}
-                className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-                aria-label="Refresh quote"
-              >
-                <Icon
-                  icon="lucide:refresh-cw"
-                  width={14}
-                  className={refreshingReview ? 'animate-spin' : undefined}
-                />
-                Refresh quote
-              </button>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowReviewMore(value => !value)}
+                  aria-expanded={showReviewMore}
+                  className="inline-flex min-h-8 items-center gap-1 text-sm text-muted hover:text-foreground"
+                >
+                  {showReviewMore ? 'Show less' : 'Show more'}
+                  <Icon
+                    icon={showReviewMore ? 'lucide:chevron-up' : 'lucide:chevron-down'}
+                    width={14}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void refreshReview()}
+                  disabled={busy || uncertain}
+                  className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+                  aria-label="Refresh quote"
+                >
+                  <Icon
+                    icon="lucide:refresh-cw"
+                    width={14}
+                    className={refreshingReview ? 'animate-spin' : undefined}
+                  />
+                  Refresh quote
+                </button>
+              </div>
             </div>
           }
           error={
-            error ? (
+            error || (reviewExpired && !uncertain && !refreshingReview) ? (
               <p role="alert" className="mt-3 text-sm text-warning">
-                {error}
+                {error ?? 'Quote expired. Refresh quote.'}
               </p>
             ) : undefined
           }
@@ -1065,7 +1111,7 @@ function ShieldSwapForm({
             uncertain
               ? 'Check status'
               : priceAcceptanceRequired && !error
-                ? 'Accept new price'
+                ? (reviewDescription.acceptLabel ?? 'Accept new price')
                 : 'Confirm'
           }
           confirmTone={priceAcceptanceRequired && !error && !uncertain ? 'warning' : 'default'}
@@ -1075,9 +1121,12 @@ function ShieldSwapForm({
           }
           preparing={refreshingReview}
           confirmDisabled={
-            Boolean(error) ||
-            (priceAcceptanceRequired && !previousRate) ||
-            (!uncertain && prepared.review.expiresAt <= Date.now())
+            !uncertain &&
+            (Boolean(error) ||
+              reviewExpired ||
+              (!reviewAccepted && !priceAcceptanceRequired) ||
+              !previewRequest ||
+              JSON.stringify(previewRequest) !== JSON.stringify(prepared.request))
           }
           onCancel={() => void cancelReview()}
           onConfirm={() => {
@@ -1085,13 +1134,12 @@ function ShieldSwapForm({
               if (
                 !busy &&
                 !error &&
-                previousRate &&
+                !reviewExpired &&
                 prepared.review.expiresAt > Date.now() &&
                 previewRequest &&
                 JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
               ) {
-                setAcceptedPlanId(prepared.review.planId)
-                setPreviousRate(null)
+                quoteReview.accept(draftKey, reviewId)
               }
               return
             }

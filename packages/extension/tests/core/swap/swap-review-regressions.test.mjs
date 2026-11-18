@@ -4,13 +4,18 @@ import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/service
 import { resolveSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
 import {
   buildLiveSwapQuoteRequest,
-  hasSwapQuoteTermsChanged,
-  isAcceptedSwapReview,
   resolveNativeZecIntentsDestination,
   resolveScopedSwapZcashRecipient,
   resolveShieldDomainZecFundingSource,
   shieldConfidentialSwapActive
 } from '../../../src/popup/services/swap-page-model.ts'
+import {
+  canReviewQuote,
+  compareQuoteTerms,
+  isQuoteReviewAccepted,
+  quoteReviewActionLabel,
+  stageQuoteReview
+} from '../../../src/popup/services/quote-review.ts'
 import {
   buildShieldSwapZecSourceOptions,
   isShieldSwapZecSelectionId,
@@ -227,37 +232,37 @@ it('retains the reviewed sender, recipient, amount and privacy mode when a quote
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.000001' }).request.amountIn, '1')
 })
 
-it('requires a fresh, matching and explicitly accepted swap review before execution', () => {
-  const now = 10_000
-  const quote = {
-    quoteHandle: 'quote-a',
-    recipient: 'recipient',
-    estimatedOut: '100',
-    minAmountOut: '90',
-    router: 'router',
-    receivedAt: now,
-    expiresAt: now + 60_000
-  }
-  const input = {
-    quote,
-    review: { ...quote, executionId: 'execution-a' },
-    acceptedHandle: 'quote-a',
-    quoteKey: 'request-a',
-    requestKey: 'request-a',
-    now
-  }
-  assert.equal(isAcceptedSwapReview(input), true)
-  assert.equal(isAcceptedSwapReview({ ...input, acceptedHandle: null }), false)
+it('reuses accepted terms on refresh but binds confirmation to the latest execution and scope', () => {
+  const terms = { expected: '100', minimum: '90', route: 'intents' }
+  const candidate = { id: 'execution-a', terms, expiresAt: 20_000 }
+  const preview = { scope: 'intent-a', baseline: terms, candidate: null }
+  const initial = stageQuoteReview(preview, 'intent-a', candidate)
+  assert.equal(isQuoteReviewAccepted(initial, 'intent-a', candidate.id, 10_000), true)
+
+  const replacement = { ...candidate, id: 'execution-b' }
+  const refreshed = stageQuoteReview(initial, 'intent-a', replacement)
+  assert.equal(isQuoteReviewAccepted(refreshed, 'intent-a', replacement.id, 10_000), true)
+  assert.equal(canReviewQuote(refreshed, 'intent-a', candidate.id, 10_000), false)
+  assert.equal(canReviewQuote(refreshed, 'intent-b', replacement.id, 10_000), false)
+  assert.equal(canReviewQuote(refreshed, 'intent-a', replacement.id, 20_000), false)
+  assert.equal(stageQuoteReview(refreshed, 'intent-b', replacement), null)
+})
+
+it('keeps the displayed preview baseline across replacement quotes with a lower minimum', () => {
+  const baseline = { expected: '100', minimum: '90', route: 'intents' }
+  const preview = { scope: 'intent', baseline, candidate: null }
+  const candidate = { id: 'execution-a', terms: { ...baseline, minimum: '89' }, expiresAt: 20_000 }
+  const first = stageQuoteReview(preview, 'intent', candidate)
+  const refreshed = stageQuoteReview(first, 'intent', { ...candidate, id: 'execution-b' })
+  assert.equal(isQuoteReviewAccepted(refreshed, 'intent', 'execution-b', 10_000), false)
+  assert.deepEqual(compareQuoteTerms(refreshed.baseline, refreshed.candidate.terms), [
+    { field: 'minimum', previous: '90', current: '89' }
+  ])
   assert.equal(
-    isAcceptedSwapReview({ ...input, review: { ...input.review, quoteHandle: 'quote-old' } }),
-    false
+    quoteReviewActionLabel(compareQuoteTerms(baseline, { ...baseline, route: 'other' })),
+    'Accept new route'
   )
-  assert.equal(isAcceptedSwapReview({ ...input, requestKey: 'request-b' }), false)
-  assert.equal(isAcceptedSwapReview({ ...input, now: now + 60_000 }), false)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, quoteHandle: 'quote-b' }), false)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, minAmountOut: '89' }), true)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, router: 'updated-router' }), true)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, recipient: 'other' }), true)
+  assert.deepEqual(compareQuoteTerms(baseline, { ...baseline, withdrawFee: '1' }), [])
 })
 
 it('binds the Public to Private preview to its account, quote inputs and fee context', () => {

@@ -83,11 +83,10 @@ import {
   useSwapApprovalContinuation,
   type SubmittedSwapApproval
 } from '@/popup/hooks/useSwapApprovalContinuation'
-import {
-  useResumeRheaSwapReview,
-  useRheaSwapQuote,
-  useRheaSwapReviewRefresh
-} from '@/popup/hooks/useRheaSwapQuote'
+import { useResumeRheaSwapReview, useRheaSwapQuote } from '@/popup/hooks/useRheaSwapQuote'
+import { takeQuotePreview, useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
+import { nativeZecQuoteTerms, rheaQuoteTerms } from '@/popup/services/quote-review'
+import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { sameNativeZecQuoteBinding } from '@/core/services/native-zec-intents-swap'
 import {
   openHardwareSignAndWait,
@@ -264,8 +263,6 @@ import {
 import {
   buildLiveSwapQuoteRequest,
   createSwapQuoteRefreshTarget,
-  hasSwapQuoteTermsChanged,
-  isAcceptedSwapReview,
   type SwapQuoteRefreshTarget,
   buildWalletSwapSourceBalances,
   filterConfidentialFundingSourceTokens,
@@ -780,8 +777,14 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const [approvalReviewScope, setApprovalReviewScope] = useState<string | null>(null)
   const [quoteResult, setQuoteResult] = useState<RheaSwapQuoteView | null>(null)
   const [rheaReview, setRheaReview] = useState<RheaSwapReviewView | null>(null)
-  const [acceptedReviewHandle, setAcceptedReviewHandle] = useState<string | null>(null)
-  const [previousReviewRate, setPreviousReviewRate] = useState<string | null>(null)
+  const {
+    begin: beginQuoteReview,
+    stage: stageQuoteReview,
+    reset: resetQuoteReview,
+    accept: acceptQuoteReview,
+    isAccepted: isQuoteReviewAccepted,
+    describe: describeQuoteReview
+  } = useQuoteReview()
   const [privateBalanceTransferReview, setPrivateBalanceTransferReview] =
     useState<PrivateBalanceTransferReview | null>(null)
   const [liveQuoteKey, setLiveQuoteKey] = useState<string | null>(null)
@@ -2226,6 +2229,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     setTransferPreparationError(null)
     setSubmittedApproval(null)
     setApprovalError(null)
+    resetQuoteReview()
     void discardPreparedQuoteTransfer()
     setViewStep('input')
     setQuoteResult(null)
@@ -2244,6 +2248,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     chainEndpointRuntimeKey,
     currentNetwork,
     discardPreparedQuoteTransfer,
+    resetQuoteReview,
     swap.resetSwap
   ])
 
@@ -3402,9 +3407,20 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     setQuoteError: swap.setQuoteError,
     setIsQuoting: swap.setIsQuoting,
     setQuoteRetryable,
-    setTransferPreparationError,
-    setAcceptedReviewHandle
+    setTransferPreparationError
   })
+
+  const rheaReviewScope = liveQuoteRequest
+    ? JSON.stringify([
+        walletSourcesScope,
+        currentNetwork,
+        quotePurpose,
+        liveQuoteRequest.scopeKey,
+        executionSourceMode,
+        destinationMode,
+        maxSelected ? null : liveQuoteRequest.amount
+      ])
+    : null
 
   const nativeIntentsRequest = useMemo(() => {
     if (
@@ -3451,6 +3467,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         fundingSource
       } as const
       return {
+        scope: JSON.stringify([walletSourcesScope, input]),
         key: JSON.stringify([walletSourcesScope, input, quoteRefreshTick]),
         input
       }
@@ -3482,9 +3499,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     quoteRefreshTick
   ])
   const handleNativeIntentsQuoteExpiry = useCallback(() => {
-    if (viewStep === 'review') setViewStep('input')
     setQuoteRefreshTick(value => value + 1)
-  }, [viewStep])
+  }, [])
   const {
     quote: nativeIntentsQuote,
     ready: nativeIntentsQuoteReady,
@@ -3503,7 +3519,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     setQuoteError: swap.setQuoteError,
     setIsQuoting: swap.setIsQuoting,
     setQuoteRetryable,
-    isSending,
+    isSending: isSending || viewStep === 'review',
     onExpire: handleNativeIntentsQuoteExpiry
   })
 
@@ -3515,7 +3531,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     ) => {
       if (shieldNativeZecSwap && swap.isZecSource) {
         if (hasInsufficientFunds || preparingReview.current) return
-        if (!nativeIntentsQuoteReady || !nativeIntentsQuote || !nativeIntentsRequestKey) {
+        if (
+          !nativeIntentsQuoteReady ||
+          !nativeIntentsQuote ||
+          !nativeIntentsRequestKey ||
+          !nativeIntentsRequest
+        ) {
           setViewStep('input')
           setQuoteRefreshTick(value => value + 1)
           return
@@ -3538,6 +3559,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             !sameNativeZecQuoteBinding(current.quoteBinding, review.quoteBinding)
           )
             throw new Error('Intents Swap quote changed. Review again.')
+          beginQuoteReview(nativeIntentsRequest.scope, nativeZecQuoteTerms(review))
           setViewStep('review')
         } catch (error) {
           if (nativeIntentsRequestRef.current?.key !== key) return
@@ -3557,16 +3579,24 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       if (hasInsufficientFunds || preparingReview.current) return
       let resultToReview = quoteResult
       const previousQuote = viewStep === 'review' ? quoteResult : null
-      const previousRate = viewStep === 'review' ? swap.rate : null
       let newlyQuoted = false
       const requestKey = liveQuoteRequest?.key
       const { tokenIn, tokenOut } = swap
+      if (rheaReviewScope && liveQuoteRequest && resultToReview && liveQuoteKey === requestKey) {
+        beginQuoteReview(rheaReviewScope, {
+          sourceAmount: liveQuoteRequest.amount,
+          ...((publicPrivacySendRequested
+            ? takeQuotePreview(location.pathname + location.search)
+            : undefined) ?? rheaQuoteTerms(resultToReview))
+        })
+      }
       const refreshReviewQuote =
         viewStep === 'review' &&
         liveQuoteKey === requestKey &&
         (feeTierOverride !== undefined || evmFeeSelectionOverride !== undefined || forceQuote)
       if (
         !liveQuoteRequest ||
+        !rheaReviewScope ||
         !requestKey ||
         !tokenIn ||
         !tokenOut ||
@@ -3580,13 +3610,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             setTransferPreparationError(
               'Swap inputs changed. Check the selected assets and amount.'
             )
-            setAcceptedReviewHandle(null)
             return
           }
           // Preserve the reviewed layout while the bound replacement quote is requested.
           reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
           setTransferPreparationError(null)
-          setAcceptedReviewHandle(null)
         } else {
           reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(liveQuoteRequest)
           setQuoteResult(null)
@@ -3603,7 +3631,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       preparingReview.current = true
       setIsPreparingReview(true)
       setTransferPreparationError(null)
-      if (viewStep === 'review') setAcceptedReviewHandle(null)
       if (feeTierOverride) setNetworkFeeTier(feeTierOverride)
       const requestSequence = ++quoteRequestSequence.current
       const requestId = createDebugRequestId('swap-prepare')
@@ -3633,6 +3660,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
         }
         const result = resultToReview
+        beginQuoteReview(rheaReviewScope, {
+          ...rheaQuoteTerms(result),
+          sourceAmount: liveQuoteRequest.amount
+        })
         if (
           isPrivateFunding &&
           privateFundingMinimumRaw &&
@@ -3650,6 +3681,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         if (requestSequence !== quoteRequestSequence.current) {
           if (newlyQuoted) await rheaSwapClient.discard(result.quoteHandle).catch(() => {})
           return
+        }
+        if (
+          review.quoteHandle !== result.quoteHandle ||
+          review.recipient !== result.recipient ||
+          review.amountIn !== liveQuoteRequest.amount
+        ) {
+          throw new Error('Swap review does not match the requested transfer.')
         }
         if (
           isPrivateFunding &&
@@ -3706,7 +3744,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             })
             if (adjustment.maximum) routeMaximum.update(adjustment.maximum)
             if (viewStep !== 'review') setViewStep('input')
-            setAcceptedReviewHandle(null)
             setLiveQuoteKey(null)
             swap.updateAmountIn(adjustment.amount)
             return
@@ -3975,7 +4012,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                   decimals: walletOwnedSource.asset.metadata.decimals
                 })
                 if (viewStep !== 'review') setViewStep('input')
-                setAcceptedReviewHandle(null)
                 setLiveQuoteKey(null)
                 swap.updateAmountIn(adjustment.amount)
                 return null
@@ -4109,11 +4145,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
         }
         swap.setAmountOut(formatBaseUnitDecimalAmount(review.estimatedOut, tokenOut.decimals))
-        const termsChanged =
-          hasSwapQuoteTermsChanged(result, review) ||
-          Boolean(previousQuote && hasSwapQuoteTermsChanged(previousQuote, result))
-        setPreviousReviewRate(termsChanged ? previousRate : null)
-        setAcceptedReviewHandle(termsChanged ? null : result.quoteHandle)
+        stageQuoteReview(rheaReviewScope, {
+          id: JSON.stringify([review.quoteHandle, review.executionId]),
+          terms: { ...rheaQuoteTerms(review), sourceAmount: review.amountIn },
+          expiresAt: getRheaSwapQuoteDeadline(result)
+        })
         setRheaReview(review)
         expiredPrepareRetryKey.current = null
         setPrivateBalanceTransferReview(preparedBalanceTransferReview)
@@ -4162,7 +4198,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
               setRheaReview(null)
               swap.setAmountOut('')
             }
-            setAcceptedReviewHandle(null)
             setLiveQuoteKey(null)
             setQuoteReceivedAt(null)
             swap.setDepositAddress('')
@@ -4205,6 +4240,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       nativeIntentsQuoteReady,
       nativeIntentsQuote,
       nativeIntentsRequestKey,
+      nativeIntentsRequest,
+      rheaReviewScope,
+      beginQuoteReview,
+      stageQuoteReview,
+      publicPrivacySendRequested,
+      location.pathname,
+      location.search,
       quoteResult,
       liveQuoteRequest,
       liveQuoteKey,
@@ -4422,7 +4464,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   )
 
   const refreshExpiredReview = useCallback(async () => {
-    if (viewStep === 'review' && !privateBalanceTransferRequested && !publicPrivacySendRequested) {
+    if (viewStep === 'review') {
       await reviewLiveQuote()
       return
     }
@@ -4445,24 +4487,74 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   }, [
     discardPreparedQuoteTransfer,
     liveQuoteRequest,
-    privateBalanceTransferRequested,
-    publicPrivacySendRequested,
     reviewLiveQuote,
     swap.setDepositAddress,
     viewStep
   ])
 
-  const acceptedQuoteForRefresh =
-    viewStep === 'review' &&
-    !privateBalanceTransferRequested &&
-    !publicPrivacySendRequested &&
-    !isPreparingReview &&
-    !isSending &&
-    !transferPreparationError &&
-    quoteResult?.quoteHandle === acceptedReviewHandle
-      ? quoteResult
-      : null
-  useRheaSwapReviewRefresh(acceptedQuoteForRefresh, reviewLiveQuote)
+  const nativeReviewScope = nativeIntentsRequest?.scope ?? null
+  const nativeReview = nativeIntentsQuoteReady ? nativeIntentsQuote?.review : undefined
+  useEffect(() => {
+    if (viewStep !== 'review' || !nativeReviewScope || !nativeReview) return
+    stageQuoteReview(nativeReviewScope, {
+      id: nativeReview.quoteId,
+      terms: nativeZecQuoteTerms(nativeReview),
+      expiresAt: nativeReview.expiresAt
+    })
+  }, [viewStep, nativeReviewScope, nativeReview, stageQuoteReview])
+
+  const rheaReviewId = rheaReview
+    ? JSON.stringify([rheaReview.quoteHandle, rheaReview.executionId])
+    : null
+  const rheaReviewMatchesRequest = Boolean(
+    quoteResult &&
+    rheaReview &&
+    quoteResult.quoteHandle === rheaReview.quoteHandle &&
+    liveQuoteKey &&
+    liveQuoteKey === liveQuoteRequest?.key
+  )
+  const rheaQuoteAccepted =
+    rheaReviewMatchesRequest && isQuoteReviewAccepted(rheaReviewScope, rheaReviewId)
+  const rheaReviewStatus = describeQuoteReview(rheaReviewScope, rheaReviewId)
+  const nativeReviewStatus = describeQuoteReview(nativeReviewScope, nativeReview?.quoteId ?? null)
+  const acceptRheaQuote = () => {
+    if (
+      isPreparingReview ||
+      isSending ||
+      reviewAfterQuoteRefresh.current ||
+      transferPreparationError
+    )
+      return
+    if (!rheaReviewMatchesRequest || !acceptQuoteReview(rheaReviewScope, rheaReviewId)) {
+      void refreshExpiredReview()
+    }
+  }
+  const reviewExpired = useQuoteReviewTimer({
+    expiresAt:
+      quoteResult && isRheaSwapQuoteFresh(quoteResult)
+        ? getRheaSwapQuoteDeadline(quoteResult)
+        : quoteResult
+          ? 0
+          : null,
+    active: viewStep === 'review' && !shieldNativeZecSwap && !isPreparingReview && !isSending,
+    refresh:
+      rheaQuoteAccepted &&
+      !transferPreparationError &&
+      !privateBalanceTransferRequested &&
+      !publicPrivacySendRequested
+        ? () => void reviewLiveQuote(undefined, true)
+        : undefined,
+    autoRefreshMs: 60_000
+  })
+  useQuoteReviewTimer({
+    expiresAt: nativeIntentsQuote?.review.expiresAt ?? null,
+    active: viewStep === 'review' && shieldNativeZecSwap && !isSending,
+    refresh:
+      nativeReview && isQuoteReviewAccepted(nativeReviewScope, nativeReview.quoteId)
+        ? handleNativeIntentsQuoteExpiry
+        : undefined,
+    autoRefreshMs: Number.POSITIVE_INFINITY
+  })
 
   const handleConfirmSwap = useCallback(async () => {
     if (shieldNativeZecSwap && swap.isZecSource) {
@@ -4471,6 +4563,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         !nativeIntentsQuoteReady ||
         !nativeIntentsQuote ||
         !nativeIntentsRequestKey ||
+        !isQuoteReviewAccepted(nativeReviewScope, nativeIntentsQuote.review.quoteId) ||
         !effectiveWalletId ||
         !effectiveAccountId ||
         !currentAccount ||
@@ -4682,13 +4775,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       (isPreparingReview ||
         isSending ||
         Boolean(transferPreparationError) ||
-        !isAcceptedSwapReview({
-          quote: quoteResult,
-          review: rheaReview,
-          acceptedHandle: acceptedReviewHandle,
-          quoteKey: liveQuoteKey,
-          requestKey: liveQuoteRequest?.key
-        }))
+        !rheaReviewMatchesRequest ||
+        !isQuoteReviewAccepted(rheaReviewScope, rheaReviewId))
     ) {
       if (quoteResult && !isRheaSwapQuoteFresh(quoteResult)) await refreshExpiredReview()
       return
@@ -5272,7 +5360,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     hasInsufficientFunds,
     quoteResult,
     rheaReview,
-    acceptedReviewHandle,
+    rheaReviewMatchesRequest,
+    rheaReviewScope,
+    rheaReviewId,
+    nativeReviewScope,
+    isQuoteReviewAccepted,
     isPreparingReview,
     isSending,
     liveQuoteKey,
@@ -5994,6 +6086,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
   const handleReturnToInput = useCallback(() => {
     quoteRequestSequence.current += 1
+    resetQuoteReview()
     reviewAfterQuoteRefresh.current = null
     setApprovalReviewScope(null)
     setIsPrivateFundingSubmitting(false)
@@ -6003,7 +6096,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       return
     }
     setViewStep('input')
-  }, [discardPreparedQuoteTransfer, goBack, privateBalanceTransferRequested])
+  }, [discardPreparedQuoteTransfer, goBack, privateBalanceTransferRequested, resetQuoteReview])
 
   const returnFromPublicPrivacySend = () => {
     quoteRequestSequence.current += 1
@@ -6391,7 +6484,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       swap.tokenIn &&
       swap.tokenOut
     ) {
-      const review = nativeIntentsQuoteReady ? nativeIntentsQuote?.review : null
+      const review = nativeReview
       return (
         <SwapReviewView
           tokenIn={swap.tokenIn}
@@ -6428,15 +6521,30 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           sourceNetworkFee={{ amount: networkFee, symbol: 'ZEC' }}
           preparationError={
             !review
-              ? 'Quote expired. Refresh it.'
+              ? swap.isQuoting
+                ? null
+                : (swap.quoteError ?? 'Quote expired. Refresh it.')
               : !selectedFee.ready
                 ? 'Network fee estimate is unavailable'
                 : null
           }
           insufficient={hasInsufficientFunds}
           onRefreshQuote={() => {
-            setViewStep('input')
             setQuoteRefreshTick(value => value + 1)
+          }}
+          quoteRefreshing={swap.isQuoting}
+          quoteAcceptanceLabel={nativeReviewStatus.acceptLabel}
+          quoteChanges={
+            <QuoteReviewChanges changes={nativeReviewStatus.changes} output={swap.tokenOut} />
+          }
+          confirmDisabled={
+            !review ||
+            (!nativeReviewStatus.acceptLabel &&
+              !isQuoteReviewAccepted(nativeReviewScope, review.quoteId))
+          }
+          onAcceptNewPrice={() => {
+            if (review && !isSending && !swap.isQuoting)
+              acceptQuoteReview(nativeReviewScope, review.quoteId)
           }}
           isLoading={isSending}
           onCancel={handleReturnToInput}
@@ -6454,12 +6562,24 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         tokenInPrice: swap.tokenIn.price,
         tokenOutPrice: swap.tokenOut.price
       })
+      const quoteChanges = (
+        <QuoteReviewChanges
+          changes={rheaReviewStatus.changes}
+          output={swap.tokenOut}
+          source={swap.tokenIn}
+        />
+      )
+      const quoteAcceptanceLabel =
+        rheaReviewMatchesRequest &&
+        !reviewExpired &&
+        !isPreparingReview &&
+        !refreshingMaximumReview &&
+        !transferPreparationError
+          ? rheaReviewStatus.acceptLabel
+          : undefined
+      const refreshReview = () => void reviewLiveQuote(undefined, true)
 
       if (privateBalanceTransferRequested && walletOwnedSource) {
-        const priceAcceptanceRequired =
-          acceptedReviewHandle !== reviewedQuote.quoteHandle &&
-          !isPreparingReview &&
-          !transferPreparationError
         const transferReview =
           privateBalanceTransferReview?.quoteHandle === rheaReview.quoteHandle &&
           privateBalanceTransferReview.executionId === rheaReview.executionId
@@ -6613,32 +6733,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             amountPrefix={publicPrivacySendRequested ? '-' : ''}
             network={walletOwnedSource.chain.chain.displayName}
             rows={reviewRows}
-            afterRows={
-              priceAcceptanceRequired ? (
-                <button
-                  type="button"
-                  className="min-h-8 text-xs text-primary hover:underline"
-                  onClick={() => {
-                    if (
-                      !isAcceptedSwapReview({
-                        quote: reviewedQuote,
-                        review: rheaReview,
-                        acceptedHandle: reviewedQuote.quoteHandle,
-                        quoteKey: liveQuoteKey,
-                        requestKey: liveQuoteRequest?.key
-                      })
-                    ) {
-                      void refreshExpiredReview()
-                      return
-                    }
-                    setAcceptedReviewHandle(reviewedQuote.quoteHandle)
-                    setPreviousReviewRate(null)
-                  }}
-                >
-                  Accept updated quote
-                </button>
-              ) : undefined
-            }
+            afterRows={quoteChanges}
             error={
               transferPreparationError ? (
                 <InlineError
@@ -6651,8 +6746,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 <p className="mt-3 px-1 text-xs text-warning" role="alert">
                   Transfer review is unavailable. Go back and try again.
                 </p>
-              ) : priceAcceptanceRequired ? (
-                <InlineError message="Quote changed. Review the updated amount before confirming." />
+              ) : reviewExpired ? (
+                <InlineError message="Quote expired." onRetry={refreshReview} />
               ) : hasInsufficientFunds || preparedFeeUnaffordable ? (
                 <p className="mt-3 px-1 text-xs text-warning">
                   Amount exceeds balance at this fee. Go back to lower the amount or switch fee
@@ -6660,20 +6755,21 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 </p>
               ) : undefined
             }
-            confirmLabel="Confirm"
-            confirming={isSending || isPreparingReview}
+            confirmLabel={quoteAcceptanceLabel ?? 'Confirm'}
+            confirmTone={quoteAcceptanceLabel ? 'warning' : 'default'}
+            confirming={isSending || isPreparingReview || refreshingMaximumReview}
             submitting={isSending}
             confirmDisabled={
               !transferReview ||
               Boolean(transferPreparationError) ||
-              priceAcceptanceRequired ||
+              (!quoteAcceptanceLabel && !rheaQuoteAccepted) ||
               hasInsufficientFunds ||
               preparedFeeUnaffordable
             }
             onCancel={
               publicPrivacySendRequested ? returnFromPublicPrivacySend : handleReturnToInput
             }
-            onConfirm={handleConfirmSwap}
+            onConfirm={quoteAcceptanceLabel ? acceptRheaQuote : handleConfirmSwap}
           />
         )
       }
@@ -6681,7 +6777,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       if (crossChainSendRequested) {
         const reviewMatchesQuote = rheaReview.quoteHandle === reviewedQuote.quoteHandle
         const reviewedQuoteReady =
-          reviewMatchesQuote && !isPreparingReview && isRheaSwapQuoteFresh(reviewedQuote)
+          reviewMatchesQuote &&
+          rheaReviewMatchesRequest &&
+          !isPreparingReview &&
+          !refreshingMaximumReview &&
+          !reviewExpired &&
+          (rheaQuoteAccepted || Boolean(quoteAcceptanceLabel))
         const routeCost = reviewedQuoteReady
           ? getCrossChainSendRouteCost({
               source: swap.tokenIn,
@@ -6697,10 +6798,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           tokenIn: swap.tokenIn,
           approvalPending: Boolean(pendingRheaEvmAfterApproval)
         })
-        const priceAcceptanceRequired =
-          acceptedReviewHandle !== reviewedQuote.quoteHandle &&
-          !isPreparingReview &&
-          !transferPreparationError
         return (
           <CrossChainSendReviewView
             source={swap.tokenIn}
@@ -6715,26 +6812,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             isPreparingReview={isPreparingReview}
             isSending={isSending}
             reviewedQuoteReady={reviewedQuoteReady}
-            priceAcceptanceRequired={priceAcceptanceRequired}
+            quoteAcceptanceLabel={quoteAcceptanceLabel}
+            quoteChanges={quoteChanges}
             transferPreparationError={transferPreparationError}
             insufficientFunds={hasInsufficientFunds || preparedFeeUnaffordable}
             onRefresh={() => void reviewLiveQuote(undefined, true)}
-            onAccept={() => {
-              if (
-                !isAcceptedSwapReview({
-                  quote: reviewedQuote,
-                  review: rheaReview,
-                  acceptedHandle: reviewedQuote.quoteHandle,
-                  quoteKey: liveQuoteKey,
-                  requestKey: liveQuoteRequest?.key
-                })
-              ) {
-                void refreshExpiredReview()
-                return
-              }
-              setAcceptedReviewHandle(reviewedQuote.quoteHandle)
-              setPreviousReviewRate(null)
-            }}
+            onAccept={acceptRheaQuote}
             onRetryPreparation={() => void reviewLiveQuote(networkFeeTier).catch(() => {})}
             onRetryExpired={() => void refreshExpiredReview()}
             onCancel={handleReturnToInput}
@@ -6779,32 +6862,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           rate={swap.rate}
           provider={rheaReview.router}
           quoteRefreshing={isPreparingReview || refreshingMaximumReview}
-          previousRate={previousReviewRate ?? undefined}
-          priceAcceptanceRequired={
-            Boolean(
-              quoteResult && rheaReview && acceptedReviewHandle !== quoteResult.quoteHandle
-            ) &&
-            !isPreparingReview &&
-            !refreshingMaximumReview &&
-            !transferPreparationError
-          }
-          onAcceptNewPrice={() => {
-            if (isPreparingReview || refreshingMaximumReview || isSending || !quoteResult) return
-            if (
-              !isAcceptedSwapReview({
-                quote: quoteResult,
-                review: rheaReview,
-                acceptedHandle: quoteResult.quoteHandle,
-                quoteKey: liveQuoteKey,
-                requestKey: liveQuoteRequest?.key
-              })
-            ) {
-              void refreshExpiredReview()
-              return
-            }
-            setAcceptedReviewHandle(quoteResult.quoteHandle)
-            setPreviousReviewRate(null)
-          }}
+          quoteAcceptanceLabel={quoteAcceptanceLabel}
+          quoteChanges={quoteChanges}
+          confirmDisabled={!quoteAcceptanceLabel && !rheaQuoteAccepted}
+          onAcceptNewPrice={acceptRheaQuote}
           onRefreshQuote={
             privateBalanceTransferRequested || publicPrivacySendRequested
               ? undefined
@@ -6831,8 +6892,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           slippage={swap.slippage}
           onConfirm={handleConfirmSwap}
           isLoading={isSending || isPreparingReview || refreshingMaximumReview}
-          preparationError={transferPreparationError}
-          onRetryPreparation={() => void reviewLiveQuote(networkFeeTier).catch(() => {})}
+          preparationError={transferPreparationError ?? (reviewExpired ? 'Quote expired.' : null)}
+          onRetryPreparation={
+            reviewExpired
+              ? refreshReview
+              : () => void reviewLiveQuote(networkFeeTier).catch(() => {})
+          }
           confirmLabel={
             crossChainSendRequested
               ? 'Confirm Send'

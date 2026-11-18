@@ -8,7 +8,6 @@ import { resolveIntentsEvmAssets } from '@/core/services/intents-evm-assets'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
-  type RheaSwapQuoteView,
   type RheaSwapQuoteRequest,
   type RheaSwapReviewView,
   type RheaSwapToken
@@ -37,7 +36,6 @@ import {
   type ShieldSwapZecSourceKind
 } from '@/popup/services/shield-swap-zec-sources'
 import type { ShieldFundingAsset } from './shield-transfer'
-import { isRheaSwapQuoteFresh } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import {
   filterCrossChainSendDestinations,
@@ -233,38 +231,6 @@ export {
   getRheaSwapQuoteDeadline,
   isRheaSwapQuoteFresh
 } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
-
-export function hasSwapQuoteTermsChanged(
-  previous: RheaSwapQuoteView,
-  next: RheaSwapQuoteView
-): boolean {
-  return (
-    previous.estimatedOut !== next.estimatedOut ||
-    previous.minAmountOut !== next.minAmountOut ||
-    previous.router !== next.router ||
-    previous.recipient !== next.recipient
-  )
-}
-
-export function isAcceptedSwapReview(input: {
-  readonly quote: RheaSwapQuoteView | null
-  readonly review: RheaSwapReviewView | null
-  readonly acceptedHandle: string | null
-  readonly quoteKey: string | null
-  readonly requestKey: string | null | undefined
-  readonly now?: number
-}): boolean {
-  const { quote, review, acceptedHandle, quoteKey, requestKey } = input
-  return Boolean(
-    quote &&
-    review &&
-    acceptedHandle === quote.quoteHandle &&
-    review.quoteHandle === quote.quoteHandle &&
-    quoteKey &&
-    quoteKey === requestKey &&
-    isRheaSwapQuoteFresh(quote, input.now)
-  )
-}
 
 export function resolveShieldDomainZecFundingSource(input: {
   readonly ordinarySwapRequested: boolean

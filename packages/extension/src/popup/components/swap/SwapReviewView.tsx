@@ -40,8 +40,9 @@ interface SwapReviewViewProps {
   toFiat: string
   /** Output token units received for one input token unit. */
   rate?: string
-  previousRate?: string
-  priceAcceptanceRequired?: boolean
+  quoteAcceptanceLabel?: string
+  quoteChanges?: ReactNode
+  confirmDisabled?: boolean
   onAcceptNewPrice?: () => void
   onRefreshQuote?: () => void
   quoteRefreshing?: boolean
@@ -108,8 +109,9 @@ export function SwapReviewView({
   fromFiat,
   toFiat,
   rate,
-  previousRate,
-  priceAcceptanceRequired,
+  quoteAcceptanceLabel,
+  quoteChanges,
+  confirmDisabled,
   onAcceptNewPrice,
   onRefreshQuote,
   quoteRefreshing,
@@ -223,12 +225,6 @@ export function SwapReviewView({
                 <span className="inline-block h-4 w-32 animate-pulse rounded bg-card" />
               ) : rate ? (
                 <span className="inline-flex max-w-full flex-col items-end gap-0.5 tabular-nums">
-                  {priceAcceptanceRequired && previousRate && (
-                    <span className="text-xs text-muted line-through">
-                      1 {formatSymbol(tokenIn.symbol)} = {formatTokenQuantity(previousRate)}{' '}
-                      {formatSymbol(tokenOut.symbol)}
-                    </span>
-                  )}
                   <span>
                     1 {formatSymbol(tokenIn.symbol)} = {formatTokenQuantity(rate)}{' '}
                     {formatSymbol(tokenOut.symbol)}
@@ -421,6 +417,7 @@ export function SwapReviewView({
           )}
         </div>
 
+        {quoteChanges}
         {preparationError && (
           <InlineError
             message={preparationError}
@@ -461,26 +458,27 @@ export function SwapReviewView({
           <Button
             type="button"
             size="wallet"
-            onClick={priceAcceptanceRequired ? onAcceptNewPrice : onConfirm}
+            onClick={quoteAcceptanceLabel ? onAcceptNewPrice : onConfirm}
             disabled={
               isLoading ||
               insufficient ||
               feeUnavailable ||
               Boolean(preparationError) ||
-              (priceAcceptanceRequired && !onAcceptNewPrice)
+              confirmDisabled ||
+              (Boolean(quoteAcceptanceLabel) && !onAcceptNewPrice)
             }
             isLoading={isLoading}
             aria-label={
-              priceAcceptanceRequired
-                ? 'Accept new price'
+              quoteAcceptanceLabel
+                ? quoteAcceptanceLabel
                 : approvalDetails
                   ? 'Confirm token approval'
                   : actionLabel
             }
-            className={`min-w-0 flex-[2] text-sm text-black ${priceAcceptanceRequired ? 'bg-warning hover:bg-warning/90' : ''}`}
+            className={`min-w-0 flex-[2] text-sm text-black ${quoteAcceptanceLabel ? 'bg-warning hover:bg-warning/90' : ''}`}
           >
-            {priceAcceptanceRequired
-              ? 'Accept new price'
+            {quoteAcceptanceLabel
+              ? quoteAcceptanceLabel
               : actionLabel === 'Confirm Swap'
                 ? 'Confirm'
                 : actionLabel}
