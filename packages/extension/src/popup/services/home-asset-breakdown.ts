@@ -3,6 +3,8 @@ import type { PortfolioFiatSummary } from '@/popup/components/portfolio/portfoli
 import type { PortfolioReadModel } from '@/core/portfolio'
 import type { AssetPriceReadModel } from '@/core/prices'
 import type { ZcashBalance } from '@/types'
+import { buildAccountKey } from '@/core/wallet/account-scope'
+import type { AccountPortfolioValueSnapshot } from '@/core/wallet/account-portfolio-value'
 import { isPortfolioModelForScope } from './portfolio-cache'
 import { getAssetDomainRaw, summarizeAssetDomainsUsd, type AssetDomain } from './asset-domains'
 
@@ -67,6 +69,18 @@ export interface HomeAssetDomainDisplay {
   readonly loading: Readonly<Record<AssetDomain, boolean>>
 }
 
+export function resolveHomeCachedTotal(
+  values: ReadonlyMap<string, AccountPortfolioValueSnapshot>,
+  network: 'mainnet' | 'testnet',
+  walletId: string | null,
+  accountId: string | null,
+  selectedChains: readonly string[] | null | undefined
+): string | null {
+  if (!walletId || !accountId || selectedChains?.length === 1) return null
+  const value = values.get(buildAccountKey(network, walletId, accountId))
+  return value?.valuationBasis === 'wallet-assets-v2' && value.complete ? value.totalUsd : null
+}
+
 export function resolveHomeAssetDomainDisplay(input: {
   readonly portfolio: PortfolioReadModel | null
   readonly walletId: string | null
@@ -77,6 +91,7 @@ export function resolveHomeAssetDomainDisplay(input: {
   readonly totalStatus: HomePortfolioTotalStatus
   readonly fiat: PortfolioFiatSummary
   readonly breakdown: HomeAssetBreakdown | null
+  readonly cachedTotalUsd?: string | null
 }): HomeAssetDomainDisplay {
   const model = isPortfolioModelForScope(input.portfolio, input.walletId, input.accountId)
     ? input.portfolio
@@ -125,13 +140,15 @@ export function resolveHomeAssetDomainDisplay(input: {
   }
   const totals: Record<AssetDomain, string | null> = {
     all:
-      input.totalStatus === 'ready' || input.totalStatus === 'partial' ? input.fiat.totalUsd : null,
+      input.totalStatus === 'ready' || input.totalStatus === 'partial'
+        ? input.fiat.totalUsd
+        : (input.cachedTotalUsd ?? null),
     public: null,
     shield: null,
     private: null
   }
   const loading: Record<AssetDomain, boolean> = {
-    all: input.totalStatus === 'loading',
+    all: input.totalStatus === 'loading' && totals.all === null,
     public: false,
     shield: false,
     private: false

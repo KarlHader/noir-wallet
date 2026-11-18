@@ -7,6 +7,8 @@ import { getActivityAddressAlias } from '../../../src/popup/services/activity-ad
 import {
   getHomeAssetBreakdown,
   hasCompletePortfolioTotal,
+  resolveHomeAssetDomainDisplay,
+  resolveHomeCachedTotal,
   resolveHomePortfolioTotalStatus
 } from '../../../src/popup/services/home-asset-breakdown.ts'
 import {
@@ -376,6 +378,38 @@ test('Home total requires a complete current-account Portfolio and ready prices'
   expect(complete(model, 'ready', 'wallet-a', 'account-a', { ...fiat, staleAssetCount: 1 })).toBe(
     false
   )
+})
+
+test('Home shows only a scoped complete cached total until a current valuation is available', () => {
+  const values = new Map([
+    ['mainnet_wallet-a_account-a', {
+      valuationBasis: 'wallet-assets-v2', totalUsd: '12.5', updatedAt: 1, complete: true
+    }],
+    ['mainnet_wallet-a_account-b', {
+      valuationBasis: 'wallet-assets-v2', totalUsd: '99', updatedAt: 1, complete: false
+    }]
+  ])
+  const cached = (network, walletId, accountId, selectedChains) =>
+    resolveHomeCachedTotal(values, network, walletId, accountId, selectedChains)
+  expect(cached('mainnet', 'wallet-a', 'account-a')).toBe('12.5')
+  expect(cached('mainnet', 'wallet-a', 'account-b')).toBeNull()
+  expect(cached('testnet', 'wallet-a', 'account-a')).toBeNull()
+  expect(cached('mainnet', 'wallet-b', 'account-a')).toBeNull()
+  expect(cached('mainnet', 'wallet-a', 'account-a', ['eip155:1'])).toBeNull()
+
+  const base = {
+    portfolio: null, walletId: 'wallet-a', accountId: 'account-a',
+    loadStatus: 'loading', settled: false, priceStatus: 'loading',
+    totalStatus: 'loading', fiat: { totalUsd: '0' }, breakdown: null,
+    cachedTotalUsd: cached('mainnet', 'wallet-a', 'account-a')
+  }
+  const initial = resolveHomeAssetDomainDisplay(base)
+  expect(initial.totals).toEqual({ all: '12.5', public: null, shield: null, private: null })
+  expect(initial.loading.all).toBe(false)
+  expect(resolveHomeAssetDomainDisplay({ ...base, cachedTotalUsd: null }).loading.all).toBe(true)
+  expect(resolveHomeAssetDomainDisplay({
+    ...base, totalStatus: 'ready', fiat: { totalUsd: '7' }
+  }).totals.all).toBe('7')
 })
 
 test('Home renders available valuations during partial refreshes instead of an endless skeleton', () => {
