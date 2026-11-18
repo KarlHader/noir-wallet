@@ -1,4 +1,4 @@
-import { BitcoinWalletClientError } from '@/popup/services/bitcoin-wallet-client'
+import { BitcoinWalletClientError } from './bitcoin-wallet-client'
 
 export function getBitcoinSendPrepareError(error: unknown): string {
   if (!(error instanceof BitcoinWalletClientError)) {

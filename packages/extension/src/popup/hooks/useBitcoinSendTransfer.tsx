@@ -49,7 +49,7 @@ import {
 import {
   getBitcoinSendApprovalError,
   getBitcoinSendPrepareError
-} from '@/popup/pages/transactions/bitcoin-send-validation'
+} from '@/popup/services/bitcoin-send-validation'
 
 interface BitcoinSendAsset {
   readonly asset: PortfolioAssetView

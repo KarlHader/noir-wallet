@@ -250,7 +250,7 @@ import { toWalletEvmSwapToken } from '@/popup/services/token-address-discovery'
 import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSwapRoute
-} from '@/popup/pages/transactions/evm-send-validation'
+} from '@/popup/services/evm-send-validation'
 import { requiredRheaEvmApproval } from '@/popup/services/rhea-evm-approval'
 import { swapApprovalContinuationClient } from '@/popup/services/swap-approval-continuation-client'
 import type { SwapApprovalContinuation } from '@/background/swap-approval-continuation'

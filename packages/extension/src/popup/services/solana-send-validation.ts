@@ -1,4 +1,4 @@
-import { SolanaWalletClientError } from '@/popup/services/solana-wallet-client'
+import { SolanaWalletClientError } from './solana-wallet-client'
 
 export function getSolanaSendPrepareError(
   error: unknown,

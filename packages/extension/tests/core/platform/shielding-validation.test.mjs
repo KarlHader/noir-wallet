@@ -11,7 +11,7 @@ import {
 import {
   getZcashTransparentToShieldMoveAmountError,
   resolveZcashTransparentShieldFundingBalance
-} from '../../../src/popup/pages/transactions/zcash-send-validation.ts'
+} from '../../../src/popup/services/zcash-send-validation.ts'
 
 const describe = it.describe
 

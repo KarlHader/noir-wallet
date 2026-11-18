@@ -4,7 +4,7 @@ import { sameNativeZecQuoteBinding, zecToZats } from '@/core/services/native-zec
 import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSendDraft
-} from '@/popup/pages/transactions/evm-send-validation'
+} from '@/popup/services/evm-send-validation'
 import { getPublicPrivateSendRouteCost } from '@/popup/services/public-private-send-preview'
 import { useZcashMoveQuote } from '@/popup/hooks/useZcashMoveQuote'
 import { useZcashPrivateSendPreview } from '@/popup/hooks/useZcashPrivateSendPreview'
@@ -113,7 +113,7 @@ import {
   isZcashSendRecipientReady,
   resolveZcashSendRecipientInput,
   shouldRetainZcashSendRecipient
-} from '@/popup/pages/transactions/zcash-send-validation'
+} from '@/popup/services/zcash-send-validation'
 
 export function ZcashTransfer({
   active = true,

@@ -35,7 +35,7 @@ Global PEA
   -> Main address or an external destination
 ```
 
-The reverse Transfer from asset details fills the current Main address and uses this route. It spends only PEA on-chain assets, never balances that exist solely in the Confidential abstract account. The relevant code is `src/popup/pages/transactions/evm-send-validation.ts`, `src/core/services/rhea-swap/rhea-private-transfer.ts`, and `src/background/rhea-swap.ts`.
+The reverse Transfer from asset details fills the current Main address and uses this route. It spends only PEA on-chain assets, never balances that exist solely in the Confidential abstract account. The relevant code is `src/popup/services/evm-send-validation.ts`, `src/core/services/rhea-swap/rhea-private-transfer.ts`, and `src/background/rhea-swap.ts`.
 
 ### Wallet EVM Same-chain Send
 
@@ -43,7 +43,7 @@ Send always retains the selected source address. Public sends use direct on-chai
 
 Send prefetches selectable EVM catalogs with at most two requests in flight, sharing the existing ten-minute cache and request deduplication. In SDK 2.0.6, same-chain source and destination assets use the `from` catalog. The source-catalog adapter detects rows the SDK would silently discard and avoids retaining empty or capability-incomplete results, so Retry can reach the service. Match the network and native identity or contract, then require `nearintents` or `preswap-nearintents` in the matching asset's sources. A failed, partial, empty, or capability-incomplete result leaves support unknown: Continue waits and offers Retry. A failed supported-asset quote or Max estimate never falls back to a direct transfer.
 
-The direct-send review identifies the send method and requires **Send anyway** for a PEA source or a Public source whose recipient is Confidential or unknown. Only the local account directory on the selected network establishes a Public or PEA role; external addresses and address-book labels do not. Source, recipient, asset, amount, and method changes invalidate the review. Entry points are `src/popup/pages/transactions/EvmSendForm.tsx`, `src/popup/services/evm-send-{catalog,routing}.ts`, `src/core/services/rhea-swap/rhea-confidential-support.ts`, and `src/core/accounts/evm-address-role.ts`.
+The direct-send review identifies the send method and requires **Send anyway** for a PEA source or a Public source whose recipient is Confidential or unknown. Only the local account directory on the selected network establishes a Public or PEA role; external addresses and address-book labels do not. Source, recipient, asset, amount, and method changes invalidate the review. Entry points are `src/popup/hooks/useEvmSendTransfer.tsx`, `src/popup/services/evm-send-{catalog,routing}.ts`, `src/core/services/rhea-swap/rhea-confidential-support.ts`, and `src/core/accounts/evm-address-role.ts`.
 
 These rules apply only to wallet same-chain Send. Swap, cross-chain Send, account-to-account Transfer, and dApp routing retain their existing behavior.
 

@@ -67,7 +67,7 @@ import { isSelectableChainFamily } from '@/popup/services/chain-selection-availa
 import { SolanaTransactionResult } from './SolanaTransactionResult'
 import { NearTransactionResult } from './NearTransactionResult'
 import { isPortfolioModelForScope } from '@/popup/services/portfolio-cache'
-import { parsePublicPrivateEvmSendDraft } from './evm-send-validation'
+import { parsePublicPrivateEvmSendDraft } from '@/popup/services/evm-send-validation'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import {
   getCrossChainSendAssetGroup,

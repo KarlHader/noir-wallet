@@ -37,7 +37,7 @@ import {
   buildPublicPrivateEvmSendPath,
   resolveEvmNativeMaximumAmount,
   type EvmSendSourceMode
-} from '@/popup/pages/transactions/evm-send-validation'
+} from '@/popup/services/evm-send-validation'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import {
   recordSendApprovalFailure,
@@ -81,7 +81,7 @@ import {
 import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
 import { readEvmSendDestinationSupport } from '@/popup/services/evm-send-catalog'
 
-export interface EvmSendAsset {
+interface EvmSendAsset {
   readonly asset: PortfolioAssetView
   readonly chain: PortfolioChainView
 }

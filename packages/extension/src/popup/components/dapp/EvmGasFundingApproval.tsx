@@ -12,7 +12,7 @@ import {
   parseEvmGasFundingDetails,
   type EvmGasFundingPreview
 } from '@/popup/services/evm-gas-funding'
-import { buildPrivateGasFundingPath } from '@/popup/pages/transactions/evm-send-validation'
+import { buildPrivateGasFundingPath } from '@/popup/services/evm-send-validation'
 
 interface EvmGasFundingApprovalProps {
   readonly data: unknown

@@ -27,8 +27,14 @@ import {
   type SolanaTransferReview,
   type SolanaTransferSubmission
 } from '@/popup/services/solana-wallet-client'
-import { getNearSendApprovalError, getNearSendPrepareError } from './near-send-validation'
-import { getSolanaSendApprovalError, getSolanaSendPrepareError } from './solana-send-validation'
+import {
+  getNearSendApprovalError,
+  getNearSendPrepareError
+} from '@/popup/services/near-send-validation'
+import {
+  getSolanaSendApprovalError,
+  getSolanaSendPrepareError
+} from '@/popup/services/solana-send-validation'
 
 export type SendTransferSubmission =
   | { readonly family: 'bitcoin'; readonly value: BitcoinTransferSubmission }
