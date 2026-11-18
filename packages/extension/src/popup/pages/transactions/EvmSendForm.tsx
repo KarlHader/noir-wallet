@@ -1381,10 +1381,14 @@ export function EvmSendForm({
                 tier={feeSelection.kind === 'tier' ? feeSelection.tier : 'standard'}
                 selection={feeSelection}
                 customDefaults={feePreview.details}
-                feeModel={feePreview.details?.transactionType ?? 'eip1559'}
+                feeModel={
+                  feePreview.details?.transactionType ??
+                  (feeSelection.kind === 'legacy' ? 'legacy' : 'eip1559')
+                }
                 amount={previewFee}
                 symbol={nativeSymbol}
                 layout="inline"
+                disabled={feePreview.loading}
                 onTierChange={tier => handleFormFeeSelectionChange({ kind: 'tier', tier })}
                 onSelectionChange={handleFormFeeSelectionChange}
               />

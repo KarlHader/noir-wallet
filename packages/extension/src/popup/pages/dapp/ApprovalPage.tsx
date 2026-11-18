@@ -1549,6 +1549,10 @@ export function ApprovalPage() {
               chainFamily="evm"
               tier={dappEvmFeeSelection.kind === 'tier' ? dappEvmFeeSelection.tier : 'standard'}
               selection={dappEvmFeeSelection}
+              feeModel={
+                evmTransactionSummary.fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'
+              }
+              customDefaults={evmTransactionSummary.fields}
               amount={feeAmount}
               symbol={nativeSymbol}
               onTierChange={handleNetworkFeeTierChange}

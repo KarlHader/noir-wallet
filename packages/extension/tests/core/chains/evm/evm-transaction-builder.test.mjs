@@ -307,9 +307,9 @@ test.describe('EVM transfer builder', () => {
     })
   })
 
-  test('keeps BNB Low above the RPC gas price baseline', async () => {
+  test('uses the BNB RPC gas price baseline for Low and preserves an explicit 0.05 Gwei cap', async () => {
     const bnbChainId = parseChainId('eip155:56').id
-    const prepared = await buildEvmTransfer({
+    const input = {
       chainId: bnbChainId,
       chainAccount: { ...account, scope: { ...account.scope, chainId: bnbChainId } },
       assets,
@@ -318,18 +318,43 @@ test.describe('EVM transfer builder', () => {
         recipient,
         amountRaw: '123'
       },
-      feeTier: 'low',
       rpc: transactionRpc({
         getLatestBlockFee: async () => ({ blockNumber: '100', baseFeePerGas: '0' }),
         getMaximumPriorityFeePerGas: async () => '1000000000',
         getGasPrice: async () => '2000000000'
       })
-    })
+    }
+    const prepared = await buildEvmTransfer({ ...input, feeTier: 'low' })
 
     expect(prepared.transaction).toMatchObject({
       maxPriorityFeePerGas: '2000000000',
       maxFeePerGas: '2000000000'
     })
+    const lowGasPriceInput = {
+      ...input,
+      rpc: transactionRpc({
+        getLatestBlockFee: async () => ({ blockNumber: '100', baseFeePerGas: '0' }),
+        getMaximumPriorityFeePerGas: async () => '50000000',
+        getGasPrice: async () => '50000000'
+      })
+    }
+    const standard = await buildEvmTransfer(lowGasPriceInput)
+    const custom = await buildEvmTransfer({
+      ...lowGasPriceInput,
+      feeSelection: {
+        kind: 'custom',
+        maxPriorityFeePerGasWei: '50000000',
+        maxFeePerGasWei: '50000000',
+        gasLimit: '21000'
+      }
+    })
+    for (const review of [standard, custom]) {
+      expect(review.transaction).toMatchObject({
+        maxPriorityFeePerGas: '50000000',
+        maxFeePerGas: '50000000',
+        gasLimit: '21000'
+      })
+    }
   })
 
   test('builds a same-nonce self-transfer with replacement-safe fees for cancellation', async () => {

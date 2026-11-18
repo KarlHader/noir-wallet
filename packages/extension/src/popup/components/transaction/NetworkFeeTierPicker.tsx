@@ -31,8 +31,8 @@ interface NetworkFeeTierPickerProps {
   readonly layout?: 'stacked' | 'inline'
   readonly customDefaults?: Readonly<{
     gasLimit: string
-    maxFeePerGasWei: string
-    maxPriorityFeePerGasWei: string
+    maxFeePerGasWei: string | null
+    maxPriorityFeePerGasWei: string | null
     gasPriceWei?: string | null
   }> | null
   readonly feeModel?: 'eip1559' | 'legacy'
@@ -148,12 +148,14 @@ function NetworkFeeTierEditContent({
   }, [])
   const [customPriorityFeeGwei, setCustomPriorityFeeGwei] = useState(
     formatEvmPriorityFeeGwei(selection) ??
-      (customDefaults ? formatEvmWeiAsGwei(customDefaults.maxPriorityFeePerGasWei) : '')
+      (customDefaults?.maxPriorityFeePerGasWei != null
+        ? formatEvmWeiAsGwei(customDefaults.maxPriorityFeePerGasWei)
+        : '')
   )
   const [customMaximumFeeGwei, setCustomMaximumFeeGwei] = useState(
     selection.kind === 'custom' && selection.maxFeePerGasWei
       ? formatEvmWeiAsGwei(selection.maxFeePerGasWei)
-      : customDefaults
+      : customDefaults?.maxFeePerGasWei != null
         ? formatEvmWeiAsGwei(customDefaults.maxFeePerGasWei)
         : ''
   )
@@ -169,6 +171,7 @@ function NetworkFeeTierEditContent({
         ? formatEvmWeiAsGwei(customDefaults.gasPriceWei)
         : ''
   )
+  const canEditCustom = allowCustom && (customDefaults != null || selection.kind !== 'tier')
 
   const handleSelect = async (nextSelection: EvmFeeSelection) => {
     if (pending.current) return
@@ -201,7 +204,8 @@ function NetworkFeeTierEditContent({
         disabled={updating}
       />
       {details}
-      {allowCustom && (
+      {allowCustom && !canEditCustom && <p className="text-xs text-muted">No fee estimate yet</p>}
+      {canEditCustom && (
         <div className="space-y-2 rounded-md border border-border/60 bg-card/45 p-3">
           <label htmlFor="custom-gas-limit" className="block text-xs font-medium">
             Gas limit
@@ -214,7 +218,6 @@ function NetworkFeeTierEditContent({
               setCustomGasLimit(event.target.value)
               setError(null)
             }}
-            placeholder="21000"
             disabled={updating}
           />
           {feeModel === 'legacy' ? (
@@ -230,7 +233,6 @@ function NetworkFeeTierEditContent({
                   setCustomGasPriceGwei(event.target.value)
                   setError(null)
                 }}
-                placeholder="3"
                 endContent={<span className="text-xs text-muted">GWEI</span>}
                 disabled={updating}
               />
@@ -248,7 +250,6 @@ function NetworkFeeTierEditContent({
                   setCustomMaximumFeeGwei(event.target.value)
                   setError(null)
                 }}
-                placeholder="3"
                 endContent={<span className="text-xs text-muted">GWEI</span>}
                 disabled={updating}
               />
@@ -265,7 +266,6 @@ function NetworkFeeTierEditContent({
                     setError(null)
                     setRetrySelection(null)
                   }}
-                  placeholder="1.5"
                   endContent={<span className="text-xs text-muted">GWEI</span>}
                   disabled={updating}
                 />
