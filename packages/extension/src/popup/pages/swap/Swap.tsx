@@ -3241,7 +3241,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       currentAmount: swap.amountIn,
       maximumAmount: zcashAvailability.amount
     })
-    if (!amount || safeBig(amount).lte(0)) return
+    if (!amount || safeBig(amount).lte(0) || amount === swap.amountIn) return
     reviewAfterQuoteRefresh.current = createSwapQuoteRefreshTarget(lastZcashQuoteRequest.current, {
       decimal: amount,
       decimals: swap.tokenIn?.decimals ?? ZEC_DECIMALS
@@ -4667,7 +4667,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         },
         resultReturnPath
       )
-      navigate('/transaction-result')
+      navigate('/transaction-result', { replace: crossChainSendRequested })
     },
     [
       swap,
@@ -4690,7 +4690,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
 
   const refreshExpiredReview = useCallback(async () => {
     if (viewStep === 'review' && !privateBalanceTransferRequested && !publicPrivacySendRequested) {
-      await reviewLiveQuote(undefined, true)
+      await reviewLiveQuote()
       return
     }
     const sequence = ++quoteRequestSequence.current
@@ -7341,7 +7341,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 <InlineError message="Amount exceeds balance at this fee." />
               ) : undefined
             }
-            confirmLabel="Confirm Send"
+            confirmLabel={pendingRheaEvmAfterApproval ? 'Approve Token' : 'Confirm Send'}
             confirming={isSending || isPreparingReview}
             submitting={isSending}
             confirmDisabled={
@@ -7869,6 +7869,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         isQuoting={swap.isQuoting}
         quoteError={
           shieldSwapSelected &&
+          !accountNetworksLoading &&
           !(shieldNativeZecSwap ? nativeZecConfidentialAvailable : confidentialShieldAvailable)
             ? 'Shield Swap is unavailable for this account.'
             : shieldNativeZecSwap && !nativeZecShieldAvailable
@@ -7879,7 +7880,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                     !shieldNativeZecSwap &&
                     swap.tokenOut &&
                     !resolvedRecipientAddress &&
-                    !swap.destinationTokensLoading
+                    !swap.destinationTokensLoading &&
+                    !walletSourcesLoading &&
+                    swap.selectionReady
                   ? recipientNetworkSupported
                     ? 'Receive account unavailable for this asset.'
                     : 'This destination network is unavailable in this wallet.'
@@ -7901,6 +7904,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                         ? 'This asset is not available for Confidential funding.'
                         : shieldNativeZecSwap &&
                             swap.tokenOut &&
+                            !walletSourcesLoading &&
+                            nativeIntentsCatalogSettled &&
+                            !awaitingNativeDestinationRestore &&
+                            (nativeConfidentialDestinationTokens.length === 0 ||
+                              initializedNativeDestinationScope.current === swapPreferenceScope) &&
                             !resolveNativeZecIntentsDestination(
                               swap.tokenOut,
                               portfolio,
@@ -8172,11 +8180,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         (viewStep === 'review' || (resumingApprovalReview && viewStep === 'input')) && (
           <div className="flex h-14 shrink-0 items-center justify-between bg-background px-5">
             <h1 className="min-w-0 truncate text-lg font-medium leading-[23px]">
-              {publicPrivacySendRequested || crossChainSendRequested
-                ? 'Confirm Send'
-                : lockedAssetFlowRequested
-                  ? 'Transfer'
-                  : 'Confirm Swap'}
+              {crossChainSendRequested && viewStep === 'review' && pendingRheaEvmAfterApproval
+                ? 'Token approval'
+                : publicPrivacySendRequested || crossChainSendRequested
+                  ? 'Confirm Send'
+                  : lockedAssetFlowRequested
+                    ? 'Transfer'
+                    : 'Confirm Swap'}
             </h1>
             <button
               type="button"

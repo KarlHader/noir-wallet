@@ -208,7 +208,7 @@ export function CrossChainSendFormView({
         footer={
           <SendFormActions
             onContinue={onReview}
-            disabled={initializing || !canGetQuote || hasInsufficientFunds || actionLoading}
+            disabled={initializing || !canGetQuote || hasInsufficientFunds || isQuoting}
             loading={actionLoading}
           />
         }
@@ -218,10 +218,19 @@ export function CrossChainSendFormView({
         )}
 
         <SendRouteInfoCard
-          provider={providerName ?? '—'}
+          provider={
+            isQuoting ? (
+              <span role="status" className="inline-flex items-center gap-1.5 text-muted">
+                <Icon icon="lucide:loader-circle" className="size-3.5 animate-spin" aria-hidden />
+                Calculating quote…
+              </span>
+            ) : (
+              (providerName ?? '—')
+            )
+          }
           feeLabel="Route cost (est.)"
           fee={
-            routeCost === undefined ? (
+            isQuoting || routeCost === undefined ? (
               '—'
             ) : routeCost === null ? (
               'Unavailable'
@@ -243,7 +252,7 @@ export function CrossChainSendFormView({
                   {slippage}% <Icon icon="lucide:chevron-down" width={12} />
                 </button>
               </div>
-              {tokenOut && estimatedOut && (
+              {!isQuoting && tokenOut && estimatedOut && (
                 <div className="flex min-w-0 items-center justify-between gap-2">
                   <span className="text-muted">Est. receive</span>
                   <span

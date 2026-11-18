@@ -249,6 +249,8 @@ export function Send({
   const [maxSelected, setMaxSelected] = useState(retryDraft?.maxSelected ?? false)
   const [memo, setMemo] = useState(retryDraft?.memo ?? '')
   const [showReview, setShowReview] = useState(false)
+  const showReviewRef = useRef(showReview)
+  showReviewRef.current = showReview
   const [isHardwareSigning, setIsHardwareSigning] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   useLayoutEffect(() => {
@@ -476,7 +478,13 @@ export function Send({
           }
           setMoveQuote({ key: moveQuoteKey, review })
           expiryTimer = window.setTimeout(
-            () => setMoveQuoteRetry(value => value + 1),
+            () => {
+              if (showReviewRef.current || confirmationInFlight.current) {
+                setMoveQuoteError('Move quote expired. Try again.')
+                return
+              }
+              setMoveQuoteRetry(value => value + 1)
+            },
             Math.max(0, review.expiresAt - Date.now() - 5_000)
           )
         })
@@ -1016,6 +1024,8 @@ export function Send({
             current.expiresAt <= Date.now() + 5_000 ||
             JSON.stringify(current.quoteBinding) !== JSON.stringify(review.quoteBinding)
           ) {
+            setMoveQuote(null)
+            setMoveQuoteError('Move quote changed. Try again.')
             throw new Error('Move quote changed. Review again.')
           }
         } else {
@@ -1199,9 +1209,6 @@ export function Send({
         useWalletStore.getState().currentNetwork !== currentNetwork
       )
         return
-      if (isConfidentialMove) {
-        setMoveQuoteRetry(value => value + 1)
-      }
       toast.error(
         isSelfMove ? 'Could not start Move' : 'Could not send ZEC',
         classifyError(cause).userMessage
@@ -1870,12 +1877,13 @@ export function Send({
                   message={
                     moveQuoteReady && moveQuote
                       ? 'Move quote updated. Review the new amount.'
-                      : (moveQuoteError ?? 'Refreshing Move quote…')
+                      : (moveQuoteError ??
+                        (moveQuote ? 'Move quote expired. Try again.' : 'Refreshing Move quote…'))
                   }
                   onRetry={
                     moveQuoteReady && moveQuote
                       ? () => setReviewedMoveQuote(moveQuote.review)
-                      : moveQuoteError
+                      : moveQuoteError || moveQuote
                         ? () => setMoveQuoteRetry(value => value + 1)
                         : undefined
                   }

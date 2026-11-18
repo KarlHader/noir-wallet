@@ -798,13 +798,7 @@ export function MultichainSend({
               currentSession.zcashInitialFundingSource === 'shielded' ? '/shield-funds' : '/',
               { replace: true }
             )
-        : sendEntry !== null
-          ? goBack
-          : () => {
-              if (shieldActive) navigate('/send', { replace: true, state: navigationSnapshot })
-              setSelection(null)
-              setAssetPickerOpen(true)
-            }
+        : goBack
   const initialPortfolio =
     navigationSnapshot?.walletId === effectiveWalletId &&
     navigationSnapshot?.accountId === effectiveAccountId &&
