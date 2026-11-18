@@ -19,6 +19,9 @@ import {
 } from '@/popup/components/transaction/ZcashMoveLayout'
 import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanner'
 import { openModal } from '../../provider/ModalManager'
+import { carryQuotePreview } from '@/popup/hooks/useQuoteReview'
+import { rheaQuoteTerms } from '@/popup/services/quote-review'
+import { QuoteReviewChanges } from './QuoteReviewChanges'
 import { RecipientSelector } from '../../components/transaction/RecipientSelector'
 import { InlineError } from '@/popup/components/common/InlineError'
 import { ZcashSyncProgress } from '@/popup/components/common/ZcashSyncProgress'
@@ -367,7 +370,9 @@ export function ZcashTransfer({
   const {
     quote: moveQuote,
     reviewedQuote: reviewedMoveQuote,
-    setReviewedQuote: setReviewedMoveQuote,
+    reviewStatus: moveReviewStatus,
+    beginReview: beginMoveReview,
+    acceptReview: acceptMoveReview,
     error: moveQuoteError,
     ready: moveQuoteReady,
     reviewReady: moveReviewReady,
@@ -753,17 +758,27 @@ export function ZcashTransfer({
     )
       return
     if (sendPrivately) {
-      if (!privatePreviewReady || !currentWalletId || !currentAccountId || !isValidAmount) return
+      if (
+        !privatePreviewReady ||
+        !privatePreview ||
+        !currentWalletId ||
+        !currentAccountId ||
+        !isValidAmount
+      )
+        return
       navigate(
-        buildPublicPrivateEvmSendPath({
-          assetId: ZEC_ZCASH_ASSET,
-          recipient: effectiveToAddress,
-          amount,
-          maximum: maxSelected,
-          walletId: currentWalletId,
-          accountId: currentAccountId,
-          network: currentNetwork
-        }),
+        carryQuotePreview(
+          buildPublicPrivateEvmSendPath({
+            assetId: ZEC_ZCASH_ASSET,
+            recipient: effectiveToAddress,
+            amount,
+            maximum: maxSelected,
+            walletId: currentWalletId,
+            accountId: currentAccountId,
+            network: currentNetwork
+          }),
+          { ...rheaQuoteTerms(privatePreview.quote), sourceAmount: privatePreview.amountRaw }
+        ),
         { replace: true }
       )
       return
@@ -779,7 +794,7 @@ export function ZcashTransfer({
       (isSelfMove ||
         isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
     ) {
-      if (isConfidentialMove && moveQuote) setReviewedMoveQuote(moveQuote.review)
+      if (isConfidentialMove) beginMoveReview()
       setShowReview(true)
     }
   }
@@ -1714,24 +1729,25 @@ export function ZcashTransfer({
                 )
               }
             ]}
+            afterRows={
+              reviewedMoveQuote && (
+                <QuoteReviewChanges
+                  changes={moveReviewStatus.changes}
+                  output={{
+                    decimals: reviewedMoveQuote.destinationDecimals,
+                    symbol: reviewedMoveQuote.destinationSymbol
+                  }}
+                />
+              )
+            }
             error={
-              isConfidentialMove && !moveReviewReady ? (
+              isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel ? (
                 <InlineError
                   className="mt-3"
                   message={
-                    moveQuoteReady && moveQuote
-                      ? 'Move quote updated. Review the new amount.'
-                      : (moveQuoteError ??
-                        (moveQuote ? 'Move quote expired. Try again.' : 'Refreshing Move quote…'))
+                    moveQuoteError ?? (moveQuote ? 'Move quote expired.' : 'Refreshing Move quote…')
                   }
-                  onRetry={
-                    moveQuoteReady && moveQuote
-                      ? () => setReviewedMoveQuote(moveQuote.review)
-                      : moveQuoteError || moveQuote
-                        ? retryMoveQuote
-                        : undefined
-                  }
-                  retryLabel={moveQuoteReady && moveQuote ? 'Review quote' : 'Retry'}
+                  onRetry={moveQuoteError || moveQuote ? retryMoveQuote : undefined}
                 />
               ) : reviewInsufficient && amountErrorCopy ? (
                 <InlineError className="mt-3" message={amountErrorCopy} />
@@ -1743,14 +1759,19 @@ export function ZcashTransfer({
                 />
               ) : undefined
             }
-            confirmLabel={isHardwareSigning ? 'Waiting for wallet...' : 'Confirm'}
+            confirmLabel={
+              isHardwareSigning
+                ? 'Waiting for wallet...'
+                : (moveReviewStatus.acceptLabel ?? 'Confirm')
+            }
+            confirmTone={moveReviewStatus.acceptLabel ? 'warning' : 'default'}
             preparing={showReview && !syncBlocked && (moveQuoteLoading || feeCalculating)}
             confirming={isConfirming}
             submitting={isConfirming && !isHardwareWallet}
             confirmDisabled={
               !active ||
               moveUnavailable ||
-              (isConfidentialMove && !moveReviewReady) ||
+              (isConfidentialMove && !moveReviewReady && !moveReviewStatus.acceptLabel) ||
               reviewInsufficient ||
               !feeReady ||
               syncBlocked ||
@@ -1760,7 +1781,7 @@ export function ZcashTransfer({
             onCancel={() => {
               if (!confirmationInFlight.current && !isHardwareSigning) setShowReview(false)
             }}
-            onConfirm={() => void handleConfirm()}
+            onConfirm={moveReviewStatus.acceptLabel ? acceptMoveReview : () => void handleConfirm()}
           />
         </DialogContent>
       </Dialog>

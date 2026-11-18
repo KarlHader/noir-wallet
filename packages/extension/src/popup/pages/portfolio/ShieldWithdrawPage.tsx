@@ -19,6 +19,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFundingPreview'
+import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -48,6 +49,7 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { Button } from '@/popup/components/ui/button'
 import { InlineError } from '@/popup/components/common/InlineError'
@@ -86,6 +88,7 @@ import {
   ZcashMoveAccountCard
 } from '@/popup/components/transaction/ZcashMoveLayout'
 import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
+import { confidentialQuoteTerms } from '@/popup/services/quote-review'
 
 function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): string {
   return chain.family === 'evm'
@@ -223,10 +226,12 @@ export function ShieldWithdrawForm({
     destination: ShieldFundingAsset
     amount: string
   }> | null>(null)
+  const quoteReview = useQuoteReview()
   const preparedRef = useRef(prepared)
   preparedRef.current = prepared
   const [previewGeneration, setPreviewGeneration] = useState(0)
   const [recoveryPending, setRecoveryPending] = useState(false)
+  const [refreshingReview, setRefreshingReview] = useState(false)
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -236,11 +241,15 @@ export function ShieldWithdrawForm({
     destinationNetworkId,
     recipient,
     amount,
-    slippage
+    slippage,
+    entry.provider,
+    moveToOwnZcash
   ])
   const latestDraftKey = useRef(draftKey)
   latestDraftKey.current = draftKey
   const confirmationAttempt = useRef<string | null>(null)
+  const cancelledPlanId = useRef<string | null>(null)
+  const reviewRequestId = useRef(0)
   const pendingSourceNetworkCheck = useRef<{
     sourceAssetId: string
     networkId: string
@@ -301,10 +310,13 @@ export function ShieldWithdrawForm({
   }, [active, prepared])
 
   useEffect(() => {
+    reviewRequestId.current += 1
     const pending = preparedRef.current
     if (pending && confirmationAttempt.current !== pending.review.planId)
       void confidentialFundingClient.cancel(pending.review.planId).catch(() => {})
     preparedRef.current = null
+    quoteReview.reset()
+    cancelledPlanId.current = null
     setSourceId(routeAssetId)
     setDestinationNetworkId(routeNetworkId)
     setAmount(routeAmount)
@@ -313,12 +325,21 @@ export function ShieldWithdrawForm({
     setNetworkPickerOpen(false)
     setPrepared(null)
     setRecoveryPending(false)
+    setRefreshingReview(false)
     setBusy(false)
     setUncertain(false)
     setError(null)
     pendingSourceNetworkCheck.current = null
     confirmationAttempt.current = null
-  }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient, routeAmount])
+  }, [
+    scopeKey,
+    routeAssetId,
+    routeNetworkId,
+    routeRecipient,
+    routeAmount,
+    entry.provider,
+    moveToOwnZcash
+  ])
 
   useEffect(() => {
     setError(null)
@@ -697,6 +718,7 @@ export function ShieldWithdrawForm({
     void loadBalances(true, false)
     preparedRef.current = null
     setPrepared(null)
+    quoteReview.reset()
     setAmount('')
     setUncertain(false)
     setError(null)
@@ -763,6 +785,8 @@ export function ShieldWithdrawForm({
     setBusy(true)
     setError(null)
     const submittedDraftKey = draftKey
+    quoteReview.reset()
+    quoteReview.begin(submittedDraftKey, confidentialQuoteTerms(preview))
     try {
       const request = previewRequest
       const review = await confidentialFundingClient.prepare(request)
@@ -784,11 +808,23 @@ export function ShieldWithdrawForm({
       }
       confirmationAttempt.current = null
       setUncertain(false)
+      if (
+        !quoteReview.stage(submittedDraftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        return
+      }
+      cancelledPlanId.current = null
       const pending = { review, request, source, destination, amount }
       preparedRef.current = pending
       setPrepared(pending)
     } catch (cause) {
       if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey) {
+        quoteReview.reset()
         setRecoveryPending(true)
         setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
         setPreviewGeneration(value => value + 1)
@@ -811,12 +847,125 @@ export function ShieldWithdrawForm({
     if (isUnsignedShieldTerminal(plan)) {
       preparedRef.current = null
       setPrepared(null)
+      quoteReview.reset()
       setUncertain(false)
       setError(`${actionLabel} was not started. Try again.`)
       return 'failed'
     }
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
   }
+  const refreshReview = async () => {
+    if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return
+    if (!previewRequest || JSON.stringify(previewRequest) !== JSON.stringify(prepared.request)) {
+      setError(`${actionLabel} details changed. Go back and review again.`)
+      return
+    }
+    const current = prepared
+    const submittedDraftKey = draftKey
+    const requestId = ++reviewRequestId.current
+    setBusy(true)
+    setRefreshingReview(true)
+    setError(null)
+    try {
+      if (
+        confirmationAttempt.current === current.review.planId &&
+        (await inspectPlan(current.review.planId)) !== 'prepared'
+      )
+        return
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) return
+      if (cancelledPlanId.current !== current.review.planId) {
+        await confidentialFundingClient.cancel(current.review.planId)
+        cancelledPlanId.current = current.review.planId
+      }
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) {
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      const review = await confidentialFundingClient.prepare(current.request)
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) {
+        if (review.phase === 'prepared')
+          void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      if (review.phase !== 'prepared') {
+        openActivity(review.transactionId)
+        return
+      }
+      if (
+        !matchesExternalShieldWithdrawReview(review, current.request) ||
+        review.purpose !== current.request.purpose
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        throw new Error(`${actionLabel} review changed. Try again.`)
+      }
+      if (
+        !quoteReview.stage(submittedDraftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      confirmationAttempt.current = null
+      cancelledPlanId.current = null
+      const pending = { ...current, review }
+      preparedRef.current = pending
+      setPrepared(pending)
+    } catch (cause) {
+      if (
+        reviewRequestId.current === requestId &&
+        scopeStillCurrent() &&
+        latestDraftKey.current === submittedDraftKey
+      ) {
+        if (cancelledPlanId.current === current.review.planId) {
+          preparedRef.current = null
+          setPrepared(null)
+          quoteReview.reset()
+          setPreviewGeneration(value => value + 1)
+        }
+        setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
+      }
+    } finally {
+      if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey) {
+        setBusy(false)
+        setRefreshingReview(false)
+      }
+    }
+  }
+  const reviewId = prepared
+    ? JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+    : null
+  const reviewAccepted = quoteReview.isAccepted(draftKey, reviewId)
+  const reviewDescription = quoteReview.describe(draftKey, reviewId)
+  const reviewExpired = useQuoteReviewTimer({
+    expiresAt: prepared?.review.expiresAt ?? null,
+    active: active && Boolean(prepared),
+    refresh:
+      reviewAccepted && !busy && !uncertain && !error ? () => void refreshReview() : undefined,
+    autoRefreshMs: 60_000
+  })
   const cancelReview = async () => {
     if (!prepared || busy || !scopeStillCurrent()) return
     setBusy(true)
@@ -825,11 +974,13 @@ export function ShieldWithdrawForm({
         const state = await inspectPlan(prepared.review.planId)
         if (state !== 'prepared') return
       }
-      await confidentialFundingClient.cancel(prepared.review.planId)
+      if (cancelledPlanId.current !== prepared.review.planId)
+        await confidentialFundingClient.cancel(prepared.review.planId)
       if (!mounted.current || latestScope.current !== scopeKey || latestEntry.current !== entryKey)
         return
       preparedRef.current = null
       setPrepared(null)
+      quoteReview.reset()
       setUncertain(false)
     } catch (cause) {
       if (scopeStillCurrent())
@@ -841,6 +992,21 @@ export function ShieldWithdrawForm({
   }
   const confirm = async () => {
     if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
+    if (!uncertain && prepared.review.expiresAt <= Date.now()) {
+      setError('Quote expired. Refresh quote.')
+      return
+    }
+    if (
+      !uncertain &&
+      (!quoteReview.isAccepted(
+        draftKey,
+        JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+      ) ||
+        !previewRequest ||
+        JSON.stringify(previewRequest) !== JSON.stringify(prepared.request) ||
+        Boolean(error))
+    )
+      return
     setBusy(true)
     setError(null)
     try {
@@ -853,8 +1019,6 @@ export function ShieldWithdrawForm({
         }
         return
       }
-      if (prepared.review.expiresAt <= Date.now())
-        throw new Error(`${actionLabel} quote expired. Review again.`)
       confirmationAttempt.current = prepared.review.planId
       const plan = await confidentialFundingClient.confirm(
         prepared.review.planId,
@@ -897,6 +1061,7 @@ export function ShieldWithdrawForm({
   }
 
   if (prepared) {
+    const priceAcceptanceRequired = reviewDescription.changes.length > 0 && !reviewAccepted
     const output = formatBaseUnitDecimalAmount(
       prepared.review.expectedOutputRaw,
       prepared.destination.asset.metadata.decimals
@@ -1030,18 +1195,75 @@ export function ShieldWithdrawForm({
               })()
             }
           ]}
+          afterRows={
+            <div className="pt-3">
+              {!refreshingReview && (
+                <QuoteReviewChanges
+                  changes={reviewDescription.changes}
+                  output={{
+                    decimals: prepared.destination.asset.metadata.decimals,
+                    symbol: formatSymbol(prepared.destination.asset.metadata.symbol)
+                  }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => void refreshReview()}
+                disabled={busy || uncertain}
+                className="inline-flex min-h-8 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+                aria-label="Refresh quote"
+              >
+                <Icon
+                  icon="lucide:refresh-cw"
+                  width={14}
+                  className={refreshingReview ? 'animate-spin' : undefined}
+                />
+                Refresh quote
+              </button>
+            </div>
+          }
           error={
-            error ? (
+            error || (reviewExpired && !uncertain && !refreshingReview) ? (
               <p role="alert" className="mt-3 text-sm text-warning">
-                {error}
+                {error ?? 'Quote expired. Refresh quote.'}
               </p>
             ) : undefined
           }
-          confirmLabel={uncertain ? 'Check status' : 'Confirm'}
+          confirmLabel={
+            uncertain
+              ? 'Check status'
+              : priceAcceptanceRequired
+                ? (reviewDescription.acceptLabel ?? 'Accept new price')
+                : 'Confirm'
+          }
+          confirmTone={priceAcceptanceRequired && !error && !uncertain ? 'warning' : 'default'}
           confirming={busy}
           submitting={busy && confirmationAttempt.current === prepared.review.planId}
+          preparing={refreshingReview}
+          confirmDisabled={
+            !uncertain &&
+            (Boolean(error) ||
+              reviewExpired ||
+              (!reviewAccepted && !priceAcceptanceRequired) ||
+              !previewRequest ||
+              JSON.stringify(previewRequest) !== JSON.stringify(prepared.request))
+          }
           onCancel={() => void cancelReview()}
-          onConfirm={() => void confirm()}
+          onConfirm={() => {
+            if (priceAcceptanceRequired && !uncertain) {
+              if (
+                !busy &&
+                !error &&
+                !reviewExpired &&
+                prepared.review.expiresAt > Date.now() &&
+                previewRequest &&
+                JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
+              )
+                quoteReview.accept(draftKey, reviewId)
+              return
+            }
+            void confirm()
+          }}
         />
       </div>
     )
