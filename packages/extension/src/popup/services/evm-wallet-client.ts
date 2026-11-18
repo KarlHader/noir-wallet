@@ -1313,12 +1313,8 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
             !/^(0|[1-9][0-9]{0,19})$/.test(record.pendingNonce) ||
             typeof record.highestLocalNonce !== 'string' ||
             !/^(0|[1-9][0-9]{0,19})$/.test(record.highestLocalNonce) ||
-            (record.action !== 'await-confirmation' &&
-              BigInt(record.highestLocalNonce) < BigInt(record.pendingNonce)) ||
-            (record.action !== 'retry-broadcast' &&
-              record.action !== 'await-confirmation' &&
-              record.action !== 'replace' &&
-              record.action !== 'fill-gap') ||
+            BigInt(record.highestLocalNonce) < BigInt(record.pendingNonce) ||
+            (record.action !== 'retry-broadcast' && record.action !== 'fill-gap') ||
             (record.action === 'fill-gap' && record.transactionId !== undefined) ||
             (record.action !== 'fill-gap' && record.transactionId === undefined)
           ) {

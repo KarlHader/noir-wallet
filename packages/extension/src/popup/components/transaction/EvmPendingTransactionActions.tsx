@@ -249,6 +249,22 @@ export function EvmPendingTransactionActions({
   const canSpeedUp =
     accountMatches && canSpeedUpEvmActivity(item, evmChainIds, Date.now(), shieldQuoteExpiresAt)
   const originKey = getReplacementOriginKey(item, evmChainIds)
+  const origin = item.segments.find(segment => segment.role === 'origin')
+  const cancellationPending =
+    item.source === 'wallet-v2' &&
+    item.status !== 'final' &&
+    item.status !== 'failed' &&
+    origin?.target.kind === 'onchain' &&
+    evmChainIds.includes(origin.target.chainId) &&
+    origin.status === 'broadcast' &&
+    origin.evidence?.replacementTransactionHash !== undefined
+  if (cancellationPending) {
+    return (
+      <p role="status" className={cn('text-center text-xs text-muted', className)}>
+        Cancellation pending
+      </p>
+    )
+  }
   if (!canCancel && !canSpeedUp) return null
   if (submittedFor?.id === item.id)
     return (
@@ -387,7 +403,7 @@ export function EvmPendingTransactionActions({
         window.close()
         return
       }
-      if (stillCurrent()) {
+      if (submission.status === 'broadcast' && stillCurrent()) {
         setSubmittedFor({ id: item.id, action })
       }
     } catch (error) {

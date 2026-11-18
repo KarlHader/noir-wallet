@@ -145,7 +145,7 @@ export interface EvmNonceRecoveryState {
   readonly chainId: ChainId
   readonly pendingNonce: string
   readonly highestLocalNonce: string
-  readonly action: 'retry-broadcast' | 'await-confirmation' | 'replace' | 'fill-gap'
+  readonly action: 'retry-broadcast' | 'fill-gap'
   readonly transactionId?: TransactionId
 }
 
@@ -471,93 +471,26 @@ export class EvmTransferOrchestrator {
     const sender = (
       input.executionAccount ?? parseEvmAccountBinding(input.chainAccount, chainId)
     ).address.toLowerCase()
-    await this.rpc.assertExpectedChain()
-    const pendingNonce = BigInt(await this.rpc.getPendingNonce(sender))
     const scope = normalizeScope(input.chainAccount.scope)
-    const graphs = await this.repository.list({
-      scope,
-      chainId,
-      statuses: ['signed', 'broadcast', 'confirming'],
-      limit: 200
-    })
-    const local = graphs.flatMap(graph => {
-      const nonce = this.graphNonce(graph, chainId, sender)
-      return nonce === null
-        ? []
-        : [
-            {
-              nonce,
-              transactionId: graph.root.id,
-              createdAt: graph.root.createdAt,
-              recoverySubmitted:
-                graph.root.kind === 'cancel' &&
-                (graph.root.status === 'broadcast' || graph.root.status === 'confirming'),
-              replaceable:
-                (graph.root.status === 'broadcast' || graph.root.status === 'confirming') &&
-                graph.root.intent?.evm !== undefined &&
-                graph.segments.some(
-                  segment =>
-                    segment.role === 'origin' && segment.evidence?.transactionHash !== undefined
-                )
-            }
-          ]
-    })
-    let signedTransactionId: TransactionId | undefined
+    const queue = await this.readNonceQueue(scope, chainId, sender)
     for (const pending of await this.pendingStore.list()) {
-      if (pending.phase !== 'signed') continue
+      if (pending.phase !== 'signed' || !scopesMatch(pending.scope, scope)) continue
       const graph = await this.pendingStore.getReviewGraph(pending.transactionId)
-      if (!graph) continue
-      const nonce = this.graphNonce(graph, chainId, sender)
-      if (nonce === null) continue
-      local.push({
-        nonce,
-        transactionId: pending.transactionId,
-        createdAt: graph.root.createdAt,
-        recoverySubmitted: false,
-        replaceable: false
-      })
-      if (nonce === pendingNonce) signedTransactionId = pending.transactionId
-    }
-    const highest = local.reduce<bigint | null>(
-      (current, entry) => (current === null || entry.nonce > current ? entry.nonce : current),
-      null
-    )
-    if (highest === null || highest < pendingNonce) return null
-    const unsettled = local.find(entry => entry.nonce < pendingNonce && entry.recoverySubmitted)
-    if (unsettled) {
+      if (!graph || this.graphNonce(graph, chainId, sender) !== queue.nextNonce) continue
       return Object.freeze({
         chainId,
-        pendingNonce: pendingNonce.toString(),
-        highestLocalNonce: highest.toString(),
-        action: 'await-confirmation',
-        transactionId: unsettled.transactionId
+        pendingNonce: queue.nextNonce.toString(),
+        highestLocalNonce: (queue.gapHighest ?? queue.nextNonce).toString(),
+        action: 'retry-broadcast',
+        transactionId: pending.transactionId
       })
     }
-    const submitted = local.find(entry => entry.nonce === pendingNonce && entry.recoverySubmitted)
-    const blocking = local
-      .filter(entry => entry.nonce === pendingNonce && entry.replaceable)
-      .sort(
-        (left, right) =>
-          left.createdAt - right.createdAt || left.transactionId.localeCompare(right.transactionId)
-      )[0]
+    if (queue.gapHighest === null) return null
     return Object.freeze({
       chainId,
-      pendingNonce: pendingNonce.toString(),
-      highestLocalNonce: highest.toString(),
-      action: signedTransactionId
-        ? 'retry-broadcast'
-        : submitted
-          ? 'await-confirmation'
-          : blocking
-            ? 'replace'
-            : 'fill-gap',
-      ...(signedTransactionId
-        ? { transactionId: signedTransactionId }
-        : submitted
-          ? { transactionId: submitted.transactionId }
-          : blocking
-            ? { transactionId: blocking.transactionId }
-            : {})
+      pendingNonce: queue.nextNonce.toString(),
+      highestLocalNonce: queue.gapHighest.toString(),
+      action: 'fill-gap'
     })
   }
 
@@ -570,25 +503,8 @@ export class EvmTransferOrchestrator {
   }): Promise<PreparedEvmTransferApproval> {
     const state = await this.getNonceRecovery(input)
     if (!state) throw new EvmTransactionError('stale-nonce', 'No EVM nonce gap remains')
-    if (state.action === 'retry-broadcast' || state.action === 'await-confirmation') {
-      throw new EvmTransactionError(
-        'stale-nonce',
-        state.action === 'retry-broadcast'
-          ? 'Retry the signed EVM transaction first'
-          : 'Wait for the EVM recovery transaction to confirm'
-      )
-    }
-    if (state.action === 'replace' && state.transactionId) {
-      return this.prepareCancel({
-        chainAccount: input.chainAccount,
-        originalTransactionId: state.transactionId,
-        ...(input.executionAccount === undefined
-          ? {}
-          : { executionAccount: input.executionAccount }),
-        ...(input.feeSelection === undefined ? {} : { feeSelection: input.feeSelection }),
-        ...(input.signingMode === undefined ? {} : { signingMode: input.signingMode }),
-        ...(input.externalSigner === undefined ? {} : { externalSigner: input.externalSigner })
-      })
+    if (state.action === 'retry-broadcast') {
+      throw new EvmTransactionError('stale-nonce', 'Retry the signed EVM transaction first')
     }
     const sender = (
       input.executionAccount ??
@@ -657,7 +573,8 @@ export class EvmTransferOrchestrator {
         : await this.readLocalNonceFloor(
             normalizeScope(input.chainAccount.scope),
             input.chainAccount.scope.chainId,
-            sender
+            sender,
+            input.signal
           )
     const sharedBuildInput = {
       chainId: input.chainAccount.scope.chainId,
@@ -951,38 +868,83 @@ export class EvmTransferOrchestrator {
     }
   }
 
+  private async readNonceQueue(
+    scope: TransactionAccountScope,
+    chainId: ChainId,
+    sender: string,
+    signal?: AbortSignal
+  ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
+    await this.rpc.assertExpectedChain(signal)
+    const pendingNonce = BigInt(await this.rpc.getPendingNonce(sender, signal))
+    const persisted = await this.repository.list({
+      scope,
+      chainId,
+      statuses: ['signed', 'broadcast', 'confirming'],
+      limit: 200
+    })
+    const candidates = persisted.flatMap(graph => {
+      const nonce = this.graphNonce(graph, chainId, sender)
+      if (nonce === null || nonce < pendingNonce) return []
+      const origin = graph.segments.find(segment => segment.role === 'origin')
+      return [{ nonce, hash: origin?.evidence?.transactionHash }]
+    })
+    if (candidates.length === 0) {
+      return { nextNonce: pendingNonce, gapHighest: null, uncertainHead: false }
+    }
+
+    const latestNonce = BigInt(await this.rpc.getTransactionCount(sender, 'latest', signal))
+    let nextNonce = latestNonce > pendingNonce ? latestNonce : pendingNonce
+    const pending = new Set<bigint>()
+    const unresolved = new Set<bigint>()
+    const remaining = candidates.filter(candidate => candidate.nonce >= nextNonce)
+    for (let offset = 0; offset < remaining.length; offset += 4) {
+      const observations = await Promise.all(
+        remaining.slice(offset, offset + 4).map(async ({ nonce, hash }) => {
+          if (!hash) return { nonce, status: 'unknown' }
+          const location = await this.rpc.getTransactionLocation(hash, signal)
+          if (location.status !== 'unknown') return { nonce, status: location.status }
+          const receipt = await this.rpc.getTransactionReceipt(hash, signal)
+          return {
+            nonce,
+            status: receipt?.transactionHash === hash.toLowerCase() ? 'included' : 'unknown'
+          }
+        })
+      )
+      for (const { nonce, status } of observations) {
+        if (status === 'included' && nonce >= nextNonce) nextNonce = nonce + 1n
+        if (status === 'pending') pending.add(nonce)
+        if (status === 'unknown') unresolved.add(nonce)
+      }
+    }
+    while (pending.has(nextNonce)) nextNonce += 1n
+    const uncertainHead = unresolved.has(nextNonce)
+    let gapHighest: bigint | null = null
+    if (!uncertainHead) {
+      for (const nonce of pending) {
+        if (nonce > nextNonce && (gapHighest === null || nonce > gapHighest)) gapHighest = nonce
+      }
+    }
+    return { nextNonce, gapHighest, uncertainHead }
+  }
+
   private async readLocalNonceFloor(
     scope: TransactionAccountScope,
     chainId: ChainId,
     sender: string,
+    signal?: AbortSignal,
     protectedTransactionId?: TransactionId
-  ): Promise<string | undefined> {
-    await this.rpc.assertExpectedChain()
-    const pendingNonce = BigInt(await this.rpc.getPendingNonce(sender))
-    let highest: bigint | null = null
-    const include = (nonceValue: string): void => {
-      const nonce = BigInt(nonceValue)
-      if (highest === null || nonce > highest) highest = nonce
+  ): Promise<string> {
+    const queue = await this.readNonceQueue(scope, chainId, sender, signal)
+    if (queue.gapHighest !== null) {
+      throw new EvmTransactionError(
+        'nonce-recovery-required',
+        `Resolve EVM nonce ${queue.nextNonce} before preparing another transaction`
+      )
     }
-    const includeGraph = (graph: TransactionGraph): void => {
-      const nonce = this.graphNonce(graph, chainId, sender)
-      if (nonce === null) return
-      if (graph.root.kind === 'cancel') {
-        if (nonce < pendingNonce) return
-        throw new EvmTransactionError(
-          'nonce-recovery-required',
-          'Wait for the EVM recovery transaction to confirm before sending again'
-        )
-      }
-      if (nonce >= pendingNonce) {
-        throw new EvmTransactionError(
-          'nonce-recovery-required',
-          `Resolve EVM nonce ${pendingNonce} before preparing another transaction`
-        )
-      }
-      include(nonce.toString())
+    if (queue.uncertainHead) {
+      throw new EvmTransactionError('stale-nonce', 'The earlier EVM nonce could not be verified')
     }
-
+    let nonceFloor = queue.nextNonce
     const { active: pendingRecords } = await this.listUnexpiredPendingTransfers(
       chainId,
       sender,
@@ -1005,17 +967,13 @@ export class EvmTransferOrchestrator {
       if (pending.prepared.chainId !== chainId || pending.prepared.from.toLowerCase() !== sender) {
         continue
       }
-      include(pending.prepared.transaction.nonce)
+      const nonce = BigInt(pending.prepared.transaction.nonce)
+      if (pending.transactionId === protectedTransactionId && nonce !== queue.nextNonce) {
+        throw new EvmTransactionError('stale-nonce', 'The next EVM nonce changed. Review again')
+      }
+      if (nonce >= nonceFloor) nonceFloor = nonce + 1n
     }
-
-    const persisted = await this.repository.list({
-      scope,
-      chainId,
-      statuses: ['signed', 'broadcast', 'confirming'],
-      limit: 200
-    })
-    for (const graph of persisted) includeGraph(graph)
-    return highest === null ? undefined : (highest + 1n).toString()
+    return nonceFloor.toString()
   }
 
   private async listUnexpiredPendingTransfers(
@@ -1269,24 +1227,14 @@ export class EvmTransferOrchestrator {
   ): Promise<void> {
     const prepared = pending.prepared
     if (prepared.kind === 'nonce-recovery') {
-      await this.rpc.assertExpectedChain(signal)
-      const currentNonce = await this.rpc.getPendingNonce(prepared.from, signal)
-      if (currentNonce !== prepared.transaction.nonce) {
-        throw new EvmTransactionError('stale-nonce', 'EVM pending nonce changed')
-      }
-      const persisted = await this.repository.list({
-        scope: pending.scope,
-        chainId: prepared.chainId,
-        statuses: ['signed', 'broadcast', 'confirming'],
-        limit: 200
-      })
-      if (
-        persisted.some(
-          candidate =>
-            candidate.root.status !== 'signed' &&
-            this.graphNonce(candidate, prepared.chainId, prepared.from) === BigInt(currentNonce)
-        )
-      ) {
+      const queue = await this.readNonceQueue(
+        pending.scope,
+        prepared.chainId,
+        prepared.from,
+        signal
+      )
+      const currentNonce = queue.nextNonce.toString()
+      if (queue.gapHighest === null || currentNonce !== prepared.transaction.nonce) {
         throw new EvmTransactionError('stale-nonce', 'EVM nonce recovery state changed')
       }
       for (const candidate of (
@@ -1416,6 +1364,7 @@ export class EvmTransferOrchestrator {
       pending.scope,
       prepared.chainId,
       prepared.from,
+      signal,
       pending.transactionId
     )
   }

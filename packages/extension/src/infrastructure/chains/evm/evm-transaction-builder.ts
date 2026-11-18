@@ -1315,7 +1315,7 @@ export async function buildEvmNonceRecoveryTransaction(
     await input.rpc.getPendingNonce(account.address, input.signal),
     'EVM pending nonce'
   )
-  if (pendingNonce !== nonce) {
+  if (pendingNonce > nonce) {
     throw new EvmTransactionError('stale-nonce', 'EVM pending nonce changed')
   }
   return buildEvmSelfTransaction(input, account, nonce, 'nonce-recovery')

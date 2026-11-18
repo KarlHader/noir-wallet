@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
-import type { ActivityItem } from '@/core/activity'
 import {
   formatEvmWeiAsGwei,
   parseEvmPriorityFeeGwei,
@@ -35,7 +34,6 @@ interface EvmNonceRecoveryBannerProps {
   readonly executionMode: 'main' | 'private'
   readonly feeSymbol: string
   readonly feeDecimals: number
-  readonly activityItems: readonly ActivityItem[]
   readonly onUpdated: () => void
 }
 
@@ -46,7 +44,6 @@ export function EvmNonceRecoveryBanner({
   executionMode,
   feeSymbol,
   feeDecimals,
-  activityItems,
   onUpdated
 }: EvmNonceRecoveryBannerProps) {
   const [state, setState] = useState<RecoveryState | null>(null)
@@ -58,7 +55,6 @@ export function EvmNonceRecoveryBanner({
   const [checkRevision, setCheckRevision] = useState(0)
   const [reviewOpen, setReviewOpen] = useState(false)
   const refreshSequence = useRef(0)
-  const replacedOperation = activityItems.find(item => item.id === state?.transactionId)?.kind
   const presentation = state ? getEvmNonceRecoveryPresentation(state.action) : null
 
   const refresh = useCallback(async () => {
@@ -107,21 +103,8 @@ export function EvmNonceRecoveryBanner({
     return () => clearTimeout(timer)
   }, [checkFailed, checkRevision, refresh, state])
 
-  useEffect(() => {
-    if (
-      state?.action === 'await-confirmation' &&
-      activityItems.some(
-        item =>
-          item.id === state.transactionId && (item.status === 'final' || item.status === 'failed')
-      )
-    ) {
-      void refresh()
-    }
-  }, [activityItems, refresh, state])
-
   const handleRecovery = async () => {
     if (!state || busy) return
-    if (state.action === 'await-confirmation') return
     setBusy(true)
     setError(null)
     try {
@@ -148,12 +131,7 @@ export function EvmNonceRecoveryBanner({
         await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
         throw new Error('Invalid EVM recovery review')
       }
-      if (
-        summary.fields.nonce !== state.pendingNonce ||
-        (state.action === 'replace' &&
-          review.graph.root.relation?.transactionId !== state.transactionId) ||
-        (state.action === 'fill-gap' && review.graph.root.relation !== undefined)
-      ) {
+      if (summary.fields.nonce !== state.pendingNonce || review.graph.root.relation !== undefined) {
         await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
         await refresh()
         throw new Error('Pending nonce changed. Review the current recovery transaction.')
@@ -164,14 +142,10 @@ export function EvmNonceRecoveryBanner({
         body: resolve => (
           <div className="space-y-4 pb-2">
             <p className="text-sm leading-5 text-muted">
-              This sends a zero-value transaction to your own address. It may replace an earlier
-              transaction. Recovery completes only after it confirms.
+              This sends a zero-value transaction to your own address and costs a network fee. Later
+              queued transactions, including token approvals, may go through. It does not cancel
+              them.
             </p>
-            {state.action === 'replace' && (
-              <p className="text-sm leading-5 text-warning">
-                This will replace your pending {replacedOperation ?? 'transaction'}.
-              </p>
-            )}
             <div className="space-y-2 border-y border-border/60 py-3 text-xs">
               <div className="flex justify-between gap-3">
                 <span className="text-muted">Nonce</span>
@@ -233,7 +207,7 @@ export function EvmNonceRecoveryBanner({
         } else {
           toast.success(
             submission.status === 'broadcast'
-              ? 'Recovery submitted. Wait for confirmation before continuing.'
+              ? 'Recovery submitted. Confirmation is pending.'
               : 'Broadcast interrupted. Retry from Activity.'
           )
         }
@@ -267,8 +241,6 @@ export function EvmNonceRecoveryBanner({
     )
   }
 
-  const canReview = state.action === 'fill-gap' || state.action === 'replace'
-
   return (
     <div className="border-b border-border/60 px-5 py-3" aria-label="EVM nonce recovery">
       <div className="flex min-w-0 items-center gap-3">
@@ -288,31 +260,22 @@ export function EvmNonceRecoveryBanner({
             size="sm"
             variant="ghost"
             className="h-8 shrink-0 gap-1 px-1.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-            aria-expanded={canReview ? reviewOpen : undefined}
+            aria-expanded={reviewOpen}
             disabled={busy}
-            onClick={() => {
-              if (canReview) setReviewOpen(open => !open)
-              else void handleRecovery()
-            }}
+            onClick={() => setReviewOpen(open => !open)}
           >
             {presentation.actionLabel}
             <Icon
-              icon={canReview && reviewOpen ? 'lucide:chevron-up' : 'lucide:chevron-right'}
+              icon={reviewOpen ? 'lucide:chevron-up' : 'lucide:chevron-right'}
               width={14}
               height={14}
             />
           </Button>
         )}
       </div>
-      {canReview && reviewOpen && (
+      {reviewOpen && (
         <div className="ml-12 mt-3 border-t border-border/60 pt-3">
-          <p className="text-xs leading-4 text-muted">
-            A zero-value transaction to your own address can clear the blocked order after it
-            confirms.
-            {state.action === 'replace' &&
-              ` This may replace your pending ${replacedOperation ?? 'transaction'}.`}
-          </p>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <label htmlFor={`nonce-fee-${chainId}`} className="shrink-0 text-xs text-muted">
               Network fee
             </label>

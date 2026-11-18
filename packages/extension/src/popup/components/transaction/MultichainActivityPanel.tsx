@@ -614,7 +614,6 @@ export function MultichainActivityPanel({
             }
             feeSymbol={nativeAsset?.metadata.symbol ?? 'native'}
             feeDecimals={nativeAsset?.metadata.decimals ?? 18}
-            activityItems={visibleModel?.items ?? []}
             onUpdated={() => void load()}
           />
         )
