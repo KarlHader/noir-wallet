@@ -23,7 +23,7 @@ export const SDK_NPM_VERSION = '11.21.1'
 const REGISTRY = 'https://registry.npmjs.org'
 const PACKAGE_URL = `${REGISTRY}/@noir-wallet%2Fsdk`
 const SHA = /^[a-f0-9]{40}$/
-const STABLE_VERSION = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const STABLE_VERSION = /^(?:0|2)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const BETA_VERSION = /^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.([1-9]\d*)$/
 const root = fileURLToPath(new URL('../', import.meta.url))
 
@@ -36,7 +36,7 @@ function supportedVersion(value) {
     typeof value === 'string' &&
       (STABLE_VERSION.test(value) || BETA_VERSION.test(value)) &&
       value.length < 64,
-    'Only stable 0.x.y and 2.x.y-beta.N SDK versions are supported'
+    'Only stable 0.x.y, 2.x.y and 2.x.y-beta.N SDK versions are supported'
   )
   return value
 }
@@ -122,7 +122,7 @@ export function resolveSdkRelease({ env, manifest, branchHeadSha }) {
   assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
   if (operation === 'verify') return { operation, should_stage: 'false' }
   const releaseLine = env.RELEASE_LINE || 'beta'
-  assert(releaseLine === 'beta', 'Only the 2.x SDK beta release line can be staged')
+  assert(['stable', 'beta'].includes(releaseLine), 'Choose the stable or beta SDK release line')
   const sourceBranch = 'main'
   assert(SHA.test(branchHeadSha ?? ''), 'Selected branch has no valid head commit')
   assert(
@@ -130,6 +130,7 @@ export function resolveSdkRelease({ env, manifest, branchHeadSha }) {
     'Confirmed source SHA must match the selected branch head'
   )
   validateSdkManifest(manifest)
+  assert(manifest.version.startsWith('2.'), 'V1 SDK publication is frozen')
   assert(
     env.CONFIRM_VERSION === manifest.version,
     'Confirmed SDK version does not match the source'
@@ -177,8 +178,10 @@ export function packageSdkRelease(directory, env, { sourceRoot = root, run = exe
   trustedInvocation(env)
   assert(SHA.test(env.SDK_SOURCE_SHA ?? ''), 'A pinned SDK source SHA is required')
   assert(
-    env.SDK_RELEASE_LINE === 'beta' && env.SDK_SOURCE_BRANCH === 'main',
-    'Only a main-branch 2.x SDK beta can be packaged for release'
+    ['stable', 'beta'].includes(env.SDK_RELEASE_LINE) &&
+      env.SDK_SOURCE_BRANCH === 'main' &&
+      readJson(path.join(sourceRoot, 'packages/sdk/package.json')).version.startsWith('2.'),
+    'Only a main-branch 2.x SDK can be packaged for release'
   )
   return packageSdkArtifact(directory, env, 'release', { sourceRoot, run })
 }
@@ -346,7 +349,7 @@ export function validateRegistryTarget(packument, version) {
   if (distTag === 'beta') {
     assert(
       STABLE_VERSION.test(packument['dist-tags'].latest ?? ''),
-      'npm latest must remain on the V1 stable line'
+      'npm latest must point to a stable SDK version'
     )
   }
   const latest = packument['dist-tags'][distTag]
@@ -393,8 +396,10 @@ export async function stageSdkRelease(
   )
   const metadata = validateSdkArtifact(directory, { ...expected, mode: 'release' })
   assert(
-    metadata.releaseLine === 'beta' && metadata.sourceBranch === 'main',
-    'Only a main-branch 2.x SDK beta can be staged'
+    ['stable', 'beta'].includes(metadata.releaseLine) &&
+      metadata.sourceBranch === 'main' &&
+      metadata.version.startsWith('2.'),
+    'Only a main-branch 2.x SDK can be staged'
   )
   assert(
     metadata.workflowSha === env.GITHUB_SHA && metadata.runId === env.GITHUB_RUN_ID,
@@ -632,7 +637,7 @@ export async function verifyPublishedSdk(
   if (metadata.releaseLine === 'beta') {
     assert(
       STABLE_VERSION.test(packument['dist-tags']?.latest ?? ''),
-      'npm latest must remain on the V1 stable line'
+      'npm latest must point to a stable SDK version'
     )
   }
   assert(
@@ -696,7 +701,7 @@ export async function locateSdkArtifact(env, { request } = {}) {
     'The selected attempt has no successful SDK build job'
   )
   const name = new RegExp(
-    `^noir-sdk-(0\\.[0-9]+\\.[0-9]+|2\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+)-${runId}-${runAttempt}$`
+    `^noir-sdk-(0\\.[0-9]+\\.[0-9]+|2\\.[0-9]+\\.[0-9]+(?:-beta\\.[0-9]+)?)-${runId}-${runAttempt}$`
   )
   const matches = []
   for (let page = 1; page <= 20; page++) {
@@ -783,7 +788,7 @@ async function main() {
     const operation = env.OPERATION
     const releaseLine = env.RELEASE_LINE || 'beta'
     assert(['stage', 'verify'].includes(operation), 'Choose stage or verify')
-    assert(releaseLine === 'beta', 'Only the 2.x SDK beta release line can be staged')
+    assert(['stable', 'beta'].includes(releaseLine), 'Choose the stable or beta SDK release line')
     let branchHeadSha
     let manifest
     if (operation === 'stage') {

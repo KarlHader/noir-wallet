@@ -139,13 +139,14 @@ Promotion additionally verifies a successful candidate workflow dispatched from 
 
 ## SDK npm Staging
 
-The SDK has its own version in `packages/sdk/package.json`. Before npm setup or merge, the [SDK PR workflow](../.github/workflows/sdk.yml) must pass its no-publication rehearsal: it checks and retains one tarball, then a separate read-only job validates that artifact, runs the npm CLI staging dry-run, and installs the same tarball as a consumer. The dry-run does not verify GitHub OIDC or npm server staging. The [SDK staging workflow](../.github/workflows/publish-sdk.yml) runs only in the public, non-fork `NoirWallet/noir-wallet` repository on `main`. Publication is manual: maintainers dispatch `operation=stage`, select the Beta release line, and confirm the exact version and full source SHA. The workflow builds and tests the selected SDK and example, packs the SDK once, checks that tarball as an installed consumer, and retains the tarball and source metadata as an Actions artifact for up to 30 days. Its separate upload job uses the `sdk-npm` environment to stage that same tarball using npm trusted publishing with provenance; it does not directly publish a version or change npm dist-tags.
+The SDK has its own version in `packages/sdk/package.json`. Before npm setup or merge, the [SDK PR workflow](../.github/workflows/sdk.yml) must pass its no-publication rehearsal: it checks and retains one tarball, then a separate read-only job validates that artifact, runs the npm CLI staging dry-run, and installs the same tarball as a consumer. The dry-run does not verify GitHub OIDC or npm server staging. The [SDK staging workflow](../.github/workflows/publish-sdk.yml) runs only in the public, non-fork `NoirWallet/noir-wallet` repository on `main`. Publication is manual: maintainers dispatch `operation=stage`, select the stable or Beta release line, and confirm the exact version and full source SHA. The workflow builds and tests the selected SDK and example, packs the SDK once, checks that tarball as an installed consumer, and retains the tarball and source metadata as an Actions artifact for up to 30 days. Its separate upload job uses the `sdk-npm` environment to stage that same tarball using npm trusted publishing with provenance; it does not directly publish a version or change npm dist-tags.
 
 | Release line | Source branch | SDK versions                               | npm dist-tag |
 | ------------ | ------------- | ------------------------------------------ | ------------ |
+| `stable`     | `main`        | `2.x.y`, starting at `2.0.0`               | `latest`     |
 | `beta`       | `main`        | `2.x.y-beta.N`, starting at `2.0.0-beta.1` | `beta`       |
 
-V1 SDK publication is frozen. New SDK candidates use the npm `beta` channel; `latest` remains on the existing V1 stable line. Only the current commit of the selected source branch can start a candidate; unmerged branches cannot be staged. Subsequent jobs use that fixed source SHA. Source and workflow commits are recorded separately: npm provenance identifies the trusted `main` workflow commit, while the original candidate artifact binds the selected SDK source and package bytes. SDK Beta releases do not require a simultaneous extension release.
+V1 SDK publication is frozen. V2 stable candidates use `latest`; prereleases use `beta`. Approving the first V2 stable candidate moves `latest` from V1 to V2; pinned V1 versions remain available. Only the current commit of the selected source branch can start a candidate; unmerged branches cannot be staged. Subsequent jobs use that fixed source SHA. Source and workflow commits are recorded separately: npm provenance identifies the trusted `main` workflow commit, while the original candidate artifact binds the selected SDK source and package bytes. SDK releases do not require a simultaneous extension release; verify V1 compatibility before publishing V2 SDK ahead of the V2 extension.
 
 ### One-time npm setup
 
@@ -156,9 +157,9 @@ After `SDK Gate` has run successfully, configure an additional ruleset for `main
 ### Stage and accept a version
 
 1. Open a PR for the SDK version change against its source branch and require `SDK Gate` to pass before merging the reviewed PR. Choose an unpublished version from the release line above; do not reuse a version already present on npm or in staging. Complete the one-time npm setup. Before starting a new candidate, check npm **Staged Packages** and finish or resolve any pending candidate for this package.
-2. Select `Stage SDK on npm` on `main`, choose `operation=stage` and `release_line=beta`, and enter the package version and full current SHA of `main`. Keep the run ID, original build attempt, source SHA, workflow SHA, and artifact name. Verify the tarball checksum and inspect its contents before approval.
+2. Select `Stage SDK on npm` on `main`, choose `operation=stage` and `release_line=stable` for V2 stable (`beta` for a prerelease), and enter the package version and full current SHA of `main`. Keep the run ID, original build attempt, source SHA, workflow SHA, and artifact name. Verify the tarball checksum and inspect its contents before approval.
 3. Test three combinations in a real browser against the existing Zcash contract: the candidate SDK tarball with the accepted V1 Mainnet and Testnet ZIPs, the candidate SDK tarball with the accepted V2 candidate ZIP, and the existing published SDK with that V2 candidate ZIP. Record SHA-256 hashes for both SDK packages and every extension ZIP used. The CI consumer check does not establish browser or extension behavior.
-4. Open npm **Staged Packages** from the account page in the run summary, find the reported Stage ID, confirm the candidate's target dist-tag, and approve with the authorized npm account and its two-factor authentication. Run the verification command from the candidate's build or staging summary; it binds `operation=verify` to the original `candidate_run_id` and `candidate_run_attempt`. The same fields can be entered manually when dispatching the workflow from `main`; verification restores the release line and target tag from the original candidate. It compares the published package and provenance with the accepted artifact, installs the registry version as a consumer, and runs `npm audit signatures`. Beta verification requires `beta` to point to the candidate and `latest` to remain on the V1 stable line; a newer V1 release does not invalidate the Beta. Check that verification succeeds before announcing the version.
+4. Open npm **Staged Packages** from the account page in the run summary, find the reported Stage ID, confirm the candidate's target dist-tag, and approve with the authorized npm account and its two-factor authentication. Run the verification command from the candidate's build or staging summary; it binds `operation=verify` to the original `candidate_run_id` and `candidate_run_attempt`. The same fields can be entered manually when dispatching the workflow from `main`; verification restores the release line and target tag from the original candidate. It compares the published package and provenance with the accepted artifact, installs the registry version as a consumer, and runs `npm audit signatures`. Stable verification requires `latest` to point to the candidate. Beta verification requires `beta` to point to the candidate and `latest` to remain a stable version; a newer stable release does not invalidate the Beta. Check that verification succeeds before announcing the version.
 
 Only the staging job has OIDC permission. The verification operation has read-only repository permissions and cannot approve or publish on npm. OIDC cannot query staged packages, so an upload timeout, command failure, or invalid receipt leaves the staging result unconfirmed. Check npm before retrying:
 
@@ -175,18 +176,7 @@ The SDK example in `packages/sdk/example/` is verified on pull requests and depl
 
 ## Website and Signup Worker
 
-The website at `https://www.zknoir.com/` keeps its existing Cloudflare Pages Git integration. It builds and publishes the independent `/frost` page with the rest of the website. The [Website Signup Worker workflow](../.github/workflows/web-vote.yml) deploys only `packages/web-vote/`, independently of Pages and wallet releases. Homepage traffic continues to use Pages; signup API routing is defined in the [Worker configuration](../packages/web-vote/wrangler.json).
-
-### One-Time Deployment Credentials
-
-In the GitHub repository, open **Settings → Secrets and variables → Actions** and add these repository secrets:
-
-| Secret                  | Value                                                                                     |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the website's zone and the signup Worker                |
-| `CLOUDFLARE_API_TOKEN`  | A Cloudflare API token authorized to deploy the Worker and manage its routes in that zone |
-
-Follow [Cloudflare's GitHub Actions authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/) to create a token using the **Edit Cloudflare Workers** template and restrict it to the intended account and website zone. See [Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/) for Worker creation and route permissions. Store the token in Actions secrets, never in source files or frontend build variables. The configured hosts must use Cloudflare-proxied DNS for Worker routes.
+The website at `https://www.zknoir.com/` keeps its existing Cloudflare Pages Git integration. It builds and publishes the independent `/frost` page with the rest of the website. The [Website Signup Worker workflow](../.github/workflows/web-vote.yml) verifies `packages/web-vote/` and its website client; it does not deploy. Homepage traffic continues to use Pages; signup API routing is defined in the [Worker configuration](../packages/web-vote/wrangler.json).
 
 ### Signup Email Configuration
 
@@ -227,16 +217,21 @@ LIMIT 20;
 
 Failure logs contain only bounded diagnostic fields and the outcome, never recipient addresses, credentials, exception messages, or raw SMTP responses. `EAUTH` with SMTP code `535` identifies an authentication rejection; verify the actual Google login account and App Password. `ESOCKET`, `ETLS`, or `ETIMEDOUT` at `CONNECT` identifies connection or TLS setup failure. `WORKER_INTERRUPTED` records a restarted in-flight job. Correct configuration failures without deleting saved signups or mail history. The signup client lives in `packages/web/src/pages/FrostVotePage.tsx`.
 
-### Automatic Deployment and Recovery
+### Deployment and Recovery
 
-- Relevant pushes to `main` verify the Worker, test and build the signup client, then deploy the production Worker. The workflow's path filters define relevant changes.
-- Pull requests run verification without deployment or access to the deployment credentials. Forks do not deploy.
-- Manual runs can deploy from `main`; other branches only verify. Missing credentials fail deployment with a configuration error.
-- Deployment uses the committed Wrangler configuration, including runtime caching and the existing Durable Object binding and migration. Signup responses use `Cache-Control: no-store`. Signups use a separate named instance from historical votes; neither stored dataset is reset, and local test data is not uploaded.
-- Before deployment, the run's commit must still match current `main`. Rerunning an older workflow cannot replace a newer Worker deployment; start a new manual run from current `main` instead.
-- The final step performs a read-only health request to the production API and validates its response against the client contract. It does not submit a production signup or read email addresses.
+Relevant pushes to `main`, pull requests, and manual workflow runs verify the Worker and test and build the signup client. GitHub Actions does not require Cloudflare deployment credentials.
 
-After pushing, check **Actions → Website Signup Worker** and the existing Pages deployment status. These are independent deployments; the page may publish before its API is ready. If credential or route setup fails, correct the relevant account, token, or DNS configuration and rerun the workflow from `main`. If the post-deployment API check fails, inspect the route and API response: the deployment may already have succeeded. Do not remove the Durable Object or reset stored data to recover a failed deployment. For a code regression, revert the affected change on `main` and let the normal deployment workflow publish the correction. No production deployment is verified merely by a local dry run.
+Deploy manually from the reviewed `main` checkout using local Cloudflare authentication:
+
+```bash
+pnpm --filter @noir-wallet/web-vote deploy
+```
+
+Cloudflare Git integration can handle deployments once configured. The website's existing Pages deployment remains independent of the signup Worker.
+
+Deployment uses the committed Wrangler configuration, including runtime caching and the existing Durable Object binding and migration. Signups use a separate named instance from historical votes; neither stored dataset is reset, and local test data is not uploaded.
+
+After deployment, check `GET https://www.zknoir.com/api/frost-signups` for HTTP 200 and `{ "status": "ok" }`, then verify email delivery as described above. If credential or route setup fails, correct the relevant Cloudflare authentication or DNS configuration before retrying. Do not remove the Durable Object or reset stored data to recover a failed deployment. For a code regression, revert the affected change on `main` and deploy the corrected revision. No production deployment is verified merely by a local dry run.
 
 ## History Proxy Deployment
 

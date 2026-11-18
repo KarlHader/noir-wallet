@@ -119,6 +119,21 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
         }
       ]
     },
+    {
+      id: 'zcash-testnet',
+      chain: 'zcash',
+      network: TESTNET,
+      label: 'Zcash Testnet',
+      iconChain: 'zec',
+      probe: 'zcash-lightwalletd-grpc-web',
+      endpoints: [
+        {
+          id: 'deltarpc',
+          label: 'DeltaRPC',
+          url: 'https://zcash-wallet-grpc-testnet.deltarpc.com'
+        }
+      ]
+    },
     chain('eip155:1', MAINNET, 'Ethereum', 'eth', EVM, [
       ['publicnode', 'PublicNode', 'https://ethereum-rpc.publicnode.com'],
       ['drpc', 'dRPC', 'https://eth.drpc.org'],

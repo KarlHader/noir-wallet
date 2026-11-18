@@ -132,7 +132,7 @@ function buildZcashMessagePayload(message: string): Uint8Array {
   return concatUint8Arrays(
     encodeCompactSize(prefix.length),
     prefixBytes,
-    encodeCompactSize(message.length),
+    encodeCompactSize(msgBytes.length),
     msgBytes
   )
 }

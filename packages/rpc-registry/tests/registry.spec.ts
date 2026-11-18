@@ -78,7 +78,7 @@ test('derives monitor targets from the same registry across chain namespaces', (
   }
 
   const targets = getMonitorTargets(registry)
-  expect(targets).toHaveLength(10)
+  expect(targets).toHaveLength(11)
   expect(targets.at(-1)).toMatchObject({
     chainId: 'zcash-testnet',
     chain: 'zcash',

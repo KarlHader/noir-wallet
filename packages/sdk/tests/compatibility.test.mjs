@@ -6,7 +6,8 @@ import {
   detectProvider,
   getNoirWallet,
   getZcashProvider,
-  isNoirWalletInstalled
+  isNoirWalletInstalled,
+  verifyMessageSignature
 } from '../dist/index.mjs'
 
 test('provider discovery handles server and uninstalled environments', async () => {
@@ -88,6 +89,17 @@ test('disconnection and request rejection reach callers unchanged', async () => 
   assert.equal(await api.getAccounts(), null)
   await assert.rejects(api.connect(), error => error === rejected)
   await assert.rejects(api.getBalance(), error => error === rejected)
+})
+
+test('verifies a signed UTF-8 Zcash message', () => {
+  // Fixed vector signed with private key 0x01 repeated 32 times using the Rust signer format.
+  const signature =
+    '1b879a522ea3afb78470ddbe3d20e921626bf7787d3591b9d891adb59d1f0824ec7ac4a3de3498476ec310aeb275fbfc86e22f48af0f9f76e4205efc35020869f8'
+  const pubkey =
+    '041b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f70beaf8f588b541507fed6a642c5ab42dfdf8120a7f639de5122d47a69a8e8d1'
+
+  assert.equal(verifyMessageSignature({ message: 'Café', signature, pubkey }).valid, true)
+  assert.equal(verifyMessageSignature({ message: 'Cafe', signature, pubkey }).valid, false)
 })
 
 test('npm-verified provenance must bind the signer and accepted build', async () => {

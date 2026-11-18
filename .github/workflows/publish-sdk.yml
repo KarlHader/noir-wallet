@@ -14,7 +14,7 @@ on:
         required: true
         default: beta
         type: choice
-        options: [beta]
+        options: [stable, beta]
       confirm_version:
         description: SDK version to stage (required for stage)
         required: false

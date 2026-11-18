@@ -6,6 +6,7 @@ import {
   updatePersistedWalletSettings
 } from '@/lib/wallet-settings-storage'
 import type { Network } from '@/types'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   fetchRpcRegistry,
   parseRpcRegistryDocument,
@@ -26,6 +27,26 @@ export type RpcEndpointPreferences = Record<RpcEndpointChain, RpcEndpointId>
 
 export const DEFAULT_RPC_ENDPOINT_PREFERENCES: RpcEndpointPreferences = {
   zcash: RPC_DEFAULT_ENDPOINTS.zcash.mainnet.id
+}
+
+let activeRpcNetwork: Network = 'mainnet'
+
+function defaultPreferences(): RpcEndpointPreferences {
+  return { zcash: RPC_DEFAULT_ENDPOINTS.zcash[DEFAULT_NETWORK].id }
+}
+
+function ensureRuntimeRpcGroups(): void {
+  if (activeRpcNetwork === DEFAULT_NETWORK) return
+  activeRpcNetwork = DEFAULT_NETWORK
+  setRpcEndpointGroups([
+    {
+      chain: 'zcash',
+      label: DEFAULT_NETWORK === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+      iconChain: 'zec',
+      options: [RPC_DEFAULT_ENDPOINTS.zcash[DEFAULT_NETWORK]]
+    }
+  ])
+  activeRpcEndpointOverrides = {}
 }
 
 let activeRpcEndpointGroups = cloneRpcEndpointGroups(RPC_ENDPOINT_GROUPS)
@@ -55,6 +76,7 @@ function setRpcEndpointGroups(groups: RpcEndpointGroup[]): void {
 }
 
 export function getRpcEndpointGroups(): RpcEndpointGroup[] {
+  ensureRuntimeRpcGroups()
   return cloneRpcEndpointGroups(activeRpcEndpointGroups)
 }
 
@@ -65,7 +87,7 @@ let activeRpcEndpointOverrides: Partial<Record<RpcEndpointChain, RpcEndpointId>>
 
 export function setActiveRpcEndpointPreferences(preferences?: Partial<RpcEndpointPreferences>) {
   activeRpcEndpointPreferences = {
-    ...DEFAULT_RPC_ENDPOINT_PREFERENCES,
+    ...defaultPreferences(),
     ...preferences
   }
 }
@@ -85,6 +107,7 @@ export function setActiveRpcEndpointOverride(
 }
 
 export function getRpcEndpointOptions(chain: RpcEndpointChain): RpcEndpointOption[] {
+  ensureRuntimeRpcGroups()
   return [...(rpcEndpointOptionsByChain[chain] || [])]
 }
 
@@ -93,7 +116,7 @@ export function getNextRpcEndpointOption(
   preferredEndpointId: RpcEndpointId,
   activeEndpointId: RpcEndpointId
 ): RpcEndpointOption | undefined {
-  const options = rpcEndpointOptionsByChain[chain] || []
+  const options = getRpcEndpointOptions(chain)
   const preferred = options.find(option => option.id === preferredEndpointId)
   if (!preferred) return undefined
 
@@ -103,12 +126,10 @@ export function getNextRpcEndpointOption(
 }
 
 export function getPreferredRpcEndpointOption(chain: RpcEndpointChain): RpcEndpointOption {
-  const selectedId = activeRpcEndpointPreferences[chain] || DEFAULT_RPC_ENDPOINT_PREFERENCES[chain]
-  const options = rpcEndpointOptionsByChain[chain] || []
+  const selectedId = activeRpcEndpointPreferences[chain] || defaultPreferences()[chain]
+  const options = getRpcEndpointOptions(chain)
   const selectedOption = options.find(option => option.id === selectedId)
-  const defaultOption = options.find(
-    option => option.id === DEFAULT_RPC_ENDPOINT_PREFERENCES[chain]
-  )
+  const defaultOption = options.find(option => option.id === defaultPreferences()[chain])
 
   const resolved = selectedOption || defaultOption || options[0]
   if (!resolved) throw new Error(`No RPC endpoints configured for ${chain}`)
@@ -118,14 +139,14 @@ export function getPreferredRpcEndpointOption(chain: RpcEndpointChain): RpcEndpo
 export function getActiveRpcEndpointOption(chain: RpcEndpointChain): RpcEndpointOption {
   const preferredOption = getPreferredRpcEndpointOption(chain)
   const selectedId = activeRpcEndpointOverrides[chain] || preferredOption.id
-  const options = rpcEndpointOptionsByChain[chain] || []
+  const options = getRpcEndpointOptions(chain)
   const selectedOption = options.find(option => option.id === selectedId)
 
   return selectedOption || preferredOption
 }
 
 export function getActiveZcashRpcUrlForNetwork(network: Network, fallbackUrl: string): string {
-  return network === 'mainnet' ? getActiveRpcEndpointOption('zcash').url : fallbackUrl
+  return network === DEFAULT_NETWORK ? getActiveRpcEndpointOption('zcash').url : fallbackUrl
 }
 
 const RPC_REGISTRY_CACHE_KEY = 'rpc_registry_cache_v1'
@@ -137,6 +158,8 @@ interface StoredRpcPreferences {
 }
 
 function readPersistedEndpointId(raw: unknown): string | undefined {
+  // The legacy preference is mainnet-only; explicit selections use network-scoped chain settings.
+  if (DEFAULT_NETWORK !== 'mainnet') return
   const preferences = decodePersistedWalletSettings(raw)?.rpcEndpointPreferences
   if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) return
   const value = (preferences as { zcash?: unknown }).zcash
@@ -162,6 +185,7 @@ async function persistRpcEndpointPreferences(
   stored: StoredRpcPreferences,
   preferences: RpcEndpointPreferences
 ): Promise<void> {
+  if (DEFAULT_NETWORK !== 'mainnet') return
   await chrome.storage.local.set({
     [SETTINGS_STORAGE_KEY]: updatePersistedWalletSettings(stored.raw, {
       rpcEndpointPreferences: preferences
@@ -170,9 +194,10 @@ async function persistRpcEndpointPreferences(
 }
 
 function applyRegistryGroups(registry: ReturnType<typeof parseRpcRegistryDocument>): void {
+  ensureRuntimeRpcGroups()
   if (registry) setActiveRpcRegistryDocument(registry)
   const zcash = registry?.chains.find(
-    chain => chain.chain === 'zcash' && chain.network === 'mainnet'
+    chain => chain.chain === 'zcash' && chain.network === DEFAULT_NETWORK
   )
   if (!zcash) return
   const endpoints = zcash.endpoints.filter(endpoint => !RETIRED_ZCASH_RPC_URLS.has(endpoint.url))
@@ -207,7 +232,7 @@ async function refreshRegistryGroups(): Promise<boolean> {
     typeof value === 'number' && Date.now() >= value && Date.now() - value < ttl
   if (cached && recent(timing?.successAt, 5 * 60_000)) {
     applyRegistryGroups(cached)
-    return cached.chains.some(chain => chain.chain === 'zcash' && chain.network === 'mainnet')
+    return cached.chains.some(chain => chain.chain === 'zcash' && chain.network === DEFAULT_NETWORK)
   }
   if (recent(timing?.attemptAt, 60_000)) {
     applyRegistryGroups(cached)
@@ -225,7 +250,9 @@ async function refreshRegistryGroups(): Promise<boolean> {
       })
       .catch(() => {})
     applyRegistryGroups(registry)
-    return registry.chains.some(chain => chain.chain === 'zcash' && chain.network === 'mainnet')
+    return registry.chains.some(
+      chain => chain.chain === 'zcash' && chain.network === DEFAULT_NETWORK
+    )
   } catch {
     await loadCachedRegistryGroups()
     return false
@@ -241,7 +268,7 @@ export async function syncActiveRpcEndpointPreferencesFromStorage(): Promise<Rpc
     const stored = await readStoredRpcPreferences()
     await loadCachedRegistryGroups()
     setActiveRpcEndpointPreferences({
-      zcash: stored.persistedEndpointId ?? DEFAULT_RPC_ENDPOINT_PREFERENCES.zcash
+      zcash: stored.persistedEndpointId ?? defaultPreferences().zcash
     })
   } catch {
     setActiveRpcEndpointPreferences()
@@ -265,7 +292,7 @@ export function ensureRpcEndpointPreferencesLoaded(): Promise<RpcEndpointPrefere
       const stored = await readStoredRpcPreferences()
       await loadCachedRegistryGroups()
       const preferences = {
-        zcash: stored.persistedEndpointId ?? DEFAULT_RPC_ENDPOINT_PREFERENCES.zcash
+        zcash: stored.persistedEndpointId ?? defaultPreferences().zcash
       }
       setActiveRpcEndpointPreferences(preferences)
       return { ...preferences }
@@ -293,7 +320,7 @@ export function refreshRpcEndpointRegistry(): Promise<RpcEndpointPreferences> {
       const hasFreshZcashRegistry = await refreshRegistryGroups()
       if (!hasFreshZcashRegistry) {
         const preferences = {
-          zcash: stored.persistedEndpointId ?? DEFAULT_RPC_ENDPOINT_PREFERENCES.zcash
+          zcash: stored.persistedEndpointId ?? defaultPreferences().zcash
         }
         setActiveRpcEndpointPreferences(preferences)
         return preferences
@@ -301,10 +328,10 @@ export function refreshRpcEndpointRegistry(): Promise<RpcEndpointPreferences> {
 
       const selected = await selectPreferredRpcEndpoint(
         getRpcEndpointOptions('zcash'),
-        stored.persistedEndpointId ?? DEFAULT_RPC_ENDPOINT_PREFERENCES.zcash
+        stored.persistedEndpointId ?? defaultPreferences().zcash
       )
       const preferences = {
-        ...DEFAULT_RPC_ENDPOINT_PREFERENCES,
+        ...defaultPreferences(),
         zcash: selected.id
       }
       setActiveRpcEndpointPreferences(preferences)
@@ -342,7 +369,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       return
     }
     setActiveRpcEndpointPreferences({
-      zcash: readPersistedEndpointId(change.newValue) ?? DEFAULT_RPC_ENDPOINT_PREFERENCES.zcash
+      zcash: readPersistedEndpointId(change.newValue) ?? defaultPreferences().zcash
     })
   })
 }
