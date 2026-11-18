@@ -170,6 +170,20 @@ test('reversal loads the supported destination as a source before changing the p
     tokenIn: sourceZec,
     tokenOut: destinationUsdc
   })
+  assert.deepEqual(
+    await loadReversedSwapPair({
+      ...input,
+      tokenOut: { ...zec, rheaAddress: zec.assetId }
+    }),
+    { tokenIn: sourceZec, tokenOut: destinationUsdc }
+  )
+  await assert.rejects(
+    loadReversedSwapPair({
+      ...input,
+      tokenOut: { ...zec, rheaAddress: zec.assetId, isNative: false }
+    }),
+    /reverse direction/
+  )
   assert.equal(await loadReversedSwapPair({ ...input, isCancelled: () => true }), null)
   await assert.rejects(
     loadReversedSwapPair({ ...input, loadSources: async () => [] }),

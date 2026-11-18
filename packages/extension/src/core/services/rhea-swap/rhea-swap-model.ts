@@ -258,6 +258,17 @@ const RHEA_NATIVE_CATALOG_ALIASES = new Map([
   ['zcash:zec:mainnet:native', { assetId: ASSET_PRICE_SOURCE_ASSETS.zec, quoteAddress: 'zec' }]
 ])
 
+export function getRheaSwapTokenRouteAddress(
+  token: Pick<RheaSwapToken, 'rheaChainId' | 'rheaAddress' | 'isNative'>
+): string {
+  const address = token.isNative
+    ? (RHEA_NATIVE_QUOTE_ADDRESSES.get(`${token.rheaChainId}:${token.rheaAddress}`) ??
+      RHEA_NATIVE_CATALOG_ALIASES.get(`${token.rheaChainId}:${token.rheaAddress}`)?.quoteAddress ??
+      token.rheaAddress)
+    : token.rheaAddress
+  return /^[1-9]\d*$/.test(token.rheaChainId) ? address.toLowerCase() : address
+}
+
 export interface RheaSwapChainDescriptor {
   readonly apiChainId: ChainRef
   readonly tokenListChainId: number

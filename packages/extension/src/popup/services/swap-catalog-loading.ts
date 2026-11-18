@@ -1,4 +1,8 @@
-import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
+import {
+  RHEA_SWAP_CHAIN_CATALOG,
+  getRheaSwapTokenRouteAddress,
+  type RheaSwapToken
+} from '@/core/services/rhea-swap'
 import type { ChainDefinition } from '@/core/chains/registry'
 import { rheaSwapClient } from './rhea-swap-client'
 import { getChainFromAssetId } from '@/lib/format'
@@ -206,12 +210,10 @@ export function isSameSwapTokenRouteIdentity(
   right: RheaSwapToken | null
 ): boolean {
   if (!left || !right) return left === right
-  const address = (token: RheaSwapToken) =>
-    /^[1-9]\d*$/.test(token.rheaChainId) ? token.rheaAddress.toLowerCase() : token.rheaAddress
   return (
     left.assetId === right.assetId &&
     left.rheaChainId === right.rheaChainId &&
-    address(left) === address(right) &&
+    getRheaSwapTokenRouteAddress(left) === getRheaSwapTokenRouteAddress(right) &&
     left.decimals === right.decimals &&
     left.isNative === right.isNative
   )
@@ -221,13 +223,9 @@ function findReverseCatalogToken(
   catalog: readonly RheaSwapToken[],
   token: RheaSwapToken
 ): RheaSwapToken | undefined {
-  const sameAddress = (candidate: RheaSwapToken) =>
-    /^[1-9]\d*$/.test(token.rheaChainId)
-      ? candidate.rheaAddress.toLowerCase() === token.rheaAddress.toLowerCase()
-      : candidate.rheaAddress === token.rheaAddress
   const matchesRoute = (candidate: RheaSwapToken) =>
     candidate.rheaChainId === token.rheaChainId &&
-    sameAddress(candidate) &&
+    getRheaSwapTokenRouteAddress(candidate) === getRheaSwapTokenRouteAddress(token) &&
     candidate.decimals === token.decimals &&
     candidate.isNative === token.isNative
   const exact = findSwapTokenInCatalog(catalog, token)

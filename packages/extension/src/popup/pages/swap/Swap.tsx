@@ -1453,14 +1453,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (!walletSourcesScope) return
     setManualPortfolioRefreshScope(walletSourcesScope)
     try {
-      if (
-        !(await portfolioSnapshot.refresh(true, { forceDiscovery: true })) &&
-        activeScopeRef.current === walletSourcesScope
-      ) {
-        toast.error('Unable to refresh balances')
-      }
+      await portfolioSnapshot.refresh(true, { forceDiscovery: true })
     } catch {
-      if (activeScopeRef.current === walletSourcesScope) toast.error('Unable to refresh balances')
+      // The portfolio keeps its cached balances and exposes failures to the active form.
     } finally {
       setManualPortfolioRefreshScope(current => (current === walletSourcesScope ? null : current))
     }
@@ -2017,6 +2012,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const canSwitchTokens = !swap.isSwitchingTokens && reverseUnavailableReason === null
   const reverseContext = JSON.stringify([
     walletSourcesScope,
+    swap.tokenIn?.assetId,
+    swap.tokenOut?.assetId,
+    swap.amountIn,
     executionSourceMode,
     destinationMode,
     fundingSource,
@@ -2027,6 +2025,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   ])
   const activeReverseContext = useRef(reverseContext)
   activeReverseContext.current = reverseContext
+  const [reverseFailure, setReverseFailure] = useState<{ context: string; message: string } | null>(
+    null
+  )
+  const reverseError = reverseFailure?.context === reverseContext ? reverseFailure.message : null
+  useEffect(() => setReverseFailure(null), [reverseContext])
   const requestedSourceToken = useMemo(() => {
     if (!requestedSourceAssetId) return null
     if (!isSwapAssetOnEnabledChain(requestedSourceAssetId, enabledSwapChains)) return null
@@ -6087,6 +6090,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const handleSwitchTokens = useCallback(() => {
     if (!canSwitchTokens) return
     const context = reverseContext
+    setReverseFailure(null)
     const reversedSourceMode = destinationMode
     const reversedDestinationMode = executionSourceMode
     void swap
@@ -6111,7 +6115,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           if (isZecDestination && !ordinarySwapRequested) setFundingSource(zecDestinationType)
         }
       })
-      .catch(error => toast.error(getRheaSwapErrorMessage(error)))
+      .catch(error => {
+        if (activeReverseContext.current === context)
+          setReverseFailure({ context, message: getRheaSwapErrorMessage(error) })
+      })
   }, [
     canSwitchTokens,
     destinationMode,
@@ -8279,7 +8286,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                                 /^\d+$/.test(privateFundingMinimumRaw) &&
                                 BigInt(quoteResult.minAmountOut) < BigInt(privateFundingMinimumRaw)
                               ? `Increase the amount to receive enough ${swap.tokenOut?.symbol ?? 'Gas'}`
-                              : swap.quoteError
+                              : (reverseError ?? swap.quoteError)
         }
         onEnableReceiveNetwork={
           ordinarySwapRequested &&
@@ -8420,17 +8427,19 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           swap.retryTokenCatalog()
         }}
         onRetryQuote={
-          swap.quoteError &&
-          quoteRetryable &&
-          (liveQuoteRequest || nativeIntentsRequest || reverseIntentsRequest)
-            ? () => {
-                reviewAfterQuoteRefresh.current = null
-                expiredPrepareRetryKey.current = null
-                swap.setQuoteError(null)
-                swap.setIsQuoting(true)
-                setQuoteRefreshTick(current => current + 1)
-              }
-            : undefined
+          reverseError
+            ? handleSwitchTokens
+            : swap.quoteError &&
+                quoteRetryable &&
+                (liveQuoteRequest || nativeIntentsRequest || reverseIntentsRequest)
+              ? () => {
+                  reviewAfterQuoteRefresh.current = null
+                  expiredPrepareRetryKey.current = null
+                  swap.setQuoteError(null)
+                  swap.setIsQuoting(true)
+                  setQuoteRefreshTick(current => current + 1)
+                }
+              : undefined
         }
         onOpenSlippageSetting={handleOpenSlippageSetting}
         showSlippageSetting={!showSwapSettings}
