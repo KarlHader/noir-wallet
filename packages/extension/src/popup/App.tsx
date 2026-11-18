@@ -45,7 +45,6 @@ import { ExportPrivateKey } from './pages/account/ExportPrivateKey'
 
 // Transaction Pages
 import { Send } from './pages/transactions/Send'
-import { MultichainSend } from './pages/transactions/MultichainSend'
 import { Transfer } from './pages/transactions/Transfer'
 import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
@@ -179,15 +178,6 @@ function ZcashCapabilityEntry({
   return children
 }
 
-function ZcashSendRoute() {
-  const location = useLocation()
-  return new URLSearchParams(location.search).get('move') === '1' ? (
-    <Send />
-  ) : (
-    <MultichainSend initialZcashProvider />
-  )
-}
-
 function VotingCapabilityEntry({ children }: { children: ReactNode }) {
   const { replace } = useNavigate()
   const { activeAccount, loading } = useActiveAccountNetworks()
@@ -225,7 +215,7 @@ function AppRoutes() {
       </Route>
 
       <Route path="/unlock" element={<UnlockPage />} />
-      <Route path="/send" element={multichainSendEnabled ? <MultichainSend /> : <Send />} />
+      <Route path="/send" element={<Send multiChainEnabled={multichainSendEnabled} />} />
       <Route path="/transfer" element={<Transfer />} />
       {multichainSendEnabled && (
         <Route
@@ -244,7 +234,7 @@ function AppRoutes() {
           path="/send/zcash"
           element={
             <ZcashCapabilityEntry fallbackPath="/send">
-              <ZcashSendRoute />
+              <Send multiChainEnabled={multichainSendEnabled} initialZcashProvider />
             </ZcashCapabilityEntry>
           }
         />

@@ -22,6 +22,8 @@ import { getSendRouteCostFromAmounts } from './send-route-cost'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
 import { isSelectableChainFamily } from './chain-selection-availability'
 import { getEnabledSwapChains } from './swap-catalog-loading'
+import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { sortTokenSelectorNetworks } from '@/popup/components/tokens/token-selector-chain-order'
 
 type SendAssetIdentity = Readonly<{
   chainId: string
@@ -31,6 +33,70 @@ type SendAssetIdentity = Readonly<{
 
 export type CrossChainSendAssetGroup = MarketAssetId | `protocol:${string}`
 export type CrossChainSendCapabilities = Readonly<{ evm: boolean; solana: boolean }>
+
+export function readCrossChainSendRoute(
+  searchParams: URLSearchParams,
+  navigationState: unknown,
+  crossChainSendRequested: boolean
+) {
+  const sourceAssetId = searchParams.get('source')
+  const state = navigationState && typeof navigationState === 'object' ? navigationState : null
+  return {
+    sourceAssetId,
+    destinationAssetId: searchParams.get('destination'),
+    destinationChainId: crossChainSendRequested ? searchParams.get('destinationChainId') : null,
+    recipient: crossChainSendRequested ? searchParams.get('recipient') : null,
+    amount: crossChainSendRequested ? searchParams.get('amount') : null,
+    sourceMode: searchParams.get('sourceMode'),
+    returnToSendAssetId:
+      state && 'returnToSendAssetId' in state && state.returnToSendAssetId === sourceAssetId
+        ? sourceAssetId
+        : null,
+    sendEntry:
+      state &&
+      'sendEntry' in state &&
+      (state.sendEntry === 'asset-detail' || state.sendEntry === 'shield')
+        ? state.sendEntry
+        : null
+  }
+}
+
+interface CrossChainSendNetwork {
+  readonly chain: ChainDefinition
+  readonly descriptor: { readonly apiChainId: string }
+}
+
+export function buildCrossChainSendNetworkOptions(input: {
+  readonly source: CrossChainSendNetwork | null
+  readonly candidates: readonly CrossChainSendNetwork[]
+  readonly destination: CrossChainSendNetwork | null
+  readonly support: ReadonlyMap<string, CrossChainSendDestinationSupport>
+}) {
+  const { source, candidates, destination, support } = input
+  const toOption = ({ chain, descriptor }: CrossChainSendNetwork) => ({
+    id: descriptor.apiChainId,
+    chainId: chain.id,
+    name: chain.displayName,
+    icon: resolveChainIconAlias(chain.family, chain.displayName, chain.id)
+  })
+  const options = sortTokenSelectorNetworks(
+    (source ? [source, ...candidates] : candidates).map(toOption),
+    option => ({ id: option.chainId, name: option.name })
+  ).map(option => {
+    const current = support.get(option.chainId)
+    const status =
+      current?.status ?? (option.chainId === source?.chain.id ? 'available' : 'unknown')
+    return {
+      ...option,
+      disabled: status === 'unavailable',
+      note: current?.disabledReason,
+      priority: status === 'available' ? 0 : status === 'unknown' ? 1 : 2
+    }
+  })
+  return destination && !options.some(option => option.id === destination.descriptor.apiChainId)
+    ? [...options, { ...toOption(destination), disabled: true, note: 'No Send route available' }]
+    : options
+}
 
 const mainnetAssets = createAssetRegistry(
   createInitialProductChainRegistry('mainnet'),

@@ -1,6 +1,6 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
 import { parseZcashAddress } from '@/core/address-book/address-book'
-import { EvmWalletClientError } from '@/popup/services/evm-wallet-client'
+import { EvmWalletClientError } from './evm-wallet-client'
 
 export type EvmSendSourceMode = 'main' | 'private'
 

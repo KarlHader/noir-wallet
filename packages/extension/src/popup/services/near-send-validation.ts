@@ -1,4 +1,4 @@
-import { NearWalletClientError } from '@/popup/services/near-wallet-client'
+import { NearWalletClientError } from './near-wallet-client'
 
 export function getNearSendPrepareError(error: unknown, networkName: string): string {
   if (!(error instanceof NearWalletClientError)) {

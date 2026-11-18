@@ -119,7 +119,7 @@ import {
   buildAddToPrivateEvmPath,
   buildMoveToMainEvmPath,
   getEvmTokenFeeBalanceError
-} from './evm-send-validation'
+} from '@/popup/services/evm-send-validation'
 import { initialMoveDraft, readMoveAssetHint, readMoveDraft } from './move-draft'
 import { getFundingBalance } from '@/core/wallet/funding-balance'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'

@@ -12,7 +12,7 @@ import {
   parsePublicPrivateEvmSendDraft,
   parsePublicPrivateEvmSwapRoute,
   resolveEvmNativeMaximumAmount
-} from '../../../../src/popup/pages/transactions/evm-send-validation.ts'
+} from '../../../../src/popup/services/evm-send-validation.ts'
 import { EvmWalletClientError } from '../../../../src/popup/services/evm-wallet-client.ts'
 import { resolveAccountAvailableRaw } from '../../../../src/popup/services/transfer-availability.ts'
 import {
