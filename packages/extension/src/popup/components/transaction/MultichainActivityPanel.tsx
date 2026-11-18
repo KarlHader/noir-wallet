@@ -8,7 +8,10 @@ import { Button } from '../ui/button'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
-import { formatChainAddressExplorerUrl } from '@/popup/services/chain-explorer'
+import {
+  formatChainAddressExplorerUrl,
+  resolveChainExplorerTarget
+} from '@/popup/services/chain-explorer'
 import { ListSkeleton } from '../ui/skeleton'
 import { NetworkFilter } from '../common/NetworkFilter'
 import { InlineError } from '../common/InlineError'
@@ -423,10 +426,12 @@ export function MultichainActivityPanel({
     selectedNetwork?.privateExecutionAddress
       ? selectedNetwork.privateExecutionAddress
       : selectedAddress?.value
-  const fullHistoryUrl =
-    selectedNetwork && selectedHistoryAddress
+  const isZcashShieldHistory = shieldProvider === 'zcash-shield'
+  const fullHistoryUrl = isZcashShieldHistory
+    ? resolveChainExplorerTarget(getZcashChainId(network), network)?.baseUrl
+    : selectedNetwork && selectedHistoryAddress
       ? formatChainAddressExplorerUrl(selectedNetwork.chain.id, selectedHistoryAddress, network)
-      : ''
+      : undefined
   const visibleItems = useMemo(
     () =>
       filterActivityItems({
@@ -670,7 +675,7 @@ export function MultichainActivityPanel({
           referrerPolicy="no-referrer"
           className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
         >
-          Full history
+          {isZcashShieldHistory ? 'View Zcash explorer' : 'Full history'}
           <Icon icon="lucide:external-link" width={13} height={13} />
         </a>
       </div>
