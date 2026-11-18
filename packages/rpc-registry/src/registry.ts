@@ -62,7 +62,7 @@ const TESTNET = 'testnet'
 
 export const RPC_REGISTRY: RpcRegistryDocument = {
   version: RPC_REGISTRY_SCHEMA_VERSION,
-  updatedAt: '2026-11-02T00:00:00.000Z',
+  updatedAt: '2026-11-18T00:00:00.000Z',
   chains: [
     {
       id: 'zcash-mainnet',
@@ -120,7 +120,6 @@ export const RPC_REGISTRY: RpcRegistryDocument = {
       ]
     },
     chain('eip155:1', MAINNET, 'Ethereum', 'eth', EVM, [
-      ['deltarpc', 'DeltaRPC', 'https://eth.deltarpc.com'],
       ['publicnode', 'PublicNode', 'https://ethereum-rpc.publicnode.com'],
       ['drpc', 'dRPC', 'https://eth.drpc.org'],
       ['blockpi', 'BlockPI', 'https://ethereum.public.blockpi.network/v1/rpc/public']

@@ -16,6 +16,7 @@ import {
   type AssetDefinitionInput
 } from '@/core/chains/registry'
 import { createConfiguredEvmRpcClient, EvmPortfolioCoordinator } from '@/infrastructure/chains/evm'
+import { resolvePreferredEvmPortfolioRpc } from '@/infrastructure/chains/evm/evm-portfolio-batch'
 import {
   createFastNearAccountTokenClient,
   createConfiguredNearRpcClient,
@@ -111,6 +112,8 @@ export function createBackgroundPortfolioCoordinator(
           chains,
           assets,
           rpc: createConfiguredEvmRpcClient(DEFAULT_NETWORK, evmNetwork),
+          resolvePreferredBalanceRpc: () =>
+            resolvePreferredEvmPortfolioRpc(DEFAULT_NETWORK, chainId),
           resolvePrivateExecutionAddress: async context => {
             if (!credentialSession.hasUnlockSession()) return null
             const binding = parseEvmAccountBinding(context.chainAccount, chainId)

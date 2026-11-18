@@ -16,7 +16,7 @@ import type {
   StorageV2ReadRepository
 } from '@/ports/repositories'
 import { completePublicOnlyEvmBalance, readEvmPortfolioSource } from './evm-balance-reader'
-import type { EvmBalanceRpc } from './evm-rpc-client'
+import type { EvmBalanceRpc, EvmContractRpc } from './evm-rpc-client'
 
 export type EvmPortfolioStorageRepository = Pick<
   StorageV2ReadRepository,
@@ -30,6 +30,7 @@ export interface EvmPortfolioCoordinatorOptions {
   readonly chains: ChainRegistry
   readonly assets: AssetRegistry
   readonly rpc: EvmBalanceRpc
+  readonly resolvePreferredBalanceRpc?: () => EvmContractRpc | undefined
   readonly resolvePrivateExecutionAddress?: (
     context: ActiveEvmPortfolioContext
   ) => Promise<string | null>
@@ -234,6 +235,7 @@ export class EvmPortfolioCoordinator {
             chainAccount: context.chainAccount,
             assets: this.options.assets,
             rpc: this.options.rpc,
+            preferredBalanceRpc: this.options.resolvePreferredBalanceRpc?.(),
             publicOnly: !supportsEvmPrivateExecution(context.keyDomainSource),
             ...(privateAddress === undefined ? {} : { privateAddress }),
             now: () => refreshedAt
