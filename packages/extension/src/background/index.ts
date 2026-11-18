@@ -6794,14 +6794,14 @@ async function performWalletUnlock(password: string): Promise<any> {
     }
 
     const walletState = useWalletStore.getState()
-    const activeRetainedV1Wallet = walletState.currentWalletId
-      ? walletState.getWallet(walletState.currentWalletId)
-      : null
+    const hasRetainedV1Wallet = walletState.wallets.some(
+      wallet => wallet.id === walletState.currentWalletId || wallet.accounts.length > 0
+    )
     const storageV2SupportsZcash = await credentialLifecycle.activeAccountSupportsChain('zcash')
     const unlockPath = resolveWalletUnlockPath(
       await credentialLifecycle.getActiveWalletSetMode(),
       storageV2SupportsZcash,
-      Boolean(activeRetainedV1Wallet)
+      hasRetainedV1Wallet
     )
     if (unlockPath.kind === 'native-v2') {
       const attemptStatus = await SecureStorage.getLoginAttempts()
@@ -6867,12 +6867,14 @@ async function performWalletUnlock(password: string): Promise<any> {
       return result
     }
 
-    const credentials = result.recoveredWalletId
-      ? await credentialLifecycle.resumeActiveRetainedWalletForRecovery(
-          password,
-          result.recoveredWalletId
-        )
-      : await credentialLifecycle.synchronizeRetainedV1(password)
+    // Without an active V2 pointer, the verified retained credential must migrate first.
+    const credentials =
+      result.recoveredWalletId && storageV2SupportsZcash !== null
+        ? await credentialLifecycle.resumeActiveRetainedWalletForRecovery(
+            password,
+            result.recoveredWalletId
+          )
+        : await credentialLifecycle.synchronizeRetainedV1(password)
     if (result.recoveredWalletId && result.recoveredAccountId) {
       const selection = await credentialLifecycle.selectActiveAccount(
         result.recoveredWalletId,
