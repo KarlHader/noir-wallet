@@ -61,11 +61,14 @@ export function PortfolioAssetRowContent({
   )
 }
 
+type ConfidentialZecBalance = Readonly<{ assetId: string; amount: string; fiat: string | null }>
+
 interface PortfolioAssetGroupCardProps {
   readonly domain?: AssetDomain
   readonly group: PortfolioAssetGroup
   readonly prices: AssetPriceReadModel | null
   readonly balancesHidden: boolean
+  readonly confidentialZec?: ConfidentialZecBalance | null
   readonly expanded: boolean
   readonly pricesLoading?: boolean
   readonly directAsset?: boolean
@@ -79,6 +82,7 @@ interface PortfolioAssetBalanceRowProps {
   readonly entry: PortfolioAssetGroupEntry
   readonly prices: AssetPriceReadModel | null
   readonly balancesHidden: boolean
+  readonly confidentialZec?: ConfidentialZecBalance | null
   readonly leading: 'chain' | 'token'
   readonly pricesLoading?: boolean
   readonly showUnitPrice?: boolean
@@ -119,6 +123,7 @@ function PortfolioAssetQuantity({
   domain,
   prices,
   balancesHidden,
+  confidentialZec,
   amount,
   symbol
 }: {
@@ -126,6 +131,7 @@ function PortfolioAssetQuantity({
   readonly domain: AssetDomain
   readonly prices: AssetPriceReadModel | null
   readonly balancesHidden: boolean
+  readonly confidentialZec?: ConfidentialZecBalance | null
   readonly amount: Big
   readonly symbol: string
 }) {
@@ -133,13 +139,19 @@ function PortfolioAssetQuantity({
 
   const domainBalances = getPortfolioAssetDomainBalances(entries, domain, prices)
   const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
+  const balances =
+    isZcash &&
+    confidentialZec &&
+    entries.some(entry => entry.asset.asset.id === confidentialZec.assetId)
+      ? [...domainBalances, { ...confidentialZec, domain: 'near-confidential' as const }]
+      : domainBalances
   return (
     <Tooltip
       side="top"
       className="max-w-[260px]"
       content={
         <div className="space-y-1.5">
-          {domainBalances.map(balance => (
+          {balances.map(balance => (
             <div key={balance.domain} className="flex items-start justify-between gap-4">
               <span className="shrink-0">
                 {balance.domain === 'public' && isZcash
@@ -148,7 +160,9 @@ function PortfolioAssetQuantity({
                     ? 'Public'
                     : balance.domain === 'shield'
                       ? 'Shield'
-                      : 'Private'}
+                      : balance.domain === 'near-confidential'
+                        ? 'NEAR Confidential'
+                        : 'Private'}
               </span>
               <span className="text-right tabular-nums">
                 <span className="block">
@@ -235,6 +249,7 @@ function PortfolioAssetBalanceRow({
   domain,
   prices,
   balancesHidden,
+  confidentialZec,
   leading,
   pricesLoading = false,
   showUnitPrice = true,
@@ -314,6 +329,7 @@ function PortfolioAssetBalanceRow({
             domain={domain ?? 'all'}
             prices={prices}
             balancesHidden={balancesHidden}
+            confidentialZec={confidentialZec}
             amount={amount}
             symbol={entry.asset.metadata.symbol}
           />
@@ -338,6 +354,7 @@ export function PortfolioAssetGroupCard({
   domain = 'all',
   prices,
   balancesHidden,
+  confidentialZec,
   expanded,
   pricesLoading = false,
   directAsset = false,
@@ -439,6 +456,7 @@ export function PortfolioAssetGroupCard({
                 domain={domain}
                 prices={prices}
                 balancesHidden={balancesHidden}
+                confidentialZec={confidentialZec}
                 amount={totalAmount}
                 symbol={group.symbol}
               />
@@ -470,6 +488,7 @@ export function PortfolioAssetGroupCard({
               domain={domain}
               prices={prices}
               balancesHidden={balancesHidden}
+              confidentialZec={confidentialZec}
               leading="chain"
               pricesLoading={pricesLoading}
               showUnitPrice={unitQuote === null}

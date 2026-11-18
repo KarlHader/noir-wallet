@@ -192,8 +192,8 @@ export function formatFiatAmount(value: NumericValue, options?: { showSign?: boo
   const parsed = parseNumericValue(value)
   if (!parsed) return UNKNOWN
   const prefix = options?.showSign ? '$' : ''
-  if (!parsed.eq(0) && parsed.abs().lt('0.01')) return belowMinimum(parsed, 2, prefix)
   const sign = parsed.lt(0) ? '-' : ''
+  if (!parsed.eq(0) && parsed.abs().lt('0.01')) return `${sign}${prefix}<${minimumAt(2)}`
   return `${sign}${prefix}${groupDecimal(parsed.abs().toFixed(2, Big.roundHalfUp))}`
 }
 

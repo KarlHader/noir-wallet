@@ -202,6 +202,7 @@ export function MultichainPortfolioPanel({
     <PortfolioShell
       model={domainModel!}
       sourceModel={visibleModel}
+      network={network}
       domain={domain}
       hideToolbar={hideToolbar}
       prices={prices}

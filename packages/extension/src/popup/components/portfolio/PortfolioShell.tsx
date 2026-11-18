@@ -7,7 +7,9 @@ import { cn } from '@/lib/utils'
 import tokenViewIcon from '@/images/portfolio-token-view.svg'
 import chainViewIcon from '@/images/portfolio-chain-view.svg'
 import type { PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
-import type { AssetPriceReadModel } from '@/core/prices'
+import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
+import Big from '@/lib/big'
+import type { Network } from '@/types'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { Skeleton } from '@/popup/components/ui/skeleton'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
@@ -32,6 +34,7 @@ import {
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 import {
   listStandaloneNearConfidentialHoldings,
+  resolveNearConfidentialZecHolding,
   sumNearConfidentialChainFiat
 } from '@/popup/services/near-confidential-holdings'
 import {
@@ -52,6 +55,7 @@ interface PortfolioShellProps {
   readonly hideToolbar?: boolean
   readonly model: PortfolioReadModel
   readonly sourceModel?: PortfolioReadModel
+  readonly network: Network
   readonly prices: AssetPriceReadModel | null
   readonly priceStatus?: 'loading' | 'ready' | 'error'
   readonly balancesHidden?: boolean
@@ -240,6 +244,7 @@ function PortfolioViewIcon({
 export function PortfolioShell({
   model,
   sourceModel,
+  network,
   domain = 'all',
   hideToolbar = false,
   prices: sourcePrices,
@@ -267,6 +272,22 @@ export function PortfolioShell({
     () => withConfidentialAssetPrices(sourceModel ?? model, sourcePrices),
     [model, sourceModel, sourcePrices]
   )
+  const confidentialZec = useMemo(() => {
+    if (domain !== 'all' || balancesHidden) return null
+    const holding = resolveNearConfidentialZecHolding({
+      model: sourceModel ?? model,
+      network,
+      walletId: model.scope.keyDomainId,
+      accountId: model.scope.accountId
+    })
+    if (!holding) return null
+    const price = findAssetPrice(prices, holding.assetId)?.priceUsd
+    return {
+      assetId: holding.assetId,
+      amount: holding.amount,
+      fiat: price ? new Big(holding.amount).times(price).toFixed() : null
+    }
+  }, [balancesHidden, domain, model, network, prices, sourceModel])
   const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
     displayModel.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
@@ -381,6 +402,7 @@ export function PortfolioShell({
           domain={domain}
           group={group}
           prices={prices}
+          confidentialZec={confidentialZec}
           balancesHidden={balancesHidden}
           expanded={false}
           pricesLoading={pricesLoading}
@@ -668,6 +690,7 @@ export function PortfolioShell({
                           entry={{ asset, chain }}
                           domain={domain}
                           prices={prices}
+                          confidentialZec={confidentialZec}
                           balancesHidden={balancesHidden}
                           pricesLoading={pricesLoading}
                           onSelectAsset={onSelectAsset}
@@ -719,6 +742,7 @@ export function PortfolioShell({
                                 entry={{ asset, chain }}
                                 domain={domain}
                                 prices={prices}
+                                confidentialZec={confidentialZec}
                                 balancesHidden={balancesHidden}
                                 pricesLoading={pricesLoading}
                                 onSelectAsset={onSelectAsset}
