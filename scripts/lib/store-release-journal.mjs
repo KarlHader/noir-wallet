@@ -336,6 +336,7 @@ async function requireHistoricalReceipts({
     ) {
       throw new Error('Release journal workflow history has untrusted provenance')
     }
+    const verifiedExecutions = new Set()
     for (let attempt = 1; attempt <= listed.run_attempt; attempt++) {
       if (String(listed.id) === currentRun.id && String(attempt) === currentRun.attempt) {
         if (listed.head_sha !== currentRun.sha) {
@@ -392,11 +393,22 @@ async function requireHistoricalReceipts({
             entry.attempt === String(attempt) &&
             entry.stage === job.name
         )
+        // GitHub can list a reused successful job with new IDs but the original execution times.
+        const startedAt = Date.parse(job.started_at)
+        const completedAt = Date.parse(job.completed_at)
+        const execution =
+          job.conclusion === 'success' && startedAt < completedAt
+            ? `${job.name}/${startedAt}/${completedAt}`
+            : null
+        if (recorded.length === 0 && execution && verifiedExecutions.has(execution)) continue
         if (
           (intentPersisted && !recorded.some(entry => entry.phase === 'intent')) ||
           (executionStarted && recorded.length === 0)
         ) {
           throw new Error('Prior store attempt has a missing release journal receipt')
+        }
+        if (execution && recorded.some(entry => entry.phase === 'result')) {
+          verifiedExecutions.add(execution)
         }
       }
     }
