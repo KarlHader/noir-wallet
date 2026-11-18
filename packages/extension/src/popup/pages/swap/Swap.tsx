@@ -80,6 +80,7 @@ import {
   cancelNativeZecIntentsSwap,
   type NativeZecIntentsSwapReview
 } from '@/popup/services/native-zec-intents-swap-client'
+import { sameNativeZecQuoteBinding } from '@/core/services/native-zec-intents-swap'
 import {
   openHardwareSignAndWait,
   openHardwareSignTab,
@@ -325,29 +326,6 @@ function sameNativeZecDestination(
     left.assetId === right.assetId &&
     left.protocolAssetId === right.protocolAssetId &&
     left.recipient === right.recipient
-  )
-}
-
-function sameNativeZecQuoteBinding(
-  left: NativeZecIntentsSwapReview['quoteBinding'],
-  right: NativeZecIntentsSwapReview['quoteBinding']
-): boolean {
-  return (
-    Object.keys(left).length === Object.keys(right).length &&
-    left.provider === right.provider &&
-    left.quoteHandle === right.quoteHandle &&
-    left.isCrossChain === right.isCrossChain &&
-    left.destinationChain === right.destinationChain &&
-    left.depositAddress === right.depositAddress &&
-    left.originAsset === right.originAsset &&
-    left.destinationAsset === right.destinationAsset &&
-    left.expectedAmountOut === right.expectedAmountOut &&
-    left.minAmountOut === right.minAmountOut &&
-    left.recipient === right.recipient &&
-    left.refundTo === right.refundTo &&
-    left.deadline === right.deadline &&
-    left.recipientType === right.recipientType &&
-    left.fundingSource === right.fundingSource
   )
 }
 

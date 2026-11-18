@@ -49,6 +49,18 @@ export interface NativeZecIntentsSwapRecord extends NativeZecIntentsSwapReview {
   readonly terminalAt?: number
 }
 
+export function sameNativeZecQuoteBinding(left: QuoteBinding, right: QuoteBinding): boolean {
+  return (
+    Boolean(left && right) &&
+    Object.keys(left).length === Object.keys(right).length &&
+    Object.entries(left).every(
+      ([key, value]) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        right[key as keyof QuoteBinding] === value
+    )
+  )
+}
+
 export function zatsToZec(amountZats: string): string {
   if (!/^[1-9][0-9]{0,77}$/.test(amountZats)) {
     throw new Error('Native ZEC swap amount is invalid')

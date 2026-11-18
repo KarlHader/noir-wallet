@@ -22,6 +22,7 @@ import { resolveManagedIntentsAsset } from '@/core/services/intents-managed-asse
 import { resolveIntentsEvmChainId } from '@/core/services/intents-evm-assets'
 import { resolveIntentsWalletAsset } from '@/core/services/intents-wallet-assets'
 import {
+  sameNativeZecQuoteBinding,
   zatsToZec,
   zecToZats,
   type NativeZecIntentsSwapRecord,
@@ -52,26 +53,6 @@ export interface NativeZecActiveAccountSnapshot {
 function recordKey(quoteId: string): string {
   if (!ID_PATTERN.test(quoteId)) throw new Error('Native ZEC Intents quote ID is invalid')
   return `${PREFIX}${quoteId}`
-}
-
-function sameBinding(left: QuoteBinding, right: QuoteBinding): boolean {
-  return (
-    Object.keys(left).length === Object.keys(right).length &&
-    left.provider === right.provider &&
-    left.quoteHandle === right.quoteHandle &&
-    left.isCrossChain === right.isCrossChain &&
-    left.destinationChain === right.destinationChain &&
-    left.depositAddress === right.depositAddress &&
-    left.originAsset === right.originAsset &&
-    left.destinationAsset === right.destinationAsset &&
-    left.expectedAmountOut === right.expectedAmountOut &&
-    left.minAmountOut === right.minAmountOut &&
-    left.recipient === right.recipient &&
-    left.recipientType === right.recipientType &&
-    left.fundingSource === right.fundingSource &&
-    left.refundTo === right.refundTo &&
-    left.deadline === right.deadline
-  )
 }
 
 function parseRecord(value: unknown): NativeZecIntentsSwapRecord {
@@ -168,7 +149,7 @@ export async function readNativeZecIntentsSwapMetadata(
   const value = (await chrome.storage.local.get(key))[key]
   if (value === undefined) return null
   const record = parseRecord(value)
-  return sameBinding(binding, record.quoteBinding) ? record : null
+  return sameNativeZecQuoteBinding(binding, record.quoteBinding) ? record : null
 }
 
 export async function markNativeZecIntentsSwapTerminal(
@@ -188,7 +169,7 @@ export async function markNativeZecIntentsSwapTerminal(
     if (
       record.schemaVersion !== 2 ||
       record.claimedTransactionId !== transactionId ||
-      !sameBinding(binding, record.quoteBinding) ||
+      !sameNativeZecQuoteBinding(binding, record.quoteBinding) ||
       (record.terminalStatus !== undefined && record.terminalStatus !== status)
     ) {
       throw new Error('Native ZEC Confidential terminal status changed')
@@ -212,7 +193,7 @@ export async function readNativeZecIntentsSwapStatus(
           return value === undefined ? null : parseRecord(value)
         })()
       : null
-  if (record && !sameBinding(binding, record.quoteBinding)) {
+  if (record && !sameNativeZecQuoteBinding(binding, record.quoteBinding)) {
     throw new Error('Native ZEC Intents status quote binding changed')
   }
   if (binding.recipientType !== 'CONFIDENTIAL_INTENTS' && record?.schemaVersion !== 2) {
@@ -739,7 +720,7 @@ export class NativeZecIntentsSwapCoordinator {
             (record.schemaVersion === 2 ? record.fundingSource : 'shielded') ||
           input.to !== record.depositAddress ||
           zecToZats(input.amount) !== record.amountZats ||
-          !sameBinding(input.binding, record.quoteBinding)
+          !sameNativeZecQuoteBinding(input.binding, record.quoteBinding)
         ) {
           throw new Error('Native ZEC Intents quote changed or was already submitted')
         }

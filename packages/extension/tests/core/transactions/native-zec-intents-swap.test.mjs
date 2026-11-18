@@ -174,7 +174,16 @@ test('native ZEC Intents spend binds the approved quote and survives coordinator
         binding: { ...confidentialSpend.binding, recipientType: 'DESTINATION_CHAIN' }
       })
     ).rejects.toThrow()
-    expect(await coordinator.claimSpend(confidentialSpend)).toBe(expiresAt)
+    const reorderedBinding = Object.fromEntries(Object.entries(confidentialSpend.binding).reverse())
+    await expect(
+      coordinator.claimSpend({
+        ...confidentialSpend,
+        binding: { ...reorderedBinding, minAmountOut: '899' }
+      })
+    ).rejects.toThrow()
+    expect(await coordinator.claimSpend({ ...confidentialSpend, binding: reorderedBinding })).toBe(
+      expiresAt
+    )
     expect(await coordinator.claimSpend(confidentialSpend)).toBe(expiresAt)
     await expect(
       new NativeZecIntentsSwapCoordinator(options).claimSpend({

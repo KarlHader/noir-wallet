@@ -5,7 +5,7 @@ import {
   cancelNativeZecIntentsSwap,
   type NativeZecIntentsSwapReview
 } from '@/popup/services/native-zec-intents-swap-client'
-import { zecToZats } from '@/core/services/native-zec-intents-swap'
+import { sameNativeZecQuoteBinding, zecToZats } from '@/core/services/native-zec-intents-swap'
 import {
   buildPublicPrivateEvmSendPath,
   parsePublicPrivateEvmSendDraft,
@@ -1027,7 +1027,7 @@ export function Send({
             current.amountZats !== zecToZats(amount) ||
             current.depositAddress !== review.depositAddress ||
             current.expiresAt <= Date.now() + 5_000 ||
-            JSON.stringify(current.quoteBinding) !== JSON.stringify(review.quoteBinding)
+            !sameNativeZecQuoteBinding(current.quoteBinding, review.quoteBinding)
           ) {
             setMoveQuote(null)
             setMoveQuoteError('Move quote changed. Try again.')
