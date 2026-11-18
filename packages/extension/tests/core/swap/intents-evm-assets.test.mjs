@@ -3,7 +3,6 @@ import { expect } from '@playwright/test'
 import { getEvmNetworkConfigs } from '../../../src/config/networks.ts'
 import { resolveManagedIntentsAssets } from '../../../src/core/services/intents-managed-assets.ts'
 import {
-  getDefaultIntentsEvmAssets,
   resolveIntentsEvmAssets,
   resolveIntentsEvmChainId
 } from '../../../src/core/services/intents-evm-assets.ts'
@@ -63,7 +62,6 @@ test('maps only canonical supported Intents ERC-20 assets to wallet AssetIds', (
       symbol: 'USDC'
     })
   ])
-  expect(getDefaultIntentsEvmAssets(assets)).toEqual(assets)
 })
 
 test('prefers the current BSC representation when a deprecated row shares its contract', () => {

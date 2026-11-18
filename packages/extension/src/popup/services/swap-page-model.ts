@@ -2,12 +2,12 @@ import type { PortfolioReadModel } from '@/core/portfolio'
 import { decodeFunctionData, parseAbi } from 'viem'
 import { parseZcashAddress } from '@/core/address-book/address-book'
 import { isZecToken, type SwapToken } from '@/core/services/intents-api'
+import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import { getEvmNetworkConfigs } from '@/config/networks'
 import { resolveIntentsEvmAssets } from '@/core/services/intents-evm-assets'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
-  type RheaSwapQuoteView,
   type RheaSwapQuoteRequest,
   type RheaSwapReviewView,
   type RheaSwapToken
@@ -23,14 +23,19 @@ import {
 
 import {
   resolveWalletOwnedQuoteAsset,
+  resolveRheaSwapDestinationIdentity,
   resolveWalletQuoteReceiveTarget,
   type PreparedQuoteDepositTransfer,
+  type QuoteDepositExecutionMode,
   type WalletOwnedQuoteAsset
 } from '@/popup/services/quote-deposit-transfer-client'
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
 import type { FundingSource, Network } from '@/types'
-import type { ShieldSwapZecSourceKind } from '@/popup/services/shield-swap-zec-sources'
-import { isRheaSwapQuoteFresh } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
+import {
+  shieldSwapZecSourceParam,
+  type ShieldSwapZecSourceKind
+} from '@/popup/services/shield-swap-zec-sources'
+import type { ShieldFundingAsset } from './shield-transfer'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import {
   filterCrossChainSendDestinations,
@@ -40,6 +45,71 @@ import {
 const ERC20_TRANSFER_ABI = parseAbi([
   'function transfer(address to, uint256 amount) returns (bool)'
 ])
+
+export function resolveSwapResultReturnPaths(input: {
+  sourceAssetId?: string | null
+  originPath: string | null
+  crossChainScopeMatches: boolean
+  crossChainSend: boolean
+  publicPrivacySend: boolean
+  privateBalanceTransfer: boolean
+  privateTransfer: boolean
+  privateFundingRequestId: string | null
+  walletId: string | null
+  accountId: string | null
+  sourceMode: QuoteDepositExecutionMode
+  shieldSelected: boolean
+  shieldSource: ShieldSwapZecSourceKind | null
+}): { crossChainOriginPath: string | null; resultReturnPath: string } {
+  const { sourceAssetId, originPath } = input
+  const crossChainOriginPath =
+    input.crossChainScopeMatches &&
+    originPath?.startsWith('/') &&
+    !originPath.startsWith('//') &&
+    !originPath.includes('\\') &&
+    !originPath.startsWith('/send') &&
+    !originPath.startsWith('/transaction-result')
+      ? originPath
+      : null
+  const sendPath = (sourceMode: 'main' | 'private') =>
+    sourceAssetId ? `/send?${new URLSearchParams({ assetId: sourceAssetId, sourceMode })}` : '/send'
+
+  let resultReturnPath: string
+  if (input.privateFundingRequestId) {
+    resultReturnPath = `/approval?requestId=${encodeURIComponent(input.privateFundingRequestId)}`
+  } else if (input.crossChainSend) {
+    resultReturnPath = crossChainOriginPath ?? sendPath('main')
+  } else if (input.publicPrivacySend) {
+    resultReturnPath = sendPath('main')
+  } else if (input.privateBalanceTransfer) {
+    const from = input.privateTransfer ? 'private' : 'public'
+    const to = input.privateTransfer ? 'public' : 'private'
+    resultReturnPath = `/transfer?${new URLSearchParams({
+      ...(sourceAssetId ? { assetId: sourceAssetId } : {}),
+      from,
+      to,
+      mode: from
+    })}`
+  } else if (input.privateTransfer) {
+    resultReturnPath = sendPath('private')
+  } else {
+    const params = new URLSearchParams({
+      balanceDomain: input.shieldSelected
+        ? 'shield'
+        : input.sourceMode === 'private'
+          ? 'private'
+          : 'public',
+      ...(input.walletId && input.accountId
+        ? { sourceWalletId: input.walletId, sourceAccountId: input.accountId }
+        : {}),
+      ...(input.shieldSelected && input.shieldSource
+        ? { shieldZecSource: shieldSwapZecSourceParam(input.shieldSource) }
+        : {})
+    })
+    resultReturnPath = `/swap?${params}`
+  }
+  return { crossChainOriginPath, resultReturnPath }
+}
 
 export function resolveSwapRecipientChainId(
   token: RheaSwapToken | null,
@@ -54,6 +124,71 @@ export function resolveSwapRecipientChainId(
       .list()
       .find(chain => chain.family === descriptor.walletFamily)?.id ?? null
   )
+}
+
+export function resolveNativeZecIntentsDestination(
+  token: RheaSwapToken,
+  portfolio: PortfolioReadModel | null,
+  network: Network,
+  managedAssets: readonly IntentsManagedAsset[],
+  protocolTokens: readonly SwapToken[],
+  destinations: readonly ShieldFundingAsset[] = []
+): Readonly<{ chainId: string; assetId: string; protocolAssetId: string }> | null {
+  const internal = destinations.find(
+    asset =>
+      asset.asset.metadata.decimals === token.decimals &&
+      (asset.asset.asset.id === token.assetId || asset.managed.protocolAssetId === token.assetId)
+  )
+  if (internal)
+    return Object.freeze({
+      chainId: internal.managed.chainId,
+      assetId: internal.managed.assetId,
+      protocolAssetId: internal.managed.protocolAssetId
+    })
+  if (isZecToken(token)) return null
+  const chainId = resolveSwapRecipientChainId(token, network)
+  if (!chainId) return null
+  const managed = managedAssets.find(
+    asset =>
+      asset.chainId === chainId &&
+      asset.decimals === token.decimals &&
+      (asset.assetId === token.assetId ||
+        asset.protocolAssetId === token.assetId ||
+        (asset.namespace === 'erc20' &&
+          token.contractAddress !== null &&
+          token.contractAddress !== undefined &&
+          asset.reference.toLowerCase() === token.contractAddress.toLowerCase()))
+  )
+  const native = token.isNative ? resolveRheaSwapDestinationIdentity(token, portfolio) : null
+  const assetId = managed?.assetId ?? native?.assetId
+  const protocolAssetId =
+    managed?.protocolAssetId ??
+    (native && protocolTokens.some(candidate => candidate.assetId === token.assetId)
+      ? token.assetId
+      : null)
+  if (!assetId || !protocolAssetId || (managed?.chainId ?? native?.chainId) !== chainId) return null
+  return Object.freeze({ chainId, assetId, protocolAssetId })
+}
+
+// Adapt internal assets to the shared form model without loading a Public swap catalog.
+export function confidentialDestinationFormToken(
+  asset: ShieldFundingAsset,
+  token: SwapToken
+): RheaSwapToken | null {
+  const descriptor = RHEA_SWAP_CHAIN_CATALOG.find(chain => chain.blockchain === token.blockchain)
+  if (!descriptor || asset.managed.protocolAssetId !== token.assetId) return null
+  return Object.freeze({
+    ...token,
+    assetId: asset.asset.asset.id,
+    rheaChainId: descriptor.apiChainId,
+    tokenListChainId: descriptor.tokenListChainId,
+    rheaAddress:
+      asset.asset.asset.kind === 'native' && asset.chain.chain.family === 'evm'
+        ? '0x0000000000000000000000000000000000000000'
+        : asset.asset.asset.reference,
+    isNative: asset.asset.asset.kind === 'native',
+    sources: Object.freeze(['near-intents'])
+  })
 }
 
 export function resolveManagedSwapRecipient(input: {
@@ -97,38 +232,6 @@ export {
   isRheaSwapQuoteFresh
 } from '@/core/services/rhea-swap/rhea-swap-quote-validity'
 
-export function hasSwapQuoteTermsChanged(
-  previous: RheaSwapQuoteView,
-  next: RheaSwapQuoteView
-): boolean {
-  return (
-    previous.estimatedOut !== next.estimatedOut ||
-    previous.minAmountOut !== next.minAmountOut ||
-    previous.router !== next.router ||
-    previous.recipient !== next.recipient
-  )
-}
-
-export function isAcceptedSwapReview(input: {
-  readonly quote: RheaSwapQuoteView | null
-  readonly review: RheaSwapReviewView | null
-  readonly acceptedHandle: string | null
-  readonly quoteKey: string | null
-  readonly requestKey: string | null | undefined
-  readonly now?: number
-}): boolean {
-  const { quote, review, acceptedHandle, quoteKey, requestKey } = input
-  return Boolean(
-    quote &&
-    review &&
-    acceptedHandle === quote.quoteHandle &&
-    review.quoteHandle === quote.quoteHandle &&
-    quoteKey &&
-    quoteKey === requestKey &&
-    isRheaSwapQuoteFresh(quote, input.now)
-  )
-}
-
 export function resolveShieldDomainZecFundingSource(input: {
   readonly ordinarySwapRequested: boolean
   readonly shieldZecSource: ShieldSwapZecSourceKind | null
@@ -144,7 +247,14 @@ export function resolveShieldDomainZecFundingSource(input: {
   ) {
     return 'shielded'
   }
-  if (input.ordinarySwapRequested && input.isZecSource) return 'transparent'
+  if (
+    input.ordinarySwapRequested &&
+    input.shieldZecSource === 'native-transparent' &&
+    input.isZecSource
+  ) {
+    return 'transparent'
+  }
+  if (input.ordinarySwapRequested && input.isZecSource) return input.selectedFundingSource
   return input.selectedFundingSource
 }
 
@@ -152,7 +262,7 @@ export function shieldConfidentialSwapActive(input: {
   readonly shieldSwapSelected: boolean
   readonly shieldZecSource: ShieldSwapZecSourceKind | null
 }): boolean {
-  return input.shieldSwapSelected && input.shieldZecSource !== 'native-shielded'
+  return input.shieldSwapSelected && input.shieldZecSource === 'intents'
 }
 
 export function resolveSwapReviewAction(input: {
@@ -289,6 +399,15 @@ function formatSwapTokenPortfolioBalance(
   return formatBaseUnitDecimalAmount(availableRaw, asset.metadata.decimals)
 }
 
+const portfolioTokenBalances = new WeakMap<
+  PortfolioReadModel,
+  {
+    readonly receiveTargets: AdditionalReceiveTargetsView | null
+    readonly main: WeakMap<RheaSwapToken, string | undefined>
+    readonly private: WeakMap<RheaSwapToken, string | undefined>
+  }
+>()
+
 export function buildWalletSwapSourceBalances(input: {
   readonly tokens: readonly RheaSwapToken[]
   readonly portfolio: PortfolioReadModel | null
@@ -297,18 +416,33 @@ export function buildWalletSwapSourceBalances(input: {
   readonly evmExecutionMode: 'main' | 'private'
 }): ReadonlyMap<string, string> {
   const balances = new Map<string, string>()
+  let snapshot = input.portfolio ? portfolioTokenBalances.get(input.portfolio) : undefined
+  if (input.portfolio && (!snapshot || snapshot.receiveTargets !== input.receiveTargets)) {
+    snapshot = {
+      receiveTargets: input.receiveTargets,
+      main: new WeakMap(),
+      private: new WeakMap()
+    }
+    portfolioTokenBalances.set(input.portfolio, snapshot)
+  }
+  // Portfolio read models are immutable and account scoped. A new snapshot or
+  // receive-target view invalidates these display values; funding modes never mix.
+  const cached = snapshot?.[input.evmExecutionMode]
   for (const token of input.tokens) {
     if (isZecToken(token)) {
       balances.set(token.assetId, input.zcashAvailable)
       continue
     }
     if (!input.portfolio) continue
-    const formatted = formatSwapTokenPortfolioBalance(
-      token,
-      input.portfolio,
-      input.receiveTargets,
-      input.evmExecutionMode
-    )
+    const formatted = cached?.has(token)
+      ? cached.get(token)
+      : formatSwapTokenPortfolioBalance(
+          token,
+          input.portfolio,
+          input.receiveTargets,
+          input.evmExecutionMode
+        )
+    cached?.set(token, formatted)
     if (formatted !== undefined) balances.set(token.assetId, formatted)
   }
   return balances
@@ -381,11 +515,7 @@ export function filterConfidentialFundingSourceTokens(
 }
 
 export function isConfidentialSwapDestinationSupported(token: RheaSwapToken): boolean {
-  return (
-    token.sources?.some(source =>
-      ['nearintents', 'preswap-nearintents'].includes(source.toLowerCase())
-    ) ?? false
-  )
+  return token.rheaChainId === 'zcash' || /^[1-9]\d*$/.test(token.rheaChainId)
 }
 
 export function filterSwapDestinationTokens(

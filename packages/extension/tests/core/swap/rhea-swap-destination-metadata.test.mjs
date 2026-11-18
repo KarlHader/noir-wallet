@@ -44,6 +44,8 @@ function quoteBinding(
       executionId: 'execution-1',
       router: 'router-1',
       amountIn: '1000000',
+      estimatedOut: '1234500000000000000',
+      minAmountOut: '1200000000000000000',
       isCrossChain: true,
       execution: { kind: 'evm-signature', target: 'router-1' }
     }

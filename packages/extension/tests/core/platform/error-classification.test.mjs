@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { classifyError, isRpcEndpointError, isWalletLockedError } from '../../../src/lib/errors.ts'
+import { classifyError, isRpcEndpointError, isUnmappedError, isWalletLockedError } from '../../../src/lib/errors.ts'
 import { fetchWithTimeout } from '../../../src/lib/fetch-utils.ts'
 
 test.describe('Error classification', () => {
-  test('shows actionable backup failures while keeping unrelated errors private', () => {
+  test('shows actionable backup failures and safe unmapped reasons', () => {
     expect(
       classifyError(
         new Error('Backup words do not match this wallet. View your secret phrase and try again.')
@@ -27,7 +27,35 @@ test.describe('Error classification', () => {
       retryable: true
     })
     expect(classifyError(new Error('Unknown private backend details'))).toMatchObject({
-      userMessage: 'An unexpected error occurred. Please try again.'
+      userMessage: 'Unknown private backend details'
+    })
+    expect(isUnmappedError(new Error('Unknown private backend details'))).toBe(true)
+    expect(isUnmappedError(new Error('InsufficientFunds'))).toBe(false)
+    expect(classifyError(new Error('Unexpected failure: password=example'))).toMatchObject({
+      userMessage: 'Unexpected failure: password=[Redacted]'
+    })
+    expect(classifyError(new Error('Unexpected failure: {"payload":"opaque"}'))).toMatchObject({
+      userMessage: 'Unexpected failure'
+    })
+    expect(classifyError(new Error('IncorrectDataError errorCode=6a80 [Ledger]'))).toMatchObject({
+      userMessage: 'IncorrectDataError errorCode=6a80 [Ledger]'
+    })
+    expect(classifyError(new Error('[Ledger] signature rejected'))).toMatchObject({
+      userMessage: '[Ledger] signature rejected'
+    })
+    expect(classifyError(new Error('Provider data: route expired'))).toMatchObject({
+      userMessage: 'Provider data: route expired'
+    })
+    expect(classifyError(new Error('{"message":"Device rejected the request","payload":"opaque"}'))).toMatchObject({
+      userMessage: 'Device rejected the request'
+    })
+    const longReason = `The provider declined this request because ${'the selected plan no longer matches the approved parameters. '.repeat(10)}`
+    expect(classifyError(new Error(longReason)).userMessage).toBe(longReason.trim())
+    const boundedReason = classifyError(new Error(`Provider error: ${'retry later. '.repeat(250)}`)).userMessage
+    expect(boundedReason.length).toBeLessThanOrEqual(2048)
+    expect(boundedReason).toContain('[Truncated]')
+    expect(classifyError({ error: 'opaque' })).toMatchObject({
+      userMessage: 'Request failed. Error details unavailable.'
     })
   })
   test('identifies locked wallet failures for an unlock redirect', () => {

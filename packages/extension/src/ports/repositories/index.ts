@@ -34,6 +34,8 @@ export type {
 } from './storage-v2-repository'
 export type {
   ApplyTransactionSegmentEventInput,
+  BackfillConfidentialEvmOriginInput,
+  BackfillConfidentialEvmOriginResult,
   TransactionCreateResult,
   TransactionCreateStatus,
   TransactionListQuery,

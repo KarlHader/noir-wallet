@@ -3,6 +3,7 @@ import { expect } from '@playwright/test'
 import {
   estimateRheaRouteMaximum,
   fallbackTransferMaximum,
+  resolveNativeRouteMaximum,
   resolveTransferSpendableRaw,
   isTransferAmountSpendable
 } from '../../../src/popup/services/transfer-maximum.ts'
@@ -98,6 +99,22 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
 })
 
+test('routed Max holds a fixed native reserve and never spends a balance below it', () => {
+  const cases = [
+    { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
+    { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
+    { family: 'zcash', decimals: 8, reserve: 50_000n }
+  ]
+  for (const { reserve, ...source } of cases) {
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve - 1n) })).toBe('0')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve) })).toBe('0')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve + 1n) })).toBe('1')
+    expect(resolveNativeRouteMaximum({ ...source, availableRaw: String(reserve * 100n) })).toBe(
+      String(reserve * 99n)
+    )
+  }
+})
+
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {
   for (const [family, decimals, availableRaw, symbol] of [
     ['evm', 18, '4867000000000000', 'ETH'],
@@ -117,7 +134,7 @@ test('fee-estimate failure leaves a positive native proposal with a fee reserve 
   }
 })
 
-test('estimates confidential native gas using the actual smaller route and discards the unsigned quote', async () => {
+test('estimates Private Swap native gas using the actual smaller route and discards the unsigned quote', async () => {
   const calls = []
   const token = {
     rheaChainId: '1',
@@ -164,7 +181,7 @@ test('estimates confidential native gas using the actual smaller route and disca
     tokenIn: token,
     tokenOut: token,
     recipient: '0x2222222222222222222222222222222222222222',
-    confidential: true,
+    confidential: false,
     purpose: 'private-swap',
     executionMode: 'private',
     feeTier: 'fast'
@@ -176,12 +193,12 @@ test('estimates confidential native gas using the actual smaller route and disca
     'quote',
     {
       amountIn: '500000000000000000',
-      confidentiality: 'basic',
       sender: source.refundAddress,
       recipient: input.recipient
     },
     'private-swap'
   ])
+  expect(calls[0][1]).not.toHaveProperty('confidentiality')
   expect(calls[1]).toMatchObject([
     'estimate',
     {

@@ -15,7 +15,7 @@ import {
 import {
   evmSendCatalogRequest,
   loadEvmSendCatalog,
-  prefetchEvmSendCatalogs
+  readEvmSendDestinationSupport
 } from '../../../../src/popup/services/evm-send-catalog.ts'
 import { createRheaSwapClient } from '../../../../src/popup/services/rhea-swap-client.ts'
 import {
@@ -29,6 +29,7 @@ import {
   RheaSwapService
 } from '../../../../src/core/services/rhea-swap/rhea-swap-service.ts'
 import { RheaSwapCatalogClient } from '../../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import { RHEA_SWAP_TOKEN_CATALOG_TTL_MS } from '../../../../src/core/services/rhea-swap/rhea-swap-model.ts'
 import { createEvmWalletClient } from '../../../../src/popup/services/evm-wallet-client.ts'
 
 const chain = { id: 'eip155:1', family: 'evm', network: { kind: 'mainnet' } }
@@ -66,9 +67,9 @@ const support = (value, asset = native, network = chain) =>
 it('distinguishes explicit support, explicit exclusion, and unknown capability metadata', () => {
   assert.equal(support(catalog(token())), 'supported')
   assert.equal(support(catalog(token({ sources: ['preswap-nearintents'] }))), 'supported')
-  assert.equal(support(catalog(token({ sources: ['lifi'] }))), 'unsupported')
+  assert.equal(support(catalog(token({ sources: ['lifi'] }))), 'unknown')
   assert.equal(support(catalog(token({ sources: [] }))), 'unknown')
-  assert.equal(support(catalog(token()), erc20), 'unsupported')
+  assert.equal(support(catalog(token()), erc20), 'unknown')
   for (const value of [null, catalog(), { ...catalog(token()), failedChainIds: [1] }]) {
     assert.equal(support(value), 'unknown')
   }
@@ -82,8 +83,8 @@ it('matches contracts case-insensitively, never by symbol, catalog ID, or anothe
     symbol: 'ETH'
   })
   assert.equal(support(catalog(row), erc20), 'supported')
-  assert.equal(support(catalog(row), native), 'unsupported')
-  assert.equal(support(catalog(token({ contractAddress: contract })), erc20), 'unsupported')
+  assert.equal(support(catalog(row), native), 'unknown')
+  assert.equal(support(catalog(token({ contractAddress: contract })), erc20), 'unknown')
   assert.equal(support(catalog({ ...row, contractAddress: null }), erc20), 'supported')
   for (const overrides of [
     { rheaChainId: '56' },
@@ -159,16 +160,15 @@ it('derives address roles from chain-scoped local identities and gives PEA prece
     assert.match(getEvmSendPrivacyWarning('private', role), /direct on-chain/)
 })
 
-it('chooses the route before any quote and keeps unknown private assets blocked', () => {
+it('lets unknown EVM assets request a confidential quote before declaring route support', () => {
   for (const state of ['supported', 'unsupported', 'unknown'])
     assert.equal(resolveEvmSendRoute('main', state), 'onchain')
   assert.equal(resolveEvmSendRoute('private', 'supported'), 'confidential')
   assert.equal(resolveEvmSendRoute('private', 'unsupported'), 'onchain')
-  assert.equal(resolveEvmSendRoute('private', 'unknown'), 'pending')
+  assert.equal(resolveEvmSendRoute('private', 'unknown'), 'confidential')
   assert.equal(resolveEvmSendRoute('main', 'supported', true), 'confidential')
-  for (const state of ['unsupported', 'unknown']) {
-    assert.equal(resolveEvmSendRoute('main', state, true), 'pending')
-  }
+  assert.equal(resolveEvmSendRoute('main', 'unsupported', true), 'pending')
+  assert.equal(resolveEvmSendRoute('main', 'unknown', true), 'confidential')
   assert.equal(getEvmSendRecipientError('main', 'confidential', true), null)
 })
 
@@ -308,13 +308,22 @@ it('accepts a same-address transfer review while rejecting a falsely marked self
   )
 })
 
-it('normalizes and shares ten-minute Send catalogs while allowing a forced retry', async () => {
+it('normalizes and shares cached Send catalogs while allowing a forced retry', async () => {
   let now = 0
   let requests = 0
   const client = createRheaSwapClient(
-    async () => {
+    async message => {
       requests++
-      return { result: catalog(token()) }
+      const chainId = message.tokenListChainIds[0]
+      return {
+        result: catalog(
+          token({
+            rheaChainId: String(chainId),
+            tokenListChainId: chainId,
+            blockchain: chainId === 1 ? 'eth' : 'op'
+          })
+        )
+      }
     },
     { now: () => now }
   )
@@ -325,23 +334,23 @@ it('normalizes and shares ten-minute Send catalogs while allowing a forced retry
     client.listTokens(normalized)
   ])
   assert.deepEqual(first, second)
-  assert.equal(requests, 1)
+  assert.equal(requests, 2)
   assert.deepEqual(client.readCachedTokens(normalized), first)
-  assert.equal(support(first), 'supported')
-  await client.listTokens(normalized)
-  assert.equal(requests, 1)
-  now = 10 * 60 * 1000
-  assert.equal(client.readCachedTokens(request), null)
+  assert.equal(support(client.readCachedTokens(evmSendCatalogRequest(chain))), 'supported')
   await client.listTokens(normalized)
   assert.equal(requests, 2)
+  now = RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  assert.equal(client.readCachedTokens(request), null)
+  await client.listTokens(normalized)
+  assert.equal(requests, 4)
   await client.listTokens(request, { bypassCache: true })
-  assert.equal(requests, 3)
+  assert.equal(requests, 6)
 })
 
 it('does not cache partial/empty catalogs and lets a retry recover', async () => {
-  const results = [{ ...catalog(token()), failedChainIds: [10] }, catalog(), catalog(token())]
+  const results = [{ ...catalog(token()), failedChainIds: [1] }, catalog(), catalog(token())]
   const client = createRheaSwapClient(async () => ({ result: results.shift() }))
-  const request = { ...evmSendCatalogRequest(chain), tokenListChainIds: [1, 10] }
+  const request = evmSendCatalogRequest(chain)
   for (let i = 0; i < 2; i++) {
     await client.listTokens(request)
     assert.equal(client.readCachedTokens(request), null)
@@ -389,7 +398,7 @@ it('does not let SDK row filtering prove exclusion or cache an empty/metadata-in
   assert.equal(support(supported), 'supported')
   await service.listTokens(request)
   assert.equal(calls, 4)
-  now = 600_000
+  now = RHEA_SWAP_TOKEN_CATALOG_TTL_MS
   await service.listTokens(request)
   assert.equal(calls, 5)
 })
@@ -421,31 +430,52 @@ it('ignores a previous context completion after switching account, network, or a
   assert.deepEqual(applied, ['new'])
 })
 
-it('prefetches the preferred network first with at most two in-flight requests', async () => {
-  let active = 0
-  let maximum = 0
-  const seen = []
-  const networks = [
-    chain,
-    { ...chain, id: 'eip155:56' },
-    { ...chain, id: 'eip155:137' },
-    { ...chain, id: 'eip155:999999' }
-  ]
-  await prefetchEvmSendCatalogs(networks, 'eip155:137', () => false, {
-    listTokens: async request => {
-      seen.push(request.tokenListChainIds[0])
-      maximum = Math.max(maximum, ++active)
-      await Promise.resolve()
-      active--
-      return catalog(token())
-    }
+it('reads Send network support from existing single-chain caches without fetching catalogs', () => {
+  const source = token({
+    assetId: 'nep141:custom.token',
+    isNative: false,
+    contractAddress: contract,
+    rheaAddress: contract
   })
-  assert.equal(seen[0], 137)
-  assert.equal(maximum, 2)
-  assert.deepEqual(
-    [...seen].sort((a, b) => a - b),
-    [1, 56, 137]
+  const target = {
+    ...source,
+    rheaChainId: '8453',
+    tokenListChainId: 8453,
+    blockchain: 'base',
+    contractAddress: `0x${'cd'.repeat(20)}`,
+    rheaAddress: `0x${'cd'.repeat(20)}`
+  }
+  const reads = []
+  let targetCatalog = catalog(target)
+  const client = {
+    readCachedTokens: request => {
+      reads.push(request)
+      return request.direction === 'from' ? catalog(source) : targetCatalog
+    }
+  }
+  const input = { sourceAssetId: erc20.id, destinationChainId: 'eip155:8453' }
+  assert.deepEqual(readEvmSendDestinationSupport(input, client), {
+    status: 'available',
+    destinationAssetId: `eip155:8453/erc20:0x${'cd'.repeat(20)}`
+  })
+  assert.deepEqual(reads, [
+    { direction: 'from', tokenListChainIds: [1] },
+    { direction: 'cross-chain-to', tokenListChainIds: [8453] }
+  ])
+  targetCatalog = null
+  assert.equal(readEvmSendDestinationSupport(input, client).status, 'unknown')
+  reads.length = 0
+  assert.equal(
+    readEvmSendDestinationSupport(
+      {
+        sourceAssetId: native.id,
+        destinationChainId: 'eip155:56'
+      },
+      client
+    ).status,
+    'unavailable'
   )
+  assert.deepEqual(reads, [])
 })
 
 it('prepares native and ERC-20 direct Max probes from PEA without a privacy quote or approval', async () => {

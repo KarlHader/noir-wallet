@@ -185,6 +185,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
   })
   const selectedContext = await service.readQuoteSecurityContext(selected.quoteHandle)
   expect(selectedContext.scope).toEqual(scope)
+  expect(await service.readQuoteView(selected.quoteHandle)).toEqual(selected)
   expect(() =>
     assertPrivateQuoteRoute(
       selectedContext.request,
@@ -204,6 +205,7 @@ test('alternative routes bind a fresh quote to the same account and selected bui
   ).toThrow(/alternative index/)
   expect(builtRouter).toBe('alternate')
   now = 20_001
+  await expect(service.readQuoteView(selected.quoteHandle)).rejects.toThrow(/expired/)
   await expect(service.prepare(selected.quoteHandle)).rejects.toThrow(/expired/)
   await expect(service.selectRoute(best.quoteHandle, 1)).rejects.toThrow(/expired/)
 })
@@ -232,11 +234,18 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     toChain: '56',
     sender: source,
     recipient: destination,
-    confidentiality: 'basic',
     tokenIn: { address: 'native' },
     tokenOut: { address: 'native' }
   }
   expect(() => assertPrivateQuoteRoute(route, account, 'private-swap', account)).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, confidentiality: 'basic' },
+      account,
+      'private-swap',
+      account
+    )
+  ).toThrow(/account changed/)
   const publicDestination = account.networks[1].addresses[0].value
   expect(() =>
     assertPrivateQuoteRoute(
@@ -294,16 +303,22 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       }
     ]
   }
-  for (const recipient of ['u1own', 't1own']) {
-    expect(() =>
-      assertPrivateQuoteRoute(
-        { ...route, toChain: 'zcash', recipient },
-        zcashAccount,
-        'private-swap',
-        account
-      )
-    ).toThrow(/this Account/)
-  }
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: 'zcash', recipient: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      account
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, toChain: 'zcash', recipient: 't1own' },
+      zcashAccount,
+      'private-swap',
+      account
+    )
+  ).toThrow(/this Account/)
   for (const recipient of ['u1external', 'U1OWN']) {
     expect(() =>
       assertPrivateQuoteRoute(
@@ -333,9 +348,9 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       { ...publicSwap, fromChain: 'zcash', sender: 'u1own', recipient: publicDestination },
       zcashAccount,
       'wallet-swap',
-      account
+      { ...account, zcashFundingSource: 'shielded' }
     )
-  ).toThrow(/Swap/)
+  ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
       { ...publicSwap, fromChain: 'zcash', sender: 't1own', recipient: publicDestination },
@@ -351,7 +366,41 @@ test('Private Swap quote remains bound to the same Account and its managed desti
       'wallet-swap',
       account
     )
-  ).toThrow(/Swap/)
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      { ...account, zcashFundingSource: 'shielded' }
+    )
+  ).not.toThrow()
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own', recipient: publicDestination },
+      zcashAccount,
+      'private-swap',
+      { ...account, zcashFundingSource: 'shielded' }
+    )
+  ).toThrow(/this Account/)
+  expect(() =>
+    assertPrivateQuoteRoute(
+      { ...route, fromChain: 'zcash', sender: 'u1own' },
+      zcashAccount,
+      'private-swap',
+      { ...account, accountId: 'another-account', zcashFundingSource: 'shielded' }
+    )
+  ).toThrow(/account changed/)
+  for (const sender of ['t1own', 'u1external']) {
+    expect(() =>
+      assertPrivateQuoteRoute(
+        { ...route, fromChain: 'zcash', sender },
+        zcashAccount,
+        'private-swap',
+        { ...account, zcashFundingSource: 'shielded' }
+      )
+    ).toThrow(/source/)
+  }
   expect(() =>
     assertPrivateQuoteRoute(
       { ...publicSwap, toChain: 'zcash', recipient: 't1own' },
@@ -418,44 +467,45 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     assertPrivateQuoteRoute(route, account, 'private-swap', { ...account, accountId: 'account-2' })
   ).toThrow(/account changed/)
   expect(() => assertPrivateQuoteRoute(route, null, 'private-swap')).toThrow(/account changed/)
+  const confidentialRoute = { ...route, confidentiality: 'basic' }
   const main = account.networks[0].addresses[0].value
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main },
+      { ...confidentialRoute, toChain: '1', recipient: main },
       account,
       'private-transfer'
     )
   ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: `0x${'5'.repeat(40)}` },
+      { ...confidentialRoute, toChain: '1', recipient: `0x${'5'.repeat(40)}` },
       account,
       'private-transfer'
     )
   ).toThrow(/must stay in this Account/)
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main, tokenOut: { address: 'other' } },
+      { ...confidentialRoute, toChain: '1', recipient: main, tokenOut: { address: 'other' } },
       account,
       'private-transfer'
     )
   ).toThrow(/asset/)
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, recipient: `0x${'5'.repeat(40)}` },
+      { ...confidentialRoute, recipient: `0x${'5'.repeat(40)}` },
       account,
       'private-cross-chain-send'
     )
   ).not.toThrow()
   expect(() =>
     assertPrivateQuoteRoute(
-      { ...route, toChain: '1', recipient: main },
+      { ...confidentialRoute, toChain: '1', recipient: main },
       account,
       'private-cross-chain-send'
     )
   ).toThrow(/route is invalid/)
   const privateDappRoute = {
-    ...route,
+    ...confidentialRoute,
     toChain: '1',
     recipient: `0x${'5'.repeat(40)}`
   }
@@ -470,7 +520,7 @@ test('Private Swap quote remains bound to the same Account and its managed desti
     )
   ).toThrow(/route is invalid/)
   const publicRoute = {
-    ...route,
+    ...confidentialRoute,
     toChain: '1',
     sender: main,
     recipient: `0x${'5'.repeat(40)}`
@@ -547,6 +597,62 @@ test('Private Swap quote remains bound to the same Account and its managed desti
 test('RHEA Swap quote sends the Noir Swap referral', () => {
   const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(quoteRequest))
   expect(serializeQuoteRequest(request)).toMatchObject({ referral: 'noir_swap' })
+})
+
+test('Zcash unified source quotes bind the shielded funding source', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const request = { ...quoteRequest, sender: 'u1own' }
+  const service = new RheaSwapService(
+    {
+      async quote(normalizedRequest) {
+        return normalizeQuote(
+          normalizedRequest,
+          {
+            isCrossChain: true,
+            chainType: 'zcash',
+            bestQuote: {
+              router: 'nearintents',
+              amountOut: '2500',
+              minAmountOut: '2400',
+              expiresAt: 31_000,
+              preSwap: null,
+              bridge: null
+            }
+          },
+          1_000
+        )
+      }
+    },
+    sessions,
+    { createHandle: () => 'unified-source' }
+  )
+  const scope = {
+    walletId: 'wallet-1',
+    accountId: 'account-1',
+    purpose: 'private-swap',
+    zcashFundingSource: 'shielded'
+  }
+  const quote = await service.quote(request, undefined, scope)
+  await expect(service.readQuoteSecurityContext(quote.quoteHandle)).resolves.toMatchObject({
+    scope,
+    request: { sender: 'u1own' }
+  })
+  for (const purpose of ['wallet-swap', 'private-swap']) {
+    await expect(
+      service.quote(request, undefined, {
+        ...scope,
+        purpose,
+        zcashFundingSource: 'transparent'
+      })
+    ).rejects.toThrow(/funding source/)
+  }
+  await expect(
+    service.quote(request, undefined, {
+      ...scope,
+      purpose: 'wallet-swap',
+      zcashFundingSource: undefined
+    })
+  ).rejects.toThrow(/funding source/)
 })
 
 test('token adapter preserves the RHEA protocol identity', () => {
@@ -782,6 +888,122 @@ test('catalog loading deduplicates native EVM address aliases after canonicaliza
   })
 })
 
+test('prepared BNB swaps accept native address aliases while binding the custom ERC-20 contract', async () => {
+  const sessions = new MemoryRheaSwapQuoteSessionStore()
+  const quoteHandle = 'rhea-quote:bnb-custom-token'
+  const tokenOut = `0x${'a'.repeat(40)}`
+  const request = toSdkQuoteRequest(
+    parseRheaSwapQuoteRequest({
+      fromChain: '56',
+      toChain: '56',
+      tokenIn: {
+        chain: '56',
+        address: 'nep141:bnb.omdep.near',
+        symbol: 'BNB',
+        decimals: 18,
+        isNative: true
+      },
+      tokenOut: { chain: '56', address: tokenOut, symbol: 'CUSTOM', decimals: 18 },
+      amountIn: '1000000000000000',
+      slippageBps: 50,
+      sender: `0x${'1'.repeat(40)}`,
+      recipient: `0x${'2'.repeat(40)}`
+    })
+  )
+  const rawQuote = {
+    isCrossChain: false,
+    chainType: 'evm',
+    bestQuote: {
+      router: 'rango',
+      amountOut: '2500000000000000000',
+      minAmountOut: '2400000000000000000'
+    }
+  }
+  const quote = normalizeQuote(request, rawQuote, 1_000)
+  const rawBuild = {
+    isCrossChain: false,
+    chainType: 'evm',
+    router: 'rango',
+    fromChain: '56',
+    toChain: '56',
+    tokenIn: {
+      address: '0x0000000000000000000000000000000000000000',
+      symbol: 'BNB',
+      decimals: 18
+    },
+    tokenOut: { address: tokenOut, symbol: 'CUSTOM', decimals: 18 },
+    amountIn: quote.amountIn,
+    estimatedOut: quote.estimatedOut,
+    minAmountOut: quote.minAmountOut,
+    tx: {
+      chainId: 56,
+      from: request.sender,
+      to: `0x${'3'.repeat(40)}`,
+      data: '0x1234',
+      value: quote.amountIn
+    },
+    approve: null
+  }
+  const record = {
+    schemaVersion: 1,
+    quoteHandle,
+    request,
+    quoteRaw: rawQuote,
+    receivedAt: 1_000,
+    expiresAt: 31_000,
+    build: {
+      executionId: 'execution-bnb',
+      request: {
+        ...quote.buildContext.request,
+        router: 'rango',
+        expectedOut: quote.estimatedOut,
+        minAmountOut: quote.minAmountOut
+      },
+      raw: rawBuild
+    }
+  }
+  await sessions.put(record)
+  const service = new RheaSwapService({}, sessions, { now: () => 2_000 })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    tokenIn: { address: rawBuild.tokenIn.address },
+    tokenOut: { address: tokenOut }
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: {
+        ...rawBuild,
+        tokenIn: { ...rawBuild.tokenIn, address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' }
+      }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    tokenIn: { address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' }
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: { ...rawBuild, router: 'rango-updated' }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).resolves.toMatchObject({
+    router: 'rango-updated'
+  })
+  await sessions.put({
+    ...record,
+    build: {
+      ...record.build,
+      raw: {
+        ...rawBuild,
+        tokenOut: { ...rawBuild.tokenOut, address: `0x${'4'.repeat(40)}` }
+      }
+    }
+  })
+  await expect(service.readPreparedBuild(quoteHandle)).rejects.toThrow(/does not match its quote/)
+})
+
 test('quote and build remain bound across a session-store reload', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const calls = []
@@ -866,6 +1088,7 @@ test('quote and build remain bound across a session-store reload', async () => {
     estimatedOut: quote.estimatedOut,
     minAmountOut: quote.minAmountOut,
     tx: { kind: 'zcash_transfer', amount: quote.amountIn, depositAddress: 't1deposit' },
+    deposit: { depositAddress: 't1deposit', timeEstimate: '35' },
     approve: null,
     orderId: 'order-1',
     statusRouter: 'nearintents'
@@ -896,6 +1119,7 @@ test('quote and build remain bound across a session-store reload', async () => {
           depositAddress: 't1deposit',
           decimals: 8
         },
+        deposit: rawBuild.deposit,
         request: { ...buildRequest, recipient: buildRecipient },
         raw: rawBuild
       }
@@ -985,6 +1209,10 @@ test('quote and build remain bound across a session-store reload', async () => {
   )
   buildRecipient = 'alice.near'
   for (const field of ['estimatedOut', 'minAmountOut']) {
+    const updatedAmount =
+      field === 'estimatedOut'
+        ? (BigInt(quote.estimatedOut) + 1n).toString()
+        : (BigInt(quote.minAmountOut) - 1n).toString()
     const driftedBuildService = new RheaSwapService(
       {
         ...client,
@@ -992,8 +1220,8 @@ test('quote and build remain bound across a session-store reload', async () => {
           const build = await client.buildSwap(input)
           return {
             ...build,
-            [field]: '1',
-            raw: { ...build.raw, [field]: '1' }
+            [field]: updatedAmount,
+            raw: { ...build.raw, [field]: updatedAmount }
           }
         }
       },
@@ -1001,11 +1229,33 @@ test('quote and build remain bound across a session-store reload', async () => {
       { now: () => 2_000, createHandle: () => `drifted-${field}` }
     )
     const driftedQuote = await driftedBuildService.quote(confidentialQuoteRequest)
-    await expect(driftedBuildService.prepare(driftedQuote.quoteHandle)).rejects.toThrow(
-      /does not match its quote/
+    const review = await driftedBuildService.prepare(driftedQuote.quoteHandle)
+    expect(review[field]).toBe(updatedAmount)
+    expect(review[field]).not.toBe(driftedQuote[field])
+    await expect(
+      driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)
+    ).resolves.toMatchObject({
+      [field]: updatedAmount
+    })
+  }
+  for (const [field, invalidAmount] of [
+    ['estimatedOut', '1'],
+    ['minAmountOut', '0']
+  ]) {
+    const invalidBuildService = new RheaSwapService(
+      {
+        ...client,
+        async buildSwap(input) {
+          const build = await client.buildSwap(input)
+          return { ...build, [field]: invalidAmount }
+        }
+      },
+      new MemoryRheaSwapQuoteSessionStore(),
+      { now: () => 2_000, createHandle: () => `invalid-${field}` }
     )
-    await expect(driftedBuildService.readPreparedBuild(driftedQuote.quoteHandle)).rejects.toThrow(
-      /has not been prepared/
+    const invalidQuote = await invalidBuildService.quote(confidentialQuoteRequest)
+    await expect(invalidBuildService.prepare(invalidQuote.quoteHandle)).rejects.toThrow(
+      /does not match its quote \(output\)/
     )
   }
   for (const field of ['tokenIn', 'tokenOut']) {
@@ -1045,6 +1295,7 @@ test('quote and build remain bound across a session-store reload', async () => {
   })
   const review = await service.prepare(quoteView.quoteHandle)
   expect(review.execution).toMatchObject({ kind: 'zcash-transfer', target: 't1deposit' })
+  expect(parseRheaSwapReviewView(review).timeEstimateSeconds).toBe(35)
   await expect(service.hasRecordedOrder(quoteView.quoteHandle)).resolves.toBe(false)
   expect((await service.readPreparedBuild(quoteView.quoteHandle)).executionId).toBe('execution-1')
   const depositTransfer = { executionId: 'execution-1', to: 't1deposit', amountZats: '100000000' }
@@ -1075,30 +1326,13 @@ test('quote and build remain bound across a session-store reload', async () => {
       fundingSource: 'transparent'
     })
   ).resolves.toBe(31_000)
-  const shieldedSwapService = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore(), {
-    now: () => 2_000,
-    createHandle: () => 'wallet-swap-shielded-source'
-  })
-  const shieldedSwapQuote = await shieldedSwapService.quote(confidentialQuoteRequest, undefined, {
-    ...privateSwapScope,
-    purpose: 'wallet-swap',
-    zcashFundingSource: 'shielded'
-  })
-  await shieldedSwapService.prepare(shieldedSwapQuote.quoteHandle)
   await expect(
-    shieldedSwapService.readZcashTransferDeadline(shieldedSwapQuote.quoteHandle, {
-      ...depositTransfer,
-      fundingSource: 'shielded'
+    walletSwapService.quote(confidentialQuoteRequest, undefined, {
+      ...privateSwapScope,
+      purpose: 'wallet-swap',
+      zcashFundingSource: 'shielded'
     })
-  ).resolves.toBe(31_000)
-  for (const fundingSource of [undefined, 'transparent']) {
-    await expect(
-      shieldedSwapService.readZcashTransferDeadline(shieldedSwapQuote.quoteHandle, {
-        ...depositTransfer,
-        fundingSource
-      })
-    ).rejects.toThrow(/funding source/)
-  }
+  ).rejects.toThrow(/funding source/)
   for (const altered of [
     { executionId: 'another-execution' },
     { to: 't1anotherdeposit' },
@@ -1176,7 +1410,7 @@ test('quote and build remain bound across a session-store reload', async () => {
 test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap transaction', async () => {
   const sessions = new MemoryRheaSwapQuoteSessionStore()
   const sender = '0x52908400098527886E0F7030069857D2E4169EE7'
-  const token = '0x2222222222222222222222222222222222222222'
+  const token = '0xaabbccddaabbccddaabbccddaabbccddaabbccdd'
   const spender = '0x3333333333333333333333333333333333333333'
   const router = '0x4444444444444444444444444444444444444444'
   const amount = 1_000_000n
@@ -1205,7 +1439,7 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     router: 'odos',
     fromChain: '1',
     toChain: 'near',
-    tokenIn: { address: token, symbol: 'USDC', decimals: 6 },
+    tokenIn: { address: `0x${token.slice(2).toUpperCase()}`, symbol: 'USDC', decimals: 6 },
     tokenOut: { address: 'wrap.near', symbol: 'NEAR', decimals: 24 },
     amountIn: amount.toString(),
     estimatedOut: request.expectedOut,
@@ -1253,6 +1487,22 @@ test('EVM plan accepts only an exact ERC-20 approval followed by its bound swap 
     transaction: { chainId: 1, to: router, value: '0' },
     approval: { spender, amountRaw: amount.toString() }
   })
+
+  const boundSession = await sessions.get('rhea-quote:evm')
+  await sessions.put({
+    ...boundSession,
+    build: {
+      ...boundSession.build,
+      raw: {
+        ...raw,
+        tokenIn: { ...raw.tokenIn, address: '0x1111111111111111111111111111111111111111' }
+      }
+    }
+  })
+  await expect(service.readEvmTransactionPlan('rhea-quote:evm')).rejects.toThrow(
+    /does not match its quote/
+  )
+  await sessions.put(boundSession)
 
   await sessions.put({
     ...(await sessions.get('rhea-quote:evm')),

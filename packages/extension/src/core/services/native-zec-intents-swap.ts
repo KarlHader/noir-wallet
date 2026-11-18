@@ -9,9 +9,11 @@ export interface PrepareNativeZecIntentsSwapInput {
     chainId: string
     assetId: string
     protocolAssetId: string
-    recipient: string
+    recipient?: string
   }>
   readonly refundAddress: string
+  readonly recipientType?: 'DESTINATION_CHAIN' | 'CONFIDENTIAL_INTENTS'
+  readonly fundingSource?: 'transparent' | 'shielded'
   readonly slippageBps: number
   readonly requestId?: string
 }
@@ -29,6 +31,8 @@ export interface NativeZecIntentsSwapReview {
   readonly destinationSymbol: string
   readonly destinationDecimals: number
   readonly refundAddress: string
+  readonly recipientType?: 'CONFIDENTIAL_INTENTS'
+  readonly fundingSource?: 'transparent' | 'shielded'
   readonly expectedOutputRaw: string
   readonly minimumOutputRaw: string
   readonly expiresAt: number
@@ -36,11 +40,25 @@ export interface NativeZecIntentsSwapReview {
 }
 
 export interface NativeZecIntentsSwapRecord extends NativeZecIntentsSwapReview {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 1 | 2
   readonly requestId?: string
   readonly slippageBps: number
   readonly createdAt: number
   readonly claimedTransactionId?: string
+  readonly terminalStatus?: 'SUCCESS' | 'REFUNDED' | 'FAILED'
+  readonly terminalAt?: number
+}
+
+export function sameNativeZecQuoteBinding(left: QuoteBinding, right: QuoteBinding): boolean {
+  return (
+    Boolean(left && right) &&
+    Object.keys(left).length === Object.keys(right).length &&
+    Object.entries(left).every(
+      ([key, value]) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        right[key as keyof QuoteBinding] === value
+    )
+  )
 }
 
 export function zatsToZec(amountZats: string): string {

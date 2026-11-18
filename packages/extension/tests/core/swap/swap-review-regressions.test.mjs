@@ -4,16 +4,25 @@ import { selectWalletOwnedQuoteAssetExecution } from '../../../src/popup/service
 import { resolveSwapMaximumAdjustment } from '../../../src/popup/services/swap-maximum.ts'
 import {
   buildLiveSwapQuoteRequest,
-  hasSwapQuoteTermsChanged,
-  isAcceptedSwapReview,
+  resolveNativeZecIntentsDestination,
   resolveScopedSwapZcashRecipient,
   resolveShieldDomainZecFundingSource,
   shieldConfidentialSwapActive
 } from '../../../src/popup/services/swap-page-model.ts'
 import {
+  canReviewQuote,
+  compareQuoteTerms,
+  isQuoteReviewAccepted,
+  quoteReviewActionLabel,
+  stageQuoteReview
+} from '../../../src/popup/services/quote-review.ts'
+import {
   buildShieldSwapZecSourceOptions,
+  isShieldSwapZecSelectionId,
+  parseShieldSwapZecSourceParam,
   SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID,
-  SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID
+  SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID,
+  SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID
 } from '../../../src/popup/services/shield-swap-zec-sources.ts'
 import {
   getRheaSwapErrorMessage,
@@ -46,6 +55,35 @@ it('rejects a stale Zcash Max fee when a refreshed Max amount differs', () => {
   })
   assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 1000).ready, true)
   assert.equal(selectSwapFeeEstimate('0.8', true, '0.8', max, amount, 2000).ready, false)
+})
+
+it('uses the Intents protocol ID when quoting native Shield ZEC to Base USDC', () => {
+  const assetId = 'eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+  const protocolAssetId = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near'
+  const token = {
+    assetId: 'nep141:older-base-usdc.omft.near',
+    rheaChainId: '8453',
+    blockchain: 'base',
+    contractAddress: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    decimals: 6,
+    isNative: false
+  }
+  const managed = [
+    {
+      assetId,
+      protocolAssetId,
+      chainId: 'eip155:8453',
+      namespace: 'erc20',
+      reference: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      decimals: 6
+    }
+  ]
+  const protocolTokens = [{ assetId: protocolAssetId, blockchain: 'base', decimals: 6 }]
+  assert.deepEqual(
+    resolveNativeZecIntentsDestination(token, null, 'mainnet', managed, protocolTokens),
+    { chainId: 'eip155:8453', assetId, protocolAssetId }
+  )
+  assert.equal(resolveNativeZecIntentsDestination(token, null, 'mainnet', [], protocolTokens), null)
 })
 
 function source(balance = '1000000') {
@@ -194,36 +232,74 @@ it('retains the reviewed sender, recipient, amount and privacy mode when a quote
   assert.equal(buildLiveSwapQuoteRequest({ ...input, amountIn: '0.000001' }).request.amountIn, '1')
 })
 
-it('requires a fresh, matching and explicitly accepted swap review before execution', () => {
-  const now = 10_000
-  const quote = {
+it('reuses accepted terms on refresh but binds confirmation to the latest execution and scope', () => {
+  const terms = { expected: '100', minimum: '90', route: 'intents' }
+  const candidate = { id: 'execution-a', terms, expiresAt: 20_000 }
+  const preview = { scope: 'intent-a', baseline: terms, candidate: null }
+  const initial = stageQuoteReview(preview, 'intent-a', candidate)
+  assert.equal(isQuoteReviewAccepted(initial, 'intent-a', candidate.id, 10_000), true)
+
+  const replacement = { ...candidate, id: 'execution-b' }
+  const refreshed = stageQuoteReview(initial, 'intent-a', replacement)
+  assert.equal(isQuoteReviewAccepted(refreshed, 'intent-a', replacement.id, 10_000), true)
+  assert.equal(canReviewQuote(refreshed, 'intent-a', candidate.id, 10_000), false)
+  assert.equal(canReviewQuote(refreshed, 'intent-b', replacement.id, 10_000), false)
+  assert.equal(canReviewQuote(refreshed, 'intent-a', replacement.id, 20_000), false)
+  assert.equal(stageQuoteReview(refreshed, 'intent-b', replacement), null)
+})
+
+it('establishes the first executable price only when building the same indicative quote', () => {
+  const baseline = { expected: '3129340784451821', minimum: '3098047376607302', route: 'intents' }
+  const preview = { scope: 'intent', baseline, indicativeQuoteHandle: 'quote-a', candidate: null }
+  const candidate = {
+    id: 'execution-a',
     quoteHandle: 'quote-a',
-    recipient: 'recipient',
-    estimatedOut: '100',
-    minAmountOut: '90',
-    router: 'router',
-    receivedAt: now,
-    expiresAt: now + 60_000
+    terms: { ...baseline, expected: '3128852208142304', minimum: '3097563686060888' },
+    expiresAt: 20_000
   }
-  const input = {
-    quote,
-    review: { ...quote, executionId: 'execution-a' },
-    acceptedHandle: 'quote-a',
-    quoteKey: 'request-a',
-    requestKey: 'request-a',
-    now
+  const initial = stageQuoteReview(preview, preview.scope, candidate)
+  assert.equal(isQuoteReviewAccepted(initial, preview.scope, candidate.id, 10_000), true)
+
+  const replacement = {
+    ...candidate,
+    id: 'execution-b',
+    quoteHandle: 'quote-b',
+    terms: { ...candidate.terms, minimum: '3097563686060887' }
   }
-  assert.equal(isAcceptedSwapReview(input), true)
-  assert.equal(isAcceptedSwapReview({ ...input, acceptedHandle: null }), false)
+  const refreshed = stageQuoteReview(initial, preview.scope, replacement)
+  assert.equal(isQuoteReviewAccepted(refreshed, preview.scope, replacement.id, 10_000), false)
+  assert.deepEqual(compareQuoteTerms(refreshed.baseline, refreshed.candidate.terms), [
+    { field: 'minimum', previous: '3097563686060888', current: '3097563686060887' }
+  ])
+  const replacedBeforeReview = stageQuoteReview(preview, preview.scope, replacement)
   assert.equal(
-    isAcceptedSwapReview({ ...input, review: { ...input.review, quoteHandle: 'quote-old' } }),
+    isQuoteReviewAccepted(replacedBeforeReview, preview.scope, replacement.id, 10_000),
     false
   )
-  assert.equal(isAcceptedSwapReview({ ...input, requestKey: 'request-b' }), false)
-  assert.equal(isAcceptedSwapReview({ ...input, now: now + 60_000 }), false)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, quoteHandle: 'quote-b' }), false)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, minAmountOut: '89' }), true)
-  assert.equal(hasSwapQuoteTermsChanged(quote, { ...quote, recipient: 'other' }), true)
+
+  const changedRoute = { ...candidate, terms: { ...candidate.terms, route: 'other' } }
+  const differentRoute = stageQuoteReview(preview, preview.scope, changedRoute)
+  assert.equal(
+    quoteReviewActionLabel(compareQuoteTerms(differentRoute.baseline, changedRoute.terms)),
+    'Accept new route'
+  )
+})
+
+it('keeps an explicit preview baseline across replacement quotes with a lower minimum', () => {
+  const baseline = { expected: '100', minimum: '90', route: 'intents' }
+  const preview = { scope: 'intent', baseline, candidate: null }
+  const candidate = { id: 'execution-a', terms: { ...baseline, minimum: '89' }, expiresAt: 20_000 }
+  const first = stageQuoteReview(preview, 'intent', candidate)
+  const refreshed = stageQuoteReview(first, 'intent', { ...candidate, id: 'execution-b' })
+  assert.equal(isQuoteReviewAccepted(refreshed, 'intent', 'execution-b', 10_000), false)
+  assert.deepEqual(compareQuoteTerms(refreshed.baseline, refreshed.candidate.terms), [
+    { field: 'minimum', previous: '90', current: '89' }
+  ])
+  assert.equal(
+    quoteReviewActionLabel(compareQuoteTerms(baseline, { ...baseline, route: 'other' })),
+    'Accept new route'
+  )
+  assert.deepEqual(compareQuoteTerms(baseline, { ...baseline, withdrawFee: '1' }), [])
 })
 
 it('binds the Public to Private preview to its account, quote inputs and fee context', () => {
@@ -332,7 +408,7 @@ it('keeps minimum amounts while removing nested provider metadata without changi
   assert.deepEqual(classifyError(error), before)
   assert.equal(
     getRheaSwapErrorMessage(new RheaSwapClientError('{invalid response')),
-    'An unexpected error occurred. Please try again.'
+    'Request failed. Error details unavailable.'
   )
   assert.equal(
     getSwapQuoteFailureMessage(
@@ -530,6 +606,24 @@ it('keeps Shield native ZEC swap on shielded funding without merging confidentia
   assert.equal(
     resolveShieldDomainZecFundingSource({
       ordinarySwapRequested: true,
+      shieldZecSource: 'native-transparent',
+      isZecSource: true,
+      selectedFundingSource: 'shielded'
+    }),
+    'transparent'
+  )
+  assert.equal(
+    resolveShieldDomainZecFundingSource({
+      ordinarySwapRequested: true,
+      shieldZecSource: null,
+      isZecSource: true,
+      selectedFundingSource: 'shielded'
+    }),
+    'shielded'
+  )
+  assert.equal(
+    resolveShieldDomainZecFundingSource({
+      ordinarySwapRequested: true,
       shieldZecSource: 'intents',
       isZecSource: true,
       selectedFundingSource: 'transparent'
@@ -544,6 +638,8 @@ it('keeps Shield native ZEC swap on shielded funding without merging confidentia
     shieldConfidentialSwapActive({ shieldSwapSelected: true, shieldZecSource: 'intents' }),
     true
   )
+  assert.equal(parseShieldSwapZecSourceParam('native-transparent'), 'native-transparent')
+  assert.equal(isShieldSwapZecSelectionId(SHIELD_SWAP_ZEC_TRANSPARENT_SELECTION_ID), true)
 })
 
 it('lists Intents and native Shield ZEC as separate selectable sources with distinct balances', () => {
@@ -591,7 +687,8 @@ it('lists Intents and native Shield ZEC as separate selectable sources with dist
     assert.equal(options.length, 2)
     assert.equal(options[0].selectionId, SHIELD_SWAP_ZEC_INTENTS_SELECTION_ID)
     assert.equal(options[0].availableRaw, '120000000')
-    assert.equal(options[0].badgeBlockchain, 'zec')
+    assert.equal(options[0].badgeBlockchain, 'near')
+    assert.equal(options[0].chainName, 'NEAR Confidential')
     assert.equal(options[1].selectionId, SHIELD_SWAP_ZEC_NATIVE_SELECTION_ID)
     assert.equal(options[1].availableRaw, '40000000')
     assert.equal(options[1].badgeBlockchain, 'zec')

@@ -148,6 +148,7 @@ function publicCatalogStorage() {
 }
 
 test('shares public RHEA catalogs across callers and Background lifetimes, keeping chain and direction separate', async () => {
+  expect(RHEA_SWAP_TOKEN_CATALOG_TTL_MS).toBe(60 * 60 * 1_000)
   const storage = publicCatalogStorage()
   let now = NOW
   const calls = []
@@ -160,6 +161,11 @@ test('shares public RHEA catalogs across callers and Background lifetimes, keepi
   const [a, b] = await Promise.all([first.read(request), first.read(request)])
   expect(a.tokens).toEqual(b.tokens)
   expect(calls).toHaveLength(1)
+  expect(await first.readFresh(request)).toEqual({
+    result: a,
+    expiresAt: NOW + RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  })
+  expect(calls).toHaveLength(1)
 
   const restarted = new PersistentRheaSwapCatalogCache(load, storage, () => now)
   expect((await restarted.read(request)).tokens).toEqual(a.tokens)
@@ -167,9 +173,100 @@ test('shares public RHEA catalogs across callers and Background lifetimes, keepi
   await restarted.read({ ...request, direction: 'cross-chain-to' })
   await restarted.read({ ...request, tokenListChainIds: [8453] })
   expect(calls).toHaveLength(3)
-  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS - 1
+  await restarted.read(request)
+  expect(calls).toHaveLength(3)
+  now += 1
+  const expiredWorker = new PersistentRheaSwapCatalogCache(load, storage, () => now)
+  expect(await expiredWorker.readFresh(request)).toBeNull()
+  expect(await expiredWorker.readLastGood(request)).toEqual(a)
+  expect(calls).toHaveLength(3)
   await restarted.read(request)
   expect(calls).toHaveLength(4)
+})
+
+test('keeps complete per-chain last good catalogs when live refresh fails or is incomplete', async () => {
+  const storage = publicCatalogStorage()
+  let now = NOW
+  let refreshed = false
+  const cache = new PersistentRheaSwapCatalogCache(
+    async input => {
+      const chainId = input.tokenListChainIds[0]
+      if (!refreshed) return publicCatalog(chainId)
+      if (chainId === 1) throw new Error('Unavailable')
+      return { tokens: [], failedChainIds: [] }
+    },
+    storage,
+    () => now
+  )
+  const request = { direction: 'from', tokenListChainIds: [1, 8453] }
+  const original = await cache.read(request)
+  expect(original.tokens).toHaveLength(2)
+
+  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS
+  refreshed = true
+  const live = await cache.read(request)
+  expect(live.tokens).toEqual([])
+  expect(live.failedChainIds).toEqual([1])
+  expect(await cache.readLastGood(request)).toEqual(original)
+
+  const restarted = new PersistentRheaSwapCatalogCache(
+    async () => {
+      throw new Error('readLastGood must remain offline')
+    },
+    storage,
+    () => now
+  )
+  expect(await restarted.readLastGood(request)).toEqual(original)
+})
+
+test('last good rejects future, corrupt, incomplete and display-seed catalogs', async () => {
+  const storage = publicCatalogStorage()
+  let loads = 0
+  const request = { direction: 'from', tokenListChainIds: [1] }
+  const cache = new PersistentRheaSwapCatalogCache(
+    async () => {
+      loads++
+      return publicCatalog()
+    },
+    storage,
+    () => NOW
+  )
+  expect(await cache.readLastGood(request)).toEqual({ tokens: [], failedChainIds: [1] })
+  expect(loads).toBe(0)
+  await cache.read(request)
+  const key = [...storage.responses.keys()][0]
+  const snapshot = await storage.responses.get(key).json()
+  const invalid = [
+    { ...snapshot, fetchedAt: NOW + 1 },
+    { ...snapshot, result: publicCatalog(8453) },
+    {
+      ...snapshot,
+      result: {
+        ...publicCatalog(),
+        tokens: publicCatalog().tokens.map(token => ({ ...token, sources: [] }))
+      }
+    },
+    {
+      ...snapshot,
+      result: {
+        ...publicCatalog(),
+        tokens: publicCatalog().tokens.map(token => ({ ...token, isDisplaySeed: true }))
+      }
+    }
+  ]
+  for (const value of invalid) {
+    storage.responses.set(key, new Response(JSON.stringify(value)))
+    const restarted = new PersistentRheaSwapCatalogCache(
+      async () => {
+        throw new Error('readLastGood must remain offline')
+      },
+      storage,
+      () => NOW
+    )
+    expect(await restarted.readLastGood(request)).toEqual({ tokens: [], failedChainIds: [1] })
+  }
+  expect(loads).toBe(1)
 })
 
 test('does not retain failed, empty or capability-incomplete public catalogs', async () => {

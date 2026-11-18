@@ -21,6 +21,7 @@ interface CrossChainSendFormViewProps {
   readonly tokenIn: RheaSwapToken | null
   readonly tokenOut: RheaSwapToken | null
   readonly destinationOptions: readonly ChainSelectorOption[]
+  readonly selectedDestinationChainId?: string | null
   readonly onSelectDestination: (chainId: string) => void
   readonly amount: string
   readonly estimatedOut: string
@@ -40,6 +41,7 @@ interface CrossChainSendFormViewProps {
   readonly catalogError: boolean
   readonly sourceAssetsLoading: boolean
   readonly destinationAssetsLoading: boolean
+  readonly destinationNetworksLoading?: boolean
   readonly hasInsufficientFunds: boolean
   readonly insufficientMessage?: string
   readonly maxLoading: boolean
@@ -63,6 +65,7 @@ export function CrossChainSendFormView({
   tokenIn,
   tokenOut,
   destinationOptions,
+  selectedDestinationChainId,
   onSelectDestination,
   amount,
   estimatedOut,
@@ -82,6 +85,7 @@ export function CrossChainSendFormView({
   catalogError,
   sourceAssetsLoading,
   destinationAssetsLoading,
+  destinationNetworksLoading = false,
   hasInsufficientFunds,
   insufficientMessage,
   maxLoading,
@@ -204,8 +208,8 @@ export function CrossChainSendFormView({
         footer={
           <SendFormActions
             onContinue={onReview}
-            disabled={initializing || !canGetQuote || hasInsufficientFunds || actionLoading}
-            loading={actionLoading}
+            disabled={initializing || !canGetQuote || hasInsufficientFunds || isQuoting}
+            loading={actionLoading || isQuoting}
           />
         }
       >
@@ -214,10 +218,19 @@ export function CrossChainSendFormView({
         )}
 
         <SendRouteInfoCard
-          provider={providerName ?? '—'}
+          provider={
+            isQuoting ? (
+              <span role="status" className="inline-flex items-center gap-1.5 text-muted">
+                <Icon icon="lucide:loader-circle" className="size-3.5 animate-spin" aria-hidden />
+                Calculating quote…
+              </span>
+            ) : (
+              (providerName ?? '—')
+            )
+          }
           feeLabel="Route cost (est.)"
           fee={
-            routeCost === undefined ? (
+            isQuoting || routeCost === undefined ? (
               '—'
             ) : routeCost === null ? (
               'Unavailable'
@@ -239,7 +252,7 @@ export function CrossChainSendFormView({
                   {slippage}% <Icon icon="lucide:chevron-down" width={12} />
                 </button>
               </div>
-              {tokenOut && estimatedOut && (
+              {!isQuoting && tokenOut && estimatedOut && (
                 <div className="flex min-w-0 items-center justify-between gap-2">
                   <span className="text-muted">Est. receive</span>
                   <span
@@ -262,7 +275,10 @@ export function CrossChainSendFormView({
         open={networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={destinationOptions}
-        selectedId={tokenOut?.rheaChainId ?? null}
+        enabledFirst
+        loading={destinationNetworksLoading}
+        allowSelectionWhileLoading
+        selectedId={tokenOut?.rheaChainId ?? selectedDestinationChainId ?? null}
         onSelect={onSelectDestination}
       />
     </>

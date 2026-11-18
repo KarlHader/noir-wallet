@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { WALLET_CONFIG, type AutoLockMs } from '@/config/wallet'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
+import { DEFAULT_SIDE_PANEL_MODE } from '@/lib/extension-display-mode'
 import { getResponseErrorMessage } from '@/lib/errors'
 import type { Network } from '@/types'
 import { DEFAULT_FEE_TIER, type FeeTier } from '@/config/fee'
@@ -165,7 +166,7 @@ export const useSettingsStore = create<SettingsStore>()(
       portfolioChainSelectionByAccount: {},
       expandedPortfolioChainLists: {},
       ledgerSigningTransportByWallet: {},
-      sidePanelMode: false,
+      sidePanelMode: DEFAULT_SIDE_PANEL_MODE,
       isSidePanelModeLoaded: false,
       isLoaded: false,
 

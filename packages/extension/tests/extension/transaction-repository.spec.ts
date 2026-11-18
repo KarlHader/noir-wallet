@@ -1,5 +1,9 @@
 import type { BrowserContext, Page, Worker } from '@playwright/test'
+import { getDefaultEvmRpcEndpoint } from '../../src/config/rpc-endpoints'
 import { expect, test, waitForBackgroundWalletInitialization } from '../helpers/extension-fixtures'
+
+const ethereumMainnetRpcHost = new URL(getDefaultEvmRpcEndpoint('mainnet', 'eip155:1').url).host
+const ethereumMainnetRpcRoute = (url: URL) => url.host === ethereumMainnetRpcHost
 
 async function getExtensionWorker(context: BrowserContext): Promise<Worker> {
   return context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'))
@@ -66,6 +70,67 @@ test('persists V2 transaction graphs, events, indexes, and CAS across reloads', 
   await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
 })
 
+test('invalidates affected Portfolio chains only after durable transaction changes', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `transaction-portfolio-invalidation-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await expect(
+    popup.evaluate(
+      name =>
+        window.transactionRepositoryIntegration!.inspectTransactionPortfolioInvalidations(name),
+      databaseName
+    )
+  ).resolves.toEqual({
+    statuses: ['created', 'applied', 'duplicate-event', 'applied', 'applied', 'created'],
+    committedBeforeNotification: 'broadcast',
+    waitedForNotification: true,
+    events: [
+      {
+        network: 'mainnet',
+        keyDomainId: 'key-domain:1',
+        accountId: 'account:1',
+        chainIds: ['eip155:1']
+      },
+      {
+        network: 'mainnet',
+        keyDomainId: 'key-domain:1',
+        accountId: 'account:1',
+        chainIds: ['eip155:1']
+      }
+    ],
+    persistedStatus: 'confirming'
+  })
+})
+
+test('finds an older Confidential graph through the MV3 IndexedDB repository', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `transaction-v2-confidential-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await expect(
+    popup.evaluate(
+      name => window.transactionRepositoryIntegration!.inspectOlderConfidentialGraph(name),
+      databaseName
+    )
+  ).resolves.toEqual({
+    hiddenFromRecent: true,
+    confidentialIds: ['transaction:confidential-old']
+  })
+})
+
 test('persists and replaces generation-bound Portfolio cache records', async ({
   popup,
   extensionId
@@ -82,8 +147,8 @@ test('persists and replaces generation-bound Portfolio cache records', async ({
       return window.transactionRepositoryIntegration!.initializePortfolioCache(name)
     }, databaseName)
   ).resolves.toMatchObject({
-    cachedAt: 2_100,
-    source: { status: 'error', errorCode: 'rate-limited', balances: [{ totalRaw: '2' }] }
+    cachedAt: 2_200,
+    source: { status: 'loading', balances: [{ totalRaw: '2' }] }
   })
 
   await popup.reload()
@@ -95,10 +160,110 @@ test('persists and replaces generation-bound Portfolio cache records', async ({
       return window.transactionRepositoryIntegration!.inspectPortfolioCache(name)
     }, databaseName)
   ).resolves.toEqual({
-    records: [{ cachedAt: 2_100, status: 'error', totalRaw: '2', errorCode: 'rate-limited' }],
+    records: [{ cachedAt: 2_200, status: 'loading', totalRaw: '2', errorCode: undefined }],
     deleted: 1,
     remaining: 0
   })
+  await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
+})
+
+test('reuses only matching Portfolio balances across account switch generations in IndexedDB', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `portfolio-account-switch-e2e-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await popup.evaluate(
+    name => window.transactionRepositoryIntegration!.initializeAccountSwitchPortfolioCache(name),
+    databaseName
+  )
+
+  await popup.reload()
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  await expect(
+    popup.evaluate(
+      name => window.transactionRepositoryIntegration!.inspectAccountSwitchPortfolioCache(name),
+      databaseName
+    )
+  ).resolves.toEqual({
+    exact: {
+      generationId: 'metadata:portfolio:account-switch:1',
+      cachedAt: 2_900,
+      status: 'ready',
+      totalRaw: '1',
+      balanceUpdatedAt: 2_000,
+      errorCode: undefined
+    },
+    fallback: {
+      generationId: 'metadata:portfolio:account-switch:2',
+      cachedAt: 3_100,
+      status: 'loading',
+      totalRaw: '2',
+      balanceUpdatedAt: 2_000,
+      errorCode: undefined
+    },
+    historicalError: {
+      generationId: 'metadata:portfolio:account-switch:2',
+      cachedAt: 3_200,
+      status: 'error',
+      totalRaw: '7',
+      balanceUpdatedAt: 2_000,
+      errorCode: 'rate-limited'
+    },
+    changedIdentity: null,
+    unrelatedAccount: null
+  })
+  await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
+})
+
+test('resumes scoped Portfolio invalidations and preserves a newer revision', async ({
+  popup,
+  extensionId
+}) => {
+  const databaseName = `portfolio-invalidations-e2e-${crypto.randomUUID()}`
+  await popup.goto(
+    `chrome-extension://${extensionId}/tests/extension/transaction-repository-integration.html`
+  )
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  const old = await popup.evaluate(
+    name => window.transactionRepositoryIntegration!.initializePortfolioInvalidations(name),
+    databaseName
+  )
+  if (!old) throw new Error('Portfolio invalidation marker was not persisted')
+
+  await popup.reload()
+  await expect
+    .poll(() => popup.evaluate(() => Boolean(window.transactionRepositoryIntegration)))
+    .toBe(true)
+  const result = await popup.evaluate(
+    ({ name, marker }) =>
+      window.transactionRepositoryIntegration!.inspectPortfolioInvalidations(name, marker),
+    { name: databaseName, marker: old }
+  )
+  expect(result.resumed).toEqual(
+    expect.arrayContaining([
+      { chainId: 'eip155:1', domain: 'chain', revision: 1, invalidatedAt: 3_000 },
+      { chainId: 'near:mainnet', domain: 'confidential', revision: 1, invalidatedAt: 3_100 }
+    ])
+  )
+  expect(result.resumed).toHaveLength(2)
+  expect(result.afterOldAcknowledgement).toEqual(
+    expect.arrayContaining([
+      { chainId: 'eip155:1', domain: 'chain', revision: 2, invalidatedAt: 3_200 },
+      { chainId: 'near:mainnet', domain: 'confidential', revision: 1, invalidatedAt: 3_100 }
+    ])
+  )
+  expect(result.afterOldAcknowledgement).toHaveLength(2)
+  expect(result).toMatchObject({ deleted: 2, remaining: [] })
   await popup.evaluate(name => window.transactionRepositoryIntegration!.reset(name), databaseName)
 })
 
@@ -109,7 +274,7 @@ test('refreshes the active EVM Portfolio through the real MV3 service worker', a
 }) => {
   await waitForBackgroundWalletInitialization(popup)
   const rpcMethods: string[] = []
-  await context.route('https://eth.deltarpc.com/**', async route => {
+  await context.route(ethereumMainnetRpcRoute, async route => {
     const request = route.request().postDataJSON() as { id: number; method: string }
     rpcMethods.push(request.method)
     const result =
@@ -271,7 +436,7 @@ test('runs the persisted EVM receipt monitor inside the real MV3 service worker'
   await waitForBackgroundWalletInitialization(popup)
   const transactionHash = `0x${'a'.repeat(64)}`
   const blockHash = `0x${'b'.repeat(64)}`
-  await context.route('https://eth.deltarpc.com/**', async route => {
+  await context.route(ethereumMainnetRpcRoute, async route => {
     const request = route.request().postDataJSON() as {
       id: number
       method: string
@@ -344,7 +509,7 @@ test('resumes the persisted EVM receipt monitor after service worker reconstruct
   const transactionHash = `0x${'c'.repeat(64)}`
   const blockHash = `0x${'d'.repeat(64)}`
   const rpcMethods: string[] = []
-  await context.route('https://eth.deltarpc.com/**', async route => {
+  await context.route(ethereumMainnetRpcRoute, async route => {
     const request = route.request().postDataJSON() as { id: number; method: string }
     rpcMethods.push(request.method)
     const result =

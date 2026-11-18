@@ -7,7 +7,13 @@ import type {
   PortfolioSourceSnapshot
 } from '@/core/portfolio'
 import { parseEvmAccountBinding } from './evm-account'
-import { EvmRpcError, type EvmBalanceRpc, type EvmRpcErrorCode } from './evm-rpc-client'
+import { readPreferredEvmPortfolioBalances } from './evm-portfolio-batch'
+import {
+  EvmRpcError,
+  type EvmBalanceRpc,
+  type EvmContractRpc,
+  type EvmRpcErrorCode
+} from './evm-rpc-client'
 
 const MAXIMUM_ASSETS_PER_READ = 512
 const READ_CONCURRENCY = 4
@@ -18,17 +24,18 @@ export interface ReadEvmPortfolioInput {
   readonly chainAccount: ChainAccount
   readonly assets: AssetRegistry
   readonly rpc: EvmBalanceRpc
+  readonly preferredBalanceRpc?: EvmContractRpc
   readonly privateAddress?: string
   readonly publicOnly?: boolean
   readonly signal?: AbortSignal
   readonly now?: () => number
 }
 
-function parseEvmAddress(value: string, label: string): string {
+function parseEvmAddress(value: string, label: string): `0x${string}` {
   if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
     throw new Error(`Invalid ${label}`)
   }
-  return value.toLowerCase()
+  return value.toLowerCase() as `0x${string}`
 }
 
 function parseRawBalance(value: string): string {
@@ -162,16 +169,26 @@ export async function readEvmPortfolioSource(
   if (assets.length === 0 || assets.length > MAXIMUM_ASSETS_PER_READ) {
     throw new Error('Invalid EVM asset inventory')
   }
-  try {
-    await input.rpc.assertExpectedChain(input.signal)
-  } catch (error) {
-    if (error instanceof EvmRpcError && error.code === 'cancelled') throw error
-    return Object.freeze({
-      chainAccount: input.chainAccount,
-      status: 'error',
-      balances: Object.freeze([]),
-      errorCode: error instanceof EvmRpcError ? mapErrorCode(error.code) : 'unknown'
-    })
+  const addresses = privateAddress ? [address, privateAddress] : [address]
+  const preferred = input.preferredBalanceRpc
+    ? await readPreferredEvmPortfolioBalances(
+        input.preferredBalanceRpc,
+        assets,
+        addresses,
+        input.signal
+      )
+    : undefined
+  let fallbackError: EvmRpcError | undefined
+  if (addresses.some(owner => assets.some(({ asset }) => !preferred?.get(owner)?.has(asset.id)))) {
+    try {
+      await input.rpc.assertExpectedChain(input.signal)
+    } catch (error) {
+      if (error instanceof EvmRpcError && error.code === 'cancelled') throw error
+      fallbackError =
+        error instanceof EvmRpcError
+          ? error
+          : new EvmRpcError('rpc-error', 'EVM balance endpoint could not be verified')
+    }
   }
 
   const updatedAt = (input.now ?? Date.now)()
@@ -182,17 +199,21 @@ export async function readEvmPortfolioSource(
   const errors: PortfolioReadErrorCode[] = []
   let nextIndex = 0
 
+  const readBalance = (asset: AssetRegistryEntry, owner: string) => {
+    const raw = preferred?.get(owner)?.get(asset.asset.id)
+    if (raw !== undefined) return balanceSnapshot(asset, raw, updatedAt)
+    if (fallbackError) throw fallbackError
+    return readAsset(asset, owner, input.rpc, input.signal, updatedAt)
+  }
+
   const worker = async () => {
     while (nextIndex < assets.length) {
       const index = nextIndex
       nextIndex += 1
       try {
-        const main = await readAsset(assets[index], address, input.rpc, input.signal, updatedAt)
+        const main = await readBalance(assets[index], address)
         balances[index] = privateAddress
-          ? combineAccountBalances(
-              main,
-              await readAsset(assets[index], privateAddress, input.rpc, input.signal, updatedAt)
-            )
+          ? combineAccountBalances(main, await readBalance(assets[index], privateAddress))
           : input.publicOnly
             ? completePublicOnlyEvmBalance(main)
             : main

@@ -14,7 +14,8 @@ import {
   createConfiguredEvmRpcClient,
   EvmTransferOrchestrator,
   loadActiveEvmPortfolioContext,
-  parseEvmAccountBinding
+  parseEvmAccountBinding,
+  type EvmTransferOrchestratorOptions
 } from '@/infrastructure/chains/evm'
 import { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
 import { HardwareEvmSigningContextResolver } from '@/infrastructure/keyring/hardware-evm-signing-context'
@@ -57,7 +58,8 @@ export interface BackgroundEvmTransferRuntime {
 
 export function createBackgroundEvmTransferOrchestrator(
   network: EvmNetworkConfig = getEvmNetworkConfig(DEFAULT_NETWORK),
-  userEvmAssets: readonly AssetDefinitionInput[] = []
+  userEvmAssets: readonly AssetDefinitionInput[] = [],
+  assertSpeedUpAllowed?: EvmTransferOrchestratorOptions['assertSpeedUpAllowed']
 ): EvmTransferOrchestrator {
   const assets = createBackgroundEvmTransferAssetRegistry(network, userEvmAssets)
   const scheduleMonitor = async () => {
@@ -76,6 +78,7 @@ export function createBackgroundEvmTransferOrchestrator(
     rpc: createConfiguredEvmRpcClient(DEFAULT_NETWORK, network),
     assets,
     networkMode: DEFAULT_NETWORK,
+    assertSpeedUpAllowed,
     onPendingBroadcast: scheduleMonitor,
     onBroadcastAccepted: (graph, recovered) => {
       if (recovered || graph.root.intent?.protocol?.provider === 'rhea-cross-chain-dex')
@@ -102,7 +105,8 @@ export function hasBackgroundEvmTransferCapability(
 export function createBackgroundEvmTransferController(
   network: EvmNetworkConfig = getEvmNetworkConfig(DEFAULT_NETWORK),
   userEvmAssets: readonly AssetDefinitionInput[] = [],
-  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote']
+  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote'],
+  assertSpeedUpAllowed?: EvmTransferOrchestratorOptions['assertSpeedUpAllowed']
 ): BackgroundEvmTransferController {
   const storageRepository = new IndexedDbStorageV2Repository()
   const externalSigner = new HardwareEvmSigningContextResolver({
@@ -115,7 +119,11 @@ export function createBackgroundEvmTransferController(
   const allowanceRpc = createConfiguredEvmRpcClient(DEFAULT_NETWORK, network)
   return new BackgroundEvmTransferController({
     validateRheaSwapQuote,
-    orchestrator: createBackgroundEvmTransferOrchestrator(network, userEvmAssets),
+    orchestrator: createBackgroundEvmTransferOrchestrator(
+      network,
+      userEvmAssets,
+      assertSpeedUpAllowed
+    ),
     readTokenAllowance: (token, owner, spender) =>
       readEvmTokenAllowance(allowanceRpc, token, owner, spender),
     readTokenBalance: (token, owner) => allowanceRpc.getErc20Balance(token, owner),
@@ -147,7 +155,8 @@ export function createBackgroundEvmTransferRuntime(
   networks: readonly EvmNetworkConfig[],
   activeNetwork: EvmNetworkConfig,
   userEvmAssets: readonly AssetDefinitionInput[] = [],
-  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote']
+  validateRheaSwapQuote?: BackgroundEvmTransferControllerOptions['validateRheaSwapQuote'],
+  assertSpeedUpAllowed?: EvmTransferOrchestratorOptions['assertSpeedUpAllowed']
 ): BackgroundEvmTransferRuntime {
   const capableNetworks = networks.filter(hasBackgroundEvmTransferCapability)
   const controllers = new Map(
@@ -155,7 +164,12 @@ export function createBackgroundEvmTransferRuntime(
       network =>
         [
           parseChainId(network.chainId).id,
-          createBackgroundEvmTransferController(network, userEvmAssets, validateRheaSwapQuote)
+          createBackgroundEvmTransferController(
+            network,
+            userEvmAssets,
+            validateRheaSwapQuote,
+            assertSpeedUpAllowed
+          )
         ] as const
     )
   )

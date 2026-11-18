@@ -439,11 +439,41 @@ export class BackgroundEvmTransferController {
 
   async prepareCancel(
     originalTransactionIdValue: string,
-    executionModeValue: unknown = 'main'
+    executionModeValue: unknown = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<BackgroundEvmTransferReview> {
+    return this.prepareReplacement(
+      'cancel',
+      originalTransactionIdValue,
+      executionModeValue,
+      feeSelectionValue
+    )
+  }
+
+  async prepareSpeedUp(
+    originalTransactionIdValue: string,
+    executionModeValue: unknown = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<BackgroundEvmTransferReview> {
+    return this.prepareReplacement(
+      'speed-up',
+      originalTransactionIdValue,
+      executionModeValue,
+      feeSelectionValue
+    )
+  }
+
+  private async prepareReplacement(
+    action: 'cancel' | 'speed-up',
+    originalTransactionIdValue: string,
+    executionModeValue: unknown = 'main',
+    feeSelectionValue?: unknown
   ): Promise<BackgroundEvmTransferReview> {
     const originalTransactionId = parseTransactionId(originalTransactionIdValue)
+    const feeSelection =
+      feeSelectionValue === undefined ? undefined : parseEvmFeeSelection(feeSelectionValue)
     if (executionModeValue !== 'main' && executionModeValue !== 'private') {
-      throw new Error('Invalid EVM cancel execution mode')
+      throw new Error('Invalid EVM replacement execution mode')
     }
     return accountContextTransition.runActiveOperation(async () => {
       const context = await this.requireActiveContext()
@@ -452,10 +482,11 @@ export class BackgroundEvmTransferController {
           ? await this.requirePrivateExecutionAccount(context)
           : undefined
       return toBackgroundReview(
-        await this.orchestrator.prepareCancel({
+        await this.orchestrator[action === 'cancel' ? 'prepareCancel' : 'prepareSpeedUp']({
           chainAccount: context.chainAccount,
           originalTransactionId,
           ...(executionAccount === undefined ? {} : { executionAccount }),
+          ...(feeSelection === undefined ? {} : { feeSelection }),
           ...(context.keyDomainSource.kind === 'hardware'
             ? {
                 signingMode:

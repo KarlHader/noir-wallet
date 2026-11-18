@@ -1,31 +1,34 @@
-import type { Network } from '@/types'
+const PREFERRED_CHAINS = [
+  ['zcash', 'zec'],
+  ['eip155:1', 'eth', 'ethereum'],
+  ['eip155:56', 'bsc'],
+  ['eip155:8453', 'base'],
+  ['eip155:42161', 'arb', 'arbitrum'],
+  ['eip155:137', 'pol', 'polygon']
+] as const
 
-export const TOKEN_SELECTOR_VISIBLE_CHAINS = 4
-
-export function tokenSelectorChainOrderStorageKey(input: {
-  readonly network: Network
-  readonly walletId: string
-  readonly accountId: string
-}): string {
-  return `token_selector_recent_chains:${input.network}:${input.walletId}:${input.accountId}`
+function networkRank(network: Readonly<{ id: string; name: string }>): number {
+  const id = network.id.toLowerCase()
+  const name = network.name.toLowerCase()
+  if (id === 'all' || id === 'evm:all') return -1
+  const idRank = PREFERRED_CHAINS.findIndex(aliases => aliases.some(alias => alias === id))
+  if (idRank !== -1) return idRank
+  if (name.startsWith('zcash')) return 0
+  if (name.startsWith('ethereum')) return 1
+  if (name.startsWith('bnb chain') || name.startsWith('bnb smart chain') || name.startsWith('bsc'))
+    return 2
+  if (name.startsWith('base')) return 3
+  if (name.startsWith('arbitrum')) return 4
+  if (name.startsWith('polygon')) return 5
+  return PREFERRED_CHAINS.length
 }
 
-/** Puts recently used chains first while preserving stable order for the remainder. */
-export function orderNetworkIdsByRecency(
-  optionIds: readonly string[],
-  recentIds: readonly string[]
-): readonly string[] {
-  const available = new Set(optionIds)
-  const prioritized = recentIds.filter(id => available.has(id))
-  const deferred = optionIds.filter(id => !prioritized.includes(id))
-  return Object.freeze([...prioritized, ...deferred])
-}
-
-export function recordRecentChainSelection(
-  recentIds: readonly string[],
-  chainId: string,
-  limit = 12
-): readonly string[] {
-  if (chainId === 'all' || chainId.startsWith('coming-soon:')) return recentIds
-  return Object.freeze([chainId, ...recentIds.filter(id => id !== chainId)].slice(0, limit))
+/** Keeps the preferred wallet networks first and every other network in source order. */
+export function sortTokenSelectorNetworks<T>(
+  options: readonly T[],
+  network: (option: T) => Readonly<{ id: string; name: string }>
+): T[] {
+  return [...options].sort(
+    (left, right) => networkRank(network(left)) - networkRank(network(right))
+  )
 }

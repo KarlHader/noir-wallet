@@ -2,7 +2,22 @@ import { createEvmWalletRuntimeError, type EvmWalletRuntimeError } from '@/core/
 import { KeyringError } from '@/core/keyring/ports'
 import { EvmRpcError, EvmTransactionError } from '@/infrastructure/chains/evm'
 
-export function mapEvmWalletRuntimeError(error: unknown): EvmWalletRuntimeError {
+export function mapEvmWalletRuntimeError(
+  error: unknown,
+  operation?: string
+): EvmWalletRuntimeError {
+  if (
+    (operation === 'PREPARE_EVM_CANCEL' || operation === 'PREPARE_EVM_SPEED_UP') &&
+    ((error instanceof EvmTransactionError && error.code === 'stale-nonce') ||
+      (error instanceof Error &&
+        [
+          'Only a pending EVM transaction can be cancelled',
+          'Pending EVM transaction does not contain replacement metadata',
+          'A cancellation replacement already exists'
+        ].includes(error.message)))
+  ) {
+    return createEvmWalletRuntimeError('replacement-unavailable')
+  }
   if (error instanceof EvmTransactionError && error.code === 'insufficient-funds') {
     const canonical = createEvmWalletRuntimeError('insufficient-funds')
     return error.insufficientFunds && BigInt(error.insufficientFunds.maximumGasCostRaw) > 0n
@@ -20,6 +35,9 @@ export function mapEvmWalletRuntimeError(error: unknown): EvmWalletRuntimeError 
   }
   if (error instanceof EvmTransactionError && error.code === 'nonce-recovery-required') {
     return createEvmWalletRuntimeError('nonce-recovery-required')
+  }
+  if (error instanceof EvmTransactionError && error.code === 'nonce-queue-unavailable') {
+    return createEvmWalletRuntimeError('nonce-queue-unavailable')
   }
   if (
     error instanceof EvmRpcError &&

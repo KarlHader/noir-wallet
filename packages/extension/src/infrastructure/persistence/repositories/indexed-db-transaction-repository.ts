@@ -8,11 +8,14 @@ import {
 } from '@/core/transactions/domain'
 import type {
   ApplyTransactionSegmentEventInput,
+  BackfillConfidentialEvmOriginInput,
+  BackfillConfidentialEvmOriginResult,
   TransactionCreateResult,
   TransactionListQuery,
   TransactionMutationResult,
   TransactionRepository
 } from '@/ports/repositories'
+import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import {
   TRANSACTION_V2_DATABASE,
   TRANSACTION_V2_DATABASE_INDEXES,
@@ -28,6 +31,7 @@ import {
   TRANSACTION_REPOSITORY_LIMITS,
   assertPersistableTransactionGraph,
   applyParsedTransactionMutation,
+  backfillConfidentialEvmOrigin,
   collectKnownTransactionEvents,
   parseTransactionListQuery,
   parseTransactionMutation,
@@ -38,6 +42,10 @@ import {
   transactionGraphMatchesScope,
   transactionScopeKey
 } from './transaction-repository-support'
+import {
+  notifyAppliedTransactionPortfolio,
+  notifyCreatedTransactionPortfolio
+} from './transaction-portfolio-invalidation'
 
 export interface IndexedDbTransactionRepositoryOptions {
   readonly databaseName?: string
@@ -118,9 +126,10 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
   }
 
   async create(value: TransactionGraph): Promise<TransactionCreateResult> {
+    const network = DEFAULT_NETWORK
     const graph = parseTransactionGraph(value)
     assertPersistableTransactionGraph(graph)
-    return runWithTransactionV2Database(this.databaseName, database =>
+    const result = await runWithTransactionV2Database(this.databaseName, database =>
       runTransaction(
         database,
         [TRANSACTION_V2_DATABASE_STORES.graphs, TRANSACTION_V2_DATABASE_STORES.events],
@@ -158,6 +167,14 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
         }
       )
     )
+    if (result.status === 'created') {
+      try {
+        await notifyCreatedTransactionPortfolio(network, result.graph)
+      } catch {
+        // A notification cannot turn a committed transaction into a failed submission.
+      }
+    }
+    return result
   }
 
   async get(
@@ -213,6 +230,15 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
                 throw new Error('Persisted transaction Account index mismatch')
               }
               if (query.statuses && !query.statuses.has(graph.root.status)) return false
+              if (
+                query.protocolProvider &&
+                !graph.segments.some(
+                  segment =>
+                    segment.target.kind === 'protocol' &&
+                    segment.target.provider === query.protocolProvider
+                )
+              )
+                return false
               return (
                 query.chainId === undefined ||
                 graph.segments.some(
@@ -274,9 +300,11 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
   async applySegmentEvent(
     inputValue: ApplyTransactionSegmentEventInput
   ): Promise<TransactionMutationResult> {
+    const network = DEFAULT_NETWORK
     const input = parseTransactionMutation(inputValue)
     const fingerprint = transactionEventFingerprint(input.event)
-    return runWithTransactionV2Database(this.databaseName, database =>
+    let previousGraph: TransactionGraph | null = null
+    const result = await runWithTransactionV2Database(this.databaseName, database =>
       runTransaction(
         database,
         [TRANSACTION_V2_DATABASE_STORES.graphs, TRANSACTION_V2_DATABASE_STORES.events],
@@ -309,6 +337,7 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
           if (mutation.status !== 'applied' && mutation.status !== 'ignored-stale') {
             return mutation
           }
+          if (mutation.status === 'applied') previousGraph = graph
           const eventCount = await requestResult(
             eventStore
               .index(TRANSACTION_V2_DATABASE_INDEXES.eventsByTransaction)
@@ -324,6 +353,41 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
             graphStore.put(createStoredTransactionGraphRecord(mutation.graph))
           }
           return mutation
+        }
+      )
+    )
+    if (result.status === 'applied' && result.graph && previousGraph) {
+      try {
+        await notifyAppliedTransactionPortfolio(
+          network,
+          previousGraph,
+          result.graph,
+          input.segmentId
+        )
+      } catch {
+        // The mutation is already durable; subscribers cannot change its result.
+      }
+    }
+    return result
+  }
+
+  async backfillConfidentialEvmOrigin(
+    input: BackfillConfidentialEvmOriginInput
+  ): Promise<BackfillConfidentialEvmOriginResult> {
+    return runWithTransactionV2Database(this.databaseName, database =>
+      runTransaction(
+        database,
+        [TRANSACTION_V2_DATABASE_STORES.graphs],
+        'readwrite',
+        async transaction => {
+          const store = transaction.objectStore(TRANSACTION_V2_DATABASE_STORES.graphs)
+          const raw = await requestResult<unknown>(store.get(input.transactionId))
+          const graph = raw === undefined ? undefined : parseStoredTransactionGraphRecord(raw).graph
+          const result = backfillConfidentialEvmOrigin(graph, input)
+          if (result.status === 'applied' && result.graph) {
+            store.put(createStoredTransactionGraphRecord(result.graph))
+          }
+          return result
         }
       )
     )

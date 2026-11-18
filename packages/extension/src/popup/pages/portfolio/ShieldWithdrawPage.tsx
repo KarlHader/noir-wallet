@@ -11,8 +11,7 @@ import type { ConfidentialFundingReview } from '@/core/services/confidential-fun
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatTokenQuantity,
-  parseDisplayUnitAmount
+  formatTokenQuantity
 } from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSymbol } from '@/lib/format'
@@ -20,6 +19,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useConfidentialFundingPreview } from '@/popup/hooks/useConfidentialFundingPreview'
+import { useQuoteReview, useQuoteReviewTimer } from '@/popup/hooks/useQuoteReview'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -49,8 +49,10 @@ import {
   TransactionReviewExchangeSummary,
   TransactionReviewView
 } from '@/popup/components/transaction/TransactionReviewView'
+import { QuoteReviewChanges } from '@/popup/components/transaction/QuoteReviewChanges'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
 import { Button } from '@/popup/components/ui/button'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/popup/components/ui/dialog'
 import {
   CONFIDENTIAL_PREVIEW_CONNECTION_ERROR,
@@ -81,6 +83,12 @@ import {
   resolvePrivateBalanceTransferAmount
 } from '@/popup/services/private-balance-transfer'
 import { estimateConfidentialSendTime } from '@/popup/services/send-time-estimate'
+import {
+  ZcashMoveLayout,
+  ZcashMoveAccountCard
+} from '@/popup/components/transaction/ZcashMoveLayout'
+import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
+import { confidentialQuoteTerms } from '@/popup/services/quote-review'
 
 function withdrawChainIconAlias(chain: ShieldFundingAsset['chain']['chain']): string {
   return chain.family === 'evm'
@@ -124,7 +132,11 @@ export function ShieldWithdrawForm({
   onSelectPublic,
   onOpenSourcePicker,
   onSourcePickerState,
-  sourceSelectorActive = false
+  onMoveSourceSelect,
+  onMoveDestinationSelect,
+  onMoveReverse,
+  sourceSelectorActive = false,
+  moveToOwnZcash = false
 }: {
   readonly active: boolean
   readonly entry: Readonly<ShieldWithdrawEntry>
@@ -141,9 +153,14 @@ export function ShieldWithdrawForm({
   ) => void
   readonly onOpenSourcePicker: () => void
   readonly onSourcePickerState?: (state: ShieldWithdrawSourcePickerState) => void
+  readonly onMoveSourceSelect?: () => void
+  readonly onMoveDestinationSelect?: () => void
+  readonly onMoveReverse?: () => void
   readonly sourceSelectorActive?: boolean
+  readonly moveToOwnZcash?: boolean
 }) {
   const { navigate } = useNavigate()
+  const actionLabel = moveToOwnZcash ? 'Move' : 'Send'
   const providerIsNear = entry.provider === null || entry.provider === 'near-confidential'
   const routeAssetId = entry.assetId ?? ''
   const routeNetworkId = entry.networkId
@@ -154,13 +171,16 @@ export function ShieldWithdrawForm({
   const network = useWalletStore(state => state.currentNetwork)
   const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const { activeAccount } = useActiveAccountNetworks()
+  const ownZcashRecipients = getConfidentialZcashMoveRecipients(activeAccount, network)
   const account = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
     currentAccountId,
     nativeAccount: activeAccount
   })
   const canManageNear =
-    providerIsNear && getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0
+    providerIsNear &&
+    getPrivateTransferChainIds(activeAccount, network === 'mainnet').length > 0 &&
+    (!moveToOwnZcash || ownZcashRecipients.length > 0)
   const scopeKey = `${network}:${account?.walletId ?? ''}:${account?.accountId ?? ''}`
   const latestScope = useRef(scopeKey)
   latestScope.current = scopeKey
@@ -169,7 +189,8 @@ export function ShieldWithdrawForm({
     routeNetworkId,
     routeRecipient,
     routeAmount,
-    entry.provider
+    entry.provider,
+    moveToOwnZcash
   ])
   const latestEntry = useRef(entryKey)
   latestEntry.current = entryKey
@@ -181,6 +202,7 @@ export function ShieldWithdrawForm({
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>(() =>
     resolveManagedIntentsCatalog(getCachedTokens())
   )
+  const [catalogResolved, setCatalogResolved] = useState(false)
   const [priceSnapshot, setPriceSnapshot] = useState<{
     scopeKey: string
     value: AssetPriceReadModel
@@ -188,8 +210,13 @@ export function ShieldWithdrawForm({
   const [sourceId, setSourceId] = useState(routeAssetId)
   const [destinationNetworkId, setDestinationNetworkId] = useState<string | null>(routeNetworkId)
   const [amount, setAmount] = useState(routeAmount)
-  const [recipient, setRecipient] = useState(routeRecipient)
-  const [picker, setPicker] = useState<'recipient' | 'slippage' | null>(null)
+  const [recipientDraft, setRecipient] = useState(routeRecipient)
+  const recipient = moveToOwnZcash
+    ? (ownZcashRecipients.find(item => item.address === recipientDraft)?.address ??
+      ownZcashRecipients[0]?.address ??
+      '')
+    : recipientDraft
+  const [picker, setPicker] = useState<'recipient' | 'slippage' | 'move-destination' | null>(null)
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [slippage, setSlippage] = useState(0.5)
   const [prepared, setPrepared] = useState<Readonly<{
@@ -199,6 +226,12 @@ export function ShieldWithdrawForm({
     destination: ShieldFundingAsset
     amount: string
   }> | null>(null)
+  const quoteReview = useQuoteReview()
+  const preparedRef = useRef(prepared)
+  preparedRef.current = prepared
+  const [previewGeneration, setPreviewGeneration] = useState(0)
+  const [recoveryPending, setRecoveryPending] = useState(false)
+  const [refreshingReview, setRefreshingReview] = useState(false)
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -208,13 +241,23 @@ export function ShieldWithdrawForm({
     destinationNetworkId,
     recipient,
     amount,
-    slippage
+    slippage,
+    entry.provider,
+    moveToOwnZcash
   ])
   const latestDraftKey = useRef(draftKey)
   latestDraftKey.current = draftKey
   const confirmationAttempt = useRef<string | null>(null)
+  const cancelledPlanId = useRef<string | null>(null)
+  const reviewRequestId = useRef(0)
+  const pendingSourceNetworkCheck = useRef<{
+    sourceAssetId: string
+    networkId: string
+    previousFamily?: string
+  } | null>(null)
   const {
     balances: currentBalances,
+    spendableBalances,
     connecting,
     error: balanceError,
     refreshBalances: loadBalances
@@ -244,6 +287,9 @@ export function ShieldWithdrawForm({
     mounted.current = true
     return () => {
       mounted.current = false
+      const pending = preparedRef.current
+      if (pending && confirmationAttempt.current !== pending.review.planId)
+        void confidentialFundingClient.cancel(pending.review.planId).catch(() => {})
     }
   }, [])
 
@@ -255,6 +301,7 @@ export function ShieldWithdrawForm({
     if (!active) {
       setPicker(null)
       setNetworkPickerOpen(false)
+      setRecoveryPending(false)
     }
   }, [active])
 
@@ -263,6 +310,13 @@ export function ShieldWithdrawForm({
   }, [active, prepared])
 
   useEffect(() => {
+    reviewRequestId.current += 1
+    const pending = preparedRef.current
+    if (pending && confirmationAttempt.current !== pending.review.planId)
+      void confidentialFundingClient.cancel(pending.review.planId).catch(() => {})
+    preparedRef.current = null
+    quoteReview.reset()
+    cancelledPlanId.current = null
     setSourceId(routeAssetId)
     setDestinationNetworkId(routeNetworkId)
     setAmount(routeAmount)
@@ -270,42 +324,65 @@ export function ShieldWithdrawForm({
     setPicker(null)
     setNetworkPickerOpen(false)
     setPrepared(null)
+    setRecoveryPending(false)
+    setRefreshingReview(false)
     setBusy(false)
     setUncertain(false)
     setError(null)
+    pendingSourceNetworkCheck.current = null
     confirmationAttempt.current = null
-  }, [scopeKey, routeAssetId, routeNetworkId, routeRecipient, routeAmount])
+  }, [
+    scopeKey,
+    routeAssetId,
+    routeNetworkId,
+    routeRecipient,
+    routeAmount,
+    entry.provider,
+    moveToOwnZcash
+  ])
 
   useEffect(() => {
     setError(null)
+    setRecoveryPending(false)
   }, [draftKey])
 
   useEffect(() => {
     if (!active && !sourceSelectorActive) return
     let current = true
+    let directoryAvailable = catalogTokens.length > 0
+    setCatalogResolved(false)
     const load = async () => {
       try {
-        if (getCachedTokens().length === 0) {
-          const cached = await swapTokenCatalogClient.readCached()
-          if (current && cached.length) {
-            setCatalogTokens(cached)
-            setManagedAssets(resolveManagedIntentsCatalog(cached))
-          }
+        const cached = await swapTokenCatalogClient.readCached()
+        if (!current) return
+        if (cached.length > 0) directoryAvailable = true
+        if (cached.length > 0 && catalogTokens.length === 0) {
+          setCatalogTokens(cached)
+          setManagedAssets(resolveManagedIntentsCatalog(cached))
         }
+        if (
+          !sourceSelectorActive &&
+          !routeAssetId &&
+          (cached.length > 0 || catalogTokens.length > 0)
+        )
+          return
         const refreshed = await swapTokenCatalogClient.refresh()
         if (current && refreshed.length) {
+          directoryAvailable = true
           setCatalogTokens(refreshed)
           setManagedAssets(resolveManagedIntentsCatalog(refreshed))
         }
       } catch {
         // Cached portfolio remains visible while the token catalog is unavailable.
+      } finally {
+        if (current) setCatalogResolved(directoryAvailable)
       }
     }
     void load()
     return () => {
       current = false
     }
-  }, [active, sourceSelectorActive, network])
+  }, [active, sourceSelectorActive, network, routeAssetId])
 
   useEffect(() => {
     if (!active) return
@@ -325,74 +402,104 @@ export function ShieldWithdrawForm({
     () => listShieldFundingAssets(model, managedAssets, catalogTokens, network),
     [model, managedAssets, catalogTokens, network]
   )
-  const displayBalances = currentBalances ?? shieldPortfolioBalances(model)
-  const fundedSources = shieldFundingSources(options, displayBalances)
-  const prices = priceSnapshot?.scopeKey === scopeKey ? priceSnapshot.value : null
-  const fundedAssetIds = new Set(fundedSources.map(item => item.asset.asset.id))
-  const sources = [
-    ...fundedSources,
-    ...options.filter(item => !fundedAssetIds.has(item.asset.asset.id))
-  ]
-  const sourcePickerItems = useMemo(
-    () =>
-      sortSendAssetsByBalanceValue(
-        sources.map(item => ({
-          key: item.asset.asset.id,
-          amount: formatBaseUnitDecimalAmount(
-            shieldFundingAvailableRaw(item, displayBalances),
-            item.asset.metadata.decimals
-          ),
-          priceUsd: findAssetPrice(prices, item.asset.asset.id)?.priceUsd ?? null,
-          item
-        }))
-      ).map(row => ({
-        key: row.item.asset.asset.id,
-        assetId: row.item.asset.asset.id,
-        symbol: row.item.asset.metadata.symbol,
-        iconUrl: row.item.asset.metadata.iconUrl,
-        chainName: row.item.chain.chain.displayName,
-        chainId: row.item.chain.chain.id,
-        badgeBlockchain: resolveChainIconAlias(
-          row.item.chain.chain.family,
-          row.item.chain.chain.displayName,
-          row.item.chain.chain.id
-        ),
-        nativeIconChain:
-          row.item.asset.metadata.symbol.toUpperCase() === 'ZEC' ? 'zcash' : undefined,
-        availableRaw: shieldFundingAvailableRaw(row.item, displayBalances),
-        decimals: row.item.asset.metadata.decimals,
-        priceUsd: row.priceUsd
-      })),
-    [displayBalances, prices, sources]
+  const portfolioBalances = useMemo(() => shieldPortfolioBalances(model), [model])
+  const displayBalances = currentBalances ?? portfolioBalances
+  const fundedSources = useMemo(
+    () => shieldFundingSources(options, displayBalances),
+    [options, displayBalances]
   )
+  const prices = priceSnapshot?.scopeKey === scopeKey ? priceSnapshot.value : null
+  const sources = useMemo(() => {
+    const fundedAssetIds = new Set(fundedSources.map(item => item.asset.asset.id))
+    return [...fundedSources, ...options.filter(item => !fundedAssetIds.has(item.asset.asset.id))]
+  }, [fundedSources, options])
+  const sourcePickerItems = useMemo(() => {
+    if (!sourceSelectorActive) return []
+    return sortSendAssetsByBalanceValue(
+      sources.map(item => ({
+        key: item.asset.asset.id,
+        amount: formatBaseUnitDecimalAmount(
+          shieldFundingAvailableRaw(item, displayBalances),
+          item.asset.metadata.decimals
+        ),
+        priceUsd: findAssetPrice(prices, item.asset.asset.id)?.priceUsd ?? null,
+        item
+      }))
+    ).map(row => ({
+      key: row.item.asset.asset.id,
+      assetId: row.item.asset.asset.id,
+      symbol: row.item.asset.metadata.symbol,
+      iconUrl: row.item.asset.metadata.iconUrl,
+      chainName: row.item.chain.chain.displayName,
+      chainId: row.item.chain.chain.id,
+      badgeBlockchain: resolveChainIconAlias(
+        row.item.chain.chain.family,
+        row.item.chain.chain.displayName,
+        row.item.chain.chain.id
+      ),
+      nativeIconChain: row.item.asset.metadata.symbol.toUpperCase() === 'ZEC' ? 'zcash' : undefined,
+      availableRaw: shieldFundingAvailableRaw(row.item, displayBalances),
+      decimals: row.item.asset.metadata.decimals,
+      priceUsd: row.priceUsd
+    }))
+  }, [sourceSelectorActive, displayBalances, prices, sources])
   const routedPublicAsset = model?.assets.find(item => item.asset.id === sourceId)
   const routedManaged = routedPublicAsset
     ? resolveShieldManagedAsset(routedPublicAsset, managedAssets, catalogTokens, network)
     : null
-  const source = sourceId
-    ? (sources.find(item => item.asset.asset.id === sourceId) ??
-      sources.find(item => item.managed.protocolAssetId === routedManaged?.protocolAssetId) ??
-      null)
-    : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
+  const source = moveToOwnZcash
+    ? (sources.find(item => item.asset.asset.id === routeAssetId) ?? null)
+    : sourceId
+      ? (sources.find(item => item.asset.asset.id === sourceId) ??
+        sources.find(item => item.managed.protocolAssetId === routedManaged?.protocolAssetId) ??
+        null)
+      : selectDefaultShieldWithdrawSource(options, displayBalances, model, prices, network)
   const selectedSourceAssetId = source?.asset.asset.id
-  const pickerStateKey = JSON.stringify([
-    scopeKey,
-    sourcePickerItems,
-    selectedSourceAssetId,
-    balancesHidden
-  ])
   const reportedPickerState = useRef<{
-    key: string
+    scopeKey: string
+    items: readonly ShieldSourceTokenPickerItem[]
+    selectedAssetId?: string
+    balancesHidden: boolean
     callback: typeof onSourcePickerState
+    source: ShieldFundingAsset | null
+    destinationNetworkId: string | null
+    options: readonly ShieldFundingAsset[]
+    catalogResolved: boolean
+    moveToOwnZcash: boolean
+    activeAccount: typeof activeAccount
+    modelChains: PortfolioReadModel['chains'] | undefined
   } | null>(null)
   useEffect(() => {
-    if (!onSourcePickerState) return
+    if (!sourceSelectorActive || !onSourcePickerState) return
     if (
-      reportedPickerState.current?.key === pickerStateKey &&
-      reportedPickerState.current.callback === onSourcePickerState
+      reportedPickerState.current?.scopeKey === scopeKey &&
+      reportedPickerState.current?.items === sourcePickerItems &&
+      reportedPickerState.current.selectedAssetId === selectedSourceAssetId &&
+      reportedPickerState.current.balancesHidden === balancesHidden &&
+      reportedPickerState.current.callback === onSourcePickerState &&
+      reportedPickerState.current.source === source &&
+      reportedPickerState.current.destinationNetworkId === destinationNetworkId &&
+      reportedPickerState.current.options === options &&
+      reportedPickerState.current.catalogResolved === catalogResolved &&
+      reportedPickerState.current.moveToOwnZcash === moveToOwnZcash &&
+      reportedPickerState.current.activeAccount === activeAccount &&
+      reportedPickerState.current.modelChains === model?.chains
     )
       return
-    reportedPickerState.current = { key: pickerStateKey, callback: onSourcePickerState }
+    reportedPickerState.current = {
+      scopeKey,
+      items: sourcePickerItems,
+      selectedAssetId: selectedSourceAssetId,
+      balancesHidden,
+      callback: onSourcePickerState,
+      source,
+      destinationNetworkId,
+      options,
+      catalogResolved,
+      moveToOwnZcash,
+      activeAccount,
+      modelChains: model?.chains
+    }
     onSourcePickerState({
       items: sourcePickerItems,
       selectedAssetId: selectedSourceAssetId,
@@ -402,29 +509,108 @@ export function ShieldWithdrawForm({
           setPicker(null)
           return
         }
+        const nextSource = sources.find(item => item.asset.asset.id === assetId)
+        if (!nextSource) return
         setSourceId(assetId)
-        setDestinationNetworkId(null)
-        setRecipient('')
+        pendingSourceNetworkCheck.current = null
+        if (moveToOwnZcash) {
+          setDestinationNetworkId(null)
+          setRecipient('')
+        } else {
+          const currentNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
+          const nextDestinations = listShieldSendDestinations(nextSource, options, network)
+          const stillSupported = currentNetworkId
+            ? selectShieldWithdrawDestinationForNetwork(
+                nextDestinations,
+                nextSource,
+                currentNetworkId
+              )
+            : null
+          const previousFamily =
+            (currentNetworkId === source?.chain.chain.id ? source.chain.chain.family : undefined) ??
+            activeAccount?.networks.find(item => item.chain.id === currentNetworkId)?.chain
+              .family ??
+            model?.chains.find(item => item.chain.id === currentNetworkId)?.chain.family
+          if (stillSupported || !catalogResolved) {
+            setDestinationNetworkId(currentNetworkId)
+            if (!stillSupported && currentNetworkId) {
+              pendingSourceNetworkCheck.current = {
+                sourceAssetId: assetId,
+                networkId: currentNetworkId,
+                previousFamily
+              }
+            }
+          } else {
+            const fallback =
+              nextDestinations.find(item => item.chain.chain.id === nextSource.chain.chain.id) ??
+              nextDestinations[0]
+            setDestinationNetworkId(fallback?.chain.chain.id ?? null)
+            if (previousFamily !== fallback?.chain.chain.family) setRecipient('')
+          }
+        }
         setAmount('')
         setPicker(null)
       }
     })
-  }, [onSourcePickerState, pickerStateKey])
+  }, [
+    sourceSelectorActive,
+    onSourcePickerState,
+    scopeKey,
+    sourcePickerItems,
+    selectedSourceAssetId,
+    balancesHidden,
+    sources,
+    source,
+    destinationNetworkId,
+    options,
+    network,
+    catalogResolved,
+    moveToOwnZcash,
+    activeAccount,
+    model?.chains
+  ])
   const keepSelectedSource = () => {
     if (!sourceId && source) setSourceId(source.asset.asset.id)
   }
-  const destinations = source ? listShieldSendDestinations(source, options, network) : []
-  const networkOptions: ChainSelectorOption[] = sortSendNetworks(
-    [...new Map(destinations.map(item => [item.chain.chain.id, item])).values()].map(item => ({
-      id: item.chain.chain.id,
-      name: item.chain.chain.displayName,
-      icon: withdrawChainIconAlias(item.chain.chain)
-    })),
-    option => option
+  const destinations = useMemo(
+    () => (source ? listShieldSendDestinations(source, options, network) : []),
+    [source, options, network]
   )
+  const networkOptions: ChainSelectorOption[] = useMemo(() => {
+    if (!networkPickerOpen) return []
+    const supportedIds = new Set(destinations.map(item => item.chain.chain.id))
+    const chains = new Map<string, ShieldFundingAsset['chain']['chain']>()
+    for (const item of activeAccount?.networks ?? model?.chains ?? []) {
+      chains.set(item.chain.id, item.chain)
+    }
+    for (const item of destinations) chains.set(item.chain.chain.id, item.chain.chain)
+    return sortSendNetworks(
+      [...chains.values()].map(chain => {
+        const supported = supportedIds.has(chain.id)
+        const checkingRoute =
+          !supported && !catalogResolved && (chain.family === 'evm' || chain.family === 'zcash')
+        return {
+          id: chain.id,
+          name: chain.displayName,
+          icon: withdrawChainIconAlias(chain),
+          disabled: !supported,
+          priority: supported ? 0 : checkingRoute ? 1 : 2,
+          note: supported
+            ? undefined
+            : checkingRoute
+              ? 'Checking route'
+              : chain.family === 'evm' || chain.family === 'zcash'
+                ? 'No route for this token'
+                : 'Shield Send unavailable'
+        }
+      }),
+      option => option
+    )
+  }, [networkPickerOpen, activeAccount, model?.chains, destinations, catalogResolved])
   const selectedDestinationNetworkId = destinationNetworkId ?? source?.chain.chain.id ?? null
-  const destination =
-    source && selectedDestinationNetworkId
+  const destination = moveToOwnZcash
+    ? source
+    : source && selectedDestinationNetworkId
       ? selectShieldWithdrawDestinationForNetwork(
           destinations,
           source,
@@ -432,7 +618,23 @@ export function ShieldWithdrawForm({
         )
       : null
   const destinationNetwork = destination?.chain.chain
-  const availableRaw = shieldFundingAvailableRaw(source, displayBalances)
+  useEffect(() => {
+    const pending = pendingSourceNetworkCheck.current
+    if (!catalogResolved || !pending) return
+    pendingSourceNetworkCheck.current = null
+    if (moveToOwnZcash || source?.asset.asset.id !== pending.sourceAssetId) return
+    const currentNetworkId = destinationNetworkId ?? source.chain.chain.id
+    if (
+      currentNetworkId !== pending.networkId ||
+      selectShieldWithdrawDestinationForNetwork(destinations, source, pending.networkId)
+    )
+      return
+    const fallback =
+      destinations.find(item => item.chain.chain.id === source.chain.chain.id) ?? destinations[0]
+    setDestinationNetworkId(fallback?.chain.chain.id ?? null)
+    if (pending.previousFamily !== fallback?.chain.chain.family) setRecipient('')
+  }, [catalogResolved, moveToOwnZcash, source, destinationNetworkId, destinations])
+  const availableRaw = shieldFundingAvailableRaw(source, spendableBalances ?? displayBalances)
   const displayedAsset = source?.asset ?? initialAsset
   const amountState = source
     ? resolvePrivateBalanceTransferAmount({
@@ -443,15 +645,7 @@ export function ShieldWithdrawForm({
       })
     : null
   const recipientValid = isShieldWithdrawRecipient(recipient.trim(), destination, network)
-  const previewAmountRaw = useMemo(() => {
-    if (!source || !amount.trim()) return null
-    try {
-      const raw = parseDisplayUnitAmount(amount, source.asset.metadata.decimals)
-      return BigInt(raw) > 0n ? raw : null
-    } catch {
-      return null
-    }
-  }, [amount, source])
+  const previewAmountRaw = amountState?.amountRaw
   const previewRequest = useMemo(() => {
     if (
       !account ||
@@ -463,7 +657,7 @@ export function ShieldWithdrawForm({
       !recipientValid
     )
       return null
-    return buildExternalShieldWithdrawRequest({
+    const request = buildExternalShieldWithdrawRequest({
       network,
       keyDomainId: account.walletId,
       accountId: account.accountId,
@@ -473,6 +667,7 @@ export function ShieldWithdrawForm({
       destination,
       slippageBps: Math.round(slippage * 100)
     })
+    return moveToOwnZcash ? { ...request, purpose: 'move' as const } : request
   }, [
     network,
     account?.walletId,
@@ -484,14 +679,18 @@ export function ShieldWithdrawForm({
     previewAmountRaw,
     slippage,
     recipient,
-    recipientValid
+    recipientValid,
+    moveToOwnZcash
   ])
   const {
     preview,
     loading: previewLoading,
     error: previewError,
     retry: retryPreview
-  } = useConfidentialFundingPreview(active ? previewRequest : null, scopeKey)
+  } = useConfidentialFundingPreview(
+    active ? previewRequest : null,
+    `${scopeKey}:${previewGeneration}`
+  )
   const previewFee =
     source && destination && previewRequest && preview && preview.expiresAt > Date.now()
       ? estimateShieldSendRouteFee(
@@ -517,7 +716,9 @@ export function ShieldWithdrawForm({
   const openActivity = (transactionId: string) => {
     if (!scopeStillCurrent() || !account) return
     void loadBalances(true, false)
+    preparedRef.current = null
     setPrepared(null)
+    quoteReview.reset()
     setAmount('')
     setUncertain(false)
     setError(null)
@@ -534,7 +735,7 @@ export function ShieldWithdrawForm({
       },
       prepared
         ? {
-            operation: 'send',
+            operation: moveToOwnZcash ? 'move' : 'send',
             amount: prepared.amount,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
             from: 'Shield · NEAR Confidential',
@@ -546,10 +747,21 @@ export function ShieldWithdrawForm({
   }
   const refreshBalances = async () => {
     if (!account || !canManageNear || connecting || !scopeStillCurrent()) return
-    setError(null)
-    if (await loadBalances()) {
-      if (scopeStillCurrent() && previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR)
-        retryPreview()
+    const requestedDraftKey = draftKey
+    setRecoveryPending(true)
+    try {
+      const refreshed = await loadBalances()
+      if (!scopeStillCurrent() || latestDraftKey.current !== requestedDraftKey) return
+      if (refreshed) {
+        setPreviewGeneration(value => value + 1)
+        setError(null)
+      }
+    } catch (cause) {
+      if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
+        setError(cause instanceof Error ? cause.message : 'Shield balance unavailable')
+    } finally {
+      if (scopeStillCurrent() && latestDraftKey.current === requestedDraftKey)
+        setRecoveryPending(false)
     }
   }
   const prepare = async () => {
@@ -563,6 +775,9 @@ export function ShieldWithdrawForm({
       !previewRequest ||
       !preview ||
       preview.expiresAt <= Date.now() + 5_000 ||
+      recoveryPending ||
+      Boolean(error) ||
+      Boolean(balanceError) ||
       busy ||
       !scopeStillCurrent()
     )
@@ -570,6 +785,8 @@ export function ShieldWithdrawForm({
     setBusy(true)
     setError(null)
     const submittedDraftKey = draftKey
+    quoteReview.reset()
+    quoteReview.begin(submittedDraftKey, confidentialQuoteTerms(preview))
     try {
       const request = previewRequest
       const review = await confidentialFundingClient.prepare(request)
@@ -582,16 +799,39 @@ export function ShieldWithdrawForm({
         openActivity(review.transactionId)
         return
       }
-      if (!matchesExternalShieldWithdrawReview(review, request)) {
+      if (
+        !matchesExternalShieldWithdrawReview(review, request) ||
+        review.purpose !== request.purpose
+      ) {
         void confidentialFundingClient.cancel(review.planId).catch(() => {})
-        throw new Error('Send review changed. Try again.')
+        throw new Error(`${actionLabel} review changed. Try again.`)
       }
       confirmationAttempt.current = null
       setUncertain(false)
-      setPrepared({ review, request, source, destination, amount })
+      if (
+        !quoteReview.stage(submittedDraftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        return
+      }
+      cancelledPlanId.current = null
+      const pending = { review, request, source, destination, amount }
+      preparedRef.current = pending
+      setPrepared(pending)
     } catch (cause) {
-      if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
-        setError(cause instanceof Error ? cause.message : 'Send quote unavailable')
+      if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey) {
+        quoteReview.reset()
+        setRecoveryPending(true)
+        setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
+        setPreviewGeneration(value => value + 1)
+        await loadBalances(true, false).catch(() => false)
+        if (scopeStillCurrent() && latestDraftKey.current === submittedDraftKey)
+          setRecoveryPending(false)
+      }
     } finally {
       if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey)
         setBusy(false)
@@ -605,13 +845,127 @@ export function ShieldWithdrawForm({
       return 'started'
     }
     if (isUnsignedShieldTerminal(plan)) {
+      preparedRef.current = null
       setPrepared(null)
+      quoteReview.reset()
       setUncertain(false)
-      setError('Send was not started. Try again.')
+      setError(`${actionLabel} was not started. Try again.`)
       return 'failed'
     }
     return plan.phase === 'prepared' ? 'prepared' : 'pending'
   }
+  const refreshReview = async () => {
+    if (!prepared || busy || uncertain || !canManageNear || !scopeStillCurrent()) return
+    if (!previewRequest || JSON.stringify(previewRequest) !== JSON.stringify(prepared.request)) {
+      setError(`${actionLabel} details changed. Go back and review again.`)
+      return
+    }
+    const current = prepared
+    const submittedDraftKey = draftKey
+    const requestId = ++reviewRequestId.current
+    setBusy(true)
+    setRefreshingReview(true)
+    setError(null)
+    try {
+      if (
+        confirmationAttempt.current === current.review.planId &&
+        (await inspectPlan(current.review.planId)) !== 'prepared'
+      )
+        return
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) return
+      if (cancelledPlanId.current !== current.review.planId) {
+        await confidentialFundingClient.cancel(current.review.planId)
+        cancelledPlanId.current = current.review.planId
+      }
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) {
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      const review = await confidentialFundingClient.prepare(current.request)
+      if (!scopeStillCurrent() || latestDraftKey.current !== submittedDraftKey) {
+        if (review.phase === 'prepared')
+          void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      if (review.phase !== 'prepared') {
+        openActivity(review.transactionId)
+        return
+      }
+      if (
+        !matchesExternalShieldWithdrawReview(review, current.request) ||
+        review.purpose !== current.request.purpose
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        throw new Error(`${actionLabel} review changed. Try again.`)
+      }
+      if (
+        !quoteReview.stage(submittedDraftKey, {
+          id: JSON.stringify([review.planId, review.payloadFingerprint]),
+          terms: confidentialQuoteTerms(review),
+          expiresAt: review.expiresAt
+        })
+      ) {
+        void confidentialFundingClient.cancel(review.planId).catch(() => {})
+        if (reviewRequestId.current === requestId) {
+          preparedRef.current = null
+          setPrepared(previous =>
+            previous?.review.planId === current.review.planId ? null : previous
+          )
+          quoteReview.reset()
+        }
+        return
+      }
+      confirmationAttempt.current = null
+      cancelledPlanId.current = null
+      const pending = { ...current, review }
+      preparedRef.current = pending
+      setPrepared(pending)
+    } catch (cause) {
+      if (
+        reviewRequestId.current === requestId &&
+        scopeStillCurrent() &&
+        latestDraftKey.current === submittedDraftKey
+      ) {
+        if (cancelledPlanId.current === current.review.planId) {
+          preparedRef.current = null
+          setPrepared(null)
+          quoteReview.reset()
+          setPreviewGeneration(value => value + 1)
+        }
+        setError(cause instanceof Error ? cause.message : `${actionLabel} quote unavailable`)
+      }
+    } finally {
+      if (mounted.current && latestScope.current === scopeKey && latestEntry.current === entryKey) {
+        setBusy(false)
+        setRefreshingReview(false)
+      }
+    }
+  }
+  const reviewId = prepared
+    ? JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+    : null
+  const reviewAccepted = quoteReview.isAccepted(draftKey, reviewId)
+  const reviewDescription = quoteReview.describe(draftKey, reviewId)
+  const reviewExpired = useQuoteReviewTimer({
+    expiresAt: prepared?.review.expiresAt ?? null,
+    active: active && Boolean(prepared),
+    refresh:
+      reviewAccepted && !busy && !uncertain && !error ? () => void refreshReview() : undefined,
+    autoRefreshMs: 60_000
+  })
   const cancelReview = async () => {
     if (!prepared || busy || !scopeStillCurrent()) return
     setBusy(true)
@@ -620,10 +974,13 @@ export function ShieldWithdrawForm({
         const state = await inspectPlan(prepared.review.planId)
         if (state !== 'prepared') return
       }
-      await confidentialFundingClient.cancel(prepared.review.planId)
+      if (cancelledPlanId.current !== prepared.review.planId)
+        await confidentialFundingClient.cancel(prepared.review.planId)
       if (!mounted.current || latestScope.current !== scopeKey || latestEntry.current !== entryKey)
         return
+      preparedRef.current = null
       setPrepared(null)
+      quoteReview.reset()
       setUncertain(false)
     } catch (cause) {
       if (scopeStillCurrent())
@@ -635,6 +992,21 @@ export function ShieldWithdrawForm({
   }
   const confirm = async () => {
     if (!prepared || busy || !canManageNear || !scopeStillCurrent()) return
+    if (!uncertain && prepared.review.expiresAt <= Date.now()) {
+      setError('Quote expired. Refresh quote.')
+      return
+    }
+    if (
+      !uncertain &&
+      (!quoteReview.isAccepted(
+        draftKey,
+        JSON.stringify([prepared.review.planId, prepared.review.payloadFingerprint])
+      ) ||
+        !previewRequest ||
+        JSON.stringify(previewRequest) !== JSON.stringify(prepared.request) ||
+        Boolean(error))
+    )
+      return
     setBusy(true)
     setError(null)
     try {
@@ -643,12 +1015,10 @@ export function ShieldWithdrawForm({
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError('Send was not started. Review and try again.')
+          setError(`${actionLabel} was not started. Review and try again.`)
         }
         return
       }
-      if (prepared.review.expiresAt <= Date.now())
-        throw new Error('Send quote expired. Review again.')
       confirmationAttempt.current = prepared.review.planId
       const plan = await confidentialFundingClient.confirm(
         prepared.review.planId,
@@ -663,15 +1033,15 @@ export function ShieldWithdrawForm({
         if (!scopeStillCurrent()) return
         if (state === 'prepared') {
           setUncertain(false)
-          setError(cause instanceof Error ? cause.message : 'Send could not start')
+          setError(cause instanceof Error ? cause.message : `${actionLabel} could not start`)
         } else if (state === 'pending') {
           setUncertain(true)
-          setError('Send status is pending. Check status before trying again.')
+          setError(`${actionLabel} status is pending. Check status before trying again.`)
         }
       } catch {
         if (scopeStillCurrent()) {
           setUncertain(true)
-          setError('Send status unavailable. Check status before trying again.')
+          setError(`${actionLabel} status unavailable. Check status before trying again.`)
         }
       }
     } finally {
@@ -691,6 +1061,7 @@ export function ShieldWithdrawForm({
   }
 
   if (prepared) {
+    const priceAcceptanceRequired = reviewDescription.changes.length > 0 && !reviewAccepted
     const output = formatBaseUnitDecimalAmount(
       prepared.review.expectedOutputRaw,
       prepared.destination.asset.metadata.decimals
@@ -703,7 +1074,7 @@ export function ShieldWithdrawForm({
       <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <TransactionReviewView
           variant="figma"
-          title="Confirm Send"
+          title={moveToOwnZcash ? 'Confirm Move' : 'Confirm Send'}
           asset={{
             assetId: prepared.source.asset.asset.id,
             symbol: formatSymbol(prepared.source.asset.metadata.symbol),
@@ -715,7 +1086,7 @@ export function ShieldWithdrawForm({
           summary={
             <TransactionReviewExchangeSummary
               presentation="single"
-              destinationLabel="Recipient receives"
+              destinationLabel={moveToOwnZcash ? 'You receive' : 'Recipient receives'}
               destinationPrefix=""
               source={{
                 asset: {
@@ -739,7 +1110,10 @@ export function ShieldWithdrawForm({
           }
           rows={[
             { label: 'From', content: 'Shield · NEAR Confidential' },
-            { label: 'Recipient', content: prepared.review.destinationAddress },
+            {
+              label: moveToOwnZcash ? 'To' : 'Recipient',
+              content: prepared.review.destinationAddress
+            },
             {
               label: 'Network',
               content: (
@@ -755,7 +1129,7 @@ export function ShieldWithdrawForm({
               )
             },
             {
-              label: 'Recipient receives',
+              label: moveToOwnZcash ? 'You receive' : 'Recipient receives',
               content: (
                 <AmountDisplay
                   value={output}
@@ -821,303 +1195,466 @@ export function ShieldWithdrawForm({
               })()
             }
           ]}
+          afterRows={
+            <div className="pt-3">
+              {!refreshingReview && (
+                <QuoteReviewChanges
+                  changes={reviewDescription.changes}
+                  output={{
+                    decimals: prepared.destination.asset.metadata.decimals,
+                    symbol: formatSymbol(prepared.destination.asset.metadata.symbol)
+                  }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => void refreshReview()}
+                disabled={busy || uncertain}
+                className="inline-flex min-h-8 items-center gap-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+                aria-label="Refresh quote"
+              >
+                <Icon
+                  icon="lucide:refresh-cw"
+                  width={14}
+                  className={refreshingReview ? 'animate-spin' : undefined}
+                />
+                Refresh quote
+              </button>
+            </div>
+          }
           error={
-            error ? (
+            error || (reviewExpired && !uncertain && !refreshingReview) ? (
               <p role="alert" className="mt-3 text-sm text-warning">
-                {error}
+                {error ?? 'Quote expired. Refresh quote.'}
               </p>
             ) : undefined
           }
-          confirmLabel={uncertain ? 'Check status' : 'Confirm'}
+          confirmLabel={
+            uncertain
+              ? 'Check status'
+              : priceAcceptanceRequired
+                ? (reviewDescription.acceptLabel ?? 'Accept new price')
+                : 'Confirm'
+          }
+          confirmTone={priceAcceptanceRequired && !error && !uncertain ? 'warning' : 'default'}
           confirming={busy}
           submitting={busy && confirmationAttempt.current === prepared.review.planId}
+          preparing={refreshingReview}
+          confirmDisabled={
+            !uncertain &&
+            (Boolean(error) ||
+              reviewExpired ||
+              (!reviewAccepted && !priceAcceptanceRequired) ||
+              !previewRequest ||
+              JSON.stringify(previewRequest) !== JSON.stringify(prepared.request))
+          }
           onCancel={() => void cancelReview()}
-          onConfirm={() => void confirm()}
+          onConfirm={() => {
+            if (priceAcceptanceRequired && !uncertain) {
+              if (
+                !busy &&
+                !error &&
+                !reviewExpired &&
+                prepared.review.expiresAt > Date.now() &&
+                previewRequest &&
+                JSON.stringify(previewRequest) === JSON.stringify(prepared.request)
+              )
+                quoteReview.accept(draftKey, reviewId)
+              return
+            }
+            void confirm()
+          }}
         />
       </div>
     )
   }
 
-  return (
-    <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <SendFormView
-        domain="shield"
-        availableDomains={['public', 'shield']}
-        disabled={busy}
-        onDomainChange={domain => {
-          if (domain === 'public') {
-            const publicAssetId = [source?.asset, destination?.asset, initialAsset]
-              .map(asset => asset?.asset.id)
-              .find(id => model?.assets.some(item => item.asset.id === id))
-            onSelectPublic(
-              publicAssetId ?? null,
-              recipientValid ? recipient : '',
-              amount,
-              destination?.asset.asset.id ?? null
-            )
+  const routeDetails = (
+    <>
+      <div>
+        <SendRouteInfoCard
+          feeLabel="Fee (est.)"
+          fee={
+            preview && previewRequest && !previewLoading && !previewError ? (
+              previewFee ? (
+                <AmountDisplay
+                  value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
+                  symbol={formatSymbol(source?.asset.metadata.symbol)}
+                  profile="fee"
+                />
+              ) : (
+                'Unavailable'
+              )
+            ) : undefined
           }
-        }}
-        recipient={
-          <div className="space-y-2">
-            <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
-              <SendFieldLabel>Send to</SendFieldLabel>
+          provider={
+            <span className="inline-flex items-center gap-2">
+              <img src={nearLogo} alt="" className="size-5 rounded" />
+              Confidential
+            </span>
+          }
+          extra={
+            <div className="flex min-h-5 items-center justify-between gap-3">
+              <span className="text-muted">Slippage</span>
               <button
                 type="button"
-                disabled={busy || destinations.length === 0}
-                onClick={() => {
-                  keepSelectedSource()
-                  setNetworkPickerOpen(true)
-                }}
-                className="wallet-interactive inline-flex min-w-0 items-center gap-1.5 hover:text-primary disabled:opacity-50"
-                aria-label={`Destination network, ${destinationNetwork?.displayName ?? 'select network'}`}
+                aria-label={`Slippage settings, currently ${slippage}%`}
+                disabled={busy}
+                onClick={() => setPicker('slippage')}
+                className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary disabled:opacity-45"
               >
-                {destinationNetwork && (
-                  <ChainIcon
-                    chain={withdrawChainIconAlias(destinationNetwork)}
-                    width={16}
-                    height={16}
-                    className="shrink-0 rounded-[4px]"
-                  />
-                )}
-                <span className="truncate">
-                  {destinationNetwork?.displayName ?? 'Select network'}
-                </span>
-                <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0" />
+                {slippage}%
+                <Icon icon="lucide:settings-2" width={15} height={15} />
               </button>
             </div>
-            <div>
-              <SendRecipientInputCard
-                id="shield-send-recipient"
-                label="Recipient address"
-                value={recipient}
-                onChange={value => {
-                  keepSelectedSource()
-                  setRecipient(value)
-                }}
-                placeholder="Enter address"
-                variant="filled"
-                hideLabel
-                disabled={busy || !destination}
-                onSelectRecipient={
-                  busy || !destination
-                    ? undefined
-                    : () => {
-                        keepSelectedSource()
-                        setPicker('recipient')
-                      }
-                }
-              />
-            </div>
-          </div>
-        }
-        amountInput={
-          <SendAmountInputCard
-            ariaLabel="Send amount"
-            disabled={busy}
-            available={availableRaw}
-            symbol={formatSymbol(displayedAsset?.metadata.symbol)}
-            inline
-            value={amount}
-            onChange={value => {
-              const next = normalizePrivateBalanceTransferInput(value)
-              if (next !== null) {
-                keepSelectedSource()
-                setAmount(next)
-              }
-            }}
-          />
-        }
-        assetSelector={
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onOpenSourcePicker}
-            className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
-            aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
-          >
-            {displayedAsset && (
-              <TokenIcon
-                assetId={displayedAsset.asset.id}
-                symbol={formatSymbol(displayedAsset.metadata.symbol)}
-                icon={displayedAsset.metadata.iconUrl}
-                blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
-                size={24}
-              />
-            )}
-            <span className="flex min-w-0 flex-col items-start gap-0.5 leading-none">
-              <span className="max-w-[7ch] truncate">
-                {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
-              </span>
-              {source && (
-                <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
-              )}
-            </span>
-            <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
-          </button>
-        }
-        balance={
-          <span
-            className="min-w-0 truncate"
-            title={
-              source && !balancesHidden
-                ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                : undefined
-            }
-          >
-            {balancesHidden
-              ? '••••'
-              : source
-                ? formatTokenQuantity(
-                    formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
-                  )
-                : '—'}
+          }
+          time={
+            previewRequest && destination && !previewError && preview?.timeEstimateSeconds ? (
+              <span>{estimateConfidentialSendTime(preview?.timeEstimateSeconds, undefined)}</span>
+            ) : undefined
+          }
+        />
+      </div>
+      {source && destinations.length === 0 && (
+        <p role="alert" className="text-xs text-warning">
+          No supported network for this token
+        </p>
+      )}
+      {!error && !balanceError && previewError && (
+        <div role="alert" className="flex items-center justify-between gap-2 text-xs text-warning">
+          <span>
+            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+              ? 'Refresh Shield balances to get a quote.'
+              : previewError}
           </span>
-        }
-        maxButton={
           <button
             type="button"
-            disabled={busy || connecting || !source || !currentBalances || availableRaw === '0'}
-            title={!currentBalances ? 'Shield balance unavailable' : 'Use maximum balance'}
-            onClick={() => {
-              if (!source) return
-              keepSelectedSource()
-              setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
-            }}
-            className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted disabled:opacity-40"
+            disabled={connecting || recoveryPending}
+            onClick={
+              previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
+                ? () => void refreshBalances()
+                : retryPreview
+            }
+            className="shrink-0 text-primary disabled:opacity-45"
           >
-            Max
+            {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR ? 'Refresh balances' : 'Retry'}
           </button>
-        }
-        footer={
-          <SendFormActions
-            loading={busy}
-            disabled={
-              !canManageNear ||
-              !currentBalances ||
-              !source ||
-              !destination ||
-              !amountState?.amountRaw ||
-              !recipientValid ||
-              !preview ||
-              previewLoading
-            }
-            onContinue={() => void prepare()}
-          />
-        }
-      >
-        <div>
-          <SendRouteInfoCard
-            feeLabel="Fee (est.)"
-            fee={
-              preview && previewRequest && !previewLoading && !previewError ? (
-                previewFee ? (
-                  <AmountDisplay
-                    value={formatBaseUnitDecimalAmount(previewFee.raw, previewFee.decimals)}
-                    symbol={formatSymbol(source?.asset.metadata.symbol)}
-                    profile="fee"
-                  />
-                ) : (
-                  'Unavailable'
-                )
-              ) : undefined
-            }
-            provider={
-              <span className="inline-flex items-center gap-2">
-                <img src={nearLogo} alt="" className="size-5 rounded" />
-                Confidential
-              </span>
-            }
-            extra={
-              <div className="flex min-h-5 items-center justify-between gap-3">
-                <span className="text-muted">Slippage</span>
+        </div>
+      )}
+      {amountState?.error && (
+        <p role="alert" className="text-xs text-warning">
+          {amountState.error}
+        </p>
+      )}
+      {recipient && !recipientValid && (
+        <p role="alert" className="text-xs text-warning">
+          Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
+        </p>
+      )}
+      {(balanceError || (error && !amountState?.error)) && (
+        <InlineError
+          message={!amountState?.error && error ? error : balanceError}
+          tone="warning"
+          onRetry={() => void refreshBalances()}
+          retrying={connecting || recoveryPending}
+        />
+      )}
+      {!currentBalances && canManageNear && connecting && (
+        <p role="status" className="text-center text-sm text-muted">
+          Loading Shield balances…
+        </p>
+      )}
+    </>
+  )
+  const moveRecipient = ownZcashRecipients.find(item => item.address === recipient)
+  const canContinue = Boolean(
+    canManageNear &&
+    currentBalances &&
+    source &&
+    destination &&
+    amountState?.amountRaw &&
+    recipientValid &&
+    preview &&
+    !previewLoading &&
+    !recoveryPending &&
+    !error &&
+    !balanceError
+  )
+  const moveBalance = balancesHidden
+    ? '••••'
+    : source
+      ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+      : '—'
+
+  return (
+    <div ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {moveToOwnZcash ? (
+        <>
+          <div className="page-content min-h-0 !px-4 pt-4 space-y-2">
+            <ZcashMoveLayout
+              amount={
+                <input
+                  aria-label="ZEC amount"
+                  inputMode="decimal"
+                  value={amount}
+                  disabled={busy}
+                  placeholder="0"
+                  onChange={event => {
+                    const next = normalizePrivateBalanceTransferInput(event.target.value)
+                    if (next !== null) setAmount(next)
+                  }}
+                  className="h-12 w-full max-w-[280px] bg-transparent px-2 text-center text-[40px] font-semibold leading-tight tabular-nums outline-none placeholder:text-muted/45"
+                  style={{
+                    fontSize: `${Math.max(18, Math.min(40, Math.floor(440 / Math.max(1, amount.length))))}px`
+                  }}
+                />
+              }
+              balance={moveBalance}
+              max={
                 <button
                   type="button"
-                  aria-label={`Slippage settings, currently ${slippage}%`}
-                  disabled={busy}
-                  onClick={() => setPicker('slippage')}
-                  className="wallet-interactive inline-flex items-center gap-2 rounded text-foreground hover:text-primary disabled:opacity-45"
+                  aria-label="Max"
+                  disabled={busy || !spendableBalances || !source || availableRaw === '0'}
+                  onClick={() => {
+                    if (source)
+                      setAmount(
+                        formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                      )
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
                 >
-                  {slippage}%
-                  <Icon icon="lucide:settings-2" width={15} height={15} />
+                  Max
+                </button>
+              }
+              source={
+                <ZcashMoveAccountCard
+                  label="From"
+                  source="confidential"
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address=""
+                  disabled={busy}
+                  onClick={onMoveSourceSelect}
+                />
+              }
+              destination={
+                <ZcashMoveAccountCard
+                  label="To"
+                  source={moveRecipient?.privacy ?? 'transparent'}
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address={recipient}
+                  disabled={busy}
+                  onClick={
+                    onMoveDestinationSelect ??
+                    (ownZcashRecipients.length > 1
+                      ? () => setPicker('move-destination')
+                      : undefined)
+                  }
+                />
+              }
+              onReverse={onMoveReverse}
+              canReverse={Boolean(onMoveReverse)}
+            />
+            {routeDetails}
+          </div>
+          <div className="page-footer">
+            <Button
+              size="wallet"
+              className="w-full h-[45px]"
+              isLoading={busy || previewLoading}
+              disabled={!canContinue || busy}
+              onClick={() => void prepare()}
+            >
+              Move
+            </Button>
+          </div>
+        </>
+      ) : (
+        <SendFormView
+          domain="shield"
+          availableDomains={['public', 'shield']}
+          disabled={busy}
+          onDomainChange={domain => {
+            if (domain === 'public') {
+              const publicAssetId = [source?.asset, destination?.asset, initialAsset]
+                .map(asset => asset?.asset.id)
+                .find(id => model?.assets.some(item => item.asset.id === id))
+              onSelectPublic(
+                publicAssetId ?? null,
+                recipientValid ? recipient : '',
+                amount,
+                destination?.asset.asset.id ?? null
+              )
+            }
+          }}
+          recipient={
+            <div className="space-y-2">
+              <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
+                <SendFieldLabel>Send to</SendFieldLabel>
+                <button
+                  type="button"
+                  disabled={busy || !source}
+                  onClick={() => {
+                    keepSelectedSource()
+                    setNetworkPickerOpen(true)
+                  }}
+                  className="wallet-interactive inline-flex min-w-0 items-center gap-1.5 hover:text-primary disabled:opacity-50"
+                  aria-label={`Destination network, ${destinationNetwork?.displayName ?? 'select network'}`}
+                >
+                  {destinationNetwork && (
+                    <ChainIcon
+                      chain={withdrawChainIconAlias(destinationNetwork)}
+                      width={16}
+                      height={16}
+                      className="shrink-0 rounded-[4px]"
+                    />
+                  )}
+                  <span className="truncate">
+                    {destinationNetwork?.displayName ?? 'Select network'}
+                  </span>
+                  <Icon icon="lucide:chevron-down" width={13} height={13} className="shrink-0" />
                 </button>
               </div>
-            }
-            time={
-              previewRequest && destination && !previewError && preview?.timeEstimateSeconds ? (
-                <span>{estimateConfidentialSendTime(preview?.timeEstimateSeconds, undefined)}</span>
-              ) : undefined
-            }
-          />
-        </div>
-        {source && destinations.length === 0 && (
-          <p role="alert" className="text-xs text-warning">
-            No supported network for this token
-          </p>
-        )}
-        {!error && !balanceError && previewError && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-2 text-xs text-warning"
-          >
-            <span>
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh Shield balances to get a quote.'
-                : previewError}
-            </span>
+              <div>
+                <SendRecipientInputCard
+                  id="shield-send-recipient"
+                  label="Recipient address"
+                  value={recipient}
+                  onChange={value => {
+                    keepSelectedSource()
+                    setRecipient(value)
+                  }}
+                  placeholder="Enter address"
+                  variant="filled"
+                  hideLabel
+                  disabled={busy || !destination}
+                  onSelectRecipient={
+                    busy || !destination
+                      ? undefined
+                      : () => {
+                          keepSelectedSource()
+                          setPicker('recipient')
+                        }
+                  }
+                />
+              </div>
+            </div>
+          }
+          amountInput={
+            <SendAmountInputCard
+              ariaLabel="Send amount"
+              disabled={busy}
+              available={availableRaw}
+              symbol={formatSymbol(displayedAsset?.metadata.symbol)}
+              inline
+              value={amount}
+              onChange={value => {
+                const next = normalizePrivateBalanceTransferInput(value)
+                if (next !== null) {
+                  keepSelectedSource()
+                  setAmount(next)
+                }
+              }}
+            />
+          }
+          assetSelector={
             <button
               type="button"
-              disabled={connecting}
-              onClick={
-                previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                  ? () => void refreshBalances()
-                  : retryPreview
-              }
-              className="shrink-0 text-primary disabled:opacity-45"
+              disabled={busy}
+              onClick={onOpenSourcePicker}
+              className="wallet-interactive flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-wallet-surface px-2.5 text-sm enabled:hover:bg-wallet-selected enabled:active:bg-white/15 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 disabled:opacity-50"
+              aria-label={`Select Confidential ${formatSymbol(displayedAsset?.metadata.symbol)} asset`}
             >
-              {previewError === CONFIDENTIAL_PREVIEW_CONNECTION_ERROR
-                ? 'Refresh balances'
-                : 'Retry'}
+              {displayedAsset && (
+                <TokenIcon
+                  assetId={displayedAsset.asset.id}
+                  symbol={formatSymbol(displayedAsset.metadata.symbol)}
+                  icon={displayedAsset.metadata.iconUrl}
+                  blockchain={source ? withdrawChainIconAlias(source.chain.chain) : undefined}
+                  size={24}
+                />
+              )}
+              <span className="flex min-w-0 flex-col items-start gap-0.5 leading-none">
+                <span className="max-w-[7ch] truncate">
+                  {displayedAsset ? formatSymbol(displayedAsset.metadata.symbol) : 'Token'}
+                </span>
+                {source && (
+                  <span className="text-[10px] text-muted">{source.chain.chain.displayName}</span>
+                )}
+              </span>
+              <Icon icon="lucide:chevron-down" width={16} height={16} className="shrink-0" />
             </button>
-          </div>
-        )}
-        {amountState?.error && (
-          <p role="alert" className="text-xs text-warning">
-            {amountState.error}
-          </p>
-        )}
-        {recipient && !recipientValid && (
-          <p role="alert" className="text-xs text-warning">
-            Enter a valid {destinationNetwork?.family === 'zcash' ? 'Zcash' : 'EVM'} address
-          </p>
-        )}
-        {(balanceError || (error && !amountState?.error)) && (
-          <p role="alert" className="text-xs text-warning">
-            {balanceError ?? error}
-          </p>
-        )}
-        {!currentBalances && canManageNear && connecting && (
-          <p role="status" className="text-center text-sm text-muted">
-            Loading Shield balances…
-          </p>
-        )}
-        {!currentBalances && canManageNear && !connecting && balanceError && (
-          <Button
-            variant="outline"
-            size="wallet"
-            onClick={() => void refreshBalances()}
-            className="w-full"
-          >
-            Retry
-          </Button>
-        )}
-      </SendFormView>
+          }
+          balance={
+            <span
+              className="min-w-0 truncate"
+              title={
+                source && !balancesHidden
+                  ? formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                  : undefined
+              }
+            >
+              {balancesHidden
+                ? '••••'
+                : source
+                  ? formatTokenQuantity(
+                      formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals)
+                    )
+                  : '—'}
+            </span>
+          }
+          maxButton={
+            <button
+              type="button"
+              disabled={busy || !spendableBalances || !source || availableRaw === '0'}
+              title={availableRaw === '0' ? 'Shield balance unavailable' : 'Use maximum balance'}
+              onClick={() => {
+                if (!source) return
+                keepSelectedSource()
+                setAmount(formatBaseUnitDecimalAmount(availableRaw, source.asset.metadata.decimals))
+              }}
+              className="rounded-md bg-white/10 px-2 py-1 font-medium text-muted disabled:opacity-40"
+            >
+              Max
+            </button>
+          }
+          footer={
+            <SendFormActions
+              loading={busy || previewLoading}
+              disabled={
+                !canManageNear ||
+                !currentBalances ||
+                !source ||
+                !destination ||
+                !amountState?.amountRaw ||
+                !recipientValid ||
+                !preview ||
+                previewLoading ||
+                recoveryPending ||
+                Boolean(error) ||
+                Boolean(balanceError)
+              }
+              onContinue={() => void prepare()}
+            />
+          }
+        >
+          {routeDetails}
+        </SendFormView>
+      )}
       <Dialog open={active && picker !== null} onOpenChange={open => !open && setPicker(null)}>
         <DialogContent
           position="bottom"
           className="max-h-[80vh] min-h-0 overflow-y-auto bg-wallet-surface p-4 pb-6"
         >
-          <DialogTitle>{picker === 'slippage' ? 'Slippage' : 'Recipient'}</DialogTitle>
-          <DialogDescription className="sr-only">Set Send {picker}</DialogDescription>
+          <DialogTitle>
+            {picker === 'slippage'
+              ? 'Slippage'
+              : picker === 'move-destination'
+                ? 'Move to'
+                : 'Recipient'}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            Set {actionLabel} {picker}
+          </DialogDescription>
           {picker === 'slippage' ? (
             <SlippageSettingContent
               key={slippage}
@@ -1127,6 +1664,24 @@ export function ShieldWithdrawForm({
                 setPicker(null)
               }}
             />
+          ) : picker === 'move-destination' ? (
+            <div className="space-y-2">
+              {ownZcashRecipients.map(item => (
+                <ZcashMoveAccountCard
+                  key={item.address}
+                  label="To"
+                  source={item.privacy}
+                  accountName={activeAccount?.accountDisplayName ?? ''}
+                  address={item.address}
+                  selected={recipient === item.address}
+                  disabled={busy}
+                  onClick={() => {
+                    setRecipient(item.address)
+                    setPicker(null)
+                  }}
+                />
+              ))}
+            </div>
           ) : picker === 'recipient' && destination ? (
             <RecipientSelector
               chainId={destination.chain.chain.id}
@@ -1143,6 +1698,7 @@ export function ShieldWithdrawForm({
         open={active && networkPickerOpen}
         onOpenChange={setNetworkPickerOpen}
         options={networkOptions}
+        enabledFirst
         selectedId={selectedDestinationNetworkId}
         onSelect={id => {
           const next = selectShieldWithdrawDestinationForNetwork(destinations, source, id)

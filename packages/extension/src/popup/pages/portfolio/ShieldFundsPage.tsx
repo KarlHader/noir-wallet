@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
-import zamaLogo from '@/images/figma-zama.png'
-import privacyPoolsLogo from '@/images/figma-privacy-pools.png'
 import { formatFiatAmount } from '@/lib/number-format'
 import type { AssetPriceReadModel } from '@/core/prices'
 import { useWalletStore } from '@/store/wallet-store'
@@ -37,6 +35,7 @@ import {
   shieldZcashEnablePath
 } from '@/popup/services/shield-zcash-entry'
 import { getDefaultZcashSelfMoveSource } from '@/popup/services/zcash-self-move'
+import { getZcashChainId } from '@/core/chains/registry'
 
 export function ShieldFundsPage() {
   const currentWalletId = useWalletStore(state => state.currentWalletId)
@@ -173,6 +172,7 @@ function ShieldFundsContent() {
       : providersFor(action)
   const mode = new URLSearchParams(location.search).get('mode') === 'private' ? 'private' : 'public'
   const requestedAssetId = new URLSearchParams(location.search).get('assetId')
+  const requestedZcashMove = requestedAssetId === `${getZcashChainId(currentNetwork)}/slip44:133`
   const originParams = new URLSearchParams(location.search)
   originParams.delete('action')
   const originSearch = originParams.toString()
@@ -188,15 +188,30 @@ function ShieldFundsContent() {
     requestedAssetId
   )
   const zcashMovePath = zcashMoveSource
-    ? `/send/zcash?move=1&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
+    ? `/shield-zcash-move?move=1&assetId=${encodeURIComponent(`${getZcashChainId(currentNetwork)}/slip44:133`)}&from=${zcashMoveSource}&originPath=${sendOriginPath}${zcashSendScopeQuery}`
     : null
+  const zcashSendOriginState = account
+    ? {
+        sendOriginHistory: {
+          originPath: decodeURIComponent(sendOriginPath),
+          network: currentNetwork,
+          walletId: account.walletId,
+          accountId: account.accountId,
+          entryKey: location.key
+        }
+      }
+    : undefined
   const runAction = (provider: ShieldProvider, action: ShieldAction, auto = false) => {
     setPendingAction(null)
     const go = (path: string) =>
       (auto ? replace : navigate)(withShieldAsset(path, requestedAssetId))
     if (action === 'move') {
       if (provider === 'zcash-shield') {
-        if (zcashMovePath) go(zcashMovePath)
+        if (zcashMovePath)
+          navigate(zcashMovePath, {
+            replace: auto,
+            state: auto ? undefined : zcashSendOriginState
+          })
       } else go(movePath)
       return
     }
@@ -217,18 +232,7 @@ function ShieldFundsContent() {
         )
         navigate(path, {
           replace: auto,
-          state:
-            !auto && account
-              ? {
-                  sendOriginHistory: {
-                    originPath: decodeURIComponent(sendOriginPath),
-                    network: currentNetwork,
-                    walletId: account.walletId,
-                    accountId: account.accountId,
-                    entryKey: location.key
-                  }
-                }
-              : undefined
+          state: auto ? undefined : zcashSendOriginState
         })
       }
       return
@@ -241,8 +245,10 @@ function ShieldFundsContent() {
   }
   const openAction = (action: ShieldAction) => {
     if (action === 'move') {
-      if (canManageNear) navigate(movePath)
-      else if (zcashMovePath) navigate(zcashMovePath)
+      if (requestedZcashMove && zcashMovePath)
+        navigate(zcashMovePath, { state: zcashSendOriginState })
+      else if (canManageNear) navigate(movePath)
+      else if (zcashMovePath) navigate(zcashMovePath, { state: zcashSendOriginState })
       return
     }
     if (action === 'receive') {
@@ -278,7 +284,13 @@ function ShieldFundsContent() {
     handledActionQuery.current = location.search
     const providers = availableProviders(requestedAction)
     if (requestedAction === 'move' && (canManageNear || zcashMovePath)) {
-      replace(canManageNear ? movePath : zcashMovePath!)
+      replace(
+        requestedZcashMove && zcashMovePath
+          ? zcashMovePath
+          : canManageNear
+            ? movePath
+            : zcashMovePath!
+      )
     } else if (requestedAction === 'receive' && providers.length > 0) {
       replace(withShieldAsset('/shield-deposit', requestedAssetId))
     } else if (requestedAction === 'send' && canManageNear)
@@ -293,7 +305,7 @@ function ShieldFundsContent() {
   return (
     <div className="page-container min-h-0 overflow-hidden">
       <div className="shrink-0 border-b border-white/[0.08]">
-        <PageHeader title="Shielded" showBack />
+        <PageHeader title="Shield" showBack />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
         <div className="pb-5 pt-4 text-center">
@@ -360,12 +372,7 @@ function ShieldFundsContent() {
                     currentWalletId &&
                     currentAccountId
                       ? navigate(shieldZcashEnablePath(currentWalletId, currentAccountId))
-                      : navigate(
-                          withShieldAsset(
-                            `/shield-provider?provider=${provider}&mode=${mode}`,
-                            requestedAssetId
-                          )
-                        )
+                      : navigate(`/shield-provider?provider=${provider}&mode=${mode}`)
                   }
                   className="wallet-interactive flex h-[154px] min-w-0 flex-col overflow-hidden rounded-lg bg-wallet-surface text-left hover:brightness-110 active:brightness-95 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 >
@@ -428,34 +435,10 @@ function ShieldFundsContent() {
                 </button>
               )
             })}
-          {(
-            [
-              ['ZAMA', zamaLogo],
-              ['Privacy Pools', privacyPoolsLogo]
-            ] as const
-          ).map(([name, icon]) => (
-            <div
-              key={name}
-              className="flex h-[154px] min-w-0 flex-col items-center justify-between rounded-lg bg-wallet-surface px-2 pb-3 pt-6 text-center"
-            >
-              <img
-                src={icon}
-                alt=""
-                aria-hidden="true"
-                width={36}
-                height={36}
-                className="rounded-md brightness-50"
-              />
-              <span className="text-sm font-medium">{name}</span>
-              <span className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-muted">
-                Coming soon
-              </span>
-            </div>
-          ))}
         </div>
         <section aria-labelledby="shield-explanation" className="mt-8">
           <h2 id="shield-explanation" className="text-sm text-wallet-secondary">
-            How Shielded Works?
+            How Shield Works
           </h2>
           <div className="mt-5 space-y-7">
             {[

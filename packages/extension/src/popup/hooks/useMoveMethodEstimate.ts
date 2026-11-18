@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import type { MoveMethodEstimate } from '@/popup/services/move-method-estimate'
 
-export function useMoveMethodEstimate({
+export function useMoveMethodEstimate<T>({
   enabled,
   requestKey,
   estimate
 }: {
   readonly enabled: boolean
   readonly requestKey: string
-  readonly estimate: (signal: AbortSignal) => Promise<MoveMethodEstimate>
+  readonly estimate: (signal: AbortSignal) => Promise<T>
 }): {
-  value: MoveMethodEstimate | null
+  value: T | null
   loading: boolean
   error: boolean
   errorMessage: string | null
@@ -19,24 +18,24 @@ export function useMoveMethodEstimate({
   estimateRef.current = estimate
   const [state, setState] = useState<{
     key: string
-    value: MoveMethodEstimate | null
+    value: T | null
     loading: boolean
     error: boolean
     errorMessage: string | null
   }>({ key: '', value: null, loading: false, error: false, errorMessage: null })
   useEffect(() => {
     const controller = new AbortController()
+    const estimateRequest = estimateRef.current
     setState(previous =>
       previous.key === requestKey
         ? { ...previous, loading: enabled, error: false, errorMessage: null }
         : { key: requestKey, value: null, loading: enabled, error: false, errorMessage: null }
     )
     if (!enabled) return () => controller.abort()
-    // These are indicative fees, not execution quotes. Review obtains a fresh
-    // quote; polling here repeatedly prepares routes while the user is idle.
+    // Debounce input changes without polling for new quotes while the user is idle.
     const timer = setTimeout(async () => {
       try {
-        const value = await estimateRef.current(controller.signal)
+        const value = await estimateRequest(controller.signal)
         if (!controller.signal.aborted)
           setState({
             key: requestKey,

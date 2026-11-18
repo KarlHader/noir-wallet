@@ -371,11 +371,17 @@ export function AddressesList() {
   const location = useLocation()
   const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
-  const walletId = searchParams.get('walletId')
-  const accountId = searchParams.get('accountId')
+  const requestedWalletId = searchParams.get('walletId')
+  const requestedAccountId = searchParams.get('accountId')
   const scopedChainId = searchParams.get('chainId')
   const scopedReceive = searchParams.has('chainId')
   const receiveView = searchParams.get('source') === 'receive'
+  const currentWalletId = useWalletStore(state => state.currentWalletId)
+  const currentAccountId = useWalletStore(state => state.currentAccountId)
+  const receiveForActiveAccount =
+    receiveView && !scopedReceive && !searchParams.has('walletId') && !searchParams.has('accountId')
+  const walletId = receiveForActiveAccount ? currentWalletId : requestedWalletId
+  const accountId = receiveForActiveAccount ? currentAccountId : requestedAccountId
   const explicitMode = searchParams.get('mode')
   const requestedPrivacy = searchParams.get('privacy')
   const shieldedZcashOnly =
@@ -391,8 +397,6 @@ export function AddressesList() {
     walletId && accountId ? state.getAccount(walletId, accountId) : undefined
   )
   const wallet = useWalletStore(state => state.wallets.find(item => item.id === walletId))
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const executionMode = useDAppExecutionMode(
     Boolean(

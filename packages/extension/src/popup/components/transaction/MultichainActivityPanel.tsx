@@ -8,7 +8,10 @@ import { Button } from '../ui/button'
 import { useSettingsStore } from '@/store/settings-store'
 import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import type { AccountNetworkView } from '@/popup/services/account-networks-client'
-import { formatChainAddressExplorerUrl } from '@/popup/services/chain-explorer'
+import {
+  formatChainAddressExplorerUrl,
+  resolveChainExplorerTarget
+} from '@/popup/services/chain-explorer'
 import { ListSkeleton } from '../ui/skeleton'
 import { NetworkFilter } from '../common/NetworkFilter'
 import { InlineError } from '../common/InlineError'
@@ -293,11 +296,10 @@ export function MultichainActivityPanel({
     const chainIds = !focusTransactionId && providerChainIds?.length ? providerChainIds : undefined
     let localModelAvailable = false
     try {
-      const local = await evmWalletClient.getActivity(
-        'read',
-        'all',
-        chainIds ? { chainIds } : undefined
-      )
+      const local = await evmWalletClient.getActivity('read', 'all', {
+        ...(chainIds ? { chainIds } : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {})
+      })
       if (request !== requestSequence.current) return
       if (isActivityModelForScope(local, walletId, accountId)) {
         localModelAvailable = true
@@ -309,17 +311,14 @@ export function MultichainActivityPanel({
     }
 
     try {
-      const refreshed = await evmWalletClient.getActivity(
-        'refresh',
-        'all',
-        focusTransactionId
-          ? undefined
-          : filteredChainId
-            ? { chainIds: [filteredChainId] }
-            : chainIds
-              ? { chainIds }
-              : undefined
-      )
+      const refreshed = await evmWalletClient.getActivity('refresh', 'all', {
+        ...(!focusTransactionId && filteredChainId
+          ? { chainIds: [filteredChainId] }
+          : !focusTransactionId && chainIds
+            ? { chainIds }
+            : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {})
+      })
       if (request !== requestSequence.current) return
       if (!isActivityModelForScope(refreshed, walletId, accountId)) {
         setStatus(localModelAvailable ? 'ready' : 'error')
@@ -331,7 +330,14 @@ export function MultichainActivityPanel({
       if (request !== requestSequence.current) return
       setStatus(localModelAvailable ? 'ready' : 'error')
     }
-  }, [accountId, filteredChainId, focusTransactionId, providerChainIds, walletId])
+  }, [
+    accountId,
+    confidentialIntentsOnly,
+    filteredChainId,
+    focusTransactionId,
+    providerChainIds,
+    walletId
+  ])
 
   useEffect(() => {
     const retainedModel = isActivityModelForScope(initialModel, walletId, accountId)
@@ -420,10 +426,12 @@ export function MultichainActivityPanel({
     selectedNetwork?.privateExecutionAddress
       ? selectedNetwork.privateExecutionAddress
       : selectedAddress?.value
-  const fullHistoryUrl =
-    selectedNetwork && selectedHistoryAddress
+  const isZcashShieldHistory = shieldProvider === 'zcash-shield'
+  const fullHistoryUrl = isZcashShieldHistory
+    ? resolveChainExplorerTarget(getZcashChainId(network), network)?.baseUrl
+    : selectedNetwork && selectedHistoryAddress
       ? formatChainAddressExplorerUrl(selectedNetwork.chain.id, selectedHistoryAddress, network)
-      : ''
+      : undefined
   const visibleItems = useMemo(
     () =>
       filterActivityItems({
@@ -568,6 +576,7 @@ export function MultichainActivityPanel({
     try {
       const next = await evmWalletClient.getActivity('refresh', 'all', {
         ...(providerChainIds?.length ? { chainIds: providerChainIds } : {}),
+        ...(confidentialIntentsOnly ? { protocolProvider: 'Confidential Intents' as const } : {}),
         historyPageCount: nextPageCount
       })
       if (request !== olderRequestSequence.current || refreshRequest !== requestSequence.current)
@@ -610,7 +619,6 @@ export function MultichainActivityPanel({
             }
             feeSymbol={nativeAsset?.metadata.symbol ?? 'native'}
             feeDecimals={nativeAsset?.metadata.decimals ?? 18}
-            activityItems={visibleModel?.items ?? []}
             onUpdated={() => void load()}
           />
         )
@@ -667,7 +675,7 @@ export function MultichainActivityPanel({
           referrerPolicy="no-referrer"
           className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
         >
-          Full history
+          {isZcashShieldHistory ? 'View Zcash explorer' : 'Full history'}
           <Icon icon="lucide:external-link" width={13} height={13} />
         </a>
       </div>

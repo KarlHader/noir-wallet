@@ -27,11 +27,12 @@ function policy(
     allowedQuoteTokenAddresses: Object.freeze(
       input.allowedQuoteTokenAddresses.map(address => address.toLowerCase() as `0x${string}`)
     ),
-    minimumLiquidityUsd: 100_000,
-    minimumVolume24hUsd: 10_000,
+    // Wallet reference prices do not determine whether a swap is executable.
+    minimumLiquidityUsd: 0,
+    minimumVolume24hUsd: 0,
     minimumPairAgeMs: DAY_MS,
-    singlePoolMinimumLiquidityUsd: 1_000_000,
-    singlePoolMinimumVolume24hUsd: 100_000,
+    singlePoolMinimumLiquidityUsd: 0,
+    singlePoolMinimumVolume24hUsd: 0,
     singlePoolMinimumPairAgeMs: 7 * DAY_MS,
     maximumPriceDivergenceBps: 500,
     mappingTtlMs: DAY_MS

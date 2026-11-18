@@ -5,6 +5,7 @@
  * converted to actionable messages the user can understand.
  */
 import { isWalletSnapshotIntegrityError } from './wallet-snapshot-errors'
+import { sanitizeDiagnosticMessage } from './diagnostic-log'
 
 export const WALLET_SNAPSHOT_RECOVERY_MESSAGE =
   'Wallet data needs to be resynced before sending again.'
@@ -366,9 +367,55 @@ export interface ClassifiedError {
   retryable: boolean
 }
 
+function rawErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : typeof error === 'string' ? error : String(error)
+}
+
+export function isUnmappedError(error: unknown): boolean {
+  if (isWalletSnapshotRecoveryError(error)) return false
+  const raw = rawErrorMessage(error)
+  return !ERROR_MAPPINGS.some(mapping => mapping.pattern.test(raw))
+}
+
+function structuredErrorReason(value: unknown, depth = 0): string | undefined {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object' || Array.isArray(value) || depth >= 3) return undefined
+  const fields = value as Record<string, unknown>
+  for (const key of ['message', 'reason', 'cause', 'error']) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      const reason = structuredErrorReason(fields[key], depth + 1)
+      if (reason) return reason
+    }
+  }
+  return undefined
+}
+
+function safeUnmappedErrorMessage(raw: string): string {
+  let reason = raw.trim()
+  const jsonStart = reason.indexOf('{')
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(reason.slice(jsonStart)) as unknown
+      reason = structuredErrorReason(parsed) ?? reason.slice(0, jsonStart).replace(/[:\s]+$/, '')
+    } catch {
+      if (/^\{[\w .-]+$/.test(reason)) reason = reason.slice(1)
+      else if (/\{\s*(?:"[^"]+"|\w+)\s*:/.test(reason)) {
+        reason = reason.slice(0, jsonStart).replace(/[:\s]+$/, '')
+      }
+    }
+  }
+  const payloadStart = reason.search(
+    /\b(?:payload|requestBody|responseBody)\s*[:=]|\b(?:body|data)\s*[:=]\s*(?=[{\["']|0x[0-9a-fA-F]{20,}|[A-Za-z0-9+/_-]{80,})/i
+  )
+  if (payloadStart >= 0) reason = reason.slice(0, payloadStart).replace(/[:\s]+$/, '')
+  const safe = sanitizeDiagnosticMessage(reason)
+    .replace(/\b[A-Za-z0-9+/_=-]{80,}\b/g, '[Encoded data redacted]')
+    .trim()
+  return safe || 'Request failed. Error details unavailable.'
+}
+
 export function classifyError(error: unknown): ClassifiedError {
-  const raw =
-    error instanceof Error ? error.message : typeof error === 'string' ? error : String(error)
+  const raw = rawErrorMessage(error)
 
   if (isWalletSnapshotRecoveryError(error)) {
     return {
@@ -389,7 +436,10 @@ export function classifyError(error: unknown): ClassifiedError {
   }
 
   return {
-    userMessage: 'An unexpected error occurred. Please try again.',
+    userMessage:
+      error instanceof Error || typeof error === 'string'
+        ? safeUnmappedErrorMessage(raw)
+        : 'Request failed. Error details unavailable.',
     technicalMessage: raw,
     retryable: true
   }

@@ -1,6 +1,7 @@
 import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
+  isEvmSpeedUpReplacement,
   parseTransactionGraph,
   parseTransactionIntentSnapshot,
   parseTransactionSegmentEvidence,
@@ -570,9 +571,45 @@ export function buildActivityReadModel(input: {
   const privateExecutionAddresses = new Set(
     privateAddressValues.map(address => address.toLowerCase())
   )
+  const confirmedSpeedUps = new Map<string, TransactionGraph[]>()
+  for (const graph of input.localGraphs) {
+    const relation = graph.root.relation
+    if (graph.root.status !== 'final' || relation?.kind !== 'replacement-of') continue
+    const linked = confirmedSpeedUps.get(relation.transactionId) ?? []
+    linked.push(graph)
+    confirmedSpeedUps.set(relation.transactionId, linked)
+  }
   const candidates = [
     ...input.localGraphs
-      .map(graph => mapTransactionGraphToActivityItem(graph, privateExecutionAddresses))
+      .map(graph => {
+        const item = mapTransactionGraphToActivityItem(graph, privateExecutionAddresses)
+        const origin = graph.segments.find(segment => segment.role === 'origin')
+        const replacementHash = origin?.evidence?.replacementTransactionHash
+        if (origin?.status !== 'final' || !replacementHash || !item.snapshot) return item
+        const replacement = confirmedSpeedUps.get(graph.root.id)?.find(candidate => {
+          const replacementOrigin = candidate.segments.find(segment => segment.role === 'origin')
+          return (
+            replacementOrigin?.status === 'final' &&
+            replacementOrigin.evidence?.transactionHash?.toLowerCase() ===
+              replacementHash.toLowerCase() &&
+            isEvmSpeedUpReplacement(graph, candidate)
+          )
+        })
+        const next = replacement?.root.intent
+        const fee = next?.feeLimit
+        const transaction = next?.evm?.unsignedTransaction
+        if (!fee || !transaction || fee.assetId !== item.snapshot.feeLimit?.assetId) return item
+        const maxFeePerGas =
+          transaction.type === 'legacy' ? transaction.gasPrice : transaction.maxFeePerGas
+        if (fee.amountRaw !== (BigInt(transaction.gasLimit) * BigInt(maxFeePerGas)).toString()) {
+          return item
+        }
+        // The stored intent remains immutable; only the displayed maximum reflects the confirmed replacement.
+        return Object.freeze({
+          ...item,
+          snapshot: Object.freeze({ ...item.snapshot, feeLimit: fee, evm: next.evm })
+        })
+      })
       .filter(item => !isUnbroadcastUserCancellation(item)),
     ...supplementalItems
   ]

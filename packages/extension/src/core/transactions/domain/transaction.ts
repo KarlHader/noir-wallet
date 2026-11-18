@@ -78,6 +78,30 @@ export interface TransactionAssetAmount {
   readonly metadata?: AssetDisplayMetadata
 }
 
+export type TransactionEvmUnsignedTransaction =
+  | Readonly<{
+      type: 'eip1559'
+      chainId: string
+      nonce: string
+      maxFeePerGas: string
+      maxPriorityFeePerGas: string
+      gasLimit: string
+      to: string
+      value: string
+      input: string
+      accessList: readonly never[]
+    }>
+  | Readonly<{
+      type: 'legacy'
+      chainId: string
+      nonce: string
+      gasPrice: string
+      gasLimit: string
+      to: string
+      value: string
+      input: string
+    }>
+
 export interface TransactionAssetChange extends TransactionAssetAmount {
   readonly direction: 'incoming' | 'outgoing'
 }
@@ -115,6 +139,7 @@ export interface TransactionIntentSnapshot {
     readonly maxPriorityFeePerGasWei: string
     readonly gasLimit: string
     readonly methodSelector?: string
+    readonly unsignedTransaction?: TransactionEvmUnsignedTransaction
   }>
 }
 

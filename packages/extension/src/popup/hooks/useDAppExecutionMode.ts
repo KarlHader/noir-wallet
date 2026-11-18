@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DAppExecutionMode, DAppExecutionModeState } from '@/core/dapp/dapp-execution-mode'
 import { dappExecutionModeClient } from '@/popup/services/dapp-execution-mode-client'
 import type { Network } from '@/types'
+import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
 
 const confirmedModes = new Map<string, DAppExecutionModeState>()
 
@@ -46,7 +47,7 @@ export function useDAppExecutionMode(
     setLoading(true)
     setError(null)
     try {
-      const next = await dappExecutionModeClient.read()
+      const next = await withTimeout(dappExecutionModeClient.read(), 10_000, 'Read wallet mode')
       if (version === requestVersion.current && latestScopeKey.current === scopeKey) {
         confirmedModes.set(scopeKey, next)
         setScopedState({ scopeKey, state: next })
@@ -55,8 +56,6 @@ export function useDAppExecutionMode(
       return next
     } catch (caught) {
       if (version === requestVersion.current && latestScopeKey.current === scopeKey) {
-        confirmedModes.delete(scopeKey)
-        setScopedState({ scopeKey, state: null })
         setConfirmedScopeKey(null)
         setError(caught instanceof Error ? caught.message : 'Unable to read dApp account mode')
       }
@@ -68,8 +67,26 @@ export function useDAppExecutionMode(
   }, [scopeKey])
 
   useEffect(() => {
-    void refresh().catch(() => {})
+    const controller = new AbortController()
+    const readMode = async () => {
+      let attempt = 0
+      while (!controller.signal.aborted) {
+        try {
+          await refresh()
+          return
+        } catch {
+          // A service-worker restart can close a read-only message channel.
+          // Keep actions gated until Background confirms this Account's mode.
+          await waitForDelayOrAbort(
+            Math.min(500 * 2 ** Math.min(attempt++, 4), 5_000),
+            controller.signal
+          )
+        }
+      }
+    }
+    void readMode()
     return () => {
+      controller.abort()
       requestVersion.current += 1
     }
   }, [refresh])

@@ -20,6 +20,7 @@ import {
 } from '../../../../src/infrastructure/chains/evm/index.ts'
 import { InMemoryTransactionRepository } from '../../../../src/infrastructure/persistence/repositories/index.ts'
 import { reportBackgroundSendBroadcast } from '../../../../src/background/analytics/send-broadcast.ts'
+import { RheaSwapTransactionMonitor } from '../../../../src/background/rhea-swap-transaction-monitor.ts'
 
 const chainId = parseChainId('eip155:1').id
 const chains = createEvmBitcoinChainRegistry('mainnet')
@@ -89,6 +90,7 @@ function rpc(overrides = {}) {
     assertExpectedChain: async () => {},
     getNativeBalance: async () => '1000000000000000000000',
     getPendingNonce: async () => '7',
+    getTransactionCount: async () => '7',
     simulateCall: async () => '0x',
     estimateGas: async () => '21000',
     getMaximumPriorityFeePerGas: async () => '1000000000',
@@ -98,6 +100,7 @@ function rpc(overrides = {}) {
     }),
     broadcastRawTransaction: async () => transactionHash,
     hasTransaction: async () => true,
+    getTransactionLocation: async () => ({ status: 'unknown' }),
     getTransactionReceipt: async () => null,
     getFinalizedBlockNumber: async () => '100',
     ...overrides
@@ -194,7 +197,8 @@ function harness(options = {}) {
       options.createExternalRequestId ?? (() => '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'),
     onPendingBroadcast: options.onPendingBroadcast,
     onBroadcastAccepted: options.onBroadcastAccepted,
-    onMonitoringRequired: options.onMonitoringRequired
+    onMonitoringRequired: options.onMonitoringRequired,
+    assertSpeedUpAllowed: options.assertSpeedUpAllowed
   })
   return { orchestrator, repository, pendingStore, session, calls }
 }
@@ -487,7 +491,7 @@ test('serializes approvals for the same sender through signing and broadcast', a
   expect(results[0].status).toBe('fulfilled')
   expect(results[1]).toMatchObject({
     status: 'rejected',
-    reason: expect.objectContaining({ message: expect.stringContaining('nonce') })
+    reason: expect.objectContaining({ code: 'nonce-queue-unavailable' })
   })
   expect(maximumActiveConfirms).toBe(1)
 })
@@ -853,6 +857,86 @@ test('binds a RHEA ERC-20 swap amount to its EVM contract-call review', async ()
   })
 })
 
+test('completed RHEA destination rechecks the EVM origin and blocks replacement reviews', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const prepared = await testHarness.orchestrator.prepare({
+    chainAccount: account,
+    intent: { assetId: 'eip155:1/slip44:60', recipient, amountRaw: '123' },
+    rheaSwapBinding: {
+      ...rheaSwapBinding(),
+      origin: {
+        ...rheaSwapBinding().origin,
+        assetId: 'eip155:1/slip44:60',
+        protocolAssetId: 'native'
+      }
+    }
+  })
+  const submitted = await testHarness.orchestrator.approve({
+    scope,
+    transactionId: prepared.graph.root.id,
+    payloadFingerprint: prepared.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+  const cancellationReview = await testHarness.orchestrator.prepareCancel({
+    chainAccount: account,
+    originalTransactionId: submitted.graph.root.id
+  })
+  let rechecks = 0
+  const monitor = new RheaSwapTransactionMonitor(
+    {
+      async recordTransactionSubmission() {},
+      async reportSubmission() {},
+      async getOrderStatus() {
+        return { status: 'completed', destinationHash: `0x${'b'.repeat(64)}` }
+      },
+      async retireReportedSubmission() {}
+    },
+    {
+      recheckEvmOrigin: async () => {
+        rechecks += 1
+      },
+      notifyStatus: () => {}
+    }
+  )
+  monitor.repository = testHarness.repository
+
+  expect(await monitor.checkGraph(submitted.graph)).toBe(true)
+  const completed = await testHarness.repository.get(scope, submitted.graph.root.id)
+  expect(completed.root.status).toBe('confirming')
+  expect(completed.segments.find(segment => segment.role === 'origin')).toMatchObject({
+    status: 'broadcast',
+    evidence: { transactionHash }
+  })
+  expect(completed.segments.find(segment => segment.role === 'destination').status).toBe('final')
+  expect(rechecks).toBe(1)
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: cancellationReview.graph.root.id,
+      payloadFingerprint: cancellationReview.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+  await expect(
+    testHarness.orchestrator.prepareCancel({
+      chainAccount: account,
+      originalTransactionId: submitted.graph.root.id
+    })
+  ).rejects.toThrow(/pending EVM transaction/i)
+  await expect(
+    testHarness.orchestrator.prepareSpeedUp({
+      chainAccount: account,
+      originalTransactionId: submitted.graph.root.id
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+})
+
 test('cancels only awaiting approvals from the invalidated Account scope', async () => {
   const testHarness = harness()
   const first = await prepare(testHarness.orchestrator)
@@ -1144,10 +1228,24 @@ test('expires an unsigned lower-nonce review before a later approval and reuses 
   expect(retried.signing.summary.fields.nonce).toBe('7')
 })
 
-test('blocks a new transfer when old local nonces outrun the RPC pending nonce', async () => {
-  const testHarness = harness({ rpc: rpc({ getPendingNonce: async () => '9' }) })
+test('pauses sends only after observing a later queued hash beyond the RPC pending nonce', async () => {
+  let location = 'unknown'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => '9',
+      getTransactionLocation: async () => ({ status: location })
+    })
+  })
   await testHarness.repository.create(localBroadcastGraph(21))
 
+  await expect(
+    testHarness.orchestrator.getNonceRecovery({ chainAccount: account })
+  ).resolves.toBeNull()
+  const ordinary = await prepare(testHarness.orchestrator)
+  expect(ordinary.signing.summary.fields.nonce).toBe('9')
+  await testHarness.orchestrator.reject({ scope, transactionId: ordinary.graph.root.id })
+
+  location = 'pending'
   await expect(prepare(testHarness.orchestrator)).rejects.toMatchObject({
     code: 'nonce-recovery-required'
   })
@@ -1161,33 +1259,59 @@ test('blocks a new transfer when old local nonces outrun the RPC pending nonce',
   await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
 })
 
-test('releases a stale clearing transaction after the pending nonce advances past it', async () => {
-  let pendingNonce = '9'
-  const testHarness = harness({ rpc: rpc({ getPendingNonce: async () => pendingNonce }) })
+test('does not pause sends for an ordinary pending cancellation and the next approval', async () => {
+  let latestNonce = '9'
   const original = localBroadcastGraph(9)
   const clearing = localBroadcastGraph(9, 'transaction:evm:clearing-9')
+  clearing.segments[0].evidence.transactionHash = `0x${'cc'.repeat(32)}`
   clearing.root.kind = 'cancel'
   clearing.root.intent.direction = 'self'
   clearing.root.intent.recipient.address = from
+  const approval = localBroadcastGraph(10)
+  approval.root.kind = 'approve'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => '9',
+      getTransactionCount: async () => latestNonce,
+      getTransactionLocation: async hash => ({
+        status: hash === original.segments[0].evidence.transactionHash ? 'unknown' : 'pending'
+      })
+    })
+  })
   await testHarness.repository.create(original)
   await testHarness.repository.create(clearing)
+  await testHarness.repository.create(approval)
 
   await expect(
     testHarness.orchestrator.getNonceRecovery({ chainAccount: account })
-  ).resolves.toMatchObject({
-    action: 'await-confirmation',
-    pendingNonce: '9'
-  })
-  await expect(prepare(testHarness.orchestrator)).rejects.toMatchObject({
-    code: 'nonce-recovery-required'
-  })
+  ).resolves.toBeNull()
+  const beforeConfirmation = await prepare(testHarness.orchestrator)
+  expect(beforeConfirmation.signing.summary.fields.nonce).toBe('11')
+  await testHarness.orchestrator.reject({ scope, transactionId: beforeConfirmation.graph.root.id })
 
-  pendingNonce = '10'
+  latestNonce = '10'
   await expect(
     testHarness.orchestrator.getNonceRecovery({ chainAccount: account })
   ).resolves.toBeNull()
   const next = await prepare(testHarness.orchestrator)
-  expect(next.signing.summary.fields.nonce).toBe('10')
+  expect(next.signing.summary.fields.nonce).toBe('11')
+})
+
+test('does not offer a paid nonce recovery when the RPC count changes during verification', async () => {
+  let pendingReads = 0
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => (++pendingReads % 2 === 1 ? '9' : '10'),
+      getTransactionCount: async () => '9',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  await testHarness.repository.create(localBroadcastGraph(10))
+
+  await expect(
+    testHarness.orchestrator.prepareNonceRecovery({ chainAccount: account })
+  ).rejects.toMatchObject({ code: 'nonce-queue-unavailable' })
+  await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
 })
 
 test('fails closed on a rate-limited pending nonce query before signing', async () => {
@@ -1207,7 +1331,7 @@ test('fails closed on a rate-limited pending nonce query before signing', async 
   await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
 })
 
-test('allows a user-approved cancellation when the oldest local hash is unknown to RPC', async () => {
+test('only offers cancellation from the original transaction when its head hash is unknown', async () => {
   let nonce = '9'
   const testHarness = harness({
     rpc: rpc({
@@ -1220,12 +1344,14 @@ test('allows a user-approved cancellation when the oldest local hash is unknown 
 
   await expect(
     testHarness.orchestrator.getNonceRecovery({ chainAccount: account })
-  ).resolves.toMatchObject({
-    pendingNonce: '9',
-    action: 'replace',
-    transactionId: original.root.id
+  ).rejects.toMatchObject({ code: 'nonce-queue-unavailable' })
+  await expect(prepare(testHarness.orchestrator)).rejects.toMatchObject({
+    code: 'nonce-queue-unavailable'
   })
-  const review = await testHarness.orchestrator.prepareNonceRecovery({ chainAccount: account })
+  const review = await testHarness.orchestrator.prepareCancel({
+    chainAccount: account,
+    originalTransactionId: original.root.id
+  })
   expect(review.signing.summary.fields.nonce).toBe('9')
   expect(review.graph.root.relation).toEqual({
     kind: 'replacement-of',
@@ -1243,22 +1369,31 @@ test('allows a user-approved cancellation when the oldest local hash is unknown 
   await expect(testHarness.pendingStore.get(review.graph.root.id)).resolves.toBeNull()
 })
 
-test('prepares a self-transfer at the missing pending nonce and rejects stale approval', async () => {
-  let nonce = '9'
-  const testHarness = harness({ rpc: rpc({ getPendingNonce: async () => nonce }) })
+test('prepares a self-transfer after a known pending nonce and rechecks the queued hash before signing', async () => {
+  let location = 'pending'
+  const head = localBroadcastGraph(9)
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => '9',
+      getTransactionLocation: async hash => ({
+        status: hash === head.segments[0].evidence.transactionHash ? 'pending' : location
+      })
+    })
+  })
+  await testHarness.repository.create(head)
   await testHarness.repository.create(localBroadcastGraph(21))
 
   const review = await testHarness.orchestrator.prepareNonceRecovery({ chainAccount: account })
   const pending = await testHarness.pendingStore.get(review.graph.root.id)
-  expect(review.signing.summary.fields.nonce).toBe('9')
+  expect(review.signing.summary.fields.nonce).toBe('10')
   expect(review.graph.root).toMatchObject({ kind: 'cancel', status: 'prepared' })
   expect(review.graph.root.relation).toBeUndefined()
   expect(pending.prepared).toMatchObject({
     kind: 'nonce-recovery',
-    transaction: { nonce: '9', value: '0', to: from, input: '0x' }
+    transaction: { nonce: '10', value: '0', to: from, input: '0x' }
   })
 
-  nonce = '10'
+  location = 'unknown'
   await expect(
     testHarness.orchestrator.approve({
       scope,
@@ -1298,8 +1433,16 @@ test('accepts a locally reserved nonce ahead of a lagging RPC pending nonce', as
 
 test('prepares a linked same-nonce cancellation only while the original remains pending', async () => {
   let location = { status: 'pending' }
+  let pendingNonce = '7'
   const testHarness = harness({
-    rpc: rpc({ getTransactionLocation: async () => location })
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async (_address, tag) => {
+        expect(tag).toBe('latest')
+        return '7'
+      },
+      getTransactionLocation: async () => location
+    })
   })
   const original = await prepare(testHarness.orchestrator)
   await testHarness.orchestrator.approve({
@@ -1307,6 +1450,7 @@ test('prepares a linked same-nonce cancellation only while the original remains 
     transactionId: original.graph.root.id,
     payloadFingerprint: original.signing.payloadFingerprint.digestHex
   })
+  pendingNonce = '8'
 
   const cancellation = await testHarness.orchestrator.prepareCancel({
     chainAccount: account,
@@ -1336,6 +1480,159 @@ test('prepares a linked same-nonce cancellation only while the original remains 
   ).rejects.toThrow(/no longer pending/i)
 })
 
+test('passes cancellation nonce review after the original advances the pending nonce', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const original = await prepare(testHarness.orchestrator)
+  await testHarness.orchestrator.approve({
+    scope,
+    transactionId: original.graph.root.id,
+    payloadFingerprint: original.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+  const cancellation = await testHarness.orchestrator.prepareCancel({
+    chainAccount: account,
+    originalTransactionId: original.graph.root.id
+  })
+
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: cancellation.graph.root.id,
+      payloadFingerprint: cancellation.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toThrow(/signed EVM transaction failed integrity validation/i)
+})
+
+test('reviews a same-payload speed up and rejects approval after the origin finalizes', async () => {
+  let pendingNonce = '7'
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => pendingNonce,
+      getTransactionCount: async () => '7',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  const original = await prepare(testHarness.orchestrator)
+  await testHarness.orchestrator.approve({
+    scope,
+    transactionId: original.graph.root.id,
+    payloadFingerprint: original.signing.payloadFingerprint.digestHex
+  })
+  pendingNonce = '8'
+
+  const speedUp = await testHarness.orchestrator.prepareSpeedUp({
+    chainAccount: account,
+    originalTransactionId: original.graph.root.id
+  })
+  expect(speedUp.graph.root).toMatchObject({
+    kind: 'transfer',
+    relation: { kind: 'replacement-of', transactionId: original.graph.root.id }
+  })
+  expect(speedUp.graph.root.intent.evm.unsignedTransaction).toMatchObject({
+    nonce: '7',
+    to: recipient,
+    value: '123',
+    input: '0x'
+  })
+  await expect(
+    testHarness.orchestrator.getPendingApproval({ scope, transactionId: speedUp.graph.root.id })
+  ).resolves.toMatchObject({ graph: { root: { status: 'prepared' } } })
+
+  const persisted = await testHarness.repository.get(scope, original.graph.root.id)
+  const origin = persisted.segments[0]
+  await testHarness.repository.applySegmentEvent({
+    scope,
+    transactionId: persisted.root.id,
+    segmentId: origin.id,
+    event: {
+      id: 'event:evm:origin-final-before-speed-up',
+      status: 'final',
+      cause: 'progress',
+      observedAt: 2_000,
+      evidence: {
+        transactionHash: origin.evidence.transactionHash,
+        blockHash: `0x${'b'.repeat(64)}`,
+        blockHeight: 101
+      }
+    },
+    expectedRootRevision: persisted.root.revision,
+    expectedSegmentRevision: origin.revision
+  })
+
+  await expect(
+    testHarness.orchestrator.approve({
+      scope,
+      transactionId: speedUp.graph.root.id,
+      payloadFingerprint: speedUp.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+})
+
+test('requires a funding plan check before preparing a Shield origin speed up', async () => {
+  const testHarness = harness()
+  const original = localBroadcastGraph(7, 'transaction:evm:shield-speed-up')
+  original.root.kind = 'shield'
+  original.root.intent.shield = {
+    schemaVersion: 1,
+    operation: 'deposit',
+    sourceDomain: 'public',
+    destinationDomain: 'shield'
+  }
+  original.root.intent.evm.unsignedTransaction = {
+    type: 'eip1559',
+    chainId: '1',
+    nonce: '7',
+    maxFeePerGas: '5000000000',
+    maxPriorityFeePerGas: '1000000000',
+    gasLimit: '21000',
+    to: recipient,
+    value: '123',
+    input: '0x',
+    accessList: []
+  }
+  await testHarness.repository.create(original)
+
+  await expect(
+    testHarness.orchestrator.prepareSpeedUp({
+      chainAccount: account,
+      originalTransactionId: original.root.id
+    })
+  ).rejects.toMatchObject({ code: 'stale-nonce' })
+
+  let checks = 0
+  const guarded = harness({
+    rpc: rpc({
+      getPendingNonce: async () => '8',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    }),
+    assertSpeedUpAllowed: async () => {
+      checks += 1
+      if (checks === 2) throw new Error('Funding quote expired')
+    }
+  })
+  await guarded.repository.create(original)
+  const speedUp = await guarded.orchestrator.prepareSpeedUp({
+    chainAccount: account,
+    originalTransactionId: original.root.id
+  })
+  expect(checks).toBe(1)
+  await expect(
+    guarded.orchestrator.approve({
+      scope,
+      transactionId: speedUp.graph.root.id,
+      payloadFingerprint: speedUp.signing.payloadFingerprint.digestHex
+    })
+  ).rejects.toThrow(/quote expired/i)
+  expect(checks).toBe(2)
+})
+
 test('rejects cancellation preparation after the original leaves the pending pool', async () => {
   let location = { status: 'pending' }
   const testHarness = harness({
@@ -1357,6 +1654,38 @@ test('rejects cancellation preparation after the original leaves the pending poo
     })
   ).rejects.toThrow(/no longer pending/i)
   await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
+})
+
+test('does not cancel a completed EVM origin while later graph segments remain pending', async () => {
+  const testHarness = harness()
+  const original = localBroadcastGraph(7, 'transaction:evm:origin-complete')
+  const relayId = 'segment:evm:origin-complete:relay'
+  original.root.kind = 'shield'
+  original.root.status = 'confirming'
+  original.root.segmentIds.push(relayId)
+  original.segments[0].status = 'final'
+  original.segments[0].evidence.blockHash = `0x${'b'.repeat(64)}`
+  original.segments[0].evidence.blockHeight = 101
+  original.segments.push({
+    id: relayId,
+    transactionId: original.root.id,
+    role: 'relay',
+    target: { kind: 'protocol', provider: 'Confidential Intents', account: from },
+    status: 'confirming',
+    requiredForFinality: true,
+    dependsOn: [original.segments[0].id],
+    createdAt: 500,
+    updatedAt: 500,
+    revision: 0
+  })
+  await testHarness.repository.create(original)
+
+  await expect(
+    testHarness.orchestrator.prepareCancel({
+      chainAccount: account,
+      originalTransactionId: original.root.id
+    })
+  ).rejects.toThrow(/replacement metadata/i)
 })
 
 test('rejects a cancellation approval when its original completed during review', async () => {

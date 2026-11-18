@@ -33,7 +33,7 @@ export function FundingSourceSelector({
               type="button"
               aria-label={
                 receiving
-                  ? `Receive at ${type === 'shielded' ? 'Shielded' : 'Transparent'}`
+                  ? `Receive at ${type === 'shielded' ? 'Shield' : 'Transparent'}`
                   : type === 'transparent'
                     ? 'Transparent'
                     : 'Zcash shield'

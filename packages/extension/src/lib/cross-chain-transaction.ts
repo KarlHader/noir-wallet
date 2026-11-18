@@ -1,10 +1,11 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
-import type { Transaction, TransactionStatus, TransactionType } from '@/types'
+import type { QuoteBinding, Transaction, TransactionStatus, TransactionType } from '@/types'
 import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 
 export interface CrossChainRoute {
   destinationAsset?: string
   destinationChain?: string
+  recipientType?: QuoteBinding['recipientType']
 }
 
 /**
@@ -20,6 +21,7 @@ export function getCrossChainCompletionStatus(
 }
 
 export function isZcashDestination(route?: CrossChainRoute): boolean {
+  if (route?.recipientType === 'CONFIDENTIAL_INTENTS') return false
   if (route?.destinationAsset === ZEC_ZCASH_ASSET) return true
 
   const destinationChain = route?.destinationChain?.trim().toLowerCase()

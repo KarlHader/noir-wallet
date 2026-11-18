@@ -4,9 +4,14 @@ import { normalizeFromTokenList } from '@rhea-finance/cross-chain-aggregation-de
 import {
   MemoryRheaSwapQuoteSessionStore,
   RheaSwapService,
+  RHEA_SWAP_TOKEN_CATALOG_TTL_MS,
   toRheaSwapToken
 } from '../../../src/core/services/rhea-swap/index.ts'
-import { mergeSelectedSwapSourceCatalog } from '../../../src/popup/services/swap-catalog-loading.ts'
+import { RheaSwapCatalogClient } from '../../../src/core/services/rhea-swap/rhea-swap-catalog-client.ts'
+import {
+  findSwapTokenInCatalog,
+  mergeSelectedSwapSourceCatalog
+} from '../../../src/popup/services/swap-catalog-loading.ts'
 import { filterSwapDestinationTokens } from '../../../src/popup/services/swap-page-model.ts'
 import { getSwapDestinationTokens } from '../../../src/popup/services/swap-token-selection.ts'
 
@@ -38,6 +43,13 @@ it('keeps same-chain destinations after selecting Ethereum USDC from a progressi
   assert.deepEqual(destinations, [ETH, USDT, ZEC])
   assert.deepEqual(sources, [ZEC, ETH, USDC, USDT])
   assert.deepEqual(current, [ZEC])
+})
+
+it('retains a same-chain destination found only in the destination catalog', () => {
+  const custom = { ...USDC, assetId: 'eip155:1/erc20:0x3333333333333333333333333333333333333333' }
+  const destinations = getSwapDestinationTokens(custom, [custom], [ETH])
+
+  assert.equal(findSwapTokenInCatalog(destinations, { ...ETH }), ETH)
 })
 
 it('completes a partially retained source chain even when the selected token is already present', () => {
@@ -183,4 +195,54 @@ it('does not treat a protocol native asset ID from another EVM chain as Arbitrum
       }),
     /quote token address is invalid/
   )
+})
+
+it('retries a partially valid destination catalog and caches its repaired response', async () => {
+  const first = {
+    address: '0x1111111111111111111111111111111111111111',
+    symbol: 'ONE',
+    decimals: 18,
+    price: 1,
+    sources: ['nearIntents']
+  }
+  const second = {
+    ...first,
+    address: '0x2222222222222222222222222222222222222222',
+    symbol: 'TWO'
+  }
+  let calls = 0
+  let now = 0
+  const client = new RheaSwapCatalogClient({
+    baseUrl: 'https://catalog.example',
+    now: () => now,
+    retry: { maxRetries: 0 },
+    fetch: async () => {
+      calls++
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          msg: 'success',
+          data: { tokens: [first, calls === 1 ? { ...second, price: -1 } : second] }
+        })
+      )
+    }
+  })
+  const service = new RheaSwapService(client, new MemoryRheaSwapQuoteSessionStore())
+  const request = { direction: 'cross-chain-to', tokenListChainIds: [1] }
+
+  const partial = await service.listTokens(request)
+  assert.equal(partial.tokens.length, 1)
+  assert.deepEqual(partial.failedChainIds, [1])
+
+  const repaired = await service.listTokens(request)
+  assert.equal(repaired.tokens.length, 2)
+  assert.deepEqual(repaired.failedChainIds, [])
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 2)
+  now += RHEA_SWAP_TOKEN_CATALOG_TTL_MS - 1
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 2)
+  now += 1
+  assert.equal((await service.listTokens(request)).tokens.length, 2)
+  assert.equal(calls, 3)
 })

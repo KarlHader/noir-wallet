@@ -61,6 +61,7 @@ export interface BitcoinDiscoveryCoordinatorOptions {
 
 export interface ScanActiveBitcoinDiscoveryOptions {
   readonly forceRefresh?: boolean
+  readonly requireNewScan?: boolean
   readonly addressType?: BitcoinSupportedAddressType
 }
 
@@ -183,6 +184,10 @@ export class BitcoinDiscoveryCoordinator {
     const addressType = options.addressType ?? DEFAULT_ADDRESS_TYPE
     const key = JSON.stringify([context.chainAccount.id, context.accountIndex])
     const gate = this.scans.get(key) ?? new DedupPromise<BitcoinDiscoveryState | null>()
+    if (options.requireNewScan && gate.isPending) {
+      await gate.run(() => this.scan(context, addressType, options.forceRefresh === true))
+      return this.scanActive({ ...options, requireNewScan: false })
+    }
     this.scans.set(key, gate)
     const result = await gate
       .run(() => this.scan(context, addressType, options.forceRefresh === true))

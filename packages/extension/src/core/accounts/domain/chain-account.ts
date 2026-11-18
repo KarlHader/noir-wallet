@@ -26,3 +26,17 @@ export function parseChainAccountId(value: string): ChainAccountId {
   }
   return value as ChainAccountId
 }
+
+export function chainAccountsEqual(left: ChainAccount, right: ChainAccount): boolean {
+  return (
+    left.id === right.id &&
+    left.scope.keyDomainId === right.scope.keyDomainId &&
+    left.scope.accountId === right.scope.accountId &&
+    left.scope.chainId === right.scope.chainId &&
+    left.derivation.scheme === right.derivation.scheme &&
+    left.derivation.path === right.derivation.path &&
+    left.identity.kind === right.identity.kind &&
+    left.identity.value === right.identity.value &&
+    left.createdAt === right.createdAt
+  )
+}

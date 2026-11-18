@@ -32,11 +32,38 @@ import {
   type RheaSwapToken
 } from './rhea-swap-model'
 import { isDeprecatedIntentsToken } from '@/core/services/intents-evm-assets'
+import { getEvmNativeProtocolAssetId } from '@/config/asset-market-assets'
 import { readRheaDestinationHash } from './rhea-order-status'
 import { getRheaSwapQuoteDeadline, isRheaSwapQuoteFresh } from './rhea-swap-quote-validity'
 import { DedupPromise, SerialTaskQueue } from '@/lib/async-utils'
 
 const MAXIMUM_SESSION_RECORDS = 16
+
+function sameQuoteAssetAddress(
+  left: string,
+  right: string,
+  chain: string,
+  isNative: boolean
+): boolean {
+  if (left === right) return true
+  if (!/^[1-9]\d*$/.test(chain)) return false
+  const evmAddress = /^0x[0-9a-fA-F]{40}$/
+  if (
+    evmAddress.test(left) &&
+    evmAddress.test(right) &&
+    left.toLowerCase() === right.toLowerCase()
+  ) {
+    return true
+  }
+  if (!isNative) return false
+  const nativeAddresses = new Set([
+    '0x0000000000000000000000000000000000000000',
+    '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    getEvmNativeProtocolAssetId(`eip155:${chain}`)?.toLowerCase(),
+    ...(chain === '137' ? ['0x0000000000000000000000000000000000001010'] : [])
+  ])
+  return nativeAddresses.has(left.toLowerCase()) && nativeAddresses.has(right.toLowerCase())
+}
 
 function toEvmCallView(tx: EvmTx): RheaSwapEvmTransactionPlan['transaction'] {
   return Object.freeze({
@@ -222,6 +249,20 @@ export class RheaSwapService {
     if (this.clearingSessions) throw new Error('RHEA Swap sessions are being cleared')
     const epoch = this.sessionEpoch
     const request = toSdkQuoteRequest(parseRheaSwapQuoteRequest(value))
+    if (request.fromChain === 'zcash' && privateSwapScope) {
+      const expectedFundingSource = request.sender.startsWith('u1') ? 'shielded' : 'transparent'
+      if (
+        (privateSwapScope.purpose === 'wallet-swap' &&
+          (privateSwapScope.zcashFundingSource !== undefined ||
+            expectedFundingSource === 'shielded') &&
+          privateSwapScope.zcashFundingSource !== expectedFundingSource) ||
+        (privateSwapScope.purpose === 'private-swap' &&
+          (expectedFundingSource !== 'shielded' ||
+            privateSwapScope.zcashFundingSource !== 'shielded'))
+      ) {
+        throw new Error('Swap funding source does not match the quoted Zcash account.')
+      }
+    }
     const quote = await this.client.quote(request, { signal })
     this.assertQuoteMatchesRequest(quote, request)
     const quoteHandle = `rhea-quote:${this.createHandle()}`
@@ -316,6 +357,13 @@ export class RheaSwapService {
     return Object.freeze({ request: record.request, scope: record.privateSwapScope ?? null })
   }
 
+  async readQuoteView(quoteHandle: string): Promise<RheaSwapQuoteView> {
+    const record = await this.requireSession(quoteHandle)
+    const quote = normalizeQuote(record.request, record.quoteRaw, record.receivedAt)
+    this.assertQuoteFresh(record, quote)
+    return this.toQuoteView(record, quote)
+  }
+
   private async prepareOnce(
     quoteHandle: string,
     signal?: AbortSignal
@@ -335,9 +383,21 @@ export class RheaSwapService {
       })
     })
     await this.sessions.put(updated)
+    const rawTimeEstimate = build.deposit?.timeEstimate
+    const timeEstimateSeconds =
+      typeof rawTimeEstimate === 'string' ? Number(rawTimeEstimate) : rawTimeEstimate
     return Object.freeze({
       ...this.toQuoteView(updated, quote),
+      estimatedOut: build.estimatedOut,
+      minAmountOut: build.minAmountOut,
+      router: build.router,
       executionId: build.executionId,
+      ...(record.request.confidentiality === 'basic' &&
+      typeof timeEstimateSeconds === 'number' &&
+      Number.isFinite(timeEstimateSeconds) &&
+      timeEstimateSeconds > 0
+        ? { timeEstimateSeconds }
+        : {}),
       isCrossChain: build.isCrossChain,
       fromChain: build.fromChain,
       toChain: build.toChain,
@@ -369,7 +429,9 @@ export class RheaSwapService {
   ): Promise<number> {
     const record = await this.requireSession(quoteHandle)
     if (
-      record.privateSwapScope?.purpose === 'wallet-swap' &&
+      (record.privateSwapScope?.purpose === 'wallet-swap' ||
+        (record.privateSwapScope?.purpose === 'private-swap' &&
+          record.request.fromChain === 'zcash')) &&
       transfer.fundingSource !== (record.privateSwapScope.zcashFundingSource ?? 'transparent')
     ) {
       throw new Error('Swap funding source has changed. Get a new quote.')
@@ -994,23 +1056,64 @@ export class RheaSwapService {
   }
 
   private assertBuildMatchesQuote(build: SwapBuild, quote: Quote): void {
-    if (
-      build.fromChain !== quote.fromChain ||
-      build.toChain !== quote.toChain ||
-      build.tokenIn.address !== quote.tokenIn.address ||
-      build.tokenOut.address !== quote.tokenOut.address ||
-      (quote.tokenIn.decimals !== undefined && build.tokenIn.decimals !== quote.tokenIn.decimals) ||
-      (quote.tokenOut.decimals !== undefined &&
-        build.tokenOut.decimals !== quote.tokenOut.decimals) ||
-      build.amountIn !== quote.amountIn ||
-      build.estimatedOut !== quote.estimatedOut ||
-      build.minAmountOut !== quote.minAmountOut ||
-      build.router !== quote.route.router ||
-      build.request?.sender !== quote.buildContext.request.sender ||
-      build.request?.recipient !== quote.buildContext.request.recipient ||
-      build.request?.confidentiality !== quote.buildContext.request.confidentiality
-    ) {
-      throw new Error('RHEA Swap build does not match its quote')
+    const mismatches = [
+      ['fromChain', build.fromChain !== quote.fromChain],
+      ['toChain', build.toChain !== quote.toChain],
+      [
+        'tokenIn.address',
+        !sameQuoteAssetAddress(
+          build.tokenIn.address,
+          quote.tokenIn.address,
+          quote.fromChain,
+          quote.tokenIn.isNative === true
+        )
+      ],
+      [
+        'tokenOut.address',
+        !sameQuoteAssetAddress(
+          build.tokenOut.address,
+          quote.tokenOut.address,
+          quote.toChain,
+          quote.tokenOut.isNative === true
+        )
+      ],
+      [
+        'tokenIn.decimals',
+        quote.tokenIn.decimals !== undefined && build.tokenIn.decimals !== quote.tokenIn.decimals
+      ],
+      [
+        'tokenOut.decimals',
+        quote.tokenOut.decimals !== undefined && build.tokenOut.decimals !== quote.tokenOut.decimals
+      ],
+      ['amountIn', build.amountIn !== quote.amountIn],
+      ['requested fromChain', build.request?.fromChain !== quote.buildContext.request.fromChain],
+      ['requested toChain', build.request?.toChain !== quote.buildContext.request.toChain],
+      ['requested tokenIn', build.request?.tokenIn !== quote.buildContext.request.tokenIn],
+      ['requested tokenOut', build.request?.tokenOut !== quote.buildContext.request.tokenOut],
+      ['requested amountIn', build.request?.amountIn !== quote.buildContext.request.amountIn],
+      ['requested router', build.request?.router !== quote.route.router],
+      ['requested expectedOut', build.request?.expectedOut !== quote.estimatedOut],
+      ['requested minAmountOut', build.request?.minAmountOut !== quote.minAmountOut],
+      ['sender', build.request?.sender !== quote.buildContext.request.sender],
+      ['recipient', build.request?.recipient !== quote.buildContext.request.recipient],
+      [
+        'confidentiality',
+        build.request?.confidentiality !== quote.buildContext.request.confidentiality
+      ],
+      [
+        'confidentiality route',
+        quote.buildContext.request.confidentiality === 'basic' &&
+          !build.router.toLowerCase().includes('nearintents')
+      ],
+      [
+        'output',
+        BigInt(build.estimatedOut) <= 0n ||
+          BigInt(build.minAmountOut) <= 0n ||
+          BigInt(build.minAmountOut) > BigInt(build.estimatedOut)
+      ]
+    ] as const
+    for (const [field, mismatch] of mismatches) {
+      if (mismatch) throw new Error(`RHEA Swap build does not match its quote (${field})`)
     }
   }
 

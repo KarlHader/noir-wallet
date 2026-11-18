@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { isAssetVisibleInAssetView } from '../../../src/popup/components/portfolio/portfolio-asset-visibility.ts'
+import { applyTokenDisplayPolicy } from '../../../src/core/portfolio/portfolio-visibility.ts'
 
 function chain(id, family, displayName) {
   return { id, family, displayName }
@@ -82,4 +83,44 @@ test.describe('Portfolio asset-mode visibility', () => {
       )
     ).toBe(true)
   })
+})
+
+test('admits automatically held Tokens only by exact identity while preserving explicit choices', () => {
+  const native = 'eip155:1/slip44:60'
+  const id = number => `eip155:1/erc20:0x${String(number).repeat(40)}`
+  const rows = [
+    [native, 'native', '0'],
+    [id(1), 'token', '0'], // Listed in Swap, but empty.
+    [id(2), 'token', '1'], // Listed in Swap and held.
+    [id(3), 'token', '0'], // Listed in Swap, but empty.
+    [id(4), 'token', '1000000'], // Unlisted token impersonating USDC.
+    [id(5), 'token', '0'], // User explicitly enabled an unlisted token.
+    [id(6), 'token', '1'] // User hid a curated token.
+  ].map(([assetId, kind, totalRaw]) => ({
+    asset: { id: assetId, kind },
+    metadata: { symbol: 'USDC' },
+    balance: { totalRaw }
+  }))
+  const model = {
+    chains: [{ assets: rows }],
+    assets: rows,
+    confidential: {
+      status: 'ready',
+      assets: [
+        { assetId: native, availableRaw: '1' },
+        { assetId: id(2), availableRaw: '1' },
+        { assetId: id(4), availableRaw: '1000000', priceUsd: '999' },
+        { availableRaw: '1000000', symbol: 'USDC' }
+      ]
+    }
+  }
+  const filtered = applyTokenDisplayPolicy(model, {
+    allowedAssetIds: new Set([id(1), id(2), id(3), id(6)]),
+    visibleAssetIds: new Set([id(5), id(6)]),
+    hiddenAssetIds: new Set([id(6)])
+  })
+  expect(filtered.assets.map(row => row.asset.id)).toEqual([native, id(2), id(5)])
+  expect(filtered.chains[0].assets).toEqual(filtered.assets)
+  expect(filtered.confidential.assets.map(row => row.assetId)).toEqual([native, id(2)])
+  expect(model.assets).toHaveLength(7)
 })

@@ -233,7 +233,7 @@ export function projectConfidentialPlanResult(
         ? settledRows.reduce((sum, row) => sum + BigInt(row.settledOutputRaw!), 0n).toString()
         : undefined
   return confidentialResultEvent(
-    next.operation ?? 'cluster',
+    next.purpose === 'native-zec-swap' ? 'swap' : (next.operation ?? 'cluster'),
     status,
     next.source.chainId,
     `shield-plan:${next.planId}`,
@@ -250,8 +250,10 @@ export function projectConfidentialPlanResult(
       destinationDomain: next.destinationDomain,
       privacyRoute: 'confidential',
       provider: 'near_confidential',
-      transferType: next.externalRecipient ? 'external' : 'self',
-      activityType: next.operation === 'swap' ? 'swap' : 'transfer'
+      transferType:
+        next.externalRecipient && next.purpose !== 'native-zec-swap' ? 'external' : 'self',
+      activityType:
+        next.operation === 'swap' || next.purpose === 'native-zec-swap' ? 'swap' : 'transfer'
     },
     source?.symbol,
     destination?.symbol

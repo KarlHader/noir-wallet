@@ -38,6 +38,74 @@ import {
   listDepositTokenChoices
 } from '../../../src/popup/services/shield-deposit-options.ts'
 
+test('passive Confidential balance reads skip identity setup without a session', async () => {
+  const scope = { network: 'mainnet', keyDomainId: 'wallet:one', accountId: 'account:one' }
+  const usableSession = { accessToken: 'synthetic', expiresAt: 1_000_000_000 }
+  let session = null
+  let identityAccountId = scope.accountId
+  let identityReads = 0
+  let balanceReads = 0
+  let signingCalls = 0
+  const coordinator = new ConfidentialFundingCoordinator({
+    network: 'mainnet',
+    evmNetworks: [{ chainId: 'eip155:1', rpcUrl: 'https://rpc.example.test' }],
+    now: () => 1_000,
+    store: {
+      getSession: async () => session,
+      putSession: async (_network, _domain, _account, value) => {
+        session = value
+      },
+      putBalances: async () => {}
+    },
+    signer: {
+      resolveIdentity: async () => {
+        identityReads += 1
+        return {
+          address: '0x1111111111111111111111111111111111111111',
+          context: {
+            chainAccount: {
+              scope: { keyDomainId: scope.keyDomainId, accountId: identityAccountId }
+            }
+          }
+        }
+      },
+      signMessage: async () => {
+        signingCalls += 1
+        return 'signed'
+      }
+    },
+    api: {
+      createAuthPayload: async () => ({ payload: 'challenge' }),
+      authenticate: async () => usableSession,
+      getBalances: async () => {
+        balanceReads += 1
+        return []
+      }
+    }
+  })
+
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow(
+    'Confidential authorization is required'
+  )
+  expect(identityReads).toBe(0)
+  expect(balanceReads).toBe(0)
+
+  session = usableSession
+  identityAccountId = 'account:other'
+  await expect(coordinator.refreshBalances(scope, false)).rejects.toThrow('Active Wallet Account changed')
+  expect(balanceReads).toBe(0)
+
+  identityAccountId = scope.accountId
+  await expect(coordinator.refreshBalances(scope, false)).resolves.toEqual([])
+  expect(balanceReads).toBe(1)
+  expect(signingCalls).toBe(0)
+
+  session = null
+  await expect(coordinator.refreshBalances(scope, true)).resolves.toEqual([])
+  expect(signingCalls).toBe(1)
+  expect(balanceReads).toBe(2)
+})
+
 test('minimum deposit display rounds up without changing the exact payment amount', () => {
   const raw = '8000000000000000001'
   expect(formatMinimumDepositPaymentAmount(raw, 18)).toBe('8.000001')
@@ -243,7 +311,20 @@ test.describe('confidential funding safety rules', () => {
       amountRaw: '1000'
     }
     const records = new Map()
-    const repository = new InMemoryTransactionRepository()
+    let metadataLockHeld = false
+    let metadataLockTail = Promise.resolve()
+    let verifyNotificationLockBoundary = false
+    let accountDeleted = false
+    let deleteAfterPrecheck = false
+    const repository = new (class extends InMemoryTransactionRepository {
+      async applySegmentEvent(input) {
+        const result = await super.applySegmentEvent(input)
+        if (result.status === 'applied' && verifyNotificationLockBoundary && metadataLockHeld) {
+          throw new Error('Portfolio invalidation reentered the metadata lock')
+        }
+        return result
+      }
+    })()
     let quoteCalls = 0
     let catalogBlockchain = 'base'
     let balanceReads = 0
@@ -351,7 +432,28 @@ test.describe('confidential funding safety rules', () => {
           records.set(record.depositId, structuredClone(record))
         },
         async withExternalDepositScope(_scope, operation) {
-          return operation()
+          const previous = metadataLockTail
+          let release
+          metadataLockTail = new Promise(resolve => { release = resolve })
+          await previous
+          metadataLockHeld = true
+          let result
+          try {
+            if (accountDeleted) throw new Error('Wallet Account metadata is unavailable')
+            result = await operation()
+          } finally {
+            metadataLockHeld = false
+            release()
+          }
+          if (deleteAfterPrecheck) {
+            deleteAfterPrecheck = false
+            accountDeleted = true
+            await repository.deleteByAccountScope({
+              keyDomainId: 'wallet:one',
+              accountId: 'account:one'
+            })
+          }
+          return result
         },
         async getSession() {
           return { accessToken: 'synthetic', expiresAt: now + 1_000_000 }
@@ -547,7 +649,9 @@ test.describe('confidential funding safety rules', () => {
       '400'
     )
     serviceStatus = 'PROCESSING'
+    verifyNotificationLockBoundary = true
     expect((await coordinator.refreshExternalDeposit(created.depositId)).phase).toBe('processing')
+    verifyNotificationLockBoundary = false
     serviceStatus = 'INCOMPLETE_DEPOSIT'
     depositedAmountRaw = '500'
     const processingPartial = await coordinator.refreshExternalDeposit(created.depositId)
@@ -705,6 +809,34 @@ test.describe('confidential funding safety rules', () => {
     await expect(coordinator.createExternalDeposit({ ...minimumRequest, source })).rejects.toThrow(
       'request ID was reused'
     )
+    const deletionRace = {
+      ...created,
+      depositId: 'deletion-race',
+      transactionId: 'tx:confidential-external:deletion-race',
+      phase: 'processing'
+    }
+    records.set(deletionRace.depositId, deletionRace)
+    await repository.create(createExternalShieldDepositGraph(deletionRace))
+    serviceStatus = 'PROCESSING'
+    deleteAfterPrecheck = true
+    expect((await coordinator.refreshExternalDeposit(deletionRace.depositId)).phase).toBe(
+      'processing'
+    )
+    expect(
+      await repository.get(
+        { keyDomainId: 'wallet:one', accountId: 'account:one' },
+        deletionRace.transactionId
+      )
+    ).toBeNull()
+    await expect(coordinator.refreshExternalDeposit(deletionRace.depositId)).rejects.toThrow(
+      'Wallet Account metadata is unavailable'
+    )
+    expect(
+      await repository.get(
+        { keyDomainId: 'wallet:one', accountId: 'account:one' },
+        deletionRace.transactionId
+      )
+    ).toBeNull()
   })
 
   test('discovers the provider minimum and binds a flexible external deposit quote', async () => {
@@ -1035,6 +1167,8 @@ test.describe('confidential funding safety rules', () => {
       })
       expect(quoteRequests[2].appFees).toBeUndefined()
       expect(quoteRequests[2].referral).toBe('noir_move')
+      expect(quoteRequests[2].dry).toBe(true)
+      expect(quoteRequests[3].dry).toBe(false)
       expect(feeReads).toBe(1)
       await api.quote({
         ...withdrawal,
@@ -1043,7 +1177,7 @@ test.describe('confidential funding safety rules', () => {
         recipientType: 'CONFIDENTIAL_INTENTS',
         dry: true
       })
-      expect(quoteRequests[4]).toMatchObject({
+      expect(quoteRequests[5]).toMatchObject({
         referral: 'noir_swap',
         swapType: 'EXACT_INPUT',
         depositType: 'CONFIDENTIAL_INTENTS',
@@ -1083,7 +1217,7 @@ test.describe('confidential funding safety rules', () => {
       ]
       await expect(api.quote(withdrawal)).rejects.toThrow('app fees do not match')
       echoedFees = undefined
-      providerFee = { recipient: 'provider.near', fee: 21 }
+      providerFee = { recipient: 'provider.near', fee: 26 }
       await expect(api.quote(withdrawal)).rejects.toThrow('provider fee quote is invalid')
       feeConfig = { ...feeConfig, confidentialPlatformFeeBps: 10_001 }
       await expect(
@@ -1091,7 +1225,67 @@ test.describe('confidential funding safety rules', () => {
           withdrawal
         )
       ).rejects.toThrow('fee rate is invalid')
-      expect(quoteRequests).toHaveLength(20)
+      expect(quoteRequests).toHaveLength(21)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('binds an external confidential deposit to the automatic 1Click fee', async () => {
+    const originalFetch = globalThis.fetch
+    const requests = []
+    const providerFee = { recipient: 'provider.near', fee: 25 }
+    let formalFees = [providerFee]
+    let formalDestinationAsset
+    globalThis.fetch = async (url, init) => {
+      expect(url).toBe('https://example.test/1click/quote')
+      const request = JSON.parse(init.body)
+      requests.push(request)
+      return Response.json({
+        correlationId: 'zec-deposit-quote',
+        quoteRequest: {
+          ...request,
+          ...(formalDestinationAsset && !request.dry
+            ? { destinationAsset: formalDestinationAsset }
+            : {}),
+          appFees: request.dry ? [providerFee] : formalFees
+        },
+        quote: {
+          amountIn: request.amount,
+          amountOut: '190000',
+          depositAddress: 'deposit-address',
+          deadline: request.deadline
+        }
+      })
+    }
+    try {
+      const api = new ConfidentialFundingApi(apiConfig, 'https://near.example.test', 'swap-jwt')
+      const input = {
+        referral: 'noir_swap',
+        originAsset: 'nep141:zec.omft.near',
+        destinationAsset: 'nep141:arbitrum-usdc.omft.near',
+        amountRaw: '200000',
+        signerId: '0x1111111111111111111111111111111111111111',
+        refundTo: 't1ExampleRefundAddress',
+        recipient: '0x1111111111111111111111111111111111111111',
+        depositType: 'ORIGIN_CHAIN',
+        refundType: 'ORIGIN_CHAIN',
+        recipientType: 'CONFIDENTIAL_INTENTS',
+        slippageBps: 50,
+        dry: false
+      }
+      const quote = await api.quote(input)
+      expect(requests.map(request => request.dry)).toEqual([true, false])
+      expect(requests.every(request => request.appFees === undefined)).toBe(true)
+      expect(quote.quoteRequest.appFees).toEqual([providerFee])
+
+      formalFees = [{ ...providerFee, fee: 26 }]
+      await expect(api.quote(input)).rejects.toThrow('app fees do not match')
+      formalFees = [{ recipient: 'other.near', fee: 25 }]
+      await expect(api.quote(input)).rejects.toThrow('app fees do not match')
+      formalFees = [providerFee]
+      formalDestinationAsset = 'nep141:other.omft.near'
+      await expect(api.quote(input)).rejects.toThrow('does not match the requested funding route')
     } finally {
       globalThis.fetch = originalFetch
     }

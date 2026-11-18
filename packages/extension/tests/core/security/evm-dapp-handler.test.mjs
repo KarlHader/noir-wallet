@@ -4,6 +4,7 @@ import { expect } from '@playwright/test'
 import { BackgroundEvmDAppHandler } from '../../../src/background/evm-dapp-handler.ts'
 import { BUILTIN_EVM_NETWORKS, EVM_NETWORKS } from '../../../src/config/networks.ts'
 import { EvmRpcError } from '../../../src/infrastructure/chains/evm/evm-rpc-client.ts'
+import { EvmTransactionError } from '../../../src/infrastructure/chains/evm/evm-transaction-builder.ts'
 
 const account = {
   generationId: 'generation-1',
@@ -1634,6 +1635,40 @@ test.describe('Background EVM dApp handler', () => {
       action: 'evmTransaction',
       data: { token: null, intent: preparedContractCalls[0] }
     })
+  })
+
+  test('reports a blocked send queue without opening or persisting a signing review', async () => {
+    const notices = []
+    const { handler, approvalCalls, persistedOperations } = harness({
+      onSendQueueBlocked: async reason => notices.push(reason),
+      transferController: {
+        prepareContractCall: async () => {
+          throw new EvmTransactionError('nonce-recovery-required', 'Internal nonce details')
+        }
+      }
+    })
+    const origin = 'https://dapp.example'
+    await handler.request({ method: 'eth_requestAccounts' }, origin, {})
+
+    await expect(
+      handler.request(
+        {
+          method: 'eth_sendTransaction',
+          params: [
+            {
+              from: account.chainAccount.identity.value,
+              to: '0x2222222222222222222222222222222222222222',
+              data: '0x12345678aabbccdd'
+            }
+          ]
+        },
+        origin,
+        {}
+      )
+    ).rejects.toMatchObject({ code: -32000, message: expect.stringContaining('Open Activity') })
+    expect(approvalCalls.map(call => call.action)).toEqual(['evmConnect'])
+    expect(persistedOperations).toEqual([])
+    expect(notices).toEqual(['nonce-recovery-required'])
   })
 
   test('rejects and releases a prepared transfer when permission is revoked after approval', async () => {

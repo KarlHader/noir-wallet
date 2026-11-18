@@ -85,7 +85,7 @@ export function createUserEvmAssetsClient(sendMessage: RuntimeMessenger) {
         !Array.isArray(result.detectedAssets) ||
         result.detectedAssets.length > 512 ||
         !Array.isArray(result.hiddenAssetIds) ||
-        result.hiddenAssetIds.length > 512 ||
+        result.hiddenAssetIds.length > 4_096 ||
         !Array.isArray(result.protocolAssetIds) ||
         result.protocolAssetIds.length > 1_024
       ) {

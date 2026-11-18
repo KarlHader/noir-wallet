@@ -20,7 +20,8 @@ import {
 import {
   addInspectedToken,
   findVerifiedRheaSwapToken,
-  inspectTokenAddress
+  inspectTokenAddress,
+  toWalletEvmSwapToken
 } from '../../../src/popup/services/token-address-discovery.ts'
 
 const NOW = Date.parse('2026-08-15T03:00:00.000Z')
@@ -283,6 +284,15 @@ test('address discovery keeps inspection separate from addition and rejects a cr
     }
     expect(findVerifiedRheaSwapToken(candidate, [catalogToken])).toBe(catalogToken)
     expect(findVerifiedRheaSwapToken(otherChain, [catalogToken])).toBeNull()
+    expect(toWalletEvmSwapToken(candidate)).toMatchObject({
+      assetId: ASSET_ID,
+      rheaChainId: '1',
+      tokenListChainId: 1,
+      rheaAddress: CONTRACT,
+      isNative: false,
+      sources: []
+    })
+    expect(toWalletEvmSwapToken({ ...candidate, assetId: otherChain.assetId })).toBeNull()
   } finally {
     globalThis.chrome = previousChrome
   }
@@ -423,7 +433,7 @@ test('enables an Intents Token with one on-chain inspection and reuses the store
   ).rejects.toThrow('Token decimals do not match the Intents catalog')
 })
 
-test('upgrades a legacy matching Token to Intents catalog provenance without another RPC read', async () => {
+test('keeps a manually added Token visible when Intents activates it', async () => {
   const { chains, bundledAssets } = createContext()
   const catalog = createMemoryRepository()
   const metadataRpc = createMetadataRpc(() => ({
@@ -437,7 +447,8 @@ test('upgrades a legacy matching Token to Intents catalog provenance without ano
     metadata: { name: 'Tether USD', symbol: 'USDT', decimals: 6 },
     inspectedAt: NOW
   })
-  catalog.assets.set(ASSET_ID, createUserEvmAssetRecord(chains, candidate, NOW))
+  const manualRecord = createUserEvmAssetRecord(chains, candidate, NOW)
+  catalog.assets.set(ASSET_ID, manualRecord)
   const coordinator = new UserEvmAssetCoordinator({
     chains,
     bundledAssets,
@@ -453,8 +464,9 @@ test('upgrades a legacy matching Token to Intents catalog provenance without ano
       expectedSymbol: 'USDT',
       expectedDecimals: 6
     })
-  ).resolves.toMatchObject({ source: 'intents-catalog' })
-  expect(catalog.assets.get(ASSET_ID)?.source).toBe('intents-catalog')
+  ).resolves.toBe(manualRecord)
+  expect(catalog.assets.get(ASSET_ID)).toBe(manualRecord)
+  expect((await coordinator.list())[0]?.source).toBe('user-added')
   expect(metadataRpc.readCount).toBe(0)
 })
 

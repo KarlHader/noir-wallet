@@ -10,13 +10,8 @@ import {
   type TokenSelectionItem
 } from './TokenSelectionList'
 import { TokenIcon } from './TokenIcon'
-import { useWalletStore } from '@/store/wallet-store'
-import { resolveEvmChainIconAlias } from '@/config/icons'
-import {
-  orderNetworkIdsByRecency,
-  recordRecentChainSelection,
-  tokenSelectorChainOrderStorageKey
-} from './token-selector-chain-order'
+import { sortTokenSelectorNetworks } from './token-selector-chain-order'
+import type { useTokenSelectorWindow } from '@/popup/hooks/useTokenSelectorWindow'
 import {
   addInspectedToken,
   inspectTokenAddress,
@@ -32,7 +27,6 @@ export interface TokenSelectorNetwork {
 }
 
 interface TokenSelectorViewProps {
-  readonly fixedNetworkOrder?: boolean
   readonly accountScope?: Readonly<{ walletId: string; accountId: string }> | null
   readonly search: string
   readonly onSearchChange: (value: string) => void
@@ -42,7 +36,6 @@ interface TokenSelectorViewProps {
   readonly items: readonly TokenSelectionItem[]
   readonly selectedKey?: string
   readonly onSelect: (key: string) => void
-  readonly lowBalanceKeys?: ReadonlySet<string>
   readonly emptyMessage?: string
   readonly loading?: boolean
   readonly fullHeight?: boolean
@@ -51,16 +44,15 @@ interface TokenSelectorViewProps {
   readonly status?: ReactNode
   readonly afterRows?: ReactNode
   readonly onScroll?: UIEventHandler<HTMLDivElement>
+  readonly virtualWindow?: ReturnType<typeof useTokenSelectorWindow>
   readonly discovery?: {
     readonly scopeKey: string
     readonly chainId: string | null
-    readonly onAdded: (result: InspectedTokenAddress) => string | void
+    readonly onAdded: (result: InspectedTokenAddress) => string | void | Promise<string | void>
   }
 }
 
 export function TokenSelectorView({
-  fixedNetworkOrder = false,
-  accountScope,
   search,
   onSearchChange,
   networks,
@@ -69,7 +61,6 @@ export function TokenSelectorView({
   items,
   selectedKey,
   onSelect,
-  lowBalanceKeys,
   emptyMessage = 'No tokens found',
   loading = false,
   fullHeight = true,
@@ -78,61 +69,12 @@ export function TokenSelectorView({
   status,
   afterRows,
   onScroll,
+  virtualWindow,
   discovery
 }: TokenSelectorViewProps) {
-  const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const currentWalletId = useWalletStore(state => state.currentWalletId)
-  const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const walletId = accountScope?.walletId ?? currentWalletId
-  const accountId = accountScope?.accountId ?? currentAccountId
-  const lowBalancePreferenceKey =
-    walletId && accountId
-      ? `token-selector-low-balance:${currentNetwork}:${walletId}:${accountId}`
-      : null
-  const chainOrderKey =
-    walletId && accountId
-      ? tokenSelectorChainOrderStorageKey({
-          network: currentNetwork,
-          walletId,
-          accountId
-        })
-      : null
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
-  const [recentChainIds, setRecentChainIds] = useState<readonly string[]>([])
-  const pendingRecentChainIds = useRef<readonly string[] | null>(null)
-  useEffect(() => {
-    pendingRecentChainIds.current = null
-    setRecentChainIds([])
-    if (!chainOrderKey) return
-    let active = true
-    void chrome.storage.session
-      .get(chainOrderKey)
-      .then(result => {
-        if (active && pendingRecentChainIds.current === null) {
-          const saved = result[chainOrderKey]
-          setRecentChainIds(
-            Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : []
-          )
-        }
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-      if (pendingRecentChainIds.current) {
-        void chrome.storage.session
-          .set({ [chainOrderKey]: pendingRecentChainIds.current })
-          .catch(() => {})
-      }
-    }
-  }, [chainOrderKey])
   const selectNetwork = (id: string) => {
     onNetworkChange(id)
-    if (chainOrderKey && !fixedNetworkOrder) {
-      pendingRecentChainIds.current = recordRecentChainSelection(
-        pendingRecentChainIds.current ?? recentChainIds,
-        networks.find(network => network.id === id)?.iconChain ?? id
-      )
-    }
   }
   const discoveryKey = `${discovery?.scopeKey ?? ''}:${discovery?.chainId ?? ''}:${search.trim().toLowerCase()}`
   const latestDiscoveryKey = useRef(discoveryKey)
@@ -157,7 +99,7 @@ export function TokenSelectorView({
     }
   }, [])
   useEffect(() => {
-    if (!addressSearch || !discovery?.chainId || items.length > 0 || loading) return
+    if (!addressSearch || !discovery?.chainId || items.length > 0) return
     let cancelled = false
     const generation = discoveryGeneration.current
     setDiscoveryError(null)
@@ -184,34 +126,19 @@ export function TokenSelectorView({
     return () => {
       cancelled = true
     }
-  }, [addressSearch, discovery?.chainId, discoveryKey, items.length, loading, search])
-  const availableById = new Map(
-    networks.filter(network => !network.disabledReason).map(network => [network.id, network])
-  )
-  const availableIdByIconChain = new Map(
-    [...availableById.values()].map(network => [network.iconChain, network.id])
-  )
-  const available = (
-    fixedNetworkOrder
-      ? [...availableById.keys()]
-      : orderNetworkIdsByRecency(
-          [...availableById.keys()],
-          recentChainIds.map(id => {
-            if (availableById.has(id)) return id
-            const iconChain = id.startsWith('eip155:') ? resolveEvmChainIconAlias(id) : id
-            return availableIdByIconChain.get(iconChain) ?? id
-          })
-        )
-  ).map(id => availableById.get(id)!)
+  }, [addressSearch, discovery?.chainId, discoveryKey, items.length, search])
+  const orderedNetworks = sortTokenSelectorNetworks(networks, network => ({
+    id: network.id,
+    name: network.label
+  }))
+  const available = orderedNetworks.filter(network => !network.disabledReason)
   const primary = available.slice(0, 5)
   const more = available.slice(5)
-  const disabled = networks.filter(network => network.disabledReason)
+  const disabled = orderedNetworks.filter(network => network.disabledReason)
   const effectiveNetwork =
     selectedNetwork === 'all' || available.some(network => network.id === selectedNetwork)
       ? selectedNetwork
       : 'all'
-  const lowBalance =
-    lowBalanceKeys && !search.trim() ? items.filter(item => lowBalanceKeys.has(item.key)) : []
   const inspectedResult =
     items.length === 0 && inspected?.key === discoveryKey ? inspected.result : null
   const discoveredAddress = inspectedResult?.candidate.contractAddress
@@ -223,18 +150,19 @@ export function TokenSelectorView({
           symbol: inspectedResult.token.symbol,
           subtitle: `${discoveredNetwork ?? 'Selected network'} · ${discoveredAddress?.slice(0, 8)}...${discoveredAddress?.slice(-6)}`,
           title: discoveredAddress,
-          ariaLabel: `Add ${inspectedResult.token.symbol} on ${discoveredNetwork ?? 'selected network'} to wallet`,
+          ariaLabel: `${addingKey === discoveryKey ? 'Adding' : 'Add'} ${inspectedResult.token.symbol} on ${discoveredNetwork ?? 'selected network'} to wallet`,
           icon: <TokenIcon token={inspectedResult.token} size={32} />,
-          symbolSuffix: <span className="text-xs text-primary">Add</span>,
-          disabledReason: addingKey === discoveryKey ? 'Adding token' : undefined
+          symbolSuffix: (
+            <span className="text-xs text-primary">
+              {addingKey === discoveryKey ? 'Adding' : 'Add'}
+            </span>
+          ),
+          disabledReason: addingKey === discoveryKey ? 'Adding token' : undefined,
+          busy: addingKey === discoveryKey
         }
       ]
     : []
   const displayedItems = [...items, ...discoveryItems]
-  const displayedFunded =
-    lowBalanceKeys && !search.trim()
-      ? displayedItems.filter(item => !lowBalanceKeys.has(item.key))
-      : displayedItems
 
   return (
     <div
@@ -251,7 +179,7 @@ export function TokenSelectorView({
         onSelect={selectNetwork}
         options={[
           { id: 'all', name: 'All networks' },
-          ...networks.map(network => ({
+          ...orderedNetworks.map(network => ({
             id: network.id,
             name: network.label,
             icon: network.iconChain,
@@ -348,8 +276,14 @@ export function TokenSelectorView({
           </p>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto" onScroll={onScroll}>
-        {loading || inspectingKey === discoveryKey ? (
+      <div
+        ref={virtualWindow?.scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        style={virtualWindow ? { overflowAnchor: 'none' } : undefined}
+        onScroll={virtualWindow?.onScroll ?? onScroll}
+        onKeyDown={virtualWindow?.onKeyDown}
+      >
+        {(loading || inspectingKey === discoveryKey) && displayedItems.length === 0 ? (
           <ListSkeleton rows={5} label="Loading tokens" className="px-1" />
         ) : displayedItems.length === 0 ? (
           <p
@@ -361,7 +295,8 @@ export function TokenSelectorView({
         ) : (
           <>
             <TokenSelectionList
-              items={displayedFunded}
+              items={displayedItems}
+              virtualWindow={virtualWindow}
               selectedKey={selectedKey}
               onSelect={key => {
                 if (key !== discoveryItems[0]?.key) {
@@ -376,13 +311,15 @@ export function TokenSelectorView({
                 )
                   return
                 const generation = discoveryGeneration.current
+                setDiscoveryError(null)
                 setAddingKey(discoveryKey)
                 void addInspectedToken(inspectedResult.candidate)
-                  .then(() => {
+                  .then(async () => {
                     if (!mounted.current || discoveryGeneration.current !== generation) return
+                    const message = (await discovery.onAdded(inspectedResult)) || 'Added to wallet'
+                    if (!mounted.current || discoveryGeneration.current !== generation) return
+                    setDiscoveryError(null)
                     setInspected(null)
-                    const message = discovery.onAdded(inspectedResult) || 'Added to wallet'
-                    if (!mounted.current) return
                     setAddedStatus({
                       key: discoveryKey,
                       message
@@ -397,92 +334,10 @@ export function TokenSelectorView({
                   })
               }}
             />
-            {lowBalance.length > 0 && (
-              <LowBalanceRows
-                items={lowBalance}
-                selectedKey={selectedKey}
-                onSelect={onSelect}
-                preferenceKey={lowBalancePreferenceKey}
-              />
-            )}
           </>
         )}
         {afterRows}
       </div>
     </div>
-  )
-}
-
-function LowBalanceRows({
-  items,
-  selectedKey,
-  onSelect,
-  preferenceKey
-}: {
-  readonly items: readonly TokenSelectionItem[]
-  readonly selectedKey?: string
-  readonly onSelect: (key: string) => void
-  readonly preferenceKey: string | null
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const [visibleCount, setVisibleCount] = useState(100)
-  const changedByUser = useRef(false)
-  useEffect(() => {
-    changedByUser.current = false
-    setExpanded(false)
-    if (!preferenceKey) return
-    let active = true
-    void chrome.storage.local
-      .get(preferenceKey)
-      .then(result => {
-        if (active && !changedByUser.current) setExpanded(result[preferenceKey] === true)
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-    }
-  }, [preferenceKey])
-  return (
-    <section className="pt-2">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => {
-          changedByUser.current = true
-          const next = !expanded
-          if (next) setVisibleCount(100)
-          setExpanded(next)
-          if (preferenceKey)
-            void chrome.storage.local.set({ [preferenceKey]: next }).catch(() => {})
-        }}
-        className="wallet-interactive flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-muted hover:text-foreground"
-      >
-        <span className="min-w-0 flex-1">Low balance tokens ({items.length})</span>
-        <Icon
-          icon={expanded ? 'lucide:chevron-up' : 'lucide:chevron-down'}
-          width={16}
-          height={16}
-          aria-hidden="true"
-        />
-      </button>
-      {expanded && (
-        <>
-          <TokenSelectionList
-            items={items.slice(0, visibleCount)}
-            selectedKey={selectedKey}
-            onSelect={onSelect}
-          />
-          {items.length > visibleCount && (
-            <button
-              type="button"
-              onClick={() => setVisibleCount(current => Math.min(items.length, current + 100))}
-              className="wallet-interactive w-full py-3 text-center text-sm text-primary hover:bg-card focus-visible:outline-2 focus-visible:outline-primary"
-            >
-              Show more
-            </button>
-          )}
-        </>
-      )}
-    </section>
   )
 }

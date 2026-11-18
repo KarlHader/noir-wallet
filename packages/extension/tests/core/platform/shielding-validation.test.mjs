@@ -11,7 +11,7 @@ import {
 import {
   getZcashTransparentToShieldMoveAmountError,
   resolveZcashTransparentShieldFundingBalance
-} from '../../../src/popup/pages/transactions/zcash-send-validation.ts'
+} from '../../../src/popup/services/zcash-send-validation.ts'
 
 const describe = it.describe
 
@@ -26,7 +26,7 @@ const shieldBannerSource = readSource(
   '../../../src/popup/components/transaction/ShieldFundsBanner.tsx'
 )
 const shieldHookSource = readSource('../../../src/popup/hooks/useShieldFunds.tsx')
-const sendSource = readSource('../../../src/popup/pages/transactions/Send.tsx')
+const sendSource = readSource('../../../src/popup/components/transaction/ZcashTransfer.tsx')
 const approvalSource = readSource('../../../src/popup/pages/dapp/ApprovalPage.tsx')
 const backgroundSource = readSource('../../../src/background/index.ts')
 const dappHandlerSource = readSource('../../../src/background/dapp-handler.ts')

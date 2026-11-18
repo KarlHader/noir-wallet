@@ -116,6 +116,54 @@ function solanaProtocolPortfolioEnvelope() {
   return { result: { model, userAssets: [], detectedAssets: [], protocolAssets: [protocolAsset] } }
 }
 
+function evmProtocolPortfolioEnvelope() {
+  const protocolAsset = Object.freeze({
+    chainId,
+    namespace: 'erc20',
+    reference: customContract,
+    kind: 'token',
+    metadata: { name: 'RHEA', symbol: 'RHEA', decimals: 18 },
+    source: 'protocol',
+    verification: 'trusted'
+  })
+  const chains = createInitialProductChainRegistry('mainnet')
+  const assets = createAssetRegistry(chains, [
+    ...getBundledInitialProductAssetDefinitions('mainnet'),
+    protocolAsset
+  ])
+  const scope = { keyDomainId: 'key-domain:evm', accountId: 'account:evm' }
+  const model = buildPortfolioReadModel(
+    scope,
+    [
+      {
+        chainAccount: {
+          id: 'chain-account:evm:portfolio',
+          scope: { ...scope, chainId },
+          derivation: { scheme: 'bip44', path: "m/44'/60'/0'/0/0" },
+          identity: { kind: 'account-identifier', value: from },
+          createdAt: 1
+        },
+        status: 'ready',
+        balances: [
+          {
+            assetId: customAssetId,
+            totalRaw: '0',
+            spendableRaw: '0',
+            availableRaw: '0',
+            pendingRaw: '0',
+            mainRaw: '0',
+            privateRaw: '0',
+            updatedAt: 10
+          }
+        ]
+      }
+    ],
+    chains,
+    assets
+  )
+  return { result: { model, userAssets: [], detectedAssets: [], protocolAssets: [protocolAsset] } }
+}
+
 function graph(status = 'prepared', ids = { transactionId, segmentId }) {
   return {
     root: {
@@ -205,6 +253,31 @@ function cancellationReview(originalTransactionId = 'transaction:evm:original') 
   value.graph.root.intent.recipient.address = from
   value.review.summary.fields.to = from
   value.review.summary.fields.valueWei = '0'
+  return value
+}
+
+function speedUpReview(originalTransactionId = 'transaction:evm:original') {
+  const value = review()
+  value.graph.root.relation = { kind: 'replacement-of', transactionId: originalTransactionId }
+  value.graph.root.intent.evm = {
+    schemaVersion: 1,
+    nonce: '0',
+    maxFeePerGasWei: '3',
+    maxPriorityFeePerGasWei: '1',
+    gasLimit: '21000',
+    unsignedTransaction: {
+      type: 'eip1559',
+      chainId: '1',
+      nonce: '0',
+      to: recipient,
+      value: '1',
+      input: '0x',
+      gasLimit: '21000',
+      maxFeePerGas: '3',
+      maxPriorityFeePerGas: '1',
+      accessList: []
+    }
+  }
   return value
 }
 
@@ -436,6 +509,19 @@ test.describe('Popup EVM wallet client', () => {
     await expect(invalid.getPortfolio('read')).rejects.toMatchObject({ code: 'invalid-response' })
   })
 
+  test('atomically validates protocol EVM Tokens with the Portfolio model', async () => {
+    const client = createEvmWalletClient(async () => evmProtocolPortfolioEnvelope())
+    await expect(client.getPortfolio('read')).resolves.toMatchObject({
+      status: 'ready',
+      assets: [{ asset: { id: customAssetId }, metadata: { symbol: 'RHEA' } }]
+    })
+
+    const substituted = evmProtocolPortfolioEnvelope()
+    substituted.result.protocolAssets = []
+    const invalid = createEvmWalletClient(async () => substituted)
+    await expect(invalid.getPortfolio('read')).rejects.toMatchObject({ code: 'invalid-response' })
+  })
+
   test('sends only public transfer intent data and strictly decodes the review', async () => {
     const messages = []
     const client = createEvmWalletClient(async message => {
@@ -565,39 +651,72 @@ test.describe('Popup EVM wallet client', () => {
     expect(JSON.stringify(messages)).not.toContain('privateKey')
   })
 
-  test('binds a cancellation review to the requested chain and original transaction', async () => {
-    const originalTransactionId = 'transaction:evm:original'
-    const messages = []
-    const client = createEvmWalletClient(async message => {
-      messages.push(message)
-      return { result: cancellationReview(originalTransactionId) }
-    })
+  for (const [method, messageType] of [
+    ['prepareCancel', 'PREPARE_EVM_CANCEL'],
+    ['prepareSpeedUp', 'PREPARE_EVM_SPEED_UP']
+  ])
+    test(`binds ${method} review to the requested chain and original transaction`, async () => {
+      const originalTransactionId = 'transaction:evm:original'
+      const messages = []
+      const client = createEvmWalletClient(async message => {
+        messages.push(message)
+        const value =
+          method === 'prepareCancel'
+            ? cancellationReview(originalTransactionId)
+            : speedUpReview(originalTransactionId)
+        value.graph.root.relation = { kind: 'replacement-of', transactionId: originalTransactionId }
+        return { result: value }
+      })
 
-    await expect(
-      client.prepareCancel(chainId, originalTransactionId, 'private')
-    ).resolves.toMatchObject({
-      graph: {
-        root: {
-          kind: 'cancel',
-          relation: { kind: 'replacement-of', transactionId: originalTransactionId }
+      await expect(
+        client[method](chainId, originalTransactionId, 'private', { kind: 'tier', tier: 'fast' })
+      ).resolves.toMatchObject({
+        graph: {
+          root: {
+            kind: method === 'prepareCancel' ? 'cancel' : 'transfer',
+            relation: { kind: 'replacement-of', transactionId: originalTransactionId }
+          }
         }
-      }
-    })
-    expect(messages).toEqual([
-      {
-        type: 'PREPARE_EVM_CANCEL',
-        chainId,
-        originalTransactionId,
-        executionMode: 'private'
-      }
-    ])
+      })
+      expect(messages).toEqual([
+        {
+          type: messageType,
+          chainId,
+          originalTransactionId,
+          executionMode: 'private',
+          feeSelection: { kind: 'tier', tier: 'fast' }
+        }
+      ])
 
-    const substituted = createEvmWalletClient(async () => ({
-      result: cancellationReview('transaction:evm:other')
-    }))
-    await expect(substituted.prepareCancel(chainId, originalTransactionId)).rejects.toMatchObject({
-      code: 'invalid-response'
+      const substituted = createEvmWalletClient(async () => ({
+        result: cancellationReview('transaction:evm:other')
+      }))
+      await expect(substituted[method](chainId, originalTransactionId)).rejects.toMatchObject({
+        code: 'invalid-response'
+      })
     })
+
+  test('accepts a single-origin Shield speed-up and rejects a changed signing recipient', async () => {
+    const value = speedUpReview()
+    value.graph.root.kind = 'shield'
+    value.graph.root.intent.direction = 'self'
+    value.graph.root.intent.shield = {
+      schemaVersion: 1,
+      operation: 'deposit',
+      sourceDomain: 'private',
+      destinationDomain: 'shield'
+    }
+    const client = createEvmWalletClient(async () => ({ result: value }))
+    await expect(
+      client.prepareSpeedUp(chainId, 'transaction:evm:original', 'private')
+    ).resolves.toMatchObject({ graph: { root: { kind: 'shield' } } })
+    await expect(client.getPendingTransfer(transactionId)).resolves.toMatchObject({
+      graph: { root: { kind: 'shield' } }
+    })
+    value.review.summary.fields.to = from
+    await expect(
+      client.prepareSpeedUp(chainId, 'transaction:evm:original', 'private')
+    ).rejects.toMatchObject({ code: 'invalid-response' })
   })
 
   test('binds approval to the transaction ID and exact Background fingerprint', async () => {

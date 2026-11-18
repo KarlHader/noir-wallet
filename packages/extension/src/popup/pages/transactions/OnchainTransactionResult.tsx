@@ -256,7 +256,7 @@ export function OnchainTransactionResult({
           )}
           {total && (
             <TransactionResultDetailRow label={totalLabel}>
-              <AmountDisplay value={total} symbol={asset.metadata.symbol} showDetails={false} />
+              <AmountDisplay value={total} symbol={asset.metadata.symbol} />
             </TransactionResultDetailRow>
           )}
 

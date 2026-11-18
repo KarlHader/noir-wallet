@@ -49,7 +49,7 @@ export function resolveConfidentialEvmAssetSupport(input: {
     (input.asset.kind !== 'token' || !/^0x[0-9a-f]{40}$/i.test(input.asset.reference))
   )
     return 'unknown'
-  if (matches.length === 0) return 'unsupported'
+  if (matches.length === 0) return 'unknown'
   if (
     matches.some(token =>
       token.sources.some(source =>
@@ -58,5 +58,5 @@ export function resolveConfidentialEvmAssetSupport(input: {
     )
   )
     return 'supported'
-  return matches.some(token => token.sources.length === 0) ? 'unknown' : 'unsupported'
+  return 'unknown'
 }

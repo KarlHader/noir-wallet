@@ -150,7 +150,7 @@ export function createIntentsWalletAssetCatalog(
       symbol: token.symbol,
       decimals: token.decimals,
       ...(iconUrl ? { iconUrl } : {}),
-      visibleByDefault: ['USDC', 'USDT'].includes(token.symbol.toUpperCase())
+      visibleByDefault: false
     })
     const existing = entries.get(descriptor.assetId)
     if (existing && (existing.symbol !== entry.symbol || existing.decimals !== entry.decimals)) {

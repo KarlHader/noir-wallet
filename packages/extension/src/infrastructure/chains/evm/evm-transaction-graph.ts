@@ -152,6 +152,7 @@ export function createEvmTransferGraph(input: CreateEvmTransferGraphInput): Tran
               ? '0'
               : input.prepared.transaction.maxPriorityFeePerGas,
           gasLimit: input.prepared.transaction.gasLimit,
+          unsignedTransaction: input.prepared.transaction,
           ...(input.prepared.transaction.input.length >= 10
             ? { methodSelector: input.prepared.transaction.input.slice(0, 10).toLowerCase() }
             : {})

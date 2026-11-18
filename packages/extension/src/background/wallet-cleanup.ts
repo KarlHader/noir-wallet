@@ -136,16 +136,18 @@ export class WalletCleanupCoordinator {
   ) {}
 
   private enqueue<T>(mutation: () => Promise<T>): Promise<T> {
-    const task = this.queue
-      .catch(() => {})
-      .then(async () => {
-        syncScheduler.pauseForTx()
-        try {
-          return await mutation()
-        } finally {
-          syncScheduler.resumeAfterTx()
-        }
-      })
+    return this.enqueueMetadataMutation(async () => {
+      syncScheduler.pauseForTx()
+      try {
+        return await mutation()
+      } finally {
+        syncScheduler.resumeAfterTx()
+      }
+    })
+  }
+
+  private enqueueMetadataMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const task = this.queue.catch(() => {}).then(mutation)
     this.queue = task.then(
       () => undefined,
       () => undefined
@@ -594,10 +596,10 @@ export class WalletCleanupCoordinator {
   }
 
   renameAccount(walletId: string, accountId: string, displayName: string): Promise<void> {
-    return this.enqueue(() =>
+    return this.enqueueMetadataMutation(() =>
       accountContextTransition.runActiveOperation(async () => {
         if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
-        await this.hydrateStores()
+        await rehydrateWalletStore()
         const pointer = await this.storageRepository.getActivePointer()
         if (!pointer) throw new Error('Account not found')
         const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
@@ -650,7 +652,7 @@ export class WalletCleanupCoordinator {
           }
           await rehydrateWalletStore()
         }
-        await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+        void chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
       })
     )
   }
@@ -690,10 +692,10 @@ export class WalletCleanupCoordinator {
   }
 
   renameNativeWallet(walletId: string, displayName: string) {
-    return this.enqueue(() =>
+    return this.enqueueMetadataMutation(() =>
       accountContextTransition.runActiveOperation(async () => {
         if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
-        await this.hydrateStores()
+        await rehydrateWalletStore()
         const pointer = await this.storageRepository.getActivePointer()
         if (!pointer) throw new Error('Wallet not found')
         const snapshot = await this.storageRepository.getSnapshot(pointer.generationId)
@@ -727,7 +729,7 @@ export class WalletCleanupCoordinator {
           }
           await rehydrateWalletStore()
         }
-        await chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
+        void chrome.runtime.sendMessage({ type: 'ACCOUNT_CONTEXT_CHANGED' }).catch(() => {})
         return result
       })
     )

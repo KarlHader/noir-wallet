@@ -9,12 +9,17 @@ import { getIntentsStatusCopy } from '@/lib/transaction-status-copy'
 import type { TransactionLifecycleStatus } from '@/core/transactions/domain'
 import type { Network } from '@/types'
 import type { ActivityItem } from '@/core/activity'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
 import { buildActivityPresentationCatalog } from '@/popup/services/activity-presentation-catalog'
 import { useSettingsStore } from '@/store/settings-store'
+import { useActivityEvmAssets } from '@/popup/hooks/useActivityEvmAssets'
 import {
   ActivityTransactionBody,
   buildActivityTransactionView
 } from '../transaction/ActivityTransactionBody'
+import { buildActivityExecutionAddressModes } from '../transaction/multichain-activity-presentation'
+import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { getIntentsProgressPresentation } from '@/popup/services/transaction-progress'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
 import { TransactionReferenceValue } from '../transaction/TransactionReferenceValue'
@@ -36,6 +41,7 @@ interface SwapStatusDisplayProps {
   actionName?: string
   router?: string
   destinationChain?: string
+  internalDestination?: boolean
   destinationConfirmations?: number | null
   originChain?: string
   originTxHash?: string
@@ -45,12 +51,15 @@ interface SwapStatusDisplayProps {
   /** ZEC fee for the on-chain leg, in ZEC. Omit to hide the fee row. */
   fee?: string
   confidentialFunding?: ConfidentialFundingStatusView
+  confidentialPlan?: ConfidentialFundingPlan | null
   onResumeConfidentialFunding?: () => void
   resumingConfidentialFunding?: boolean
   onClose: () => void
   onViewActivity: () => void
   viewActivityDisabled?: boolean
   activityItem?: ActivityItem | null
+  activeAccount?: AccountNetworksView | null
+  portfolio?: PortfolioReadModel | null
 }
 
 function TxHashLink({ hash, label, url }: { hash: string; label: string; url: string }) {
@@ -72,6 +81,7 @@ export function SwapStatusDisplay({
   actionName,
   router,
   destinationChain: destinationChainHint,
+  internalDestination = false,
   destinationConfirmations,
   originChain: originChainHint,
   originTxHash,
@@ -80,17 +90,21 @@ export function SwapStatusDisplay({
   signedOrder,
   fee,
   confidentialFunding,
+  confidentialPlan,
   onResumeConfidentialFunding,
   resumingConfidentialFunding,
   onClose,
   onViewActivity,
   viewActivityDisabled,
-  activityItem
+  activityItem,
+  activeAccount,
+  portfolio
 }: SwapStatusDisplayProps) {
   const currentStatus = status?.status || 'PENDING_DEPOSIT'
   const destinationTxHash = status?.swapDetails?.destinationChainTxHashes?.[0]?.hash
   const requiredConfirmations = WALLET_CONFIG.SPENDABILITY_CONFIRMATIONS
   const waitsForZcashDestination =
+    !internalDestination &&
     currentStatus === 'SUCCESS' &&
     isZcashDestination({
       destinationAsset: status?.destinationAsset,
@@ -117,6 +131,7 @@ export function SwapStatusDisplay({
     originTxHash: originTxHash ?? status?.swapDetails?.originChainTxHashes?.[0]?.hash,
     originConfirmations,
     destinationTxHash,
+    internalDestination,
     waitsForDestinationConfirmations: waitsForSpendability,
     destinationConfirmations,
     requiredConfirmations,
@@ -134,14 +149,28 @@ export function SwapStatusDisplay({
   const showFee = !!fee
   const showDestinationAmount = showExchangeAmounts && confidentialFunding?.phase !== 'refunded'
   const endpointSettings = useSettingsStore(state => state.chainEndpointSettings)
+  const {
+    userAssets: userEvmAssets,
+    detectedAssets: detectedEvmAssets,
+    catalogTokens
+  } = useActivityEvmAssets()
+  const scopedPortfolio =
+    activityItem &&
+    portfolio?.scope.keyDomainId === activityItem.scope.keyDomainId &&
+    portfolio.scope.accountId === activityItem.scope.accountId
+      ? portfolio
+      : null
   const activityCatalog = useMemo(
     () =>
       buildActivityPresentationCatalog({
         network,
         endpointSettings,
-        userEvmAssets: []
+        userEvmAssets,
+        detectedEvmAssets,
+        catalogTokens,
+        portfolio: scopedPortfolio
       }),
-    [network, endpointSettings]
+    [network, endpointSettings, userEvmAssets, detectedEvmAssets, catalogTokens, scopedPortfolio]
   )
   const activityView = activityItem
     ? buildActivityTransactionView({
@@ -149,6 +178,12 @@ export function SwapStatusDisplay({
         network,
         assetMetadata: activityCatalog.assetMetadata,
         chainMetadata: activityCatalog.chainMetadata,
+        executionAddressModes:
+          activeAccount?.walletId === activityItem.scope.keyDomainId &&
+          activeAccount.accountId === activityItem.scope.accountId
+            ? buildActivityExecutionAddressModes(activeAccount.networks)
+            : undefined,
+        confidentialPlan,
         refunded: confidentialFunding?.phase === 'refunded',
         fallback: {
           source: { value: amountIn, symbol: tokenInSymbol },
@@ -238,7 +273,6 @@ export function SwapStatusDisplay({
               value={amountIn}
               symbol={tokenInSymbol}
               prefix={showExchangeAmounts ? '- ' : undefined}
-              showDetails={false}
               className="text-sm font-medium"
             />
           </div>
@@ -249,7 +283,6 @@ export function SwapStatusDisplay({
                 value={amountOut}
                 symbol={tokenOutSymbol}
                 prefix="+ "
-                showDetails={false}
                 className="text-sm font-medium"
               />
             </div>

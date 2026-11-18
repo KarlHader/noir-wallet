@@ -2,7 +2,8 @@ import { Icon } from '@iconify/react'
 import { useState, type ReactNode } from 'react'
 import { getActivityAssetEffects, type ActivityItem } from '@/core/activity'
 import type { Network } from '@/types'
-import { formatSortAddress } from '@/lib/format'
+import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
+import { detectAddressType, formatSortAddress } from '@/lib/format'
 import { formatBaseUnitAmount } from '@/lib/number-format'
 import { cn } from '@/lib/utils'
 import { getTransactionStatusToneClassName } from '@/lib/transaction-status-presentation'
@@ -23,6 +24,7 @@ import { ChainIcon } from '../common/ChainIcon'
 import { CopyFeedbackIcon, CopyToast, useCopyToClipboard } from '../common/CopyToast'
 import { DetailRow } from '../common/DetailRow'
 import { PrivateAddressWarningDialog } from '../account/PrivateAddressWarningDialog'
+import { ZcashFundingBadge } from '../account/ZcashFundingBadge'
 import { TokenIcon } from '../tokens/TokenIcon'
 import { ActivityInteractionIcon } from './ActivityInteractionIcon'
 import { ActivityRouteTokenIcons } from './ActivityRouteTokenIcons'
@@ -83,6 +85,7 @@ export interface ActivityTransactionView {
   readonly toLabel: string | undefined
   readonly fee: { readonly value: string; readonly symbol: string; readonly label: string } | null
   readonly references: ReturnType<typeof getActivityTransactionReferences>
+  readonly confidentialReference: { readonly label: string; readonly value: string } | null
   readonly replacementReferences: readonly {
     readonly id: string
     readonly hash: string
@@ -104,11 +107,13 @@ export function buildActivityTransactionView(input: {
   readonly chainMetadata: ReadonlyMap<string, ActivityChainMetadata>
   readonly executionAddressModes?: ReadonlyMap<string, 'Public' | 'Confidential'>
   readonly settledDestination?: Parameters<typeof getActivitySwapPresentation>[4]
+  readonly legacyPrivateShieldWithdrawDestination?: boolean
   readonly fallback?: ActivityTransactionFallback
   readonly refunded?: boolean
   readonly replacementHash?: string
   readonly statusLabel?: string
   readonly statusTone?: ActivityStatus['tone']
+  readonly confidentialPlan?: ConfidentialFundingPlan | null
 }): ActivityTransactionView {
   const { item, network, assetMetadata, chainMetadata, fallback } = input
   const rawSwap = getActivitySwapPresentation(
@@ -116,7 +121,8 @@ export function buildActivityTransactionView(input: {
     assetMetadata,
     chainMetadata,
     input.executionAddressModes,
-    input.settledDestination
+    input.settledDestination,
+    input.legacyPrivateShieldWithdrawDestination
   )
   const sourceAmount = item.snapshot?.primaryAmount
   const destinationAmount = item.snapshot?.counterAmount
@@ -195,6 +201,24 @@ export function buildActivityTransactionView(input: {
   const isMove = isShieldMove || (swap !== null && isDirectAccountMove(item, swap))
   const isShieldSend = item.snapshot?.shield?.operation === 'withdraw' && direction === 'outgoing'
   const references = getActivityTransactionReferences(item)
+  const confidentialPlan = input.confidentialPlan
+  const confidentialIntentHash = confidentialPlan?.withdraws
+    .find(row => row.intentHash?.trim())
+    ?.intentHash?.trim()
+  const confidentialReference =
+    confidentialPlan?.operation === 'swap' &&
+    confidentialPlan.sourceDomain === 'shield' &&
+    confidentialPlan.destinationDomain === 'shield' &&
+    confidentialPlan.transactionId === item.id &&
+    confidentialPlan.network === network &&
+    confidentialPlan.keyDomainId === item.scope.keyDomainId &&
+    confidentialPlan.accountId === item.scope.accountId
+      ? confidentialIntentHash
+        ? { label: 'Intent Hash', value: confidentialIntentHash }
+        : confidentialPlan.orderId?.trim()
+          ? { label: 'Order ID', value: confidentialPlan.orderId.trim() }
+          : null
+      : null
   const replacementReferences = item.segments.flatMap(segment => {
     const hash = segment.evidence?.replacementTransactionHash
     const chainId = segment.target.kind === 'onchain' ? segment.target.chainId : null
@@ -228,7 +252,7 @@ export function buildActivityTransactionView(input: {
     fee = {
       value: formatBaseUnitAmount(feeLimit.amountRaw, feeMetadata.decimals),
       symbol: feeMetadata.symbol,
-      label: item.snapshot?.evm ? 'Fee limit' : 'Network fee'
+      label: item.snapshot?.evm ? 'Max fee' : 'Network fee'
     }
   } else if (fallback?.fee) {
     fee = { ...fallback.fee, label: fallback.fee.label ?? 'Network fee' }
@@ -270,6 +294,7 @@ export function buildActivityTransactionView(input: {
       item.snapshot?.shield?.destinationDomain === 'shield' ? 'NEAR Confidential' : undefined,
     fee,
     references,
+    confidentialReference,
     replacementReferences,
     progressSteps: getActivityProgressSteps(item, chainId =>
       chainId === 'near:mainnet'
@@ -298,7 +323,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
   if (swap) {
     return (
       <div className="flex flex-col items-center py-7 text-center" data-activity-swap-detail>
-        <ActivityRouteTokenIcons route={swap} size="detail" />
+        <ActivityRouteTokenIcons item={item} route={swap} size="detail" />
         {swap.isExternalDeposit ? (
           <div className="mt-4 max-w-full">
             <p className="text-sm text-muted">
@@ -312,11 +337,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
             >
               {view.isRefunded ? (
                 swap.source ? (
-                  <AmountDisplay
-                    value={swap.source.exact}
-                    symbol={swap.source.symbol}
-                    showDetails={false}
-                  />
+                  <AmountDisplay value={swap.source.exact} symbol={swap.source.symbol} />
                 ) : (
                   '—'
                 )
@@ -325,7 +346,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   value={swap.destination.exact}
                   prefix="+"
                   symbol={swap.destination.symbol}
-                  showDetails={false}
                 />
               ) : (
                 '—'
@@ -336,17 +356,12 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
           <>
             <div className="mt-4 max-w-full break-all font-sans text-3xl font-bold tabular-nums">
               {swap.source ? (
-                <AmountDisplay
-                  value={swap.source.exact}
-                  prefix="−"
-                  symbol={swap.source.symbol}
-                  showDetails={false}
-                />
+                <AmountDisplay value={swap.source.exact} prefix="−" symbol={swap.source.symbol} />
               ) : (
                 '—'
               )}
             </div>
-            {swap.destination && !view.isRefunded && (
+            {swap.destination && !swap.hideDestinationCredit && !view.isRefunded && (
               <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
                 {view.isShieldSend
                   ? 'Recipient receives'
@@ -357,7 +372,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                   value={swap.destination.exact}
                   prefix={view.isShieldSend ? '' : '+'}
                   symbol={swap.destination.symbol}
-                  showDetails={false}
                 />
               </div>
             )}
@@ -410,7 +424,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                 value={change.value}
                 prefix={change.direction === 'incoming' ? '+' : '−'}
                 symbol={change.symbol}
-                showDetails={false}
               />
             </div>
           ))}
@@ -421,7 +434,6 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
             value={view.amount.value}
             prefix={view.amount.prefix}
             symbol={view.amount.symbol}
-            showDetails={false}
           />
         </div>
       ) : view.showChanges || view.interaction ? null : (
@@ -526,6 +538,18 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
   const [privateCopyAddress, setPrivateCopyAddress] = useState<string | null>(null)
   const sender = view.senderAddress
   const recipient = view.recipient
+  const zcashReceiveSource =
+    view.item.source === 'zcash-v1' && view.item.kind === 'receive'
+      ? recipient
+        ? detectAddressType(recipient)
+        : view.item.assetDomains?.length === 1
+          ? view.item.assetDomains[0] === 'shield'
+            ? 'shielded'
+            : view.item.assetDomains[0] === 'public'
+              ? 'transparent'
+              : null
+          : null
+      : null
   return (
     <>
       {view.fromLabel ? (
@@ -557,6 +581,7 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
             {view.approvalTokenSymbol && (
               <span className="shrink-0 text-sm">{view.approvalTokenSymbol}</span>
             )}
+            {zcashReceiveSource && <ZcashFundingBadge source={zcashReceiveSource} />}
             <AddressValue
               address={recipient}
               url=""
@@ -569,6 +594,10 @@ export function ActivityTransactionParties({ view }: { readonly view: ActivityTr
               copied={isCopied('recipient')}
             />
           </span>
+        </DetailRow>
+      ) : zcashReceiveSource ? (
+        <DetailRow label="To">
+          <ZcashFundingBadge source={zcashReceiveSource} />
         </DetailRow>
       ) : null}
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
@@ -596,7 +625,6 @@ export function ActivityTransactionFee({ view }: { readonly view: ActivityTransa
         symbol={view.fee.symbol}
         profile="fee"
         className="text-sm"
-        showDetails={false}
       />
     </DetailRow>
   ) : null
@@ -607,33 +635,75 @@ export function ActivityTransactionReferences({
 }: {
   readonly view: ActivityTransactionView
 }) {
-  if (view.isCrossChain) return null
+  const { copyToClipboard, showToast, copyFailed, isCopied } = useCopyToClipboard()
+  const confidentialReference = view.confidentialReference
+  if (view.isCrossChain && !confidentialReference) return null
   return (
     <>
-      {view.references.map(reference => (
-        <DetailRow key={reference.id} label={reference.label}>
-          <TransactionReferenceValue
-            hash={reference.hash}
-            url={
-              reference.chainId
-                ? formatChainTransactionExplorerUrl(reference.chainId, reference.hash, view.network)
-                : ''
-            }
-          />
+      {!view.isCrossChain &&
+        view.references.map(reference => (
+          <DetailRow key={reference.id} label={reference.label}>
+            <TransactionReferenceValue
+              hash={reference.hash}
+              url={
+                reference.chainId
+                  ? formatChainTransactionExplorerUrl(
+                      reference.chainId,
+                      reference.hash,
+                      view.network
+                    )
+                  : ''
+              }
+            />
+          </DetailRow>
+        ))}
+      {!view.isCrossChain &&
+        view.replacementReferences.map(reference => (
+          <DetailRow key={`${reference.id}:replacement`} label="Replacement Hash">
+            <TransactionReferenceValue
+              hash={reference.hash}
+              url={
+                reference.chainId
+                  ? formatChainTransactionExplorerUrl(
+                      reference.chainId,
+                      reference.hash,
+                      view.network
+                    )
+                  : ''
+              }
+            />
+          </DetailRow>
+        ))}
+      {confidentialReference && (
+        <DetailRow label={confidentialReference.label}>
+          <span className="flex min-w-0 max-w-[220px] items-center gap-1.5">
+            <span
+              className="min-w-0 truncate font-mono text-sm"
+              title={confidentialReference.value}
+            >
+              {confidentialReference.value}
+            </span>
+            <button
+              type="button"
+              aria-label={`Copy ${confidentialReference.label}`}
+              title={`Copy ${confidentialReference.label}`}
+              className="shrink-0 text-muted hover:text-foreground"
+              onClick={() =>
+                void copyToClipboard(confidentialReference.value, 'confidential-reference', {
+                  toastOnSuccess: true
+                })
+              }
+            >
+              <CopyFeedbackIcon
+                copied={isCopied('confidential-reference')}
+                width={14}
+                height={14}
+              />
+            </button>
+          </span>
         </DetailRow>
-      ))}
-      {view.replacementReferences.map(reference => (
-        <DetailRow key={`${reference.id}:replacement`} label="Replacement Hash">
-          <TransactionReferenceValue
-            hash={reference.hash}
-            url={
-              reference.chainId
-                ? formatChainTransactionExplorerUrl(reference.chainId, reference.hash, view.network)
-                : ''
-            }
-          />
-        </DetailRow>
-      ))}
+      )}
+      <CopyToast show={showToast} error={copyFailed} message="Reference copied" />
     </>
   )
 }

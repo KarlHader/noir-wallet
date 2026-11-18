@@ -94,6 +94,7 @@ function SendSourceSection({
   domain,
   availableDomains,
   onDomainChange,
+  sourceLabel = 'Send from',
   disabled
 }: {
   readonly amountInput: ReactNode
@@ -105,12 +106,13 @@ function SendSourceSection({
   readonly domain: BalanceDomain
   readonly availableDomains: readonly BalanceDomain[]
   readonly onDomainChange: (domain: BalanceDomain) => void
+  readonly sourceLabel?: string
   readonly disabled?: boolean
 }) {
   return (
     <>
       <div className="order-1 flex min-w-0 items-center justify-between gap-3">
-        <SendFieldLabel>Send from</SendFieldLabel>
+        <SendFieldLabel>{sourceLabel}</SendFieldLabel>
         {sourceAction ?? (
           <BalanceDomainTabs
             value={domain}

@@ -65,9 +65,11 @@ function storage(overrides = {}) {
 
 function cache() {
   const values = new Map()
+  const get = async (generationId, chainAccountId) =>
+    values.get(JSON.stringify([generationId, chainAccountId])) ?? null
   return {
-    get: async (generationId, chainAccountId) =>
-      values.get(JSON.stringify([generationId, chainAccountId])) ?? null,
+    get,
+    getForActiveChainAccount: (generationId, chainAccount) => get(generationId, chainAccount.id),
     list: async () => [],
     put: async record => {
       values.set(JSON.stringify([record.generationId, record.source.chainAccount.id]), record)
@@ -183,9 +185,10 @@ test.describe('EVM active Portfolio coordinator', () => {
   test('deduplicates concurrent refreshes and discards a result after generation switch', async () => {
     let reads = 0
     let activePointer = pointer
+    const cacheRepository = cache()
     const coordinator = new EvmPortfolioCoordinator({
       storageRepository: storage({ getActivePointer: async () => activePointer }),
-      cacheRepository: cache(),
+      cacheRepository,
       chainId: 'eip155:1',
       chains,
       assets,
@@ -203,6 +206,26 @@ test.describe('EVM active Portfolio coordinator', () => {
     expect(first).toBeNull()
     expect(second).toBeNull()
     expect(reads).toBe(1)
+    await expect(cacheRepository.get(pointer.generationId, chainAccount.id)).resolves.toBeNull()
+  })
+
+  test('does not persist an in-flight source after its runtime is replaced', async () => {
+    const cacheRepository = cache()
+    let canCommit = true
+    const coordinator = new EvmPortfolioCoordinator({
+      storageRepository: storage(),
+      cacheRepository,
+      chainId: 'eip155:1',
+      chains,
+      assets,
+      rpc: rpc(() => {
+        canCommit = false
+      }),
+      canCommit: () => canCommit,
+      now: () => 2_000
+    })
+    await expect(coordinator.refreshActive()).resolves.toBeNull()
+    await expect(cacheRepository.get(pointer.generationId, chainAccount.id)).resolves.toBeNull()
   })
 
   test('fails closed on a pointer mismatch and returns null without an active EVM account', async () => {

@@ -1,33 +1,59 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { RheaSwapToken } from '@/core/services/rhea-swap'
-import type { SwapToken } from '@/core/services/intents-api'
-import { DEFAULT_NETWORK } from '@/lib/runtime-network'
-import { formatBaseUnitDecimalAmount } from '@/lib/number-format'
-import { getEvmNetworkConfigs } from '@/config/networks'
-import { evmWalletClient } from '@/popup/services/evm-wallet-client'
-import type { PortfolioReadModel } from '@/core/portfolio'
-import { TokenSelector, type TokenSelectorProps } from '../tokens/TokenSelector'
-import { findVerifiedRheaSwapToken } from '@/popup/services/token-address-discovery'
-import { ListSkeleton } from '../ui/skeleton'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
-import { isPortfolioModelForScope, readCachedPortfolio } from '@/popup/services/portfolio-cache'
+import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
+import { isZecToken, type SwapToken } from '@/core/services/intents-api'
+import type { Network } from '@/types'
+import { useWalletStore } from '@/store/wallet-store'
+import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
+import {
+  TokenSelector,
+  type TokenSelectorExtraItem,
+  type TokenSelectorProps
+} from '../tokens/TokenSelector'
+import {
+  findVerifiedRheaSwapToken,
+  preferWalletEvmQuoteToken,
+  toWalletEvmQuoteToken,
+  toWalletEvmSwapToken
+} from '@/popup/services/token-address-discovery'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import type { AdditionalReceiveTargetsView } from '@/popup/services/receive-targets-client'
 import { receiveTargetsClient } from '@/popup/services/receive-targets-client'
 import { buildWalletSwapSourceBalances } from '@/popup/services/swap-page-model'
-import type { UserEvmAssetRecord } from '@/core/chains/user-assets'
-import { userEvmAssetsClient } from '@/popup/services/user-evm-assets-client'
+import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
+import { filterManuallyHiddenSwapTokens } from '@/popup/services/swap-token-visibility'
+import { useManagedTokenCatalog } from '@/popup/hooks/useManagedTokenCatalog'
+import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
+import { findAssetPrice } from '@/core/prices'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
+import { safeBig } from '@/lib/big'
 import {
-  loadCuratedSwapTokens,
-  readCachedCuratedSwapTokens,
-  selectDefaultSwapTokens,
-  type CuratedSwapTokenRow
-} from '@/popup/services/swap-curated-catalog'
+  getSwapCatalogDisplaySeeds,
+  mergeTokenCatalogs,
+  readCachedTokenCatalogByChain
+} from '@/popup/services/swap-catalog-loading'
+
+interface SelectorFilter {
+  readonly search: string
+  readonly network: string
+}
+
+function swapTokenKey(token: SwapToken): string {
+  const route = token as RheaSwapToken
+  const address = /^[1-9]\d*$/.test(route.rheaChainId)
+    ? route.rheaAddress.toLowerCase()
+    : route.rheaAddress
+  return `${route.rheaChainId}:${address}:${route.assetId}:${route.decimals}:${route.isNative}`
+}
+
+function swapTokenAssetRoute(token: RheaSwapToken): string {
+  return `${token.rheaChainId}:${token.isNative ? 'native' : token.rheaAddress.toLowerCase()}:${token.decimals}`
+}
 
 interface SwapBalanceScope {
   readonly scopeKey: string
   readonly walletId: string
   readonly accountId: string
-  readonly initialPortfolio: PortfolioReadModel | null
   readonly receiveTargets: AdditionalReceiveTargetsView | null
   readonly zcashAvailable: string
   readonly evmExecutionMode: 'main' | 'private'
@@ -39,11 +65,21 @@ interface SwapTokenSelectorProps extends Omit<
 > {
   readonly initialTokens: readonly RheaSwapToken[]
   readonly loadTokens: (
+    filter: SelectorFilter,
     onTokens: (tokens: readonly RheaSwapToken[]) => void,
     isCancelled: () => boolean
   ) => Promise<readonly RheaSwapToken[]>
-  readonly onSelect: (token: RheaSwapToken, portfolio: PortfolioReadModel | null) => void
+  readonly onSelect: (token: RheaSwapToken) => void
   readonly balanceScope?: SwapBalanceScope
+  readonly resolveItems?: (tokens: readonly RheaSwapToken[]) => Readonly<{
+    tokens: readonly RheaSwapToken[]
+    extraItems: readonly TokenSelectorExtraItem[]
+  }>
+  readonly filterLocalTokens?: (tokens: readonly RheaSwapToken[]) => readonly RheaSwapToken[]
+  readonly scopeNetwork?: Network
+  readonly openingWalletPointer?: Readonly<{ walletId: string | null; accountId: string | null }>
+  readonly onScopeInvalidated?: () => void
+  readonly catalogDirection?: 'from' | 'cross-chain-to'
 }
 
 export function SwapTokenSelector({
@@ -51,93 +87,223 @@ export function SwapTokenSelector({
   loadTokens,
   onSelect,
   balanceScope,
+  resolveItems,
+  filterLocalTokens,
+  scopeNetwork,
+  openingWalletPointer,
+  onScopeInvalidated,
+  catalogDirection,
   ...props
 }: SwapTokenSelectorProps) {
-  const [tokens, setTokens] = useState(initialTokens)
-  const [loading, setLoading] = useState(true)
-  const chainIdsKey = [...new Set(tokens.map(token => token.tokenListChainId))]
-    .sort((a, b) => a - b)
-    .join(',')
+  const scopeInvalidated = useRef(false)
+  const openingScope = useRef(
+    (() => {
+      const state = useWalletStore.getState()
+      return {
+        network: scopeNetwork ?? state.currentNetwork,
+        walletId: openingWalletPointer ? openingWalletPointer.walletId : state.currentWalletId,
+        accountId: openingWalletPointer ? openingWalletPointer.accountId : state.currentAccountId,
+        scopedWalletId: props.accountScope?.walletId ?? balanceScope?.walletId ?? null,
+        scopedAccountId: props.accountScope?.accountId ?? balanceScope?.accountId ?? null
+      }
+    })()
+  )
+  const [catalogTokens, setTokens] = useState(initialTokens)
+  const [filter, setFilter] = useState<SelectorFilter>({ search: '', network: 'all' })
+  const [loadingNetwork, setLoadingNetwork] = useState<string | null>(null)
+  const [catalogErrorKey, setCatalogErrorKey] = useState<string | null>(null)
+  const [retryRequest, setRetryRequest] = useState(0)
+  const handleFilterChange = useCallback((next: SelectorFilter) => {
+    if (scopeInvalidated.current) return
+    setFilter(current =>
+      current.search === next.search && current.network === next.network ? current : next
+    )
+  }, [])
+  const loadedNetworks = useRef(new Set<string>())
+  const loadTokensRef = useRef(loadTokens)
+  loadTokensRef.current = loadTokens
+  useEffect(() => {
+    const opening = openingScope.current
+    const invalidate = () => {
+      if (scopeInvalidated.current) return
+      scopeInvalidated.current = true
+      onScopeInvalidated?.()
+    }
+    const check = () => {
+      const state = useWalletStore.getState()
+      if (state.currentNetwork !== opening.network) return invalidate()
+      if (opening.walletId || opening.accountId) {
+        if (
+          state.currentWalletId !== opening.walletId ||
+          state.currentAccountId !== opening.accountId
+        )
+          invalidate()
+        return
+      }
+      if (
+        (state.currentWalletId || state.currentAccountId) &&
+        (state.currentWalletId !== opening.scopedWalletId ||
+          state.currentAccountId !== opening.scopedAccountId)
+      )
+        invalidate()
+    }
+    const onAccountContextChanged = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      if (getOwnExtensionSenderContext(sender, chrome.runtime.id) !== 'service-worker') return
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown }).type === 'ACCOUNT_CONTEXT_CHANGED'
+      )
+        invalidate()
+    }
+    const unsubscribe = useWalletStore.subscribe(check)
+    chrome.runtime.onMessage.addListener(onAccountContextChanged)
+    check()
+    return () => {
+      unsubscribe()
+      chrome.runtime.onMessage.removeListener(onAccountContextChanged)
+    }
+  }, [onScopeInvalidated])
+  const configuredChainIds = useMemo(
+    () =>
+      props.availableNetworks?.flatMap(network => {
+        if (network.disabledReason) return []
+        const chain = RHEA_SWAP_CHAIN_CATALOG.find(candidate => candidate.blockchain === network.id)
+        return chain ? [chain.tokenListChainId] : []
+      }),
+    [props.availableNetworks]
+  )
+  const chainIdsKey = useMemo(
+    () =>
+      [...new Set(configuredChainIds ?? catalogTokens.map(token => token.tokenListChainId))]
+        .sort((a, b) => a - b)
+        .join(','),
+    [catalogTokens, configuredChainIds]
+  )
   const chainIds = useMemo(
     () => (chainIdsKey ? chainIdsKey.split(',').map(Number) : []),
     [chainIdsKey]
   )
-  const [curatedRows, setCuratedRows] = useState<readonly CuratedSwapTokenRow[]>(() =>
-    readCachedCuratedSwapTokens(chainIds)
-  )
-  const [curatedLoading, setCuratedLoading] = useState(true)
-  const [customAssets, setCustomAssets] = useState<readonly UserEvmAssetRecord[]>([])
   useEffect(() => {
-    let cancelled = false
-    setCuratedRows(readCachedCuratedSwapTokens(chainIds))
-    setCuratedLoading(true)
-    void loadCuratedSwapTokens(chainIds, rows => {
-      if (!cancelled) setCuratedRows(rows)
-    })
-      .then(rows => {
-        if (!cancelled) setCuratedRows(rows)
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setCuratedLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [chainIds])
-  useEffect(() => {
-    let cancelled = false
-    setCustomAssets([])
-    void userEvmAssetsClient
-      .list()
-      .then(assets => {
-        if (!cancelled) setCustomAssets(assets)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [balanceScope?.scopeKey])
-  const [portfolioSnapshot, setPortfolioSnapshot] = useState(() => ({
-    scope: balanceScope?.scopeKey,
-    value: balanceScope?.initialPortfolio ?? null
-  }))
+    if (!catalogDirection || chainIds.length === 0) return
+    const cached = readCachedTokenCatalogByChain(catalogDirection, chainIds)
+    if (cached.length > 0)
+      startTransition(() => setTokens(current => mergeTokenCatalogs(current, cached)))
+  }, [catalogDirection, chainIds])
+  const activeNetwork = useWalletStore(state => state.currentNetwork)
+  const {
+    rows: managedRows,
+    hiddenAssetIds,
+    ready: managedReady
+  } = useManagedTokenCatalog({
+    network: scopeNetwork ?? activeNetwork,
+    walletId: props.accountScope?.walletId ?? balanceScope?.walletId ?? null,
+    accountId: props.accountScope?.accountId ?? balanceScope?.accountId ?? null
+  })
   const [receiveTargetsSnapshot, setReceiveTargetsSnapshot] = useState(() => ({
     scope: balanceScope?.scopeKey,
     value: balanceScope?.receiveTargets ?? null
   }))
-  const portfolio =
-    portfolioSnapshot.scope === balanceScope?.scopeKey
-      ? portfolioSnapshot.value
-      : (balanceScope?.initialPortfolio ?? null)
   const receiveTargets =
     receiveTargetsSnapshot.scope === balanceScope?.scopeKey
-      ? receiveTargetsSnapshot.value
+      ? (receiveTargetsSnapshot.value ?? balanceScope?.receiveTargets ?? null)
       : (balanceScope?.receiveTargets ?? null)
   const walletId = balanceScope?.walletId ?? null
   const accountId = balanceScope?.accountId ?? null
-  const scopedPortfolio = isPortfolioModelForScope(portfolio, walletId, accountId)
-    ? portfolio
-    : null
+  const sharedPortfolio = usePortfolioSnapshot(walletId, accountId, {
+    enabled: balanceScope !== undefined
+  })
+  const scopedPortfolio = sharedPortfolio.model
   const scopedReceiveTargets =
     receiveTargets?.keyDomainId === walletId && receiveTargets.accountId === accountId
       ? receiveTargets
       : null
-  const portfolioReadSequence = useRef(0)
-  const readLatestPortfolio = useCallback(async () => {
-    if (!walletId || !accountId) return
-    const sequence = ++portfolioReadSequence.current
-    const latest = await readCachedPortfolio({ walletId, accountId })
-    if (sequence === portfolioReadSequence.current && latest)
-      setPortfolioSnapshot({ scope: balanceScope?.scopeKey, value: latest })
-  }, [walletId, accountId, balanceScope?.scopeKey])
-  useEffect(() => {
-    void readLatestPortfolio().catch(() => {})
-    return () => {
-      portfolioReadSequence.current += 1
+  const scopedAccountPortfolio =
+    scopedPortfolio?.scope.keyDomainId === walletId && scopedPortfolio.scope.accountId === accountId
+      ? scopedPortfolio
+      : null
+  const { tokens, defaultRoutes } = useMemo(() => {
+    const configured = new Set(chainIds)
+    const defaultRoutes = new Set<string>()
+    const catalog = catalogTokens.filter(token => !token.isDisplaySeed)
+    const byRoute = new Map<string, RheaSwapToken>()
+    for (const token of catalog) {
+      const route = swapTokenAssetRoute(token)
+      if (!byRoute.has(route)) byRoute.set(route, token)
     }
-  }, [readLatestPortfolio])
-  usePortfolioUpdates(walletId, accountId, readLatestPortfolio)
+    const held: RheaSwapToken[] = []
+    if (scopedAccountPortfolio && balanceScope) {
+      for (const asset of scopedAccountPortfolio.assets) {
+        if (!asset.asset.chainId.startsWith('eip155:')) continue
+        try {
+          if (
+            BigInt(resolveAccountAvailableRaw(asset.balance, balanceScope.evmExecutionMode)) <= 0n
+          )
+            continue
+        } catch {
+          continue
+        }
+        const walletToken = toWalletEvmQuoteToken(asset)
+        if (!walletToken || !configured.has(walletToken.tokenListChainId)) continue
+        const route = swapTokenAssetRoute(walletToken)
+        defaultRoutes.add(route)
+        const preferred = preferWalletEvmQuoteToken(asset, byRoute.get(route))
+        if (!preferred || byRoute.get(route) === preferred) continue
+        held.push(preferred)
+        byRoute.set(route, preferred)
+      }
+    }
+    const managed = managedRows.flatMap(asset => {
+      const token = toWalletEvmSwapToken({
+        assetId: asset.assetId,
+        chainId: asset.chainId,
+        contractAddress: asset.reference,
+        metadata: asset.metadata
+      })
+      if (!token || !configured.has(token.tokenListChainId)) return []
+      const route = swapTokenAssetRoute(token)
+      defaultRoutes.add(route)
+      if (byRoute.has(route)) return []
+      byRoute.set(route, token)
+      return [token]
+    })
+    const seeds = [
+      ...catalogTokens.filter(token => token.isDisplaySeed),
+      ...getSwapCatalogDisplaySeeds(chainIds)
+    ].flatMap(seed => {
+      const route = swapTokenAssetRoute(seed)
+      if (byRoute.has(route)) return []
+      byRoute.set(route, seed)
+      return [seed]
+    })
+    return { tokens: mergeTokenCatalogs(catalog, held, managed, seeds), defaultRoutes }
+  }, [catalogTokens, chainIds, scopedAccountPortfolio, balanceScope, managedRows])
+  const visibleTokens = useMemo(
+    () =>
+      !managedReady
+        ? tokens.filter(token => token.isNative)
+        : filterManuallyHiddenSwapTokens(tokens, hiddenAssetIds),
+    [tokens, hiddenAssetIds, managedReady]
+  )
+  const localTokens = useMemo(
+    () => filterLocalTokens?.(visibleTokens) ?? visibleTokens,
+    [filterLocalTokens, visibleTokens]
+  )
+  const resolvedItems = useMemo(
+    () =>
+      resolveItems?.(localTokens) ?? { tokens: localTokens, extraItems: props.extraItems ?? [] },
+    [resolveItems, localTokens, props.extraItems]
+  )
+  const guardedExtraItems = useMemo(
+    () =>
+      resolvedItems.extraItems.map(item => ({
+        ...item,
+        onSelect: () => {
+          if (!scopeInvalidated.current) item.onSelect()
+        }
+      })),
+    [resolvedItems.extraItems]
+  )
   useEffect(() => {
     if (!walletId || !accountId || scopedReceiveTargets) return
     let cancelled = false
@@ -151,178 +317,105 @@ export function SwapTokenSelector({
       cancelled = true
     }
   }, [walletId, accountId, balanceScope?.scopeKey, scopedReceiveTargets])
+  const zcashAvailable = balanceScope?.zcashAvailable
+  const evmExecutionMode = balanceScope?.evmExecutionMode
   const balances = useMemo(
     () =>
-      balanceScope
+      zcashAvailable !== undefined && evmExecutionMode
         ? buildWalletSwapSourceBalances({
-            tokens,
+            tokens: resolvedItems.tokens,
             portfolio: scopedPortfolio,
             receiveTargets: scopedReceiveTargets,
-            zcashAvailable: balanceScope.zcashAvailable,
-            evmExecutionMode: balanceScope.evmExecutionMode
+            zcashAvailable,
+            evmExecutionMode
           })
         : undefined,
-    [tokens, scopedPortfolio, scopedReceiveTargets, balanceScope]
+    [resolvedItems.tokens, scopedPortfolio, scopedReceiveTargets, zcashAvailable, evmExecutionMode]
   )
-  const [catalogBalanceState, setCatalogBalanceState] = useState(
-    () => new Map<string, { status: 'loading' | 'error' | 'ready'; amount?: string }>()
-  )
-  const [balanceRetryEpoch, setBalanceRetryEpoch] = useState(0)
-  const [visibleCandidates, setVisibleCandidates] = useState<readonly RheaSwapToken[]>([])
-  const requestedCatalogBalances = useRef(new Set<string>())
-  const balanceScopeKey = `${balanceScope?.scopeKey ?? ''}:${balanceScope?.evmExecutionMode ?? ''}`
-  const activeBalanceScopeKey = useRef(balanceScopeKey)
-  const balanceStateScopeKey = useRef(balanceScopeKey)
-  const scopedCatalogBalanceState =
-    balanceStateScopeKey.current === balanceScopeKey ? catalogBalanceState : new Map()
-  useEffect(() => {
-    activeBalanceScopeKey.current = balanceScopeKey
-    return () => {
-      activeBalanceScopeKey.current = ''
+  const network = scopeNetwork ?? activeNetwork
+  const prices = useCachedAssetPrices(network, !!balanceScope)
+  const pricesByTokenKey = useMemo(() => {
+    if (!prices || !balances) return undefined
+    const displayPrices = new Map<string, string>()
+    const zecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, network)
+    for (const token of resolvedItems.tokens) {
+      if (!balances.has(token.assetId)) continue
+      const evmChainId = /^[1-9]\d*$/.test(token.rheaChainId) ? `eip155:${token.rheaChainId}` : null
+      const assetId = isZecToken(token)
+        ? zecAssetId
+        : evmChainId
+          ? scopedAccountPortfolio?.assets.find(
+              ({ asset, metadata }) =>
+                asset.chainId === evmChainId &&
+                metadata.decimals === token.decimals &&
+                (token.isNative
+                  ? asset.kind === 'native'
+                  : asset.namespace === 'erc20' &&
+                    asset.reference === token.contractAddress?.toLowerCase())
+            )?.asset.id
+          : resolveRheaSwapCanonicalAssetId(token.assetId, network)
+      const price = assetId ? findAssetPrice(prices, assetId)?.priceUsd : undefined
+      if (price && safeBig(price).gt(0)) displayPrices.set(swapTokenKey(token), price)
     }
-  }, [balanceScopeKey])
-  useEffect(() => {
-    balanceStateScopeKey.current = balanceScopeKey
-    requestedCatalogBalances.current.clear()
-    setCatalogBalanceState(new Map())
-    setVisibleCandidates([])
-  }, [balanceScopeKey])
-  const onVisibleTokensChange = useCallback(
-    (
-      visible: readonly SwapToken[],
-      filter: { readonly search: string; readonly network: string }
-    ) => {
-      const next =
-        filter.search.trim() || filter.network !== 'all'
-          ? visible.slice(0, 8).flatMap(item => {
-              const token = tokens.find(
-                candidate =>
-                  candidate.assetId === item.assetId && candidate.blockchain === item.blockchain
-              )
-              return token ? [token] : []
-            })
-          : []
-      setVisibleCandidates(previous =>
-        previous.length === next.length &&
-        previous.every((token, index) => token.assetId === next[index].assetId)
-          ? previous
-          : next
-      )
-    },
-    [tokens]
-  )
-  const evmChainIds = useMemo(
-    () => new Set(getEvmNetworkConfigs(DEFAULT_NETWORK).map(config => config.chainId)),
-    []
-  )
-  useEffect(() => {
-    if (!balanceScope || balanceStateScopeKey.current !== balanceScopeKey) return
-    const scopeKey = balanceScopeKey
-    const candidates = visibleCandidates.filter(token => {
-      const chainId = `eip155:${token.tokenListChainId}` as const
-      return (
-        evmChainIds.has(chainId) &&
-        /^0x[0-9a-fA-F]{40}$/.test(token.contractAddress ?? '') &&
-        !balances?.has(token.assetId) &&
-        !requestedCatalogBalances.current.has(token.assetId)
-      )
-    })
-    if (candidates.length === 0) return
-    for (const token of candidates) {
-      if (requestedCatalogBalances.current.size >= 128) {
-        requestedCatalogBalances.current.delete(
-          requestedCatalogBalances.current.values().next().value!
-        )
-      }
-      requestedCatalogBalances.current.add(token.assetId)
-    }
-    setCatalogBalanceState(previous => {
-      const next = new Map(previous)
-      for (const token of candidates) next.set(token.assetId, { status: 'loading' })
-      return next
-    })
-    void (async () => {
-      for (let index = 0; index < candidates.length; index += 4) {
-        await Promise.all(
-          candidates.slice(index, index + 4).map(async token => {
-            try {
-              const raw = await evmWalletClient.getTokenBalance({
-                chainId: `eip155:${token.tokenListChainId}`,
-                token: token.contractAddress!,
-                walletId: balanceScope.walletId,
-                accountId: balanceScope.accountId,
-                executionMode: balanceScope.evmExecutionMode
-              })
-              if (activeBalanceScopeKey.current !== scopeKey) return
-              setCatalogBalanceState(previous =>
-                new Map(previous).set(token.assetId, {
-                  status: 'ready',
-                  amount: formatBaseUnitDecimalAmount(raw, token.decimals)
-                })
-              )
-            } catch {
-              if (activeBalanceScopeKey.current !== scopeKey) return
-              setCatalogBalanceState(previous =>
-                new Map(previous).set(token.assetId, { status: 'error' })
-              )
-            }
-          })
-        )
-      }
-    })()
-  }, [balanceScope, balanceScopeKey, balances, evmChainIds, visibleCandidates, balanceRetryEpoch])
-  const mergedBalances = useMemo(() => {
-    if (!balances) return undefined
-    const merged = new Map(balances)
-    for (const [assetId, result] of scopedCatalogBalanceState) {
-      if (result.status === 'ready' && result.amount !== undefined && !merged.has(assetId)) {
-        merged.set(assetId, result.amount)
-      }
-    }
-    return merged
-  }, [balances, scopedCatalogBalanceState])
-  const balanceLoadStates = useMemo(
-    () =>
-      new Map(
-        [...scopedCatalogBalanceState].flatMap(([assetId, result]) =>
-          result.status === 'ready' ? [] : [[assetId, result.status] as const]
-        )
-      ),
-    [scopedCatalogBalanceState]
-  )
-  const retryBalances = useCallback(() => {
-    const failed = [...scopedCatalogBalanceState].filter(([, result]) => result.status === 'error')
-    if (failed.length === 0) return
-    for (const [assetId] of failed) requestedCatalogBalances.current.delete(assetId)
-    setCatalogBalanceState(previous => {
-      const next = new Map(previous)
-      for (const [assetId] of failed) next.delete(assetId)
-      return next
-    })
-    setBalanceRetryEpoch(epoch => epoch + 1)
-  }, [scopedCatalogBalanceState])
+    return displayPrices
+  }, [balances, network, prices, resolvedItems.tokens, scopedAccountPortfolio])
   const defaultTokens = useMemo(
-    () => selectDefaultSwapTokens(tokens, curatedRows, { balances: mergedBalances, customAssets }),
-    [tokens, curatedRows, mergedBalances, customAssets]
+    () =>
+      resolvedItems.tokens.filter(
+        token =>
+          token.isNative ||
+          defaultRoutes.has(swapTokenAssetRoute(token)) ||
+          (props.selectedToken && swapTokenKey(token) === swapTokenKey(props.selectedToken))
+      ),
+    [resolvedItems.tokens, defaultRoutes, props.selectedToken]
   )
   useEffect(() => {
+    const { search, network } = filter
+    const requestKey = `${network}:${search}`
+    if (scopeInvalidated.current || !search || loadedNetworks.current.has(network)) {
+      setLoadingNetwork(null)
+      return
+    }
     let cancelled = false
-    void loadTokens(
-      next => startTransition(() => setTokens(next)),
-      () => cancelled
-    )
+    setLoadingNetwork(network)
+    setCatalogErrorKey(null)
+    let received = false
+    const returnedNetworks = new Set<string>()
+    const accept = (next: readonly RheaSwapToken[]) => {
+      if (cancelled || scopeInvalidated.current) return
+      received = true
+      for (const token of next) {
+        if (!token.isDisplaySeed) returnedNetworks.add(token.blockchain)
+      }
+      if (next.length === 0) return
+      startTransition(() => setTokens(current => mergeTokenCatalogs(current, next)))
+    }
+    void loadTokensRef
+      .current(filter, accept, () => cancelled || scopeInvalidated.current)
       .then(next => {
-        if (!cancelled) startTransition(() => setTokens(next))
+        if (cancelled || scopeInvalidated.current) return
+        if (!received) accept(next)
+        for (const returned of returnedNetworks) loadedNetworks.current.add(returned)
+        const availableNetworks = (props.availableNetworks ?? []).filter(
+          option => !option.disabledReason
+        )
+        if (
+          network === 'all' &&
+          availableNetworks.length > 0 &&
+          availableNetworks.every(option => returnedNetworks.has(option.id))
+        )
+          loadedNetworks.current.add('all')
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled && !scopeInvalidated.current) setCatalogErrorKey(requestKey)
+      })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && !scopeInvalidated.current) setLoadingNetwork(null)
       })
     return () => {
       cancelled = true
     }
-  }, [loadTokens])
-  if (loading && tokens.length === 0) return <ListSkeleton rows={5} label="Loading tokens" />
+  }, [filter, retryRequest])
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TokenSelector
@@ -334,25 +427,27 @@ export function SwapTokenSelector({
             : null)
         }
         stableCatalogOrder
-        tokens={tokens}
+        tokenKey={swapTokenKey}
+        tokens={resolvedItems.tokens}
+        extraItems={guardedExtraItems}
         defaultTokens={defaultTokens}
-        defaultCatalogLoading={curatedLoading}
-        balances={mergedBalances}
-        balanceLoadStates={balanceLoadStates}
-        onRetryBalances={retryBalances}
-        onVisibleTokensChange={onVisibleTokensChange}
-        catalogLoading={loading}
+        defaultCatalogLoading={false}
+        balances={balances}
+        pricesByTokenKey={pricesByTokenKey}
+        catalogLoading={loadingNetwork === filter.network}
+        catalogError={catalogErrorKey === `${filter.network}:${filter.search}`}
+        onRetryCatalog={() => setRetryRequest(current => current + 1)}
+        onFilterChange={handleFilterChange}
         onDiscoveredToken={result => {
-          const matched = findVerifiedRheaSwapToken(result.candidate, tokens)
-          if (!matched) return 'Added to wallet; unavailable for swapping'
-          onSelect(matched, scopedPortfolio)
+          if (scopeInvalidated.current) return 'Account changed'
+          const matched =
+            findVerifiedRheaSwapToken(result.candidate, tokens) ??
+            toWalletEvmSwapToken(result.candidate)
+          if (!matched) return 'Select an available EVM network'
+          if (!scopeInvalidated.current) onSelect(matched)
         }}
         onSelect={token => {
-          const selected = tokens.find(
-            candidate =>
-              candidate.assetId === token.assetId && candidate.blockchain === token.blockchain
-          )
-          if (selected) onSelect(selected, scopedPortfolio)
+          if (!scopeInvalidated.current) onSelect(token as RheaSwapToken)
         }}
       />
     </div>

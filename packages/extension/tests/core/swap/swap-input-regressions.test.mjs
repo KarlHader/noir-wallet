@@ -17,14 +17,27 @@ import {
 } from '../../../src/popup/services/swap-page-model.ts'
 import {
   canReverseSwapPair,
+  isSwapAssetOnEnabledChain,
+  isSameSwapTokenRouteIdentity,
   loadReversedSwapPair
 } from '../../../src/popup/services/swap-catalog-loading.ts'
 
-const zec = { assetId: 'nep141:zec.omft.near', rheaChainId: 'zcash', blockchain: 'zec' }
+const zec = {
+  assetId: 'nep141:zec.omft.near',
+  rheaChainId: 'zcash',
+  rheaAddress: 'zec',
+  blockchain: 'zec',
+  decimals: 8,
+  isNative: true
+}
 const usdc = {
   assetId: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
   rheaChainId: '42161',
-  blockchain: 'arb'
+  rheaAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  contractAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  blockchain: 'arb',
+  decimals: 6,
+  isNative: false
 }
 const zcashChain = {
   id: 'bip122:00040fe8ec8471911baa1db1266ea15d',
@@ -32,6 +45,7 @@ const zcashChain = {
   network: { kind: 'mainnet' }
 }
 const arbitrumChain = { id: 'eip155:42161', family: 'evm', network: { kind: 'mainnet' } }
+const bnbChain = { id: 'eip155:56', family: 'evm', network: { kind: 'mainnet' } }
 
 test('only the current destination account can restore a managed recipient and allow reversal', () => {
   const publicAddress = `0x${'a'.repeat(40)}`
@@ -126,6 +140,23 @@ test('asset selector balances follow their own side and never claim an unknown p
 test('reversal loads the supported destination as a source before changing the pair', async () => {
   assert.equal(canReverseSwapPair(usdc, zec, [zcashChain, arbitrumChain]), true)
   assert.equal(canReverseSwapPair(usdc, zec, [arbitrumChain]), false)
+  const bnb = {
+    assetId: 'nep141:bnb.omdep.near',
+    rheaChainId: '56',
+    rheaAddress: 'bnb',
+    blockchain: 'bsc',
+    decimals: 18,
+    isNative: true
+  }
+  assert.equal(canReverseSwapPair(usdc, bnb, [arbitrumChain, bnbChain]), true)
+  assert.equal(canReverseSwapPair(usdc, bnb, [arbitrumChain]), false)
+  assert.equal(isSwapAssetOnEnabledChain(bnb.assetId, [bnbChain]), true)
+  assert.equal(
+    isSwapAssetOnEnabledChain('nep141:bnb-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.omdep.near', [
+      bnbChain
+    ]),
+    true
+  )
   const sourceZec = { ...zec, direction: 'source' }
   const destinationUsdc = { ...usdc, direction: 'destination' }
   const input = {
@@ -139,9 +170,84 @@ test('reversal loads the supported destination as a source before changing the p
     tokenIn: sourceZec,
     tokenOut: destinationUsdc
   })
+  assert.deepEqual(
+    await loadReversedSwapPair({
+      ...input,
+      tokenOut: { ...zec, rheaAddress: zec.assetId }
+    }),
+    { tokenIn: sourceZec, tokenOut: destinationUsdc }
+  )
+  await assert.rejects(
+    loadReversedSwapPair({
+      ...input,
+      tokenOut: { ...zec, rheaAddress: zec.assetId, isNative: false }
+    }),
+    /reverse direction/
+  )
   assert.equal(await loadReversedSwapPair({ ...input, isCancelled: () => true }), null)
   await assert.rejects(
     loadReversedSwapPair({ ...input, loadSources: async () => [] }),
     /reverse direction/
+  )
+  await assert.rejects(
+    loadReversedSwapPair({
+      ...input,
+      loadSources: async () => [{ ...sourceZec, rheaAddress: 'different-zec' }]
+    }),
+    /reverse direction/
+  )
+})
+
+test('catalog metadata refresh does not cancel reversal of the same route', () => {
+  const current = {
+    ...usdc,
+    rheaAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    decimals: 6,
+    isNative: false
+  }
+  assert.equal(isSameSwapTokenRouteIdentity(current, { ...current, icon: 'new-icon' }), true)
+  assert.equal(
+    isSameSwapTokenRouteIdentity(current, {
+      ...current,
+      rheaAddress: '0x0000000000000000000000000000000000000001'
+    }),
+    false
+  )
+})
+
+test('reversal preserves a wallet ERC20 on either side when the directory omits it', async () => {
+  const custom = {
+    assetId: 'eip155:1/erc20:0x1111111111111111111111111111111111111111',
+    rheaChainId: '1',
+    rheaAddress: '0x1111111111111111111111111111111111111111',
+    contractAddress: '0x1111111111111111111111111111111111111111',
+    blockchain: 'eth',
+    decimals: 18,
+    isNative: false
+  }
+  const reverseSource = {
+    ...usdc,
+    assetId: 'eip155:42161/erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    direction: 'source'
+  }
+  assert.deepEqual(
+    await loadReversedSwapPair({
+      tokenIn: custom,
+      tokenOut: usdc,
+      isCancelled: () => false,
+      loadSources: async () => [reverseSource],
+      loadDestinations: async () => []
+    }),
+    { tokenIn: reverseSource, tokenOut: custom }
+  )
+  assert.deepEqual(
+    await loadReversedSwapPair({
+      tokenIn: usdc,
+      tokenOut: custom,
+      isCancelled: () => false,
+      loadSources: async () => [],
+      loadDestinations: async () => [{ ...usdc, direction: 'destination' }]
+    }),
+    { tokenIn: custom, tokenOut: { ...usdc, direction: 'destination' } }
   )
 })

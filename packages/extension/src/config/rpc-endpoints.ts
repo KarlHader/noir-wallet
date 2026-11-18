@@ -34,7 +34,11 @@ export const RPC_DEFAULT_ENDPOINTS = {
   },
   evm: {
     mainnet: {
-      'eip155:1': { id: 'deltarpc', label: 'DeltaRPC', url: 'https://eth.deltarpc.com' },
+      'eip155:1': {
+        id: 'publicnode',
+        label: 'PublicNode',
+        url: 'https://ethereum-rpc.publicnode.com'
+      },
       'eip155:56': {
         id: 'official',
         label: 'BNB Chain',

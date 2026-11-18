@@ -110,7 +110,6 @@ jobs:
         working-directory: wallet
         env:
           BUILD_CHANNEL: ${{ inputs.mode == 'candidate' && 'production' || 'beta' }}
-          BETA_INVITE_REQUIRED: ${{ inputs.mode == 'beta' && '1' || '0' }}
           GA_API_SECRET: ${{ secrets.GA_API_SECRET }}
           CUSTOM_ANALYTICS_PASSWORD: ${{ secrets.CUSTOM_ANALYTICS_PASSWORD }}
 

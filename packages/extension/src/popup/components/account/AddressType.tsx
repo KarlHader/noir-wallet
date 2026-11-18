@@ -4,7 +4,7 @@ const getAddressTypeConfig = (t: AddressType) => {
   switch (t) {
     case 'shielded':
       return {
-        label: 'Shielded',
+        label: 'Shield',
         className: 'bg-[#9500FF]/40 text-[#DEAFFF]'
       }
     case 'transparent':
@@ -24,7 +24,7 @@ interface AddressTypeLabelProps {
 }
 
 /**
- * Static address type label (Shielded/Transparent) - non-interactive display
+ * Static address type label (Shield/Transparent) - non-interactive display
  */
 export function AddressTypeLabel({
   type,

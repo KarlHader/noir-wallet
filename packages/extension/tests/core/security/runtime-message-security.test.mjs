@@ -172,6 +172,7 @@ test.describe('Runtime message security', () => {
     const messages = [
       prepare,
       { type: 'GET_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' },
+      { type: 'GET_NATIVE_ZEC_INTENTS_SWAP_STATUS', quoteId: 'quote-one' },
       { type: 'CANCEL_NATIVE_ZEC_INTENTS_SWAP', quoteId: 'quote-one' }
     ]
     for (const message of messages) {
@@ -465,8 +466,14 @@ test.describe('Runtime message security', () => {
       authorize: true
     }
     expect(parseTrustedExtensionRuntimeMessage(shieldRefresh)).toEqual(shieldRefresh)
+    expect(
+      parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, notifyPortfolio: false })
+    ).toEqual({ ...shieldRefresh, notifyPortfolio: false })
     expect(() =>
       parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, authorize: 'true' })
+    ).toThrow()
+    expect(() =>
+      parseTrustedExtensionRuntimeMessage({ ...shieldRefresh, notifyPortfolio: 'false' })
     ).toThrow()
     expect(isTrustedRuntimeMessageSender(shieldRefresh.type, popupSender, extensionId)).toBe(true)
     expect(

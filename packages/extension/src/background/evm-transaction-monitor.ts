@@ -150,6 +150,9 @@ export class BackgroundEvmTransactionMonitor {
     if (result.errors > 0) {
       console.warn(`[EVM Transaction Monitor] ${result.errors} observation(s) failed`)
     }
+    if (result.applied > 0) {
+      void chrome.runtime.sendMessage({ type: 'TRANSACTION_UPDATED' }).catch(() => {})
+    }
     this.consecutiveFailurePolls = result.errors > 0 ? this.consecutiveFailurePolls + 1 : 0
     if (result.checked > 0 || result.errors > 0) {
       const delayInMinutes =

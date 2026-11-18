@@ -21,7 +21,7 @@ import {
 
 const REQUEST_TIMEOUT_MS = 30_000
 const APP_FEE_CACHE_MS = 5 * 60_000
-const MAX_CONFIDENTIAL_PROVIDER_FEE_BPS = 20
+const MAX_CONFIDENTIAL_PROVIDER_FEE_BPS = 25
 const INTENTS_CONTRACT = 'intents.near'
 const VERSIONED_NONCE_PREFIX = new Uint8Array([86, 40, 246, 198])
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -931,7 +931,7 @@ export class ConfidentialFundingApi {
       confidentiality: 'basic'
     }
     let providerFees: readonly ConfidentialAppFee[] = []
-    if (appFees) {
+    if (appFees || isDeposit) {
       const baseline = parseQuote(
         await requestJson(this.oneClickUrl('/quote'), {
           method: 'POST',
@@ -961,7 +961,7 @@ export class ConfidentialFundingApi {
     })
     const quote = parseQuote(value)
     if (
-      appFees &&
+      (appFees || isDeposit) &&
       Object.entries(request).some(
         ([key, value]) => key !== 'appFees' && quote.quoteRequest[key] !== value
       )

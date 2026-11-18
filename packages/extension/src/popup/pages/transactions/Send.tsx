@@ -1,242 +1,608 @@
-import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { MARKET_ASSETS } from '@/config/asset-market-assets'
 import {
-  buildPublicPrivateEvmSendPath,
-  parsePublicPrivateEvmSendDraft,
-  isPublicPrivateSendRecipient
-} from './evm-send-validation'
-import { rheaSwapClient, getRheaSwapErrorMessage } from '@/popup/services/rhea-swap-client'
-import { isRheaSwapQuoteFresh, getRheaSwapQuoteDeadline } from '@/popup/services/swap-page-model'
-import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
-import {
-  buildZcashPublicPrivateSendPreviewRequest,
-  getPublicPrivateSendRouteCost
-} from '@/popup/services/public-private-send-preview'
-import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Icon } from '@iconify/react'
-import { Button } from '../../components/ui/button'
-import { PageHeader } from '../../components/common/PageHeader'
-import { ShieldFundsBanner } from '../../components/transaction/ShieldFundsBanner'
-import { openModal } from '../../provider/ModalManager'
-import { RecipientSelector } from '../../components/transaction/RecipientSelector'
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
+import { formatSortAddress } from '@/lib/format'
+import { resolveChainIconAlias } from '@/lib/chain-icon'
+import { parseAssetId } from '@/core/chains/registry'
+import type { TokenSelectionItem } from '@/popup/components/tokens/TokenSelectionList'
+import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import { PageHeader } from '@/popup/components/common/PageHeader'
 import { InlineError } from '@/popup/components/common/InlineError'
-import { ZcashSyncProgress } from '@/popup/components/common/ZcashSyncProgress'
-import {
-  SendAmountInputCard,
-  SendFormActions,
-  SendFormView,
-  SendAssetHeader,
-  SendFieldLabel,
-  SendRouteInfoCard,
-  SendRecipientAddress,
-  SendRecipientInputCard
-} from '../../components/transaction/SendInputCards'
-import { openHardwareSignAndWait, openHardwareSignTab } from '@/lib/hardware-tab'
-import { isSidePanelSurface } from '@/lib/extension-display-mode'
-import { toast } from '@/store/toast-store'
-import { classifyError } from '@/lib/errors'
-import { ANALYTICS_EVENTS, PAGE_IDS, sendAnalyticsEvent, type TrackOptions } from '@/lib/analytics'
-
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../../components/ui/dialog'
+import { SendRouteMenu } from '@/popup/components/transaction/SendRouteMenu'
+import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
+import { TokenBalanceDisplay } from '@/popup/components/tokens/TokenBalanceDisplay'
+import { ZcashFundingBadge } from '@/popup/components/account/ZcashFundingBadge'
+import { evmWalletClient, type EvmTransferSubmission } from '@/popup/services/evm-wallet-client'
+import { useNavigate } from '@/popup/provider/Router'
 import { useWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore } from '@/store/account-data-store'
 import {
-  useTransactionResultStore,
-  type ZcashSendRetryDraft
-} from '@/store/transaction-result-store'
-import {
-  retryZcashBalanceRead,
-  useZcashBalanceReadStatus,
-  useZcashSyncReadStatus
-} from '@/popup/hooks/usePersistedExtensionContextSync'
-import { useLocation, useNavigate } from '../../provider/Router'
-import { formatSortAddress, getAccountDisplayName } from '@/lib/format'
-import {
-  formatFiatAmount,
-  formatBaseUnitDecimalAmount,
-  formatTokenQuantity
-} from '@/lib/number-format'
-import { cn } from '@/lib/utils'
-import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
-import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
-import { BalanceDomainTabs } from '@/popup/components/account/BalanceDomainTabs'
-import { TokenIcon } from '../../components/tokens/TokenIcon'
-import { ChainIcon } from '../../components/common/ChainIcon'
-import nearLogo from '@/images/figma-near-confidential.svg'
-import zcashShieldLogo from '@/images/figma-zcash-shield.svg'
-import { useTransaction } from '../../hooks/useTransaction'
-import { useShieldFunds } from '../../hooks/useShieldFunds'
-import { useFeeEstimate } from '../../hooks/useFeeEstimate'
-import { useMaxTransferEstimate } from '../../hooks/useMaxTransferEstimate'
-import { FeeTierPicker } from '../../components/transaction/FeeTierPicker'
-import { useSettingsStore } from '@/store/settings-store'
-import { marginalFeeForTier, staticFeeFallbackZats } from '@/core/zcash/fee-policy'
-import { zcashWalletRuntimeClient } from '@/popup/services/zcash-wallet-runtime-client'
-import { resolveZcashFundingAvailability } from '@/popup/services/transfer-availability'
-import {
-  getFundingBalance,
-  getFundingAmountError,
-  getFundingAmountErrorCopy
-} from '@/core/wallet/funding-balance'
-import {
   getFundingSourceOptions,
-  getFundingSourceUnavailableReason
+  getFundingSourceUnavailableReason,
+  type FundingSourceOption
 } from '@/core/wallet/funding-source'
-import type { FundingSource } from '@/types'
-import { safeBig } from '@/lib/big'
+import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import type { FundingSource, KeySource } from '@/types'
+import { getAssetDomainRaw, type ShieldProvider } from '@/popup/services/asset-domains'
+import { ZcashTransfer } from '@/popup/components/transaction/ZcashTransfer'
+import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import { shieldSourceSelectionItem } from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
+import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
+import {
+  ShieldWithdrawForm,
+  type ShieldWithdrawEntry,
+  type ShieldWithdrawSourcePickerState
+} from '../portfolio/ShieldWithdrawPage'
+import { EvmTransactionResult } from './EvmTransactionResult'
+import { SendTransferForm, type SendTransferSubmission } from './SendTransferForm'
+import { BitcoinTransactionResult } from './BitcoinTransactionResult'
+import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
+import { useSettingsStore } from '@/store/settings-store'
+import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
+import { assetPriceClient } from '@/popup/services/asset-price-client'
+import { offerSaveRecipient } from '@/popup/services/save-recipient-prompt'
+import {
+  buildSendAssetSelectionModel,
+  prepareManagedSendAsset,
+  resolveSendAssetSelection,
+  sortSendNetworks,
+  type ManagedSendAsset,
+  type SendAsset
+} from './send-asset-order'
+import { useManagedTokenCatalog } from '@/popup/hooks/useManagedTokenCatalog'
+import { intentsAssetManagerClient } from '@/popup/services/intents-asset-manager-client'
+import { isSelectableChainFamily } from '@/popup/services/chain-selection-availability'
+import { SolanaTransactionResult } from './SolanaTransactionResult'
+import { NearTransactionResult } from './NearTransactionResult'
+import { isPortfolioModelForScope } from '@/popup/services/portfolio-cache'
+import { parsePublicPrivateEvmSendDraft } from '@/popup/services/evm-send-validation'
+import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
+import {
+  getCrossChainSendAssetGroup,
+  getCrossChainSendDestinationCandidates,
+  getCrossChainSendDestinationAssetId
+} from '@/popup/services/cross-chain-send-assets'
+import {
+  hydrateEvmSendDestinationCatalogs,
+  readEvmSendDestinationSupport
+} from '@/popup/services/evm-send-catalog'
+import { getEnabledSwapChains } from '@/popup/services/swap-catalog-loading'
+import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
+import {
+  resolveEvmFeatureRuntimePolicy,
+  resolveSolanaFeatureRuntimePolicy
+} from '@/core/chains/feature-runtime-policy'
 
-import { ZEC_DECIMALS } from '@/config/wallet'
-import { useZnsResolve } from '../../hooks/useZnsResolve'
-import {
-  isTransparentZcashAddress,
-  sanitizeMemoForRecipient,
-  supportsZcashMemo
-} from '@/lib/zcash-memo'
-import {
-  getShieldableTransparentBalance,
-  hasEnoughTransparentBalanceToShield,
-  MIN_SHIELDING_BALANCE_MESSAGE
-} from '@/core/zcash/shielding'
-import {
-  assertActiveAccountScope,
-  getActiveAccountScopeKey
-} from '@/popup/lib/active-account-scope'
-import { getZcashChainId } from '@/core/chains/registry'
-import {
-  getDefaultZcashSelfMoveSource,
-  resolveZcashSelfMove
-} from '@/popup/services/zcash-self-move'
-import { estimateZcashSendTime } from '@/popup/services/send-time-estimate'
-import {
-  getZcashTransparentToShieldMoveAmountError,
-  isZcashSendRecipientReady,
-  resolveZcashSendRecipientInput,
-  shouldRetainZcashSendRecipient
-} from './zcash-send-validation'
+type SendSubmission =
+  | Readonly<{ family: 'evm'; value: EvmTransferSubmission }>
+  | SendTransferSubmission
 
-function MoveLayout({
-  amount,
-  balance,
-  max,
-  accountName,
-  fromAddress,
-  toAddress,
-  from,
-  onReverse,
-  canReverse
+interface SendDomainSession {
+  key: string
+  routeKey: string
+  source: 'main' | 'shield'
+  publicVisited: boolean
+  publicRecipient: string
+  publicAmount: string
+  shieldEntry: ShieldWithdrawEntry | null
+  shieldProvider: ShieldProvider
+  zcashVisited: boolean
+  zcashInitialFundingSource: FundingSource
+}
+
+const crossChainCapabilities = Object.freeze({
+  evm: resolveEvmFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled,
+  solana: resolveSolanaFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__).newOperationsEnabled
+})
+
+function availableUsdPrice(
+  asset: PortfolioReadModel['assets'][number],
+  prices: AssetPriceReadModel | null
+): string | null {
+  return findAssetPrice(prices, asset.asset.id)?.priceUsd ?? null
+}
+
+function AssetSelection({
+  accountScope,
+  assets,
+  chains,
+  zcashSources,
+  zcashEnabled,
+  zcashNetwork,
+  zecPrice,
+  prices,
+  loadingAdditional,
+  additionalError,
+  onSelectZcash,
+  onSelect,
+  onRetry,
+  toolbar,
+  zcashOnly = false
 }: {
-  amount: ReactNode
-  balance: string
-  max: ReactNode
-  accountName: string
-  fromAddress: string
-  toAddress: string
-  from: FundingSource
-  onReverse: () => void
-  canReverse: boolean
+  accountScope: Readonly<{ walletId: string; accountId: string }> | null
+  assets: readonly SendAsset[]
+  chains: readonly SendAsset['chain'][]
+  zcashSources: readonly FundingSourceOption[]
+  zcashEnabled: boolean
+  zcashNetwork: 'mainnet' | 'testnet'
+  zecPrice: number
+  prices: AssetPriceReadModel | null
+  loadingAdditional: boolean
+  additionalError: boolean
+  onSelectZcash: (source: FundingSource) => void
+  onSelect: (asset: SendAsset) => void
+  onRetry: (chainId?: string) => Promise<void>
+  toolbar?: ReactNode
+  zcashOnly?: boolean
 }) {
-  const accountCard = (label: 'From' | 'To', source: FundingSource, address: string) => (
-    <div className="min-w-0 rounded-xl border border-white/5 bg-wallet-surface px-4 py-4">
-      <span className="text-xs font-medium text-muted">{label}</span>
-      <div className="mt-3 flex min-w-0 items-center gap-3">
-        {source === 'shielded' ? (
-          <img src={zcashShieldLogo} alt="" className="size-8 shrink-0 rounded" />
-        ) : (
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-muted">
-            <Icon icon="lucide:wallet" width={19} height={19} />
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
-            <span className="truncate" title={source === 'shielded' ? 'Shield' : accountName}>
-              {source === 'shielded' ? 'Shield' : accountName}
-            </span>
-            {source === 'transparent' && (
-              <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[11px] text-muted">
-                Transparent
-              </span>
-            )}
-          </div>
-          <span className="mt-1 block truncate text-base font-medium" title={address}>
-            {source === 'shielded'
-              ? 'Zcash Shield'
-              : address
-                ? formatSortAddress(address)
-                : 'Address unavailable'}
-          </span>
-        </div>
-      </div>
-    </div>
+  const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredValue(query)
+  const [selectedNetwork, setSelectedNetwork] = useState('all')
+  const [renderWindow, setRenderWindow] = useState({ filter: '', count: 100 })
+  const filterKey = `${selectedNetwork}:${deferredQuery}`
+  const walletId = useWalletStore(state => state.currentWalletId)
+  const accountId = useWalletStore(state => state.currentAccountId)
+  const runtimeNetwork = useWalletStore(state => state.currentNetwork)
+  const endpointKey = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
-
+  const managedCatalog = useManagedTokenCatalog({
+    network: runtimeNetwork,
+    walletId: zcashOnly ? null : (accountScope?.walletId ?? null),
+    accountId: zcashOnly ? null : (accountScope?.accountId ?? null)
+  })
+  const selectionSequence = useRef(0)
+  const [pendingSelection, setPendingSelection] = useState<{
+    entry: ManagedSendAsset
+    error: string | null
+  } | null>(null)
+  const selectionScope = JSON.stringify([
+    runtimeNetwork,
+    walletId,
+    accountId,
+    accountScope,
+    endpointKey
+  ])
+  const liveSelectionScope = useRef(selectionScope)
+  liveSelectionScope.current = selectionScope
+  useEffect(
+    () => () => {
+      selectionSequence.current++
+    },
+    [selectionScope]
+  )
+  const cancelSelection = () => {
+    selectionSequence.current++
+    setPendingSelection(null)
+  }
+  const selectManaged = async (entry: ManagedSendAsset) => {
+    if (
+      !accountScope ||
+      !managedCatalog.ready ||
+      managedCatalog.hiddenAssetIds.has(entry.token.assetId)
+    )
+      return
+    const request = ++selectionSequence.current
+    const expectedScope = selectionScope
+    const isCurrent = () => {
+      const wallet = useWalletStore.getState()
+      return (
+        request === selectionSequence.current &&
+        liveSelectionScope.current === expectedScope &&
+        wallet.currentNetwork === runtimeNetwork &&
+        wallet.currentWalletId === walletId &&
+        wallet.currentAccountId === accountId &&
+        getChainEndpointRuntimeKey(useSettingsStore.getState().chainEndpointSettings) ===
+          endpointKey
+      )
+    }
+    if (!isCurrent()) return
+    setPendingSelection({ entry, error: null })
+    try {
+      const selected = await prepareManagedSendAsset({
+        entry,
+        isCurrent,
+        register: token => intentsAssetManagerClient.ensureSelectedEvmAsset(token),
+        readPublicBalance: (chainId, token) =>
+          evmWalletClient.getTokenBalance({
+            chainId,
+            token,
+            ...accountScope,
+            executionMode: 'main'
+          })
+      })
+      if (selected && isCurrent()) onSelect(selected)
+    } catch (error) {
+      if (isCurrent())
+        setPendingSelection({
+          entry,
+          error: error instanceof Error ? error.message : String(error)
+        })
+    }
+  }
+  const { networkOptions, orderedRows } = useMemo(
+    () =>
+      buildSendAssetSelectionModel({
+        assets: zcashOnly ? [] : assets,
+        catalog: zcashOnly ? [] : managedCatalog.rows,
+        hiddenAssetIds: managedCatalog.hiddenAssetIds,
+        chains: zcashOnly ? [] : chains,
+        zcashSources,
+        zcashEnabled,
+        zcashNetwork,
+        zecPrice,
+        prices,
+        selectedNetwork,
+        searchQuery: deferredQuery,
+        enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+      }),
+    [
+      assets,
+      chains,
+      zcashOnly,
+      managedCatalog.rows,
+      managedCatalog.hiddenAssetIds,
+      prices,
+      deferredQuery,
+      selectedNetwork,
+      zcashSources,
+      zcashEnabled,
+      zcashNetwork,
+      zecPrice
+    ]
+  )
+  const visibleLimit = renderWindow.filter === filterKey ? renderWindow.count : 100
+  const visibleRows = orderedRows.slice(0, visibleLimit)
   return (
-    <>
-      <div className="flex min-w-0 flex-col items-center pb-6 pt-5 text-center">
-        {amount}
-        <span className="mt-3 inline-flex h-9 items-center gap-2 rounded-full bg-wallet-surface px-2.5 text-base font-medium">
-          <TokenIcon symbol="ZEC" nativeChain="zcash" blockchain="zec" size={26} />
-          ZEC
-        </span>
-        <div className="mt-4 flex min-w-0 items-center justify-center gap-3 text-xs text-muted">
-          <span className="min-w-0 truncate" title={balance}>
-            {formatTokenQuantity(balance)}
-          </span>
-          {max}
-        </div>
-      </div>
-      <div>
-        {accountCard('From', from, fromAddress)}
-        <div className="relative h-2.5">
-          {canReverse && (
-            <button
-              type="button"
-              aria-label="Switch move direction"
-              title="Switch move direction"
-              onClick={onReverse}
-              className="absolute left-1/2 top-1/2 z-10 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-card text-foreground transition-colors hover:bg-wallet-selected"
-            >
-              <Icon icon="lucide:arrow-down-up" width={18} height={18} />
-            </button>
-          )}
-        </div>
-        {accountCard('To', from === 'transparent' ? 'shielded' : 'transparent', toAddress)}
-      </div>
-    </>
+    <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
+      <TokenSelectorView
+        accountScope={accountScope}
+        toolbar={toolbar}
+        search={query}
+        onSearchChange={value => {
+          cancelSelection()
+          setQuery(value)
+        }}
+        networks={networkOptions.map(option => ({
+          id: option.id,
+          label: option.label,
+          iconChain: option.iconAlias,
+          disabledReason: option.disabled ? 'Coming soon' : undefined
+        }))}
+        selectedNetwork={selectedNetwork}
+        onNetworkChange={chainId => {
+          cancelSelection()
+          setSelectedNetwork(chainId)
+          if (
+            chainId.startsWith('eip155:') &&
+            assets.some(
+              entry =>
+                entry.chain.chain.id === chainId &&
+                getAssetDomainRaw(entry.asset, 'public') === null
+            )
+          )
+            onRetry(chainId)
+        }}
+        discovery={
+          walletId && accountId
+            ? {
+                scopeKey: `${runtimeNetwork}:${walletId}:${accountId}`,
+                chainId: selectedNetwork.startsWith('eip155:') ? selectedNetwork : null,
+                onAdded: async () => {
+                  await onRetry()
+                  return 'Added to wallet'
+                }
+              }
+            : undefined
+        }
+        onScroll={event => {
+          const { scrollTop, clientHeight, scrollHeight } = event.currentTarget
+          if (scrollHeight - scrollTop - clientHeight < 200 && visibleLimit < orderedRows.length)
+            setRenderWindow({ filter: filterKey, count: visibleLimit + 100 })
+        }}
+        items={visibleRows.map((row): TokenSelectionItem => {
+          if (row.kind === 'zcash') {
+            const networkName = zcashNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'
+            return {
+              key: row.key,
+              symbol: 'ZEC',
+              symbolSuffix: <ZcashFundingBadge source={row.source} />,
+              ariaLabel: `Send ${row.source === 'shielded' ? 'Shield' : 'Transparent'} ZEC on ${networkName}`,
+              subtitle: networkName,
+              icon: (
+                <TokenIcon
+                  symbol="ZEC"
+                  nativeChain="zcash"
+                  blockchain="zec"
+                  size={32}
+                  className="shrink-0"
+                />
+              ),
+              balance: (
+                <TokenBalanceDisplay
+                  amount={row.amount}
+                  symbol="ZEC"
+                  priceUsd={row.priceUsd}
+                  approximateFiat
+                />
+              )
+            }
+          }
+          const { entry } = row
+          const metadata =
+            row.kind === 'catalog' ? row.entry.token.metadata : row.entry.asset.metadata
+          const assetId =
+            row.kind === 'catalog' ? row.entry.token.assetId : row.entry.asset.asset.id
+          const reference =
+            row.kind === 'catalog' ? row.entry.token.reference : row.entry.asset.asset.reference
+          const customToken =
+            row.kind === 'catalog'
+              ? row.entry.token.source === 'custom'
+              : row.entry.asset.asset.kind === 'token' && row.entry.asset.source === 'user-added'
+          const networkName = entry.chain.chain.displayName
+          const busy = pendingSelection?.entry.token.assetId === row.key && !pendingSelection.error
+          return {
+            key: row.key,
+            symbol: metadata.symbol,
+            busy,
+            disabledReason: busy ? 'Loading token' : undefined,
+            symbolSuffix: customToken ? (
+              <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
+                Custom
+              </span>
+            ) : undefined,
+            ariaLabel: `Send ${metadata.symbol}${customToken ? ' custom Token' : ''} on ${networkName}`,
+            subtitle: `${networkName}${customToken ? ` · ${formatSortAddress(reference)}` : ''}`,
+            icon: (
+              <TokenIcon
+                assetId={assetId}
+                symbol={metadata.symbol}
+                icon={metadata.iconUrl}
+                blockchain={resolveChainIconAlias(
+                  entry.chain.chain.family,
+                  networkName,
+                  entry.chain.chain.id
+                )}
+                size={32}
+                className="shrink-0"
+              />
+            ),
+            balance:
+              row.amount === null ? (
+                <p className="min-w-0 truncate text-right text-sm font-medium text-muted">
+                  {row.kind === 'portfolio' && entry.chain.status === 'loading' ? 'Updating…' : '—'}
+                </p>
+              ) : row.kind === 'portfolio' &&
+                entry.chain.chain.family === 'bitcoin' &&
+                row.entry.asset.updatedAt === 0 ? (
+                <p className="min-w-0 truncate text-right text-sm font-medium">
+                  {entry.chain.status === 'error' ? '—' : 'Updating…'}
+                </p>
+              ) : (
+                <TokenBalanceDisplay
+                  amount={row.amount}
+                  symbol={metadata.symbol}
+                  priceUsd={row.priceUsd}
+                  approximateFiat
+                />
+              )
+          }
+        })}
+        onSelect={key => {
+          const row = orderedRows.find(item => item.key === key)
+          if (row?.kind === 'catalog') {
+            void selectManaged(row.entry)
+          } else {
+            if (
+              row?.kind === 'portfolio' &&
+              row.entry.chain.chain.family === 'evm' &&
+              row.entry.asset.asset.namespace === 'erc20' &&
+              row.entry.asset.balance.mainRaw === undefined
+            ) {
+              const token = managedCatalog.rows.find(token => token.assetId === row.key)
+              if (token) {
+                void selectManaged({ token, chain: row.entry.chain })
+                return
+              }
+            }
+            cancelSelection()
+            if (row?.kind === 'zcash') onSelectZcash(row.source)
+            else if (row) onSelect(row.entry)
+          }
+        }}
+        emptyMessage={!loadingAdditional && !additionalError ? 'No assets found' : 'Loading tokens'}
+        afterRows={
+          <>
+            {pendingSelection?.error && (
+              <InlineError
+                message={pendingSelection.error}
+                onRetry={() => {
+                  void selectManaged(pendingSelection.entry)
+                }}
+                className="mt-2 px-3 py-2.5"
+              />
+            )}
+            {loadingAdditional && (
+              <div
+                role="status"
+                aria-label="Loading additional networks"
+                className="flex animate-pulse items-center gap-3 py-3"
+              >
+                <div className="size-10 rounded-full bg-card" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-16 rounded bg-card" />
+                  <div className="h-2.5 w-28 rounded bg-card/70" />
+                </div>
+              </div>
+            )}
+            {additionalError && (
+              <InlineError
+                message="Additional networks are unavailable."
+                onRetry={onRetry}
+                className="mt-2 px-3 py-2.5"
+              />
+            )}
+          </>
+        }
+      />
+    </div>
   )
 }
 
 export function Send({
-  active = true,
-  embedded = false,
-  initialFundingSource = 'transparent',
-  fundingSourceSelection,
-  onSelectAsset
+  multiChainEnabled,
+  initialZcashProvider = false
 }: {
-  readonly active?: boolean
-  readonly embedded?: boolean
-  readonly initialFundingSource?: FundingSource
-  readonly fundingSourceSelection?: Readonly<{ source: FundingSource; revision: number }> | null
-  readonly onSelectAsset?: (fundingSource: FundingSource) => void
-} = {}) {
-  const { navigate, goBack } = useNavigate()
+  readonly multiChainEnabled: boolean
+  readonly initialZcashProvider?: boolean
+}) {
+  const [searchParams] = useSearchParams()
+  if (!multiChainEnabled || (initialZcashProvider && searchParams.get('move') === '1')) {
+    return <ZcashTransfer />
+  }
+  return <SendAssetFlow initialZcashProvider={initialZcashProvider} />
+}
+
+function SendAssetFlow({
+  initialZcashProvider = false
+}: { readonly initialZcashProvider?: boolean } = {}) {
+  const [searchParams] = useSearchParams()
   const location = useLocation()
-  const routeParams = new URLSearchParams(location.search)
+  const requestedAssetId = searchParams.get('assetId')
+  const requestedSourceMode = searchParams.get('sourceMode')
+  const requestedNetworkId = searchParams.get('networkId')
+  const { goBack, navigate, replace } = useNavigate()
+  const currentNetwork = useWalletStore(state => state.currentNetwork)
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
-  const currentNetwork = useWalletStore(state => state.currentNetwork)
-  const sourceWalletId = routeParams.get('sourceWalletId')
-  const sourceAccountId = routeParams.get('sourceAccountId')
-  const sourceScopeValid =
-    (!sourceWalletId || sourceWalletId === currentWalletId) &&
-    (!sourceAccountId || sourceAccountId === currentAccountId)
-  const requestedOriginPath = routeParams.get('originPath')
+  const zecPrice = useWalletStore(state => state.zecPrice)
+  const chainEndpointRuntimeKey = useSettingsStore(state =>
+    getChainEndpointRuntimeKey(state.chainEndpointSettings)
+  )
+  const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
+  const currentWallet = useWalletStore(state => state.getCurrentWallet())
+  const currentAccount = useWalletStore(state => state.getCurrentAccount())
+  const appliedRequestedAssetRef = useRef<string | null>(null)
+  const [assetPriceSnapshot, setAssetPriceSnapshot] = useState<{
+    scopeKey: string
+    value: AssetPriceReadModel | null
+  } | null>(null)
+  const [selectionSnapshot, setSelectionSnapshot] = useState<{
+    scopeKey: string
+    entryKey: string
+    requestedAssetId: string | null
+    value: SendAsset | null
+  } | null>(null)
+  const [submission, setSubmission] = useState<SendSubmission | null>(null)
+  const [destinationCacheAttempt, requestDestinationCache] = useState(0)
+  const [, refreshDestinationSupport] = useState(0)
+  const [assetPickerState, setAssetPickerState] = useState<{
+    key: string
+    open: boolean
+    draft?: {
+      recipient: string
+      amount: string
+      destinationAssetId?: string
+      destinationChainId: string
+    }
+  } | null>(null)
+  const [sourcePicker, setSourcePicker] = useState<{
+    mode: 'shield' | 'zcash-public'
+    provider: ShieldProvider
+  } | null>(null)
+  const [sourcePickerQuery, setSourcePickerQuery] = useState('')
+  const deferredSourcePickerQuery = useDeferredValue(sourcePickerQuery)
+  const [sourceRenderWindow, setSourceRenderWindow] = useState({ filter: '', count: 100 })
+  const [sourcePickerNetwork, setSourcePickerNetwork] = useState('all')
+  const [nearSourceOptions, setNearSourceOptions] = useState<{
+    key: string
+    value: ShieldWithdrawSourcePickerState
+  } | null>(null)
+  const [zcashFundingSelection, setZcashFundingSelection] = useState<{
+    key: string
+    source: FundingSource
+    revision: number
+  } | null>(null)
+  const [nonEvmDraft, setNonEvmDraft] = useState<{
+    key: string
+    assetId: string
+    recipient: string
+    amount: string
+  } | null>(null)
+  const {
+    activeAccount: storageV2Account,
+    catalog: accountCatalog,
+    loading: accountCatalogLoading,
+    refresh: refreshAccountCatalog,
+    contextChanging
+  } = useActiveAccountNetworks()
+  const zcashKeySource: KeySource | undefined = storageV2Account
+    ? storageV2Account.walletSource.kind === 'hardware'
+      ? isZcashHardwareKeySource(storageV2Account.walletSource.hardware.vendor)
+        ? storageV2Account.walletSource.hardware.vendor
+        : undefined
+      : storageV2Account.walletSource.kind
+    : currentWallet?.keySource
+  const zcashSources = useMemo(
+    () => getFundingSourceOptions(zcashBalance, currentAccount?.addresses ?? {}, zcashKeySource),
+    [zcashBalance, currentAccount?.addresses, zcashKeySource]
+  )
+  const defaultZcashFundingSource: FundingSource =
+    zcashSources.find(source => source.type === 'transparent' && !source.disabledReason)?.type ??
+    zcashSources.find(source => !source.disabledReason)?.type ??
+    (getFundingSourceUnavailableReason(zcashKeySource, 'transparent') ? 'shielded' : 'transparent')
+  const effectiveAccount = contextChanging
+    ? null
+    : resolveEffectiveActiveAccountIdentity({
+        currentWalletId,
+        currentAccountId,
+        nativeAccount: storageV2Account
+      })
+  const effectiveWalletId = effectiveAccount?.walletId ?? null
+  const effectiveAccountId = effectiveAccount?.accountId ?? null
+  const {
+    model,
+    status: loadStatus,
+    refresh,
+    readLatest
+  } = usePortfolioSnapshot(effectiveWalletId, effectiveAccountId)
+  const entryScope = location.state as {
+    walletId?: unknown
+    accountId?: unknown
+    crossChainReturnDraft?: { walletId?: unknown; accountId?: unknown }
+  } | null
+  const entryScopeValid =
+    (!searchParams.get('sourceWalletId') ||
+      searchParams.get('sourceWalletId') === effectiveWalletId) &&
+    (!searchParams.get('sourceAccountId') ||
+      searchParams.get('sourceAccountId') === effectiveAccountId) &&
+    (typeof entryScope?.walletId !== 'string' || entryScope.walletId === effectiveWalletId) &&
+    (typeof entryScope?.accountId !== 'string' || entryScope.accountId === effectiveAccountId) &&
+    (!entryScope?.crossChainReturnDraft ||
+      (entryScope.crossChainReturnDraft.walletId === effectiveWalletId &&
+        entryScope.crossChainReturnDraft.accountId === effectiveAccountId))
+  const requestedRecipient = entryScopeValid ? searchParams.get('recipient') : null
+  const requestedAmount = entryScopeValid ? (searchParams.get('amount') ?? '') : ''
+  const requestedOriginPath = searchParams.get('originPath')
   const originPath =
     requestedOriginPath?.startsWith('/') &&
     !requestedOriginPath.startsWith('//') &&
     !requestedOriginPath.includes('\\') &&
     !requestedOriginPath.startsWith('/send') &&
     !requestedOriginPath.startsWith('/transaction-result') &&
-    sourceScopeValid
+    entryScopeValid
       ? requestedOriginPath
       : null
   const sendOriginHistory = (
@@ -254,1370 +620,1161 @@ export function Send({
     originPath &&
     sendOriginHistory?.originPath === originPath &&
     sendOriginHistory.network === currentNetwork &&
-    sendOriginHistory.walletId === currentWalletId &&
-    sendOriginHistory.accountId === currentAccountId &&
+    sendOriginHistory.walletId === effectiveWalletId &&
+    sendOriginHistory.accountId === effectiveAccountId &&
     typeof sendOriginHistory.entryKey === 'string' &&
     sendOriginHistory.entryKey.length > 0
   )
-  const leaveSend = () =>
-    canReturnToOriginHistory
-      ? goBack()
-      : navigate(originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/'), {
-          replace: true
-        })
-  const isSelfMove = routeParams.get('move') === '1'
-  const moveSource =
-    routeParams.get('from') === 'transparent' || routeParams.get('from') === 'shielded'
-      ? (routeParams.get('from') as FundingSource)
-      : null
-  const walletMode = 'public' as const
-  const requestedRetryDraft = (location.state as { retryDraft?: ZcashSendRetryDraft } | null)
-    ?.retryDraft
-  const retryDraft =
-    requestedRetryDraft?.network === currentNetwork &&
-    requestedRetryDraft.walletId === currentWalletId &&
-    requestedRetryDraft.accountId === currentAccountId &&
-    requestedRetryDraft.fundingSource === routeParams.get('from')
-      ? requestedRetryDraft
-      : null
-  const routeIdentity = JSON.stringify([isSelfMove, routeParams.get('from'), walletMode])
-  const previousRouteIdentity = useRef(routeIdentity)
-  const [selectedFundingSource, setFundingSource] = useState<FundingSource>(() => {
-    const source = routeParams.get('from')
-    return (
-      retryDraft?.fundingSource ??
-      (source === 'shielded' || source === 'transparent' ? source : initialFundingSource)
-    )
-  })
-  const [privateSendScope, setPrivateSendScope] = useState<string | null>(null)
-  const [privatePreview, setPrivatePreview] = useState<{
-    key: string
-    quote: RheaSwapQuoteView
-    amountRaw: string
-  } | null>(null)
-  const [privatePreviewError, setPrivatePreviewError] = useState<string | null>(null)
-  const [privatePreviewRetry, setPrivatePreviewRetry] = useState(0)
-  const [toAddress, setToAddress] = useState(retryDraft?.toAddress ?? '')
-  const [selectedRecipient, setSelectedRecipient] = useState<{
-    address: string
-    name: string
-  } | null>(null)
-  const [amount, setAmount] = useState(retryDraft?.amount ?? '')
-  const [maxSelected, setMaxSelected] = useState(retryDraft?.maxSelected ?? false)
-  const [memo, setMemo] = useState(retryDraft?.memo ?? '')
-  const [showReview, setShowReview] = useState(false)
-  const [isHardwareSigning, setIsHardwareSigning] = useState(false)
-  const [isConfirming, setIsConfirming] = useState(false)
-  const confirmationInFlight = useRef(false)
-  const activeRef = useRef(active)
-  activeRef.current = active
-  const appliedFundingSourceRevision = useRef<number | null>(null)
-  const {
-    isShielding: isMigrating,
-    handleShieldFunds: handleMigrateNow,
-    shieldSheet: migrateSheet
-  } = useShieldFunds(PAGE_IDS.SEND)
-
-  const currentAccount = useWalletStore(state => state.getCurrentAccount())
-  const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
-  const activeScopeRef = useRef<string | null | undefined>(undefined)
-  const balance = useAccountDataStore(state => state.getCurrentBalance())
-  const balanceReadStatus = useZcashBalanceReadStatus(
+  const scopeKey = JSON.stringify([
+    effectiveWalletId,
+    effectiveAccountId,
     currentNetwork,
-    currentWalletId,
-    currentAccountId
+    chainEndpointRuntimeKey
+  ])
+  const sendEntryKey = `${location.key}:${scopeKey}`
+  const navigationSnapshot = location.state as {
+    initialPortfolio?: PortfolioReadModel | null
+    initialPrices?: AssetPriceReadModel | null
+    walletId?: string | null
+    accountId?: string | null
+    network?: string
+    endpointRuntimeKey?: string
+    preparedSendSelection?: { scopeKey: string; value: SendAsset }
+    sendEntry?: 'asset-detail' | 'shield'
+    openSourceAssetPicker?: boolean
+    crossChainReturnDraft?: {
+      sourceAssetId: string
+      walletId: string
+      accountId: string
+      recipient: string
+      amount: string
+      destinationAssetId?: string
+      destinationChainId?: string
+    }
+  } | null
+  const returnedSourcePickerRequested =
+    navigationSnapshot?.openSourceAssetPicker === true &&
+    entryScopeValid &&
+    Boolean(effectiveWalletId && effectiveAccountId) &&
+    navigationSnapshot.crossChainReturnDraft?.sourceAssetId === requestedAssetId &&
+    navigationSnapshot.crossChainReturnDraft.walletId === effectiveWalletId &&
+    navigationSnapshot.crossChainReturnDraft.accountId === effectiveAccountId
+  const assetPickerOpen =
+    assetPickerState?.key === sendEntryKey ? assetPickerState.open : returnedSourcePickerRequested
+  const setAssetPickerOpen = (open: boolean) => setAssetPickerState({ key: sendEntryKey, open })
+  const handleNonEvmDraftChange = useCallback(
+    (assetId: string, draft: Readonly<{ recipient: string; amount: string }>) => {
+      setNonEvmDraft(previous =>
+        previous?.key === sendEntryKey &&
+        previous.assetId === assetId &&
+        previous.recipient === draft.recipient &&
+        previous.amount === draft.amount
+          ? previous
+          : { key: sendEntryKey, assetId, ...draft }
+      )
+    },
+    [sendEntryKey]
   )
-  const syncReadStatus = useZcashSyncReadStatus(currentNetwork, currentWalletId, currentAccountId)
-  const balanceKnown = balance !== null
-  const syncState = useAccountDataStore(state =>
-    currentWalletId
-      ? state.getWalletSyncState(currentNetwork, currentWalletId)
+  useEffect(() => {
+    setSourcePicker(null)
+    setNearSourceOptions(null)
+    setZcashFundingSelection(null)
+  }, [sendEntryKey])
+  const [domainSession, setDomainSession] = useState<SendDomainSession | null>(null)
+  const requestedZcashProvider =
+    initialZcashProvider || searchParams.get('provider') === 'zcash-shield'
+  const initialSource =
+    domainSession?.routeKey === location.key
+      ? domainSession.source
+      : requestedZcashProvider || requestedSourceMode === 'shield'
+        ? 'shield'
+        : 'main'
+  const currentSession: SendDomainSession =
+    domainSession?.key === sendEntryKey
+      ? domainSession
       : {
-          isSyncing: false,
-          syncProgress: 0,
-          currentHeight: 0,
-          latestHeight: 0,
-          etaMs: null
+          key: sendEntryKey,
+          routeKey: location.key,
+          source: initialSource,
+          publicVisited: initialSource !== 'shield',
+          publicRecipient: requestedRecipient ?? '',
+          publicAmount: requestedAmount,
+          shieldProvider: requestedZcashProvider ? 'zcash-shield' : 'near-confidential',
+          zcashVisited: requestedZcashProvider,
+          zcashInitialFundingSource:
+            searchParams.get('from') === 'transparent' &&
+            !getFundingSourceUnavailableReason(zcashKeySource, 'transparent')
+              ? 'transparent'
+              : (searchParams.get('from') === 'shielded' ||
+                    (requestedZcashProvider && !initialZcashProvider)) &&
+                  !getFundingSourceUnavailableReason(zcashKeySource, 'shielded')
+                ? 'shielded'
+                : defaultZcashFundingSource,
+          shieldEntry:
+            initialSource === 'shield'
+              ? {
+                  assetId: requestedZcashProvider ? ZEC_ZCASH_ASSET : requestedAssetId,
+                  networkId: requestedNetworkId,
+                  recipient: requestedRecipient ?? '',
+                  amount: requestedAmount,
+                  provider: 'near-confidential'
+                }
+              : null
         }
-  )
-  const syncBlocked = isSelfMove && (syncReadStatus !== 'available' || syncState.isSyncing)
-  const feeSyncScope = syncState.isSyncing ? 'syncing' : 'idle'
-  const zecPrice = useWalletStore(state => state.zecPrice)
-  const { setResult, updateStep } = useTransactionResultStore()
-
-  const currentWallet = useWalletStore(state => state.getCurrentWallet())
-  const accountDisplayName = getAccountDisplayName(
-    currentWalletId ?? currentWallet?.id ?? '',
-    currentAccountId ?? currentAccount?.id ?? '',
-    currentAccount?.name ?? 'Account',
-    accountDisplayNames
-  )
-  const isHardwareWallet = isZcashHardwareKeySource(currentWallet?.keySource)
-  // Keep a bare Move route stable while balances refresh; entry points pass a funded source explicitly.
-  const defaultMoveSource = getDefaultZcashSelfMoveSource({
-    addresses: currentAccount?.addresses,
-    balance: null,
-    keySource: currentWallet?.keySource,
-    network: currentNetwork
-  })
-  const fundingSource = isSelfMove
-    ? (moveSource ?? defaultMoveSource ?? 'transparent')
-    : getFundingSourceUnavailableReason(currentWallet?.keySource, selectedFundingSource)
-      ? 'shielded'
-      : selectedFundingSource
-  const isTransparentToShieldMove = isSelfMove && fundingSource === 'transparent'
-  const sendDraftPath = `${embedded ? '/send/zcash' : location.pathname}?${new URLSearchParams({
-    ...(isSelfMove ? { move: '1' } : {}),
-    ...(originPath ? { originPath } : {}),
-    ...(sourceWalletId ? { sourceWalletId } : {}),
-    ...(sourceAccountId ? { sourceAccountId } : {}),
-    from: fundingSource,
-    mode: walletMode
-  })}`
-  const resultReturnPath = originPath ?? (fundingSource === 'shielded' ? '/shield-funds' : '/')
-  const resultNavigationState = canReturnToOriginHistory
-    ? {
-        sendOriginHistory: {
-          originPath,
-          network: currentNetwork,
-          walletId: currentWalletId,
-          accountId: currentAccountId,
-          entryKey: sendOriginHistory?.entryKey,
-          sendKey: location.key
-        }
+  const shieldActive = currentSession.source === 'shield'
+  const zcashActive =
+    shieldActive && currentSession.shieldProvider === 'zcash-shield' && !sourcePicker
+  const nearActive =
+    shieldActive && currentSession.shieldProvider === 'near-confidential' && !sourcePicker
+  const selectZcash = (source: FundingSource) => {
+    if (getFundingSourceUnavailableReason(zcashKeySource, source)) return
+    setAssetPickerOpen(false)
+    setZcashFundingSelection(previous => ({
+      key: sendEntryKey,
+      source,
+      revision: (previous?.revision ?? 0) + 1
+    }))
+    setDomainSession({
+      ...currentSession,
+      source: 'shield',
+      shieldProvider: 'zcash-shield',
+      zcashVisited: true,
+      zcashInitialFundingSource: currentSession.zcashVisited
+        ? currentSession.zcashInitialFundingSource
+        : source,
+      shieldEntry: currentSession.shieldEntry ?? {
+        assetId: ZEC_ZCASH_ASSET,
+        networkId: null,
+        recipient: '',
+        provider: 'near-confidential'
       }
-    : undefined
-  const retrySend =
-    currentWalletId && currentAccountId
-      ? {
-          path: sendDraftPath,
-          draft: {
-            network: currentNetwork,
-            walletId: currentWalletId,
-            accountId: currentAccountId,
-            fundingSource,
-            toAddress,
-            amount,
-            memo,
-            maxSelected
-          }
-        }
-      : undefined
-  const selfMove = isSelfMove
-    ? resolveZcashSelfMove(currentAccount?.addresses, fundingSource, currentNetwork)
-    : null
-  const moveUnavailableReason = getFundingSourceUnavailableReason(
-    currentWallet?.keySource,
-    fundingSource
-  )
-  const moveUnavailable = isSelfMove && (!selfMove || Boolean(moveUnavailableReason))
-  const reverseSource = fundingSource === 'transparent' ? 'shielded' : 'transparent'
-  const canReverseMove =
-    isSelfMove &&
-    resolveZcashSelfMove(currentAccount?.addresses, reverseSource, currentNetwork) !== null &&
-    !getFundingSourceUnavailableReason(currentWallet?.keySource, reverseSource)
-
-  const { sendTransaction } = useTransaction()
-
-  const recipientInput = resolveZcashSendRecipientInput(toAddress, currentNetwork)
-  const zns = useZnsResolve(active && !isSelfMove ? recipientInput.znsInput : '')
-  const effectiveToAddress = isSelfMove
-    ? (selfMove?.toAddress ?? '')
-    : recipientInput.formatError
-      ? ''
-      : zns.address || recipientInput.resolvedAddress
-  const recipientFormatError = isSelfMove ? null : recipientInput.formatError
-
-  const feeTier = useSettingsStore(state => state.feeTier)
-  const setFeeTier = useSettingsStore(state => state.setFeeTier)
-
-  const fromAddress = currentAccount?.addresses[fundingSource] || ''
-  const sourceBalance = getFundingBalance(balance, fundingSource)
-  const fundingOptions = getFundingSourceOptions(
-    balance,
-    currentAccount?.addresses ?? {},
-    currentWallet?.keySource
-  )
-  const transparentBalance = safeBig(getShieldableTransparentBalance(balance)).toNumber()
-  const shieldableBalance = getShieldableTransparentBalance(balance)
-
-  const reverseMove = () => {
-    if (!canReverseMove) return
-    setShowReview(false)
-    setToAddress('')
-    setSelectedRecipient(null)
-    setAmount('')
-    setMaxSelected(false)
-    setMemo('')
-    const params = new URLSearchParams({
-      move: '1',
-      from: reverseSource,
-      mode: walletMode,
-      ...(originPath ? { originPath } : {}),
-      ...(sourceWalletId ? { sourceWalletId } : {}),
-      ...(sourceAccountId ? { sourceAccountId } : {})
     })
-    navigate(`/send/zcash?${params.toString()}`, { replace: true })
   }
-
-  const recipientSupportsMemo = supportsZcashMemo(effectiveToAddress)
-  const effectiveMemo = isSelfMove ? '' : sanitizeMemoForRecipient(effectiveToAddress, memo)
-  const privacyScope = JSON.stringify([currentNetwork, currentWalletId, currentAccountId])
-  const privateSendAvailable =
-    !isSelfMove &&
-    currentNetwork === 'mainnet' &&
-    fundingSource === 'transparent' &&
-    (!effectiveToAddress || isTransparentZcashAddress(effectiveToAddress)) &&
-    !getFundingSourceUnavailableReason(currentWallet?.keySource, 'transparent')
-  const sendPrivately = privateSendAvailable && privateSendScope === privacyScope
-  const memoUnsupported = Boolean(!isSelfMove && !sendPrivately && memo && !recipientSupportsMemo)
-  const previewKey =
-    active &&
-    sendPrivately &&
-    currentWalletId &&
-    currentAccountId &&
-    fromAddress &&
-    isPublicPrivateSendRecipient(ZEC_ZCASH_ASSET, effectiveToAddress) &&
-    safeBig(amount || '0').gt(0) &&
-    safeBig(amount || '0').lte(sourceBalance.available)
-      ? JSON.stringify([privacyScope, fromAddress, effectiveToAddress, amount, feeTier])
-      : null
-  const currentPreviewKey = useRef(previewKey)
-  currentPreviewKey.current = previewKey
-  const privatePreviewReady = Boolean(
-    previewKey && privatePreview?.key === previewKey && isRheaSwapQuoteFresh(privatePreview.quote)
-  )
-  useEffect(() => {
-    if (isSelfMove || !currentWalletId || !currentAccountId) return
-    const draft = parsePublicPrivateEvmSendDraft(new URLSearchParams(location.search), {
-      walletId: currentWalletId,
-      accountId: currentAccountId,
-      network: currentNetwork,
-      assetId: ZEC_ZCASH_ASSET
-    })
-    if (!draft) return
-    setFundingSource('transparent')
-    setToAddress(draft.recipient)
-    setAmount(draft.amount)
-    setMaxSelected(draft.maximum)
-    setPrivateSendScope(privacyScope)
-  }, [location.search, currentWalletId, currentAccountId, currentNetwork, isSelfMove, privacyScope])
-  useEffect(() => {
-    setPrivatePreview(null)
-    setPrivatePreviewError(null)
-    if (!previewKey) return
-    let cancelled = false
-    let quoteHandle: string | null = null
-    let expiryTimer: number | undefined
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const [source, destination] = await Promise.all([
-            rheaSwapClient.listTokens({ direction: 'from', tokenListChainIds: [900010] }),
-            rheaSwapClient.listTokens({ direction: 'cross-chain-to', tokenListChainIds: [900010] })
-          ])
-          if (cancelled) return
-          const request = buildZcashPublicPrivateSendPreviewRequest({
-            sourceTokens: source.tokens,
-            destinationTokens: destination.tokens,
-            amount,
-            slippage: 1,
-            sender: fromAddress,
-            recipient: effectiveToAddress
-          })
-          if (!request) throw new Error('Confidential route unavailable')
-          const quote = await rheaSwapClient.quote(request.request, 'public-private-send')
-          if (cancelled || currentPreviewKey.current !== previewKey) {
-            void rheaSwapClient.discard(quote.quoteHandle).catch(() => {})
-            return
-          }
-          quoteHandle = quote.quoteHandle
-          if (!isRheaSwapQuoteFresh(quote) || quote.recipient !== effectiveToAddress)
-            throw new Error('Quote expired. Try again.')
-          setPrivatePreview({ key: previewKey, quote, amountRaw: request.amount })
-          expiryTimer = window.setTimeout(
-            () => {
-              if (cancelled || currentPreviewKey.current !== previewKey) return
-              setPrivatePreview(null)
-              setPrivatePreviewError('Quote expired. Try again.')
-              if (quoteHandle) void rheaSwapClient.discard(quoteHandle).catch(() => {})
-              quoteHandle = null
-            },
-            Math.max(0, getRheaSwapQuoteDeadline(quote) - Date.now())
-          )
-        } catch (error) {
-          if (quoteHandle) {
-            void rheaSwapClient.discard(quoteHandle).catch(() => {})
-            quoteHandle = null
-          }
-          if (!cancelled && currentPreviewKey.current === previewKey)
-            setPrivatePreviewError(getRheaSwapErrorMessage(error))
+  const openSourcePicker = (mode: 'shield' | 'zcash-public', provider: ShieldProvider) => {
+    setSourceRenderWindow({ filter: '', count: 100 })
+    setSourcePickerQuery('')
+    setSourcePickerNetwork('all')
+    if (mode === 'shield' && !currentSession.shieldEntry) {
+      setDomainSession({
+        ...currentSession,
+        shieldEntry: {
+          assetId: ZEC_ZCASH_ASSET,
+          networkId: null,
+          recipient: '',
+          provider: 'near-confidential'
         }
-      })()
-    }, 800)
+      })
+    }
+    setSourcePicker({ mode, provider })
+  }
+  const [{ reviewing: shieldReviewing, busy: shieldBusy }, setShieldState] = useState({
+    reviewing: false,
+    busy: false
+  })
+  const handleShieldStateChange = useCallback(
+    (next: { readonly reviewing: boolean; readonly busy: boolean }) => {
+      setShieldState(previous =>
+        previous.reviewing === next.reviewing && previous.busy === next.busy ? previous : next
+      )
+    },
+    []
+  )
+  const handleNearSourceOptions = useCallback(
+    (value: ShieldWithdrawSourcePickerState) => {
+      setNearSourceOptions({ key: sendEntryKey, value })
+    },
+    [sendEntryKey]
+  )
+  const setSelection = (value: SendAsset | null) =>
+    setSelectionSnapshot({ scopeKey, entryKey: location.key, requestedAssetId, value })
+  const sendEntry =
+    entryScopeValid &&
+    (navigationSnapshot?.sendEntry === 'asset-detail' || navigationSnapshot?.sendEntry === 'shield')
+      ? navigationSnapshot.sendEntry
+      : null
+  const returnToEntry = originPath
+    ? canReturnToOriginHistory
+      ? goBack
+      : () => navigate(originPath, { replace: true })
+    : !entryScopeValid
+      ? () => navigate(shieldActive ? '/shield-funds' : '/', { replace: true })
+      : initialZcashProvider
+        ? () =>
+            navigate(
+              currentSession.zcashInitialFundingSource === 'shielded' ? '/shield-funds' : '/',
+              { replace: true }
+            )
+        : goBack
+  const initialPortfolio =
+    navigationSnapshot?.walletId === effectiveWalletId &&
+    navigationSnapshot?.accountId === effectiveAccountId &&
+    navigationSnapshot?.network === currentNetwork &&
+    navigationSnapshot?.endpointRuntimeKey === chainEndpointRuntimeKey &&
+    isPortfolioModelForScope(
+      navigationSnapshot?.initialPortfolio ?? null,
+      effectiveWalletId,
+      effectiveAccountId
+    )
+      ? navigationSnapshot.initialPortfolio
+      : null
+  const visibleModel = model
+  const initialPrices =
+    initialPortfolio && navigationSnapshot?.initialPrices?.status !== 'error'
+      ? (navigationSnapshot?.initialPrices ?? null)
+      : null
+  const cachedPrices = assetPriceSnapshot?.scopeKey === scopeKey ? assetPriceSnapshot.value : null
+  const assetPrices =
+    cachedPrices &&
+    (!initialPrices ||
+      (cachedPrices.fetchedAt >= initialPrices.fetchedAt &&
+        cachedPrices.quotes.length >= initialPrices.quotes.length))
+      ? cachedPrices
+      : initialPrices
+  const zcashEnabled =
+    !contextChanging &&
+    (storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
+      Boolean(currentAccount?.addresses.transparent || currentAccount?.addresses.shielded))
+  const confidentialEnabled =
+    getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0
+  const availableShieldProviders: ShieldProvider[] = [
+    ...(confidentialEnabled ? (['near-confidential'] as const) : []),
+    ...(zcashEnabled ? (['zcash-shield'] as const) : [])
+  ]
+
+  const load = useCallback(
+    async (forceRefresh = false, refreshChainId?: string) => {
+      await refresh(forceRefresh, refreshChainId ? { chainIds: [refreshChainId] } : {})
+    },
+    [refresh]
+  )
+
+  useEffect(() => {
+    setSelectionSnapshot(null)
+    setSubmission(null)
+    setAssetPickerState(null)
+  }, [effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey])
+
+  useEffect(() => {
+    let cancelled = false
+    void assetPriceClient
+      .getPrices('read')
+      .then(prices => {
+        if (!cancelled && prices && prices.status !== 'error' && prices.quotes.length > 0)
+          setAssetPriceSnapshot({ scopeKey, value: prices })
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
-      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer)
-      if (quoteHandle) void rheaSwapClient.discard(quoteHandle).catch(() => {})
     }
-  }, [previewKey, privatePreviewRetry])
+  }, [scopeKey])
 
-  const maxTransfer = useMaxTransferEstimate({
-    to: effectiveToAddress,
-    memo: effectiveMemo,
-    feeTier,
-    fundingSource,
-    scopeKey: feeSyncScope,
-    enabled:
-      active &&
-      balanceKnown &&
-      !syncBlocked &&
-      !sendPrivately &&
-      !moveUnavailable &&
-      !!effectiveToAddress &&
-      !!fromAddress &&
-      !recipientFormatError
-  })
-  const isMaxTransferAmount =
-    !!maxTransfer.maxAmount && safeBig(amount || '0').eq(maxTransfer.maxAmount)
-  const staleSelectedMax = maxSelected && !!maxTransfer.maxAmount && !isMaxTransferAmount
-  const feeEstimate = useFeeEstimate({
-    type: 'send',
-    to: effectiveToAddress,
-    amount,
-    memo: effectiveMemo,
-    fundingSource,
-    feeTier,
-    scopeKey: feeSyncScope,
-    enabled:
-      active &&
-      balanceKnown &&
-      !syncBlocked &&
-      !sendPrivately &&
-      !moveUnavailable &&
-      safeBig(amount || '0').gt(0) &&
-      (!isSelfMove ||
-        safeBig(amount).lte(
-          isTransparentToShieldMove ? shieldableBalance : sourceBalance.available
-        )) &&
-      !!effectiveToAddress &&
-      !recipientFormatError &&
-      !maxSelected &&
-      !isMaxTransferAmount
-  })
-
-  const isMaxFeeMode = maxSelected || isMaxTransferAmount
-  const displayedFeeByTier = isMaxFeeMode ? maxTransfer.feeByTier : feeEstimate.feeByTier
-  const displayedFeeLoadingByTier = isMaxFeeMode
-    ? maxTransfer.loadingByTier
-    : feeEstimate.loadingByTier
-  const feeRequired =
-    !moveUnavailable &&
-    !!effectiveToAddress &&
-    safeBig(amount || '0').gt(0) &&
-    recipientFormatError === null
-  const feeError = feeRequired && (isMaxFeeMode ? maxTransfer.error : feeEstimate.error)
-  const feeReady =
-    feeRequired &&
-    !feeError &&
-    !staleSelectedMax &&
-    !!(isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote) &&
-    (isMaxFeeMode ? maxTransfer.feeQuote!.expiresAt : feeEstimate.feeQuote!.expiresAt) >
-      Date.now() &&
-    (isMaxFeeMode
-      ? !maxTransfer.loading &&
-        !!maxTransfer.feeQuote &&
-        !!maxTransfer.fee &&
-        safeBig(maxTransfer.fee).gt(0)
-      : !feeEstimate.loading && !!feeEstimate.feeQuote && feeEstimate.feeZats !== null)
-  const displayedFeeLoading = feeRequired && !feeReady && !feeError
-  const retryFeeEstimate = () => {
-    if (moveUnavailable) return
-    if (isMaxFeeMode) void maxTransfer.request()
-    else feeEstimate.retry()
-  }
-
-  const selectedFeeZats = feeEstimate.feeByTier[feeTier] ?? staticFeeFallbackZats(feeTier)
-  const standardFeeZats = feeEstimate.feeByTier.standard ?? staticFeeFallbackZats('standard')
-  const estimatedFeeZec = formatBaseUnitDecimalAmount(String(selectedFeeZats), ZEC_DECIMALS)
-  const { amount: effectiveMaxStr } = resolveZcashFundingAvailability({
-    balance,
-    fundingSource,
-    selectedFeeZats,
-    standardFeeZats,
-    maximumAmount: maxTransfer.maxAmount,
-    capTransparentToShieldable: isTransparentToShieldMove
-  })
-  const amountError = isTransparentToShieldMove
-    ? null
-    : getFundingAmountError(amount, sourceBalance, effectiveMaxStr)
-  const amountErrorCopy = isTransparentToShieldMove
-    ? getZcashTransparentToShieldMoveAmountError(amount, balance, effectiveMaxStr)
-    : getFundingAmountErrorCopy(amountError)
-  const reviewInsufficient =
-    amountError !== null || (isTransparentToShieldMove && amountErrorCopy !== undefined)
-  const isValidAmount =
-    balanceKnown && !!fromAddress && safeBig(amount || '0').gt(0) && !reviewInsufficient
-  const selectedFeeZec = isMaxFeeMode ? (maxTransfer.fee ?? estimatedFeeZec) : estimatedFeeZec
-  const selectedFeeQuote = isMaxFeeMode ? maxTransfer.feeQuote : feeEstimate.feeQuote
-  const latestFee = useRef({
-    selectedFeeQuote,
-    selectedFeeZec,
-    amount,
-    effectiveToAddress,
-    feeTier,
-    fundingSource,
-    effectiveMemo,
-    maxSelected,
-    isSelfMove
-  })
-  latestFee.current = {
-    selectedFeeQuote,
-    selectedFeeZec,
-    amount,
-    effectiveToAddress,
-    feeTier,
-    fundingSource,
-    effectiveMemo,
-    maxSelected,
-    isSelfMove
-  }
-
+  const assets = useMemo<readonly SendAsset[]>(() => {
+    if (!visibleModel) return []
+    const chainById = new Map(visibleModel.chains.map(chain => [chain.chain.id, chain]))
+    return visibleModel.assets.flatMap(asset => {
+      const chain = chainById.get(asset.asset.chainId)
+      return chain &&
+        isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
+        (chain.chain.family === 'evm' ||
+          chain.chain.family === 'bitcoin' ||
+          chain.chain.family === 'solana' ||
+          chain.chain.family === 'near') &&
+        chain.chain.capabilities.transaction.status === 'available'
+        ? [{ asset, chain }]
+        : []
+    })
+  }, [visibleModel])
+  const selectedSnapshot =
+    selectionSnapshot?.scopeKey === scopeKey &&
+    selectionSnapshot.entryKey === location.key &&
+    selectionSnapshot.requestedAssetId === requestedAssetId
+      ? selectionSnapshot
+      : null
+  const selectedAssetId = selectedSnapshot
+    ? (selectedSnapshot.value?.asset.asset.id ?? null)
+    : requestedAssetId
+  const preparedSelection =
+    !selectedSnapshot &&
+    entryScopeValid &&
+    navigationSnapshot?.preparedSendSelection?.scopeKey === scopeKey &&
+    navigationSnapshot.preparedSendSelection.value.asset.asset.id === requestedAssetId
+      ? navigationSnapshot.preparedSendSelection.value
+      : null
+  const selection = resolveSendAssetSelection(
+    assets,
+    selectedAssetId,
+    selectedSnapshot ? selectedSnapshot.value : preparedSelection
+  )
+  const returnDraft =
+    entryScopeValid &&
+    navigationSnapshot?.crossChainReturnDraft?.sourceAssetId === selection?.asset.asset.id &&
+    navigationSnapshot?.crossChainReturnDraft?.walletId === effectiveWalletId &&
+    navigationSnapshot?.crossChainReturnDraft?.accountId === effectiveAccountId
+      ? navigationSnapshot.crossChainReturnDraft
+      : null
+  const destinationCandidates = useMemo(
+    () =>
+      selection?.chain.chain.family === 'evm' && currentNetwork === 'mainnet' && storageV2Account
+        ? getCrossChainSendDestinationCandidates({
+            sourceChainId: selection.chain.chain.id,
+            chains: storageV2Account.networks,
+            enabledChainIds: storageV2Account?.networks.map(network => network.chain.id) ?? [],
+            capabilities: crossChainCapabilities,
+            enabledFlags: __ENABLED_CHAIN_FEATURE_FLAGS__
+          })
+        : [],
+    [currentNetwork, selection, storageV2Account]
+  )
   useEffect(() => {
-    if (showReview && staleSelectedMax && !isConfirming) setShowReview(false)
-  }, [showReview, staleSelectedMax, isConfirming])
-
-  useEffect(() => {
-    if (active && maxSelected && effectiveMaxStr) {
-      setAmount(effectiveMaxStr)
-    }
-  }, [active, maxSelected, effectiveMaxStr])
-
-  useEffect(() => {
-    if (!active) setShowReview(false)
-  }, [active])
-
-  useEffect(() => {
-    if (previousRouteIdentity.current === routeIdentity) return
-    previousRouteIdentity.current = routeIdentity
-    setShowReview(false)
-    setFundingSource(moveSource ?? defaultMoveSource ?? 'transparent')
-    setToAddress('')
-    setSelectedRecipient(null)
-    setAmount('')
-    setMaxSelected(false)
-    setMemo('')
-  }, [moveSource, routeIdentity, walletMode, defaultMoveSource])
-
-  useEffect(() => {
-    const activeScope = getActiveAccountScopeKey()
-    const previousScope = activeScopeRef.current
-    activeScopeRef.current = activeScope
-    if (previousScope === undefined || previousScope === activeScope) return
-
-    setShowReview(false)
-    setToAddress('')
-    setSelectedRecipient(null)
-    setAmount('')
-    setMaxSelected(false)
-    setMemo('')
-    setFundingSource('shielded')
-  }, [currentWalletId, currentAccountId])
-
-  const handleSelectFundingSource = (source: FundingSource) => {
-    if (fundingOptions.find(option => option.type === source)?.disabledReason) return
-    setPrivateSendScope(null)
-    if (!shouldRetainZcashSendRecipient(toAddress, currentAccount?.addresses)) {
-      setToAddress('')
-      setSelectedRecipient(null)
-    }
-    setFundingSource(source)
-    setAmount('')
-    setMaxSelected(false)
-    setShowReview(false)
-  }
-
-  useLayoutEffect(() => {
     if (
-      !fundingSourceSelection ||
-      appliedFundingSourceRevision.current === fundingSourceSelection.revision
+      !selection ||
+      selection.chain.chain.family !== 'evm' ||
+      currentNetwork !== 'mainnet' ||
+      shieldActive ||
+      assetPickerOpen
     )
       return
-    appliedFundingSourceRevision.current = fundingSourceSelection.revision
-    if (fundingSource !== fundingSourceSelection.source)
-      handleSelectFundingSource(fundingSourceSelection.source)
-  }, [fundingSourceSelection, fundingSource])
+    let cancelled = false
+    void hydrateEvmSendDestinationCatalogs({
+      sourceChain: selection.chain.chain,
+      destinationChains: destinationCandidates.map(item => item.chain.chain)
+    }).then(() => {
+      if (!cancelled) refreshDestinationSupport(revision => revision + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    selection,
+    destinationCandidates,
+    sendEntryKey,
+    currentNetwork,
+    shieldActive,
+    assetPickerOpen,
+    destinationCacheAttempt
+  ])
 
-  const handleSelectMyAddress = async () => {
-    await openModal<string>({
-      title: 'Select Recipient',
-      showCloseButton: true,
-      body: (resolve: (value: any) => void, close: () => void) => (
-        <RecipientSelector
-          chainId={getZcashChainId(currentNetwork)}
-          excludeAddresses={fromAddress ? [fromAddress] : []}
-          onSelect={(address, name) => {
-            setToAddress(address)
-            setSelectedRecipient(name ? { address, name } : null)
-            close()
-            resolve(address)
-          }}
-        />
+  const selectReturnedSource = (
+    asset: SendAsset | null,
+    zcashSource: FundingSource = defaultZcashFundingSource
+  ) => {
+    const draft =
+      (assetPickerState?.key === sendEntryKey ? assetPickerState.draft : undefined) ??
+      (returnedSourcePickerRequested ? navigationSnapshot?.crossChainReturnDraft : undefined)
+    if (!draft || !effectiveWalletId || !effectiveAccountId) {
+      if (asset) {
+        setSelection(asset)
+        setAssetPickerOpen(false)
+      } else {
+        selectZcash(zcashSource)
+      }
+      return
+    }
+
+    const preparedSendSelection = asset
+      ? {
+          scopeKey,
+          value: { asset: asset.asset, chain: { ...asset.chain, assets: [] } }
+        }
+      : undefined
+    const sourceAssetId = asset?.asset.asset.id ?? ZEC_ZCASH_ASSET
+    const requestedDestinationChainId = draft.destinationChainId
+    const destinationSupport =
+      asset && requestedDestinationChainId
+        ? readEvmSendDestinationSupport({
+            sourceAssetId,
+            destinationChainId: requestedDestinationChainId,
+            capabilities: crossChainCapabilities
+          })
+        : null
+    const destinationChainId =
+      destinationSupport?.status === 'unavailable'
+        ? asset?.chain.chain.id
+        : requestedDestinationChainId
+    const destinationChain = storageV2Account?.networks.find(
+      network => network.chain.id === destinationChainId
+    )
+    const group = asset ? getCrossChainSendAssetGroup(asset.asset.asset) : null
+    const matchingDestinationAssetId =
+      destinationChainId === requestedDestinationChainId &&
+      destinationSupport?.status === 'available'
+        ? destinationSupport.destinationAssetId
+        : destinationChainId && group
+          ? getCrossChainSendDestinationAssetId(destinationChainId, group)
+          : null
+    const destinationDescriptor = destinationChain
+      ? getEnabledSwapChains([destinationChain.chain])[0]
+      : null
+    const enabledDescriptor = (descriptor: typeof destinationDescriptor) =>
+      descriptor &&
+      ((descriptor.walletFamily === 'evm' && crossChainCapabilities.evm) ||
+        (descriptor.walletFamily === 'solana' && crossChainCapabilities.solana))
+    const validDestinationChain =
+      currentNetwork === 'mainnet' &&
+      asset &&
+      destinationChainId &&
+      storageV2Account?.networks.some(network => network.chain.id === asset.chain.chain.id) &&
+      storageV2Account?.networks.some(network => network.chain.id === destinationChainId) &&
+      destinationChain &&
+      isSelectableChainFamily(destinationChain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__) &&
+      destinationChain?.chain.capabilities.transaction.status === 'available' &&
+      enabledDescriptor(destinationDescriptor)
+        ? destinationChain
+        : null
+    const previousDestination = storageV2Account?.networks.find(
+      network => network.chain.id === requestedDestinationChainId
+    )
+    const recipient =
+      requestedDestinationChainId !== destinationChainId &&
+      previousDestination?.chain.family !== destinationChain?.chain.family
+        ? ''
+        : (draft.recipient ?? requestedRecipient ?? '')
+    const amount = draft?.amount ?? requestedAmount
+    if (validDestinationChain && asset && asset.chain.chain.id !== destinationChainId) {
+      navigate(
+        `/send/cross-chain?${new URLSearchParams({
+          source: sourceAssetId,
+          destinationChainId: validDestinationChain.chain.id,
+          ...(matchingDestinationAssetId ? { destination: matchingDestinationAssetId } : {}),
+          sourceMode: 'main',
+          sourceWalletId: effectiveWalletId,
+          sourceAccountId: effectiveAccountId,
+          ...(originPath ? { originPath } : {}),
+          ...(recipient ? { recipient } : {}),
+          ...(amount ? { amount } : {})
+        })}`,
+        {
+          replace: true,
+          state: {
+            preparedSendSelection,
+            returnToSendAssetId: sourceAssetId,
+            sendEntry,
+            crossChainSendRouteAccount: {
+              walletId: effectiveWalletId,
+              accountId: effectiveAccountId,
+              sourceAssetId,
+              destinationChainId: validDestinationChain.chain.id,
+              ...(matchingDestinationAssetId
+                ? { destinationAssetId: matchingDestinationAssetId }
+                : {})
+            }
+          }
+        }
       )
+      return
+    }
+    setAssetPickerOpen(false)
+    const params = new URLSearchParams({
+      assetId: sourceAssetId,
+      sourceMode: asset ? 'main' : 'shield',
+      sourceWalletId: effectiveWalletId,
+      sourceAccountId: effectiveAccountId,
+      ...(asset ? {} : { provider: 'zcash-shield', from: zcashSource }),
+      ...(recipient ? { recipient } : {}),
+      ...(amount ? { amount } : {}),
+      ...(originPath ? { originPath } : {})
+    })
+    navigate(`/send?${params}`, {
+      replace: true,
+      state: {
+        ...(preparedSendSelection ? { preparedSendSelection } : {}),
+        sendEntry,
+        crossChainReturnDraft: {
+          sourceAssetId,
+          destinationAssetId:
+            asset?.chain.chain.id === destinationChainId
+              ? sourceAssetId
+              : (matchingDestinationAssetId ?? undefined),
+          destinationChainId,
+          walletId: effectiveWalletId,
+          accountId: effectiveAccountId,
+          recipient,
+          amount
+        }
+      }
     })
   }
 
-  const handleContinue = () => {
-    if (!active || syncBlocked) return
-    if (sendPrivately) {
-      if (!privatePreviewReady || !currentWalletId || !currentAccountId || !isValidAmount) return
-      navigate(
-        buildPublicPrivateEvmSendPath({
-          assetId: ZEC_ZCASH_ASSET,
-          recipient: effectiveToAddress,
-          amount,
-          maximum: maxSelected,
-          walletId: currentWalletId,
-          accountId: currentAccountId,
-          network: currentNetwork
-        }),
-        { replace: true }
-      )
-      return
-    }
-    if (
-      effectiveToAddress &&
-      !moveUnavailable &&
-      isValidAmount &&
-      !reviewInsufficient &&
-      feeReady &&
-      !memoUnsupported &&
-      !recipientFormatError &&
-      (isSelfMove ||
-        isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
-    ) {
-      setShowReview(true)
-    }
-  }
-
-  const sendEventBase: TrackOptions = {
-    pageId: PAGE_IDS.SEND,
-    hasTransaction: 1,
-    inputSymbol: 'ZEC'
-  }
-
-  const handleConfirm = async () => {
-    if (!active || isHardwareSigning || confirmationInFlight.current) return
-    if (
-      !isValidAmount ||
-      reviewInsufficient ||
-      !feeReady ||
-      !selectedFeeQuote ||
-      memoUnsupported ||
-      !fromAddress ||
-      !currentAccount ||
-      syncBlocked ||
-      moveUnavailable
+  useEffect(() => {
+    if (selection?.chain.chain.family !== 'evm' || requestedSourceMode !== 'private') return
+    replace(
+      `/transfer?${new URLSearchParams({
+        assetId: selection.asset.asset.id,
+        from: 'private',
+        to: 'shield'
+      })}`
     )
-      return
-    const activeScope = getActiveAccountScopeKey()
-    if (!activeScope) return
-    confirmationInFlight.current = true
-    setIsConfirming(true)
-    try {
-      try {
-        const currentQuote = await zcashWalletRuntimeClient.getFeeQuote()
-        const latest = latestFee.current
-        if (
-          !activeRef.current ||
-          getActiveAccountScopeKey() !== activeScope ||
-          latest.selectedFeeQuote?.id !== selectedFeeQuote.id ||
-          latest.selectedFeeZec !== selectedFeeZec ||
-          latest.amount !== amount ||
-          latest.effectiveToAddress !== effectiveToAddress ||
-          latest.feeTier !== feeTier ||
-          latest.fundingSource !== fundingSource ||
-          latest.effectiveMemo !== effectiveMemo ||
-          latest.maxSelected !== maxSelected ||
-          latest.isSelfMove !== isSelfMove
+  }, [replace, requestedSourceMode, selection])
+
+  const leaveOnchainResult = useCallback(
+    (path: string, shouldOffer: boolean) => {
+      const graph = submission?.value.graph
+      const recipient = graph?.root.intent?.recipient
+      const sender = graph?.root.intent?.sender
+      const chain = selection?.chain.chain
+      if (path === '/send') {
+        setSubmission(null)
+        setAssetPickerOpen(false)
+        navigate(
+          originPath ??
+            (selection
+              ? `/send?${new URLSearchParams({
+                  assetId: selection.asset.asset.id,
+                  sourceMode: 'main'
+                })}`
+              : '/send'),
+          { replace: true }
         )
-          return
-        if (currentQuote.id !== selectedFeeQuote.id || selectedFeeQuote.expiresAt <= Date.now()) {
-          if (isMaxFeeMode) void maxTransfer.request(true)
-          else feeEstimate.retry()
-          return
-        }
-      } catch {
-        if (isMaxFeeMode) void maxTransfer.request(true)
-        else feeEstimate.retry()
-        return
-      }
-      assertActiveAccountScope(activeScope)
-      if (isSelfMove) {
-        const wallet = useWalletStore.getState()
-        const currentMove = resolveZcashSelfMove(
-          wallet.getCurrentAccount()?.addresses,
-          fundingSource,
-          wallet.currentNetwork
-        )
-        if (
-          wallet.currentNetwork !== currentNetwork ||
-          !currentMove ||
-          currentMove.fromAddress !== fromAddress ||
-          currentMove.toAddress !== effectiveToAddress
-        ) {
-          throw new Error('Active account changed. Review this action again.')
-        }
-      }
-      const marginalFeeZats = marginalFeeForTier(feeTier, selectedFeeQuote.standardMarginalFeeZats)
-
-      sendAnalyticsEvent(ANALYTICS_EVENTS.SEND_SUBMITTED, {
-        ...sendEventBase,
-        extra: { fee_tier: feeTier, hardware: isHardwareWallet, funding_source: fundingSource }
-      })
-
-      // Hardware wallets sign via QR codes in a dedicated tab (camera access
-      // and the multi-step flow don't survive in a popup)
-      if (isHardwareWallet) {
-        assertActiveAccountScope(activeScope)
-        if (!currentWallet || !currentAccount) return
-        setShowReview(false)
-        const request = {
-          kind: 'send' as const,
-          walletId: currentWallet.id,
-          accountId: currentAccount.id,
-          to: effectiveToAddress,
-          amount,
-          fundingSource,
-          maxTransfer: maxSelected,
-          memo: effectiveMemo,
-          marginalFeeZats,
-          feeQuoteId: selectedFeeQuote.id,
-          feeTier
-        }
-        if (!isSidePanelSurface(window.location.search)) {
-          await openHardwareSignTab(request)
-          window.close()
-          return
-        }
-
-        setIsHardwareSigning(true)
-        try {
-          const result = await openHardwareSignAndWait(request)
-          if (result.status === 'success') {
-            setResult(
-              {
-                type: 'zcash',
-                operation: isSelfMove ? 'move' : 'send',
-                step: 'submitted',
-                amount: result.amount,
-                fromAddress,
-                toAddress: effectiveToAddress,
-                txHash: result.txHash,
-                accountKey: result.accountKey,
-                transactionId: result.transactionId,
-                showFrom: true,
-                showTo: true
-              },
-              resultReturnPath,
-              retrySend
-            )
-            navigate('/transaction-result', { state: resultNavigationState })
-          } else if (result.status === 'timeout') {
-            toast.error('Hardware signing timed out', 'The transaction form has been restored.')
-          }
-        } catch (cause) {
-          toast.error('Could not open hardware signing', classifyError(cause).userMessage)
-        } finally {
-          setIsHardwareSigning(false)
-        }
-        return
-      }
-
-      setShowReview(false)
-
-      assertActiveAccountScope(activeScope)
-
-      const pendingResult = {
-        type: 'zcash',
-        operation: isSelfMove ? 'move' : 'send',
-        step: 'pending',
-        amount,
-        fromAddress,
-        toAddress: effectiveToAddress,
-        showFrom: true,
-        showTo: true,
-        saveRecipient: {
-          chainId: getZcashChainId(currentNetwork),
-          chainFamily: 'zcash',
-          network: currentNetwork,
-          networkName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
-          address: effectiveToAddress,
-          name: zns.name ?? 'Recipient',
-          znsName: zns.name || undefined,
-          selfTransfer: Object.values(currentAccount.addresses).includes(effectiveToAddress)
-        }
-      } as const
-      setResult(pendingResult, resultReturnPath, retrySend)
-      navigate('/transaction-result', { state: resultNavigationState })
-
-      const result = await sendTransaction({
-        to: effectiveToAddress,
-        amount,
-        from: fromAddress,
-        fromType: fundingSource,
-        memo: effectiveMemo,
-        fee: selectedFeeZec,
-        marginalFeeZats,
-        feeQuoteId: selectedFeeQuote.id,
-        feeTier,
-        onCreated: (transaction, accountKey) => {
-          if (useTransactionResultStore.getState().data !== pendingResult) return
-          updateStep('pending', {
-            accountKey,
-            transactionId: transaction.id,
-            timestamp: transaction.timestamp
-          })
-        },
-        analytics: {
-          pageId: PAGE_IDS.SEND,
-          fundingSource
-        }
-      })
-
-      if (result.step === 'success') {
-        updateStep(
-          'submitted',
-          { txHash: result.txHash, timestamp: result.timestamp },
-          result.accountKey,
-          result.transactionId
-        )
-      } else if (result.step === 'pending') {
-        updateStep('pending', { error: result.error }, result.accountKey, result.transactionId)
       } else {
-        if (result.transactionId) {
-          updateStep('failed', { error: result.error }, result.accountKey, result.transactionId)
-        } else if (useTransactionResultStore.getState().data === pendingResult) {
-          updateStep('failed', { error: result.error })
-        }
+        navigate(path)
       }
-    } finally {
-      confirmationInFlight.current = false
-      setIsConfirming(false)
-    }
-  }
-
-  if (!currentAccount) {
-    return (
-      <div className={embedded ? 'flex min-h-0 flex-1 flex-col' : 'page-container'}>
-        {!embedded && <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack />}
-        <div className="flex-1 flex items-center justify-center px-5">
-          <p className="text-muted text-center">No account available</p>
-        </div>
-      </div>
-    )
-  }
-
-  const recipientView = (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs">
-        <SendFieldLabel>Send to</SendFieldLabel>
-        <span className="inline-flex items-center gap-1.5 text-foreground">
-          <ChainIcon chain="zcash" width={16} height={16} showTooltip={false} />
-          {currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-        </span>
-      </div>
-      <SendRecipientInputCard
-        id="zcash-send-recipient"
-        value={toAddress}
-        onChange={value => {
-          setToAddress(value)
-          setSelectedRecipient(null)
-        }}
-        placeholder="Recipient address"
-        variant="filled"
-        hideLabel
-        invalid={Boolean(recipientFormatError)}
-        onSelectRecipient={handleSelectMyAddress}
-      />
-      {recipientFormatError && (
-        <p role="alert" className="mt-1.5 px-1 text-xs text-danger">
-          {recipientFormatError}
-        </p>
-      )}
-      {zns.loading && (
-        <p className="text-muted text-xs mt-1.5 px-1 flex items-center gap-1.5">
-          <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
-          Resolving name...
-        </p>
-      )}
-      {zns.address && (
-        <p className="text-primary text-xs mt-1.5 px-1 flex items-center gap-1.5">
-          <Icon icon="lucide:check-circle" width={12} height={12} />
-          {formatSortAddress(zns.address)}
-        </p>
-      )}
-      {recipientInput.znsInput && zns.error && (
-        <InlineError
-          className="mt-1.5 px-1"
-          message={zns.error}
-          onRetry={zns.retryable ? zns.retry : undefined}
-          retrying={zns.loading}
-        />
-      )}
-    </div>
+      if (
+        !shouldOffer ||
+        !recipient ||
+        !chain ||
+        (chain.family !== 'evm' && chain.family !== 'bitcoin') ||
+        (chain.network.kind !== 'mainnet' && chain.network.kind !== 'testnet')
+      ) {
+        return
+      }
+      void offerSaveRecipient({
+        chainId: chain.id,
+        chainFamily: chain.family,
+        network: chain.network.kind,
+        networkName: chain.displayName,
+        address: recipient.address,
+        name: 'Recipient',
+        selfTransfer:
+          graph?.root.intent?.direction === 'self' ||
+          (sender?.address.toLowerCase() === recipient.address.toLowerCase() &&
+            sender.chainId === recipient.chainId)
+      })
+    },
+    [navigate, originPath, selection, submission]
   )
 
-  const sendContent = (
-    <div className={cn('space-y-2', !isSelfMove && 'flex flex-col gap-4 space-y-0')}>
-      {isSelfMove && (
-        <>
-          <MoveLayout
-            amount={
-              <input
-                aria-label="ZEC amount"
-                inputMode="decimal"
-                value={amount}
-                onChange={event => {
-                  if (!/^\d*\.?\d*$/.test(event.target.value)) return
-                  setMaxSelected(false)
-                  setAmount(event.target.value)
-                }}
-                placeholder="0"
-                aria-invalid={reviewInsufficient || undefined}
-                className="h-12 w-full max-w-[280px] bg-transparent px-2 text-center text-[40px] font-semibold leading-tight tabular-nums outline-none placeholder:text-muted/45"
-                style={{
-                  fontSize: `${Math.max(18, Math.min(40, Math.floor(440 / Math.max(1, amount.length))))}px`
-                }}
-              />
-            }
-            balance={
-              balanceKnown
-                ? isTransparentToShieldMove
-                  ? shieldableBalance
-                  : sourceBalance.available
-                : '—'
-            }
-            max={
-              <button
-                type="button"
-                aria-label="Max"
-                aria-pressed={maxSelected}
-                aria-busy={maxTransfer.loading || undefined}
-                disabled={
-                  !fromAddress ||
-                  !balanceKnown ||
-                  !effectiveToAddress ||
-                  moveUnavailable ||
-                  safeBig(effectiveMaxStr).lte(0) ||
-                  maxTransfer.loading ||
-                  (isTransparentToShieldMove &&
-                    !hasEnoughTransparentBalanceToShield(shieldableBalance))
+  useEffect(() => {
+    if (
+      shieldActive ||
+      !selectedAssetId ||
+      !visibleModel ||
+      appliedRequestedAssetRef.current === `${sendEntryKey}:${selectedAssetId}`
+    ) {
+      return
+    }
+    const requested = visibleModel.assets.find(asset => asset.asset.id === selectedAssetId)
+    if (!requested) {
+      if (loadStatus !== 'loading')
+        appliedRequestedAssetRef.current = `${sendEntryKey}:${selectedAssetId}`
+      return
+    }
+    const chain = visibleModel.chains.find(item => item.chain.id === requested.asset.chainId)
+    appliedRequestedAssetRef.current = `${sendEntryKey}:${selectedAssetId}`
+    if (chain?.chain.family === 'zcash') {
+      selectZcash(currentSession.zcashInitialFundingSource)
+      return
+    }
+  }, [loadStatus, visibleModel, selectedAssetId, shieldActive, sendEntryKey])
+
+  const nearPicker = nearSourceOptions?.key === sendEntryKey ? nearSourceOptions.value : null
+  const nearSourceVisible =
+    sourcePicker?.mode === 'shield' && sourcePicker.provider === 'near-confidential'
+  const sourceFilterKey = `${sendEntryKey}:${sourcePicker?.provider}:${sourcePickerNetwork}:${deferredSourcePickerQuery}`
+  const sourceVisibleLimit =
+    sourceRenderWindow.filter === sourceFilterKey ? sourceRenderWindow.count : 100
+  const searchedNearItems = useMemo(() => {
+    if (!nearSourceVisible) return []
+    const items = (nearPicker?.items ?? []).filter(
+      item =>
+        sourcePickerNetwork === 'all' ||
+        (item.chainId ?? item.badgeBlockchain ?? 'near') === sourcePickerNetwork
+    )
+    if (!deferredSourcePickerQuery.trim()) return items
+    return items
+      .map(item => {
+        let contractAddress: string | null = null
+        try {
+          const asset = parseAssetId(item.assetId)
+          if (asset.namespace === 'erc20') contractAddress = asset.reference
+        } catch {}
+        return {
+          item,
+          rank: rankTokenSearchFields(
+            {
+              symbol: item.symbol,
+              contractAddress,
+              assetId: item.assetId,
+              searchTerms: item.chainName ? [item.chainName] : []
+            },
+            deferredSourcePickerQuery
+          )
+        }
+      })
+      .filter(row => row.rank < 99)
+      .sort((left, right) => left.rank - right.rank)
+      .map(row => row.item)
+  }, [nearSourceVisible, nearPicker?.items, sourcePickerNetwork, deferredSourcePickerQuery])
+  const visibleNearItems = searchedNearItems.slice(0, sourceVisibleLimit)
+  const sourcePickerNetworks = useMemo(
+    () =>
+      sortSendNetworks(
+        [
+          ...new Map(
+            (nearPicker?.items ?? []).map(item => {
+              const id = item.chainId ?? item.badgeBlockchain ?? 'near'
+              return [
+                id,
+                {
+                  id,
+                  label: item.chainName ?? 'NEAR Confidential',
+                  iconChain: item.badgeBlockchain ?? id
                 }
-                onClick={() => {
-                  setMaxSelected(true)
-                  setAmount(effectiveMaxStr)
-                  void maxTransfer.request()
-                }}
-                className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
-              >
-                {maxTransfer.loading && (
-                  <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
-                )}
-                Max
-              </button>
-            }
-            accountName={accountDisplayName}
-            fromAddress={fromAddress}
-            toAddress={effectiveToAddress}
-            from={fundingSource}
-            onReverse={reverseMove}
-            canReverse={canReverseMove}
-          />
-          {moveUnavailable && (
-            <InlineError
-              message={
-                moveUnavailableReason ??
-                'This account cannot move ZEC between Transparent and Shield.'
-              }
-            />
-          )}
-          {isTransparentToShieldMove &&
-            !moveUnavailable &&
-            safeBig(amount || '0').gt(0) &&
-            !amountErrorCopy &&
-            !hasEnoughTransparentBalanceToShield(shieldableBalance) && (
-              <InlineError message={MIN_SHIELDING_BALANCE_MESSAGE} />
-            )}
-          {amountErrorCopy && <InlineError message={amountErrorCopy} />}
-          {!balanceKnown &&
-            balanceReadStatus === 'error' &&
-            currentWalletId &&
-            currentAccountId && (
-              <InlineError
-                message="ZEC balance unavailable."
-                onRetry={() =>
-                  void retryZcashBalanceRead(currentNetwork, currentWalletId, currentAccountId)
-                }
-              />
-            )}
-        </>
-      )}
+              ] as const
+            })
+          ).values()
+        ],
+        option => ({ id: option.id, name: option.label })
+      ),
+    [nearPicker?.items]
+  )
+  const sourcePickerRows = visibleNearItems.map(item =>
+    shieldSourceSelectionItem(item, nearPicker?.balancesHidden ?? false)
+  )
 
-      {!isSelfMove &&
-        !balanceKnown &&
-        balanceReadStatus === 'error' &&
-        currentWalletId &&
-        currentAccountId && (
-          <InlineError
-            message="ZEC balance unavailable."
-            onRetry={() =>
-              void retryZcashBalanceRead(currentNetwork, currentWalletId, currentAccountId)
-            }
-          />
-        )}
+  if (submission?.family === 'evm' && selection?.chain.chain.family === 'evm') {
+    return (
+      <EvmTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
 
-      {!isSelfMove && !sendPrivately && (
-        <div className="order-4">
-          <div className="mb-1.5 flex items-center justify-between px-1">
-            <label htmlFor="zcash-send-memo" className="text-xs text-muted">
-              Memo (optional)
-            </label>
-            {memoUnsupported && (
-              <button type="button" onClick={() => setMemo('')} className="text-xs text-primary">
-                Clear
-              </button>
-            )}
-          </div>
-          <textarea
-            id="zcash-send-memo"
-            value={memo}
-            disabled={!recipientSupportsMemo}
-            aria-invalid={memoUnsupported || undefined}
-            aria-describedby={memoUnsupported ? 'zcash-send-memo-error' : undefined}
-            onChange={event => {
-              const encoded = new TextEncoder().encode(event.target.value)
-              if (encoded.length <= 512) setMemo(event.target.value)
-            }}
-            placeholder="Add a private memo"
-            rows={2}
-            className="w-full resize-none rounded-xl border border-border/60 bg-card/50 px-4 py-3 text-sm placeholder:text-muted/50 focus:border-primary/50 focus:outline-none disabled:opacity-40"
-          />
-          {memoUnsupported && (
-            <p id="zcash-send-memo-error" role="alert" className="mt-1 px-1 text-xs text-warning">
-              This recipient cannot receive a memo.
-            </p>
-          )}
-          {memo && (
-            <p className="mt-1 px-1 text-right text-xs text-muted">
-              {new TextEncoder().encode(memo).length}/512 bytes
-            </p>
-          )}
-        </div>
-      )}
+  if (submission?.family === 'bitcoin' && selection?.chain.chain.family === 'bitcoin') {
+    return (
+      <BitcoinTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
 
-      {!isSelfMove &&
-        fundingSource === 'shielded' &&
-        Boolean(amount) &&
-        safeBig(amount).gt(sourceBalance.available) &&
-        currentWallet?.keySource !== 'keystone' && (
-          <div className="order-4">
-            <ShieldFundsBanner
-              transparentBalance={transparentBalance}
-              action="send"
-              isShielding={isMigrating}
-              onShield={handleMigrateNow}
-            />
-          </div>
-        )}
+  if (submission?.family === 'solana' && selection?.chain.chain.family === 'solana') {
+    return (
+      <SolanaTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
 
-      {!sendPrivately && (
-        <div className="order-5">
-          <SendRouteInfoCard
-            provider={
-              <span className="inline-flex items-center gap-1.5">
-                <img src={zcashShieldLogo} alt="" className="size-5 rounded" />
-                Zcash
-              </span>
-            }
-            fee={
-              <FeeTierPicker
-                tier={feeTier}
-                onTierChange={setFeeTier}
-                feeByTier={displayedFeeByTier}
-                loadingByTier={displayedFeeLoadingByTier}
-                loading={displayedFeeLoading}
-                allowFallback={!feeRequired}
-                hideLabel
-              />
-            }
-            time={estimateZcashSendTime()}
-          />
-        </div>
-      )}
-      {!sendPrivately && maxTransfer.error && !isMaxFeeMode && (
-        <InlineError
-          className="order-3 px-1"
-          message="Could not calculate maximum amount"
-          onRetry={() => void maxTransfer.request()}
-        />
-      )}
-      {!sendPrivately && !amountErrorCopy && feeError && (
-        <InlineError
-          className="order-6 px-1"
-          message={(!isMaxFeeMode && feeEstimate.errorMessage) || 'Could not estimate network fee'}
-          onRetry={retryFeeEstimate}
-        />
-      )}
+  if (submission?.family === 'near' && selection?.chain.chain.family === 'near') {
+    return (
+      <NearTransactionResult
+        asset={selection.asset}
+        chain={selection.chain}
+        submission={submission.value}
+        onDone={outcome => leaveOnchainResult('/send', outcome !== 'failed')}
+        onViewActivity={transactionId =>
+          leaveOnchainResult(
+            `/?tab=activity&transactionId=${encodeURIComponent(transactionId)}`,
+            true
+          )
+        }
+      />
+    )
+  }
 
-      {sendPrivately && (
-        <div className="order-5">
-          <SendRouteInfoCard
-            provider={
-              <span className="inline-flex items-center gap-1.5">
-                <img src={nearLogo} alt="" className="size-5 rounded" />
-                NEAR Confidential Intents
-              </span>
+  const walletMode = 'public'
+  const nonEvmCrossChainSourceAssetId =
+    selection?.chain.chain.family === 'solana' &&
+    crossChainCapabilities.solana &&
+    currentNetwork === 'mainnet' &&
+    getCrossChainSendAssetGroup(selection.asset.asset) === MARKET_ASSETS.usdc
+      ? selection.asset.asset.id
+      : null
+  const activeNonEvmDraft =
+    nonEvmDraft?.key === sendEntryKey && nonEvmDraft.assetId === nonEvmCrossChainSourceAssetId
+      ? nonEvmDraft
+      : null
+  const publicPrivateDraft =
+    selection && effectiveWalletId && effectiveAccountId
+      ? parsePublicPrivateEvmSendDraft(searchParams, {
+          walletId: effectiveWalletId,
+          accountId: effectiveAccountId,
+          network: currentNetwork,
+          assetId: selection.asset.asset.id
+        })
+      : null
+  const preparingRequestedAsset = Boolean(
+    !assetPickerOpen && requestedAssetId && !selection && loadStatus === 'loading'
+  )
+  const switchSource = (
+    sourceMode: 'main' | 'shield',
+    assetId: string | null,
+    recipient: string,
+    networkId?: string,
+    amount = '',
+    selectedAsset?: SendAsset
+  ) => {
+    setAssetPickerOpen(false)
+    if (selectedAsset) setSelection(selectedAsset)
+    else if (sourceMode === 'main' && !currentSession.publicVisited)
+      setSelection(assets.find(item => item.asset.asset.id === assetId) ?? null)
+    setDomainSession({
+      ...currentSession,
+      source: sourceMode,
+      publicVisited: currentSession.publicVisited || sourceMode === 'main',
+      shieldProvider:
+        sourceMode === 'shield' && currentSession.source === 'main'
+          ? 'near-confidential'
+          : currentSession.shieldProvider,
+      publicRecipient:
+        sourceMode === 'main' && !currentSession.publicVisited
+          ? recipient
+          : currentSession.publicRecipient,
+      publicAmount:
+        sourceMode === 'main' && !currentSession.publicVisited
+          ? amount
+          : currentSession.publicAmount,
+      shieldEntry:
+        currentSession.shieldEntry ??
+        (sourceMode === 'shield'
+          ? {
+              assetId,
+              recipient,
+              amount,
+              networkId: networkId ?? null,
+              provider: 'near-confidential'
             }
-            fee={
-              privatePreviewReady && privatePreview ? (
-                <AmountDisplay
-                  value={
-                    getPublicPrivateSendRouteCost({
-                      amountInRaw: privatePreview.amountRaw,
-                      estimatedOutRaw: privatePreview.quote.estimatedOut,
-                      decimals: ZEC_DECIMALS
-                    }) ?? '—'
+          : null)
+    })
+  }
+  return (
+    <div className="page-container" data-wallet-mode={walletMode}>
+      {!(nearActive && shieldReviewing) && (
+        <PageHeader
+          title={sourcePicker ? 'Select Token' : 'Send'}
+          showBack
+          onBack={
+            sourcePicker
+              ? () => setSourcePicker(null)
+              : shieldActive
+                ? () => {
+                    if (!nearActive || !shieldBusy) returnToEntry()
                   }
-                  symbol="ZEC"
+                : assetPickerOpen && selection
+                  ? () => {
+                      if (returnedSourcePickerRequested) selectReturnedSource(selection)
+                      else setAssetPickerOpen(false)
+                    }
+                  : selection
+                    ? returnToEntry
+                    : goBack
+          }
+          rightContent={
+            !sourcePicker && !shieldActive && !assetPickerOpen && nonEvmCrossChainSourceAssetId ? (
+              <SendRouteMenu
+                route="onchain"
+                onChange={route => {
+                  if (route !== 'cross-chain' || !effectiveWalletId || !effectiveAccountId) return
+                  navigate(
+                    `/send/cross-chain?${new URLSearchParams({
+                      source: nonEvmCrossChainSourceAssetId,
+                      sourceMode: 'main',
+                      sourceWalletId: effectiveWalletId,
+                      sourceAccountId: effectiveAccountId,
+                      ...(originPath ? { originPath } : {}),
+                      ...(activeNonEvmDraft?.recipient
+                        ? { recipient: activeNonEvmDraft.recipient }
+                        : {}),
+                      ...(activeNonEvmDraft?.amount ? { amount: activeNonEvmDraft.amount } : {})
+                    })}`,
+                    {
+                      replace: true,
+                      state: { returnToSendAssetId: nonEvmCrossChainSourceAssetId, sendEntry }
+                    }
+                  )
+                }}
+              />
+            ) : undefined
+          }
+        />
+      )}
+      {sourcePicker && !nearSourceVisible && (
+        <AssetSelection
+          key={`${sendEntryKey}:${sourcePicker.mode}:zcash`}
+          accountScope={effectiveAccount}
+          assets={assets}
+          chains={visibleModel?.chains ?? []}
+          zcashOnly={sourcePicker.mode === 'shield'}
+          zcashSources={zcashSources}
+          zcashEnabled={zcashEnabled}
+          zcashNetwork={currentNetwork}
+          zecPrice={zecPrice}
+          prices={assetPrices}
+          loadingAdditional={loadStatus === 'loading'}
+          additionalError={loadStatus === 'error' && !visibleModel}
+          toolbar={
+            sourcePicker.mode === 'shield' ? (
+              <div className="-mx-4 mt-3">
+                <ShieldSendProviderTabs
+                  value={sourcePicker.provider}
+                  onChange={provider => {
+                    setSourcePickerNetwork('all')
+                    setSourcePicker({ ...sourcePicker, provider })
+                  }}
+                  availableProviders={availableShieldProviders}
                 />
-              ) : (
-                '—'
+              </div>
+            ) : undefined
+          }
+          onSelectZcash={source => {
+            selectZcash(source)
+            setSourcePicker(null)
+          }}
+          onSelect={asset => {
+            switchSource('main', asset.asset.asset.id, '', undefined, '', asset)
+            setSourcePicker(null)
+          }}
+          onRetry={async chainId => {
+            await load(true, chainId)
+          }}
+        />
+      )}
+      {sourcePicker && nearSourceVisible && (
+        <div className="page-content flex min-h-0 flex-col !px-4 pt-4">
+          <TokenSelectorView
+            accountScope={effectiveAccount}
+            search={sourcePickerQuery}
+            onSearchChange={setSourcePickerQuery}
+            networks={sourcePickerNetworks}
+            selectedNetwork={sourcePickerNetwork}
+            onNetworkChange={setSourcePickerNetwork}
+            toolbar={
+              <div className="-mx-4 mt-3">
+                <ShieldSendProviderTabs
+                  value={sourcePicker.provider}
+                  onChange={provider => {
+                    setSourcePickerNetwork('all')
+                    setSourcePicker({ ...sourcePicker, provider })
+                  }}
+                  availableProviders={availableShieldProviders}
+                />
+              </div>
+            }
+            onScroll={event => {
+              const { scrollTop, clientHeight, scrollHeight } = event.currentTarget
+              if (
+                scrollHeight - scrollTop - clientHeight < 200 &&
+                sourceVisibleLimit < searchedNearItems.length
+              )
+                setSourceRenderWindow({ filter: sourceFilterKey, count: sourceVisibleLimit + 100 })
+            }}
+            items={sourcePickerRows}
+            selectedKey={
+              nearPicker?.items.find(item => item.assetId === nearPicker.selectedAssetId)?.key
+            }
+            onSelect={key => {
+              const item = nearPicker?.items.find(row => row.key === key)
+              if (!item) return
+              nearPicker?.onSelect(item.assetId)
+              setDomainSession({
+                ...currentSession,
+                source: 'shield',
+                shieldProvider: 'near-confidential'
+              })
+              setSourcePicker(null)
+            }}
+            emptyMessage={visibleModel ? 'No tokens found' : 'Loading tokens'}
+          />
+        </div>
+      )}
+      {currentSession.shieldEntry && (
+        <div
+          hidden={!nearActive}
+          className={nearActive ? 'flex min-h-0 flex-1 flex-col' : undefined}
+        >
+          <ShieldWithdrawForm
+            key={sendEntryKey}
+            active={nearActive}
+            entry={currentSession.shieldEntry}
+            model={visibleModel ?? null}
+            initialAsset={
+              assets.find(item => item.asset.asset.id === currentSession.shieldEntry?.assetId)
+                ?.asset ?? null
+            }
+            refresh={load}
+            readProjection={async () => {
+              await readLatest()
+            }}
+            onStateChange={handleShieldStateChange}
+            onSelectPublic={(assetId, recipient, amount, destinationAssetId) => {
+              if (
+                assetId &&
+                destinationAssetId &&
+                assetId !== destinationAssetId &&
+                effectiveWalletId &&
+                effectiveAccountId
+              ) {
+                navigate(
+                  `/send/cross-chain?${new URLSearchParams({
+                    source: assetId,
+                    destination: destinationAssetId,
+                    sourceMode: 'main',
+                    sourceWalletId: effectiveWalletId,
+                    sourceAccountId: effectiveAccountId,
+                    ...(recipient ? { recipient } : {}),
+                    ...(amount ? { amount } : {}),
+                    ...(originPath ? { originPath } : {})
+                  })}`,
+                  {
+                    replace: true,
+                    state: {
+                      returnToSendAssetId: assetId,
+                      sendEntry,
+                      crossChainSendRouteAccount: {
+                        walletId: effectiveWalletId,
+                        accountId: effectiveAccountId,
+                        sourceAssetId: assetId,
+                        destinationAssetId
+                      }
+                    }
+                  }
+                )
+              } else switchSource('main', assetId, recipient, undefined, amount)
+            }}
+            onOpenSourcePicker={() => openSourcePicker('shield', 'near-confidential')}
+            onSourcePickerState={handleNearSourceOptions}
+            sourceSelectorActive={
+              sourcePicker?.mode === 'shield' && sourcePicker.provider === 'near-confidential'
+            }
+          />
+        </div>
+      )}
+      {currentSession.zcashVisited && (
+        <div
+          hidden={!zcashActive}
+          className={zcashActive ? 'flex min-h-0 flex-1 flex-col' : undefined}
+        >
+          <ZcashTransfer
+            key={sendEntryKey}
+            embedded
+            active={zcashActive}
+            initialFundingSource={currentSession.zcashInitialFundingSource}
+            fundingSourceSelection={
+              zcashFundingSelection?.key === sendEntryKey ? zcashFundingSelection : null
+            }
+            onSelectAsset={fundingSource =>
+              openSourcePicker(
+                fundingSource === 'shielded' ? 'shield' : 'zcash-public',
+                'zcash-shield'
               )
             }
-            extra={
-              privatePreviewReady && privatePreview ? (
-                <div className="flex justify-between gap-3 border-t border-white/10 pt-3">
-                  <span className="text-muted">Est. receive</span>
-                  <AmountDisplay
-                    value={formatBaseUnitDecimalAmount(
-                      privatePreview.quote.estimatedOut,
-                      ZEC_DECIMALS
-                    )}
-                    symbol="ZEC"
-                  />
-                </div>
-              ) : undefined
-            }
           />
         </div>
       )}
-      {sendPrivately && privatePreviewError && (
-        <InlineError
-          className="order-6"
-          message={privatePreviewError}
-          onRetry={() => setPrivatePreviewRetry(value => value + 1)}
-        />
-      )}
-    </div>
-  )
-
-  const actionDisabled =
-    !active ||
-    !effectiveToAddress ||
-    moveUnavailable ||
-    !amount ||
-    !isValidAmount ||
-    memoUnsupported ||
-    reviewInsufficient ||
-    Boolean(recipientFormatError) ||
-    (sendPrivately ? !privatePreviewReady : !feeReady) ||
-    syncBlocked ||
-    (isTransparentToShieldMove && !hasEnoughTransparentBalanceToShield(shieldableBalance)) ||
-    (!isSelfMove &&
-      !isZcashSendRecipientReady(effectiveToAddress, recipientFormatError, zns.loading))
-  const syncActionStatus =
-    syncState.isSyncing && syncReadStatus === 'available' ? (
-      <ZcashSyncProgress className="mb-2 w-fit" showLabel {...syncState} />
-    ) : isSelfMove && syncReadStatus === 'loading' ? (
-      <p role="status" className="mb-2 text-xs text-muted">
-        Checking sync status
-      </p>
-    ) : isSelfMove && syncReadStatus === 'error' && currentWalletId && currentAccountId ? (
-      <InlineError
-        className="mb-2"
-        message="Could not check sync status"
-        onRetry={() =>
-          void retryZcashBalanceRead(currentNetwork, currentWalletId, currentAccountId)
-        }
-      />
-    ) : null
-
-  return (
-    <div
-      className={embedded ? 'flex min-h-0 flex-1 flex-col bg-background' : 'page-container'}
-      data-wallet-mode={isSelfMove ? 'public' : walletMode}
-    >
-      {!embedded && <PageHeader title={isSelfMove ? 'Move' : 'Send'} showBack onBack={leaveSend} />}
-      {isSelfMove ? (
-        <>
-          <div className="page-content min-h-0 !px-4 pt-4">{sendContent}</div>
-          <div className="page-footer">
-            {syncActionStatus}
-            <Button
-              size="wallet"
-              disabled={actionDisabled}
-              onClick={handleContinue}
-              className="w-full h-[45px]"
-            >
-              Move
-            </Button>
-          </div>
-        </>
-      ) : (
-        <SendFormView
-          domain={fundingSource === 'shielded' ? 'shield' : 'public'}
-          availableDomains={(['public', 'shield'] as const).filter(domain =>
-            fundingOptions.some(
-              option =>
-                !option.disabledReason &&
-                option.type === (domain === 'public' ? 'transparent' : 'shielded')
-            )
-          )}
-          onDomainChange={domain =>
-            handleSelectFundingSource(domain === 'shield' ? 'shielded' : 'transparent')
-          }
-          sourceAction={
-            <BalanceDomainTabs
-              value={fundingSource === 'shielded' ? 'shield' : 'public'}
-              labels={{ public: 'Transparent' }}
-              available={(['public', 'shield'] as const).filter(domain =>
-                fundingOptions.some(
-                  option =>
-                    !option.disabledReason &&
-                    option.type === (domain === 'public' ? 'transparent' : 'shielded')
-                )
-              )}
-              onChange={domain =>
-                handleSelectFundingSource(domain === 'shield' ? 'shielded' : 'transparent')
-              }
-            />
-          }
-          recipient={recipientView}
-          amountInput={
-            <SendAmountInputCard
-              testId="zcash-amount-card"
-              ariaLabel="ZEC amount"
-              value={amount}
-              onChange={nextAmount => {
-                if (!/^\d*\.?\d*$/.test(nextAmount)) return
-                setMaxSelected(false)
-                setAmount(nextAmount)
-              }}
-              available={balanceKnown ? sourceBalance.available : ''}
-              symbol="ZEC"
-              priceUsd={zecPrice}
-              invalid={reviewInsufficient}
-              error={amountErrorCopy}
-              inline
-            />
-          }
-          assetSelector={
-            <SendAssetHeader
-              symbol="ZEC"
-              networkName={currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-              nativeChain="zcash"
-              blockchain="zec"
-              variant="pill"
-              onSelectAsset={onSelectAsset ? () => onSelectAsset(fundingSource) : undefined}
-            />
-          }
-          balance={
-            <span title={balanceKnown ? sourceBalance.available : undefined}>
-              {balanceKnown ? formatTokenQuantity(sourceBalance.available) : '—'}
-            </span>
-          }
-          maxButton={
-            <button
-              type="button"
-              aria-label="Max"
-              aria-pressed={maxSelected}
-              aria-busy={maxTransfer.loading || undefined}
-              disabled={
-                !fromAddress ||
-                !balanceKnown ||
-                safeBig(effectiveMaxStr).lte(0) ||
-                !effectiveToAddress ||
-                zns.loading ||
-                maxTransfer.loading
-              }
-              onClick={() => {
-                setMaxSelected(true)
-                setAmount(effectiveMaxStr)
-                void maxTransfer.request()
-              }}
-              className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-1 font-medium text-primary disabled:opacity-40"
-            >
-              {maxTransfer.loading && (
-                <Icon icon="lucide:loader-2" width={12} height={12} className="animate-spin" />
-              )}
-              Max
-            </button>
-          }
-          footer={
-            <>
-              {syncActionStatus}
-              <SendFormActions
-                privacy={
-                  privateSendAvailable
-                    ? {
-                        checked: sendPrivately,
-                        onChange: () => {
-                          setPrivateSendScope(sendPrivately ? null : privacyScope)
-                          setMaxSelected(false)
+      {currentSession.publicVisited && selection && (
+        <div className={shieldActive || assetPickerOpen ? 'hidden' : 'contents'}>
+          {selection.chain.chain.family === 'evm' && visibleModel ? (
+            requestedSourceMode === 'private' ? null : storageV2Account ? (
+              <SendTransferForm
+                family="evm"
+                key={`${sendEntryKey}:${selection.asset.asset.id}`}
+                active={!shieldActive && !assetPickerOpen}
+                walletMode={walletMode}
+                catalogAccount={storageV2Account}
+                catalog={accountCatalog}
+                onSelectAsset={draft =>
+                  setAssetPickerState({
+                    key: sendEntryKey,
+                    open: true,
+                    draft: {
+                      ...draft,
+                      destinationAssetId: selection.asset.asset.id,
+                      destinationChainId: selection.chain.chain.id
+                    }
+                  })
+                }
+                onSelectShield={(recipient, amount) =>
+                  switchSource(
+                    'shield',
+                    selection.asset.asset.id,
+                    recipient,
+                    selection.chain.chain.id,
+                    amount
+                  )
+                }
+                onOpenDestinationNetworks={() => requestDestinationCache(attempt => attempt + 1)}
+                destinationNetworks={sortSendNetworks(
+                  [
+                    {
+                      chainId: selection.chain.chain.id,
+                      name: selection.chain.chain.displayName,
+                      icon: resolveChainIconAlias(
+                        selection.chain.chain.family,
+                        selection.chain.chain.displayName,
+                        selection.chain.chain.id
+                      )
+                    },
+                    ...destinationCandidates.map(item => ({
+                      chainId: item.chain.chain.id,
+                      name: item.chain.chain.displayName,
+                      icon: resolveChainIconAlias(
+                        item.chain.chain.family,
+                        item.chain.chain.displayName,
+                        item.chain.chain.id
+                      )
+                    }))
+                  ],
+                  option => ({ id: option.chainId, name: option.name })
+                )}
+                onSelectDestinationNetwork={(destinationChainId, draft) => {
+                  if (destinationChainId === selection.chain.chain.id) return
+                  if (!effectiveWalletId || !effectiveAccountId) return
+                  const destination = destinationCandidates.find(
+                    item => item.chain.chain.id === destinationChainId
+                  )
+                  if (!destination) return
+                  const availability = readEvmSendDestinationSupport({
+                    sourceAssetId: selection.asset.asset.id,
+                    destinationChainId,
+                    capabilities: crossChainCapabilities
+                  })
+                  if (availability.status === 'unavailable') return
+                  const destinationAssetId = availability.destinationAssetId
+                  navigate(
+                    `/send/cross-chain?${new URLSearchParams({
+                      source: selection.asset.asset.id,
+                      destinationChainId,
+                      ...(destinationAssetId ? { destination: destinationAssetId } : {}),
+                      sourceMode: 'main',
+                      sourceWalletId: effectiveWalletId,
+                      sourceAccountId: effectiveAccountId,
+                      ...(originPath ? { originPath } : {}),
+                      ...(draft.recipient ? { recipient: draft.recipient } : {}),
+                      ...(draft.amount ? { amount: draft.amount } : {})
+                    })}`,
+                    {
+                      replace: true,
+                      state: {
+                        returnToSendAssetId: selection.asset.asset.id,
+                        sendEntry,
+                        crossChainSendRouteAccount: {
+                          walletId: effectiveWalletId,
+                          accountId: effectiveAccountId,
+                          sourceAssetId: selection.asset.asset.id,
+                          destinationChainId,
+                          ...(destinationAssetId ? { destinationAssetId } : {})
                         }
                       }
+                    }
+                  )
+                }}
+                selection={selection}
+                portfolio={visibleModel}
+                priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+                sourceMode="main"
+                onFundPrivate={
+                  currentNetwork === 'mainnet'
+                    ? () =>
+                        navigate(
+                          `/transfer?${new URLSearchParams({
+                            assetId: selection.asset.asset.id,
+                            from: 'public',
+                            to: 'private',
+                            mode: walletMode
+                          })}`
+                        )
                     : undefined
                 }
-                disabled={actionDisabled}
-                onContinue={handleContinue}
+                initialRecipient={
+                  returnDraft?.recipient ??
+                  (/^0x[0-9a-fA-F]{40}$/.test(currentSession.publicRecipient)
+                    ? currentSession.publicRecipient
+                    : undefined)
+                }
+                initialAmount={returnDraft?.amount ?? currentSession.publicAmount}
+                initialDraft={publicPrivateDraft ?? undefined}
+                onSubmitted={value => setSubmission({ family: 'evm', value })}
               />
-            </>
-          }
-        >
-          {sendContent}
-        </SendFormView>
+            ) : (
+              <div className="px-4 py-6">
+                {accountCatalogLoading ? (
+                  <p role="status" className="text-sm text-muted">
+                    Loading account…
+                  </p>
+                ) : (
+                  <InlineError
+                    message="Unable to load account."
+                    onRetry={() => void refreshAccountCatalog()}
+                  />
+                )}
+              </div>
+            )
+          ) : selection?.chain.chain.family === 'bitcoin' ||
+            selection?.chain.chain.family === 'solana' ||
+            selection?.chain.chain.family === 'near' ? (
+            <SendTransferForm
+              key={`${sendEntryKey}:${selection.asset.asset.id}`}
+              family={selection.chain.chain.family}
+              selection={selection}
+              priceUsd={availableUsdPrice(selection.asset, assetPrices)}
+              initialRecipient={returnDraft?.recipient}
+              initialAmount={returnDraft?.amount}
+              onDraftChange={handleNonEvmDraftChange}
+              onSubmitted={setSubmission}
+            />
+          ) : null}
+        </div>
       )}
-
-      <Dialog
-        open={showReview}
-        onOpenChange={open => {
-          if (!open && (confirmationInFlight.current || isHardwareSigning)) return
-          setShowReview(open)
-        }}
-      >
-        <DialogContent
-          position="bottom"
-          showCloseButton={false}
-          aria-label={isSelfMove ? 'Confirm Move' : 'Confirm Send'}
-          data-wallet-mode={isSelfMove ? 'public' : walletMode}
-          className="flex h-dvh max-h-dvh flex-col gap-0 rounded-none border-0 bg-background p-0 shadow-none"
-        >
-          <DialogTitle className="sr-only">
-            {isSelfMove ? 'Confirm Move' : 'Confirm Send'}
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Review the amount, destination, and fee before {isSelfMove ? 'moving' : 'sending'}.
-          </DialogDescription>
-          <TransactionReviewView
-            title={isSelfMove ? 'Confirm Move' : 'Confirm Send'}
-            showTitle
-            variant="figma"
-            asset={{ symbol: 'ZEC', nativeChain: 'zcash' }}
-            amount={amount}
-            amountPrefix={isConfirming && !isHardwareWallet ? '' : isSelfMove ? '' : '-'}
-            fiatValue={formatFiatAmount(
-              safeBig(amount || '0')
-                .times(zecPrice || 0)
-                .times(isSelfMove ? 1 : -1)
-                .toFixed(),
-              { showSign: true }
-            )}
-            network={currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'}
-            rows={[
-              {
-                label: isSelfMove ? 'From' : 'Send from',
-                content: (
-                  <span className="min-w-0 text-right">
-                    <span className="flex items-center justify-end gap-1.5">
-                      {accountDisplayName}
-                      <span
-                        className={cn(
-                          'rounded px-1.5 py-0.5 text-xs',
-                          fundingSource === 'shielded'
-                            ? 'bg-primary/10 text-primary'
-                            : 'bg-white/10 text-muted'
-                        )}
-                      >
-                        {fundingSource === 'shielded' ? 'Shield' : 'Transparent'}
-                      </span>
-                    </span>
-                    <span
-                      className="block truncate text-xs font-normal leading-4 text-muted"
-                      title={fromAddress}
-                    >
-                      {formatSortAddress(fromAddress)}
-                    </span>
-                  </span>
-                )
-              },
-              {
-                label: isSelfMove ? 'To' : 'Recipient',
-                content: (
-                  <SendRecipientAddress
-                    address={effectiveToAddress}
-                    name={
-                      zns.name ||
-                      (selectedRecipient?.address === toAddress
-                        ? selectedRecipient.name
-                        : undefined)
-                    }
-                  />
-                )
-              },
-              {
-                label: 'Network',
-                content: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash'
-              },
-              ...(effectiveMemo ? [{ label: 'Memo', content: effectiveMemo }] : []),
-              {
-                label: 'Network fee',
-                content: (
-                  <FeeTierPicker
-                    tier={feeTier}
-                    onTierChange={setFeeTier}
-                    feeByTier={displayedFeeByTier}
-                    loading={displayedFeeLoading}
-                    loadingByTier={displayedFeeLoadingByTier}
-                    allowFallback={false}
-                    hideLabel
-                  />
-                )
-              }
-            ]}
-            error={
-              feeError ? (
-                <InlineError
-                  className="mt-3"
-                  message={
-                    (!isMaxFeeMode && feeEstimate.errorMessage) || 'Could not estimate network fee'
-                  }
-                  onRetry={retryFeeEstimate}
-                />
-              ) : undefined
-            }
-            confirmLabel={isHardwareSigning ? 'Waiting for hardware wallet...' : 'Confirm'}
-            confirming={isConfirming}
-            submitting={isConfirming && !isHardwareWallet}
-            confirmDisabled={
-              !active ||
-              moveUnavailable ||
-              reviewInsufficient ||
-              !feeReady ||
-              syncBlocked ||
-              isHardwareSigning
-            }
-            cancelDisabled={isConfirming || isHardwareSigning}
-            onCancel={() => {
-              if (!confirmationInFlight.current && !isHardwareSigning) setShowReview(false)
-            }}
-            onConfirm={() => void handleConfirm()}
-          />
-        </DialogContent>
-      </Dialog>
-
-      {migrateSheet}
+      {!shieldActive && (assetPickerOpen || (!selection && !preparingRequestedAsset)) && (
+        <AssetSelection
+          key={sendEntryKey}
+          accountScope={effectiveAccount}
+          assets={assets}
+          chains={visibleModel?.chains ?? []}
+          zcashSources={zcashSources}
+          zcashEnabled={zcashEnabled}
+          zcashNetwork={currentNetwork}
+          zecPrice={zecPrice}
+          prices={assetPrices}
+          loadingAdditional={loadStatus === 'loading'}
+          additionalError={loadStatus === 'error' && !visibleModel}
+          onSelectZcash={source => selectReturnedSource(null, source)}
+          onRetry={async chainId => {
+            await load(true, chainId)
+          }}
+          onSelect={asset => selectReturnedSource(asset)}
+        />
+      )}
+      {!shieldActive && preparingRequestedAsset && (
+        <div className="page-content" role="status" aria-label="Loading asset" />
+      )}
     </div>
   )
 }

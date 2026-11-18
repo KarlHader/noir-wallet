@@ -163,6 +163,8 @@ export interface QuoteBinding {
   expectedAmountOut?: string
   minAmountOut?: string
   recipient?: string
+  recipientType?: 'DESTINATION_CHAIN' | 'CONFIDENTIAL_INTENTS'
+  fundingSource?: 'transparent' | 'shielded'
   refundTo?: string
   deadline?: number
 }

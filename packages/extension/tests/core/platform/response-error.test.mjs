@@ -38,7 +38,7 @@ test('classifies HTTP rate limits without displaying the response body', async (
     })
     assert.equal(
       classifyError(new Error('unrecognized upstream details')).userMessage,
-      'An unexpected error occurred. Please try again.'
+      'unrecognized upstream details'
     )
   } finally {
     globalThis.fetch = originalFetch

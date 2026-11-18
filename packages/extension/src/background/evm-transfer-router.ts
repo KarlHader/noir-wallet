@@ -69,7 +69,13 @@ export interface BackgroundEvmTransferRouteController {
   ) => Promise<EvmTransferApprovalResult>
   readonly prepareCancel: (
     originalTransactionIdValue: string,
-    executionModeValue?: unknown
+    executionModeValue?: unknown,
+    feeSelectionValue?: unknown
+  ) => Promise<BackgroundEvmTransferReview>
+  readonly prepareSpeedUp: (
+    originalTransactionIdValue: string,
+    executionModeValue?: unknown,
+    feeSelectionValue?: unknown
   ) => Promise<BackgroundEvmTransferReview>
   readonly getNonceRecovery: (executionModeValue?: unknown) => Promise<EvmNonceRecoveryState | null>
   readonly prepareNonceRecovery: (
@@ -286,16 +292,37 @@ export class BackgroundEvmTransferRouter {
   async prepareCancel(
     chainIdValue: string,
     originalTransactionIdValue: string,
-    executionMode: EvmTransferExecutionMode = 'main'
+    executionMode: EvmTransferExecutionMode = 'main',
+    feeSelectionValue?: unknown
   ): Promise<BackgroundEvmTransferReview> {
     const chain = parseChainId(chainIdValue)
     if (chain.namespace !== 'eip155') throw new Error('EVM cancel requires an EVM chain')
     const result = await this.requireController(chain.id).prepareCancel(
       originalTransactionIdValue,
-      executionMode
+      executionMode,
+      feeSelectionValue
     )
     if (result.review.chainId !== chain.id) {
       throw new Error('Prepared EVM cancel was returned by the wrong network controller')
+    }
+    return result
+  }
+
+  async prepareSpeedUp(
+    chainIdValue: string,
+    originalTransactionIdValue: string,
+    executionMode: EvmTransferExecutionMode = 'main',
+    feeSelectionValue?: unknown
+  ): Promise<BackgroundEvmTransferReview> {
+    const chain = parseChainId(chainIdValue)
+    if (chain.namespace !== 'eip155') throw new Error('EVM speed-up requires an EVM chain')
+    const result = await this.requireController(chain.id).prepareSpeedUp(
+      originalTransactionIdValue,
+      executionMode,
+      feeSelectionValue
+    )
+    if (result.review.chainId !== chain.id) {
+      throw new Error('Prepared EVM speed-up was returned by the wrong network controller')
     }
     return result
   }

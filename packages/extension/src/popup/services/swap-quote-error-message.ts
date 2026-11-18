@@ -28,6 +28,14 @@ export function readSwapErrorReason(message: string, depth = 0): string {
   return message.trim().replace(/^HTTP \d{3}:\s*/i, '')
 }
 
+export function isSwapQuotePriceMoved(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null
+  return (
+    message !== null &&
+    /^Price moved too much,\s*please re-quote\.?$/i.test(readSwapErrorReason(message))
+  )
+}
+
 function hasSwapTimeoutReason(value: unknown, depth = 0): boolean {
   if (depth >= 6) return false
   if (typeof value === 'string') {
@@ -63,6 +71,9 @@ export function getSwapQuoteFailureMessage(error: unknown): string | null {
   const minimum = getRheaSwapMinimumAmountMessage(message)
   if (minimum) return minimum
   const reason = readSwapErrorReason(message)
+  if (isSwapQuotePriceMoved(error)) {
+    return reason
+  }
   if (/unsupported destination token|destinationtoken.*not supported/i.test(reason)) {
     return 'This destination is unavailable for this swap. Choose another asset.'
   }

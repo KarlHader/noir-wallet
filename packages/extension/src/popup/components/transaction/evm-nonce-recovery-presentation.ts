@@ -12,17 +12,11 @@ export function getEvmNonceRecoveryPresentation(action: EvmNonceRecoveryState['a
         icon: 'lucide:refresh-cw',
         actionLabel: 'Retry'
       }
-    case 'await-confirmation':
-      return {
-        title: 'Clearing transaction',
-        icon: 'lucide:clock-3'
-      }
     case 'fill-gap':
-    case 'replace':
       return {
         title: 'New sends paused',
         icon: 'lucide:clock-alert',
-        actionLabel: 'Review'
+        actionLabel: 'Fix send queue'
       }
   }
 }

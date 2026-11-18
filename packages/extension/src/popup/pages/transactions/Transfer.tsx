@@ -5,6 +5,7 @@ import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
 import {
   formatBaseUnitAmount,
+  formatBaseUnitDecimalAmount,
   formatTokenQuantity,
   formatFiatAmount,
   parseDisplayUnitAmount
@@ -22,11 +23,11 @@ import { classifyError } from '@/lib/errors'
 import { getSwapQuoteFailureMessage } from '@/popup/services/swap-quote-error-message'
 import { rankTokenSearchFields } from '@/popup/services/swap-token-selection'
 import { useWalletStore } from '@/store/wallet-store'
+import { useAccountDataStore } from '@/store/account-data-store'
 import { useSettingsStore } from '@/store/settings-store'
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '@/popup/hooks/useHomePortfolio'
-import { useTransferMaximum } from '@/popup/hooks/useTransferMaximum'
 import { useMoveMethodEstimate } from '@/popup/hooks/useMoveMethodEstimate'
 import { useShieldBalances } from '@/popup/hooks/useShieldBalances'
 import {
@@ -42,6 +43,12 @@ import { AmountDisplay } from '@/popup/components/common/AmountDisplay'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { TokenSelectorDialog } from '@/popup/components/tokens/TokenSelectorDialog'
 import { TokenSelectorView } from '@/popup/components/tokens/TokenSelectorView'
+import {
+  shieldSourceSelectionItem,
+  type ShieldSourceTokenPickerItem
+} from '@/popup/components/tokens/ShieldSourceTokenPickerRows'
+import { ShieldSendProviderTabs } from '@/popup/components/portfolio/ShieldSendProviderTabs'
+import type { ShieldProvider } from '@/popup/services/asset-domains'
 import { ChainIcon } from '@/popup/components/common/ChainIcon'
 import { ChainSelector, type ChainSelectorOption } from '@/popup/components/common/ChainSelector'
 import { ExecutionAccountIcon } from '@/popup/components/account/ExecutionAccountSelector'
@@ -62,9 +69,7 @@ import {
   DialogTitle
 } from '@/popup/components/ui/dialog'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
-import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
-import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
-import { resolveConfidentialEvmAssetSupport } from '@/core/services/rhea-swap/rhea-confidential-support'
+import { toWalletEvmQuoteToken } from '@/popup/services/token-address-discovery'
 import type { SwapToken } from '@/core/services/intents-api'
 import { resolvePortfolioTransferAvailability } from '@/popup/services/transfer-availability'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
@@ -80,6 +85,7 @@ import { resolveManagedIntentsCatalog } from '@/popup/services/intents-asset-man
 import type { IntentsManagedAsset } from '@/core/services/intents-managed-assets'
 import {
   buildShieldTransferRequest,
+  formatShieldQuoteTime,
   hasShieldTransferStarted,
   isClusterTransferRoute,
   isUnsignedShieldTerminal,
@@ -94,11 +100,7 @@ import {
 } from '@/popup/services/shield-transfer'
 import { TransactionReviewView } from '@/popup/components/transaction/TransactionReviewView'
 import { openConfidentialActivity } from '@/popup/components/transaction/ConfidentialActivitySheet'
-import {
-  createNativeTransferSource,
-  estimateConfidentialTransferMaximum,
-  fallbackTransferMaximum
-} from '@/popup/services/transfer-maximum'
+import { resolveNativeRouteMaximum } from '@/popup/services/transfer-maximum'
 import {
   normalizePrivateBalanceTransferInput,
   getPrivateTransferChainIds,
@@ -113,8 +115,14 @@ import {
   buildAddToPrivateEvmPath,
   buildMoveToMainEvmPath,
   getEvmTokenFeeBalanceError
-} from './evm-send-validation'
+} from '@/popup/services/evm-send-validation'
 import { initialMoveDraft, readMoveAssetHint, readMoveDraft } from './move-draft'
+import { getFundingBalance } from '@/core/wallet/funding-balance'
+import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { resolveZcashSelfMove } from '@/popup/services/zcash-self-move'
+import { getZcashChainId } from '@/core/chains/registry'
+import { ZEC_DECIMALS } from '@/config/wallet'
+import type { FundingSource } from '@/types/wallet'
 import {
   readShieldMovePreference,
   selectShieldMoveAssetId,
@@ -290,21 +298,16 @@ function MethodCard({
         <span className="text-muted">Privacy</span>
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
       </span>
-      {(loading || (estimate && estimate.time !== '—')) && (
-        <span className="mt-2 flex justify-between gap-2">
-          <span className="shrink-0 text-muted">Time (est.)</span>
-          <span className="min-w-0 text-right">
-            {loading ? (
-              <Skeleton className="ml-auto h-4 w-full max-w-16" />
-            ) : estimate ? (
-              <>
-                <span className="block">{estimate.time}</span>
-                <span className="block text-[10px] text-muted">{estimate.timeScope}</span>
-              </>
-            ) : null}
-          </span>
+      <span className="mt-2 flex min-h-8 justify-between gap-2">
+        <span className="shrink-0 text-muted">Time (est.)</span>
+        <span className="min-w-0 text-right">
+          {loading ? (
+            <Skeleton className="ml-auto h-4 w-12 max-w-full" />
+          ) : (
+            <span className="block">{estimate?.time ?? '—'}</span>
+          )}
         </span>
-      )}
+      </span>
       <span className="mt-2 flex justify-between gap-2">
         <span className="shrink-0 text-muted">Fee (est.)</span>
         <span className="min-w-0 break-words text-right">
@@ -348,6 +351,11 @@ function TransferForm() {
   const wallets = useWalletStore(state => state.wallets)
   const accountDisplayNames = useWalletStore(state => state.accountDisplayNames)
   const currentNetwork = useWalletStore(state => state.currentNetwork)
+  const currentAccount = useWalletStore(state => state.getCurrentAccount())
+  const currentWallet = useWalletStore(state => state.getCurrentWallet())
+  const zcashBalance = useAccountDataStore(state => state.getCurrentBalance())
+  const zecPrice = useWalletStore(state => state.zecPrice)
+  const balancesHidden = useSettingsStore(state => state.balancesHidden)
   const endpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
@@ -408,6 +416,7 @@ function TransferForm() {
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
   const [assetChainId, setAssetChainId] = useState('all')
+  const [assetProvider, setAssetProvider] = useState<ShieldProvider>('near-confidential')
   const [networkPickerOpen, setNetworkPickerOpen] = useState(false)
   const [destinationAssetId, setDestinationAssetId] = useState<string | null>(
     initialDraft.destinationAssetId ?? null
@@ -436,10 +445,6 @@ function TransferForm() {
   const userEditedMove = useRef(false)
   const userPickedMethod = useRef(launchHasDraft)
   const [catalogReady, setCatalogReady] = useState(false)
-  const [routeSnapshot, setRouteSnapshot] = useState<{
-    key: string
-    status: 'supported' | 'unsupported' | 'error'
-  } | null>(null)
   const [managedAssets, setManagedAssets] = useState<readonly IntentsManagedAsset[]>([])
   const [catalogTokens, setCatalogTokens] = useState<readonly SwapToken[]>([])
   const canLoadShield =
@@ -447,6 +452,7 @@ function TransferForm() {
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
+    connecting: shieldConnecting,
     error: shieldBalanceError,
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
@@ -459,7 +465,8 @@ function TransferForm() {
       : null,
     refreshPortfolio,
     readProjection: readLatestPortfolio,
-    authorizeOnMount: false
+    authorizeOnMount:
+      from === 'shield' || (method === 'cluster' && isClusterTransferRoute(from, to))
   })
   const [shieldConnection, setShieldConnection] = useState<
     'checking' | 'connected' | 'required' | 'busy'
@@ -470,6 +477,17 @@ function TransferForm() {
   const [confirmUncertain, setConfirmUncertain] = useState(false)
   const [cancellingShield, setCancellingShield] = useState(false)
   const confirmAttemptedPlanId = useRef<string | null>(null)
+  const reviewAttempt = useRef<{ key: string; dedupKey: string } | null>(null)
+  const [feeRefresh, setFeeRefresh] = useState<{
+    planId: string
+    selection: EvmFeeSelection
+    cancelled: boolean
+  } | null>(null)
+  const feeRefreshRef = useRef(feeRefresh)
+  const updateFeeRefresh = (next: typeof feeRefresh) => {
+    feeRefreshRef.current = next
+    setFeeRefresh(next)
+  }
   const [preparedShield, setPreparedShield] = useState<{
     key: string
     review: ConfidentialFundingReview
@@ -594,6 +612,8 @@ function TransferForm() {
     setCancellingShield(false)
     setShieldError(null)
     setConfirmUncertain(false)
+    reviewAttempt.current = null
+    updateFeeRefresh(null)
     setAssetPickerOpen(false)
     setNetworkPickerOpen(false)
     setDomainPicker(null)
@@ -833,6 +853,55 @@ function TransferForm() {
       catalogTokens
     ]
   )
+  const shieldAssetPicker = shieldEntry || from === 'shield' || to === 'shield'
+  const zcashMoveSources = (['transparent', 'shielded'] as const).filter(
+    source =>
+      activeAccount?.networks.some(item => item.chain.family === 'zcash') &&
+      resolveZcashSelfMove(currentAccount?.addresses, source, currentNetwork) !== null &&
+      !getFundingSourceUnavailableReason(currentWallet?.keySource, source)
+  )
+  const availableProviders: ShieldProvider[] = [
+    ...(canLoadShield ? (['near-confidential'] as const) : []),
+    ...(zcashMoveSources.length > 0 ? (['zcash-shield'] as const) : [])
+  ]
+  const activeAssetProvider = availableProviders.includes(assetProvider)
+    ? assetProvider
+    : (availableProviders[0] ?? 'near-confidential')
+  const zcashPickerRows: ShieldSourceTokenPickerItem[] = zcashMoveSources.map(source => ({
+    key: `zcash-move:${source}`,
+    assetId: 'zec',
+    symbol: 'ZEC',
+    chainName: currentNetwork === 'testnet' ? 'Zcash Testnet' : 'Zcash',
+    chainId: 'zec',
+    badgeBlockchain: 'zec',
+    nativeIconChain: 'zcash',
+    zcashFundingSource: source,
+    availableRaw: parseDisplayUnitAmount(
+      getFundingBalance(zcashBalance, source).available,
+      ZEC_DECIMALS
+    ),
+    decimals: ZEC_DECIMALS,
+    priceUsd: zecPrice
+  }))
+  const shieldPickerRows: ShieldSourceTokenPickerItem[] =
+    activeAssetProvider === 'zcash-shield'
+      ? zcashPickerRows
+      : pickerRows.map(item => ({
+          key: item.asset.asset.id,
+          assetId: item.asset.asset.id,
+          symbol: item.asset.metadata.symbol,
+          iconUrl: item.asset.metadata.iconUrl,
+          chainName: item.chain.chain.displayName,
+          chainId: item.chain.chain.id,
+          badgeBlockchain: resolveChainIconAlias(
+            item.chain.chain.family,
+            item.chain.chain.displayName,
+            item.chain.chain.id
+          ),
+          availableRaw: item.sourceRaw,
+          decimals: item.asset.metadata.decimals,
+          priceUsd: findAssetPrice(assetPrices, item.asset.asset.id)?.priceUsd
+        }))
   const rankPickerAsset = (item: TransferAsset) =>
     rankTokenSearchFields(
       {
@@ -1026,130 +1095,34 @@ function TransferForm() {
           : null))
       : sourceRaw
   const routeKey = `${scopeKey}:${selected?.asset.asset.id ?? ''}:${from}:${to}:${destination?.asset.asset.id ?? ''}`
-  const routeState = routeSnapshot?.key === routeKey ? routeSnapshot.status : 'loading'
+  const routeState =
+    selected?.chain.chain.family === 'evm' &&
+    eligible &&
+    supportedPair &&
+    toWalletEvmQuoteToken(selected.asset)
+      ? 'supported'
+      : 'unsupported'
   const methodAvailable = supportedPair && routeState === 'supported'
 
-  useEffect(() => {
-    let cancelled = false
-    if (!selected || selected.chain.chain.family !== 'evm' || !eligible || !supportedPair) {
-      setRouteSnapshot({ key: routeKey, status: 'unsupported' })
-      return
-    }
-    if (!amount.trim()) {
-      setRouteSnapshot(null)
-      return
-    }
-    const match = /^eip155:([1-9][0-9]*)$/.exec(selected.chain.chain.id)
-    if (!match) {
-      setRouteSnapshot({ key: routeKey, status: 'unsupported' })
-      return
-    }
-    setRouteSnapshot(null)
-    void rheaSwapClient
-      .listTokens({ direction: 'from', tokenListChainIds: [Number(match[1])] })
-      .then(catalog => {
-        if (cancelled) return
-        const contract =
-          selected.asset.asset.kind === 'token'
-            ? selected.asset.asset.reference.toLowerCase()
-            : null
-        if (!resolveRheaPrivateTransferToken(catalog.tokens, contract)) {
-          setRouteSnapshot({
-            key: routeKey,
-            status: catalog.failedChainIds.includes(Number(match[1])) ? 'error' : 'unsupported'
-          })
-          return
-        }
-        const confidentialSupport = resolveConfidentialEvmAssetSupport({
-          chain: selected.chain.chain,
-          asset: selected.asset.asset,
-          catalog
-        })
-        setRouteSnapshot({
-          key: routeKey,
-          status:
-            confidentialSupport === 'supported'
-              ? 'supported'
-              : confidentialSupport === 'unsupported'
-                ? 'unsupported'
-                : catalog.failedChainIds.includes(Number(match[1]))
-                  ? 'error'
-                  : 'unsupported'
-        })
-      })
-      .catch(() => {
-        if (!cancelled) setRouteSnapshot({ key: routeKey, status: 'error' })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [routeKey, selected?.chain.chain.id, eligible, supportedPair, retry, amount])
-
-  const nativeMaximumEnabled = Boolean(
-    selected &&
+  const maximumRaw =
+    selected?.asset.asset.kind === 'native' &&
+    selected.chain.chain.family === 'evm' &&
     source &&
-    eligible &&
-    (clusterSelected
-      ? Boolean(managedAsset)
-      : supportedPair
-        ? routeState === 'supported'
-        : fundingRoute && from !== 'shield' && Boolean(managedAsset)) &&
-    (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
-    selected.asset.asset.kind === 'native' &&
-    BigInt(source.availableRaw) > 0n
-  )
-  const nativeMaximumRequired =
-    maxSelected && selected?.asset.asset.kind === 'native' && from !== 'shield'
-  const maximum = useTransferMaximum({
-    prefetch: selected?.chain.chain.family === 'evm',
-    refreshOnExpiry: false,
-    enabled: nativeMaximumEnabled,
-    requestKey: `${scopeKey}:${selected?.asset.asset.id ?? ''}:${direction}:${source?.availableRaw ?? '0'}`,
-    fallback: () =>
-      fallbackTransferMaximum(
-        createNativeTransferSource({
-          asset: selected!.asset,
-          chain: selected!.chain,
-          availableRaw: source!.availableRaw,
-          sender: source!.sender
+    from !== 'shield'
+      ? resolveNativeRouteMaximum({
+          family: 'evm',
+          chainId: selected.chain.chain.id,
+          availableRaw: source.availableRaw,
+          decimals: selected.asset.metadata.decimals
         })
-      ),
-    estimate: () =>
-      estimateConfidentialTransferMaximum({
-        asset: selected!.asset,
-        chain: selected!.chain,
-        availableRaw: source!.availableRaw,
-        sender: source!.sender,
-        recipient: source!.recipient,
-        executionMode: source!.executionMode,
-        purpose: source!.executionMode === 'private' ? 'private-transfer' : 'confidential-funding'
-      })
-  })
-  useEffect(() => {
-    if (
-      nativeMaximumRequired &&
-      nativeMaximumEnabled &&
-      !maximum.value &&
-      !maximum.loading &&
-      !maximum.error
-    )
-      void maximum.request()
-  }, [
-    nativeMaximumRequired,
-    nativeMaximumEnabled,
-    maximum.value,
-    maximum.loading,
-    maximum.error,
-    routeKey,
-    source?.availableRaw
-  ])
+      : null
   const available =
     selected && source
       ? resolvePortfolioTransferAvailability({
           balanceRaw: source.availableRaw,
           decimals: selected.asset.metadata.decimals,
           isNative: selected.asset.asset.kind === 'native',
-          maximumRaw: maximum.value?.amountRaw ?? null
+          maximumRaw: null
         })
       : null
   const shieldAvailable =
@@ -1158,31 +1131,17 @@ function TransferForm() {
           balanceRaw: shieldSourceRaw,
           decimals: selected.asset.metadata.decimals,
           isNative: from !== 'shield' && selected.asset.asset.kind === 'native',
-          maximumRaw: from === 'shield' ? shieldSourceRaw : (maximum.value?.amountRaw ?? null)
+          maximumRaw: null
         })
       : null
-  const currentAmount = maxSelected
-    ? nativeMaximumRequired && (!maximum.value || maximum.loading)
-      ? ''
+  const maxAmount =
+    selected && maximumRaw !== null
+      ? formatBaseUnitDecimalAmount(maximumRaw, selected.asset.metadata.decimals)
       : ((fundingRoute ? shieldAvailable : available)?.display ?? '')
-    : amount
+  const currentAmount = maxSelected ? maxAmount : amount
   useEffect(() => {
-    if (!maxSelected) return
-    if (nativeMaximumRequired && (!maximum.value || maximum.loading)) {
-      setAmount('')
-      return
-    }
-    const value = fundingRoute ? shieldAvailable : available
-    if (value) setAmount(value.display)
-  }, [
-    maxSelected,
-    nativeMaximumRequired,
-    maximum.value,
-    maximum.loading,
-    fundingRoute,
-    shieldAvailable?.display,
-    available?.display
-  ])
+    if (maxSelected) setAmount(maxAmount)
+  }, [maxSelected, maxAmount])
   const amountState =
     selected && available && source && supportedPair
       ? resolvePrivateBalanceTransferAmount({
@@ -1240,25 +1199,26 @@ function TransferForm() {
         signal
       })
   })
+  const clusterEstimateKey = `${methodEstimateKey}:${shieldConnection}:${managedAsset?.protocolAssetId ?? ''}`
+  const buildClusterPreviewRequest = () =>
+    buildShieldTransferRequest({
+      network: currentNetwork,
+      keyDomainId: effective!.walletId,
+      accountId: effective!.accountId,
+      from,
+      to,
+      method: 'cluster',
+      amountRaw: estimateAmountRaw!,
+      asset: selected!.asset,
+      chain: selected!.chain,
+      managed: managedAsset!
+    })
   const clusterEstimate = useMoveMethodEstimate({
     enabled:
       canEstimateMethods && Boolean(managedAsset && effective && shieldConnection === 'connected'),
-    requestKey: `${methodEstimateKey}:${shieldConnection}:${JSON.stringify(evmMoveFee)}`,
+    requestKey: clusterEstimateKey,
     estimate: async signal => {
-      const request = buildShieldTransferRequest({
-        network: currentNetwork,
-        keyDomainId: effective!.walletId,
-        accountId: effective!.accountId,
-        from,
-        to,
-        method: 'cluster',
-        amountRaw: estimateAmountRaw!,
-        asset: selected!.asset,
-        chain: selected!.chain,
-        managed: managedAsset!,
-        ...(from === 'shield' ? {} : { feeSelection: evmMoveFee })
-      })
-      const preview = await confidentialFundingClient.preview(request)
+      const preview = await confidentialFundingClient.preview(buildClusterPreviewRequest())
       signal.throwIfAborted()
       return clusterMoveEstimate(estimateAmountRaw!, preview)
     }
@@ -1266,6 +1226,24 @@ function TransferForm() {
   const clusterQuoted = Boolean(
     canEstimateMethods && managedAsset && shieldConnection === 'connected' && clusterEstimate.value
   )
+  const clusterNetworkFee = useMoveMethodEstimate({
+    enabled:
+      clusterSelected &&
+      clusterQuoted &&
+      from !== 'shield' &&
+      Boolean(shieldAmountState?.amountRaw) &&
+      !preparingShield,
+    requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
+    estimate: () =>
+      confidentialFundingClient.previewClusterNetworkFee({
+        ...buildClusterPreviewRequest(),
+        feeSelection: evmMoveFee
+      })
+  }).value
+  const clusterEstimateWithFee =
+    clusterEstimate.value && clusterNetworkFee
+      ? { ...clusterEstimate.value, sourceNetworkFee: clusterNetworkFee }
+      : clusterEstimate.value
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
   const selectedEstimate = method === 'cluster' ? clusterEstimate : directEstimate
   const clusterUnavailable = getSwapQuoteFailureMessage(clusterEstimate.errorMessage) === 'no route'
@@ -1316,7 +1294,9 @@ function TransferForm() {
       setMethod('cluster')
     }
   }, [method, clusterUnavailable, directUnavailable, clusterQuoted, directQuoted])
-  const shieldReviewKey = `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(evmMoveFee)}`
+  const shieldReviewKeyForFee = (feeSelection: EvmFeeSelection) =>
+    `${routeKey}:${method}:${currentAmount}:${shieldAmountState?.amountRaw ?? ''}:${JSON.stringify(feeSelection)}`
+  const shieldReviewKey = shieldReviewKeyForFee(evmMoveFee)
   const latestShieldReviewKey = useRef(shieldReviewKey)
   latestShieldReviewKey.current = shieldReviewKey
   const activeShieldReview = preparedShield?.key === shieldReviewKey ? preparedShield.review : null
@@ -1325,6 +1305,8 @@ function TransferForm() {
     if (confirmAttemptedPlanId.current !== preparedShield.review.planId)
       void confidentialFundingClient.cancel(preparedShield.review.planId).catch(() => {})
     setPreparedShield(null)
+    reviewAttempt.current = null
+    updateFeeRefresh(null)
   }, [shieldReviewKey, preparedShield])
   const canReview = Boolean(
     draftScope === scopeKey &&
@@ -1335,10 +1317,7 @@ function TransferForm() {
     (!clusterPair || (method === 'directly' && directQuoted)) &&
     !tokenFeeBalanceError &&
     (direction === 'main-to-private' ? publicRaw !== null : privateRaw !== null) &&
-    (!maxSelected || (available?.display === currentAmount && amount === currentAmount)) &&
-    (!maxSelected ||
-      selected.asset.asset.kind !== 'native' ||
-      (maximum.value && !maximum.loading)) &&
+    (!maxSelected || amount === currentAmount) &&
     amountState?.amountRaw
   )
   const canReviewShield = Boolean(
@@ -1353,11 +1332,7 @@ function TransferForm() {
     shieldConnection === 'connected' &&
     shieldSourceRaw !== null &&
     !tokenFeeBalanceError &&
-    (!maxSelected || (shieldAvailable?.display === currentAmount && amount === currentAmount)) &&
-    (!maxSelected ||
-      selected.asset.asset.kind !== 'native' ||
-      from === 'shield' ||
-      (maximum.value && !maximum.loading)) &&
+    (!maxSelected || amount === currentAmount) &&
     shieldAmountState?.amountRaw
   )
   const selectDomain = (domain: TransferDomain, side: 'from' | 'to') => {
@@ -1405,6 +1380,19 @@ function TransferForm() {
             maximum: maxSelected
           })
     )
+  }
+  const openZcashMove = (source: FundingSource) => {
+    if (!effective || !zcashMoveSources.includes(source)) return
+    const query = new URLSearchParams({
+      move: '1',
+      assetId: `${getZcashChainId(currentNetwork)}/slip44:133`,
+      from: source,
+      originPath: `${location.pathname}${location.search}`,
+      sourceWalletId: effective.walletId,
+      sourceAccountId: effective.accountId
+    })
+    setAssetPickerOpen(false)
+    navigate(`/shield-zcash-move?${query.toString()}`)
   }
   const symbol = formatSymbol(selected?.asset.metadata.symbol)
   const sourceBalance =
@@ -1476,11 +1464,10 @@ function TransferForm() {
       !available ||
       BigInt(available.amountRaw) === 0n
   const handleMax = () => {
-    if (!selected || maxDisabled) return
+    if (!selected || maxDisabled || maximumRaw === '0') return
     setSelectedAssetId(selected.asset.asset.id)
     setMaxSelected(true)
-    if (selected.asset.asset.kind === 'native' && from !== 'shield') void maximum.request()
-    else setAmount((fundingRoute ? shieldAvailable : available)?.display ?? '')
+    setAmount(maxAmount)
   }
 
   const scopeStillCurrent = () => {
@@ -1511,17 +1498,24 @@ function TransferForm() {
     if (!scopeStillCurrent()) return
     setShieldConnection(updated ? 'connected' : 'required')
   }
-  const prepareShield = async () => {
+  const prepareShield = async (
+    feeSelection: EvmFeeSelection = evmMoveFee,
+    replacingReview = false
+  ): Promise<boolean> => {
     if (
-      !canReviewShield ||
+      (!replacingReview && !canReviewShield) ||
       !selected ||
       !managedAsset ||
       !effective ||
       !shieldAmountState?.amountRaw ||
       !scopeStillCurrent()
     )
-      return
-    const key = shieldReviewKey
+      return false
+    const key = shieldReviewKeyForFee(feeSelection)
+    const expectedKey = shieldReviewKey
+    if (reviewAttempt.current?.key !== key)
+      reviewAttempt.current = { key, dedupKey: `move:${crypto.randomUUID()}` }
+    const dedupKey = reviewAttempt.current.dedupKey
     setPreparingShield(true)
     setShieldError(null)
     try {
@@ -1536,18 +1530,24 @@ function TransferForm() {
         asset: selected.asset,
         chain: selected.chain,
         managed: managedAsset,
-        ...(from === 'shield' ? {} : { feeSelection: evmMoveFee }),
-        ...(from === 'shield' && destination ? { destination } : {})
+        ...(from === 'shield' ? {} : { feeSelection }),
+        ...(from === 'shield' && destination ? { destination } : {}),
+        dedupKey
       })
       const result = await confidentialFundingClient.prepare(request)
-      if (!scopeStillCurrent() || latestShieldReviewKey.current !== key) {
+      if (!scopeStillCurrent() || latestShieldReviewKey.current !== expectedKey) {
         if (result.phase === 'prepared')
           void confidentialFundingClient.cancel(result.planId).catch(() => {})
-        return
+        return false
       }
       if (result.phase !== 'prepared') {
-        await checkShieldPlan(result.planId)
-        return
+        const status = await checkShieldPlan(result.planId)
+        if (replacingReview && scopeStillCurrent()) {
+          if (status !== 'started')
+            throw new Error('Transfer review could not be prepared. Try again.')
+        }
+        if (status === 'started') reviewAttempt.current = null
+        return false
       }
       if (!matchesShieldReview(result, request)) {
         void confidentialFundingClient.cancel(result.planId).catch(() => {})
@@ -1555,20 +1555,25 @@ function TransferForm() {
       }
       confirmAttemptedPlanId.current = null
       setConfirmUncertain(false)
+      reviewAttempt.current = null
+      if (replacingReview) setEvmMoveFee(feeSelection)
       setPreparedShield({ key, review: result })
+      return true
     } catch (error) {
       if (scopeStillCurrent()) {
         const message = error instanceof Error ? error.message : ''
         const classifiedMessage = classifyError(error).userMessage
-        setShieldError(
+        const userMessage =
           message === 'Gas limit is below the estimated gas required'
             ? 'Gas limit is below the estimated gas required. Edit the network fee and try again.'
             : classifiedMessage === 'Insufficient native balance for the amount and network fee.' &&
                 nativeFeeAsset
               ? `Insufficient ${formatSymbol(nativeFeeAsset.metadata.symbol)} balance for the amount and network fee.`
               : classifiedMessage
-        )
+        setShieldError(userMessage)
+        if (replacingReview) throw new Error(userMessage)
       }
+      return false
     } finally {
       if (scopeStillCurrent()) setPreparingShield(false)
     }
@@ -1585,6 +1590,8 @@ function TransferForm() {
       setMaxSelected(false)
       setShieldError(null)
       setConfirmUncertain(false)
+      reviewAttempt.current = null
+      updateFeeRefresh(null)
       void loadShieldBalances(true, false)
       void openConfidentialActivity(
         plan,
@@ -1641,18 +1648,21 @@ function TransferForm() {
         const status = await checkShieldPlan(pending.planId)
         if (status !== 'prepared') return
       }
-      await confidentialFundingClient.cancel(pending.planId)
+      if (feeRefreshRef.current?.planId !== pending.planId || !feeRefreshRef.current.cancelled)
+        await confidentialFundingClient.cancel(pending.planId)
       if (!scopeStillCurrent()) return
       setPreparedShield(null)
     } catch {
       if (scopeStillCurrent()) setPreparedShield(null)
     } finally {
+      reviewAttempt.current = null
+      updateFeeRefresh(null)
       if (scopeStillCurrent()) setCancellingShield(false)
     }
   }
   const confirmShield = async () => {
     const pending = activeShieldReview
-    if (!pending || !scopeStillCurrent()) return
+    if (!pending || feeRefreshRef.current || preparingShield || !scopeStillCurrent()) return
     if (!confirmUncertain && pending.expiresAt <= Date.now()) {
       setShieldError('Shield review expired. Try again.')
       return
@@ -1700,16 +1710,33 @@ function TransferForm() {
 
   const changeShieldFee = async (next: EvmFeeSelection) => {
     const review = activeShieldReview
-    if (!review?.sourceEvmFee || areEvmFeeSelectionsEqual(next, evmMoveFee)) return
+    if (
+      !review?.sourceEvmFee ||
+      (areEvmFeeSelectionsEqual(next, evmMoveFee) && !feeRefreshRef.current)
+    )
+      return
+    if (cancellingShield || confirmingShield || preparingShield || !scopeStillCurrent()) return
     if (confirmAttemptedPlanId.current === review.planId)
       throw new Error('Check transfer status before changing network fee.')
+    const previous = feeRefreshRef.current
+    const refresh = {
+      planId: review.planId,
+      selection: next,
+      cancelled: previous?.planId === review.planId && previous.cancelled
+    }
+    updateFeeRefresh(refresh)
     setCancellingShield(true)
     try {
-      await confidentialFundingClient.cancel(review.planId)
-      if (!scopeStillCurrent()) return
-      setPreparedShield(null)
-      setShieldError(null)
-      setEvmMoveFee(next)
+      if (!refresh.cancelled) {
+        await confidentialFundingClient.cancel(review.planId)
+        if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
+        updateFeeRefresh({ ...refresh, cancelled: true })
+      }
+      if (!scopeStillCurrent() || latestShieldReviewKey.current !== shieldReviewKey) return
+      if (await prepareShield(next, true)) updateFeeRefresh(null)
+    } catch (error) {
+      if (scopeStillCurrent()) setShieldError(classifyError(error).userMessage)
+      throw error
     } finally {
       if (scopeStillCurrent()) setCancellingShield(false)
     }
@@ -1748,7 +1775,6 @@ function TransferForm() {
             icon: selected.asset.metadata.iconUrl
           }}
           amount={currentAmount}
-          amountDetails={false}
           fiatValue={moveReviewFiatValue}
           network={selected.chain.chain.displayName}
           rows={[
@@ -1803,7 +1829,7 @@ function TransferForm() {
               ? [
                   {
                     label: 'Estimated time',
-                    content: `${activeShieldReview.quoteTimeEstimateSeconds} sec`
+                    content: formatShieldQuoteTime(activeShieldReview.quoteTimeEstimateSeconds!)
                   }
                 ]
               : []),
@@ -1896,9 +1922,22 @@ function TransferForm() {
           ]}
           error={
             shieldError ? (
-              <p role="alert" className="mt-3 text-xs text-warning">
-                {shieldError}
-              </p>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p role="alert" className="text-xs text-warning">
+                  {shieldError}
+                </p>
+                {feeRefresh && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={cancellingShield || preparingShield}
+                    onClick={() => void changeShieldFee(feeRefresh.selection).catch(() => {})}
+                  >
+                    Retry
+                  </Button>
+                )}
+              </div>
             ) : undefined
           }
           confirmLabel={
@@ -1916,6 +1955,8 @@ function TransferForm() {
           confirmDisabled={
             !scopeStillCurrent() ||
             cancellingShield ||
+            preparingShield ||
+            feeRefresh !== null ||
             (!confirmUncertain && activeShieldReview.expiresAt <= Date.now())
           }
           onCancel={() => void cancelShieldReview()}
@@ -2011,11 +2052,11 @@ function TransferForm() {
             <button
               type="button"
               onClick={handleMax}
-              disabled={!selected || maxDisabled || maximum.loading}
+              disabled={!selected || maxDisabled || maximumRaw === '0'}
               aria-label="Max"
               className="wallet-interactive shrink-0 rounded bg-white/10 px-1.5 py-0.5 disabled:opacity-40"
             >
-              {maximum.loading ? '…' : 'Max'}
+              Max
             </button>
           </div>
         </div>
@@ -2113,7 +2154,7 @@ function TransferForm() {
                     shieldConnection === 'connected' &&
                     clusterEstimate.loading
                   }
-                  fee={formatMoveMethodFee(clusterEstimate.value, selected.asset)}
+                  fee={formatMoveMethodFee(clusterEstimateWithFee, selected.asset)}
                   onClick={() => {
                     userPickedMethod.current = true
                     setMethod('cluster')
@@ -2150,15 +2191,12 @@ function TransferForm() {
                 selection={evmMoveFee}
                 feeModel={evmMoveFee.kind === 'legacy' ? 'legacy' : 'eip1559'}
                 amount={
-                  clusterEstimate.value?.sourceNetworkFee
-                    ? formatBaseUnitAmount(
-                        clusterEstimate.value.sourceNetworkFee.raw,
-                        clusterEstimate.value.sourceNetworkFee.decimals
-                      )
+                  clusterNetworkFee
+                    ? formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)
                     : '—'
                 }
                 symbol={
-                  clusterEstimate.value?.sourceNetworkFee?.symbol ??
+                  clusterNetworkFee?.symbol ??
                   nativeFeeAsset?.metadata.symbol ??
                   selected.chain.chain.displayName
                 }
@@ -2179,19 +2217,19 @@ function TransferForm() {
             onRetry={() => setRetry(value => value + 1)}
           />
         )}
-        {supportedPair && amount.trim() && routeState === 'error' && (
-          <InlineError
-            message="Transfer availability could not be checked."
-            onRetry={() => setRetry(value => value + 1)}
-          />
-        )}
         {loadState === 'error' && !portfolio && (
           <InlineError
             message="Assets could not be loaded."
             onRetry={() => void refreshPortfolio(true)}
           />
         )}
-        {shieldError && !activeShieldReview && (
+        {fundingRoute && shieldConnection === 'required' && !shieldConnecting && (
+          <InlineError
+            message={shieldError ?? 'Shield balance unavailable.'}
+            onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+          />
+        )}
+        {shieldError && !activeShieldReview && shieldConnection !== 'required' && (
           <p role="alert" className="text-xs text-warning">
             {shieldError}
           </p>
@@ -2201,36 +2239,21 @@ function TransferForm() {
         <Button
           size="wallet"
           className="w-full"
-          disabled={
-            fundingRoute && shieldConnection !== 'connected'
-              ? shieldConnection !== 'required'
-              : fundingRoute
-                ? !canReviewShield || preparingShield
-                : !canReview
-          }
+          disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
           isLoading={
             preparingShield ||
-            (fundingRoute && (shieldConnection === 'checking' || shieldConnection === 'busy'))
+            (fundingRoute &&
+              (shieldConnecting ||
+                shieldConnection === 'checking' ||
+                shieldConnection === 'busy')) ||
+            (!transferError &&
+              clusterPair &&
+              (fundingRoute ? clusterSelected : method === 'directly') &&
+              selectedEstimate.loading)
           }
-          onClick={
-            fundingRoute && shieldConnection !== 'connected'
-              ? () => void refreshShield(shieldNeedsAuthorization)
-              : fundingRoute
-                ? () => void prepareShield()
-                : review
-          }
+          onClick={fundingRoute ? () => void prepareShield() : review}
         >
-          {fundingRoute && shieldConnection !== 'connected'
-            ? shieldConnection === 'required'
-              ? shieldNeedsAuthorization
-                ? 'Connect'
-                : 'Retry'
-              : 'Loading balances…'
-            : clusterSelected
-              ? 'Review Cluster'
-              : shieldPair
-                ? 'Move'
-                : 'Move'}
+          {clusterSelected ? 'Review Cluster' : 'Move'}
         </Button>
       </div>
 
@@ -2243,53 +2266,108 @@ function TransferForm() {
         <TokenSelectorView
           search={assetSearch}
           onSearchChange={setAssetSearch}
-          networks={Array.from(
-            new Map(pickerRows.map(item => [item.chain.chain.id, item.chain])).values()
-          ).map(chain => ({
-            id: chain.chain.id,
-            label: chain.chain.displayName,
-            iconChain: resolveChainIconAlias(
-              chain.chain.family,
-              chain.chain.displayName,
-              chain.chain.id
-            )
-          }))}
+          networks={
+            shieldAssetPicker
+              ? Array.from(
+                  new Map(
+                    shieldPickerRows.map(item => [
+                      item.chainId,
+                      {
+                        id: item.chainId ?? 'zec',
+                        label: item.chainId === 'zec' ? 'Zcash' : (item.chainName ?? ''),
+                        iconChain: item.badgeBlockchain ?? item.chainId ?? 'zec'
+                      }
+                    ])
+                  ).values()
+                )
+              : Array.from(
+                  new Map(pickerRows.map(item => [item.chain.chain.id, item.chain])).values()
+                ).map(chain => ({
+                  id: chain.chain.id,
+                  label: chain.chain.displayName,
+                  iconChain: resolveChainIconAlias(
+                    chain.chain.family,
+                    chain.chain.displayName,
+                    chain.chain.id
+                  )
+                }))
+          }
           selectedNetwork={assetChainId}
           onNetworkChange={setAssetChainId}
-          selectedKey={selected?.asset.asset.id}
-          items={pickerRows
-            .filter(item => assetChainId === 'all' || item.chain.chain.id === assetChainId)
-            .filter(item => rankPickerAsset(item) < 99)
-            .sort((left, right) => rankPickerAsset(left) - rankPickerAsset(right))
-            .map(item => ({
-              key: item.asset.asset.id,
-              symbol: formatSymbol(item.asset.metadata.symbol),
-              icon: (
-                <TokenIcon
-                  assetId={item.asset.asset.id}
-                  symbol={formatSymbol(item.asset.metadata.symbol)}
-                  icon={item.asset.metadata.iconUrl}
-                  blockchain={resolveChainIconAlias(
-                    item.chain.chain.family,
-                    item.chain.chain.displayName,
-                    item.chain.chain.id
-                  )}
-                  size={32}
+          toolbar={
+            shieldAssetPicker ? (
+              <div className="-mx-4 mt-3">
+                <ShieldSendProviderTabs
+                  value={activeAssetProvider}
+                  availableProviders={availableProviders}
+                  onChange={provider => {
+                    setAssetChainId('all')
+                    setAssetProvider(provider)
+                  }}
                 />
-              ),
-              subtitle: item.chain.chain.displayName,
-              balance: (
-                <span className="block truncate text-base tabular-nums">
-                  {formatTokenQuantity(
-                    formatBaseUnitAmount(item.sourceRaw, item.asset.metadata.decimals)
-                  )}
-                  <span className="block truncate text-xs text-muted">
-                    {item.valueUsd !== null ? formatFiatAmount(item.valueUsd) : '—'}
-                  </span>
-                </span>
-              )
-            }))}
+              </div>
+            ) : undefined
+          }
+          selectedKey={
+            shieldAssetPicker && activeAssetProvider === 'zcash-shield'
+              ? undefined
+              : selected?.asset.asset.id
+          }
+          items={
+            shieldAssetPicker
+              ? shieldPickerRows
+                  .filter(item => assetChainId === 'all' || item.chainId === assetChainId)
+                  .filter(
+                    item =>
+                      rankTokenSearchFields(
+                        {
+                          symbol: item.symbol,
+                          name: item.chainName,
+                          searchTerms: [item.zcashFundingSource ?? '']
+                        },
+                        assetSearch
+                      ) < 99
+                  )
+                  .map(item => shieldSourceSelectionItem(item, balancesHidden))
+              : pickerRows
+                  .filter(item => assetChainId === 'all' || item.chain.chain.id === assetChainId)
+                  .filter(item => rankPickerAsset(item) < 99)
+                  .sort((left, right) => rankPickerAsset(left) - rankPickerAsset(right))
+                  .map(item => ({
+                    key: item.asset.asset.id,
+                    symbol: formatSymbol(item.asset.metadata.symbol),
+                    icon: (
+                      <TokenIcon
+                        assetId={item.asset.asset.id}
+                        symbol={formatSymbol(item.asset.metadata.symbol)}
+                        icon={item.asset.metadata.iconUrl}
+                        blockchain={resolveChainIconAlias(
+                          item.chain.chain.family,
+                          item.chain.chain.displayName,
+                          item.chain.chain.id
+                        )}
+                        size={32}
+                      />
+                    ),
+                    subtitle: item.chain.chain.displayName,
+                    balance: (
+                      <span className="block truncate text-base tabular-nums">
+                        {formatTokenQuantity(
+                          formatBaseUnitAmount(item.sourceRaw, item.asset.metadata.decimals)
+                        )}
+                        <span className="block truncate text-xs text-muted">
+                          {item.valueUsd !== null ? formatFiatAmount(item.valueUsd) : '—'}
+                        </span>
+                      </span>
+                    )
+                  }))
+          }
           onSelect={key => {
+            if (shieldAssetPicker && activeAssetProvider === 'zcash-shield') {
+              const source = zcashMoveSources.find(item => key === `zcash-move:${item}`)
+              if (source) openZcashMove(source)
+              return
+            }
             const item = pickerRows.find(row => row.asset.asset.id === key)
             if (!item) return
             userEditedMove.current = true
@@ -2300,7 +2378,7 @@ function TransferForm() {
             setAssetPickerOpen(false)
           }}
           emptyMessage={
-            pickerRows.length === 0
+            (shieldAssetPicker ? shieldPickerRows.length : pickerRows.length) === 0
               ? loadState === 'loading' || (from === 'shield' && shieldConnection === 'checking')
                 ? 'Loading assets…'
                 : 'No assets available'

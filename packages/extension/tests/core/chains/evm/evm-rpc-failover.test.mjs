@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
 import { getEvmNetworkConfigs } from '../../../../src/config/networks.ts'
+import { getDefaultEvmRpcEndpoint } from '../../../../src/config/rpc-endpoints.ts'
 import { getEvmRpcEndpointOptions } from '../../../../src/infrastructure/chains/managed-rpc-endpoints.ts'
+import { setActiveRpcRegistryDocument } from '../../../../src/infrastructure/chains/rpc-registry-client.ts'
 import { EvmRpcError } from '../../../../src/infrastructure/chains/evm/evm-rpc-client.ts'
 import { createEvmRpcFailoverClient } from '../../../../src/infrastructure/chains/evm/evm-rpc-failover-client.ts'
 
@@ -43,14 +45,56 @@ test.describe('EVM RPC endpoint pools', () => {
     }
   })
 
-  test('uses only the owned DeltaRPC endpoint for Ethereum mainnet', () => {
-    expect(getEvmRpcEndpointOptions('mainnet', 'eip155:1')).toEqual([
-      { id: 'deltarpc', label: 'DeltaRPC', url: 'https://eth.deltarpc.com' }
-    ])
+  test('uses the bundled endpoint when the cached Ethereum registry contains only a retired endpoint', () => {
+    setActiveRpcRegistryDocument({
+      version: 1,
+      updatedAt: '2026-11-02T00:00:00.000Z',
+      chains: [
+        {
+          id: 'eip155:1',
+          network: 'mainnet',
+          probe: 'evm-json-rpc',
+          endpoints: [{ id: 'deltarpc', label: 'Retired RPC', url: 'https://retired.example' }]
+        }
+      ]
+    })
+    try {
+      expect(getEvmRpcEndpointOptions('mainnet', 'eip155:1')).toEqual([
+        getDefaultEvmRpcEndpoint('mainnet', 'eip155:1')
+      ])
+    } finally {
+      setActiveRpcRegistryDocument(null)
+    }
   })
 })
 
 test.describe('EVM RPC failover', () => {
+  test('restarts a failed nonce observation on one endpoint', async () => {
+    const client = createEvmRpcFailoverClient(
+      {
+        chainId: 'eip155:1',
+        endpoints: [
+          { id: 'primary', label: 'Primary', url: 'https://primary.example' },
+          { id: 'fallback', label: 'Fallback', url: 'https://fallback.example' }
+        ]
+      },
+      async (url, init) => {
+        const request = JSON.parse(init.body)
+        if (request.method === 'eth_chainId') return rpcResponse(request.id, '0x1')
+        if (url === 'https://fallback.example/') return rpcResponse(request.id, '0xa')
+        if (request.params[1] === 'pending') return rpcResponse(request.id, '0x9')
+        return new Response('', { status: 429 })
+      }
+    )
+
+    await expect(
+      client.withNonceQueueEndpoint(async rpc => ({
+        pending: await rpc.getPendingNonce(ADDRESS),
+        latest: await rpc.getTransactionCount(ADDRESS, 'latest')
+      }))
+    ).resolves.toEqual({ pending: '10', latest: '10' })
+  })
+
   test('falls back from a rate-limited endpoint and keeps the healthy endpoint active', async () => {
     const requests = []
     const client = createEvmRpcFailoverClient(

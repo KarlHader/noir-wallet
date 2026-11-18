@@ -4,6 +4,7 @@ import { parseTransactionGraph } from '@/core/transactions/domain'
 import { parseChainId } from '@/core/chains/registry'
 import {
   RHEA_SWAP_CHAIN_CATALOG,
+  normalizeRheaSwapEvmTokenAssetId,
   type RheaSwapExecutionView,
   type RheaSwapEvmCallView,
   type RheaSwapEvmSignaturePlan,
@@ -384,7 +385,12 @@ export function parseRheaSwapToken(value: unknown): RheaSwapToken {
     throw new Error('RHEA Swap token metadata is invalid')
   }
   return Object.freeze({
-    assetId: readString(value.assetId, 'RHEA Swap token asset ID'),
+    assetId: normalizeRheaSwapEvmTokenAssetId(
+      readString(value.assetId, 'RHEA Swap token asset ID'),
+      chain,
+      readString(value.rheaAddress, 'RHEA Swap token address'),
+      value.isNative
+    ),
     blockchain: descriptor.blockchain,
     contractAddress: value.contractAddress,
     decimals: value.decimals,
@@ -557,7 +563,7 @@ export function parseRheaSwapReviewView(value: unknown): RheaSwapReviewView {
       'amountIn',
       'execution'
     ],
-    ['alternatives'],
+    ['alternatives', 'timeEstimateSeconds'],
     'RHEA Swap review'
   )
   const quote = parseRheaSwapQuoteView({
@@ -571,6 +577,15 @@ export function parseRheaSwapReviewView(value: unknown): RheaSwapReviewView {
     ...(value.alternatives === undefined ? {} : { alternatives: value.alternatives })
   })
   if (typeof value.isCrossChain !== 'boolean') throw new Error('RHEA Swap route kind is invalid')
+  const { timeEstimateSeconds } = value
+  if (
+    timeEstimateSeconds !== undefined &&
+    (typeof timeEstimateSeconds !== 'number' ||
+      !Number.isFinite(timeEstimateSeconds) ||
+      timeEstimateSeconds <= 0)
+  ) {
+    throw new Error('RHEA Swap time estimate is invalid')
+  }
   const fromChain = readChainRef(value.fromChain, 'RHEA Swap source chain')
   const toChain = readChainRef(value.toChain, 'RHEA Swap destination chain')
   const tokenIn = readAssetRef(value.tokenIn, 'RHEA Swap source asset')
@@ -581,6 +596,7 @@ export function parseRheaSwapReviewView(value: unknown): RheaSwapReviewView {
   return Object.freeze({
     ...quote,
     executionId: readString(value.executionId, 'RHEA Swap execution ID', 160),
+    ...(timeEstimateSeconds === undefined ? {} : { timeEstimateSeconds }),
     isCrossChain: value.isCrossChain,
     fromChain,
     toChain,

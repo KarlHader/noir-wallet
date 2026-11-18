@@ -4,18 +4,18 @@ import { ASSET_PRICE_SOURCE_ASSETS } from '@/config/asset-market-assets'
 import { type RheaSwapToken } from '@/core/services/rhea-swap'
 import { useSwapPreferences } from '@/store/swap-store'
 import {
-  getEnabledSwapChains,
   getSwapCatalogDisplaySeeds,
-  ALL_DESTINATION_CHAIN_IDS,
   mergeTokenCatalogs,
   readCachedTokenCatalogByChain,
   loadTokenCatalogByChain,
   buildInitialSwapCatalogPlan,
   findSwapTokenInCatalog,
+  findSwapTokenForDisplaySeed,
   isSwapAssetOnEnabledChain,
   pickProvisionalSwapSource,
   mergeSelectedSwapSourceCatalog,
   loadReversedSwapPair,
+  isSameSwapTokenRouteIdentity,
   type SwapInitialCatalogOptions
 } from '@/popup/services/swap-catalog-loading'
 import {
@@ -26,6 +26,7 @@ import {
   getSavedSwapDestinationAssetId,
   getSwapDestinationTokens
 } from '@/popup/services/swap-token-selection'
+import { rheaSwapClient } from '@/popup/services/rhea-swap-client'
 
 export function useSwapState(
   preferenceScope: string | null,
@@ -95,11 +96,19 @@ export function useSwapState(
   const [tokenIn, setTokenIn] = useState<RheaSwapToken | null>(initialState.tokenIn)
   const [selectedSourceAssetId, setSelectedSourceAssetId] = useState<string | null>(null)
   const [tokenOut, setTokenOut] = useState<RheaSwapToken | null>(initialState.tokenOut)
+  const currentSelectionContext = useRef({ catalogScope, preferenceScope, tokenIn, tokenOut })
+  currentSelectionContext.current = { catalogScope, preferenceScope, tokenIn, tokenOut }
+  const selectorContextKey = JSON.stringify([catalogScope, preferenceScope, enabledChainKey])
+  const activeSelectorContextKey = useRef(selectorContextKey)
+  activeSelectorContextKey.current = selectorContextKey
   const [sourceCatalog, setSourceCatalog] = useState<readonly RheaSwapToken[]>(initialState.sources)
   const [crossChainDestinationCatalog, setCrossChainDestinationCatalog] = useState<
     readonly RheaSwapToken[]
   >(initialState.destinations)
   const selectorSourceCatalog = useRef<readonly RheaSwapToken[]>([])
+  useEffect(() => {
+    selectorSourceCatalog.current = []
+  }, [selectorContextKey])
   const [amountIn, setAmountIn] = useState('')
   const [amountOut, setAmountOut] = useState('')
   const [recipientAddress, setRecipientAddressState] = useState('')
@@ -125,7 +134,6 @@ export function useSwapState(
   const setSlippage = useSwapPreferences(state => state.setSlippage)
   const setSavedTokenSelection = useSwapPreferences(state => state.setSavedTokenSelection)
   const setSavedTokenInId = useSwapPreferences(state => state.setSavedTokenInId)
-  const setSavedTokenOutId = useSwapPreferences(state => state.setSavedTokenOutId)
 
   const [areTokensLoading, setAreTokensLoading] = useState(true)
   const [destinationTokensLoading, setDestinationTokensLoading] = useState(true)
@@ -196,6 +204,37 @@ export function useSwapState(
 
   useEffect(() => {
     let cancelled = false
+    const mergeSourceCatalog = (
+      current: readonly RheaSwapToken[],
+      incoming: readonly RheaSwapToken[] = []
+    ) => {
+      const selection = currentSelectionContext.current
+      if (
+        !selectionEdited.current ||
+        selection.catalogScope !== catalogScope ||
+        activePreferenceScope.current !== selection.preferenceScope ||
+        !isSwapAssetOnEnabledChain(selection.tokenIn?.assetId, options.enabledChains)
+      )
+        return mergeTokenCatalogs(current, incoming)
+      const selected = [
+        selection.tokenIn,
+        selection.tokenOut?.blockchain === selection.tokenIn?.blockchain ? selection.tokenOut : null
+      ].filter((token): token is RheaSwapToken => token != null)
+      const identity = (token: RheaSwapToken) => `${token.rheaChainId}:${token.rheaAddress}`
+      const selectedByAddress = new Map(selected.map(token => [identity(token), token]))
+      const refreshed = incoming.map(token => {
+        const retained = selectedByAddress.get(identity(token))
+        return retained && retained.assetId !== token.assetId
+          ? Object.freeze({ ...token, assetId: retained.assetId })
+          : token
+      })
+      const refreshedAddresses = new Set(refreshed.map(identity))
+      return mergeTokenCatalogs(
+        current,
+        refreshed,
+        selected.filter(token => !refreshedAddresses.has(identity(token)))
+      )
+    }
     const readActiveSelection = () => {
       const scope = activePreferenceScope.current
       return scope ? useSwapPreferences.getState().tokenSelections[scope] : undefined
@@ -297,7 +336,7 @@ export function useSwapState(
       setCatalogError(false)
       if (sourcesReady && destinationsReady) return
       if (!sourcesReady) {
-        setSourceCatalog(displaySources)
+        setSourceCatalog(() => mergeSourceCatalog([], displaySources))
         setTokenIn(previous =>
           previous && isSwapAssetOnEnabledChain(previous.assetId, options.enabledChains)
             ? previous
@@ -341,7 +380,7 @@ export function useSwapState(
           plan.sourceChainIds,
           catalogRequestId > 0,
           tokens => {
-            setSourceCatalog(previous => mergeTokenCatalogs(previous, tokens))
+            setSourceCatalog(previous => mergeSourceCatalog(previous, tokens))
             setTokenOut(previous =>
               previous?.isDisplaySeed
                 ? (tokens.find(token => token.assetId === previous.assetId) ?? previous)
@@ -368,7 +407,7 @@ export function useSwapState(
         if (sources.length === 0 && cachedPlannedSources.length === 0) {
           throw new Error('RHEA Swap source assets are unavailable')
         }
-        setSourceCatalog(previous => mergeTokenCatalogs(previous, sources))
+        setSourceCatalog(previous => mergeSourceCatalog(previous, sources))
         setTokenOut(previous =>
           previous?.isDisplaySeed
             ? (sources.find(token => token.assetId === previous.assetId) ?? previous)
@@ -394,7 +433,7 @@ export function useSwapState(
       } catch {
         if (!cancelled) {
           if (cachedPlannedSources.length === 0) {
-            setSourceCatalog(displaySources)
+            setSourceCatalog(() => mergeSourceCatalog([], displaySources))
             setAmountOut('')
             setQuoteError(null)
           }
@@ -425,17 +464,22 @@ export function useSwapState(
     async (
       direction: 'from' | 'cross-chain-to',
       onTokens: (tokens: readonly RheaSwapToken[]) => void,
-      isCancelled: () => boolean
+      isCancelled: () => boolean,
+      chainIds: readonly number[]
     ) => {
+      const requestScope = selectorContextKey
+      const cancelled = () => isCancelled() || activeSelectorContextKey.current !== requestScope
       let loaded = direction === 'from' ? sourceCatalog : crossChainDestinationCatalog
+      let requested: readonly RheaSwapToken[] = []
       let pending: readonly RheaSwapToken[] = []
       let publishTimer: ReturnType<typeof setTimeout> | null = null
       const publish = () => {
         publishTimer = null
-        if (isCancelled() || pending.length === 0) return
+        if (cancelled() || pending.length === 0) return
         const next = pending
         pending = []
         loaded = mergeTokenCatalogs(loaded, next)
+        requested = mergeTokenCatalogs(requested, next)
         if (direction === 'from') {
           selectorSourceCatalog.current = loaded
           if (tokenOut && findSwapTokenInCatalog(next, tokenOut)) {
@@ -446,38 +490,94 @@ export function useSwapState(
             )
           }
         }
-        onTokens(
-          direction === 'from' ? loaded : getSwapDestinationTokens(tokenIn, sourceCatalog, loaded)
-        )
+        onTokens(requested)
       }
       try {
         await loadTokenCatalogByChain(
           direction,
-          direction === 'from'
-            ? getEnabledSwapChains(options.enabledChains).map(chain => chain.tokenListChainId)
-            : ALL_DESTINATION_CHAIN_IDS.filter(chainId => chainId !== tokenIn?.tokenListChainId),
+          chainIds,
           false,
           next => {
             pending = mergeTokenCatalogs(pending, next)
             if (publishTimer === null) publishTimer = setTimeout(publish, 120)
           },
-          isCancelled
+          cancelled,
+          rheaSwapClient,
+          { strict: true }
         )
       } finally {
         if (publishTimer !== null) clearTimeout(publishTimer)
         publish()
       }
-      return direction === 'from'
-        ? loaded
-        : getSwapDestinationTokens(tokenIn, sourceCatalog, loaded)
+      if (cancelled()) return []
+      return requested
     },
-    [sourceCatalog, crossChainDestinationCatalog, tokenIn, tokenOut, enabledChainKey]
+    [sourceCatalog, crossChainDestinationCatalog, tokenIn, tokenOut, selectorContextKey]
   )
 
-  const destinationTokens = useMemo(
-    () => getSwapDestinationTokens(tokenIn, sourceCatalog, crossChainDestinationCatalog),
-    [crossChainDestinationCatalog, sourceCatalog, tokenIn]
-  )
+  useEffect(() => {
+    const seeds = [
+      tokenIn?.isDisplaySeed ? { token: tokenIn, direction: 'from' as const } : null,
+      tokenOut?.isDisplaySeed
+        ? {
+            token: tokenOut,
+            direction:
+              tokenIn?.rheaChainId === tokenOut.rheaChainId
+                ? ('from' as const)
+                : ('cross-chain-to' as const)
+          }
+        : null
+    ].filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    if (seeds.length === 0) return
+    let stopped = false
+    const requestScope = selectorContextKey
+    const cancelled = () => stopped || activeSelectorContextKey.current !== requestScope
+    for (const { token, direction } of seeds) {
+      void loadTokenCatalogByChain(
+        direction,
+        [token.tokenListChainId],
+        false,
+        tokens => {
+          if (cancelled()) return
+          const resolved = findSwapTokenForDisplaySeed(tokens, token)
+          if (!resolved) return
+          if (token === tokenIn) {
+            setSourceCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            setTokenIn(previous => (previous === token ? resolved : previous))
+          } else {
+            if (direction === 'from')
+              setSourceCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            else
+              setCrossChainDestinationCatalog(previous => mergeTokenCatalogs(previous, [resolved]))
+            setTokenOut(previous => (previous === token ? resolved : previous))
+          }
+        },
+        cancelled
+      )
+    }
+    return () => {
+      stopped = true
+    }
+  }, [tokenIn, tokenOut, selectorContextKey])
+
+  const destinationTokens = useMemo(() => {
+    const catalog = getSwapDestinationTokens(tokenIn, sourceCatalog, crossChainDestinationCatalog)
+    return tokenOut &&
+      tokenOut.assetId !== tokenIn?.assetId &&
+      !findSwapTokenInCatalog(catalog, tokenOut)
+      ? mergeTokenCatalogs(catalog, [tokenOut])
+      : catalog
+  }, [crossChainDestinationCatalog, sourceCatalog, tokenIn, tokenOut])
+  useEffect(() => {
+    if (
+      !tokenIn ||
+      selectionScope !== preferenceScope ||
+      !isSwapAssetOnEnabledChain(tokenIn.assetId, options.enabledChains) ||
+      findSwapTokenInCatalog(sourceCatalog, tokenIn)
+    )
+      return
+    setSourceCatalog(previous => mergeTokenCatalogs(previous, [tokenIn]))
+  }, [tokenIn, sourceCatalog, selectionScope, preferenceScope, enabledChainKey])
   useEffect(() => {
     if (!tokenOut || findSwapTokenInCatalog(sourceCatalog, tokenOut)) return
     const sourceToken = findSwapTokenInCatalog(selectorSourceCatalog.current, tokenOut)
@@ -488,30 +588,6 @@ export function useSwapState(
     () => mergeTokenCatalogs(sourceCatalog, destinationTokens),
     [destinationTokens, sourceCatalog]
   )
-
-  useEffect(() => {
-    if (
-      tokenOut &&
-      !areTokensLoading &&
-      !destinationTokensLoading &&
-      selectionScope === preferenceScope &&
-      !destinationTokens.some(
-        token =>
-          token.rheaChainId === tokenOut.rheaChainId && token.rheaAddress === tokenOut.rheaAddress
-      )
-    ) {
-      setTokenOut(null)
-      setAmountOut('')
-      setQuoteError(null)
-    }
-  }, [
-    areTokensLoading,
-    destinationTokensLoading,
-    selectionScope,
-    preferenceScope,
-    destinationTokens,
-    tokenOut
-  ])
 
   // Derived state
   const isZecSource = isZecToken(tokenIn)
@@ -575,8 +651,8 @@ export function useSwapState(
         const isCancelled = () =>
           sequence !== switchRequestSequence.current ||
           revision !== inputRevision.current ||
-          activePair.current.tokenIn !== tokenIn ||
-          activePair.current.tokenOut !== tokenOut ||
+          !isSameSwapTokenRouteIdentity(activePair.current.tokenIn, tokenIn) ||
+          !isSameSwapTokenRouteIdentity(activePair.current.tokenOut, tokenOut) ||
           options?.isCancelled?.() === true
         const pair = await loadReversedSwapPair({
           tokenIn,
@@ -636,11 +712,11 @@ export function useSwapState(
   }, [])
 
   const setTokenPair = useCallback(
-    (nextTokenIn: RheaSwapToken, nextTokenOut: RheaSwapToken | null) => {
+    (nextTokenIn: RheaSwapToken, nextTokenOut: RheaSwapToken | null, persistSelection = false) => {
       inputRevision.current += 1
       setTokenIn(nextTokenIn)
       setTokenOut(nextTokenOut)
-      if (preferenceScope) {
+      if (preferenceScope && persistSelection) {
         setSavedTokenSelection(preferenceScope, {
           tokenInId: nextTokenIn.assetId,
           tokenOutId: nextTokenOut?.assetId ?? null
@@ -680,23 +756,27 @@ export function useSwapState(
 
   const selectTokenIn = useCallback(
     (token: RheaSwapToken) => {
+      const current = currentSelectionContext.current
+      if (current.catalogScope !== catalogScope) return
       markSelectionEdited()
       setSourceCatalog(previous =>
         mergeSelectedSwapSourceCatalog(previous, selectorSourceCatalog.current, token)
       )
       setTokenIn(token)
       setSelectedSourceAssetId(token.assetId)
-      if (preferenceScope) setSavedTokenInId(preferenceScope, token.assetId)
+      if (current.preferenceScope) setSavedTokenInId(current.preferenceScope, token.assetId)
       setAmountOut('')
       setQuoteError(null)
     },
-    [markSelectionEdited, preferenceScope, setSavedTokenInId]
+    [catalogScope, markSelectionEdited, setSavedTokenInId]
   )
 
   const selectTokenOut = useCallback(
     (token: RheaSwapToken) => {
+      const current = currentSelectionContext.current
+      if (current.catalogScope !== catalogScope) return
       markSelectionEdited()
-      if (token.blockchain === tokenIn?.blockchain) {
+      if (token.blockchain === current.tokenIn?.blockchain) {
         setSourceCatalog(previous =>
           previous.includes(token) ? previous : mergeTokenCatalogs(previous, [token])
         )
@@ -706,11 +786,15 @@ export function useSwapState(
         )
       }
       setTokenOut(token)
-      if (preferenceScope) setSavedTokenOutId(preferenceScope, token.assetId)
+      if (current.preferenceScope)
+        setSavedTokenSelection(current.preferenceScope, {
+          tokenInId: current.tokenIn?.assetId ?? null,
+          tokenOutId: token.assetId
+        })
       setAmountOut('')
       setQuoteError(null)
     },
-    [markSelectionEdited, preferenceScope, setSavedTokenOutId, tokenIn?.blockchain]
+    [catalogScope, markSelectionEdited, setSavedTokenSelection]
   )
 
   const selectTokenOutForFlow = useCallback((token: RheaSwapToken) => {

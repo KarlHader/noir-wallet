@@ -205,6 +205,8 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     'destination',
     'refundAddress',
     'slippageBps',
+    ...(value.recipientType === undefined ? [] : ['recipientType']),
+    ...(value.fundingSource === undefined ? [] : ['fundingSource']),
     ...(value.requestId === undefined ? [] : ['requestId'])
   ]
   if (!hasExactRuntimeKeys(value, fields) || !isRuntimeRecord(value.destination)) return false
@@ -215,13 +217,23 @@ const isNativeZecIntentsSwapRequest: RuntimeFieldValidator = value => {
     isNativeZecIntentsQuoteId(value.accountId) &&
     typeof value.amountZats === 'string' &&
     /^[1-9][0-9]{0,77}$/.test(value.amountZats) &&
-    hasExactRuntimeKeys(destination, ['chainId', 'assetId', 'protocolAssetId', 'recipient']) &&
+    hasExactRuntimeKeys(destination, [
+      'chainId',
+      'assetId',
+      'protocolAssetId',
+      ...(value.recipientType === 'CONFIDENTIAL_INTENTS' ? [] : ['recipient'])
+    ]) &&
     [destination.chainId, destination.assetId, destination.protocolAssetId].every(
       field => typeof field === 'string' && field.length > 0 && field.length <= 256
     ) &&
-    typeof destination.recipient === 'string' &&
-    destination.recipient.length > 0 &&
-    destination.recipient.length <= 1024 &&
+    (value.recipientType === 'CONFIDENTIAL_INTENTS'
+      ? destination.recipient === undefined &&
+        (value.fundingSource === 'transparent' || value.fundingSource === 'shielded')
+      : (value.recipientType === undefined || value.recipientType === 'DESTINATION_CHAIN') &&
+        (value.fundingSource === undefined || value.fundingSource === 'shielded') &&
+        typeof destination.recipient === 'string' &&
+        destination.recipient.length > 0 &&
+        destination.recipient.length <= 1024) &&
     typeof value.refundAddress === 'string' &&
     value.refundAddress.length > 0 &&
     value.refundAddress.length <= 512 &&
@@ -435,9 +447,6 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
     }
   },
   WALLET_UNLOCK: { required: { password: isLegacyPasswordString } },
-  GET_BETA_INVITE_ACTIVATION: {},
-  CHECK_BETA_INVITE_CODE: { required: { inviteCode: isShortString } },
-  BIND_BETA_INVITE_WALLET: {},
   CHANGE_WALLET_PASSWORD: {
     required: { currentPassword: isLegacyPasswordString, newPassword: isShortString }
   },
@@ -622,6 +631,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
       action: isPortfolioAction,
       executionMode: value => value === 'all' || isDAppExecutionMode(value),
       chainIds: isChainIdArray,
+      protocolProvider: value => value === 'Confidential Intents',
       historyPageCount: value =>
         typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 10
     }
@@ -695,9 +705,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   DISCARD_RHEA_SWAP: { required: { quoteHandle: isRheaSwapQuoteHandle } },
   PREPARE_NATIVE_ZEC_INTENTS_SWAP: { required: { request: isNativeZecIntentsSwapRequest } },
   GET_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
+  GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: { required: { quoteId: isNativeZecIntentsQuoteId } },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
   PREPARE_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
-  PREVIEW_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
+  PREVIEW_CONFIDENTIAL_FUNDING: {
+    required: { request: isRecord },
+    optional: { clusterFeeOnly: isBoolean }
+  },
   CREATE_EXTERNAL_SHIELD_DEPOSIT: { required: { request: isRecord } },
   GET_EXTERNAL_SHIELD_DEPOSIT: { required: { depositId: isShortString } },
   LIST_EXTERNAL_SHIELD_DEPOSITS: { required: { scope: isRecord } },
@@ -711,7 +725,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
   CHECK_CONFIDENTIAL_FUNDING_SUBMISSION: { required: { planId: isShortString } },
   CANCEL_CONFIDENTIAL_FUNDING: { required: { planId: isShortString } },
-  REFRESH_CONFIDENTIAL_BALANCES: { required: { scope: isRecord, authorize: isBoolean } },
+  REFRESH_CONFIDENTIAL_BALANCES: {
+    required: { scope: isRecord, authorize: isBoolean },
+    optional: { notifyPortfolio: isBoolean }
+  },
   GET_ASSET_MARKET_HISTORY: {
     required: {
       assetId: isShortString,
@@ -722,7 +739,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_ADDITIONAL_RECEIVE_TARGETS: {
     required: { walletId: isShortString, accountId: isShortString }
   },
-  GET_ACCOUNT_NETWORKS: {},
+  GET_ACCOUNT_NETWORKS: { optional: { deriveMissingAddresses: isBoolean } },
   GET_BITCOIN_ADDRESS_BALANCES: {},
   SET_ACTIVE_BITCOIN_ADDRESS_TYPE: {
     required: {
@@ -757,7 +774,13 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_SWAP_TOKEN_CATALOG: {},
   GET_PORTFOLIO: {
     required: { action: isPortfolioAction },
-    optional: { forceDiscovery: isBoolean, chainIds: isChainIdArray }
+    optional: {
+      forceDiscovery: isBoolean,
+      automatic: isBoolean,
+      chainIds: isChainIdArray,
+      expectedWalletId: isShortString,
+      expectedAccountId: isShortString
+    }
   },
   GET_EVM_PORTFOLIO: { required: { action: isPortfolioAction } },
   GET_EVM_CONFIRMATION_ESTIMATE: {
@@ -822,7 +845,17 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   },
   PREPARE_EVM_CANCEL: {
     required: { chainId: isShortString, originalTransactionId: isShortString },
-    optional: { executionMode: value => value === 'main' || value === 'private' }
+    optional: {
+      executionMode: value => value === 'main' || value === 'private',
+      feeSelection: isEvmFeeSelection
+    }
+  },
+  PREPARE_EVM_SPEED_UP: {
+    required: { chainId: isShortString, originalTransactionId: isShortString },
+    optional: {
+      executionMode: value => value === 'main' || value === 'private',
+      feeSelection: isEvmFeeSelection
+    }
   },
   GET_EVM_NONCE_RECOVERY: {
     required: { chainId: isShortString },
@@ -1041,9 +1074,6 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     ANALYTICS_EVENT: ['extension-page'],
     ANALYTICS_PAGE_VIEW: ['extension-page'],
     WALLET_UNLOCK: ['extension-page'],
-    GET_BETA_INVITE_ACTIVATION: ['extension-page'],
-    CHECK_BETA_INVITE_CODE: ['extension-page'],
-    BIND_BETA_INVITE_WALLET: ['extension-page'],
     CHANGE_WALLET_PASSWORD: ['extension-page'],
     GET_CONNECTED_DAPPS: ['extension-page'],
     GET_CURRENT_TAB_DAPP: ['extension-page'],
@@ -1122,6 +1152,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     DISCARD_RHEA_SWAP: ['extension-page'],
     PREPARE_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
     GET_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
+    GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: ['extension-page'],
     CANCEL_NATIVE_ZEC_INTENTS_SWAP: ['extension-page'],
     PREPARE_CONFIDENTIAL_FUNDING: ['extension-page'],
     PREVIEW_CONFIDENTIAL_FUNDING: ['extension-page'],
@@ -1163,6 +1194,7 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     ESTIMATE_EVM_CONTRACT_CALL_FEE: ['extension-page'],
     PREPARE_EVM_CONTRACT_CALL: ['extension-page'],
     PREPARE_EVM_CANCEL: ['extension-page'],
+    PREPARE_EVM_SPEED_UP: ['extension-page'],
     GET_EVM_NONCE_RECOVERY: ['extension-page'],
     PREPARE_EVM_NONCE_RECOVERY: ['extension-page'],
     GET_PENDING_EVM_TRANSFER: ['extension-page'],

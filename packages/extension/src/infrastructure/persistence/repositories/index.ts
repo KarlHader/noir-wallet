@@ -10,11 +10,18 @@ export {
 } from './indexed-db-storage-v2-repository'
 export { deleteStorageV2Persistence } from './indexed-db-wallet-persistence'
 export { InMemoryTransactionRepository } from './in-memory-transaction-repository'
+export {
+  subscribeTransactionPortfolioInvalidations,
+  type TransactionPortfolioInvalidation
+} from './transaction-portfolio-invalidation'
 export { TRANSACTION_REPOSITORY_LIMITS } from './transaction-repository-support'
 export {
   IndexedDbPortfolioCacheRepository,
   deleteIndexedDbPortfolioCache,
-  type IndexedDbPortfolioCacheRepositoryOptions
+  type IndexedDbPortfolioCacheRepositoryOptions,
+  type PortfolioInvalidationDomain,
+  type PortfolioInvalidationMarker,
+  type PortfolioInvalidationRecordScope
 } from './indexed-db-portfolio-cache-repository'
 export {
   IndexedDbTransactionRepository,

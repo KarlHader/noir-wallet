@@ -10,11 +10,8 @@ import { SecureStorage } from '@/core/wallet/secure-storage'
 import { accountNetworksClient } from '../services/account-networks-client'
 import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
-import { useBetaInviteActivation } from './useBetaInviteActivation'
-import {
-  canUseRouteBeforeBetaActivation,
-  getPendingBetaInviteReturnRoute
-} from '../services/beta-invite-route-policy'
+import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
+import { EXTENSION_ACTIVITY_ROUTE } from '@/config/extension'
 
 /**
  * Custom hook for application routing logic
@@ -35,8 +32,6 @@ export function useAppRouting() {
   const { autoLockMs, loadSettings } = useSettingsStore()
   const { getPendingNotifications, markAsNotified } = useAccountDataStore()
 
-  const lastVisibleTimeRef = useRef<number>(Date.now())
-
   // Detect if this is a dApp-triggered window
   const isDApp = useRef(
     (() => {
@@ -50,33 +45,13 @@ export function useAppRouting() {
   const isHardwareTab = useRef(window.location.hash.includes('/hardware/'))
   const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
-  const isTokenManagerEntry = useRef(window.location.hash === '#/manage-tokens')
-  const { status: betaInviteStatus } = useBetaInviteActivation()
-  const inviteReturnRoute = useRef(
-    getPendingBetaInviteReturnRoute(
-      location.pathname,
-      location.search,
-      betaInviteStatus.required && betaInviteStatus.state.phase !== 'activated',
-      isDApp.current || isHardwareTab.current
-    )
+  const walletEntryRoute = useRef(
+    window.location.hash === `#${EXTENSION_ACTIVITY_ROUTE}`
+      ? EXTENSION_ACTIVITY_ROUTE
+      : window.location.hash === '#/manage-tokens'
+        ? '/manage-tokens'
+        : '/'
   )
-  const restoredInviteRoute = useRef(false)
-
-  useEffect(() => {
-    if (
-      isLoading ||
-      betaInviteStatus.state.phase !== 'activated' ||
-      !inviteReturnRoute.current ||
-      restoredInviteRoute.current ||
-      canUseRouteBeforeBetaActivation(location.pathname)
-    ) {
-      return
-    }
-    restoredInviteRoute.current = true
-    if (`${location.pathname}${location.search}` !== inviteReturnRoute.current) {
-      replace(inviteReturnRoute.current)
-    }
-  }, [betaInviteStatus.state.phase, isLoading, location.pathname, location.search, replace])
 
   const routeToUnlock = useCallback(() => {
     // Import/create can complete without remounting the app. Read the current
@@ -96,24 +71,29 @@ export function useAppRouting() {
   }, [hasCatalogWallet, location.pathname, location.search, replace])
 
   // Auto-lock handler
-  const handleAutoLock = useCallback(async () => {
-    if (!hasAnyWallet) return
-    // Another extension page may still be active (for example a hardware setup
-    // tab while the side panel is idle). Only Background can decide whether
-    // the shared activity deadline has expired; page timers are wakeups only.
-    try {
-      const response: unknown = await chrome.runtime.sendMessage({ type: 'CHECK_WALLET_AUTO_LOCK' })
-      if (
-        response &&
-        typeof response === 'object' &&
-        'active' in response &&
-        response.active === false
-      )
-        routeToUnlock()
-    } catch {
-      // Background's alarm remains responsible for enforcing the deadline.
-    }
-  }, [hasAnyWallet, routeToUnlock])
+  const handleAutoLock = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!hasAnyWallet) return true
+      // Another extension page may still be active (for example a hardware setup
+      // tab while the side panel is idle). Only Background can decide whether
+      // the shared activity deadline has expired; page timers are wakeups only.
+      try {
+        const response: unknown = await withTimeout(
+          chrome.runtime.sendMessage({ type: 'CHECK_WALLET_AUTO_LOCK' }),
+          10_000,
+          'Check wallet session'
+        )
+        if (!response || typeof response !== 'object' || !('active' in response)) return false
+        if (typeof response.active !== 'boolean') return false
+        if (!response.active && !signal?.aborted) routeToUnlock()
+        return true
+      } catch {
+        // Background's alarm remains responsible for enforcing the deadline.
+        return false
+      }
+    },
+    [hasAnyWallet, routeToUnlock]
+  )
 
   useEffect(() => {
     const handleSessionChange = (
@@ -126,27 +106,50 @@ export function useAppRouting() {
     return () => chrome.storage.onChanged.removeListener(handleSessionChange)
   }, [routeToUnlock])
 
-  // Visibility-based lock: checks elapsed hidden time when popup regains focus
+  // Reconcile after navigation/resume too: a restarted Background may invalidate
+  // the session while the UI was not observing the descriptor removal.
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        lastVisibleTimeRef.current = Date.now()
-      } else {
-        if (autoLockMs > 0 && hasAnyWallet) {
-          const hiddenDuration = Date.now() - lastVisibleTimeRef.current
-
-          if (hiddenDuration >= autoLockMs) {
-            handleAutoLock()
-          }
+    if (
+      isLoading ||
+      !hasAnyWallet ||
+      location.pathname === '/unlock' ||
+      location.pathname === '/update' ||
+      location.pathname === '/terms-of-use' ||
+      location.pathname.startsWith('/onboarding') ||
+      location.pathname === '/add-wallet' ||
+      location.pathname === '/import-wallet'
+    )
+      return
+    const controller = new AbortController()
+    let checking = false
+    const checkSession = async () => {
+      if (checking) return
+      checking = true
+      try {
+        let attempt = 0
+        while (!controller.signal.aborted) {
+          if (await handleAutoLock(controller.signal)) return
+          await waitForDelayOrAbort(
+            Math.min(500 * 2 ** Math.min(attempt++, 4), 5_000),
+            controller.signal
+          )
         }
+      } finally {
+        checking = false
       }
     }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    const onResume = () => {
+      if (!document.hidden) void checkSession()
     }
-  }, [autoLockMs, hasAnyWallet, handleAutoLock])
+    void checkSession()
+    document.addEventListener('visibilitychange', onResume)
+    window.addEventListener('focus', onResume)
+    return () => {
+      controller.abort()
+      document.removeEventListener('visibilitychange', onResume)
+      window.removeEventListener('focus', onResume)
+    }
+  }, [hasAnyWallet, handleAutoLock, isLoading, location.pathname])
 
   // Idle detection: lock after autoLockMs of no user interaction while popup is open
   useEffect(() => {
@@ -285,10 +288,7 @@ export function useAppRouting() {
           // Hardware tabs must return to their flow (with query, e.g. sign request id)
           redirectParams.set('redirect', `${currentPath}${location.search || ''}`)
         } else {
-          redirectParams.set(
-            'redirect',
-            inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/')
-          )
+          redirectParams.set('redirect', walletEntryRoute.current)
         }
 
         replace(`/unlock?${redirectParams.toString()}`)
@@ -314,7 +314,7 @@ export function useAppRouting() {
 
       // dApp windows and hardware tabs stay on their route; normal popup goes home
       if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
-        replace(inviteReturnRoute.current ?? (isTokenManagerEntry.current ? '/manage-tokens' : '/'))
+        replace(walletEntryRoute.current)
       }
     } catch (error) {
       console.error('[useAppRouting] Initialization error:', error)

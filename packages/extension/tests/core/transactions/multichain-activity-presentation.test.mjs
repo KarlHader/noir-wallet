@@ -5,6 +5,7 @@ import { selectActivityObservation } from '../../../src/popup/services/activity-
 import {
   buildActivityExecutionAddressModes,
   canCancelEvmActivity,
+  canSpeedUpEvmActivity,
   getActivityDetailTitle,
   getActivityExternalReferenceLabel,
   getActivityFailureLabel,
@@ -17,7 +18,8 @@ import {
   getClusterSettledDestination,
   getActivitySwapSourceMethodLabel,
   hasMatchingActivityTokenIcons,
-  isAccountModeTransfer
+  isAccountModeTransfer,
+  isLegacyPrivateShieldWithdrawDestination
 } from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
 
 const transactionHash = `0x${'a'.repeat(64)}`
@@ -73,6 +75,88 @@ function failedItem(evidence) {
 }
 
 test.describe('Multichain Activity presentation', () => {
+  test('labels a legacy Shield send to the scoped Private address without relabeling other recipients', () => {
+    const chainId = 'eip155:137'
+    const privateAddress = `0x${'2'.repeat(40)}`
+    const publicAddress = `0x${'3'.repeat(40)}`
+    const assetId = `${chainId}/slip44:60`
+    const item = {
+      ...failedItem({ transactionHash }),
+      id: 'tx:confidential:legacy-send',
+      kind: 'withdraw',
+      snapshot: {
+        schemaVersion: 1,
+        direction: 'outgoing',
+        shield: {
+          schemaVersion: 1,
+          operation: 'withdraw',
+          sourceDomain: 'shield',
+          destinationDomain: 'public'
+        },
+        primaryAmount: { assetId, amountRaw: '100' },
+        counterAmount: { assetId, amountRaw: '90' },
+        recipient: { chainId, address: privateAddress }
+      }
+    }
+    const plan = {
+      operation: 'withdraw',
+      destinationDomain: 'public',
+      transactionId: item.id,
+      network: 'mainnet',
+      keyDomainId: item.scope.keyDomainId,
+      accountId: item.scope.accountId,
+      destination: { chainId, address: privateAddress },
+      externalRecipient: privateAddress
+    }
+    const account = {
+      walletId: item.scope.keyDomainId,
+      accountId: item.scope.accountId,
+      networks: [
+        { chain: { id: chainId }, privateExecutionAddress: privateAddress },
+        { chain: { id: 'eip155:1' }, privateExecutionAddress: publicAddress }
+      ]
+    }
+    const assets = new Map([[assetId, { metadata: { symbol: 'POL', decimals: 18 } }]])
+    const route = (activity, fundingPlan = plan, activeAccount = account, network = 'mainnet') =>
+      getActivitySwapPresentation(
+        activity,
+        assets,
+        new Map(),
+        new Map(),
+        undefined,
+        isLegacyPrivateShieldWithdrawDestination(activity, fundingPlan, activeAccount, network)
+      )
+
+    expect(route(item)?.destinationAccountMode).toBe('Confidential')
+    expect(route(item, { ...plan, externalRecipient: publicAddress })?.destinationAccountMode).toBe(
+      'Public'
+    )
+    expect(route(item, { ...plan, transactionId: 'other' })?.destinationAccountMode).toBe('Public')
+    expect(route(item, { ...plan, network: 'testnet' })?.destinationAccountMode).toBe('Public')
+    expect(
+      route(item, { ...plan, destination: { ...plan.destination, chainId: 'eip155:1' } })
+        ?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route(item, plan, { ...account, accountId: 'account:other' })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route(item, plan, { ...account, networks: account.networks.slice(1) })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route({ ...item, snapshot: { ...item.snapshot, direction: 'self' } })?.destinationAccountMode
+    ).toBe('Public')
+    expect(
+      route({
+        ...item,
+        snapshot: {
+          ...item.snapshot,
+          shield: { ...item.snapshot.shield, destinationDomain: 'private' }
+        }
+      })?.destinationAccountMode
+    ).toBe('Confidential')
+  })
+
   test('shows the owned account route for a Confidential transfer without labeling external recipients', () => {
     const publicAddress = `0x${'1'.repeat(40)}`
     const privateAddress = `0x${'2'.repeat(40)}`
@@ -80,9 +164,13 @@ test.describe('Multichain Activity presentation', () => {
     const assetId = 'eip155:1/slip44:60'
     const addressModes = buildActivityExecutionAddressModes([
       {
-        chain: { family: 'evm' },
+        chain: { id: 'eip155:1', family: 'evm' },
         addresses: [{ value: publicAddress }],
         privateExecutionAddress: privateAddress
+      },
+      {
+        chain: { id: 'eip155:8453', family: 'evm' },
+        addresses: [{ value: publicAddress }]
       }
     ])
     const item = {
@@ -99,7 +187,7 @@ test.describe('Multichain Activity presentation', () => {
         protocol: {
           provider: 'rhea-cross-chain-dex',
           userAction: 'transfer',
-          destination: { recipient: privateAddress }
+          destination: { chainId: 'eip155:1', recipient: privateAddress }
         }
       }
     }
@@ -111,6 +199,7 @@ test.describe('Multichain Activity presentation', () => {
       sourceAccountMode: 'Public',
       destinationAccountMode: 'Confidential'
     })
+    expect(route.hideDestinationCredit).toBeUndefined()
     expect(getActivityRouteTitle(item, route)).toBe('Move')
     expect(hasMatchingActivityTokenIcons(route)).toBe(true)
     expect(
@@ -131,43 +220,42 @@ test.describe('Multichain Activity presentation', () => {
         getActivitySwapPresentation({ ...item, kind: 'swap' }, assets, chains, addressModes)
       )
     ).toBe(true)
+    const externalTransfer = {
+      ...item,
+      snapshot: {
+        ...item.snapshot,
+        protocol: {
+          ...item.snapshot.protocol,
+          destination: { chainId: 'eip155:8453', recipient: externalAddress }
+        }
+      }
+    }
+    const externalRoute = getActivitySwapPresentation(
+      externalTransfer,
+      assets,
+      chains,
+      addressModes
+    )
+    expect(externalRoute.destinationAccountMode).toBeUndefined()
+    expect(externalRoute.hideDestinationCredit).toBe(true)
     expect(
       getActivitySwapPresentation(
         {
-          ...item,
+          ...externalTransfer,
           snapshot: {
-            ...item.snapshot,
+            ...externalTransfer.snapshot,
             protocol: {
-              ...item.snapshot.protocol,
-              destination: { recipient: externalAddress }
+              ...externalTransfer.snapshot.protocol,
+              destination: { chainId: 'eip155:8453', recipient: publicAddress }
             }
           }
         },
         assets,
         chains,
         addressModes
-      )?.destinationAccountMode
+      )?.hideDestinationCredit
     ).toBeUndefined()
-    expect(
-      getActivityRouteTitle(
-        item,
-        getActivitySwapPresentation(
-          {
-            ...item,
-            snapshot: {
-              ...item.snapshot,
-              protocol: {
-                ...item.snapshot.protocol,
-                destination: { recipient: externalAddress }
-              }
-            }
-          },
-          assets,
-          chains,
-          addressModes
-        )
-      )
-    ).toBe('Transfer')
+    expect(getActivityRouteTitle(externalTransfer, externalRoute)).toBe('Transfer')
   })
 
   test('keeps both Swap assets and their route tied to the correct chains', () => {
@@ -427,7 +515,7 @@ test.describe('Multichain Activity presentation', () => {
     expect(getActivitySwapPresentation(item, assets, new Map())).toBeNull()
   })
 
-  test('offers cancellation only for a locally tracked pending EVM transaction', () => {
+  test('offers pending EVM actions for an onchain origin until it finalizes or is replaced', () => {
     const item = {
       ...failedItem({ transactionHash }),
       status: 'broadcast',
@@ -453,8 +541,133 @@ test.describe('Multichain Activity presentation', () => {
       ]
     }
     expect(canCancelEvmActivity(item, ['eip155:1'])).toBe(true)
+    expect(
+      canCancelEvmActivity(
+        {
+          ...item,
+          status: 'confirming',
+          segments: [{ ...item.segments[0], status: 'confirming' }]
+        },
+        ['eip155:1']
+      )
+    ).toBe(false)
     expect(canCancelEvmActivity({ ...item, status: 'final' }, ['eip155:1'])).toBe(false)
     expect(canCancelEvmActivity({ ...item, kind: 'cancel' }, ['eip155:1'])).toBe(false)
+    const shield = {
+      ...item,
+      kind: 'shield',
+      snapshot: {
+        ...item.snapshot,
+        shield: { operation: 'deposit', sourceDomain: 'private', destinationDomain: 'shield' },
+        evm: { ...item.snapshot.evm, unsignedTransaction: { type: 'eip1559' } },
+        protocol: { expiresAt: 200 }
+      },
+      segments: [
+        ...item.segments,
+        { role: 'relay', status: 'created', target: { kind: 'protocol' } }
+      ]
+    }
+    expect(canCancelEvmActivity(shield, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100)).toBe(true)
+    const processing = {
+      ...shield,
+      segments: [
+        { ...shield.segments[0], evidence: { transactionHash, confirmations: 0 } },
+        { ...shield.segments[1], status: 'broadcast' }
+      ]
+    }
+    expect(canCancelEvmActivity(processing, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(processing, ['eip155:1'], 100)).toBe(true)
+    const completedDestination = {
+      ...processing,
+      status: 'confirming',
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        { role: 'destination', status: 'final', target: { kind: 'onchain', chainId: 'eip155:56' } }
+      ]
+    }
+    expect(canCancelEvmActivity(completedDestination, ['eip155:1'])).toBe(false)
+    expect(canSpeedUpEvmActivity(completedDestination, ['eip155:1'], 100)).toBe(false)
+    const includedDestination = {
+      ...completedDestination,
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        {
+          role: 'destination',
+          status: 'confirming',
+          target: { kind: 'onchain', chainId: 'eip155:56' },
+          evidence: { transactionHash: `0x${'d'.repeat(64)}`, blockHeight: 0 }
+        }
+      ]
+    }
+    expect(canCancelEvmActivity(includedDestination, ['eip155:1'])).toBe(false)
+    expect(canSpeedUpEvmActivity(includedDestination, ['eip155:1'], 100)).toBe(false)
+    const pendingDestination = {
+      ...includedDestination,
+      segments: [
+        processing.segments[0],
+        processing.segments[1],
+        {
+          ...includedDestination.segments[2],
+          status: 'broadcast',
+          evidence: { transactionHash: `0x${'d'.repeat(64)}` }
+        }
+      ]
+    }
+    expect(canCancelEvmActivity(pendingDestination, ['eip155:1'])).toBe(true)
+    expect(canSpeedUpEvmActivity(pendingDestination, ['eip155:1'], 100)).toBe(true)
+    for (const evidence of [
+      { blockHeight: 0 },
+      { blockHash: `0x${'c'.repeat(64)}` },
+      { confirmations: 1 }
+    ]) {
+      const mined = {
+        ...processing,
+        segments: [
+          { ...processing.segments[0], evidence: { transactionHash, ...evidence } },
+          processing.segments[1]
+        ]
+      }
+      expect(canCancelEvmActivity(mined, ['eip155:1'])).toBe(false)
+      expect(canSpeedUpEvmActivity(mined, ['eip155:1'], 100)).toBe(false)
+    }
+    for (const reconfirming of [
+      { ...processing, reconfirming: true },
+      {
+        ...processing,
+        segments: [{ ...processing.segments[0], reconfirming: true }, processing.segments[1]]
+      }
+    ]) {
+      expect(canCancelEvmActivity(reconfirming, ['eip155:1'])).toBe(false)
+      expect(canSpeedUpEvmActivity(reconfirming, ['eip155:1'], 100)).toBe(false)
+    }
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 200)).toBe(false)
+    expect(canSpeedUpEvmActivity(shield, ['eip155:1'], 100, 100)).toBe(false)
+    expect(
+      canSpeedUpEvmActivity(
+        { ...shield, snapshot: { ...shield.snapshot, evm: item.snapshot.evm } },
+        ['eip155:1'],
+        100
+      )
+    ).toBe(false)
+    expect(
+      canCancelEvmActivity({ ...shield, segments: [{ ...item.segments[0], status: 'final' }] }, [
+        'eip155:1'
+      ])
+    ).toBe(false)
+    expect(
+      canCancelEvmActivity(
+        {
+          ...shield,
+          segments: [
+            { ...item.segments[0], evidence: { transactionHash, replacementTransactionHash } }
+          ]
+        },
+        ['eip155:1']
+      )
+    ).toBe(false)
   })
 
   test('distinguishes a proven replacement from an unexplained dropped transaction', () => {

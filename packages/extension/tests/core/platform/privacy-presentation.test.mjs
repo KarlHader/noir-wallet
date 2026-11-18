@@ -7,6 +7,8 @@ import { getActivityAddressAlias } from '../../../src/popup/services/activity-ad
 import {
   getHomeAssetBreakdown,
   hasCompletePortfolioTotal,
+  resolveHomeAssetDomainDisplay,
+  resolveHomeCachedTotal,
   resolveHomePortfolioTotalStatus
 } from '../../../src/popup/services/home-asset-breakdown.ts'
 import {
@@ -24,7 +26,10 @@ import {
   resolveConfidentialDetailAssetId,
   resolveNearConfidentialZecHolding
 } from '../../../src/popup/services/near-confidential-holdings.ts'
-import { getAssetDetailCategories } from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
+import {
+  getAssetDetailCategories,
+  sumZcashDetailBalanceRaw
+} from '../../../src/popup/pages/portfolio/asset-detail-balance.ts'
 import { resolveShieldZcashVaultEntry } from '../../../src/popup/services/shield-zcash-entry.ts'
 
 test('Zcash Shield requires the active V2 account source and network capability', () => {
@@ -234,6 +239,14 @@ test('NEAR Confidential ZEC stays separate from on-chain ZEC and inside its acco
     public: '0',
     shield: '0'
   })
+  expect(sumZcashDetailBalanceRaw('300000000', '125000000')).toBe('425000000')
+  expect(sumZcashDetailBalanceRaw('300000000', null)).toBeNull()
+  expect(
+    resolveNearConfidentialZecHolding({
+      ...input,
+      model: { ...model, confidential: { status: 'ready', assets: [] } }
+    })?.availableRaw
+  ).toBe('0')
   expect(resolveNearConfidentialZecHolding({ ...input, accountId: 'account-b' })).toBeNull()
   expect(resolveNearConfidentialZecHolding({ ...input, network: 'testnet' })).toBeNull()
   expect(
@@ -367,6 +380,38 @@ test('Home total requires a complete current-account Portfolio and ready prices'
   )
 })
 
+test('Home shows only a scoped complete cached total until a current valuation is available', () => {
+  const values = new Map([
+    ['mainnet_wallet-a_account-a', {
+      valuationBasis: 'wallet-assets-v2', totalUsd: '12.5', updatedAt: 1, complete: true
+    }],
+    ['mainnet_wallet-a_account-b', {
+      valuationBasis: 'wallet-assets-v2', totalUsd: '99', updatedAt: 1, complete: false
+    }]
+  ])
+  const cached = (network, walletId, accountId, selectedChains) =>
+    resolveHomeCachedTotal(values, network, walletId, accountId, selectedChains)
+  expect(cached('mainnet', 'wallet-a', 'account-a')).toBe('12.5')
+  expect(cached('mainnet', 'wallet-a', 'account-b')).toBeNull()
+  expect(cached('testnet', 'wallet-a', 'account-a')).toBeNull()
+  expect(cached('mainnet', 'wallet-b', 'account-a')).toBeNull()
+  expect(cached('mainnet', 'wallet-a', 'account-a', ['eip155:1'])).toBeNull()
+
+  const base = {
+    portfolio: null, walletId: 'wallet-a', accountId: 'account-a',
+    loadStatus: 'loading', settled: false, priceStatus: 'loading',
+    totalStatus: 'loading', fiat: { totalUsd: '0' }, breakdown: null,
+    cachedTotalUsd: cached('mainnet', 'wallet-a', 'account-a')
+  }
+  const initial = resolveHomeAssetDomainDisplay(base)
+  expect(initial.totals).toEqual({ all: '12.5', public: null, shield: null, private: null })
+  expect(initial.loading.all).toBe(false)
+  expect(resolveHomeAssetDomainDisplay({ ...base, cachedTotalUsd: null }).loading.all).toBe(true)
+  expect(resolveHomeAssetDomainDisplay({
+    ...base, totalStatus: 'ready', fiat: { totalUsd: '7' }
+  }).totals.all).toBe('7')
+})
+
 test('Home renders available valuations during partial refreshes instead of an endless skeleton', () => {
   const model = { scope: { keyDomainId: 'wallet-a', accountId: 'account-a' }, status: 'ready' }
   const fiat = { pricedAssetCount: 1, missingAssetCount: 0, staleAssetCount: 0 }
@@ -491,22 +536,10 @@ test('home asset domains count each EVM and Zcash balance once', () => {
       { assetId: zcashAsset.asset.id, priceUsd: '3', freshness: 'fresh' }
     ]
   }
-  const multichainFiat = {
-    totalUsd: '230',
-    mainUsd: '112',
-    privateUsd: '118',
-    pricedAssetCount: 2,
-    missingAssetCount: 0,
-    staleAssetCount: 0
-  }
   const input = {
-    multichainEnabled: true,
-    liveMultichainTotal: true,
-    multichainFiat,
+    livePortfolioTotal: true,
     portfolio: model,
-    prices,
-    zcashBalance: null,
-    zecPrice: 0
+    prices
   }
   expect(getHomeAssetBreakdown(input)).toEqual({
     publicUsd: '112',
@@ -648,7 +681,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
   })
   const zcash = projectPortfolioForChains(chainScoped, [zcashAsset.asset.chainId])
   expect(summarizePortfolioFiat(zcash, prices).totalUsd).toBe('36')
-  expect(summarizeAssetDomainsUsd(zcash, prices)).toEqual({
+  expect(getHomeAssetBreakdown({ ...input, portfolio: zcash })).toEqual({
     publicUsd: '12',
     publicUsdPartial: false,
     shieldUsd: '24',
@@ -675,8 +708,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
   expect(
     getHomeAssetBreakdown({
       ...input,
-      portfolio: independent,
-      multichainFiat: summarizePortfolioFiat(independent, prices)
+      portfolio: independent
     })
   ).toMatchObject({ shieldUsd: '108' })
   const unavailable = { ...independent, confidential: { status: 'unavailable', assets: [] } }
@@ -775,22 +807,7 @@ test('home asset domains count each EVM and Zcash balance once', () => {
     privateUsdPartial: false
   })
   expect(getAssetDomainRaw({ ...evmAsset, balance: { totalRaw: '100' } }, 'public')).toBeNull()
-  expect(getHomeAssetBreakdown({ ...input, liveMultichainTotal: false })).toBeNull()
-  expect(
-    getHomeAssetBreakdown({
-      ...input,
-      multichainEnabled: false,
-      zcashBalance: { transparent: '2', shielded: '3', total: '5' },
-      zecPrice: 4
-    })
-  ).toEqual({
-    publicUsd: '8',
-    publicUsdPartial: false,
-    shieldUsd: '12',
-    shieldUsdPartial: false,
-    privateUsd: '0',
-    privateUsdPartial: false
-  })
+  expect(getHomeAssetBreakdown({ ...input, livePortfolioTotal: false })).toBeNull()
 })
 
 test('asset detail uses a unique Confidential identity without adding it to the Home row total', () => {

@@ -16,6 +16,7 @@ import {
   type EvmBroadcastRpc,
   type EvmContractRpc,
   type EvmDAppReadRpc,
+  type EvmNonceQueueEndpointSelector,
   type EvmTransactionRpc
 } from './evm-rpc-client'
 import { createEvmRpcFailoverClient } from './evm-rpc-failover-client'
@@ -38,7 +39,12 @@ const evmHistoryApiOrigin =
 export function createConfiguredEvmRpcClient(
   network: Network,
   configuredNetwork: EvmNetworkConfig = getEvmNetworkConfig(network)
-): EvmBalanceRpc & EvmContractRpc & EvmTransactionRpc & EvmBroadcastRpc & EvmDAppReadRpc {
+): EvmBalanceRpc &
+  EvmContractRpc &
+  EvmTransactionRpc &
+  EvmBroadcastRpc &
+  EvmDAppReadRpc &
+  EvmNonceQueueEndpointSelector {
   const builtin = findBuiltinEvmNetworkConfig(network, configuredNetwork.chainId)
   const bundled = builtin ? getEvmRpcEndpointOptions(network, configuredNetwork.chainId) : []
   const preferredUrl = new URL(configuredNetwork.rpcUrl).toString()
@@ -194,6 +200,7 @@ export {
 } from './detected-evm-asset-coordinator'
 export {
   EvmTokenDiscoveryClient,
+  type EvmTokenDiscoverySource,
   type DetectedEvmTokenCandidate
 } from './evm-token-discovery-client'
 export {
@@ -216,6 +223,7 @@ export {
   buildEvmCancelTransaction,
   buildEvmContractCall,
   buildEvmNonceRecoveryTransaction,
+  buildEvmSpeedUpTransaction,
   buildEvmTransfer,
   estimateEvmContractCallFee,
   estimateEvmTransferFee,
@@ -228,6 +236,7 @@ export {
   type BuildEvmContractCallInput,
   type BuildEvmCancelInput,
   type BuildEvmNonceRecoveryInput,
+  type BuildEvmSpeedUpInput,
   type BuildEvmTransferInput,
   type EvmContractCallIntent,
   type EvmFeeEstimate,
@@ -282,6 +291,7 @@ export {
   type EvmNonceRecoveryState,
   type SubmitEvmExternalSignatureInput
 } from './evm-transfer-orchestrator'
+export { isEvmSpeedUpReplacement } from './evm-speed-up'
 export {
   EvmTransactionMonitor,
   type EvmTransactionMonitorOptions,

@@ -66,7 +66,7 @@ export function ShieldConfirmSheet({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent position="bottom" showCloseButton={false} className="p-0 gap-0">
         <DialogHeader className="px-5 pt-5 pb-4">
-          <DialogTitle className="text-center">Shielded</DialogTitle>
+          <DialogTitle className="text-center">Shield</DialogTitle>
           <DialogDescription className="sr-only">
             Move transparent funds into the private pool
           </DialogDescription>

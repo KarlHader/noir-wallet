@@ -355,6 +355,46 @@ test.describe('Transaction repository', () => {
     await expect(repository.list({ scope: scope('account:2') })).resolves.toHaveLength(1)
   })
 
+  test('finds older Confidential graphs beyond the ordinary Activity limit', async () => {
+    const repository = new InMemoryTransactionRepository()
+    const older = graph('transaction:confidential-old', 'account:1', ethereumChainId, {
+      root: { status: 'broadcast' },
+      segment: { status: 'broadcast', evidence: { transactionHash: 'old-hash' } }
+    })
+    const relayId = 'segment:transaction:confidential-old:relay'
+    older.root.segmentIds.push(relayId)
+    older.segments.push({
+      ...older.segments[0],
+      id: relayId,
+      role: 'relay',
+      target: { kind: 'protocol', provider: 'Confidential Intents', account: '0x' + '1'.repeat(40) },
+      status: 'created',
+      requiredForFinality: false,
+      dependsOn: [older.segments[0].id],
+      evidence: undefined
+    })
+    await repository.create(older)
+    for (let index = 0; index < 201; index += 1) {
+      await repository.create(
+        graph(`transaction:new-${index}`, 'account:1', ethereumChainId, {
+          root: { status: 'broadcast', updatedAt: 2_000 + index },
+          segment: {
+            status: 'broadcast',
+            updatedAt: 2_000 + index,
+            evidence: { transactionHash: `new-hash-${index}` }
+          }
+        })
+      )
+    }
+
+    expect((await repository.list({ scope: scope(), limit: 200 })).map(item => item.root.id)).not.toContain(
+      older.root.id
+    )
+    await expect(
+      repository.list({ scope: scope(), protocolProvider: 'Confidential Intents', limit: 201 })
+    ).resolves.toMatchObject([{ root: { id: older.root.id } }])
+  })
+
   test('keeps repository ports independent from browser and V1 stores', () => {
     const sourceCode = [
       '../../../src/ports/repositories/transaction-repository.ts',

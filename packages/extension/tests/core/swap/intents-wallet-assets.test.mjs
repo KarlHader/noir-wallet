@@ -85,7 +85,7 @@ test('maps only mainnet SOL, SPL and NEP-141 protocol assets into the wallet reg
     {
       assetId:
         'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      visibleByDefault: true
+      visibleByDefault: false
     },
     { assetId: 'near:mainnet/nep141:wrap.near', visibleByDefault: false },
     { assetId: 'near:mainnet/nep141:lst.rhealab.near', visibleByDefault: false }

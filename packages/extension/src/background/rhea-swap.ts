@@ -14,7 +14,9 @@ import {
   parseRheaSwapQuoteRequest,
   toSdkQuoteRequest,
   type RheaSwapQuoteSessionRecord,
-  type RheaSwapQuoteSessionStore
+  type RheaSwapQuoteSessionStore,
+  type RheaSwapToken,
+  type RheaSwapCatalogResult
 } from '@/core/services/rhea-swap'
 import type { TransactionGraph } from '@/core/transactions/domain'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/config/extension'
@@ -193,10 +195,18 @@ function parseStoredRecord(value: unknown): RheaSwapQuoteSessionRecord {
       typeof privateSwapScope.walletId !== 'string' ||
       typeof privateSwapScope.accountId !== 'string' ||
       (privateSwapScope.zcashFundingSource !== undefined &&
-        (privateSwapScope.purpose !== 'wallet-swap' ||
+        ((privateSwapScope.purpose !== 'wallet-swap' &&
+          privateSwapScope.purpose !== 'private-swap') ||
           request.fromChain !== 'zcash' ||
           (privateSwapScope.zcashFundingSource !== 'transparent' &&
             privateSwapScope.zcashFundingSource !== 'shielded'))) ||
+      (privateSwapScope.purpose === 'private-swap' &&
+        request.fromChain === 'zcash' &&
+        privateSwapScope.zcashFundingSource !== 'shielded') ||
+      (privateSwapScope.purpose === 'wallet-swap' &&
+        request.fromChain === 'zcash' &&
+        request.sender.startsWith('u1') &&
+        privateSwapScope.zcashFundingSource !== 'shielded') ||
       (privateSwapScope.purpose !== undefined &&
         privateSwapScope.purpose !== 'wallet-swap' &&
         privateSwapScope.purpose !== 'public-cross-chain-send' &&
@@ -421,12 +431,60 @@ export function createBackgroundRheaSwapService(): RheaSwapService | null {
 }
 
 let publicCatalog: PersistentRheaSwapCatalogCache | undefined
+let portfolioTokens: readonly RheaSwapToken[] = Object.freeze([])
 
-export function readBackgroundRheaSwapCatalog(input: Parameters<RheaSwapService['listTokens']>[0]) {
-  const service = createBackgroundRheaSwapService()
-  if (!service) throw new Error('RHEA Swap is unavailable')
-  publicCatalog ??= new PersistentRheaSwapCatalogCache(request => service.listTokens(request))
-  return publicCatalog.read(input)
+function getPublicCatalog(): PersistentRheaSwapCatalogCache {
+  return (publicCatalog ??= new PersistentRheaSwapCatalogCache(request => {
+    const service = createBackgroundRheaSwapService()
+    if (!service) throw new Error('RHEA Swap is unavailable')
+    return service.listTokens(request)
+  }))
+}
+
+function rememberPortfolioTokens(result: RheaSwapCatalogResult): void {
+  const chains = new Set(result.tokens.map(token => token.tokenListChainId))
+  portfolioTokens = Object.freeze([
+    ...portfolioTokens.filter(token => !chains.has(token.tokenListChainId)),
+    ...result.tokens.map(token =>
+      token.isNative
+        ? token
+        : Object.freeze({
+            ...token,
+            contractAddress: token.contractAddress ?? token.rheaAddress
+          })
+    )
+  ])
+}
+
+export function getCachedBackgroundRheaSwapTokens(): readonly RheaSwapToken[] {
+  return portfolioTokens
+}
+
+export async function hydrateBackgroundRheaSwapCatalog(
+  input: Parameters<RheaSwapService['listTokens']>[0]
+): Promise<void> {
+  if (input.direction !== 'from' || input.tokenListChainIds.length === 0) return
+  rememberPortfolioTokens(await getPublicCatalog().readLastGood(input))
+}
+
+export async function readBackgroundRheaSwapCatalog(
+  input: Parameters<RheaSwapService['listTokens']>[0]
+) {
+  const cache = getPublicCatalog()
+  const result = await cache.read(input)
+  if (input.direction === 'from') rememberPortfolioTokens(await cache.readLastGood(input))
+  return result
+}
+
+export async function prewarmBackgroundRheaSwapCatalog(chainIds: readonly number[]): Promise<void> {
+  const unique = [...new Set(chainIds)]
+  for (let index = 0; index < unique.length; index += 2) {
+    const tokenListChainIds = unique.slice(index, index + 2)
+    await Promise.all([
+      readBackgroundRheaSwapCatalog({ direction: 'from', tokenListChainIds }),
+      readBackgroundRheaSwapCatalog({ direction: 'cross-chain-to', tokenListChainIds })
+    ])
+  }
 }
 
 export async function recordRheaSwapGraphBroadcast(graph: TransactionGraph): Promise<void> {

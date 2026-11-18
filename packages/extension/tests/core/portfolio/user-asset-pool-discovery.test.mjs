@@ -251,31 +251,38 @@ test('forced discovery can replace a cached unavailable result with an eligible 
   expect(requests).toHaveLength(2)
 })
 
-test('accepts a single pool only at the stronger liquidity, volume, and age thresholds', async () => {
-  const weak = serviceFor(
+test('accepts low-liquidity reference prices without recent volume while retaining pool age validation', async () => {
+  const reference = serviceFor(
     () =>
       new Response(
-        JSON.stringify([pair({ pairAddress: '0x2222222222222222222222222222222222222222' })])
+        JSON.stringify([
+          pair({
+            pairAddress: '0x2222222222222222222222222222222222222222',
+            liquidityUsd: 3_674,
+            volume24hUsd: 0
+          })
+        ])
       )
   )
-  await expect(weak.service.discover(ASSET_ID)).resolves.toEqual({ status: 'unavailable' })
+  await expect(reference.service.discover(ASSET_ID)).resolves.toMatchObject({
+    status: 'available',
+    observedPriceUsd: '1'
+  })
 
-  const strong = serviceFor(
+  const recent = serviceFor(
     () =>
       new Response(
         JSON.stringify([
           pair({
             pairAddress: '0x2222222222222222222222222222222222222222',
             liquidityUsd: 1_000_000,
-            volume24hUsd: 100_000
+            volume24hUsd: 100_000,
+            pairCreatedAt: NOW - DAY_MS
           })
         ])
       )
   )
-  await expect(strong.service.discover(ASSET_ID)).resolves.toMatchObject({
-    status: 'available',
-    source: 'network'
-  })
+  await expect(recent.service.discover(ASSET_ID)).resolves.toEqual({ status: 'unavailable' })
 })
 
 test('does not query testnet and refreshes an expired mapping', async () => {

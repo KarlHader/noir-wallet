@@ -1,19 +1,14 @@
-import { InlineError } from '@/popup/components/common/InlineError'
 import { Button } from '../../components/ui/button'
 import { PageHeader } from '../../components/common/PageHeader'
 import WalletIcon from '@/images/wallet-icon.svg'
 import { useNavigate } from '../../provider/Router'
 import { useOnboardingStore } from '@/store/onboarding-store'
-import { useBetaInviteBinding } from '../../hooks/useBetaInviteBinding'
 
 export function CongratulationsPage() {
   const { replace } = useNavigate()
   const { dappRequestId, reset } = useOnboardingStore()
-  const { status, changeCode, error, busy, activate } = useBetaInviteBinding()
-  const activationPending = status.required && status.state.phase !== 'activated'
 
   const handleComplete = async () => {
-    if (activationPending) return
     reset()
 
     // If onboarding was triggered by dApp connection, redirect to approval page
@@ -43,24 +38,9 @@ export function CongratulationsPage() {
       </div>
 
       <div className="px-5 pb-5">
-        {error && (
-          <div className="mb-3 space-y-2">
-            <InlineError message={error} onRetry={() => void activate()} retrying={busy} />
-            <Button variant="ghost" onClick={changeCode} disabled={busy} className="w-full h-10">
-              Use another code
-            </Button>
-          </div>
-        )}
-        {!error && (
-          <Button
-            onClick={handleComplete}
-            disabled={activationPending || busy}
-            isLoading={busy}
-            className="w-full h-[45px]"
-          >
-            Got it
-          </Button>
-        )}
+        <Button onClick={handleComplete} className="w-full h-[45px]">
+          Got it
+        </Button>
       </div>
     </div>
   )

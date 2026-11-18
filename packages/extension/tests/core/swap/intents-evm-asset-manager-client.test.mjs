@@ -3,9 +3,9 @@ import { expect } from '@playwright/test'
 import {
   findManagedIntentsAssetByReference,
   resolveManagedIntentsAsset,
-  resolveManagedIntentsAssets
+  resolveManagedIntentsAssets,
+  resolveSwapTokenAssetIds
 } from '../../../src/core/services/intents-managed-assets.ts'
-import { intentsAssetManagerClient } from '../../../src/popup/services/intents-asset-manager-client.ts'
 import { resolveEvmNetworkCatalog } from '../../../src/core/chains/evm-runtime-config.ts'
 import { DEFAULT_CHAIN_ENDPOINT_SETTINGS } from '../../../src/core/chains/chain-endpoint-settings.ts'
 
@@ -60,7 +60,36 @@ const RNEAR_MANAGED_ASSET = Object.freeze({
   management: 'protocol'
 })
 
+function rheaToken(token, rheaChainId, tokenListChainId) {
+  return {
+    ...token,
+    rheaChainId,
+    tokenListChainId,
+    rheaAddress: token.contractAddress,
+    isNative: false,
+    sources: ['nearIntents']
+  }
+}
+
 test('maps every supported Intents EVM Token into the Manage Tokens catalog', () => {
+  const tokens = [rheaToken(GNOSIS_USDC, '100', 100), rheaToken(POLYGON_USDT, '137', 137)]
+  expect([...resolveSwapTokenAssetIds(tokens, 'mainnet', networks)]).toEqual([
+    `eip155:100/erc20:${GNOSIS_USDC.contractAddress}`,
+    `eip155:137/erc20:${POLYGON_USDT.contractAddress}`
+  ])
+  expect(resolveSwapTokenAssetIds(tokens, 'testnet', networks).size).toBe(0)
+  expect(
+    resolveSwapTokenAssetIds(
+      [
+        { ...tokens[0], isNative: true },
+        { ...tokens[0], isDisplaySeed: true },
+        { ...tokens[0], sources: [] },
+        { ...tokens[0], rheaAddress: POLYGON_USDT.contractAddress }
+      ],
+      'mainnet',
+      networks
+    ).size
+  ).toBe(0)
   expect(
     resolveManagedIntentsAssets([GNOSIS_USDC, POLYGON_USDT], 'mainnet', networks)
   ).toMatchObject([
@@ -79,8 +108,17 @@ test('maps every supported Intents EVM Token into the Manage Tokens catalog', ()
     RNEAR_MANAGED_ASSET
   ])
 })
-
 test('uses the wallet asset adapters to include SPL and NEP-141 Tokens automatically', () => {
+  expect([
+    ...resolveSwapTokenAssetIds(
+      [rheaToken(SOLANA_USDC, 'solana', 501), rheaToken(NEAR_USDT, 'near', 900001)],
+      'mainnet',
+      networks
+    )
+  ]).toEqual([
+    `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:${SOLANA_USDC.contractAddress}`,
+    `near:mainnet/nep141:${NEAR_USDT.contractAddress}`
+  ])
   expect(resolveManagedIntentsAssets([SOLANA_USDC, NEAR_USDT], 'mainnet', networks)).toMatchObject([
     {
       protocolAssetId: SOLANA_USDC.assetId,
@@ -98,7 +136,6 @@ test('uses the wallet asset adapters to include SPL and NEP-141 Tokens automatic
     RNEAR_MANAGED_ASSET
   ])
 })
-
 test('resolves the exact Swap destination without symbol or chain ambiguity', () => {
   const catalog = [GNOSIS_USDC, POLYGON_USDT, SOLANA_USDC]
 
@@ -172,95 +209,4 @@ test('adapts a newly configured EVM chain through its icon-chain identifier', ()
     },
     RNEAR_MANAGED_ASSET
   ])
-})
-
-test('refreshes protocol assets even when default EVM Token activation fails', async () => {
-  const originalChrome = globalThis.chrome
-  const messages = []
-  globalThis.chrome = {
-    runtime: {
-      async sendMessage(message) {
-        messages.push(message)
-        if (message.type === 'GET_MANAGED_TOKEN_ASSETS') {
-          return {
-            result: {
-              userAssets: [],
-              detectedAssets: [],
-              hiddenAssetIds: [],
-              protocolAssetIds: []
-            }
-          }
-        }
-        if (message.type === 'ENABLE_INTENTS_EVM_ASSETS') {
-          throw new Error('EVM discovery is unavailable')
-        }
-        if (message.type === 'REFRESH_INTENTS_PROTOCOL_ASSETS') {
-          return { result: { refreshed: true } }
-        }
-        throw new Error(`Unexpected message: ${message.type}`)
-      }
-    }
-  }
-
-  try {
-    await expect(
-      intentsAssetManagerClient.ensureDefaults([GNOSIS_USDC, SOLANA_USDC])
-    ).rejects.toThrow('EVM discovery is unavailable')
-    expect(messages.map(message => message.type)).toContain('REFRESH_INTENTS_PROTOCOL_ASSETS')
-  } finally {
-    if (originalChrome === undefined) delete globalThis.chrome
-    else globalThis.chrome = originalChrome
-  }
-})
-
-test('does not re-enable persisted default Tokens when a Popup is reopened', async () => {
-  const originalChrome = globalThis.chrome
-  const messages = []
-  const [evmAsset, protocolAsset, rnearAsset] = resolveManagedIntentsAssets(
-    [GNOSIS_USDC, SOLANA_USDC],
-    'mainnet',
-    networks
-  )
-  globalThis.chrome = {
-    runtime: {
-      async sendMessage(message) {
-        messages.push(message)
-        if (message.type !== 'GET_MANAGED_TOKEN_ASSETS') {
-          throw new Error(`Unexpected message: ${message.type}`)
-        }
-        return {
-          result: {
-            userAssets: [
-              {
-                assetId: evmAsset.assetId,
-                chainId: evmAsset.chainId,
-                contractAddress: evmAsset.reference,
-                metadata: {
-                  name: 'USD Coin',
-                  symbol: evmAsset.symbol,
-                  decimals: evmAsset.decimals,
-                  iconUrl: evmAsset.iconUrl
-                },
-                source: 'intents-catalog',
-                addedAt: Date.parse('2026-08-28T00:00:00.000Z')
-              }
-            ],
-            detectedAssets: [],
-            hiddenAssetIds: [],
-            protocolAssetIds: [protocolAsset.assetId, rnearAsset.assetId]
-          }
-        }
-      }
-    }
-  }
-
-  try {
-    await expect(
-      intentsAssetManagerClient.ensureDefaults([GNOSIS_USDC, SOLANA_USDC])
-    ).resolves.toEqual([])
-    expect(messages.map(message => message.type)).toEqual(['GET_MANAGED_TOKEN_ASSETS'])
-  } finally {
-    if (originalChrome === undefined) delete globalThis.chrome
-    else globalThis.chrome = originalChrome
-  }
 })

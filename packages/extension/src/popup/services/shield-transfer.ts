@@ -29,6 +29,7 @@ import type {
 import { getConfidentialAvailableForAsset } from '@/core/services/confidential-funding'
 import type { TransferDomain } from './private-balance-transfer'
 import { getCrossChainSendAssetGroup } from './cross-chain-send-assets'
+import { formatIntentsConfirmationTime } from './confirmation-time-format'
 
 type ShieldTransferAsset = Pick<
   IntentsManagedAsset,
@@ -43,11 +44,7 @@ export type ShieldFundingAsset = Readonly<{
 }>
 
 export function formatShieldQuoteTime(seconds: number): string {
-  if (seconds < 60) return `${seconds} sec`
-  const minutes = Math.ceil(seconds / 60)
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.ceil(minutes / 60)
-  return `${hours} hr`
+  return formatIntentsConfirmationTime(seconds)
 }
 
 function confidentialHolding(
@@ -603,6 +600,7 @@ export function buildShieldTransferRequest(
     managed: ShieldTransferAsset
     destination?: ShieldFundingAsset
     feeSelection?: EvmFeeSelection
+    dedupKey?: string
   }>
 ): PrepareConfidentialFundingRequest {
   const source: ShieldFundingAsset = {
@@ -650,6 +648,7 @@ export function buildShieldTransferRequest(
     source: Object.freeze({ ...sourceRoute, amountRaw: input.amountRaw }),
     destination: destinationRoute,
     slippageBps: 50,
-    ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection })
+    ...(input.from === 'shield' || !input.feeSelection ? {} : { feeSelection: input.feeSelection }),
+    ...(input.dedupKey ? { dedupKey: input.dedupKey } : {})
   })
 }

@@ -91,8 +91,8 @@ test('review quantities share list formatting and retain exact values for copyin
 test('fiat valuations use cents while unit prices retain meaningful small digits', () => {
   assert.equal(formatFiatAmount('12345.675', { showSign: true }), '$12,345.68')
   assert.equal(formatFiatAmount('0', { showSign: true }), '$0.00')
-  assert.equal(formatFiatAmount('0.00999', { showSign: true }), '<$0.01')
-  assert.equal(formatFiatAmount('-0.001', { showSign: true }), '-<$0.01')
+  assert.equal(formatFiatAmount('0.00999', { showSign: true }), '$<0.01')
+  assert.equal(formatFiatAmount('-0.001', { showSign: true }), '-$<0.01')
   assert.equal(formatFiatAmount('-12.345', { showSign: true }), '-$12.35')
   assert.equal(formatFiatAmount('12345678901234567890.675'), '12,345,678,901,234,567,890.68')
   assert.equal(formatTokenPrice('0.00987654', { showSign: true }), '$0.009877')

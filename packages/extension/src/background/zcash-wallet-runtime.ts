@@ -2568,6 +2568,28 @@ export class BackgroundZcashWalletRuntime {
     }
   }
 
+  async prepareDAppAccount(walletId: string, accountId: string): Promise<void> {
+    const wallet = this.store.getWallet(walletId)
+    const account = wallet?.accounts.find(item => item.id === accountId)
+    if (!wallet || !account || !isAccountNetworkEnabled(account, this.network, 'zcash')) {
+      throw new Error('The authorized Zcash account is unavailable')
+    }
+    if (!(await credentialSession.hasUnlockSession())) throw new Error('Wallet is locked')
+    await this.initialize()
+    if (this.password === null && !this.hasSessionCredentialFor(walletId)) {
+      if (
+        !isZcashHardwareKeySource(wallet.keySource) &&
+        !(await credentialSession.bindZcashCredential(walletId))
+      ) {
+        throw new Error('Wallet credential is not available in the active session')
+      }
+      if (!(await this.restoreFromCredentialSession(walletId, accountId))) {
+        throw new Error('The authorized Zcash account could not be restored')
+      }
+    }
+    await this.ensureWalletCoreAccount(walletId, accountId)
+  }
+
   getCurrentAccount(): AccountData | null {
     const { currentWalletId, currentAccountId } = this.store
     if (!currentWalletId || !currentAccountId) return null
@@ -3145,6 +3167,28 @@ export class BackgroundZcashWalletRuntime {
       }
     }
 
+    return core
+  }
+
+  getReadyVotingReadCore(walletId: string, accountId: string): ZcashWalletCore | null {
+    const account = this.store.getAccount(walletId, accountId)
+    const core = this.walletCores.get(walletId)
+    if (
+      this.isLocked() ||
+      this.network !== this.store.currentNetwork ||
+      (this.password === null && !this.hasSessionCredentialFor(walletId)) ||
+      this.activeRestorePromise !== null ||
+      this.walletCoreLocks.has(walletId) ||
+      !account ||
+      !isAccountNetworkEnabled(account, this.network, 'zcash') ||
+      !core?.hasWasmInitialized() ||
+      !core.isReady() ||
+      core.accountIndex !== account.derivationIndex
+    ) {
+      return null
+    }
+    // Account identity was established during restore; rechecking it through
+    // wallet.getAccountHdIndex is a soft read rejected throughout active sync.
     return core
   }
 

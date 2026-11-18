@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@iconify/react'
-import type { ActivityItem } from '@/core/activity'
 import {
   formatEvmWeiAsGwei,
   parseEvmPriorityFeeGwei,
@@ -8,7 +7,7 @@ import {
 } from '@/infrastructure/chains/evm'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
-import { evmWalletClient } from '@/popup/services/evm-wallet-client'
+import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { openModal } from '@/popup/provider/ModalManager'
 import { toast } from '@/store/toast-store'
 import { formatBaseUnitAmount } from '@/lib/number-format'
@@ -35,7 +34,6 @@ interface EvmNonceRecoveryBannerProps {
   readonly executionMode: 'main' | 'private'
   readonly feeSymbol: string
   readonly feeDecimals: number
-  readonly activityItems: readonly ActivityItem[]
   readonly onUpdated: () => void
 }
 
@@ -46,7 +44,6 @@ export function EvmNonceRecoveryBanner({
   executionMode,
   feeSymbol,
   feeDecimals,
-  activityItems,
   onUpdated
 }: EvmNonceRecoveryBannerProps) {
   const [state, setState] = useState<RecoveryState | null>(null)
@@ -55,26 +52,34 @@ export function EvmNonceRecoveryBanner({
   const [customPriorityFee, setCustomPriorityFee] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [checkFailed, setCheckFailed] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [checkRevision, setCheckRevision] = useState(0)
   const [reviewOpen, setReviewOpen] = useState(false)
   const refreshSequence = useRef(0)
-  const replacedOperation = activityItems.find(item => item.id === state?.transactionId)?.kind
   const presentation = state ? getEvmNonceRecoveryPresentation(state.action) : null
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
+    setChecking(true)
     try {
       const next = await evmWalletClient.getNonceRecovery(chainId, executionMode)
       if (sequence !== refreshSequence.current) return
       setState(next)
+      if (!next) setReviewOpen(false)
       setCheckFailed(false)
       setError(null)
-    } catch {
+    } catch (cause) {
       if (sequence !== refreshSequence.current) return
       setState(null)
-      setCheckFailed(true)
+      setReviewOpen(false)
+      setCheckFailed(
+        cause instanceof EvmWalletClientError && cause.code === 'nonce-queue-unavailable'
+      )
     } finally {
-      if (sequence === refreshSequence.current) setCheckRevision(previous => previous + 1)
+      if (sequence === refreshSequence.current) {
+        setChecking(false)
+        setCheckRevision(previous => previous + 1)
+      }
     }
   }, [chainId, executionMode])
 
@@ -107,21 +112,8 @@ export function EvmNonceRecoveryBanner({
     return () => clearTimeout(timer)
   }, [checkFailed, checkRevision, refresh, state])
 
-  useEffect(() => {
-    if (
-      state?.action === 'await-confirmation' &&
-      activityItems.some(
-        item =>
-          item.id === state.transactionId && (item.status === 'final' || item.status === 'failed')
-      )
-    ) {
-      void refresh()
-    }
-  }, [activityItems, refresh, state])
-
   const handleRecovery = async () => {
-    if (!state || busy) return
-    if (state.action === 'await-confirmation') return
+    if (!state || busy || checking) return
     setBusy(true)
     setError(null)
     try {
@@ -148,12 +140,7 @@ export function EvmNonceRecoveryBanner({
         await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
         throw new Error('Invalid EVM recovery review')
       }
-      if (
-        summary.fields.nonce !== state.pendingNonce ||
-        (state.action === 'replace' &&
-          review.graph.root.relation?.transactionId !== state.transactionId) ||
-        (state.action === 'fill-gap' && review.graph.root.relation !== undefined)
-      ) {
+      if (summary.fields.nonce !== state.pendingNonce || review.graph.root.relation !== undefined) {
         await evmWalletClient.rejectTransfer(review.graph.root.id).catch(() => {})
         await refresh()
         throw new Error('Pending nonce changed. Review the current recovery transaction.')
@@ -164,14 +151,10 @@ export function EvmNonceRecoveryBanner({
         body: resolve => (
           <div className="space-y-4 pb-2">
             <p className="text-sm leading-5 text-muted">
-              This sends a zero-value transaction to your own address. It may replace an earlier
-              transaction. Recovery completes only after it confirms.
+              This sends a zero-value transaction to your own address and costs a network fee. Later
+              queued transactions, including token approvals, may go through. It does not cancel
+              them.
             </p>
-            {state.action === 'replace' && (
-              <p className="text-sm leading-5 text-warning">
-                This will replace your pending {replacedOperation ?? 'transaction'}.
-              </p>
-            )}
             <div className="space-y-2 border-y border-border/60 py-3 text-xs">
               <div className="flex justify-between gap-3">
                 <span className="text-muted">Nonce</span>
@@ -233,7 +216,7 @@ export function EvmNonceRecoveryBanner({
         } else {
           toast.success(
             submission.status === 'broadcast'
-              ? 'Recovery submitted. Wait for confirmation before continuing.'
+              ? 'Recovery submitted. Confirmation is pending.'
               : 'Broadcast interrupted. Retry from Activity.'
           )
         }
@@ -251,7 +234,18 @@ export function EvmNonceRecoveryBanner({
     }
   }
 
-  if (!state) return null
+  if (!state) {
+    return checkFailed ? (
+      <div className="border-b border-border/60 px-5 py-3">
+        <p className="mb-1 text-xs text-muted">{networkName}</p>
+        <InlineError
+          message="Unable to verify the send queue."
+          onRetry={() => void refresh()}
+          retrying={checking}
+        />
+      </div>
+    ) : null
+  }
 
   if (state.action === 'retry-broadcast') {
     return (
@@ -266,8 +260,6 @@ export function EvmNonceRecoveryBanner({
       </div>
     )
   }
-
-  const canReview = state.action === 'fill-gap' || state.action === 'replace'
 
   return (
     <div className="border-b border-border/60 px-5 py-3" aria-label="EVM nonce recovery">
@@ -288,31 +280,22 @@ export function EvmNonceRecoveryBanner({
             size="sm"
             variant="ghost"
             className="h-8 shrink-0 gap-1 px-1.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
-            aria-expanded={canReview ? reviewOpen : undefined}
-            disabled={busy}
-            onClick={() => {
-              if (canReview) setReviewOpen(open => !open)
-              else void handleRecovery()
-            }}
+            aria-expanded={reviewOpen}
+            disabled={busy || checking}
+            onClick={() => setReviewOpen(open => !open)}
           >
             {presentation.actionLabel}
             <Icon
-              icon={canReview && reviewOpen ? 'lucide:chevron-up' : 'lucide:chevron-right'}
+              icon={reviewOpen ? 'lucide:chevron-up' : 'lucide:chevron-right'}
               width={14}
               height={14}
             />
           </Button>
         )}
       </div>
-      {canReview && reviewOpen && (
+      {reviewOpen && (
         <div className="ml-12 mt-3 border-t border-border/60 pt-3">
-          <p className="text-xs leading-4 text-muted">
-            A zero-value transaction to your own address can clear the blocked order after it
-            confirms.
-            {state.action === 'replace' &&
-              ` This may replace your pending ${replacedOperation ?? 'transaction'}.`}
-          </p>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <label htmlFor={`nonce-fee-${chainId}`} className="shrink-0 text-xs text-muted">
               Network fee
             </label>

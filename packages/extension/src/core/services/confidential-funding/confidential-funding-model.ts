@@ -127,6 +127,7 @@ export function normalizeConfidentialWithdrawRequest(
 
 export interface ConfidentialFundingPlan {
   readonly schemaVersion: 1
+  readonly purpose?: 'move' | 'native-zec-swap'
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
@@ -211,6 +212,7 @@ export function canRetryConfidentialSubmission(
 
 export interface ConfidentialFundingReview {
   readonly planId: string
+  readonly purpose?: 'move' | 'native-zec-swap'
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
@@ -255,11 +257,6 @@ export interface ConfidentialFundingPreview {
   readonly expiresAt: number
   readonly appFeeBps?: number
   readonly timeEstimateSeconds?: number
-  readonly sourceNetworkFee?: Readonly<{
-    raw: string
-    symbol: string
-    decimals: number
-  }>
 }
 
 export interface ConfidentialFundingProgress {

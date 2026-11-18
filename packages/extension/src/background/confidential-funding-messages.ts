@@ -10,6 +10,8 @@ import type {
 } from './confidential-funding-coordinator'
 import { CONFIDENTIAL_SESSION_REQUIRED_ERROR } from '@/core/services/confidential-funding'
 import { ConfidentialFundingApiError } from './confidential-funding-api'
+import { useWalletStore } from '@/store/wallet-store'
+import { readNativeZecIntentsSwapStatus } from './native-zec-intents-swap'
 
 export type ConfidentialBalanceErrorCode =
   | 'authorization_required'
@@ -52,24 +54,36 @@ interface ExternalDepositMessage {
 
 const handlers = {
   PREPARE_NATIVE_ZEC_INTENTS_SWAP: (
-    { coordinator, accountContextTransition }: FundingContext,
+    { coordinator }: FundingContext,
     message: Readonly<{ request: PrepareNativeZecIntentsSwapInput }>
-  ) =>
-    accountContextTransition.runActiveOperation(() =>
-      coordinator.prepareNativeZecIntentsSwap(message.request)
-    ),
+  ) => coordinator.prepareNativeZecIntentsSwap(message.request),
   GET_NATIVE_ZEC_INTENTS_SWAP: (
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>
   ) => coordinator.getNativeZecIntentsSwap(message.quoteId),
+  GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: async (
+    { coordinator }: FundingContext,
+    message: Readonly<{ quoteId: string }>
+  ) => {
+    const review = await coordinator.getNativeZecIntentsSwap(message.quoteId)
+    if (review.quoteBinding.recipientType !== 'CONFIDENTIAL_INTENTS') {
+      throw new Error('Native ZEC Confidential status is unavailable')
+    }
+    return readNativeZecIntentsSwapStatus(review.quoteBinding)
+  },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: (
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>
   ) => coordinator.cancelNativeZecIntentsSwap(message.quoteId),
   PREPARE_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
     coordinator.prepare(message.request),
-  PREVIEW_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
-    coordinator.preview(message.request),
+  PREVIEW_CONFIDENTIAL_FUNDING: (
+    { coordinator }: FundingContext,
+    message: PrepareMessage & Readonly<{ clusterFeeOnly?: boolean }>
+  ) =>
+    message.clusterFeeOnly
+      ? coordinator.preview(message.request, true)
+      : coordinator.preview(message.request),
   CREATE_EXTERNAL_SHIELD_DEPOSIT: (
     { coordinator }: FundingContext,
     message: Readonly<{ request: CreateExternalShieldDepositInput }>
@@ -101,10 +115,32 @@ const handlers = {
   },
   REFRESH_CONFIDENTIAL_BALANCES: async (
     { coordinator }: FundingContext,
-    message: Readonly<{ scope: ExternalShieldDepositScope; authorize: boolean }>
+    message: Readonly<{
+      scope: ExternalShieldDepositScope
+      authorize: boolean
+      notifyPortfolio?: boolean
+    }>
   ) => {
     try {
-      return await coordinator.refreshBalances(message.scope, message.authorize)
+      // Authorization acquires the account queue inside the signer. Holding it
+      // here would deadlock that signature and block all subsequent mode reads.
+      const balances = await coordinator.refreshBalances(message.scope, message.authorize)
+      const { currentNetwork, currentWalletId, currentAccountId } = useWalletStore.getState()
+      if (
+        message.notifyPortfolio !== false &&
+        currentNetwork === message.scope.network &&
+        currentWalletId === message.scope.keyDomainId &&
+        currentAccountId === message.scope.accountId
+      ) {
+        void chrome.runtime
+          .sendMessage({
+            type: 'PORTFOLIO_UPDATED',
+            walletId: message.scope.keyDomainId,
+            accountId: message.scope.accountId
+          })
+          .catch(() => {})
+      }
+      return balances
     } catch (error) {
       const cause = error instanceof Error ? error : new Error('Shield balance unavailable')
       Object.assign(cause, { balanceErrorCode: classifyBalanceReadError(error) })

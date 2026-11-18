@@ -1,4 +1,6 @@
 import type { Network } from '@/types'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { getZcashChainId } from '@/core/chains/registry'
 import { externalRecipientsMatch, isValidExternalRecipient } from './confidential-funding-recipient'
 import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
@@ -20,6 +22,7 @@ export interface ConfidentialBalanceSnapshot {
   readonly balances: readonly ConfidentialBalance[]
   readonly updatedAt: number
   readonly fresh: boolean
+  readonly known: boolean
 }
 const PHASES = new Set<ConfidentialFundingPlan['phase']>([
   'prepared',
@@ -169,6 +172,16 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       plan.operation !== 'withdraw' &&
       plan.operation !== 'cluster' &&
       plan.operation !== 'swap') ||
+    (plan.purpose !== undefined &&
+      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+        plan.operation !== 'withdraw' ||
+        plan.sourceDomain !== 'shield' ||
+        plan.destinationDomain !== 'public' ||
+        plan.externalRecipient === undefined ||
+        (plan.purpose === 'native-zec-swap' &&
+          (plan.destination.assetId !== `${getZcashChainId(plan.network)}/slip44:133` ||
+            plan.destination.protocolAssetId !== ZEC_ZCASH_ASSET ||
+            plan.source.protocolAssetId === ZEC_ZCASH_ASSET)))) ||
     (plan.externalRecipient !== undefined &&
       (plan.operation !== 'withdraw' ||
         plan.destinationDomain !== 'public' ||
@@ -209,7 +222,13 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         (plan.withdraws[0].signedPayload !== undefined && !plan.frozenRequest) ||
         plan.depositQuote !== undefined ||
         plan.preparedDeposit !== undefined)) ||
-    (plan.operation !== 'swap' && plan.swapQuote !== undefined) ||
+    (plan.purpose === 'native-zec-swap' &&
+      (!plan.swapQuote ||
+        plan.swapQuote.quoteRequest.dry !== false ||
+        plan.reviewedAppFeesFingerprint !== undefined)) ||
+    (plan.operation !== 'swap' &&
+      plan.purpose !== 'native-zec-swap' &&
+      plan.swapQuote !== undefined) ||
     (plan.reviewedAppFeesFingerprint !== undefined &&
       ((plan.operation !== 'withdraw' && plan.operation !== 'cluster') ||
         !/^[0-9a-f]{64}$/.test(plan.reviewedAppFeesFingerprint))) ||
@@ -695,12 +714,18 @@ export class ChromeConfidentialFundingStore {
     const key = this.balanceKey(network, keyDomainId, accountId)
     const value = (await chrome.storage.local.get(key))[key]
     if (value === undefined) {
-      return Object.freeze({ balances: Object.freeze([]), updatedAt: 0, fresh: false })
+      return Object.freeze({
+        balances: Object.freeze([]),
+        updatedAt: 0,
+        fresh: false,
+        known: false
+      })
     }
     try {
       const snapshot = parseBalanceSnapshot(value)
       return Object.freeze({
         ...snapshot,
+        known: true,
         fresh:
           snapshot.updatedAt > 0 &&
           snapshot.updatedAt <= this.now() &&
@@ -708,7 +733,12 @@ export class ChromeConfidentialFundingStore {
       })
     } catch {
       await chrome.storage.local.remove(key)
-      return Object.freeze({ balances: Object.freeze([]), updatedAt: 0, fresh: false })
+      return Object.freeze({
+        balances: Object.freeze([]),
+        updatedAt: 0,
+        fresh: false,
+        known: false
+      })
     }
   }
 
@@ -716,15 +746,28 @@ export class ChromeConfidentialFundingStore {
     network: Network,
     keyDomainId: string,
     accountId: string,
-    balances: readonly ConfidentialBalance[]
+    balances: readonly ConfidentialBalance[],
+    requestedAt = this.now()
   ): Promise<void> {
+    if (!Number.isSafeInteger(requestedAt) || requestedAt < 0) {
+      throw new Error('Confidential balance request time is invalid')
+    }
     const snapshot = Object.freeze({
       schemaVersion: 1,
       balances: parseBalances(balances),
-      updatedAt: this.now()
+      updatedAt: requestedAt
     })
-    await withUndeletedWalletAccountMetadata(keyDomainId, accountId, network, () =>
-      chrome.storage.local.set({ [this.balanceKey(network, keyDomainId, accountId)]: snapshot })
-    )
+    await withUndeletedWalletAccountMetadata(keyDomainId, accountId, network, async () => {
+      const key = this.balanceKey(network, keyDomainId, accountId)
+      const current = (await chrome.storage.local.get(key))[key]
+      if (current !== undefined) {
+        try {
+          if (parseBalanceSnapshot(current).updatedAt >= requestedAt) return
+        } catch {
+          // Replace malformed cached data with a valid response.
+        }
+      }
+      await chrome.storage.local.set({ [key]: snapshot })
+    })
   }
 }

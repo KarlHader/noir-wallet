@@ -4,9 +4,11 @@ import { expect } from '@playwright/test'
 import {
   fetchQuote,
   fetchIntentsWalletTokens,
+  fetchSwapTokens,
   fetchSwapStatus,
   evaluateIntentsStatusQuoteBinding,
   getCachedTokens,
+  INTENTS_SWAP_TOKEN_CATALOG_TTL_MS,
   parseCoinGeckoIconCatalogResponse,
   parseQuoteSuccessResponse,
   parseSwapStatusResponse,
@@ -14,6 +16,44 @@ import {
   refreshSwapTokenIcons,
   refreshSwapTokenCatalog
 } from '../../../src/core/services/intents-api.ts'
+
+test('Intents token directory stays cached for one hour', async () => {
+  const originalFetch = globalThis.fetch
+  const originalNow = Date.now
+  let now = originalNow()
+  let calls = 0
+  const token = {
+    assetId: 'nep141:eth.omft.near',
+    blockchain: 'eth',
+    contractAddress: null,
+    decimals: 18,
+    icon: null,
+    price: 1,
+    priceUpdatedAt: new Date(now).toISOString(),
+    symbol: 'ETH'
+  }
+  Date.now = () => now
+  globalThis.fetch = async input => {
+    expect(String(input)).toBe('https://1click.chaindefuser.com/v0/tokens')
+    calls++
+    return Response.json([token])
+  }
+  try {
+    getCachedTokens().splice(0)
+    expect(INTENTS_SWAP_TOKEN_CATALOG_TTL_MS).toBe(60 * 60 * 1_000)
+    await fetchSwapTokens()
+    now += INTENTS_SWAP_TOKEN_CATALOG_TTL_MS - 1
+    await fetchSwapTokens()
+    expect(calls).toBe(1)
+    now += 1
+    await fetchSwapTokens()
+    expect(calls).toBe(2)
+  } finally {
+    getCachedTokens().splice(0)
+    Date.now = originalNow
+    globalThis.fetch = originalFetch
+  }
+})
 
 test('Intents settlement checks the quoted raw minimum with destination precision', () => {
   const binding = {
@@ -72,6 +112,44 @@ test('swap quote sends the configured 35 bps app fee', async () => {
     })
     expect(result.quoteStatus).toBe('error')
     expect(submittedBody.appFees).toEqual([{ recipient: 'noir_swap.near', fee: 35 }])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('protected Intents quote requires a matching request echo', async () => {
+  const originalFetch = globalThis.fetch
+  let requestedBody
+  globalThis.fetch = async (_input, init) => {
+    requestedBody = JSON.parse(init.body)
+    return new Response(JSON.stringify(response()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+  }
+
+  try {
+    const request = {
+      originAsset: 'nep141:base-usdc.omft.near',
+      destinationAsset: 'nep141:zec.omft.near',
+      amount: '1000000',
+      refundTo: '0x1111111111111111111111111111111111111111',
+      recipient: 'u1destination',
+      validateQuoteRequest: true
+    }
+    expect((await fetchQuote(request)).quoteStatus).toBe('error')
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({ ...response(), quoteRequest: { ...requestedBody, recipient: 't1other' } }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    expect((await fetchQuote(request)).quoteStatus).toBe('error')
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ...response(), quoteRequest: requestedBody }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    expect((await fetchQuote(request)).quoteStatus).toBe('success')
   } finally {
     globalThis.fetch = originalFetch
   }

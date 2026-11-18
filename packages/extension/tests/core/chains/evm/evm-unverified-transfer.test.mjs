@@ -17,7 +17,7 @@ import {
   EvmTransactionError
 } from '../../../../src/infrastructure/chains/evm/index.ts'
 import { mapEvmWalletRuntimeError } from '../../../../src/background/evm-wallet-runtime-error.ts'
-import { getEvmSendPrepareError } from '../../../../src/popup/pages/transactions/evm-send-validation.ts'
+import { getEvmSendPrepareError } from '../../../../src/popup/services/evm-send-validation.ts'
 import { EvmWalletClientError } from '../../../../src/popup/services/evm-wallet-client.ts'
 
 const chainId = parseChainId('eip155:1').id

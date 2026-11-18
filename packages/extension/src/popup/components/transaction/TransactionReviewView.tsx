@@ -36,7 +36,6 @@ interface TransactionReviewViewProps {
   readonly asset: TransactionReviewAsset | null
   readonly amount: string
   readonly amountPrefix?: string
-  readonly amountDetails?: boolean
   readonly fiatValue?: string | null
   readonly network: string
   readonly rows: readonly TransactionReviewRow[]
@@ -64,7 +63,6 @@ export function TransactionReviewView({
   asset,
   amount,
   amountPrefix = '',
-  amountDetails = true,
   fiatValue,
   network,
   rows,
@@ -98,7 +96,7 @@ export function TransactionReviewView({
             summary
           ) : (
             <TransactionResultDetailRow label="Amount">
-              <AmountDisplay value={amount} symbol={asset?.symbol} showDetails={false} />
+              <AmountDisplay value={amount} symbol={asset?.symbol} />
             </TransactionResultDetailRow>
           )}
           {rows
@@ -181,7 +179,6 @@ export function TransactionReviewView({
                   value={amount}
                   symbol={asset.symbol}
                   prefix={amountPrefix}
-                  showDetails={amountDetails}
                   className={figma ? 'justify-start gap-x-1' : undefined}
                 />
               ) : (
@@ -244,7 +241,9 @@ export function TransactionReviewView({
         <Button
           variant="outline"
           size={figma ? 'wallet' : 'default'}
-          className={figma ? 'h-[45px] flex-1 border-white/10 bg-card' : 'h-[45px] flex-1'}
+          className={
+            figma ? 'h-[45px] min-w-0 flex-1 border-white/10 bg-card' : 'h-[45px] min-w-0 flex-1'
+          }
           disabled={cancelDisabled || confirming}
           onClick={onCancel}
         >
@@ -252,9 +251,9 @@ export function TransactionReviewView({
         </Button>
         <Button
           size={figma ? 'wallet' : 'default'}
-          className={`${figma ? 'h-[45px] flex-[2]' : 'h-[45px] flex-1'} ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
+          className={`${figma ? 'h-[45px] min-w-0 flex-[2]' : 'h-[45px] min-w-0 flex-1'} whitespace-normal text-center leading-tight ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
           disabled={confirmDisabled || preparing}
-          isLoading={confirming}
+          isLoading={preparing || confirming}
           onClick={onConfirm}
         >
           {confirmLabel}
@@ -286,7 +285,6 @@ export function TransactionReviewExchangeSummary({
           value={source.amount}
           symbol={source.asset.symbol}
           prefix="-"
-          showDetails={false}
           className="max-w-full justify-start"
         />
       </div>
@@ -321,7 +319,6 @@ export function TransactionReviewExchangeSummary({
                   value={entry.amount}
                   symbol={entry.asset.symbol}
                   prefix={index === 0 ? '-' : destinationPrefix}
-                  showDetails={false}
                   className="max-w-full justify-start font-sans tabular-nums"
                 />
               )}

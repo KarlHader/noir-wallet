@@ -27,6 +27,24 @@ function getNetworkAliases(network: EvmNetworkConfig): readonly string[] {
   )
 }
 
+// Network configurations are immutable. Reuse their alias index when resolving
+// a catalog instead of rebuilding every network's aliases for every token.
+const networkAliasIndexes = new WeakMap<
+  readonly EvmNetworkConfig[],
+  ReadonlyMap<string, EvmNetworkConfig>
+>()
+
+function getNetworkAliasIndex(networks: readonly EvmNetworkConfig[]) {
+  const cached = networkAliasIndexes.get(networks)
+  if (cached) return cached
+  const index = new Map<string, EvmNetworkConfig>()
+  for (const network of networks) {
+    for (const alias of getNetworkAliases(network)) index.set(alias, network)
+  }
+  networkAliasIndexes.set(networks, index)
+  return index
+}
+
 export interface IntentsEvmAsset {
   readonly protocolAssetId: string
   readonly assetId: string
@@ -75,19 +93,14 @@ export function resolveIntentsEvmChainId(
   networks: readonly EvmNetworkConfig[]
 ): string | null {
   const normalized = blockchain.trim().toLowerCase()
-  return networks.find(network => getNetworkAliases(network).includes(normalized))?.chainId ?? null
+  return getNetworkAliasIndex(networks).get(normalized)?.chainId ?? null
 }
 
 export function resolveIntentsEvmAssets(
   tokens: readonly SwapToken[],
   networks: readonly EvmNetworkConfig[]
 ): readonly IntentsEvmAsset[] {
-  const networkByAlias = new Map<string, EvmNetworkConfig>()
-  for (const network of networks) {
-    for (const alias of getNetworkAliases(network)) {
-      networkByAlias.set(alias, network)
-    }
-  }
+  const networkByAlias = getNetworkAliasIndex(networks)
 
   const resolved = new Map<string, IntentsEvmAsset>()
   for (const token of tokens) {
@@ -120,12 +133,4 @@ export function resolveIntentsEvmAssets(
     )
   }
   return Object.freeze([...resolved.values()])
-}
-
-export function getDefaultIntentsEvmAssets(
-  assets: readonly IntentsEvmAsset[]
-): readonly IntentsEvmAsset[] {
-  return Object.freeze(
-    assets.filter(asset => ['USDC', 'USDT'].includes(asset.symbol.toUpperCase()))
-  )
 }

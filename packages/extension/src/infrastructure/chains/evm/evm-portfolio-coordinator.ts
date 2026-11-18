@@ -1,4 +1,4 @@
-import type { ChainAccount } from '@/core/accounts/domain'
+import { chainAccountsEqual, type ChainAccount } from '@/core/accounts/domain'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { AssetRegistry, ChainRegistry } from '@/core/chains/registry'
@@ -16,7 +16,7 @@ import type {
   StorageV2ReadRepository
 } from '@/ports/repositories'
 import { completePublicOnlyEvmBalance, readEvmPortfolioSource } from './evm-balance-reader'
-import type { EvmBalanceRpc } from './evm-rpc-client'
+import type { EvmBalanceRpc, EvmContractRpc } from './evm-rpc-client'
 
 export type EvmPortfolioStorageRepository = Pick<
   StorageV2ReadRepository,
@@ -30,9 +30,11 @@ export interface EvmPortfolioCoordinatorOptions {
   readonly chains: ChainRegistry
   readonly assets: AssetRegistry
   readonly rpc: EvmBalanceRpc
+  readonly resolvePreferredBalanceRpc?: () => EvmContractRpc | undefined
   readonly resolvePrivateExecutionAddress?: (
     context: ActiveEvmPortfolioContext
   ) => Promise<string | null>
+  readonly canCommit?: () => boolean | Promise<boolean>
   readonly now?: () => number
 }
 
@@ -90,20 +92,6 @@ export async function loadActiveEvmPortfolioContext(
   })
 }
 
-function chainAccountsEqual(left: ChainAccount, right: ChainAccount): boolean {
-  return (
-    left.id === right.id &&
-    left.scope.keyDomainId === right.scope.keyDomainId &&
-    left.scope.accountId === right.scope.accountId &&
-    left.scope.chainId === right.scope.chainId &&
-    left.derivation.scheme === right.derivation.scheme &&
-    left.derivation.path === right.derivation.path &&
-    left.identity.kind === right.identity.kind &&
-    left.identity.value === right.identity.value &&
-    left.createdAt === right.createdAt
-  )
-}
-
 function preserveCachedBalances(
   refreshed: PortfolioSourceSnapshot,
   cached: PortfolioSourceSnapshot | undefined
@@ -139,13 +127,10 @@ export class EvmPortfolioCoordinator {
   async readCachedActiveSource(): Promise<ActiveEvmPortfolioSource | null> {
     const context = await this.loadActiveContext()
     if (!context) return null
-    const cached = await this.options.cacheRepository.get(
+    const cached = await this.options.cacheRepository.getForActiveChainAccount(
       context.generationId,
-      context.chainAccount.id
+      context.chainAccount
     )
-    if (cached && !chainAccountsEqual(cached.source.chainAccount, context.chainAccount)) {
-      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
-    }
     const source = cached
       ? this.requiresPrivateBalanceRefresh(context, cached.source)
         ? {
@@ -204,7 +189,11 @@ export class EvmPortfolioCoordinator {
   private async refresh(
     context: ActiveEvmPortfolioContext
   ): Promise<ActiveEvmPortfolioSource | null> {
-    const refreshedAt = (this.options.now ?? Date.now)()
+    const previous = await this.options.cacheRepository.getForActiveChainAccount(
+      context.generationId,
+      context.chainAccount
+    )
+    const refreshedAt = Math.max((this.options.now ?? Date.now)(), (previous?.cachedAt ?? -1) + 1)
     if (!Number.isSafeInteger(refreshedAt) || refreshedAt < 0) {
       throw new Error('Invalid EVM Portfolio refresh timestamp')
     }
@@ -226,17 +215,18 @@ export class EvmPortfolioCoordinator {
             chainAccount: context.chainAccount,
             assets: this.options.assets,
             rpc: this.options.rpc,
+            preferredBalanceRpc: this.options.resolvePreferredBalanceRpc?.(),
             publicOnly: !supportsEvmPrivateExecution(context.keyDomainSource),
             ...(privateAddress === undefined ? {} : { privateAddress }),
             now: () => refreshedAt
           })
     const cached =
       refreshedSource.status === 'error'
-        ? await this.options.cacheRepository.get(context.generationId, context.chainAccount.id)
+        ? await this.options.cacheRepository.getForActiveChainAccount(
+            context.generationId,
+            context.chainAccount
+          )
         : null
-    if (cached && !chainAccountsEqual(cached.source.chainAccount, context.chainAccount)) {
-      throw new Error('Portfolio cache ChainAccount does not match active Storage V2 metadata')
-    }
     const source = preserveCachedBalances(
       refreshedSource,
       cached && !supportsEvmPrivateExecution(context.keyDomainSource)
@@ -246,14 +236,41 @@ export class EvmPortfolioCoordinator {
           })
         : cached?.source
     )
+    if (this.options.canCommit && !(await this.options.canCommit())) return null
+    const pointerBeforeWrite = await this.options.storageRepository.getActivePointer()
+    if (pointerBeforeWrite?.generationId !== context.generationId) return null
+    const activeBeforeWrite = await this.loadActiveContext()
+    if (
+      !activeBeforeWrite ||
+      activeBeforeWrite.generationId !== context.generationId ||
+      !chainAccountsEqual(activeBeforeWrite.chainAccount, context.chainAccount)
+    ) {
+      return null
+    }
+    if (this.options.canCommit && !(await this.options.canCommit())) return null
     await this.options.cacheRepository.put({
       generationId: context.generationId,
       cachedAt: refreshedAt,
       source
     })
-    const currentPointer = await this.options.storageRepository.getActivePointer()
-    if (currentPointer?.generationId !== context.generationId) return null
-    return Object.freeze({ ...context, source })
+    const stored = await this.options.cacheRepository.get(
+      context.generationId,
+      context.chainAccount.id
+    )
+    if (!stored || !chainAccountsEqual(stored.source.chainAccount, context.chainAccount)) {
+      throw new Error('Refreshed Portfolio cache does not match active ChainAccount')
+    }
+    const pointerAfterWrite = await this.options.storageRepository.getActivePointer()
+    if (pointerAfterWrite?.generationId !== context.generationId) return null
+    const activeAfterWrite = await this.loadActiveContext()
+    if (
+      !activeAfterWrite ||
+      activeAfterWrite.generationId !== context.generationId ||
+      !chainAccountsEqual(activeAfterWrite.chainAccount, context.chainAccount)
+    ) {
+      return null
+    }
+    return Object.freeze({ ...context, source: stored.source })
   }
 
   private requiresPrivateBalanceRefresh(

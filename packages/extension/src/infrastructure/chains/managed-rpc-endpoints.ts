@@ -33,7 +33,9 @@ export function getEvmRpcEndpointOptions(
     throw new Error(`No built-in EVM network configured for ${chainId}`)
   }
   const managed = getManagedRpcEndpointOptions(chainId, network, 'evm-json-rpc')
-  return managedOrDefault(managed, getDefaultEvmRpcEndpoint(network, chainId))
+  const endpoints =
+    chainId === 'eip155:1' ? managed.filter(endpoint => endpoint.id !== 'deltarpc') : managed
+  return managedOrDefault(endpoints, getDefaultEvmRpcEndpoint(network, chainId))
 }
 
 export function resolveBitcoinRpcEndpointOptions(

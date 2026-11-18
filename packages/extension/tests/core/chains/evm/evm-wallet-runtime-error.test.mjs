@@ -119,4 +119,27 @@ test.describe('EVM wallet runtime error mapping', () => {
       message: 'The EVM wallet request failed'
     })
   })
+
+  test('identifies stale replacement requests without changing ordinary transfer errors', () => {
+    const stale = new EvmTransactionError('stale-nonce', 'internal nonce detail')
+    for (const operation of ['PREPARE_EVM_CANCEL', 'PREPARE_EVM_SPEED_UP']) {
+      expect(mapEvmWalletRuntimeError(stale, operation)).toEqual({
+        code: 'replacement-unavailable',
+        message: 'This transaction is no longer available for replacement'
+      })
+    }
+    for (const message of [
+      'Only a pending EVM transaction can be cancelled',
+      'Pending EVM transaction does not contain replacement metadata',
+      'A cancellation replacement already exists'
+    ]) {
+      expect(mapEvmWalletRuntimeError(new Error(message), 'PREPARE_EVM_CANCEL')).toMatchObject({
+        code: 'replacement-unavailable'
+      })
+    }
+    expect(mapEvmWalletRuntimeError(stale, 'PREPARE_EVM_TRANSFER')).toEqual({
+      code: 'request-failed',
+      message: 'The EVM wallet request failed'
+    })
+  })
 })

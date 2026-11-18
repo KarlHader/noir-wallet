@@ -9,6 +9,8 @@ import {
   type EvmDAppReadRpc,
   type EvmDAppRpcCall,
   type EvmLatestBlockFee,
+  type EvmNonceQueueEndpointSelector,
+  type EvmNonceQueueRpc,
   type EvmRpcBlockTag,
   type EvmRpcCall,
   type EvmTransactionLocation,
@@ -97,7 +99,7 @@ function isRetryableEndpointFailure(error: unknown): error is EvmRpcError {
 export function createEvmRpcFailoverClient(
   config: EvmRpcFailoverClientConfig,
   fetchImplementation: FetchImplementation = fetch
-): EvmRpc {
+): EvmRpc & EvmNonceQueueEndpointSelector {
   let endpointStates = parseEndpoints(config, fetchImplementation, new Map())
   let activeKey = endpointStates[0].key
 
@@ -145,6 +147,10 @@ export function createEvmRpcFailoverClient(
   }
 
   return Object.freeze({
+    withNonceQueueEndpoint: <Result>(
+      operation: (rpc: EvmNonceQueueRpc) => Promise<Result>,
+      signal?: AbortSignal
+    ) => run(state => operation(state.client), signal),
     assertExpectedChain: async (signal?: AbortSignal) => {
       await run(
         async state => {

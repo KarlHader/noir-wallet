@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import Big from '@/lib/big'
-import type { PortfolioReadModel } from '@/core/portfolio'
+import { parseAssetId } from '@/core/chains/registry'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import type { ActivityItem } from '@/core/activity'
 import {
@@ -23,7 +23,11 @@ import {
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { cn } from '@/lib/utils'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
-import { getAssetDetailCategories, getZcashPrivacyBalanceDisplay } from './asset-detail-balance'
+import {
+  getAssetDetailCategories,
+  getZcashPrivacyBalanceDisplay,
+  sumZcashDetailBalanceRaw
+} from './asset-detail-balance'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { useWalletStore } from '@/store/wallet-store'
 import { useSettingsStore } from '@/store/settings-store'
@@ -37,17 +41,13 @@ import {
 } from '@/popup/components/common/CopyToast'
 import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { AssetBalanceRow } from '@/popup/components/portfolio/AssetBalanceRow'
+import { withConfidentialAssetPrices } from '@/popup/components/portfolio/portfolio-prices'
 import { PrivateAddressWarningDialog } from '@/popup/components/account/PrivateAddressWarningDialog'
 import { confidentialFundingClient } from '@/popup/services/confidential-funding-client'
 import { getPrivateTransferChainIds } from '@/popup/services/private-balance-transfer'
 import { resolveNearConfidentialZecHolding } from '@/popup/services/near-confidential-holdings'
 
 import { formatDisplayTokenAmount } from '@/popup/components/portfolio/portfolio-format'
-import {
-  isPortfolioModelForScope,
-  readCachedPortfolio,
-  refreshPortfolioFromCache
-} from '@/popup/services/portfolio-cache'
 import { assetPriceClient } from '@/popup/services/asset-price-client'
 import { assetMarketHistoryClient } from '@/popup/services/asset-market-history-client'
 import {
@@ -57,7 +57,7 @@ import {
 import { useNavigate } from '@/popup/provider/Router'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { ListSkeleton, Skeleton } from '@/popup/components/ui/skeleton'
-import { usePortfolioUpdates } from '@/popup/hooks/usePortfolioUpdates'
+import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
 import { MultichainActivityPanel } from '@/popup/components/transaction/MultichainActivityPanel'
 import { MultichainActivityDetail } from '@/popup/components/transaction/MultichainActivityDetail'
 import { openModal } from '@/popup/provider/ModalManager'
@@ -73,6 +73,7 @@ import {
 import { BitcoinAccountTypeSelector } from '@/popup/components/bitcoin/BitcoinAccountTypeSelector'
 import { resolveEffectiveActiveAccountIdentity } from '@/popup/lib/effective-active-account'
 import { getFundingSourceUnavailableReason } from '@/core/wallet/funding-source'
+import { getConfidentialZcashMoveRecipients } from '@/popup/services/zcash-self-move'
 import type { KeySource } from '@/types/wallet'
 
 export function AssetDetail() {
@@ -100,11 +101,12 @@ export function AssetDetail() {
   const chainEndpointRuntimeKey = useSettingsStore(state =>
     getChainEndpointRuntimeKey(state.chainEndpointSettings)
   )
-  const requestSequence = useRef(0)
-  const cacheReadSequence = useRef(0)
-  const availableModel = useRef<PortfolioReadModel | null>(null)
   const historyRequestSequence = useRef(0)
-  const [model, setModel] = useState<PortfolioReadModel | null>(null)
+  const missingAssetRefreshes = useRef(new Set<string>())
+  const { model, status, refresh, readLatest } = usePortfolioSnapshot(
+    effectiveWalletId,
+    effectiveAccountId
+  )
   const [prices, setPrices] = useState<AssetPriceReadModel | null>(null)
   const [priceStatus, setPriceStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [history, setHistory] = useState<AssetMarketHistoryReadModel | null>(null)
@@ -117,7 +119,6 @@ export function AssetDetail() {
     'loading'
   )
   const [historyRetry, setHistoryRetry] = useState(0)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [bitcoinCatalog, setBitcoinCatalog] = useState<BitcoinAddressBalanceCatalogView | null>(
     null
   )
@@ -129,96 +130,34 @@ export function AssetDetail() {
     setPrivateCopyAddress(null)
   }, [effectiveWalletId, effectiveAccountId, currentNetwork, requestedAssetId])
 
-  const load = useCallback(
-    async (forceRefresh = false) => {
-      const request = ++requestSequence.current
-      cacheReadSequence.current += 1
-      const hasAvailableModel = () =>
-        isPortfolioModelForScope(availableModel.current, effectiveWalletId, effectiveAccountId)
-      setStatus(hasAvailableModel() ? 'ready' : 'loading')
-      try {
-        if (!effectiveWalletId || !effectiveAccountId) {
-          return
-        }
-        const scope = {
-          walletId: effectiveWalletId,
-          accountId: effectiveAccountId,
-          endpointRuntimeKey: chainEndpointRuntimeKey
-        }
-        const cached = await readCachedPortfolio(scope).catch(() => null)
-        if (request !== requestSequence.current) return
-        if (cached) {
-          availableModel.current = cached
-          setModel(cached)
-          setStatus('ready')
-        }
-        const selectedChainId = cached?.assets.find(item => item.asset.id === requestedAssetId)
-          ?.asset.chainId
-        const refreshed = await refreshPortfolioFromCache(scope, cached, {
-          forceRefresh,
-          refreshChainIds: selectedChainId ? [selectedChainId] : []
-        })
-        if (request !== requestSequence.current) return
-        cacheReadSequence.current += 1
-        if (refreshed) {
-          availableModel.current = refreshed
-          setModel(refreshed)
-        }
-        setStatus(hasAvailableModel() ? 'ready' : 'error')
-      } catch {
-        if (request === requestSequence.current) {
-          setStatus(hasAvailableModel() ? 'ready' : 'error')
-        }
-      }
-    },
-    [chainEndpointRuntimeKey, effectiveAccountId, effectiveWalletId, requestedAssetId]
-  )
+  const load = useCallback((forceRefresh = false) => refresh(forceRefresh), [refresh])
 
   useEffect(() => {
-    availableModel.current = null
-    setModel(null)
-    void load()
-    return () => {
-      requestSequence.current += 1
-    }
-  }, [effectiveWalletId, effectiveAccountId, chainEndpointRuntimeKey, load])
-
-  const readLatest = useCallback(async () => {
-    const request = requestSequence.current
-    const cacheRequest = ++cacheReadSequence.current
-    try {
-      if (!effectiveWalletId || !effectiveAccountId) return
-      const latest = await readCachedPortfolio({
-        walletId: effectiveWalletId,
-        accountId: effectiveAccountId
-      })
-      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
-      if (!isPortfolioModelForScope(latest, effectiveWalletId, effectiveAccountId)) return
-      availableModel.current = latest
-      setModel(latest)
-      const latestAsset = latest?.assets.find(item => item.asset.id === requestedAssetId)
-      const latestChain = latestAsset
-        ? latest?.chains.find(item => item.chain.id === latestAsset.asset.chainId)
-        : undefined
-      if (latestChain?.chain.family === 'bitcoin') {
-        const catalog = await bitcoinAddressBalancesClient.getActiveCatalog().catch(() => null)
+    if (!effectiveWalletId || !effectiveAccountId) return
+    const selectedAsset = model?.assets.find(item => item.asset.id === requestedAssetId)
+    if (
+      !selectedAsset ||
+      model?.chains.find(item => item.chain.id === selectedAsset.asset.chainId)?.chain.family !==
+        'bitcoin'
+    )
+      return
+    let active = true
+    void bitcoinAddressBalancesClient
+      .getActiveCatalog()
+      .then(catalog => {
         if (
-          request === requestSequence.current &&
+          active &&
           catalog?.walletId === effectiveWalletId &&
           catalog.accountId === effectiveAccountId
         ) {
           setBitcoinCatalog(catalog)
         }
-      }
-      if (request !== requestSequence.current || cacheRequest !== cacheReadSequence.current) return
-      setStatus('ready')
-    } catch {
-      // Notifications are opportunistic cache reads. Initial load/retry owns
-      // connection errors; a transient notification must not replace its UI.
+      })
+      .catch(() => {})
+    return () => {
+      active = false
     }
-  }, [effectiveAccountId, effectiveWalletId, requestedAssetId])
-
-  usePortfolioUpdates(effectiveWalletId, effectiveAccountId, readLatest)
+  }, [effectiveWalletId, effectiveAccountId, requestedAssetId, model])
 
   useEffect(() => {
     let cancelled = false
@@ -245,9 +184,46 @@ export function AssetDetail() {
     }
   }, [requestedAssetId])
 
-  const visibleModel = isPortfolioModelForScope(model, effectiveWalletId, effectiveAccountId)
-    ? model
-    : null
+  const visibleModel = model
+  useEffect(() => {
+    if (!visibleModel || !requestedAssetId || !effectiveWalletId || !effectiveAccountId) return
+    if (visibleModel.assets.some(item => item.asset.id === requestedAssetId)) return
+    if (
+      storageV2Account?.walletId !== effectiveWalletId ||
+      storageV2Account.accountId !== effectiveAccountId
+    )
+      return
+    let chainId: string
+    try {
+      chainId = parseAssetId(requestedAssetId).chainId
+    } catch {
+      return
+    }
+    if (!storageV2Account.networks.some(network => network.chain.id === chainId)) return
+    const attemptKey = JSON.stringify([
+      currentNetwork,
+      effectiveWalletId,
+      effectiveAccountId,
+      chainEndpointRuntimeKey,
+      requestedAssetId
+    ])
+    if (missingAssetRefreshes.current.has(attemptKey)) return
+    missingAssetRefreshes.current.add(attemptKey)
+    void refresh(false, { additionalChainIds: [chainId] })
+  }, [
+    visibleModel,
+    requestedAssetId,
+    effectiveWalletId,
+    effectiveAccountId,
+    storageV2Account,
+    currentNetwork,
+    chainEndpointRuntimeKey,
+    refresh
+  ])
+  const displayPrices = useMemo(
+    () => withConfidentialAssetPrices(visibleModel, prices),
+    [visibleModel, prices]
+  )
   const asset = visibleModel?.assets.find(item => item.asset.id === requestedAssetId) ?? null
   const chain = asset
     ? (visibleModel?.chains.find(item => item.chain.id === asset.asset.chainId) ?? null)
@@ -264,13 +240,17 @@ export function AssetDetail() {
     evmAccountNetwork?.privateExecutionAddress &&
     evmMainAddress
   )
+  const refreshConfidentialBalances =
+    privateTransferEligible ||
+    (chain?.chain.family === 'zcash' &&
+      getPrivateTransferChainIds(storageV2Account, currentNetwork === 'mainnet').length > 0)
   const categories =
     asset && visibleModel
       ? getAssetDetailCategories(
           asset,
           visibleModel,
           privateTransferEligible,
-          findAssetPrice(prices, asset.asset.id)?.priceUsd
+          findAssetPrice(displayPrices, asset.asset.id)?.priceUsd
         )
       : null
   const nearConfidentialZec = asset
@@ -282,14 +262,17 @@ export function AssetDetail() {
         assetId: asset.asset.id
       })
     : null
+  const hasConfidentialCapability =
+    currentNetwork === 'mainnet' && getPrivateTransferChainIds(storageV2Account, true).length > 0
   const actionDomain =
-    searchParams.get('mode') === 'private' &&
+    (searchParams.get('domain') === 'private' ||
+      (searchParams.get('domain') !== 'public' && searchParams.get('mode') === 'private')) &&
     (chain?.chain.family !== 'evm' || privateTransferEligible)
       ? 'private'
       : 'public'
   const activityFilterDomain = searchParams.get('history') === 'shield' ? 'shield' : undefined
   useEffect(() => {
-    if (!privateTransferEligible || !effectiveWalletId || !effectiveAccountId) return
+    if (!refreshConfidentialBalances || !effectiveWalletId || !effectiveAccountId) return
     let active = true
     void confidentialFundingClient
       .refreshBalances(
@@ -298,7 +281,7 @@ export function AssetDetail() {
           keyDomainId: effectiveWalletId,
           accountId: effectiveAccountId
         },
-        true
+        false
       )
       .then(async () => {
         if (active) await readLatest()
@@ -307,7 +290,13 @@ export function AssetDetail() {
     return () => {
       active = false
     }
-  }, [privateTransferEligible, effectiveWalletId, effectiveAccountId, currentNetwork])
+  }, [
+    refreshConfidentialBalances,
+    effectiveWalletId,
+    effectiveAccountId,
+    currentNetwork,
+    readLatest
+  ])
 
   const handleMove = (from: 'public' | 'private' = actionDomain) => {
     if (!asset) return
@@ -324,7 +313,7 @@ export function AssetDetail() {
         entry: 'asset-detail',
         from,
         to: 'shield',
-        mode: searchParams.get('mode') === 'private' ? 'private' : 'public'
+        mode: actionDomain
       })}`,
       { state: { moveAssetHint } }
     )
@@ -355,7 +344,7 @@ export function AssetDetail() {
       cancelled = true
     }
   }, [chain?.chain.family, effectiveWalletId, effectiveAccountId])
-  const quote = asset ? findAssetPrice(prices, asset.asset.id) : undefined
+  const quote = asset ? findAssetPrice(displayPrices, asset.asset.id) : undefined
   const explorerUrl =
     asset && chain ? formatChainAssetExplorerUrl(chain.chain.id, asset.asset, currentNetwork) : ''
   const zcashKeySource: KeySource | undefined = storageV2Account
@@ -570,18 +559,30 @@ export function AssetDetail() {
         label: 'Receive',
         onClick: () => navigate(`/shield-deposit?${query}`)
       },
-      ...(chain?.chain.family === 'evm'
+      ...(chain?.chain.family === 'zcash' &&
+      getConfidentialZcashMoveRecipients(storageV2Account, currentNetwork).length > 0
         ? [
             {
               action: 'move' as const,
               label: 'Move',
               onClick: () =>
                 navigate(
-                  `/transfer?${query}&entry=asset-detail&from=shield&to=${actionDomain}&mode=${actionDomain}`
+                  `/shield-zcash-move?${query}&from=confidential&originPath=${encodeURIComponent(sendOriginPath)}&sourceWalletId=${encodeURIComponent(effectiveWalletId ?? '')}&sourceAccountId=${encodeURIComponent(effectiveAccountId ?? '')}`
                 )
             }
           ]
-        : []),
+        : chain?.chain.family === 'evm'
+          ? [
+              {
+                action: 'move' as const,
+                label: 'Move',
+                onClick: () =>
+                  navigate(
+                    `/transfer?${query}&entry=asset-detail&from=shield&to=${actionDomain}&mode=${actionDomain}`
+                  )
+              }
+            ]
+          : []),
       { action: 'swap' as const, label: 'Swap', onClick: () => navigate(`/shield-swap?${query}`) }
     ]
   }
@@ -640,7 +641,7 @@ export function AssetDetail() {
         disabled: Boolean(getFundingSourceUnavailableReason(zcashKeySource, privacy)),
         onClick: () =>
           navigate(
-            `/send/zcash?move=1&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
+            `/shield-zcash-move?move=1&assetId=${encodeURIComponent(asset?.asset.id ?? '')}&from=${privacy}&originPath=${encodeURIComponent(sendOriginPath)}${zcashSendScopeQuery}`
           )
       },
       {
@@ -679,7 +680,7 @@ export function AssetDetail() {
     [currentNetwork, visibleModel, navigate, storageV2Account?.networks]
   )
 
-  if (status === 'loading' && !visibleModel) {
+  if (status === 'loading' && (!visibleModel || !asset)) {
     return (
       <div className="page-container">
         <PageHeader title="Asset details" showBack />
@@ -736,9 +737,12 @@ export function AssetDetail() {
     chain.chain.id
   )
   const displayRaw =
-    categories?.raw.all == null
-      ? null
-      : (BigInt(categories.raw.all) + BigInt(nearConfidentialZec?.availableRaw ?? '0')).toString()
+    chain.chain.family === 'zcash' && hasConfidentialCapability
+      ? sumZcashDetailBalanceRaw(
+          categories?.raw.all ?? null,
+          nearConfidentialZec?.availableRaw ?? null
+        )
+      : (categories?.raw.all ?? null)
   const detailAmount =
     displayRaw === null ? '—' : formatDisplayTokenAmount(displayRaw, asset.metadata.decimals)
   const detailFiat =
@@ -960,10 +964,7 @@ export function AssetDetail() {
     )
   }
   return (
-    <div
-      className="page-container"
-      data-wallet-mode={searchParams.get('mode') === 'private' ? 'private' : 'public'}
-    >
+    <div className="page-container" data-wallet-mode={actionDomain}>
       <CopyToast show={showToast} error={copyFailed} message="Address copied" />
       <PrivateAddressWarningDialog
         address={privateCopyAddress}
@@ -1064,7 +1065,7 @@ export function AssetDetail() {
           {(isZcashAsset || privateTransferEligible) && (
             <WalletActionButton
               icon={<WalletShieldFundsIcon />}
-              label="Shielded"
+              label="Shield"
               onClick={() =>
                 navigate(
                   `/shield-funds?mode=${actionDomain}&assetId=${encodeURIComponent(asset.asset.id)}`
@@ -1089,7 +1090,7 @@ export function AssetDetail() {
                   <AssetBalanceRow
                     key={domain}
                     label={
-                      domain === 'shield' ? 'Shielded' : domain === 'private' ? 'Private' : 'Public'
+                      domain === 'shield' ? 'Shield' : domain === 'private' ? 'Private' : 'Public'
                     }
                     subtitle={
                       domain === 'shield'
@@ -1183,21 +1184,26 @@ export function AssetDetail() {
                   : undefined
               }
             />
-            {nearConfidentialZec && (
+            {hasConfidentialCapability && (
               <AssetBalanceRow
-                label="Shielded"
+                label="NEAR Confidential"
                 actions={confidentialActions()}
-                subtitle="NEAR Confidential Intents"
-                balance={`${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`}
+                balance={
+                  nearConfidentialZec
+                    ? `${formatDisplayTokenAmount(nearConfidentialZec.availableRaw, asset.metadata.decimals)} ZEC`
+                    : '—'
+                }
                 fiat={formatBalanceFiat(
-                  quote ? new Big(nearConfidentialZec.amount).times(quote.priceUsd).toFixed() : null
+                  nearConfidentialZec && quote
+                    ? new Big(nearConfidentialZec.amount).times(quote.priceUsd).toFixed()
+                    : null
                 )}
               />
             )}
           </section>
         )}
 
-        {(quote || historyStatus === 'loading' || visibleHistory) && (
+        {(historyStatus !== 'unsupported' || quote) && (
           <section className="border-t border-border py-4">
             <MarketPriceChart
               points={visibleHistory?.points ?? null}
@@ -1213,15 +1219,10 @@ export function AssetDetail() {
                 historyRanges?.assetId === asset.asset.id ? historyRanges.ranges : []
               }
               onRangeChange={setHistoryRange}
+              error={historyStatus === 'error' ? 'Unable to load chart.' : null}
+              onRetry={() => setHistoryRetry(value => value + 1)}
             />
           </section>
-        )}
-        {historyStatus === 'error' && (
-          <InlineError
-            message="Unable to load chart."
-            onRetry={() => setHistoryRetry(value => value + 1)}
-            className="pb-4"
-          />
         )}
 
         {hasPendingBalance && !isZcashAsset && (

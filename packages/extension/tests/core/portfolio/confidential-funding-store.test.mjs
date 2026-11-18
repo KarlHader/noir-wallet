@@ -72,9 +72,26 @@ test('expires Confidential balance caches and treats legacy arrays as stale', as
     await expect(store.getBalances('mainnet', 'wallet:one', 'account:one')).resolves.toEqual(
       balances
     )
+    expect(await store.getBalanceSnapshot('mainnet', 'wallet:one', 'account:one')).toMatchObject({
+      known: true,
+      fresh: true,
+      updatedAt: now
+    })
 
     now += CONFIDENTIAL_BALANCE_CACHE_TTL_MS + 1
     await expect(store.getBalances('mainnet', 'wallet:one', 'account:one')).resolves.toEqual([])
+    expect(await store.getBalanceSnapshot('mainnet', 'wallet:one', 'account:one')).toMatchObject({
+      known: true,
+      fresh: false,
+      balances
+    })
+
+    await store.putBalances('mainnet', 'wallet:one', 'account:one', [], now)
+    await store.putBalances('mainnet', 'wallet:one', 'account:one', balances, now - 1)
+    expect(await store.getBalanceSnapshot('mainnet', 'wallet:one', 'account:one')).toMatchObject({
+      balances: [],
+      updatedAt: now
+    })
 
     const [key] = [...local.values.keys()]
     local.values.set(key, structuredClone(balances))

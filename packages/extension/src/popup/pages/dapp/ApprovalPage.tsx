@@ -1198,7 +1198,7 @@ export function ApprovalPage() {
                   <span className="text-xs text-muted">Funding source</span>
                   <span className="flex items-center justify-end gap-2 text-xs text-foreground/90">
                     <AddressTypeLabel type={fundingSource} size="sm" />
-                    {fundingSource === 'transparent' ? 'Transparent' : 'Shielded'}
+                    {fundingSource === 'transparent' ? 'Transparent' : 'Shield'}
                   </span>
                 </div>
               </div>
@@ -1549,6 +1549,10 @@ export function ApprovalPage() {
               chainFamily="evm"
               tier={dappEvmFeeSelection.kind === 'tier' ? dappEvmFeeSelection.tier : 'standard'}
               selection={dappEvmFeeSelection}
+              feeModel={
+                evmTransactionSummary.fields.transactionType === 'legacy' ? 'legacy' : 'eip1559'
+              }
+              customDefaults={evmTransactionSummary.fields}
               amount={feeAmount}
               symbol={nativeSymbol}
               onTierChange={handleNetworkFeeTierChange}

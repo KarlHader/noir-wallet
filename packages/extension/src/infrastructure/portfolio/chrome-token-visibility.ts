@@ -145,7 +145,12 @@ export class ChromeTokenVisibilityRepository {
         .map(([assetId, preference]) => ({
           assetId,
           visible: preference.visible,
-          source: preference.source === 'legacy' ? ('user' as const) : preference.source
+          source:
+            preference.source === 'legacy'
+              ? preference.visible
+                ? ('default' as const)
+                : ('user' as const)
+              : preference.source
         }))
     }
     await chrome.storage.local.set({ [this.storageKey]: snapshot })
@@ -162,6 +167,29 @@ export class ChromeTokenVisibilityRepository {
     )
   }
 
+  async readUserOverrides(): Promise<
+    Readonly<{ hiddenAssetIds: readonly string[]; visibleAssetIds: readonly string[] }>
+  > {
+    await this.mutationQueue
+    const preferences = [...(await this.readSnapshot()).values()]
+    return Object.freeze({
+      hiddenAssetIds: Object.freeze(
+        preferences
+          .filter(
+            preference =>
+              !preference.visible &&
+              (preference.source === 'user' || preference.source === 'legacy')
+          )
+          .map(preference => preference.assetId)
+      ),
+      visibleAssetIds: Object.freeze(
+        preferences
+          .filter(preference => preference.visible && preference.source === 'user')
+          .map(preference => preference.assetId)
+      )
+    })
+  }
+
   setHidden(assetId: string, hidden: boolean): Promise<void> {
     const normalizedAssetId = normalizeManagedTokenAssetId(assetId)
     return this.enqueue(async () => {
@@ -169,6 +197,21 @@ export class ChromeTokenVisibilityRepository {
       preferences.set(
         normalizedAssetId,
         Object.freeze({ assetId: normalizedAssetId, visible: !hidden, source: 'user' as const })
+      )
+      await this.writeSnapshot(preferences)
+    })
+  }
+
+  revealUserSelectedAsset(assetId: string): Promise<void> {
+    const normalizedAssetId = normalizeManagedTokenAssetId(assetId)
+    return this.enqueue(async () => {
+      const preferences = await this.readSnapshot()
+      const current = preferences.get(normalizedAssetId)
+      if (current && !current.visible && (current.source === 'user' || current.source === 'legacy'))
+        return
+      preferences.set(
+        normalizedAssetId,
+        Object.freeze({ assetId: normalizedAssetId, visible: true, source: 'user' as const })
       )
       await this.writeSnapshot(preferences)
     })
@@ -201,8 +244,12 @@ export class ChromeTokenVisibilityRepository {
             assetId,
             Object.freeze({
               assetId,
-              visible: current.visible,
-              source: current.visible === visible ? ('default' as const) : ('user' as const)
+              // Legacy visible entries may have been enabled automatically by symbol.
+              visible: current.visible ? visible : false,
+              source:
+                current.visible || current.visible === visible
+                  ? ('default' as const)
+                  : ('user' as const)
             })
           )
           changed = true

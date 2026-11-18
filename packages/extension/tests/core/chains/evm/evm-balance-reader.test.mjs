@@ -1,5 +1,12 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import {
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeFunctionResult,
+  erc20Abi,
+  multicall3Abi
+} from 'viem'
 
 import {
   createAssetRegistry,
@@ -29,6 +36,7 @@ const account = {
   },
   createdAt: 1_700_000_000_000
 }
+const privateAddress = '0x2222222222222222222222222222222222222222'
 
 function rpc(overrides = {}) {
   return {
@@ -149,6 +157,97 @@ test.describe('EVM portfolio source reader', () => {
       errorCode: 'rate-limited'
     })
     expect(source.balances.map(balance => balance.assetId)).toEqual(['eip155:1/slip44:60'])
+  })
+
+  for (const privateTokenSucceeds of [true, false]) {
+    test(`separates Public and Private balance batches and ${privateTokenSucceeds ? 'skips legacy RPC on success' : 'falls back only for unresolved balances'}`, async () => {
+      const owners = []
+      const fallbackCalls = []
+      const source = await readEvmPortfolioSource({
+        chainId,
+        chainAccount: account,
+        assets,
+        privateAddress,
+        rpc: rpc({
+          assertExpectedChain: async () => fallbackCalls.push('probe'),
+          getNativeBalance: async () => {
+            throw new Error('Unexpected native fallback')
+          },
+          getErc20Balance: async (_contract, owner) => {
+            fallbackCalls.push(owner)
+            return '7'
+          }
+        }),
+        preferredBalanceRpc: {
+          assertExpectedChain: async () => {},
+          callContract: async (contract, data) => {
+            const {
+              args: [calls]
+            } = decodeFunctionData({ abi: multicall3Abi, data })
+            const nativeCall = calls.find(
+              call => call.target.toLowerCase() === contract.toLowerCase()
+            )
+            const tokenCall = calls.find(
+              call => call.target.toLowerCase() !== contract.toLowerCase()
+            )
+            const {
+              args: [owner]
+            } = decodeFunctionData({ abi: erc20Abi, data: tokenCall.callData })
+            const {
+              args: [nativeOwner]
+            } = decodeFunctionData({ abi: multicall3Abi, data: nativeCall.callData })
+            expect(calls).toHaveLength(2)
+            expect(nativeOwner).toBe(owner)
+            owners.push(owner)
+            return encodeFunctionResult({
+              abi: multicall3Abi,
+              functionName: 'aggregate3',
+              result: calls.map(call => {
+                const native = call === nativeCall
+                const success = native || owner !== privateAddress || privateTokenSucceeds
+                return {
+                  success,
+                  returnData: success
+                    ? encodeAbiParameters([{ type: 'uint256' }], [native ? 3n : 0n])
+                    : '0x'
+                }
+              })
+            })
+          }
+        },
+        now: () => 100
+      })
+
+      expect(owners.sort()).toEqual([account.identity.value, privateAddress])
+      expect(fallbackCalls).toEqual(privateTokenSucceeds ? [] : ['probe', privateAddress])
+      expect(source.status).toBe('ready')
+      expect(source.balances).toMatchObject([
+        { mainRaw: '3', privateRaw: '3', totalRaw: '6' },
+        { mainRaw: '0', privateRaw: privateTokenSucceeds ? '0' : '7' }
+      ])
+    })
+  }
+
+  test('uses legacy balances when the preferred endpoint is unavailable', async () => {
+    const source = await readEvmPortfolioSource({
+      chainId,
+      chainAccount: account,
+      assets,
+      rpc: rpc(),
+      preferredBalanceRpc: {
+        assertExpectedChain: async () => {
+          throw new EvmRpcError('network-unavailable', 'unavailable')
+        },
+        callContract: async () => {
+          throw new Error('Unexpected contract call')
+        }
+      }
+    })
+    expect(source.status).toBe('ready')
+    expect(source.balances.map(balance => balance.totalRaw)).toEqual([
+      '1000000000000000000',
+      '2000000'
+    ])
   })
 
   test('reads an imported EVM private-key account without pretending it has an HD path', async () => {

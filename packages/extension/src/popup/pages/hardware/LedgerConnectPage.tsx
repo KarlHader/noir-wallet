@@ -16,7 +16,6 @@ import {
   type AccountNetworksCatalogView
 } from '../../services/account-networks-client'
 import { ledgerHardwareProvisioningClient } from '../../services/hardware-provisioning-client'
-import { BetaInviteHardwareDoneButton } from '../../components/onboarding/BetaInviteBinding'
 import { exportLedgerWalletAccounts } from '../../services/ledger-account-export'
 import {
   type LedgerChainFamily,
@@ -809,7 +808,9 @@ export function LedgerConnectPage() {
             <p>Ledger accounts added</p>
           </div>
           <div className="page-footer">
-            <BetaInviteHardwareDoneButton />
+            <Button className="h-[45px] w-full" onClick={() => window.close()}>
+              Done
+            </Button>
           </div>
         </>
       )}

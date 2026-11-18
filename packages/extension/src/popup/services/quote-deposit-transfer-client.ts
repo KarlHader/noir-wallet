@@ -202,8 +202,8 @@ export function createRheaSwapBinding(input: {
       protocolChainId: input.tokenOut.rheaChainId,
       protocolAssetId: input.tokenOut.assetId,
       recipient: input.quote.recipient,
-      expectedAmountRaw: input.quote.estimatedOut,
-      minimumAmountRaw: input.quote.minAmountOut,
+      expectedAmountRaw: input.review.estimatedOut,
+      minimumAmountRaw: input.review.minAmountOut,
       ...(destinationMetadata ? { metadata: destinationMetadata } : {})
     }
   })
@@ -540,6 +540,7 @@ export function createNearIntentsSwapBinding(input: {
   readonly destination?: WalletOwnedQuoteAsset
   readonly tokenIn: SwapToken
   readonly tokenOut: SwapToken
+  readonly originProtocolAssetId?: string
   readonly amountInRaw: string
   readonly recipient: string
   readonly quote: NearIntentsQuote
@@ -595,7 +596,7 @@ export function createNearIntentsSwapBinding(input: {
     origin: {
       chainId: input.source.chain.chain.id,
       assetId: input.source.asset.asset.id,
-      protocolAssetId: input.source.sourceAssetId
+      protocolAssetId: input.originProtocolAssetId ?? input.source.sourceAssetId
     },
     destination: {
       chainId: destinationIdentity.chainId,

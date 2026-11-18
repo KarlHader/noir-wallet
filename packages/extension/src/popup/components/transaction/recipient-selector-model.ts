@@ -35,10 +35,18 @@ export interface MyAccountRecipientGroupOptions {
 export function getMyAccountRecipientUnavailableReason(
   address: Pick<MyAccountRecipientAddress, 'value' | 'executionMode'>,
   sendingAddress: string | undefined,
-  disablePrivateExecutionAddresses = false
+  disablePrivateExecutionAddresses = false,
+  recipientExecutionMode?: 'main' | 'private'
 ): string | null {
   if (disablePrivateExecutionAddresses && address.executionMode === 'private') {
     return 'Private execution addresses cannot be selected for Send.'
+  }
+  if (
+    recipientExecutionMode &&
+    address.executionMode &&
+    address.executionMode !== recipientExecutionMode
+  ) {
+    return `Only ${recipientExecutionMode === 'main' ? 'Public' : 'Private'} accounts can be selected for this Send.`
   }
   if (sendingAddress && address.value.toLowerCase() === sendingAddress.toLowerCase()) {
     return 'This is the sending address.'

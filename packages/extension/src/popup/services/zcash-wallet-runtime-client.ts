@@ -529,7 +529,11 @@ export const zcashWalletRuntimeClient = Object.freeze({
 
   async voting<T>(
     input:
-      | { readonly action: 'discoverRounds' }
+      | {
+          readonly action: 'discoverRounds'
+          readonly walletId: string
+          readonly accountId: string
+        }
       | {
           readonly action:
             | 'checkEligibility'
@@ -540,6 +544,8 @@ export const zcashWalletRuntimeClient = Object.freeze({
             | 'submitBallot'
             | 'resumeRound'
             | 'clearRound'
+          readonly walletId: string
+          readonly accountId: string
           readonly roundId: string
           readonly decisions?: readonly BallotDecision[]
         }

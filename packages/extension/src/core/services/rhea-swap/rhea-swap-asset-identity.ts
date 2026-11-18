@@ -39,11 +39,15 @@ export function resolveRheaSwapCanonicalAssetId(
   protocolAssetId: string,
   network: Network = 'mainnet'
 ): AssetId | null {
-  try {
-    const parsed = parseAssetId(protocolAssetId)
-    return chainsByNetwork[network].get(parsed.chainId) ? parsed.id : null
-  } catch {
-    // RHEA token lists use protocol IDs rather than wallet asset IDs.
+  // Wallet asset IDs have a chain/asset separator. Protocol IDs must not pay
+  // for a thrown parser error for every row in a provider's token catalog.
+  if (protocolAssetId.includes('/')) {
+    try {
+      const parsed = parseAssetId(protocolAssetId)
+      return chainsByNetwork[network].get(parsed.chainId) ? parsed.id : null
+    } catch {
+      // Continue with the provider's protocol ID mappings.
+    }
   }
   const mapped = byProtocolId.get(network)?.get(protocolAssetId)
   if (mapped) return parseAssetId(mapped).id

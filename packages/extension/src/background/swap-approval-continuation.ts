@@ -4,6 +4,7 @@ import { parseAccountId } from '@/core/accounts/domain'
 import { parseAssetId } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
+import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
 import type { BackgroundEvmTransferRouter } from './evm-transfer-router'
 
 const APPROVE_ABI = parseAbi(['function approve(address spender, uint256 amount) returns (bool)'])
@@ -31,6 +32,8 @@ export interface SwapApprovalContinuation {
   readonly destinationMode: 'main' | 'private'
   readonly customRecipient: boolean
   readonly purpose?: 'public-private-send'
+  readonly quoteHandle?: string
+  readonly quoteRequestKey?: string
   readonly createdAt: number
 }
 
@@ -90,6 +93,14 @@ function parseInput(value: unknown): SwapApprovalContinuationInput {
     (item.destinationMode !== 'main' && item.destinationMode !== 'private') ||
     typeof item.customRecipient !== 'boolean' ||
     (item.purpose !== undefined && item.purpose !== 'public-private-send') ||
+    (item.quoteHandle === undefined) !== (item.quoteRequestKey === undefined) ||
+    (item.quoteHandle !== undefined &&
+      (typeof item.quoteHandle !== 'string' ||
+        !/^rhea-quote:[0-9A-Za-z:_-]{1,128}$/.test(item.quoteHandle))) ||
+    (item.quoteRequestKey !== undefined &&
+      (typeof item.quoteRequestKey !== 'string' ||
+        item.quoteRequestKey.length === 0 ||
+        item.quoteRequestKey.length > 4_096)) ||
     (item.purpose === 'public-private-send' &&
       (item.sourceMode !== 'main' ||
         item.sourceAssetId !== item.destinationAssetId ||
@@ -116,7 +127,13 @@ function parseInput(value: unknown): SwapApprovalContinuationInput {
     sourceMode: item.sourceMode,
     destinationMode: item.destinationMode,
     customRecipient: item.customRecipient,
-    ...(item.purpose === 'public-private-send' ? { purpose: item.purpose } : {})
+    ...(item.purpose === 'public-private-send' ? { purpose: item.purpose } : {}),
+    ...(item.quoteHandle === undefined
+      ? {}
+      : {
+          quoteHandle: item.quoteHandle as string,
+          quoteRequestKey: item.quoteRequestKey as string
+        })
   }
 }
 
@@ -220,8 +237,9 @@ export async function readSwapApprovalContinuation(
 export async function continueSwapAfterApproval(
   transactionId: string,
   router: BackgroundEvmTransferRouter,
-  readActive: ReadActiveScope
-): Promise<SwapApprovalContinuation> {
+  readActive: ReadActiveScope,
+  readQuote?: (record: SwapApprovalContinuation) => Promise<RheaSwapQuoteView | null>
+): Promise<SwapApprovalContinuation & { readonly quote: RheaSwapQuoteView | null }> {
   const record = await readSwapApprovalContinuation(transactionId, readActive)
   if (!record) throw new Error('Swap continuation is unavailable. Start a new Swap.')
   const graph = await new IndexedDbTransactionRepository().get(
@@ -241,7 +259,10 @@ export async function continueSwapAfterApproval(
     throw new Error('Token allowance is not available. Check Activity and try again.')
   if (!matchesActive(record, await readActive()))
     throw new Error('Active account changed. Review this Swap again.')
-  return record
+  const quote = record.quoteHandle ? ((await readQuote?.(record).catch(() => null)) ?? null) : null
+  if (!matchesActive(record, await readActive()))
+    throw new Error('Active account changed. Review this Swap again.')
+  return { ...record, quote }
 }
 
 export async function clearSwapApprovalContinuation(transactionId: string): Promise<void> {

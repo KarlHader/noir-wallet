@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import { TokenSelectionSearch } from '../tokens/TokenSelectionList'
+import { sortTokenSelectorNetworks } from '../tokens/token-selector-chain-order'
 import { ChainIcon } from './ChainIcon'
 import { PageHeader } from './PageHeader'
 
@@ -12,6 +13,7 @@ export interface ChainSelectorOption {
   readonly icon?: string
   readonly disabled?: boolean
   readonly note?: string
+  readonly priority?: number
 }
 
 interface ChainSelectorProps {
@@ -23,8 +25,10 @@ interface ChainSelectorProps {
   readonly title?: string
   readonly label?: string
   readonly loading?: boolean
+  readonly allowSelectionWhileLoading?: boolean
   readonly error?: string
   readonly onRetry?: () => void
+  readonly enabledFirst?: boolean
 }
 
 export function ChainSelector({
@@ -36,8 +40,10 @@ export function ChainSelector({
   title = 'Select Network',
   label,
   loading = false,
+  allowSelectionWhileLoading = false,
   error,
-  onRetry
+  onRetry,
+  enabledFirst = false
 }: ChainSelectorProps) {
   const [search, setSearch] = useState('')
   const [pendingId, setPendingId] = useState<string | null>(null)
@@ -48,10 +54,18 @@ export function ChainSelector({
       setSelectionError('')
     }
   }, [open])
-  const filtered = options.filter(option =>
-    option.name.toLowerCase().includes(search.trim().toLowerCase())
+  const filtered = sortTokenSelectorNetworks(
+    options.filter(option => option.name.toLowerCase().includes(search.trim().toLowerCase())),
+    option => option
   )
-  const busy = loading || pendingId !== null
+  filtered.sort((left, right) => {
+    const priority = (left.priority ?? 0) - (right.priority ?? 0)
+    return (
+      priority ||
+      (enabledFirst ? Number(Boolean(left.disabled)) - Number(Boolean(right.disabled)) : 0)
+    )
+  })
+  const busy = (loading && !allowSelectionWhileLoading) || pendingId !== null
   const select = async (id: string) => {
     if (busy) return
     setPendingId(id)
@@ -59,8 +73,8 @@ export function ChainSelector({
     try {
       await onSelect(id)
       onOpenChange(false)
-    } catch {
-      setSelectionError('Unable to switch network. Try again.')
+    } catch (cause) {
+      setSelectionError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setPendingId(null)
     }

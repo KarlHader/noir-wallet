@@ -38,6 +38,7 @@ export function AccountAvatar({ walletId, ...props }: AccountAvatarProps) {
     <img
       {...props}
       src={src}
+      crossOrigin="anonymous"
       alt=""
       aria-hidden="true"
       referrerPolicy="no-referrer"

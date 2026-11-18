@@ -4,6 +4,7 @@ import { mapZcashV1TransactionToActivityItem } from '../../../../src/infrastruct
 import {
   getActivityProgressSteps,
   getActivitySwapPresentation,
+  getActivityAccountRouteLabel,
   getActivityRouteTitle,
   getActivityDetailTitle
 } from '../../../../src/popup/components/transaction/multichain-activity-presentation.ts'
@@ -62,6 +63,47 @@ test('pending ZEC swap Activity projects the quote-time final recipient and dest
   assert.equal(
     getActivityProgressSteps(item, id => chainMetadata.get(id)?.displayName ?? id).length,
     3
+  )
+})
+
+test('native ZEC Confidential settlement projects an internal destination without a public recipient', () => {
+  const confidential = {
+    ...transaction,
+    fromType: 'transparent',
+    quoteBinding: {
+      ...transaction.quoteBinding,
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      fundingSource: 'transparent'
+    },
+    chainHashes: [{ hash: 'cd'.repeat(32), chain: 'Zcash' }]
+  }
+  const item = mapZcashV1TransactionToActivityItem(confidential, scope)
+  const destination = item.segments.find(segment => segment.role === 'destination')
+  assert.equal(destination.target.kind, 'protocol')
+  assert.equal(destination.target.provider, 'NEAR Confidential')
+  assert.equal(item.snapshot.recipient, undefined)
+
+  const presentation = getActivitySwapPresentation(item, new Map(), new Map())
+  assert.equal(presentation.destinationNetwork, 'NEAR Confidential')
+  assert.equal(presentation.destinationAccountMode, 'Confidential')
+  assert.equal(presentation.sourceAccountMode, 'Public')
+  assert.equal(presentation.sourceFundingSource, 'transparent')
+  assert.equal(getActivityAccountRouteLabel(presentation), 'Transparent → NEAR Confidential')
+  assert.equal(presentation.destinationChainIconAlias, 'near')
+  assert.equal(presentation.recipientAddress, undefined)
+  const shieldedItem = mapZcashV1TransactionToActivityItem(
+    {
+      ...confidential,
+      fromType: 'shielded',
+      quoteBinding: { ...confidential.quoteBinding, fundingSource: 'shielded' }
+    },
+    scope
+  )
+  const shieldedPresentation = getActivitySwapPresentation(shieldedItem, new Map(), new Map())
+  assert.equal(shieldedPresentation.sourceFundingSource, 'shielded')
+  assert.equal(
+    getActivityAccountRouteLabel(shieldedPresentation),
+    'Zcash Shield → NEAR Confidential'
   )
 })
 

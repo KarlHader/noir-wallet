@@ -38,7 +38,6 @@ import { MIN_KEYSTONE_ZCASH_FIRMWARE_VERSION } from '@/lib/zcash-hardware-compat
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { accountNetworksClient } from '../../services/account-networks-client'
 import { keystoneHardwareProvisioningClient } from '../../services/hardware-provisioning-client'
-import { BetaInviteHardwareDoneButton } from '../../components/onboarding/BetaInviteBinding'
 import {
   buildKeystoneNetworkBundles,
   filterKeystoneMultiAccountsPayload,
@@ -522,7 +521,9 @@ export function KeystoneConnectPage() {
             </p>
           </div>
           <div className="page-footer">
-            <BetaInviteHardwareDoneButton />
+            <Button className="h-[45px] w-full" onClick={() => window.close()}>
+              Done
+            </Button>
           </div>
         </>
       )}

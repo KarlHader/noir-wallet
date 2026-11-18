@@ -2,6 +2,7 @@ import type {
   SwapApprovalContinuation,
   SwapApprovalContinuationInput
 } from '@/background/swap-approval-continuation'
+import type { RheaSwapQuoteView } from '@/core/services/rhea-swap'
 
 async function request<T>(type: string, fields: Record<string, unknown>): Promise<T> {
   const response = await chrome.runtime.sendMessage({ type, ...fields })
@@ -16,7 +17,10 @@ export const swapApprovalContinuationClient = {
   get: (transactionId: string) =>
     request<SwapApprovalContinuation | null>('GET_SWAP_APPROVAL_CONTINUATION', { transactionId }),
   continue: (transactionId: string) =>
-    request<SwapApprovalContinuation>('CONTINUE_SWAP_AFTER_APPROVAL', { transactionId }),
+    request<SwapApprovalContinuation & { readonly quote: RheaSwapQuoteView | null }>(
+      'CONTINUE_SWAP_AFTER_APPROVAL',
+      { transactionId }
+    ),
   clear: (transactionId: string) =>
     request<void>('CLEAR_SWAP_APPROVAL_CONTINUATION', { transactionId })
 }

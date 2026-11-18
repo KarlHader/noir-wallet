@@ -11,10 +11,12 @@ import {
   createInitialProductChainRegistry,
   filterAssetDefinitionsForChains,
   getBundledInitialProductAssetDefinitions,
+  getZcashChainId,
   parseChainId,
   type AssetDefinitionInput
 } from '@/core/chains/registry'
 import { createConfiguredEvmRpcClient, EvmPortfolioCoordinator } from '@/infrastructure/chains/evm'
+import { resolvePreferredEvmPortfolioRpc } from '@/infrastructure/chains/evm/evm-portfolio-batch'
 import {
   createFastNearAccountTokenClient,
   createConfiguredNearRpcClient,
@@ -30,6 +32,14 @@ import {
   SingleChainPortfolioCoordinator,
   UnifiedPortfolioCoordinator
 } from '@/infrastructure/portfolio'
+import { BackgroundPortfolioService } from '@/infrastructure/portfolio/background-portfolio-service'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import {
+  DEFAULT_CHAIN_ENDPOINT_SETTINGS,
+  getChainEndpointRuntimeKey
+} from '@/core/chains/chain-endpoint-settings'
+import { parseAccountId } from '@/core/accounts/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
 import {
   IndexedDbPortfolioCacheRepository,
   IndexedDbStorageV2Repository
@@ -40,15 +50,25 @@ import { useAccountDataStore } from '@/store/account-data-store'
 import { useWalletStore } from '@/store/wallet-store'
 import { createBackgroundBitcoinPortfolioCoordinator } from './bitcoin-transfer'
 import { credentialSession } from './credential-session'
-import { isStoredAccountNetworkEnabled } from '@/lib/wallet-metadata-storage'
+import { markWalletNeedsCatchUp } from './tx-sync'
+import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
+import {
+  isStoredAccountNetworkEnabled,
+  withUndeletedWalletAccountMetadata
+} from '@/lib/wallet-metadata-storage'
 
 export function createBackgroundPortfolioCoordinator(
   evmNetworks: readonly EvmNetworkConfig[],
   customEvmNetworks: readonly EvmNetworkConfig[] = [],
   userEvmAssets: readonly AssetDefinitionInput[] = [],
   protocolAssets: readonly AssetDefinitionInput[] = [],
-  endpointSettings?: ChainEndpointSettings
-): UnifiedPortfolioCoordinator {
+  endpointSettings?: ChainEndpointSettings,
+  enrich: (
+    model: PortfolioReadModel,
+    refresh: false | 'if-stale' | true
+  ) => Promise<PortfolioReadModel> = async model => model
+): BackgroundPortfolioService {
+  let runtimeActive = true
   const storageRepository = new IndexedDbStorageV2Repository()
   const cacheRepository = new IndexedDbPortfolioCacheRepository()
   const chains = createBuildAddressGatedChainRegistry(
@@ -85,12 +105,15 @@ export function createBackgroundPortfolioCoordinator(
       Object.freeze({
         chainId,
         portfolio: new EvmPortfolioCoordinator({
+          canCommit: () => runtimeActive,
           storageRepository,
           cacheRepository,
           chainId,
           chains,
           assets,
           rpc: createConfiguredEvmRpcClient(DEFAULT_NETWORK, evmNetwork),
+          resolvePreferredBalanceRpc: () =>
+            resolvePreferredEvmPortfolioRpc(DEFAULT_NETWORK, chainId),
           resolvePrivateExecutionAddress: async context => {
             if (!credentialSession.hasUnlockSession()) return null
             const binding = parseEvmAccountBinding(context.chainAccount, chainId)
@@ -115,6 +138,7 @@ export function createBackgroundPortfolioCoordinator(
   })
   const solanaPortfolio = chains.get(parseChainId(solanaNetwork.chainId).id)
     ? new SingleChainPortfolioCoordinator({
+        canCommit: () => runtimeActive,
         storageRepository,
         cacheRepository,
         chains,
@@ -133,6 +157,7 @@ export function createBackgroundPortfolioCoordinator(
   const nearTokenInventory = createFastNearAccountTokenClient({ chainId: nearNetwork.chainId })
   const nearPortfolio = chains.get(parseChainId(nearNetwork.chainId).id)
     ? new SingleChainPortfolioCoordinator({
+        canCommit: () => runtimeActive,
         storageRepository,
         cacheRepository,
         chains,
@@ -145,7 +170,7 @@ export function createBackgroundPortfolioCoordinator(
       })
     : undefined
 
-  return new UnifiedPortfolioCoordinator({
+  const coordinator = new UnifiedPortfolioCoordinator({
     storageRepository,
     chains,
     assets,
@@ -195,6 +220,110 @@ export function createBackgroundPortfolioCoordinator(
         return { balance, status: 'loading', updatedAt }
       }
       return { balance, status: 'ready', updatedAt }
+    }
+  })
+  return new BackgroundPortfolioService({
+    coordinator,
+    enrich,
+    readScope: async () => {
+      if (!runtimeActive) return null
+      const pointer = await storageRepository.getActivePointer()
+      if (!pointer) return null
+      const snapshot = await storageRepository.getSnapshot(pointer.generationId)
+      const active = snapshot?.manifest.activeAccount
+      const wallet = useWalletStore.getState()
+      if (
+        !runtimeActive ||
+        !active ||
+        snapshot?.manifest.status !== 'verified' ||
+        snapshot.manifest.sourceFingerprint !== pointer.sourceFingerprint ||
+        wallet.currentNetwork !== DEFAULT_NETWORK ||
+        ((wallet.currentWalletId !== null || wallet.currentAccountId !== null) &&
+          (active.keyDomainId !== wallet.currentWalletId ||
+            active.accountId !== wallet.currentAccountId))
+      )
+        return null
+      return {
+        network: DEFAULT_NETWORK,
+        generationId: pointer.generationId,
+        keyDomainId: active.keyDomainId,
+        accountId: active.accountId,
+        runtimeKey: getChainEndpointRuntimeKey(endpointSettings ?? DEFAULT_CHAIN_ENDPOINT_SETTINGS)
+      }
+    },
+    markStale: async (scope, chainIds, domain = 'chain') => {
+      if (!runtimeActive || scope.network !== DEFAULT_NETWORK) return
+      const zcashChainId = getZcashChainId(scope.network)
+      const needsZcashCatchUp = domain === 'chain' && chainIds.includes(zcashChainId)
+      const persistedChainIds =
+        domain === 'chain' ? chainIds.filter(id => id !== zcashChainId) : chainIds
+      await withUndeletedWalletAccountMetadata(
+        scope.keyDomainId,
+        scope.accountId,
+        scope.network,
+        async () => {
+          const pointer = await storageRepository.getActivePointer()
+          if (!pointer || !runtimeActive) return
+          const snapshot = await storageRepository.getSnapshot(pointer.generationId)
+          if (
+            !snapshot?.chainAccounts.some(
+              account =>
+                account.scope.keyDomainId === scope.keyDomainId &&
+                account.scope.accountId === scope.accountId
+            )
+          )
+            return
+          const persistedScope = {
+            network: scope.network,
+            generationId: pointer.generationId,
+            keyDomainId: parseKeyDomainId(scope.keyDomainId),
+            accountId: parseAccountId(scope.accountId)
+          }
+          if (needsZcashCatchUp) {
+            await markWalletNeedsCatchUp(scope.keyDomainId, scope.accountId)
+            backgroundZcashWalletRuntime.requestSync()
+          }
+          await cacheRepository.markInvalidated(persistedScope, persistedChainIds, domain)
+          if (domain === 'chain') {
+            await cacheRepository.markStaleByAccountScope(
+              { keyDomainId: persistedScope.keyDomainId, accountId: persistedScope.accountId },
+              persistedChainIds,
+              Date.now(),
+              pointer.generationId
+            )
+          }
+        }
+      )
+    },
+    readInvalidations: scope =>
+      cacheRepository.listInvalidated({
+        network: scope.network,
+        generationId: scope.generationId,
+        keyDomainId: parseKeyDomainId(scope.keyDomainId),
+        accountId: parseAccountId(scope.accountId)
+      }),
+    acknowledgeInvalidations: async (scope, markers) => {
+      await cacheRepository.acknowledgeInvalidated(
+        {
+          network: scope.network,
+          generationId: scope.generationId,
+          keyDomainId: parseKeyDomainId(scope.keyDomainId),
+          accountId: parseAccountId(scope.accountId)
+        },
+        markers
+      )
+    },
+    onUpdated: model => {
+      void chrome.runtime
+        .sendMessage({
+          type: 'PORTFOLIO_UPDATED',
+          walletId: model.scope.keyDomainId,
+          accountId: model.scope.accountId
+        })
+        .catch(() => {})
+    },
+    onDispose: () => {
+      runtimeActive = false
     }
   })
 }

@@ -166,6 +166,9 @@ function crossChainSegments(
 ): readonly ActivitySegment[] {
   const failureCode = crossChainFailure(transaction)
   const outboundFromZcash = transaction.type === 'swap' || transaction.type === 'supply'
+  const confidentialDestination =
+    transaction.type === 'swap' &&
+    transaction.quoteBinding?.recipientType === 'CONFIDENTIAL_INTENTS'
   const originChain =
     transaction.chainHashes
       ?.find(item => item.hash.toLowerCase() === transaction.txHash.toLowerCase())
@@ -224,10 +227,12 @@ function crossChainSegments(
     { readonly hash: string; readonly chain: string; readonly chainId?: ChainId }
   >()
   for (const item of transaction.chainHashes ?? []) {
+    if (confidentialDestination) continue
     if (item.hash.toLowerCase() === transaction.txHash.toLowerCase()) continue
     destinationHashes.set(item.hash.toLowerCase(), item)
   }
   if (
+    !confidentialDestination &&
     transaction.destinationTxHash &&
     transaction.destinationTxHash.toLowerCase() !== transaction.txHash.toLowerCase() &&
     !destinationHashes.has(transaction.destinationTxHash.toLowerCase())
@@ -287,12 +292,18 @@ function crossChainSegments(
         )
       : null
     const destinationChainId = boundDestinationChainId(transaction, destinationAssetId)
-    if (destinationChainId) {
+    if (destinationChainId || confidentialDestination) {
       segments.push(
         Object.freeze({
           id: `${transaction.id}:destination:0`,
           role: 'destination' as const,
-          target: Object.freeze({ kind: 'onchain' as const, chainId: destinationChainId }),
+          target: confidentialDestination
+            ? Object.freeze({
+                kind: 'protocol' as const,
+                provider: 'NEAR Confidential',
+                account: transaction.quoteBinding!.recipient!
+              })
+            : Object.freeze({ kind: 'onchain' as const, chainId: destinationChainId! }),
           status: transaction.status === 'success' ? ('final' as const) : ('created' as const)
         })
       )
@@ -336,7 +347,10 @@ export function mapZcashV1TransactionToActivityItem(
       : undefined
   const finalRecipientChainId = boundDestinationChainId(transaction, counterAssetId)
   const finalRecipient =
-    transaction.type === 'swap' && transaction.quoteBinding?.recipient && finalRecipientChainId
+    transaction.type === 'swap' &&
+    transaction.quoteBinding?.recipientType !== 'CONFIDENTIAL_INTENTS' &&
+    transaction.quoteBinding?.recipient &&
+    finalRecipientChainId
       ? Object.freeze({
           chainId: finalRecipientChainId,
           address: transaction.quoteBinding.recipient

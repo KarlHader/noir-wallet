@@ -13,6 +13,15 @@ export interface DetectedEvmTokenCandidate {
   readonly iconUrl?: string
 }
 
+export interface EvmTokenDiscoverySource {
+  readonly available: boolean
+  discover(
+    address: string,
+    chainIds: readonly string[],
+    signal?: AbortSignal
+  ): Promise<readonly DetectedEvmTokenCandidate[]>
+}
+
 export interface EvmTokenDiscoveryClientOptions {
   readonly chains: ChainRegistry
   readonly origin?: string
@@ -25,13 +34,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-export class EvmTokenDiscoveryClient {
+export class EvmTokenDiscoveryClient implements EvmTokenDiscoverySource {
   private readonly origin: string
   private readonly fetcher: typeof fetch
 
   constructor(private readonly options: EvmTokenDiscoveryClientOptions) {
     this.origin = options.origin ?? __EVM_HISTORY_API_ORIGIN__
-    this.fetcher = options.fetch ?? fetch
+    const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis)
+    this.fetcher = (input, init) => fetcher(input, init)
   }
 
   get available(): boolean {

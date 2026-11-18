@@ -101,7 +101,6 @@ function projectEnvironment(config) {
     PLAYWRIGHT_E2E: config.profile ? '1' : undefined,
     E2E_BUILD_PROFILE: config.profile,
     ENABLED_CHAIN_FEATURE_FLAGS: config.features,
-    BETA_INVITE_REQUIRED: undefined,
     EXTENSION_DEV_SERVER: undefined,
     ...config.env
   }

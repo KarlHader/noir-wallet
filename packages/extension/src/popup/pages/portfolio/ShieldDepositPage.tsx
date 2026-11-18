@@ -653,15 +653,12 @@ function ShieldDepositContent() {
           }
           qrValue={near ? (canPay ? viewedRecord.depositAddress : undefined) : zcashAddress}
           beforeQr={
-            near && canPay ? (
+            near && canPay && !payment?.hasDeposit ? (
               <p className="text-center text-base font-medium">
                 {viewedRecord.amountMode === 'minimum' ? 'Send at least' : 'Send exactly'}{' '}
                 {(viewedRecord.amountMode === 'minimum'
                   ? formatMinimumDepositPaymentAmount
-                  : formatDepositAmount)(
-                  payment?.paymentAmountRaw ?? viewedRecord.amountRaw,
-                  viewedRecord.sourceDecimals
-                )}{' '}
+                  : formatDepositAmount)(viewedRecord.amountRaw, viewedRecord.sourceDecimals)}{' '}
                 {viewedRecord.sourceSymbol}
               </p>
             ) : undefined

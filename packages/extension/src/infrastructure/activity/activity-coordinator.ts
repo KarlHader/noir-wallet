@@ -45,6 +45,7 @@ export interface ActivityReadOptions {
   readonly accountMode?: 'main' | 'private' | 'all'
   readonly chainIds?: readonly string[]
   readonly historyPageCount?: number
+  readonly protocolProvider?: 'Confidential Intents'
 }
 
 export class ActivityCoordinator {
@@ -54,10 +55,26 @@ export class ActivityCoordinator {
     const scope = await this.loadActiveScope()
     if (!scope) return null
     const accountMode = options.accountMode ?? 'main'
+    const confidentialPageCount = options.historyPageCount ?? 1
+    if (
+      options.protocolProvider &&
+      (!Number.isSafeInteger(confidentialPageCount) ||
+        confidentialPageCount < 1 ||
+        confidentialPageCount > 10)
+    ) {
+      throw new Error('Confidential Activity page count is invalid')
+    }
+    const confidentialLimit = confidentialPageCount * 200
     const [storedLocalGraphs, zcashTransactions, supplementalItems] = await Promise.all([
-      this.options.transactionRepository.list({ scope, limit: 200 }),
-      this.options.loadZcashTransactions(scope),
-      this.loadSupplementalItems(scope, accountMode, options)
+      this.options.transactionRepository.list({
+        scope,
+        limit: options.protocolProvider ? 10_000 : 200,
+        ...(options.protocolProvider ? { protocolProvider: options.protocolProvider } : {})
+      }),
+      options.protocolProvider ? Promise.resolve([]) : this.options.loadZcashTransactions(scope),
+      options.protocolProvider
+        ? Promise.resolve([])
+        : this.loadSupplementalItems(scope, accountMode, options)
     ])
     const localGraphs = this.options.filterLocalGraphs
       ? await this.options.filterLocalGraphs(scope, storedLocalGraphs)
@@ -69,12 +86,14 @@ export class ActivityCoordinator {
       const hash = transaction.txHash.toLowerCase()
       destinationReceipts.set(hash, [...(destinationReceipts.get(hash) ?? []), transaction])
     }
-    const hasMore = await this.options
-      .loadSupplementalHasMore?.(scope, accountMode, options.chainIds)
-      .catch(() => false)
+    const hasMore = options.protocolProvider
+      ? confidentialPageCount < 10 && localGraphs.length > confidentialLimit
+      : await this.options
+          .loadSupplementalHasMore?.(scope, accountMode, options.chainIds)
+          .catch(() => false)
     return buildActivityReadModel({
       scope,
-      localGraphs,
+      localGraphs: options.protocolProvider ? localGraphs.slice(0, confidentialLimit) : localGraphs,
       supplementalItems: Object.freeze([
         ...zcashTransactions.map(transaction => {
           const matchingReceipts = destinationReceipts
@@ -95,7 +114,7 @@ export class ActivityCoordinator {
         ...supplementalItems
       ]),
       privateExecutionAddresses,
-      limit: 2_000,
+      limit: options.protocolProvider ? confidentialLimit : 2_000,
       hasMore
     })
   }

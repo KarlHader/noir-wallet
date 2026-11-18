@@ -66,7 +66,7 @@ type ZcashConnectResult = {
 }
 ```
 
-The top-level addresses belong to the active primary account. Keep `accounts[i].id` when you need
+The top-level addresses belong to the account selected for this site. Keep `accounts[i].id` when you need
 an account-specific balance; do not construct the ID yourself.
 
 **Rejects when:** the user rejects, selects no account, or has no wallet available.
@@ -80,7 +80,7 @@ getAccounts(): Promise<ZcashConnectResult | null>
 ```
 
 Returns the same shape as `connect()` without opening the wallet. It returns `null` when the wallet
-is locked or the active account is not authorized. Official Noir applications can reconnect
+is locked or the selected account is no longer authorized. Official Noir applications can reconnect
 automatically after disconnect while the wallet is unlocked. Other disconnected sites must call
 `connect()` for approval again; a silent restore cannot reconnect them.
 
@@ -216,7 +216,7 @@ user selects the fee in the wallet.
 shieldFunds(): Promise<string>
 ```
 
-No amount is accepted. Noir Wallet calculates the active account's currently shieldable
+No amount is accepted. Noir Wallet calculates the site's selected account's currently shieldable
 transparent funds, opens approval, and returns the transaction ID after broadcast.
 
 Confirmed funds must meet the wallet's minimum shielding threshold. Pending transparent funds are
@@ -247,7 +247,7 @@ getPublicKey(options?: {
 } | null>
 ```
 
-Does not open approval. It returns `null` while the wallet is locked or when no active account is
+Does not open approval. It returns `null` while the wallet is locked or when no authorized account is
 available. `originAddress` is present for `derived` identities.
 
   </Accordion>
@@ -279,7 +279,7 @@ checkLendingMcaAccount(): Promise<{
 } | null>
 ```
 
-It returns `null` while the wallet is locked or when there is no active account.
+It returns `null` while the wallet is locked or when there is no authorized account.
 
   </Accordion>
 </Accordions>

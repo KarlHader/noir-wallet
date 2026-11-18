@@ -40,14 +40,14 @@ export function ShieldedAddressHistorySheet({
         className="max-h-[78vh] grid-rows-[auto_minmax(0,1fr)] gap-0 p-0"
       >
         <DialogHeader className="border-b border-border px-5 pb-4 pt-5">
-          <DialogTitle className="text-center">Shielded addresses</DialogTitle>
+          <DialogTitle className="text-center">Shield addresses</DialogTitle>
           <DialogDescription className="sr-only">
             Choose the default shielded receiving address
           </DialogDescription>
         </DialogHeader>
         <div
           role="region"
-          aria-label="Shielded address history"
+          aria-label="Shield address history"
           className="min-h-0 space-y-2 overflow-y-auto px-4 py-4"
         >
           {error && (

@@ -10,9 +10,6 @@ import { WalletInitializing } from './components/ui/wallet-initializing'
 import { BlockingWalletFailure } from './components/common/BlockingWalletFailure'
 import { PageHeader } from './components/common/PageHeader'
 import { useAppRouting } from './hooks/useAppRouting'
-import { BetaInviteActivationGate } from './hooks/useBetaInviteActivation'
-import { BetaInviteProtectedRoute } from './components/onboarding/BetaInviteBinding'
-import { canUseRouteBeforeBetaActivation } from './services/beta-invite-route-policy'
 import { usePersistedExtensionContextSync } from './hooks/usePersistedExtensionContextSync'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { rehydrateWalletStore, useWalletStore } from '@/store/wallet-store'
@@ -48,13 +45,13 @@ import { ExportPrivateKey } from './pages/account/ExportPrivateKey'
 
 // Transaction Pages
 import { Send } from './pages/transactions/Send'
-import { MultichainSend } from './pages/transactions/MultichainSend'
 import { Transfer } from './pages/transactions/Transfer'
 import { TransactionResultPage } from './pages/transactions/TransactionResultPage'
 import { AssetDetail } from './pages/portfolio/AssetDetail'
 import { ShieldProviderDetail } from './pages/portfolio/ShieldProviderDetail'
 import { ShieldFundsPage } from './pages/portfolio/ShieldFundsPage'
 import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
+import { ShieldZcashMovePage } from './pages/portfolio/ShieldZcashMovePage'
 import { ShieldDepositPage } from './pages/portfolio/ShieldDepositPage'
 
 // Swap Page
@@ -181,15 +178,6 @@ function ZcashCapabilityEntry({
   return children
 }
 
-function ZcashSendRoute() {
-  const location = useLocation()
-  return new URLSearchParams(location.search).get('move') === '1' ? (
-    <Send />
-  ) : (
-    <MultichainSend initialZcashProvider />
-  )
-}
-
 function VotingCapabilityEntry({ children }: { children: ReactNode }) {
   const { replace } = useNavigate()
   const { activeAccount, loading } = useActiveAccountNetworks()
@@ -227,7 +215,7 @@ function AppRoutes() {
       </Route>
 
       <Route path="/unlock" element={<UnlockPage />} />
-      <Route path="/send" element={multichainSendEnabled ? <MultichainSend /> : <Send />} />
+      <Route path="/send" element={<Send multiChainEnabled={multichainSendEnabled} />} />
       <Route path="/transfer" element={<Transfer />} />
       {multichainSendEnabled && (
         <Route
@@ -246,7 +234,7 @@ function AppRoutes() {
           path="/send/zcash"
           element={
             <ZcashCapabilityEntry fallbackPath="/send">
-              <ZcashSendRoute />
+              <Send multiChainEnabled={multichainSendEnabled} initialZcashProvider />
             </ZcashCapabilityEntry>
           }
         />
@@ -306,6 +294,7 @@ function AppRoutes() {
       <Route path="/shield-provider" element={<ShieldProviderDetail />} />
       <Route path="/shield-funds" element={<ShieldFundsPage />} />
       <Route path="/shield-withdraw" element={<ShieldWithdrawPage />} />
+      <Route path="/shield-zcash-move" element={<ShieldZcashMovePage />} />
       <Route path="/shield-deposit" element={<ShieldDepositPage />} />
       <Route path="/shield-swap" element={<Swap />} />
       <Route path="/settings" element={<Settings />} />
@@ -436,11 +425,7 @@ function AppContent() {
     </div>
   )
 
-  return canUseRouteBeforeBetaActivation(location.pathname) ? (
-    content
-  ) : (
-    <BetaInviteProtectedRoute>{content}</BetaInviteProtectedRoute>
-  )
+  return content
 }
 
 function App() {
@@ -475,9 +460,7 @@ function App() {
             </div>
           ) : (
             <>
-              <BetaInviteActivationGate>
-                <AppContent />
-              </BetaInviteActivationGate>
+              <AppContent />
               <ToastContainer />
             </>
           )}

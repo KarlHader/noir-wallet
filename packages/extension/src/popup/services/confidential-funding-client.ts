@@ -13,6 +13,7 @@ import type { SwapStatus } from '@/core/services/intents-api'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
 import type { Network } from '@/types'
+import { parseZcashAddress } from '@/core/address-book/address-book'
 
 type RuntimeMessenger = (message: Readonly<Record<string, unknown>>) => Promise<unknown>
 export type ConfidentialBalance = Readonly<{ tokenId: string; available: string; source: string }>
@@ -26,6 +27,7 @@ export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
+  readonly purpose?: 'move' | 'native-zec-swap'
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
@@ -158,15 +160,7 @@ function parsePreview(value: unknown): ConfidentialFundingPreview {
     (value.timeEstimateSeconds !== undefined &&
       (typeof value.timeEstimateSeconds !== 'number' ||
         !Number.isSafeInteger(value.timeEstimateSeconds) ||
-        value.timeEstimateSeconds <= 0)) ||
-    (value.sourceNetworkFee !== undefined &&
-      (!isRecord(value.sourceNetworkFee) ||
-        typeof value.sourceNetworkFee.raw !== 'string' ||
-        !/^\d+$/.test(value.sourceNetworkFee.raw) ||
-        typeof value.sourceNetworkFee.symbol !== 'string' ||
-        typeof value.sourceNetworkFee.decimals !== 'number' ||
-        !Number.isSafeInteger(value.sourceNetworkFee.decimals) ||
-        value.sourceNetworkFee.decimals < 0))
+        value.timeEstimateSeconds <= 0))
   ) {
     throw new Error('Confidential funding preview is invalid')
   }
@@ -177,17 +171,41 @@ function parsePreview(value: unknown): ConfidentialFundingPreview {
     ...(value.appFeeBps === undefined ? {} : { appFeeBps: value.appFeeBps }),
     ...(value.timeEstimateSeconds === undefined
       ? {}
-      : { timeEstimateSeconds: value.timeEstimateSeconds }),
-    ...(value.sourceNetworkFee === undefined
-      ? {}
-      : {
-          sourceNetworkFee: Object.freeze({
-            raw: value.sourceNetworkFee.raw as string,
-            symbol: value.sourceNetworkFee.symbol as string,
-            decimals: value.sourceNetworkFee.decimals as number
-          })
-        })
+      : { timeEstimateSeconds: value.timeEstimateSeconds })
   })
+}
+
+function parseClusterNetworkFee(value: unknown) {
+  if (value === null) return null
+  if (
+    !isRecord(value) ||
+    typeof value.raw !== 'string' ||
+    !/^\d+$/.test(value.raw) ||
+    typeof value.symbol !== 'string' ||
+    typeof value.decimals !== 'number' ||
+    !Number.isSafeInteger(value.decimals) ||
+    value.decimals < 0
+  ) {
+    throw new Error('Cluster network fee is invalid')
+  }
+  return Object.freeze({ raw: value.raw, symbol: value.symbol, decimals: value.decimals })
+}
+
+function matchesExternalRecipient(
+  recipient: unknown,
+  destination: unknown,
+  network: unknown
+): boolean {
+  if (typeof recipient !== 'string' || typeof destination !== 'string') return false
+  if (/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
+    return !/^0x0{40}$/i.test(recipient) && recipient.toLowerCase() === destination.toLowerCase()
+  }
+  if (network !== 'mainnet' && network !== 'testnet') return false
+  try {
+    return parseZcashAddress(recipient, network).address === destination
+  } catch {
+    return false
+  }
 }
 
 function parseReview(value: unknown): ConfidentialFundingReview {
@@ -204,13 +222,24 @@ function parseReview(value: unknown): ConfidentialFundingReview {
     !/^\d+$/.test(review.expectedOutputRaw) ||
     !/^\d+$/.test(review.minimumOutputRaw) ||
     !/^0x[0-9a-fA-F]{40}$/.test(review.sourceAddress) ||
-    !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress) ||
+    (review.externalRecipient === undefined &&
+      !/^0x[0-9a-fA-F]{40}$/.test(review.destinationAddress)) ||
     (review.externalRecipient !== undefined &&
       (review.operation !== 'withdraw' ||
         review.destinationDomain !== 'public' ||
         typeof review.externalRecipient !== 'string' ||
         /^0x0{40}$/i.test(review.externalRecipient) ||
-        review.externalRecipient.toLowerCase() !== review.destinationAddress.toLowerCase())) ||
+        !matchesExternalRecipient(
+          review.externalRecipient,
+          review.destinationAddress,
+          review.network
+        ))) ||
+    (review.purpose !== undefined &&
+      (!['move', 'native-zec-swap'].includes(review.purpose) ||
+        review.operation !== 'withdraw' ||
+        review.sourceDomain !== 'shield' ||
+        review.destinationDomain !== 'public' ||
+        review.externalRecipient === undefined)) ||
     !Number.isSafeInteger(review.withdrawCount) ||
     (review.operation !== undefined &&
       !['deposit', 'withdraw', 'cluster', 'swap'].includes(review.operation)) ||
@@ -269,7 +298,17 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.destinationDomain !== 'public' ||
         typeof plan.externalRecipient !== 'string' ||
         /^0x0{40}$/i.test(plan.externalRecipient) ||
-        plan.externalRecipient.toLowerCase() !== plan.destination.address.toLowerCase())) ||
+        !matchesExternalRecipient(
+          plan.externalRecipient,
+          plan.destination.address,
+          plan.network
+        ))) ||
+    (plan.purpose !== undefined &&
+      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
+        plan.operation !== 'withdraw' ||
+        plan.sourceDomain !== 'shield' ||
+        plan.destinationDomain !== 'public' ||
+        plan.externalRecipient === undefined)) ||
     (plan.batchSubmissionAttemptedAt !== undefined &&
       (!Number.isSafeInteger(plan.batchSubmissionAttemptedAt) ||
         plan.batchSubmissionAttemptedAt <= 0)) ||
@@ -283,6 +322,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.destinationDomain !== 'shield' ||
         plan.requiresDeposit ||
         !plan.swapQuote)) ||
+    (plan.purpose === 'native-zec-swap' &&
+      (!plan.swapQuote || plan.swapQuote.quoteRequest.dry !== false)) ||
     (plan.operation !== undefined &&
       (!['public', 'private', 'shield'].includes(plan.sourceDomain ?? '') ||
         !['public', 'private', 'shield'].includes(plan.destinationDomain ?? ''))) ||
@@ -355,6 +396,10 @@ export function createConfidentialFundingClient(
       request: PrepareConfidentialFundingRequest
     ): Promise<ConfidentialFundingPreview> =>
       parsePreview(unwrap(await send({ type: 'PREVIEW_CONFIDENTIAL_FUNDING', request }))),
+    previewClusterNetworkFee: async (request: PrepareConfidentialFundingRequest) =>
+      parseClusterNetworkFee(
+        unwrap(await send({ type: 'PREVIEW_CONFIDENTIAL_FUNDING', request, clusterFeeOnly: true }))
+      ),
     prepare: async (
       request: PrepareConfidentialFundingRequest
     ): Promise<ConfidentialFundingReview> =>
@@ -378,9 +423,12 @@ export function createConfidentialFundingClient(
     },
     refreshBalances: async (
       scope: Readonly<{ network: Network; keyDomainId: string; accountId: string }>,
-      authorize: boolean
+      authorize: boolean,
+      notifyPortfolio = true
     ): Promise<readonly ConfidentialBalance[]> => {
-      const result = unwrap(await send({ type: 'REFRESH_CONFIDENTIAL_BALANCES', scope, authorize }))
+      const result = unwrap(
+        await send({ type: 'REFRESH_CONFIDENTIAL_BALANCES', scope, authorize, notifyPortfolio })
+      )
       if (
         !Array.isArray(result) ||
         result.some(

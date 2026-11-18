@@ -26,7 +26,7 @@ import type { FundingSource } from '@/types/wallet'
 export interface SwapReviewAccount {
   readonly name?: string
   readonly address?: string
-  readonly badge?: 'Public' | 'Private' | 'Shield' | 'Transparent' | 'Shielded' | 'Confidential'
+  readonly badge?: 'Public' | 'Private' | 'Shield' | 'Transparent' | 'Confidential'
 }
 
 interface SwapReviewViewProps {
@@ -35,12 +35,14 @@ interface SwapReviewViewProps {
   amountIn: string
   amountOut: string
   recipient: string
+  recipientLabel?: string
   fromFiat: string
   toFiat: string
   /** Output token units received for one input token unit. */
   rate?: string
-  previousRate?: string
-  priceAcceptanceRequired?: boolean
+  quoteAcceptanceLabel?: string
+  quoteChanges?: ReactNode
+  confirmDisabled?: boolean
   onAcceptNewPrice?: () => void
   onRefreshQuote?: () => void
   quoteRefreshing?: boolean
@@ -80,7 +82,7 @@ interface SwapReviewViewProps {
       readonly address: string
     } | null
   } | null
-  destinationDetails?: { readonly network: string }
+  destinationDetails?: { readonly network: string; readonly chainIcon?: string }
   approvalDetails?: {
     readonly spender: string
     readonly amount: string
@@ -100,14 +102,16 @@ export function SwapReviewView({
   amountIn,
   amountOut,
   recipient,
+  recipientLabel = 'Recipient',
   minAmountOut,
   priceImpact,
   arrivalEstimate,
   fromFiat,
   toFiat,
   rate,
-  previousRate,
-  priceAcceptanceRequired,
+  quoteAcceptanceLabel,
+  quoteChanges,
+  confirmDisabled,
   onAcceptNewPrice,
   onRefreshQuote,
   quoteRefreshing,
@@ -164,6 +168,7 @@ export function SwapReviewView({
         <div className="space-y-3 px-1">
           <QuoteAssetRow
             direction="pay"
+            loading={quoteRefreshing}
             token={tokenIn}
             amount={amountIn}
             fiatValue={fromFiat}
@@ -201,7 +206,7 @@ export function SwapReviewView({
                   <Icon icon="lucide:arrow-right" width={12} className="shrink-0 text-muted" />
                   <span className="inline-flex items-center gap-1.5">
                     <ChainIcon
-                      chain={tokenOut.blockchain}
+                      chain={destinationDetails?.chainIcon ?? tokenOut.blockchain}
                       alt=""
                       showTooltip={false}
                       className="size-4 shrink-0 rounded-[4px]"
@@ -216,14 +221,10 @@ export function SwapReviewView({
             <DetailItem label="Send method">{sendMethod}</DetailItem>
           ) : (
             <DetailItem label="Rate">
-              {rate ? (
+              {quoteRefreshing ? (
+                <span className="inline-block h-4 w-32 animate-pulse rounded bg-card" />
+              ) : rate ? (
                 <span className="inline-flex max-w-full flex-col items-end gap-0.5 tabular-nums">
-                  {priceAcceptanceRequired && previousRate && (
-                    <span className="text-xs text-muted line-through">
-                      1 {formatSymbol(tokenIn.symbol)} = {formatTokenQuantity(previousRate)}{' '}
-                      {formatSymbol(tokenOut.symbol)}
-                    </span>
-                  )}
                   <span>
                     1 {formatSymbol(tokenIn.symbol)} = {formatTokenQuantity(rate)}{' '}
                     {formatSymbol(tokenOut.symbol)}
@@ -241,7 +242,6 @@ export function SwapReviewView({
               <AmountDisplay
                 value={formatAmount(minAmountOut, tokenOut.decimals)}
                 symbol={formatSymbol(tokenOut.symbol)}
-                showDetails={false}
                 className="font-sans tabular-nums"
               />
             )}
@@ -285,9 +285,13 @@ export function SwapReviewView({
                 </DetailItem>
               )}
               <DetailItem label="Network fee">
-                {sourceNetworkFee && sourceFeeTier && sourceFeeFamily && onSourceFeeTierChange ? (
+                {quoteRefreshing ? (
+                  <span className="inline-block h-4 w-24 animate-pulse rounded bg-card" />
+                ) : sourceNetworkFee &&
+                  sourceFeeTier &&
+                  sourceFeeFamily &&
+                  onSourceFeeTierChange ? (
                   <NetworkFeeTierPicker
-                    showAmountDetails={false}
                     chainFamily={sourceFeeFamily}
                     tier={sourceFeeTier}
                     amount={sourceNetworkFee.amount}
@@ -300,7 +304,6 @@ export function SwapReviewView({
                     value={sourceNetworkFee.amount}
                     symbol={sourceNetworkFee.symbol}
                     profile="fee"
-                    showDetails={false}
                     className="font-sans tabular-nums"
                   />
                 ) : feeTier && onFeeTierChange && feeByTier ? (
@@ -317,7 +320,7 @@ export function SwapReviewView({
                   '—'
                 )}
               </DetailItem>
-              <DetailItem label="Recipient">
+              <DetailItem label={recipientLabel}>
                 <span className="block break-all text-xs" title={recipient}>
                   {recipient}
                 </span>
@@ -398,7 +401,6 @@ export function SwapReviewView({
                       <AmountDisplay
                         value={approvalDetails.amount}
                         symbol={formatSymbol(approvalDetails.symbol)}
-                        showDetails={false}
                       />
                     </div>
                     <div className="flex justify-between gap-3">
@@ -415,6 +417,7 @@ export function SwapReviewView({
           )}
         </div>
 
+        {quoteChanges}
         {preparationError && (
           <InlineError
             message={preparationError}
@@ -455,26 +458,27 @@ export function SwapReviewView({
           <Button
             type="button"
             size="wallet"
-            onClick={priceAcceptanceRequired ? onAcceptNewPrice : onConfirm}
+            onClick={quoteAcceptanceLabel ? onAcceptNewPrice : onConfirm}
             disabled={
               isLoading ||
               insufficient ||
               feeUnavailable ||
               Boolean(preparationError) ||
-              (priceAcceptanceRequired && !onAcceptNewPrice)
+              confirmDisabled ||
+              (Boolean(quoteAcceptanceLabel) && !onAcceptNewPrice)
             }
             isLoading={isLoading}
             aria-label={
-              priceAcceptanceRequired
-                ? 'Accept new price'
+              quoteAcceptanceLabel
+                ? quoteAcceptanceLabel
                 : approvalDetails
                   ? 'Confirm token approval'
                   : actionLabel
             }
-            className={`min-w-0 flex-[2] text-sm text-black ${priceAcceptanceRequired ? 'bg-warning hover:bg-warning/90' : ''}`}
+            className={`min-w-0 flex-[2] text-sm text-black ${quoteAcceptanceLabel ? 'bg-warning hover:bg-warning/90' : ''}`}
           >
-            {priceAcceptanceRequired
-              ? 'Accept new price'
+            {quoteAcceptanceLabel
+              ? quoteAcceptanceLabel
               : actionLabel === 'Confirm Swap'
                 ? 'Confirm'
                 : actionLabel}
@@ -525,7 +529,6 @@ function QuoteAssetRow({
                 value={amount}
                 symbol={formatSymbol(token.symbol)}
                 prefix={direction === 'pay' ? '-' : '+'}
-                showDetails={false}
                 className="max-w-full justify-start gap-1 font-sans tabular-nums"
               />
             </div>
@@ -542,7 +545,7 @@ function QuoteAssetRow({
                 {badge && (
                   <span
                     className={
-                      badge === 'Shield' || badge === 'Shielded'
+                      badge === 'Shield'
                         ? 'shrink-0 rounded bg-success/15 px-2 py-0.5 text-[11px] text-success'
                         : badge === 'Private' || badge === 'Confidential'
                           ? 'shrink-0 rounded bg-private/12 px-2 py-0.5 text-[11px] text-private'

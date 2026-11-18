@@ -115,7 +115,12 @@ function readBoundedString(value: unknown, label: string, limit: number): string
 
 function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
   const record = readRecord(value, 'Confidential portfolio')
-  assertExactKeys(record, ['status', 'assets'], [], 'Confidential portfolio')
+  assertExactKeys(
+    record,
+    ['status', 'assets'],
+    ['freshness', 'updatedAt'],
+    'Confidential portfolio'
+  )
   if (record.status !== 'ready' && record.status !== 'unavailable') {
     throw new Error('Invalid Confidential portfolio status')
   }
@@ -128,6 +133,17 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
   if (record.status === 'unavailable' && record.assets.length !== 0) {
     throw new Error('Unavailable Confidential portfolio cannot contain balances')
   }
+  if (record.freshness !== undefined || record.updatedAt !== undefined) {
+    if (
+      (record.status === 'ready' && record.freshness !== 'fresh' && record.freshness !== 'stale') ||
+      (record.status === 'unavailable' && record.freshness !== 'unavailable') ||
+      record.updatedAt === undefined ||
+      (record.status === 'unavailable' && record.updatedAt !== 0)
+    ) {
+      throw new Error('Invalid Confidential portfolio freshness')
+    }
+    readTimestamp(record.updatedAt, 'Confidential portfolio timestamp')
+  }
   const seen = new Set<string>()
   const entries = record.assets.map(value => {
     const item = readRecord(value, 'Confidential portfolio asset')
@@ -135,6 +151,7 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       item,
       ['tokenId', 'protocolAssetId', 'availableRaw'],
       [
+        'spendableRaw',
         'assetId',
         'chainId',
         'blockchain',
@@ -155,6 +172,13 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       512
     )
     const availableRaw = readRawAmount(item.availableRaw, 'Confidential available balance')
+    const spendableRaw =
+      item.spendableRaw === undefined
+        ? undefined
+        : readRawAmount(item.spendableRaw, 'Confidential spendable balance')
+    if (spendableRaw !== undefined && BigInt(spendableRaw) > BigInt(availableRaw)) {
+      throw new Error('Confidential spendable balance exceeds available balance')
+    }
     if (availableRaw === '0' || seen.has(protocolAssetId)) {
       throw new Error('Duplicate or empty Confidential portfolio asset')
     }
@@ -203,6 +227,7 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       tokenId,
       protocolAssetId,
       availableRaw,
+      ...(spendableRaw === undefined ? {} : { spendableRaw }),
       ...(assetId === undefined ? {} : { assetId }),
       ...(chainId === undefined ? {} : { chainId }),
       ...(item.blockchain === undefined
@@ -223,7 +248,16 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       ...(priceUpdatedAt === undefined ? {} : { priceUpdatedAt })
     })
   })
-  return Object.freeze({ status: record.status, assets: Object.freeze(entries) })
+  return Object.freeze({
+    status: record.status,
+    assets: Object.freeze(entries),
+    ...(record.freshness === undefined
+      ? {}
+      : {
+          freshness: record.freshness as 'fresh' | 'stale' | 'unavailable',
+          updatedAt: record.updatedAt as number
+        })
+  })
 }
 
 function parseBalanceView(value: unknown): PortfolioBalanceView {

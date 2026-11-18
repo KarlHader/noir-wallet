@@ -3,6 +3,8 @@ import { expect } from '@playwright/test'
 import {
   buildInitialSwapCatalogPlan,
   findSwapTokenInCatalog,
+  findSwapTokenForDisplaySeed,
+  getSwapCatalogDisplaySeeds,
   loadTokenCatalogByChain,
   mergeTokenCatalogs,
   pickProvisionalSwapSource
@@ -93,7 +95,7 @@ test('publishes a healthy chain before slow chains finish and stops queued work 
   let cancelled = false
   const calls = []
   const published = []
-  const token = { rheaChainId: '1', rheaAddress: 'eth', symbol: 'ETH' }
+  const token = { tokenListChainId: 1, rheaChainId: '1', rheaAddress: 'eth', symbol: 'ETH' }
   const loading = loadTokenCatalogByChain(
     'from',
     [1, 10, 56, 137],
@@ -119,6 +121,103 @@ test('publishes a healthy chain before slow chains finish and stops queued work 
   expect(calls).toEqual([1, 10])
   release()
   expect(await loading).toEqual([token])
+})
+
+test('publishes cached chains immediately and requests only missing chains', async () => {
+  let release
+  const pending = new Promise(resolve => {
+    release = resolve
+  })
+  const cached = {
+    ...ethereumChain,
+    assetId: 'cached',
+    tokenListChainId: 1,
+    rheaChainId: '1',
+    rheaAddress: 'eth'
+  }
+  const fresh = {
+    ...polygonChain,
+    assetId: 'fresh',
+    tokenListChainId: 137,
+    rheaChainId: '137',
+    rheaAddress: 'pol'
+  }
+  const calls = []
+  const updates = []
+  const loading = loadTokenCatalogByChain(
+    'from',
+    [1, 137, 1],
+    false,
+    tokens => updates.push(tokens),
+    () => false,
+    {
+      readCachedTokens: input =>
+        input.tokenListChainIds[0] === 1 ? { tokens: [cached], failedChainIds: [] } : null,
+      listTokens: async input => {
+        calls.push(input.tokenListChainIds[0])
+        await pending
+        return { tokens: [fresh], failedChainIds: [] }
+      }
+    }
+  )
+  expect(updates).toEqual([[cached]])
+  expect(calls).toEqual([137])
+  release()
+  expect(await loading).toEqual([cached, fresh])
+  expect(updates).toEqual([[cached], [fresh]])
+})
+
+test('strict single-chain search preserves the provider failure', async () => {
+  const failure = new Error('Provider unavailable')
+  const calls = []
+  await expect(
+    loadTokenCatalogByChain(
+      'cross-chain-to',
+      [137],
+      false,
+      tokens => calls.push(tokens),
+      () => false,
+      {
+        listTokens: async () => {
+          throw failure
+        }
+      },
+      { strict: true }
+    )
+  ).rejects.toBe(failure)
+  expect(calls).toEqual([])
+  await expect(
+    loadTokenCatalogByChain(
+      'cross-chain-to',
+      [137],
+      false,
+      tokens => calls.push(tokens),
+      () => false,
+      {
+        listTokens: async () => ({
+          tokens: [{ tokenListChainId: 1, assetId: 'wrong-chain' }],
+          failedChainIds: []
+        })
+      },
+      { strict: true }
+    )
+  ).rejects.toThrow(/chain 137/)
+  expect(calls).toEqual([])
+})
+
+test('strict single-chain search accepts an authoritative empty catalog', async () => {
+  const updates = []
+  const result = await loadTokenCatalogByChain(
+    'cross-chain-to',
+    [137],
+    false,
+    tokens => updates.push(tokens),
+    () => false,
+    { listTokens: async () => ({ tokens: [], failedChainIds: [] }) },
+    { strict: true }
+  )
+  expect(result).toEqual([])
+  expect(updates).toEqual([])
 })
 
 test('excludes deprecated routes from cached and live Swap catalogs', async () => {
@@ -171,4 +270,40 @@ test('distinguishes a selected token from an asset on another chain', () => {
   }
   expect(findSwapTokenInCatalog([polygon], usdc)).toBeUndefined()
   expect(findSwapTokenInCatalog([polygon], polygon)).toBe(polygon)
+  expect(
+    findSwapTokenInCatalog([usdc], { ...usdc, rheaAddress: 'different-contract' })
+  ).toBeUndefined()
+})
+
+test('display seeds cover configured native and USDC assets and resolve only to exact catalog identities', () => {
+  const seeds = getSwapCatalogDisplaySeeds([1, 56, 137, 8453, 501, 900002, 900010])
+  expect(
+    seeds
+      .filter(token => token.isNative)
+      .map(token => token.tokenListChainId)
+      .sort((a, b) => a - b)
+  ).toEqual([1, 56, 137, 501, 8453, 900002, 900010])
+  const baseUsdc = seeds.find(token => token.tokenListChainId === 8453 && token.symbol === 'USDC')
+  expect(baseUsdc).toMatchObject({
+    assetId: 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+    contractAddress: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    isDisplaySeed: true
+  })
+  const catalogToken = { ...baseUsdc, isDisplaySeed: undefined, sources: ['nearintents'] }
+  expect(findSwapTokenForDisplaySeed([catalogToken], baseUsdc)).toBe(catalogToken)
+  expect(mergeTokenCatalogs([baseUsdc], [catalogToken])).toEqual([catalogToken])
+  const nativeSeed = seeds.find(token => token.tokenListChainId === 56 && token.isNative)
+  const resolvedNative = {
+    ...nativeSeed,
+    rheaAddress: '0x0000000000000000000000000000000000000000',
+    isDisplaySeed: undefined,
+    sources: []
+  }
+  expect(mergeTokenCatalogs([nativeSeed], [resolvedNative])).toEqual([resolvedNative])
+  expect(
+    findSwapTokenForDisplaySeed(
+      [{ ...catalogToken, contractAddress: '0x1111111111111111111111111111111111111111' }],
+      baseUsdc
+    )
+  ).toBeUndefined()
 })

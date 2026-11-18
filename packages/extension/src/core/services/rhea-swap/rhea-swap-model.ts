@@ -21,7 +21,7 @@ import { createInitialProductChainRegistry, getZcashChainId } from '@/core/chain
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
 const MAXIMUM_STRING_LENGTH = 512
-export const RHEA_SWAP_TOKEN_CATALOG_TTL_MS = 10 * 60 * 1_000
+export const RHEA_SWAP_TOKEN_CATALOG_TTL_MS = 60 * 60 * 1_000
 
 export interface PrivateSwapAccountRoute {
   readonly walletId: string
@@ -50,7 +50,9 @@ export function assertPrivateQuoteRoute(
   >,
   account: PrivateSwapAccountRoute | null,
   purpose: PrivateQuotePurpose,
-  scope?: Pick<PrivateSwapAccountRoute, 'walletId' | 'accountId'>
+  scope?: Pick<PrivateSwapAccountRoute, 'walletId' | 'accountId'> & {
+    readonly zcashFundingSource?: 'transparent' | 'shielded'
+  }
 ): void {
   if (
     !account ||
@@ -58,10 +60,21 @@ export function assertPrivateQuoteRoute(
     (purpose !== 'wallet-swap' &&
       purpose !== 'public-cross-chain-send' &&
       ((!/^[1-9]\d*$/.test(request.fromChain) &&
-        !(purpose === 'public-private-send' && request.fromChain === 'zcash')) ||
-        request.confidentiality !== 'basic'))
+        !(purpose === 'public-private-send' && request.fromChain === 'zcash') &&
+        !(purpose === 'private-swap' && request.fromChain === 'zcash')) ||
+        (purpose === 'private-swap'
+          ? request.confidentiality !== undefined
+          : request.confidentiality !== 'basic')))
   ) {
     throw new Error('Private quote account changed. Get a new quote.')
+  }
+  if (
+    request.fromChain === 'zcash' &&
+    (purpose === 'wallet-swap' || purpose === 'private-swap') &&
+    (scope?.zcashFundingSource !== undefined || request.sender.startsWith('u1')) &&
+    scope?.zcashFundingSource !== (request.sender.startsWith('u1') ? 'shielded' : 'transparent')
+  ) {
+    throw new Error('Swap funding source does not match the quoted Zcash account.')
   }
   const source = account.networks.find(network => network.chainId === `eip155:${request.fromChain}`)
   if (purpose === 'public-private-send') {
@@ -151,11 +164,11 @@ export function assertPrivateQuoteRoute(
     )
     if (
       !sourceIsPublic ||
-      (request.fromChain === 'zcash' && !/^t[13]/.test(request.sender)) ||
+      (request.fromChain === 'zcash' && !/^(?:t[13]|u1)/.test(request.sender)) ||
       !destinationNetwork ||
       !recipient ||
       !publicDestination ||
-      (request.toChain === 'zcash' && !/^t[13]/.test(recipient)) ||
+      (request.toChain === 'zcash' && !/^(?:t[13]|u1)/.test(recipient)) ||
       (/^[1-9]\d*$/.test(request.fromChain) &&
         /^[1-9]\d*$/.test(request.toChain) &&
         request.confidentiality !== undefined)
@@ -164,9 +177,18 @@ export function assertPrivateQuoteRoute(
     }
     return
   }
+  const privateZcashSource =
+    purpose === 'private-swap' &&
+    request.fromChain === 'zcash' &&
+    account.networks
+      .find(network => network.chainId === getZcashChainId('mainnet'))
+      ?.addresses?.some(
+        address => address.value === request.sender && address.value.startsWith('u1')
+      )
   if (
-    !source?.privateExecutionAddress ||
-    source.privateExecutionAddress.toLowerCase() !== request.sender.toLowerCase()
+    !privateZcashSource &&
+    (!source?.privateExecutionAddress ||
+      source.privateExecutionAddress.toLowerCase() !== request.sender.toLowerCase())
   ) {
     throw new Error('Private quote source does not match this Account.')
   }
@@ -191,7 +213,7 @@ export function assertPrivateQuoteRoute(
     if (
       request.fromChain !== request.toChain ||
       request.tokenIn.address.toLowerCase() !== request.tokenOut.address.toLowerCase() ||
-      !source.addresses?.some(
+      !source?.addresses?.some(
         address => address.value.toLowerCase() === request.recipient?.toLowerCase()
       )
     ) {
@@ -199,8 +221,19 @@ export function assertPrivateQuoteRoute(
     }
     return
   }
-  if (purpose === 'private-swap' && !/^[1-9]\d*$/.test(request.toChain))
-    throw new Error('Private Swap must stay in this Account.')
+  if (purpose === 'private-swap' && request.toChain === 'zcash') {
+    const destination = account.networks.find(
+      network => network.chainId === getZcashChainId('mainnet')
+    )
+    if (
+      !destination?.addresses?.some(
+        address => address.value === request.recipient && address.value.startsWith('u1')
+      )
+    ) {
+      throw new Error('Private Swap must stay in this Account.')
+    }
+    return
+  }
   const destination = account.networks.find(
     network => network.chainId === `eip155:${request.toChain}`
   )
@@ -224,6 +257,17 @@ const RHEA_NATIVE_QUOTE_ADDRESSES = Object.freeze(
 const RHEA_NATIVE_CATALOG_ALIASES = new Map([
   ['zcash:zec:mainnet:native', { assetId: ASSET_PRICE_SOURCE_ASSETS.zec, quoteAddress: 'zec' }]
 ])
+
+export function getRheaSwapTokenRouteAddress(
+  token: Pick<RheaSwapToken, 'rheaChainId' | 'rheaAddress' | 'isNative'>
+): string {
+  const address = token.isNative
+    ? (RHEA_NATIVE_QUOTE_ADDRESSES.get(`${token.rheaChainId}:${token.rheaAddress}`) ??
+      RHEA_NATIVE_CATALOG_ALIASES.get(`${token.rheaChainId}:${token.rheaAddress}`)?.quoteAddress ??
+      token.rheaAddress)
+    : token.rheaAddress
+  return /^[1-9]\d*$/.test(token.rheaChainId) ? address.toLowerCase() : address
+}
 
 export interface RheaSwapChainDescriptor {
   readonly apiChainId: ChainRef
@@ -379,6 +423,20 @@ export interface RheaSwapToken extends SwapToken {
   readonly isDisplaySeed?: true
 }
 
+export function normalizeRheaSwapEvmTokenAssetId(
+  assetId: string,
+  chain: ChainRef,
+  quoteAddress: string,
+  isNative: boolean
+): string {
+  return !isNative &&
+    /^[1-9]\d*$/.test(chain) &&
+    /^0x[0-9a-fA-F]{40}$/.test(assetId) &&
+    assetId.toLowerCase() === quoteAddress.toLowerCase()
+    ? `eip155:${chain}/erc20:${quoteAddress.toLowerCase()}`
+    : assetId
+}
+
 export interface RheaSwapQuoteRequest {
   readonly fromChain: ChainRef
   readonly toChain: ChainRef
@@ -422,6 +480,7 @@ export interface RheaSwapExecutionView {
 
 export interface RheaSwapReviewView extends RheaSwapQuoteView {
   readonly executionId: string
+  readonly timeEstimateSeconds?: number
   readonly isCrossChain: boolean
   readonly fromChain: ChainRef
   readonly toChain: ChainRef
@@ -712,9 +771,6 @@ export function toRheaSwapToken(item: SwapTokenListItem): RheaSwapToken {
     isEvmChain && !evmNativeAssetId
       ? `eip155:${descriptor.apiChainId}/${isNative ? 'slip44:60' : `erc20:${readEvmQuoteAddress(item)}`}`
       : catalogAssetId
-  const assetId = isNative
-    ? (evmNativeAssetId ?? chainScopedCatalogAssetId)
-    : chainScopedCatalogAssetId
   const quoteAddress = nativeQuoteAddress
     ? nativeQuoteAddress
     : isEvmChain && !isNative
@@ -722,6 +778,9 @@ export function toRheaSwapToken(item: SwapTokenListItem): RheaSwapToken {
       : isRecord(item.raw) && typeof item.raw.address === 'string'
         ? readString(item.raw.address, 'RHEA Swap quote token address')
         : readString(item.address, 'RHEA Swap quote token address')
+  const assetId = isNative
+    ? (evmNativeAssetId ?? chainScopedCatalogAssetId)
+    : normalizeRheaSwapEvmTokenAssetId(chainScopedCatalogAssetId, item.chain, quoteAddress, false)
   return Object.freeze({
     assetId: readString(assetId, 'RHEA Swap asset ID'),
     blockchain: descriptor.blockchain,

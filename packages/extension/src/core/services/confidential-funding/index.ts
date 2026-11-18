@@ -44,6 +44,7 @@ export {
   filterConfidentialPortfolioMappings,
   getConfidentialAvailableForAsset,
   mergeConfidentialBalancesIntoPortfolio,
+  projectConfidentialOnlyEvmAssets,
   type ConfidentialPortfolioAssetMapping,
   type ConfidentialPortfolioBalance
 } from './confidential-funding-portfolio'

@@ -152,12 +152,19 @@ export interface EvmWalletClient {
     options?: {
       readonly forceDiscovery?: boolean
       readonly chainIds?: readonly string[]
+      readonly automatic?: boolean
+      readonly expectedWalletId?: string
+      readonly expectedAccountId?: string
     }
   ) => Promise<PortfolioReadModel | null>
   readonly getActivity: (
     action: 'read' | 'refresh',
     executionMode?: 'main' | 'private' | 'all',
-    options?: { readonly chainIds?: readonly string[]; readonly historyPageCount?: number }
+    options?: {
+      readonly chainIds?: readonly string[]
+      readonly historyPageCount?: number
+      readonly protocolProvider?: 'Confidential Intents'
+    }
   ) => Promise<ActivityReadModel | null>
   readonly prepareTransfer: (
     intent: EvmTransferIntent,
@@ -184,7 +191,14 @@ export interface EvmWalletClient {
   readonly prepareCancel: (
     chainId: string,
     originalTransactionId: TransactionId,
-    executionMode?: 'main' | 'private'
+    executionMode?: 'main' | 'private',
+    feeSelection?: EvmFeeSelection
+  ) => Promise<EvmTransferReview>
+  readonly prepareSpeedUp: (
+    chainId: string,
+    originalTransactionId: TransactionId,
+    executionMode?: 'main' | 'private',
+    feeSelection?: EvmFeeSelection
   ) => Promise<EvmTransferReview>
   readonly getNonceRecovery: (
     chainId: string,
@@ -223,12 +237,19 @@ function resolveProductRegistries(
   const catalog = resolveEvmNetworkCatalog(DEFAULT_NETWORK, getActiveChainEndpointSettings())
   const custom = catalog.filter(network => network.source === 'custom')
   const chains = createInitialProductChainRegistry(DEFAULT_NETWORK, custom)
+  const protocolAssetIds = new Set(
+    protocolAssets.map(
+      asset => `${asset.chainId}/${asset.namespace}:${asset.reference.toLowerCase()}`
+    )
+  )
   return Object.freeze({
     chains,
     assets: createAssetRegistry(chains, [
       ...getBundledInitialProductAssetDefinitions(DEFAULT_NETWORK, custom),
       ...userAssets.map(userEvmAssetToDefinition),
-      ...detectedAssets.map(detectedEvmAssetToDefinition),
+      ...detectedAssets
+        .filter(asset => !protocolAssetIds.has(asset.assetId.toLowerCase()))
+        .map(detectedEvmAssetToDefinition),
       ...protocolAssets
     ])
   })
@@ -377,9 +398,11 @@ function parseProtocolAssetDefinitions(
     registry.list().map(entry => {
       const chain = chains.resolve(entry.asset.chainId)
       if (
-        (chain.family !== 'solana' && chain.family !== 'near') ||
+        (chain.family !== 'solana' && chain.family !== 'near' && chain.family !== 'evm') ||
         entry.asset.kind !== 'token' ||
-        (entry.asset.namespace !== 'token' && entry.asset.namespace !== 'nep141') ||
+        (chain.family === 'evm'
+          ? entry.asset.namespace !== 'erc20'
+          : entry.asset.namespace !== 'token' && entry.asset.namespace !== 'nep141') ||
         entry.source !== 'protocol' ||
         entry.verification !== 'trusted'
       ) {
@@ -494,6 +517,19 @@ function assertGraphSigningContext(graph: TransactionGraph, chainId: string): vo
     throw new Error('EVM signing review does not match its transaction graph')
   }
   const protocol = graph.root.intent.protocol
+  if (graph.root.relation?.kind === 'replacement-of' && graph.root.kind !== 'cancel') {
+    const transaction = graph.root.intent.evm?.unsignedTransaction
+    if (
+      graph.segments.length !== 1 ||
+      !transaction ||
+      `eip155:${transaction.chainId}` !== chainId ||
+      (protocol !== undefined && protocol.origin.chainId !== chainId)
+    ) {
+      throw new Error('EVM signing review has an invalid replacement graph')
+    }
+    // A speed-up keeps the original business intent but signs only its source transaction.
+    return
+  }
   if (protocol === undefined) {
     if (graph.root.kind === 'contract-call' || graph.root.kind === 'approve') {
       if (
@@ -587,6 +623,26 @@ function parseTransferReview(
     operation: 'transaction'
   })
   assertGraphSigningContext(graph, chainId.id)
+  if (graph.root.relation?.kind === 'replacement-of' && graph.root.kind !== 'cancel') {
+    const transaction = graph.root.intent!.evm!.unsignedTransaction!
+    if (
+      summary.schema !== 'evm.transaction.v1' ||
+      summary.fields.from.toLowerCase() !== graph.root.intent!.sender!.address.toLowerCase() ||
+      summary.fields.to?.toLowerCase() !== transaction.to.toLowerCase() ||
+      summary.fields.transactionType !== transaction.type ||
+      summary.fields.nonce !== transaction.nonce ||
+      summary.fields.valueWei !== transaction.value ||
+      summary.fields.gasLimit !== transaction.gasLimit ||
+      summary.fields.calldata.value !== transaction.input ||
+      summary.fields.maximumFeeWei !== graph.root.intent!.feeLimit?.amountRaw ||
+      (transaction.type === 'legacy'
+        ? summary.fields.gasPriceWei !== transaction.gasPrice
+        : summary.fields.maxFeePerGasWei !== transaction.maxFeePerGas ||
+          summary.fields.maxPriorityFeePerGasWei !== transaction.maxPriorityFeePerGas)
+    ) {
+      throw new Error('EVM replacement graph does not match its signing summary')
+    }
+  }
   if (graph.root.kind === 'contract-call' || graph.root.kind === 'approve') {
     const intent = graph.root.intent
     if (
@@ -854,6 +910,9 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
       options: {
         readonly forceDiscovery?: boolean
         readonly chainIds?: readonly string[]
+        readonly automatic?: boolean
+        readonly expectedWalletId?: string
+        readonly expectedAccountId?: string
       } = {}
     ) => {
       const requestedChainIds = options.chainIds
@@ -874,7 +933,14 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
         type: 'GET_PORTFOLIO',
         action,
         ...(options.forceDiscovery === undefined ? {} : { forceDiscovery: options.forceDiscovery }),
-        ...(chainIds === undefined ? {} : { chainIds })
+        ...(chainIds === undefined ? {} : { chainIds }),
+        ...(options.automatic === undefined ? {} : { automatic: options.automatic }),
+        ...(options.expectedWalletId === undefined
+          ? {}
+          : { expectedWalletId: options.expectedWalletId }),
+        ...(options.expectedAccountId === undefined
+          ? {}
+          : { expectedAccountId: options.expectedAccountId })
       })
       return parseRuntimeResult(response, value => {
         const result = readRecord(value, 'Portfolio result')
@@ -914,7 +980,11 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
     getActivity: async (
       action: 'read' | 'refresh',
       executionMode: 'main' | 'private' | 'all' = 'all',
-      options: { readonly chainIds?: readonly string[]; readonly historyPageCount?: number } = {}
+      options: {
+        readonly chainIds?: readonly string[]
+        readonly historyPageCount?: number
+        readonly protocolProvider?: 'Confidential Intents'
+      } = {}
     ) => {
       const requestedChainIds = options.chainIds
       const chainIds =
@@ -943,7 +1013,10 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           action,
           executionMode,
           ...(chainIds === undefined ? {} : { chainIds }),
-          ...(historyPageCount === undefined ? {} : { historyPageCount })
+          ...(historyPageCount === undefined ? {} : { historyPageCount }),
+          ...(options.protocolProvider === undefined
+            ? {}
+            : { protocolProvider: options.protocolProvider })
         },
         value => (value === null ? null : parseActivityReadModel(value))
       )
@@ -1147,10 +1220,15 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
     prepareCancel: async (
       chainId: string,
       originalTransactionId: TransactionId,
-      executionMode: 'main' | 'private' = 'main'
+      executionMode: 'main' | 'private' = 'main',
+      feeSelection?: EvmFeeSelection
     ) => {
       const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
       const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
       if (!parsedChainId.startsWith('eip155:')) {
         throw new EvmWalletClientError('invalid-response', 'EVM cancel requires an EVM chain')
       }
@@ -1159,7 +1237,8 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
           type: 'PREPARE_EVM_CANCEL',
           chainId: parsedChainId,
           originalTransactionId: parsedTransactionId,
-          executionMode
+          executionMode,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection })
         },
         value => {
           const prepared = parseTransferReview(value)
@@ -1169,6 +1248,42 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
             prepared.graph.root.relation.transactionId !== parsedTransactionId
           ) {
             throw new Error('EVM cancellation review does not match its request')
+          }
+          return prepared
+        }
+      )
+    },
+    prepareSpeedUp: async (
+      chainId: string,
+      originalTransactionId: TransactionId,
+      executionMode: 'main' | 'private' = 'main',
+      feeSelection?: EvmFeeSelection
+    ) => {
+      const parsedChainId = parseClientInput(() => parseChainId(chainId).id)
+      const parsedTransactionId = parseClientInput(() => parseTransactionId(originalTransactionId))
+      const parsedFeeSelection =
+        feeSelection === undefined
+          ? undefined
+          : parseClientInput(() => parseEvmFeeSelection(feeSelection))
+      if (!parsedChainId.startsWith('eip155:')) {
+        throw new EvmWalletClientError('invalid-response', 'EVM speed-up requires an EVM chain')
+      }
+      return send(
+        {
+          type: 'PREPARE_EVM_SPEED_UP',
+          chainId: parsedChainId,
+          originalTransactionId: parsedTransactionId,
+          executionMode,
+          ...(parsedFeeSelection === undefined ? {} : { feeSelection: parsedFeeSelection })
+        },
+        value => {
+          const prepared = parseTransferReview(value)
+          if (
+            prepared.review.chainId !== parsedChainId ||
+            prepared.graph.root.relation?.kind !== 'replacement-of' ||
+            prepared.graph.root.relation.transactionId !== parsedTransactionId
+          ) {
+            throw new Error('EVM speed-up review does not match its request')
           }
           return prepared
         }
@@ -1198,12 +1313,8 @@ export function createEvmWalletClient(sendMessage: EvmRuntimeMessenger): EvmWall
             !/^(0|[1-9][0-9]{0,19})$/.test(record.pendingNonce) ||
             typeof record.highestLocalNonce !== 'string' ||
             !/^(0|[1-9][0-9]{0,19})$/.test(record.highestLocalNonce) ||
-            (record.action !== 'await-confirmation' &&
-              BigInt(record.highestLocalNonce) < BigInt(record.pendingNonce)) ||
-            (record.action !== 'retry-broadcast' &&
-              record.action !== 'await-confirmation' &&
-              record.action !== 'replace' &&
-              record.action !== 'fill-gap') ||
+            BigInt(record.highestLocalNonce) < BigInt(record.pendingNonce) ||
+            (record.action !== 'retry-broadcast' && record.action !== 'fill-gap') ||
             (record.action === 'fill-gap' && record.transactionId !== undefined) ||
             (record.action !== 'fill-gap' && record.transactionId === undefined)
           ) {
