@@ -523,7 +523,8 @@ function assertGraphSigningContext(graph: TransactionGraph, chainId: string): vo
       graph.segments.length !== 1 ||
       !transaction ||
       `eip155:${transaction.chainId}` !== chainId ||
-      (protocol !== undefined && protocol.origin.chainId !== chainId)
+      (protocol !== undefined &&
+        (protocol.provider === 'noir-public' || protocol.origin.chainId !== chainId))
     ) {
       throw new Error('EVM signing review has an invalid replacement graph')
     }
@@ -564,6 +565,9 @@ function assertGraphSigningContext(graph: TransactionGraph, chainId: string): vo
       throw new Error('EVM signing review has an invalid transfer graph')
     }
     return
+  }
+  if (protocol.provider === 'noir-public') {
+    throw new Error('EVM signing review has an invalid protocol graph')
   }
   const sourceTarget =
     protocol.provider === 'near-intents' ? protocol.depositAddress : protocol.sourceTarget

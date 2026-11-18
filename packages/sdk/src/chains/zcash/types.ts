@@ -1,4 +1,5 @@
 export interface ZcashProvider {
+  readonly supportedSigningModes?: readonly SigningMode[]
   request(args: RequestArguments): Promise<any>
   on(event: string, handler: (...args: any[]) => void): void
   removeListener?(event: string, handler: (...args: any[]) => void): void
@@ -65,6 +66,60 @@ export interface ZcashConnectResult extends ZcashAddress {
  */
 export interface ZcashBalanceResult extends Balance {
   accounts: ZcashAccountBalance[]
+}
+
+export interface PublicAccount {
+  chain: 'zcash-l2' | 'evm'
+  network: 'mainnet' | 'testnet'
+  signingMode: 'derived' | 'legacy_index0' | 'evm'
+  publicKey: string
+  address: string
+  mcaId: string | null
+  parentContractId: string
+  status: 'inactive' | 'activating' | 'active'
+  activationId?: string
+}
+
+export interface PublicAsset {
+  tokenId: string
+  symbol: string
+  name: string
+  decimals: number
+  balanceRaw: string | null
+  status: 'fresh' | 'stale' | 'unavailable'
+  updatedAt?: number
+}
+
+export interface PublicAssets {
+  account: PublicAccount
+  assets: PublicAsset[]
+}
+
+export interface PublicFunctionCallRequest {
+  FunctionCall: {
+    receiver_id: string
+    function_calls: Array<{
+      method_name: string
+      args: string
+      gas: string
+      deposit: string
+    }>
+  }
+}
+
+export interface SendPublicTransactionParams {
+  requestId: string
+  txRequests: PublicFunctionCallRequest[]
+}
+
+export interface PublicTransaction {
+  operationId: string
+  requestId: string
+  status: 'signed' | 'broadcast' | 'confirming' | 'final' | 'failed'
+  submissionId?: string
+  transactionHash?: string
+  anchor?: { status: string; transactionHash?: string }
+  error?: string
 }
 
 export type FundingSource = 'shielded' | 'transparent'

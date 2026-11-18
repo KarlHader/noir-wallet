@@ -413,7 +413,9 @@ export function getActivitySwapPresentation(
   const recipientAddress =
     confidentialDestination || shield?.destinationDomain === 'shield'
       ? undefined
-      : (item.snapshot?.protocol?.destination.recipient ??
+      : ((item.snapshot?.protocol?.provider === 'noir-public'
+          ? undefined
+          : item.snapshot?.protocol?.destination.recipient) ??
         (item.source === 'zcash-v1' || shield ? item.snapshot?.recipient?.address : undefined))
   const senderAddress = item.snapshot?.sender?.address
   const shieldDomainLabel = (domain: 'public' | 'private' | 'shield') =>
@@ -837,7 +839,9 @@ export function canSpeedUpEvmActivity(
   return Boolean(
     getPendingEvmActivityOrigin(item, evmChainIds) &&
     item.snapshot?.evm?.unsignedTransaction &&
-    (item.snapshot.protocol === undefined || item.snapshot.protocol.expiresAt > now) &&
+    (item.snapshot.protocol === undefined ||
+      (item.snapshot.protocol.provider !== 'noir-public' &&
+        item.snapshot.protocol.expiresAt > now)) &&
     (shieldQuoteExpiresAt === undefined || shieldQuoteExpiresAt > now)
   )
 }
@@ -975,6 +979,11 @@ export function getActivityProgressSteps(
 ): readonly TransactionProgressStep[] {
   const origin = item.segments.find(segment => segment.role === 'origin')
   const shieldSendAuthorization = resolveShieldAuthorizationOrigin(item, origin)
+  const isPublicExecution =
+    item.kind === 'contract-call' &&
+    origin?.target.kind === 'protocol' &&
+    origin.target.provider === 'noir-public' &&
+    item.segments.some(segment => segment.role === 'destination')
   return item.segments
     .filter(
       segment =>
@@ -1035,7 +1044,12 @@ export function getActivityProgressSteps(
               : 'pending'
       return {
         id: segment.id,
-        label: getActivitySegmentLabel(segment, item),
+        label:
+          isPublicExecution && segment.role === 'origin'
+            ? 'Public execution'
+            : isPublicExecution && segment.role === 'destination'
+              ? 'Rollup anchoring'
+              : getActivitySegmentLabel(segment, item),
         detail:
           segment.target.kind === 'onchain'
             ? chainName(segment.target.chainId)

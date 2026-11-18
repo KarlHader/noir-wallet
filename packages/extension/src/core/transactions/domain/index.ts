@@ -65,11 +65,15 @@ export {
   assertNearIntentsTransferBinding,
   getTransactionProtocolIntentKind,
   parseNearIntentsTransactionBinding,
+  parseNoirPublicActivationIntent,
+  parseNoirPublicTransactionBinding,
   parseRheaSwapTransactionBinding,
   parseTransactionProtocolBinding,
   type NearIntentsAssetBinding,
   type NearIntentsDestinationBinding,
   type NearIntentsTransactionBinding,
+  type NoirPublicTransactionBinding,
+  type NoirPublicActivationIntent,
   type RheaSwapTransactionBinding,
   type TransactionProtocolBinding
 } from './protocol'

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { approvalContextMatches } from '../../../src/background/approval-context-policy.ts'
-import { signApprovedDAppMessage } from '../../../src/background/dapp-message-signing.ts'
+import {
+  parseZcashSigningMode,
+  signApprovedDAppMessage
+} from '../../../src/background/dapp-message-signing.ts'
 
 function approval(overrides = {}) {
   return {
@@ -60,6 +63,20 @@ test('approval context expires on account, network, authorization, lock or reque
     ),
     false
   )
+  assert.equal(
+    approvalContextMatches(approval({ action: 'publicActivate', accountAuthorized: false })),
+    false
+  )
+  assert.equal(
+    approvalContextMatches(
+      approval({
+        action: 'publicTransaction',
+        accountAuthorized: true,
+        currentAuthorizationRevision: 5
+      })
+    ),
+    false
+  )
 })
 
 test('all message signing modes bind their primary signature to the reviewed HD account', async () => {
@@ -88,4 +105,19 @@ test('all message signing modes bind their primary signature to the reviewed HD 
     { message: 'reviewed', accountIndex: 99, addressIndex: undefined },
     { message: 'reviewed', accountIndex: 3, addressIndex: undefined }
   ])
+})
+
+test('shared Zcash signing methods reject unsupported modes and options', () => {
+  assert.equal(parseZcashSigningMode(undefined), 'current')
+  for (const mode of ['current', 'derived', 'legacy_index0']) {
+    assert.equal(parseZcashSigningMode({ signingMode: mode }), mode)
+  }
+  for (const options of [
+    { signingMode: 'noir_protocol_public' },
+    { signingMode: 'unknown' },
+    { signingMode: 'current', unexpected: true },
+    []
+  ]) {
+    assert.throws(() => parseZcashSigningMode(options), /Zcash signing/)
+  }
 })

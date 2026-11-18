@@ -7,8 +7,13 @@ import { getPortfolioAssetUsdValue } from '@/popup/components/portfolio/portfoli
 import { isAssetVisibleInAssetView } from '@/popup/components/portfolio/portfolio-asset-visibility'
 import { getNearConfidentialChainId } from './near-confidential-holdings'
 import type { ChainFeatureFlagValue } from '@/config/multichain-feature-flags'
-import { isSelectableChainFamily } from './chain-selection-availability'
+import {
+  isSelectableChainFamily,
+  networkDisplayId,
+  resolveNetworkDisplaySelection
+} from './chain-selection-availability'
 import { getAssetDomainRaw, type AssetDomain } from './asset-domains'
+import { parseChainId } from '@/core/chains/registry'
 
 const ASSET_FALLBACK_ORDER = ['USDC', 'USDT', 'ZEC', 'BTC', 'ETH', 'SOL', 'NEAR'] as const
 
@@ -21,8 +26,7 @@ export function resolvePortfolioChainSelection(
     model?.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, enabledFlags))
       .map(chain => chain.chain.id) ?? []
-  const selected = persistedSelection?.filter(chainId => available.includes(chainId))
-  return selected?.length === 1 ? selected : available
+  return resolveNetworkDisplaySelection(available, persistedSelection)
 }
 
 export function projectPortfolioForChains(
@@ -79,10 +83,12 @@ export function getPortfolioAssetDomainBalances(
   const domains = (['public', 'shield', 'private'] as const).filter(category =>
     domain === 'all'
       ? category === 'public' ||
-        entries.some(({ chain }) =>
-          category === 'shield'
-            ? chain.chain.family === 'evm' || chain.chain.family === 'zcash'
-            : chain.chain.family === 'evm'
+        entries.some(
+          ({ asset, chain }) =>
+            !isPublicPortfolioAsset(asset) &&
+            (category === 'shield'
+              ? chain.chain.family === 'evm' || chain.chain.family === 'zcash'
+              : chain.chain.family === 'evm')
         )
       : category === domain
   )
@@ -111,6 +117,51 @@ export function getPortfolioAssetDomainBalances(
       fiat: fiatKnown ? fiat.toFixed() : null
     })
   })
+}
+
+export function isPublicPortfolioAsset(asset: PortfolioAssetView): boolean {
+  return asset.source === 'protocol' && /^noir:(mainnet|testnet)$/.test(asset.asset.chainId)
+}
+
+export function getPortfolioAssetNetworkLabel(entry: PortfolioAssetGroupEntry): string {
+  return isPublicPortfolioAsset(entry.asset)
+    ? `${entry.chain.chain.displayName} · Public`
+    : entry.chain.chain.displayName
+}
+
+export function groupPortfolioDisplayChains(
+  chains: readonly PortfolioChainView[]
+): readonly PortfolioChainView[] {
+  const groups = new Map<string, PortfolioChainView>()
+  for (const entry of chains) {
+    const id = networkDisplayId(entry.chain.id)
+    const existing = groups.get(id)
+    if (!existing) {
+      groups.set(
+        id,
+        id === entry.chain.id
+          ? entry
+          : { ...entry, chain: { ...entry.chain, id: parseChainId(id).id } }
+      )
+      continue
+    }
+    const base = entry.chain.id === id ? entry : existing
+    const assets = [...existing.assets, ...entry.assets]
+    groups.set(id, {
+      ...base,
+      chain: { ...base.chain, id: parseChainId(id).id },
+      // Group only for display; asset IDs and their execution sources stay intact.
+      assets,
+      status:
+        entry.status === 'ready' && existing.status === 'ready'
+          ? 'ready'
+          : assets.length
+            ? 'partial'
+            : 'error',
+      errorCodes: [...new Set([...existing.errorCodes, ...entry.errorCodes])]
+    })
+  }
+  return [...groups.values()]
 }
 
 export function getPortfolioChainBalanceStatus(

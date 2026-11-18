@@ -22,6 +22,7 @@ interface ProviderRequestArguments {
 type ProviderListener = (data: unknown) => void
 
 interface ChainProvider {
+  readonly supportedSigningModes?: readonly string[]
   request: (args: ProviderRequestArguments) => Promise<unknown>
   on: (event: string, handler: ProviderListener) => ChainProvider
   removeListener: (event: string, handler: ProviderListener) => ChainProvider
@@ -329,6 +330,7 @@ function createMultichainProvider(): MultichainProvider {
 
 function createZcashProvider(): ChainProvider {
   const provider: ChainProvider = {
+    supportedSigningModes: Object.freeze(['current', 'derived', 'legacy_index0']),
     request: args => requestProvider('zcash', args),
     on(event, handler) {
       addProviderListener('zcash', event, handler)

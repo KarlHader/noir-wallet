@@ -26,7 +26,9 @@ const SUPPORTED_APPROVAL_ACTIONS = [
   'solanaMessage',
   'nearConnect',
   'nearTransaction',
-  'nearMessage'
+  'nearMessage',
+  'publicTransaction',
+  'publicActivate'
 ] as const
 
 export type DAppApprovalAction = (typeof SUPPORTED_APPROVAL_ACTIONS)[number]
@@ -54,10 +56,18 @@ function isSupportedApprovalAction(value: unknown): value is DAppApprovalAction 
   )
 }
 
-function isWebOrigin(value: unknown): value is string {
+function isApprovalOrigin(value: unknown, action: DAppApprovalAction): value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return false
   try {
     const parsed = new URL(value)
+    if (action === 'publicActivate' && parsed.protocol === 'chrome-extension:') {
+      return (
+        typeof chrome !== 'undefined' &&
+        Boolean(chrome.runtime?.id) &&
+        parsed.protocol === 'chrome-extension:' &&
+        value === chrome.runtime.getURL('/').replace(/\/$/, '')
+      )
+    }
     return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.origin === value
   } catch {
     return false
@@ -83,8 +93,8 @@ export function parsePendingApprovalResponse(
   if (
     !isRecord(request) ||
     request.id !== expectedRequestId ||
-    !isWebOrigin(request.origin) ||
     !isSupportedApprovalAction(request.action) ||
+    !isApprovalOrigin(request.origin, request.action) ||
     !isRecord(request.data)
   ) {
     return { status: 'error', error: 'Invalid or unsupported approval request.' }

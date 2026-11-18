@@ -433,6 +433,7 @@ export class EvmTransferOrchestrator {
       sender.address.toLowerCase() !== activeSender.toLowerCase() ||
       unsignedTransaction.chainId !== input.chainAccount.scope.chainId.slice('eip155:'.length) ||
       (original.root.intent?.protocol !== undefined &&
+        original.root.intent.protocol.provider !== 'noir-public' &&
         original.root.intent.protocol.expiresAt <= this.now())
     ) {
       throw new EvmTransactionError('stale-nonce', 'Pending EVM transaction cannot be sped up')
@@ -1360,6 +1361,7 @@ export class EvmTransferOrchestrator {
         (origin.status !== 'broadcast' && origin.status !== 'confirming') ||
         origin.evidence?.replacementTransactionHash !== undefined ||
         (original.root.intent?.protocol !== undefined &&
+          original.root.intent.protocol.provider !== 'noir-public' &&
           original.root.intent.protocol.expiresAt <= this.now()) ||
         !isEvmSpeedUpReplacement(original, graph) ||
         JSON.stringify(graph.root.intent?.evm?.unsignedTransaction) !==

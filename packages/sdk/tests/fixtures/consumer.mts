@@ -64,7 +64,15 @@ type ZcashContracts = [
 
 declare const provider: ZcashTypes.ZcashProvider
 const api: ZcashAPI = new ZcashAPI(provider)
+api.on('accountsChanged', account => void account)
+api.removeListener('accountsChanged', account => void account)
 const connect: Promise<RootTypes.ZcashConnectResult> = api.connect()
+const accounts: Promise<RootTypes.ZcashConnectResult | null> = api.getAccounts()
+const publicAssets: Promise<RootTypes.PublicAssets> = api.getPublicAssets()
+const publicSigningMode: Promise<RootTypes.PublicAccount['signingMode']> = publicAssets.then(
+  ({ account }) => account.signingMode
+)
+const disconnect: Promise<void> = api.disconnect()
 const balance: Promise<ZcashTypes.ZcashBalanceResult> = api.getBalance()
 const send: Promise<string> = api.sendTransaction({
   to: 't-address',
@@ -77,5 +85,19 @@ const detected: Promise<ZcashTypes.ZcashProvider> = detectProvider()
 const address: string = publicKeyToAddress('02' + '00'.repeat(32))
 const valid: boolean = verifyMessageSignature({ message: 'x', signature: 'y' }).valid
 declare const publicTypes: [RootContracts, ZcashContracts]
-void [connect, balance, send, wallet, installed, rawProvider, detected, address, valid]
+void [
+  connect,
+  accounts,
+  publicAssets,
+  publicSigningMode,
+  disconnect,
+  balance,
+  send,
+  wallet,
+  installed,
+  rawProvider,
+  detected,
+  address,
+  valid
+]
 void publicTypes

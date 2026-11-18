@@ -43,7 +43,9 @@ function getReplacementOriginKey(
     item.snapshot?.sender,
     item.snapshot?.evm?.nonce,
     item.snapshot?.evm?.unsignedTransaction,
-    item.snapshot?.protocol?.expiresAt,
+    item.snapshot?.protocol?.provider === 'noir-public'
+      ? item.snapshot.protocol.paymentIntent?.expiresAt
+      : item.snapshot?.protocol?.expiresAt,
     item.snapshot?.shield?.sourceDomain,
     item.accountMode
   ])

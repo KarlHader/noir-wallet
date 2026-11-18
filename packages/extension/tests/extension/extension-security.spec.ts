@@ -264,6 +264,24 @@ test('enforces trusted Storage, dApp origin, and Background-only Worker routing'
   expect(validDAppResponse?.error).not.toBe('Unauthorized dApp request sender')
   expect(validDAppResponse?.error).not.toBe('Invalid dApp request')
 
+  const publicRead = await evaluateInContext<unknown>(
+    cdp,
+    contentScriptContextId,
+    `chrome.runtime.sendMessage({
+      type: 'DAPP_REQUEST',
+      requestId: 'public-ungranted-read',
+      chainId: 'zcash',
+      request: { method: 'zcash_getPublicAccount' }
+    })`
+  )
+  expect(publicRead).toEqual({ requestId: 'public-ungranted-read', result: null })
+  const internalActivation = await evaluateInContext<unknown>(
+    cdp,
+    contentScriptContextId,
+    `chrome.runtime.sendMessage({ type: 'PUBLIC_ACTIVATE_ACCOUNT' })`
+  )
+  expect(internalActivation).toBeUndefined()
+
   const forgedOriginResponse = await evaluateInContext<{ error?: string }>(
     cdp,
     contentScriptContextId,

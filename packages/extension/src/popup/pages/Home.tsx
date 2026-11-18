@@ -53,6 +53,11 @@ import type { AssetPriceReadModel } from '@/core/prices'
 import { summarizePortfolioFiat } from '../components/portfolio/portfolio-prices'
 import { useActiveAccountNetworks } from '../hooks/useActiveAccountNetworks'
 import { useHomePortfolio } from '../hooks/useHomePortfolio'
+import { useNoirPublicAssets } from '../hooks/useNoirPublicAssets'
+import { NoirPublicActivationCard } from '../components/portfolio/NoirPublicActivationCard'
+import { appendPublicPortfolio } from '../services/noir-public-portfolio-presentation'
+import { parseAccountId } from '@/core/accounts/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
 import { useSettingsStore } from '@/store/settings-store'
 import { getChainEndpointRuntimeKey } from '@/core/chains/chain-endpoint-settings'
 import { ZcashSyncProgress } from '../components/common/ZcashSyncProgress'
@@ -371,6 +376,39 @@ export function Home() {
     effectiveWalletId && effectiveAccountId
       ? JSON.stringify([currentNetwork, effectiveWalletId, effectiveAccountId])
       : null
+  const publicEligible =
+    currentNetwork === 'mainnet' &&
+    storageV2Account?.walletSource.kind === 'software' &&
+    Boolean(effectiveWalletId && effectiveAccountId)
+  const publicAssets = useNoirPublicAssets(
+    publicEligible,
+    `${currentNetwork}:${effectiveWalletId ?? ''}:${effectiveAccountId ?? ''}`,
+    effectiveWalletId,
+    effectiveAccountId
+  )
+  const portfolioWithPublic = useMemo(
+    () =>
+      appendPublicPortfolio(
+        multichainPortfolio,
+        publicAssets.assets,
+        effectiveWalletId && effectiveAccountId
+          ? {
+              keyDomainId: parseKeyDomainId(effectiveWalletId),
+              accountId: parseAccountId(effectiveAccountId)
+            }
+          : null
+      ),
+    [multichainPortfolio, publicAssets.assets, effectiveWalletId, effectiveAccountId]
+  )
+  const refreshPortfolioWithPublic = useCallback(
+    async (forceDiscovery?: boolean) => {
+      await Promise.all([
+        refreshPortfolio(forceDiscovery),
+        ...(publicEligible ? [publicAssets.refresh()] : [])
+      ])
+    },
+    [refreshPortfolio, publicEligible, publicAssets.refresh]
+  )
   const activityExecutionMode = dappExecutionMode.state?.mode ?? null
   const previousActivityFilterContext = useRef<{
     scope: string
@@ -1082,18 +1120,21 @@ export function Home() {
               activeAccount={storageV2Account}
               walletId={effectiveWalletId}
               accountId={effectiveAccountId}
-              model={multichainPortfolio}
+              model={portfolioWithPublic}
               status={portfolioLoadStatus}
               prices={assetPrices}
               priceStatus={assetPriceStatus}
               balancesHidden={balancesHidden}
-              onRefresh={refreshPortfolio}
+              onRefresh={refreshPortfolioWithPublic}
               onRetryPrices={refreshAssetPrices}
               onSelectAsset={
                 modeActionsReady
                   ? assetId => {
+                      const asset = parseAssetId(assetId)
                       navigate.navigate(
-                        `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${assetDomain === 'public' || assetDomain === 'private' ? assetDomain : privateMode ? 'private' : 'public'}`
+                        asset.chainId === `noir:${currentNetwork}`
+                          ? `/public-asset-detail?tokenId=${encodeURIComponent(asset.reference)}`
+                          : `/asset-detail?assetId=${encodeURIComponent(assetId)}&domain=${assetDomain}&mode=${assetDomain === 'public' || assetDomain === 'private' ? assetDomain : privateMode ? 'private' : 'public'}`
                       )
                     }
                   : undefined
@@ -1130,6 +1171,16 @@ export function Home() {
                 </span>
                 <span className="mt-1 text-xs text-muted">Ethereum, BNB Chain, Base and more…</span>
               </button>
+            )}
+            {publicEligible && (
+              <NoirPublicActivationCard
+                key={`${currentNetwork}:${effectiveWalletId}:${effectiveAccountId}`}
+                account={publicAssets.account}
+                status={publicAssets.status}
+                error={publicAssets.error}
+                onRefresh={publicAssets.refresh}
+                onViewActivity={() => navigate.navigate(homeTabPath(location.search, 'activity'))}
+              />
             )}
           </TabsContent>
 

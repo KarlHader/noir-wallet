@@ -34,6 +34,8 @@ import {
   toggleMultichainConnectionAccount,
   type MultichainConnectionScope as MultichainScopeOption
 } from '@/popup/services/dapp-connection-presentation'
+import { NoirPublicActivationReview } from '@/popup/components/dapp/NoirPublicActivationReview'
+import { TokenIcon } from '@/popup/components/tokens/TokenIcon'
 import { EvmAddNetworkDetails } from '@/popup/components/dapp/EvmAddNetworkDetails'
 import {
   ApprovalDetailCard,
@@ -47,6 +49,10 @@ import {
   canRetryPendingApprovalLoad,
   parsePendingApprovalResponse
 } from '@/popup/services/dapp-approval-request'
+import {
+  parsePublicActivationReview,
+  parsePublicTransactionReview
+} from '@/popup/services/noir-public-approval-review'
 import { useActiveAccountNetworks } from '@/popup/hooks/useActiveAccountNetworks'
 import { EvmGasFundingApproval } from '@/popup/components/dapp/EvmGasFundingApproval'
 import { NetworkFeeTierPicker } from '@/popup/components/transaction/NetworkFeeTierPicker'
@@ -60,6 +66,7 @@ import {
   useCopyToClipboard
 } from '@/popup/components/common/CopyToast'
 import { useNavigate } from '@/popup/provider/Router'
+import type { NoirPublicFunctionCallRequest } from '@/core/services/noir-protocol/public/types'
 import {
   formatDAppHost,
   parseBitcoinSigningSummary,
@@ -137,6 +144,65 @@ function ConnectionPermissionSummary({ includesActivity = false }: { includesAct
       </div>
     </section>
   )
+}
+
+function PublicFunctionCalls({
+  requests,
+  executionFeeRaw
+}: {
+  requests: readonly NoirPublicFunctionCallRequest[]
+  executionFeeRaw?: string
+}) {
+  return requests.map((request, requestIndex) => (
+    <ApprovalDetailCard
+      key={requestIndex}
+      title={
+        executionFeeRaw && requestIndex === 0
+          ? 'Execution fee'
+          : `FunctionCall ${requestIndex + (executionFeeRaw ? 0 : 1)}`
+      }
+    >
+      <div className="space-y-3 text-xs">
+        {executionFeeRaw && requestIndex === 0 && (
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+            <span className="text-muted">Amount</span>
+            <span className="text-right font-medium">
+              {formatBaseUnitDecimalAmount(executionFeeRaw, 8)} ZEC
+            </span>
+          </div>
+        )}
+        <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+          <span className="text-muted">Receiver</span>
+          <span className="break-all text-right font-mono">{request.FunctionCall.receiver_id}</span>
+        </div>
+        {request.FunctionCall.function_calls.map((call, callIndex) => (
+          <div
+            key={callIndex}
+            className="space-y-2 border-t border-border/70 pt-3 first:border-0 first:pt-0"
+          >
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Method</span>
+              <span className="break-all text-right font-mono">{call.method_name}</span>
+            </div>
+            <div className="min-w-0 space-y-1.5">
+              <p className="text-muted">Arguments</p>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/50 p-2.5 text-left font-mono leading-5 text-foreground/90">
+                {call.args}
+              </pre>
+            </div>
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Deposit</span>
+              <span className="break-all text-right font-mono">{call.deposit} yoctoNEAR</span>
+            </div>
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+              <span className="text-muted">Gas</span>
+              <span className="break-all text-right font-mono">{call.gas}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </ApprovalDetailCard>
+  ))
 }
 
 export function ApprovalPage() {
@@ -232,6 +298,10 @@ export function ApprovalPage() {
   const isNearTransaction = action === 'nearTransaction'
   const isNearMessage = action === 'nearMessage'
   const isMultichainConnect = action === 'multichainConnect'
+  const isPublicTransaction = action === 'publicTransaction'
+  const isPublicActivate = action === 'publicActivate'
+  const publicTransactionReview = isPublicTransaction ? parsePublicTransactionReview(data) : null
+  const publicActivationReview = isPublicActivate ? parsePublicActivationReview(data) : null
   const requiresZcashAccountReady =
     action === 'connect' ||
     action === 'sendTransaction' ||
@@ -550,6 +620,10 @@ export function ApprovalPage() {
         (sendPrivately && !privateTransferReady))
     )
       return
+    if (approved && isPublicActivate && !parsePublicActivationReview(data)) {
+      setError('The activation review is invalid or expired.')
+      return
+    }
     if (decisionInFlight.current) return
     decisionInFlight.current = true
 
@@ -801,6 +875,75 @@ export function ApprovalPage() {
 
   const renderContent = () => {
     switch (action) {
+      case 'publicActivate':
+        return publicActivationReview ? (
+          <div className="space-y-4">
+            {origin === `chrome-extension://${chrome.runtime.id}` ? (
+              <div className="flex items-center gap-3">
+                <TokenIcon symbol="ZEC" nativeChain="zcash" size={36} />
+                <div>
+                  <h1 className="text-lg font-semibold">Activate Public</h1>
+                  <p className="text-xs text-muted">Zcash</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <DAppRequestHeader
+                  domain={dappDomain}
+                  pageUrl={dappPageUrl}
+                  action="Activate Public"
+                />
+                <DAppNetworkCard
+                  chain={publicActivationReview.account.chain === 'evm' ? 'evm' : 'zcash'}
+                  network={publicActivationReview.account.chain === 'evm' ? 'EVM' : 'Zcash'}
+                  chainId={publicActivationReview.chainId}
+                />
+              </>
+            )}
+            <NoirPublicActivationReview review={publicActivationReview} />
+          </div>
+        ) : (
+          renderInvalidSigningRequest('The activation review is invalid or expired.', false)
+        )
+
+      case 'publicTransaction':
+        return publicTransactionReview ? (
+          <div className="space-y-4">
+            <DAppRequestHeader
+              domain={dappDomain}
+              pageUrl={dappPageUrl}
+              action="Review Public transaction"
+            />
+            <DAppNetworkCard
+              chain={publicTransactionReview.account.chain === 'evm' ? 'evm' : 'zcash'}
+              network={publicTransactionReview.account.chain === 'evm' ? 'EVM' : 'Zcash'}
+              chainId={publicTransactionReview.account.chain === 'evm' ? data.chainId : undefined}
+            />
+            <ApprovalDetailCard title="Public account">
+              <div className="space-y-3 text-xs">
+                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                  <span className="text-muted">MCA</span>
+                  <span className="break-all text-right font-mono">
+                    {publicTransactionReview.account.mcaId}
+                  </span>
+                </div>
+                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+                  <span className="text-muted">Signing address</span>
+                  <span className="break-all text-right font-mono">
+                    {publicTransactionReview.account.address}
+                  </span>
+                </div>
+              </div>
+            </ApprovalDetailCard>
+            <PublicFunctionCalls
+              requests={publicTransactionReview.txRequests}
+              executionFeeRaw={publicTransactionReview.executionFee.amountRaw}
+            />
+          </div>
+        ) : (
+          renderInvalidSigningRequest('The Public transaction request is invalid.', false)
+        )
+
       case 'multichainConnect': {
         const scopes: MultichainScopeOption[] = Array.isArray(data.scopes)
           ? data.scopes.filter(
@@ -1727,7 +1870,9 @@ export function ApprovalPage() {
             disabled={isLoading}
             size="lg"
           >
-            {isMultichainConnect || MULTI_ACCOUNT_CONNECT_ACTIONS.has(action) ? 'Cancel' : 'Reject'}
+            {isMultichainConnect || isPublicActivate || MULTI_ACCOUNT_CONNECT_ACTIONS.has(action)
+              ? 'Cancel'
+              : 'Reject'}
           </Button>
           <Button
             className="flex-1 bg-primary hover:bg-primary/90"
@@ -1740,6 +1885,8 @@ export function ApprovalPage() {
               (isEvmTransaction && evmTransactionSummary === null) ||
               (isEvmNetwork && data.action === 'add' && evmAddNetwork === null) ||
               (isEvmMessage && evmMessageSummary === null) ||
+              (isPublicTransaction && publicTransactionReview === null) ||
+              (isPublicActivate && publicActivationReview === null) ||
               ((isBitcoinTransaction || isBitcoinMessage) && bitcoinSigningSummary === null) ||
               ((isSolanaTransaction || isSolanaMessage || isNearTransaction || isNearMessage) &&
                 nativeSigningSummary === null) ||
@@ -1770,19 +1917,23 @@ export function ApprovalPage() {
                         : 'Switch Network'
                       : isBitcoinConnect
                         ? 'Connect'
-                        : isSolanaConnect || isNearConnect
-                          ? 'Connect'
-                          : isEvmTransaction
+                        : isPublicActivate
+                          ? 'Pay & activate'
+                          : isPublicTransaction
                             ? 'Confirm'
-                            : isEvmMessage
-                              ? 'Sign message'
-                              : isSolanaMessage || isNearMessage
-                                ? 'Sign message'
-                                : action === 'signMessage'
+                            : isSolanaConnect || isNearConnect
+                              ? 'Connect'
+                              : isEvmTransaction
+                                ? 'Confirm'
+                                : isEvmMessage
                                   ? 'Sign message'
-                                  : action === 'sendTransaction' || action === 'shieldFunds'
-                                    ? 'Confirm'
-                                    : 'Approve'}
+                                  : isSolanaMessage || isNearMessage
+                                    ? 'Sign message'
+                                    : action === 'signMessage'
+                                      ? 'Sign message'
+                                      : action === 'sendTransaction' || action === 'shieldFunds'
+                                        ? 'Confirm'
+                                        : 'Approve'}
           </Button>
         </div>
       }

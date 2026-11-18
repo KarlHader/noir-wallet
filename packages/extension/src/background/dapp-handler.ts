@@ -1,5 +1,12 @@
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
+import { noirPublicRuntime } from './noir-protocol/public-runtime'
+import {
+  assertPublicContext,
+  capturePublicContext,
+  invalidatePublicRequestContexts,
+  type NoirPublicRequestContext
+} from './noir-protocol/public-context'
 import { connectionAuthorizesAccount, dappManager } from '../core/dapp/dapp-manager'
 import { shouldAutoConnectDApp } from '@/core/dapp/first-party-policy'
 import { syncScheduler } from './sync-scheduler'
@@ -21,7 +28,7 @@ import { useWalletStore, rehydrateWalletStore } from '@/store/wallet-store'
 import { useAccountDataStore, buildAccountKey } from '@/store/account-data-store'
 import { EVM_GAS_FUNDING_APPROVAL_TIMEOUT_MS, pendingRequestsManager } from './pending-requests'
 import { getApprovalContext } from './approval-context'
-import { signApprovedDAppMessage } from './dapp-message-signing'
+import { parseZcashSigningMode, signApprovedDAppMessage } from './dapp-message-signing'
 import { sleep } from '@/lib/utils'
 import { logger } from '@/lib/logger'
 import { ANALYTICS_EVENTS, PAGE_IDS, trackEvent } from '@/background/analytics/reporter'
@@ -141,7 +148,14 @@ const CONNECT_APPROVAL_ACTIONS = new Set([
 ])
 
 const APPROVAL_ACTION_PREFIXES = Object.freeze({
-  zcash: Object.freeze(['connect', 'sendTransaction', 'signMessage', 'shieldFunds']),
+  zcash: Object.freeze([
+    'connect',
+    'sendTransaction',
+    'signMessage',
+    'shieldFunds',
+    'publicActivate',
+    'publicTransaction'
+  ]),
   evm: Object.freeze([
     'evmConnect',
     'evmTransaction',
@@ -241,11 +255,14 @@ export class DAppHandler {
   /**
    * Clear the Zcash permission cache and approvals when its runtime is locked.
    */
-  clearPermissions(): void {
+  clearPermissions(invalidateRequests = true): void {
     this.permissions.clear()
-    // Native accounts can stay unlocked without a Zcash runtime. Global wallet
-    // locking cancels every chain's approvals in performWalletLockState.
-    pendingRequestsManager.cancelAll(action => APPROVAL_ACTION_PREFIXES.zcash.includes(action))
+    if (invalidateRequests) {
+      invalidatePublicRequestContexts()
+      // Native accounts can stay unlocked without a Zcash runtime. Global wallet
+      // locking cancels every chain's approvals in performWalletLockState.
+      pendingRequestsManager.cancelAll(action => APPROVAL_ACTION_PREFIXES.zcash.includes(action))
+    }
   }
 
   async removeAccountReferences(walletId: string, accountId?: string): Promise<void> {
@@ -253,6 +270,7 @@ export class DAppHandler {
     await Promise.all(
       result.affectedOrigins.map(async origin => {
         this.permissions.delete(origin)
+        pendingRequestsManager.cancelOrigin(origin)
         await this.broadcastEvent(origin, 'accountsChanged', null).catch(() => {})
       })
     )
@@ -261,6 +279,7 @@ export class DAppHandler {
   async clearConnections(): Promise<void> {
     const origins = await dappManager.clearConnections()
     this.permissions.clear()
+    pendingRequestsManager.cancelAll()
     await Promise.all(
       origins.map(origin => this.broadcastEvent(origin, 'accountsChanged', null).catch(() => {}))
     )
@@ -295,6 +314,10 @@ export class DAppHandler {
   private static readonly HARDWARE_UNSUPPORTED_METHODS = new Set([
     'zcash_signMessage',
     'zcash_getPublicKey',
+    'zcash_activatePublicAccount',
+    'zcash_getPublicAssets',
+    'zcash_sendPublicTransaction',
+    'zcash_getPublicTransaction',
     'zcash_checkLendingMcaAccount'
   ])
 
@@ -343,6 +366,41 @@ export class DAppHandler {
 
       case 'zcash_getPublicKey':
         return this.getPublicKey(origin, request.params?.[0])
+
+      case 'zcash_getPublicAccount':
+      case 'zcash_getPublicAssets':
+      case 'zcash_getPublicTransaction':
+      case 'zcash_activatePublicAccount':
+      case 'zcash_sendPublicTransaction': {
+        if (request.method === 'zcash_getPublicAccount') {
+          const authorization = await dappManager.getAuthorization(origin)
+          const state = useWalletStore.getState()
+          if (
+            !authorization.accounts.some(
+              account =>
+                account.walletId === state.currentWalletId &&
+                account.accountId === state.currentAccountId
+            ) ||
+            !(await credentialSession.hasUnlockSession())
+          )
+            return null
+        }
+        const context = await capturePublicContext(origin)
+        const approve = (action: 'publicActivate' | 'publicTransaction', data: unknown) =>
+          this.requestExternalApproval(origin, action, data, { publicContext: context })
+        const result =
+          request.method === 'zcash_getPublicAccount'
+            ? await noirPublicRuntime.getAccount(context)
+            : request.method === 'zcash_getPublicAssets'
+              ? await noirPublicRuntime.getAssets(context)
+              : request.method === 'zcash_getPublicTransaction'
+                ? await noirPublicRuntime.getTransaction(context, request.params?.[0])
+                : request.method === 'zcash_activatePublicAccount'
+                  ? await noirPublicRuntime.activate(context, approve)
+                  : await noirPublicRuntime.send(context, request.params?.[0], approve)
+        await assertPublicContext(context)
+        return result
+      }
 
       case 'zcash_sendTransaction':
         return this.sendTransaction(origin, request.params?.[0], request.tabInfo ?? {})
@@ -405,7 +463,7 @@ export class DAppHandler {
     const isConnected = await dappManager.isConnected(origin)
     const authorizationRevision = await dappManager.getAuthorizationRevision(origin)
     const chosen = await this.runConnectApproval(origin, tabInfo)
-    await accountContextTransition.runActiveOperation(() =>
+    const committedRevision = await accountContextTransition.runActiveOperation(() =>
       this.applyConnectApproval(origin, chosen, tabInfo, authorizationRevision)
     )
 
@@ -417,7 +475,8 @@ export class DAppHandler {
     }
 
     const bound = await this.getBoundZcashAccount(origin)
-    if (!bound) throw new Error('No authorized Zcash account available')
+    if (!bound || bound.revision !== committedRevision)
+      throw new Error('Site authorization changed. Connect again.')
 
     await dappManager.updateLastActive(origin)
 
@@ -1029,8 +1088,8 @@ export class DAppHandler {
     binding: BatchAccount,
     tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string },
     authorization?: { readonly automatic?: boolean; readonly expectedRevision?: number }
-  ): Promise<void> {
-    await dappManager.setAuthorizedAccounts(
+  ): Promise<number> {
+    return dappManager.setAuthorizedAccounts(
       origin,
       tabInfo,
       chosen.map(a => ({ walletId: a.walletId, accountId: a.accountId })),
@@ -1045,7 +1104,7 @@ export class DAppHandler {
     chosen: BatchAccount[],
     tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string },
     expectedRevision: number
-  ): Promise<void> {
+  ): Promise<number> {
     const available = new Set((await this.buildAllSelectableAccounts()).map(account => account.id))
     if (chosen.some(account => !available.has(account.id))) {
       throw new Error('The selected Zcash accounts changed. Review the connection request again.')
@@ -1064,7 +1123,7 @@ export class DAppHandler {
     if (!isZcashHardwareKeySource(wallet?.keySource)) {
       await credentialSession.getCredentialBinding(target.walletId)
     }
-    await this.persistAuthorized(origin, chosen, target, tabInfo, { expectedRevision })
+    return this.persistAuthorized(origin, chosen, target, tabInfo, { expectedRevision })
   }
 
   private async getPublicKey(
@@ -1083,7 +1142,7 @@ export class DAppHandler {
       await this.ensureApprovedAccountContext(origin, walletId, accountId, bound.revision)
       const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
       const network = useWalletStore.getState().currentNetwork
-      const mode: IdentitySigningMode = options?.signingMode ?? 'current'
+      const mode = parseZcashSigningMode(options)
       const identity = await fetchCachedIdentity(
         network,
         walletId,
@@ -1568,6 +1627,7 @@ export class DAppHandler {
     originAddress?: string
   }> {
     this.validateSignMessageParam(message)
+    const mode = parseZcashSigningMode(options)
     await this.ensurePermission(origin)
 
     const { approved, walletId, accountId, authorizationRevision } = await this.requestUserApproval(
@@ -1586,7 +1646,6 @@ export class DAppHandler {
 
     return this.runBoundZcashOperation(walletId, accountId, async () => {
       await this.ensureApprovedAccountContext(origin, walletId, accountId, authorizationRevision)
-      const mode: IdentitySigningMode = options?.signingMode ?? 'current'
       const dedupKey = `${walletId}:${accountId}:${message}:${mode}`
       const pending = this.signMessageInFlight.get(dedupKey)
       if (pending) {
@@ -1603,7 +1662,7 @@ export class DAppHandler {
         walletCore,
         message,
         approvedAccountIndex,
-        options?.signingMode,
+        mode,
         SIGNING_ACCOUNT_INDEX
       ).finally(() => {
         if (this.signMessageInFlight.get(dedupKey) === promise) {
@@ -2020,6 +2079,7 @@ export class DAppHandler {
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
+      readonly publicContext?: NoirPublicRequestContext
     }
   ): Promise<{
     readonly approved: boolean
@@ -2048,9 +2108,10 @@ export class DAppHandler {
     origin: string,
     chainId: NoirRuntimeEventMessage['chainId'],
     eventName: NoirRuntimeEventMessage['eventName'],
-    data: unknown
+    data: unknown,
+    validate?: () => Promise<void>
   ): Promise<void> {
-    await this.broadcastEvent(origin, eventName, data, chainId)
+    await this.broadcastEvent(origin, eventName, data, chainId, validate)
   }
 
   cancelPendingApprovals(
@@ -2092,6 +2153,7 @@ export class DAppHandler {
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
+      readonly publicContext?: NoirPublicRequestContext
     }
   ): Promise<DAppApprovalDecision> {
     if (!CONNECT_APPROVAL_ACTIONS.has(action)) {
@@ -2138,20 +2200,42 @@ export class DAppHandler {
       readonly onEvmFeeSelectionChange?: (selection: EvmFeeSelection) => Promise<unknown>
       readonly onEvmTransferPrivacyChange?: (enabled: boolean) => Promise<unknown>
       readonly cancelOnNetworkFeeTierChangeError?: boolean
+      readonly publicContext?: NoirPublicRequestContext
     },
     onWindowCreated?: (windowId: number) => void
   ): Promise<DAppApprovalDecision> {
+    const publicContext = options?.publicContext
+    if (publicContext) {
+      if (publicContext.origin !== origin) throw new Error('Invalid Public approval origin')
+      await assertPublicContext(publicContext)
+    }
     const bound =
-      action !== 'connect' && APPROVAL_ACTION_PREFIXES.zcash.includes(action)
+      !publicContext?.internal &&
+      !publicContext?.chainId &&
+      action !== 'connect' &&
+      APPROVAL_ACTION_PREFIXES.zcash.includes(action)
         ? await this.getBoundZcashAccount(origin)
         : null
-    if (action !== 'connect' && APPROVAL_ACTION_PREFIXES.zcash.includes(action) && !bound) {
+    if (
+      action !== 'connect' &&
+      APPROVAL_ACTION_PREFIXES.zcash.includes(action) &&
+      !publicContext?.internal &&
+      !publicContext?.chainId &&
+      (!bound ||
+        (publicContext &&
+          (bound.walletId !== publicContext.walletId ||
+            bound.accountId !== publicContext.accountId)))
+    ) {
       throw new Error('Wallet account or site connection changed. Reconnect and try again.')
     }
-    const capturedWalletId = bound?.walletId ?? useWalletStore.getState().currentWalletId ?? ''
+    const capturedWalletId =
+      publicContext?.walletId ?? bound?.walletId ?? useWalletStore.getState().currentWalletId ?? ''
     const capturedAccountId =
-      bound?.accountId ?? backgroundZcashWalletRuntime.getCurrentAccount()?.id ?? ''
-    const capturedNetwork = useWalletStore.getState().currentNetwork
+      publicContext?.accountId ??
+      bound?.accountId ??
+      backgroundZcashWalletRuntime.getCurrentAccount()?.id ??
+      ''
+    const capturedNetwork = publicContext?.network ?? useWalletStore.getState().currentNetwork
     let releaseLaunch = () => {}
     const nextLaunch = new Promise<void>(resolve => {
       releaseLaunch = resolve
@@ -2185,6 +2269,11 @@ export class DAppHandler {
       await closeAllPopupWindows()
       if (executionModeRequestToken) {
         await dappExecutionModeRequestGate.waitForStable(executionModeRequestToken)
+      }
+      if (publicContext) {
+        await assertPublicContext(publicContext)
+        if (authorizationRevision !== publicContext.authorizationRevision)
+          throw new Error('Site authorization changed. Connect again.')
       }
 
       requestId = pendingRequestsManager.create(
@@ -2553,7 +2642,6 @@ export class DAppHandler {
     if (!conn) {
       throw new Error('No connection found for this site')
     }
-
     const { currentWalletId } = useWalletStore.getState()
     const account = backgroundZcashWalletRuntime.getCurrentAccount()
     if (!currentWalletId || !account) {
@@ -2599,6 +2687,7 @@ export class DAppHandler {
 
     if (isLock) {
       for (const dapp of connectedDApps) {
+        if ((await dappManager.getAuthorization(dapp.origin)).accounts.length === 0) continue
         try {
           await this.broadcastEvent(dapp.origin, 'accountsChanged', [])
         } catch (error) {
@@ -2675,7 +2764,8 @@ export class DAppHandler {
     origin: string,
     eventName: NoirRuntimeEventMessage['eventName'],
     data: unknown,
-    chainId: NoirRuntimeEventMessage['chainId'] = 'zcash'
+    chainId: NoirRuntimeEventMessage['chainId'] = 'zcash',
+    validate?: () => Promise<void>
   ): Promise<void> {
     const tabs = await chrome.tabs.query({})
 
@@ -2691,6 +2781,27 @@ export class DAppHandler {
       }
 
       if (tabOrigin === origin) {
+        if (chainId === 'zcash' && data !== null && !Array.isArray(data)) {
+          if (eventName === 'accountsChanged' || eventName === 'chainChanged') {
+            const bound = await this.getBoundZcashAccount(origin)
+            if (!bound) continue
+            if (eventName === 'accountsChanged') {
+              const addresses = data as { transparent?: string; shielded?: string }
+              if (
+                bound.account.addresses.transparent !== addresses.transparent ||
+                bound.account.addresses.shielded !== addresses.shielded
+              )
+                continue
+            }
+          }
+        }
+        if (validate) {
+          try {
+            await validate()
+          } catch {
+            continue
+          }
+        }
         try {
           await chrome.tabs.sendMessage(tab.id, {
             type: 'NOIR_EVENT',

@@ -166,6 +166,15 @@ import {
 } from './evm-transaction-monitor'
 import { createBackgroundEvmPortfolioCoordinator } from './evm-portfolio'
 import { createBackgroundPortfolioCoordinator } from './portfolio'
+import { noirPublicRuntime, PUBLIC_TRANSACTION_MONITOR_ALARM } from './noir-protocol/public-runtime'
+import {
+  capturePublicContext,
+  capturePublicEvmContext,
+  publicInternalOrigin,
+  assertPublicContext
+} from './noir-protocol/public-context'
+import { PUBLIC_SESSION_METHODS } from './multichain-session-dapp-handler'
+import { selectPublicAccount } from './noir-protocol/public-account-selection'
 import { createBackgroundActivityCoordinator } from './activity'
 import {
   observeActivityReceipts,
@@ -309,7 +318,11 @@ import {
   toCaip25ErrorShape
 } from './multichain-session-dapp-handler'
 import { readFirstPartyDAppSessionSnapshot } from './first-party-dapp-session'
-import { caip25SessionAllowsMethod, type Caip25RuntimeMethod } from '@/core/dapp/caip25'
+import {
+  Caip25ProviderError,
+  caip25SessionAllowsMethod,
+  type Caip25RuntimeMethod
+} from '@/core/dapp/caip25'
 import {
   resolveNearRuntimeNetworkConfig,
   resolveSolanaRuntimeNetworkConfig
@@ -447,6 +460,23 @@ if (__MULTICHAIN_CONFORMANCE_RPC_ENABLED__) {
 }
 
 const runtimeNetworkReady = initializeRuntimeNetwork()
+
+noirPublicRuntime.setIdentityReadiness(restoreBackgroundZcashRuntimeFromSession)
+noirPublicRuntime.setPaymentExecutor(async payment => {
+  const { context } = payment
+  await handleBackgroundZcashTx({
+    action: 'send',
+    walletId: context.walletId,
+    accountId: context.accountId,
+    accountKey: buildAccountKey(context.network, context.walletId, context.accountId),
+    transactionId: payment.transactionId,
+    sendParams: { to: payment.depositAddress, amount: payment.amount, fundingSource: 'shielded' },
+    marginalFeeZats: payment.marginalFeeZats,
+    feeQuoteId: payment.feeQuoteId,
+    submissionDeadline: payment.expiresAt,
+    authorizePublicPayment: () => assertPublicContext(context)
+  })
+})
 
 const evmFeatureRuntimePolicy = resolveEvmFeatureRuntimePolicy(__ENABLED_CHAIN_FEATURE_FLAGS__)
 const bitcoinFeatureRuntimePolicy = resolveBitcoinFeatureRuntimePolicy(
@@ -691,6 +721,7 @@ const walletDAppConnection = new WalletDAppConnectionCoordinator({
   loadActiveAccount: () => accountNetworksCoordinator.readActiveAccount(),
   getEvmChainId: async dapp => (await evmDAppOrigins.get(dapp.origin)).getCaip2ChainId(),
   getZcashChainId: () => getZcashChainId(DEFAULT_NETWORK),
+  supportsSessionChain: chainId => multichainSessionDAppHandler?.supportsChain(chainId) ?? false,
   connectEvm: async origin =>
     (await evmDAppOrigins.get(origin)).connectCurrentAccountToDApp(origin),
   connectZcash: origin => dappHandler.connectCurrentAccountToDApp(origin),
@@ -883,6 +914,62 @@ async function dispatchDAppChainRequest(
   tabInfo: { readonly title?: string; readonly favIconUrl?: string; readonly pageUrl?: string },
   expectedChainId?: string
 ): Promise<unknown> {
+  if (PUBLIC_SESSION_METHODS.has(request.method)) {
+    if (!expectedChainId || (chainId !== 'evm' && chainId !== 'zcash'))
+      throw new Caip25ProviderError(4100, 'Public requires an authorized CAIP-27 scope.')
+    const context =
+      chainId === 'evm'
+        ? await capturePublicEvmContext(origin, expectedChainId, async () => {
+            const runtime = await evmDAppOrigins.get(origin)
+            if (runtime.getCaip2ChainId() !== expectedChainId) {
+              throw new Caip25ProviderError(
+                4901,
+                'The site network changed. Review the request again.'
+              )
+            }
+          })
+        : await capturePublicContext(origin)
+    const session = await dappManager.getCaip25Session(origin)
+    if (!caip25SessionAllowsMethod(session, expectedChainId, request.method)) {
+      throw new Caip25ProviderError(4100, 'The Public method is not authorized for this scope.')
+    }
+    await assertPublicContext(context)
+    const params = Array.isArray(request.params) ? request.params : []
+    const approve = async (
+      action:
+        | 'publicActivate'
+        | 'publicTransaction'
+        | 'signMessage'
+        | 'evmMessage'
+        | 'evmTransaction',
+      data: unknown
+    ) => {
+      const decision = await dappHandler.requestExternalApproval(
+        origin,
+        action,
+        { ...(data as object), ...(tabInfo.favIconUrl ? { favicon: tabInfo.favIconUrl } : {}) },
+        { publicContext: context }
+      )
+      if (!decision.approved) throw new Caip25ProviderError(4001, 'User rejected the request.')
+      return decision
+    }
+    const result =
+      request.method === 'noir_getPublicAccount'
+        ? await noirPublicRuntime.getAccount(context)
+        : request.method === 'noir_getPublicAssets'
+          ? await noirPublicRuntime.getAssets(context)
+          : request.method === 'noir_getPublicTransaction'
+            ? await noirPublicRuntime.getTransaction(context, params[0])
+            : request.method === 'noir_activatePublicAccount'
+              ? await noirPublicRuntime.activate(context, approve, approve)
+              : request.method === 'noir_sendPublicTransaction'
+                ? await noirPublicRuntime.send(context, params[0], approve)
+                : request.method === 'noir_getPublicKey'
+                  ? await noirPublicRuntime.getPublicKey(context)
+                  : await noirPublicRuntime.signMessage(context, params[0], approve)
+    await assertPublicContext(context)
+    return result
+  }
   if (chainId === 'evm') {
     const result = await evmDAppOrigins.request(
       {
@@ -957,9 +1044,11 @@ async function dispatchDAppChainRequest(
       tabInfo
     )
   }
-  return request.method === 'zcash_disconnect'
-    ? handleDAppDisconnect(origin)
-    : handleDAppRequest(request, origin, tabInfo)
+  if (request.method === 'zcash_disconnect') {
+    await handleDAppDisconnect(origin)
+    return null
+  }
+  return handleDAppRequest(request, origin, tabInfo)
 }
 
 const CAIP25_CONNECTION_METHODS = new Set([
@@ -983,6 +1072,25 @@ async function assertCaip25MethodPermission(
   origin: string,
   activeEvmChainId?: string
 ): Promise<void> {
+  if (
+    family === 'zcash' &&
+    method === 'zcash_getAccounts' &&
+    (await dappManager.getAuthorization(origin)).accounts.length === 0
+  )
+    return
+  // Protocol business calls use the ordinary Zcash grant. They remain outside
+  // CAIP-25; wallet_invokeMethod rejects them before this dispatch.
+  if (
+    family === 'zcash' &&
+    [
+      'zcash_getPublicAccount',
+      'zcash_activatePublicAccount',
+      'zcash_getPublicAssets',
+      'zcash_sendPublicTransaction',
+      'zcash_getPublicTransaction'
+    ].includes(method)
+  )
+    return
   if (CAIP25_CONNECTION_METHODS.has(method)) return
   const chainId =
     family === 'zcash'
@@ -1298,6 +1406,7 @@ async function reloadMultichainRuntime(
       : null
   evmTransferController = evmTransferRuntime?.activeController ?? null
   evmTransferRouter = evmTransferRuntime?.router ?? null
+  noirPublicRuntime.setEvmPaymentRouter(evmTransferRouter)
   confidentialFundingCoordinator = evmFeatureRuntimePolicy.newOperationsEnabled
     ? createBackgroundConfidentialFundingCoordinator(
         catalog,
@@ -1499,7 +1608,10 @@ async function reloadMultichainRuntime(
             iconChain: 'near'
           }
         }),
-    dispatch: dispatchDAppChainRequest
+    dispatch: (family, request, origin, tabInfo, scope) =>
+      dispatchDAppChainRequest(family, request, origin, tabInfo, scope),
+    selectPublicAccount: (origin, scopes) =>
+      selectPublicAccount(origin, scopes, context => noirPublicRuntime.getAccount(context))
   })
   assetPriceService = createBackgroundAssetPriceService(
     userAssets.definitions,
@@ -2189,6 +2301,7 @@ const backgroundNetworkServicesReady = multichainStartupReady
         ? transactionMonitor.init()
         : chrome.alarms.clear('transaction-monitor-alarm').then(() => undefined),
       zcashTxMonitor.init(),
+      noirPublicRuntime.resume().catch(() => {}),
       rheaSwapTransactionMonitor?.init().catch(error => {
         console.warn('[RHEA Swap Monitor] Startup poll failed:', error)
       }) ?? Promise.resolve()
@@ -2458,6 +2571,10 @@ async function isWalletUiContextOpen(): Promise<boolean> {
 void trustedStorageAccessReady.then(() => initializeAnalyticsReporting()).catch(() => {})
 
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === PUBLIC_TRANSACTION_MONITOR_ALARM) {
+    void runtimeNetworkReady.then(() => noirPublicRuntime.resume()).catch(() => {})
+    return
+  }
   if (alarm.name === ANALYTICS_OUTBOX_ALARM) {
     void handleAnalyticsAlarm(alarm.name).catch(() => {})
     return
@@ -4002,6 +4119,42 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       result => sendResponse({ result }),
       () => sendResponse({ result: null })
     )
+    return true
+  }
+  if (
+    message.type === 'PUBLIC_GET_ACCOUNT' ||
+    message.type === 'PUBLIC_GET_ASSETS' ||
+    message.type === 'PUBLIC_ACTIVATE_ACCOUNT'
+  ) {
+    void (async () => {
+      await runtimeNetworkReady
+      if (
+        message.type === 'PUBLIC_ACTIVATE_ACCOUNT' &&
+        !(await restoreBackgroundZcashRuntimeFromSession())
+      )
+        throw new Error('Unlock the wallet to continue')
+      const origin = publicInternalOrigin()
+      const context = await capturePublicContext(origin, true)
+      if (message.type === 'PUBLIC_GET_ASSETS')
+        return {
+          success: true,
+          result: await noirPublicRuntime.getAssets(context, message.refresh !== false)
+        }
+      const account =
+        message.type === 'PUBLIC_GET_ACCOUNT'
+          ? await noirPublicRuntime.getAccount(context, false)
+          : await noirPublicRuntime.activate(context, (action, data) =>
+              dappHandler.requestExternalApproval(origin, action, data, { publicContext: context })
+            )
+      return { success: true, account }
+    })()
+      .then(sendResponse)
+      .catch(error =>
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Public operation failed'
+        })
+      )
     return true
   }
 
@@ -6501,7 +6654,9 @@ async function ensureDAppHandlerReady(): Promise<void> {
 
   // If wallet is locked, clear permission cache and don't restore
   if (backgroundZcashWalletRuntime.isLocked()) {
-    dappHandler.clearPermissions()
+    // A cold Native runtime after SW restart is not a locked keyring session.
+    // Public cached reads and connection approvals must survive Native startup.
+    dappHandler.clearPermissions(false)
     return
   }
 
@@ -6558,6 +6713,21 @@ async function handleDAppRequest(
         return null
       }
       return dappHandler.getSilentAccounts(origin)
+    }
+
+    // Persisted Public account and operation reads do not need a Zcash sync or
+    // Worker restore. The Public runtime initializes signing only on a cache miss.
+    if (
+      ['zcash_getPublicAccount', 'zcash_getPublicAssets', 'zcash_getPublicTransaction'].includes(
+        request.method
+      )
+    ) {
+      return dappHandler.handleRequest({
+        method: request.method,
+        params: request.params,
+        origin,
+        tabInfo
+      })
     }
 
     // Silent methods never trigger unlock
@@ -7701,6 +7871,8 @@ async function handleBackgroundZcashTx(params: {
   txType?: TransactionType
   sendParams?: SendTransactionParams
   marginalFeeZats?: number
+  submissionDeadline?: number
+  authorizePublicPayment?: () => Promise<void>
   feeQuoteId?: string
   monitorParams?: {
     depositAddress: string
@@ -7809,17 +7981,19 @@ async function handleBackgroundZcashTx(params: {
               amount: sendParams!.amount,
               fundingSource: sendParams!.fundingSource ?? 'shielded'
             })
-          : await readRheaZcashTransferDeadline(
+          : (params.submissionDeadline ??
+            (await readRheaZcashTransferDeadline(
               pendingRecord.quoteBinding,
               sendParams!.to,
               sendParams!.amount,
               sendParams!.fundingSource
-            )
+            )))
         if (nativeIntentsQuote) {
           await transactionRecorder.updateTransaction(accountKey, transactionId, {
             depositAddress: nativeIntentsQuote.depositAddress
           })
         }
+        await params.authorizePublicPayment?.()
         const transferResult = await walletCore.sendTransaction(
           { ...sendParams!, marginalFeeZats, feeQuoteId },
           submissionDeadline,

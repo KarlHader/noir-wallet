@@ -28,6 +28,8 @@ import {
   getAvailablePortfolioAssetGroupUsdValue,
   getPortfolioAssetDomainBalances,
   getPortfolioAssetGroupUnitQuote,
+  getPortfolioAssetNetworkLabel,
+  isPublicPortfolioAsset,
   type PortfolioAssetGroup,
   type PortfolioAssetGroupEntry
 } from '@/popup/services/portfolio-presentation'
@@ -145,7 +147,9 @@ function PortfolioAssetQuantity({
   if (balancesHidden) return <p className="mt-0.5 break-all text-xs text-muted">••••</p>
 
   const domainBalances = getPortfolioAssetDomainBalances(entries, domain, prices)
-  const isZcash = entries.every(entry => entry.chain.chain.family === 'zcash')
+  const isZcash = entries.every(
+    entry => entry.chain.chain.family === 'zcash' && !isPublicPortfolioAsset(entry.asset)
+  )
   const balances = confidentialZec
     ? [...domainBalances, { ...confidentialZec, domain: 'near-confidential' as const }]
     : domainBalances
@@ -275,7 +279,7 @@ function PortfolioAssetBalanceRow({
     <div>
       <button
         type="button"
-        aria-label={`View ${formatSymbol(entry.asset.metadata.symbol)} details on ${entry.chain.chain.displayName}`}
+        aria-label={`View ${formatSymbol(entry.asset.metadata.symbol)} details on ${getPortfolioAssetNetworkLabel(entry)}`}
         onClick={() => onSelectAsset?.(entry.asset.asset.id)}
         className={cn(
           'wallet-interactive flex min-h-[72px] w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left hover:bg-white/[0.05] active:bg-white/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
@@ -301,12 +305,15 @@ function PortfolioAssetBalanceRow({
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <p className="truncate text-base font-medium">
               {leading === 'chain'
-                ? entry.chain.chain.displayName
+                ? getPortfolioAssetNetworkLabel(entry)
                 : formatSymbol(entry.asset.metadata.symbol)}
             </p>
-            {domain === 'public' && entry.chain.chain.family === 'zcash' && (
-              <ZcashFundingBadge source="transparent" />
+            {leading === 'token' && isPublicPortfolioAsset(entry.asset) && (
+              <span className="text-xs text-muted">Public</span>
             )}
+            {domain === 'public' &&
+              entry.chain.chain.family === 'zcash' &&
+              !isPublicPortfolioAsset(entry.asset) && <ZcashFundingBadge source="transparent" />}
           </div>
           {showUnitPrice && (
             <UnitPrice
@@ -394,7 +401,7 @@ export function PortfolioAssetGroupCard({
         type="button"
         aria-label={
           directAsset
-            ? `View ${formatSymbol(group.symbol)} details on ${group.entries[0]?.chain.chain.displayName}`
+            ? `View ${formatSymbol(group.symbol)} details on ${group.entries[0] ? getPortfolioAssetNetworkLabel(group.entries[0]) : 'network'}`
             : `${expanded ? 'Collapse' : 'Expand'} ${formatSymbol(group.symbol)} networks`
         }
         aria-expanded={directAsset ? undefined : expanded}
@@ -425,10 +432,14 @@ export function PortfolioAssetGroupCard({
           title={
             <>
               <p className="truncate text-base font-medium">{formatSymbol(group.symbol)}</p>
+              {group.entries.some(entry => isPublicPortfolioAsset(entry.asset)) && (
+                <span className="shrink-0 text-xs text-muted">Public</span>
+              )}
               {domain === 'public' &&
-                group.entries.every(entry => entry.chain.chain.family === 'zcash') && (
-                  <ZcashFundingBadge source="transparent" />
-                )}
+                group.entries.every(
+                  entry =>
+                    entry.chain.chain.family === 'zcash' && !isPublicPortfolioAsset(entry.asset)
+                ) && <ZcashFundingBadge source="transparent" />}
               {!group.bundled && (
                 <span className="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[9px] text-muted">
                   Custom

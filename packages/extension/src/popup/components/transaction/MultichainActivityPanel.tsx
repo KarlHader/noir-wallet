@@ -232,9 +232,17 @@ export function MultichainActivityPanel({
       ),
     [accountNetworks]
   )
+  const publicChainId = network === 'mainnet' ? 'noir:mainnet' : 'noir:testnet'
+  const hasPublicActivity = Boolean(
+    isActivityModelForScope(model, walletId, accountId) &&
+    model.items.some(item => resolveActivityChainId(item) === publicChainId)
+  )
   const availableChainIds = useMemo(
-    () => selectableAccountNetworks.map(entry => entry.chain.id),
-    [selectableAccountNetworks]
+    () => [
+      ...selectableAccountNetworks.map(entry => entry.chain.id),
+      ...(hasPublicActivity ? [publicChainId] : [])
+    ],
+    [hasPublicActivity, publicChainId, selectableAccountNetworks]
   )
   const selectedChainIds = useMemo(
     () =>
@@ -357,6 +365,12 @@ export function MultichainActivityPanel({
       return
     }
     setStatus('loading')
+  }, [walletId, accountId, network, initialModel])
+
+  useEffect(() => {
+    if (!walletId || !accountId || isActivityModelForScope(initialModel, walletId, accountId)) {
+      return
+    }
     void load()
     return () => {
       requestSequence.current += 1
@@ -648,7 +662,12 @@ export function MultichainActivityPanel({
       <div className="flex items-center justify-between gap-3">
         <NetworkFilter
           ariaLabelPrefix="Filter activity by network"
-          options={selectableAccountNetworks.map(entry => entry.chain)}
+          options={[
+            ...selectableAccountNetworks.map(entry => entry.chain),
+            ...(hasPublicActivity
+              ? [{ id: publicChainId, family: 'zcash', displayName: 'Zcash' }]
+              : [])
+          ]}
           selectedIds={selectedChainIds}
           onSelectionChange={chainIds =>
             setPortfolioChainSelection(

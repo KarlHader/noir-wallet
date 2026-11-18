@@ -40,6 +40,7 @@ import {
   buildPortfolioAssetGroups,
   getPortfolioChainUsdValue,
   getPortfolioChainBalanceStatus,
+  groupPortfolioDisplayChains,
   partitionPortfolioAssetGroups,
   partitionPortfolioAssets,
   sortPortfolioAssets,
@@ -201,6 +202,7 @@ function UnavailableChainBalance({
         chain={resolveChainIconAlias(chain.chain.family, chain.chain.displayName, chain.chain.id)}
         width={32}
         height={32}
+        className="shrink-0 rounded-full"
         showTooltip={false}
       />
       <div className="min-w-0 flex-1">
@@ -372,7 +374,7 @@ export function PortfolioShell({
     [assetGroups, prices]
   )
   const sortedChains = useMemo(
-    () => sortPortfolioChains(visibleChains, prices),
+    () => sortPortfolioChains(groupPortfolioDisplayChains(visibleChains), prices),
     [prices, visibleChains]
   )
   const displayedChains = chainListExpanded ? sortedChains : sortedChains.slice(0, 3)

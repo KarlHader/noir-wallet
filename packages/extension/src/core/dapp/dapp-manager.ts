@@ -56,6 +56,7 @@ const STORAGE_KEY = 'connectedDApps'
 const MAX_NEW_FAVICON_LENGTH = 4_096
 const MAX_STORED_FAVICON_LENGTH = 262_144
 const AUTHORIZATION_KEY = 'dapp_authorization_state'
+const LEGACY_PUBLIC_CHAIN_ID = 'noir:mainnet'
 const MAX_CONNECTED_DAPPS = 256
 const MAX_AUTHORIZED_ACCOUNTS = 100
 const MAX_ACCOUNT_REF_LENGTH = 256
@@ -338,20 +339,44 @@ function normalizeLegacyEvmAuthorization(connection: ConnectedDApp): ConnectedDA
 function readConnectionsForMigration(stored: unknown): {
   readonly connections: ConnectedDApp[]
   readonly migrated: boolean
+  readonly legacyPublicOrigins: readonly string[]
 } {
-  const connections = stored === undefined ? [] : parseStoredDAppConnections(stored)
+  const parsed = stored === undefined ? [] : parseStoredDAppConnections(stored)
   const raw = Array.isArray(stored) ? stored : []
-  const migrated = connections.some(
-    connection =>
-      connection.evmAuthorization !== undefined &&
+  const legacyPublicOrigins = parsed
+    .filter(connection =>
       raw.some(
         candidate =>
           isRecord(candidate) &&
           candidate.origin === connection.origin &&
-          candidate.evmAuthorization === undefined
+          Array.isArray(candidate.chainAuthorizations) &&
+          candidate.chainAuthorizations.some(
+            (authorization: unknown) =>
+              isRecord(authorization) && authorization.chainId === LEGACY_PUBLIC_CHAIN_ID
+          )
       )
+    )
+    .map(connection => connection.origin)
+  const connections = parsed.filter(
+    connection =>
+      !legacyPublicOrigins.includes(connection.origin) ||
+      getConnectionAccountRefs(connection).length > 0 ||
+      Boolean(connection.evmAuthorization) ||
+      (connection.chainAuthorizations?.length ?? 0) > 0
   )
-  return { connections, migrated }
+  const migrated =
+    legacyPublicOrigins.length > 0 ||
+    connections.some(
+      connection =>
+        connection.evmAuthorization !== undefined &&
+        raw.some(
+          candidate =>
+            isRecord(candidate) &&
+            candidate.origin === connection.origin &&
+            candidate.evmAuthorization === undefined
+        )
+    )
+  return { connections, migrated, legacyPublicOrigins }
 }
 
 function normalizeChainAuthorizations(
@@ -516,7 +541,12 @@ export function parseStoredDAppConnection(value: unknown): ConnectedDApp {
   const chainAuthorizations =
     value.chainAuthorizations === undefined
       ? undefined
-      : normalizeChainAuthorizations(value.chainAuthorizations as DAppChainAuthorization[], origin)
+      : normalizeChainAuthorizations(
+          (value.chainAuthorizations as DAppChainAuthorization[]).filter(
+            authorization => authorization?.chainId !== LEGACY_PUBLIC_CHAIN_ID
+          ),
+          origin
+        )
   const evmAuthorization =
     value.evmAuthorization === undefined
       ? undefined
@@ -1225,7 +1255,7 @@ export class DAppManager {
     accounts: AccountRef[],
     binding: AccountRef,
     authorization?: { readonly automatic?: boolean; readonly expectedRevision?: number }
-  ): Promise<void> {
+  ): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()
       const state = this.authorizationState[origin]
@@ -1235,7 +1265,9 @@ export class DAppManager {
           automaticState !== undefined &&
           (automaticState.mode !== 'unreviewed' || automaticState.publicExplicit === true)) ||
         (authorization?.expectedRevision !== undefined &&
-          authorization.expectedRevision !== (state?.revision ?? 0))
+          (!Number.isSafeInteger(authorization.expectedRevision) ||
+            authorization.expectedRevision < 0 ||
+            authorization.expectedRevision !== (state?.revision ?? 0)))
       ) {
         throw new Error('Site authorization changed. Connect again.')
       }
@@ -1257,15 +1289,17 @@ export class DAppManager {
         existing?.boundWalletId !== undefined &&
         (existing.boundWalletId !== binding.walletId ||
           existing.boundAccountId !== binding.accountId)
-      const revision = bindingChanged
-        ? this.advanceAuthorizationRevision(origin)[origin].revision
-        : (state?.revision ?? 0)
+      const revision =
+        bindingChanged || !authorization?.automatic
+          ? this.advanceAuthorizationRevision(origin)[origin].revision
+          : (state?.revision ?? 0)
       if (!authorization?.automatic) {
         states[origin] = { ...state, revision, mode: 'approved' }
       } else if (automaticState !== undefined) {
         states[origin] = { ...automaticState, revision }
       }
       await this.commitConnections(next, states)
+      return states[origin]?.revision ?? 0
     })
   }
 
@@ -1361,14 +1395,14 @@ export class DAppManager {
       if (ZCASH_DAPP_CHAIN_IDS.has(normalizeDAppChainId(chainId))) {
         states[origin] = {
           ...states[origin],
-          revision: states[origin]?.revision ?? 0,
+          revision: this.nextRevision(origin),
           mode: 'approved',
           firstPartySession: 'explicit'
         }
       } else {
         states[origin] = {
           ...states[origin],
-          revision: states[origin]?.revision ?? 0,
+          revision: this.nextRevision(origin),
           mode: states[origin]?.mode ?? 'unreviewed',
           firstPartySession: 'explicit'
         }
@@ -1383,12 +1417,14 @@ export class DAppManager {
     accounts: AccountRef[],
     binding: AccountRef,
     expectedRevision?: number
-  ): Promise<void> {
+  ): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()
       if (
         expectedRevision !== undefined &&
-        expectedRevision !== (this.authorizationState[origin]?.revision ?? 0)
+        (!Number.isSafeInteger(expectedRevision) ||
+          expectedRevision < 0 ||
+          expectedRevision !== (this.authorizationState[origin]?.revision ?? 0))
       ) {
         throw new Error('Site authorization changed. Connect again.')
       }
@@ -1427,14 +1463,9 @@ export class DAppManager {
         chainAuthorizations: previousChains.filter(item => !isEvmChain(item.chainId)),
         caip25Session: caip25Session ?? undefined
       })
-      const states = { ...this.authorizationState }
-      states[origin] = {
-        ...states[origin],
-        revision: states[origin]?.revision ?? 0,
-        mode: states[origin]?.mode ?? 'unreviewed',
-        firstPartySession: 'explicit'
-      }
+      const states = this.advanceAuthorizationRevision(origin, 'explicit')
       await this.commitConnections(next, states)
+      return states[origin].revision
     })
   }
 
@@ -1577,6 +1608,11 @@ export class DAppManager {
       const accounts = authorization.accounts.some(ref => accountRefsEqual(ref, account))
         ? authorization.accounts
         : [...authorization.accounts, account]
+      if (
+        accounts.length === authorization.accounts.length &&
+        accountRefsEqual(authorization.binding, account)
+      )
+        return
       const next = new Map(this.connectedDApps)
       if (existing.evmAuthorization) {
         next.set(origin, {
@@ -1726,7 +1762,7 @@ export class DAppManager {
           now: Date.now()
         })
       )
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -1741,7 +1777,7 @@ export class DAppManager {
     },
     expectedRevision?: number,
     authorization?: { readonly automatic?: boolean }
-  ): Promise<void> {
+  ): Promise<number> {
     return this.enqueueMutation(async () => {
       await this.initialize()
       if (
@@ -1774,7 +1810,7 @@ export class DAppManager {
         : states[origin]
       states[origin] = {
         ...state,
-        revision: state?.revision ?? 0,
+        revision: authorization?.automatic ? (state?.revision ?? 0) : this.nextRevision(origin),
         mode: authorization?.automatic
           ? 'unreviewed'
           : zcashAuthorization !== undefined
@@ -1783,6 +1819,7 @@ export class DAppManager {
         firstPartySession: authorization?.automatic ? 'automatic' : 'explicit'
       }
       await this.commitConnections(next, states)
+      return states[origin].revision
     })
   }
 
@@ -1856,16 +1893,15 @@ export class DAppManager {
       if (!dapp) return
 
       const refs = getConnectionAccountRefs(dapp)
-      if (!refs.some(a => a.walletId === account.walletId && a.accountId === account.accountId)) {
-        refs.push(account)
-      }
+      if (refs.some(a => accountRefsEqual(a, account))) return
+      refs.push(account)
       const next = new Map(this.connectedDApps)
       next.set(origin, {
         ...dapp,
         authorizedAccounts: refs,
         lastActiveAt: nextActivityTime(dapp)
       })
-      await this.commitConnections(next)
+      await this.commitConnections(next, this.advanceRevisions([origin]))
     })
   }
 
@@ -1950,7 +1986,8 @@ export class DAppManager {
         ...(accountId === undefined ? {} : { accountId })
       })
       await this.commitConnections(
-        new Map(result.connections.map(connection => [connection.origin, connection]))
+        new Map(result.connections.map(connection => [connection.origin, connection])),
+        this.advanceRevisions(result.affectedOrigins)
       )
       return result
     })
@@ -1970,8 +2007,10 @@ export class DAppManager {
         Array.from(this.connectedDApps.values()),
         chainIds
       )
+      const states = this.advanceRevisions(result.affectedOrigins)
       await this.commitConnections(
-        new Map(result.connections.map(connection => [connection.origin, connection]))
+        new Map(result.connections.map(connection => [connection.origin, connection])),
+        states
       )
       return result
     })
@@ -2067,8 +2106,22 @@ export class DAppManager {
 
   private async reloadStorage(): Promise<void> {
     const result = await this.getStorage().get([STORAGE_KEY, AUTHORIZATION_KEY])
-    const { connections, migrated } = readConnectionsForMigration(result[STORAGE_KEY])
+    const { connections, migrated, legacyPublicOrigins } = readConnectionsForMigration(
+      result[STORAGE_KEY]
+    )
     const states = parseAuthorizationState(result[AUTHORIZATION_KEY])
+    for (const origin of legacyPublicOrigins) {
+      const state = states[origin]
+      if ((state?.revision ?? 0) >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('Site authorization revision exhausted')
+      }
+      states[origin] = {
+        ...state,
+        revision: (state?.revision ?? 0) + 1,
+        mode: state?.mode ?? 'unreviewed',
+        publicExplicit: true
+      }
+    }
     if (migrated) {
       await this.getStorage().set({ [STORAGE_KEY]: connections, [AUTHORIZATION_KEY]: states })
     }
@@ -2096,19 +2149,33 @@ export class DAppManager {
     return states
   }
 
+  private nextRevision(origin: string): number {
+    const revision = this.authorizationState[origin]?.revision ?? 0
+    if (revision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Site authorization revision exhausted')
+    }
+    return revision + 1
+  }
+
+  private advanceRevisions(origins: readonly string[]): Record<string, AuthorizationState> {
+    const states = { ...this.authorizationState }
+    for (const origin of origins) {
+      states[origin] = {
+        ...states[origin],
+        revision: this.nextRevision(origin),
+        mode: states[origin]?.mode ?? 'unreviewed'
+      }
+    }
+    return states
+  }
+
   private advanceAuthorizationRevision(
     origin: string,
     firstPartySession?: AuthorizationState['firstPartySession']
   ): Record<string, AuthorizationState> {
-    const states = { ...this.authorizationState }
-    const revision = states[origin]?.revision ?? 0
-    if (revision >= Number.MAX_SAFE_INTEGER)
-      throw new Error('Site authorization revision exhausted')
-    states[origin] = {
-      ...states[origin],
-      revision: revision + 1,
-      mode: states[origin]?.mode ?? 'unreviewed',
-      ...(firstPartySession === undefined ? {} : { firstPartySession })
+    const states = this.advanceRevisions([origin])
+    if (firstPartySession !== undefined) {
+      states[origin] = { ...states[origin], firstPartySession }
     }
     return states
   }

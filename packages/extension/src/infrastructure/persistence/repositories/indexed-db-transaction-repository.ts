@@ -239,6 +239,9 @@ export class IndexedDbTransactionRepository implements TransactionRepository {
                 )
               )
                 return false
+              if (query.provider && graph.root.intent?.protocol?.provider !== query.provider) {
+                return false
+              }
               return (
                 query.chainId === undefined ||
                 graph.segments.some(

@@ -43,6 +43,11 @@ export const ZCASH_DAPP_RUNTIME_METHODS = Object.freeze([
   'zcash_getBalance',
   'zcash_getMaxTransfer',
   'zcash_getPublicKey',
+  'zcash_getPublicAccount',
+  'zcash_activatePublicAccount',
+  'zcash_getPublicAssets',
+  'zcash_sendPublicTransaction',
+  'zcash_getPublicTransaction',
   'zcash_getAddresses',
   'zcash_sendTransaction',
   'zcash_signMessage',
@@ -407,6 +412,9 @@ const isDiagnosticLogDraft: RuntimeFieldValidator = value =>
   (value.sequence as number) >= 0
 
 const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = Object.freeze({
+  PUBLIC_GET_ACCOUNT: {},
+  PUBLIC_GET_ASSETS: { optional: { refresh: isBoolean } },
+  PUBLIC_ACTIVATE_ACCOUNT: {},
   PORTFOLIO_UPDATED: { required: { walletId: isShortString, accountId: isShortString } },
   SYNC_PROGRESS: {
     optional: {
@@ -1185,6 +1193,9 @@ const TRUSTED_RUNTIME_CONTEXTS: Readonly<Record<string, readonly OwnExtensionSen
     REFRESH_INTENTS_PROTOCOL_ASSETS: ['extension-page'],
     GET_SWAP_TOKEN_CATALOG: ['extension-page'],
     GET_PORTFOLIO: ['extension-page'],
+    PUBLIC_GET_ACCOUNT: ['extension-page'],
+    PUBLIC_GET_ASSETS: ['extension-page'],
+    PUBLIC_ACTIVATE_ACCOUNT: ['extension-page'],
     GET_EVM_PORTFOLIO: ['extension-page'],
     GET_EVM_CONFIRMATION_ESTIMATE: ['extension-page'],
     GET_EVM_TOKEN_ALLOWANCE: ['extension-page'],

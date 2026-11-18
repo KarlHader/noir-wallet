@@ -241,7 +241,7 @@ if (!verification.valid) {
 }
 ```
 
-Available signing modes are `current`, `derived`, and `legacy_index0`. See the [Provider API reference](https://docs.zknoir.com/developers/provider-api) before choosing a compatibility mode.
+Signing modes are `current`, `derived`, and `legacy_index0`. Protocol accounts use `derived` or `legacy_index0`; read the mode from `getPublicAssets().account`. See the [Provider API reference](https://docs.zknoir.com/developers/provider-api) for signing behavior.
 
 ## Listen for account changes
 
@@ -276,9 +276,9 @@ The methods below are available on `getNoirWallet().zcash`.
 
 | Method                           | Approval | Purpose                                                 |
 | -------------------------------- | -------: | ------------------------------------------------------- |
-| `connect()`                      |      Yes | Request access to one or more accounts                  |
-| `getAccounts()`                  |       No | Read the current authorization, or `null`               |
-| `disconnect()`                   |       No | Remove this site's wallet authorization                 |
+| `connect()`                      |      Yes | Request access to Zcash accounts                        |
+| `getAccounts()`                  |       No | Read authorized Zcash accounts                          |
+| `disconnect()`                   |       No | Remove account authorization                            |
 | `getAddresses()`                 |       No | Read the primary transparent and shielded addresses     |
 | `getBalance(accountId?)`         |       No | Read primary, selected, and authorized-account balances |
 | `getMaxTransfer(params)`         |       No | Calculate the exact Max amount and fee                  |
@@ -293,6 +293,55 @@ The methods below are available on `getNoirWallet().zcash`.
 `switchNetwork()` is deprecated and always throws. Select the wallet's global network mode in Developer Settings.
 
 The package also exports lower-level helpers such as `detectProvider()`, `getZcashProvider()`, `publicKeyToAddress()`, and `verifyMessageSignature()`. Most applications should start with `getNoirWallet()`.
+
+## Noir Protocol Public (experimental)
+
+Use the extension and SDK from the same tested commit for this demo capability; do not assume an installed npm `beta` package or released extension includes it. See the [Public demo guide](../../docs/mutil-chain/operations/noir-protocol-public-demo.md) for local setup and offline checks.
+
+Connect through a CAIP-25 session for the EVM or Zcash identity used by the Protocol account. Bind the Public client to that authorized scope; an EVM-only wallet does not need a Zcash account:
+
+```ts
+import { getNoirWallet, NoirPublicClient, PUBLIC_SESSION_METHODS } from '@noir-wallet/sdk'
+
+const wallet = getNoirWallet()
+if (!wallet?.multichain || !wallet.ethereum) throw new Error('EVM wallet unavailable')
+const chainId = await wallet.ethereum.request<string>({ method: 'eth_chainId' })
+const scope = `eip155:${BigInt(chainId)}`
+await wallet.multichain.createSession({
+  scopes: {
+    [scope]: {
+      methods: [...PUBLIC_SESSION_METHODS, 'eth_chainId'],
+      notifications: ['wallet_sessionChanged', 'accountsChanged', 'chainChanged']
+    }
+  }
+})
+const protocol = new NoirPublicClient(wallet.multichain, scope)
+const { account } = await protocol.getPublicAssets()
+const key = await protocol.getPublicKey()
+if (key.pubkey !== account.publicKey) throw new Error('Account changed')
+const signed = await protocol.signMessage('{ "message": "Sign in to Example" }')
+// Verify signed against account.address using ERC-191 for EVM, or
+// verifyMessageSignature for Zcash. Signing does not submit a transaction.
+await wallet.multichain.revokeSession()
+```
+
+For Zcash, use its Mainnet or Testnet CAIP-2 scope from the [scope definitions](./example/src/noir-protocol/public/connection.ts). Restore authorization with `getSession()` and handle `wallet_sessionChanged`; clear account, asset, and pending intent state when the authorized accounts or scope change. Existing direct `zcash_*` Public methods remain available for Zcash integrations.
+
+`selectPublicAccount()` chooses among the current account's authorized Public scopes without creating an account or paying a fee. It reuses an existing MCA or activation first, then prefers a scope with a positive native Gas balance. That balance is a selection signal; activation still validates the complete quote and network fee. Use its returned `scope` for the next `NoirPublicClient`, and confirm an EVM network switch when needed.
+
+`PublicAccount` contains `chain`, `publicKey`, `address`, `mcaId`, `parentContractId`, `network`, `status`, and `signingMode`. EVM uses `chain: 'evm'`, `signingMode: 'evm'`, and the authorized EVM address as its identity in `publicKey` and `address`. Zcash uses `chain: 'zcash-l2'` and its existing `derived` or `legacy_index0` identity. `mcaId` is `null` before activation. Each identity's MCA binding belongs to the configured Public parent contract; a Lending MCA from a different contract is not interchangeable. Public balances remain separate from native-chain balances.
+
+Public account activation and wallet-managed transactions use these additional methods:
+
+| Method                                             | Purpose / result                                                                                                                                                     |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `activatePublicAccount()`                          | Request paid activation approval; return the current `PublicAccount`, which may still be `activating`. Poll `getPublicAssets()` for completion.                      |
+| `getPublicAssets()`                                | Return `{ account, assets }`; each token includes `tokenId`, `decimals`, `balanceRaw`, and freshness `status`. An unavailable balance is not zero.                   |
+| `sendPublicTransaction({ requestId, txRequests })` | Approve, sign, submit, and monitor FunctionCalls; return a `PublicTransaction` with `operationId`. Reuse the same ID and unchanged calls when retrying an operation. |
+| `getPublicTransaction(operationId)`                | Return the authorized operation or `null`, including execution status, transaction hash, and optional anchoring progress.                                            |
+
+`signMessage()` signs the original text bytes after approval, including JSON text. The wallet may display valid JSON without rewriting it. The dApp owns transaction construction, nonce, expiry, external submission, and status tracking.
+`sendPublicTransaction()` retains its FunctionCall shape and automatic fee handling for wallet-managed execution. Its `final` status means verified execution, `failed` means failure, and `signed`, `broadcast`, and `confirming` remain pending. Anchoring is tracked separately. The [SDK types](./src/chains/zcash/types.ts) define the FunctionCall and result shapes.
 
 ## Handle errors
 

@@ -6,6 +6,8 @@ import { selectDAppSessionAccounts } from '../../../src/background/dapp-session-
 import { DAppManager } from '../../../src/core/dapp/dapp-manager.ts'
 
 const ethereum = 'eip155:1'
+const zcash = 'bip122:00040fe8ec8471911baa1db1266ea15d'
+const bitcoin = 'bip122:000000000019d6689c085ae165831e93'
 const custom = 'eip155:4663'
 const reference = { walletId: 'wallet-1', accountId: 'account-1' }
 const address = '0x1111111111111111111111111111111111111111'
@@ -36,12 +38,15 @@ function createHandler({
   readFirstPartySnapshot,
   readTokenList,
   openTokenManager,
+  bitcoinEnabled = false,
   executionAccounts = [address]
 } = {}) {
   let stored = null
+  let revision = 0
   const approvals = []
   const events = []
   const invocations = []
+  let approveConnection = true
   const handler = new BackgroundMultichainSessionDAppHandler({
     network: 'mainnet',
     readTokenList,
@@ -67,10 +72,10 @@ function createHandler({
     manager: manager ?? {
       canAutoConnectSession: async () => false,
       getAllConnections: async () => [],
-      getAuthorizationRevision: async () => 4,
       getCaip25Session: async () => stored,
-      setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, revision) => {
-        expect(revision).toBe(4)
+      getAuthorizationRevision: async () => revision,
+      setCaip25Session: async (_origin, _tab, authorizations, session, _zcash, expected) => {
+        expect(expected).toBe(revision)
         expect(authorizations).toEqual(
           session.scopes.map(scope => ({
             chainId: scope.chainId,
@@ -79,13 +84,14 @@ function createHandler({
           }))
         )
         stored = session
+        return ++revision
       }
     },
     approval: {
       requestExternalApproval: async (_origin, action, data) => {
         approvals.push({ action, data })
         return {
-          approved: true,
+          approved: approveConnection,
           requestId: 'approval-1',
           selectedScopes: { evm: selectedIds }
         }
@@ -114,6 +120,7 @@ function createHandler({
       resolveSessionAccountSelection: async (value, ids) => selectDAppSessionAccounts(value, ids),
       getSessionAccounts: async () => []
     },
+    bitcoinEnabled,
     solana: null,
     near: null,
     dispatch: async (...args) => {
@@ -121,7 +128,20 @@ function createHandler({
       return 'invoked'
     }
   })
-  return { handler, approvals, events, invocations, getStored: () => stored }
+  return {
+    handler,
+    approvals,
+    events,
+    invocations,
+    getStored: () => stored,
+    setStored: session => {
+      stored = session
+    },
+    getRevision: () => revision,
+    setApproveConnection: approved => {
+      approveConnection = approved
+    }
+  }
 }
 
 test('token metadata and manager require the current authorized account and reject context changes', async () => {
@@ -189,7 +209,16 @@ test('token metadata and manager require the current authorized account and reje
 })
 
 test('creates one shared EVM approval while preserving atomic chain scopes and methods', async () => {
-  const { handler, approvals, events, invocations, getStored } = createHandler()
+  const {
+    handler,
+    approvals,
+    events,
+    invocations,
+    getStored,
+    setStored,
+    getRevision,
+    setApproveConnection
+  } = createHandler()
 
   const session = await handler.request(
     {
@@ -230,11 +259,35 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
   expect(session.scopes[ethereum].accounts).toEqual([`${ethereum}:${address}`])
   expect(session.scopes[custom].accounts).toEqual([`${custom}:${address}`])
   expect(getStored().scopes.map(scope => scope.accounts)).toEqual([[reference], [reference]])
+  expect(getStored().scopes.map(scope => scope.methods)).toEqual([
+    ['eth_accounts'],
+    ['eth_accounts']
+  ])
   expect(events.at(-1).slice(0, 3)).toEqual([
     'https://dapp.example',
     'multichain',
     'wallet_sessionChanged'
   ])
+
+  const previousSession = getStored()
+  setStored({
+    ...previousSession,
+    scopes: [
+      ...previousSession.scopes,
+      { chainId: bitcoin, methods: ['getAccounts'], notifications: [] }
+    ]
+  })
+  setApproveConnection(false)
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 4001 })
+  expect(getStored().scopes.map(scope => scope.chainId)).toEqual([ethereum, custom, bitcoin])
+  expect(getRevision()).toBe(1)
+  setApproveConnection(true)
+  await handler.reconnect('https://dapp.example')
+  expect(approvals).toHaveLength(3)
+  expect(getStored()).toEqual(previousSession)
+  expect(getRevision()).toBe(2)
+  expect(approvals[2].data.scopes).toHaveLength(1)
+  expect(approvals[2].data.scopes[0].chainId).toBe('evm')
 
   await expect(
     handler.request(
@@ -270,6 +323,153 @@ test('creates one shared EVM approval while preserving atomic chain scopes and m
       {}
     )
   ).rejects.toMatchObject({ code: 4100 })
+  setStored({ scopes: [{ chainId: bitcoin, methods: ['getAccounts'], notifications: [] }] })
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 5100 })
+  expect(approvals).toHaveLength(3)
+  expect(getStored().scopes[0].chainId).toBe(bitcoin)
+})
+
+test('Native Zcash sessions reject Public methods, including methods retained in old sessions', async () => {
+  let stored = {
+    scopes: [{ chainId: zcash, methods: ['zcash_getPublicAssets'], notifications: [] }]
+  }
+  const dispatched = []
+  const handler = new BackgroundMultichainSessionDAppHandler({
+    network: 'mainnet',
+    evmNetworks: [],
+    manager: {
+      getAllConnections: async () => [],
+      getCaip25Session: async () => stored,
+      getAuthorizationRevision: async () => 0,
+      setCaip25Session: async () => {
+        throw new Error('Unexpected commit')
+      }
+    },
+    approval: {
+      requestExternalApproval: async () => {
+        throw new Error('Unexpected approval')
+      }
+    },
+    zcash: {
+      prepareSessionAccountSelection: async () =>
+        proposal({ chainId: zcash, chainName: 'Zcash', iconChain: 'zec' }),
+      getSessionAccounts: async () => [address]
+    },
+    evm: {},
+    bitcoin: {},
+    solana: null,
+    near: null,
+    dispatch: async (...args) => {
+      dispatched.push(args)
+    }
+  })
+  const origin = 'https://dapp.example'
+  for (const method of [
+    'zcash_getPublicAccount',
+    'zcash_activatePublicAccount',
+    'zcash_getPublicAssets',
+    'zcash_sendPublicTransaction',
+    'zcash_getPublicTransaction'
+  ]) {
+    await expect(
+      handler.request(
+        {
+          method: 'wallet_createSession',
+          params: { scopes: { [zcash]: { methods: [method], notifications: [] } } }
+        },
+        origin,
+        {}
+      )
+    ).rejects.toMatchObject({ code: 5101 })
+    stored = { scopes: [{ chainId: zcash, methods: [method], notifications: [] }] }
+    await expect(handler.reconnect(origin)).rejects.toMatchObject({ code: 5101 })
+    const legacySession = await handler.request({ method: 'wallet_getSession' }, origin, {})
+    expect(legacySession.scopes[zcash].methods).toEqual([])
+    await expect(
+      handler.request(
+        {
+          method: 'wallet_invokeMethod',
+          params: { scope: zcash, request: { method } }
+        },
+        origin,
+        {}
+      )
+    ).rejects.toMatchObject({ code: 4100 })
+  }
+  expect(dispatched).toEqual([])
+})
+
+test('Native Zcash approval aborts on intervening authorization changes', async () => {
+  let revision = 3
+  let changeDuringApproval = false
+  let changeDuringSessionNotification = false
+  let readsSinceCommit = 0
+  let stored = null
+  let approvalData
+  let broadcasts = 0
+  const committedRevisions = []
+  const handler = new BackgroundMultichainSessionDAppHandler({
+    network: 'mainnet',
+    evmNetworks: [],
+    manager: {
+      getAllConnections: async () => [],
+      getCaip25Session: async () => {
+        readsSinceCommit += 1
+        if (changeDuringSessionNotification && readsSinceCommit === 2) revision += 1
+        return stored
+      },
+      getAuthorizationRevision: async () => revision,
+      setCaip25Session: async (_origin, _tab, _authorizations, session, _zcash, expected) => {
+        committedRevisions.push(expected)
+        stored = session
+        readsSinceCommit = 0
+        return ++revision
+      }
+    },
+    approval: {
+      requestExternalApproval: async (_origin, _action, data) => {
+        approvalData = data
+        if (changeDuringApproval) revision += 1
+        return { approved: true, selectedScopes: { [zcash]: ['account-1'] } }
+      },
+      broadcastProviderEvent: async () => {
+        broadcasts += 1
+      }
+    },
+    zcash: {
+      prepareSessionAccountSelection: async () =>
+        proposal({ chainId: zcash, chainName: 'Zcash', iconChain: 'zec' }),
+      resolveSessionAccountSelection: async value =>
+        selectDAppSessionAccounts(value, ['account-1']),
+      getSessionAccounts: async () => [address]
+    },
+    evm: {},
+    bitcoin: {},
+    solana: null,
+    near: null,
+    dispatch: async () => null
+  })
+  const request = () =>
+    handler.request(
+      {
+        method: 'wallet_createSession',
+        params: { scopes: { [zcash]: { methods: ['zcash_getAccounts'], notifications: [] } } }
+      },
+      'https://dapp.example',
+      {}
+    )
+  await expect(request()).resolves.toMatchObject({ scopes: { [zcash]: {} } })
+  expect(approvalData.linksIdentities).toBeUndefined()
+  expect(committedRevisions).toEqual([3])
+  expect(broadcasts).toBe(1)
+  changeDuringApproval = true
+  await expect(handler.reconnect('https://dapp.example')).rejects.toMatchObject({ code: 4100 })
+  expect(committedRevisions).toEqual([3])
+  changeDuringApproval = false
+  changeDuringSessionNotification = true
+  await expect(request()).rejects.toMatchObject({ code: 4100 })
+  expect(committedRevisions).toEqual([3, 5])
+  expect(broadcasts).toBe(1)
 })
 
 test('multichain Connect grants only networks supported by the active account', async () => {
@@ -385,6 +585,7 @@ function firstPartyFixture({ executionAccounts, executionMode = 'main' } = {}) {
     manager,
     // First-party sessions also include enabled chains belonging to other wallets.
     activeChainIds: async () => [ethereum],
+    bitcoinEnabled: true,
     readFirstPartySnapshot: async () => state.snapshot,
     ...(executionAccounts === undefined ? {} : { executionAccounts })
   }
@@ -463,6 +664,37 @@ test('official Connect all skips connection approval while third-party Connect r
     await handler.request({ method: 'wallet_getSession' }, 'https://untrusted.example', {})
   ).toBeNull()
   await handler.request(request, 'https://untrusted.example', {})
+  expect(approvals).toHaveLength(1)
+})
+
+test('first-party auto-connect cannot grant Public methods without approval', async () => {
+  const { handler, manager, approvals } = firstPartyFixture()
+  const origin = 'https://app.zknoir.com'
+  const method = 'noir_getPublicAssets'
+  const invoke = () =>
+    handler.request(
+      {
+        method: 'wallet_invokeMethod',
+        params: { scope: ethereum, request: { method } }
+      },
+      origin,
+      {}
+    )
+  const automatic = await handler.request({ method: 'wallet_getSession' }, origin, {})
+  expect(automatic.scopes[ethereum].methods).not.toContain(method)
+  await expect(invoke()).rejects.toMatchObject({ code: 4100 })
+  expect(approvals).toHaveLength(0)
+
+  const approved = await handler.request(
+    {
+      method: 'wallet_createSession',
+      params: { scopes: { [ethereum]: { methods: [method], notifications: [] } } }
+    },
+    origin,
+    {}
+  )
+  expect(approved.scopes[ethereum].methods).toEqual([method])
+  expect((await manager.getCaip25Session(origin)).scopes[0].methods).toEqual([method])
   expect(approvals).toHaveLength(1)
 })
 

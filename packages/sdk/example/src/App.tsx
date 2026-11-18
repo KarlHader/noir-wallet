@@ -29,8 +29,10 @@ import {
   getExampleChainIconUrl
 } from './evm-network-catalog'
 import './App.css'
+import { PublicDemo } from './noir-protocol/public/PublicDemo'
+import { DemoHeader } from './DemoHeader'
 
-type TabId = 'overview' | 'send' | 'signing' | 'tools' | 'batch'
+type TabId = 'overview' | 'send' | 'public' | 'signing' | 'tools' | 'batch'
 
 const SIGNING_MODES: { id: SigningMode; label: string }[] = [
   { id: 'current', label: 'Current' },
@@ -572,6 +574,7 @@ function App() {
   const tabs: { id: TabId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'send', label: 'Send' },
+    { id: 'public', label: 'Public' },
     { id: 'signing', label: 'Sign & Verify' },
     { id: 'tools', label: 'Tools' },
     { id: 'batch', label: 'Batch' }
@@ -595,31 +598,18 @@ function App() {
 
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <div className="logo">
-            <a href={import.meta.env.BASE_URL} className="logo-link">
-              <img
-                src={`${import.meta.env.BASE_URL}logo.png`}
-                alt="Noir Wallet"
-                className="logo-img"
-              />
-              <span className="logo-text">
-                <span className="logo-noir">Noir </span>
-                <span className="logo-wallet">Wallet</span>
-              </span>
-            </a>
-            <span className="logo-badge">SDK Example V2</span>
-          </div>
-          <div className="header-status">
+      <DemoHeader
+        active="examples"
+        status={
+          <>
             {!isInstalled && <span className="status-badge unavailable">Not detected</span>}
             {isInstalled && !connected && (
               <span className="status-badge ready">Provider ready</span>
             )}
             {connected && <span className="status-badge connected">Connected</span>}
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="main">
         <section className="page-intro">
@@ -639,7 +629,28 @@ function App() {
           </div>
         )}
 
-        {isInstalled && !connected && (
+        {isInstalled && (
+          <nav className="tab-nav">
+            {tabs
+              .filter(tab => connected || tab.id === 'overview' || tab.id === 'public')
+              .map(tab => (
+                <button
+                  key={tab.id}
+                  className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            {connected && (
+              <button className="btn btn-danger btn-xs tab-disconnect" onClick={disconnect}>
+                Disconnect
+              </button>
+            )}
+          </nav>
+        )}
+
+        {isInstalled && !connected && activeTab !== 'public' && (
           <div className="card connect-section">
             <ExampleChainIcon
               className="empty-state-icon"
@@ -661,23 +672,10 @@ function App() {
           </div>
         )}
 
+        {isInstalled && activeTab === 'public' && noirWallet && <PublicDemo wallet={noirWallet} />}
+
         {connected && (
           <>
-            <nav className="tab-nav">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-              <button className="btn btn-danger btn-xs tab-disconnect" onClick={disconnect}>
-                Disconnect
-              </button>
-            </nav>
-
             {activeTab === 'overview' && (
               <div className="tab-panel grid-2">
                 <div className="card card-compact">

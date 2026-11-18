@@ -53,6 +53,7 @@ import { ShieldFundsPage } from './pages/portfolio/ShieldFundsPage'
 import { ShieldWithdrawPage } from './pages/portfolio/ShieldWithdrawPage'
 import { ShieldZcashMovePage } from './pages/portfolio/ShieldZcashMovePage'
 import { ShieldDepositPage } from './pages/portfolio/ShieldDepositPage'
+import { NoirPublicAssetDetail } from './pages/portfolio/NoirPublicAssetDetail'
 
 // Swap Page
 import { Swap } from './pages/swap/Swap'
@@ -241,6 +242,7 @@ function AppRoutes() {
       )}
       <Route path="/transaction-result" element={<TransactionResultPage />} />
       <Route path="/asset-detail" element={<AssetDetail />} />
+      <Route path="/public-asset-detail" element={<NoirPublicAssetDetail />} />
       <Route path="/account-list" element={<AccountList />} />
       <Route path="/account-detail" element={<AccountDetail />} />
       <Route path="/account-networks" element={<ManageAccountNetworksPage />} />

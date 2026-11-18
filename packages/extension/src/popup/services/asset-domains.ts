@@ -90,6 +90,7 @@ export function projectPortfolioForDomain(
   if (domain === 'all') return model
   const projected = new Map<string, PortfolioAssetView>()
   for (const asset of model.assets) {
+    if (asset.asset.chainId.startsWith('noir:') && domain !== 'public') continue
     const raw = getAssetDomainRaw(asset, domain)
     if (raw === null) continue
     if (
@@ -104,9 +105,10 @@ export function projectPortfolioForDomain(
   const chains = model.chains
     .filter(
       chain =>
-        domain === 'public' ||
-        chain.chain.family === 'evm' ||
-        (domain === 'shield' && chain.chain.family === 'zcash')
+        (domain === 'public' ||
+          chain.chain.family === 'evm' ||
+          (domain === 'shield' && chain.chain.family === 'zcash')) &&
+        (domain === 'public' || !chain.chain.id.startsWith('noir:'))
     )
     .map(chain =>
       Object.freeze({

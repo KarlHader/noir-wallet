@@ -2,6 +2,10 @@ import { parseAccountId } from '@/core/accounts/domain'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
 import {
+  deletePublicAccountProjections,
+  withPublicAccountDataLock
+} from '@/infrastructure/noir-protocol/public-account-projection'
+import {
   deleteIndexedDbBitcoinChangeReservations,
   IndexedDbBitcoinChangeReservationRepository
 } from '@/infrastructure/chains/bitcoin/bitcoin-change-reservation-repository'
@@ -754,7 +758,8 @@ export class WalletCleanupCoordinator {
         ])
         await Promise.all([
           deleteIndexedDbTransactionPersistence(),
-          deleteIndexedDbPortfolioCache(),
+          withPublicAccountDataLock(() => deleteIndexedDbPortfolioCache()),
+          deletePublicAccountProjections(),
           deleteIndexedDbBitcoinDiscovery(),
           deleteIndexedDbBitcoinChangeReservations(),
           deleteIndexedDbBitcoinInputReservations(),
@@ -803,7 +808,8 @@ export class WalletCleanupCoordinator {
       this.bitcoinInputReservations.deleteByAccountScope(scope),
       deleteHistoryCacheByAccountScope(scope),
       this.transactionRepository.deleteByAccountScope(scope),
-      this.portfolioCache.deleteByAccountScope(scope),
+      withPublicAccountDataLock(() => this.portfolioCache.deleteByAccountScope(scope)),
+      deletePublicAccountProjections(walletId, accountId),
       confidentialFundingStore.deleteExternalDepositsByAccountScope(walletId, accountId),
       confidentialFundingStore.deleteBalancesByAccountScope(walletId, accountId),
       confidentialFundingStore.deleteSessionsByAccountScope(walletId, accountId),

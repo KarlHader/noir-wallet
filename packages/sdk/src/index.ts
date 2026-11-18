@@ -99,6 +99,12 @@ export type {
   ZcashAccountBalance,
   ZcashConnectResult,
   ZcashBalanceResult,
+  PublicAccount,
+  PublicAsset,
+  PublicAssets,
+  PublicFunctionCallRequest,
+  SendPublicTransactionParams,
+  PublicTransaction,
   Balance,
   FundingSource,
   SendTransactionParams,
@@ -115,3 +121,10 @@ export type {
   VerifyMessageParams,
   VerifyMessageResult
 } from './chains/zcash'
+
+export { NoirPublicClient, PUBLIC_SESSION_METHODS } from './protocol/public'
+export type {
+  PublicSigningIdentity,
+  PublicMessageSignature,
+  PublicAccountSelection
+} from './protocol/public'

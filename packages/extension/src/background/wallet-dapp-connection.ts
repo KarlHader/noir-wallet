@@ -17,6 +17,7 @@ interface WalletDAppConnectionOptions {
   readonly loadActiveAccount: () => Promise<WalletDAppActiveAccount | null>
   readonly getEvmChainId: (dapp: ConnectedDApp) => string | Promise<string>
   readonly getZcashChainId: () => string
+  readonly supportsSessionChain?: (chainId: string) => boolean
   readonly connectEvm: (origin: string) => Promise<void>
   readonly connectZcash: (origin: string) => Promise<void>
   readonly connectSession: (
@@ -61,7 +62,11 @@ export class WalletDAppConnectionCoordinator {
       const targets = await this.targets(dapp, active)
       const sessionChains =
         dapp.caip25Session?.scopes
-          .filter(scope => active.chainIds.includes(scope.chainId))
+          .filter(
+            scope =>
+              active.chainIds.includes(scope.chainId) &&
+              (this.options.supportsSessionChain?.(scope.chainId) ?? true)
+          )
           .map(scope => scope.chainId) ?? []
       const matches = (account: AccountRef) =>
         account.walletId === active.reference.walletId &&
@@ -94,7 +99,11 @@ export class WalletDAppConnectionCoordinator {
       if (!active) throw new Error('No active account')
       if (dapp.caip25Session) {
         const chainIds = dapp.caip25Session.scopes
-          .filter(scope => active.chainIds.includes(scope.chainId))
+          .filter(
+            scope =>
+              active.chainIds.includes(scope.chainId) &&
+              (this.options.supportsSessionChain?.(scope.chainId) ?? true)
+          )
           .map(scope => scope.chainId)
         if (chainIds.length === 0) {
           throw new Error('Reconnect from the site to update this network permission')

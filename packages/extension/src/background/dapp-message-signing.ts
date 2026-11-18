@@ -1,5 +1,18 @@
 export type DAppMessageSigningMode = 'derived' | 'current' | 'legacy_index0'
 
+export function parseZcashSigningMode(options: unknown): DAppMessageSigningMode {
+  if (options === undefined) return 'current'
+  if (!options || typeof options !== 'object' || Array.isArray(options))
+    throw new Error('Invalid Zcash signing options')
+  const value = options as Record<string, unknown>
+  if (Object.keys(value).some(key => key !== 'signingMode'))
+    throw new Error('Invalid Zcash signing options')
+  const mode = value.signingMode === undefined ? 'current' : value.signingMode
+  if (typeof mode !== 'string' || !['current', 'derived', 'legacy_index0'].includes(mode))
+    throw new Error('Unsupported Zcash signing mode')
+  return mode as DAppMessageSigningMode
+}
+
 export async function signApprovedDAppMessage<T extends { pubkey?: string; address?: string }>(
   core: {
     signMessage(message: string, accountIndex?: number, addressIndex?: number): Promise<T>

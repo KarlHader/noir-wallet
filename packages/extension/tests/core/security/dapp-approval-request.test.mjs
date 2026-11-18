@@ -2,6 +2,10 @@ import { test } from 'node:test'
 import { expect } from '@playwright/test'
 import { parsePendingApprovalResponse } from '../../../src/popup/services/dapp-approval-request.ts'
 import {
+  parsePublicActivationReview,
+  parsePublicTransactionReview
+} from '../../../src/popup/services/noir-public-approval-review.ts'
+import {
   parseEvmGasFundingDetails,
   resolveEvmGasFundingPreview
 } from '../../../src/popup/services/evm-gas-funding.ts'
@@ -21,6 +25,174 @@ function response(overrides = {}) {
 }
 
 test.describe('dApp approval request boundary', () => {
+  test('accepts Native connection and rejects retired Public approval actions', () => {
+    expect(
+      parsePendingApprovalResponse(response({ action: 'connect', data: {} }), requestId)
+    ).toMatchObject({ status: 'ready', request: { action: 'connect' } })
+    for (const action of ['publicConnect', 'publicSignMessage']) {
+      expect(parsePendingApprovalResponse(response({ action, data: {} }), requestId).status).toBe(
+        'error'
+      )
+    }
+  })
+
+  test('accepts web Public activation and only the wallet own internal activation origin', () => {
+    const previousChrome = globalThis.chrome
+    globalThis.chrome = {
+      runtime: { id: 'wallet-id', getURL: () => 'chrome-extension://wallet-id/' }
+    }
+    try {
+      expect(
+        parsePendingApprovalResponse(
+          response({
+            action: 'publicActivate',
+            origin: 'chrome-extension://wallet-id',
+            data: {}
+          }),
+          requestId
+        ).status
+      ).toBe('ready')
+      expect(
+        parsePendingApprovalResponse(
+          response({
+            action: 'publicTransaction',
+            origin: 'chrome-extension://wallet-id',
+            data: {}
+          }),
+          requestId
+        ).status
+      ).toBe('error')
+      expect(
+        parsePendingApprovalResponse(
+          response({
+            action: 'publicActivate',
+            origin: 'https://dapp.example',
+            data: {}
+          }),
+          requestId
+        ).status
+      ).toBe('ready')
+      expect(
+        parsePendingApprovalResponse(
+          response({
+            action: 'publicActivate',
+            origin: 'chrome-extension://another-wallet',
+            data: {}
+          }),
+          requestId
+        ).status
+      ).toBe('error')
+    } finally {
+      globalThis.chrome = previousChrome
+    }
+  })
+
+  test('requires the actual Public transaction calls and complete activation costs', () => {
+    const account = {
+      chain: 'zcash-l2',
+      network: 'mainnet',
+      publicKey: 'pk',
+      signingMode: 'derived',
+      address: 'public-account',
+      mcaId: 'mca',
+      parentContractId: 'parent.near',
+      status: 'active'
+    }
+    const call = {
+      method_name: 'transfer',
+      args: '{"amount":"1"}',
+      gas: '30000000000000',
+      deposit: '1'
+    }
+    const review = {
+      account,
+      nonce: '1',
+      deadline: '9999999999',
+      tgas: 200,
+      executionFee: { tokenId: 'zec.omft.near', amountRaw: '6800', recipient: 'fees.near' },
+      txRequests: [
+        {
+          FunctionCall: {
+            receiver_id: 'zec.omft.near',
+            function_calls: [
+              {
+                method_name: 'ft_transfer',
+                args: '{"receiver_id":"fees.near","amount":"6800"}',
+                gas: '30000000000000',
+                deposit: '1'
+              }
+            ]
+          }
+        },
+        { FunctionCall: { receiver_id: 'token.near', function_calls: [call] } }
+      ],
+      label: 'Harmless operation'
+    }
+    expect(
+      parsePublicTransactionReview(review)?.txRequests[1].FunctionCall.function_calls[0].deposit
+    ).toBe('1')
+    expect(
+      parsePublicTransactionReview({
+        ...review,
+        txRequests: [
+          review.txRequests[0],
+          { FunctionCall: { receiver_id: 'token.near', function_calls: Array(16).fill(call) } }
+        ]
+      })?.txRequests[1].FunctionCall.function_calls
+    ).toHaveLength(16)
+    expect(
+      parsePublicTransactionReview(review)?.txRequests[1].FunctionCall.function_calls[0].args
+    ).toBe(call.args)
+    expect(parsePublicTransactionReview({ ...review, txRequests: [] })).toBeNull()
+    expect(
+      parsePublicTransactionReview({
+        ...review,
+        account: { ...account, signingMode: 'noir_protocol_public' }
+      })
+    ).toBeNull()
+    expect(
+      parsePublicTransactionReview({
+        ...review,
+        txRequests: [
+          review.txRequests[0],
+          {
+            FunctionCall: {
+              receiver_id: 'token.near',
+              function_calls: [{ ...call, deposit: undefined }]
+            }
+          }
+        ]
+      })
+    ).toBeNull()
+    expect(
+      parsePublicTransactionReview({
+        ...review,
+        executionFee: { ...review.executionFee, amountRaw: '1' }
+      })
+    ).toBeNull()
+    expect(
+      parsePublicActivationReview({
+        account: { ...account, status: 'inactive' },
+        amount: '0.01',
+        fee: '0.001',
+        creationFee: '0.0003',
+        expectedCredit: '0.009',
+        depositAddress: 't1address',
+        expiresAt: Date.now() + 60000
+      })
+    ).toMatchObject({ totalPayment: '0.011' })
+    expect(
+      parsePublicActivationReview({
+        account: { ...account, status: 'inactive' },
+        amount: '0.01',
+        fee: '0.001',
+        creationFee: '0.0003',
+        expectedCredit: '0.009',
+        depositAddress: 't1address',
+        expiresAt: Date.now() - 1
+      })
+    ).toBeNull()
+  })
   test('accepts a supported request bound to the expected ID and web origin', () => {
     expect(parsePendingApprovalResponse(response(), requestId)).toEqual({
       status: 'ready',

@@ -1,6 +1,7 @@
 import { getActivityAssetEffects, type ActivityItem, type ActivityReadModel } from '@/core/activity'
 import { getZcashChainId, parseAssetId } from '@/core/chains/registry'
 import { resolveActivityChainId } from '@/popup/components/transaction/activity-chain'
+import { resolveNetworkDisplaySelection } from './chain-selection-availability'
 
 const ZCASH_CHAIN_IDS = new Set([getZcashChainId('mainnet'), getZcashChainId('testnet')])
 
@@ -21,10 +22,7 @@ export function resolveAvailableActivityChainSelection(
   availableChainIds: readonly string[],
   persistedSelection: readonly string[] | null | undefined
 ): readonly string[] {
-  if (!persistedSelection) return availableChainIds
-  const availableChainIdSet = new Set(availableChainIds)
-  const availableSelection = persistedSelection.filter(chainId => availableChainIdSet.has(chainId))
-  return availableSelection.length === 1 ? availableSelection : availableChainIds
+  return resolveNetworkDisplaySelection(availableChainIds, persistedSelection)
 }
 
 export function filterActivityItems(input: {

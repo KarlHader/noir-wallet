@@ -11,21 +11,56 @@ import { credentialSession } from './credential-session'
 import { accountContextTransition } from './account-context-transition'
 import { syncScheduler } from './sync-scheduler'
 import { WALLET_CONFIG } from '@/config/wallet'
+import { capturePublicEvmContext } from './noir-protocol/public-context'
 
-const ZCASH_ACTIONS = new Set(['connect', 'sendTransaction', 'signMessage', 'shieldFunds'])
+const ZCASH_ACTIONS = new Set([
+  'connect',
+  'sendTransaction',
+  'signMessage',
+  'shieldFunds',
+  'publicActivate',
+  'publicTransaction'
+])
 
 export async function getApprovalContext(requestId: string): Promise<PendingRequest> {
   const request = pendingRequestsManager.get(requestId)
   if (!request) throw new Error('Request not found or expired')
   if (!ZCASH_ACTIONS.has(request.action)) return request
 
+  if (
+    (request.action === 'publicActivate' || request.action === 'publicTransaction') &&
+    request.data?.account?.chain === 'evm'
+  ) {
+    try {
+      const context = await capturePublicEvmContext(request.origin, request.data.chainId)
+      if (
+        context.walletId !== request.walletId ||
+        context.accountId !== request.accountId ||
+        context.evmAddress !== request.data.account.publicKey ||
+        context.executionModeRevision !== request.data.executionModeRevision ||
+        context.authorizationRevision !== request.authorizationRevision ||
+        pendingRequestsManager.get(requestId) !== request
+      )
+        throw new Error('Public EVM approval context changed')
+      return request
+    } catch {
+      pendingRequestsManager.cancel(requestId)
+      throw new Error('EVM account or site connection changed. Reconnect and try again.')
+    }
+  }
+
   await rehydrateWalletStore()
   const authorization = await dappManager.getAuthorization(request.origin)
   const connection = await dappManager.getConnection(request.origin)
   const state = useWalletStore.getState()
-  const accountAuthorized = authorization.accounts.some(
-    account => account.walletId === request.walletId && account.accountId === request.accountId
-  )
+  const internalPublicActivation =
+    request.action === 'publicActivate' &&
+    request.origin === `chrome-extension://${chrome.runtime.id}`
+  const accountAuthorized =
+    internalPublicActivation ||
+    authorization.accounts.some(
+      account => account.walletId === request.walletId && account.accountId === request.accountId
+    )
   if (
     !approvalContextMatches({
       action: request.action,
@@ -33,8 +68,12 @@ export async function getApprovalContext(requestId: string): Promise<PendingRequ
       currentNetwork: state.currentNetwork,
       requestWalletId: request.walletId,
       requestAccountId: request.accountId,
-      boundWalletId: connection?.boundWalletId ?? null,
-      boundAccountId: connection?.boundAccountId ?? null,
+      boundWalletId: internalPublicActivation
+        ? state.currentWalletId
+        : (connection?.boundWalletId ?? null),
+      boundAccountId: internalPublicActivation
+        ? state.currentAccountId
+        : (connection?.boundAccountId ?? null),
       accountExists: !!state.getAccount(request.walletId, request.accountId),
       locked: !(await credentialSession.hasUnlockSession()),
       authorizationRevision: request.authorizationRevision,

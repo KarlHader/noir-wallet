@@ -82,7 +82,7 @@ export class InMemoryTransactionRepository implements TransactionRepository {
   }
 
   async list(queryValue: TransactionListQuery): Promise<readonly TransactionGraph[]> {
-    const { scope, limit, chainId, statuses, protocolProvider } =
+    const { scope, limit, chainId, statuses, protocolProvider, provider } =
       parseTransactionListQuery(queryValue)
 
     const accountIds = this.byAccount.get(transactionScopeKey(scope)) ?? new Set<TransactionId>()
@@ -101,7 +101,8 @@ export class InMemoryTransactionRepository implements TransactionRepository {
             graph.segments.some(
               segment =>
                 segment.target.kind === 'protocol' && segment.target.provider === protocolProvider
-            ))
+            )) &&
+          (provider === undefined || graph.root.intent?.protocol?.provider === provider)
       )
       .sort(
         (left, right) =>

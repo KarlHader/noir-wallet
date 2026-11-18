@@ -3,6 +3,7 @@ import test from 'node:test'
 import { validateVerifiedPublishedProvenance } from '../../../scripts/sdk-package-check.mjs'
 import {
   ZcashAPI,
+  NoirPublicClient,
   detectProvider,
   getNoirWallet,
   getZcashProvider,
@@ -100,6 +101,155 @@ test('verifies a signed UTF-8 Zcash message', () => {
 
   assert.equal(verifyMessageSignature({ message: 'Café', signature, pubkey }).valid, true)
   assert.equal(verifyMessageSignature({ message: 'Cafe', signature, pubkey }).valid, false)
+})
+
+test('Public Zcash methods preserve request IDs and positional wire parameters', async () => {
+  const requests = []
+  const account = {
+    chain: 'zcash-l2',
+    network: 'testnet',
+    signingMode: 'derived',
+    publicKey: 'public-key',
+    address: 'public-address',
+    mcaId: null,
+    parentContractId: 'parent',
+    status: 'inactive'
+  }
+  const assets = { account, assets: [] }
+  const transaction = { operationId: 'operation-1', requestId: 'request-1', status: 'signed' }
+  const api = new ZcashAPI({
+    async request(args) {
+      requests.push(args)
+      switch (args.method) {
+        case 'zcash_activatePublicAccount':
+          return account
+        case 'zcash_getPublicAssets':
+          return assets
+        case 'zcash_sendPublicTransaction':
+        case 'zcash_getPublicTransaction':
+          return transaction
+        default:
+          throw new Error(`Unexpected method: ${args.method}`)
+      }
+    },
+    on() {},
+    async disconnect() {}
+  })
+  const params = {
+    requestId: 'request-1',
+    txRequests: [
+      {
+        FunctionCall: {
+          receiver_id: 'contract',
+          function_calls: [{ method_name: 'call', args: '{}', gas: '30000000000000', deposit: '0' }]
+        }
+      }
+    ]
+  }
+
+  assert.deepEqual(await api.activatePublicAccount(), account)
+  assert.deepEqual(await api.getPublicAssets(), assets)
+  assert.deepEqual(await api.sendPublicTransaction(params), transaction)
+  assert.deepEqual(await api.getPublicTransaction('operation-1'), transaction)
+  assert.deepEqual(requests, [
+    { method: 'zcash_activatePublicAccount' },
+    { method: 'zcash_getPublicAssets' },
+    { method: 'zcash_sendPublicTransaction', params: [params] },
+    { method: 'zcash_getPublicTransaction', params: ['operation-1'] }
+  ])
+})
+
+test('Protocol uses the Native connection and account event', async () => {
+  const calls = []
+  const listeners = new Map()
+  const address = { transparent: 't-native', shielded: 'zs-native' }
+  const api = new ZcashAPI({
+    async request(args) {
+      calls.push(args)
+      if (args.method === 'zcash_requestAccounts') return address
+      if (args.method === 'zcash_getAccounts') return address
+      if (args.method === 'zcash_disconnect') return null
+      throw new Error(`Unexpected method: ${args.method}`)
+    },
+    on(event, handler) {
+      listeners.set(event, handler)
+    },
+    removeListener(event, handler) {
+      if (listeners.get(event) === handler) listeners.delete(event)
+    },
+    async disconnect() {}
+  })
+  const changed = () => {}
+  api.on('accountsChanged', changed)
+  assert.equal(listeners.get('accountsChanged'), changed)
+  assert.deepEqual(await api.connect(), await api.getAccounts())
+  await api.disconnect()
+  api.removeListener('accountsChanged', changed)
+  assert.equal(listeners.has('accountsChanged'), false)
+  assert.deepEqual(calls, [
+    { method: 'zcash_requestAccounts' },
+    { method: 'zcash_getAccounts' },
+    { method: 'zcash_disconnect' }
+  ])
+})
+
+test('message signing preserves Native mode and exact message bytes', async () => {
+  const calls = []
+  const api = new ZcashAPI({
+    async request(args) {
+      calls.push(args)
+      if (args.method === 'zcash_getPublicKey') {
+        return { pubkey: 'key', address: 'address', signingMode: args.params[0].signingMode }
+      }
+      if (args.method === 'zcash_signMessage') {
+        return {
+          signature: 'signature',
+          pubkey: 'key',
+          address: 'address',
+          signingMode: args.params[1].signingMode
+        }
+      }
+      throw new Error(`Unexpected method: ${args.method}`)
+    },
+    on() {},
+    async disconnect() {}
+  })
+  const message = '{  "message": "Sign in" }\n'
+  for (const signingMode of ['derived', 'legacy_index0']) {
+    assert.equal((await api.getPublicKey({ signingMode })).signingMode, signingMode)
+    assert.equal((await api.signMessage(message, { signingMode })).signingMode, signingMode)
+  }
+  assert.equal((await api.signMessage(message)).signingMode, 'current')
+  assert.deepEqual(calls, [
+    { method: 'zcash_getPublicKey', params: [{ signingMode: 'derived' }] },
+    { method: 'zcash_signMessage', params: [message, { signingMode: 'derived' }] },
+    { method: 'zcash_getPublicKey', params: [{ signingMode: 'legacy_index0' }] },
+    { method: 'zcash_signMessage', params: [message, { signingMode: 'legacy_index0' }] },
+    { method: 'zcash_signMessage', params: [message, { signingMode: 'current' }] }
+  ])
+})
+
+test('invalid signing modes fail before a provider request', async () => {
+  const calls = []
+  const api = new ZcashAPI({
+    async request(args) {
+      calls.push(args)
+    },
+    on() {},
+    async disconnect() {}
+  })
+  for (const options of [
+    null,
+    [],
+    { signingMode: 'noir_protocol_public' },
+    { signingMode: 'unknown' },
+    { signingModes: ['derived'] },
+    { signingMode: 'current', unexpected: true }
+  ]) {
+    await assert.rejects(api.getPublicKey(options), TypeError)
+    await assert.rejects(api.signMessage('hello', options), TypeError)
+  }
+  assert.deepEqual(calls, [])
 })
 
 test('npm-verified provenance must bind the signer and accepted build', async () => {
@@ -225,4 +375,26 @@ test('npm-verified provenance must bind the signer and accepted build', async ()
     validateVerifiedPublishedProvenance({ verified: [] }, metadata, async () => {}, tufCachePath),
     /npm-verified/
   )
+})
+
+test('Public execution remains bound to its CAIP scope and preserves rejection', async () => {
+  const calls = []
+  const rejection = Object.assign(new Error('User rejected the transaction'), { code: 4001 })
+  const provider = {
+    async invokeMethod(input) {
+      calls.push(input)
+      throw rejection
+    }
+  }
+  const client = new NoirPublicClient(provider, 'eip155:1')
+  const intent = { requestId: 'reviewed-intent', txRequests: [] }
+  await assert.rejects(client.sendPublicTransaction(intent), error => error === rejection)
+  assert.deepEqual(calls, [
+    {
+      scope: 'eip155:1',
+      request: { method: 'noir_sendPublicTransaction', params: [intent] }
+    }
+  ])
+  assert.throws(() => new NoirPublicClient(provider, 'near:mainnet'), /EVM or Zcash/)
+  assert.equal(calls.length, 1)
 })

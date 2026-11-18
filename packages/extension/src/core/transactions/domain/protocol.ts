@@ -1,5 +1,17 @@
 import { parseAssetDisplayMetadata, parseAssetId, parseChainId } from '@/core/chains/registry'
 import type { AssetDisplayMetadata, AssetId, ChainId } from '@/core/chains/domain'
+import { getEvmNativeProtocolAssetId } from '@/config/asset-market-assets'
+import {
+  computePublicSubmissionId,
+  computeLegacyPublicSubmissionId,
+  parsePublicCandidate,
+  readPublicAccountId,
+  readPublicEvmAddress,
+  readPublicIdentity,
+  serializePublicCandidate
+} from '@/core/services/noir-protocol/public/protocol'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 
 const RAW_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,77})$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/
@@ -60,12 +72,242 @@ export interface RheaSwapTransactionBinding {
   readonly destination: RheaSwapDestinationBinding
 }
 
-export type TransactionProtocolBinding = NearIntentsTransactionBinding | RheaSwapTransactionBinding
+export interface NoirPublicTransactionBinding {
+  readonly schemaVersion: 1
+  readonly provider: 'noir-public'
+  readonly kind: 'contract-call' | 'public-activation'
+  readonly network: 'mainnet' | 'testnet'
+  readonly requestId: string
+  readonly origin: string
+  readonly accountAddress: string
+  readonly parentContractId: string
+  readonly identityPublicKey: string
+  readonly identityChain?: 'evm'
+  readonly requestFingerprint: string
+  readonly submissionId?: string
+  readonly signedRequest?: string
+  readonly activationId?: string
+  readonly paymentIntent?: NoirPublicActivationIntent
+}
+
+export interface NoirPublicActivationIntent {
+  readonly depositAddress: string
+  readonly amountInRaw: string
+  readonly amountOutRaw: string
+  readonly feeRaw: string
+  readonly expiresAt: number
+  readonly refundAddress: string
+  readonly recipient: string
+  readonly parentMessage: string
+  readonly evmPayment?: Readonly<{
+    chainId: ChainId
+    assetId: AssetId
+    protocolAssetId: string
+    accountAddress: string
+    transactionId: string
+  }>
+}
+
+export type TransactionProtocolBinding =
+  | NearIntentsTransactionBinding
+  | RheaSwapTransactionBinding
+  | NoirPublicTransactionBinding
 
 export function getTransactionProtocolIntentKind(
   binding: TransactionProtocolBinding
-): 'swap' | 'supply' | 'transfer' {
+): 'swap' | 'supply' | 'transfer' | 'contract-call' {
+  if (binding.provider === 'noir-public') return 'contract-call'
   return binding.userAction === 'transfer' ? 'transfer' : binding.kind
+}
+
+function parseJsonObject(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 65_536) {
+    throw new Error(`${label} must be bounded JSON`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error(`${label} must be valid JSON`)
+  }
+  if (!isRecord(parsed)) throw new Error(`${label} must be a JSON object`)
+  return value
+}
+
+function fingerprintPublicValue(value: unknown): string {
+  return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(value))))
+}
+
+export function parseNoirPublicActivationIntent(value: unknown): NoirPublicActivationIntent {
+  if (!isRecord(value)) throw new Error('Noir Public payment intent must be an object')
+  assertExactKeys(
+    value,
+    [
+      'depositAddress',
+      'amountInRaw',
+      'amountOutRaw',
+      'feeRaw',
+      'expiresAt',
+      'refundAddress',
+      'recipient',
+      'parentMessage',
+      ...(value.evmPayment === undefined ? [] : ['evmPayment'])
+    ],
+    'Noir Public payment intent'
+  )
+  if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= 0) {
+    throw new Error('Invalid Noir Public payment intent expiry')
+  }
+  let evmPayment: NoirPublicActivationIntent['evmPayment']
+  if (value.evmPayment !== undefined) {
+    if (!isRecord(value.evmPayment)) throw new Error('Invalid Noir Public EVM payment')
+    assertExactKeys(
+      value.evmPayment,
+      ['chainId', 'assetId', 'protocolAssetId', 'accountAddress', 'transactionId'],
+      'Noir Public EVM payment'
+    )
+    const chainId = parseChainId(value.evmPayment.chainId as string).id
+    const asset = parseAssetId(value.evmPayment.assetId as string)
+    const protocolAssetId = parseString(value.evmPayment.protocolAssetId, 'Noir Public EVM asset')
+    if (
+      !chainId.startsWith('eip155:') ||
+      asset.chainId !== chainId ||
+      asset.namespace !== 'slip44' ||
+      protocolAssetId !== getEvmNativeProtocolAssetId(chainId)
+    )
+      throw new Error('Noir Public EVM payment asset is not a registered native asset')
+    evmPayment = Object.freeze({
+      chainId,
+      assetId: asset.id,
+      protocolAssetId,
+      accountAddress: readPublicEvmAddress(value.evmPayment.accountAddress),
+      transactionId: parseString(value.evmPayment.transactionId, 'Noir Public EVM transaction ID')
+    })
+  }
+  return Object.freeze({
+    depositAddress: parseString(value.depositAddress, 'Noir Public deposit address'),
+    amountInRaw: parseRawAmount(value.amountInRaw, 'Noir Public input amount'),
+    amountOutRaw: parseRawAmount(value.amountOutRaw, 'Noir Public output amount'),
+    feeRaw: parseRawAmount(value.feeRaw, 'Noir Public fee'),
+    expiresAt: value.expiresAt as number,
+    refundAddress: parseString(value.refundAddress, 'Noir Public refund address'),
+    recipient: parseString(value.recipient, 'Noir Public recipient'),
+    parentMessage: parseString(value.parentMessage, 'Noir Public parent message'),
+    ...(evmPayment ? { evmPayment } : {})
+  })
+}
+
+export function parseNoirPublicTransactionBinding(value: unknown): NoirPublicTransactionBinding {
+  if (!isRecord(value)) throw new Error('Noir Public binding must be an object')
+  assertExactKeys(
+    value,
+    [
+      'schemaVersion',
+      'provider',
+      'kind',
+      'network',
+      'requestId',
+      'origin',
+      'accountAddress',
+      'parentContractId',
+      'identityPublicKey',
+      ...(value.identityChain === undefined ? [] : ['identityChain']),
+      'requestFingerprint',
+      ...(value.kind === 'public-activation'
+        ? ['activationId', 'paymentIntent']
+        : ['submissionId', 'signedRequest'])
+    ],
+    'Noir Public binding'
+  )
+  if (
+    value.schemaVersion !== 1 ||
+    value.provider !== 'noir-public' ||
+    (value.kind !== 'contract-call' && value.kind !== 'public-activation') ||
+    (value.network !== 'mainnet' && value.network !== 'testnet') ||
+    (value.identityChain !== undefined && value.identityChain !== 'evm')
+  ) {
+    throw new Error('Invalid Noir Public binding')
+  }
+  const origin = parseString(value.origin, 'Noir Public origin')
+  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(origin)) {
+    let parsedOrigin: URL
+    try {
+      parsedOrigin = new URL(origin)
+    } catch {
+      throw new Error('Noir Public origin must be a valid origin')
+    }
+    if (
+      parsedOrigin.origin !== origin ||
+      (parsedOrigin.protocol !== 'https:' && parsedOrigin.protocol !== 'http:')
+    ) {
+      throw new Error('Noir Public origin must be a web origin')
+    }
+  }
+  const common = {
+    schemaVersion: 1 as const,
+    provider: 'noir-public' as const,
+    kind: value.kind,
+    network: value.network as 'mainnet' | 'testnet',
+    requestId: parseString(value.requestId, 'Noir Public request ID'),
+    origin,
+    accountAddress: readPublicAccountId(value.accountAddress, 'Noir Public account address'),
+    parentContractId: readPublicAccountId(value.parentContractId, 'Noir Public parent contract'),
+    identityPublicKey: readPublicIdentity(
+      value.identityPublicKey,
+      value.identityChain === 'evm' ? 'evm' : 'zcash'
+    ),
+    ...(value.identityChain === 'evm' ? { identityChain: 'evm' as const } : {}),
+    requestFingerprint: parseString(value.requestFingerprint, 'Noir Public request fingerprint')
+  }
+  if (!/^[0-9a-f]{64}$/.test(common.requestFingerprint)) {
+    throw new Error('Invalid Noir Public request fingerprint')
+  }
+  if (value.kind === 'public-activation') {
+    const paymentIntent = parseNoirPublicActivationIntent(value.paymentIntent)
+    if (fingerprintPublicValue(paymentIntent) !== common.requestFingerprint) {
+      throw new Error('Noir Public payment intent fingerprint mismatch')
+    }
+    return Object.freeze({
+      ...common,
+      kind: 'public-activation',
+      activationId: parseString(value.activationId, 'Noir Public activation ID'),
+      paymentIntent
+    })
+  }
+  const signedRequest = parseJsonObject(value.signedRequest, 'Noir Public signed request')
+  const candidate = parsePublicCandidate(JSON.parse(signedRequest))
+  if (
+    candidate.address !== common.accountAddress ||
+    (common.identityChain === 'evm'
+      ? !('EVM' in candidate.signer_wallet) ||
+        `0x${candidate.signer_wallet.EVM}` !== common.identityPublicKey
+      : !('Zcash' in candidate.signer_wallet) ||
+        candidate.signer_wallet.Zcash !== common.identityPublicKey) ||
+    serializePublicCandidate(candidate) !== signedRequest
+  ) {
+    throw new Error('Noir Public signed request does not match its binding')
+  }
+  const submissionId = parseString(value.submissionId, 'Noir Public submission ID')
+  const expectedSubmissionId = /^[0-9a-f]{64}$/.test(submissionId)
+    ? computeLegacyPublicSubmissionId(candidate)
+    : computePublicSubmissionId(candidate)
+  if (expectedSubmissionId !== submissionId) {
+    throw new Error('Noir Public submission ID does not match its signed request')
+  }
+  const originalRequests =
+    candidate.tgas === undefined ? candidate.tx_requests : candidate.tx_requests.slice(1)
+  if (
+    originalRequests.length === 0 ||
+    fingerprintPublicValue(originalRequests) !== common.requestFingerprint
+  ) {
+    throw new Error('Noir Public request fingerprint mismatch')
+  }
+  return Object.freeze({
+    ...common,
+    kind: 'contract-call',
+    submissionId,
+    signedRequest
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -298,9 +540,9 @@ export function parseRheaSwapTransactionBinding(value: unknown): RheaSwapTransac
 
 export function parseTransactionProtocolBinding(value: unknown): TransactionProtocolBinding {
   if (!isRecord(value)) throw new Error('Transaction protocol binding must be an object')
-  return value.provider === 'rhea-cross-chain-dex'
-    ? parseRheaSwapTransactionBinding(value)
-    : parseNearIntentsTransactionBinding(value)
+  if (value.provider === 'noir-public') return parseNoirPublicTransactionBinding(value)
+  if (value.provider === 'rhea-cross-chain-dex') return parseRheaSwapTransactionBinding(value)
+  return parseNearIntentsTransactionBinding(value)
 }
 
 export function assertNearIntentsTransferBinding(input: {

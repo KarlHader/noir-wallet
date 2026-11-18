@@ -15,6 +15,7 @@ const typescript = require('typescript')
 
 const origin = 'https://connected.example'
 const account = { walletId: 'wallet-1', accountId: 'account-1' }
+const otherAccount = { walletId: 'wallet-2', accountId: 'account-2' }
 
 test('EVM network consent is origin-scoped, persistent, and cleared by EVM revocation', async () => {
   const { manager, storage } = managerFixture()
@@ -128,6 +129,8 @@ test('stored EVM network consent rejects malformed or widened state', () => {
 
 function managerFixture() {
   const values = new Map()
+  let writes = 0
+  let failNextWrite = false
   let failWrites = false
   const storage = {
     async get(keys) {
@@ -138,6 +141,11 @@ function managerFixture() {
       )
     },
     async set(items) {
+      writes += 1
+      if (failNextWrite) {
+        failNextWrite = false
+        throw new Error('Storage write failed')
+      }
       if (failWrites) throw new Error('storage unavailable')
       for (const [key, value] of Object.entries(items)) values.set(key, structuredClone(value))
     }
@@ -145,12 +153,56 @@ function managerFixture() {
   return {
     manager: new DAppManager(storage),
     storage,
+    get writes() {
+      return writes
+    },
+    failNextWrite() {
+      failNextWrite = true
+    },
     values,
     setFailWrites: value => {
       failWrites = value
     }
   }
 }
+
+test('Native approval commits one revision and preserves its grant on failure', async () => {
+  const fixture = managerFixture()
+  const { manager, storage } = fixture
+  const first = await manager.setAuthorizedAccounts(origin, {}, [account], account, {
+    expectedRevision: 0
+  })
+  assert.equal(first, 1)
+  assert.equal(fixture.writes, 1)
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [account])
+  assert.equal(await manager.canAutoConnect(origin), false)
+
+  await assert.rejects(
+    manager.setAuthorizedAccounts(origin, {}, [otherAccount], otherAccount, {
+      expectedRevision: 0
+    }),
+    /Site authorization changed/
+  )
+  assert.equal(fixture.writes, 1)
+  fixture.failNextWrite()
+  await assert.rejects(
+    manager.setAuthorizedAccounts(origin, {}, [otherAccount], otherAccount, {
+      expectedRevision: first
+    }),
+    /Storage write failed/
+  )
+  assert.equal(fixture.writes, 2)
+  const reloaded = new DAppManager(storage)
+  assert.equal(await reloaded.getAuthorizationRevision(origin), first)
+  assert.deepEqual(await reloaded.getAuthorizedAccounts(origin), [account])
+
+  const second = await reloaded.setAuthorizedAccounts(origin, {}, [otherAccount], otherAccount, {
+    expectedRevision: first
+  })
+  assert.equal(second, first + 1)
+  const afterRestart = new DAppManager(storage)
+  assert.deepEqual(await afterRestart.getAuthorizedAccounts(origin), [otherAccount])
+})
 
 function balanceHandlerFixture(manager) {
   let balancesAvailable = true
@@ -583,6 +635,158 @@ test('changing a Zcash site binding invalidates approvals from the previous acco
   )
 })
 
+test('legacy Public-only permission is discarded without granting Native access', async () => {
+  const { manager, storage, values } = managerFixture()
+  values.set('connectedDApps', [
+    {
+      id: 'legacy-public',
+      name: 'Legacy',
+      host: 'connected.example',
+      origin,
+      favicon: '',
+      connectedAt: 1,
+      lastActiveAt: 1,
+      chainAuthorizations: [
+        {
+          chainId: 'noir:mainnet',
+          accounts: [account],
+          binding: account
+        }
+      ]
+    }
+  ])
+  values.set('dapp_authorization_state', {
+    [origin]: { revision: 5, mode: 'unreviewed' }
+  })
+
+  assert.deepEqual(await manager.getAuthorization(origin), { revision: 6, accounts: [] })
+  assert.equal(await manager.getConnection(origin), null)
+  assert.equal(await manager.canAutoConnect(origin), false)
+  assert.deepEqual(values.get('connectedDApps'), [])
+  assert.equal(values.get('dapp_authorization_state')[origin].publicExplicit, true)
+  await assert.rejects(
+    manager.setAuthorizedAccounts(origin, {}, [account], account, { expectedRevision: 5 }),
+    /Site authorization changed/
+  )
+
+  const restored = new DAppManager(storage)
+  assert.equal(await restored.getAuthorizationRevision(origin), 6)
+  assert.equal(await restored.canAutoConnect(origin), false)
+  await assert.rejects(
+    restored.setAuthorizedAccounts(origin, {}, [account], account, { automatic: true }),
+    /Site authorization changed/
+  )
+  await restored.setAuthorizedAccounts(origin, {}, [account], account, { expectedRevision: 6 })
+  assert.deepEqual(await restored.getAuthorizedAccounts(origin), [account])
+})
+
+test('legacy Public grant removal preserves existing Native authorization', async () => {
+  const { manager, values } = managerFixture()
+  values.set('connectedDApps', [
+    {
+      id: 'mixed',
+      name: 'Mixed',
+      host: 'connected.example',
+      origin,
+      favicon: '',
+      connectedAt: 1,
+      lastActiveAt: 1,
+      boundWalletId: account.walletId,
+      boundAccountId: account.accountId,
+      authorizedAccounts: [account],
+      chainAuthorizations: [
+        {
+          chainId: 'noir:mainnet',
+          accounts: [otherAccount],
+          binding: otherAccount
+        }
+      ]
+    }
+  ])
+  values.set('dapp_authorization_state', {
+    [origin]: { revision: 3, mode: 'approved', publicExplicit: true }
+  })
+
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [account])
+  assert.equal(await manager.getAuthorizationRevision(origin), 4)
+  assert.equal((await manager.getConnection(origin)).chainAuthorizations.length, 0)
+  assert.equal(await manager.canAutoConnect(origin), false)
+  await manager.removeLegacyAuthorization(origin)
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [])
+  assert.equal(await manager.isRevoked(origin), true)
+  await assert.rejects(
+    manager.setAuthorizedAccounts(origin, {}, [otherAccount], otherAccount, {
+      expectedRevision: 4
+    }),
+    /Site authorization changed/
+  )
+})
+
+test('CAIP session commit rejects a concurrent Native approval', async () => {
+  const { manager } = managerFixture()
+  const chainId = 'eip155:1'
+  const authorizations = [{ chainId, accounts: [account], binding: account }]
+  const session = {
+    scopes: [{ chainId, methods: ['eth_accounts'], notifications: [] }]
+  }
+  const reviewedRevision = await manager.getAuthorizationRevision(origin)
+  const nativeRevision = await manager.setAuthorizedAccounts(
+    origin,
+    {},
+    [otherAccount],
+    otherAccount,
+    {
+      expectedRevision: reviewedRevision
+    }
+  )
+  await assert.rejects(
+    manager.setCaip25Session(origin, {}, authorizations, session, undefined, reviewedRevision),
+    /Site authorization changed/
+  )
+  assert.equal(await manager.getChainAuthorization(origin, chainId), null)
+  const committedRevision = await manager.setCaip25Session(
+    origin,
+    {},
+    authorizations,
+    session,
+    undefined,
+    nativeRevision
+  )
+  assert.equal(committedRevision, nativeRevision + 1)
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [otherAccount])
+  assert.deepEqual((await manager.getChainAuthorization(origin, chainId)).binding, account)
+})
+
+test('obsolete Public chain cannot be granted through generic chain authorization', async () => {
+  const { manager } = managerFixture()
+  await assert.rejects(
+    manager.setChainAuthorizedAccounts(origin, {}, 'noir:mainnet', [account], account),
+    /released provider chain/
+  )
+  await assert.rejects(
+    manager.setChainAuthorizedAccounts(origin, {}, 'noir:testnet', [account], account),
+    /released provider chain/
+  )
+  assert.equal(await manager.getAuthorizationRevision(origin), 0)
+})
+
+test('Other chain revisions preserve legacy Native auto-connect eligibility', async () => {
+  const { manager, storage } = managerFixture()
+  await manager.setChainAuthorizedAccounts(origin, {}, 'eip155:1', [account], account)
+  assert.equal(await manager.getAuthorizationRevision(origin), 1)
+  assert.equal(await new DAppManager(storage).canAutoConnect(origin), true)
+  await manager.setAuthorizedAccounts(origin, {}, [account], account, { automatic: true })
+  assert.deepEqual(await manager.getAuthorizedAccounts(origin), [account])
+  assert.equal(await manager.getAuthorizationRevision(origin), 1)
+
+  await manager.removeLegacyAuthorization(origin)
+  assert.equal(await manager.canAutoConnect(origin), false)
+  await assert.rejects(
+    manager.setAuthorizedAccounts(origin, {}, [account], account, { automatic: true }),
+    /Site authorization changed/
+  )
+})
+
 test('Public authorization metadata survives reload without restoring revoked or automatic access', async () => {
   const { manager, storage } = managerFixture()
   const revokedOrigin = 'https://revoked.example'
@@ -627,7 +831,7 @@ test('Public authorization metadata survives reload without restoring revoked or
   })
   await restored.removeConnection(publicOrigin)
   const { dapp_authorization_state: persisted } = await storage.get('dapp_authorization_state')
-  assert.deepEqual(persisted[publicOrigin], { revision: 6, mode: 'revoked', publicExplicit: true })
+  assert.deepEqual(persisted[publicOrigin], { revision: 7, mode: 'revoked', publicExplicit: true })
   const reloaded = new DAppManager(storage)
   assert.equal(await reloaded.canAutoConnect(publicOrigin), false)
   assert.equal(await reloaded.isRevoked(revokedOrigin), true)
@@ -663,8 +867,9 @@ test('an existing browser favicon data URL does not erase approved connections o
 test('shared EVM authorization projects onto custom chains and revokes without removing Zcash', async () => {
   const { manager, storage, setFailWrites } = managerFixture()
   const other = { walletId: 'wallet-2', accountId: 'account-2' }
-  await manager.setAuthorizedAccounts(origin, {}, [account], account)
-  await manager.setEvmAuthorizedAccounts(origin, {}, [account, other], other)
+  const nativeRevision = await manager.setAuthorizedAccounts(origin, {}, [account], account)
+  const evmRevision = await manager.setEvmAuthorizedAccounts(origin, {}, [account, other], other)
+  assert.equal(evmRevision, nativeRevision + 1)
   assert.deepEqual(await manager.getChainAuthorization(origin, 'eip155:31337'), {
     chainId: 'eip155:31337',
     accounts: [account, other],

@@ -17,7 +17,9 @@ export function ActivityRouteTokenIcons({
 }) {
   const exchange = item.snapshot?.shield
     ? item.snapshot.shield.operation === 'swap'
-    : item.kind === 'swap' && item.snapshot?.protocol?.userAction !== 'transfer'
+    : item.kind === 'swap' &&
+      (item.snapshot?.protocol?.provider === 'noir-public' ||
+        item.snapshot?.protocol?.userAction !== 'transfer')
   const singleAsset = !exchange || hasMatchingActivityTokenIcons(route)
   const primaryAsset =
     !exchange && route.isExternalDeposit

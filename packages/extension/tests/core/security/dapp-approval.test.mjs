@@ -402,3 +402,35 @@ test('rejection cancels an approval during privacy preparation and discards its 
   assert.deepEqual(await pendingPrivacyResponse, { error: 'Approval request is no longer active' })
   assert.equal(pendingRequestsManager.get(requestId), null)
 })
+
+test('rejection cancels an approval during fee preparation and discards its late review', async () => {
+  let completeFeeUpdate
+  const feeUpdate = new Promise(resolve => {
+    completeFeeUpdate = resolve
+  })
+  const handler = new DAppHandler()
+  const approvalOpened = waitForApprovalOpened()
+  const approval = handler.requestExternalApproval(
+    'https://dapp.example',
+    'bitcoinTransaction',
+    { feeTier: 'standard' },
+    { onNetworkFeeTierChange: () => feeUpdate }
+  )
+  await approvalOpened
+  const requestId = new URLSearchParams(approvalUrl.split('?')[1]).get('requestId')
+  assert.ok(requestId)
+
+  const pendingFeeResponse = sendApprovalMessage(requestId, {
+    type: 'DAPP_NETWORK_FEE_TIER_CHANGE',
+    feeTier: 'fast'
+  })
+  assert.deepEqual(
+    await sendApprovalMessage(requestId, { type: 'DAPP_APPROVAL_RESULT', success: false }),
+    { success: true }
+  )
+  assert.equal((await approval).approved, false)
+  assert.equal(listeners.size, 0)
+  completeFeeUpdate({ feeTier: 'fast' })
+  assert.deepEqual(await pendingFeeResponse, { error: 'Approval request is no longer active' })
+  assert.equal(pendingRequestsManager.get(requestId), null)
+})
