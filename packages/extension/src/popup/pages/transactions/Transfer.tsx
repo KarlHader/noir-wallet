@@ -456,7 +456,7 @@ function TransferForm() {
   const shieldBalanceKey = `${currentNetwork}:${effective?.walletId ?? ''}:${effective?.accountId ?? ''}`
   const {
     balances: shieldBalances,
-    settled: shieldBalanceSettled,
+    connecting: shieldConnecting,
     error: shieldBalanceError,
     errorCode: shieldBalanceErrorCode,
     refreshBalances: loadShieldBalances
@@ -469,7 +469,8 @@ function TransferForm() {
       : null,
     refreshPortfolio,
     readProjection: readLatestPortfolio,
-    authorizeOnMount: false
+    authorizeOnMount:
+      from === 'shield' || (method === 'cluster' && isClusterTransferRoute(from, to))
   })
   const [shieldConnection, setShieldConnection] = useState<
     'checking' | 'connected' | 'required' | 'busy'
@@ -582,27 +583,6 @@ function TransferForm() {
     setShieldConnection('connected')
     setShieldError(null)
   }, [shieldBalances])
-
-  useEffect(() => {
-    if (
-      canLoadShield &&
-      effective?.walletId &&
-      effective.accountId &&
-      shieldBalanceSettled &&
-      !shieldBalances &&
-      !shieldBalanceError &&
-      shieldConnection === 'checking'
-    )
-      setShieldConnection('required')
-  }, [
-    canLoadShield,
-    effective?.walletId,
-    effective?.accountId,
-    shieldBalanceSettled,
-    shieldBalances,
-    shieldBalanceError,
-    shieldConnection
-  ])
 
   useEffect(() => {
     if (!shieldBalanceError) return
@@ -1573,9 +1553,7 @@ function TransferForm() {
       wallet.currentNetwork === currentNetwork
     )
   }
-  const shieldNeedsAuthorization =
-    shieldBalanceErrorCode === 'authorization_required' ||
-    (canLoadShield && shieldBalances === null && shieldBalanceError === null)
+  const shieldNeedsAuthorization = shieldBalanceErrorCode === 'authorization_required'
   const refreshShield = async (authorize = false) => {
     if (!effective || !scopeStillCurrent()) return
     setShieldConnection('busy')
@@ -2317,7 +2295,13 @@ function TransferForm() {
             onRetry={() => void refreshPortfolio(true)}
           />
         )}
-        {shieldError && !activeShieldReview && (
+        {fundingRoute && shieldConnection === 'required' && !shieldConnecting && (
+          <InlineError
+            message={shieldError ?? 'Shield balance unavailable.'}
+            onRetry={() => void refreshShield(shieldNeedsAuthorization)}
+          />
+        )}
+        {shieldError && !activeShieldReview && shieldConnection !== 'required' && (
           <p role="alert" className="text-xs text-warning">
             {shieldError}
           </p>
@@ -2327,41 +2311,22 @@ function TransferForm() {
         <Button
           size="wallet"
           className="w-full"
-          disabled={
-            fundingRoute && shieldConnection !== 'connected'
-              ? shieldConnection !== 'required'
-              : fundingRoute
-                ? !canReviewShield || preparingShield
-                : !canReview
-          }
+          disabled={fundingRoute ? !canReviewShield || preparingShield : !canReview}
           isLoading={
             preparingShield ||
-            (fundingRoute && (shieldConnection === 'checking' || shieldConnection === 'busy')) ||
+            (fundingRoute &&
+              (shieldConnecting ||
+                shieldConnection === 'checking' ||
+                shieldConnection === 'busy')) ||
             (!transferError &&
               ((clusterPair &&
                 (fundingRoute ? clusterSelected : method === 'directly') &&
                 selectedEstimate.loading) ||
                 (maxSelected && maximum.loading)))
           }
-          onClick={
-            fundingRoute && shieldConnection !== 'connected'
-              ? () => void refreshShield(shieldNeedsAuthorization)
-              : fundingRoute
-                ? () => void prepareShield()
-                : review
-          }
+          onClick={fundingRoute ? () => void prepareShield() : review}
         >
-          {fundingRoute && shieldConnection !== 'connected'
-            ? shieldConnection === 'required'
-              ? shieldNeedsAuthorization
-                ? 'Connect'
-                : 'Retry'
-              : 'Loading balances…'
-            : clusterSelected
-              ? 'Review Cluster'
-              : shieldPair
-                ? 'Move'
-                : 'Move'}
+          {clusterSelected ? 'Review Cluster' : 'Move'}
         </Button>
       </div>
 
