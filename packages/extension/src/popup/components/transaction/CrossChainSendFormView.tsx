@@ -209,7 +209,7 @@ export function CrossChainSendFormView({
           <SendFormActions
             onContinue={onReview}
             disabled={initializing || !canGetQuote || hasInsufficientFunds || isQuoting}
-            loading={actionLoading}
+            loading={actionLoading || isQuoting}
           />
         }
       >

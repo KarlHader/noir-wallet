@@ -401,7 +401,7 @@ export function Send({
     currentAccountId &&
     currentAccount?.addresses.transparent &&
     safeBig(amount || '0').gt(0) &&
-    safeBig(amount || '0').lte(getFundingBalance(balance, fundingSource).available)
+    (showReview || safeBig(amount || '0').lte(getFundingBalance(balance, fundingSource).available))
       ? JSON.stringify([
           currentNetwork,
           currentWalletId,
@@ -420,6 +420,7 @@ export function Send({
   const moveReviewReady = Boolean(
     moveQuoteReady && reviewedMoveQuote?.quoteId === moveQuote?.review.quoteId
   )
+  const moveQuoteLoading = Boolean(moveQuoteKey && !moveQuoteReady && !moveQuoteError)
   useEffect(() => {
     setMoveQuote(null)
     setMoveQuoteError(null)
@@ -915,7 +916,11 @@ export function Send({
 
   const handleContinue = () => {
     if (!active || syncBlocked) return
-    if (isConfidentialMove && !moveQuoteReady) return
+    if (
+      isConfidentialMove &&
+      (!moveQuoteReady || !moveQuote || moveQuote.review.expiresAt <= Date.now() + 5_000)
+    )
+      return
     if (sendPrivately) {
       if (!privatePreviewReady || !currentWalletId || !currentAccountId || !isValidAmount) return
       navigate(
@@ -1575,6 +1580,18 @@ export function Send({
     </div>
   )
 
+  const feeCalculating =
+    feeRequired &&
+    !feeReady &&
+    !feeError &&
+    (isMaxFeeMode ? maxTransfer.loading : feeEstimate.loading)
+  const actionLoading =
+    active &&
+    !syncBlocked &&
+    (moveQuoteLoading ||
+      (sendPrivately
+        ? Boolean(previewKey && !privatePreviewReady && !privatePreviewError)
+        : feeCalculating || (maxSelected && maxTransfer.loading) || (isValidAmount && zns.loading)))
   const actionDisabled =
     !active ||
     !effectiveToAddress ||
@@ -1623,6 +1640,7 @@ export function Send({
             <Button
               size="wallet"
               disabled={actionDisabled}
+              isLoading={actionLoading}
               onClick={handleContinue}
               className="w-full h-[45px]"
             >
@@ -1735,6 +1753,7 @@ export function Send({
                     : undefined
                 }
                 disabled={actionDisabled}
+                loading={actionLoading}
                 onContinue={handleContinue}
               />
             </>
@@ -1889,6 +1908,8 @@ export function Send({
                   }
                   retryLabel={moveQuoteReady && moveQuote ? 'Review quote' : 'Retry'}
                 />
+              ) : reviewInsufficient && amountErrorCopy ? (
+                <InlineError className="mt-3" message={amountErrorCopy} />
               ) : feeError ? (
                 <InlineError
                   className="mt-3"
@@ -1898,6 +1919,7 @@ export function Send({
               ) : undefined
             }
             confirmLabel={isHardwareSigning ? 'Waiting for wallet...' : 'Confirm'}
+            preparing={showReview && !syncBlocked && (moveQuoteLoading || feeCalculating)}
             confirming={isConfirming}
             submitting={isConfirming && !isHardwareWallet}
             confirmDisabled={

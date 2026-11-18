@@ -253,7 +253,7 @@ export function TransactionReviewView({
           size={figma ? 'wallet' : 'default'}
           className={`${figma ? 'h-[45px] min-w-0 flex-[2]' : 'h-[45px] min-w-0 flex-1'} whitespace-normal text-center leading-tight ${confirmTone === 'warning' ? 'bg-warning text-black hover:bg-warning/90' : ''}`}
           disabled={confirmDisabled || preparing}
-          isLoading={confirming}
+          isLoading={preparing || confirming}
           onClick={onConfirm}
         >
           {confirmLabel}

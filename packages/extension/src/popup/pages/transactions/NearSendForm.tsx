@@ -388,7 +388,7 @@ export function NearSendForm({
             disabled={
               !amountWithinBalance || !parsedRecipient || maximumPending || feePreview.loading
             }
-            loading={preparing || feePreview.loading}
+            loading={preparing || (maxSelected && maximum.loading) || feePreview.loading}
             onContinue={handleContinue}
           />
         }

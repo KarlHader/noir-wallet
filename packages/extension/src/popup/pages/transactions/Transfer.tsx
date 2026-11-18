@@ -2325,7 +2325,12 @@ function TransferForm() {
           }
           isLoading={
             preparingShield ||
-            (fundingRoute && (shieldConnection === 'checking' || shieldConnection === 'busy'))
+            (fundingRoute && (shieldConnection === 'checking' || shieldConnection === 'busy')) ||
+            (!transferError &&
+              ((clusterPair &&
+                (fundingRoute ? clusterSelected : method === 'directly') &&
+                selectedEstimate.loading) ||
+                (maxSelected && maximum.loading)))
           }
           onClick={
             fundingRoute && shieldConnection !== 'connected'

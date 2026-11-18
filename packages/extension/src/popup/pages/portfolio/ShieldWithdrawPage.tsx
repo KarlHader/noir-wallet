@@ -1246,7 +1246,7 @@ export function ShieldWithdrawForm({
             <Button
               size="wallet"
               className="w-full h-[45px]"
-              isLoading={busy}
+              isLoading={busy || previewLoading}
               disabled={!canContinue || busy}
               onClick={() => void prepare()}
             >
@@ -1405,7 +1405,7 @@ export function ShieldWithdrawForm({
           }
           footer={
             <SendFormActions
-              loading={busy}
+              loading={busy || previewLoading}
               disabled={
                 !canManageNear ||
                 !currentBalances ||

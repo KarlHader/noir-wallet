@@ -7546,6 +7546,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         liveQuoteKey === liveQuoteRequest.key &&
         quoteResult !== null &&
         !swap.isQuoting
+    const feeLoading =
+      swap.isZecSource &&
+      !hasInsufficientFunds &&
+      !swap.quoteError &&
+      (shieldNativeZecSwap
+        ? nativeIntentsQuoteReady
+        : liveQuoteRequest !== null &&
+          liveQuoteKey === liveQuoteRequest.key &&
+          quoteResult !== null) &&
+      Boolean(swap.depositAddress) &&
+      displayedFeeLoading
     if (crossChainSendRequested) {
       const activeQuote =
         liveQuoteRequest?.key === liveQuoteKey && quoteResult && isRheaSwapQuoteFresh(quoteResult)
@@ -7752,7 +7763,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 : 'Max is unavailable for this route'
           }
           canGetQuote={canGetQuote}
-          actionLoading={isPreparingReview}
+          actionLoading={isPreparingReview || feeLoading || (maxSelected && routeMaximum.loading)}
           providerName={activeQuote?.router}
           slippage={swap.slippage}
           onAmountChange={value => {
@@ -8118,7 +8129,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 ? 'Review Send'
                 : 'Swap'
         }
-        actionLoading={isPrivateFundingSubmitting || isPreparingReview}
+        actionLoading={
+          isPrivateFundingSubmitting ||
+          isPreparingReview ||
+          feeLoading ||
+          (maxSelected && routeMaximum.loading)
+        }
       />
     )
   }

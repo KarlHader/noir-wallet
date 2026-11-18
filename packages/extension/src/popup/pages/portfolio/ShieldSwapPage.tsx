@@ -1285,7 +1285,7 @@ function ShieldSwapForm({
         <Button
           size="wallet"
           className="w-full disabled:bg-card disabled:text-muted disabled:opacity-100"
-          isLoading={busy}
+          isLoading={busy || (validAmount && Boolean(previewRequest) && previewLoading)}
           disabled={
             !canManageNear ||
             !trustedBalances ||

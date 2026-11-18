@@ -1314,7 +1314,12 @@ export function EvmSendForm({
               tokenFeeBalanceError !== null ||
               (route === 'onchain' && feePreview.loading)
             }
-            loading={preparing || (route === 'onchain' && feePreview.loading)}
+            loading={
+              preparing ||
+              (maxSelected && maximum.loading) ||
+              (route === 'onchain' && feePreview.loading) ||
+              (privatePreviewKey !== null && privatePreviewLoading)
+            }
             onContinue={handleContinue}
           />
         }
