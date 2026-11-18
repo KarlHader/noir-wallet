@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Noir Wallet are documented in this file.
 
+## [2.0.0] - 2026-11-19
+
+- Manage Zcash and supported EVM accounts from the redesigned Home and account switcher.
+- See Total, Public, Shield, and Private balances in dedicated asset views.
+- Use the redesigned Send, Receive, and Swap screens, with clearer fees and transaction progress.
+- Move funds between supported Public, Shield, and Private balances from the new Move screen.
+
 ## [2.0.0-beta.2] - 2026-11-10
 
 ### Added
