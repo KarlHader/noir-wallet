@@ -23,6 +23,9 @@ export async function recheckPendingTransaction(
   transaction: Transaction,
   now = Date.now()
 ): Promise<Partial<Transaction> | null> {
+  // The background monitor verifies the persisted Confidential quote and refreshes its balance.
+  if (transaction.quoteBinding?.recipientType === 'CONFIDENTIAL_INTENTS') return null
+
   if (
     transaction.status === 'relay_confirmed' &&
     getCrossChainCompletionStatus(transaction.type, {

@@ -13,7 +13,6 @@ import { safeBig } from '@/lib/big'
 import { ANALYTICS_EVENTS, trackEvent } from '@/background/analytics/reporter'
 import {
   getCrossChainCompletionStatus,
-  isZcashDestination,
   needsRelayStatusRecovery
 } from '@/lib/cross-chain-transaction'
 import type { QuoteBinding, Transaction } from '@/types'
@@ -131,10 +130,14 @@ export class TransactionMonitor {
             (transaction.quoteBinding?.provider === 'near-intents' && transaction.type === 'swap'
               ? transaction.quoteBinding.depositAddress
               : undefined)
+          const needsConfidentialSettlement =
+            transaction.status === 'relay_confirmed' &&
+            transaction.quoteBinding?.recipientType === 'CONFIDENTIAL_INTENTS'
           if (
             !needsRelayStatusRecovery({ ...transaction, depositAddress }) ||
             !depositAddress ||
-            Date.now() - transaction.timestamp >= INTENTS_PROGRESS_STALE_MS ||
+            (!needsConfidentialSettlement &&
+              Date.now() - transaction.timestamp >= INTENTS_PROGRESS_STALE_MS) ||
             alreadyMonitored.has(depositAddress)
           ) {
             continue
@@ -336,6 +339,7 @@ export class TransactionMonitor {
 
   private async handleCompletion(pendingTx: PendingTransaction, providerStatus: SwapStatus) {
     let status = providerStatus
+    let waitsForZcashConfirmations = false
     const originChain = pendingTx.originChain || 'zcash'
     const destinationChain = pendingTx.destinationChain || ''
 
@@ -405,8 +409,10 @@ export class TransactionMonitor {
 
         const completionStatus = getCrossChainCompletionStatus(tx.type, {
           destinationAsset: status.destinationAsset,
-          destinationChain: pendingTx.destinationChain
+          destinationChain: pendingTx.destinationChain,
+          recipientType: tx.quoteBinding?.recipientType
         })
+        waitsForZcashConfirmations = completionStatus === 'relay_confirmed'
         updates = {
           status: completionStatus,
           ...(shouldUpdateAmount ? { amount: realAmount } : {}),
@@ -463,7 +469,7 @@ export class TransactionMonitor {
             .catch(() => {})
         }
       }
-      if (status.status === 'SUCCESS') {
+      if (waitsForZcashConfirmations) {
         await this.registerZcashDestinationMonitor(tx, pendingTx, status)
       }
     } catch (error) {
@@ -495,12 +501,6 @@ export class TransactionMonitor {
     this.notifyCompletion(pendingTx, status)
 
     const actionName = pendingTx.actionName || 'Transaction'
-    const waitsForZcashConfirmations =
-      status.status === 'SUCCESS' &&
-      getCrossChainCompletionStatus('swap', {
-        destinationAsset: status.destinationAsset,
-        destinationChain: pendingTx.destinationChain
-      }) === 'relay_confirmed'
     const statusCopy = getIntentsStatusCopy(status.status, {
       actionName,
       hasDestinationTxHash: !!status.swapDetails?.destinationChainTxHashes?.[0]?.hash,
@@ -559,6 +559,7 @@ export class TransactionMonitor {
     const preliminary = evaluateIntentsStatusQuoteBinding(binding, status)
     if (preliminary === 'mismatch') return 'mismatch'
     const actualAmount = status.swapDetails?.amountOutFormatted
+    if (binding.recipientType === 'CONFIDENTIAL_INTENTS' && !actualAmount) return 'unknown'
     if (binding.minAmountOut && actualAmount) {
       const nativeQuote = await readNativeZecIntentsSwapMetadata(binding).catch(() => null)
       let destinationToken = getCachedTokens().find(
@@ -588,20 +589,6 @@ export class TransactionMonitor {
     pendingTx: PendingTransaction,
     status: SwapStatus
   ): Promise<void> {
-    if (
-      tx.type !== 'withdraw' &&
-      tx.type !== 'claim' &&
-      !(
-        tx.type === 'swap' &&
-        isZcashDestination({
-          destinationAsset: status.destinationAsset,
-          destinationChain: pendingTx.destinationChain
-        })
-      )
-    ) {
-      return
-    }
-
     const destHashes = status.swapDetails?.destinationChainTxHashes
     const zecHash = destHashes?.[0]?.hash
     if (!zecHash || !pendingTx.transactionId) return
@@ -620,7 +607,7 @@ export class TransactionMonitor {
         ...accountScope,
         transactionId: pendingTx.transactionId,
         amount: status.swapDetails?.amountOutFormatted || tx.amount,
-        type: tx.type === 'swap' ? 'receive' : tx.type
+        type: tx.type === 'withdraw' || tx.type === 'claim' ? tx.type : 'receive'
       },
       { checkImmediately: true }
     )

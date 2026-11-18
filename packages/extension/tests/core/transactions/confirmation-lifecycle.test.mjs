@@ -266,6 +266,16 @@ test.describe('Withdraw monitor continuation', () => {
     expect(isZcashDestination({ destinationAsset: 'nep141:zec.omft.near' })).toBe(true)
   })
 
+  test('ZEC deposited into Confidential is final on relay success without Zcash confirmations', () => {
+    const route = { destinationAsset: 'nep141:zec.omft.near', destinationChain: 'zcash' }
+    expect(
+      getCrossChainCompletionStatus('swap', { ...route, recipientType: 'CONFIDENTIAL_INTENTS' })
+    ).toBe('success')
+    expect(
+      getCrossChainCompletionStatus('swap', { ...route, recipientType: 'DESTINATION_CHAIN' })
+    ).toBe('relay_confirmed')
+  })
+
   test('Intents owns the final status of supply and swap origin transactions', () => {
     expect(isIntentsSettledTransaction('supply')).toBe(true)
     expect(isIntentsSettledTransaction('swap')).toBe(true)
