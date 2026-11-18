@@ -6,10 +6,12 @@ import {
   type TransactionIntentSnapshot,
   type TransactionGraph
 } from '@/core/transactions/domain'
+import { getZcashChainId } from '@/core/chains/registry'
 
 export function createConfidentialFundingGraph(input: {
   readonly planId: string
   readonly operation?: 'deposit' | 'withdraw' | 'cluster' | 'swap'
+  readonly purpose?: 'native-zec-swap'
   readonly sourceDomain?: 'public' | 'private' | 'shield'
   readonly destinationDomain?: 'public' | 'private' | 'shield'
   readonly scope: TransactionAccountScope
@@ -52,6 +54,17 @@ export function createConfidentialFundingGraph(input: {
           input.sourceDomain === input.destinationDomain)))
   )
     throw new Error('Confidential funding graph route is invalid')
+  if (
+    input.purpose === 'native-zec-swap' &&
+    (input.operation !== 'withdraw' ||
+      input.sourceDomain !== 'shield' ||
+      input.destinationDomain !== 'public' ||
+      (input.destination.chainId !== getZcashChainId('mainnet') &&
+        input.destination.chainId !== getZcashChainId('testnet')) ||
+      input.destination.assetId !== `${input.destination.chainId}/slip44:133` ||
+      input.source.assetId === input.destination.assetId)
+  )
+    throw new Error('Confidential funding graph swap route is invalid')
   if (!input.requiresDeposit && !/^[0-9a-f]{64}$/.test(input.signedWithdrawFingerprint ?? '')) {
     throw new Error('Confidential funding graph requires a frozen signed withdraw batch')
   }
@@ -68,11 +81,13 @@ export function createConfidentialFundingGraph(input: {
       id: transactionId,
       scope: input.scope,
       kind:
-        input.operation === 'deposit'
-          ? 'shield'
-          : input.operation === 'withdraw' || input.operation === 'cluster'
-            ? 'withdraw'
-            : 'swap',
+        input.purpose === 'native-zec-swap'
+          ? 'swap'
+          : input.operation === 'deposit'
+            ? 'shield'
+            : input.operation === 'withdraw' || input.operation === 'cluster'
+              ? 'withdraw'
+              : 'swap',
       status: input.requiresDeposit ? 'signed' : 'confirming',
       segmentIds,
       createdAt: input.now,
@@ -85,7 +100,7 @@ export function createConfidentialFundingGraph(input: {
           ? {
               shield: {
                 schemaVersion: 1 as const,
-                operation: input.operation,
+                operation: input.purpose === 'native-zec-swap' ? 'swap' : input.operation,
                 sourceDomain: input.sourceDomain!,
                 destinationDomain: input.destinationDomain!
               }

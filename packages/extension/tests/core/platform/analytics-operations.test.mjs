@@ -50,6 +50,19 @@ test('Shield results follow persisted, settled confidential transitions', () => 
   assert.deepEqual(result?.options.extra, { operation: 'swap', status: 'success' })
   assert.equal(result?.options.hasTransaction, 1)
   assert.equal(result?.options.chain, 'evm')
+  const nativeZecSwap = {
+    ...plan,
+    operation: 'withdraw',
+    purpose: 'native-zec-swap',
+    externalRecipient: 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+  }
+  const nativeZecResult = projectConfidentialPlanResult(nativeZecSwap, {
+    ...nativeZecSwap,
+    phase: 'ready'
+  })
+  assert.deepEqual(nativeZecResult?.options.extra, { operation: 'swap', status: 'success' })
+  assert.equal(nativeZecResult?.options.collector?.activityType, 'swap')
+  assert.equal(nativeZecResult?.options.collector?.transferType, 'self')
   assert.equal(
     projectConfidentialPlanResult(plan, {
       ...ready,

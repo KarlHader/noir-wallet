@@ -295,7 +295,8 @@ export function parseTransactionIntentSnapshot(value: unknown): TransactionInten
                     shield.destinationDomain === 'private')) ||
                 (shield.operation === 'swap' &&
                   shield.sourceDomain === 'shield' &&
-                  shield.destinationDomain === 'shield') ||
+                  (shield.destinationDomain === 'shield' ||
+                    shield.destinationDomain === 'public')) ||
                 (shield.operation === 'cluster' &&
                   (shield.sourceDomain === 'public' ||
                     shield.sourceDomain === 'private' ||

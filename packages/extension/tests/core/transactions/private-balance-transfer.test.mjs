@@ -23,7 +23,8 @@ import {
 } from '../../../src/popup/services/shield-transfer.ts'
 import {
   buildShieldSwapRequest,
-  buildShieldSwapPreviewRequest
+  buildShieldSwapPreviewRequest,
+  matchesShieldSwapReview
 } from '../../../src/popup/services/shield-swap-form.ts'
 import { initialMoveDraft } from '../../../src/popup/pages/transactions/move-draft.ts'
 import {
@@ -410,6 +411,48 @@ test('uses independently held Shield tokens without adding them to Public assets
   ).find(item => item.asset.asset.id === zcashAssetId)
   expect(zcashSource?.asset.balance.confidentialRaw).toBe('140000')
   const zcashRecipient = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+  const nativeZecSwap = buildShieldSwapRequest({
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    from: sources[0],
+    to: withZcashOptions.find(item => item.asset.asset.id === zcashAssetId),
+    amount: '1.25',
+    balances,
+    slippageBps: 50,
+    nativeZecRecipient: zcashRecipient
+  })
+  expect(nativeZecSwap).toMatchObject({
+    purpose: 'native-zec-swap',
+    operation: 'withdraw',
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    externalRecipient: zcashRecipient,
+    destination: { assetId: zcashAssetId, protocolAssetId: zcashProtocolId }
+  })
+  const nativeZecReview = {
+    operation: 'withdraw',
+    purpose: 'native-zec-swap',
+    sourceDomain: 'shield',
+    destinationDomain: 'public',
+    network: 'mainnet',
+    keyDomainId: 'wallet',
+    accountId: 'account',
+    sourceAmountRaw: nativeZecSwap.source.amountRaw,
+    slippageBps: 50,
+    withdrawCount: 1,
+    requiresDeposit: false,
+    sourceAddress: `0x${'1'.repeat(40)}`,
+    externalRecipient: zcashRecipient,
+    destinationAddress: zcashRecipient
+  }
+  expect(matchesShieldSwapReview(nativeZecReview, nativeZecSwap)).toBe(true)
+  expect(
+    matchesShieldSwapReview(
+      { ...nativeZecReview, destinationAddress: zcashRecipient.toLowerCase() },
+      nativeZecSwap
+    )
+  ).toBe(false)
   expect(
     listShieldSendDestinations(zcashSource, withZcashOptions, 'mainnet').map(
       item => item.asset.asset.id

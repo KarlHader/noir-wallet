@@ -16,6 +16,10 @@ import { parseTransactionGraph } from '../../../src/core/transactions/domain/ind
 import { confidentialPrivateTokenId } from '../../../src/core/services/confidential-funding/confidential-funding-portfolio.ts'
 import { ZCASH_CHAIN_IDS } from '../../../src/core/chains/registry/chain-ids.ts'
 import { createConfidentialFundingClient } from '../../../src/popup/services/confidential-funding-client.ts'
+import {
+  getActivityDetailTitle,
+  getActivityRouteTitle
+} from '../../../src/popup/components/transaction/multichain-activity-presentation.ts'
 
 const scope = { keyDomainId: 'wallet:one', accountId: 'account:one' }
 const signerId = '0x1111111111111111111111111111111111111111'
@@ -721,6 +725,84 @@ test.describe('confidential funding persisted recovery', () => {
       recipient: { address: transparent },
       primaryAmount: { assetId: h.zcashAssetId, amountRaw: '10000' }
     })
+  })
+
+  test('binds a Confidential swap withdrawal to the current account native ZEC recipient', async () => {
+    const recipient = 't1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F'
+    let active = {
+      network: 'mainnet',
+      walletId: scope.keyDomainId,
+      accountId: scope.accountId,
+      refundAddresses: [recipient]
+    }
+    const h = directPreparationHarness(undefined, () => active)
+    const request = {
+      ...h.request('50'),
+      purpose: 'native-zec-swap',
+      destinationDomain: 'public',
+      destination: {
+        chainId: ZCASH_CHAIN_IDS.mainnet,
+        chainName: 'zec',
+        assetId: h.zcashAssetId,
+        protocolAssetId: h.zcashProtocolId
+      },
+      externalRecipient: recipient
+    }
+    await expect(
+      h.coordinator.prepare({
+        ...request,
+        externalRecipient: 't1aJHc8RvkGgoLqtVfuVX8VT2TcqjJrUKUP'
+      })
+    ).rejects.toThrow('Native ZEC swap must receive into the current account')
+    expect(h.state.quoteCalls).toHaveLength(0)
+    h.state.formalQuoteAppFees = [{ recipient: 'platform.near', fee: 50 }]
+    const review = await h.coordinator.prepare(request)
+    expect(review).toMatchObject({
+      purpose: 'native-zec-swap',
+      operation: 'withdraw',
+      destinationAddress: recipient,
+      slippageBps: 100
+    })
+    expect(h.state.lastQuoteRequest).toMatchObject({
+      originAsset: 'nep141:eth.omft.near',
+      destinationAsset: h.zcashProtocolId,
+      recipient,
+      recipientType: 'DESTINATION_CHAIN'
+    })
+    expect(h.state.formalQuotes).toBe(1)
+    expect(h.state.lastQuoteRequest.dry).toBe(false)
+    active = { ...active, accountId: 'account:other' }
+    await expect(h.coordinator.confirm(review.planId, review.payloadFingerprint)).rejects.toThrow(
+      'Native ZEC swap must receive into the current account'
+    )
+    active = { ...active, accountId: scope.accountId }
+    h.state.allowSigning = true
+    const plan = await h.coordinator.confirm(review.planId, review.payloadFingerprint)
+    expect(h.state.formalQuotes).toBe(1)
+    expect(plan.frozenRequest).toMatchObject({
+      mode: 'SWAP',
+      from_token: 'nep141:eth.omft.near',
+      withdraws: [{ destination_address: recipient, token: h.zcashProtocolId }]
+    })
+    const graph = await h.repository.get(scope, review.transactionId)
+    expect(graph.root.kind).toBe('swap')
+    expect(graph.root.intent).toMatchObject({
+      direction: 'self',
+      shield: { operation: 'swap', sourceDomain: 'shield', destinationDomain: 'public' },
+      recipient: { address: recipient }
+    })
+    expect(graph.segments.find(segment => segment.role === 'destination').target).toMatchObject({
+      kind: 'onchain',
+      chainId: ZCASH_CHAIN_IDS.mainnet
+    })
+    const activity = {
+      ...graph.root,
+      source: 'wallet-v2',
+      snapshot: graph.root.intent,
+      segments: graph.segments
+    }
+    expect(getActivityRouteTitle(activity, {})).toBe('Swap')
+    expect(getActivityDetailTitle(activity)).toBe('Shield Swap')
   })
 
   test('quotes a Confidential ZEC to EVM swap and an EVM to Confidential ZEC swap', async () => {

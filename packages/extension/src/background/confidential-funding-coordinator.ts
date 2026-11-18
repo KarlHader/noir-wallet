@@ -219,7 +219,7 @@ interface ConfidentialFundingRouteInput {
   readonly feeSelection?: EvmFeeSelection
   readonly dedupKey?: string
   readonly externalRecipient?: string
-  readonly purpose?: 'move'
+  readonly purpose?: 'move' | 'native-zec-swap'
 }
 
 export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
@@ -253,9 +253,9 @@ export type PrepareConfidentialFundingInput = ConfidentialFundingRouteInput &
 function fundingReferral(input: {
   readonly operation?: 'deposit' | 'withdraw' | 'swap' | 'cluster'
   readonly externalRecipient?: string
-  readonly purpose?: 'move'
+  readonly purpose?: 'move' | 'native-zec-swap'
 }): NoirIntentsReferral {
-  if (input.operation === 'swap') return NOIR_SWAP_REFERRAL
+  if (input.operation === 'swap' || input.purpose === 'native-zec-swap') return NOIR_SWAP_REFERRAL
   if (input.purpose === 'move') return NOIR_MOVE_REFERRAL
   return input.externalRecipient ? NOIR_SEND_REFERRAL : NOIR_MOVE_REFERRAL
 }
@@ -426,7 +426,7 @@ function reviewFromPlan(
   const quoteTimeEstimateSeconds =
     plan.operation === 'deposit'
       ? plan.depositQuote?.quote.timeEstimate
-      : plan.operation === 'swap'
+      : plan.operation === 'swap' || plan.purpose === 'native-zec-swap'
         ? plan.swapQuote?.quote.timeEstimate
         : plan.operation === 'withdraw'
           ? plan.quoteTimeEstimateSeconds
@@ -458,7 +458,7 @@ function reviewFromPlan(
     ...(validQuoteTimeEstimateSeconds(quoteTimeEstimateSeconds)
       ? { quoteTimeEstimateSeconds }
       : {}),
-    ...(plan.operation === 'swap'
+    ...(plan.operation === 'swap' || plan.purpose === 'native-zec-swap'
       ? {
           slippageBps: plan.slippageBps,
           ...(plan.swapQuote?.quote.withdrawFee !== undefined
@@ -1940,6 +1940,7 @@ export class ConfidentialFundingCoordinator {
         : destinationIdentity.address)
     const isDeposit = input.operation === 'deposit'
     const isSwap = input.operation === 'swap'
+    const isFrozenSwap = isSwap || input.purpose === 'native-zec-swap'
     if (!isDeposit) {
       this.assertUnreservedBalance(
         plans,
@@ -1962,7 +1963,7 @@ export class ConfidentialFundingCoordinator {
       refundType: isDeposit ? 'ORIGIN_CHAIN' : 'CONFIDENTIAL_INTENTS',
       recipientType: isDeposit || isSwap ? 'CONFIDENTIAL_INTENTS' : 'DESTINATION_CHAIN',
       slippageBps: input.slippageBps,
-      dry: !isDeposit && !isSwap
+      dry: !isDeposit && !isFrozenSwap
     })
     assertConfidentialQuoteBinding(
       quote,
@@ -1985,7 +1986,7 @@ export class ConfidentialFundingCoordinator {
     if (isDeposit && !quote.quote.depositAddress) {
       throw new Error('Confidential deposit quote has no destination')
     }
-    if (isSwap && (quote.quoteRequest.dry !== false || !quote.quote.depositAddress)) {
+    if (isFrozenSwap && (quote.quoteRequest.dry !== false || !quote.quote.depositAddress)) {
       throw new Error('Shield swap quote has no active destination')
     }
 
@@ -2027,7 +2028,7 @@ export class ConfidentialFundingCoordinator {
     const planId = this.createId()
     const approvalExpiresAt = Math.min(
       quoteDeadline(quote),
-      ...(isSwap ? [Date.parse(String(quote.quoteRequest.deadline ?? ''))] : []),
+      ...(isFrozenSwap ? [Date.parse(String(quote.quoteRequest.deadline ?? ''))] : []),
       preparedDeposit?.expiresAt ?? Number.MAX_SAFE_INTEGER
     )
     if (!Number.isSafeInteger(approvalExpiresAt) || approvalExpiresAt <= this.now()) {
@@ -2057,11 +2058,11 @@ export class ConfidentialFundingCoordinator {
       requiresDeposit: isDeposit,
       confidentialBaselineRaw: baseline,
       ...(isDeposit ? { depositQuote: quote, preparedDeposit } : {}),
-      ...(isSwap ? { swapQuote: quote } : {}),
-      ...(!isDeposit && !isSwap && validQuoteTimeEstimateSeconds(quote.quote.timeEstimate)
+      ...(isFrozenSwap ? { swapQuote: quote } : {}),
+      ...(!isDeposit && !isFrozenSwap && validQuoteTimeEstimateSeconds(quote.quote.timeEstimate)
         ? { quoteTimeEstimateSeconds: quote.quote.timeEstimate }
         : {}),
-      ...(!isDeposit && !isSwap
+      ...(!isDeposit && !isFrozenSwap
         ? {
             reviewedAppFeesFingerprint: await fingerprintDirectConfidentialApproval([
               readConfidentialQuoteAppFees(quote)
@@ -2386,7 +2387,10 @@ export class ConfidentialFundingCoordinator {
       throw new Error('Confidential funding approval is unavailable or expired')
     }
     const identity = await this.requirePlanIdentity(plan)
-    if (plan.operation === 'swap' && plan.phase === 'prepared') {
+    if (
+      (plan.operation === 'swap' || plan.purpose === 'native-zec-swap') &&
+      plan.phase === 'prepared'
+    ) {
       if (!plan.swapQuote) throw new Error('Shield swap quote is unavailable')
       if (Date.parse(String(plan.swapQuote.quoteRequest.deadline ?? '')) <= this.now()) {
         throw new Error('Shield swap quote has expired')
@@ -2401,7 +2405,8 @@ export class ConfidentialFundingCoordinator {
           recipient: plan.destination.address,
           depositType: 'CONFIDENTIAL_INTENTS',
           refundType: 'CONFIDENTIAL_INTENTS',
-          recipientType: 'CONFIDENTIAL_INTENTS',
+          recipientType:
+            plan.purpose === 'native-zec-swap' ? 'DESTINATION_CHAIN' : 'CONFIDENTIAL_INTENTS',
           slippageBps: plan.slippageBps
         },
         this.now()
@@ -3644,23 +3649,29 @@ export class ConfidentialFundingCoordinator {
     let formalMinimumOutputRaw = plan.minimumOutputRaw
     if (!row) throw new Error('Shield withdraw intent is unavailable')
     if (!row.signedPayload) {
-      const quote =
-        plan.operation === 'swap' && plan.swapQuote?.quoteRequest.dry === false
+      const frozenQuote =
+        (plan.operation === 'swap' || plan.purpose === 'native-zec-swap') &&
+        plan.swapQuote?.quoteRequest.dry === false
           ? plan.swapQuote
-          : await this.options.api.quote({
-              referral: fundingReferral(plan),
-              originAsset: plan.source.protocolAssetId,
-              destinationAsset: plan.destination.protocolAssetId,
-              amountRaw: plan.source.amountRaw,
-              signerId: plan.signerId,
-              recipient: plan.destination.address,
-              depositType: 'CONFIDENTIAL_INTENTS',
-              refundType: 'CONFIDENTIAL_INTENTS',
-              recipientType:
-                plan.operation === 'swap' ? 'CONFIDENTIAL_INTENTS' : 'DESTINATION_CHAIN',
-              slippageBps: plan.slippageBps,
-              dry: false
-            })
+          : undefined
+      if (plan.purpose === 'native-zec-swap' && !frozenQuote) {
+        throw new Error('Native ZEC swap quote is unavailable')
+      }
+      const quote =
+        frozenQuote ??
+        (await this.options.api.quote({
+          referral: fundingReferral(plan),
+          originAsset: plan.source.protocolAssetId,
+          destinationAsset: plan.destination.protocolAssetId,
+          amountRaw: plan.source.amountRaw,
+          signerId: plan.signerId,
+          recipient: plan.destination.address,
+          depositType: 'CONFIDENTIAL_INTENTS',
+          refundType: 'CONFIDENTIAL_INTENTS',
+          recipientType: plan.operation === 'swap' ? 'CONFIDENTIAL_INTENTS' : 'DESTINATION_CHAIN',
+          slippageBps: plan.slippageBps,
+          dry: false
+        }))
       assertConfidentialQuoteBinding(
         quote,
         {
@@ -3677,7 +3688,7 @@ export class ConfidentialFundingCoordinator {
         this.now()
       )
       if (
-        plan.operation === 'swap' &&
+        (plan.operation === 'swap' || plan.purpose === 'native-zec-swap') &&
         (await fingerprintDirectConfidentialApproval(
           readConfidentialQuoteAppFees(plan.swapQuote)
         )) !== (await fingerprintDirectConfidentialApproval(readConfidentialQuoteAppFees(quote)))
@@ -4599,6 +4610,7 @@ export class ConfidentialFundingCoordinator {
       : undefined
     const graph = createConfidentialFundingGraph({
       planId: plan.planId,
+      ...(plan.purpose === 'native-zec-swap' ? { purpose: plan.purpose } : {}),
       ...(plan.operation
         ? {
             operation: plan.operation,
@@ -4656,7 +4668,10 @@ export class ConfidentialFundingCoordinator {
         expectedAmountRaw: plan.expectedOutputRaw,
         address: plan.destination.address
       },
-      externalRecipient: Boolean(plan.externalRecipient) && plan.purpose !== 'move',
+      externalRecipient:
+        Boolean(plan.externalRecipient) &&
+        plan.purpose !== 'move' &&
+        plan.purpose !== 'native-zec-swap',
       withdrawDepositAddresses: plan.withdraws.map(row => row.depositAddress || null),
       requiresDeposit: plan.requiresDeposit,
       signedWithdrawFingerprint: plan.requestFingerprint,
@@ -4821,7 +4836,7 @@ export class ConfidentialFundingCoordinator {
   }
 
   private assertOwnZcashMoveRecipient(value: {
-    readonly purpose?: 'move'
+    readonly purpose?: 'move' | 'native-zec-swap'
     readonly operation?: string
     readonly sourceDomain?: string
     readonly destinationDomain?: string
@@ -4833,17 +4848,20 @@ export class ConfidentialFundingCoordinator {
     readonly externalRecipient?: string
   }): void {
     if (value.purpose === undefined) return
+    const isMove = value.purpose === 'move'
+    const isNativeZecSwap = value.purpose === 'native-zec-swap'
     const active = this.options.getNativeZecActiveAccount?.()
     const assetId = `${getZcashChainId(this.options.network)}/slip44:133`
     if (
-      value.purpose !== 'move' ||
+      (!isMove && !isNativeZecSwap) ||
       value.operation !== 'withdraw' ||
       value.sourceDomain !== 'shield' ||
       value.destinationDomain !== 'public' ||
-      value.source.assetId !== assetId ||
       value.destination.assetId !== assetId ||
-      value.source.protocolAssetId !== ZEC_ZCASH_ASSET ||
       value.destination.protocolAssetId !== ZEC_ZCASH_ASSET ||
+      (isMove &&
+        (value.source.assetId !== assetId || value.source.protocolAssetId !== ZEC_ZCASH_ASSET)) ||
+      (isNativeZecSwap && value.source.protocolAssetId === ZEC_ZCASH_ASSET) ||
       !value.externalRecipient ||
       !active ||
       active.network !== value.network ||
@@ -4851,7 +4869,11 @@ export class ConfidentialFundingCoordinator {
       active.accountId !== value.accountId ||
       !active.refundAddresses.includes(value.externalRecipient)
     )
-      throw new Error('Zcash Move must receive into the current account')
+      throw new Error(
+        isNativeZecSwap
+          ? 'Native ZEC swap must receive into the current account'
+          : 'Zcash Move must receive into the current account'
+      )
     const parsed = parseZcashAddress(value.externalRecipient, this.options.network)
     if (
       !parsed.scheme.startsWith('zcash-transparent-') &&

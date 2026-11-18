@@ -1,4 +1,7 @@
 import type { Network } from '@/types'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { parseZcashAddress } from '@/core/address-book/address-book'
+import { getZcashChainId } from '@/core/chains/registry'
 import type { ConfidentialFundingReview } from '@/core/services/confidential-funding'
 import Big from '@/lib/big'
 import { formatSortAddress } from '@/lib/format'
@@ -113,12 +116,18 @@ export function buildShieldSwapRequest(
     amount: string
     balances: readonly Readonly<{ tokenId: string; available: string }>[] | null
     slippageBps: number
+    nativeZecRecipient?: string
   }>,
   preview = false
 ): PrepareConfidentialFundingRequest {
+  const nativeZecSwap = input.nativeZecRecipient !== undefined
   const amountError = shieldSwapFormAmountError(input.amount, input.from, input.balances)
   if (
     input.from.managed.protocolAssetId === input.to.managed.protocolAssetId ||
+    (nativeZecSwap &&
+      (input.to.managed.chainId !== getZcashChainId(input.network) ||
+        input.to.managed.protocolAssetId !== ZEC_ZCASH_ASSET ||
+        input.to.managed.assetId !== `${getZcashChainId(input.network)}/slip44:133`)) ||
     (amountError &&
       !(
         preview &&
@@ -130,6 +139,19 @@ export function buildShieldSwapRequest(
     input.slippageBps > 10_000
   )
     throw new Error('Shield swap is unavailable')
+  if (nativeZecSwap) {
+    try {
+      const parsed = parseZcashAddress(input.nativeZecRecipient!, input.network)
+      if (
+        parsed.address !== input.nativeZecRecipient ||
+        (!parsed.scheme.startsWith('zcash-transparent-') &&
+          !input.nativeZecRecipient!.startsWith(input.network === 'mainnet' ? 'u1' : 'utest1'))
+      )
+        throw new Error('Invalid recipient')
+    } catch {
+      throw new Error('Shield swap recipient is invalid')
+    }
+  }
   const amountRaw = parseDisplayUnitAmount(input.amount, input.from.asset.metadata.decimals)
   const source = Object.freeze({
     chainId: input.from.managed.chainId,
@@ -148,12 +170,14 @@ export function buildShieldSwapRequest(
     network: input.network,
     keyDomainId: input.keyDomainId,
     accountId: input.accountId,
-    operation: 'swap',
+    ...(nativeZecSwap ? { purpose: 'native-zec-swap' as const } : {}),
+    operation: nativeZecSwap ? 'withdraw' : 'swap',
     sourceDomain: 'shield',
-    destinationDomain: 'shield',
+    destinationDomain: nativeZecSwap ? 'public' : 'shield',
     source,
     destination,
-    slippageBps: input.slippageBps
+    slippageBps: input.slippageBps,
+    ...(nativeZecSwap ? { externalRecipient: input.nativeZecRecipient } : {})
   })
 }
 
@@ -167,10 +191,12 @@ export function matchesShieldSwapReview(
   review: ConfidentialFundingReview,
   request: PrepareConfidentialFundingRequest
 ): boolean {
+  const nativeZecSwap = request.purpose === 'native-zec-swap'
   return (
-    review.operation === 'swap' &&
+    review.operation === (nativeZecSwap ? 'withdraw' : 'swap') &&
     review.sourceDomain === 'shield' &&
-    review.destinationDomain === 'shield' &&
+    review.destinationDomain === (nativeZecSwap ? 'public' : 'shield') &&
+    review.purpose === request.purpose &&
     review.network === request.network &&
     review.keyDomainId === request.keyDomainId &&
     review.accountId === request.accountId &&
@@ -178,6 +204,9 @@ export function matchesShieldSwapReview(
     review.slippageBps === request.slippageBps &&
     review.withdrawCount === 1 &&
     !review.requiresDeposit &&
-    review.sourceAddress.toLowerCase() === review.destinationAddress.toLowerCase()
+    (nativeZecSwap
+      ? review.externalRecipient === request.externalRecipient &&
+        review.destinationAddress === request.externalRecipient
+      : review.sourceAddress.toLowerCase() === review.destinationAddress.toLowerCase())
   )
 }

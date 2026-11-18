@@ -27,7 +27,7 @@ export type { CreateExternalShieldDepositInput, ExternalShieldDepositScope }
 export { CONFIDENTIAL_SESSION_REQUIRED_ERROR as CONFIDENTIAL_PREVIEW_CONNECTION_ERROR } from '@/core/services/confidential-funding'
 
 export interface PrepareConfidentialFundingRequest {
-  readonly purpose?: 'move'
+  readonly purpose?: 'move' | 'native-zec-swap'
   readonly network: Network
   readonly keyDomainId: string
   readonly accountId: string
@@ -236,7 +236,7 @@ function parseReview(value: unknown): ConfidentialFundingReview {
           review.network
         ))) ||
     (review.purpose !== undefined &&
-      (review.purpose !== 'move' ||
+      (!['move', 'native-zec-swap'].includes(review.purpose) ||
         review.operation !== 'withdraw' ||
         review.sourceDomain !== 'shield' ||
         review.destinationDomain !== 'public' ||
@@ -305,7 +305,7 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
           plan.network
         ))) ||
     (plan.purpose !== undefined &&
-      (plan.purpose !== 'move' ||
+      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||
@@ -323,6 +323,8 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         plan.destinationDomain !== 'shield' ||
         plan.requiresDeposit ||
         !plan.swapQuote)) ||
+    (plan.purpose === 'native-zec-swap' &&
+      (!plan.swapQuote || plan.swapQuote.quoteRequest.dry !== false)) ||
     (plan.operation !== undefined &&
       (!['public', 'private', 'shield'].includes(plan.sourceDomain ?? '') ||
         !['public', 'private', 'shield'].includes(plan.destinationDomain ?? ''))) ||

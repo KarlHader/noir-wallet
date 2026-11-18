@@ -1,4 +1,6 @@
 import type { Network } from '@/types'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { getZcashChainId } from '@/core/chains/registry'
 import { externalRecipientsMatch, isValidExternalRecipient } from './confidential-funding-recipient'
 import { withMetadataLock, withUndeletedWalletAccountMetadata } from '@/lib/wallet-metadata-storage'
 import type { ConfidentialFundingPlan } from '@/core/services/confidential-funding'
@@ -171,11 +173,15 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
       plan.operation !== 'cluster' &&
       plan.operation !== 'swap') ||
     (plan.purpose !== undefined &&
-      (plan.purpose !== 'move' ||
+      (!['move', 'native-zec-swap'].includes(plan.purpose) ||
         plan.operation !== 'withdraw' ||
         plan.sourceDomain !== 'shield' ||
         plan.destinationDomain !== 'public' ||
-        plan.externalRecipient === undefined)) ||
+        plan.externalRecipient === undefined ||
+        (plan.purpose === 'native-zec-swap' &&
+          (plan.destination.assetId !== `${getZcashChainId(plan.network)}/slip44:133` ||
+            plan.destination.protocolAssetId !== ZEC_ZCASH_ASSET ||
+            plan.source.protocolAssetId === ZEC_ZCASH_ASSET)))) ||
     (plan.externalRecipient !== undefined &&
       (plan.operation !== 'withdraw' ||
         plan.destinationDomain !== 'public' ||
@@ -216,7 +222,13 @@ function parsePlan(value: unknown): ConfidentialFundingPlan {
         (plan.withdraws[0].signedPayload !== undefined && !plan.frozenRequest) ||
         plan.depositQuote !== undefined ||
         plan.preparedDeposit !== undefined)) ||
-    (plan.operation !== 'swap' && plan.swapQuote !== undefined) ||
+    (plan.purpose === 'native-zec-swap' &&
+      (!plan.swapQuote ||
+        plan.swapQuote.quoteRequest.dry !== false ||
+        plan.reviewedAppFeesFingerprint !== undefined)) ||
+    (plan.operation !== 'swap' &&
+      plan.purpose !== 'native-zec-swap' &&
+      plan.swapQuote !== undefined) ||
     (plan.reviewedAppFeesFingerprint !== undefined &&
       ((plan.operation !== 'withdraw' && plan.operation !== 'cluster') ||
         !/^[0-9a-f]{64}$/.test(plan.reviewedAppFeesFingerprint))) ||

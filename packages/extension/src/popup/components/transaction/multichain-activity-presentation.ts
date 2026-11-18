@@ -8,7 +8,9 @@ import type {
   TransactionSegmentTarget
 } from '@/core/transactions/domain'
 import { formatSortAddress, formatSymbol } from '@/lib/format'
+import { detectZcashAddressType } from '@/lib/zcash-memo'
 import { parseAssetId } from '@/core/chains/registry'
+import { ZCASH_CHAIN_IDS } from '@/core/chains/registry/chain-ids'
 import type {
   ActivityAssetMetadata,
   ActivityChainMetadata
@@ -90,6 +92,7 @@ export interface ActivitySwapPresentation {
   readonly destinationChainIconAlias?: string
   readonly sourceAccountMode?: 'Public' | 'Confidential' | 'Shield' | 'External'
   readonly sourceFundingSource?: 'transparent' | 'shielded'
+  readonly destinationFundingSource?: 'transparent' | 'shielded'
   readonly destinationAccountMode?: 'Public' | 'Confidential' | 'Shield'
 }
 
@@ -145,6 +148,9 @@ export function isDirectAccountMove(item: ActivityItem, route: ActivitySwapPrese
 }
 
 export function getActivityAccountRouteLabel(route: ActivitySwapPresentation): string {
+  if (route.destinationFundingSource) {
+    return `NEAR Confidential → ${route.destinationFundingSource === 'shielded' ? 'Zcash Shield' : 'Transparent'}`
+  }
   const label = (mode: ActivitySwapPresentation['sourceAccountMode']) =>
     mode === 'Confidential' ? 'Private' : (mode ?? '')
   const source =
@@ -453,7 +459,14 @@ export function getActivitySwapPresentation(
             : ('transparent' as const)
         }
       : {}),
-    ...(destinationAccountMode ? { destinationAccountMode } : {})
+    ...(destinationAccountMode ? { destinationAccountMode } : {}),
+    ...(shield?.sourceDomain === 'shield' &&
+    shield.destinationDomain === 'public' &&
+    (destinationChainId === ZCASH_CHAIN_IDS.mainnet ||
+      destinationChainId === ZCASH_CHAIN_IDS.testnet) &&
+    recipientAddress
+      ? { destinationFundingSource: detectZcashAddressType(recipientAddress) }
+      : {})
   })
 }
 
