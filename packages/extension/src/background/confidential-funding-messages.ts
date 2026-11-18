@@ -77,8 +77,13 @@ const handlers = {
   ) => coordinator.cancelNativeZecIntentsSwap(message.quoteId),
   PREPARE_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
     coordinator.prepare(message.request),
-  PREVIEW_CONFIDENTIAL_FUNDING: ({ coordinator }: FundingContext, message: PrepareMessage) =>
-    coordinator.preview(message.request),
+  PREVIEW_CONFIDENTIAL_FUNDING: (
+    { coordinator }: FundingContext,
+    message: PrepareMessage & Readonly<{ clusterFeeOnly?: boolean }>
+  ) =>
+    message.clusterFeeOnly
+      ? coordinator.preview(message.request, true)
+      : coordinator.preview(message.request),
   CREATE_EXTERNAL_SHIELD_DEPOSIT: (
     { coordinator }: FundingContext,
     message: Readonly<{ request: CreateExternalShieldDepositInput }>

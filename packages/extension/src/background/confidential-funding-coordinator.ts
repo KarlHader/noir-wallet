@@ -118,6 +118,8 @@ import type { PrepareNativeZecIntentsSwapInput } from '@/core/services/native-ze
 import type { QuoteBinding } from '@/types/wallet'
 
 const SESSION_REFRESH_BUFFER_MS = 60_000
+const CLUSTER_DEPOSIT_PREFETCH_MS = 60_000
+const MAX_CLUSTER_DEPOSIT_PREFETCHES = 32
 export const CONFIDENTIAL_FUNDING_MONITOR_ALARM = 'confidential-funding-monitor'
 
 const EXTERNAL_DEPOSIT_STATUS_BACKOFF_INITIAL_MS = 10_000
@@ -258,6 +260,24 @@ function fundingReferral(input: {
   if (input.operation === 'swap' || input.purpose === 'native-zec-swap') return NOIR_SWAP_REFERRAL
   if (input.purpose === 'move') return NOIR_MOVE_REFERRAL
   return input.externalRecipient ? NOIR_SEND_REFERRAL : NOIR_MOVE_REFERRAL
+}
+
+type ClusterFundingInput = Extract<PrepareConfidentialFundingInput, { operation: 'cluster' }>
+
+function clusterDepositBinding(input: ClusterFundingInput, identity: ConfidentialSigningIdentity) {
+  return {
+    originAsset: input.source.protocolAssetId,
+    destinationAsset: input.source.protocolAssetId,
+    amountRaw: input.source.amountRaw,
+    signerId: identity.address,
+    refundTo:
+      input.sourceDomain === 'private' ? identity.peaAddress.toLowerCase() : identity.address,
+    recipient: identity.address,
+    depositType: 'ORIGIN_CHAIN' as const,
+    refundType: 'ORIGIN_CHAIN' as const,
+    recipientType: 'CONFIDENTIAL_INTENTS' as const,
+    slippageBps: input.slippageBps
+  }
 }
 
 export interface ConfidentialFundingCoordinatorOptions {
@@ -555,6 +575,10 @@ export class ConfidentialFundingCoordinator {
     DedupPromise<readonly ConfidentialBalance[]>
   >()
   private readonly rpcByChain = new Map<string, EvmTransactionRpc & EvmBroadcastRpc>()
+  private readonly clusterDepositPrefetches = new Map<
+    string,
+    { expiresAt: number; quote: Promise<ConfidentialQuote> }
+  >()
   private readonly continuingByPlan = new Map<string, Promise<ConfidentialFundingPlan>>()
   private readonly confirmingByPlan = new Map<
     string,
@@ -1410,12 +1434,16 @@ export class ConfidentialFundingCoordinator {
     else await this.scheduleMonitoring()
   }
 
-  async preview(value: PrepareConfidentialFundingInput): Promise<ConfidentialFundingPreview> {
+  async preview(value: PrepareConfidentialFundingInput): Promise<ConfidentialFundingPreview>
+  async preview(
+    value: PrepareConfidentialFundingInput,
+    clusterFeeOnly: true
+  ): Promise<NonNullable<ConfidentialFundingReview['sourceNetworkFee']> | null>
+  async preview(value: PrepareConfidentialFundingInput, clusterFeeOnly = false) {
     const input = this.parseInput(value)
     if (
-      input.operation !== 'withdraw' &&
-      input.operation !== 'swap' &&
-      input.operation !== 'cluster'
+      input.operation !== 'cluster' &&
+      (clusterFeeOnly || (input.operation !== 'withdraw' && input.operation !== 'swap'))
     ) {
       throw new Error('Confidential preview route is invalid')
     }
@@ -1447,6 +1475,8 @@ export class ConfidentialFundingCoordinator {
       throw new Error(CONFIDENTIAL_SESSION_REQUIRED_ERROR)
     }
     if (input.operation === 'cluster') {
+      if (clusterFeeOnly)
+        return this.previewClusterNetworkFee(input, sourceIdentity, sourceSigningChain)
       return this.previewCluster(input, sourceIdentity, destinationIdentity, sourceSigningChain)
     }
     const recipient =
@@ -1496,31 +1526,16 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async previewCluster(
-    input: Extract<PrepareConfidentialFundingInput, { operation: 'cluster' }>,
+    input: ClusterFundingInput,
     sourceIdentity: ConfidentialSigningIdentity,
     destinationIdentity: ConfidentialSigningIdentity,
     sourceSigningChain: ChainId
   ): Promise<ConfidentialFundingPreview> {
-    const sourceAddress =
-      input.sourceDomain === 'private'
-        ? sourceIdentity.peaAddress.toLowerCase()
-        : sourceIdentity.address
     const destinationAddress =
       input.destinationDomain === 'private'
         ? destinationIdentity.peaAddress
         : destinationIdentity.address
-    const depositBinding = {
-      originAsset: input.source.protocolAssetId,
-      destinationAsset: input.source.protocolAssetId,
-      amountRaw: input.source.amountRaw,
-      signerId: sourceIdentity.address,
-      refundTo: sourceAddress,
-      recipient: sourceIdentity.address,
-      depositType: 'ORIGIN_CHAIN' as const,
-      refundType: 'ORIGIN_CHAIN' as const,
-      recipientType: 'CONFIDENTIAL_INTENTS' as const,
-      slippageBps: input.slippageBps
-    }
+    const depositBinding = clusterDepositBinding(input, sourceIdentity)
     const depositQuote =
       input.sourceDomain === 'shield'
         ? undefined
@@ -1556,48 +1571,6 @@ export class ConfidentialFundingCoordinator {
       (!depositQuote || validQuoteTimeEstimateSeconds(depositTime))
         ? (depositTime ?? 0) + Math.max(...validWithdrawTimes)
         : undefined
-    let sourceNetworkFee: ConfidentialFundingPreview['sourceNetworkFee']
-    if (depositQuote && isAddress(depositQuote.quote.depositAddress)) {
-      try {
-        const fee = await estimateEvmTransferFee({
-          chainId: parseChainId(input.source.chainId).id,
-          chainAccount: sourceIdentity.context.chainAccount,
-          ...(input.sourceDomain === 'private'
-            ? {
-                executionAccount: {
-                  kind: 'pea' as const,
-                  address: sourceIdentity.peaAddress,
-                  addressIndex: sourceIdentity.addressIndex
-                }
-              }
-            : {}),
-          assets: this.options.assets,
-          intent: {
-            assetId: input.source.assetId,
-            recipient: depositQuote.quote.depositAddress,
-            amountRaw: input.source.amountRaw
-          },
-          rpc: this.requireRpc(input.source.chainId),
-          ...(input.feeSelection
-            ? { feeSelection: input.feeSelection }
-            : { feeTier: input.feeTier })
-        })
-        const feeAsset = this.options.assets
-          .list(parseChainId(input.source.chainId).id)
-          .find(entry => entry.asset.kind === 'native')
-        if (feeAsset) {
-          sourceNetworkFee = Object.freeze({
-            raw: fee.maximumFeeWei,
-            symbol: feeAsset.metadata.symbol,
-            decimals: feeAsset.metadata.decimals
-          })
-        }
-      } catch {
-        // Fee availability must not invalidate a bound route quote.
-      }
-    }
-    const finalIdentity = await this.options.signer.resolveIdentity(sourceSigningChain)
-    this.assertSameAccount(sourceIdentity, finalIdentity)
     return Object.freeze({
       amountOutRaw: previews.quotes
         .reduce((sum, quote) => sum + BigInt(quote.quote.amountOut), 0n)
@@ -1608,9 +1581,113 @@ export class ConfidentialFundingCoordinator {
       expiresAt,
       ...(timeEstimateSeconds !== undefined && validQuoteTimeEstimateSeconds(timeEstimateSeconds)
         ? { timeEstimateSeconds }
-        : {}),
-      ...(sourceNetworkFee ? { sourceNetworkFee } : {})
+        : {})
     })
+  }
+
+  private async previewClusterNetworkFee(
+    input: ClusterFundingInput,
+    identity: ConfidentialSigningIdentity,
+    chainId: ChainId
+  ): Promise<NonNullable<ConfidentialFundingReview['sourceNetworkFee']> | null> {
+    if (input.sourceDomain === 'shield') return null
+    const feeAsset = this.options.assets.list(chainId).find(entry => entry.asset.kind === 'native')
+    if (!feeAsset) return null
+    try {
+      const rpc = this.requireRpc(chainId)
+      const quote = await this.clusterDepositQuote(input, identity, 'prefetch')
+      const fee = await estimateEvmTransferFee({
+        chainId,
+        chainAccount: identity.context.chainAccount,
+        ...(input.sourceDomain === 'private'
+          ? {
+              executionAccount: {
+                kind: 'pea' as const,
+                address: identity.peaAddress,
+                addressIndex: identity.addressIndex
+              }
+            }
+          : {}),
+        assets: this.options.assets,
+        intent: {
+          assetId: input.source.assetId,
+          recipient: quote.quote.depositAddress,
+          amountRaw: input.source.amountRaw
+        },
+        rpc,
+        ...(input.feeSelection ? { feeSelection: input.feeSelection } : { feeTier: input.feeTier })
+      })
+      this.assertSameAccount(identity, await this.options.signer.resolveIdentity(chainId))
+      if (quoteDeadline(quote) <= this.now()) return null
+      return Object.freeze({
+        raw: fee.maximumFeeWei,
+        symbol: feeAsset.metadata.symbol,
+        decimals: feeAsset.metadata.decimals
+      })
+    } catch {
+      return null
+    }
+  }
+
+  private async clusterDepositQuote(
+    input: ClusterFundingInput,
+    identity: ConfidentialSigningIdentity,
+    mode: 'prefetch' | 'review'
+  ): Promise<ConfidentialQuote> {
+    const binding = clusterDepositBinding(input, identity)
+    const referral = fundingReferral(input)
+    const key = await fingerprintConfidentialValue({
+      network: input.network,
+      keyDomainId: input.keyDomainId,
+      accountId: input.accountId,
+      chainId: input.source.chainId,
+      assetId: input.source.assetId,
+      sourceDomain: input.sourceDomain,
+      destinationDomain: input.destinationDomain,
+      addressIndex: identity.addressIndex,
+      binding,
+      referral
+    })
+    const validate = (quote: ConfidentialQuote) => {
+      assertConfidentialQuoteBinding(quote, binding, this.now())
+      if (
+        quote.quoteRequest.dry !== false ||
+        !isAddress(quote.quote.depositAddress) ||
+        /^0x0{40}$/i.test(quote.quote.depositAddress)
+      )
+        throw new Error('Confidential deposit quote has no destination')
+      return quote
+    }
+    const fetchQuote = () =>
+      this.options.api.quote({ ...binding, referral, dry: false }).then(validate)
+    const cache = this.clusterDepositPrefetches
+    for (const [key, entry] of cache) {
+      if (entry.expiresAt <= this.now()) cache.delete(key)
+    }
+    const existing = cache.get(key)
+    if (existing) {
+      try {
+        const quote = validate(await existing.quote)
+        if (mode === 'review' && cache.get(key) === existing) cache.delete(key)
+        return quote
+      } catch (error) {
+        if (cache.get(key) === existing) cache.delete(key)
+        if (mode === 'prefetch') throw error
+      }
+    }
+    if (mode === 'review') return fetchQuote()
+    if (cache.size >= MAX_CLUSTER_DEPOSIT_PREFETCHES)
+      throw new Error('Cluster deposit prefetch is busy')
+    const entry = { expiresAt: this.now() + CLUSTER_DEPOSIT_PREFETCH_MS, quote: fetchQuote() }
+    cache.set(key, entry)
+    try {
+      const quote = await entry.quote
+      entry.expiresAt = Math.min(entry.expiresAt, quoteDeadline(quote))
+      return quote
+    } catch (error) {
+      if (cache.get(key) === entry) cache.delete(key)
+      throw error
+    }
   }
 
   async prepare(value: PrepareConfidentialFundingInput): Promise<ConfidentialFundingReview> {
@@ -2104,7 +2181,7 @@ export class ConfidentialFundingCoordinator {
   }
 
   private async prepareCluster(
-    input: Extract<PrepareConfidentialFundingInput, { operation: 'cluster' }>,
+    input: ClusterFundingInput,
     sourceIdentity: ConfidentialSigningIdentity,
     destinationIdentity: ConfidentialSigningIdentity
   ): Promise<ConfidentialFundingReview> {
@@ -2145,41 +2222,8 @@ export class ConfidentialFundingCoordinator {
         ? destinationIdentity.peaAddress
         : destinationIdentity.address
     const depositQuote = requiresDeposit
-      ? await this.options.api.quote({
-          referral: fundingReferral(input),
-          originAsset: input.source.protocolAssetId,
-          destinationAsset: input.source.protocolAssetId,
-          amountRaw: input.source.amountRaw,
-          signerId: sourceIdentity.address,
-          refundTo: sourceAddress,
-          recipient: sourceIdentity.address,
-          depositType: 'ORIGIN_CHAIN',
-          refundType: 'ORIGIN_CHAIN',
-          recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageBps: input.slippageBps,
-          dry: false
-        })
+      ? await this.clusterDepositQuote(input, sourceIdentity, 'review')
       : undefined
-    if (depositQuote) {
-      assertConfidentialQuoteBinding(
-        depositQuote,
-        {
-          originAsset: input.source.protocolAssetId,
-          destinationAsset: input.source.protocolAssetId,
-          amountRaw: input.source.amountRaw,
-          signerId: sourceIdentity.address,
-          refundTo: sourceAddress,
-          recipient: sourceIdentity.address,
-          depositType: 'ORIGIN_CHAIN',
-          refundType: 'ORIGIN_CHAIN',
-          recipientType: 'CONFIDENTIAL_INTENTS',
-          slippageBps: input.slippageBps
-        },
-        this.now()
-      )
-      if (!depositQuote.quote.depositAddress)
-        throw new Error('Confidential deposit quote has no destination')
-    }
     const spendRaw = depositQuote?.quote.amountOut ?? input.source.amountRaw
     const previews = await this.prepareWithdrawPreviews({
       referral: fundingReferral(input),

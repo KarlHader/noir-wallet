@@ -1,3 +1,4 @@
+import { bsc, bscTestnet, mainnet, sepolia } from 'viem/chains'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
 import { preferWalletEvmQuoteToken } from './token-address-discovery'
@@ -17,7 +18,16 @@ export interface MoveMethodEstimate {
     readonly decimals: number
   }
   readonly time: string
-  readonly timeScope: 'Network only' | 'Excl. scheduling'
+  readonly timeScope: 'Network only' | 'Excl. scheduling' | 'Block cadence'
+}
+
+const directTimingChains = [mainnet, bsc, sepolia, bscTestnet]
+
+function directBlockCadence(chainId: string, transactions: number): string {
+  const blockTime = directTimingChains.find(chain => `eip155:${chain.id}` === chainId)?.blockTime
+  if (!blockTime) return '—'
+  const seconds = (blockTime / 1000) * transactions
+  return formatConfirmationTime({ minimumSeconds: seconds, maximumSeconds: seconds * 2 })
 }
 
 function routeFee(amountRaw: string, outputRaw: string): string | null {
@@ -33,7 +43,6 @@ export function clusterMoveEstimate(
   return {
     expiresAt: preview.expiresAt,
     routeFeeRaw: routeFee(amountRaw, preview.amountOutRaw),
-    ...(preview.sourceNetworkFee ? { sourceNetworkFee: preview.sourceNetworkFee } : {}),
     time: formatIntentsConfirmationTime(seconds),
     timeScope: 'Excl. scheduling'
   }
@@ -84,7 +93,7 @@ export async function estimateDirectMove(input: {
   )
   try {
     input.signal.throwIfAborted()
-    const result: MoveMethodEstimate = {
+    let result: MoveMethodEstimate = {
       expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
       routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
       time: '—',
@@ -105,6 +114,11 @@ export async function estimateDirectMove(input: {
         getTokenAllowance: evmWalletClient.getTokenAllowance
       })
       const calls = [...(approval ? [approval.transaction] : []), plan.transaction]
+      result = {
+        ...result,
+        time: directBlockCadence(input.chain.chain.id, calls.length),
+        timeScope: 'Block cadence'
+      }
       const fees: EvmFeeEstimate[] = []
       for (const call of calls) {
         input.signal.throwIfAborted()
@@ -126,7 +140,7 @@ export async function estimateDirectMove(input: {
         .getConfirmationEstimate({
           chainId: fee.chainId,
           maxFeePerGasWei: fee.maxFeePerGasWei,
-          maxPriorityFeePerGasWei: fee.maxPriorityFeePerGasWei
+          maxPriorityFeePerGasWei: fee.gasPriceWei ?? fee.maxPriorityFeePerGasWei
         })
         .catch(() => null)
       const confirmations = calls.length
@@ -141,14 +155,15 @@ export async function estimateDirectMove(input: {
               }
             }
           : {}),
-        time: formatConfirmationTime(
-          confirmation
-            ? {
+        ...(confirmation
+          ? {
+              time: formatConfirmationTime({
                 minimumSeconds: confirmation.minimumSeconds * confirmations,
                 maximumSeconds: confirmation.maximumSeconds * confirmations
-              }
-            : null
-        )
+              }),
+              timeScope: 'Network only'
+            }
+          : {})
       }
     } catch {
       input.signal.throwIfAborted()
@@ -176,6 +191,6 @@ export function formatMoveMethodFee(
     }
   return {
     value: `~${format(estimate.routeFeeRaw, asset.metadata.decimals)} ${asset.metadata.symbol}`,
-    detail: gas ? `+ ~${format(gas.raw, gas.decimals)} ${gas.symbol}` : '+ network fee'
+    detail: gas ? `+\u00a0~${format(gas.raw, gas.decimals)} ${gas.symbol}` : '+ network fee'
   }
 }

@@ -160,15 +160,7 @@ function parsePreview(value: unknown): ConfidentialFundingPreview {
     (value.timeEstimateSeconds !== undefined &&
       (typeof value.timeEstimateSeconds !== 'number' ||
         !Number.isSafeInteger(value.timeEstimateSeconds) ||
-        value.timeEstimateSeconds <= 0)) ||
-    (value.sourceNetworkFee !== undefined &&
-      (!isRecord(value.sourceNetworkFee) ||
-        typeof value.sourceNetworkFee.raw !== 'string' ||
-        !/^\d+$/.test(value.sourceNetworkFee.raw) ||
-        typeof value.sourceNetworkFee.symbol !== 'string' ||
-        typeof value.sourceNetworkFee.decimals !== 'number' ||
-        !Number.isSafeInteger(value.sourceNetworkFee.decimals) ||
-        value.sourceNetworkFee.decimals < 0))
+        value.timeEstimateSeconds <= 0))
   ) {
     throw new Error('Confidential funding preview is invalid')
   }
@@ -179,17 +171,24 @@ function parsePreview(value: unknown): ConfidentialFundingPreview {
     ...(value.appFeeBps === undefined ? {} : { appFeeBps: value.appFeeBps }),
     ...(value.timeEstimateSeconds === undefined
       ? {}
-      : { timeEstimateSeconds: value.timeEstimateSeconds }),
-    ...(value.sourceNetworkFee === undefined
-      ? {}
-      : {
-          sourceNetworkFee: Object.freeze({
-            raw: value.sourceNetworkFee.raw as string,
-            symbol: value.sourceNetworkFee.symbol as string,
-            decimals: value.sourceNetworkFee.decimals as number
-          })
-        })
+      : { timeEstimateSeconds: value.timeEstimateSeconds })
   })
+}
+
+function parseClusterNetworkFee(value: unknown) {
+  if (value === null) return null
+  if (
+    !isRecord(value) ||
+    typeof value.raw !== 'string' ||
+    !/^\d+$/.test(value.raw) ||
+    typeof value.symbol !== 'string' ||
+    typeof value.decimals !== 'number' ||
+    !Number.isSafeInteger(value.decimals) ||
+    value.decimals < 0
+  ) {
+    throw new Error('Cluster network fee is invalid')
+  }
+  return Object.freeze({ raw: value.raw, symbol: value.symbol, decimals: value.decimals })
 }
 
 function matchesExternalRecipient(
@@ -397,6 +396,10 @@ export function createConfidentialFundingClient(
       request: PrepareConfidentialFundingRequest
     ): Promise<ConfidentialFundingPreview> =>
       parsePreview(unwrap(await send({ type: 'PREVIEW_CONFIDENTIAL_FUNDING', request }))),
+    previewClusterNetworkFee: async (request: PrepareConfidentialFundingRequest) =>
+      parseClusterNetworkFee(
+        unwrap(await send({ type: 'PREVIEW_CONFIDENTIAL_FUNDING', request, clusterFeeOnly: true }))
+      ),
     prepare: async (
       request: PrepareConfidentialFundingRequest
     ): Promise<ConfidentialFundingReview> =>

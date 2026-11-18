@@ -708,7 +708,10 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_NATIVE_ZEC_INTENTS_SWAP_STATUS: { required: { quoteId: isNativeZecIntentsQuoteId } },
   CANCEL_NATIVE_ZEC_INTENTS_SWAP: { required: { quoteId: isNativeZecIntentsQuoteId } },
   PREPARE_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
-  PREVIEW_CONFIDENTIAL_FUNDING: { required: { request: isRecord } },
+  PREVIEW_CONFIDENTIAL_FUNDING: {
+    required: { request: isRecord },
+    optional: { clusterFeeOnly: isBoolean }
+  },
   CREATE_EXTERNAL_SHIELD_DEPOSIT: { required: { request: isRecord } },
   GET_EXTERNAL_SHIELD_DEPOSIT: { required: { depositId: isShortString } },
   LIST_EXTERNAL_SHIELD_DEPOSITS: { required: { scope: isRecord } },

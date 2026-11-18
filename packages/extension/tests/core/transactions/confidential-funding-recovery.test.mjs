@@ -379,6 +379,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
   const state = {
     now: 1_000,
     signatures: 0,
+    preparedDeposits: 0,
     allowSigning: false,
     identityChains: [],
     signingChains: [],
@@ -433,6 +434,15 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
         }
       }
     },
+    prepareTransaction: async () => {
+      state.preparedDeposits += 1
+      return {
+        commandId: `deposit-${state.preparedDeposits}`,
+        payloadFingerprint: 'a'.repeat(64),
+        expiresAt: state.now + 60_000
+      }
+    },
+    cancelTransaction: async () => {},
     signMessage: async input => {
       state.signatures += 1
       state.signingChains.push(input.chainId)
@@ -968,29 +978,63 @@ test.describe('confidential funding persisted recovery', () => {
 
     h.state.quoteOverride = input => ({
       ...(input.depositType === 'ORIGIN_CHAIN'
-        ? { depositAddress: '0x3333333333333333333333333333333333333333', timeEstimate: 8 }
+        ? {
+            depositAddress: input.dry ? '' : '0x3333333333333333333333333333333333333333',
+            timeEstimate: 8
+          }
         : { timeEstimate: 17 })
     })
-    h.coordinator.rpcByChain.set('eip155:1', {
+    const rpc = {
       assertExpectedChain: async () => {},
+      getPendingNonce: async () => '0',
       getNativeBalance: async () => '1000000000000000000',
       getMaximumPriorityFeePerGas: async () => '1000000000',
       getLatestBlockFee: async () => ({ baseFeePerGas: '1000000000', blockNumber: '1' }),
       simulateCall: async () => '0x',
       estimateGas: async () => '21000'
-    })
+    }
+    h.coordinator.rpcByChain.set('eip155:1', rpc)
     const privateCluster = { ...cluster, sourceDomain: 'private', destinationDomain: 'public' }
-    const feePreview = await h.coordinator.preview(privateCluster)
-    expect(feePreview.sourceNetworkFee).toMatchObject({ symbol: 'ETH', decimals: 18 })
-    expect(BigInt(feePreview.sourceNetworkFee.raw)).toBeGreaterThan(0n)
-    h.coordinator.rpcByChain.clear()
+    const fees = await Promise.all([
+      h.coordinator.preview(privateCluster, true),
+      h.coordinator.preview(privateCluster, true)
+    ])
+    expect(fees[0]).toMatchObject({ symbol: 'ETH', decimals: 18 })
+    expect(BigInt(fees[0].raw)).toBeGreaterThan(0n)
+    expect(fees[1]).toEqual(fees[0])
+    expect(h.state.formalQuotes).toBe(1)
+    expect(h.state.preparedDeposits).toBe(0)
+    expect(h.plans.size).toBe(0)
+
+    h.coordinator.rpcByChain.set('eip155:1', {
+      ...rpc,
+      estimateGas: async () => {
+        throw new Error('RPC unavailable')
+      }
+    })
+    expect(await h.coordinator.preview(privateCluster, true)).toBeNull()
     const noRpcPreview = await h.coordinator.preview(privateCluster)
     expect(noRpcPreview).toMatchObject({
       amountOutRaw: '60',
       minimumOutputRaw: '60',
       timeEstimateSeconds: 25
     })
-    expect(noRpcPreview.sourceNetworkFee).toBeUndefined()
+
+    h.coordinator.rpcByChain.set('eip155:1', rpc)
+    const changedAmount = { ...privateCluster, source: { ...privateCluster.source, amountRaw: '63' } }
+    const changedReview = await h.coordinator.prepare(changedAmount)
+    expect(changedReview.sourceAmountRaw).toBe('63')
+    expect(h.state.formalQuotes).toBe(2)
+    const review = await h.coordinator.prepare({ ...privateCluster, dedupKey: 'review-cluster' })
+    expect(review.sourceNetworkFee).toEqual(fees[0])
+    expect(h.state.formalQuotes).toBe(2)
+    await h.coordinator.cancel(changedReview.planId)
+    await h.coordinator.cancel(review.planId)
+    await h.coordinator.preview(privateCluster, true)
+    h.state.now += 60_001
+    const freshReview = await h.coordinator.prepare(privateCluster)
+    expect(h.state.formalQuotes).toBe(4)
+    await h.coordinator.cancel(freshReview.planId)
 
     h.state.quoteOverride = input =>
       input.depositType === 'ORIGIN_CHAIN' ? { timeEstimate: 8 } : {}

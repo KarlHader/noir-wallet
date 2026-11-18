@@ -302,21 +302,21 @@ function MethodCard({
         <span className="text-muted">Privacy</span>
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
       </span>
-      {(loading || (estimate && estimate.time !== '—')) && (
-        <span className="mt-2 flex justify-between gap-2">
-          <span className="shrink-0 text-muted">Time (est.)</span>
-          <span className="min-w-0 text-right">
-            {loading ? (
-              <Skeleton className="ml-auto h-4 w-full max-w-16" />
-            ) : estimate ? (
-              <>
-                <span className="block">{estimate.time}</span>
+      <span className="mt-2 flex min-h-12 justify-between gap-2">
+        <span className="shrink-0 text-muted">Time (est.)</span>
+        <span className="min-w-0 text-right">
+          {loading ? (
+            <Skeleton className="ml-auto h-4 w-12 max-w-full" />
+          ) : (
+            <>
+              <span className="block">{estimate?.time ?? '—'}</span>
+              {estimate && estimate.time !== '—' && (
                 <span className="block text-[10px] text-muted">{estimate.timeScope}</span>
-              </>
-            ) : null}
-          </span>
+              )}
+            </>
+          )}
         </span>
-      )}
+      </span>
       <span className="mt-2 flex justify-between gap-2">
         <span className="shrink-0 text-muted">Fee (est.)</span>
         <span className="min-w-0 break-words text-right">
@@ -1288,25 +1288,26 @@ function TransferForm() {
         signal
       })
   })
+  const clusterEstimateKey = `${methodEstimateKey}:${shieldConnection}:${managedAsset?.protocolAssetId ?? ''}`
+  const buildClusterPreviewRequest = () =>
+    buildShieldTransferRequest({
+      network: currentNetwork,
+      keyDomainId: effective!.walletId,
+      accountId: effective!.accountId,
+      from,
+      to,
+      method: 'cluster',
+      amountRaw: estimateAmountRaw!,
+      asset: selected!.asset,
+      chain: selected!.chain,
+      managed: managedAsset!
+    })
   const clusterEstimate = useMoveMethodEstimate({
     enabled:
       canEstimateMethods && Boolean(managedAsset && effective && shieldConnection === 'connected'),
-    requestKey: `${methodEstimateKey}:${shieldConnection}:${JSON.stringify(evmMoveFee)}`,
+    requestKey: clusterEstimateKey,
     estimate: async signal => {
-      const request = buildShieldTransferRequest({
-        network: currentNetwork,
-        keyDomainId: effective!.walletId,
-        accountId: effective!.accountId,
-        from,
-        to,
-        method: 'cluster',
-        amountRaw: estimateAmountRaw!,
-        asset: selected!.asset,
-        chain: selected!.chain,
-        managed: managedAsset!,
-        ...(from === 'shield' ? {} : { feeSelection: evmMoveFee })
-      })
-      const preview = await confidentialFundingClient.preview(request)
+      const preview = await confidentialFundingClient.preview(buildClusterPreviewRequest())
       signal.throwIfAborted()
       return clusterMoveEstimate(estimateAmountRaw!, preview)
     }
@@ -1314,6 +1315,24 @@ function TransferForm() {
   const clusterQuoted = Boolean(
     canEstimateMethods && managedAsset && shieldConnection === 'connected' && clusterEstimate.value
   )
+  const clusterNetworkFee = useMoveMethodEstimate({
+    enabled:
+      clusterSelected &&
+      clusterQuoted &&
+      from !== 'shield' &&
+      Boolean(shieldAmountState?.amountRaw) &&
+      !preparingShield,
+    requestKey: `${clusterEstimateKey}:${JSON.stringify(evmMoveFee)}`,
+    estimate: () =>
+      confidentialFundingClient.previewClusterNetworkFee({
+        ...buildClusterPreviewRequest(),
+        feeSelection: evmMoveFee
+      })
+  }).value
+  const clusterEstimateWithFee =
+    clusterEstimate.value && clusterNetworkFee
+      ? { ...clusterEstimate.value, sourceNetworkFee: clusterNetworkFee }
+      : clusterEstimate.value
   const directQuoted = Boolean(canEstimateMethods && methodAvailable && directEstimate.value)
   const selectedEstimate = method === 'cluster' ? clusterEstimate : directEstimate
   const clusterUnavailable = getSwapQuoteFailureMessage(clusterEstimate.errorMessage) === 'no route'
@@ -2234,7 +2253,7 @@ function TransferForm() {
                     shieldConnection === 'connected' &&
                     clusterEstimate.loading
                   }
-                  fee={formatMoveMethodFee(clusterEstimate.value, selected.asset)}
+                  fee={formatMoveMethodFee(clusterEstimateWithFee, selected.asset)}
                   onClick={() => {
                     userPickedMethod.current = true
                     setMethod('cluster')
@@ -2271,15 +2290,12 @@ function TransferForm() {
                 selection={evmMoveFee}
                 feeModel={evmMoveFee.kind === 'legacy' ? 'legacy' : 'eip1559'}
                 amount={
-                  clusterEstimate.value?.sourceNetworkFee
-                    ? formatBaseUnitAmount(
-                        clusterEstimate.value.sourceNetworkFee.raw,
-                        clusterEstimate.value.sourceNetworkFee.decimals
-                      )
+                  clusterNetworkFee
+                    ? formatBaseUnitAmount(clusterNetworkFee.raw, clusterNetworkFee.decimals)
                     : '—'
                 }
                 symbol={
-                  clusterEstimate.value?.sourceNetworkFee?.symbol ??
+                  clusterNetworkFee?.symbol ??
                   nativeFeeAsset?.metadata.symbol ??
                   selected.chain.chain.displayName
                 }
