@@ -178,6 +178,7 @@ export type SyncBlocksOptions = {
   force?: boolean
   priority?: 'foreground' | 'background'
   waitForTipAdvance?: boolean
+  skipPendingSettlement?: boolean
   maxDurationMs?: number
   maxBatchBlocks?: number
 }
@@ -555,7 +556,9 @@ export class BackgroundZcashWalletRuntime {
     if (pending) {
       const journalBatches = await this.getJournalBatchCount(walletId)
       logger.log(`Replaying ${journalBatches} journal entries before persist`, walletId, accountId)
-      await core.replayJournalEntries(network, walletId, { allowAfterAbort: true })
+      await traceDebugStage('zcash-sync', 'journal-replay', () =>
+        core.replayJournalEntries(network, walletId, { allowAfterAbort: true })
+      )
       height = await this.safePostReplaySummary(walletId, accountId, core, height)
       this.clearWalletSummaryCache(walletId)
     } else {
@@ -1350,7 +1353,9 @@ export class BackgroundZcashWalletRuntime {
     const core = this.walletCores.get(walletId)
     if (!core) return
     const key = `${this.network}_${walletId}`
-    await core.persistDb(key, { allowDuringSyncSession: true })
+    await traceDebugStage('zcash-sync', 'persist-snapshot', () =>
+      core.persistDb(key, { allowDuringSyncSession: true })
+    )
   }
 
   /**
@@ -4564,7 +4569,8 @@ export class BackgroundZcashWalletRuntime {
         }
       }
 
-      const pendingZcashTxPre = await hasPendingZcashTxForWallet(syncWalletId!)
+      const pendingZcashTxPre =
+        !options?.skipPendingSettlement && (await hasPendingZcashTxForWallet(syncWalletId!))
       syncNeedsSettlement =
         !!options?.waitForTipAdvance ||
         pendingZcashTxPre ||
@@ -4664,6 +4670,7 @@ export class BackgroundZcashWalletRuntime {
         })
       }
 
+      if (isAborted?.()) return abortBeforeScan()
       await core.beginSyncSession()
       syncSessionActive = true
 
@@ -4672,7 +4679,7 @@ export class BackgroundZcashWalletRuntime {
       // skip those round-trips; on failure we fall back to per-batch refresh.
       let sessionSetupDone = false
       try {
-        await core.syncSessionSetup()
+        if (!isAborted?.()) await core.syncSessionSetup()
         sessionSetupDone = true
       } catch (e) {
         if (!isAborted?.()) {
@@ -4875,6 +4882,10 @@ export class BackgroundZcashWalletRuntime {
             syncLogPrefix,
             `preparing batch ${preparingBatch} (size ${batchSize}${refreshBatch ? ', refresh' : ''})...`
           )
+          if (isAborted?.()) {
+            aborted = true
+            break
+          }
           batchResult = await core.prepareSyncBatchWithJournal(
             batchSize,
             syncNetwork,
@@ -4896,14 +4907,20 @@ export class BackgroundZcashWalletRuntime {
           }
           consecutiveErrors = 0
         } catch (batchErr: any) {
+          const batchMessage = batchErr?.message || String(batchErr)
+          const isRpcTimeout =
+            batchMessage.includes('Offscreen RPC timeout') ||
+            batchMessage.includes('Worker RPC timeout')
           if (isAborted?.() || options?.signal?.aborted) {
+            if (isRpcTimeout) {
+              snapshotFailed = true
+              await core.markDirty()
+            }
             aborted = true
             break
           }
           consecutiveErrors++
-          const errMsg = batchErr?.message || String(batchErr)
-          const isRpcTimeout =
-            errMsg.includes('Offscreen RPC timeout') || errMsg.includes('Worker RPC timeout')
+          const errMsg = batchMessage
           if (isRpcTimeout && consecutiveErrors <= 2) {
             logger.warn(
               `Batch RPC timeout (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}), reinitializing worker: ${errMsg}`,
@@ -5094,7 +5111,8 @@ export class BackgroundZcashWalletRuntime {
 
           if (!wasmProgress.dirty && wasmProgress.fullyScanned >= syncTargetHeight) {
             const atTipWithPending =
-              syncNeedsSettlement || this.summaryHasPendingBalance(noRangeSummary)
+              !options?.skipPendingSettlement &&
+              (syncNeedsSettlement || this.summaryHasPendingBalance(noRangeSummary))
             if (atTipWithPending) {
               const settlementMaxAttempts = WALLET_CONFIG.SYNC.SETTLEMENT_MAX_ATTEMPTS
               const settlementIntervalMs = WALLET_CONFIG.SYNC.SETTLEMENT_INTERVAL_MS

@@ -463,41 +463,46 @@ export class DAppHandler {
       Date.now() - (this.boundBalanceRefreshTimes.get(refreshKey) ?? 0) >=
         WALLET_CONFIG.SYNC.DAPP_BALANCE_SYNC_STALE_MS
     ) {
-      await this.runBoundZcashOperation(bound.walletId, bound.accountId, async () => {
-        if (
-          cachedBalance &&
-          Date.now() - (this.boundBalanceRefreshTimes.get(refreshKey) ?? 0) <
-            WALLET_CONFIG.SYNC.DAPP_BALANCE_SYNC_STALE_MS
-        )
-          return
-        await this.ensureApprovedAccountContext(
-          origin,
-          bound.walletId,
-          bound.accountId,
-          bound.revision
-        )
-        await backgroundZcashWalletRuntime.refreshBalances(bound.walletId, true, {
-          localOnly: true,
-          canApply: () => {
-            const state = useWalletStore.getState()
-            return (
-              state.currentNetwork === network &&
-              state.wallets.some(
-                wallet =>
-                  wallet.id === bound.walletId &&
-                  wallet.accounts.some(account => account.id === bound.accountId)
+      await this.runBoundZcashOperation(
+        bound.walletId,
+        bound.accountId,
+        async () => {
+          if (
+            cachedBalance &&
+            Date.now() - (this.boundBalanceRefreshTimes.get(refreshKey) ?? 0) <
+              WALLET_CONFIG.SYNC.DAPP_BALANCE_SYNC_STALE_MS
+          )
+            return
+          await this.ensureApprovedAccountContext(
+            origin,
+            bound.walletId,
+            bound.accountId,
+            bound.revision
+          )
+          await backgroundZcashWalletRuntime.refreshBalances(bound.walletId, true, {
+            localOnly: true,
+            canApply: () => {
+              const state = useWalletStore.getState()
+              return (
+                state.currentNetwork === network &&
+                state.wallets.some(
+                  wallet =>
+                    wallet.id === bound.walletId &&
+                    wallet.accounts.some(account => account.id === bound.accountId)
+                )
               )
-            )
-          }
-        })
-        await this.ensureApprovedAccountContext(
-          origin,
-          bound.walletId,
-          bound.accountId,
-          bound.revision
-        )
-        this.boundBalanceRefreshTimes.set(refreshKey, Date.now())
-      })
+            }
+          })
+          await this.ensureApprovedAccountContext(
+            origin,
+            bound.walletId,
+            bound.accountId,
+            bound.revision
+          )
+          this.boundBalanceRefreshTimes.set(refreshKey, Date.now())
+        },
+        false
+      )
     }
     if (!useAccountDataStore.getState().getBalance(network, bound.walletId, bound.accountId)) {
       throw new Error('Zcash balance is unavailable. Try again after the wallet refreshes.')
@@ -1269,22 +1274,10 @@ export class DAppHandler {
       if (!sourceAccount) throw new Error('Wallet account no longer available')
       const approvedAccountIndex = sourceAccount.derivationIndex
       const fromAddress = sourceAccount?.addresses[fundingSource] || ''
-      let txPaused = false
       let transactionId: string | undefined
       let broadcastHash: string | undefined
 
       try {
-        syncScheduler.pauseForTx()
-        txPaused = true
-
-        const syncIdle = await syncScheduler.waitForWalletSyncIdle(
-          walletId,
-          WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS
-        )
-        if (!syncIdle) {
-          throw new Error('Wallet is syncing. Please try again after sync completes.')
-        }
-
         const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
         if (fundingSource === 'transparent') {
           await prepareTransparentSpend(walletCore, txParams.amount, approvedAccountIndex)
@@ -1432,10 +1425,6 @@ export class DAppHandler {
           .catch(() => {})
 
         throw new Error(userMessage)
-      } finally {
-        if (txPaused) {
-          syncScheduler.resumeAfterTx()
-        }
       }
     })
   }
@@ -1679,7 +1668,6 @@ export class DAppHandler {
 
     return this.runBoundZcashOperation(walletId, accountId, async () => {
       await this.ensureApprovedAccountContext(origin, walletId, accountId, authorizationRevision)
-      let txPaused = false
       const accountKey = buildAccountKey(currentNetwork, walletId, accountId)
       const approvedAccount = useWalletStore.getState().getAccount(walletId, accountId)
       if (!approvedAccount) throw new Error('Wallet account no longer available')
@@ -1687,17 +1675,6 @@ export class DAppHandler {
       let transactionId: string | undefined
       let broadcastHash: string | undefined
       try {
-        syncScheduler.pauseForTx()
-        txPaused = true
-
-        const syncIdle = await syncScheduler.waitForWalletSyncIdle(
-          walletId,
-          WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS
-        )
-        if (!syncIdle) {
-          throw new Error('Wallet is syncing. Please try again after sync completes.')
-        }
-
         const walletCore = await backgroundZcashWalletRuntime.getWalletCore(walletId, accountId)
         const latestTransparentBalance = getShieldableTransparentBalance(
           await prepareTransparentSpend(walletCore, undefined, approvedAccountIndex)
@@ -1821,10 +1798,6 @@ export class DAppHandler {
           .catch(() => {})
 
         throw new Error(userMessage)
-      } finally {
-        if (txPaused) {
-          syncScheduler.resumeAfterTx()
-        }
       }
     })
   }
@@ -1933,20 +1906,19 @@ export class DAppHandler {
   private async runBoundZcashOperation<T>(
     walletId: string,
     accountId: string,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    yieldActive = true
   ): Promise<T> {
-    return accountContextTransition.runActiveOperation(async () => {
-      syncScheduler.pauseForTx()
-      try {
-        if (!(await syncScheduler.waitForActiveSyncIdle(WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS))) {
-          throw new Error('Wallet is syncing. Please try again after sync completes.')
-        }
-        await backgroundZcashWalletRuntime.prepareDAppAccount(walletId, accountId)
-        return await operation()
-      } finally {
-        syncScheduler.resumeAfterTx()
-      }
-    })
+    return accountContextTransition.runActiveOperation(() =>
+      syncScheduler.withWalletSyncPaused(
+        walletId,
+        async () => {
+          await backgroundZcashWalletRuntime.prepareDAppAccount(walletId, accountId)
+          return operation()
+        },
+        yieldActive
+      )
+    )
   }
 
   private async ensureApprovedAccountContext(

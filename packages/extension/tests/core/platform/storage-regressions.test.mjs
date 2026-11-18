@@ -350,7 +350,12 @@ test.describe('Storage regressions', () => {
   test('quarantines automatic recovery failures instead of deleting evidence', () => {
     expect(offscreenSource).toContain('quarantineWalletPersistence')
     expect(offscreenSource).not.toContain('deleteWalletDb(')
-    expect(offscreenSource).not.toContain('clearJournalEntries(')
+    const poisonedRecovery = offscreenSource.slice(
+      offscreenSource.indexOf('async function recoverFromPoisonedSnapshot('),
+      offscreenSource.indexOf('function isPoisonedSnapshotError(')
+    )
+    expect(poisonedRecovery).toContain('quarantineWalletPersistence')
+    expect(poisonedRecovery).not.toContain('clearJournalEntries(')
 
     const syncStart = zcashWalletRuntimeSource.indexOf('async syncBlocks(')
     const assertionStart = zcashWalletRuntimeSource.indexOf(

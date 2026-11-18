@@ -67,7 +67,7 @@ import { formatHardwareSigningError } from '@/lib/hardware-signing-error'
 import { appendDiagnosticLog, exportDiagnosticLogs } from '@/lib/diagnostic-log-store'
 import { parseDiagnosticLogDraft, sanitizeDiagnosticMessage } from '@/lib/diagnostic-log'
 import { logDebugTiming, traceDebugStage } from '@/lib/debug-performance'
-import { hasWalletDb, loadTransactions, mutateTransactions } from '@/lib/indexed-db'
+import { loadTransactions, mutateTransactions } from '@/lib/indexed-db'
 import {
   useWalletStore,
   prepareWalletStoreForUse,
@@ -431,7 +431,7 @@ import {
   initializeExtensionDisplayMode,
   persistSidePanelMode
 } from './extension-display-mode'
-import { computePassiveSyncDelayMinutes, shouldRequestPeriodicSync } from './passive-sync-policy'
+import { computePassiveSyncDelayMinutes } from './passive-sync-policy'
 import { fetchLatestBlockHeight } from '@/infrastructure/chains/rpc-registry-client'
 import { DedupPromise, SerialTaskQueue, TimeoutError, withTimeout } from '@/lib/async-utils'
 
@@ -2375,57 +2375,12 @@ async function checkOffscreenHealth(): Promise<void> {
 }
 
 async function requestPeriodicBalanceSync(): Promise<'scheduled' | 'skipped' | 'probe-failed'> {
-  if (syncScheduler.isRunning()) return 'skipped'
   await Promise.all([rehydrateWalletStore(), useAccountDataStore.persist.rehydrate()])
-  const { currentWalletId, currentNetwork } = useWalletStore.getState()
-  if (!currentWalletId) return 'skipped'
-  const currentAccountId = useWalletStore.getState().currentAccountId
-  const currentAccount = currentAccountId
-    ? useWalletStore.getState().getAccount(currentWalletId, currentAccountId)
-    : null
-  if (!currentAccount || !isAccountNetworkEnabled(currentAccount, currentNetwork, 'zcash')) {
-    return 'skipped'
+  try {
+    return (await probeRoutineZcashSync()) ? 'scheduled' : 'skipped'
+  } catch {
+    return 'probe-failed'
   }
-
-  const syncState = useAccountDataStore
-    .getState()
-    .getWalletSyncState(currentNetwork, currentWalletId)
-  const hasUnlockSession = await credentialSession.hasUnlockSession()
-  const [isWalletUiOpen, hasPendingCrossChainTransaction, hasPendingZcashTransaction, snapshot] =
-    await Promise.all([
-      isWalletUiContextOpen(),
-      transactionMonitor.hasPendingTransactions(),
-      zcashTxMonitor.hasPendingTransactions(),
-      hasWalletDb(`${currentNetwork}_${currentWalletId}`)
-    ])
-  const hasPendingTransactions = hasPendingCrossChainTransaction || hasPendingZcashTransaction
-  let networkHeight: number | null = null
-  if (!isWalletUiOpen && !hasPendingTransactions) {
-    try {
-      networkHeight = await fetchLatestBlockHeight(getNetworkConfig(currentNetwork).rpcUrl)
-    } catch {
-      return 'probe-failed'
-    }
-  }
-  if (
-    !shouldRequestPeriodicSync({
-      isSchedulerRunning: syncScheduler.isRunning(),
-      isWalletUiOpen,
-      hasPendingTransactions,
-      isWalletLocked: backgroundZcashWalletRuntime.isLocked() && !hasUnlockSession,
-      hasPersistedSnapshot: snapshot,
-      currentHeight: syncState.currentHeight,
-      networkHeight,
-      lastSyncTime: syncState.lastSyncTime,
-      now: Date.now(),
-      minBlockGap: WALLET_CONFIG.SYNC.BACKGROUND_MIN_GAP_BLOCKS,
-      maxStaleMs: WALLET_CONFIG.SYNC.BACKGROUND_MAX_STALE_MS
-    })
-  ) {
-    return 'skipped'
-  }
-
-  return syncScheduler.requestPassiveSync(0) ? 'scheduled' : 'skipped'
 }
 
 async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
@@ -2447,49 +2402,56 @@ async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
 
 let lastForegroundZcashProbe: { key: string; startedAt: number } | undefined
 
-async function probeForegroundZcashSync(signal: AbortSignal): Promise<void> {
+async function probeRoutineZcashSync(signal?: AbortSignal): Promise<boolean> {
   await runtimeNetworkReady
   await prepareWalletStoreForUse()
-  const canProbe = () =>
-    !signal.aborted &&
-    !networkRestartRequired &&
-    !syncScheduler.isRunning() &&
-    !syncScheduler.isTxPaused()
-  if (!canProbe()) return
-
   const { currentNetwork, currentWalletId, currentAccountId, getAccount } =
     useWalletStore.getState()
-  if (!currentWalletId || !currentAccountId) return
+  if (!currentWalletId || !currentAccountId) return false
   const account = getAccount(currentWalletId, currentAccountId)
-  if (!account || !isAccountNetworkEnabled(account, currentNetwork, 'zcash')) return
-  if (!(await credentialSession.hasUnlockSession()) || !canProbe()) return
-
-  const key = `${currentNetwork}:${currentWalletId}:${currentAccountId}`
-  const now = performance.now()
-  if (
-    lastForegroundZcashProbe?.key === key &&
-    now - lastForegroundZcashProbe.startedAt < WALLET_CONFIG.SYNC.FOREGROUND_PROBE_MS
-  )
-    return
-  const probe = { key, startedAt: now }
-  lastForegroundZcashProbe = probe
+  if (!account || !isAccountNetworkEnabled(account, currentNetwork, 'zcash')) return false
   const endpoint = getNetworkConfig(currentNetwork).rpcUrl
+  let scopeChanged = false
+  const unsubscribe = useWalletStore.subscribe(state => {
+    if (
+      state.currentNetwork !== currentNetwork ||
+      state.currentWalletId !== currentWalletId ||
+      state.currentAccountId !== currentAccountId
+    )
+      scopeChanged = true
+  })
+  const isCurrent = () =>
+    !signal?.aborted &&
+    !networkRestartRequired &&
+    !scopeChanged &&
+    endpoint === getNetworkConfig(currentNetwork).rpcUrl
+
+  const key = `${currentNetwork}:${currentWalletId}:${currentAccountId}:${endpoint}`
+  const now = performance.now()
+  const probe = { key, startedAt: now }
   try {
-    const tip = await fetchLatestBlockHeight(endpoint, undefined, undefined, signal)
-    if (!canProbe() || endpoint !== getNetworkConfig(currentNetwork).rpcUrl) return
-    const scanned = useAccountDataStore
-      .getState()
-      .getWalletSyncState(currentNetwork, currentWalletId).currentHeight
-    if (tip > scanned) {
-      await syncScheduler.requestForegroundCatchUp(
-        currentNetwork,
-        currentWalletId,
-        currentAccountId,
-        signal
+    if (!isCurrent()) return false
+    if (signal) {
+      if (!(await credentialSession.hasUnlockSession()) || !isCurrent()) return false
+      if (
+        lastForegroundZcashProbe?.key === key &&
+        now - lastForegroundZcashProbe.startedAt < WALLET_CONFIG.SYNC.FOREGROUND_PROBE_MS
       )
+        return false
+      lastForegroundZcashProbe = probe
     }
+    const tip = await fetchLatestBlockHeight(endpoint, undefined, undefined, signal)
+    return await syncScheduler.observeRoutineTip(
+      currentNetwork,
+      currentWalletId,
+      currentAccountId,
+      tip,
+      isCurrent,
+      !signal
+    )
   } finally {
-    if (signal.aborted && lastForegroundZcashProbe === probe) lastForegroundZcashProbe = undefined
+    unsubscribe()
+    if (signal?.aborted && lastForegroundZcashProbe === probe) lastForegroundZcashProbe = undefined
   }
 }
 
@@ -2504,30 +2466,12 @@ chrome.runtime.onConnect.addListener(port => {
   }
   const controller = new AbortController()
   port.onDisconnect.addListener(() => controller.abort())
-  void probeForegroundZcashSync(controller.signal)
+  void probeRoutineZcashSync(controller.signal)
     .catch(() => {})
     .finally(() => {
       if (!controller.signal.aborted) port.disconnect()
     })
 })
-
-async function isWalletUiContextOpen(): Promise<boolean> {
-  if (typeof chrome.runtime.getContexts !== 'function') return false
-
-  try {
-    const contexts = await chrome.runtime.getContexts({
-      contextTypes: [
-        chrome.runtime.ContextType.TAB,
-        chrome.runtime.ContextType.POPUP,
-        chrome.runtime.ContextType.SIDE_PANEL
-      ],
-      documentOrigins: [new URL(chrome.runtime.getURL('/')).origin]
-    })
-    return contexts.length > 0
-  } catch {
-    return false
-  }
-}
 
 void trustedStorageAccessReady.then(() => initializeAnalyticsReporting()).catch(() => {})
 
@@ -5513,14 +5457,15 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER' ||
     message.type === 'ESTIMATE_ZCASH_SHIELD_FEE'
   ) {
-    const activeWalletId = useWalletStore.getState().currentWalletId || undefined
     const debugRequestId =
       typeof message.debugRequestId === 'string' ? message.debugRequestId : undefined
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     measure('background-account-transition', () =>
-      accountContextTransition.runActiveOperation(() =>
-        withTxSyncPause(activeWalletId, async () => {
+      accountContextTransition.runActiveOperation(async () => {
+        await rehydrateWalletStore()
+        const activeWalletId = useWalletStore.getState().currentWalletId || undefined
+        return withTxSyncPause(activeWalletId, async () => {
           await measure('background-prepare-wallet-core', prepareWalletCoreForTx)
           if (message.type === 'ESTIMATE_ZCASH_SHIELD_FEE') {
             return measure('background-estimate-shield-fee', () =>
@@ -5554,7 +5499,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             )
           )
         })
-      )
+      })
     )
       .then(result => sendResponse({ success: true, ...result }))
       .catch(error =>
@@ -7197,12 +7142,11 @@ async function handleDAppDisconnect(origin: string): Promise<boolean> {
  * build/broadcast must run inside this window.
  */
 async function withTxSyncPause<T>(walletId: string | undefined, fn: () => Promise<T>): Promise<T> {
+  if (walletId) return syncScheduler.withWalletSyncPaused(walletId, fn)
   try {
     syncScheduler.pauseForTx()
     const syncWaitMs = WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS
-    const syncIdle = walletId
-      ? await syncScheduler.waitForWalletSyncIdle(walletId, syncWaitMs)
-      : await syncScheduler.waitForActiveSyncIdle(syncWaitMs)
+    const syncIdle = await syncScheduler.waitForActiveSyncIdle(syncWaitMs)
     if (!syncIdle) {
       throw new Error('Wallet is syncing. Please try again after sync completes.')
     }

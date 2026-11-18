@@ -5,12 +5,20 @@ import { getOffscreenClient } from '@/core/worker/client'
 import type { RPCSchema, ZcashTransactionContext } from '@/core/worker/types'
 import { decodeWorkerRpcError, encodeWorkerRpcError } from '@/core/worker/rpc-errors'
 import { isTransactionSubmissionUnknown } from '@/core/zcash/transfer-result'
+import {
+  classifyZcashInsufficientFunds,
+  ZCASH_SPENDABILITY_UNVERIFIED
+} from '@/core/zcash/wallet-rpc-errors'
 import { replayJournalPages } from '@/lib/sync-journal'
 import {
   applyZcashWorkerBroadcast,
   zcashWorkerBroadcastResult
 } from '@/lib/transaction-replacement'
 import {
+  clearJournalEntries,
+  getJournalManifest,
+  getWalletPersistenceQuarantine,
+  loadJournalPage,
   loadWalletDb,
   mutateTransactions,
   quarantineWalletPersistence,
@@ -44,6 +52,7 @@ import {
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import { parseStoredHardwareCredential } from '@/core/wallet/hardware-wallet-data'
 import { getNetworkConfig } from '@/lib/runtime-network'
+import { fetchLatestBlockHeight } from '@/infrastructure/chains/rpc-registry-client'
 import {
   CredentialCapsuleWorkerHost,
   CredentialSessionHost,
@@ -174,6 +183,7 @@ const reinitializingByWallet = new Map<string, Promise<void>>()
 const pendingInitByWallet = new Map<string, Promise<any>>()
 const pendingInitStartedAt = new Map<string, number>()
 const activeSyncBatchByWallet = new Map<string, Promise<unknown>>()
+const activeSyncPersistByWallet = new Map<string, Promise<unknown>>()
 type SyncOwner = { ownerId: string; ownerStartedAt: number }
 type SyncSessionEntry = SyncOwner & { promise: Promise<void>; resolve: () => void }
 const activeSyncSessionByWallet = new Map<string, SyncSessionEntry>()
@@ -287,12 +297,16 @@ async function reconcileWalletState(
   const orphaned =
     isSyncSessionActive(walletId) &&
     (force || !sessionStarted || Date.now() - sessionStarted > PENDING_INIT_STALE_MS)
-  if (orphaned || (force && isSyncBatchActive(walletId))) {
+  if (
+    orphaned ||
+    (force && (isSyncBatchActive(walletId) || activeSyncPersistByWallet.has(walletId)))
+  ) {
     const claimedOwner = syncOwnerByWallet.get(walletId)
     const claimedSession = activeSyncSessionByWallet.get(walletId)
     offscreenWarn('[WALLET RECONCILE] Recovering interrupted sync session', walletId)
     await signalSyncAbort(walletId)
     await awaitActiveSyncBatch(walletId)
+    await activeSyncPersistByWallet.get(walletId)?.catch(() => {})
     if (
       syncOwnerByWallet.get(walletId) !== claimedOwner ||
       activeSyncSessionByWallet.get(walletId) !== claimedSession
@@ -322,6 +336,7 @@ async function executeWalletReload(payload: {
   dbKey?: string
   recreateWorker?: boolean
   resetWallet?: boolean
+  recoverJournal?: boolean
 }): Promise<{ generation: number }> {
   const {
     walletId,
@@ -330,7 +345,8 @@ async function executeWalletReload(payload: {
     compactBlockCdn,
     dbKey,
     recreateWorker,
-    resetWallet
+    resetWallet,
+    recoverJournal
   } = payload
   offscreenLog('[WALLET RELOAD] starting', walletId)
   await acquireWalletLane(walletId, 'reload')
@@ -338,6 +354,7 @@ async function executeWalletReload(payload: {
   try {
     await signalSyncAbort(walletId).catch(() => {})
     await awaitActiveSyncBatch(walletId)
+    await activeSyncPersistByWallet.get(walletId)?.catch(() => {})
     endSyncSession(walletId)
     activeSyncBatchByWallet.delete(walletId)
 
@@ -362,11 +379,13 @@ async function executeWalletReload(payload: {
       }
     }
 
+    if (recoverJournal && !dbBytes) throw new Error('Recovery snapshot unavailable')
+
     // Without a snapshot there is nothing to restore from: keep the in-memory
     // instance (it may hold accounts and scan progress) instead of resetting
     // it into a blank shell that can neither replay journals nor persist.
     if (resetWallet || dbBytes) {
-      await zcashWorkerClient.requestToWorker('wallet.reset', { walletId }).catch(() => {})
+      await zcashWorkerClient.requestToWorker('wallet.reset', { walletId })
     } else {
       offscreenWarn('[WALLET RELOAD] no snapshot found, keeping in-memory wallet', walletId)
     }
@@ -402,8 +421,20 @@ async function executeWalletReload(payload: {
         journal: true
       })
     }
+    if (recoverJournal) {
+      if (initResult !== true || !dbBytes || !dbKey) {
+        throw new Error('Recovery snapshot could not be restored')
+      }
+      const replayed = await replayWalletJournal(walletId, network, walletId, true)
+      if (replayed > 0) {
+        await persistWalletSnapshot(walletId, dbKey, true)
+        await clearJournalEntries(network, walletId)
+      }
+    }
     rememberInitPayload({ walletId, network, lightwalletdUrl, compactBlockCdn, dbKey })
-    clearWalletDirty(walletId)
+    if (resetWallet || recoverJournal || (dbBytes && initResult === true)) {
+      clearWalletDirty(walletId)
+    }
     trySetupLogForwarding()
     const generation = getWalletGeneration(walletId)
     offscreenLog(`[WALLET RELOAD] completed generation=${generation}`, walletId)
@@ -456,15 +487,18 @@ function recoverDirtyWallet(payload: WalletInitPayload): Promise<void> {
   if (existing) return existing
 
   offscreenWarn('Dirty wallet detected, auto-reloading from persisted DB', walletId)
-  const task = executeWalletReload(payload)
+  const task = executeWalletReload({ ...payload, recoverJournal: true })
     .catch(error => {
       // A transient reload failure can leave the worker module poisoned; retry
       // once from a freshly recreated worker before surfacing WALLET_DIRTY.
+      if (!isPoisonedSnapshotError(error) && !isWalletNotInitializedError(String(error))) {
+        throw error
+      }
       offscreenWarn(
         `Dirty wallet reload failed (${error?.message || error}), retrying with fresh worker`,
         walletId
       )
-      return executeWalletReload({ ...payload, recreateWorker: true })
+      return executeWalletReload({ ...payload, recreateWorker: true, recoverJournal: true })
     })
     .then(() => undefined)
     .finally(() => {
@@ -570,6 +604,41 @@ function endSyncSession(walletId: string, owner?: SyncOwner): void {
 
 function isSyncUnsafeReadActive(walletId?: string): boolean {
   return isSyncSessionActive(walletId) || isSyncBatchActive(walletId)
+}
+
+async function replayWalletJournal(
+  walletId: string,
+  network: string,
+  journalWalletId: string,
+  allowAfterAbort = false
+): Promise<number> {
+  const manifest = await getJournalManifest(network, journalWalletId)
+  if (!manifest || manifest.nextSeq <= (manifest.baseSnapshotSeq ?? 0)) return 0
+  return replayJournalPages({
+    fromSeq: manifest.baseSnapshotSeq ?? 0,
+    toSeq: manifest.nextSeq,
+    readPage: (fromSeq, toSeq) => loadJournalPage(network, journalWalletId, fromSeq, toSeq),
+    applyPage: entries =>
+      zcashWorkerClient.requestToWorker('wallet.replayJournalEntries', { walletId, entries }),
+    ensureActive: () => {
+      if (!allowAfterAbort && isSyncAbortRequested(walletId)) throw new SyncAbortedError(walletId)
+    }
+  })
+}
+
+async function persistWalletSnapshot(walletId: string, key: string, syncCheckpoint: boolean) {
+  const result = await zcashWorkerClient.requestToWorker('wallet.dbToBytes', { walletId })
+  const chunks = toDbChunks(result)
+  const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+  if (totalBytes < 1000) {
+    const existing = await loadWalletDb(key)
+    if (existing && existing.length > totalBytes) {
+      if (syncCheckpoint) throw new Error('Sync checkpoint rejected: wallet snapshot too small')
+      return false
+    }
+  }
+  await saveWalletDb(key, chunks)
+  return true
 }
 
 function isExclusiveRpc(method: string): boolean {
@@ -699,6 +768,7 @@ async function waitForActiveSyncSession(walletId?: string): Promise<void> {
 async function waitForActiveSyncOperations(walletId?: string): Promise<void> {
   await waitForActiveSyncBatch(walletId)
   await waitForActiveSyncSession(walletId)
+  if (walletId) await activeSyncPersistByWallet.get(walletId)?.catch(() => {})
 }
 
 async function waitForSyncOperationsWithGeneration(
@@ -848,6 +918,72 @@ function isCancelledWorkerRequest(walletId: string, generation: number, message:
   return (
     getWalletGeneration(walletId) !== generation || message.startsWith('Worker request cancelled:')
   )
+}
+
+const SPENDABILITY_METHODS = new Set([
+  'transaction.estimateFee',
+  'transaction.estimateMaxTransfer',
+  'transaction.estimateShieldFee',
+  'transaction.send',
+  'transaction.oneclick_shield',
+  'pczt.create',
+  'pczt.shieldCreate'
+])
+
+async function ensureSpendabilityCheckpoint(walletId: string): Promise<boolean> {
+  const busy = () =>
+    isSyncUnsafeReadActive(walletId) ||
+    activeSyncPersistByWallet.has(walletId) ||
+    getWalletLane(walletId)?.state === 'reload'
+  if (busy()) return false
+  const init = initPayloadsByWallet.get(walletId)
+  if (!init) throw new Error('Wallet runtime unavailable')
+  const generation = getWalletGeneration(walletId)
+  const [quarantine, journal] = await Promise.all([
+    getWalletPersistenceQuarantine(init.dbKey ?? `${init.network}_${walletId}`),
+    getJournalManifest(init.network, walletId)
+  ])
+  if (quarantine) throw new Error('Wallet persistence requires recovery')
+  if (busy() || getWalletGeneration(walletId) !== generation) return false
+  if (journal && journal.nextSeq > (journal.baseSnapshotSeq ?? 0) && !isWalletDirty(walletId)) {
+    markWalletDirty(walletId)
+  }
+  if (isWalletDirty(walletId)) await recoverDirtyWallet(init)
+  return !busy() && !isWalletDirty(walletId)
+}
+
+async function classifySpendabilityError(
+  method: string,
+  walletId: string | undefined,
+  message: string
+): Promise<string> {
+  if (!walletId || !SPENDABILITY_METHODS.has(method) || !/\binsufficient\s*funds\b/i.test(message))
+    return message
+  const init = initPayloadsByWallet.get(walletId)
+  if (!init || isWalletDirty(walletId) || isSyncUnsafeReadActive(walletId))
+    return ZCASH_SPENDABILITY_UNVERIFIED
+  const generation = getWalletGeneration(walletId)
+  try {
+    const [tip, summary] = await Promise.all([
+      fetchLatestBlockHeight(init.lightwalletdUrl),
+      zcashWorkerClient.requestToWorker('wallet.getWalletSummary', { walletId, requireFresh: true })
+    ])
+    if (
+      initPayloadsByWallet.get(walletId) !== init ||
+      getWalletGeneration(walletId) !== generation ||
+      isWalletDirty(walletId) ||
+      isSyncUnsafeReadActive(walletId)
+    )
+      return ZCASH_SPENDABILITY_UNVERIFIED
+    return classifyZcashInsufficientFunds(
+      message,
+      summary?.fully_scanned_height,
+      tip,
+      summary?.chain_tip_height
+    )
+  } catch {
+    return ZCASH_SPENDABILITY_UNVERIFIED
+  }
 }
 
 function isTransactionMutation(method: string): boolean {
@@ -1548,22 +1684,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true
     }
     const generation = getWalletGeneration(walletId)
+    const workerStartedAt = performance.now()
+    let producedJournal = false
     const batchOperation = zcashWorkerClient
       .requestToWorker('wallet.prepareSyncBatch', { walletId, batchSize, refresh })
       .then(async (result: any) => {
+        logDebugTiming('zcash-sync', 'batch-worker-roundtrip', workerStartedAt)
         trySetupLogForwarding()
         if (!result) {
           sendResponse({ result: null })
           return
         }
+        producedJournal = true
         const bytes = result instanceof Uint8Array ? result : new Uint8Array(result)
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
         const rangeStart = dv.getUint32(0, true)
         const rangeEnd = dv.getUint32(4, true)
 
         if (network && journalWalletId) {
+          const journalStartedAt = performance.now()
           const { appendJournalEntry } = await import('@/lib/indexed-db')
           await appendJournalEntry(network, journalWalletId, rangeStart, rangeEnd, bytes)
+          logDebugTiming('zcash-sync', 'batch-journal-write', journalStartedAt)
         }
 
         sendResponse({ result: { rangeStart, rangeEnd, journalSize: bytes.byteLength } })
@@ -1574,6 +1716,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ error: 'Wallet sync batch cancelled' })
           return
         }
+        if (producedJournal || error instanceof TimeoutError) markWalletDirty(walletId)
         offscreenError('prepareSyncBatchWithJournal failed', error, walletId)
         if (isWalletNotInitializedError(msg)) {
           await ensureWalletInitialized(walletId)
@@ -1598,25 +1741,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     ;(async () => {
       try {
-        const { getJournalManifest, loadJournalPage } = await import('@/lib/indexed-db')
-        const manifest = await getJournalManifest(network, journalWalletId)
-        if (!manifest || manifest.nextSeq <= (manifest.baseSnapshotSeq ?? 0)) {
-          sendResponse({ result: 0 })
-          return
-        }
-        const replayed = await replayJournalPages({
-          fromSeq: manifest.baseSnapshotSeq ?? 0,
-          toSeq: manifest.nextSeq,
-          readPage: (fromSeq, toSeq) => loadJournalPage(network, journalWalletId, fromSeq, toSeq),
-          applyPage: entries =>
-            zcashWorkerClient.requestToWorker('wallet.replayJournalEntries', { walletId, entries }),
-          ensureActive: () => {
-            // A completed batch can still finish recovery after scan cancellation.
-            if (allowAfterAbort !== true && isSyncAbortRequested(walletId)) {
-              throw new SyncAbortedError(walletId)
-            }
-          }
-        })
+        const replayed = await replayWalletJournal(
+          walletId,
+          network,
+          journalWalletId,
+          allowAfterAbort
+        )
         trySetupLogForwarding()
         sendResponse({ result: replayed })
       } catch (error: any) {
@@ -1633,7 +1763,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       key: string
       allowDuringSyncSession?: boolean
     }
-    ;(async () => {
+    if (allowDuringSyncSession && activeSyncPersistByWallet.has(walletId)) {
+      sendRetryableError(sendResponse, 'SYNC_BUSY: wallet checkpoint in progress', walletId)
+      return true
+    }
+    const operation = (async () => {
       if (walletId && !allowDuringSyncSession) {
         const generationBefore = getWalletGeneration(walletId)
         try {
@@ -1648,36 +1782,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       try {
-        const result = await zcashWorkerClient.requestToWorker('wallet.dbToBytes', { walletId })
-        const chunks = toDbChunks(result)
-        const totalBytes = chunks.reduce((sum, c) => sum + c.byteLength, 0)
-
-        const MIN_VALID_DB_SIZE = 1000
-        if (totalBytes < MIN_VALID_DB_SIZE) {
-          const existing = await loadWalletDb(key)
-          if (existing && existing.length > totalBytes) {
-            offscreenWarn(
-              `Refusing to overwrite ${existing.length} bytes with ${totalBytes} bytes for key: ${key}`,
-              walletId
-            )
-            sendResponse({ result: false })
-            return
-          }
-        }
-
-        offscreenLog(
-          allowDuringSyncSession
-            ? `persistDb: saving ${totalBytes} bytes for key: ${key} during sync`
-            : `persistDb: saving ${totalBytes} bytes for key: ${key}`,
-          walletId
-        )
-        await saveWalletDb(key, chunks)
-        sendResponse({ result: true })
+        sendResponse({
+          result: await persistWalletSnapshot(walletId, key, !!allowDuringSyncSession)
+        })
       } catch (error: any) {
         offscreenError('persistDb failed', error, walletId)
         sendResponse({ error: error?.message || String(error) })
       }
     })()
+    if (allowDuringSyncSession) {
+      activeSyncPersistByWallet.set(walletId, operation)
+      void operation.finally(() => {
+        if (activeSyncPersistByWallet.get(walletId) === operation) {
+          activeSyncPersistByWallet.delete(walletId)
+        }
+      })
+    }
     return true
   }
 
@@ -1715,12 +1835,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   ;(async () => {
-    if (rpcWalletId && message.method !== 'wallet.reset' && isWalletDirty(rpcWalletId)) {
-      const isMutation = isTransactionMutation(message.method)
-      // Transaction mutations must never run on a stale in-memory wallet, so we
-      // recover even while a sync is active (the reload aborts it). Other RPCs
-      // defer to the sync and retry once it settles.
-      if (isMutation || !isSyncUnsafeReadActive(rpcWalletId)) {
+    const requiresCleanWallet =
+      isTransactionMutation(message.method) || SPENDABILITY_METHODS.has(message.method)
+    if (requiresCleanWallet && rpcWalletId) {
+      try {
+        if (!(await ensureSpendabilityCheckpoint(rpcWalletId))) {
+          sendRetryableError(sendResponse, 'SYNC_BUSY: wallet sync in progress', rpcWalletId)
+          return
+        }
+      } catch (error) {
+        offscreenError('Wallet checkpoint verification failed', error, rpcWalletId)
+        sendResponse({ error: ZCASH_SPENDABILITY_UNVERIFIED })
+        return
+      }
+    } else if (rpcWalletId && message.method !== 'wallet.reset' && isWalletDirty(rpcWalletId)) {
+      if (!isSyncUnsafeReadActive(rpcWalletId)) {
         const initPayload = initPayloadsByWallet.get(rpcWalletId)
         if (initPayload) {
           try {
@@ -1734,16 +1863,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             )
             return
           }
-        } else if (isMutation) {
-          // No snapshot to restore from: refuse rather than sign and broadcast a
-          // transaction built from unreliable state. The caller's next init
-          // restores the payload and clears the dirty flag before retrying.
-          sendRetryableError(
-            sendResponse,
-            'WALLET_DIRTY: in-memory wallet stale after abort',
-            rpcWalletId
-          )
-          return
         }
       }
     }
@@ -1818,7 +1937,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse(encodeWorkerRpcError(error))
         return
       }
-      if (isWalletNotInitializedError(msg) && walletId && initPayloadsByWallet.has(walletId)) {
+      if (
+        !isTransactionMutation(message.method) &&
+        isWalletNotInitializedError(msg) &&
+        walletId &&
+        initPayloadsByWallet.has(walletId)
+      ) {
         offscreenWarn(`RPC ${message.method} failed (${msg}), reinitializing...`, walletId)
         try {
           await ensureWalletInitialized(walletId)
@@ -1828,17 +1952,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             transactionContext
           )
           trySetupLogForwarding()
-          if (isTransactionMutation(message.method)) {
-            await persistBroadcastHashSafely(
-              message.method,
-              walletId,
-              transactionContext,
-              retryResult
-            )
-            await persistWalletDbAfterTransaction(walletId).catch(persistError => {
-              offscreenError('Failed to persist DB after transaction retry', persistError, walletId)
-            })
-          }
           sendResponse({ result: retryResult })
         } catch (retryErr: any) {
           if (retryErr instanceof TimeoutError) {
@@ -1858,12 +1971,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             retryErr?.message
           )
           offscreenError(`RPC ${message.method} failed after reinit`, retryErr, walletId)
-          sendResponse({ error: retryErr.message })
+          sendResponse({
+            error: await classifySpendabilityError(
+              message.method,
+              walletId,
+              retryErr?.message || ''
+            )
+          })
         }
       } else {
         await restoreWalletAfterFailedTransaction(message.method, message.payload?.walletId, msg)
         offscreenError(`RPC ${message.method} failed`, error, walletId)
-        sendResponse({ error: msg })
+        sendResponse({ error: await classifySpendabilityError(message.method, walletId, msg) })
       }
     }
   })()

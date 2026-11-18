@@ -1,19 +1,23 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
 
-import { shouldSchedulePassiveSync } from '../../../src/background/passive-sync-policy.ts'
+import { shouldStartRoutineScan } from '../../../src/background/passive-sync-policy.ts'
 
-test('schedules passive sync only for stale, idle wallet state', () => {
+test('routine scan age is measured from a successful completion, subject to cooldown', () => {
   const base = {
     now: 100_000,
-    maxAgeMs: 30_000,
-    isSchedulerRunning: false
+    maxStaleMs: 30_000,
+    minIntervalMs: 15_000,
+    minBlockGap: 10,
+    currentHeight: 100,
+    networkHeight: 105
   }
 
-  expect(shouldSchedulePassiveSync({ ...base, lastSyncTime: null })).toBe(true)
-  expect(shouldSchedulePassiveSync({ ...base, lastSyncTime: 60_000 })).toBe(true)
-  expect(shouldSchedulePassiveSync({ ...base, lastSyncTime: 80_000 })).toBe(false)
-  expect(
-    shouldSchedulePassiveSync({ ...base, lastSyncTime: 60_000, isSchedulerRunning: true })
-  ).toBe(false)
+  expect(shouldStartRoutineScan(base)).toBe(true)
+  expect(shouldStartRoutineScan({ ...base, lastCompletedAt: 70_000 })).toBe(true)
+  expect(shouldStartRoutineScan({ ...base, lastCompletedAt: 80_000 })).toBe(false)
+  expect(shouldStartRoutineScan({ ...base, lastCompletedAt: 60_000, lastStartedAt: 85_001 })).toBe(
+    false
+  )
+  expect(shouldStartRoutineScan({ ...base, networkHeight: 0 })).toBe(false)
 })

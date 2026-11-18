@@ -232,10 +232,8 @@ function balanceHandlerFixture(manager) {
       syncScheduler: {
         requestPassiveSync() {},
         onRequestSync() {},
-        pauseForTx() {},
-        resumeAfterTx() {},
-        async waitForActiveSyncIdle() {
-          return true
+        async withWalletSyncPaused(_walletId, operation) {
+          return operation()
         }
       }
     },

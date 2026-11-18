@@ -9,6 +9,7 @@ export interface SyncJob {
   lastPersistedHeight: number
   status: 'running' | 'interrupted' | 'completed' | 'failed'
   updatedAt: number
+  lastCompletedAt?: number
   startedAt: number
   batchCount: number
   persistFailures: string[]
@@ -68,6 +69,10 @@ export const syncJobStore = {
       lastPersistedHeight: patch.lastPersistedHeight ?? existing?.lastPersistedHeight ?? 0,
       status: patch.status ?? existing?.status ?? 'running',
       updatedAt: Date.now(),
+      lastCompletedAt:
+        patch.lastCompletedAt ??
+        existing?.lastCompletedAt ??
+        (existing?.status === 'completed' ? existing.updatedAt : undefined),
       startedAt: patch.startedAt ?? existing?.startedAt ?? Date.now(),
       batchCount: patch.batchCount ?? existing?.batchCount ?? 0,
       persistFailures: patch.persistFailures ?? existing?.persistFailures ?? [],
@@ -125,6 +130,7 @@ export const syncJobStore = {
     }
     await this.upsert(walletId, network, {
       status: 'completed',
+      lastCompletedAt: Date.now(),
       ...(scannedHeight != null ? { lastPersistedHeight: scannedHeight } : {}),
       ...(targetHeight != null ? { targetHeight } : {})
     })

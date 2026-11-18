@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  classifyZcashInsufficientFunds,
+  ZCASH_SPENDABILITY_UNVERIFIED
+} from '../../../src/core/zcash/wallet-rpc-errors.ts'
+import {
   runSpendabilitySnapshotRefresh,
   runWithSpendabilityRecovery,
   SPENDABILITY_REPAIR_STARTED_MESSAGE,
@@ -8,7 +12,6 @@ import {
 } from '../../../src/core/wallet/spendability-recovery.ts'
 import {
   computePassiveSyncDelayMinutes,
-  shouldRequestPeriodicSync,
   shouldResumeInterruptedSync
 } from '../../../src/background/passive-sync-policy.ts'
 import { shouldMarkSyncJobInterrupted } from '../../../src/lib/sync-job-store.ts'
@@ -83,29 +86,19 @@ test('stable spendability metadata failure reloads a snapshot once and requests 
   )
 })
 
-test('locked passive sync needs a snapshot and sufficient chain gap or staleness', () => {
-  const state = {
-    isSchedulerRunning: false,
-    isWalletUiOpen: false,
-    hasPendingTransactions: false,
-    isWalletLocked: true,
-    hasPersistedSnapshot: true,
-    currentHeight: 100,
-    networkHeight: 105,
-    lastSyncTime: 1_000,
-    now: 2_000,
-    minBlockGap: 10,
-    maxStaleMs: 10_000
-  }
-  assert.equal(shouldRequestPeriodicSync(state), false)
+test('WASM insufficient funds requires verified up-to-date scan state', () => {
+  const error = 'Failed to propose transfer: InsufficientFunds'
+  assert.equal(classifyZcashInsufficientFunds(error, 100, 100, 100), error)
+  assert.match(classifyZcashInsufficientFunds(error, 100, 101, 100), /^SYNC_BUSY:/)
+  assert.match(classifyZcashInsufficientFunds(error, 100, 100, 101), /^SYNC_BUSY:/)
   assert.equal(
-    shouldRequestPeriodicSync({ ...state, hasPersistedSnapshot: false, networkHeight: 120 }),
-    false
+    classifyZcashInsufficientFunds(error, undefined, 100, 100),
+    ZCASH_SPENDABILITY_UNVERIFIED
   )
-  assert.equal(shouldRequestPeriodicSync({ ...state, networkHeight: 110 }), true)
-  assert.equal(shouldRequestPeriodicSync({ ...state, now: 11_001 }), true)
-  assert.equal(shouldRequestPeriodicSync({ ...state, hasPendingTransactions: true }), true)
-  assert.equal(shouldRequestPeriodicSync({ ...state, isSchedulerRunning: true }), false)
+  assert.equal(
+    classifyZcashInsufficientFunds(error, 100, undefined, 100),
+    ZCASH_SPENDABILITY_UNVERIFIED
+  )
 })
 
 test('passive retry delay is bounded and budgeted jobs do not resume at startup', () => {

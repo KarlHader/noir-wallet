@@ -1,22 +1,12 @@
-export interface PassiveSyncState {
-  now: number
-  lastSyncTime: number | null
-  maxAgeMs: number
-  isSchedulerRunning: boolean
-}
-
-export interface PeriodicSyncActivityState {
-  isSchedulerRunning: boolean
-  isWalletUiOpen: boolean
-  hasPendingTransactions: boolean
-  isWalletLocked: boolean
-  hasPersistedSnapshot: boolean
+export interface RoutineScanState {
   currentHeight: number
-  networkHeight: number | null
-  lastSyncTime: number | null
+  networkHeight: number
+  lastCompletedAt?: number
+  lastStartedAt?: number
   now: number
   minBlockGap: number
   maxStaleMs: number
+  minIntervalMs: number
 }
 
 export interface PassiveSyncDelayOptions {
@@ -34,19 +24,13 @@ export interface InterruptedSyncResumeState {
   resumeOnStartup?: boolean
 }
 
-export function shouldSchedulePassiveSync(state: PassiveSyncState): boolean {
-  if (state.isSchedulerRunning) return false
-  if (state.lastSyncTime === null) return true
-  return state.now - state.lastSyncTime >= state.maxAgeMs
-}
-
-export function shouldRequestPeriodicSync(state: PeriodicSyncActivityState): boolean {
-  if (state.isSchedulerRunning) return false
-  if (state.isWalletLocked && !state.hasPersistedSnapshot) return false
-  if (state.isWalletUiOpen || state.hasPendingTransactions) return true
-  if (state.networkHeight === null || state.networkHeight <= 0) return false
+export function shouldStartRoutineScan(state: RoutineScanState): boolean {
+  if (!Number.isSafeInteger(state.networkHeight) || state.networkHeight <= 0) return false
+  if (state.lastStartedAt !== undefined && state.now - state.lastStartedAt < state.minIntervalMs)
+    return false
   const gap = Math.max(0, state.networkHeight - Math.max(0, state.currentHeight))
-  const stale = state.lastSyncTime === null || state.now - state.lastSyncTime >= state.maxStaleMs
+  const stale =
+    state.lastCompletedAt === undefined || state.now - state.lastCompletedAt >= state.maxStaleMs
   return gap >= state.minBlockGap || stale
 }
 

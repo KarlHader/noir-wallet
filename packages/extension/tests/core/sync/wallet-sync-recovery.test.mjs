@@ -31,7 +31,7 @@ const zcashSettingsSource = readFileSync(
   'utf-8'
 )
 
-function syncSessionHarness() {
+function syncSessionHarness(overrides = {}) {
   const source = ts.createSourceFile('offscreen.ts', offscreenSource, ts.ScriptTarget.Latest, true)
   const names = [
     'assertCurrentSyncOwner',
@@ -41,7 +41,8 @@ function syncSessionHarness() {
     'waitForActiveSyncOperations',
     'beginSyncSession',
     'endSyncSession',
-    'reconcileWalletState'
+    'reconcileWalletState',
+    'ensureSpendabilityCheckpoint'
   ]
   const declarations = source.statements.filter(
     statement => ts.isFunctionDeclaration(statement) && names.includes(statement.name?.text)
@@ -57,9 +58,11 @@ function syncSessionHarness() {
   const started = new Map()
   const aborted = new Set()
   const dirty = new Set()
+  const persists = new Map()
   const dependencies = {
     activeSyncSessionByWallet: sessions,
     activeSyncBatchByWallet: batches,
+    activeSyncPersistByWallet: persists,
     syncOwnerByWallet: owners,
     syncSessionStartedAt: started,
     pendingInitByWallet: new Map(),
@@ -67,18 +70,48 @@ function syncSessionHarness() {
     PENDING_INIT_STALE_MS: 90_000,
     isSyncSessionActive: walletId => sessions.has(walletId),
     isSyncBatchActive: walletId => batches.has(walletId),
+    isSyncUnsafeReadActive: walletId => sessions.has(walletId) || batches.has(walletId),
+    getWalletLane: () => undefined,
+    getWalletGeneration: () => 0,
+    initPayloadsByWallet: new Map([['wallet', { network: 'mainnet' }]]),
+    getWalletPersistenceQuarantine: async () => null,
+    getJournalManifest: async () => null,
+    isWalletDirty: walletId => dirty.has(walletId),
     signalSyncAbort: async walletId => aborted.add(walletId),
     markWalletDirty: walletId => dirty.add(walletId),
     bumpWalletGeneration() {},
     offscreenLog() {},
-    offscreenWarn() {}
+    offscreenWarn() {},
+    ...overrides
   }
   const functions = new Function(
     ...Object.keys(dependencies),
     `${code}\nreturn { ${names.join(', ')} }`
   )(...Object.values(dependencies))
-  return { ...functions, sessions, batches, aborted, dirty }
+  return { ...functions, sessions, batches, aborted, dirty, persists }
 }
+
+it('does not admit spendability checks against an unfinished or failed checkpoint after restart', async () => {
+  let journal = { baseSnapshotSeq: 2, nextSeq: 3 }
+  let attempts = 0
+  const harness = syncSessionHarness({
+    getJournalManifest: async () => journal,
+    recoverDirtyWallet: async () => {
+      assert.equal(harness.dirty.has('wallet'), true)
+      if (++attempts === 1) throw new Error('checkpoint write failed')
+      journal = null
+      harness.dirty.delete('wallet')
+    }
+  })
+  harness.persists.set('wallet', new Promise(() => {}))
+  assert.equal(await harness.ensureSpendabilityCheckpoint('wallet'), false)
+  assert.equal(attempts, 0)
+  harness.persists.delete('wallet')
+  await assert.rejects(harness.ensureSpendabilityCheckpoint('wallet'), /checkpoint write failed/)
+  assert.equal(harness.dirty.has('wallet'), true)
+  assert.equal(await harness.ensureSpendabilityCheckpoint('wallet'), true)
+  assert.equal(attempts, 2)
+})
 
 it('new service worker waits for journal completion and rejects the old session owner', async () => {
   const harness = syncSessionHarness()
@@ -273,32 +306,6 @@ describe('Wallet sync recovery', () => {
     assert.ok(resyncSource.includes('syncScheduler.quiesceWalletForMutation(walletId)'))
     assert.ok(!addAccountSource.includes('waitForWalletSyncIdle(walletId, 30_000)'))
     assert.ok(!resyncSource.includes('waitForWalletSyncIdle(walletId, 30_000)'))
-  })
-
-  it('rechecks a transaction pause after asynchronous sync preflight', () => {
-    const preflightStart = syncSchedulerSource.indexOf(
-      'await backgroundZcashWalletRuntime.initialize()'
-    )
-    const credentialCheck = syncSchedulerSource.indexOf(
-      'await credentialSession.hasUnlockSession()',
-      preflightStart
-    )
-    const walletReady = syncSchedulerSource.indexOf(
-      'await backgroundZcashWalletRuntime.waitForWalletReady(',
-      credentialCheck
-    )
-    const syncStart = syncSchedulerSource.indexOf(
-      'await this.runSyncForWallet(syncTarget, accountId, passiveRun)',
-      walletReady
-    )
-
-    assert.ok(preflightStart >= 0 && credentialCheck > preflightStart)
-    assert.ok(walletReady > credentialCheck && syncStart > walletReady)
-    assert.ok(
-      syncSchedulerSource.slice(preflightStart, credentialCheck).includes('yieldToTxPause()')
-    )
-    assert.ok(syncSchedulerSource.slice(credentialCheck, walletReady).includes('yieldToTxPause()'))
-    assert.ok(syncSchedulerSource.slice(walletReady, syncStart).includes('yieldToTxPause()'))
   })
 
   it('does not treat optimistic sync UI state as an active operation during recovery', () => {

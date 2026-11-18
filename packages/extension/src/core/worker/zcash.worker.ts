@@ -52,7 +52,7 @@ import { TimeoutError } from '../../lib/async-utils'
 import { proveHardwarePczt, toHardwarePcztError } from '../zcash/hardware-pczt'
 import { parseZeroIndexerRuntimeOptions, type ZeroIndexerOptions } from '../zcash/zero-indexer'
 import { serializeDiagnosticArgs } from '../../lib/diagnostic-log'
-import { traceDebugStage } from '../../lib/debug-performance'
+import { logDebugTiming, traceDebugStage } from '../../lib/debug-performance'
 import { loadVotingState, saveVotingState } from '../../lib/indexed-db'
 import { validateVotingDecisions } from '../../lib/voting'
 import { assertRheaSwapSubmissionDeadline } from '../services/rhea-swap/rhea-swap-quote-validity'
@@ -1172,9 +1172,15 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
           batchSize?: number
           refresh?: boolean
         }
+        const queuedAt = performance.now()
         result = await runForWallet(walletId, async () => {
+          logDebugTiming('zcash-sync', 'batch-worker-queue', queuedAt)
           const w = getWallet(walletId)
-          const journalData = await w.prepare_sync_batch(batchSize ?? undefined, refresh ?? true)
+          const journalData = await traceDebugStage(
+            'zcash-sync',
+            'batch-wasm-download-and-scan',
+            () => w.prepare_sync_batch(batchSize ?? undefined, refresh ?? true)
+          )
           // Subtree roots are fresh after either a refreshing batch or a prior
           // syncSessionSetup; the session contract guarantees one of these ran.
           subtreeRootsFresh.add(walletId)
@@ -1291,9 +1297,11 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         break
       }
       case 'wallet.getWalletSummary': {
-        const { walletId } = payload as RPCSchema['wallet.getWalletSummary']['request']
+        const { walletId, requireFresh } =
+          payload as RPCSchema['wallet.getWalletSummary']['request']
         result = await runForWallet(walletId, async () => {
           const w = getWallet(walletId)
+          if (requireFresh && summaryGateClosed.has(walletId)) return null
           const summary = await getSummaryOrCached(walletId, w)
 
           const plainSummary = summary

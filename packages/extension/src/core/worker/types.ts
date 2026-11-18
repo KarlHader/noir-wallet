@@ -211,7 +211,7 @@ export interface RPCSchema {
     response: WasmTransactionEntry[]
   }
   'wallet.getWalletSummary': {
-    request: WalletRouted & { allowDuringSync?: boolean }
+    request: WalletRouted & { allowDuringSync?: boolean; requireFresh?: boolean }
     response: {
       account_balances: Record<string, any>
       chain_tip_height: number

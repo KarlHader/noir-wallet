@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { isAccountNetworkEnabled } from '../../../src/core/wallet/account-network-selection.ts'
+import * as passivePolicy from '../../../src/background/passive-sync-policy.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript')
@@ -33,10 +34,12 @@ function createSchedulerHarness({ syncBlocks, hasPendingTransaction = () => fals
   let initializationCount = 0
   const syncStates = []
   const messages = []
+  const sessionStorage = {}
   const runtime = {
     getNetwork: () => 'mainnet',
     hasTransactionHistoryRefreshFailure: () => false,
     finishSyncPreflight: () => {},
+    isWalletSyncing: () => false,
     initialize: async () => {
       initializationCount++
     },
@@ -48,14 +51,29 @@ function createSchedulerHarness({ syncBlocks, hasPendingTransaction = () => fals
   const wallet = { id: 'wallet-a', accounts: [{ id: 'account-a' }] }
   const dependencies = {
     './zcash-wallet-runtime': { backgroundZcashWalletRuntime: runtime },
+    './passive-sync-policy': passivePolicy,
+    '@/lib/debug-performance': { logDebugTiming() {} },
+    '@/lib/sync-job-store': {
+      syncJobStore: { get: async () => ({ status: 'completed', updatedAt: Date.now() }) }
+    },
     '@/config/wallet': {
       WALLET_CONFIG: {
-        SYNC: { FOREGROUND_BATCH_MAX_BLOCKS: 100, BACKGROUND_SYNC_BUDGET_MS: 90_000 }
+        SYNC: {
+          FOREGROUND_BATCH_MAX_BLOCKS: 100,
+          BACKGROUND_SYNC_BUDGET_MS: 90_000,
+          BACKGROUND_MIN_GAP_BLOCKS: 10,
+          BACKGROUND_MAX_STALE_MS: 3_600_000,
+          ROUTINE_MIN_SCAN_INTERVAL_MS: 1_500_000,
+          MAX_BLOCKING_WAIT_MS: 1_000
+        }
       }
     },
     '@/lib/sync-abort': { clearSyncAbort: async () => {} },
     '../core/wallet/pending-zcash-tx': { hasPendingZcashTxForWallet: hasPendingTransaction },
-    '@/lib/indexed-db': { getWalletPersistenceQuarantine: async () => quarantine },
+    '@/lib/indexed-db': {
+      getWalletPersistenceQuarantine: async () => quarantine,
+      hasWalletDb: async () => true
+    },
     '@/store/wallet-store': {
       prepareWalletStoreForUse: async () => {},
       useWalletStore: {
@@ -71,7 +89,7 @@ function createSchedulerHarness({ syncBlocks, hasPendingTransaction = () => fals
     '@/store/account-data-store': {
       useAccountDataStore: {
         getState: () => ({
-          getWalletSyncState: () => ({ syncReason: null }),
+          getWalletSyncState: () => ({ syncReason: null, currentHeight: 100 }),
           getBalance: () => null,
           setWalletSyncStateFor: (_network, _walletId, state) => syncStates.push(state)
         })
@@ -81,6 +99,17 @@ function createSchedulerHarness({ syncBlocks, hasPendingTransaction = () => fals
   }
   globalThis.chrome = {
     alarms: { create: () => {}, clear: () => {} },
+    storage: {
+      session: {
+        get: async key => ({ [key]: sessionStorage[key] }),
+        set: async values => {
+          Object.assign(sessionStorage, values)
+        },
+        remove: async key => {
+          delete sessionStorage[key]
+        }
+      }
+    },
     runtime: { sendMessage: async message => messages.push(message) }
   }
   return {
@@ -212,7 +241,7 @@ test('another confirmed transaction during catch-up triggers a subsequent wallet
   assert.equal(scans, 2)
 })
 
-test('routine foreground catch-up yields to transactions without admitting another scan', async () => {
+test('concurrent probes share admission, and transactions wait for a yielded scan to become idle', async () => {
   let releaseBatch
   const batch = new Promise(resolve => {
     releaseBatch = resolve
@@ -230,25 +259,29 @@ test('routine foreground catch-up yields to transactions without admitting anoth
       return { status: 'aborted' }
     }
   })
-  const request = signal =>
-    scheduler.requestForegroundCatchUp('mainnet', 'wallet-a', 'account-a', signal)
-  await request(AbortSignal.abort())
-  assert.equal(scheduler.isRunning(), false)
-  await request(new AbortController().signal)
+  const request = (passive, tip = 110, isCurrent = () => true) =>
+    scheduler.observeRoutineTip('mainnet', 'wallet-a', 'account-a', tip, isCurrent, passive)
+  assert.equal(await request(false, 110, () => false), false)
+  assert.equal(await request(false, 109), false)
+  const outcomes = await Promise.all([request(false), request(true)])
+  assert.equal(outcomes.filter(Boolean).length, 1)
   const { isAborted, options } = await scanning
   assert.equal(options.waitForTipAdvance, false)
   assert.equal(options.maxBatchBlocks, 100)
-  scheduler.pauseForTx()
+  let trading = false
+  const transaction = scheduler.withWalletSyncPaused('wallet-a', async () => {
+    trading = true
+  })
   assert.equal(isAborted(), true)
   assert.equal(options.signal.aborted, true)
   assert.equal(scheduler.isRunning(), true)
+  assert.equal(trading, false)
   releaseBatch()
-  assert.equal(await scheduler.waitForActiveSyncIdle(1_000), true)
-  await request(new AbortController().signal)
+  await transaction
+  assert.equal(trading, true)
+  assert.equal(await request(true, 120), false)
   assert.equal(scheduler.isRunning(), false)
   assert.equal(scans, 1)
-  scheduler.resumeAfterTx()
-  assert.equal(scheduler.isRunning(), false)
 })
 
 test('a wallet with a pending Zcash transaction does not run routine catch-up', async () => {
@@ -258,11 +291,16 @@ test('a wallet with a pending Zcash transaction does not run routine catch-up', 
       assert.fail('a routine scan should not interrupt transaction settlement')
     }
   })
-  await harness.scheduler.requestForegroundCatchUp(
-    'mainnet',
-    'wallet-a',
-    'account-a',
-    new AbortController().signal
+  assert.equal(
+    await harness.scheduler.observeRoutineTip(
+      'mainnet',
+      'wallet-a',
+      'account-a',
+      110,
+      () => true,
+      false
+    ),
+    false
   )
   assert.equal(await harness.scheduler.waitForActiveSyncIdle(1_000), true)
   assert.equal(harness.getInitializationCount(), 0)
@@ -361,7 +399,10 @@ function createPauseScheduler(overrides = {}) {
       clearSyncAbort: overrides.clearSyncAbort ?? (async () => {}),
       signalSyncAbort: async () => {}
     },
-    '@/config/wallet': { WALLET_CONFIG: { SYNC: { INIT_READY_TIMEOUT_MS: 1000 } } },
+    '@/config/wallet': {
+      WALLET_CONFIG: { SYNC: { INIT_READY_TIMEOUT_MS: 1000, MAX_BLOCKING_WAIT_MS: 1000 } }
+    },
+    '@/lib/debug-performance': { logDebugTiming() {} },
     '@/store/wallet-store': {
       prepareWalletStoreForUse: async () => {},
       useWalletStore: {
@@ -387,6 +428,42 @@ function createPauseScheduler(overrides = {}) {
     }
   })
 }
+
+test('a transaction admitted during sync preflight prevents the scan from starting', async () => {
+  const readyRequested = deferred()
+  const ready = deferred()
+  const txStarted = deferred()
+  const txFinished = deferred()
+  const scanStarted = deferred()
+  let scans = 0
+  const scheduler = createPauseScheduler({
+    runtime: {
+      waitForWalletReady: async () => {
+        readyRequested.resolve()
+        return ready.promise
+      },
+      syncBlocks: async () => {
+        scans++
+        scanStarted.resolve()
+        return { status: 'completed' }
+      }
+    }
+  })
+  const preflight = scheduler.run()
+  await readyRequested.promise
+  const transaction = scheduler.withWalletSyncPaused('wallet', async () => {
+    txStarted.resolve()
+    await txFinished.promise
+  })
+  await txStarted.promise
+  ready.resolve(true)
+  await preflight
+  assert.equal(scans, 0)
+  txFinished.resolve()
+  await transaction
+  await scanStarted.promise
+  assert.equal(scans, 1)
+})
 
 test('a paused partial scan releases its wallet without waiting for history I/O', async () => {
   const started = deferred()

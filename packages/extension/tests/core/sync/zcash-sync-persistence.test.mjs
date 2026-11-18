@@ -115,6 +115,7 @@ function createSync({
     '@/core/wallet/pending-zcash-tx': { hasPendingZcashTxForWallet: async () => false },
     '@/config/wallet': { WALLET_CONFIG },
     '@/lib/async-utils': { withTimeout, waitForDelayOrAbort },
+    '@/lib/debug-performance': { traceDebugStage: (_id, _stage, operation) => operation() },
     '@/lib/errors': { isRpcEndpointError: () => false },
     './transaction-recipient-recovery': { TransactionRecipientRecovery: class {} }
   }

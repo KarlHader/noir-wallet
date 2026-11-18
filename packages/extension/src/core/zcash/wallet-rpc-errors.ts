@@ -4,6 +4,30 @@ import { isRpcEndpointError } from '@/lib/errors'
 export const WALLET_BUSY_MESSAGE = 'Wallet is temporarily busy. Please try again in a moment.'
 export const RPC_ENDPOINT_UNAVAILABLE_MESSAGE =
   'The wallet RPC endpoint is unavailable. Try again or switch RPC endpoint in Settings.'
+export const ZCASH_SPENDABILITY_UNVERIFIED =
+  'Unable to verify Zcash spendable balance. Please try again.'
+
+export function classifyZcashInsufficientFunds(
+  message: string,
+  scanned: number | undefined,
+  tip: number | undefined,
+  walletTip: number | undefined
+): string {
+  if (
+    !scanned ||
+    !Number.isSafeInteger(scanned) ||
+    scanned < 0 ||
+    !tip ||
+    !Number.isSafeInteger(tip) ||
+    tip < 0 ||
+    !walletTip ||
+    !Number.isSafeInteger(walletTip) ||
+    walletTip < 0
+  ) {
+    return ZCASH_SPENDABILITY_UNVERIFIED
+  }
+  return scanned < Math.max(tip, walletTip) ? 'SYNC_BUSY: wallet sync in progress' : message
+}
 
 export function isSyncBusyError(message: string): boolean {
   return message.includes('SYNC_BUSY')
@@ -40,6 +64,7 @@ export function isRetryableWalletRpcError(message: string): boolean {
 }
 
 export function getRetryableWalletRpcUserMessage(message: string): string {
+  if (isSyncBusyError(message)) return 'Wallet is syncing. Please try again after sync completes.'
   if (/shield(?:ing)?[\s\S]*InsufficientFunds/i.test(message)) {
     return MIN_SHIELDING_BALANCE_MESSAGE
   }

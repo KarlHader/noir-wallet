@@ -10,7 +10,6 @@ import { approvalContextMatches } from './approval-context-policy'
 import { credentialSession } from './credential-session'
 import { accountContextTransition } from './account-context-transition'
 import { syncScheduler } from './sync-scheduler'
-import { WALLET_CONFIG } from '@/config/wallet'
 
 const ZCASH_ACTIONS = new Set(['connect', 'sendTransaction', 'signMessage', 'shieldFunds'])
 
@@ -57,12 +56,8 @@ export async function estimateApprovalFee(
   if (request.action !== 'shieldFunds' && request.action !== 'sendTransaction') {
     throw new Error('Request does not support fee estimation')
   }
-  return accountContextTransition.runActiveOperation(async () => {
-    syncScheduler.pauseForTx()
-    try {
-      if (!(await syncScheduler.waitForActiveSyncIdle(WALLET_CONFIG.SYNC.MAX_BLOCKING_WAIT_MS))) {
-        throw new Error('Wallet is syncing. Please try again after sync completes.')
-      }
+  return accountContextTransition.runActiveOperation(() =>
+    syncScheduler.withWalletSyncPaused(request.walletId, async () => {
       await backgroundZcashWalletRuntime.prepareDAppAccount(request.walletId, request.accountId)
       await backgroundZcashWalletRuntime.getWalletCore(request.walletId, request.accountId)
       await getApprovalContext(requestId)
@@ -102,8 +97,6 @@ export async function estimateApprovalFee(
             })
       await getApprovalContext(requestId)
       return { fee: fee.feeZats, marginalFeeZats: fee.marginalFeeZats, feeQuote: fee.feeQuote }
-    } finally {
-      syncScheduler.resumeAfterTx()
-    }
-  })
+    })
+  )
 }

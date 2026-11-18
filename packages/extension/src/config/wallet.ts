@@ -110,6 +110,7 @@ export const WALLET_CONFIG = {
     BACKGROUND_POLL_MAX_BACKOFF_MINUTES: 120,
     BACKGROUND_MIN_GAP_BLOCKS: 10,
     BACKGROUND_MAX_STALE_MS: 60 * 60 * 1000,
+    ROUTINE_MIN_SCAN_INTERVAL_MS: 25 * 60 * 1000,
     BACKGROUND_SYNC_BUDGET_MS: 90 * 1000,
     /** Minimum age of cached wallet state before a dApp balance read requests a sync */
     DAPP_BALANCE_SYNC_STALE_MS: 30 * 1000,
