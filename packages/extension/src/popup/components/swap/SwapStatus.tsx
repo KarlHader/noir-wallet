@@ -18,6 +18,8 @@ import {
   ActivityTransactionBody,
   buildActivityTransactionView
 } from '../transaction/ActivityTransactionBody'
+import { buildActivityExecutionAddressModes } from '../transaction/multichain-activity-presentation'
+import type { AccountNetworksView } from '@/popup/services/account-networks-client'
 import { getIntentsProgressPresentation } from '@/popup/services/transaction-progress'
 import { TransactionProgressSteps } from '../transaction/TransactionProgressSteps'
 import { TransactionReferenceValue } from '../transaction/TransactionReferenceValue'
@@ -56,6 +58,7 @@ interface SwapStatusDisplayProps {
   onViewActivity: () => void
   viewActivityDisabled?: boolean
   activityItem?: ActivityItem | null
+  activeAccount?: AccountNetworksView | null
   portfolio?: PortfolioReadModel | null
 }
 
@@ -94,6 +97,7 @@ export function SwapStatusDisplay({
   onViewActivity,
   viewActivityDisabled,
   activityItem,
+  activeAccount,
   portfolio
 }: SwapStatusDisplayProps) {
   const currentStatus = status?.status || 'PENDING_DEPOSIT'
@@ -174,6 +178,11 @@ export function SwapStatusDisplay({
         network,
         assetMetadata: activityCatalog.assetMetadata,
         chainMetadata: activityCatalog.chainMetadata,
+        executionAddressModes:
+          activeAccount?.walletId === activityItem.scope.keyDomainId &&
+          activeAccount.accountId === activityItem.scope.accountId
+            ? buildActivityExecutionAddressModes(activeAccount.networks)
+            : undefined,
         confidentialPlan,
         refunded: confidentialFunding?.phase === 'refunded',
         fallback: {

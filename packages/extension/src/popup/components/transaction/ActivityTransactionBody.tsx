@@ -252,7 +252,7 @@ export function buildActivityTransactionView(input: {
     fee = {
       value: formatBaseUnitAmount(feeLimit.amountRaw, feeMetadata.decimals),
       symbol: feeMetadata.symbol,
-      label: item.snapshot?.evm ? 'Fee limit' : 'Network fee'
+      label: item.snapshot?.evm ? 'Max fee' : 'Network fee'
     }
   } else if (fallback?.fee) {
     fee = { ...fallback.fee, label: fallback.fee.label ?? 'Network fee' }
@@ -361,7 +361,7 @@ export function ActivityTransactionHero({ view }: { readonly view: ActivityTrans
                 '—'
               )}
             </div>
-            {swap.destination && !view.isRefunded && (
+            {swap.destination && !swap.hideDestinationCredit && !view.isRefunded && (
               <div className="mt-1 max-w-full break-all font-sans text-sm text-muted tabular-nums">
                 {view.isShieldSend
                   ? 'Recipient receives'

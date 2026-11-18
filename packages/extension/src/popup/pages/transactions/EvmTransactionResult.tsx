@@ -28,7 +28,7 @@ export function EvmTransactionResult({
       feeSymbol={
         chain.assets.find(entry => entry.asset.kind === 'native')?.metadata.symbol ?? 'ETH'
       }
-      feeLabel="Fee limit"
+      feeLabel="Max fee"
       totalLabel="Maximum total"
       showTotal={asset.asset.kind === 'native'}
       onDone={onDone}

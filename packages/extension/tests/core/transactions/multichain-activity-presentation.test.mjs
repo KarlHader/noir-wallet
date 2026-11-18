@@ -164,9 +164,13 @@ test.describe('Multichain Activity presentation', () => {
     const assetId = 'eip155:1/slip44:60'
     const addressModes = buildActivityExecutionAddressModes([
       {
-        chain: { family: 'evm' },
+        chain: { id: 'eip155:1', family: 'evm' },
         addresses: [{ value: publicAddress }],
         privateExecutionAddress: privateAddress
+      },
+      {
+        chain: { id: 'eip155:8453', family: 'evm' },
+        addresses: [{ value: publicAddress }]
       }
     ])
     const item = {
@@ -183,7 +187,7 @@ test.describe('Multichain Activity presentation', () => {
         protocol: {
           provider: 'rhea-cross-chain-dex',
           userAction: 'transfer',
-          destination: { recipient: privateAddress }
+          destination: { chainId: 'eip155:1', recipient: privateAddress }
         }
       }
     }
@@ -195,6 +199,7 @@ test.describe('Multichain Activity presentation', () => {
       sourceAccountMode: 'Public',
       destinationAccountMode: 'Confidential'
     })
+    expect(route.hideDestinationCredit).toBeUndefined()
     expect(getActivityRouteTitle(item, route)).toBe('Move')
     expect(hasMatchingActivityTokenIcons(route)).toBe(true)
     expect(
@@ -215,43 +220,42 @@ test.describe('Multichain Activity presentation', () => {
         getActivitySwapPresentation({ ...item, kind: 'swap' }, assets, chains, addressModes)
       )
     ).toBe(true)
+    const externalTransfer = {
+      ...item,
+      snapshot: {
+        ...item.snapshot,
+        protocol: {
+          ...item.snapshot.protocol,
+          destination: { chainId: 'eip155:8453', recipient: externalAddress }
+        }
+      }
+    }
+    const externalRoute = getActivitySwapPresentation(
+      externalTransfer,
+      assets,
+      chains,
+      addressModes
+    )
+    expect(externalRoute.destinationAccountMode).toBeUndefined()
+    expect(externalRoute.hideDestinationCredit).toBe(true)
     expect(
       getActivitySwapPresentation(
         {
-          ...item,
+          ...externalTransfer,
           snapshot: {
-            ...item.snapshot,
+            ...externalTransfer.snapshot,
             protocol: {
-              ...item.snapshot.protocol,
-              destination: { recipient: externalAddress }
+              ...externalTransfer.snapshot.protocol,
+              destination: { chainId: 'eip155:8453', recipient: publicAddress }
             }
           }
         },
         assets,
         chains,
         addressModes
-      )?.destinationAccountMode
+      )?.hideDestinationCredit
     ).toBeUndefined()
-    expect(
-      getActivityRouteTitle(
-        item,
-        getActivitySwapPresentation(
-          {
-            ...item,
-            snapshot: {
-              ...item.snapshot,
-              protocol: {
-                ...item.snapshot.protocol,
-                destination: { recipient: externalAddress }
-              }
-            }
-          },
-          assets,
-          chains,
-          addressModes
-        )
-      )
-    ).toBe('Transfer')
+    expect(getActivityRouteTitle(externalTransfer, externalRoute)).toBe('Transfer')
   })
 
   test('keeps both Swap assets and their route tied to the correct chains', () => {

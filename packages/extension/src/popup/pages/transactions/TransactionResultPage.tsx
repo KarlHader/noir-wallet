@@ -859,6 +859,7 @@ export function TransactionResultPage() {
           fee={data.fee}
           confidentialFunding={data.confidentialFunding}
           activityItem={scopedOriginActivity}
+          activeAccount={activeAccount}
           onResumeConfidentialFunding={handleResumeConfidentialFunding}
           resumingConfidentialFunding={resumingConfidentialFunding}
           onClose={handleDone}

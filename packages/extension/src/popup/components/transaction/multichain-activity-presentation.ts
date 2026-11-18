@@ -85,6 +85,7 @@ export interface ActivitySwapPresentation {
   readonly source?: ActivityDisplayAmount
   readonly destination?: ActivityDisplayAmount
   readonly destinationIsSettled?: true
+  readonly hideDestinationCredit?: true
   readonly isExternalDeposit?: true
   readonly recipientAddress?: string
   readonly sourceNetwork: string
@@ -243,14 +244,24 @@ export function hasMatchingActivityTokenIcons(route: ActivitySwapPresentation): 
   return !source.iconUrl || !destination.iconUrl || source.iconUrl === destination.iconUrl
 }
 
+function activityAddressKey(chainId: string, address: string): string {
+  return `${chainId}:${chainId.startsWith('eip155:') ? address.toLowerCase() : address}`
+}
+
 export function buildActivityExecutionAddressModes(
   networks: readonly AccountNetworkView[]
 ): ReadonlyMap<string, 'Public' | 'Confidential'> {
   const modes = new Map<string, 'Public' | 'Confidential'>()
   for (const network of networks) {
-    if (network.chain.family !== 'evm') continue
-    for (const address of network.addresses) modes.set(address.value.toLowerCase(), 'Public')
-    if (network.privateExecutionAddress) {
+    for (const address of network.addresses) {
+      modes.set(activityAddressKey(network.chain.id, address.value), 'Public')
+      if (network.chain.family === 'evm') modes.set(address.value.toLowerCase(), 'Public')
+    }
+    if (network.chain.family === 'evm' && network.privateExecutionAddress) {
+      modes.set(
+        activityAddressKey(network.chain.id, network.privateExecutionAddress),
+        'Confidential'
+      )
       modes.set(network.privateExecutionAddress.toLowerCase(), 'Confidential')
     }
   }
@@ -427,11 +438,21 @@ export function getActivitySwapPresentation(
       : recipientAddress
         ? executionAddressModes.get(recipientAddress.toLowerCase())
         : undefined
+  const protocol = item.snapshot?.protocol
+  const hideDestinationCredit =
+    !shield &&
+    item.kind === 'transfer' &&
+    protocol?.provider === 'rhea-cross-chain-dex' &&
+    protocol.userAction === 'transfer' &&
+    !executionAddressModes.has(
+      activityAddressKey(protocol.destination.chainId, protocol.destination.recipient)
+    )
 
   return Object.freeze({
     ...(source ? { source } : {}),
     ...(destination ? { destination } : {}),
     ...(settledAmount ? { destinationIsSettled: true as const } : {}),
+    ...(hideDestinationCredit ? { hideDestinationCredit: true as const } : {}),
     ...(isExternalDeposit ? { isExternalDeposit: true as const } : {}),
     ...(recipientAddress ? { recipientAddress } : {}),
     sourceNetwork:

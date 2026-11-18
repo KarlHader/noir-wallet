@@ -210,7 +210,7 @@ function SwapActivityRow({
               <p className="truncate whitespace-nowrap font-sans text-sm font-medium tabular-nums">
                 {presentation.source ? `−${presentation.source.formatted} ${sourceSymbol}` : '—'}
               </p>
-              {presentation.destination && (
+              {presentation.destination && !presentation.hideDestinationCredit && (
                 <p className="truncate whitespace-nowrap font-sans text-[11px] text-muted tabular-nums">
                   {isShieldSend
                     ? 'Recipient receives '
