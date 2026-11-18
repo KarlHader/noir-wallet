@@ -212,6 +212,9 @@ import {
   type AdditionalReceiveTargetsView
 } from '@/popup/services/receive-targets-client'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
+import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
+import { findAssetPrice } from '@/core/prices'
+import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
 import {
   createSwapTokenPreferenceScope,
   getDefaultSwapSourceAssetId,
@@ -1105,6 +1108,15 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       currentWallet?.keySource
     ]
   )
+  const pickerPrices = useCachedAssetPrices(currentNetwork, nativeZecShieldAvailable)
+  const nativeZecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, currentNetwork)
+  const walletZecPrice = nativeZecAssetId
+    ? findAssetPrice(pickerPrices, nativeZecAssetId)?.priceUsd
+    : undefined
+  const zecPickerPrice =
+    walletZecPrice && Number(walletZecPrice) > 0
+      ? walletZecPrice
+      : shieldCatalogTokens.find(token => token.assetId === ZEC_ZCASH_ASSET)?.price
   const shieldPickerRows = useMemo((): readonly ShieldSourceTokenPickerItem[] => {
     const pricesByAssetId = new Map(shieldCatalogTokens.map(token => [token.assetId, token.price]))
     return [
@@ -1124,7 +1136,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 getFundingBalance(storeBalance, 'transparent').available,
                 ZEC_DECIMALS
               ),
-              decimals: ZEC_DECIMALS
+              decimals: ZEC_DECIMALS,
+              priceUsd: zecPickerPrice
             }
           ]
         : []),
@@ -1140,6 +1153,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         nativeIconChain: 'zcash',
         availableRaw: option.availableRaw,
         decimals: option.decimals,
+        priceUsd: zecPickerPrice,
         disabledReason: option.disabledReason
       })),
       ...shieldSourceChoices
@@ -1170,7 +1184,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     shieldZecSourceOptions,
     shieldSourceChoices,
     shieldDisplayBalances,
-    shieldCatalogTokens
+    shieldCatalogTokens,
+    zecPickerPrice
   ])
   const nativeZecPickerRows = useMemo(
     () =>
@@ -1202,11 +1217,18 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             getFundingBalance(storeBalance, source).available,
             ZEC_DECIMALS
           ),
-          decimals: ZEC_DECIMALS
+          decimals: ZEC_DECIMALS,
+          priceUsd: zecPickerPrice
         }
       )
     })
-  }, [hasManagedZcashDestination, nativeZecShieldAvailable, nativeZecPickerRows, storeBalance])
+  }, [
+    hasManagedZcashDestination,
+    nativeZecShieldAvailable,
+    nativeZecPickerRows,
+    storeBalance,
+    zecPickerPrice
+  ])
   const [walletSourcesTraceId] = useState(() => createDebugRequestId('swap-wallet-sources'))
   const selectedAssetRegistrationKey = useRef<string | null>(null)
   const selectedAssetRegistrationAttempts = useRef<{ key: string; count: number } | null>(null)
@@ -2593,7 +2615,9 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             (!privateDestinationSelectionRequested ||
               isConfidentialSwapDestinationSupported(token)) &&
             (!privateSwapRequested ||
-              ((isZecToken(token) || /^[1-9]\d*$/.test(token.rheaChainId)) &&
+              ((isZecToken(token)
+                ? !isZecToken(tokenIn ?? null)
+                : /^[1-9]\d*$/.test(token.rheaChainId)) &&
                 (supportsPrivateDestination(token, 'main') ||
                   supportsPrivateDestination(token, 'private'))))
         ) ?? null)
@@ -5637,9 +5661,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       const selectorZcashFundingSource =
         type === 'in'
           ? fundingSource
-          : ordinarySwapRequested && !shieldSwapSelected
-            ? 'transparent'
-            : zecDestinationType
+          : privateSwapRequested
+            ? 'shielded'
+            : ordinarySwapRequested && !shieldSwapSelected
+              ? 'transparent'
+              : zecDestinationType
       const filterDestinations = (tokens: readonly RheaSwapToken[]) =>
         filterSelectableSwapDestinationTokens({
           tokens,
@@ -5664,7 +5690,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
                 nativeConfidentialDestinations
               ) !== null) &&
             (!privateSwapRequested ||
-              ((isZecToken(token) || /^[1-9]\d*$/.test(token.rheaChainId)) &&
+              ((isZecToken(token) ? !swap.isZecSource : /^[1-9]\d*$/.test(token.rheaChainId)) &&
                 supportsPrivateDestination(token, 'private')))
         )
       const filterSources = (tokens: readonly RheaSwapToken[]) =>

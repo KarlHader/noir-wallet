@@ -1,6 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RHEA_SWAP_CHAIN_CATALOG, type RheaSwapToken } from '@/core/services/rhea-swap'
-import type { SwapToken } from '@/core/services/intents-api'
+import { isZecToken, type SwapToken } from '@/core/services/intents-api'
 import type { Network } from '@/types'
 import { useWalletStore } from '@/store/wallet-store'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
@@ -22,6 +22,11 @@ import { buildWalletSwapSourceBalances } from '@/popup/services/swap-page-model'
 import { resolveAccountAvailableRaw } from '@/popup/services/transfer-availability'
 import { filterManuallyHiddenSwapTokens } from '@/popup/services/swap-token-visibility'
 import { useManagedTokenCatalog } from '@/popup/hooks/useManagedTokenCatalog'
+import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
+import { findAssetPrice } from '@/core/prices'
+import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
+import { safeBig } from '@/lib/big'
 import {
   getSwapCatalogDisplaySeeds,
   mergeTokenCatalogs,
@@ -327,6 +332,33 @@ export function SwapTokenSelector({
         : undefined,
     [resolvedItems.tokens, scopedPortfolio, scopedReceiveTargets, zcashAvailable, evmExecutionMode]
   )
+  const network = scopeNetwork ?? activeNetwork
+  const prices = useCachedAssetPrices(network, !!balanceScope)
+  const pricesByTokenKey = useMemo(() => {
+    if (!prices || !balances) return undefined
+    const displayPrices = new Map<string, string>()
+    const zecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, network)
+    for (const token of resolvedItems.tokens) {
+      if (!balances.has(token.assetId)) continue
+      const evmChainId = /^[1-9]\d*$/.test(token.rheaChainId) ? `eip155:${token.rheaChainId}` : null
+      const assetId = isZecToken(token)
+        ? zecAssetId
+        : evmChainId
+          ? scopedAccountPortfolio?.assets.find(
+              ({ asset, metadata }) =>
+                asset.chainId === evmChainId &&
+                metadata.decimals === token.decimals &&
+                (token.isNative
+                  ? asset.kind === 'native'
+                  : asset.namespace === 'erc20' &&
+                    asset.reference === token.contractAddress?.toLowerCase())
+            )?.asset.id
+          : resolveRheaSwapCanonicalAssetId(token.assetId, network)
+      const price = assetId ? findAssetPrice(prices, assetId)?.priceUsd : undefined
+      if (price && safeBig(price).gt(0)) displayPrices.set(swapTokenKey(token), price)
+    }
+    return displayPrices
+  }, [balances, network, prices, resolvedItems.tokens, scopedAccountPortfolio])
   const defaultTokens = useMemo(
     () =>
       resolvedItems.tokens.filter(
@@ -401,6 +433,7 @@ export function SwapTokenSelector({
         defaultTokens={defaultTokens}
         defaultCatalogLoading={false}
         balances={balances}
+        pricesByTokenKey={pricesByTokenKey}
         catalogLoading={loadingNetwork === filter.network}
         catalogError={catalogErrorKey === `${filter.network}:${filter.search}`}
         onRetryCatalog={() => setRetryRequest(current => current + 1)}

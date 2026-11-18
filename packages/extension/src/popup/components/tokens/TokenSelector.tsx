@@ -42,6 +42,7 @@ export interface TokenSelectorProps {
   defaultTokens?: readonly SwapToken[]
   defaultCatalogLoading?: boolean
   balances?: ReadonlyMap<string, string>
+  pricesByTokenKey?: ReadonlyMap<string, string>
   zcashFundingSource?: FundingSource
   catalogLoading?: boolean
   catalogError?: boolean
@@ -72,6 +73,7 @@ export function TokenSelector({
   defaultTokens,
   defaultCatalogLoading = false,
   balances,
+  pricesByTokenKey,
   zcashFundingSource,
   catalogLoading = false,
   catalogError = false,
@@ -244,7 +246,7 @@ export function TokenSelector({
             <TokenBalanceDisplay
               amount={balance}
               symbol={symbol}
-              priceUsd={token.price}
+              priceUsd={pricesByTokenKey?.get(tokenKey(token)) ?? token.price}
               approximateFiat
             />
           )
