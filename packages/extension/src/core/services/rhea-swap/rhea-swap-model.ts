@@ -480,6 +480,7 @@ export interface RheaSwapExecutionView {
 
 export interface RheaSwapReviewView extends RheaSwapQuoteView {
   readonly executionId: string
+  readonly timeEstimateSeconds?: number
   readonly isCrossChain: boolean
   readonly fromChain: ChainRef
   readonly toChain: ChainRef

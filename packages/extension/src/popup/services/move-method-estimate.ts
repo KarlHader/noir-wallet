@@ -1,4 +1,3 @@
-import { bsc, bscTestnet, mainnet, sepolia } from 'viem/chains'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
 import { resolveRheaPrivateTransferToken } from '@/core/services/rhea-swap'
 import { preferWalletEvmQuoteToken } from './token-address-discovery'
@@ -7,7 +6,7 @@ import { formatBaseUnitDecimalAmount, formatFeeAmount } from '@/lib/number-forma
 import { evmWalletClient, type EvmFeeEstimate } from './evm-wallet-client'
 import { rheaSwapClient } from './rhea-swap-client'
 import { requiredRheaEvmApproval } from './rhea-evm-approval'
-import { formatConfirmationTime, formatIntentsConfirmationTime } from './confirmation-time-format'
+import { formatIntentsConfirmationTime } from './confirmation-time-format'
 
 export interface MoveMethodEstimate {
   readonly expiresAt: number
@@ -18,16 +17,14 @@ export interface MoveMethodEstimate {
     readonly decimals: number
   }
   readonly time: string
-  readonly timeScope: 'Network only' | 'Excl. scheduling' | 'Block cadence'
 }
 
-const directTimingChains = [mainnet, bsc, sepolia, bscTestnet]
+const DIRECT_MAXIMUM_MINUTES = 5
+const CLUSTER_MAXIMUM_MINUTES = 10 + 2 // Batch execution and arrival allowance.
 
-function directBlockCadence(chainId: string, transactions: number): string {
-  const blockTime = directTimingChains.find(chain => `eip155:${chain.id}` === chainId)?.blockTime
-  if (!blockTime) return '—'
-  const seconds = (blockTime / 1000) * transactions
-  return formatConfirmationTime({ minimumSeconds: seconds, maximumSeconds: seconds * 2 })
+function formatMoveTime(seconds: number | undefined, maximumMinutes: number): string {
+  const range = formatIntentsConfirmationTime(seconds, maximumMinutes)
+  return range === '—' ? `Up to ${maximumMinutes} min` : range
 }
 
 function routeFee(amountRaw: string, outputRaw: string): string | null {
@@ -39,12 +36,10 @@ export function clusterMoveEstimate(
   amountRaw: string,
   preview: ConfidentialFundingPreview
 ): MoveMethodEstimate {
-  const seconds = preview.timeEstimateSeconds
   return {
     expiresAt: preview.expiresAt,
     routeFeeRaw: routeFee(amountRaw, preview.amountOutRaw),
-    time: formatIntentsConfirmationTime(seconds),
-    timeScope: 'Excl. scheduling'
+    time: formatMoveTime(preview.timeEstimateSeconds, CLUSTER_MAXIMUM_MINUTES)
   }
 }
 
@@ -96,13 +91,16 @@ export async function estimateDirectMove(input: {
     let result: MoveMethodEstimate = {
       expiresAt: Math.min(quote.expiresAt ?? Infinity, Date.now() + 30_000),
       routeFeeRaw: routeFee(input.amountRaw, quote.estimatedOut),
-      time: '—',
-      timeScope: 'Network only'
+      time: formatMoveTime(undefined, DIRECT_MAXIMUM_MINUTES)
     }
     // A route quote remains useful when RPC cannot estimate its source gas.
     try {
       const review = await rheaSwapClient.prepare(quote.quoteHandle)
       input.signal.throwIfAborted()
+      result = {
+        ...result,
+        time: formatMoveTime(review.timeEstimateSeconds, DIRECT_MAXIMUM_MINUTES)
+      }
       if (review.execution.kind !== 'evm-transaction') return result
       const plan = await rheaSwapClient.getEvmTransactionPlan(quote.quoteHandle)
       input.signal.throwIfAborted()
@@ -114,11 +112,6 @@ export async function estimateDirectMove(input: {
         getTokenAllowance: evmWalletClient.getTokenAllowance
       })
       const calls = [...(approval ? [approval.transaction] : []), plan.transaction]
-      result = {
-        ...result,
-        time: directBlockCadence(input.chain.chain.id, calls.length),
-        timeScope: 'Block cadence'
-      }
       const fees: EvmFeeEstimate[] = []
       for (const call of calls) {
         input.signal.throwIfAborted()
@@ -135,15 +128,6 @@ export async function estimateDirectMove(input: {
         )
       }
       input.signal.throwIfAborted()
-      const fee = fees[0]!
-      const confirmation = await evmWalletClient
-        .getConfirmationEstimate({
-          chainId: fee.chainId,
-          maxFeePerGasWei: fee.maxFeePerGasWei,
-          maxPriorityFeePerGasWei: fee.gasPriceWei ?? fee.maxPriorityFeePerGasWei
-        })
-        .catch(() => null)
-      const confirmations = calls.length
       return {
         ...result,
         ...(input.nativeFeeAsset
@@ -153,15 +137,6 @@ export async function estimateDirectMove(input: {
                 symbol: input.nativeFeeAsset.metadata.symbol,
                 decimals: input.nativeFeeAsset.metadata.decimals
               }
-            }
-          : {}),
-        ...(confirmation
-          ? {
-              time: formatConfirmationTime({
-                minimumSeconds: confirmation.minimumSeconds * confirmations,
-                maximumSeconds: confirmation.maximumSeconds * confirmations
-              }),
-              timeScope: 'Network only'
             }
           : {})
       }

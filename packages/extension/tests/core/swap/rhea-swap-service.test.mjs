@@ -1088,6 +1088,7 @@ test('quote and build remain bound across a session-store reload', async () => {
     estimatedOut: quote.estimatedOut,
     minAmountOut: quote.minAmountOut,
     tx: { kind: 'zcash_transfer', amount: quote.amountIn, depositAddress: 't1deposit' },
+    deposit: { depositAddress: 't1deposit', timeEstimate: '35' },
     approve: null,
     orderId: 'order-1',
     statusRouter: 'nearintents'
@@ -1118,6 +1119,7 @@ test('quote and build remain bound across a session-store reload', async () => {
           depositAddress: 't1deposit',
           decimals: 8
         },
+        deposit: rawBuild.deposit,
         request: { ...buildRequest, recipient: buildRecipient },
         raw: rawBuild
       }
@@ -1293,6 +1295,7 @@ test('quote and build remain bound across a session-store reload', async () => {
   })
   const review = await service.prepare(quoteView.quoteHandle)
   expect(review.execution).toMatchObject({ kind: 'zcash-transfer', target: 't1deposit' })
+  expect(parseRheaSwapReviewView(review).timeEstimateSeconds).toBe(35)
   await expect(service.hasRecordedOrder(quoteView.quoteHandle)).resolves.toBe(false)
   expect((await service.readPreparedBuild(quoteView.quoteHandle)).executionId).toBe('execution-1')
   const depositTransfer = { executionId: 'execution-1', to: 't1deposit', amountZats: '100000000' }

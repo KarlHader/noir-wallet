@@ -1,8 +1,12 @@
-export function formatIntentsConfirmationTime(seconds: number | undefined): string {
+export function formatIntentsConfirmationTime(
+  seconds: number | undefined,
+  maximumMinutes = 5
+): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return '—'
-  const minimumSeconds = Math.min(Math.ceil(seconds), 300)
-  if (minimumSeconds < 60) return `~${minimumSeconds} sec–5 min`
-  return formatConfirmationTime({ minimumSeconds, maximumSeconds: 300 })
+  const maximumSeconds = maximumMinutes * 60
+  const minimumSeconds = Math.min(Math.ceil(seconds), maximumSeconds)
+  if (minimumSeconds < 60) return `~${minimumSeconds} sec–${maximumMinutes} min`
+  return formatConfirmationTime({ minimumSeconds, maximumSeconds })
 }
 
 export function formatConfirmationTime(

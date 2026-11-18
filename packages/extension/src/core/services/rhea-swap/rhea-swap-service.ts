@@ -383,12 +383,21 @@ export class RheaSwapService {
       })
     })
     await this.sessions.put(updated)
+    const rawTimeEstimate = build.deposit?.timeEstimate
+    const timeEstimateSeconds =
+      typeof rawTimeEstimate === 'string' ? Number(rawTimeEstimate) : rawTimeEstimate
     return Object.freeze({
       ...this.toQuoteView(updated, quote),
       estimatedOut: build.estimatedOut,
       minAmountOut: build.minAmountOut,
       router: build.router,
       executionId: build.executionId,
+      ...(record.request.confidentiality === 'basic' &&
+      typeof timeEstimateSeconds === 'number' &&
+      Number.isFinite(timeEstimateSeconds) &&
+      timeEstimateSeconds > 0
+        ? { timeEstimateSeconds }
+        : {}),
       isCrossChain: build.isCrossChain,
       fromChain: build.fromChain,
       toChain: build.toChain,

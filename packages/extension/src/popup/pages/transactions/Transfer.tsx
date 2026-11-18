@@ -302,18 +302,13 @@ function MethodCard({
         <span className="text-muted">Privacy</span>
         <span>{title === 'Cluster' ? 'Strong' : 'Standard'}</span>
       </span>
-      <span className="mt-2 flex min-h-12 justify-between gap-2">
+      <span className="mt-2 flex min-h-8 justify-between gap-2">
         <span className="shrink-0 text-muted">Time (est.)</span>
         <span className="min-w-0 text-right">
           {loading ? (
             <Skeleton className="ml-auto h-4 w-12 max-w-full" />
           ) : (
-            <>
-              <span className="block">{estimate?.time ?? '—'}</span>
-              {estimate && estimate.time !== '—' && (
-                <span className="block text-[10px] text-muted">{estimate.timeScope}</span>
-              )}
-            </>
+            <span className="block">{estimate?.time ?? '—'}</span>
           )}
         </span>
       </span>
