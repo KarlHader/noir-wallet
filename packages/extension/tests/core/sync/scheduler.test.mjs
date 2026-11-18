@@ -27,7 +27,7 @@ function loadScheduler(dependencies) {
   return new module.exports.SyncScheduler()
 }
 
-function createSchedulerHarness() {
+function createSchedulerHarness({ syncBlocks, hasPendingTransaction = () => false } = {}) {
   let quarantine = null
   let hasSession = true
   let initializationCount = 0
@@ -40,11 +40,21 @@ function createSchedulerHarness() {
     initialize: async () => {
       initializationCount++
     },
-    isLocked: () => true
+    isLocked: () => !syncBlocks,
+    ensureWalletReadyForSync: async () => {},
+    waitForWalletReady: async () => true,
+    syncBlocks
   }
   const wallet = { id: 'wallet-a', accounts: [{ id: 'account-a' }] }
   const dependencies = {
     './zcash-wallet-runtime': { backgroundZcashWalletRuntime: runtime },
+    '@/config/wallet': {
+      WALLET_CONFIG: {
+        SYNC: { FOREGROUND_BATCH_MAX_BLOCKS: 100, BACKGROUND_SYNC_BUDGET_MS: 90_000 }
+      }
+    },
+    '@/lib/sync-abort': { clearSyncAbort: async () => {} },
+    '../core/wallet/pending-zcash-tx': { hasPendingZcashTxForWallet: hasPendingTransaction },
     '@/lib/indexed-db': { getWalletPersistenceQuarantine: async () => quarantine },
     '@/store/wallet-store': {
       prepareWalletStoreForUse: async () => {},
@@ -200,6 +210,62 @@ test('another confirmed transaction during catch-up triggers a subsequent wallet
   finishFirstScan()
   assert.deepEqual(await Promise.all([first, second]), ['completed', 'completed'])
   assert.equal(scans, 2)
+})
+
+test('routine foreground catch-up yields to transactions without admitting another scan', async () => {
+  let releaseBatch
+  const batch = new Promise(resolve => {
+    releaseBatch = resolve
+  })
+  let started
+  const scanning = new Promise(resolve => {
+    started = resolve
+  })
+  let scans = 0
+  const { scheduler } = createSchedulerHarness({
+    async syncBlocks(isAborted, _walletId, _accountId, options) {
+      scans++
+      started({ isAborted, options })
+      await batch
+      return { status: 'aborted' }
+    }
+  })
+  const request = signal =>
+    scheduler.requestForegroundCatchUp('mainnet', 'wallet-a', 'account-a', signal)
+  await request(AbortSignal.abort())
+  assert.equal(scheduler.isRunning(), false)
+  await request(new AbortController().signal)
+  const { isAborted, options } = await scanning
+  assert.equal(options.waitForTipAdvance, false)
+  assert.equal(options.maxBatchBlocks, 100)
+  scheduler.pauseForTx()
+  assert.equal(isAborted(), true)
+  assert.equal(options.signal.aborted, true)
+  assert.equal(scheduler.isRunning(), true)
+  releaseBatch()
+  assert.equal(await scheduler.waitForActiveSyncIdle(1_000), true)
+  await request(new AbortController().signal)
+  assert.equal(scheduler.isRunning(), false)
+  assert.equal(scans, 1)
+  scheduler.resumeAfterTx()
+  assert.equal(scheduler.isRunning(), false)
+})
+
+test('a wallet with a pending Zcash transaction does not run routine catch-up', async () => {
+  const harness = createSchedulerHarness({
+    hasPendingTransaction: async () => true,
+    async syncBlocks() {
+      assert.fail('a routine scan should not interrupt transaction settlement')
+    }
+  })
+  await harness.scheduler.requestForegroundCatchUp(
+    'mainnet',
+    'wallet-a',
+    'account-a',
+    new AbortController().signal
+  )
+  assert.equal(await harness.scheduler.waitForActiveSyncIdle(1_000), true)
+  assert.equal(harness.getInitializationCount(), 0)
 })
 
 test('sync snapshot reads the current background balance for the requested account and network', () => {

@@ -17,6 +17,7 @@ export const UI_CONFIG = {
 export const EXTENSION_POPUP_PATH = 'index.html'
 export const EXTENSION_SIDE_PANEL_PATH = 'index.html?surface=side-panel'
 export const EXTENSION_ACTIVITY_ROUTE = '/?tab=activity'
+export const FOREGROUND_ZCASH_PROBE_PORT = 'foreground-zcash-probe'
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 

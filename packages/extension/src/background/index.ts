@@ -43,7 +43,7 @@ import {
 import { dappHandler } from './dapp-handler'
 import { evmDAppOperationStore } from './evm-dapp-operation-store'
 import { backgroundZcashWalletRuntime } from './zcash-wallet-runtime'
-import { UI_CONFIG } from '@/config/extension'
+import { FOREGROUND_ZCASH_PROBE_PORT, UI_CONFIG } from '@/config/extension'
 import { WALLET_CONFIG, ZEC_DECIMALS, type MnemonicWordCount } from '@/config/wallet'
 import {
   DEFAULT_NETWORK,
@@ -2444,6 +2444,72 @@ async function handlePeriodicBalanceSyncAlarm(): Promise<void> {
     })
   }
 }
+
+let lastForegroundZcashProbe: { key: string; startedAt: number } | undefined
+
+async function probeForegroundZcashSync(signal: AbortSignal): Promise<void> {
+  await runtimeNetworkReady
+  await prepareWalletStoreForUse()
+  const canProbe = () =>
+    !signal.aborted &&
+    !networkRestartRequired &&
+    !syncScheduler.isRunning() &&
+    !syncScheduler.isTxPaused()
+  if (!canProbe()) return
+
+  const { currentNetwork, currentWalletId, currentAccountId, getAccount } =
+    useWalletStore.getState()
+  if (!currentWalletId || !currentAccountId) return
+  const account = getAccount(currentWalletId, currentAccountId)
+  if (!account || !isAccountNetworkEnabled(account, currentNetwork, 'zcash')) return
+  if (!(await credentialSession.hasUnlockSession()) || !canProbe()) return
+
+  const key = `${currentNetwork}:${currentWalletId}:${currentAccountId}`
+  const now = performance.now()
+  if (
+    lastForegroundZcashProbe?.key === key &&
+    now - lastForegroundZcashProbe.startedAt < WALLET_CONFIG.SYNC.FOREGROUND_PROBE_MS
+  )
+    return
+  const probe = { key, startedAt: now }
+  lastForegroundZcashProbe = probe
+  const endpoint = getNetworkConfig(currentNetwork).rpcUrl
+  try {
+    const tip = await fetchLatestBlockHeight(endpoint, undefined, undefined, signal)
+    if (!canProbe() || endpoint !== getNetworkConfig(currentNetwork).rpcUrl) return
+    const scanned = useAccountDataStore
+      .getState()
+      .getWalletSyncState(currentNetwork, currentWalletId).currentHeight
+    if (tip > scanned) {
+      await syncScheduler.requestForegroundCatchUp(
+        currentNetwork,
+        currentWalletId,
+        currentAccountId,
+        signal
+      )
+    }
+  } finally {
+    if (signal.aborted && lastForegroundZcashProbe === probe) lastForegroundZcashProbe = undefined
+  }
+}
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== FOREGROUND_ZCASH_PROBE_PORT) return
+  if (
+    !port.sender ||
+    getOwnExtensionSenderContext(port.sender, chrome.runtime.id) !== 'extension-page'
+  ) {
+    port.disconnect()
+    return
+  }
+  const controller = new AbortController()
+  port.onDisconnect.addListener(() => controller.abort())
+  void probeForegroundZcashSync(controller.signal)
+    .catch(() => {})
+    .finally(() => {
+      if (!controller.signal.aborted) port.disconnect()
+    })
+})
 
 async function isWalletUiContextOpen(): Promise<boolean> {
   if (typeof chrome.runtime.getContexts !== 'function') return false

@@ -69,6 +69,7 @@ export class SyncScheduler {
   private runningWalletId: string | null = null
   private removedWalletIds = new Set<string>()
   private txPauseDepth = 0
+  private foregroundCatchUp: { walletId: string; controller: AbortController } | null = null
   private pendingPassiveRun = false
   private pendingRpcReload: { network: Network; reason: 'failover' | 'recovery' } | null = null
 
@@ -255,6 +256,17 @@ export class SyncScheduler {
 
   pauseForTx(): void {
     this.txPauseDepth++
+    this.yieldForegroundCatchUp()
+  }
+
+  private yieldForegroundCatchUp(targetWalletId?: string): void {
+    const active = this.foregroundCatchUp
+    if (active && (!targetWalletId || active.walletId === targetWalletId)) {
+      // Stop at an existing journal-safe cancellation check; do not cancel
+      // ordinary sync or discard a queued explicit request.
+      this.syncAbortFlags.set(active.walletId, true)
+      active.controller.abort()
+    }
   }
 
   resumeAfterTx(): void {
@@ -268,6 +280,42 @@ export class SyncScheduler {
 
   isTxPaused(): boolean {
     return this.txPauseDepth > 0
+  }
+
+  async requestForegroundCatchUp(
+    network: Network,
+    walletId: string,
+    accountId: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const mayStart = () => {
+      const state = useWalletStore.getState()
+      return (
+        !signal.aborted &&
+        !this.running &&
+        this.activeSyncPromises.size === 0 &&
+        this.transactionCatchUps.size === 0 &&
+        !this.isTxPaused() &&
+        !this.currentPendingRpcReload() &&
+        !this.removedWalletIds.has(walletId) &&
+        !this.cancelledPreflightWalletIds.has(walletId) &&
+        state.currentNetwork === network &&
+        state.currentWalletId === walletId &&
+        state.currentAccountId === accountId &&
+        isZcashSyncEnabled(walletId, accountId)
+      )
+    }
+    if (!mayStart() || (await this.blockQuarantinedSync(walletId)) || !mayStart()) return
+
+    this.running = true
+    chrome.alarms.create(SYNC_KEEPALIVE_ALARM, { periodInMinutes: 0.4 })
+    void this.runSyncForWallet(walletId, accountId, false, false, true)
+      .catch(error => console.warn('[SyncScheduler] Foreground catch-up failed:', error))
+      .finally(() => {
+        this.running = false
+        chrome.alarms.clear(SYNC_KEEPALIVE_ALARM)
+        if (this.pendingRetrigger) this.scheduleRun()
+      })
   }
 
   async waitForActiveSyncIdle(timeoutMs: number): Promise<boolean> {
@@ -676,6 +724,7 @@ export class SyncScheduler {
     const catchUp = (async () => {
       // An in-flight scan may have started before confirmation; run once more
       // after it finishes so the confirmed transaction is included.
+      this.yieldForegroundCatchUp(walletId)
       await this.activeSyncPromises.get(key)?.catch(() => {})
       let status: SyncOutcome['status'] = 'skipped'
       do {
@@ -698,7 +747,8 @@ export class SyncScheduler {
     walletId: string,
     accountId: string,
     passive = false,
-    transaction = false
+    transaction = false,
+    foregroundCatchUp = false
   ): Promise<SyncOutcome['status']> {
     if (!isZcashSyncEnabled(walletId, accountId)) return 'skipped'
     const key = getWalletSyncKey(walletId)
@@ -709,20 +759,29 @@ export class SyncScheduler {
       this.scheduleRun()
       return 'skipped'
     }
-    if (this.yieldToTxPause()) return 'skipped'
+    if (foregroundCatchUp ? this.isTxPaused() : this.yieldToTxPause()) return 'skipped'
 
     const abortController = new AbortController()
+    if (foregroundCatchUp) this.foregroundCatchUp = { walletId, controller: abortController }
     this.syncAbortFlags.set(key, false)
     this.syncAbortControllers.set(key, abortController)
     const promise = (async () => {
       await clearSyncAbort(walletId).catch(() => {})
-      if (this.yieldToTxPause()) return 'skipped' as const
+      if (foregroundCatchUp ? this.isTxPaused() : this.yieldToTxPause()) return 'skipped' as const
       if (this.syncAbortFlags.get(key)) {
-        await signalSyncAbort(walletId).catch(() => {})
+        if (!foregroundCatchUp) await signalSyncAbort(walletId).catch(() => {})
         return 'aborted' as const
       }
-      return this.executeSync(walletId, accountId, passive, transaction, abortController.signal)
+      return this.executeSync(
+        walletId,
+        accountId,
+        passive,
+        transaction,
+        abortController.signal,
+        foregroundCatchUp
+      )
     })().finally(() => {
+      if (this.foregroundCatchUp?.controller === abortController) this.foregroundCatchUp = null
       this.activeSyncPromises.delete(key)
       if (this.syncAbortControllers.get(key) === abortController) {
         this.syncAbortControllers.delete(key)
@@ -738,31 +797,58 @@ export class SyncScheduler {
     accountId: string,
     passive: boolean,
     transaction: boolean,
-    signal: AbortSignal
+    signal: AbortSignal,
+    foregroundCatchUp = false
   ): Promise<SyncOutcome['status']> {
     if (!isZcashSyncEnabled(walletId, accountId)) return 'skipped'
+    const shouldYield = () =>
+      foregroundCatchUp ? signal.aborted || this.isTxPaused() : this.yieldToTxPause()
     this.runningWalletId = walletId
     try {
+      if (foregroundCatchUp) {
+        if (
+          !(await credentialSession.hasUnlockSession()) ||
+          shouldYield() ||
+          (await hasPendingZcashTxForWallet(walletId)) ||
+          shouldYield()
+        )
+          return 'skipped'
+        await backgroundZcashWalletRuntime.initialize()
+        if (signal.aborted) return 'aborted'
+        if (backgroundZcashWalletRuntime.isLocked()) {
+          const wallet = useWalletStore.getState().getWallet(walletId)
+          if (
+            !wallet ||
+            (!isZcashHardwareKeySource(wallet.keySource) &&
+              !(await credentialSession.bindZcashCredential(walletId))) ||
+            signal.aborted ||
+            !(await backgroundZcashWalletRuntime.restoreFromCredentialSession(walletId, accountId))
+          )
+            return 'skipped'
+        }
+        if (signal.aborted) return 'aborted'
+      }
       await backgroundZcashWalletRuntime.ensureWalletReadyForSync(
         walletId,
         accountId,
         this.preflightWalletIds.has(walletId)
       )
-      if (this.yieldToTxPause()) return 'skipped'
+      if (shouldYield()) return 'skipped'
 
       const ready = await backgroundZcashWalletRuntime.waitForWalletReady(
         walletId,
         WALLET_CONFIG.SYNC.INIT_READY_TIMEOUT_MS
       )
-      if (this.yieldToTxPause()) return 'skipped'
+      if (shouldYield()) return 'skipped'
       if (!ready) {
         logger.warn('Sync skipped: wallet WASM not ready', walletId, accountId)
         return 'skipped'
       }
 
       const syncKey = getWalletSyncKey(walletId)
-      const pendingOnChainTx = await hasPendingZcashTxForWallet(walletId)
-      if (this.yieldToTxPause()) return 'skipped'
+      const waitForTipAdvance =
+        !foregroundCatchUp && ((await hasPendingZcashTxForWallet(walletId)) || transaction)
+      if (shouldYield()) return 'skipped'
       const syncResult = await backgroundZcashWalletRuntime.syncBlocks(
         () => this.syncAbortFlags.get(syncKey) === true,
         walletId,
@@ -770,26 +856,31 @@ export class SyncScheduler {
         {
           force: true,
           priority: passive ? 'background' : 'foreground',
-          waitForTipAdvance: pendingOnChainTx || transaction,
+          waitForTipAdvance,
           signal,
-          ...(passive ? { maxDurationMs: WALLET_CONFIG.SYNC.BACKGROUND_SYNC_BUDGET_MS } : {})
+          ...(passive || foregroundCatchUp
+            ? { maxDurationMs: WALLET_CONFIG.SYNC.BACKGROUND_SYNC_BUDGET_MS }
+            : {}),
+          ...(foregroundCatchUp
+            ? { maxBatchBlocks: WALLET_CONFIG.SYNC.FOREGROUND_BATCH_MAX_BLOCKS }
+            : {})
         }
       )
 
       if (syncResult.status === 'completed' || syncResult.status === 'partial') {
-        if (this.yieldToTxPause() || signal.aborted) return syncResult.status
+        if (shouldYield() || signal.aborted) return syncResult.status
         const { currentWalletId } = useWalletStore.getState()
         const fgWalletId = this.foregroundWalletId || currentWalletId
         if (walletId === fgWalletId) {
           await backgroundZcashWalletRuntime.refreshBalances(walletId, true).catch(() => {})
-          if (this.yieldToTxPause() || signal.aborted) return syncResult.status
+          if (shouldYield() || signal.aborted) return syncResult.status
           await backgroundZcashWalletRuntime
             .refreshWalletTransactionHistoriesFromWasm(walletId)
             .catch(() => {})
         }
       }
 
-      if (!this.yieldToTxPause() && !signal.aborted) {
+      if (!shouldYield() && !signal.aborted) {
         await this.handleRpcEndpointHealth(syncResult, signal)
       }
 
@@ -807,7 +898,7 @@ export class SyncScheduler {
           accountId,
           error
         )
-        if (!this.yieldToTxPause() && !signal.aborted) {
+        if (!shouldYield() && !signal.aborted) {
           await this.handleRpcEndpointHealth(
             {
               status: 'failed',

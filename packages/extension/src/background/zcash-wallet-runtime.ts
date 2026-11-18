@@ -179,6 +179,7 @@ export type SyncBlocksOptions = {
   priority?: 'foreground' | 'background'
   waitForTipAdvance?: boolean
   maxDurationMs?: number
+  maxBatchBlocks?: number
 }
 
 /**
@@ -4739,7 +4740,9 @@ export class BackgroundZcashWalletRuntime {
       const syncLogPrefix = logger.getSyncPrefix(syncWalletId, syncAccountId)
 
       const isCurrentWallet = syncWalletId === this.currentWalletId
-      let batchSize = getSyncBatchSize(totalRange, isCurrentWallet)
+      const selectBatchSize = (remaining: number) =>
+        Math.min(getSyncBatchSize(remaining, isCurrentWallet), options?.maxBatchBlocks ?? Infinity)
+      let batchSize = selectBatchSize(totalRange)
 
       await syncJobStore.markRunning(
         syncWalletId,
@@ -5379,7 +5382,7 @@ export class BackgroundZcashWalletRuntime {
         }
 
         if (hasMore) {
-          batchSize = getSyncBatchSize(remainingBlocks, isCurrentWallet)
+          batchSize = selectBatchSize(remainingBlocks)
 
           const journalBatches = await this.getJournalBatchCount(syncWalletId)
           if (journalBatches >= JOURNAL_CHECKPOINT_BATCHES) {

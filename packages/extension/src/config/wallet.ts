@@ -101,8 +101,9 @@ export const WALLET_CONFIG = {
      *  batch. We still re-run it every N batches so a long-running session keeps
      *  advancing toward the live tip and refreshes transparent UTXOs. */
     SESSION_SETUP_REFRESH_EVERY_N_BATCHES: 20,
-    /** Home balance polling interval (ms) */
-    BALANCE_POLL_MS: 1 * 60 * 1000,
+    /** Chain-tip probe interval while the wallet home is visible. */
+    FOREGROUND_PROBE_MS: 60_000,
+    FOREGROUND_BATCH_MAX_BLOCKS: 100,
     /** Base interval for background chain-tip probes (minutes) */
     BACKGROUND_POLL_MINUTES: 30,
     BACKGROUND_POLL_JITTER_MINUTES: 5,

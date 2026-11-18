@@ -27,6 +27,7 @@ import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { AddressTypeLabel } from '../components/account/AddressType'
 import { useSpeedUp } from '../hooks/useSpeedUp'
 import { useResyncZcash } from '../hooks/useResyncZcash'
+import { useForegroundZcashSync } from '../hooks/useForegroundZcashSync'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { BalanceWithPending } from '../components/balance/BalanceWithPending'
 import { ExtensionUpdateBanner } from '../components/common/ExtensionUpdateBanner'
@@ -287,6 +288,7 @@ export function Home() {
   const supportsZcash =
     storageV2Account?.networks.some(network => network.chain.family === 'zcash') ??
     Boolean(currentAccount)
+  useForegroundZcashSync(currentNetwork, currentWalletId, currentAccountId, supportsZcash)
   const supportsSwap =
     storageV2Account?.networks.some(network =>
       ['zcash', 'evm', 'bitcoin'].includes(network.chain.family)
