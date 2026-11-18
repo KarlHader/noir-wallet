@@ -224,7 +224,7 @@ test('native ZEC conversion preserves exact zats', () => {
   expect(() => zecToZats('1.000000001')).toThrow()
 })
 
-test('native ZEC Confidential destination binds the internal ZEC asset only', async () => {
+test('native ZEC Confidential destination binds the internal ZEC asset and active account', async () => {
   const chainId = 'bip122:00040fe8ec8471911baa1db1266ea15d'
   const assetId = `${chainId}/slip44:133`
   const protocolAssetId = 'nep141:zec.omft.near'
@@ -233,6 +233,10 @@ test('native ZEC Confidential destination binds the internal ZEC asset only', as
   const recipient = '0x1111111111111111111111111111111111111111'
   const destination = { chainId, assetId, protocolAssetId }
   const values = new Map()
+  let activeAccountId = 'account-one'
+  let switchDuringAuthorization = false
+  let switchDuringIdentityResolution = false
+  let identityResolutionCount = 0
   const originalChrome = globalThis.chrome
   const originalFetch = globalThis.fetch
   const originalLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
@@ -281,11 +285,18 @@ test('native ZEC Confidential destination binds the internal ZEC asset only', as
       getActiveAccount: () => ({
         network: 'mainnet',
         walletId: 'wallet-one',
-        accountId: 'account-one',
+        accountId: activeAccountId,
         refundAddresses: [refundAddress]
       }),
-      resolveConfidentialIdentity: async () => recipient,
-      authorizeConfidentialIdentity: async () => {},
+      resolveConfidentialIdentity: async () => {
+        identityResolutionCount += 1
+        if (switchDuringIdentityResolution && identityResolutionCount === 2)
+          activeAccountId = 'account-two'
+        return recipient
+      },
+      authorizeConfidentialIdentity: async () => {
+        if (switchDuringAuthorization) activeAccountId = 'account-two'
+      },
       quoteConfidential: async input => ({
         correlationId: 'quote-one',
         quoteRequest: {
@@ -321,6 +332,17 @@ test('native ZEC Confidential destination binds the internal ZEC asset only', as
       recipientType: 'CONFIDENTIAL_INTENTS',
       slippageBps: 50
     }
+    switchDuringAuthorization = true
+    await expect(coordinator.prepare(request)).rejects.toThrow('Native ZEC Intents Swap account changed')
+    expect(values.size).toBe(0)
+    activeAccountId = 'account-one'
+    switchDuringAuthorization = false
+    switchDuringIdentityResolution = true
+    identityResolutionCount = 0
+    await expect(coordinator.prepare(request)).rejects.toThrow('Native ZEC Intents Swap account changed')
+    expect(values.size).toBe(0)
+    activeAccountId = 'account-one'
+    switchDuringIdentityResolution = false
     const review = await coordinator.prepare(request)
     expect(review.destination).toEqual({ ...destination, recipient })
     expect(review.quoteBinding).toMatchObject({

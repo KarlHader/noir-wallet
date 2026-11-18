@@ -601,13 +601,14 @@ export class NativeZecIntentsSwapCoordinator {
         })
       }
       this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
-      if (
-        confidential &&
-        (await this.options.resolveConfidentialIdentity?.({
-          walletId: input.walletId,
-          accountId: input.accountId
-        })) !== recipient
-      ) {
+      const confirmedRecipient = confidential
+        ? await this.options.resolveConfidentialIdentity?.({
+            walletId: input.walletId,
+            accountId: input.accountId
+          })
+        : undefined
+      this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
+      if (confidential && confirmedRecipient !== recipient) {
         throw new Error('Native ZEC Confidential account changed after quoting')
       }
       const quoteId = crypto.randomUUID()
@@ -659,6 +660,7 @@ export class NativeZecIntentsSwapCoordinator {
         input.network,
         async () => {
           const ids = await this.readIndex()
+          this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
           if (ids.length >= MAX_STORED_QUOTES) {
             throw new Error('Too many recent Intents Swap quotes')
           }
@@ -668,6 +670,7 @@ export class NativeZecIntentsSwapCoordinator {
           })
         }
       )
+      this.assertActiveAccount(input.walletId, input.accountId, input.refundAddress)
       return record
     })
   }

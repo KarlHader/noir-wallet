@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import { expect } from '@playwright/test'
+import { withTimeout } from '../../../src/lib/async-utils.ts'
 
 import { ConfidentialFundingCoordinator } from '../../../src/background/confidential-funding-coordinator.ts'
 import {
@@ -583,3 +584,63 @@ test('notifies Portfolio only after a successful Confidential refresh for the ac
     else globalThis.chrome = previousChrome
   }
 })
+
+test(
+  'native ZEC Confidential quote authorization does not block account switching',
+  { timeout: 5000 },
+  async () => {
+    const previousChrome = globalThis.chrome
+    const storage = { get: async () => ({}), set: async () => {}, remove: async () => {} }
+    globalThis.chrome = { storage: { local: storage, session: storage } }
+    try {
+      const { getConfidentialFundingMessageHandler } =
+        await import('../../../src/background/confidential-funding-messages.ts')
+      const { AccountContextTransitionCoordinator } =
+        await import('../../../src/background/account-context-transition.ts')
+      const transition = new AccountContextTransitionCoordinator()
+      const events = []
+      let active = { walletId: 'wallet:one', accountId: 'account:one' }
+      const request = { walletId: active.walletId, accountId: active.accountId }
+      const handler = getConfidentialFundingMessageHandler('PREPARE_NATIVE_ZEC_INTENTS_SWAP')
+      const preparing = handler(
+        {
+          accountContextTransition: transition,
+          coordinator: {
+            prepareNativeZecIntentsSwap: async input => {
+              expect(input).toBe(request)
+              events.push('prepare')
+              await transition.runActiveOperation(async () => {
+                events.push('authorize')
+              })
+              events.push('quoted')
+              return { quoteId: 'quote:one' }
+            }
+          }
+        },
+        { request }
+      )
+      const switching = transition.runAccountSwitch(
+        { walletId: 'wallet:one', accountId: 'account:two' },
+        {
+          readCurrent: () => active,
+          validateTarget: () => {},
+          commit: async () => {
+            active = { walletId: 'wallet:one', accountId: 'account:two' }
+            events.push('switched')
+          }
+        }
+      )
+      const completed = await withTimeout(
+        Promise.all([preparing, switching]),
+        2000,
+        'Native ZEC quote'
+      )
+      expect(completed[0]).toEqual({ quoteId: 'quote:one' })
+      expect(active.accountId).toBe('account:two')
+      expect(events).toEqual(['prepare', 'authorize', 'quoted', 'switched'])
+    } finally {
+      if (previousChrome === undefined) delete globalThis.chrome
+      else globalThis.chrome = previousChrome
+    }
+  }
+)

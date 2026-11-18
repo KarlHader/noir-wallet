@@ -54,12 +54,9 @@ interface ExternalDepositMessage {
 
 const handlers = {
   PREPARE_NATIVE_ZEC_INTENTS_SWAP: (
-    { coordinator, accountContextTransition }: FundingContext,
+    { coordinator }: FundingContext,
     message: Readonly<{ request: PrepareNativeZecIntentsSwapInput }>
-  ) =>
-    accountContextTransition.runActiveOperation(() =>
-      coordinator.prepareNativeZecIntentsSwap(message.request)
-    ),
+  ) => coordinator.prepareNativeZecIntentsSwap(message.request),
   GET_NATIVE_ZEC_INTENTS_SWAP: (
     { coordinator }: FundingContext,
     message: Readonly<{ quoteId: string }>
