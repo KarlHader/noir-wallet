@@ -7,7 +7,7 @@ import {
 } from '@/infrastructure/chains/evm'
 import { getOwnExtensionSenderContext } from '@/lib/runtime-message-security'
 import { openHardwareEvmSignTab } from '@/lib/hardware-tab'
-import { evmWalletClient } from '@/popup/services/evm-wallet-client'
+import { EvmWalletClientError, evmWalletClient } from '@/popup/services/evm-wallet-client'
 import { openModal } from '@/popup/provider/ModalManager'
 import { toast } from '@/store/toast-store'
 import { formatBaseUnitAmount } from '@/lib/number-format'
@@ -52,6 +52,7 @@ export function EvmNonceRecoveryBanner({
   const [customPriorityFee, setCustomPriorityFee] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [checkFailed, setCheckFailed] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [checkRevision, setCheckRevision] = useState(0)
   const [reviewOpen, setReviewOpen] = useState(false)
   const refreshSequence = useRef(0)
@@ -59,18 +60,26 @@ export function EvmNonceRecoveryBanner({
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
+    setChecking(true)
     try {
       const next = await evmWalletClient.getNonceRecovery(chainId, executionMode)
       if (sequence !== refreshSequence.current) return
       setState(next)
+      if (!next) setReviewOpen(false)
       setCheckFailed(false)
       setError(null)
-    } catch {
+    } catch (cause) {
       if (sequence !== refreshSequence.current) return
       setState(null)
-      setCheckFailed(true)
+      setReviewOpen(false)
+      setCheckFailed(
+        cause instanceof EvmWalletClientError && cause.code === 'nonce-queue-unavailable'
+      )
     } finally {
-      if (sequence === refreshSequence.current) setCheckRevision(previous => previous + 1)
+      if (sequence === refreshSequence.current) {
+        setChecking(false)
+        setCheckRevision(previous => previous + 1)
+      }
     }
   }, [chainId, executionMode])
 
@@ -104,7 +113,7 @@ export function EvmNonceRecoveryBanner({
   }, [checkFailed, checkRevision, refresh, state])
 
   const handleRecovery = async () => {
-    if (!state || busy) return
+    if (!state || busy || checking) return
     setBusy(true)
     setError(null)
     try {
@@ -225,7 +234,18 @@ export function EvmNonceRecoveryBanner({
     }
   }
 
-  if (!state) return null
+  if (!state) {
+    return checkFailed ? (
+      <div className="border-b border-border/60 px-5 py-3">
+        <p className="mb-1 text-xs text-muted">{networkName}</p>
+        <InlineError
+          message="Unable to verify the send queue."
+          onRetry={() => void refresh()}
+          retrying={checking}
+        />
+      </div>
+    ) : null
+  }
 
   if (state.action === 'retry-broadcast') {
     return (
@@ -261,7 +281,7 @@ export function EvmNonceRecoveryBanner({
             variant="ghost"
             className="h-8 shrink-0 gap-1 px-1.5 text-xs text-primary hover:bg-primary/10 hover:text-primary"
             aria-expanded={reviewOpen}
-            disabled={busy}
+            disabled={busy || checking}
             onClick={() => setReviewOpen(open => !open)}
           >
             {presentation.actionLabel}

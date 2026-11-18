@@ -11,6 +11,7 @@ import { accountNetworksClient } from '../services/account-networks-client'
 import { didCredentialSessionEnd } from '@/core/wallet/credential-session-state'
 import { getTransactionToastCopy } from '@/lib/transaction-status-copy'
 import { waitForDelayOrAbort, withTimeout } from '@/lib/async-utils'
+import { EXTENSION_ACTIVITY_ROUTE } from '@/config/extension'
 
 /**
  * Custom hook for application routing logic
@@ -44,7 +45,13 @@ export function useAppRouting() {
   const isHardwareTab = useRef(window.location.hash.includes('/hardware/'))
   const isActivationDApp = useRef(window.location.hash.includes('from=dapp'))
   const isUpdatePage = useRef(window.location.hash.includes('/update'))
-  const isTokenManagerEntry = useRef(window.location.hash === '#/manage-tokens')
+  const walletEntryRoute = useRef(
+    window.location.hash === `#${EXTENSION_ACTIVITY_ROUTE}`
+      ? EXTENSION_ACTIVITY_ROUTE
+      : window.location.hash === '#/manage-tokens'
+        ? '/manage-tokens'
+        : '/'
+  )
 
   const routeToUnlock = useCallback(() => {
     // Import/create can complete without remounting the app. Read the current
@@ -281,7 +288,7 @@ export function useAppRouting() {
           // Hardware tabs must return to their flow (with query, e.g. sign request id)
           redirectParams.set('redirect', `${currentPath}${location.search || ''}`)
         } else {
-          redirectParams.set('redirect', isTokenManagerEntry.current ? '/manage-tokens' : '/')
+          redirectParams.set('redirect', walletEntryRoute.current)
         }
 
         replace(`/unlock?${redirectParams.toString()}`)
@@ -307,7 +314,7 @@ export function useAppRouting() {
 
       // dApp windows and hardware tabs stay on their route; normal popup goes home
       if ((!isDApp.current || isActivationDApp.current) && !isHardwareTab.current) {
-        replace(isTokenManagerEntry.current ? '/manage-tokens' : '/')
+        replace(walletEntryRoute.current)
       }
     } catch (error) {
       console.error('[useAppRouting] Initialization error:', error)

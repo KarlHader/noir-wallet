@@ -1,4 +1,5 @@
 import { trackEvent } from '@/background/analytics/reporter'
+import { EXTENSION_ACTIVITY_ROUTE, EXTENSION_POPUP_PATH } from '@/config/extension'
 import { DEFAULT_NETWORK } from '@/lib/runtime-network'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { getEvmNetworkConfig, type EvmNetworkConfig } from '@/config/networks'
@@ -13,7 +14,11 @@ import { accountContextTransition } from './account-context-transition'
 import type { BackgroundEvmTransferController } from './evm-transfer-controller'
 import { credentialSession } from './credential-session'
 import { dappHandler } from './dapp-handler'
-import { BackgroundEvmDAppHandler, type EvmDAppTabInfo } from './evm-dapp-handler'
+import {
+  BackgroundEvmDAppHandler,
+  type EvmDAppSendQueueBlock,
+  type EvmDAppTabInfo
+} from './evm-dapp-handler'
 import type { ParsedEip1193ChainRequest } from '@/core/dapp/eip1193'
 import { parseChainId } from '@/core/chains/registry'
 import {
@@ -30,6 +35,30 @@ import type { RheaSwapEvmSignatureCoordinator } from './rhea-swap-evm-signature'
 import { EvmDAppPrivateTransferCoordinator } from './evm-dapp-private-transfer'
 import { EVM_TRANSACTION_MONITOR_ALARM } from './evm-transaction-monitor'
 import { NEAR_INTENTS_TRANSACTION_MONITOR_ALARM } from './near-intents-transaction-monitor'
+
+const SEND_QUEUE_NOTIFICATION_ID = 'evm-dapp-send-queue'
+
+export function registerEvmDAppSendQueueNotification(): void {
+  chrome.notifications.onClicked.addListener(notificationId => {
+    if (notificationId !== SEND_QUEUE_NOTIFICATION_ID) return
+    void chrome.tabs
+      .create({ url: chrome.runtime.getURL(`${EXTENSION_POPUP_PATH}#${EXTENSION_ACTIVITY_ROUTE}`) })
+      .catch(() => {})
+    chrome.notifications.clear(notificationId, () => void chrome.runtime.lastError)
+  })
+}
+
+async function notifySendQueueBlocked(reason: EvmDAppSendQueueBlock): Promise<void> {
+  await chrome.notifications.create(SEND_QUEUE_NOTIFICATION_ID, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    title: 'Transaction not sent',
+    message:
+      reason === 'nonce-recovery-required'
+        ? 'Open Activity to review the blocked send queue.'
+        : 'Unable to verify the send queue. Try again.'
+  })
+}
 
 async function notifyTransactionSubmitted(confidential = false): Promise<void> {
   await Promise.all([
@@ -111,6 +140,7 @@ export function createBackgroundEvmDAppHandler(
     runActiveOperation: operation => accountContextTransition.runActiveOperation(operation),
     transferController,
     onTransactionSubmitted: () => notifyTransactionSubmitted(),
+    onSendQueueBlocked: notifySendQueueBlocked,
     ...(privateTransfer === undefined ? {} : { privateTransfer }),
     operationStore: evmDAppOperationStore,
     signer,

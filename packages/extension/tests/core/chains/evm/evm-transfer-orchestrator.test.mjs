@@ -491,7 +491,7 @@ test('serializes approvals for the same sender through signing and broadcast', a
   expect(results[0].status).toBe('fulfilled')
   expect(results[1]).toMatchObject({
     status: 'rejected',
-    reason: expect.objectContaining({ message: expect.stringContaining('nonce') })
+    reason: expect.objectContaining({ code: 'nonce-queue-unavailable' })
   })
   expect(maximumActiveConfirms).toBe(1)
 })
@@ -1297,6 +1297,23 @@ test('does not pause sends for an ordinary pending cancellation and the next app
   expect(next.signing.summary.fields.nonce).toBe('11')
 })
 
+test('does not offer a paid nonce recovery when the RPC count changes during verification', async () => {
+  let pendingReads = 0
+  const testHarness = harness({
+    rpc: rpc({
+      getPendingNonce: async () => (++pendingReads % 2 === 1 ? '9' : '10'),
+      getTransactionCount: async () => '9',
+      getTransactionLocation: async () => ({ status: 'pending' })
+    })
+  })
+  await testHarness.repository.create(localBroadcastGraph(10))
+
+  await expect(
+    testHarness.orchestrator.prepareNonceRecovery({ chainAccount: account })
+  ).rejects.toMatchObject({ code: 'nonce-queue-unavailable' })
+  await expect(testHarness.pendingStore.list()).resolves.toHaveLength(0)
+})
+
 test('fails closed on a rate-limited pending nonce query before signing', async () => {
   const testHarness = harness({
     rpc: rpc({
@@ -1327,8 +1344,10 @@ test('only offers cancellation from the original transaction when its head hash 
 
   await expect(
     testHarness.orchestrator.getNonceRecovery({ chainAccount: account })
-  ).resolves.toBeNull()
-  await expect(prepare(testHarness.orchestrator)).rejects.toMatchObject({ code: 'stale-nonce' })
+  ).rejects.toMatchObject({ code: 'nonce-queue-unavailable' })
+  await expect(prepare(testHarness.orchestrator)).rejects.toMatchObject({
+    code: 'nonce-queue-unavailable'
+  })
   const review = await testHarness.orchestrator.prepareCancel({
     chainAccount: account,
     originalTransactionId: original.root.id

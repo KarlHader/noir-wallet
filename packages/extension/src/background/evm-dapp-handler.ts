@@ -1,5 +1,5 @@
 import { transactionBroadcasted } from '@/core/transactions/transaction-analytics'
-import { supportsEvmPrivateExecution } from '@/core/chains/evm'
+import { createEvmWalletRuntimeError, supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
 import type { TrackOptions } from '../lib/analytics/types'
@@ -114,6 +114,7 @@ export interface BackgroundEvmDAppHandlerOptions {
   readonly transferController: BackgroundEvmTransferController | null
   readonly privateTransfer?: EvmDAppPrivateTransferPort
   readonly onTransactionSubmitted?: () => Promise<void>
+  readonly onSendQueueBlocked?: (reason: EvmDAppSendQueueBlock) => Promise<void>
   readonly operationStore: Readonly<{
     put: (record: EvmDAppOperationRecord) => Promise<void>
     delete: (transactionId: string) => Promise<void>
@@ -141,7 +142,25 @@ export interface EvmDAppExecutionIdentity {
   readonly address: string
 }
 
+export type EvmDAppSendQueueBlock = 'nonce-recovery-required' | 'nonce-queue-unavailable'
+
+function sendQueueBlock(error: unknown): EvmDAppSendQueueBlock | null {
+  return error instanceof EvmTransactionError &&
+    (error.code === 'nonce-recovery-required' || error.code === 'nonce-queue-unavailable')
+    ? error.code
+    : null
+}
+
 export function mapEvmTransactionPreparationError(error: unknown): unknown {
+  const reason = sendQueueBlock(error)
+  if (reason) {
+    return new Eip1193ProviderError(
+      -32000,
+      reason === 'nonce-recovery-required'
+        ? 'Open Activity in Noir Wallet to review the blocked send queue. No transaction was sent.'
+        : createEvmWalletRuntimeError(reason).message
+    )
+  }
   return error instanceof EvmTransactionError && error.code === 'insufficient-funds'
     ? new Eip1193ProviderError(-32000, 'Insufficient funds for the transaction and network fee.')
     : error
@@ -958,6 +977,7 @@ export class BackgroundEvmDAppHandler {
           this.options.network.networkMode !== 'mainnet' ||
           !funding
         ) {
+          this.notifySendQueueBlock(error)
           throw mapEvmTransactionPreparationError(error)
         }
         const decision = await this.options.approval.requestExternalApproval(
@@ -1277,7 +1297,8 @@ export class BackgroundEvmDAppHandler {
           })
           .catch(() => {})
       }
-      throw error
+      this.notifySendQueueBlock(error)
+      throw sendQueueBlock(error) ? mapEvmTransactionPreparationError(error) : error
     } finally {
       if (privateState.prepared) await privateState.prepared.cancel().catch(() => {})
       if (!submitted) {
@@ -1285,6 +1306,11 @@ export class BackgroundEvmDAppHandler {
         await this.options.operationStore.delete(prepared.graph.root.id).catch(() => {})
       }
     }
+  }
+
+  private notifySendQueueBlock(error: unknown): void {
+    const reason = sendQueueBlock(error)
+    if (reason) void this.options.onSendQueueBlocked?.(reason).catch(() => {})
   }
 
   private async signPersonalMessage(

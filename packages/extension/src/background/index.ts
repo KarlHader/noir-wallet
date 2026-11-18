@@ -281,7 +281,7 @@ import {
   type CurrentDAppEvmNetworkState
 } from './wallet-dapp-evm-networks'
 import { createBackgroundBitcoinAddressBalancesCoordinator } from './bitcoin-address-balances'
-import { createBackgroundEvmDAppHandler } from './evm-dapp'
+import { createBackgroundEvmDAppHandler, registerEvmDAppSendQueueNotification } from './evm-dapp'
 import { EvmDAppNetworkSwitchCoordinator } from './evm-dapp-network-switch'
 import { EvmDAppOriginRuntime } from './evm-dapp-origin-runtime'
 import {
@@ -2335,6 +2335,8 @@ function getZcashAccountScopes(): AccountScope[] {
 // ============================================
 // Extension Event Listeners
 // ============================================
+
+registerEvmDAppSendQueueNotification()
 
 chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') {

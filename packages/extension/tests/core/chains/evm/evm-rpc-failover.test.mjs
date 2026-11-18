@@ -69,6 +69,32 @@ test.describe('EVM RPC endpoint pools', () => {
 })
 
 test.describe('EVM RPC failover', () => {
+  test('restarts a failed nonce observation on one endpoint', async () => {
+    const client = createEvmRpcFailoverClient(
+      {
+        chainId: 'eip155:1',
+        endpoints: [
+          { id: 'primary', label: 'Primary', url: 'https://primary.example' },
+          { id: 'fallback', label: 'Fallback', url: 'https://fallback.example' }
+        ]
+      },
+      async (url, init) => {
+        const request = JSON.parse(init.body)
+        if (request.method === 'eth_chainId') return rpcResponse(request.id, '0x1')
+        if (url === 'https://fallback.example/') return rpcResponse(request.id, '0xa')
+        if (request.params[1] === 'pending') return rpcResponse(request.id, '0x9')
+        return new Response('', { status: 429 })
+      }
+    )
+
+    await expect(
+      client.withNonceQueueEndpoint(async rpc => ({
+        pending: await rpc.getPendingNonce(ADDRESS),
+        latest: await rpc.getTransactionCount(ADDRESS, 'latest')
+      }))
+    ).resolves.toEqual({ pending: '10', latest: '10' })
+  })
+
   test('falls back from a rate-limited endpoint and keeps the healthy endpoint active', async () => {
     const requests = []
     const client = createEvmRpcFailoverClient(

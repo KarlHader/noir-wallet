@@ -68,7 +68,13 @@ import {
 } from './evm-pending-transfer-store'
 import { classifyEvmContractCall, createEvmTransferGraph } from './evm-transaction-graph'
 import { broadcastSignedEvmTransaction } from './evm-transaction-observer'
-import type { EvmBroadcastRpc, EvmDAppReadRpc, EvmTransactionRpc } from './evm-rpc-client'
+import {
+  EvmRpcError,
+  type EvmBroadcastRpc,
+  type EvmNonceQueueEndpointSelector,
+  type EvmNonceQueueRpc,
+  type EvmTransactionRpc
+} from './evm-rpc-client'
 import {
   assertSignedEvmTransactionMatchesPrepared,
   createKeystoneSignedEvmTransaction,
@@ -99,11 +105,16 @@ export interface EvmTransferSigningPort {
   ) => Promise<void>
 }
 
+type EvmTransferRpc = EvmTransactionRpc &
+  EvmBroadcastRpc &
+  EvmNonceQueueRpc &
+  Partial<EvmNonceQueueEndpointSelector>
+
 export interface EvmTransferOrchestratorOptions {
   readonly repository: TransactionRepository
   readonly pendingStore: EvmPendingTransferStore
   readonly signer: EvmTransferSigningPort
-  readonly rpc: EvmTransactionRpc & EvmBroadcastRpc & Pick<EvmDAppReadRpc, 'getTransactionCount'>
+  readonly rpc: EvmTransferRpc
   readonly assets: AssetRegistry
   readonly networkMode?: Network
   readonly now?: () => number
@@ -210,6 +221,10 @@ export interface SubmitEvmExternalSignatureInput extends ContinueEvmTransferInpu
 
 const KEYSTONE_EVM_SIGNING_TTL_MS = 10 * 60 * 1000
 
+function nonceQueueUnavailable(): EvmTransactionError {
+  return new EvmTransactionError('nonce-queue-unavailable', 'Unable to verify the EVM send queue')
+}
+
 function normalizeScope(value: TransactionAccountScope): TransactionAccountScope {
   return Object.freeze({
     keyDomainId: parseKeyDomainId(value.keyDomainId),
@@ -234,9 +249,7 @@ export class EvmTransferOrchestrator {
   private readonly repository: TransactionRepository
   private readonly pendingStore: EvmPendingTransferStore
   private readonly signer: EvmTransferSigningPort
-  private readonly rpc: EvmTransactionRpc &
-    EvmBroadcastRpc &
-    Pick<EvmDAppReadRpc, 'getTransactionCount'>
+  private readonly rpc: EvmTransferRpc
   private readonly assets: AssetRegistry
   private readonly networkMode: Network
   private readonly now: () => number
@@ -485,6 +498,7 @@ export class EvmTransferOrchestrator {
         transactionId: pending.transactionId
       })
     }
+    if (queue.uncertainHead) throw nonceQueueUnavailable()
     if (queue.gapHighest === null) return null
     return Object.freeze({
       chainId,
@@ -874,8 +888,6 @@ export class EvmTransferOrchestrator {
     sender: string,
     signal?: AbortSignal
   ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
-    await this.rpc.assertExpectedChain(signal)
-    const pendingNonce = BigInt(await this.rpc.getPendingNonce(sender, signal))
     const persisted = await this.repository.list({
       scope,
       chainId,
@@ -884,26 +896,50 @@ export class EvmTransferOrchestrator {
     })
     const candidates = persisted.flatMap(graph => {
       const nonce = this.graphNonce(graph, chainId, sender)
-      if (nonce === null || nonce < pendingNonce) return []
+      if (nonce === null) return []
       const origin = graph.segments.find(segment => segment.role === 'origin')
       return [{ nonce, hash: origin?.evidence?.transactionHash }]
     })
-    if (candidates.length === 0) {
+    const observe = (rpc: EvmNonceQueueRpc) =>
+      this.observeNonceQueue(rpc, sender, candidates, signal)
+    try {
+      if (this.rpc.withNonceQueueEndpoint) {
+        return await this.rpc.withNonceQueueEndpoint(observe, signal)
+      }
+      await this.rpc.assertExpectedChain(signal)
+      return await observe(this.rpc)
+    } catch (error) {
+      if (error instanceof EvmRpcError && error.code !== 'cancelled') {
+        throw nonceQueueUnavailable()
+      }
+      throw error
+    }
+  }
+
+  private async observeNonceQueue(
+    rpc: EvmNonceQueueRpc,
+    sender: string,
+    candidates: readonly { nonce: bigint; hash: string | undefined }[],
+    signal?: AbortSignal
+  ): Promise<{ nextNonce: bigint; gapHighest: bigint | null; uncertainHead: boolean }> {
+    const pendingNonce = BigInt(await rpc.getPendingNonce(sender, signal))
+    if (!candidates.some(candidate => candidate.nonce >= pendingNonce)) {
       return { nextNonce: pendingNonce, gapHighest: null, uncertainHead: false }
     }
 
-    const latestNonce = BigInt(await this.rpc.getTransactionCount(sender, 'latest', signal))
-    let nextNonce = latestNonce > pendingNonce ? latestNonce : pendingNonce
+    const latestNonce = BigInt(await rpc.getTransactionCount(sender, 'latest', signal))
+    const initialNextNonce = latestNonce > pendingNonce ? latestNonce : pendingNonce
+    let includedFloor = initialNextNonce
     const pending = new Set<bigint>()
     const unresolved = new Set<bigint>()
-    const remaining = candidates.filter(candidate => candidate.nonce >= nextNonce)
+    const remaining = candidates.filter(candidate => candidate.nonce >= initialNextNonce)
     for (let offset = 0; offset < remaining.length; offset += 4) {
       const observations = await Promise.all(
         remaining.slice(offset, offset + 4).map(async ({ nonce, hash }) => {
           if (!hash) return { nonce, status: 'unknown' }
-          const location = await this.rpc.getTransactionLocation(hash, signal)
+          const location = await rpc.getTransactionLocation(hash, signal)
           if (location.status !== 'unknown') return { nonce, status: location.status }
-          const receipt = await this.rpc.getTransactionReceipt(hash, signal)
+          const receipt = await rpc.getTransactionReceipt(hash, signal)
           return {
             nonce,
             status: receipt?.transactionHash === hash.toLowerCase() ? 'included' : 'unknown'
@@ -911,17 +947,30 @@ export class EvmTransferOrchestrator {
         })
       )
       for (const { nonce, status } of observations) {
-        if (status === 'included' && nonce >= nextNonce) nextNonce = nonce + 1n
+        if (status === 'included' && nonce >= includedFloor) includedFloor = nonce + 1n
         if (status === 'pending') pending.add(nonce)
         if (status === 'unknown') unresolved.add(nonce)
       }
     }
+    let nextNonce = includedFloor
     while (pending.has(nextNonce)) nextNonce += 1n
     const uncertainHead = unresolved.has(nextNonce)
     let gapHighest: bigint | null = null
     if (!uncertainHead) {
       for (const nonce of pending) {
         if (nonce > nextNonce && (gapHighest === null || nonce > gapHighest)) gapHighest = nonce
+      }
+    }
+    if (gapHighest !== null || uncertainHead) {
+      const refreshedPending = BigInt(await rpc.getPendingNonce(sender, signal))
+      const refreshedLatest = BigInt(await rpc.getTransactionCount(sender, 'latest', signal))
+      if (
+        refreshedPending !== pendingNonce ||
+        refreshedLatest !== latestNonce ||
+        latestNonce > pendingNonce ||
+        includedFloor > initialNextNonce
+      ) {
+        throw new EvmRpcError('invalid-response', 'The EVM send queue changed during verification')
       }
     }
     return { nextNonce, gapHighest, uncertainHead }
@@ -942,7 +991,7 @@ export class EvmTransferOrchestrator {
       )
     }
     if (queue.uncertainHead) {
-      throw new EvmTransactionError('stale-nonce', 'The earlier EVM nonce could not be verified')
+      throw nonceQueueUnavailable()
     }
     let nonceFloor = queue.nextNonce
     const { active: pendingRecords } = await this.listUnexpiredPendingTransfers(

@@ -1113,7 +1113,7 @@ export function Home() {
             <TabsList className="h-full min-w-0 flex-1 justify-start gap-7 rounded-none bg-transparent! p-0">
               <TabsTrigger
                 value="assets"
-                className="tab-trigger-custom h-full flex-0 rounded-none px-0 py-0 text-base font-normal text-wallet-secondary data-[state=active]:text-white after:max-w-11"
+                className="tab-trigger-custom -mx-2 h-full flex-0 rounded-none px-2 py-0 text-base font-normal text-wallet-secondary data-[state=active]:text-white after:max-w-11"
               >
                 {ASSET_DOMAIN_LABELS[assetDomain]}
               </TabsTrigger>

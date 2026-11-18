@@ -144,7 +144,7 @@ function BalanceReadError({
   )
 }
 
-function UnloadedChainBalance({
+function UnavailableChainBalance({
   chain,
   balancesHidden = false,
   onRetry,
@@ -155,12 +155,11 @@ function UnloadedChainBalance({
   readonly onRetry?: () => void
   readonly disabled?: boolean
 }) {
-  const unavailable = getPortfolioChainBalanceStatus(chain) === 'unavailable'
   if (chain.chain.family === 'zcash') {
     return (
       <div
         role="status"
-        aria-label={`ZEC balance ${unavailable ? 'unavailable' : 'loading'}`}
+        aria-label="ZEC balance unavailable"
         className={portfolioAssetRowClassName}
       >
         <PortfolioAssetRowContent
@@ -174,26 +173,15 @@ function UnloadedChainBalance({
             />
           }
           title={<p className="truncate text-base font-medium">ZEC</p>}
-          subtitle={
-            unavailable ? (
-              <BalanceReadError chain={chain} onRetry={onRetry} disabled={disabled} />
-            ) : (
-              <Skeleton className="mt-1 h-3 w-20" />
-            )
-          }
+          subtitle={<BalanceReadError chain={chain} onRetry={onRetry} disabled={disabled} />}
           balance={
             balancesHidden ? (
               <>
                 <p className="text-base font-medium">••••</p>
                 <p className="mt-0.5 text-xs text-muted">••••</p>
               </>
-            ) : unavailable ? (
-              <span className="text-xs text-muted">Unavailable</span>
             ) : (
-              <>
-                <Skeleton className="ml-auto h-4 w-16" />
-                <Skeleton className="ml-auto mt-1 h-3 w-20" />
-              </>
+              <span className="text-xs text-muted">Unavailable</span>
             )
           }
         />
@@ -203,7 +191,7 @@ function UnloadedChainBalance({
   return (
     <div
       role="status"
-      aria-label={`${chain.chain.displayName} balance ${unavailable ? 'unavailable' : 'loading'}`}
+      aria-label={`${chain.chain.displayName} balance unavailable`}
       className="flex min-h-16 items-center gap-3 rounded-xl bg-card/60 px-3 py-3"
     >
       <ChainIcon
@@ -214,17 +202,9 @@ function UnloadedChainBalance({
       />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{chain.chain.displayName}</p>
-        {unavailable ? (
-          <BalanceReadError chain={chain} onRetry={onRetry} disabled={disabled} />
-        ) : (
-          <Skeleton className="mt-1.5 h-3 w-20" />
-        )}
+        <BalanceReadError chain={chain} onRetry={onRetry} disabled={disabled} />
       </div>
-      {unavailable ? (
-        <span className="text-xs text-muted">Unavailable</span>
-      ) : (
-        <Skeleton className="h-4 w-16" />
-      )}
+      <span className="text-xs text-muted">Unavailable</span>
     </div>
   )
 }
@@ -379,8 +359,11 @@ export function PortfolioShell({
     [selectableChains, prices]
   )
   const showContent = model.status === 'ready' || model.status === 'partial'
-  const unloadedChains = visibleChains.filter(
-    chain => chain.assets.length === 0 && getPortfolioChainBalanceStatus(chain) !== 'ready'
+  const unavailableChains = visibleChains.filter(
+    chain => chain.assets.length === 0 && getPortfolioChainBalanceStatus(chain) === 'unavailable'
+  )
+  const hasPendingBalances = visibleChains.some(
+    chain => getPortfolioChainBalanceStatus(chain) === 'loading'
   )
   // Balances arrive from cache before prices resolve; show price/fiat skeletons
   // instead of a bare em dash until the first price model lands.
@@ -496,9 +479,9 @@ export function PortfolioShell({
       )}
 
       <div className="min-h-0 flex-1 pb-4">
-        {model.status === 'loading' && unloadedChains.length === 0 ? (
+        {model.status === 'loading' && visibleConfidential.length === 0 ? (
           <LoadingPanel />
-        ) : model.status === 'error' && unloadedChains.length === 0 ? (
+        ) : model.status === 'error' && unavailableChains.length === 0 ? (
           <StatePanel
             icon="lucide:wifi-off"
             title="Unable to load portfolio"
@@ -515,7 +498,8 @@ export function PortfolioShell({
           view === 'assets' &&
           assetGroups.length === 0 &&
           visibleConfidential.length === 0 &&
-          unloadedChains.length === 0 ? (
+          unavailableChains.length === 0 &&
+          !hasPendingBalances ? (
           <StatePanel
             icon="lucide:wallet-cards"
             title={selectedChainIds.length === 1 ? 'No assets on this network' : 'No assets found'}
@@ -534,8 +518,8 @@ export function PortfolioShell({
                 onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
               />
             ))}
-            {unloadedChains.map(chain => (
-              <UnloadedChainBalance
+            {unavailableChains.map(chain => (
+              <UnavailableChainBalance
                 key={chain.chain.id}
                 chain={chain}
                 balancesHidden={balancesHidden}
@@ -579,6 +563,7 @@ export function PortfolioShell({
           <div className="divide-y divide-white/[0.08] pb-2">
             {displayedChains.map(chain => {
               const expanded = expandedChainIds.has(chain.chain.id)
+              const balanceStatus = getPortfolioChainBalanceStatus(chain)
               const confidentialEntries = visibleConfidential.filter(
                 item => item.chain?.chain.id === chain.chain.id
               )
@@ -628,17 +613,16 @@ export function PortfolioShell({
                       {chain.chain.displayName}
                     </span>
                     {!balancesHidden &&
-                    chain.assets.length === 0 &&
-                    getPortfolioChainBalanceStatus(chain) === 'loading' ? (
-                      <Skeleton className="h-3 w-14" />
-                    ) : !balancesHidden && chainFiat === null && pricesLoading ? (
+                    chainFiat === null &&
+                    pricesLoading &&
+                    balanceStatus !== 'loading' ? (
                       <Skeleton className="h-3 w-14" />
                     ) : (
                       <span className="text-base font-medium">
                         {balancesHidden
                           ? '••••'
                           : chainFiat === null
-                            ? getPortfolioChainBalanceStatus(chain) === 'unavailable'
+                            ? balanceStatus === 'unavailable' || balanceStatus === 'loading'
                               ? '—'
                               : formatFiatAmount('0', { showSign: true })
                             : formatFiatAmount(chainFiat, { showSign: true })}
@@ -651,25 +635,21 @@ export function PortfolioShell({
                       className={cn('text-muted transition-transform', expanded && 'rotate-180')}
                     />
                   </button>
-                  {chain.chain.family === 'zcash' &&
-                    getPortfolioChainBalanceStatus(chain) === 'unavailable' && (
-                      <div className="px-4 pb-2 pl-16">
-                        <BalanceReadError
-                          chain={chain}
-                          hasBalance={chain.assets.length > 0}
-                          onRetry={onRefresh}
-                          disabled={refreshDisabled}
-                        />
-                      </div>
-                    )}
+                  {chain.chain.family === 'zcash' && balanceStatus === 'unavailable' && (
+                    <div className="px-4 pb-2 pl-16">
+                      <BalanceReadError
+                        chain={chain}
+                        hasBalance={chain.assets.length > 0}
+                        onRetry={onRefresh}
+                        disabled={refreshDisabled}
+                      />
+                    </div>
+                  )}
                   {expanded &&
                     chain.assets.length === 0 &&
-                    !(
-                      chain.chain.family === 'zcash' &&
-                      getPortfolioChainBalanceStatus(chain) === 'unavailable'
-                    ) &&
-                    getPortfolioChainBalanceStatus(chain) !== 'ready' && (
-                      <UnloadedChainBalance
+                    chain.chain.family !== 'zcash' &&
+                    balanceStatus === 'unavailable' && (
+                      <UnavailableChainBalance
                         chain={chain}
                         balancesHidden={balancesHidden}
                         onRetry={onRefresh}

@@ -16,6 +16,7 @@ import {
   type EvmBroadcastRpc,
   type EvmContractRpc,
   type EvmDAppReadRpc,
+  type EvmNonceQueueEndpointSelector,
   type EvmTransactionRpc
 } from './evm-rpc-client'
 import { createEvmRpcFailoverClient } from './evm-rpc-failover-client'
@@ -38,7 +39,12 @@ const evmHistoryApiOrigin =
 export function createConfiguredEvmRpcClient(
   network: Network,
   configuredNetwork: EvmNetworkConfig = getEvmNetworkConfig(network)
-): EvmBalanceRpc & EvmContractRpc & EvmTransactionRpc & EvmBroadcastRpc & EvmDAppReadRpc {
+): EvmBalanceRpc &
+  EvmContractRpc &
+  EvmTransactionRpc &
+  EvmBroadcastRpc &
+  EvmDAppReadRpc &
+  EvmNonceQueueEndpointSelector {
   const builtin = findBuiltinEvmNetworkConfig(network, configuredNetwork.chainId)
   const bundled = builtin ? getEvmRpcEndpointOptions(network, configuredNetwork.chainId) : []
   const preferredUrl = new URL(configuredNetwork.rpcUrl).toString()

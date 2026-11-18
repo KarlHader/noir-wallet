@@ -153,6 +153,17 @@ export interface EvmBroadcastRpc {
   readonly getFinalizedBlockNumber: (signal?: AbortSignal) => Promise<string>
 }
 
+export type EvmNonceQueueRpc = Pick<EvmTransactionRpc, 'assertExpectedChain' | 'getPendingNonce'> &
+  Pick<EvmDAppReadRpc, 'getTransactionCount'> &
+  Pick<EvmBroadcastRpc, 'getTransactionLocation' | 'getTransactionReceipt'>
+
+export interface EvmNonceQueueEndpointSelector {
+  readonly withNonceQueueEndpoint: <Result>(
+    operation: (rpc: EvmNonceQueueRpc) => Promise<Result>,
+    signal?: AbortSignal
+  ) => Promise<Result>
+}
+
 type FetchImplementation = (input: string, init: RequestInit) => Promise<Response>
 
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = 1024 * 1024

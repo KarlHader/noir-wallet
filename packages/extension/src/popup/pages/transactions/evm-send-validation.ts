@@ -311,6 +311,7 @@ export function getEvmSendPrepareError(error: unknown, sourceMode: EvmSendSource
   if (error.code === 'nonce-recovery-required') {
     return 'An earlier transaction needs attention. Open Activity to resolve its nonce before sending.'
   }
+  if (error.code === 'nonce-queue-unavailable') return error.message
   if (error.code === 'account-unavailable') return 'This wallet does not have an EVM account.'
   if (error.code === 'expired') return 'The review expired. Prepare the transfer again.'
   if (error.code === 'review-unavailable') {

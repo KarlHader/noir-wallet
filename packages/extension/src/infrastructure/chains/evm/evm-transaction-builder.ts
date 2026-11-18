@@ -45,6 +45,7 @@ export const EVM_TRANSACTION_ERROR_CODES = Object.freeze([
   'simulation-failed',
   'stale-nonce',
   'nonce-recovery-required',
+  'nonce-queue-unavailable',
   'fee-overflow'
 ] as const)
 

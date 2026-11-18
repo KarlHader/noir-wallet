@@ -36,6 +36,9 @@ export function mapEvmWalletRuntimeError(
   if (error instanceof EvmTransactionError && error.code === 'nonce-recovery-required') {
     return createEvmWalletRuntimeError('nonce-recovery-required')
   }
+  if (error instanceof EvmTransactionError && error.code === 'nonce-queue-unavailable') {
+    return createEvmWalletRuntimeError('nonce-queue-unavailable')
+  }
   if (
     error instanceof EvmRpcError &&
     (error.code === 'timeout' ||
