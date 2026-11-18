@@ -23,6 +23,9 @@ function isolated(profile, features, options = {}) {
 
 const projects = {
   extension: isolated('mainnet-zcash-regression', '', { workers: 4 }),
+  multisig: isolated('mainnet-zcash-regression', '', {
+    env: { FROST_MULTISIG_UI: '1' }
+  }),
   'release-default': isolated('mainnet-release-default', undefined, {
     prepareExample: true,
     env: { ...testReleaseEnvironment, BUILD_CHANNEL: 'beta', E2E_SCREENSHOTS: '1' }

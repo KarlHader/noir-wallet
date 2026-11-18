@@ -17,6 +17,14 @@ export function multisigTeamRoute(scope: MultisigTabScope): string {
   return multisigRoute('team', scope)
 }
 
+export function multisigSendRoute(scope: MultisigGroupScope): string {
+  return `${MULTISIG_ROUTE_PREFIX}/send?${new URLSearchParams({ ...scope }).toString()}`
+}
+
+export async function openMultisigSendTab(scope: MultisigGroupScope): Promise<void> {
+  await chrome.tabs.create({ url: chrome.runtime.getURL(`index.html#${multisigSendRoute(scope)}`) })
+}
+
 // Chrome rejects requestDevice() without showing the Bluetooth chooser in the popup, the side panel
 // and popup-type windows, and the first camera prompt fails the same way in the popup and side
 // panel, so the flow always runs in a full tab.

@@ -163,7 +163,25 @@ import {
   isVaultRpcBlocked
 } from '@/core/multisig/multisig-runtime-policy'
 import { isVaultGroupMethod } from '@/core/multisig/vault-group-rpc'
+import { isVaultSendMethod } from '@/core/multisig/send-rpc'
 import { createMultisigVaultHandler } from './multisig-vault'
+import { createMultisigSendHandler } from './multisig-send'
+import { forwardPageWorkerRpcWithAccountAuthority } from './page-worker-account-authority'
+import { assertAccountOperationAllowed } from '@/core/accounts/application/account-capability-policy'
+import { createSigningJournal } from '@/lib/multisig-signing-storage'
+import { FrostAccountMetadataCoordinator } from '@/infrastructure/keyring/frost-account-metadata-coordinator'
+import {
+  IndexedDbCredentialRepository,
+  IndexedDbStorageV2Repository
+} from '@/infrastructure/persistence/repositories'
+import {
+  readCreationOperation,
+  listCreationOperations,
+  saveCreationOperation,
+  removeCreationOperation
+} from '@/lib/multisig-creation-storage'
+import { withUndeletedWalletAccountMetadata, WALLET_STATE_KEY } from '@/lib/wallet-metadata-storage'
+import { writeMultisigGroup } from '@/lib/multisig-group-storage'
 import { readVaultRecord, saveVaultRecordVerified } from '@/lib/multisig-vault-storage'
 import { readMultisigGroup } from '@/lib/multisig-group-storage'
 import { authorizeMultichainExtensionCommand } from './multichain-rpc-policy'
@@ -208,6 +226,7 @@ import {
 } from './rhea-swap-near'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import { parseAccountId } from '@/core/accounts/domain'
+import { isDerivedAccount } from '@/core/accounts/domain/account-source'
 import { isAssetMarketHistoryRange } from '@/core/prices'
 import { UnsupportedAssetMarketHistoryError } from '@/infrastructure/prices'
 import {
@@ -1551,6 +1570,7 @@ async function prepareSoftwareWalletNetworkMetadata(target: Network): Promise<vo
       target
     )
     for (const account of wallet.accounts) {
+      if (!isDerivedAccount(account)) continue
       const zcash = zcashAddresses[account.id]
       if (!zcash) throw new Error('Unable to derive the target Zcash Account')
       const bitcoin = await networkSwitchBitcoinDerivation.deriveAddress(
@@ -2971,7 +2991,24 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
       return true
     }
 
-    void forwardKeyringRpcToOffscreen(rpcMessage.method, rpcMessage.payload)
+    if (isVaultSendMethod(rpcMessage.method)) {
+      void multisigSend
+        .handle(rpcMessage.method, rpcMessage.payload)
+        .then(result => sendResponse({ result }))
+        .catch(() =>
+          sendResponse({ error: 'Multisig signing is unavailable. Review this action again.' })
+        )
+      return true
+    }
+
+    void forwardPageWorkerRpcWithAccountAuthority(rpcMessage.method, rpcMessage.payload, {
+      readActive: () => ({
+        account: backgroundZcashWalletRuntime.getCurrentAccount(),
+        network: backgroundZcashWalletRuntime.getNetwork()
+      }),
+      runActiveOperation: operation => accountContextTransition.runActiveOperation(operation),
+      forward: forwardKeyringRpcToOffscreen
+    })
       .then(result => sendResponse({ result }))
       .catch(error => {
         sendResponse(encodeWorkerRpcError(error))
@@ -4133,7 +4170,9 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
 
   if (message.type === 'GET_ACCOUNT_NETWORKS') {
     void accountNetworksCoordinator
-      .readCatalog()
+      .readCatalog({
+        deriveMissingAddresses: message.deriveMissingAddresses as boolean | undefined
+      })
       .then(result => sendResponse({ result }))
       .catch(error => {
         console.warn(
@@ -5001,14 +5040,22 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
     message.type === 'ESTIMATE_ZCASH_MAX_TRANSFER' ||
     message.type === 'ESTIMATE_ZCASH_SHIELD_FEE'
   ) {
-    const activeWalletId = useWalletStore.getState().currentWalletId || undefined
     const debugRequestId =
       typeof message.debugRequestId === 'string' ? message.debugRequestId : undefined
     const measure = <T>(stage: string, operation: () => Promise<T>): Promise<T> =>
       debugRequestId ? traceDebugStage(debugRequestId, stage, operation) : operation()
     measure('background-account-transition', () =>
-      accountContextTransition.runActiveOperation(() =>
-        withTxSyncPause(activeWalletId, async () => {
+      accountContextTransition.runActiveOperation(async () => {
+        await rehydrateWalletStore()
+        const state = useWalletStore.getState()
+        const account = state.getCurrentAccount()
+        if (!account) throw new Error('Active Account is unavailable for fee estimation')
+        assertAccountOperationAllowed(
+          account,
+          message.type === 'ESTIMATE_ZCASH_SHIELD_FEE' ? 'shield' : 'send',
+          state.currentNetwork
+        )
+        return withTxSyncPause(state.currentWalletId || undefined, async () => {
           await measure('background-prepare-wallet-core', prepareWalletCoreForTx)
           if (message.type === 'ESTIMATE_ZCASH_SHIELD_FEE') {
             return measure('background-estimate-shield-fee', () =>
@@ -5042,7 +5089,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
             )
           )
         })
-      )
+      })
     )
       .then(result => sendResponse({ success: true, ...result }))
       .catch(error =>
@@ -5725,7 +5772,7 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
         await assertActiveBackgroundAccountScope(request.walletId, request.accountId)
         const wallet = useWalletStore.getState().getWallet(request.walletId)
         const account = wallet?.accounts.find(item => item.id === request.accountId)
-        if (wallet?.keySource !== 'ledger' || !account) {
+        if (wallet?.keySource !== 'ledger' || !account || !isDerivedAccount(account)) {
           throw new Error('Ledger account is no longer active')
         }
         if (request.dappRequestId) {
@@ -5992,19 +6039,32 @@ const handleRuntimeMessage: Parameters<typeof chrome.runtime.onMessage.addListen
   return false
 }
 
+const frostAccountMetadata = new FrostAccountMetadataCoordinator(
+  new IndexedDbCredentialRepository(),
+  new IndexedDbStorageV2Repository()
+)
 const multisigVault = createMultisigVaultHandler({
   readWalletState: async () => {
-    await rehydrateWalletStore()
+    // Creation holds the metadata deletion lock, so hydration (which takes that lock) cannot run here.
+    const raw = (await chrome.storage.local.get(WALLET_STATE_KEY))[WALLET_STATE_KEY]
+    const retained = typeof raw === 'string' ? JSON.parse(raw) : raw
     const state = useWalletStore.getState()
     return {
       network: state.currentNetwork,
       activeWalletId: state.currentWalletId,
-      wallets: state.wallets.map(wallet => ({
-        id: wallet.id,
-        // Same test as the multisig setup page: only a recovery-phrase wallet can seal a share.
-        mnemonic: !isZcashHardwareKeySource(wallet.keySource) && wallet.keySource !== 'private-key',
-        accountIds: wallet.accounts.map(account => account.id)
-      }))
+      activeAccountId: state.currentAccountId,
+      wallets: ((retained?.state?.wallets ?? []) as import('@/types/wallet').WalletItem[]).map(
+        wallet => ({
+          id: wallet.id,
+          // Same test as the multisig setup page: only a recovery-phrase wallet can seal a share.
+          mnemonic:
+            !isZcashHardwareKeySource(wallet.keySource) && wallet.keySource !== 'private-key',
+          accountIds: wallet.accounts.map(account => account.id),
+          derivedAccountIds: wallet.accounts
+            .filter(account => !account.source)
+            .map(account => account.id)
+        })
+      )
     }
   },
   isUnlocked: () => credentialSession.hasUnlockSession(),
@@ -6012,8 +6072,81 @@ const multisigVault = createMultisigVaultHandler({
   forwardToWorker: (method, payload) => forwardKeyringRpcToOffscreen(method, payload),
   readRecord: readVaultRecord,
   saveRecord: saveVaultRecordVerified,
-  readGroupId: async scope => (await readMultisigGroup(scope))?.groupId ?? null
+  readGroupId: async scope => (await readMultisigGroup(scope))?.groupId ?? null,
+  creation: {
+    withMutation: async (walletId, operation) => {
+      syncScheduler.pauseForTx()
+      try {
+        if (!(await syncScheduler.quiesceWalletForMutation(walletId)))
+          throw new Error('Wallet sync did not stop before multisig account setup')
+        return await operation()
+      } finally {
+        syncScheduler.resumeAfterTx()
+      }
+    },
+    birthdayHeight: () => backgroundZcashWalletRuntime.resolveNewZcashBirthdayHeight(),
+    read: readCreationOperation,
+    list: listCreationOperations,
+    write: saveCreationOperation,
+    remove: removeCreationOperation,
+    withScope: (scope, operation) =>
+      withUndeletedWalletAccountMetadata(
+        scope.walletId,
+        scope.accountId,
+        scope.network as 'mainnet' | 'testnet',
+        operation
+      ),
+    register: (walletId, account, record) =>
+      backgroundZcashWalletRuntime.registerFrostAccount(walletId, account, record),
+    commitMetadata: (op, account, assertAuthorized) =>
+      frostAccountMetadata.commit(op, account, assertAuthorized),
+    saveGroup: writeMultisigGroup
+  }
 })
+void multisigVault.resumePending().catch(() => {})
+
+const multisigSend = createMultisigSendHandler({
+  journal: createSigningJournal(),
+  withScope: (scope, operation) =>
+    withUndeletedWalletAccountMetadata(
+      scope.walletId,
+      scope.accountId,
+      scope.network as 'mainnet' | 'testnet',
+      operation
+    ),
+  readWalletState: async () => {
+    const raw = (await chrome.storage.local.get(WALLET_STATE_KEY))[WALLET_STATE_KEY]
+    const retained = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const state = useWalletStore.getState()
+    return {
+      network: state.currentNetwork,
+      activeWalletId: state.currentWalletId,
+      activeAccountId: state.currentAccountId,
+      wallets: ((retained?.state?.wallets ?? []) as import('@/types/wallet').WalletItem[]).map(
+        wallet => ({
+          id: wallet.id,
+          software: wallet.keySource === undefined || wallet.keySource === 'software',
+          accounts: wallet.accounts.map(account => ({ id: account.id, source: account.source }))
+        })
+      )
+    }
+  },
+  isUnlocked: () => credentialSession.hasUnlockSession(),
+  bindCredential: walletId => credentialSession.bindZcashCredential(walletId),
+  readRecord: readVaultRecord,
+  readGroup: readMultisigGroup,
+  readCreationReady: async (scope, groupId) => {
+    const operation = await readCreationOperation(scope)
+    return operation?.phase === 'ready' && operation.groupId === groupId
+  },
+  getFeeQuote: () => backgroundZcashWalletRuntime.getFeeQuote(),
+  getCredentialBinding: walletId => credentialSession.getCredentialBinding(walletId),
+  forwardToWorker: (method, payload) => forwardKeyringRpcToOffscreen(method, payload)
+})
+accountContextTransition.registerInvalidator({
+  invalidate: request => multisigSend.invalidate(request)
+})
+void multisigSend.recoverPending().catch(() => {})
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (isRuntimeRecord(message) && message.type === 'REFRESH_EXTENSION_UPDATE') {
@@ -6332,7 +6465,10 @@ function handleWalletUnlock(password: string): Promise<any> {
     const result = await accountContextTransition.runActiveOperation(() =>
       performWalletUnlock(password)
     )
-    if (result?.success) await walletCleanupCoordinator.resumePendingCleanup()
+    if (result?.success) {
+      await walletCleanupCoordinator.resumePendingCleanup()
+      void multisigVault.resumePending().catch(() => {})
+    }
     return result
   })
 }
@@ -6581,11 +6717,15 @@ async function completeWalletLock(
 }
 
 function handleWalletLock(): Promise<void> {
+  // Mark sessions stale synchronously; the returned task confirms Worker destruction before
+  // journal interruption, without holding the metadata/account-transition lock.
+  const signingQuiesced = multisigSend.invalidate().catch(() => {})
   const syncQuiesced = beginWalletLockQuiesce()
   return enqueueWalletSessionTransition(async () => {
     backgroundZcashWalletRuntime.beginLock()
     await credentialSession.lock().catch(() => {})
     await completeWalletLock(syncQuiesced)
+    await signingQuiesced.catch(() => {})
   }).catch(async error => {
     await chrome.alarms
       .create(WALLET_AUTO_LOCK_ALARM, { when: Date.now() + 60_000 })
@@ -6614,6 +6754,7 @@ async function performWalletLockState(): Promise<void> {
       forwardKeyringRpcToOffscreen<boolean>('worker.recreate', { walletId: '__global_lock__' })
     ])
     const workerFailure = workerResults.find(result => result.status === 'rejected')
+    if (!workerFailure) await multisigSend.invalidate()
     if (workerFailure) {
       const offscreenAlive = await chrome.offscreen?.hasDocument?.().catch(() => true)
       if (offscreenAlive !== false) {
@@ -6637,6 +6778,7 @@ async function performWalletLockState(): Promise<void> {
 }
 
 async function performKeyringRuntimesResetAfterCredentialChange(): Promise<void> {
+  const signingQuiesced = multisigSend.invalidate().catch(() => {})
   pendingRequestsManager.cancelAll()
   syncScheduler.abortSync()
   const [zcashResult, ...results] = await Promise.allSettled([
@@ -6653,6 +6795,8 @@ async function performKeyringRuntimesResetAfterCredentialChange(): Promise<void>
     }
   }
   if (zcashResult.status === 'rejected') throw zcashResult.reason
+  await signingQuiesced.catch(() => {})
+  await multisigSend.invalidate()
 }
 
 /**
@@ -7129,7 +7273,12 @@ async function handleHardwarePcztBuild(params: {
     await assertActiveBackgroundAccountScope(walletId, accountId)
     const wallet = useWalletStore.getState().getWallet(walletId)
     const account = wallet?.accounts.find(item => item.id === accountId)
-    if (!wallet || !account || !isZcashHardwareKeySource(wallet.keySource)) {
+    if (
+      !wallet ||
+      !account ||
+      !isDerivedAccount(account) ||
+      !isZcashHardwareKeySource(wallet.keySource)
+    ) {
       throw new Error('Select an active hardware account')
     }
     const vendor = wallet.keySource

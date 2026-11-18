@@ -1,4 +1,5 @@
 import type { AccountNetworksCatalogView } from '@/popup/services/account-networks-client'
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type {
   LedgerHardwareCredential,
   LedgerPublicAccount
@@ -55,6 +56,7 @@ export function ledgerCatalogWallets(catalog: AccountNetworksCatalogView | null)
   >()
   for (const account of catalog?.accounts ?? []) {
     if (
+      !isDerivedAccount(account) ||
       account.walletSource.kind !== 'hardware' ||
       account.walletSource.hardware.vendor !== 'ledger'
     )

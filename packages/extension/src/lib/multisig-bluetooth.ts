@@ -1,3 +1,5 @@
+import type { BluetoothDeviceLike } from '@/core/multisig/ble/link'
+
 /** The options of `navigator.bluetooth.requestDevice` this wallet uses. */
 export interface BluetoothDeviceQuery {
   acceptAllDevices?: boolean
@@ -6,14 +8,11 @@ export interface BluetoothDeviceQuery {
 }
 
 export type BluetoothSelection =
-  | { status: 'selected'; id: string; name: string | null }
+  | { status: 'selected'; id: string; name: string | null; device?: BluetoothDeviceLike }
   | { status: 'cancelled' }
   | { status: 'unavailable' }
 
-interface RequestedBluetoothDevice {
-  id: string
-  name?: string
-}
+type RequestedBluetoothDevice = BluetoothDeviceLike
 
 // TypeScript's DOM library does not declare Web Bluetooth yet.
 interface BluetoothNavigator {
@@ -42,10 +41,9 @@ export async function chooseBluetoothDevice(
 
   try {
     const device = await bluetooth.requestDevice(query)
-    return { status: 'selected', id: device.id, name: device.name || null }
+    return { status: 'selected', id: device.id, name: device.name || null, device }
   } catch (error) {
     if (isChooserCancelled(error)) return { status: 'cancelled' }
-    console.error('Bluetooth chooser failed', error)
     return { status: 'unavailable' }
   }
 }

@@ -1,10 +1,13 @@
+import type { ActiveSolanaTransferContext } from './solana-transfer-controller'
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
-import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
+import { emitDAppEvent, observeDAppRequest } from './dapp-analytics'
+import type { DAppAnalyticsSink } from './dapp-analytics'
 import type { KeyDomainId } from '@/core/keyring/domain'
-import {
-  NativeTransferProviderError,
-  type NativeTransferDAppRuntimeMethod,
-  type SolanaDAppRuntimeMethod
+import { NativeTransferProviderError } from '@/core/dapp/native-transfer-provider'
+import type {
+  NativeTransferDAppRuntimeMethod,
+  SolanaDAppRuntimeMethod
 } from '@/core/dapp/native-transfer-provider'
 import { parseCanonicalBase64 } from '@/infrastructure/chains/solana/solana-rpc-codecs'
 import type {
@@ -15,7 +18,6 @@ import type {
 } from '@/infrastructure/chains/solana/solana-rpc-types'
 import type { SolanaMultichainSigningClient } from '@/infrastructure/keyring/multichain/solana-signing-client'
 import type {
-  ActiveNativeTransferContext,
   BackgroundNativeTransferDAppHandler,
   NativeTransferDAppTabInfo
 } from './native-transfer-dapp-handler'
@@ -47,7 +49,7 @@ export interface SolanaDAppRequest {
 }
 
 export interface AuthorizedSolanaDAppAccount {
-  readonly context: ActiveNativeTransferContext
+  readonly context: ActiveSolanaTransferContext
   readonly reference: { readonly walletId: KeyDomainId; readonly accountId: string }
   readonly address: string
 }
@@ -262,6 +264,8 @@ export class BackgroundSolanaDAppHandler {
     tabInfo: NativeTransferDAppTabInfo
   ): Promise<string> {
     const active = await this.options.loadAuthorizedAccount(origin)
+    if (!isDerivedAccount(active.context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (
       active.context.keyDomainSource.kind === 'hardware' &&
       (active.context.keyDomainSource.vendor !== 'ledger' ||
@@ -392,6 +396,8 @@ export class BackgroundSolanaDAppHandler {
     tabInfo: NativeTransferDAppTabInfo
   ): Promise<Readonly<Record<string, string>>> {
     const active = await this.options.loadAuthorizedAccount(origin)
+    if (!isDerivedAccount(active.context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (active.context.keyDomainSource.kind === 'hardware') {
       throw new NativeTransferProviderError(
         4200,

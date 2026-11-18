@@ -33,6 +33,19 @@ test.describe('multisig messages', () => {
     expect(parseEnvelope(valid)).toEqual(valid)
   })
 
+  test('accepts iOS signing carriers with their fixed rounds', () => {
+    for (const [message_type, round] of [
+      ['SIGN_INIT', 1],
+      ['SIGN_COMMITMENTS', 1],
+      ['SIGN_PAYLOAD', 3],
+      ['SIGN_SHARE', 3],
+      ['SIGN_REJECT', 3],
+      ['SIGN_RESULT', 3]
+    ] as const) {
+      expect(parseEnvelope({ ...valid, message_type, round })?.message_type).toBe(message_type)
+    }
+  })
+
   test('thresholdRequiresManualR1Check only for qr with three devices', () => {
     expect(thresholdRequiresManualR1Check('2-of-3', 'qr')).toBe(true)
     expect(thresholdRequiresManualR1Check('2-of-2', 'qr')).toBe(false)

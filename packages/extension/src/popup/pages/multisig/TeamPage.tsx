@@ -1,4 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { readCreationOperation } from '@/lib/multisig-creation-storage'
+import { requestVaultGroup } from '@/core/worker/client'
+import { InlineError } from '@/popup/components/common/InlineError'
 import { Icon } from '@iconify/react'
 import type { MultisigThreshold } from '@/core/multisig/types'
 import { DeviceCard } from '@/popup/components/multisig/DeviceCard'
@@ -49,7 +52,28 @@ export function TeamPage() {
   const scope: MultisigGroupScope | null =
     walletId && accountId ? { network, walletId, accountId } : null
   const group = useMultisigGroup(scope)
-  useCreatedToast(params.get('created') === '1')
+  const [ready, setReady] = useState(false)
+  const [readyCheck, setReadyCheck] = useState(0)
+  useEffect(() => {
+    let disposed = false
+    setReady(false)
+    if (!walletId || !accountId || !group || group.mock) return
+    const scope = { network, walletId, accountId }
+    void readCreationOperation(scope)
+      .then(async operation => {
+        if (!operation) return
+        const reply = await requestVaultGroup('vault.group.status', {
+          scope,
+          operationId: operation.operationId
+        })
+        if (!disposed) setReady(reply.phase === 'ready')
+      })
+      .catch(() => {})
+    return () => {
+      disposed = true
+    }
+  }, [network, walletId, accountId, group, readyCheck])
+  useCreatedToast(params.get('created') === '1' && ready)
 
   // This page runs in the multisig tab, which has no wallet page behind it to go back to.
   const handleDone = () => {
@@ -97,6 +121,32 @@ export function TeamPage() {
   }
 
   const ownerName = group.devices.find(device => device.role === 'owner')?.name
+  if (group.mock)
+    return (
+      <MultisigTabLayout
+        step={null}
+        title="Older multisig setup"
+        showBack={false}
+        footer={<FlowButton onClick={handleDone}>Close</FlowButton>}
+      >
+        <InlineError message="This older setup is a display record. It has not been verified as an independent multisig account. Its original data is retained." />
+      </MultisigTabLayout>
+    )
+  if (!group.mock && !ready)
+    return (
+      <MultisigTabLayout
+        step={null}
+        title="Finish account setup"
+        showBack={false}
+        footer={
+          <FlowButton onClick={() => setReadyCheck(value => value + 1)}>
+            Retry setup check
+          </FlowButton>
+        }
+      >
+        <InlineError message="Account setup has not been confirmed ready. Unlock this wallet and retry to finish." />
+      </MultisigTabLayout>
+    )
 
   return (
     <MultisigTabLayout

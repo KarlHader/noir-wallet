@@ -2,6 +2,7 @@ import {
   buildChainAccountVerificationAnchorRef,
   parseChainAccountVerificationAnchorRef
 } from '@/core/keyring/application'
+import { isDerivedAccount, type DerivedChainAccount } from '@/core/accounts/domain'
 import type { CredentialEngine, CredentialSetManifest } from '@/core/keyring/domain'
 import { getBitcoinChainId, getZcashChainId } from '@/core/chains/registry'
 import type { StoredHardwareCredential } from '@/core/wallet/hardware-wallet-data'
@@ -40,13 +41,14 @@ export function selectAccountRemovalAnchors(
   manifest: CredentialSetManifest
 ): AccountRemovalAnchors {
   const remaining = source.accounts
+    .filter(isDerivedAccount)
     .filter(account => account.keyDomainId === keyDomainId && account.id !== accountId)
     .sort((a, b) => a.accountIndex - b.accountIndex || a.id.localeCompare(b.id))
   const replacements: Partial<Record<CredentialEngine, ChainAccount>> = {}
   for (const [engine, metadata] of engineEntries(manifest)) {
     const anchorId = parseChainAccountVerificationAnchorRef(metadata.verificationAnchorRef)
     const oldAnchor = source.chainAccounts.find(account => account.id === anchorId)
-    if (!oldAnchor || oldAnchor.scope.keyDomainId !== keyDomainId) {
+    if (!oldAnchor || !isDerivedAccount(oldAnchor) || oldAnchor.scope.keyDomainId !== keyDomainId) {
       throw new Error('Account removal credential anchor is invalid')
     }
     if (oldAnchor.scope.accountId !== accountId) continue
@@ -54,6 +56,7 @@ export function selectAccountRemovalAnchors(
       .map(account =>
         source.chainAccounts.find(
           chainAccount =>
+            isDerivedAccount(chainAccount) &&
             chainAccount.scope.keyDomainId === keyDomainId &&
             chainAccount.scope.accountId === account.id &&
             chainAccount.scope.chainId === oldAnchor.scope.chainId
@@ -91,7 +94,7 @@ export function replacementAnchorRefs(
 
 function assertProjection(
   actual: { chainId: string; identity: string; derivationPath: string },
-  stored: ChainAccount
+  stored: DerivedChainAccount
 ) {
   if (
     actual.chainId !== stored.scope.chainId ||
@@ -115,7 +118,11 @@ export async function proveSoftwareAccountRemovalAnchors(input: {
   const selected = Object.values(input.anchors.replacements)
   if (selected.length === 0) return
   const owner = input.source.accounts.find(account => account.id === selected[0].scope.accountId)
-  if (!owner || selected.some(chainAccount => chainAccount.scope.accountId !== owner.id)) {
+  if (
+    !owner ||
+    !isDerivedAccount(owner) ||
+    selected.some(chainAccount => chainAccount.scope.accountId !== owner.id)
+  ) {
     throw new Error('Account removal engines require one retained Account proof')
   }
   const find = (chainId: string) =>
@@ -129,7 +136,14 @@ export async function proveSoftwareAccountRemovalAnchors(input: {
     throw new Error('Retained software EVM anchor proof is unavailable')
   }
   const evm = find(evmAnchor.scope.chainId)
-  if (!zcash || !bitcoin || !evm) {
+  if (
+    !zcash ||
+    !bitcoin ||
+    !evm ||
+    !isDerivedAccount(zcash) ||
+    !isDerivedAccount(bitcoin) ||
+    !isDerivedAccount(evm)
+  ) {
     throw new Error('Retained software Account proof is incomplete')
   }
   const transparent = input.source.addresses.find(
@@ -181,7 +195,8 @@ export function proveHardwareAccountRemovalAnchors(
   for (const candidate of Object.values(anchors.replacements)) {
     const owner = source.accounts.find(account => account.id === candidate.scope.accountId)
     const family = familyForChain(candidate.scope.chainId, network)
-    if (!owner || !family) throw new Error('Hardware account removal proof is unavailable')
+    if (!owner || !family || !isDerivedAccount(owner) || !isDerivedAccount(candidate))
+      throw new Error('Hardware account removal proof is unavailable')
     if (
       credential.vendor === 'ledger' &&
       credential.accountExport.protocol === 'ledger-accounts-v1'

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { useLocation, useNavigate as useRouterNavigate, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { PortfolioAssetView, PortfolioChainView } from '@/core/portfolio'
@@ -1278,8 +1279,15 @@ function TransferForm() {
   const walletAccounts =
     catalog?.accounts
       .filter(account => account.walletId === effective?.walletId)
-      .sort((left, right) => left.accountIndex - right.accountIndex) ??
-    (activeAccount ? [activeAccount] : [])
+      .sort((left, right) => {
+        if (isDerivedAccount(left) && isDerivedAccount(right))
+          return left.accountIndex - right.accountIndex
+        return isDerivedAccount(left) === isDerivedAccount(right)
+          ? 0
+          : isDerivedAccount(left)
+            ? -1
+            : 1
+      }) ?? (activeAccount ? [activeAccount] : [])
   const pickerAccount =
     walletAccounts.find(account => account.accountId === pickerAccountId) ?? activeAccount
   const walletIndexInStore = wallets.findIndex(wallet => wallet.id === effective?.walletId)

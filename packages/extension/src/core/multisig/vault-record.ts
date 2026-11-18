@@ -4,10 +4,11 @@
  */
 import { base64ToBytes, bytesToBase64 } from '@/lib/bytes'
 import { isBase64Text, isDkgShape } from './dkg-protocol'
+import { parseRosterManifest, type RosterManifest } from './roster'
 
 export type VaultNetwork = 'mainnet' | 'testnet'
 
-export type VaultRecordHeader = {
+export type VaultRecordHeaderV1 = {
   version: 1
   groupId: string
   network: VaultNetwork
@@ -22,7 +23,26 @@ export type VaultRecordHeader = {
   fingerprint: string // 64 lowercase hex
 }
 
-export type SealedVaultRecord = {
+export type VaultRecordBinding = {
+  accountId: string
+  birthdayHeight: number
+  rosterVersion: 1
+  roster: RosterManifest
+}
+export type VaultRecordHeaderV2 = Omit<VaultRecordHeaderV1, 'version'> &
+  VaultRecordBinding & {
+    version: 2
+    ownerWalletId: string
+  }
+export type VaultRecordHeader = VaultRecordHeaderV1 | VaultRecordHeaderV2
+export type VaultRecordScope = {
+  accountId: string
+  ownerWalletId: string
+  groupId: string
+  network: VaultNetwork
+}
+
+export type SealedVaultRecordV1 = {
   version: 1
   network: VaultNetwork
   groupId: string
@@ -30,6 +50,12 @@ export type SealedVaultRecord = {
   iv: string // base64 of 12 bytes
   ciphertext: string // base64
 }
+export type SealedVaultRecordV2 = Omit<SealedVaultRecordV1, 'version'> & {
+  version: 2
+  accountId: string
+  ownerWalletId: string
+}
+export type SealedVaultRecord = SealedVaultRecordV1 | SealedVaultRecordV2
 
 export type OpenedVaultRecord = { header: VaultRecordHeader; share: Uint8Array }
 export type VaultRecordSummary = {
@@ -37,6 +63,14 @@ export type VaultRecordSummary = {
   address: string
   participants: 2 | 3
   threshold: 2 | 3
+  authenticated?: {
+    accountId: string
+    ownerWalletId: string
+    birthdayHeight: number
+    rosterVersion: 1
+    rosterHash: string
+    creationConfirmed?: true
+  }
 }
 
 const HKDF_INFO = 'noir-wallet/frost-vault/record-key/v1'
@@ -127,7 +161,19 @@ export function isVaultWalletId(value: unknown): value is string {
 }
 
 export function parseSealedVaultRecord(value: unknown): SealedVaultRecord | null {
-  if (!isRecord(value) || !hasExactKeys(value, ENTRY_KEYS)) return null
+  if (!isRecord(value)) return null
+  if (value.version === 2) {
+    if (
+      !hasExactKeys(value, [...ENTRY_KEYS, 'accountId', 'ownerWalletId']) ||
+      !isVaultWalletId(value.accountId) ||
+      !isVaultWalletId(value.ownerWalletId)
+    )
+      return null
+    const { accountId, ownerWalletId, ...legacy } = value
+    const base = parseSealedVaultRecord({ ...legacy, version: 1 })
+    return base ? { ...base, version: 2, accountId, ownerWalletId } : null
+  }
+  if (!hasExactKeys(value, ENTRY_KEYS)) return null
   const { version, network, groupId, salt, iv, ciphertext } = value
   if (version !== 1 || !isNetwork(network) || !isVaultGroupId(groupId)) return null
   if (decodedBytes(salt)?.length !== SALT_BYTES) return null
@@ -144,7 +190,66 @@ export function parseSealedVaultRecord(value: unknown): SealedVaultRecord | null
   }
 }
 
+export function parseVaultRecordBinding(value: unknown): VaultRecordBinding | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['accountId', 'birthdayHeight', 'rosterVersion', 'roster']) ||
+    !isVaultWalletId(value.accountId) ||
+    value.rosterVersion !== 1 ||
+    typeof value.birthdayHeight !== 'number' ||
+    !Number.isSafeInteger(value.birthdayHeight) ||
+    value.birthdayHeight < 0 ||
+    value.birthdayHeight > 0xffffffff
+  )
+    return null
+  const roster = parseRosterManifest(value.roster)
+  if (
+    !roster ||
+    new Set(roster.participants.map(p => p.identityPublicKey)).size !== roster.participants.length
+  )
+    return null
+  for (const participant of roster.participants) Object.freeze(participant)
+  Object.freeze(roster.participants)
+  Object.freeze(roster)
+  return Object.freeze({
+    accountId: value.accountId,
+    birthdayHeight: value.birthdayHeight,
+    rosterVersion: 1,
+    roster
+  })
+}
+
+export function isVaultRecordHeaderV2(header: VaultRecordHeader): header is VaultRecordHeaderV2 {
+  return header.version === 2
+}
+
 function parseHeader(value: unknown): VaultRecordHeader | null {
+  if (isRecord(value) && value.version === 2) {
+    if (
+      !hasExactKeys(value, [
+        ...HEADER_KEYS,
+        'accountId',
+        'ownerWalletId',
+        'birthdayHeight',
+        'rosterVersion',
+        'roster'
+      ]) ||
+      !isVaultWalletId(value.ownerWalletId)
+    )
+      return null
+    const { accountId, ownerWalletId, birthdayHeight, rosterVersion, roster, ...legacy } = value
+    const base = parseHeader({ ...legacy, version: 1 })
+    const binding = parseVaultRecordBinding({ accountId, birthdayHeight, rosterVersion, roster })
+    if (
+      !base ||
+      !binding ||
+      binding.roster.groupId !== base.groupId ||
+      binding.roster.threshold !== base.threshold ||
+      binding.roster.participants.length !== base.participants
+    )
+      return null
+    return { ...base, version: 2, ownerWalletId, ...binding }
+  }
   if (!isRecord(value) || !hasExactKeys(value, HEADER_KEYS)) return null
   const {
     version,
@@ -197,6 +302,10 @@ export function sealedVaultRecordEquals(
     left.version === right.version &&
     left.network === right.network &&
     left.groupId === right.groupId &&
+    (left.version !== 2 ||
+      (right.version === 2 &&
+        left.accountId === right.accountId &&
+        left.ownerWalletId === right.ownerWalletId)) &&
     left.salt === right.salt &&
     left.iv === right.iv &&
     left.ciphertext === right.ciphertext
@@ -212,7 +321,11 @@ function canonicalMnemonic(mnemonic: string): string {
 }
 
 /** The seed is the BIP-39 PBKDF2 output; it is wiped as soon as the AES key exists. */
-async function deriveRecordKey(mnemonic: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveRecordKey(
+  mnemonic: string,
+  salt: Uint8Array,
+  version: 1 | 2 = 1
+): Promise<CryptoKey> {
   const phrase = encoder.encode(canonicalMnemonic(mnemonic))
   let passphrase: CryptoKey
   try {
@@ -236,7 +349,14 @@ async function deriveRecordKey(mnemonic: string, salt: Uint8Array): Promise<Cryp
   try {
     const hkdfKey = await crypto.subtle.importKey('raw', seed, 'HKDF', false, ['deriveKey'])
     return await crypto.subtle.deriveKey(
-      { name: 'HKDF', hash: 'SHA-256', salt: own(salt), info: own(encoder.encode(HKDF_INFO)) },
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: own(salt),
+        info: own(
+          encoder.encode(version === 1 ? HKDF_INFO : 'noir-wallet/frost-vault/record-key/v2')
+        )
+      },
       hkdfKey,
       { name: 'AES-GCM', length: 256 },
       false,
@@ -250,6 +370,24 @@ async function deriveRecordKey(mnemonic: string, salt: Uint8Array): Promise<Cryp
 /** Binding network and group id into the tag stops an entry from being re-labelled. */
 function additionalData(network: VaultNetwork, groupId: string): Uint8Array<ArrayBuffer> {
   return own(encoder.encode(JSON.stringify([1, network, groupId])))
+}
+
+function recordAdditionalData(
+  record: VaultRecordHeader | SealedVaultRecord
+): Uint8Array<ArrayBuffer> {
+  return record.version === 1
+    ? additionalData(record.network, record.groupId)
+    : own(
+        encoder.encode(
+          JSON.stringify([
+            2,
+            record.network,
+            record.groupId,
+            record.accountId,
+            record.ownerWalletId
+          ])
+        )
+      )
 }
 
 export async function sealVaultRecord(
@@ -269,16 +407,22 @@ export async function sealVaultRecord(
 
     const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
-    const key = await deriveRecordKey(mnemonic, salt)
+    const key = await deriveRecordKey(mnemonic, salt, checked.version)
     const ciphertext = new Uint8Array(
       await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv, additionalData: additionalData(checked.network, checked.groupId) },
+        { name: 'AES-GCM', iv, additionalData: recordAdditionalData(checked) },
         key,
         plaintext
       )
     )
     return {
-      version: 1,
+      ...(checked.version === 1
+        ? { version: 1 as const }
+        : {
+            version: 2 as const,
+            accountId: checked.accountId,
+            ownerWalletId: checked.ownerWalletId
+          }),
       network: checked.network,
       groupId: checked.groupId,
       salt: bytesToBase64(salt),
@@ -293,20 +437,30 @@ export async function sealVaultRecord(
 
 export async function openVaultRecord(
   record: SealedVaultRecord,
-  mnemonic: string
+  mnemonic: string,
+  expectedScope?: VaultRecordScope
 ): Promise<OpenedVaultRecord> {
   let plaintext: Uint8Array | null = null
   try {
     const entry = parseSealedVaultRecord(record)
     if (!entry) throw new Error('invalid entry')
+    if (
+      expectedScope &&
+      (entry.version !== 2 ||
+        entry.accountId !== expectedScope.accountId ||
+        entry.ownerWalletId !== expectedScope.ownerWalletId ||
+        entry.groupId !== expectedScope.groupId ||
+        entry.network !== expectedScope.network)
+    )
+      throw new Error('scope mismatch')
     const salt = base64ToBytes(entry.salt)
-    const key = await deriveRecordKey(mnemonic, salt)
+    const key = await deriveRecordKey(mnemonic, salt, entry.version)
     plaintext = new Uint8Array(
       await crypto.subtle.decrypt(
         {
           name: 'AES-GCM',
           iv: own(base64ToBytes(entry.iv)),
-          additionalData: additionalData(entry.network, entry.groupId)
+          additionalData: recordAdditionalData(entry)
         },
         key,
         own(base64ToBytes(entry.ciphertext))
@@ -319,7 +473,16 @@ export async function openVaultRecord(
     const header = parseHeader(
       JSON.parse(decoder.decode(plaintext.subarray(LENGTH_PREFIX_BYTES, shareStart)))
     )
-    if (!header || header.groupId !== entry.groupId || header.network !== entry.network) {
+    if (
+      !header ||
+      header.version !== entry.version ||
+      header.groupId !== entry.groupId ||
+      header.network !== entry.network ||
+      (entry.version === 2 &&
+        (header.version !== 2 ||
+          header.accountId !== entry.accountId ||
+          header.ownerWalletId !== entry.ownerWalletId))
+    ) {
       throw new Error('header mismatch')
     }
     const share = plaintext.slice(shareStart)

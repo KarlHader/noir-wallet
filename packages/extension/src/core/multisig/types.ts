@@ -19,9 +19,9 @@ export interface MultisigGroupRecord {
   devices: readonly MultisigDevice[]
   fingerprint: string
   createdAt: number
-  // Marks records produced by the placeholder protocol so they can never be mistaken for a real
-  // group once the WASM-backed implementation lands.
-  mock: true
+  // Legacy display records remain marked true. Background publishes false only for a committed
+  // independent account; the ready journal and authenticated record remain authoritative.
+  mock: boolean
 }
 
 export type SessionPhase =

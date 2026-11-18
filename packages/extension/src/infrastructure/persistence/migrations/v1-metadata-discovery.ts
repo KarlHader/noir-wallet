@@ -1,4 +1,4 @@
-import { parseAccountId, parseAccountIndex } from '@/core/accounts/domain'
+import { parseAccountId, parseAccountIndex, parseAccountSource } from '@/core/accounts/domain'
 import { parseCredentialRef, parseKeyDomainId } from '@/core/keyring/domain'
 import { parseStorageV2Snapshot } from '@/infrastructure/persistence/schema'
 import {
@@ -96,10 +96,15 @@ function parseWallets(
   walletsValue: unknown,
   accountDisplayNamesValue: unknown,
   local: Readonly<Record<string, unknown>>
-): { wallets: readonly V1DiscoveredWallet[]; issues: readonly string[] } {
+): {
+  wallets: readonly V1DiscoveredWallet[]
+  issues: readonly string[]
+  externalAccounts: ReadonlySet<string>
+} {
   const issues: string[] = []
+  const externalAccounts = new Set<string>()
   if (!Array.isArray(walletsValue) || walletsValue.length > MAX_V1_WALLETS) {
-    return { wallets: [], issues: ['wallets-invalid'] }
+    return { wallets: [], issues: ['wallets-invalid'], externalAccounts }
   }
   const accountDisplayNames = isRecord(accountDisplayNamesValue) ? accountDisplayNamesValue : {}
   const wallets: V1DiscoveredWallet[] = []
@@ -153,6 +158,25 @@ function parseWallets(
         continue
       }
       const accountId = parseNonEmptyString(accountValue.id)
+      if (Object.prototype.hasOwnProperty.call(accountValue, 'source')) {
+        try {
+          parseAccountSource(accountValue.source)
+          if (
+            keySource !== 'software' ||
+            !accountId ||
+            Object.prototype.hasOwnProperty.call(accountValue, 'derivationIndex') ||
+            accountIds.has(accountId)
+          ) {
+            throw new Error('Invalid external account')
+          }
+          accountIds.add(accountId)
+          externalAccounts.add(JSON.stringify([id, accountId]))
+        } catch {
+          issues.push(`wallet-${id}-account-${accountPosition}-invalid`)
+        }
+        // New external records belong to the active V2 generation, never a mnemonic proof.
+        continue
+      }
       const accountIndex =
         typeof accountValue.derivationIndex === 'number' &&
         Number.isSafeInteger(accountValue.derivationIndex) &&
@@ -221,7 +245,7 @@ function parseWallets(
     )
   }
 
-  return { wallets: Object.freeze(wallets), issues: Object.freeze(issues) }
+  return { wallets: Object.freeze(wallets), issues: Object.freeze(issues), externalAccounts }
 }
 
 export function discoverV1Metadata(local: Readonly<Record<string, unknown>>): V1MetadataDiscovery {
@@ -244,7 +268,7 @@ export function discoverV1Metadata(local: Readonly<Record<string, unknown>>): V1
   }
 
   const sourceValue = source === 'wallet_state' ? walletState! : legacy!
-  const { wallets, issues } = parseWallets(
+  const { wallets, issues, externalAccounts } = parseWallets(
     sourceValue.wallets,
     sourceValue.accountDisplayNames,
     local
@@ -257,6 +281,7 @@ export function discoverV1Metadata(local: Readonly<Record<string, unknown>>): V1
   }
   if (
     currentAccountId &&
+    !externalAccounts.has(JSON.stringify([currentWalletId, currentAccountId])) &&
     !wallets.some(wallet => wallet.accounts.some(account => account.id === currentAccountId))
   ) {
     issueList.push('current-account-missing')
@@ -315,7 +340,13 @@ export function buildStorageV2MetadataStage(
       status: 'staged' as const,
       sourceFingerprint: input.sourceFingerprint,
       mainKeyDomainId: keyDomains[0]?.id,
-      ...(discovery.currentWalletId && discovery.currentAccountId
+      ...(discovery.currentWalletId &&
+      discovery.currentAccountId &&
+      accounts.some(
+        account =>
+          account.id === discovery.currentAccountId &&
+          account.keyDomainId === discovery.currentWalletId
+      )
         ? {
             activeAccount: {
               keyDomainId: parseKeyDomainId(discovery.currentWalletId),

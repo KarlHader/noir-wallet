@@ -19,13 +19,8 @@ import { useMultisigGroupStore } from '@/popup/multisig/group-store'
 import { useLocation } from '@/popup/provider/Router'
 import { toast } from '@/store/toast-store'
 import { useWalletStore } from '@/store/wallet-store'
-import {
-  readMockSettings,
-  writeMockSettings,
-  type MockQrPhones,
-  type MockResponse,
-  type MockSettings
-} from './mock-settings'
+import { readMockSettings, writeMockSettings } from './mock-settings'
+import type { MockBlePhones, MockQrPhones, MockResponse, MockSettings } from './mock-settings'
 
 const MOCK_RESPONSES: readonly MockResponse[] = [
   'approve',
@@ -87,6 +82,7 @@ export function DevPanel() {
   const delayId = useId()
   const chooserId = useId()
   const qrPhonesId = useId()
+  const blePhonesId = useId()
   const session = useCreateSessionStore(state => state.session)
   const pendingDisplay = useCreateSessionStore(state => state.pendingDisplay)
   const pendingScan = useCreateSessionStore(state => state.pendingScan)
@@ -169,6 +165,10 @@ export function DevPanel() {
     const qrPhones: MockQrPhones = raw === 'real' ? 'real' : 'simulated'
     updateSettings(current => ({ ...current, qrPhones }))
   }
+  const handleBlePhonesChange = (raw: string) => {
+    const blePhones: MockBlePhones = raw === 'real' ? 'real' : 'simulated'
+    updateSettings(current => ({ ...current, blePhones }))
+  }
 
   const handleReset = async () => {
     try {
@@ -208,6 +208,8 @@ export function DevPanel() {
       toast.error('Could not check the saved share')
     }
   }
+
+  if (import.meta.env?.DEV !== true) return null
 
   return (
     <div
@@ -267,6 +269,21 @@ export function DevPanel() {
             >
               <option value="native">Browser</option>
               <option value="simulated">Simulated</option>
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor={blePhonesId} className="mb-1 block text-muted">
+              Bluetooth phones
+            </label>
+            <select
+              id={blePhonesId}
+              value={settings.blePhones}
+              onChange={event => handleBlePhonesChange(event.target.value)}
+              className={FIELD_CLASS}
+            >
+              <option value="simulated">Simulated</option>
+              <option value="real">Real</option>
             </select>
           </div>
 

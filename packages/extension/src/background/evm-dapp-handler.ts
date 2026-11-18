@@ -1,15 +1,16 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { transactionBroadcasted } from '@/core/transactions/transaction-analytics'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
-import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
+import { emitDAppEvent, observeDAppRequest } from './dapp-analytics'
+import type { DAppAnalyticsSink } from './dapp-analytics'
 import type { EvmNetworkConfig } from '@/config/networks'
-import {
-  EvmRpcError,
-  EvmTransactionError,
-  type ActiveEvmPortfolioContext,
-  type EvmBalanceRpc,
-  type EvmDAppReadRpc
+import { EvmRpcError, EvmTransactionError } from '@/infrastructure/chains/evm'
+import type {
+  ActiveEvmPortfolioContext,
+  EvmBalanceRpc,
+  EvmDAppReadRpc
 } from '@/infrastructure/chains/evm'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm/evm-account'
 import type { EvmMultichainSigningClient } from '@/infrastructure/keyring/multichain/evm-signing-client'
@@ -25,15 +26,12 @@ import {
   parseEvmAddress,
   parsePersonalSignRequest,
   parseTypedDataV4Request,
-  toEip1193ChainId,
-  type EvmDAppRuntimeMethod
+  toEip1193ChainId
 } from '@/core/dapp/eip1193'
+import type { EvmDAppRuntimeMethod } from '@/core/dapp/eip1193'
 import { parseChainId } from '@/core/chains/registry'
-import {
-  connectionHasEvmAuthorization,
-  type AccountRef,
-  type DAppManager
-} from '@/core/dapp/dapp-manager'
+import { connectionHasEvmAuthorization } from '@/core/dapp/dapp-manager'
+import type { AccountRef, DAppManager } from '@/core/dapp/dapp-manager'
 import type { SigningResult } from '@/core/keyring/ports'
 import type { DAppExecutionMode } from '@/core/dapp/dapp-execution-mode'
 import type { BackgroundEvmTransferController } from './evm-transfer-controller'
@@ -44,13 +42,13 @@ import type {
   EvmDAppPrivateTransferPreparation
 } from './evm-dapp-private-transfer'
 import type { EvmFeeSelection } from '@/infrastructure/chains/evm'
-import {
-  activeDAppSessionAccountMatches,
-  selectDAppSessionAccounts,
-  type DAppSessionAccountProposal,
-  type DAppSessionAccountSelection
+import { activeDAppSessionAccountMatches, selectDAppSessionAccounts } from './dapp-session-accounts'
+import type {
+  DAppSessionAccountProposal,
+  DAppSessionAccountSelection
 } from './dapp-session-accounts'
-import { toHex, verifyMessage, verifyTypedData, type Hex } from 'viem'
+import { toHex, verifyMessage, verifyTypedData } from 'viem'
+import type { Hex } from 'viem'
 import { requestLedgerSignature } from './ledger-signing-coordinator'
 import {
   digestLedgerPayload,
@@ -453,6 +451,8 @@ export class BackgroundEvmDAppHandler {
 
   private async loadActiveAccount(): Promise<ActiveEvmDAppAccount> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) throw new Eip1193ProviderError(4100, 'The active wallet has no EVM account.')
     const binding = parseEvmAccountBinding(context.chainAccount, this.chainId)
     const reference = Object.freeze({

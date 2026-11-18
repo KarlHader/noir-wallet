@@ -3,20 +3,19 @@ import { expect } from '@playwright/test'
 import {
   createInitialSession,
   reduceCreateSession,
-  type CreateSessionEffect,
-  type CreateSessionEvent,
-  type CreateSessionState,
   verifyPageDevices
+} from '../../../src/core/multisig/create-session'
+import type {
+  CreateSessionEffect,
+  CreateSessionEvent,
+  CreateSessionState
 } from '../../../src/core/multisig/create-session'
 import type {
   VaultDkgRound1Response,
   VaultDkgRound2Response
 } from '../../../src/core/multisig/dkg-rpc'
-import {
-  createEnvelopeFactory,
-  deviceId,
-  type MultisigMessageType
-} from '../../../src/core/multisig/messages'
+import { createEnvelopeFactory, deviceId } from '../../../src/core/multisig/messages'
+import type { MultisigMessageType } from '../../../src/core/multisig/messages'
 import {
   QR_TRANSPORT_PUBLIC_KEY,
   ROSTER_CIPHERSUITE,
@@ -203,6 +202,7 @@ test.describe('multisig create-session over QR', () => {
     expect(initial.round2Outputs).toBeNull()
     expect(initial.devices[1]).toMatchObject({
       identityPublicKey: null,
+      transportPublicKey: null,
       identityConfirmed: false,
       round1Envelope: null
     })
@@ -293,7 +293,8 @@ test.describe('multisig create-session over QR', () => {
     expect(rejected.state.abortReason).toBe('fingerprint_mismatch')
     expect(rejected.state.devices[1]).toMatchObject({
       connection: 'empty',
-      identityPublicKey: null
+      identityPublicKey: null,
+      transportPublicKey: null
     })
     expect(rejected.effects).toEqual([])
   })
@@ -302,7 +303,7 @@ test.describe('multisig create-session over QR', () => {
     const locked = reduceCreateSession(paired('2-of-2'), { type: 'CONTINUE' })
     expect(locked.state.phase).toBe('DKG_R1')
     expect(locked.state.dkgSessionId).toBeNull()
-    expect(locked.state.roster).toBeNull()
+    expect(locked.state.roster?.groupId).toBe(GROUP_ID)
     expect(locked.effects).toEqual([
       {
         type: 'dkgOpen',
@@ -320,7 +321,7 @@ test.describe('multisig create-session over QR', () => {
     const opened = reduceCreateSession(locked, { type: 'DKG_OPENED', sessionId: OTHER_SESSION })
     expect(opened.state.phase).toBe('ABORTED')
     expect(opened.state.abortReason).toBe('verification_failed')
-    expect(opened.state.roster).toBeNull()
+    expect(opened.state.roster?.groupId).toBe(GROUP_ID)
     // The Worker did open a session under the id it reported, so that one is closed.
     expect(opened.effects).toEqual([{ type: 'dkgClose', sessionId: OTHER_SESSION }])
   })
@@ -404,7 +405,9 @@ test.describe('multisig create-session over QR', () => {
       r1Echoed: false,
       r2Received: false,
       finalReceived: false,
+      finalEnvelope: null,
       identityPublicKey: null,
+      transportPublicKey: null,
       identityConfirmed: false,
       round1Envelope: null
     })

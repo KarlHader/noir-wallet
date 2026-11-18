@@ -1,14 +1,12 @@
-import type { ChainAccount } from '@/core/accounts/domain'
+import { isDerivedAccount } from '@/core/accounts/domain'
+import type { ChainAccount, DerivedChainAccount } from '@/core/accounts/domain'
 import { supportsEvmPrivateExecution } from '@/core/chains/evm'
 import { keySourceSupportsChainFamily, resolveKeyDomain } from '@/core/accounts/application'
 import type { AssetRegistry, ChainRegistry } from '@/core/chains/registry'
 import type { KeyDomainSource } from '@/core/keyring/domain'
 import { parseChainId } from '@/core/chains/registry'
-import {
-  buildPortfolioReadModel,
-  type PortfolioReadModel,
-  type PortfolioSourceSnapshot
-} from '@/core/portfolio'
+import { buildPortfolioReadModel } from '@/core/portfolio'
+import type { PortfolioReadModel, PortfolioSourceSnapshot } from '@/core/portfolio'
 import { DedupPromise } from '@/lib/async-utils'
 import type {
   PortfolioCacheRepository,
@@ -38,7 +36,7 @@ export interface EvmPortfolioCoordinatorOptions {
 
 export interface ActiveEvmPortfolioContext {
   readonly generationId: StorageV2GenerationId
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly keyDomainSource: KeyDomainSource
 }
 
@@ -67,6 +65,10 @@ export async function loadActiveEvmPortfolioContext(
   }
   const active = snapshot.manifest.activeAccount
   if (!active) return null
+  const owner = snapshot.accounts.find(
+    account => account.id === active.accountId && account.keyDomainId === active.keyDomainId
+  )
+  if (!owner || !isDerivedAccount(owner)) return null
   const keyDomain = resolveKeyDomain(snapshot.keyDomains, active.keyDomainId)
   if (!keySourceSupportsChainFamily(keyDomain.source, 'evm')) return null
   const candidates = snapshot.chainAccounts.filter(
@@ -77,6 +79,7 @@ export async function loadActiveEvmPortfolioContext(
   )
   if (candidates.length === 0) return null
   if (candidates.length !== 1) throw new Error('Active Account has ambiguous EVM ChainAccounts')
+  if (!isDerivedAccount(candidates[0])) return null
   return Object.freeze({
     generationId: pointer.generationId,
     chainAccount: candidates[0],
@@ -86,6 +89,8 @@ export async function loadActiveEvmPortfolioContext(
 
 function chainAccountsEqual(left: ChainAccount, right: ChainAccount): boolean {
   return (
+    isDerivedAccount(left) &&
+    isDerivedAccount(right) &&
     left.id === right.id &&
     left.scope.keyDomainId === right.scope.keyDomainId &&
     left.scope.accountId === right.scope.accountId &&

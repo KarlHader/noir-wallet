@@ -3,6 +3,7 @@ import {
   parseAccountId,
   parseAddressId,
   parseChainAccountId,
+  parseAccountSource,
   type Account,
   type Address,
   type ChainAccount
@@ -38,7 +39,14 @@ export function parseStorageV2ChainAccount(value: unknown): ChainAccount {
   ) {
     throw new Error('Invalid Storage V2 ChainAccount')
   }
-  assertStorageV2ExactKeys(value, ['id', 'scope', 'derivation', 'identity', 'createdAt'])
+  const external = Object.prototype.hasOwnProperty.call(value, 'source')
+  assertStorageV2ExactKeys(value, [
+    'id',
+    'scope',
+    external ? 'source' : 'derivation',
+    'identity',
+    'createdAt'
+  ])
   assertStorageV2ExactKeys(value.scope, ['keyDomainId', 'accountId', 'chainId'])
   assertStorageV2ExactKeys(value.identity, ['kind', 'value'])
   if (typeof value.identity.kind !== 'string' || !IDENTITY_KINDS.has(value.identity.kind)) {
@@ -57,7 +65,9 @@ export function parseStorageV2ChainAccount(value: unknown): ChainAccount {
         parseStorageV2String(value.scope.chainId, 'ChainAccount.scope.chainId', 64)
       ).id
     }),
-    derivation: parseStorageV2Derivation(value.derivation),
+    ...(external
+      ? { source: parseAccountSource(value.source) }
+      : { derivation: parseStorageV2Derivation(value.derivation) }),
     identity: Object.freeze({
       kind: value.identity.kind as 'public-key' | 'account-identifier',
       value: parseStorageV2String(value.identity.value, 'ChainAccount.identity.value', 4_096)

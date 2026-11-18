@@ -12,6 +12,10 @@ export function createWorkerDkgPort(): DkgPort {
     open: request => requestVaultGroup('vault.group.open', request),
     acceptRound1: request => requestVaultDkg('vault.dkg.acceptRound1', request),
     acceptRound2: request => requestVaultDkg('vault.dkg.acceptRound2', request),
+    confirmRound1: async request => {
+      if ((await requestVaultDkg('vault.dkg.confirmRound1', request)) !== true)
+        throw new Error('Round 1 confirmation failed')
+    },
     close: async request => {
       await requestVaultDkg('vault.dkg.close', request)
     },

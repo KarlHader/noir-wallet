@@ -28,6 +28,7 @@ packages/extension/.test-wallets/
 .cursor/
 .agent/
 openspec/
+docs/Design-mul/
 
 tmp
 zcash-wallet-wasm

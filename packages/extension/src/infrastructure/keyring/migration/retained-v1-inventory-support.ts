@@ -153,7 +153,11 @@ export function assertExistingAccountAnchors(
   const storedAccount = snapshot.accounts.find(
     item => item.keyDomainId === wallet.id && item.id === account.id
   )
-  if (!storedAccount || storedAccount.accountIndex !== account.accountIndex) {
+  if (
+    !storedAccount ||
+    !isDerivedAccount(storedAccount) ||
+    storedAccount.accountIndex !== account.accountIndex
+  ) {
     throw new Error('Storage V2 Account identity differs from retained V1')
   }
   const derived = findResultAccount(result, account)
@@ -168,6 +172,7 @@ export function assertExistingAccountAnchors(
     const actual = derived[engine]
     if (
       !stored ||
+      !isDerivedAccount(stored) ||
       actual.chainId !== chainId ||
       actual.identity !== stored.identity.value ||
       actual.derivationPath !== stored.derivation.path
@@ -220,7 +225,9 @@ export function inventoryAlreadyMatches(
       wallet => wallet.existingCredentialSet === undefined || wallet.newAccounts.length > 0
     ) ||
     softwareKeyDomainIds.size !== prepared.length ||
-    snapshot.accounts.filter(account => softwareKeyDomainIds.has(account.keyDomainId)).length !==
+    snapshot.accounts
+      .filter(isDerivedAccount)
+      .filter(account => softwareKeyDomainIds.has(account.keyDomainId)).length !==
       prepared.reduce((count, wallet) => count + wallet.wallet.accounts.length, 0)
   ) {
     return false
@@ -246,6 +253,7 @@ export function inventoryAlreadyMatches(
   if (
     snapshot.accounts.some(
       account =>
+        isDerivedAccount(account) &&
         !nativeKeyDomainIds.has(account.keyDomainId) &&
         accountsById.get(account.id)?.displayName !== account.displayName
     )
@@ -342,3 +350,4 @@ export function mergeInventorySnapshot(
     addresses: [...source.addresses, ...delta.addresses]
   })
 }
+import { isDerivedAccount } from '@/core/accounts/domain'

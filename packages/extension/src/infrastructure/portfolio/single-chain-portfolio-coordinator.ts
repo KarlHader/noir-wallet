@@ -1,11 +1,9 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { loadActiveReceiveWalletSet } from '@/core/accounts/application'
 import type { ChainAccount } from '@/core/accounts/domain'
 import type { AddressGatedChainRegistry, AssetRegistry } from '@/core/chains/registry'
-import {
-  buildPortfolioReadModel,
-  type PortfolioReadModel,
-  type PortfolioSourceSnapshot
-} from '@/core/portfolio'
+import { buildPortfolioReadModel } from '@/core/portfolio'
+import type { PortfolioReadModel, PortfolioSourceSnapshot } from '@/core/portfolio'
 import { DedupPromise } from '@/lib/async-utils'
 import type {
   PortfolioCacheRepository,
@@ -54,6 +52,8 @@ export interface SingleChainPortfolioCoordinatorOptions {
 
 function chainAccountsEqual(left: ChainAccount, right: ChainAccount): boolean {
   return (
+    isDerivedAccount(left) &&
+    isDerivedAccount(right) &&
     left.id === right.id &&
     left.scope.keyDomainId === right.scope.keyDomainId &&
     left.scope.accountId === right.scope.accountId &&
@@ -152,6 +152,7 @@ export class SingleChainPortfolioCoordinator {
     })
     if (!active?.activeAccount) return null
     const selectedAccount = active.activeAccount
+    if (!isDerivedAccount(selectedAccount)) return null
     const candidates = active.availableChainAccounts.filter(
       candidate => candidate.chain.id === this.options.chainId
     )
@@ -170,6 +171,7 @@ export class SingleChainPortfolioCoordinator {
     if (candidates.length !== 1) {
       throw new Error('Active Account has ambiguous single-chain Portfolio metadata')
     }
+    if (!isDerivedAccount(candidates[0].chainAccount)) return null
     return Object.freeze({
       generationId: active.generationId,
       chainAccount: candidates[0].chainAccount

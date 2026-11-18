@@ -247,6 +247,7 @@ export function QrStepPage() {
   // The session decides the step: a finished step moves the URL to the next index, the round-1
   // check and the final check go to the verify page, and a Bluetooth session to its ceremony.
   const activated = session?.phase === 'ACTIVATED'
+  const commitStatus = useCreateSessionStore(state => state.commitStatus)
   const target = session && !activated ? createFlowRoute(session) : null
   const here = qrStepRoute(index ?? '')
   useEffect(() => {
@@ -263,6 +264,7 @@ export function QrStepPage() {
 
   // The route guard already redirects when the session is missing or aborted.
   if (!session) return null
+  if (commitStatus === 'saving' || commitStatus === 'failed') return <CreationCommitFeedback />
 
   // Round 2 is done and the share is being written; the next code waits for the save.
   if (session.phase === 'FINALIZED') return <QrStepLoading message="Saving your share…" />
@@ -290,3 +292,4 @@ export function QrStepPage() {
     />
   )
 }
+import { CreationCommitFeedback } from './CreationCommitFeedback'

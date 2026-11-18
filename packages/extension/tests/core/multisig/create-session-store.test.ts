@@ -9,10 +9,8 @@ import {
 import type { DkgPort } from '../../../src/core/multisig/dkg-port'
 import type { VaultGroupOpenRequest } from '../../../src/core/multisig/vault-group-rpc'
 import type { VaultWasm } from '../../../src/core/multisig/dkg-protocol'
-import {
-  createVaultDkgRpcHandler,
-  type VaultDkgRpcHandler
-} from '../../../src/core/multisig/dkg-rpc'
+import { createVaultDkgRpcHandler } from '../../../src/core/multisig/dkg-rpc'
+import type { VaultDkgRpcHandler } from '../../../src/core/multisig/dkg-rpc'
 import type { MultisigThreshold } from '../../../src/core/multisig/types'
 import { installLockEnv } from './helpers/storage-env'
 import { TEST_MNEMONIC, createInProcessDkgPort, loadVaultWasm } from './helpers/vault-wasm'
@@ -30,10 +28,11 @@ import { encodeCborByteString, encodeEnvelopeUR } from '../../../src/lib/multisi
 import {
   MULTISIG_GROUPS_STORAGE_KEY,
   multisigGroupScopeKey,
-  readMultisigGroup,
-  type MultisigGroupScope
+  readMultisigGroup
 } from '../../../src/lib/multisig-group-storage'
-import { openVaultRecord, type SealedVaultRecord } from '../../../src/core/multisig/vault-record'
+import type { MultisigGroupScope } from '../../../src/lib/multisig-group-storage'
+import { openVaultRecord } from '../../../src/core/multisig/vault-record'
+import type { SealedVaultRecord } from '../../../src/core/multisig/vault-record'
 import type { VaultGroupSaveRequest } from '../../../src/core/multisig/vault-group-rpc'
 import { useToastStore } from '../../../src/store/toast-store'
 import type { DeviceIdentity } from '../../../src/core/multisig/identity'
@@ -82,7 +81,13 @@ if (typeof cryptoHost.randomUUID !== 'function') {
 
 // Phones answer through setTimeout(0), so a flow only needs a few macrotask turns to settle.
 // Node has no Bluetooth chooser, so the cases use the simulated one unless they stub the browser's.
-writeMockSettings({ ...DEFAULT_MOCK_SETTINGS, delayMs: 0, chooser: 'simulated' })
+writeMockSettings({
+  ...DEFAULT_MOCK_SETTINGS,
+  delayMs: 0,
+  chooser: 'simulated',
+  blePhones: 'simulated',
+  qrPhones: 'simulated'
+})
 
 // The ceremony runs on the real wallet WASM: the extension's share through an in-process copy of
 // the Worker's handler, the phones through the same module.
@@ -387,6 +392,36 @@ test.describe('multisig create-session store', () => {
       })
     } finally {
       restore()
+    }
+  })
+
+  test('a group projection write failure never publishes ready and can be retried', async () => {
+    const area = (
+      host.chrome as { storage: { local: { set(items: Record<string, unknown>): Promise<void> } } }
+    ).storage.local
+    const originalSet = area.set
+    let failGroup = true
+    area.set = async items => {
+      if (MULTISIG_GROUPS_STORAGE_KEY in items && failGroup) throw new Error('write failed')
+      return originalSet(items)
+    }
+    try {
+      await withFreshStore(async () => {
+        store.getState().start(SCOPE, '2-of-2', 'ble', OWNER_NAME)
+        await pairOverBluetooth(2)
+        store.getState().dispatch({ type: 'CONTINUE' })
+        await waitUntil(() => phase() === 'KEYSET_VERIFIED', 'KEYSET_VERIFIED')
+        store.getState().dispatch({ type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+        await waitUntil(() => store.getState().commitStatus === 'failed', 'failed account commit')
+        expect(phase()).not.toBe('ACTIVATED')
+        expect(saved.has(multisigGroupScopeKey(SCOPE))).toBe(true)
+        failGroup = false
+        store.getState().retryCommit()
+        await waitUntil(() => phase() === 'ACTIVATED', 'ready after retry')
+        expect(store.getState().commitStatus).toBe('ready')
+      })
+    } finally {
+      area.set = originalSet
     }
   })
 

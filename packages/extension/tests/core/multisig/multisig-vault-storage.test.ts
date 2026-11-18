@@ -5,6 +5,7 @@ import {
   MULTISIG_BANNER_STORAGE_KEY,
   MULTISIG_GROUPS_STORAGE_KEY,
   MULTISIG_VAULT_RECORDS_STORAGE_KEY,
+  MULTISIG_CREATION_STORAGE_KEY,
   clearMultisigData,
   type MultisigGroupScope
 } from '../../../src/lib/multisig-group-storage'
@@ -15,7 +16,11 @@ import {
   saveVaultRecordVerified
 } from '../../../src/lib/multisig-vault-storage'
 import type { SealedVaultRecord } from '../../../src/core/multisig/vault-record'
-import { installStorageEnv } from './helpers/storage-env'
+import { installStorageEnv, reorderStorageObjectKeys } from './helpers/storage-env'
+import {
+  readCreationOperation,
+  saveCreationOperation
+} from '../../../src/lib/multisig-creation-storage'
 
 const fixture = JSON.parse(
   await readFile(new URL('./fixtures/vault-record-v1.json', import.meta.url), 'utf8')
@@ -68,6 +73,10 @@ function keysOfStored(key: string): string[] {
 }
 
 function seedAll(scopeKeys: { vault: string[]; group: string[]; banner: string[] }): void {
+  env.store.set(
+    MULTISIG_CREATION_STORAGE_KEY,
+    Object.fromEntries(scopeKeys.group.map(key => [key, { future: true }]))
+  )
   const vaults: Record<string, SealedVaultRecord> = {}
   for (const key of scopeKeys.vault) {
     vaults[key] = key.startsWith('mainnet:') ? MAINNET_RECORD : RECORD
@@ -97,6 +106,63 @@ function seedAll(scopeKeys: { vault: string[]; group: string[]; banner: string[]
 }
 
 test.describe('multisig vault storage', () => {
+  test('creation progress reads back and preserves unknown unrelated records', async () => {
+    env.store.set(MULTISIG_CREATION_STORAGE_KEY, { 'testnet:other:future': { version: 9 } })
+    const operation = {
+      version: 1 as const,
+      operationId: 'op',
+      scope: TESTNET,
+      parentAccountId: 'parent',
+      groupId: 'group',
+      threshold: '2-of-3' as const,
+      birthdayHeight: 123,
+      createdAt: 1,
+      phase: 'reserved' as const
+    }
+    overrideNextSet(async (items, real) =>
+      real(reorderStorageObjectKeys(items) as Record<string, unknown>)
+    )
+    await saveCreationOperation(operation)
+    expect(await readCreationOperation(TESTNET)).toEqual(operation)
+    expect(
+      (env.store.get(MULTISIG_CREATION_STORAGE_KEY) as Record<string, unknown>)[
+        'testnet:other:future'
+      ]
+    ).toEqual({ version: 9 })
+    overrideNextSet(async (_items, _real) => {})
+    await expect(saveCreationOperation({ ...operation, phase: 'share_saved' })).rejects.toThrow(
+      'Creation progress could not be saved'
+    )
+    expect((await readCreationOperation(TESTNET))?.phase).toBe('reserved')
+
+    for (const change of [
+      (row: Record<string, unknown>) => ({ ...row, extra: true }),
+      (row: Record<string, unknown>) => ({ ...row, birthdayHeight: 124 }),
+      (row: Record<string, unknown>) => ({ ...row, birthdayHeight: null }),
+      (row: Record<string, unknown>) => ({ ...row, scope: { ...operation.scope, extra: true } }),
+      (row: Record<string, unknown>) => ({
+        ...row,
+        scope: { ...operation.scope, accountId: 'other' }
+      }),
+      (row: Record<string, unknown>) => {
+        const { birthdayHeight: _removed, ...remaining } = row
+        return remaining
+      }
+    ]) {
+      overrideNextSet(async (items, real) => {
+        const rows = items[MULTISIG_CREATION_STORAGE_KEY] as Record<string, unknown>
+        await real({
+          [MULTISIG_CREATION_STORAGE_KEY]: {
+            ...rows,
+            'testnet:w:a': change(rows['testnet:w:a'] as Record<string, unknown>)
+          }
+        })
+      })
+      await expect(saveCreationOperation({ ...operation, phase: 'share_saved' })).rejects.toThrow(
+        'Creation progress could not be saved'
+      )
+    }
+  })
   test('writes and reads a record per scope', async () => {
     await saveVaultRecordVerified(TESTNET, RECORD)
 
@@ -217,6 +283,7 @@ test.describe('multisig vault storage', () => {
     expect(keysOfStored(MULTISIG_VAULT_RECORDS_STORAGE_KEY)).toEqual(['testnet:w:ab'])
     expect(keysOfStored(MULTISIG_GROUPS_STORAGE_KEY)).toEqual(['testnet:w:ab'])
     expect(keysOfStored(MULTISIG_BANNER_STORAGE_KEY)).toEqual(['testnet:w:ab'])
+    expect(keysOfStored(MULTISIG_CREATION_STORAGE_KEY)).toEqual(['testnet:w:ab'])
   })
 
   test('deleting a wallet leaves a wallet whose id merely starts the same', async () => {
@@ -228,6 +295,7 @@ test.describe('multisig vault storage', () => {
     expect(keysOfStored(MULTISIG_VAULT_RECORDS_STORAGE_KEY)).toEqual(['testnet:w2:a'])
     expect(keysOfStored(MULTISIG_GROUPS_STORAGE_KEY)).toEqual(['testnet:w2:a'])
     expect(keysOfStored(MULTISIG_BANNER_STORAGE_KEY)).toEqual(['testnet:w2:a'])
+    expect(keysOfStored(MULTISIG_CREATION_STORAGE_KEY)).toEqual(['testnet:w2:a'])
   })
 
   test('deleting with nothing to delete leaves storage untouched', async () => {
@@ -246,6 +314,7 @@ test.describe('multisig vault storage', () => {
     expect(env.store.has(MULTISIG_VAULT_RECORDS_STORAGE_KEY)).toBe(false)
     expect(env.store.has(MULTISIG_GROUPS_STORAGE_KEY)).toBe(false)
     expect(env.store.has(MULTISIG_BANNER_STORAGE_KEY)).toBe(false)
+    expect(env.store.has(MULTISIG_CREATION_STORAGE_KEY)).toBe(false)
     expect(env.store.get('unrelated')).toBe('kept')
   })
 
@@ -263,7 +332,7 @@ test.describe('multisig vault storage', () => {
   })
 
   test('writes fail when lock coordination is unavailable', async () => {
-    delete (navigator as { locks?: unknown }).locks
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
 
     await expect(saveVaultRecordVerified(TESTNET, RECORD)).rejects.toThrow(
       'Multisig storage coordination is unavailable'

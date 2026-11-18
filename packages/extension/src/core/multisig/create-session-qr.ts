@@ -1,5 +1,6 @@
 import { bytesToBase64 } from '@/lib/bytes'
 import {
+  rosterBeforeDkg,
   abort,
   acceptRequest,
   activate,
@@ -17,29 +18,32 @@ import {
   resetDevice,
   result,
   switchTransport,
-  updateDevice,
-  type CreateSessionEffect,
-  type CreateSessionEvent,
-  type CreateSessionState,
-  type DeviceSessionState,
-  type MessageReceivedEvent,
-  type QrDisplayItem,
-  type ReduceResult
+  updateDevice
+} from './create-session-shared'
+import type {
+  CreateSessionEffect,
+  CreateSessionEvent,
+  CreateSessionState,
+  DeviceSessionState,
+  MessageReceivedEvent,
+  QrDisplayItem,
+  ReduceResult
 } from './create-session-shared'
 import {
   dkgShape,
   parseDkgFinalPayload,
   parsePairResponsePayload,
   parseRound1EchoPayload,
-  rosterSlotOf,
-  type PairInvitePayload,
-  type RosterLockPayload
+  rosterSlotOf
 } from './dkg-protocol'
+import type { PairInvitePayload, RosterLockPayload } from './dkg-protocol'
 import type { VaultDkgRound1Response, VaultDkgRound2Response } from './dkg-rpc'
 import { parseIdentityPublicKey } from './identity'
 import type { MultisigMessageType } from './messages'
-import { buildQrCeremonySteps, type QrStep } from './qr-plan'
-import { buildRoster, type RosterManifest } from './roster'
+import { buildQrCeremonySteps } from './qr-plan'
+import type { QrStep } from './qr-plan'
+import { buildRoster } from './roster'
+import type { RosterManifest } from './roster'
 import { parseSealedVaultRecord } from './vault-record'
 import type { DeviceSlot, VerifyStage } from './types'
 
@@ -176,7 +180,7 @@ function reducePairing(state: CreateSessionState, event: CreateSessionEvent): Re
 // round-1 messages name the session that will accept them.
 function lockRoster(state: CreateSessionState): ReduceResult {
   if (!allGuardiansConnected(state)) return ignored(state)
-  return result({ ...state, phase: 'DKG_R1' }, [
+  return result({ ...state, phase: 'DKG_R1', roster: rosterBeforeDkg(state) }, [
     {
       type: 'dkgOpen',
       ...dkgShape(state.threshold),
@@ -216,7 +220,7 @@ function openDkg(state: CreateSessionState, sessionId: string): ReduceResult {
   return result(next, qrStepEffects(next, 0))
 }
 
-function pairInvitePayload(state: CreateSessionState, slot: DeviceSlot): PairInvitePayload {
+export function pairInvitePayload(state: CreateSessionState, slot: DeviceSlot): PairInvitePayload {
   const owner = state.devices.find(device => device.slot === 1)?.device
   if (!owner || state.ownerIdentityPublicKey === null) {
     throw new Error('PAIR_INVITE needs the owner device and identity')
@@ -231,7 +235,7 @@ function pairInvitePayload(state: CreateSessionState, slot: DeviceSlot): PairInv
   }
 }
 
-function rosterLockPayload(
+export function rosterLockPayload(
   state: CreateSessionState,
   slot: DeviceSlot
 ): RosterLockPayload & { roster: RosterManifest } {
@@ -324,6 +328,18 @@ function reduceCeremony(state: CreateSessionState, event: CreateSessionEvent): R
       return isScanFor(step, 'DKG_R1', event.slot)
         ? round1Accepted(state, event.slot, event.result)
         : ignored(state)
+    case 'DKG_ROUND1_CONFIRMED': {
+      if (
+        !state.authenticatedDkg ||
+        !isScanFor(step, 'DKG_R1_ECHO', event.slot) ||
+        guardianState(state, event.slot)?.r1Echoed !== false
+      )
+        return ignored(state)
+      const next = updateDevice(state, event.slot, { r1Echoed: true })
+      return everyGuardian(next, d => d.r1Echoed)
+        ? advance({ ...next, phase: 'DKG_R2' })
+        : result(next)
+    }
     case 'DKG_ROUND2_ACCEPTED':
       return isScanFor(step, 'DKG_R2_BATCH', event.slot)
         ? round2Accepted(state, event.slot, event.result)
@@ -413,6 +429,14 @@ function codeScanned(
       if (!echo || echo.round1Hash !== state.r1Fingerprint) {
         return abort(state, 'verification_failed')
       }
+      if (state.authenticatedDkg && state.dkgSessionId)
+        return result(state, [
+          {
+            type: 'dkgConfirmRound1',
+            slot: event.slot,
+            request: { sessionId: state.dkgSessionId, signedEnvelope: event.envelope }
+          }
+        ])
       const next = updateDevice(state, event.slot, { r1Echoed: true })
       if (!everyGuardian(next, device => device.r1Echoed)) return result(next)
       return advance({ ...next, phase: 'DKG_R2' })
@@ -422,7 +446,10 @@ function codeScanned(
       if (!final || final.fingerprint !== state.finalFingerprint) {
         return abort(state, 'verification_failed')
       }
-      const next = updateDevice(state, event.slot, { finalReceived: true })
+      const next = updateDevice(state, event.slot, {
+        finalReceived: true,
+        finalEnvelope: event.envelope
+      })
       // The owner confirms on the verify step before this one; activation still requires it, so a
       // reordered plan cannot activate an unconfirmed group.
       if (!everyGuardian(next, device => device.finalReceived) || !next.ownerConfirmed.final) {

@@ -1,4 +1,5 @@
 import { parseAccount, parseAccountId, type Account, type AccountId } from '@/core/accounts/domain'
+import { isFrostAccount } from '@/core/accounts/domain/account-source'
 import {
   parseKeyDomain,
   parseKeyDomainId,
@@ -89,7 +90,16 @@ function assertCatalogReferences(
     if (accountIds.has(account.id)) {
       throw new Error(`Duplicate Account: ${account.id}`)
     }
-    const indexKey = `${encodeURIComponent(account.keyDomainId)}:${account.accountIndex}`
+    if (
+      isFrostAccount(account) &&
+      keyDomains.find(domain => domain.id === account.keyDomainId)?.source.kind !== 'software'
+    ) {
+      throw new Error('FROST Account requires a software KeyDomain')
+    }
+    const indexKey = JSON.stringify([
+      account.keyDomainId,
+      isFrostAccount(account) ? account.source : account.accountIndex
+    ])
     if (accountIndexes.has(indexKey)) {
       throw new Error(`Duplicate Account index in KeyDomain: ${account.keyDomainId}`)
     }

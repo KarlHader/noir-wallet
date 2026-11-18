@@ -59,6 +59,12 @@ export default defineConfig({
       ]
     },
     {
+      name: 'multisig',
+      outputDir: '../../e2e-output/multisig',
+      testMatch: ['extension/multichain-wasm.spec.ts'],
+      grep: /imports a sealed FROST v2 account/
+    },
+    {
       name: 'release-default',
       outputDir: '../../e2e-output/release-default',
       testMatch: ['extension/release/**/*.spec.ts']

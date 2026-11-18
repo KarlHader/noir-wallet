@@ -670,7 +670,7 @@ const TRUSTED_RUNTIME_SCHEMAS: Readonly<Record<string, RuntimeMessageSchema>> = 
   GET_ADDITIONAL_RECEIVE_TARGETS: {
     required: { walletId: isShortString, accountId: isShortString }
   },
-  GET_ACCOUNT_NETWORKS: {},
+  GET_ACCOUNT_NETWORKS: { optional: { deriveMissingAddresses: isBoolean } },
   GET_BITCOIN_ADDRESS_BALANCES: {},
   SET_ACTIVE_BITCOIN_ADDRESS_TYPE: {
     required: {

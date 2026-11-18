@@ -14,6 +14,12 @@ export type MultisigMessageType =
   | 'DKG_FINAL'
   | 'DKG_ACTIVATE'
   | 'SESSION_ABORT'
+  | 'SIGN_INIT'
+  | 'SIGN_COMMITMENTS'
+  | 'SIGN_PAYLOAD'
+  | 'SIGN_SHARE'
+  | 'SIGN_REJECT'
+  | 'SIGN_RESULT'
 
 export interface MultisigEnvelope {
   protocol_version: 1
@@ -49,7 +55,13 @@ const ROUND_BY_MESSAGE_TYPE: Record<MultisigMessageType, number> = {
   KEYSET_SETUP: 3,
   DKG_FINAL: 3,
   DKG_ACTIVATE: 3,
-  SESSION_ABORT: 3
+  SESSION_ABORT: 3,
+  SIGN_INIT: 1,
+  SIGN_COMMITMENTS: 1,
+  SIGN_PAYLOAD: 3,
+  SIGN_SHARE: 3,
+  SIGN_REJECT: 3,
+  SIGN_RESULT: 3
 }
 
 // Bluetooth mock only: placeholder hash and tag until that path moves to the signed protocol.

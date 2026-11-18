@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { parseChainId } from '@/core/chains/registry'
 import { findLedgerPublicAccount } from '@/core/wallet/hardware-wallet-data'
 import {
@@ -7,7 +8,8 @@ import {
 import { readActiveLedgerHardwareCredential } from '@/infrastructure/keyring/active-hardware-credential-inventory'
 import type { LedgerSigningAccountBinding } from '@/infrastructure/keyring/multichain/ledger-signing-bridge'
 import type { ChainId } from '@/core/chains/domain'
-import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { KeyDomainId } from '@/core/keyring/domain'
 import { credentialSession } from './credential-session'
 import { requestLedgerSignature } from './ledger-signing-coordinator'
 
@@ -45,14 +47,16 @@ export async function resolveLedgerSigningAccount(
       item.accountIndex === accountIndex &&
       item.id === snapshot.manifest.activeAccount?.accountId
   )
-  if (accounts.length !== 1) throw new Error('Ledger account index does not match active account')
+  if (accounts.length !== 1 || !isDerivedAccount(accounts[0]))
+    throw new Error('Ledger account index does not match active account')
   const chainAccounts = snapshot.chainAccounts.filter(
     item =>
       item.scope.keyDomainId === keyDomainId &&
       item.scope.accountId === accounts[0].id &&
       item.scope.chainId === chainId
   )
-  if (chainAccounts.length !== 1) throw new Error('Ledger chain account not registered')
+  if (chainAccounts.length !== 1 || !isDerivedAccount(chainAccounts[0]))
+    throw new Error('Ledger chain account not registered')
   const credential = await readActiveLedgerHardwareCredential(
     new IndexedDbCredentialRepository(),
     snapshot,

@@ -47,7 +47,7 @@ interface WalletStore {
   updateAccountInWallets: (
     walletId: string,
     accountId: string,
-    updates: Partial<AccountData>
+    updates: Partial<Omit<AccountData, 'id' | 'source' | 'derivationIndex'>>
   ) => void
 
   setAccountDisplayName: (walletId: string, accountId: string, displayName: string | null) => void

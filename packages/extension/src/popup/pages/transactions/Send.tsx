@@ -1,4 +1,5 @@
 import { ZEC_ZCASH_ASSET } from '@/config/intents'
+import { SendEntryGuard } from '@/popup/components/multisig/SendEntryGuard'
 import { Switch } from '../../components/ui/switch'
 import {
   buildPublicPrivateEvmSendPath,
@@ -173,6 +174,14 @@ function MoveLayout({
 }
 
 export function Send() {
+  return (
+    <SendEntryGuard>
+      <SingleSignSend />
+    </SendEntryGuard>
+  )
+}
+
+function SingleSignSend() {
   const { goBack, navigate } = useNavigate()
   const location = useLocation()
   const routeParams = new URLSearchParams(location.search)

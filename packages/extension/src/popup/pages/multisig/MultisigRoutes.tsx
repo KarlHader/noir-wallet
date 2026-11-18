@@ -11,11 +11,9 @@ import { QrStepPage } from './QrStepPage'
 import { TeamPage } from './TeamPage'
 import { ThresholdPage } from './ThresholdPage'
 import { VerifyPage } from './VerifyPage'
+import { SendPage } from './SendPage'
 
-// Pages that work without a live session: the threshold page starts one, the failed page reads
-// the one that aborted, and the team page only reads stored groups. Every other page is a step
-// of a running setup.
-const SESSION_FREE_PATHS: ReadonlySet<string> = new Set(['create', 'create/failed', 'team'])
+const SESSION_FREE_PATHS: ReadonlySet<string> = new Set(['create', 'create/failed'])
 
 const CREATE_ROUTE = `${MULTISIG_ROUTE_PREFIX}/create`
 const FAILED_ROUTE = `${CREATE_ROUTE}/failed`
@@ -58,8 +56,7 @@ function useSessionGuard(): boolean {
   return !sessionLost && !sessionAborted
 }
 
-/** Routes of the multisig full tab, relative to `/multisig/*`. */
-export function MultisigRoutes() {
+function CreationRoutes() {
   const canRender = useSessionGuard()
   if (!canRender) return null
 
@@ -72,7 +69,18 @@ export function MultisigRoutes() {
       <Route path="create/qr/:index" element={<QrStepPage />} />
       <Route path="create/verify" element={<VerifyPage />} />
       <Route path="create/failed" element={<FailedPage />} />
+    </Routes>
+  )
+}
+
+/** Sending and account display never depend on an in-progress creation session. */
+export function MultisigRoutes() {
+  const { pathname } = useLocation()
+  if (/^create(?:\/|$)/.test(relativeMultisigPath(pathname))) return <CreationRoutes />
+  return (
+    <Routes>
       <Route path="team" element={<TeamPage />} />
+      <Route path="send" element={<SendPage />} />
     </Routes>
   )
 }

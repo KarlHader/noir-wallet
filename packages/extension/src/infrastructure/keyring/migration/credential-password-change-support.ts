@@ -2,6 +2,7 @@ import type {
   V1DiscoveredWallet,
   V1MetadataDiscovery
 } from '@/infrastructure/persistence/migrations'
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { bytesToHex } from '@/lib/bytes'
 import {
   type CredentialRepository,
@@ -190,7 +191,10 @@ export function assertAccountAnchors(
   }
   for (const account of wallet.accounts) {
     const storedAccount = snapshot.accounts.find(
-      item => item.keyDomainId === wallet.id && item.accountIndex === account.accountIndex
+      item =>
+        isDerivedAccount(item) &&
+        item.keyDomainId === wallet.id &&
+        item.accountIndex === account.accountIndex
     )
     const derived = result.accounts.find(item => item.accountIndex === account.accountIndex)
     if (!storedAccount || !derived) throw new Error('Password-change Account anchor is missing')
@@ -206,6 +210,7 @@ export function assertAccountAnchors(
       const actual = derived[engine]
       if (
         !stored ||
+        !isDerivedAccount(stored) ||
         actual.chainId !== chainId ||
         actual.identity !== stored.identity.value ||
         actual.derivationPath !== stored.derivation.path

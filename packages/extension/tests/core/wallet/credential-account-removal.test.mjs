@@ -274,6 +274,22 @@ test('missing unlock or a retained anchor fails before metadata removal', async 
   assert.equal(await state.credentialRepository.findIncompleteJournal('remove'), null)
 })
 
+test('external accounts cannot replace the last HD credential anchor', async () => {
+  const state = await fixture()
+  const calls = state.compatibilityWorker.calls.length
+  const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+  const external = { ...state.retained, source }
+  delete external.accountIndex
+  const snapshot = { ...state.snapshot, accounts: [state.first, external] }
+  state.storageRepository.snapshots.set(snapshot.manifest.generationId, snapshot)
+  await assert.rejects(
+    state.removal().preflightAccountRemoval(state.keyDomain.id, state.first.id, PASSWORD),
+    /No verified .* account remains/
+  )
+  assert.equal(state.compatibilityWorker.calls.length, calls)
+  assert.equal(state.storageRepository.pointer.generationId, snapshot.manifest.generationId)
+})
+
 test('removing a non-anchor Account keeps the original CredentialSet without Worker proof', async () => {
   const state = await fixture()
   const calls = state.compatibilityWorker.calls.length
@@ -446,6 +462,155 @@ test('retained V1 reconciliation does not restore a deleted anchor Account', asy
     [state.retained.id]
   )
   assert.equal(await state.credentialRepository.findIncompleteJournal('remove'), null)
+})
+
+test('retained HD credential reconciliation preserves the active independent FROST graph', async () => {
+  const state = await fixture()
+  const source = { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+  const external = {
+    id: 'account:external',
+    keyDomainId: state.keyDomain.id,
+    source,
+    displayName: 'Independent FROST',
+    createdAt: NOW + 1
+  }
+  const parentChain = state.snapshot.chainAccounts.find(
+    account =>
+      account.scope.accountId === state.first.id && account.scope.chainId === CHAINS.zcashChainId
+  )
+  const { derivation: _derivation, ...publicChain } = parentChain
+  const externalChain = {
+    ...publicChain,
+    id: 'chain-account:external',
+    scope: { ...parentChain.scope, accountId: external.id },
+    identity: { ...parentChain.identity, value: 'u-independent-frost' },
+    source
+  }
+  const externalAddress = {
+    id: 'address:external',
+    chainAccountId: externalChain.id,
+    value: 'u-independent-frost',
+    scheme: 'zcash-unified',
+    privacy: 'shielded',
+    purpose: 'receive',
+    preferredForReceive: true,
+    rotatable: true,
+    walletCompatibility: 'limited'
+  }
+  const snapshot = parseStorageV2Snapshot({
+    ...state.snapshot,
+    manifest: {
+      ...state.snapshot.manifest,
+      activeAccount: { keyDomainId: state.keyDomain.id, accountId: external.id },
+      counts: {
+        ...state.snapshot.manifest.counts,
+        accounts: state.snapshot.accounts.length + 1,
+        chainAccounts: state.snapshot.chainAccounts.length + 1,
+        addresses: state.snapshot.addresses.length + 1
+      }
+    },
+    accounts: [...state.snapshot.accounts, external],
+    chainAccounts: [...state.snapshot.chainAccounts, externalChain],
+    addresses: [...state.snapshot.addresses, externalAddress]
+  })
+  state.storageRepository.snapshots.set(snapshot.manifest.generationId, snapshot)
+  const local = structuredClone(
+    V1_MIGRATION_FIXTURES.find(item => item.id === 'software-multi-account').local
+  )
+  const retained = JSON.parse(local.wallet_state)
+  retained.state.wallets[0].accounts.push({
+    id: external.id,
+    name: external.displayName,
+    createdAt: external.createdAt,
+    source,
+    addresses: { shielded: externalAddress.value, transparent: '' }
+  })
+  retained.state.currentAccountId = external.id
+  // Force a real inventory merge, rather than only its already-matching fast path.
+  retained.state.wallets[0].name = 'Renamed Wallet'
+  local.wallet_state = JSON.stringify(retained)
+  const discovery = discoverV1Metadata(local)
+  assert.equal(discovery.status, 'ready')
+  assert.equal(discovery.currentAccountId, external.id)
+  assert.equal(
+    discovery.wallets[0].accounts.some(account => account.id === external.id),
+    false
+  )
+  const reconcile = (inputDiscovery = discovery) =>
+    new RetainedV1ReconciliationCoordinator({
+      credentialRepository: state.credentialRepository,
+      storageRepository: state.storageRepository,
+      compatibilityWorker: state.compatibilityWorker,
+      now: () => NOW + 2
+    }).synchronize({
+      discovery: inputDiscovery,
+      credentialEnvelopes: local,
+      password: PASSWORD,
+      chains: CHAINS
+    })
+  const result = await reconcile()
+  assert.deepEqual(result.removedAccountIds, [])
+  assert.deepEqual(result.removedKeyDomainIds, [])
+  assert.equal((await reconcile()).status, 'already-synchronized')
+  const active = await state.storageRepository.getSnapshot(
+    state.storageRepository.pointer.generationId
+  )
+  assert.deepEqual(active.manifest.activeAccount, snapshot.manifest.activeAccount)
+  assert.deepEqual(
+    active.accounts.find(account => account.id === external.id),
+    external
+  )
+  assert.deepEqual(
+    active.chainAccounts.find(account => account.id === externalChain.id),
+    externalChain
+  )
+  assert.deepEqual(
+    active.addresses.find(address => address.id === externalAddress.id),
+    externalAddress
+  )
+  assert.deepEqual(
+    active.accounts.filter(account => account.source === undefined),
+    state.snapshot.accounts
+  )
+  assert.equal(active.keyDomains[0].credentialRef, state.keyDomain.credentialRef)
+  assert.deepEqual(
+    await state.credentialRepository.getCredentialSet(state.keyDomain.credentialRef),
+    state.sourceSet
+  )
+  for (const engine of ['zcash', 'multichain']) {
+    const ref = state.sourceSet.manifest.engines[engine].credentialRef
+    assert.deepEqual(
+      await state.credentialRepository.getEnvelope(ref),
+      state.sourceEnvelopes[engine]
+    )
+  }
+  assert.deepEqual(
+    state.compatibilityWorker.calls.at(-1).accounts.map(account => account.accountIndex),
+    [0, 2]
+  )
+  assert.equal(await state.credentialRepository.findIncompleteJournal('remove'), null)
+  retained.state.wallets[0].accounts = retained.state.wallets[0].accounts.filter(
+    account => account.id !== state.retained.id
+  )
+  local.wallet_state = JSON.stringify(retained)
+  const removed = await reconcile(discoverV1Metadata(local))
+  assert.deepEqual(removed.removedAccountIds, [state.retained.id])
+  const afterRemoval = await state.storageRepository.getSnapshot(removed.generationId)
+  assert.deepEqual(afterRemoval.manifest.activeAccount, snapshot.manifest.activeAccount)
+  assert.deepEqual(afterRemoval.accounts, [state.first, external])
+  assert.deepEqual(
+    afterRemoval.chainAccounts.find(account => account.id === externalChain.id),
+    externalChain
+  )
+  assert.deepEqual(
+    afterRemoval.addresses.find(address => address.id === externalAddress.id),
+    externalAddress
+  )
+  assert.equal(afterRemoval.keyDomains[0].credentialRef, state.keyDomain.credentialRef)
+  assert.deepEqual(
+    state.compatibilityWorker.calls.at(-1).accounts.map(account => account.accountIndex),
+    [0]
+  )
 })
 
 test('a retained Ledger Account is proven against its authenticated public export', async () => {

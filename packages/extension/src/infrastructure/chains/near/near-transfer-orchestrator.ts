@@ -1,6 +1,9 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { KeyringError } from '@/core/keyring/ports'
-import { parseAccountId, type ChainAccount } from '@/core/accounts/domain'
-import { parseChainId, type AssetRegistry } from '@/core/chains/registry'
+import { parseAccountId } from '@/core/accounts/domain'
+import type { ChainAccount, DerivedChainAccount } from '@/core/accounts/domain'
+import { parseChainId } from '@/core/chains/registry'
+import type { AssetRegistry } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import type {
   PreparedSigningCommand,
@@ -11,15 +14,17 @@ import type {
 import type { LedgerSigningResume } from '@/infrastructure/keyring/multichain/ledger-signing-bridge'
 import type { NearSigningPreparePayload } from '@/infrastructure/keyring/multichain/signing-adapter-near'
 import {
-  type NearIntentsTransactionBinding,
   parseTransactionEventId,
   parseTransactionId,
-  parseTransactionSegmentId,
-  type TransactionAccountScope,
-  type TransactionGraph,
-  type TransactionId,
-  type TransactionLifecycleStatus,
-  type TransactionSegmentEvent
+  parseTransactionSegmentId
+} from '@/core/transactions/domain'
+import type {
+  NearIntentsTransactionBinding,
+  TransactionAccountScope,
+  TransactionGraph,
+  TransactionId,
+  TransactionLifecycleStatus,
+  TransactionSegmentEvent
 } from '@/core/transactions/domain'
 import type { TransactionRepository } from '@/ports/repositories'
 import type { NearTransactionSigningPreparePayload } from '@/infrastructure/keyring/multichain/near-signing-client'
@@ -29,11 +34,11 @@ import {
   transitionPendingTransactionGraph
 } from '../pending-transaction-graph'
 
-import {
-  type AwaitingApprovalNearTransfer,
-  type NearPendingTransferStore,
-  type PendingNearTransfer,
-  type SignedPendingNearTransfer
+import type {
+  AwaitingApprovalNearTransfer,
+  NearPendingTransferStore,
+  PendingNearTransfer,
+  SignedPendingNearTransfer
 } from './near-pending-transfer-store'
 import type { NearBroadcastRpc, NearReadRpc } from './near-rpc-types'
 import {
@@ -82,7 +87,7 @@ export interface NearTransferOrchestratorOptions {
 }
 
 interface PrepareNearTransferBaseInput {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: number
   readonly publicKey: string
   readonly receiverId: string
@@ -191,6 +196,8 @@ export class NearTransferOrchestrator {
   }
 
   async prepare(input: PrepareNearTransferInput): Promise<PreparedNearTransferApproval> {
+    if (!isDerivedAccount(input.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (input.chainAccount.identity.kind !== 'account-identifier') {
       throw new Error('NEAR transfer requires an account-identifier binding')
     }

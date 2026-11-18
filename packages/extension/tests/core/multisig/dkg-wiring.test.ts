@@ -21,6 +21,7 @@ const VAULT_METHODS = [
   'vault.dkg.open',
   'vault.dkg.acceptRound1',
   'vault.dkg.acceptRound2',
+  'vault.dkg.confirmRound1',
   'vault.dkg.close'
 ] as const
 
@@ -36,7 +37,22 @@ test.describe('multisig dkg wiring', () => {
     expect(isBackgroundOnlyVaultRpc('vault.record.summary')).toBe(true)
     // A page opens a ceremony through vault.group.open, which names the wallet itself.
     expect(isBackgroundOnlyVaultRpc('vault.dkg.open')).toBe(true)
+    for (const method of [
+      'wallet.registerFrostAccount',
+      'wallet.preflightFrostAccount',
+      'wallet.resolveFrostAccount',
+      'vault.sign.worker.start',
+      'vault.sign.worker.prepare',
+      'vault.sign.worker.advance',
+      'vault.sign.worker.ingest',
+      'vault.sign.worker.status',
+      'vault.sign.worker.close',
+      'vault.sign.worker.invalidate'
+    ]) {
+      expect(isBackgroundOnlyVaultRpc(method), method).toBe(true)
+    }
     expect(isBackgroundOnlyVaultRpc('vault.dkg.acceptRound2')).toBe(false)
+    expect(isBackgroundOnlyVaultRpc('vault.dkg.confirmRound1')).toBe(false)
     expect(isBackgroundOnlyVaultRpc('vault.group.save')).toBe(false)
     expect(isBackgroundOnlyVaultRpc('vault.dkg.close')).toBe(false)
     expect(isVaultRpcBlocked('vault.group.open', false)).toBe(true)
@@ -62,6 +78,7 @@ test.describe('multisig dkg wiring', () => {
       open: async () => ({ sessionId: 'sid' }),
       acceptRound1: async () => ({ complete: false }),
       acceptRound2: async () => ({ complete: false }),
+      confirmRound1: async () => {},
       close: async () => {},
       save: async () => {}
     }
@@ -162,14 +179,13 @@ test.describe('multisig dkg wiring', () => {
     expect(port).toContain("throw new Error('Vault record could not be saved')")
   })
 
-  test('wallet removal and reset clear multisig data behind the feature flag', async () => {
+  test('wallet removal and reset clear multisig data independently of the feature flag', async () => {
     const source = await readSource('src/background/wallet-cleanup.ts')
     const count = (needle: string) => source.split(needle).length - 1
     expect(count('completeWalletMetadataDeletion(walletId)')).toBe(4)
     expect(count('await this.removeMultisigWalletData(walletId)')).toBe(4)
     expect(source).toContain('this.removeMultisigAccountData(walletId, accountId)')
     expect(source).toContain('this.resetMultisigData()')
-    // each helper returns before touching storage when the flag is off
-    expect(count('if (!isMultisigUiEnabled()) return')).toBe(3)
+    expect(count('if (!isMultisigUiEnabled()) return')).toBe(0)
   })
 })

@@ -11,6 +11,8 @@ import { logger } from '@/lib/logger'
 import { getShieldableTransparentBalance, getShieldInputAmountFromHistory } from './shielding'
 import { isRetryableWalletRpcError } from './wallet-rpc-errors'
 import { mapWasmAccountAddresses, mapWasmShieldedAddresses } from './account-addresses'
+import { parseAccountSource, type AccountSource } from '../accounts/domain/account-source'
+import type { RPCSchema } from '../worker/types'
 import type {
   BallotDecision,
   HardwarePcztPair,
@@ -53,7 +55,8 @@ export class ZcashWalletCore {
   /** Watch-only mode: account spends are authorized externally (hardware wallet) */
   private watchOnly = false
   accountId: number | null = null
-  accountIndex: number = 0
+  accountIndex: number | undefined = 0
+  accountSource: AccountSource | undefined
   private isInitialized = false
   private client: ZcashWorkerClient
 
@@ -99,6 +102,7 @@ export class ZcashWalletCore {
     this.watchOnly = false
     this.accountId = null
     this.accountIndex = 0
+    this.accountSource = undefined
     this.isInitialized = false
     await this.client.reset()
   }
@@ -114,6 +118,7 @@ export class ZcashWalletCore {
     this.watchOnly = false
     this.accountId = null
     this.accountIndex = 0
+    this.accountSource = undefined
     if (lightwalletdUrl) {
       this.lightwalletdUrl = lightwalletdUrl
     } else {
@@ -139,6 +144,7 @@ export class ZcashWalletCore {
     this.watchOnly = false
     this.accountId = null
     this.accountIndex = 0
+    this.accountSource = undefined
   }
 
   invalidateRuntime(): void {
@@ -152,6 +158,14 @@ export class ZcashWalletCore {
   }
 
   async restoreFromDB(targetDerivationIndex?: number): Promise<boolean> {
+    if (this.accountSource) {
+      this.seedPhrase = null
+      this.sessionCredentialBound = false
+      this.watchOnly = false
+    }
+    this.accountSource = undefined
+    this.accountId = null
+    this.accountIndex = undefined
     try {
       const accountIds = await this.client.getAccountIds()
       if (!accountIds || accountIds.length === 0) return false
@@ -174,9 +188,14 @@ export class ZcashWalletCore {
         return false
       }
 
-      this.accountId = accountIds[0]
-      const restoredIndex = await this.client.getAccountHdIndex(accountIds[0])
-      if (restoredIndex !== null) this.accountIndex = restoredIndex
+      const derived: Array<[number, number]> = []
+      for (const id of accountIds) {
+        const index = await this.client.getAccountHdIndex(id)
+        if (index != null) derived.push([id, index])
+      }
+      if (!derived.length) return false
+      this.accountId = derived[0][0]
+      this.accountIndex = derived[0][1]
       logger.log(
         `WalletCore: restored account ID ${this.accountId} (derivationIndex: ${this.accountIndex})`,
         this.walletId
@@ -242,6 +261,7 @@ export class ZcashWalletCore {
   }
 
   setSeedPhrase(seedPhrase: string, accountIndex: number = 0): void {
+    this.assertDerivedAccount()
     this.seedPhrase = seedPhrase
     this.sessionCredentialBound = false
     this.watchOnly = false
@@ -256,6 +276,7 @@ export class ZcashWalletCore {
    * be set; readiness only requires the WASM account to exist.
    */
   setWatchOnly(accountIndex: number = 0): void {
+    this.assertDerivedAccount()
     this.seedPhrase = null
     this.watchOnly = true
     this.sessionCredentialBound = false
@@ -275,6 +296,7 @@ export class ZcashWalletCore {
   }
 
   setSessionCredential(accountIndex: number): void {
+    this.assertDerivedAccount()
     this.seedPhrase = null
     this.watchOnly = false
     this.sessionCredentialBound = true
@@ -299,6 +321,7 @@ export class ZcashWalletCore {
     accountIndex: number,
     birthdayHeight: number
   ): Promise<number> {
+    this.accountSource = undefined
     this.seedPhrase = seedPhrase
     this.sessionCredentialBound = false
     this.watchOnly = false
@@ -312,6 +335,7 @@ export class ZcashWalletCore {
   }
 
   async createAccountFromSession(accountIndex: number, birthdayHeight: number): Promise<number> {
+    this.accountSource = undefined
     this.seedPhrase = null
     this.watchOnly = false
     this.sessionCredentialBound = true
@@ -333,6 +357,7 @@ export class ZcashWalletCore {
     keySource: 'keystone' | 'ledger'
     birthdayHeight?: number
   }): Promise<number> {
+    this.accountSource = undefined
     this.seedPhrase = null
     this.sessionCredentialBound = false
     this.watchOnly = true
@@ -345,6 +370,60 @@ export class ZcashWalletCore {
     return accountId
   }
 
+  private assertDerivedAccount(): void {
+    if (this.accountSource)
+      throw new Error('External FROST account requires its dedicated account flow')
+  }
+
+  private requireDerivedIndex(): number {
+    this.assertDerivedAccount()
+    if (this.accountIndex === undefined) throw new Error('HD account is not selected')
+    return this.accountIndex
+  }
+
+  private selectFrostAccount(id: number, source: AccountSource): void {
+    this.seedPhrase = null
+    this.sessionCredentialBound = false
+    this.watchOnly = true
+    this.accountSource = parseAccountSource(source)
+    this.accountIndex = undefined
+    this.accountId = id
+    this.client.markAccountReady()
+  }
+
+  async registerFrostAccount(
+    params: Omit<RPCSchema['wallet.registerFrostAccount']['request'], 'walletId'>
+  ): Promise<number> {
+    const source = parseAccountSource(params.source)
+    if (source.network !== this.network) throw new Error('External account network mismatch')
+    const id = await this.client.registerFrostAccount({ ...params, source })
+    this.selectFrostAccount(id, source)
+    return id
+  }
+
+  preflightFrostAccount(
+    params: Omit<RPCSchema['wallet.preflightFrostAccount']['request'], 'walletId'>
+  ): Promise<true> {
+    return this.client.preflightFrostAccount(params)
+  }
+
+  async resolveFrostAccount(
+    params: Omit<RPCSchema['wallet.resolveFrostAccount']['request'], 'walletId'>
+  ): Promise<number | null> {
+    if (params.source.network !== this.network) throw new Error('External account network mismatch')
+    return this.client.resolveFrostAccount(params)
+  }
+
+  async restoreFrostAccount(
+    params: Omit<RPCSchema['wallet.resolveFrostAccount']['request'], 'walletId'>
+  ): Promise<boolean> {
+    const source = parseAccountSource(params.source)
+    const id = await this.resolveFrostAccount({ ...params, source })
+    if (id === null) return false
+    this.selectFrostAccount(id, source)
+    return true
+  }
+
   /**
    * Build an unsigned PCZT for a transfer (hardware wallet flow).
    * Returns the full PCZT (kept by the wallet) plus a redacted copy for QR
@@ -353,6 +432,7 @@ export class ZcashWalletCore {
   async pcztCreate(
     params: SendTransactionParams & { signer?: 'keystone' | 'ledger' }
   ): Promise<HardwarePcztPair> {
+    this.assertDerivedAccount()
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
@@ -373,6 +453,7 @@ export class ZcashWalletCore {
    * Build an unsigned shielding PCZT (transparent -> Orchard, hardware wallet flow).
    */
   async pcztShieldCreate(marginalFeeZats?: number, feeQuoteId?: string): Promise<HardwarePcztPair> {
+    this.assertDerivedAccount()
     if (this.accountId === null) {
       throw new Error('Account not initialized')
     }
@@ -388,10 +469,12 @@ export class ZcashWalletCore {
     signedPcztBase64: string,
     submissionDeadline?: number
   ): Promise<string> {
+    this.assertDerivedAccount()
     return this.client.pcztProveSend(fullPcztBase64, signedPcztBase64, submissionDeadline)
   }
 
   async pcztLedgerPayload(redactedBase64: string, accountIndex: number) {
+    this.assertDerivedAccount()
     return this.client.pcztLedgerPayload(redactedBase64, accountIndex)
   }
 
@@ -400,6 +483,7 @@ export class ZcashWalletCore {
     accountIndex: number,
     signatures: LedgerPcztSignatures
   ): Promise<string> {
+    this.assertDerivedAccount()
     return this.client.pcztApplyLedgerSignatures(redactedBase64, accountIndex, signatures)
   }
 
@@ -412,17 +496,23 @@ export class ZcashWalletCore {
   async getAddresses(
     seedPhrase?: string,
     network?: Network,
-    accountIndex: number = 0
+    accountIndex?: number
   ): Promise<AccountAddresses> {
+    if (this.accountSource) {
+      if (seedPhrase || accountIndex !== undefined || (network && network !== this.network))
+        throw new Error('External account cannot derive addresses')
+      return this.getUnifiedAddresses()
+    }
     const seed = seedPhrase || this.seedPhrase
     const net = network || this.network
+    const index = accountIndex ?? 0
 
     if (!seed) {
       if (this.sessionCredentialBound) {
-        if (this.accountId !== null && accountIndex === this.accountIndex) {
+        if (this.accountId !== null && index === this.accountIndex) {
           return this.getUnifiedAddresses()
         }
-        const addresses = await this.client.getSessionAddresses(accountIndex, net)
+        const addresses = await this.client.getSessionAddresses(index, net)
         return mapWasmAccountAddresses(addresses)
       }
       // Watch-only accounts can't derive from seed; read from the WASM DB instead
@@ -433,7 +523,7 @@ export class ZcashWalletCore {
     }
 
     logger.log(`WalletCore: getAddresses for network ${net}`, this.walletId)
-    const addresses = await this.client.mnemonicToAddresses(seed, accountIndex, net)
+    const addresses = await this.client.mnemonicToAddresses(seed, index, net)
 
     return mapWasmAccountAddresses(addresses)
   }
@@ -462,6 +552,8 @@ export class ZcashWalletCore {
   }
 
   async getBalance(accountIndex?: number): Promise<ZcashBalance> {
+    if (this.accountSource && accountIndex !== undefined)
+      throw new Error('External account has no HD index')
     const accountId =
       accountIndex === undefined
         ? this.accountId
@@ -534,6 +626,7 @@ export class ZcashWalletCore {
     approvedAccountIndex?: number,
     transactionContext?: ZcashTransactionContext
   ): Promise<TransferResult> {
+    this.assertDerivedAccount()
     if (this.watchOnly) {
       throw new Error('Watch-only wallet: use the hardware signing flow (pcztCreate)')
     }
@@ -541,7 +634,7 @@ export class ZcashWalletCore {
       throw new Error('Wallet not unlocked')
     }
     const amountZatoshis = safeBig(params.amount).times(1e8).toFixed(0)
-    const accountIndex = approvedAccountIndex ?? this.accountIndex
+    const accountIndex = approvedAccountIndex ?? this.requireDerivedIndex()
     const seedPhrase = this.seedPhrase
 
     return await this.client.sendTransaction(
@@ -636,13 +729,14 @@ export class ZcashWalletCore {
     transactionContext?: ZcashTransactionContext,
     feeQuoteId?: string
   ): Promise<{ txid: string; amount: string | null }> {
+    this.assertDerivedAccount()
     if (this.watchOnly) {
       throw new Error('Watch-only wallet: use the hardware signing flow (pcztShieldCreate)')
     }
     if (!this.seedPhrase && !this.sessionCredentialBound) {
       throw new Error('Wallet not unlocked')
     }
-    const accountIndex = approvedAccountIndex ?? this.accountIndex
+    const accountIndex = approvedAccountIndex ?? this.requireDerivedIndex()
     const seedPhrase = this.seedPhrase
 
     const balance = await this.getBalance(accountIndex)
@@ -743,6 +837,7 @@ export class ZcashWalletCore {
     overrideAccountIndex?: number,
     addressIndex?: number
   ): Promise<{ signature: string; pubkey: string; address: string }> {
+    this.assertDerivedAccount()
     if (this.watchOnly) {
       throw new Error('Message signing is not supported by hardware wallets')
     }
@@ -752,7 +847,7 @@ export class ZcashWalletCore {
 
     return this.client.signMessage({
       walletId: this.walletId,
-      accountIndex: overrideAccountIndex ?? this.accountIndex,
+      accountIndex: overrideAccountIndex ?? this.requireDerivedIndex(),
       ...(this.seedPhrase ? { seedPhrase: this.seedPhrase } : {}),
       message,
       addressIndex
@@ -763,6 +858,7 @@ export class ZcashWalletCore {
     overrideAccountIndex?: number,
     addressIndex?: number
   ): Promise<{ pubkey: string; address: string }> {
+    this.assertDerivedAccount()
     if (this.watchOnly) {
       throw new Error('Public key derivation is not supported by hardware wallets')
     }
@@ -771,7 +867,7 @@ export class ZcashWalletCore {
     }
 
     return this.client.getPublicKey({
-      accountIndex: overrideAccountIndex ?? this.accountIndex,
+      accountIndex: overrideAccountIndex ?? this.requireDerivedIndex(),
       ...(this.seedPhrase ? { seedPhrase: this.seedPhrase } : {}),
       addressIndex
     })

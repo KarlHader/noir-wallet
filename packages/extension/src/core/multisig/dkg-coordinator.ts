@@ -9,11 +9,27 @@
  * and only encrypted.
  */
 import { bytesToBase64, bytesToHex } from '@/lib/bytes'
-import { SecretBin, round1Hash, type DkgShape, type VaultWasm } from './dkg-protocol'
-import { deviceId } from './messages'
+import {
+  SecretBin,
+  round1Hash,
+  isDkgShape,
+  parseDkgEnvelopePayload,
+  parseRound1EchoPayload,
+  parseDkgFinalPayload,
+  type DkgShape,
+  type VaultWasm
+} from './dkg-protocol'
+import { deviceId, parseEnvelope, type MultisigEnvelope } from './messages'
+import { createInboundGate, type InboundGate } from './inbound-gate'
+import type { RosterManifest } from './roster'
+import type { DeviceSlot } from './types'
 import {
   openVaultRecord,
   sealVaultRecord,
+  parseVaultRecordBinding,
+  isVaultGroupId,
+  isVaultWalletId,
+  type VaultRecordBinding,
   type SealedVaultRecord,
   type VaultRecordHeader
 } from './vault-record'
@@ -25,6 +41,62 @@ export type DkgCoordinatorConfig = DkgShape & {
   mainnet: boolean
   walletId: string
   groupId: string
+  binding?: VaultRecordBinding
+  outerSessionId?: string
+}
+
+export type CreationEvidence = { outerSessionId: string; confirmations: MultisigEnvelope[] }
+
+export function isOuterSessionId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256
+}
+
+function payloadOf(envelope: MultisigEnvelope): unknown {
+  try {
+    return JSON.parse(envelope.encrypted_payload)
+  } catch {
+    return null
+  }
+}
+
+function rosterGate(roster: RosterManifest, sessionId: string): InboundGate {
+  const own = roster.participants.find(peer => peer.slot === 0)
+  if (!own) throw new Error('Invalid DKG roster')
+  const peers = roster.participants.filter(peer => peer.slot !== 0)
+  const gate = createInboundGate({
+    groupId: roster.groupId,
+    sessionId,
+    ownIdentityPublicKey: own.identityPublicKey,
+    slots: peers.map(peer => (peer.slot + 1) as DeviceSlot)
+  })
+  for (const peer of peers) gate.registerPeer((peer.slot + 1) as DeviceSlot, peer.identityPublicKey)
+  return gate
+}
+
+/** Uses the same pinned identity and canonical wire checks as live contribution ingress. */
+export async function verifyCreationConfirmations(
+  roster: RosterManifest,
+  fingerprint: string,
+  evidence: CreationEvidence
+): Promise<void> {
+  if (
+    !isOuterSessionId(evidence.outerSessionId) ||
+    evidence.confirmations.length !== roster.participants.length - 1
+  )
+    throw new Error('Invalid DKG final confirmations')
+  const gate = rosterGate(roster, evidence.outerSessionId)
+  const accepted = new Set<number>()
+  for (const candidate of evidence.confirmations) {
+    const envelope = parseEnvelope(candidate)
+    if (!envelope || envelope.message_type !== 'DKG_FINAL')
+      throw new Error('Invalid DKG final confirmation')
+    const payload = parseDkgFinalPayload(payloadOf(envelope))
+    if (!payload || payload.fingerprint !== fingerprint) throw new Error('DKG fingerprint mismatch')
+    const result = await gate.check(envelope)
+    if (result.kind !== 'accept' || accepted.has(result.slot))
+      throw new Error('Invalid DKG final authentication')
+    accepted.add(result.slot)
+  }
 }
 
 export type Round1Outcome = { round1Hash: string; bundles: ReadonlyMap<number, Uint8Array> }
@@ -61,11 +133,19 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 function sameHeader(a: VaultRecordHeader, b: VaultRecordHeader): boolean {
-  const keys = Object.keys(a) as (keyof VaultRecordHeader)[]
-  return (
-    keys.length === Object.keys(b).length &&
-    keys.every(key => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key])
-  )
+  function sameValue(left: unknown, right: unknown): boolean {
+    if (left === right) return true
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false
+    if (Array.isArray(left) !== Array.isArray(right)) return false
+    const l = left as Record<string, unknown>
+    const r = right as Record<string, unknown>
+    const keys = Object.keys(l)
+    return (
+      keys.length === Object.keys(r).length &&
+      keys.every(key => Object.prototype.hasOwnProperty.call(r, key) && sameValue(l[key], r[key]))
+    )
+  }
+  return sameValue(a, b)
 }
 
 interface OpenedState {
@@ -84,6 +164,10 @@ export class DkgCoordinatorSession {
   private readonly accepted1 = new Set<number>()
   private readonly accepted2 = new Set<number>()
   private round1Complete = false
+  private round1Digest: string | null = null
+  private readonly confirmed1 = new Set<number>()
+  private readonly gate: InboundGate | null
+  private pending: Promise<void> = Promise.resolve()
 
   private constructor(
     private readonly wasm: VaultWasm,
@@ -95,6 +179,7 @@ export class DkgCoordinatorSession {
   ) {
     this.sessionId = sessionId
     this.state = state
+    this.gate = config.binding ? rosterGate(config.binding.roster, config.outerSessionId!) : null
   }
 
   static open(
@@ -106,6 +191,27 @@ export class DkgCoordinatorSession {
   ): DkgCoordinatorSession {
     // Checked before any wasm object exists, so a refusal leaks nothing.
     if (sessionId.length !== 16) throw new Error('session id must be 16 bytes')
+    sessionId = sessionId.slice()
+    if (
+      !isDkgShape(config) ||
+      typeof config.mainnet !== 'boolean' ||
+      !isVaultGroupId(config.groupId) ||
+      !isVaultWalletId(config.walletId)
+    )
+      throw new Error('Invalid vault DKG configuration')
+    const binding =
+      config.binding === undefined ? undefined : parseVaultRecordBinding(config.binding)
+    if (
+      binding === null ||
+      (binding &&
+        (!isOuterSessionId(config.outerSessionId) ||
+          binding.roster.groupId !== config.groupId ||
+          binding.roster.threshold !== config.threshold ||
+          binding.roster.participants.length !== config.participants))
+    ) {
+      throw new Error('Invalid vault DKG binding')
+    }
+    config = Object.freeze({ ...config, ...(binding ? { binding } : {}) })
     const relay = new wasm.DkgRelay(sessionId, config.participants)
     const dkg = new wasm.Dkg(config.participants, config.threshold, 0, sessionId)
     const dkg1 = dkg.part1()
@@ -131,10 +237,22 @@ export class DkgCoordinatorSession {
 
   async acceptRound1(
     senderSlot: number,
-    envelope: Uint8Array
+    envelope: Uint8Array,
+    signedEnvelope?: MultisigEnvelope
+  ): Promise<AcceptOutcome<Round1Outcome>> {
+    const bytes = envelope.slice()
+    const signed = parseEnvelope(signedEnvelope)
+    return this.serialized(() => this.acceptRound1Now(senderSlot, bytes, signed))
+  }
+
+  private async acceptRound1Now(
+    senderSlot: number,
+    envelope: Uint8Array,
+    signed: MultisigEnvelope | null
   ): Promise<AcceptOutcome<Round1Outcome>> {
     const state = this.open()
     try {
+      await this.authenticate('DKG_R1', senderSlot, envelope, signed)
       if (this.round1Complete) throw new Error('round 1 is already complete')
       const [sender, payload] = this.accept(state.relay, envelope, 'dkgR1', senderSlot)
       if (this.accepted1.has(sender)) throw new Error('duplicate round-1 envelope')
@@ -144,6 +262,8 @@ export class DkgCoordinatorSession {
 
       this.round1Complete = true
       const hash = await round1Hash(state.broadcasts.to_bytes())
+      this.open()
+      this.round1Digest = hash
       const bundles = new Map<number, Uint8Array>()
       for (const slot of this.peerSlots()) {
         bundles.set(slot, state.relay.bundle(1, slot, state.broadcasts))
@@ -157,11 +277,25 @@ export class DkgCoordinatorSession {
 
   async acceptRound2(
     senderSlot: number,
-    envelope: Uint8Array
+    envelope: Uint8Array,
+    signedEnvelope?: MultisigEnvelope
+  ): Promise<AcceptOutcome<Round2Outcome>> {
+    const bytes = envelope.slice()
+    const signed = parseEnvelope(signedEnvelope)
+    return this.serialized(() => this.acceptRound2Now(senderSlot, bytes, signed))
+  }
+
+  private async acceptRound2Now(
+    senderSlot: number,
+    envelope: Uint8Array,
+    signed: MultisigEnvelope | null
   ): Promise<AcceptOutcome<Round2Outcome>> {
     const state = this.open()
     try {
       if (!this.round1Complete) throw new Error('round 1 is not complete')
+      if (this.gate && this.confirmed1.size !== this.peerCount)
+        throw new Error('round 1 confirmations are incomplete')
+      await this.authenticate('DKG_R2_BATCH', senderSlot, envelope, signed)
       const [sender, batchBytes] = this.accept(state.relay, envelope, 'dkgR2Batch', senderSlot)
       if (this.accepted2.has(sender)) throw new Error('duplicate round-2 envelope')
       this.accepted2.add(sender)
@@ -172,6 +306,52 @@ export class DkgCoordinatorSession {
       this.close()
       throw error
     }
+  }
+
+  async confirmRound1(signedEnvelope: MultisigEnvelope): Promise<void> {
+    const signed = parseEnvelope(signedEnvelope)
+    return this.serialized(async () => {
+      this.open()
+      if (!this.gate || !this.round1Digest || !signed || signed.message_type !== 'DKG_R1_ECHO')
+        throw new Error('Invalid round 1 confirmation')
+      const payload = parseRound1EchoPayload(payloadOf(signed))
+      if (!payload || payload.round1Hash !== this.round1Digest)
+        throw new Error('round 1 hash mismatch')
+      const result = await this.gate.check(signed)
+      this.open()
+      if (result.kind !== 'accept' || this.confirmed1.has(result.slot - 1))
+        throw new Error('Invalid round 1 authentication')
+      this.confirmed1.add(result.slot - 1)
+    })
+  }
+
+  private serialized<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.pending.then(run).catch((error: unknown) => {
+      this.close()
+      throw error
+    })
+    this.pending = result.then(
+      () => {},
+      () => {}
+    )
+    return result
+  }
+
+  private async authenticate(
+    type: 'DKG_R1' | 'DKG_R2_BATCH',
+    senderSlot: number,
+    bytes: Uint8Array,
+    signed: MultisigEnvelope | null
+  ): Promise<void> {
+    if (!this.gate) return
+    if (!signed || signed.message_type !== type) throw new Error('Signed DKG contribution required')
+    const payload = parseDkgEnvelopePayload(payloadOf(signed))
+    if (!payload || payload.envelope !== bytesToBase64(bytes))
+      throw new Error('Signed DKG inner envelope mismatch')
+    const result = await this.gate.check(signed)
+    this.open()
+    if (result.kind !== 'accept' || result.slot - 1 !== senderSlot)
+      throw new Error('Invalid DKG contribution authentication')
   }
 
   close(): void {
@@ -215,7 +395,12 @@ export class DkgCoordinatorSession {
     if (!this.peerSlots().includes(senderSlot)) throw new Error('sender slot is not a phone')
     const accepted: unknown[] = relay.accept(envelope, expected)
     const [sender, payload] = accepted
-    if (typeof sender !== 'number' || !(payload instanceof Uint8Array)) {
+    if (
+      !Array.isArray(accepted) ||
+      accepted.length !== 2 ||
+      typeof sender !== 'number' ||
+      !(payload instanceof Uint8Array)
+    ) {
       throw new Error('unexpected relay output')
     }
     if (sender !== senderSlot) throw new Error('envelope sender does not match the transport slot')
@@ -335,13 +520,12 @@ export class DkgCoordinatorSession {
       temporaries.push(backup)
       const share = bin.keep(backup.to_bytes())
 
-      const header: VaultRecordHeader = {
-        version: 1,
+      const baseHeader = {
         groupId: config.groupId,
-        network: config.mainnet ? 'mainnet' : 'testnet',
+        network: config.mainnet ? ('mainnet' as const) : ('testnet' as const),
         participants: config.participants,
         threshold: config.threshold,
-        rosterSlot: 0,
+        rosterSlot: 0 as const,
         groupVerifyingKey: bytesToHex(groupKey),
         publicKeyPackage: bytesToBase64(publicKeyPackage),
         fvk: bytesToBase64(fvk),
@@ -349,6 +533,9 @@ export class DkgCoordinatorSession {
         address,
         fingerprint: bytesToHex(fingerprint)
       }
+      const header: VaultRecordHeader = config.binding
+        ? { ...baseHeader, version: 2, ownerWalletId: config.walletId, ...config.binding }
+        : { ...baseHeader, version: 1 }
       return {
         outcome: { fingerprint: header.fingerprint, inboxes, sealedQsk },
         header,

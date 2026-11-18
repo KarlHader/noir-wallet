@@ -1,24 +1,21 @@
-import type { Account, ChainAccount } from '@/core/accounts/domain'
+import { isDerivedAccount } from '@/core/accounts/domain'
+import type { DerivedAccount, DerivedChainAccount } from '@/core/accounts/domain'
 import { parseNearAccountId } from '@/core/chains/near'
 import type { ChainId } from '@/core/chains/domain'
 import type { KeyDomainSource, SigningSummary } from '@/core/keyring/domain'
-import {
-  parseNearIntentsTransactionBinding,
-  parseTransactionId,
-  type TransactionAccountScope,
-  type TransactionGraph
-} from '@/core/transactions/domain'
-import {
-  type NearTransferOrchestrator,
-  type NearTransferSubmission,
-  type PreparedNearTransferApproval
+import { parseNearIntentsTransactionBinding, parseTransactionId } from '@/core/transactions/domain'
+import type { TransactionAccountScope, TransactionGraph } from '@/core/transactions/domain'
+import type {
+  NearTransferOrchestrator,
+  NearTransferSubmission,
+  PreparedNearTransferApproval
 } from '@/infrastructure/chains/near'
 
 import { accountContextTransition } from './account-context-transition'
 
 export interface ActiveNearTransferContext {
-  readonly chainAccount: ChainAccount
-  readonly accountIndex: Account['accountIndex']
+  readonly chainAccount: DerivedChainAccount
+  readonly accountIndex: DerivedAccount['accountIndex']
   readonly keyDomainSource: KeyDomainSource
   readonly publicKey: string
 }
@@ -234,6 +231,8 @@ export class BackgroundNearTransferController {
 
   private async requireActiveContext(): Promise<ActiveNearTransferContext> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) throw new Error('The active Account has no NEAR ChainAccount')
     if (
       (context.keyDomainSource.kind === 'hardware' &&

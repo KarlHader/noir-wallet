@@ -6,6 +6,7 @@ import {
   createInitialProductChainRegistry
 } from '../../../src/core/chains/registry/index.ts'
 import { createAccountNetworksClient } from '../../../src/popup/services/account-networks-client.ts'
+import * as accountNetworks from '../../../src/popup/services/account-networks-client.ts'
 
 const walletId = 'wallet:account-networks-client'
 const accountId = 'account:account-networks-client:0'
@@ -79,6 +80,107 @@ function result(overrides = {}) {
 }
 
 test.describe('Account networks Popup client', () => {
+  test('retained FROST receive projection exposes only its own shielded address on its creation network', () => {
+    const ownAddress = 'utest1independentfixture'
+    const account = {
+      id: 'account:frost-vault',
+      name: 'Multisig',
+      source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'testnet' },
+      addresses: { shielded: 'u1parent-projection', transparent: 't1parent-projection' },
+      networkAddresses: { testnet: { shielded: ownAddress, transparent: 'tmparent-projection' } },
+      birthdayHeight: 100,
+      isPinned: false,
+      isHidden: false
+    }
+    const receive = accountNetworks.resolveRetainedFrostReceiveNetwork(account, 'testnet', chains)
+    expect(receive.chain.family).toBe('zcash')
+    expect(receive.addresses).toEqual([address(ownAddress, 'zcash-shielded-unified', 'shielded')])
+    expect(
+      accountNetworks.resolveZcashReceivePrivacy(account.source, 'transparent', 'public')
+    ).toBe('shielded')
+    expect(accountNetworks.resolveZcashReceivePrivacy(account.source, null, 'public')).toBe(
+      'shielded'
+    )
+    expect(accountNetworks.resolveZcashReceivePrivacy(undefined, 'transparent', 'private')).toBe(
+      'transparent'
+    )
+    expect(
+      accountNetworks.resolveRetainedFrostReceiveNetwork(account, 'mainnet', chains)
+    ).toBeNull()
+    expect(
+      accountNetworks.resolveRetainedFrostReceiveNetwork(
+        { ...account, source: undefined },
+        'testnet',
+        chains
+      )
+    ).toBeNull()
+    expect(
+      accountNetworks.resolveRetainedFrostReceiveNetwork(
+        { ...account, networkAddresses: {} },
+        'testnet',
+        chains
+      )
+    ).toBeNull()
+    expect(
+      accountNetworks.resolveRetainedFrostReceiveNetwork(
+        {
+          ...account,
+          networkAddresses: { testnet: { shielded: '', transparent: 'tmparent-projection' } }
+        },
+        'testnet',
+        chains
+      )
+    ).toBeNull()
+  })
+
+  test('roundtrips independent FROST receive metadata beside derived accounts without inventing an index', async () => {
+    const derived = result().result.accounts[0]
+    const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'testnet' }
+    const external = {
+      ...derived,
+      accountId: 'account:frost-vault',
+      accountDisplayName: 'Multisig',
+      source,
+      active: false,
+      networks: [{ ...derived.networks[0], addresses: [derived.networks[0].addresses[0]] }]
+    }
+    delete external.accountIndex
+    const read = accounts =>
+      createAccountNetworksClient(async () => result({ accounts }), chains).getCatalog()
+    const catalog = await read([derived, external])
+    expect(catalog.accounts[0].accountIndex).toBe(0)
+    expect(catalog.accounts[1].source).toEqual(source)
+    expect(catalog.accounts[1]).not.toHaveProperty('accountIndex')
+    expect(catalog.accounts[1].networks[0].addresses[0].value).toBe('utest1shieldedfixture')
+    const freshReceive = {
+      ...catalog.accounts[1],
+      networks: [
+        { ...catalog.accounts[1].networks[0], addresses: catalog.accounts[0].networks[0].addresses }
+      ]
+    }
+    expect(
+      accountNetworks.resolveAccountReceiveNetworks(freshReceive, source, 'testnet')[0].addresses
+    ).toEqual([address('utest1shieldedfixture', 'zcash-shielded-unified', 'shielded')])
+    expect(
+      accountNetworks.resolveAccountReceiveNetworks(
+        freshReceive,
+        { ...source, groupId: 'other' },
+        'testnet'
+      )
+    ).toEqual([])
+    expect(accountNetworks.resolveAccountReceiveNetworks(freshReceive, source, 'mainnet')).toEqual(
+      []
+    )
+    for (const invalid of [
+      { ...external, accountIndex: 0 },
+      { ...external, source: { ...source, version: 2 } },
+      { ...external, source: { ...source, network: 'mainnet' } },
+      { ...external, networks: [derived.networks[1]] },
+      { ...external, networks: [{ ...external.networks[0], accountDerivationPath: "m/32'/1'/0'" }] }
+    ])
+      await expect(read([derived, invalid])).rejects.toMatchObject({ code: 'invalid-response' })
+  })
+
   test('requests the trusted catalog and strictly resolves enabled chains', async () => {
     const messages = []
     const client = createAccountNetworksClient(async message => {

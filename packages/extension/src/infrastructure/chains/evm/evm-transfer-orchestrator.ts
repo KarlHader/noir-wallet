@@ -1,26 +1,27 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
+import type { DerivedChainAccount } from '@/core/accounts/domain'
 import { KeyringError } from '@/core/keyring/ports'
 import type { ChainAccount } from '@/core/accounts/domain'
 import { parseAccountId } from '@/core/accounts/domain'
 import type { Network } from '@/types'
 import type { AssetRegistry } from '@/core/chains/registry'
 import type { ChainId } from '@/core/chains/domain'
-import { parseKeyDomainId, type SigningSummary } from '@/core/keyring/domain'
-import {
-  parseSigningCommandId,
-  type PreparedSigningCommand,
-  type SigningCommandId,
-  type SigningResult
-} from '@/core/keyring/ports'
+import { parseKeyDomainId } from '@/core/keyring/domain'
+import type { SigningSummary } from '@/core/keyring/domain'
+import { parseSigningCommandId } from '@/core/keyring/ports'
+import type { PreparedSigningCommand, SigningCommandId, SigningResult } from '@/core/keyring/ports'
 import {
   parseTransactionEventId,
   parseTransactionGraph,
   parseTransactionId,
-  parseTransactionSegmentId,
-  type TransactionAccountScope,
-  type TransactionGraph,
-  type TransactionId,
-  type TransactionLifecycleStatus,
-  type TransactionSegmentEvent
+  parseTransactionSegmentId
+} from '@/core/transactions/domain'
+import type {
+  TransactionAccountScope,
+  TransactionGraph,
+  TransactionId,
+  TransactionLifecycleStatus,
+  TransactionSegmentEvent
 } from '@/core/transactions/domain'
 import type {
   NearIntentsTransactionBinding,
@@ -46,21 +47,23 @@ import {
   createEvmSigningSummary,
   EvmTransactionError,
   estimateEvmContractCallFee,
-  estimateEvmTransferFee,
-  type EvmContractCallIntent,
-  type EvmFeeEstimate,
-  type PeaEvmExecutionAccount,
-  type EvmTransferIntent
+  estimateEvmTransferFee
+} from './evm-transaction-builder'
+import type {
+  EvmContractCallIntent,
+  EvmFeeEstimate,
+  PeaEvmExecutionAccount,
+  EvmTransferIntent
 } from './evm-transaction-builder'
 import { parseEvmAccountBinding } from './evm-account'
-import {
-  type AwaitingApprovalEvmTransfer,
-  type AwaitingExternalSignatureEvmTransfer,
-  type EvmExternalSignerBinding,
-  type EvmPendingTransferStore,
-  type PendingEvmTransfer,
-  type PendingEvmSigningTransfer,
-  type SignedPendingEvmTransfer
+import type {
+  AwaitingApprovalEvmTransfer,
+  AwaitingExternalSignatureEvmTransfer,
+  EvmExternalSignerBinding,
+  EvmPendingTransferStore,
+  PendingEvmTransfer,
+  PendingEvmSigningTransfer,
+  SignedPendingEvmTransfer
 } from './evm-pending-transfer-store'
 import { classifyEvmContractCall, createEvmTransferGraph } from './evm-transaction-graph'
 import { broadcastSignedEvmTransaction } from './evm-transaction-observer'
@@ -114,7 +117,7 @@ export interface EvmTransferOrchestratorOptions {
 }
 
 export interface PrepareEvmTransferInput {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly intent: EvmTransferIntent | EvmContractCallIntent
   readonly executionAccount?: PeaEvmExecutionAccount
   readonly nearIntentsBinding?: NearIntentsTransactionBinding
@@ -144,7 +147,7 @@ export interface EvmNonceRecoveryState {
 }
 
 export interface PrepareEvmCancelInput {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly originalTransactionId: TransactionId
   readonly executionAccount?: PeaEvmExecutionAccount
   readonly signingMode?: 'internal' | 'keystone' | 'ledger'
@@ -259,6 +262,7 @@ export class EvmTransferOrchestrator {
   }
 
   async prepare(input: PrepareEvmTransferInput): Promise<PreparedEvmTransferApproval> {
+    if (!isDerivedAccount(input.chainAccount)) throw new Error('External accounts cannot use EVM')
     const sender = (
       input.executionAccount ??
       parseEvmAccountBinding(input.chainAccount, input.chainAccount.scope.chainId)
@@ -273,6 +277,7 @@ export class EvmTransferOrchestrator {
       'chainAccount' | 'intent' | 'executionAccount' | 'feeSelection' | 'feeTier' | 'signal'
     >
   ): Promise<EvmFeeEstimate> {
+    if (!isDerivedAccount(input.chainAccount)) throw new Error('External accounts cannot use EVM')
     const buildInput = {
       chainId: input.chainAccount.scope.chainId,
       chainAccount: input.chainAccount,
@@ -289,6 +294,7 @@ export class EvmTransferOrchestrator {
   }
 
   async prepareCancel(input: PrepareEvmCancelInput): Promise<PreparedEvmTransferApproval> {
+    if (!isDerivedAccount(input.chainAccount)) throw new Error('External accounts cannot use EVM')
     const scope = normalizeScope(input.chainAccount.scope)
     const originalTransactionId = parseTransactionId(input.originalTransactionId)
     const original = await this.repository.get(scope, originalTransactionId)
@@ -372,9 +378,10 @@ export class EvmTransferOrchestrator {
   }
 
   async getNonceRecovery(input: {
-    readonly chainAccount: ChainAccount
+    readonly chainAccount: DerivedChainAccount
     readonly executionAccount?: PeaEvmExecutionAccount
   }): Promise<EvmNonceRecoveryState | null> {
+    if (!isDerivedAccount(input.chainAccount)) throw new Error('External accounts cannot use EVM')
     const chainId = input.chainAccount.scope.chainId
     const sender = (
       input.executionAccount ?? parseEvmAccountBinding(input.chainAccount, chainId)
@@ -470,7 +477,7 @@ export class EvmTransferOrchestrator {
   }
 
   async prepareNonceRecovery(input: {
-    readonly chainAccount: ChainAccount
+    readonly chainAccount: DerivedChainAccount
     readonly executionAccount?: PeaEvmExecutionAccount
     readonly feeSelection?: EvmFeeSelection
     readonly signingMode?: 'internal' | 'keystone' | 'ledger'

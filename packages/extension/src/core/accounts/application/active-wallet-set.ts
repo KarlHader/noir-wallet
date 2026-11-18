@@ -1,4 +1,6 @@
 import type { Account, Address, ChainAccount } from '@/core/accounts/domain'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain/account-source'
+import { accountSupportsChain } from './account-capability-policy'
 import {
   hasAvailableAddressCapability,
   hasCompleteChainCapabilities,
@@ -45,7 +47,10 @@ function requireAvailableChainAccount(
   chainAccount: ChainAccount,
   addresses: readonly Address[]
 ): AvailableChainAccount {
-  if (!chain.capabilities.address.derivationSchemes.includes(chainAccount.derivation.scheme)) {
+  if (
+    isDerivedAccount(chainAccount) &&
+    !chain.capabilities.address.derivationSchemes.includes(chainAccount.derivation.scheme)
+  ) {
     throw new Error('Active ChainAccount uses an unavailable derivation scheme')
   }
   if (addresses.length === 0 || !addresses.some(address => address.preferredForReceive)) {
@@ -113,6 +118,13 @@ async function loadActiveWalletSetForCapability(
         if (
           !chain ||
           !activeKeyDomain ||
+          !activeAccount ||
+          !accountSupportsChain(activeAccount, chain) ||
+          (isFrostAccount(activeAccount) &&
+            (!isFrostAccount(chainAccount) ||
+              chainAccount.source.groupId !== activeAccount.source.groupId ||
+              chainAccount.source.network !== activeAccount.source.network)) ||
+          !accountSupportsChain(chainAccount, chain) ||
           !input.sourceSupports(activeKeyDomain.source, chain.family) ||
           !input.isAvailable(chain)
         ) {

@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import { createServer } from 'node:http'
 import { address, networks, Transaction } from 'bitcoinjs-lib'
 import {
   createAssetRegistry,
@@ -20,6 +21,13 @@ import {
 } from '../../src/infrastructure/chains/bitcoin'
 import { buildSolanaNativeTransfer } from '../../src/infrastructure/chains/solana/solana-transaction-builder'
 import { test, expect, waitForBackgroundWalletInitialization } from '../helpers/extension-fixtures'
+import type { VaultDkgRpcHandler } from '../../src/core/multisig/dkg-rpc'
+import type { MultisigCreationOperation } from '../../src/lib/multisig-creation-storage'
+import { buildRoster } from '../../src/core/multisig/roster'
+import { generateDeviceIdentity } from '../../src/core/multisig/identity'
+import { createEnvelopeSigner } from '../../src/core/multisig/envelope-signing'
+import { loadVaultWasm } from '../core/multisig/helpers/vault-wasm'
+import { Phone, runRounds } from '../core/multisig/helpers/raw-phone'
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
@@ -2201,4 +2209,564 @@ test.describe('pinned Multichain WASM in the real MV3 extension', () => {
     })
     expect(lockedDerive).toMatchObject({ ok: false, error: { code: 'CREDENTIAL_LOCKED' } })
   })
+})
+
+test('imports a sealed FROST v2 account through the real Worker and reloads its external identity', async ({
+  context,
+  popup,
+  extensionId
+}) => {
+  test.setTimeout(240_000)
+  await waitForBackgroundWalletInitialization(popup)
+  const background = context.serviceWorkers()[0]
+  const verifyUi = process.env.FROST_MULTISIG_UI === '1'
+  let walletId = `key-domain:frost-mv3-${crypto.randomUUID()}`
+  let accountId = `frost-account-${crypto.randomUUID()}`
+  let groupId = crypto.randomUUID()
+  let birthdayHeight = 3_000_000
+  let operation: MultisigCreationOperation | null = null
+  let parentAccountId: string | null = null
+  const pageRpc = async <T>(method: string, payload: unknown): Promise<T> => {
+    const response = await popup.evaluate(
+      input => chrome.runtime.sendMessage({ type: 'WORKER_RPC', ...input }),
+      { method, payload }
+    )
+    if (response?.error) {
+      throw new Error(`${method}: ${response.error}`)
+    }
+    return response.result as T
+  }
+  const rpc = async <T>(method: string, payload: unknown): Promise<T> => {
+    const response = await background.evaluate(
+      input => chrome.runtime.sendMessage({ type: 'KEYRING_WORKER_RPC', ...input }),
+      { method, payload }
+    )
+    if (response?.error) throw new Error(`${method}: ${response.error}`)
+    return response.result as T
+  }
+
+  // Read-only chain height, identity, fee and tree responses are synthetic;
+  // Workers, credentials, DKG, account import and IndexedDB are real.
+  let treeStateRequests = 0
+  let submissionRequests = 0
+  const varint = (value: number): Buffer => {
+    const bytes: number[] = []
+    do {
+      const next = value & 127
+      value = Math.floor(value / 128)
+      bytes.push(next | (value ? 128 : 0))
+    } while (value)
+    return Buffer.from(bytes)
+  }
+  const stringField = (field: number, value: string) => {
+    const bytes = Buffer.from(value)
+    return Buffer.concat([varint(field * 8 + 2), varint(bytes.length), bytes])
+  }
+  const trailers = Buffer.from('grpc-status: 0\r\n')
+  const trailerFrame = Buffer.alloc(5)
+  trailerFrame[0] = 128
+  trailerFrame.writeUInt32BE(trailers.length, 1)
+  const server = createServer((request, response) => {
+    response.setHeader('access-control-allow-origin', '*')
+    response.setHeader('access-control-allow-headers', '*')
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204).end()
+      return
+    }
+    // Empty server streams contain no protobuf message. An empty DATA frame
+    // would instead supply an invalid default subtree root or compact block.
+    if (request.url?.endsWith('/GetSubtreeRoots') || request.url?.endsWith('/GetBlockRange')) {
+      response.writeHead(200, { 'content-type': 'application/grpc-web+proto' })
+      response.end(Buffer.concat([trailerFrame, trailers]))
+      return
+    }
+    let bytes = Buffer.alloc(0)
+    if (request.url?.endsWith('/GetTreeState')) {
+      treeStateRequests += 1
+      bytes = Buffer.concat([
+        stringField(1, 'main'),
+        Buffer.from([16]),
+        varint(birthdayHeight - 1),
+        stringField(3, '00'.repeat(32))
+      ])
+    } else if (request.url?.endsWith('/GetLatestBlock')) {
+      bytes = Buffer.concat([Buffer.from([8]), varint(3_000_100)])
+    } else if (request.url?.endsWith('/GetLightdInfo')) {
+      bytes = Buffer.concat([stringField(4, 'main'), Buffer.from([56]), varint(3_000_100)])
+    } else if (request.url?.endsWith('/GetStandardFee')) {
+      bytes = Buffer.concat([Buffer.from([8]), varint(5_000)])
+    } else if (request.url?.endsWith('/SendTransaction')) {
+      submissionRequests += 1
+      response.writeHead(403).end()
+      return
+    }
+    const frame = Buffer.alloc(5)
+    frame.writeUInt32BE(bytes.length, 1)
+    response.writeHead(200, { 'content-type': 'application/grpc-web+proto', 'grpc-status': '0' })
+    response.end(Buffer.concat([frame, bytes, trailerFrame, trailers]))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Missing test RPC endpoint')
+  const endpoint = `http://127.0.0.1:${address.port}`
+  try {
+    if (verifyUi) {
+      await popup.goto(
+        `chrome-extension://${extensionId}/tests/extension/credential-repository-integration.html`
+      )
+      await expect
+        .poll(() =>
+          popup.evaluate(() =>
+            Boolean(
+              (window as unknown as { credentialRepositoryIntegration?: unknown })
+                .credentialRepositoryIntegration
+            )
+          )
+        )
+        .toBe(true)
+      const setup = await popup.evaluate(
+        password =>
+          (
+            window as unknown as {
+              credentialRepositoryIntegration: {
+                prepareProductionV1Migration(password: string): Promise<{ walletId: string }>
+              }
+            }
+          ).credentialRepositoryIntegration.prepareProductionV1Migration(password),
+        PASSWORD
+      )
+      walletId = setup.walletId
+      await popup.goto(`chrome-extension://${extensionId}/index.html`)
+      await waitForBackgroundWalletInitialization(popup)
+      const settings = {
+        schemaVersion: 1,
+        customEvmNetworks: [],
+        overrides: [
+          {
+            chainId: 'bip122:00040fe8ec8471911baa1db1266ea15d',
+            rpc: {
+              protocol: 'zcash-lightwalletd',
+              label: 'Local acceptance fixture',
+              url: endpoint
+            }
+          }
+        ]
+      }
+      const applied = await popup.evaluate(
+        settings => chrome.runtime.sendMessage({ type: 'APPLY_CHAIN_ENDPOINT_SETTINGS', settings }),
+        settings
+      )
+      expect(applied.error).toBeUndefined()
+      await popup.getByPlaceholder('Enter Password').fill(PASSWORD)
+      await popup.getByRole('button', { name: 'Unlock', exact: true }).click()
+      await expect(popup.getByRole('button', { name: 'Receive', exact: true })).toBeVisible()
+      await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'ABORT_SYNC' }))
+      parentAccountId = await popup.evaluate(async () => {
+        const raw = (await chrome.storage.local.get('wallet_state')).wallet_state
+        const state = typeof raw === 'string' ? JSON.parse(raw) : raw
+        return state.state.currentAccountId as string
+      })
+      operation = await pageRpc<MultisigCreationOperation>('vault.group.reserve', {
+        scope: { network: 'mainnet', walletId, accountId: parentAccountId },
+        threshold: '2-of-2'
+      })
+      accountId = operation.scope.accountId
+      groupId = operation.groupId
+      birthdayHeight = operation.birthdayHeight
+    }
+    const dbKey = `mainnet_${walletId}`
+    const vault = verifyUi
+      ? null
+      : expectSuccess(
+          await execute<VaultValue>(popup, 'credential.import', {
+            mnemonic: MNEMONIC,
+            password: PASSWORD
+          })
+        )
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const passwordKey = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(PASSWORD),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    )
+    const envelopeKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' },
+      passwordKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt']
+    )
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      envelopeKey,
+      new TextEncoder().encode(JSON.stringify({ seedPhrase: MNEMONIC }))
+    )
+    const zcashEnvelope = {
+      salt: Buffer.from(salt).toString('base64'),
+      iv: Buffer.from(iv).toString('base64'),
+      encryptedData: Buffer.from(encrypted).toString('base64')
+    }
+    const unlock = async () => {
+      if (verifyUi) {
+        expect(
+          await popup.evaluate(
+            password => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password }),
+            PASSWORD
+          )
+        ).toMatchObject({ success: true })
+        return
+      }
+      const descriptor = await rpc('session.unlock', {
+        input: {
+          password: PASSWORD,
+          credentials: [
+            {
+              keyDomainId: walletId,
+              credentialGenerationId: 'credential-generation:frost-mv3',
+              multichainVault: vault,
+              zcashEnvelope
+            }
+          ],
+          lastUserActivityAt: Date.now()
+        }
+      })
+      await rpc('session.bind-zcash', { descriptor, keyDomainId: walletId })
+    }
+    const init = () =>
+      rpc('init', {
+        walletId,
+        network: 'mainnet',
+        lightwalletdUrl: endpoint,
+        dbKey
+      })
+    if (!verifyUi) {
+      await init()
+      await unlock()
+    }
+    const identities = await Promise.all([generateDeviceIdentity(), generateDeviceIdentity()])
+    const outerSessionId = crypto.randomUUID()
+    const roster = buildRoster({
+      groupId,
+      threshold: 2,
+      identities: new Map(
+        identities.map((identity, slot) => [
+          slot,
+          Buffer.from(identity.publicKey).toString('base64')
+        ])
+      )
+    })
+    const open = {
+      participants: 2 as const,
+      threshold: 2 as const,
+      mainnet: true,
+      ownerWalletId: walletId,
+      groupId,
+      outerSessionId,
+      binding: { accountId, birthdayHeight, rosterVersion: 1 as const, roster }
+    }
+    const { sessionId } = operation
+      ? await pageRpc<{ sessionId: string }>('vault.group.open', {
+          ...open,
+          ownerWalletId: undefined,
+          scope: operation.scope,
+          operationId: operation.operationId
+        })
+      : await rpc<{ sessionId: string }>('vault.dkg.open', open)
+    const handler: VaultDkgRpcHandler = { handle: rpc, sessionCount: 1 }
+    const wasm = await loadVaultWasm()
+    const phone = new Phone(wasm, open, 1, sessionId)
+    const signers = identities.map((identity, slot) =>
+      createEnvelopeSigner({
+        groupId,
+        sessionId: outerSessionId,
+        senderId: `device-${slot + 1}`,
+        signingKey: identity.signingKeys.privateKey
+      })
+    )
+    const complete = await runRounds(
+      wasm,
+      handler,
+      open,
+      sessionId,
+      [phone],
+      (slot, type, payload) =>
+        signers[slot].next(type, 'device-1', payload as Record<string, unknown>)
+    )
+    expect(complete.record.version).toBe(2)
+    expect(phone.finish(complete.inboxes['1'], complete.sealedQsk['1'], true)).toBe(
+      complete.fingerprint
+    )
+    const confirmation = await signers[1].next('DKG_FINAL', 'device-1', {
+      fingerprint: complete.fingerprint
+    })
+    const summary = await rpc<{ address: string; authenticated: { creationConfirmed: boolean } }>(
+      'vault.record.summary',
+      {
+        record: complete.record,
+        ownerWalletId: walletId,
+        creationEvidence: { outerSessionId, confirmations: [confirmation] }
+      }
+    )
+    expect(summary.authenticated.creationConfirmed).toBe(true)
+    if (operation) {
+      await pageRpc('vault.group.save', {
+        scope: operation.scope,
+        groupId,
+        operationId: operation.operationId,
+        record: complete.record
+      })
+      expect(
+        await pageRpc('vault.group.commit', {
+          scope: operation.scope,
+          operationId: operation.operationId,
+          group: {
+            groupId,
+            threshold: '2-of-2',
+            transportKind: 'qr',
+            fingerprint: complete.fingerprint,
+            devices: [
+              { slot: 1, role: 'owner', name: 'Extension', model: 'Noir', platform: 'extension' },
+              { slot: 2, role: 'owner', name: 'Fixture phone', model: 'Synthetic', platform: 'ios' }
+            ],
+            createdAt: Date.now(),
+            mock: false
+          },
+          evidence: { sessionId: outerSessionId, confirmations: [confirmation] }
+        })
+      ).toMatchObject({ phase: 'ready', scope: operation.scope })
+      expect(
+        await popup.evaluate(
+          input => chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', ...input }),
+          { walletId, accountId }
+        )
+      ).toMatchObject({ success: true })
+    }
+    // A normal account switch can return before Background's snapshot reload.
+    // Wait on the actual account inventory rather than initializing a second
+    // fixture-owned wallet over the production lifecycle.
+    if (verifyUi) {
+      await expect
+        .poll(async () => {
+          try {
+            return (await rpc<number[]>('wallet.getAccountIds', { walletId })).length
+          } catch (error) {
+            if (
+              /not initialized|SYNC_BUSY|STALE_WALLET_RPC|WALLET_DIRTY/.test(
+                error instanceof Error ? error.message : String(error)
+              )
+            )
+              return 0
+            throw error
+          }
+        })
+        .toBe(2)
+    }
+    const request = {
+      walletId,
+      accountId,
+      source: { kind: 'frost-vault', version: 1, groupId, network: 'mainnet' },
+      sealedRecord: complete.record
+    }
+    // Pages cannot acquire authority over this internal import route.
+    const denied = await popup.evaluate(
+      input =>
+        chrome.runtime.sendMessage({
+          type: 'WORKER_RPC',
+          method: 'wallet.registerFrostAccount',
+          payload: input
+        }),
+      request
+    )
+    expect(denied.error).toBeTruthy()
+    expect(await rpc('wallet.preflightFrostAccount', request)).toBe(true)
+    const id = await rpc<number>('wallet.registerFrostAccount', request)
+    expect(id).toEqual(expect.any(Number))
+    expect(await rpc('wallet.getAccountHdIndex', { walletId, accountId: id })).toBeNull()
+    const addresses = await rpc<Record<string, string>>('wallet.getUnifiedAddresses', {
+      walletId,
+      accountId: id
+    })
+    expect(Object.values(addresses)).toContain(summary.address)
+    expect(await rpc('wallet.registerFrostAccount', request)).toBe(id)
+    const accountIds = await rpc<number[]>('wallet.getAccountIds', { walletId })
+    expect(accountIds).toContain(id)
+    expect(accountIds).toHaveLength(verifyUi ? 2 : 1)
+    if (verifyUi) {
+      const parentId = accountIds.find(candidate => candidate !== id)
+      expect(await rpc('wallet.getAccountHdIndex', { walletId, accountId: parentId })).toBe(0)
+    }
+    const signingPrepare = {
+      scope: { walletId, accountId, groupId, network: 'mainnet', rosterVersion: 1 },
+      source: request.source,
+      sealedRecord: complete.record,
+      intent: {
+        recipient: summary.address,
+        amount: '1',
+        memo: '',
+        marginalFeeZats: 5_000,
+        feeQuoteId: 'unavailable-review-fixture'
+      },
+      selectedSlots: [0, 1],
+      transport: 'qr'
+    }
+    // This package has no verified payment-review export. The real Worker must
+    // return no review authority, even with a genuine sealed independent account.
+    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
+      available: false,
+      reason: 'pczt_review_unavailable'
+    })
+    for (const changedScope of [
+      { ...signingPrepare.scope, accountId: `${accountId}-other` },
+      { ...signingPrepare.scope, walletId: `${walletId}-other` },
+      { ...signingPrepare.scope, groupId: crypto.randomUUID() },
+      { ...signingPrepare.scope, network: 'testnet' }
+    ]) {
+      await expect(
+        rpc('vault.sign.worker.prepare', { ...signingPrepare, scope: changedScope })
+      ).rejects.toThrow()
+    }
+    const absentReview = {
+      walletId,
+      reviewId: 'unavailable-review',
+      sessionId: Buffer.alloc(16).toString('base64')
+    }
+    await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
+    const deniedSigning = await popup.evaluate(
+      input =>
+        chrome.runtime.sendMessage({
+          type: 'WORKER_RPC',
+          method: 'vault.sign.worker.prepare',
+          payload: input
+        }),
+      signingPrepare
+    )
+    expect(deniedSigning.error).toBeTruthy()
+    if (verifyUi) {
+      await popup.getByRole('button', { name: 'Receive', exact: true }).click()
+      const receiveAddresses = popup.getByRole('region', { name: 'Account network addresses' })
+      await expect(receiveAddresses.getByTitle(summary.address, { exact: true })).toBeVisible()
+      await receiveAddresses.getByRole('button', { name: /Show Zcash .*address QR code/ }).click()
+      const receiveDialog = popup.getByRole('dialog')
+      await expect(receiveDialog.getByTitle(summary.address, { exact: true })).toBeVisible()
+      await expect(receiveDialog.locator('svg[aria-label="Zcash address QR code"]')).toBeVisible()
+      await popup.screenshot({
+        path: '../../e2e-output/multisig/receive-own-address.png',
+        animations: 'disabled'
+      })
+      await receiveDialog.getByRole('button', { name: 'Close receiving address' }).click()
+      await popup.getByRole('button', { name: 'Back', exact: true }).click()
+      const sendPagePromise = context.waitForEvent('page')
+      await popup.getByRole('button', { name: 'Send', exact: true }).click()
+      const sendPage = await sendPagePromise
+      await expect(sendPage.getByText('Multisig send', { exact: true })).toBeVisible()
+      await sendPage.getByPlaceholder('Recipient address').fill(summary.address)
+      await sendPage.getByRole('textbox', { name: 'Amount in ZEC' }).fill('0.00000001')
+      await sendPage.getByRole('button', { name: 'Prepare transfer', exact: true }).click()
+      await expect(
+        sendPage.getByText('Multisig sending is unavailable in this wallet version.')
+      ).toBeVisible({ timeout: 50_000 })
+      await sendPage.screenshot({
+        path: '../../e2e-output/multisig/send-unavailable.png',
+        animations: 'disabled'
+      })
+      await expect(sendPage.getByRole('button', { name: /sign|approve|broadcast/i })).toHaveCount(0)
+      const genericFee = await popup.evaluate(
+        to =>
+          chrome.runtime.sendMessage({
+            type: 'ESTIMATE_ZCASH_TRANSFER_FEE',
+            to,
+            amount: '1',
+            marginalFeeZats: 5000,
+            fundingSource: 'shielded'
+          }),
+        summary.address
+      )
+      expect(genericFee.error).toBe('Operation is unavailable for this FROST account')
+      const genericSend = await popup.evaluate(
+        payload =>
+          chrome.runtime.sendMessage({
+            type: 'WORKER_RPC',
+            method: 'transaction.send',
+            payload
+          }),
+        {
+          walletId,
+          accountIndex: 0,
+          to: summary.address,
+          amount: '1',
+          marginalFeeZats: 5000,
+          feeQuoteId: 'unavailable-review-fixture',
+          fundingSource: 'shielded'
+        }
+      )
+      expect(genericSend.error).toBe('Operation is unavailable for this FROST account')
+      expect(
+        await popup.evaluate(
+          input => chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', ...input }),
+          { walletId, accountId: parentAccountId }
+        )
+      ).toMatchObject({ success: true })
+      await expect(
+        sendPage.getByText(/account.*network.*changed|active account or network has changed/)
+      ).toBeVisible()
+      const stalePrepare = await popup.evaluate(
+        input =>
+          chrome.runtime.sendMessage({
+            type: 'WORKER_RPC',
+            method: 'vault.send.prepare',
+            payload: input
+          }),
+        {
+          scope: { network: 'mainnet', walletId, accountId },
+          groupId,
+          rosterVersion: 1,
+          to: summary.address,
+          amountZats: '1',
+          marginalFeeZats: 5000,
+          feeQuoteId: 'stale-scope',
+          selectedSlots: [0, 1],
+          transport: 'qr'
+        }
+      )
+      expect(stalePrepare.error).toBeTruthy()
+      await sendPage.close()
+      expect(
+        await popup.evaluate(
+          input => chrome.runtime.sendMessage({ type: 'SWITCH_ACCOUNT', ...input }),
+          { walletId, accountId }
+        )
+      ).toMatchObject({ success: true })
+    }
+    if (!verifyUi) expect(await rpc('wallet.persistDb', { walletId, key: dbKey })).toBe(true)
+    await rpc('worker.recreate', {})
+    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
+      available: false,
+      reason: 'pczt_review_unavailable'
+    })
+    await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
+    if (!verifyUi) await init()
+    await unlock()
+    const reloadedId = await rpc<number>('wallet.resolveFrostAccount', request)
+    expect(reloadedId).toBe(id)
+    expect(await rpc('wallet.getAccountIds', { walletId })).toEqual(accountIds)
+    expect(await rpc('wallet.getAccountHdIndex', { walletId, accountId: reloadedId })).toBeNull()
+    expect(await rpc('wallet.getUnifiedAddresses', { walletId, accountId: reloadedId })).toEqual(
+      addresses
+    )
+    expect(await rpc('vault.sign.worker.prepare', signingPrepare)).toEqual({
+      available: false,
+      reason: 'pczt_review_unavailable'
+    })
+    await expect(rpc('vault.sign.worker.start', absentReview)).rejects.toThrow()
+    if (verifyUi) expect(treeStateRequests).toBeGreaterThanOrEqual(1)
+    else expect(treeStateRequests).toBe(1)
+    expect(submissionRequests).toBe(0)
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close(error => (error ? reject(error) : resolve()))
+    )
+  }
 })

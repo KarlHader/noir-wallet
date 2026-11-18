@@ -1,8 +1,8 @@
 /**
  * noir-multisig-mock: developer settings for the simulated phones.
  *
- * The real phones and the Rust/WASM protocol do not exist yet, so the mock transport plays the
- * other side of the conversation and the dev panel decides how each phone answers next. Builds
+ * Simulated transports are opt-in development tools. The dev panel decides how each simulated
+ * phone answers next; normal sessions connect to real phones. Builds
  * with the multisig UI switched off must not contain this module; the build-surface check looks
  * for the marker string above (see MULTISIG_MOCK_MARKER).
  */
@@ -23,23 +23,26 @@ type MockChooser = 'native' | 'simulated'
 /** 'real' leaves QR sessions to real phones: no reference phone runs alongside them. */
 export type MockQrPhones = 'simulated' | 'real'
 
+/** 'real' leaves Bluetooth sessions to real phones: the extension connects over GATT itself. Default. */
+export type MockBlePhones = 'simulated' | 'real'
+
 export interface MockSettings {
   delayMs: number
   nextResponse: Record<DeviceSlot, MockResponse>
   chooser: MockChooser
   qrPhones: MockQrPhones
+  blePhones: MockBlePhones
 }
 
 export const DEFAULT_MOCK_SETTINGS: MockSettings = Object.freeze({
   delayMs: 1000,
   nextResponse: Object.freeze({ 1: 'approve', 2: 'approve', 3: 'approve' }),
   chooser: 'native',
-  qrPhones: 'simulated'
+  qrPhones: 'real',
+  blePhones: 'real'
 })
 
-// The service UUID the phones will advertise is not agreed yet, so the browser's chooser lists
-// every nearby device and a simulated phone answers for whichever one is picked. Real pairing
-// must filter on that UUID instead.
+// Development simulation only: the selected device is represented by a simulated phone.
 export const MOCK_BLUETOOTH_QUERY: BluetoothDeviceQuery = Object.freeze({ acceptAllDevices: true })
 
 export const MOCK_GUARDIANS: Readonly<Record<2 | 3, MultisigDevice>> = Object.freeze({
@@ -77,7 +80,7 @@ function copySettings(settings: MockSettings): MockSettings {
 // Field by field, so a hand edit in devtools that breaks one value keeps the others.
 function normalizeSettings(value: unknown): MockSettings {
   if (typeof value !== 'object' || value === null) return copySettings(DEFAULT_MOCK_SETTINGS)
-  const { delayMs, nextResponse, chooser, qrPhones } = value as Record<string, unknown>
+  const { delayMs, nextResponse, chooser, qrPhones, blePhones } = value as Record<string, unknown>
   const responses =
     typeof nextResponse === 'object' && nextResponse !== null
       ? (nextResponse as Record<string, unknown>)
@@ -86,6 +89,7 @@ function normalizeSettings(value: unknown): MockSettings {
   if (isValidDelay(delayMs)) result.delayMs = delayMs
   if (chooser === 'native' || chooser === 'simulated') result.chooser = chooser
   if (qrPhones === 'simulated' || qrPhones === 'real') result.qrPhones = qrPhones
+  if (blePhones === 'simulated' || blePhones === 'real') result.blePhones = blePhones
   for (const slot of SLOTS) {
     const response = responses[slot]
     if (isMockResponse(response)) result.nextResponse[slot] = response
@@ -106,6 +110,10 @@ function sessionStore(): Storage | null {
 }
 
 export function readMockSettings(): MockSettings {
+  // Node's offline tests explicitly configure simulation; browser simulation is development-only.
+  if (typeof window !== 'undefined' && import.meta.env?.DEV !== true) {
+    return copySettings(DEFAULT_MOCK_SETTINGS)
+  }
   const store = sessionStore()
   if (store) {
     try {

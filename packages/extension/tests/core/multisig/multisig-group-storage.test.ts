@@ -20,7 +20,7 @@ import {
   openMultisigCreateTab,
   openMultisigTeamTab
 } from '../../../src/lib/multisig-tab'
-import { installLockEnv } from './helpers/storage-env'
+import { installLockEnv, reorderStorageObjectKeys } from './helpers/storage-env'
 import type { MultisigGroupRecord } from '../../../src/core/multisig/types'
 
 const MAINNET: MultisigGroupScope = { network: 'mainnet', walletId: 'w', accountId: 'a' }
@@ -44,6 +44,7 @@ const RECORD: MultisigGroupRecord = {
 interface ChromeEnv {
   readonly store: Map<string, unknown>
   readonly createdTabUrls: string[]
+  transformWrite?: (value: unknown) => unknown
 }
 
 // Node has no `chrome` global, so each test installs an in-memory stand-in for the three
@@ -73,7 +74,7 @@ async function withChrome(run: (env: ChromeEnv) => void | Promise<void>): Promis
           ),
         set: async (items: Record<string, unknown>) => {
           for (const [key, value] of Object.entries(items))
-            env.store.set(key, structuredClone(value))
+            env.store.set(key, structuredClone(env.transformWrite?.(value) ?? value))
         },
         remove: async (keys: string | string[]) => {
           for (const key of keysOf(keys)) env.store.delete(key)
@@ -98,6 +99,7 @@ test.describe('multisig group storage', () => {
 
   test('write then read round-trips and other scopes stay empty', async () => {
     await withChrome(async env => {
+      env.transformWrite = reorderStorageObjectKeys
       await expect(readMultisigGroup(MAINNET)).resolves.toBeNull()
 
       await writeMultisigGroup(MAINNET, RECORD)
@@ -115,6 +117,27 @@ test.describe('multisig group storage', () => {
       expect(all['mainnet:w:a']?.groupId).toBe('group-1')
       expect(all['testnet:w:a']?.groupId).toBe('group-2')
       expect(Object.isFrozen(all)).toBe(true)
+    })
+  })
+
+  test('group readback rejects changed fields, extra nested keys and reordered devices', async () => {
+    await withChrome(async env => {
+      for (const changed of [
+        { ...RECORD, fingerprint: 'changed' },
+        { ...RECORD, extra: true },
+        { ...RECORD, devices: [...RECORD.devices].reverse() },
+        { ...RECORD, devices: RECORD.devices.map(device => ({ ...device, extra: true })) },
+        { ...RECORD, devices: RECORD.devices.slice(1) },
+        { ...RECORD, mock: null }
+      ]) {
+        env.transformWrite = value => ({
+          ...(value as Record<string, unknown>),
+          'mainnet:w:a': changed
+        })
+        await expect(writeMultisigGroup(MAINNET, RECORD)).rejects.toThrow(
+          'Multisig group could not be saved'
+        )
+      }
     })
   })
 
@@ -157,7 +180,7 @@ test.describe('multisig group storage', () => {
       env.store.set(MULTISIG_GROUPS_STORAGE_KEY, { ...invalid, 'mainnet:w:valid': RECORD })
 
       const all = await readAllMultisigGroups()
-      expect(Object.keys(all)).toEqual(['mainnet:w:valid'])
+      expect(Object.keys(all)).toEqual(['mainnet:w:not-mock', 'mainnet:w:valid'])
       await expect(
         readMultisigGroup({ ...MAINNET, accountId: 'numeric-threshold' })
       ).resolves.toBeNull()

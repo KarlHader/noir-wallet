@@ -74,6 +74,9 @@ export function createInProcessDkgPort(
       }),
     acceptRound1: request => call('vault.dkg.acceptRound1', request),
     acceptRound2: request => call('vault.dkg.acceptRound2', request),
+    confirmRound1: async request => {
+      await call('vault.dkg.confirmRound1', request)
+    },
     close: async request => {
       await call('vault.dkg.close', request)
     },

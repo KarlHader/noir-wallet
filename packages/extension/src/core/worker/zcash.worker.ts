@@ -1,4 +1,12 @@
-import { findWasmAccountIdByHdIndex, mapWasmAccountIdsByHdIndex } from './account-resolution'
+import {
+  findWasmAccountIdByHdIndex,
+  mapWasmAccountIdsByHdIndex,
+  registerExternalWasmAccount,
+  resolveExternalWasmAccount,
+  type ExternalWasmAccountPort
+} from './account-resolution'
+import { parseAccountSource } from '../accounts/domain/account-source'
+import { openVaultRecord, isVaultWalletId } from '../multisig/vault-record'
 /**
  * Zcash Web Worker
  *
@@ -29,10 +37,16 @@ import init, {
   EnvelopeCodec,
   Keyset,
   Sealed,
-  ShareBackup
+  ShareBackup,
+  Coordinator,
+  Signer,
+  PcztTools,
+  Verification
 } from '../../lib/wasm-pkg/zcash_wallet_wasm'
 import { loadPinnedZcashWasmBinary } from '../zcash/pinned-wasm'
 import { createVaultDkgRpcHandler } from '../multisig/dkg-rpc'
+import { createSigningWorkerRpcHandler } from '../multisig/signing-worker-rpc'
+import { createIndexedDbIdentityStore } from '../../lib/multisig-identity-storage'
 import { findExactBlockHeightByTime } from '../zcash/block-time'
 
 import type {
@@ -44,7 +58,7 @@ import type {
   ZcashCredentialCapsule
 } from './types'
 import type { Network } from '../../types'
-import { bytesToBase64, base64ToBytes, hexToBytes } from '../../lib/bytes'
+import { bytesToBase64, base64ToBytes, hexToBytes, bytesToHex } from '../../lib/bytes'
 import { mapWasmAccountBalanceToZcashBalance, zeroZcashBalance } from '../wallet/balance-summary'
 import { DEFAULT_EXPIRY_DELTA_BLOCKS } from '../../config/fee'
 import { fetchStandardMarginalFee } from '../../infrastructure/chains/rpc-registry-client'
@@ -587,6 +601,20 @@ const vaultDkg = createVaultDkgRpcHandler(
   walletId => resolveWalletMnemonic(walletId)
 )
 
+const vaultSigning = createSigningWorkerRpcHandler(
+  { Coordinator, Signer, EnvelopeCodec, PcztTools, Verification, ShareBackup, Keyset },
+  {
+    credential: walletId => sessionCredentials.get(walletId),
+    network: walletId => {
+      const network = wallets.get(walletId)?.network
+      return network === 'mainnet' || network === 'testnet' ? network : undefined
+    },
+    identity: () => createIndexedDbIdentityStore().load(),
+    // The shipping package has no trusted structured PCZT review API yet.
+    reviewProvider: { available: false }
+  }
+)
+
 function forwardLog(level: 'log' | 'warn' | 'error' | 'info', ...args: any[]) {
   if (!debugLogsEnabled) return
   const walletId = activeWalletId
@@ -696,6 +724,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
 
     switch (method) {
       case 'credential.bind': {
+        vaultSigning.invalidate()
         const {
           walletId,
           keyDomainId,
@@ -751,6 +780,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
         break
       }
       case 'credential.lockAll': {
+        vaultSigning.invalidate()
         const { globalUnlockEpoch } = payload as RPCSchema['credential.lockAll']['request']
         for (const [walletId, credential] of sessionCredentials) {
           if (credential.globalUnlockEpoch === globalUnlockEpoch)
@@ -762,6 +792,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'init': {
         const { walletId, network, lightwalletdUrl, compactBlockCdn, dbBytes, zeroIndexerOptions } =
           payload as RPCSchema['init']['request']
+        if (wallets.get(walletId)?.network !== network) vaultSigning.invalidate(walletId)
         result = await runForWallet(walletId, async () => {
           console.log(
             `[Worker] Init called walletId=${walletId}, network=${network}, dbBytes=${dbBytes ? dbBytes.length + ' bytes' : 'none'}`
@@ -795,6 +826,8 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             }
             return true
           }
+
+          vaultSigning.invalidate(walletId)
           if (configUnchanged) {
             console.warn(
               `[Worker] Blank wallet instance for ${walletId} cannot shadow persisted db, rebuilding from snapshot`
@@ -962,9 +995,20 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       case 'vault.dkg.open':
       case 'vault.dkg.acceptRound1':
       case 'vault.dkg.acceptRound2':
+      case 'vault.dkg.confirmRound1':
       case 'vault.dkg.close':
       case 'vault.record.summary': {
         result = await vaultDkg.handle(method, payload)
+        break
+      }
+      case 'vault.sign.worker.prepare':
+      case 'vault.sign.worker.start':
+      case 'vault.sign.worker.ingest':
+      case 'vault.sign.worker.advance':
+      case 'vault.sign.worker.status':
+      case 'vault.sign.worker.close':
+      case 'vault.sign.worker.invalidate': {
+        result = await vaultSigning.handle(method, payload)
         break
       }
       case 'mnemonic.validate': {
@@ -993,6 +1037,7 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
       // --- Wallet ---
       case 'wallet.reset': {
         const { walletId: resetId } = payload as RPCSchema['wallet.reset']['request']
+        vaultSigning.invalidate(resetId)
         if (resetId) {
           result = await runForWallet(resetId, async () => {
             const entry = wallets.get(resetId)
@@ -1332,6 +1377,94 @@ self.addEventListener('message', async (event: MessageEvent<RPCRequest<any>>) =>
             : null
 
           return plainSummary
+        })
+        break
+      }
+
+      case 'wallet.resolveFrostAccount':
+      case 'wallet.registerFrostAccount':
+      case 'wallet.preflightFrostAccount': {
+        const request = payload as RPCSchema['wallet.registerFrostAccount']['request']
+        const source = parseAccountSource(request.source)
+        if (
+          source.network !== wallets.get(request.walletId)?.network ||
+          !isVaultWalletId(request.accountId)
+        ) {
+          throw new Error('Invalid external account scope')
+        }
+        result = await runForWallet(request.walletId, async () => {
+          const w = getWallet(request.walletId)
+          const identity = {
+            walletId: request.walletId,
+            accountId: request.accountId,
+            groupId: source.groupId,
+            network: source.network
+          }
+          const port: ExternalWasmAccountPort = {
+            findByName: async name => {
+              try {
+                return await w.get_account_id_by_name(name)
+              } catch (error) {
+                if (String(error).includes('Account with given name not found')) return null
+                throw error
+              }
+            },
+            getHdIndex: id => w.get_account_hd_index(id),
+            getAddresses: id => w.get_unified_addresses(id),
+            importAccount: async () => {
+              throw new Error('External import not authorized')
+            }
+          }
+          const mnemonic = resolveWalletMnemonic(request.walletId)
+          const opened = await openVaultRecord(request.sealedRecord, mnemonic, {
+            ownerWalletId: request.walletId,
+            accountId: request.accountId,
+            groupId: source.groupId,
+            network: source.network
+          })
+          try {
+            if (resolveWalletMnemonic(request.walletId) !== mnemonic)
+              throw new Error('Wallet credential session changed')
+            const { header } = opened
+            if (
+              header.version !== 2 ||
+              header.ownerWalletId !== request.walletId ||
+              header.accountId !== request.accountId ||
+              header.groupId !== source.groupId ||
+              header.network !== source.network
+            ) {
+              throw new Error('Invalid external account binding')
+            }
+            const ak = hexToBytes(header.groupVerifyingKey)
+            ShareBackup.from_bytes(opened.share, ak, 0).free()
+            if (
+              !Keyset.ufvk_matches_ak(header.ufvk, ak) ||
+              bytesToHex(Keyset.fvk_from_ufvk(header.ufvk)) !==
+                bytesToHex(base64ToBytes(header.fvk)) ||
+              bytesToHex(
+                Keyset.fingerprint_from_ufvk(header.ufvk, source.network === 'mainnet')
+              ) !== header.fingerprint
+            )
+              throw new Error('Invalid external account keyset')
+            if (method === 'wallet.resolveFrostAccount')
+              return resolveExternalWasmAccount(port, identity, header.address)
+            const birthday = request.birthdayHeight ?? header.birthdayHeight
+            if (
+              !Number.isSafeInteger(birthday) ||
+              birthday <= 0 ||
+              birthday !== header.birthdayHeight
+            )
+              throw new Error('Invalid external account birthday')
+            if (method === 'wallet.preflightFrostAccount') return true
+            port.importAccount = name =>
+              w.create_account_ufvk_external(name, header.ufvk, birthday, 'frost-vault')
+            const id = await registerExternalWasmAccount(port, identity, header.address)
+            blankInstances.delete(request.walletId)
+            lastSummaryCache.delete(request.walletId)
+            return id
+          } finally {
+            opened.share.fill(0)
+          }
         })
         break
       }

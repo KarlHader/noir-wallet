@@ -1,11 +1,10 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainAccount } from '@/core/accounts/domain'
 import { parseEvmAccountBinding } from '@/infrastructure/chains/evm/evm-account'
 import type { CredentialRepository, StorageV2ReadRepository } from '@/ports/repositories'
 import { readActiveHardwareCredential } from './active-hardware-credential-inventory'
-import {
-  KeystoneEvmSigningContextResolver,
-  type KeystoneEvmSigningContextResolverOptions
-} from './keystone-evm-signing-context'
+import { KeystoneEvmSigningContextResolver } from './keystone-evm-signing-context'
+import type { KeystoneEvmSigningContextResolverOptions } from './keystone-evm-signing-context'
 import type { HardwareCredentialSessionProvider } from './bitcoin-address-derivation-router'
 
 export interface HardwareEvmSigningContextResolverOptions {
@@ -25,6 +24,8 @@ export class HardwareEvmSigningContextResolver {
   }
 
   async resolve(chainAccount: ChainAccount) {
+    if (!isDerivedAccount(chainAccount))
+      throw new Error('Hardware signing requires a derived ChainAccount')
     const pointer = await this.options.storageRepository.getActivePointer()
     if (!pointer) throw new Error('Storage V2 is not active')
     const snapshot = await this.options.storageRepository.getSnapshot(pointer.generationId)
@@ -43,6 +44,13 @@ export class HardwareEvmSigningContextResolver {
     ) {
       throw new Error('Active EVM ChainAccount metadata mismatch')
     }
+    const owner = snapshot.accounts.find(
+      account =>
+        account.id === chainAccount.scope.accountId &&
+        account.keyDomainId === chainAccount.scope.keyDomainId
+    )
+    if (!owner || !isDerivedAccount(owner))
+      throw new Error('Hardware signing requires a derived Account')
     const domains = snapshot.keyDomains.filter(
       candidate => candidate.id === chainAccount.scope.keyDomainId
     )

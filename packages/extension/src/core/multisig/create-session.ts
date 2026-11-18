@@ -1,13 +1,15 @@
 import {
   dkgShape,
   parseDkgFinalPayload,
+  parsePairResponsePayload,
   parseRound1EchoPayload,
-  rosterSlotOf,
-  type RosterLockPayload
+  rosterSlotOf
 } from './dkg-protocol'
+import type { RosterLockPayload } from './dkg-protocol'
 import type { VaultDkgRound1Response, VaultDkgRound2Response } from './dkg-rpc'
 import {
   abort,
+  rosterBeforeDkg,
   acceptRequest,
   activate,
   allGuardiansConnected,
@@ -25,24 +27,25 @@ import {
   resetDevice,
   result,
   switchTransport,
-  updateDevice,
-  type CreateSessionEffect,
-  type CreateSessionEvent,
-  type CreateSessionInput,
-  type CreateSessionState,
-  type DeviceSessionState,
-  type MessageReceivedEvent,
-  type ReduceResult
+  updateDevice
 } from './create-session-shared'
-import { reduceQrSession } from './create-session-qr'
+import type {
+  CreateSessionEffect,
+  CreateSessionEvent,
+  CreateSessionInput,
+  CreateSessionState,
+  DeviceSessionState,
+  MessageReceivedEvent,
+  ReduceResult
+} from './create-session-shared'
+import { pairInvitePayload, reduceQrSession, rosterLockPayload } from './create-session-qr'
+import { parseIdentityPublicKey } from './identity'
+import { buildRoster } from './roster'
+import { bytesToBase64 } from '@/lib/bytes'
 import type { MultisigMessageType } from './messages'
 import { parseSealedVaultRecord } from './vault-record'
-import {
-  PAIRING_CODE_MAX_ATTEMPTS,
-  thresholdRequiresManualR1Check,
-  type DeviceSlot,
-  type MultisigDevice
-} from './types'
+import { PAIRING_CODE_MAX_ATTEMPTS, thresholdRequiresManualR1Check } from './types'
+import type { DeviceSlot, MultisigDevice } from './types'
 
 export {
   allGuardiansConnected,
@@ -64,6 +67,7 @@ export function createInitialSession(input: CreateSessionInput): CreateSessionSt
   }
   const slots = guardianSlotsOf(input.threshold)
   return {
+    authenticatedDkg: input.authenticatedDkg ?? false,
     groupId: input.groupId,
     sessionId: input.sessionId,
     threshold: input.threshold,
@@ -82,6 +86,7 @@ export function createInitialSession(input: CreateSessionInput): CreateSessionSt
     vaultRecord: null,
     savingRecord: false,
     ownerIdentityPublicKey: null,
+    ownerTransportPublicKey: null,
     qrDkgSessionId: input.qrDkgSessionId ?? '',
     roster: null,
     round2Outputs: null
@@ -149,9 +154,15 @@ export function reduceCreateSession(
     case 'DKG_FAILED':
       // A DKG error is never retried: the Worker has already voided its session.
       return abort(state, 'verification_failed')
+    case 'MESSAGE_REJECTED':
+      // A message that fails its signature, hash or ordering check could be anyone's.
+      return abort(state, 'verification_failed')
     case 'FINGERPRINT_REJECTED':
       return abort(state, 'fingerprint_mismatch')
     case 'VAULT_RECORD_SAVED':
+      if (state.authenticatedDkg && state.phase === 'FINALIZED' && state.savingRecord) {
+        return releaseBleRound2({ ...state, phase: 'KEYSET_VERIFIED', savingRecord: false })
+      }
       // Only a save this session asked for can activate it; anything else is a stale answer.
       if (state.phase !== 'KEYSET_VERIFIED' || !state.savingRecord) return ignored(state)
       return activate({ ...state, savingRecord: false })
@@ -202,9 +213,18 @@ function reducePairing(state: CreateSessionState, event: CreateSessionEvent): Re
 function lockRoster(state: CreateSessionState): ReduceResult {
   if (!allGuardiansConnected(state)) return ignored(state)
   const shape = dkgShape(state.threshold)
-  return result({ ...state, phase: 'DKG_R1' }, [
-    { type: 'dkgOpen', ...shape, mainnet: state.mainnet, groupId: state.groupId }
+  // Phones paired over an encrypted channel were invited into a DKG session by name, so the
+  // Worker must open it under that id. The earlier code-based pairing never named one.
+  const named = pairedOverChannel(state) ? { sessionId: state.qrDkgSessionId } : {}
+  return result({ ...state, phase: 'DKG_R1', roster: rosterBeforeDkg(state) }, [
+    { type: 'dkgOpen', ...shape, mainnet: state.mainnet, groupId: state.groupId, ...named }
   ])
+}
+
+// True when every phone came through the Noise handshake and the SAS check.
+function pairedOverChannel(state: CreateSessionState): boolean {
+  const phones = guardians(state)
+  return phones.length > 0 && phones.every(device => device.transportPublicKey !== null)
 }
 
 function reduceBlePairing(state: CreateSessionState, event: CreateSessionEvent): ReduceResult {
@@ -227,6 +247,33 @@ function reduceBlePairing(state: CreateSessionState, event: CreateSessionEvent):
     case 'PAIR_SELECTION_CANCELLED':
       if (guardianState(state, event.slot)?.connection !== 'choosing') return ignored(state)
       return resetDevice(state, event.slot)
+    case 'IDENTITY_READY':
+      // Every invite names this identity, so the first one loaded is the one for the session.
+      if (state.ownerIdentityPublicKey !== null) return ignored(state)
+      return result({ ...state, ownerIdentityPublicKey: event.publicKey })
+    case 'PAIR_SAS_READY':
+      return channelReady(state, event)
+    case 'PAIR_SAS_CONFIRMED': {
+      const device = guardianState(state, event.slot)
+      // Only a code the channel produced can be confirmed; the typed-code flow has an expiry.
+      if (device?.connection !== 'code_wait' || device.pairingCodeExpiresAt !== null) {
+        return ignored(state)
+      }
+      if (device.pairingCode === null || device.transportPublicKey === null) return ignored(state)
+      if (state.ownerIdentityPublicKey === null || state.qrDkgSessionId === '') {
+        return ignored(state)
+      }
+      // The user has matched the SAS, so the invite may now go over the encrypted channel.
+      return result(updateDevice(state, event.slot, { connection: 'invite_shown' }), [
+        {
+          type: 'sendTo',
+          slot: event.slot,
+          messageType: 'PAIR_INVITE',
+          payload: pairInvitePayload(state, event.slot)
+        },
+        { type: 'awaitFrom', slot: event.slot, messageType: 'PAIR_RESPONSE' }
+      ])
+    }
     case 'PAIR_CODE_ISSUED': {
       const connection = guardianState(state, event.slot)?.connection
       if (connection !== 'pending' && connection !== 'code_wait') return ignored(state)
@@ -258,12 +305,70 @@ function reduceBlePairing(state: CreateSessionState, event: CreateSessionEvent):
       if (guardianState(state, event.slot)?.connection !== 'code_wait') return ignored(state)
       return result(state, [{ type: 'issueCode', slot: event.slot }])
     case 'MESSAGE_RECEIVED':
-      return event.envelope.message_type === 'PAIR_RESPONSE'
-        ? checkPairingCode(state, event)
-        : ignored(state)
+      if (event.envelope.message_type !== 'PAIR_RESPONSE') return ignored(state)
+      return guardianState(state, event.slot)?.connection === 'invite_shown'
+        ? acceptPairResponse(state, event)
+        : checkPairingCode(state, event)
     default:
       return ignored(state)
   }
+}
+
+// The encrypted channel is up and the phone's identity is bound to it. Showing the SAS is all
+// that happens here: nothing goes to the phone until the user has compared the two screens.
+function channelReady(
+  state: CreateSessionState,
+  event: Extract<CreateSessionEvent, { type: 'PAIR_SAS_READY' }>
+): ReduceResult {
+  const device = guardianState(state, event.slot)
+  if (device?.connection !== 'pending') return ignored(state)
+  const identity = parseIdentityPublicKey(event.identityPublicKey)
+  if (!identity) return resetDevice(state, event.slot)
+  const canonical = bytesToBase64(identity.bytes)
+  // One phone holding two shares would defeat the threshold; the same key as the extension's
+  // would let the extension pose as a guardian.
+  const taken =
+    canonical === state.ownerIdentityPublicKey ||
+    guardians(state).some(
+      other => other.slot !== event.slot && other.identityPublicKey === canonical
+    )
+  if (taken) return resetDevice(state, event.slot)
+  return result({
+    ...updateDevice(state, event.slot, {
+      connection: 'code_wait',
+      pairingCode: event.sas,
+      pairingCodeExpiresAt: null,
+      codeAttempts: 0,
+      codeError: null,
+      identityPublicKey: canonical,
+      transportPublicKey: event.transportPublicKey
+    }),
+    ownerTransportPublicKey: event.ownerTransportPublicKey
+  })
+}
+
+// The phone answered the invite. Its key was bound to the channel during the handshake, and the
+// gate has already checked that this reply names the same key.
+function acceptPairResponse(state: CreateSessionState, event: MessageReceivedEvent): ReduceResult {
+  const device = guardianState(state, event.slot)
+  if (device?.connection !== 'invite_shown') return ignored(state)
+  const reply = parsePairResponsePayload(parsePayload(event.envelope))
+  const identity = reply ? parseIdentityPublicKey(reply.identityPublicKey) : null
+  if (!reply || !identity) return ignored(state)
+  if (bytesToBase64(identity.bytes) !== device.identityPublicKey) {
+    return abort(state, 'verification_failed')
+  }
+  const guardian = asGuardian(event.slot, reply.device)
+  if (!guardian) return ignored(state)
+  return result(
+    updateDevice(state, event.slot, {
+      connection: 'connected',
+      device: guardian,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+      identityConfirmed: true
+    })
+  )
 }
 
 function checkPairingCode(state: CreateSessionState, event: MessageReceivedEvent): ReduceResult {
@@ -318,6 +423,8 @@ function reduceBleCeremony(state: CreateSessionState, event: CreateSessionEvent)
       return openDkg(state, event.sessionId)
     case 'DKG_ROUND1_ACCEPTED':
       return round1Accepted(state, event.slot, event.result)
+    case 'DKG_ROUND1_CONFIRMED':
+      return confirmedBleRound1(state, event.slot)
     case 'DKG_ROUND2_ACCEPTED':
       return round2Accepted(state, event.slot, event.result)
     case 'FINGERPRINT_CONFIRMED': {
@@ -349,6 +456,7 @@ function rosterLockFor(state: CreateSessionState, slot: DeviceSlot): RosterLockP
 // after an abort, a second open) is dropped and the store closes the orphan.
 function openDkg(state: CreateSessionState, sessionId: string): ReduceResult {
   if (state.phase !== 'DKG_R1' || state.dkgSessionId !== null) return ignored(state)
+  if (pairedOverChannel(state)) return openNamedDkg(state, sessionId)
   const next = { ...state, dkgSessionId: sessionId }
   const slots = guardianSlots(next)
   return result(next, [
@@ -358,6 +466,48 @@ function openDkg(state: CreateSessionState, sessionId: string): ReduceResult {
         slot,
         messageType: 'ROSTER_LOCK',
         payload: rosterLockFor(next, slot)
+      })
+    ),
+    ...slots.map(
+      (slot): CreateSessionEffect => ({ type: 'awaitFrom', slot, messageType: 'DKG_R1' })
+    )
+  ])
+}
+
+// The roster names every device's identity and transport key and is signed up to by each phone, so
+// ROSTER_LOCK goes out only once the Worker session the invites named exists.
+function openNamedDkg(state: CreateSessionState, sessionId: string): ReduceResult {
+  // Any other id means the phones were invited into a session the Worker does not have.
+  if (sessionId !== state.qrDkgSessionId) {
+    return abort({ ...state, dkgSessionId: sessionId }, 'verification_failed')
+  }
+  if (state.ownerIdentityPublicKey === null || state.ownerTransportPublicKey === null) {
+    return abort(state, 'verification_failed')
+  }
+  const identities = new Map<number, string>([[rosterSlotOf(1), state.ownerIdentityPublicKey]])
+  const transports = new Map<number, string>([[rosterSlotOf(1), state.ownerTransportPublicKey]])
+  for (const device of guardians(state)) {
+    if (device.identityPublicKey === null || device.transportPublicKey === null) {
+      return abort(state, 'verification_failed')
+    }
+    identities.set(rosterSlotOf(device.slot), device.identityPublicKey)
+    transports.set(rosterSlotOf(device.slot), device.transportPublicKey)
+  }
+  const roster = buildRoster({
+    groupId: state.groupId,
+    threshold: dkgShape(state.threshold).threshold,
+    identities,
+    transportPublicKeys: transports
+  })
+  const next: CreateSessionState = { ...state, dkgSessionId: sessionId, roster }
+  const slots = guardianSlots(next)
+  return result(next, [
+    ...slots.map(
+      (slot): CreateSessionEffect => ({
+        type: 'sendTo',
+        slot,
+        messageType: 'ROSTER_LOCK',
+        payload: rosterLockPayload(next, slot)
       })
     ),
     ...slots.map(
@@ -430,6 +580,17 @@ function round2Accepted(
     finalFingerprint: outcome.fingerprint,
     vaultRecord
   }
+  if (state.authenticatedDkg) {
+    const round2Outputs = Object.fromEntries(
+      slots.map(slot => [
+        String(rosterSlotOf(slot)),
+        { inbox: inboxes.get(slot)!, sealedQsk: sealedQsk.get(slot)! }
+      ])
+    )
+    return result({ ...verified, phase: 'FINALIZED', round2Outputs, savingRecord: true }, [
+      { type: 'saveVaultRecord', groupId: state.groupId, record: vaultRecord }
+    ])
+  }
   return result(verified, [
     ...slots.flatMap((target): CreateSessionEffect[] => [
       {
@@ -478,6 +639,14 @@ function receiveBleMessage(state: CreateSessionState, event: MessageReceivedEven
     if (!echo || echo.round1Hash !== state.r1Fingerprint) {
       return abort(state, 'verification_failed')
     }
+    if (state.authenticatedDkg && state.dkgSessionId)
+      return result(state, [
+        {
+          type: 'dkgConfirmRound1',
+          slot: event.slot,
+          request: { sessionId: state.dkgSessionId, signedEnvelope: event.envelope }
+        }
+      ])
     const next = updateDevice(state, event.slot, { r1Echoed: true })
     if (!everyGuardian(next, device => device.r1Echoed)) return result(next)
     return result({ ...next, phase: 'DKG_R2' }, toEachGuardian(next, 'DKG_R1_CERT', 'DKG_R2_BATCH'))
@@ -496,10 +665,50 @@ function receiveBleMessage(state: CreateSessionState, event: MessageReceivedEven
     if (!final || final.fingerprint !== state.finalFingerprint) {
       return abort(state, 'verification_failed')
     }
-    return activateWhenAllConfirmed(updateDevice(state, event.slot, { finalReceived: true }))
+    return activateWhenAllConfirmed(
+      updateDevice(state, event.slot, { finalReceived: true, finalEnvelope: event.envelope })
+    )
   }
 
   return ignored(state)
+}
+
+function releaseBleRound2(state: CreateSessionState): ReduceResult {
+  const effects: CreateSessionEffect[] = []
+  for (const slot of guardianSlots(state)) {
+    const output = state.round2Outputs?.[String(rosterSlotOf(slot))]
+    if (!output) return abort(state, 'verification_failed')
+    effects.push(
+      { type: 'sendTo', slot, messageType: 'DKG_R2_INBOX', payload: { envelope: output.inbox } },
+      {
+        type: 'sendTo',
+        slot,
+        messageType: 'KEYSET_SETUP',
+        payload: { sealedQsk: output.sealedQsk }
+      }
+    )
+  }
+  effects.push(
+    ...guardianSlots(state).map(slot => ({
+      type: 'awaitFrom' as const,
+      slot,
+      messageType: 'DKG_FINAL' as const
+    }))
+  )
+  return result(state, effects)
+}
+
+function confirmedBleRound1(state: CreateSessionState, slot: DeviceSlot): ReduceResult {
+  if (
+    !state.authenticatedDkg ||
+    state.phase !== 'DKG_R1' ||
+    guardianState(state, slot)?.r1Echoed !== false
+  )
+    return ignored(state)
+  const next = updateDevice(state, slot, { r1Echoed: true })
+  return everyGuardian(next, d => d.r1Echoed)
+    ? result({ ...next, phase: 'DKG_R2' }, toEachGuardian(next, 'DKG_R1_CERT', 'DKG_R2_BATCH'))
+    : result(next)
 }
 
 // Bluetooth activates only once the extension's share is stored: a group the phones activate
@@ -510,6 +719,7 @@ function activateWhenAllConfirmed(state: CreateSessionState): ReduceResult {
   if (!ready) return result(state)
   if (state.savingRecord) return result(state)
   if (state.vaultRecord === null) return abort(state, 'verification_failed')
+  if (state.authenticatedDkg) return activate(state)
   return result({ ...state, savingRecord: true }, [
     { type: 'saveVaultRecord', groupId: state.groupId, record: state.vaultRecord }
   ])

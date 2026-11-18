@@ -7,18 +7,33 @@
  * values.
  */
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@/lib/bytes'
-import { DkgCoordinatorSession, type MnemonicResolver } from './dkg-coordinator'
+import {
+  DkgCoordinatorSession,
+  isOuterSessionId,
+  verifyCreationConfirmations,
+  type CreationEvidence,
+  type MnemonicResolver
+} from './dkg-coordinator'
+import { parseEnvelope, type MultisigEnvelope } from './messages'
 import { isBase64Text, isDkgSessionIdText, isDkgShape, type VaultWasm } from './dkg-protocol'
 import {
   isVaultGroupId,
   isVaultWalletId,
   openVaultRecord,
   parseSealedVaultRecord,
+  parseVaultRecordBinding,
+  type VaultRecordBinding,
   type SealedVaultRecord,
   type VaultRecordSummary
 } from './vault-record'
 
-export type VaultDkgAcceptRequest = { sessionId: string; senderSlot: number; envelope: string }
+export type VaultDkgAcceptRequest = {
+  sessionId: string
+  senderSlot: number
+  envelope: string
+  signedEnvelope?: MultisigEnvelope
+}
+export type VaultDkgConfirmRequest = { sessionId: string; signedEnvelope: MultisigEnvelope }
 
 export type VaultDkgRound1Response =
   | { complete: false }
@@ -43,14 +58,21 @@ export interface VaultDkgSchema {
       ownerWalletId: string
       groupId: string
       sessionId?: string
+      binding?: VaultRecordBinding
+      outerSessionId?: string
     }
     response: { sessionId: string }
   }
   'vault.dkg.acceptRound1': { request: VaultDkgAcceptRequest; response: VaultDkgRound1Response }
   'vault.dkg.acceptRound2': { request: VaultDkgAcceptRequest; response: VaultDkgRound2Response }
+  'vault.dkg.confirmRound1': { request: VaultDkgConfirmRequest; response: true }
   'vault.dkg.close': { request: { sessionId: string }; response: true }
   'vault.record.summary': {
-    request: { record: SealedVaultRecord; ownerWalletId: string }
+    request: {
+      record: SealedVaultRecord
+      ownerWalletId: string
+      creationEvidence?: CreationEvidence
+    }
     response: VaultRecordSummary
   }
 }
@@ -61,6 +83,7 @@ const METHODS: readonly VaultDkgMethod[] = [
   'vault.dkg.open',
   'vault.dkg.acceptRound1',
   'vault.dkg.acceptRound2',
+  'vault.dkg.confirmRound1',
   'vault.dkg.close',
   'vault.record.summary'
 ]
@@ -123,7 +146,7 @@ function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'
     !hasKeys(
       payload,
       ['participants', 'threshold', 'mainnet', 'ownerWalletId', 'groupId'],
-      ['sessionId']
+      ['sessionId', 'binding', 'outerSessionId']
     )
   ) {
     throw new Error(INVALID_REQUEST)
@@ -138,19 +161,33 @@ function parseOpen(payload: unknown): VaultDkgSchema['vault.dkg.open']['request'
   ) {
     throw new Error(INVALID_REQUEST)
   }
+  const binding =
+    payload.binding === undefined ? undefined : parseVaultRecordBinding(payload.binding)
+  if (
+    binding === null ||
+    (binding &&
+      (!isOuterSessionId(payload.outerSessionId) ||
+        binding.roster.groupId !== payload.groupId ||
+        binding.roster.threshold !== shape.threshold ||
+        binding.roster.participants.length !== shape.participants))
+  ) {
+    throw new Error(INVALID_REQUEST)
+  }
   return {
     participants: shape.participants,
     threshold: shape.threshold,
     mainnet: payload.mainnet,
     ownerWalletId: payload.ownerWalletId,
     groupId: payload.groupId,
+    ...(binding ? { binding } : {}),
+    ...(binding ? { outerSessionId: payload.outerSessionId as string } : {}),
     ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId })
   }
 }
 
 function parseAccept(payload: unknown): VaultDkgAcceptRequest {
   if (
-    !hasKeys(payload, ['sessionId', 'senderSlot', 'envelope']) ||
+    !hasKeys(payload, ['sessionId', 'senderSlot', 'envelope'], ['signedEnvelope']) ||
     !isBase64Text(payload.sessionId) ||
     typeof payload.senderSlot !== 'number' ||
     !Number.isInteger(payload.senderSlot) ||
@@ -161,7 +198,25 @@ function parseAccept(payload: unknown): VaultDkgAcceptRequest {
   return {
     sessionId: payload.sessionId,
     senderSlot: payload.senderSlot,
-    envelope: payload.envelope
+    envelope: payload.envelope,
+    ...(payload.signedEnvelope === undefined
+      ? {}
+      : { signedEnvelope: parseSignedEnvelope(payload.signedEnvelope) })
+  }
+}
+
+function parseSignedEnvelope(value: unknown): MultisigEnvelope {
+  const envelope = parseEnvelope(value)
+  if (!envelope) throw new Error(INVALID_REQUEST)
+  return envelope
+}
+
+function parseConfirm(payload: unknown): VaultDkgConfirmRequest {
+  if (!hasKeys(payload, ['sessionId', 'signedEnvelope']) || !isDkgSessionIdText(payload.sessionId))
+    throw new Error(INVALID_REQUEST)
+  return {
+    sessionId: payload.sessionId,
+    signedEnvelope: parseSignedEnvelope(payload.signedEnvelope)
   }
 }
 
@@ -173,12 +228,34 @@ function parseClose(payload: unknown): { sessionId: string } {
 }
 
 function parseSummary(payload: unknown): VaultDkgSchema['vault.record.summary']['request'] {
-  if (!hasKeys(payload, ['record', 'ownerWalletId']) || !isVaultWalletId(payload.ownerWalletId)) {
+  if (
+    !hasKeys(payload, ['record', 'ownerWalletId'], ['creationEvidence']) ||
+    !isVaultWalletId(payload.ownerWalletId)
+  ) {
     throw new Error(INVALID_REQUEST)
   }
   const record = parseSealedVaultRecord(payload.record)
   if (!record) throw new Error(INVALID_REQUEST)
-  return { record, ownerWalletId: payload.ownerWalletId }
+  let creationEvidence: CreationEvidence | undefined
+  if (payload.creationEvidence !== undefined) {
+    const value = payload.creationEvidence
+    if (
+      !hasKeys(value, ['outerSessionId', 'confirmations']) ||
+      !isOuterSessionId(value.outerSessionId) ||
+      !Array.isArray(value.confirmations) ||
+      value.confirmations.length > 3
+    )
+      throw new Error(INVALID_REQUEST)
+    creationEvidence = {
+      outerSessionId: value.outerSessionId,
+      confirmations: value.confirmations.map(parseSignedEnvelope)
+    }
+  }
+  return {
+    record,
+    ownerWalletId: payload.ownerWalletId,
+    ...(creationEvidence ? { creationEvidence } : {})
+  }
 }
 
 function encodeBySlot(map: ReadonlyMap<number, Uint8Array>): Record<string, string> {
@@ -243,12 +320,22 @@ export function createVaultDkgRpcHandler(
   async function accept<T>(
     payload: unknown,
     at: number,
-    run: (session: DkgCoordinatorSession, senderSlot: number, envelope: Uint8Array) => Promise<T>
+    run: (
+      session: DkgCoordinatorSession,
+      senderSlot: number,
+      envelope: Uint8Array,
+      signedEnvelope?: MultisigEnvelope
+    ) => Promise<T>
   ): Promise<T> {
     const request = parseAccept(payload)
     const entry = take(request.sessionId, at)
     try {
-      return await run(entry.session, request.senderSlot, base64ToBytes(request.envelope))
+      return await run(
+        entry.session,
+        request.senderSlot,
+        base64ToBytes(request.envelope),
+        request.signedEnvelope
+      )
     } catch (error) {
       // The coordinator has already voided itself; the table must not keep a dead session.
       drop(request.sessionId)
@@ -268,6 +355,8 @@ export function createVaultDkgRpcHandler(
       const opened = await openVaultRecord(request.record, resolveMnemonic(request.ownerWalletId))
       share = opened.share
       const { header } = opened
+      if (header.version === 2 && header.ownerWalletId !== request.ownerWalletId)
+        throw new Error('owner mismatch')
       const ak = hexToBytes(header.groupVerifyingKey)
       wasm.ShareBackup.from_bytes(share, ak, 0).free()
       const mainnet = header.network === 'mainnet'
@@ -276,11 +365,31 @@ export function createVaultDkgRpcHandler(
         throw new Error('fingerprint mismatch')
       }
       if (!wasm.Keyset.ufvk_matches_ak(header.ufvk, ak)) throw new Error('ufvk mismatch')
+      if (request.creationEvidence) {
+        if (header.version !== 2) throw new Error('legacy creation evidence')
+        await verifyCreationConfirmations(
+          header.roster,
+          header.fingerprint,
+          request.creationEvidence
+        )
+      }
       return {
         fingerprint: header.fingerprint,
         address: header.address,
         participants: header.participants,
-        threshold: header.threshold
+        threshold: header.threshold,
+        ...(header.version === 2
+          ? {
+              authenticated: {
+                accountId: header.accountId,
+                ownerWalletId: header.ownerWalletId,
+                birthdayHeight: header.birthdayHeight,
+                rosterVersion: header.rosterVersion,
+                rosterHash: header.roster.rosterHash,
+                ...(request.creationEvidence ? { creationConfirmed: true as const } : {})
+              }
+            }
+          : {})
       }
     } catch {
       throw new Error(RECORD_UNOPENABLE)
@@ -315,8 +424,8 @@ export function createVaultDkgRpcHandler(
         return { sessionId: id }
       }
       case 'vault.dkg.acceptRound1':
-        return accept(payload, at, async (session, senderSlot, envelope) => {
-          const outcome = await session.acceptRound1(senderSlot, envelope)
+        return accept(payload, at, async (session, senderSlot, envelope, signed) => {
+          const outcome = await session.acceptRound1(senderSlot, envelope, signed)
           return outcome.complete
             ? {
                 complete: true,
@@ -326,8 +435,8 @@ export function createVaultDkgRpcHandler(
             : { complete: false }
         })
       case 'vault.dkg.acceptRound2':
-        return accept(payload, at, async (session, senderSlot, envelope) => {
-          const outcome = await session.acceptRound2(senderSlot, envelope)
+        return accept(payload, at, async (session, senderSlot, envelope, signed) => {
+          const outcome = await session.acceptRound2(senderSlot, envelope, signed)
           return outcome.complete
             ? {
                 complete: true,
@@ -338,6 +447,17 @@ export function createVaultDkgRpcHandler(
               }
             : { complete: false }
         })
+      case 'vault.dkg.confirmRound1': {
+        const request = parseConfirm(payload)
+        const entry = take(request.sessionId, at)
+        try {
+          await entry.session.confirmRound1(request.signedEnvelope)
+          return true
+        } catch (error) {
+          drop(request.sessionId)
+          throw error
+        }
+      }
       case 'vault.dkg.close': {
         drop(parseClose(payload).sessionId)
         return true

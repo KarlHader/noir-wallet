@@ -4,6 +4,7 @@
  */
 import type {
   VaultDkgAcceptRequest,
+  VaultDkgConfirmRequest,
   VaultDkgRound1Response,
   VaultDkgRound2Response
 } from './dkg-rpc'
@@ -14,6 +15,7 @@ export interface DkgPort {
   open(request: VaultGroupOpenRequest): Promise<{ sessionId: string }>
   acceptRound1(request: VaultDkgAcceptRequest): Promise<VaultDkgRound1Response>
   acceptRound2(request: VaultDkgAcceptRequest): Promise<VaultDkgRound2Response>
+  confirmRound1(request: VaultDkgConfirmRequest): Promise<void>
   close(request: { sessionId: string }): Promise<void>
   /** Background stores the sealed record for the scope's account before the group activates. */
   save(request: VaultGroupSaveRequest): Promise<void>
@@ -36,6 +38,7 @@ export function createLazyDkgPort(load: () => Promise<DkgPort>): DkgPort {
     open: request => port().then(loaded => loaded.open(request)),
     acceptRound1: request => port().then(loaded => loaded.acceptRound1(request)),
     acceptRound2: request => port().then(loaded => loaded.acceptRound2(request)),
+    confirmRound1: request => port().then(loaded => loaded.confirmRound1(request)),
     close: request => port().then(loaded => loaded.close(request)),
     save: request => port().then(loaded => loaded.save(request))
   }

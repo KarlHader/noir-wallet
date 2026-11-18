@@ -9,6 +9,7 @@ import type {
 } from '../../../../src/core/multisig/dkg-rpc'
 import { round1Hash, type VaultWasm } from '../../../../src/core/multisig/dkg-protocol'
 import { base64ToBytes, bytesToBase64, bytesToHex } from '../../../../src/lib/bytes'
+import type { MultisigEnvelope, MultisigMessageType } from '../../../../src/core/multisig/messages'
 
 export type Shape = { participants: 2 | 3; threshold: 2 | 3 }
 type Dkg = InstanceType<VaultWasm['Dkg']>
@@ -35,6 +36,7 @@ export class Phone {
   private dkg1: ReturnType<Dkg['part1']> | null = null
   private dkg2: ReturnType<Dkg['part2']> | null = null
   private broadcasts: InstanceType<VaultWasm['MessageSet']> | null = null
+  private dkg3: ReturnType<Dkg['part3']> | null = null
 
   constructor(
     private readonly wasm: VaultWasm,
@@ -72,6 +74,7 @@ export class Phone {
       this.broadcasts,
       this.wasm.MessageSet.from_bytes(payload)
     )
+    this.dkg3 = dkg3
     const statics = dkg3.statics()
     const coordinatorKey = statics.get(0)
     if (!coordinatorKey) throw new Error('no coordinator static key')
@@ -83,6 +86,11 @@ export class Phone {
     )
     return bytesToHex(this.wasm.Keyset.derive(dkg3.group_verifying_key(), qsk, mainnet, 0)[4])
   }
+
+  keyPackage(): Uint8Array {
+    if (!this.dkg3) throw new Error('finish() first')
+    return this.dkg3.key_package()
+  }
 }
 
 /** Plays both rounds of an opened Worker session with fresh phones and returns the final answer. */
@@ -90,27 +98,53 @@ export async function runRounds(
   wasm: VaultWasm,
   handler: VaultDkgRpcHandler,
   shape: Shape,
-  sessionId: string
+  sessionId: string,
+  suppliedPhones?: Phone[],
+  authenticate?: (
+    slot: number,
+    type: MultisigMessageType,
+    payload: unknown
+  ) => Promise<MultisigEnvelope>
 ): Promise<Round2Complete> {
-  const phones: Phone[] = []
-  for (let slot = 1; slot < shape.participants; slot += 1) {
-    phones.push(new Phone(wasm, shape, slot, sessionId))
-  }
+  const phones =
+    suppliedPhones ??
+    Array.from(
+      { length: shape.participants - 1 },
+      (_, index) => new Phone(wasm, shape, index + 1, sessionId)
+    )
   let r1: VaultDkgSchema['vault.dkg.acceptRound1']['response'] = { complete: false }
   for (const phone of phones) {
+    const envelope = phone.round1()
     r1 = await callVaultDkg(handler, 'vault.dkg.acceptRound1', {
       sessionId,
       senderSlot: phone.slot,
-      envelope: phone.round1()
+      envelope,
+      ...(authenticate
+        ? { signedEnvelope: await authenticate(phone.slot, 'DKG_R1', { envelope }) }
+        : {})
     })
   }
   if (!r1.complete) throw new Error('round 1 should be complete')
+  if (authenticate) {
+    for (const phone of phones) {
+      await callVaultDkg(handler, 'vault.dkg.confirmRound1', {
+        sessionId,
+        signedEnvelope: await authenticate(phone.slot, 'DKG_R1_ECHO', {
+          round1Hash: await phone.echo(r1.bundles[String(phone.slot)])
+        })
+      })
+    }
+  }
   let r2: VaultDkgSchema['vault.dkg.acceptRound2']['response'] = { complete: false }
   for (const phone of phones) {
+    const envelope = phone.round2(r1.bundles[String(phone.slot)])
     r2 = await callVaultDkg(handler, 'vault.dkg.acceptRound2', {
       sessionId,
       senderSlot: phone.slot,
-      envelope: phone.round2(r1.bundles[String(phone.slot)])
+      envelope,
+      ...(authenticate
+        ? { signedEnvelope: await authenticate(phone.slot, 'DKG_R2_BATCH', { envelope }) }
+        : {})
     })
   }
   if (!r2.complete) throw new Error('round 2 should be complete')

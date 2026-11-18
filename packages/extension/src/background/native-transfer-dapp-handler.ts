@@ -1,24 +1,25 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
-import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
-import type { Account, ChainAccount } from '@/core/accounts/domain'
+import { emitDAppEvent, observeDAppRequest } from './dapp-analytics'
+import type { DAppAnalyticsSink } from './dapp-analytics'
+import type { DerivedAccount, DerivedChainAccount } from '@/core/accounts/domain'
 import type { AccountRef, DAppManager } from '@/core/dapp/dapp-manager'
 import {
   NativeTransferProviderError,
-  parseNativeTransferNoParams,
-  type NativeTransferDAppRuntimeMethod
+  parseNativeTransferNoParams
 } from '@/core/dapp/native-transfer-provider'
+import type { NativeTransferDAppRuntimeMethod } from '@/core/dapp/native-transfer-provider'
 import type { KeyDomainSource } from '@/core/keyring/domain'
 import type { DAppChainAccountDescriptor } from './dapp-chain-account-catalog'
-import {
-  activeDAppSessionAccountMatches,
-  selectDAppSessionAccounts,
-  type DAppSessionAccountProposal,
-  type DAppSessionAccountSelection
+import { activeDAppSessionAccountMatches, selectDAppSessionAccounts } from './dapp-session-accounts'
+import type {
+  DAppSessionAccountProposal,
+  DAppSessionAccountSelection
 } from './dapp-session-accounts'
 
 export interface ActiveNativeTransferContext {
-  readonly chainAccount: ChainAccount
-  readonly accountIndex: Account['accountIndex']
+  readonly chainAccount: DerivedChainAccount
+  readonly accountIndex: DerivedAccount['accountIndex']
   readonly keyDomainSource: KeyDomainSource
   readonly publicKey?: string
 }
@@ -218,6 +219,8 @@ export class BackgroundNativeTransferDAppHandler {
 
   private async loadActiveAccount(): Promise<ActiveDAppAccount> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context || context.chainAccount.identity.kind !== 'account-identifier') {
       throw new NativeTransferProviderError(
         4100,

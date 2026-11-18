@@ -1,7 +1,8 @@
-import type { AccountId, AccountIndex, ChainAccount } from '@/core/accounts/domain'
+import type { AccountId, AccountIndex, DerivedChainAccount } from '@/core/accounts/domain'
 import type { BitcoinSupportedAddressType } from '@/core/chains/bitcoin'
 import type { KeyDomainId } from '@/core/keyring/domain'
-import { parseTransactionId, type TransactionId } from '@/core/transactions/domain'
+import { parseTransactionId } from '@/core/transactions/domain'
+import type { TransactionId } from '@/core/transactions/domain'
 import {
   accountKey,
   hasExactKeys,
@@ -23,7 +24,7 @@ export interface BitcoinInputOutpoint {
 }
 
 export interface BitcoinInputReservationScope {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: AccountIndex
   readonly addressType: BitcoinSupportedAddressType
 }

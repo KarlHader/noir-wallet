@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { expect } from '@playwright/test'
 import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
+import { buildRoster } from '../../../src/core/multisig/roster'
 import {
   isVaultGroupId,
   isVaultWalletId,
@@ -36,6 +37,102 @@ function flipByte(base64: string): string {
 }
 
 test.describe('multisig vault record', () => {
+  test('v2 authenticates ownership and immutable roster, while legacy stays readable only', async () => {
+    const roster = buildRoster({
+      groupId: HEADER.groupId,
+      threshold: HEADER.threshold,
+      identities: new Map(
+        Array.from({ length: HEADER.participants }, (_, slot) => [
+          slot,
+          bytesToBase64(Uint8Array.from([1, ...new Uint8Array(64).fill(slot + 1)]))
+        ])
+      )
+    })
+    const header = {
+      ...HEADER,
+      version: 2 as const,
+      accountId: 'account-1',
+      ownerWalletId: 'wallet-1',
+      birthdayHeight: 123,
+      rosterVersion: 1 as const,
+      roster
+    }
+    const scope = {
+      accountId: header.accountId,
+      ownerWalletId: header.ownerWalletId,
+      groupId: header.groupId,
+      network: header.network
+    }
+    const sealed = await sealVaultRecord(header, SHARE, MNEMONIC)
+    expect(sealed.version).toBe(2)
+    expect((await openVaultRecord(sealed, MNEMONIC, scope)).header).toEqual(header)
+    for (const patch of [
+      { accountId: 'other' },
+      { ownerWalletId: 'other' },
+      { groupId: 'other' },
+      { network: HEADER.network === 'mainnet' ? 'testnet' : 'mainnet' }
+    ]) {
+      await expect(openVaultRecord({ ...sealed, ...patch }, MNEMONIC)).rejects.toThrow(CANNOT_OPEN)
+      await expect(openVaultRecord(sealed, MNEMONIC, { ...scope, ...patch })).rejects.toThrow(
+        CANNOT_OPEN
+      )
+    }
+    await expect(openVaultRecord(vector.record, MNEMONIC, scope)).rejects.toThrow(CANNOT_OPEN)
+    for (const patch of [
+      { salt: flipByte(sealed.salt) },
+      { iv: flipByte(sealed.iv) },
+      { ciphertext: flipByte(sealed.ciphertext) },
+      { roster },
+      { version: 1 }
+    ]) {
+      await expect(openVaultRecord({ ...sealed, ...patch }, MNEMONIC)).rejects.toThrow(CANNOT_OPEN)
+    }
+    // A v1 ciphertext cannot be promoted by attaching account ownership and a new version.
+    await expect(
+      openVaultRecord(
+        {
+          ...vector.record,
+          version: 2,
+          accountId: scope.accountId,
+          ownerWalletId: scope.ownerWalletId
+        },
+        MNEMONIC
+      )
+    ).rejects.toThrow(CANNOT_OPEN)
+    expect(parseSealedVaultRecord(JSON.parse(JSON.stringify(sealed)))).toEqual(sealed)
+    expect(sealedVaultRecordEquals(sealed, { ...sealed, ownerWalletId: 'other' })).toBe(false)
+    expect(sealedVaultRecordEquals(sealed, { ...sealed, accountId: 'other' })).toBe(false)
+    for (const birthdayHeight of [-1, 1.5, NaN, Number.MAX_SAFE_INTEGER]) {
+      await expect(sealVaultRecord({ ...header, birthdayHeight }, SHARE, MNEMONIC)).rejects.toThrow(
+        'Invalid vault record'
+      )
+    }
+    const foreignRoster = buildRoster({
+      groupId: 'foreign-group',
+      threshold: header.threshold,
+      identities: new Map(roster.participants.map(p => [p.slot, p.identityPublicKey]))
+    })
+    await expect(
+      sealVaultRecord({ ...header, roster: foreignRoster }, SHARE, MNEMONIC)
+    ).rejects.toThrow('Invalid vault record')
+    await expect(
+      sealVaultRecord(
+        { ...header, roster: { ...roster, rosterHash: '0'.repeat(64) } },
+        SHARE,
+        MNEMONIC
+      )
+    ).rejects.toThrow('Invalid vault record')
+    const duplicate = buildRoster({
+      groupId: HEADER.groupId,
+      threshold: HEADER.threshold,
+      identities: new Map(
+        roster.participants.map(p => [p.slot, roster.participants[0].identityPublicKey])
+      )
+    })
+    await expect(
+      sealVaultRecord({ ...header, roster: duplicate }, SHARE, MNEMONIC)
+    ).rejects.toThrow('Invalid vault record')
+  })
   test('opens the independently computed v1 vector', async () => {
     const opened = await openVaultRecord(vector.record, vector.mnemonic)
     expect(opened.header).toEqual(vector.header)

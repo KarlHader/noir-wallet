@@ -1,9 +1,12 @@
 import { deleteMultisigIdentity } from '@/lib/multisig-identity-storage'
 import type { MultisigDevice, MultisigGroupRecord } from '@/core/multisig/types'
+import { storageJsonEquals } from './storage-json-equality'
 
 export const MULTISIG_GROUPS_STORAGE_KEY = 'multisig_groups_v1'
 export const MULTISIG_BANNER_STORAGE_KEY = 'multisig_banner_dismissed_v1'
 export const MULTISIG_VAULT_RECORDS_STORAGE_KEY = 'multisig_vault_records_v1'
+export const MULTISIG_CREATION_STORAGE_KEY = 'multisig_creation_v1'
+export const MULTISIG_SIGNING_STORAGE_KEY = 'multisig_signing_v1'
 const MULTISIG_STORAGE_LOCK_NAME = 'noir-multisig-storage'
 
 // One lock for all three keys: every read-modify-write below, in any extension context, would
@@ -48,7 +51,7 @@ function parseDevice(value: unknown): MultisigDevice | null {
 
 // Rebuilding the object field by field means only the known, non-secret fields are ever written
 // or returned, whatever else the caller or the stored value carries.
-function parseGroupRecord(value: unknown): MultisigGroupRecord | null {
+export function parseMultisigGroupRecord(value: unknown): MultisigGroupRecord | null {
   if (!isRecord(value)) return null
   const { groupId, threshold, transportKind, devices, fingerprint, createdAt, mock } = value
   if (
@@ -58,7 +61,7 @@ function parseGroupRecord(value: unknown): MultisigGroupRecord | null {
     typeof fingerprint !== 'string' ||
     typeof createdAt !== 'number' ||
     !Number.isFinite(createdAt) ||
-    mock !== true ||
+    typeof mock !== 'boolean' ||
     !Array.isArray(devices)
   ) {
     return null
@@ -88,7 +91,7 @@ async function readStoredGroups(): Promise<Record<string, MultisigGroupRecord>> 
   // fromEntries defines own properties, so a hostile stored key such as `__proto__` stays data.
   return Object.fromEntries(
     Object.entries(stored).flatMap(([key, value]) => {
-      const record = parseGroupRecord(value)
+      const record = parseMultisigGroupRecord(value)
       return record ? [[key, record] as const] : []
     })
   )
@@ -120,13 +123,24 @@ export async function writeMultisigGroup(
   scope: MultisigGroupScope,
   record: MultisigGroupRecord
 ): Promise<void> {
-  const sanitized = parseGroupRecord(record)
+  const sanitized = parseMultisigGroupRecord(record)
   if (!sanitized) throw new Error('Invalid multisig group record')
   await withMultisigStorageLock(async () => {
-    const groups = await readStoredGroups()
+    const stored = (await chrome.storage.local.get(MULTISIG_GROUPS_STORAGE_KEY))[
+      MULTISIG_GROUPS_STORAGE_KEY
+    ]
+    const groups = isRecord(stored) ? stored : {}
     await chrome.storage.local.set({
       [MULTISIG_GROUPS_STORAGE_KEY]: { ...groups, [multisigGroupScopeKey(scope)]: sanitized }
     })
+    const readback = (await chrome.storage.local.get(MULTISIG_GROUPS_STORAGE_KEY))[
+      MULTISIG_GROUPS_STORAGE_KEY
+    ]
+    if (
+      !isRecord(readback) ||
+      !storageJsonEquals(readback[multisigGroupScopeKey(scope)], sanitized)
+    )
+      throw new Error('Multisig group could not be saved')
   })
 }
 
@@ -148,7 +162,9 @@ export async function clearMultisigData(): Promise<void> {
     await chrome.storage.local.remove([
       MULTISIG_GROUPS_STORAGE_KEY,
       MULTISIG_BANNER_STORAGE_KEY,
-      MULTISIG_VAULT_RECORDS_STORAGE_KEY
+      MULTISIG_VAULT_RECORDS_STORAGE_KEY,
+      MULTISIG_CREATION_STORAGE_KEY,
+      MULTISIG_SIGNING_STORAGE_KEY
     ])
     await deleteMultisigIdentity()
   })

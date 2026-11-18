@@ -2,20 +2,13 @@ import type { ChainAccount } from '@/core/accounts/domain'
 import type { ChainId } from '@/core/chains/domain'
 import type { EvmTransactionSummary, SigningSummary } from '@/core/keyring/domain'
 import type { NetworkFeeTier } from '@/core/transactions/domain'
-import {
-  parseAssetId,
-  parseChainId,
-  type AssetRegistry,
-  type AssetRegistryEntry
-} from '@/core/chains/registry'
+import { parseAssetId, parseChainId } from '@/core/chains/registry'
+import type { AssetRegistry, AssetRegistryEntry } from '@/core/chains/registry'
 import { parseEvmAccountBinding } from './evm-account'
-import { deriveEvmFeeTierQuote, type EvmFeeSelection } from './evm-fee-tier'
-import {
-  EvmRpcError,
-  type EvmBroadcastRpc,
-  type EvmRpcCall,
-  type EvmTransactionRpc
-} from './evm-rpc-client'
+import { deriveEvmFeeTierQuote } from './evm-fee-tier'
+import type { EvmFeeSelection } from './evm-fee-tier'
+import { EvmRpcError } from './evm-rpc-client'
+import type { EvmBroadcastRpc, EvmRpcCall, EvmTransactionRpc } from './evm-rpc-client'
 
 const ETHEREUM_MAINNET_PRIORITY_FEE_FLOOR_WEI = 10_000_000n
 const EVM_SIMPLE_TRANSFER_GAS = 21_000n
@@ -760,6 +753,7 @@ interface PreparedEvmCall {
 function resolveExecutionAccount(
   input: Pick<BuildEvmTransferInput, 'chainId' | 'chainAccount' | 'executionAccount'>
 ) {
+  parseEvmAccountBinding(input.chainAccount, input.chainId)
   if (input.executionAccount === undefined) {
     return parseEvmAccountBinding(input.chainAccount, input.chainId)
   }

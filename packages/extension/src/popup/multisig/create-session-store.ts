@@ -3,34 +3,37 @@ import { create } from 'zustand'
 import {
   createInitialSession,
   guardianSlots,
-  reduceCreateSession,
-  type CreateSessionEffect,
-  type CreateSessionEvent,
-  type CreateSessionState,
-  type DeviceSessionState
+  reduceCreateSession
+} from '@/core/multisig/create-session'
+import type {
+  CreateSessionEffect,
+  CreateSessionEvent,
+  CreateSessionState,
+  DeviceSessionState
 } from '@/core/multisig/create-session'
 import { multisigDebug } from '@/core/multisig/debug-log'
 import type { SessionDriver } from '@/core/multisig/driver'
 import type { DeviceIdentity } from '@/core/multisig/identity'
-import {
-  buildQrCeremonySteps,
-  buildQrPairingSteps,
-  qrStepCounter,
-  type QrStep
-} from '@/core/multisig/qr-plan'
-import {
-  QR_DISPLAY_TTL_MS,
-  type DeviceSlot,
-  type MultisigGroupRecord,
-  type MultisigThreshold,
-  type MultisigTransportKind,
-  type SessionPhase
+import { buildQrCeremonySteps, buildQrPairingSteps, qrStepCounter } from '@/core/multisig/qr-plan'
+import type { QrStep } from '@/core/multisig/qr-plan'
+import { QR_DISPLAY_TTL_MS } from '@/core/multisig/types'
+import type {
+  DeviceSlot,
+  MultisigGroupRecord,
+  MultisigThreshold,
+  MultisigTransportKind,
+  SessionPhase
 } from '@/core/multisig/types'
-import { createLazyDkgPort, type DkgPort } from '@/core/multisig/dkg-port'
+import { createLazyDkgPort } from '@/core/multisig/dkg-port'
+import type { DkgPort } from '@/core/multisig/dkg-port'
 import type { VaultWasm } from '@/core/multisig/dkg-protocol'
 import { bytesToBase64 } from '@/lib/bytes'
-import { chooseBluetoothDevice, type BluetoothSelection } from '@/lib/multisig-bluetooth'
-import { writeMultisigGroup, type MultisigGroupScope } from '@/lib/multisig-group-storage'
+import { BLE_DEVICE_QUERY } from '@/core/multisig/ble/link'
+import { chooseBluetoothDevice } from '@/lib/multisig-bluetooth'
+import type { BluetoothSelection } from '@/lib/multisig-bluetooth'
+import { writeMultisigGroup } from '@/lib/multisig-group-storage'
+import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
+import type { MultisigCreationOperation } from '@/lib/multisig-creation-storage'
 import { decodeEnvelopeUR } from '@/lib/multisig-ur'
 import { toast } from '@/store/toast-store'
 import {
@@ -40,18 +43,15 @@ import {
   peekSharedIdentity
 } from './device-identity-cache'
 import { useMultisigGroupStore } from './group-store'
-import { createMockBleDriver, type ChooserRejection } from './mock/mock-ble-driver'
+import { createBleDriver } from './ble-driver'
+import type { BleChooserRejection, BleDriverOptions } from './ble-driver'
+import { createMockBleDriver } from './mock/mock-ble-driver'
+import type { ChooserRejection } from './mock/mock-ble-driver'
 import { MOCK_BLUETOOTH_QUERY, readMockSettings } from './mock/mock-settings'
 import { loadMockVaultWasm } from './mock/mock-vault-wasm'
 import { createQrMockHooks } from './mock/qr-mock-hooks'
-import {
-  createQrDriver,
-  type QrDisplay,
-  type QrDriver,
-  type QrDriverOptions,
-  type QrScanRequest,
-  type ScanOutcome
-} from './qr-driver'
+import { createQrDriver } from './qr-driver'
+import type { QrDisplay, QrDriver, QrDriverOptions, QrScanRequest, ScanOutcome } from './qr-driver'
 
 /** What a simulated set of phones needs to play the other side of a QR session. */
 export interface QrMockContext {
@@ -73,6 +73,7 @@ export interface CreateSessionDependencies {
   /** The extension's long-lived device identity, which signs every QR code it shows. */
   loadIdentity: () => Promise<DeviceIdentity>
   createQrDriver: (options: QrDriverOptions) => QrDriver
+  createBleDriver: (options: BleDriverOptions) => SessionDriver
   createQrMock: ((driver: QrDriver, context: QrMockContext) => QrMockHooks) | null
 }
 
@@ -85,6 +86,7 @@ const defaultDependencies: CreateSessionDependencies = {
   loadPhoneVault: loadMockVaultWasm,
   loadIdentity: defaultLoadIdentity,
   createQrDriver,
+  createBleDriver,
   createQrMock: createQrMockHooks
 }
 
@@ -117,13 +119,22 @@ function cachedIdentityStatus(): IdentityStatus {
 
 type DkgEffect = Extract<
   CreateSessionEffect,
-  { type: 'dkgOpen' | 'dkgAcceptRound1' | 'dkgAcceptRound2' | 'dkgClose' | 'saveVaultRecord' }
+  {
+    type:
+      | 'dkgOpen'
+      | 'dkgAcceptRound1'
+      | 'dkgConfirmRound1'
+      | 'dkgAcceptRound2'
+      | 'dkgClose'
+      | 'saveVaultRecord'
+  }
 >
 
 function isDkgEffect(effect: CreateSessionEffect): effect is DkgEffect {
   return (
     effect.type === 'dkgOpen' ||
     effect.type === 'dkgAcceptRound1' ||
+    effect.type === 'dkgConfirmRound1' ||
     effect.type === 'dkgAcceptRound2' ||
     effect.type === 'dkgClose' ||
     effect.type === 'saveVaultRecord'
@@ -149,6 +160,9 @@ export interface PendingChooser {
 }
 
 export interface CreateSessionStore {
+  reservation: MultisigCreationOperation | null
+  commitStatus: 'idle' | 'saving' | 'failed' | 'ready'
+  retryCommit(): void
   scope: MultisigGroupScope | null
   session: CreateSessionState | null
   pendingDisplay: PendingQrDisplay | null
@@ -160,7 +174,8 @@ export interface CreateSessionStore {
     scope: MultisigGroupScope,
     threshold: MultisigThreshold,
     transportKind: MultisigTransportKind,
-    ownerName: string
+    ownerName: string,
+    reservation?: MultisigCreationOperation
   ): void
   dispatch(event: CreateSessionEvent): void
   switchTransport(kind: MultisigTransportKind): void
@@ -195,9 +210,17 @@ const QR_CEREMONY_PHASES: readonly SessionPhase[] = [
 ]
 const CHOOSER_CLOSED: BluetoothSelection = { status: 'cancelled' }
 
-function reportChooserRejection(reason: ChooserRejection): void {
+function reportChooserRejection(reason: ChooserRejection | BleChooserRejection): void {
   if (reason === 'duplicate') toast.error('Device already added', 'Choose a different device.')
-  else toast.error('Bluetooth unavailable', 'Check your Bluetooth settings or use QR code.')
+  else if (reason === 'connect_failed') {
+    toast.error('Could not connect', 'Keep the phone on its waiting screen and try again.')
+  } else if (reason === 'wrong_device') {
+    toast.error('Device not verified', 'The phone could not prove its identity. Try again.')
+  } else toast.error('Bluetooth unavailable', 'Check your Bluetooth settings or use QR code.')
+}
+
+function useRealBluetooth(): boolean {
+  return readMockSettings().blePhones === 'real'
 }
 
 function guardian(session: CreateSessionState, slot: DeviceSlot): DeviceSessionState | null {
@@ -305,6 +328,8 @@ export function currentQrStep(
 }
 
 const IDLE = {
+  reservation: null,
+  commitStatus: 'idle',
   scope: null,
   session: null,
   pendingDisplay: null,
@@ -352,12 +377,13 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     const before = get()
     const session = before.session
     if (!session) return
+    if (before.commitStatus === 'saving' || before.commitStatus === 'failed') return
     const { state, effects } = reduceCreateSession(session, event)
     if (state !== session) {
       if (state.phase !== session.phase) multisigDebug('phase', { phase: state.phase })
       const steps = liveQrSteps(state)
       set({
-        session: state,
+        session: state.phase === 'ACTIVATED' ? { ...state, phase: 'KEYSET_VERIFIED' } : state,
         pendingDisplay: liveDisplay(steps, before.pendingDisplay),
         pendingScan: liveScan(steps, before.pendingScan)
       })
@@ -370,24 +396,61 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
       else if (isDkgEffect(effect)) runDkgEffect(effect, driverDispatch)
       else driver?.execute(effect, driverDispatch)
     }
-    // Both outcomes are final, so the transport goes once the last effects (the DKG_ACTIVATE
-    // sends, the persist) are out. The session stays so the result pages can read it, including
-    // abortReason.
-    const ended = state.phase === 'ABORTED' || state.phase === 'ACTIVATED'
+    // Successful disposal follows the durable commit acknowledgement. While it is pending,
+    // incoming ceremony events are ignored and cannot start a second commit.
+    const ended = state.phase === 'ABORTED'
     if (ended && state !== session) dropDriver()
   }
 
   function persistGroup(record: MultisigGroupRecord): void {
-    const { scope } = get()
+    const { scope, reservation, session: currentSession } = get()
     if (!scope) return
     // The reducer never reads the clock, so the activation time is stamped here.
     const stamped: MultisigGroupRecord = { ...record, createdAt: Date.now() }
-    // Not awaited: the dispatch loop stays synchronous. The cache is updated right away so the
-    // team page, which this tab opens next, shows the group without waiting for storage.
-    writeMultisigGroup(scope, stamped).catch(error => {
-      console.error('Failed to save the multisig group', error)
-    })
-    useMultisigGroupStore.getState().setGroup(scope, stamped)
+    const confirmations =
+      currentSession?.devices.flatMap(device =>
+        device.finalEnvelope ? [device.finalEnvelope] : []
+      ) ?? []
+    if (
+      reservation &&
+      (!currentSession || confirmations.length !== guardianSlots(currentSession).length)
+    ) {
+      set({ commitStatus: 'failed' })
+      dropDriver()
+      return
+    }
+    set({ commitStatus: 'saving' })
+    const complete = reservation
+      ? import('@/core/worker/client')
+          .then(({ requestVaultGroup }) =>
+            requestVaultGroup('vault.group.commit', {
+              scope,
+              operationId: reservation.operationId,
+              group: stamped,
+              evidence: { sessionId: currentSession!.sessionId, confirmations }
+            })
+          )
+          .then(async reply => {
+            if (reply.phase !== 'ready') throw new Error('Account is not ready')
+            await (await import('@/store/wallet-store')).rehydrateWalletStore()
+            return { ...stamped, mock: false }
+          })
+      : writeMultisigGroup(scope, stamped).then(() => stamped)
+    complete.then(
+      group => {
+        if (get().scope !== scope || get().reservation !== reservation) return
+        useMultisigGroupStore.getState().setGroup(scope, group)
+        const session = get().session
+        if (session) set({ session: { ...session, phase: 'ACTIVATED' }, commitStatus: 'ready' })
+        dropDriver()
+      },
+      () => {
+        if (get().scope === scope && get().reservation === reservation) {
+          set({ commitStatus: 'failed' })
+          dropDriver()
+        }
+      }
+    )
   }
 
   function closeChooser(): void {
@@ -399,6 +462,8 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
 
   function openChooser(slot: DeviceSlot, isCurrent: () => boolean): Promise<BluetoothSelection> {
     if (slot === 1 || !isCurrent()) return Promise.resolve(CHOOSER_CLOSED)
+    // Real phones advertise only the wallet's service, so the chooser lists just those.
+    if (useRealBluetooth()) return chooseBluetoothDevice(BLE_DEVICE_QUERY)
     if (readMockSettings().chooser === 'native') return chooseBluetoothDevice(MOCK_BLUETOOTH_QUERY)
     return new Promise(resolve => set({ chooser: { slot, resolve } }))
   }
@@ -429,7 +494,7 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     switch (effect.type) {
       case 'dkgOpen': {
         // The share is sealed under the scope's wallet; without a scope there is no wallet to name.
-        const { scope } = get()
+        const { scope, session, reservation } = get()
         if (!scope) {
           failed()
           break
@@ -441,6 +506,18 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
             mainnet: effect.mainnet,
             scope,
             groupId: effect.groupId,
+            ...(reservation && session?.roster
+              ? {
+                  operationId: reservation.operationId,
+                  outerSessionId: session.sessionId,
+                  binding: {
+                    accountId: scope.accountId,
+                    birthdayHeight: reservation.birthdayHeight,
+                    rosterVersion: 1 as const,
+                    roster: session.roster
+                  }
+                }
+              : {}),
             // QR invites already named this id, so the Worker must open under it.
             ...(effect.sessionId !== undefined ? { sessionId: effect.sessionId } : {})
           })
@@ -461,6 +538,12 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
           report({ type: 'DKG_ROUND1_ACCEPTED', slot: effect.slot, result })
         }, failed)
         break
+      case 'dkgConfirmRound1':
+        port.confirmRound1(effect.request).then(() => {
+          settled('ok')
+          report({ type: 'DKG_ROUND1_CONFIRMED', slot: effect.slot })
+        }, failed)
+        break
       case 'dkgAcceptRound2':
         port.acceptRound2(effect.request).then(result => {
           settled('ok')
@@ -479,15 +562,22 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
           report({ type: 'VAULT_RECORD_SAVE_FAILED' })
         }
         // Background files the record under the scope's account; with no scope there is none.
-        const { scope } = get()
+        const { scope, reservation } = get()
         if (!scope) {
           saveFailed()
           break
         }
-        port.save({ scope, groupId: effect.groupId, record: effect.record }).then(() => {
-          settled('ok')
-          report({ type: 'VAULT_RECORD_SAVED' })
-        }, saveFailed)
+        port
+          .save({
+            scope,
+            groupId: effect.groupId,
+            record: effect.record,
+            ...(reservation ? { operationId: reservation.operationId } : {})
+          })
+          .then(() => {
+            settled('ok')
+            report({ type: 'VAULT_RECORD_SAVED' })
+          }, saveFailed)
         break
       }
     }
@@ -513,6 +603,22 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
     const ids = { groupId: session.groupId, sessionId: session.sessionId }
     driverDispatch = event => {
       if (isCurrent()) dispatch(event)
+    }
+    if (session.transportKind === 'ble' && useRealBluetooth()) {
+      // Every message is signed with the device identity, so a real session waits for it.
+      const identity = peekSharedIdentity()
+      if (!identity) return
+      driver = dependencies.createBleDriver({
+        session: ids,
+        identity,
+        slots: guardianSlots(session),
+        onChooser: slot => openChooser(slot, isCurrent),
+        onRejected: reason => {
+          if (isCurrent()) reportChooserRejection(reason)
+        }
+      })
+      dispatch({ type: 'IDENTITY_READY', publicKey: bytesToBase64(identity.publicKey) })
+      return
     }
     if (session.transportKind === 'ble') {
       driver = createMockBleDriver({
@@ -570,7 +676,11 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
         set({ identity: { status: 'ready', publicKey: bytesToBase64(loaded.publicKey) } })
         // A QR session started while the identity was loading gets its driver only now.
         const { session } = get()
-        if (session?.transportKind === 'qr' && session.phase === 'PAIRING' && !driver) {
+        if (
+          (session?.transportKind === 'qr' || useRealBluetooth()) &&
+          session?.phase === 'PAIRING' &&
+          !driver
+        ) {
           attachDriver(session)
         }
       },
@@ -585,34 +695,54 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
   return {
     ...IDLE,
 
-    start: (scope, threshold, transportKind, name) => {
+    start: (scope, threshold, transportKind, name, reservation) => {
       dropDriver()
       ownerName = name
       // Late answers to an earlier session's load must not reach this one.
       identityGeneration += 1
       const session = createInitialSession({
-        groupId: crypto.randomUUID(),
+        groupId: reservation?.groupId ?? crypto.randomUUID(),
         sessionId: crypto.randomUUID(),
         threshold,
         transportKind,
         owner: { slot: 1, role: 'owner', name, model: OWNER_MODEL, platform: 'extension' },
         mainnet: scope.network === 'mainnet',
+        authenticatedDkg: reservation !== undefined,
         qrDkgSessionId: bytesToBase64(crypto.getRandomValues(new Uint8Array(16)))
       })
       // Published first: a QR driver reports the identity to this session as it attaches.
-      set({ ...IDLE, scope, session, identity: cachedIdentityStatus() })
+      set({
+        ...IDLE,
+        scope,
+        session,
+        reservation: reservation ?? null,
+        identity: cachedIdentityStatus()
+      })
       attachDriver(session)
       if (!peekSharedIdentity()) loadIdentity()
     },
 
     dispatch,
+    retryCommit: () => {
+      const { session, commitStatus } = get()
+      if (session && commitStatus === 'failed' && session.finalFingerprint)
+        persistGroup({
+          groupId: session.groupId,
+          threshold: session.threshold,
+          transportKind: session.transportKind,
+          devices: session.devices.flatMap(d => (d.device ? [d.device] : [])),
+          fingerprint: session.finalFingerprint,
+          createdAt: 0,
+          mock: true
+        })
+    },
 
     switchTransport: kind => {
       const { scope, session, identity: status } = get()
       if (!scope || !session) return
       // The page keeps QR disabled until the identity that signs its codes is ready. The cache is
       // the source of truth: it can be cleared (the dev panel's reset) under a published 'ready'.
-      if (kind === 'qr' && !peekSharedIdentity()) {
+      if ((kind === 'qr' || (kind === 'ble' && useRealBluetooth())) && !peekSharedIdentity()) {
         if (status.status === 'ready') {
           set({ identity: { status: 'loading' } })
           loadIdentity()
@@ -626,7 +756,7 @@ export const useCreateSessionStore = create<CreateSessionStore>()((set, get) => 
         // abort the store starts over on the new transport in a single update. The abort's
         // effects still go out first, on the old transport, so its phones learn the setup ended.
         runOnCurrentDriver(effects)
-        get().start(scope, session.threshold, kind, ownerName)
+        get().start(scope, session.threshold, kind, ownerName, get().reservation ?? undefined)
         return
       }
       if (state.transportKind === session.transportKind) return

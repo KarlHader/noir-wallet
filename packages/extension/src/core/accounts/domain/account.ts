@@ -1,4 +1,5 @@
 import { parseKeyDomainId, type KeyDomainId } from '@/core/keyring/domain'
+import { parseAccountSource, type AccountSource } from './account-source'
 
 declare const accountIdBrand: unique symbol
 declare const accountIndexBrand: unique symbol
@@ -6,13 +7,20 @@ declare const accountIndexBrand: unique symbol
 export type AccountId = string & { readonly [accountIdBrand]: true }
 export type AccountIndex = number & { readonly [accountIndexBrand]: true }
 
-export interface Account {
+interface AccountCommon {
   readonly id: AccountId
   readonly keyDomainId: KeyDomainId
-  readonly accountIndex: AccountIndex
   readonly displayName: string
   readonly createdAt: number
 }
+
+export type Account = AccountCommon &
+  (
+    | { readonly source?: never; readonly accountIndex: AccountIndex }
+    | { readonly source: AccountSource; readonly accountIndex?: never }
+  )
+export type DerivedAccount = Extract<Account, { readonly source?: never }>
+export type FrostAccount = Extract<Account, { readonly source: AccountSource }>
 
 const UNSAFE_DISPLAY_CHARACTERS =
   /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/
@@ -78,14 +86,22 @@ export function parseAccountIndex(value: unknown): AccountIndex {
 export function parseAccount(value: unknown): Account {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['id', 'keyDomainId', 'accountIndex', 'displayName', 'createdAt'])
+    !hasExactKeys(value, [
+      'id',
+      'keyDomainId',
+      Object.prototype.hasOwnProperty.call(value, 'source') ? 'source' : 'accountIndex',
+      'displayName',
+      'createdAt'
+    ])
   ) {
     throw new Error('Account has invalid keys')
   }
   return Object.freeze({
     id: parseAccountId(value.id),
     keyDomainId: parseKeyDomainId(value.keyDomainId),
-    accountIndex: parseAccountIndex(value.accountIndex),
+    ...(Object.prototype.hasOwnProperty.call(value, 'source')
+      ? { source: parseAccountSource(value.source) }
+      : { accountIndex: parseAccountIndex(value.accountIndex) }),
     displayName: parseDisplayName(value.displayName),
     createdAt: parseTimestamp(value.createdAt)
   })

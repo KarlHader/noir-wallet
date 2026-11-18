@@ -32,6 +32,33 @@ function createStorage(initial, setTransform = values => values) {
 }
 
 test.describe('V1 metadata discovery', () => {
+  test('keeps external accounts out of mnemonic migration inventories', () => {
+    const local = clone(
+      V1_MIGRATION_FIXTURES.find(item => item.id === 'software-multi-account').local
+    )
+    const persisted = JSON.parse(local.wallet_state)
+    const hd = persisted.state.wallets[0].accounts[0]
+    const external = {
+      ...hd,
+      id: 'external-account',
+      source: { kind: 'frost-vault', version: 1, groupId: 'external', network: 'mainnet' }
+    }
+    delete external.derivationIndex
+    persisted.state.wallets[0].accounts.push(external)
+    local.wallet_state = JSON.stringify(persisted)
+    const before = clone(local)
+    const result = discoverV1Metadata(local)
+    expect(result.status).toBe('ready')
+    expect(result.wallets[0].accounts).toHaveLength(2)
+    expect(result.wallets[0].accounts.every(item => typeof item.accountIndex === 'number')).toBe(
+      true
+    )
+    expect(local).toEqual(before)
+    persisted.state.currentAccountId = external.id
+    local.wallet_state = JSON.stringify(persisted)
+    expect(discoverV1Metadata(local).status).toBe('ready')
+  })
+
   for (const fixture of V1_MIGRATION_FIXTURES) {
     test(`discovers ${fixture.id} without mutating the source`, () => {
       const local = clone(fixture.local)

@@ -2,6 +2,18 @@ type Host = { chrome?: unknown }
 
 const keysOf = (keys: string | string[]): string[] => (Array.isArray(keys) ? keys : [keys])
 
+// Chrome storage dictionaries may return object keys in a different insertion order.
+export function reorderStorageObjectKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(reorderStorageObjectKeys)
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, reorderStorageObjectKeys(item)])
+    )
+  return value
+}
+
 // Node 22 has a `navigator` without `locks`; this stand-in queues requests per lock name like the
 // real Web Locks API, so read-modify-write races surface in tests instead of passing by luck.
 export function installLockEnv(): () => void {

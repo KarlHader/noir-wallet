@@ -40,6 +40,8 @@ import {
   completeAccountMetadataDeletion,
   completeWalletMetadataDeletion,
   getAccountDeletionRecord,
+  isAccountRuntimeCleanupComplete,
+  markAccountRuntimeCleanupComplete,
   getLegacyPendingCleanups,
   getPendingAccountCleanups,
   getPendingWalletCleanups,
@@ -55,7 +57,6 @@ import {
   deleteMultisigDataForWallet
 } from '@/lib/multisig-vault-storage'
 import { clearMultisigData } from '@/lib/multisig-group-storage'
-import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
 import { dappHandler } from './dapp-handler'
 import { syncScheduler } from './sync-scheduler'
 import { transactionMonitor } from './transaction-monitor'
@@ -382,6 +383,7 @@ export class WalletCleanupCoordinator {
           )
         }
         await dappHandler.removeAccountReferences(walletId, account.accountId)
+        await this.removeMultisigAccountData(walletId, account.accountId)
       }
       await finalizeLegacyAccountMetadataDeletion(walletId, accounts)
       await unblockWalletWrites(walletId)
@@ -416,11 +418,27 @@ export class WalletCleanupCoordinator {
                 await syncScheduler.prepareAccountRemoval(walletId)
                 await blockWalletWrites(walletId)
                 await this.removeMultichainAccountData(walletId, accountId)
-                await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
-                  walletId,
-                  accountId,
-                  derivationIndex
-                )
+                const network = backgroundZcashWalletRuntime.getNetwork()
+                if (
+                  !(await isAccountRuntimeCleanupComplete(
+                    walletId,
+                    accountId,
+                    network,
+                    derivationIndex
+                  ))
+                ) {
+                  await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
+                    walletId,
+                    accountId,
+                    derivationIndex
+                  )
+                  await markAccountRuntimeCleanupComplete(
+                    walletId,
+                    accountId,
+                    network,
+                    derivationIndex
+                  )
+                }
                 const credentialRemoval = await this.credentialRemoval.removeAccount(
                   walletId,
                   accountId,
@@ -434,6 +452,7 @@ export class WalletCleanupCoordinator {
                 }
                 await unblockWalletWrites(walletId)
                 await this.resumeAfterMutation(previous, true)
+                await this.removeMultisigAccountData(walletId, accountId)
                 await completeAccountMetadataDeletion(
                   walletId,
                   accountId,
@@ -478,7 +497,7 @@ export class WalletCleanupCoordinator {
               walletId,
               accountId,
               backgroundZcashWalletRuntime.getNetwork(),
-              account.derivationIndex
+              account.source ?? account.derivationIndex
             )
           } catch (error) {
             await unblockWalletWrites(walletId)
@@ -521,9 +540,15 @@ export class WalletCleanupCoordinator {
             await backgroundZcashWalletRuntime.finishAccountRemovalCleanup(
               walletId,
               accountId,
-              account.derivationIndex
+              account.source ?? account.derivationIndex
             )
           }
+          await markAccountRuntimeCleanupComplete(
+            walletId,
+            accountId,
+            backgroundZcashWalletRuntime.getNetwork(),
+            account.source ?? account.derivationIndex
+          )
           const credentialRemoval = await this.credentialRemoval.removeAccount(
             walletId,
             accountId,
@@ -543,6 +568,7 @@ export class WalletCleanupCoordinator {
           await this.removeMultisigWalletData(walletId)
           await completeWalletMetadataDeletion(walletId)
         } else {
+          await this.removeMultisigAccountData(walletId, accountId)
           await completeAccountMetadataDeletion(
             walletId,
             accountId,
@@ -820,24 +846,20 @@ export class WalletCleanupCoordinator {
       this.activityHistoryCache.deleteByScope(scope),
       dappExecutionModeCoordinator.removeAccount(walletId, accountId),
       clearSwapApprovalContinuationsForAccount(walletId, accountId),
-      new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId),
-      this.removeMultisigAccountData(walletId, accountId)
+      new ChromeEvmDAppPrivateTransferStore().clearForAccount(walletId, accountId)
     ])
   }
 
-  // Multisig stores are only touched when the feature is built in, so flag-off builds never open them.
+  // Feature flags cannot retain credentials or account state after authoritative removal.
   private async removeMultisigAccountData(walletId: string, accountId: string): Promise<void> {
-    if (!isMultisigUiEnabled()) return
     await deleteMultisigDataForAccount(walletId, accountId)
   }
 
   private async removeMultisigWalletData(walletId: string): Promise<void> {
-    if (!isMultisigUiEnabled()) return
     await deleteMultisigDataForWallet(walletId)
   }
 
   private async resetMultisigData(): Promise<void> {
-    if (!isMultisigUiEnabled()) return
     await clearMultisigData()
   }
 

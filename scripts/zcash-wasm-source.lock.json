@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "80be45e5227c29f0221ee53c89170afbb2de4fd1",
+  "sourceCommit": "2a8b20ab2814ca642f0da08866b4feac751cdef6",
   "generatedArtifacts": {
     "LICENSE.md": {
       "bytes": 4200,
@@ -18,8 +18,8 @@
       "sha256": "6982a7a006a69849d666aaf4ac7ea07a42931f850c31006782b1937fd5704f96"
     },
     "zcash_wallet_wasm_bg.wasm": {
-      "bytes": 67091763,
-      "sha256": "65f20b64dbfb60a845c793b539f01cbad9a850b0d9eb7fbf0830ca71adcec8e7"
+      "bytes": 67092147,
+      "sha256": "de92c19677e13f11b65aa8b64d1690229a6ec7044109cc58edb4fef5cd531b24"
     },
     "zcash_wallet_wasm_bg.wasm.d.ts": {
       "bytes": 27812,

@@ -63,6 +63,7 @@ export function VerifyPage() {
   const stage = parseVerifyStage(new URLSearchParams(search).get('stage'))
 
   const activated = session?.phase === 'ACTIVATED'
+  const commitStatus = useCreateSessionStore(state => state.commitStatus)
   const target = session && !activated ? createFlowRoute(session) : null
   const here = verifyRoute(stage)
 
@@ -81,6 +82,7 @@ export function VerifyPage() {
 
   // The route guard already redirects when the session is missing or aborted.
   if (!session) return null
+  if (commitStatus === 'saving' || commitStatus === 'failed') return <CreationCommitFeedback />
 
   const devices = verifyPageDevices(session)
   // Only Bluetooth phones can report their match; over QR each phone checks on its own screen.
@@ -173,3 +175,4 @@ export function VerifyPage() {
     </MultisigTabLayout>
   )
 }
+import { CreationCommitFeedback } from './CreationCommitFeedback'

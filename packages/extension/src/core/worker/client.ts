@@ -26,6 +26,7 @@ import type {
 import type { Network } from '@/types'
 import type { VaultDkgMethod } from '@/core/multisig/dkg-rpc'
 import type { VaultGroupMethod } from '@/core/multisig/vault-group-rpc'
+import type { VaultSendMethod } from '@/core/multisig/send-rpc'
 import { DEFAULT_NETWORK, getNetworkConfig } from '@/lib/runtime-network'
 import { DedupPromise, ReadyFlag, TimeoutError } from '@/lib/async-utils'
 import { WALLET_CONFIG } from '@/config/wallet'
@@ -131,6 +132,9 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'wallet.getBlockByTime': LIGHT,
   'wallet.getBlockTime': LIGHT,
   'wallet.getAccountHdIndex': LIGHT,
+  'wallet.registerFrostAccount': WASM_HEAVY,
+  'wallet.preflightFrostAccount': LIGHT,
+  'wallet.resolveFrostAccount': LIGHT,
   'wallet.beginSyncSession': LIGHT,
   'wallet.endSyncSession': LIGHT,
   'wallet.markDirty': LIGHT,
@@ -157,12 +161,30 @@ const RPC_TIMEOUTS: Record<string, number> = {
   'transaction.estimateShieldFee': LIGHT,
   'vault.dkg.open': LIGHT,
   'vault.dkg.acceptRound1': LIGHT,
+  'vault.dkg.confirmRound1': LIGHT,
   'vault.dkg.acceptRound2': LIGHT,
   'vault.dkg.close': LIGHT,
   'vault.record.summary': LIGHT,
   'vault.group.open': LIGHT,
   'vault.group.save': LIGHT,
   'vault.group.summary': LIGHT,
+  'vault.group.reserve': 120_000,
+  'vault.group.commit': 120_000,
+  'vault.group.status': 30_000,
+  'vault.group.pending': 30_000,
+  'vault.group.cancel': 30_000,
+  'vault.send.prepare': MEDIUM,
+  'vault.send.start': MEDIUM,
+  'vault.send.ingest': MEDIUM,
+  'vault.send.status': LIGHT,
+  'vault.send.cancel': LIGHT,
+  'vault.sign.worker.prepare': MEDIUM,
+  'vault.sign.worker.start': MEDIUM,
+  'vault.sign.worker.ingest': MEDIUM,
+  'vault.sign.worker.advance': LIGHT,
+  'vault.sign.worker.status': LIGHT,
+  'vault.sign.worker.close': LIGHT,
+  'vault.sign.worker.invalidate': LIGHT,
   default: MEDIUM
 }
 
@@ -413,6 +435,13 @@ export function requestVaultDkg<M extends VaultDkgMethod>(
 }
 
 export function requestVaultGroup<M extends VaultGroupMethod>(
+  method: M,
+  payload: RPCSchema[M]['request']
+): Promise<RPCSchema[M]['response']> {
+  return forwardToOffscreen(method, payload)
+}
+
+export function requestVaultSend<M extends VaultSendMethod>(
   method: M,
   payload: RPCSchema[M]['request']
 ): Promise<RPCSchema[M]['response']> {
@@ -1109,6 +1138,27 @@ export class ZcashWorkerClient {
   ): Promise<number> {
     await this.ensureInitialized()
     return this.request('wallet.createAccountUfvk', { ...params, walletId: this.wid() })
+  }
+
+  async registerFrostAccount(
+    params: Omit<RPCSchema['wallet.registerFrostAccount']['request'], 'walletId'>
+  ): Promise<number> {
+    await this.ensureInitialized()
+    return this.request('wallet.registerFrostAccount', { ...params, walletId: this.wid() })
+  }
+
+  async preflightFrostAccount(
+    params: Omit<RPCSchema['wallet.preflightFrostAccount']['request'], 'walletId'>
+  ): Promise<true> {
+    await this.ensureInitialized()
+    return this.request('wallet.preflightFrostAccount', { ...params, walletId: this.wid() })
+  }
+
+  async resolveFrostAccount(
+    params: Omit<RPCSchema['wallet.resolveFrostAccount']['request'], 'walletId'>
+  ): Promise<number | null> {
+    await this.ensureInitialized()
+    return this.request('wallet.resolveFrostAccount', { ...params, walletId: this.wid() })
   }
 
   async pcztCreate(

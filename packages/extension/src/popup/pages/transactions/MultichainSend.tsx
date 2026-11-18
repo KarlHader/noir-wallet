@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SendEntryGuard } from '@/popup/components/multisig/SendEntryGuard'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '@iconify/react'
 import type { PortfolioReadModel } from '@/core/portfolio'
@@ -302,6 +303,14 @@ function AssetSelection({
 }
 
 export function MultichainSend() {
+  return (
+    <SendEntryGuard>
+      <SingleSignMultichainSend />
+    </SendEntryGuard>
+  )
+}
+
+function SingleSignMultichainSend() {
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const requestedAssetId = searchParams.get('assetId')

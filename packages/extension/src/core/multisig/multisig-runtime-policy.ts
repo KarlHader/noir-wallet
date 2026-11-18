@@ -21,5 +21,12 @@ export function isVaultRpcBlocked(
  * `vault.group.summary`) may send them.
  */
 export function isBackgroundOnlyVaultRpc(method: string): boolean {
-  return method === 'vault.record.summary' || method === 'vault.dkg.open'
+  return (
+    method === 'vault.record.summary' ||
+    method === 'vault.dkg.open' ||
+    method.startsWith('vault.sign.worker.') ||
+    method === 'wallet.registerFrostAccount' ||
+    method === 'wallet.preflightFrostAccount' ||
+    method === 'wallet.resolveFrostAccount'
+  )
 }

@@ -2,6 +2,8 @@ import {
   MULTISIG_BANNER_STORAGE_KEY,
   MULTISIG_GROUPS_STORAGE_KEY,
   MULTISIG_VAULT_RECORDS_STORAGE_KEY,
+  MULTISIG_CREATION_STORAGE_KEY,
+  MULTISIG_SIGNING_STORAGE_KEY,
   multisigGroupScopeKey,
   withMultisigStorageLock,
   type MultisigGroupScope
@@ -11,6 +13,10 @@ import {
   sealedVaultRecordEquals,
   type SealedVaultRecord
 } from '@/core/multisig/vault-record'
+import {
+  parseSigningJournalScopeKey,
+  type SigningJournalScope
+} from '@/core/multisig/signing-journal'
 
 const NETWORKS = ['mainnet', 'testnet'] as const
 
@@ -31,7 +37,17 @@ async function readStoredVaults(): Promise<Record<string, SealedVaultRecord>> {
   return Object.fromEntries(
     Object.entries(stored).flatMap(([key, value]) => {
       const record = parseSealedVaultRecord(value)
-      return record && key.startsWith(`${record.network}:`) ? [[key, record] as const] : []
+      return record &&
+        key.startsWith(`${record.network}:`) &&
+        (record.version !== 2 ||
+          key ===
+            multisigGroupScopeKey({
+              network: record.network,
+              walletId: record.ownerWalletId,
+              accountId: record.accountId
+            }))
+        ? [[key, record] as const]
+        : []
     })
   )
 }
@@ -48,7 +64,12 @@ export function saveVaultRecordVerified(
   record: SealedVaultRecord
 ): Promise<void> {
   const sanitized = parseSealedVaultRecord(record)
-  if (!sanitized || sanitized.network !== scope.network) {
+  if (
+    !sanitized ||
+    sanitized.network !== scope.network ||
+    (sanitized.version === 2 &&
+      (sanitized.accountId !== scope.accountId || sanitized.ownerWalletId !== scope.walletId))
+  ) {
     return Promise.reject(new Error('Invalid vault record'))
   }
   const key = multisigGroupScopeKey(scope)
@@ -77,16 +98,25 @@ export function saveVaultRecordVerified(
 }
 
 // Removes matching entries from all three maps in one lock; a map with no match is not rewritten.
-async function deleteMatching(matches: (key: string) => boolean): Promise<void> {
+async function deleteMatching(
+  matches: (key: string) => boolean,
+  matchesSigningScope: (scope: SigningJournalScope) => boolean
+): Promise<void> {
   await withMultisigStorageLock(async () => {
     for (const storageKey of [
       MULTISIG_VAULT_RECORDS_STORAGE_KEY,
       MULTISIG_GROUPS_STORAGE_KEY,
-      MULTISIG_BANNER_STORAGE_KEY
+      MULTISIG_BANNER_STORAGE_KEY,
+      MULTISIG_CREATION_STORAGE_KEY,
+      MULTISIG_SIGNING_STORAGE_KEY
     ]) {
       const stored = await readRawMap(storageKey)
       const entries = Object.entries(stored)
-      const kept = entries.filter(([key]) => !matches(key))
+      const kept = entries.filter(([key]) => {
+        if (storageKey !== MULTISIG_SIGNING_STORAGE_KEY) return !matches(key)
+        const scope = parseSigningJournalScopeKey(key)
+        return !scope || !matchesSigningScope(scope)
+      })
       if (kept.length === entries.length) continue
       await chrome.storage.local.set({ [storageKey]: Object.fromEntries(kept) })
     }
@@ -100,10 +130,16 @@ export async function deleteMultisigDataForAccount(
   const targets = new Set(
     NETWORKS.map(network => multisigGroupScopeKey({ network, walletId, accountId }))
   )
-  await deleteMatching(key => targets.has(key))
+  await deleteMatching(
+    key => targets.has(key),
+    scope => scope.walletId === walletId && scope.accountId === accountId
+  )
 }
 
 export async function deleteMultisigDataForWallet(walletId: string): Promise<void> {
   const prefixes = NETWORKS.map(network => `${network}:${walletId}:`)
-  await deleteMatching(key => prefixes.some(prefix => key.startsWith(prefix)))
+  await deleteMatching(
+    key => prefixes.some(prefix => key.startsWith(prefix)),
+    scope => scope.walletId === walletId
+  )
 }

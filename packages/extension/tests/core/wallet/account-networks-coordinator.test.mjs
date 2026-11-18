@@ -168,6 +168,50 @@ function repository(value = snapshot()) {
 }
 
 test.describe('Account networks coordinator', () => {
+  test('external accounts cannot inherit other chains or the other network from a software parent', () => {
+    const external = {
+      source: { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'mainnet' }
+    }
+    expect(isAccountNetworkEnabled(external, 'mainnet', 'zcash')).toBe(true)
+    expect(isAccountNetworkEnabled(external, 'testnet', 'zcash')).toBe(false)
+    for (const family of ['evm', 'bitcoin', 'solana', 'near', 'tron']) {
+      expect(isAccountNetworkEnabled(external, 'mainnet', family)).toBe(false)
+    }
+  })
+
+  test('catalog preserves external source without deriving parent keys or exposing an HD index', async () => {
+    const value = snapshot()
+    const source = { kind: 'frost-vault', version: 1, groupId: 'group-1', network: 'testnet' }
+    value.accounts[0].source = source
+    delete value.accounts[0].accountIndex
+    const zcash = value.chainAccounts.find(item => item.scope.chainId === zcashChainId)
+    zcash.source = source
+    delete zcash.derivation
+    let derived = false
+    const coordinator = new AccountNetworksCoordinator({
+      repository: repository(value),
+      chains,
+      bitcoinDerivation: {
+        deriveAddress() {
+          derived = true
+          throw Error('Forbidden')
+        }
+      },
+      evmPeaDerivation: {
+        deriveGlobalPea() {
+          derived = true
+          throw Error('Forbidden')
+        }
+      }
+    })
+    const result = (await coordinator.readCatalog()).accounts[0]
+    expect(derived).toBe(false)
+    expect(result.source).toEqual(source)
+    expect(Object.hasOwn(result, 'accountIndex')).toBe(false)
+    expect(result.networks.map(item => item.chainId)).toEqual([zcashChainId])
+    expect(Object.hasOwn(result.networks[0], 'accountDerivationPath')).toBe(false)
+  })
+
   test('uses 12-word defaults and hides unselected Zcash from catalog and dApp chains', async () => {
     const defaults = getDefaultImportNetworkFamilies(12, ['zcash', 'evm', 'bitcoin'])
     expect(defaults).toEqual(['evm', 'bitcoin'])

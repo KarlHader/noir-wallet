@@ -10,8 +10,13 @@ import {
 import type { VaultWasm } from '../../../src/core/multisig/dkg-protocol'
 import {
   parseSealedVaultRecord,
+  openVaultRecord,
   type SealedVaultRecord
 } from '../../../src/core/multisig/vault-record'
+import { buildRoster } from '../../../src/core/multisig/roster'
+import { generateDeviceIdentity } from '../../../src/core/multisig/identity'
+import { createEnvelopeSigner, signEnvelope } from '../../../src/core/multisig/envelope-signing'
+import type { MultisigEnvelope } from '../../../src/core/multisig/messages'
 import { base64ToBytes, bytesToBase64 } from '../../../src/lib/bytes'
 import { Phone, callVaultDkg, runRounds, type Round2Complete } from './helpers/raw-phone'
 import { TEST_MNEMONIC, loadVaultWasm } from './helpers/vault-wasm'
@@ -34,6 +39,252 @@ const OPEN_2_OF_3 = {
   groupId: GROUP_ID
 } as const
 
+async function authenticatedSetup(
+  shape: { participants: 2 | 3; threshold: 2 | 3 } = { participants: 3, threshold: 2 }
+) {
+  const identities = await Promise.all(
+    Array.from({ length: shape.participants }, () => generateDeviceIdentity())
+  )
+  const outerSessionId = 'outer-session-1'
+  const roster = buildRoster({
+    groupId: GROUP_ID,
+    threshold: shape.threshold,
+    identities: new Map(identities.map((id, slot) => [slot, bytesToBase64(id.publicKey)]))
+  })
+  const signers = identities.map((id, slot) =>
+    createEnvelopeSigner({
+      groupId: GROUP_ID,
+      sessionId: outerSessionId,
+      senderId: `device-${slot + 1}`,
+      signingKey: id.signingKeys.privateKey
+    })
+  )
+  const open = {
+    ...OPEN_2_OF_3,
+    ...shape,
+    outerSessionId,
+    binding: {
+      accountId: 'reserved-account',
+      birthdayHeight: 321,
+      rosterVersion: 1 as const,
+      roster
+    }
+  }
+  const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+  const { sessionId } = await call(handler, 'vault.dkg.open', open)
+  const phones = Array.from(
+    { length: shape.participants - 1 },
+    (_, i) => new Phone(wasm, shape, i + 1, sessionId)
+  )
+  return { handler, sessionId, outerSessionId, open, phones, signers, identities }
+}
+
+test('v2 refuses opening without an explicit signed outer session binding', async () => {
+  const identity = await generateDeviceIdentity()
+  const identity2 = await generateDeviceIdentity()
+  const roster = buildRoster({
+    groupId: GROUP_ID,
+    threshold: 2,
+    identities: new Map([
+      [0, bytesToBase64(identity.publicKey)],
+      [1, bytesToBase64(identity2.publicKey)]
+    ])
+  })
+  const handler = createVaultDkgRpcHandler(wasm, () => TEST_MNEMONIC)
+  await expect(
+    call(handler, 'vault.dkg.open', {
+      ...OPEN_2_OF_3,
+      participants: 2,
+      binding: { accountId: 'reserved-account', birthdayHeight: 321, rosterVersion: 1, roster }
+    })
+  ).rejects.toThrow('Invalid vault DKG request')
+})
+
+test('v2 rejects unsigned contributions even when the inner WASM envelope is valid', async () => {
+  const { handler, sessionId, phones } = await authenticatedSetup()
+  await expect(
+    call(handler, 'vault.dkg.acceptRound1', {
+      sessionId,
+      senderSlot: 1,
+      envelope: phones[0].round1()
+    })
+  ).rejects.toThrow()
+  expect(handler.sessionCount).toBe(0)
+})
+
+test('malformed signed payload is refused without reflecting its raw content', async () => {
+  const { handler, sessionId, phones, signers, identities } = await authenticatedSetup()
+  const envelope = phones[0].round1()
+  const valid = await signers[1].next('DKG_R1', 'device-1', { envelope })
+  const signedEnvelope = await signEnvelope(identities[1].signingKeys.privateKey, {
+    ...valid,
+    encrypted_payload: 'synthetic-payload-marker'
+  })
+  await expect(
+    call(handler, 'vault.dkg.acceptRound1', { sessionId, senderSlot: 1, envelope, signedEnvelope })
+  ).rejects.toThrow('Signed DKG inner envelope mismatch')
+})
+
+test('v2 rejects forged outer identity, scope, routing, type and replay before accepting contributions', async () => {
+  for (const mutation of [
+    'signature',
+    'identity',
+    'group',
+    'session',
+    'recipient',
+    'sender',
+    'round',
+    'type',
+    'inner',
+    'replay',
+    'concurrent-replay'
+  ]) {
+    const { handler, sessionId, phones, signers } = await authenticatedSetup()
+    const envelope = phones[0].round1()
+    const signed = await signers[1].next('DKG_R1', 'device-1', { envelope })
+    let signedEnvelope: MultisigEnvelope = signed
+    if (mutation === 'signature')
+      signedEnvelope = { ...signed, authentication_data: bytesToBase64(new Uint8Array(64)) }
+    if (mutation === 'identity')
+      signedEnvelope = await createEnvelopeSigner({
+        groupId: GROUP_ID,
+        sessionId: signed.session_id,
+        senderId: 'device-2',
+        signingKey: (await generateDeviceIdentity()).signingKeys.privateKey
+      }).next('DKG_R1', 'device-1', { envelope })
+    if (mutation === 'group') signedEnvelope = { ...signed, group_id: 'other' }
+    if (mutation === 'session') signedEnvelope = { ...signed, session_id: 'other' }
+    if (mutation === 'recipient') signedEnvelope = { ...signed, recipient_id: 'device-3' }
+    if (mutation === 'sender') signedEnvelope = { ...signed, sender_id: 'device-3' }
+    if (mutation === 'round') signedEnvelope = { ...signed, round: 2 }
+    if (mutation === 'type')
+      signedEnvelope = await signers[1].next('DKG_R2_BATCH', 'device-1', { envelope })
+    if (mutation === 'inner')
+      signedEnvelope = await signers[1].next('DKG_R1', 'device-1', { envelope: 'AAEC' })
+    const request = { sessionId, senderSlot: 1, envelope, signedEnvelope }
+    if (mutation === 'concurrent-replay') {
+      const results = await Promise.allSettled([
+        call(handler, 'vault.dkg.acceptRound1', request),
+        call(handler, 'vault.dkg.acceptRound1', request)
+      ])
+      expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
+      expect(handler.sessionCount).toBe(0)
+      continue
+    }
+    if (mutation === 'replay') await call(handler, 'vault.dkg.acceptRound1', request)
+    await expect(call(handler, 'vault.dkg.acceptRound1', request)).rejects.toThrow()
+    expect(handler.sessionCount).toBe(0)
+  }
+})
+
+test('v2 cannot advance round two without every authentic matching round-one echo', async () => {
+  for (const failure of ['missing', 'hash', 'signature', 'replay']) {
+    const { handler, sessionId, phones, signers } = await authenticatedSetup({
+      participants: 2,
+      threshold: 2
+    })
+    const envelope = phones[0].round1()
+    const r1 = await call(handler, 'vault.dkg.acceptRound1', {
+      sessionId,
+      senderSlot: 1,
+      envelope,
+      signedEnvelope: await signers[1].next('DKG_R1', 'device-1', { envelope })
+    })
+    if (!r1.complete) throw new Error('round1 incomplete')
+    if (failure !== 'missing') {
+      let signedEnvelope = await signers[1].next('DKG_R1_ECHO', 'device-1', {
+        round1Hash: failure === 'hash' ? '0'.repeat(64) : r1.round1Hash
+      })
+      if (failure === 'signature')
+        signedEnvelope = {
+          ...signedEnvelope,
+          authentication_data: bytesToBase64(new Uint8Array(64))
+        }
+      const request = { sessionId, signedEnvelope }
+      if (failure === 'replay') await call(handler, 'vault.dkg.confirmRound1', request)
+      await expect(call(handler, 'vault.dkg.confirmRound1', request)).rejects.toThrow()
+    } else {
+      const inner = phones[0].round2(r1.bundles['1'])
+      await expect(
+        call(handler, 'vault.dkg.acceptRound2', {
+          sessionId,
+          senderSlot: 1,
+          envelope: inner,
+          signedEnvelope: await signers[1].next('DKG_R2_BATCH', 'device-1', { envelope: inner })
+        })
+      ).rejects.toThrow('round 1 confirmations are incomplete')
+    }
+    expect(handler.sessionCount).toBe(0)
+  }
+})
+
+for (const shape of [
+  { participants: 2, threshold: 2 },
+  { participants: 3, threshold: 2 },
+  { participants: 3, threshold: 3 }
+] as const) {
+  test(`v2 authenticates ${shape.threshold}-of-${shape.participants} and requires all signed final approvals`, async () => {
+    const { handler, sessionId, outerSessionId, phones, signers, identities } =
+      await authenticatedSetup(shape)
+    const r2 = await runRounds(wasm, handler, shape, sessionId, phones, (slot, type, payload) =>
+      signers[slot].next(type, 'device-1', payload)
+    )
+    const confirmations: MultisigEnvelope[] = []
+    for (const phone of phones) {
+      expect(
+        phone.finish(r2.inboxes[String(phone.slot)], r2.sealedQsk[String(phone.slot)], true)
+      ).toBe(r2.fingerprint)
+      confirmations.push(
+        await signers[phone.slot].next('DKG_FINAL', 'device-1', { fingerprint: r2.fingerprint })
+      )
+    }
+    const request = { record: r2.record, ownerWalletId: WALLET_ID }
+    expect(
+      (await call(handler, 'vault.record.summary', request)).authenticated?.creationConfirmed
+    ).not.toBe(true)
+    const wrongContexts = await Promise.all(
+      [
+        { group_id: 'other' },
+        { session_id: 'other' },
+        { sender_id: 'device-1' },
+        { recipient_id: 'device-3' },
+        { round: 2 },
+        { message_type: 'DKG_R1' as const },
+        { sequence: 0 }
+      ].map(patch =>
+        signEnvelope(identities[1].signingKeys.privateKey, { ...confirmations[0], ...patch })
+      )
+    )
+    for (const bad of [
+      [],
+      [...confirmations, confirmations[0]],
+      ...(confirmations.length === 2 ? [[confirmations[0], confirmations[0]]] : []),
+      ...wrongContexts.map(envelope => [envelope, ...confirmations.slice(1)]),
+      confirmations.map((e, i) =>
+        i === 0 ? { ...e, authentication_data: bytesToBase64(new Uint8Array(64)) } : e
+      ),
+      confirmations.map((e, i) => (i === 0 ? { ...e, session_id: 'other' } : e)),
+      [
+        await signers[1].next('DKG_FINAL', 'device-1', { fingerprint: '0'.repeat(64) }),
+        ...confirmations.slice(1)
+      ]
+    ]) {
+      await expect(
+        call(handler, 'vault.record.summary', {
+          ...request,
+          creationEvidence: { outerSessionId, confirmations: bad }
+        })
+      ).rejects.toThrow('Vault record cannot be opened')
+    }
+    const summary = await call(handler, 'vault.record.summary', {
+      ...request,
+      creationEvidence: { outerSessionId, confirmations }
+    })
+    expect(summary.authenticated?.creationConfirmed).toBe(true)
+    await call(handler, 'vault.dkg.close', { sessionId })
+  })
+}
+
 /** Runs a whole ceremony of the given shape through the handler and returns the final answer. */
 async function runCeremony(
   handler: VaultDkgRpcHandler,
@@ -51,11 +302,63 @@ function tampered(record: SealedVaultRecord): SealedVaultRecord {
 }
 
 test.describe('multisig dkg rpc handler', () => {
-  test('names its five methods', () => {
+  test('freezes a validated binding before DKG and seals the authenticated v2 roster', async () => {
+    const { handler, sessionId, open, phones, signers } = await authenticatedSetup()
+    const { binding, outerSessionId } = open
+    const roster = binding.roster
+    for (const patch of [
+      { birthdayHeight: -1 },
+      { accountId: '' },
+      { roster: { ...roster, groupId: 'wrong' } },
+      { rosterVersion: 2 }
+    ]) {
+      await expect(
+        call(handler, 'vault.dkg.open', {
+          ...OPEN_2_OF_3,
+          outerSessionId,
+          binding: { ...binding, ...patch }
+        })
+      ).rejects.toThrow('Invalid vault DKG request')
+    }
+    binding.birthdayHeight = 999
+    binding.accountId = 'changed-after-open'
+    roster.participants[0].identityPublicKey = roster.participants[1].identityPublicKey
+    const r2 = await runRounds(
+      wasm,
+      handler,
+      OPEN_2_OF_3,
+      sessionId,
+      phones,
+      (slot, type, payload) => signers[slot].next(type, 'device-1', payload)
+    )
+    const opened = await openVaultRecord(r2.record, TEST_MNEMONIC)
+    try {
+      expect(opened.header).toMatchObject({
+        version: 2,
+        accountId: 'reserved-account',
+        ownerWalletId: WALLET_ID,
+        birthdayHeight: 321,
+        rosterVersion: 1
+      })
+      expect(
+        opened.header.version === 2 && opened.header.roster.participants[0].identityPublicKey
+      ).not.toBe(roster.participants[0].identityPublicKey)
+      await expect(
+        call(handler, 'vault.record.summary', {
+          record: r2.record,
+          ownerWalletId: 'same-seed-other-wallet'
+        })
+      ).rejects.toThrow('Vault record cannot be opened')
+    } finally {
+      opened.share.fill(0)
+    }
+  })
+  test('names its session and record methods', () => {
     for (const method of [
       'vault.dkg.open',
       'vault.dkg.acceptRound1',
       'vault.dkg.acceptRound2',
+      'vault.dkg.confirmRound1',
       'vault.dkg.close',
       'vault.record.summary'
     ]) {

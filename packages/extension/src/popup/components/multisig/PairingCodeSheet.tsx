@@ -7,8 +7,17 @@ import { Pill } from './Pill'
 
 const CODE_LENGTH = 6
 
+/**
+ * 'enter': the user types the code shown here into the phone (simulated phones).
+ * 'compare': both screens show the same code and the user confirms they match (real Bluetooth).
+ * 'waiting': the match is confirmed and the phone is being asked to join.
+ */
+export type PairingCodeMode = 'enter' | 'compare' | 'waiting'
+
 interface PairingCodeSheetProps {
   open: boolean
+  mode?: PairingCodeMode
+  onConfirm?: () => void
   device: MultisigDevice | null
   code: string | null
   expiresAt: number | null
@@ -47,6 +56,7 @@ function useNow(active: boolean): number {
  */
 export function PairingCodeSheet(props: PairingCodeSheetProps) {
   const { open, device, code, expiresAt, error, success, onResend, onCancel } = props
+  const { mode = 'enter', onConfirm } = props
 
   // Radix unmounts the content while closed, so the body (and its timer) only exists when open.
   return (
@@ -70,6 +80,8 @@ export function PairingCodeSheet(props: PairingCodeSheetProps) {
           expiresAt={expiresAt}
           error={error}
           success={success}
+          mode={mode}
+          onConfirm={onConfirm}
           onResend={onResend}
           onCancel={onCancel}
         />
@@ -78,7 +90,12 @@ export function PairingCodeSheet(props: PairingCodeSheetProps) {
   )
 }
 
-type PairingCodeBodyProps = Omit<PairingCodeSheetProps, 'open'>
+type PairingCodeBodyProps = Omit<PairingCodeSheetProps, 'open' | 'mode'> & { mode: PairingCodeMode }
+
+// 8 digits read more easily in two groups of four.
+function formatCompareCode(code: string | null): string {
+  return code ? code.replace(/(\d{4})(?=\d)/, '$1 ') : '—'
+}
 
 function PairingCodeBody({
   device,
@@ -86,6 +103,8 @@ function PairingCodeBody({
   expiresAt,
   error,
   success,
+  mode,
+  onConfirm,
   onResend,
   onCancel
 }: PairingCodeBodyProps) {
@@ -117,6 +136,32 @@ function PairingCodeBody({
             Device connected
           </DialogDescription>
         </div>
+      ) : mode === 'compare' || mode === 'waiting' ? (
+        <>
+          <DialogDescription className="text-center text-sm text-muted">
+            {mode === 'compare'
+              ? 'Check that the Guardians app shows the same code as this screen.'
+              : 'Waiting for the phone to join…'}
+          </DialogDescription>
+
+          <div
+            aria-label="Pairing code"
+            className="flex justify-center py-2 font-mono text-3xl font-medium tabular-nums tracking-wider"
+          >
+            {formatCompareCode(code)}
+          </div>
+
+          <div className="flex flex-col items-center gap-1">
+            {mode === 'compare' && (
+              <Button className="w-full" onClick={onConfirm}>
+                Codes match
+              </Button>
+            )}
+            <Button variant="ghost" className="w-full" onClick={onCancel}>
+              {mode === 'compare' ? "Codes don't match" : 'Cancel'}
+            </Button>
+          </div>
+        </>
       ) : (
         <>
           <DialogDescription className="text-center text-sm text-muted">
@@ -134,18 +179,18 @@ function PairingCodeBody({
 
           <div className="space-y-1 text-center text-xs">
             {expired ? (
-              <p className="text-danger">Code expired</p>
+              <div className="text-danger">Code expired</div>
             ) : (
               expiresAt !== null && (
-                <p className="tabular-nums text-muted">
+                <div className="tabular-nums text-muted">
                   Expires in {formatCountdown(expiresAt - now)}
-                </p>
+                </div>
               )
             )}
             {error === 'wrong' && (
-              <p role="alert" className="text-danger">
+              <div role="alert" className="text-danger">
                 The code entered on the phone was incorrect. Try again.
-              </p>
+              </div>
             )}
           </div>
 

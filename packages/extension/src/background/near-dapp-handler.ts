@@ -1,10 +1,12 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
-import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
+import { emitDAppEvent, observeDAppRequest } from './dapp-analytics'
+import type { DAppAnalyticsSink } from './dapp-analytics'
 import type { KeyDomainId } from '@/core/keyring/domain'
-import {
-  NativeTransferProviderError,
-  type NativeTransferDAppRuntimeMethod,
-  type NearDAppRuntimeMethod
+import { NativeTransferProviderError } from '@/core/dapp/native-transfer-provider'
+import type {
+  NativeTransferDAppRuntimeMethod,
+  NearDAppRuntimeMethod
 } from '@/core/dapp/native-transfer-provider'
 import type {
   NearCommitBroadcastRpc,
@@ -24,10 +26,9 @@ import {
   encodeNearDAppFunctionArgs,
   parseNearDAppMessage,
   parseNearDAppTransaction,
-  parseNearDAppTransactionBatch,
-  type NearMessageRequest,
-  type NearTransactionRequest
+  parseNearDAppTransactionBatch
 } from './near-dapp-codecs'
+import type { NearMessageRequest, NearTransactionRequest } from './near-dapp-codecs'
 
 const MAXIMUM_U64 = 18_446_744_073_709_551_615n
 
@@ -182,6 +183,8 @@ export class BackgroundNearDAppHandler {
   ): Promise<readonly string[]> {
     return this.options.runActiveOperation(async () => {
       const active = await this.options.loadAuthorizedAccount(origin)
+      if (!isDerivedAccount(active.context.chainAccount))
+        throw new Error('External accounts cannot use this chain')
       if (
         active.context.keyDomainSource.kind === 'hardware' &&
         (active.context.keyDomainSource.vendor !== 'ledger' ||
@@ -336,6 +339,8 @@ export class BackgroundNearDAppHandler {
     tabInfo: NativeTransferDAppTabInfo
   ): Promise<Readonly<Record<string, string>>> {
     const active = await this.options.loadAuthorizedAccount(origin)
+    if (!isDerivedAccount(active.context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (
       active.context.keyDomainSource.kind === 'hardware' &&
       (active.context.keyDomainSource.vendor !== 'ledger' ||

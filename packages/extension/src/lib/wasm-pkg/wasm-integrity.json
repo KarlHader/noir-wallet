@@ -2,8 +2,8 @@
   "schemaVersion": 3,
   "engine": "zcash",
   "packageVersion": "0.1.0",
-  "abiVersion": "zcash-wallet-80be45e-v1",
-  "sourceCommit": "80be45e5227c29f0221ee53c89170afbb2de4fd1",
+  "abiVersion": "zcash-wallet-2a8b20a-v1",
+  "sourceCommit": "2a8b20ab2814ca642f0da08866b4feac751cdef6",
   "artifacts": [
     {
       "path": "LICENSE.md",
@@ -44,8 +44,8 @@
     {
       "path": "zcash_wallet_wasm_bg.wasm",
       "role": "binary",
-      "bytes": 67091763,
-      "sha256": "65f20b64dbfb60a845c793b539f01cbad9a850b0d9eb7fbf0830ca71adcec8e7"
+      "bytes": 67092147,
+      "sha256": "de92c19677e13f11b65aa8b64d1690229a6ec7044109cc58edb4fef5cd531b24"
     },
     {
       "path": "zcash_wallet_wasm_bg.wasm.d.ts",

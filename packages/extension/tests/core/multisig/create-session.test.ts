@@ -5,20 +5,19 @@ import {
   createInitialSession,
   guardianSlots,
   reduceCreateSession,
-  verifyPageDevices,
-  type CreateSessionEffect,
-  type CreateSessionEvent,
-  type CreateSessionState
+  verifyPageDevices
+} from '../../../src/core/multisig/create-session'
+import type {
+  CreateSessionEffect,
+  CreateSessionEvent,
+  CreateSessionState
 } from '../../../src/core/multisig/create-session'
 import type {
   VaultDkgRound1Response,
   VaultDkgRound2Response
 } from '../../../src/core/multisig/dkg-rpc'
-import {
-  createEnvelopeFactory,
-  deviceId,
-  type MultisigMessageType
-} from '../../../src/core/multisig/messages'
+import { createEnvelopeFactory, deviceId } from '../../../src/core/multisig/messages'
+import type { MultisigMessageType } from '../../../src/core/multisig/messages'
 import type {
   MultisigDevice,
   MultisigThreshold,
@@ -203,7 +202,9 @@ function expectGuardiansEmpty(state: CreateSessionState) {
       r1Echoed: false,
       r2Received: false,
       finalReceived: false,
+      finalEnvelope: null,
       identityPublicKey: null,
+      transportPublicKey: null,
       identityConfirmed: false,
       round1Envelope: null
     })
@@ -211,6 +212,44 @@ function expectGuardiansEmpty(state: CreateSessionState) {
 }
 
 test.describe('multisig create-session', () => {
+  test('authenticated BLE waits for Worker echo approval and durable sealing before releasing phone outputs', () => {
+    const state = { ...bleState('2-of-2', 'bundled'), authenticatedDkg: true }
+    const echo = message(2, 'DKG_R1_ECHO', { round1Hash: H1 })
+    const requested = reduceCreateSession(state, echo)
+    expect(requested.state.phase).toBe('DKG_R1')
+    expect(requested.state.devices[1].r1Echoed).toBe(false)
+    expect(requested.effects).toEqual([
+      {
+        type: 'dkgConfirmRound1',
+        slot: 2,
+        request: { sessionId: SID, signedEnvelope: echo.envelope }
+      }
+    ])
+    const approved = reduceCreateSession(requested.state, { type: 'DKG_ROUND1_CONFIRMED', slot: 2 })
+    expect(approved.state.phase).toBe('DKG_R2')
+    const outcome = completeRound2([2])
+    if (!outcome.complete) throw new Error('missing completion')
+    const sealed = reduceCreateSession(approved.state, {
+      type: 'DKG_ROUND2_ACCEPTED',
+      slot: 2,
+      result: {
+        ...outcome,
+        record: { ...RECORD, version: 2, accountId: 'reserved-account', ownerWalletId: 'wallet-1' }
+      }
+    })
+    expect(sealed.state.phase).toBe('FINALIZED')
+    expect(sealed.effects.map(effect => effect.type)).toEqual(['saveVaultRecord'])
+    const saved = reduceCreateSession(sealed.state, { type: 'VAULT_RECORD_SAVED' })
+    expect(saved.state.phase).toBe('KEYSET_VERIFIED')
+    expect(
+      saved.effects.filter(effect => effect.type === 'sendTo').map(effect => effect.messageType)
+    ).toEqual(['DKG_R2_INBOX', 'KEYSET_SETUP'])
+    const final = message(2, 'DKG_FINAL', { fingerprint: FP })
+    const confirmed = run(saved.state, final, { type: 'FINGERPRINT_CONFIRMED', stage: 'final' })
+    expect(confirmed.state.phase).toBe('ACTIVATED')
+    expect(confirmed.state.devices[1].finalEnvelope).toEqual(final.envelope)
+    expect(confirmed.effects.some(effect => effect.type === 'persistGroup')).toBe(true)
+  })
   test('ble: full 2-of-3 happy path reaches ACTIVATED and persists the group', () => {
     const initial = start('2-of-3', 'ble')
     expect(initial.phase).toBe('PAIRING')

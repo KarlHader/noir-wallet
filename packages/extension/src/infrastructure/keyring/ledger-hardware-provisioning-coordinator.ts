@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { Buffer } from 'buffer'
 import { HDKey } from '@scure/bip32'
 import { networks, payments } from 'bitcoinjs-lib'
@@ -18,15 +19,17 @@ import {
   parseCredentialGenerationId,
   parseCredentialRef,
   parseEngineCredentialRef,
-  parseKeyDomainId,
-  type HardwareCredentialMetadata
+  parseKeyDomainId
 } from '@/core/keyring/domain'
+import type { HardwareCredentialMetadata } from '@/core/keyring/domain'
 import {
   ledgerPublicAccountEquals,
   ledgerPublicAccountIdentity,
-  parseLedgerMultichainHardwareCredential,
-  type LedgerMultichainHardwareCredential,
-  type LedgerPublicAccount
+  parseLedgerMultichainHardwareCredential
+} from '@/core/wallet/ledger-hardware-credential'
+import type {
+  LedgerMultichainHardwareCredential,
+  LedgerPublicAccount
 } from '@/core/wallet/ledger-hardware-credential'
 import { SecureStorage } from '@/core/wallet/secure-storage'
 import {
@@ -56,12 +59,14 @@ import {
 } from '@/infrastructure/persistence/schema'
 import {
   CREDENTIAL_REPOSITORY_SCHEMA_VERSION,
-  STORAGE_V2_SCHEMA_VERSION,
-  type CredentialRepository,
-  type CredentialTransactionJournal,
-  type CredentialTransactionPhase,
-  type StorageV2Repository,
-  type StorageV2Snapshot
+  STORAGE_V2_SCHEMA_VERSION
+} from '@/ports/repositories'
+import type {
+  CredentialRepository,
+  CredentialTransactionJournal,
+  CredentialTransactionPhase,
+  StorageV2Repository,
+  StorageV2Snapshot
 } from '@/ports/repositories'
 
 export interface LedgerHardwareProvisioningInput {
@@ -343,6 +348,7 @@ function buildSnapshot(
         if (
           prior.scope.keyDomainId !== identity.keyDomainId ||
           prior.identity.value !== address ||
+          !isDerivedAccount(prior) ||
           prior.derivation.path !== projectedPath
         ) {
           throw new Error('Existing Ledger chain account projection changed')

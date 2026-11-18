@@ -116,10 +116,9 @@ export function selectBetaInviteTarget(
     .map(keyDomain => ({
       keyDomain,
       account: snapshot.accounts
+        .filter(isDerivedAccount)
         .filter(account => account.keyDomainId === keyDomain.id)
-        .sort(
-          (left, right) => left.accountIndex - right.accountIndex || left.id.localeCompare(right.id)
-        )[0]
+        .sort(compareAccounts)[0]
     }))
     .find(item => item.account)
   if (!first?.account) return null
@@ -242,3 +241,4 @@ export class BetaInviteActivationCoordinator {
     return result
   }
 }
+import { isDerivedAccount, compareAccounts } from '@/core/accounts/domain'

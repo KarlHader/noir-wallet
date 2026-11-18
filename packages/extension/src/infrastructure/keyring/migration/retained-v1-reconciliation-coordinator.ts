@@ -1,4 +1,5 @@
 import type { V1MetadataDiscovery } from '@/infrastructure/persistence/migrations'
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { CredentialRepository, StorageV2Repository } from '@/ports/repositories'
 import { isNativeV2CredentialKeyDomain } from '@/core/wallet/native-hardware-identity'
 export { isNativeV2CredentialKeyDomain } from '@/core/wallet/native-hardware-identity'
@@ -121,7 +122,8 @@ export class RetainedV1ReconciliationCoordinator {
 
     pointer = (await this.storageRepository.getActivePointer()) ?? pointer
     source = (await this.storageRepository.getSnapshot(pointer.generationId)) ?? source
-    for (const account of source.accounts) {
+    // Retained credential discovery excludes external accounts; absence is not their deletion.
+    for (const account of source.accounts.filter(isDerivedAccount)) {
       const desiredAccounts = desiredAccountsByWallet.get(account.keyDomainId)
       if (!desiredAccounts || desiredAccounts.has(account.id)) continue
       await this.removal.removeAccount(

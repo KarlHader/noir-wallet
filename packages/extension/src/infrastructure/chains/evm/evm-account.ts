@@ -1,3 +1,4 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainAccount } from '@/core/accounts/domain'
 import type { ChainId } from '@/core/chains/domain'
 
@@ -12,6 +13,7 @@ export function parseEvmAccountBinding(
   chainAccount: ChainAccount,
   expectedChainId: ChainId
 ): EvmAccountBinding {
+  if (!isDerivedAccount(chainAccount)) throw new Error('EVM requires a derived ChainAccount')
   const path = /^m\/44'\/60'\/(0|[1-9][0-9]*)'\/0\/(0|[1-9][0-9]*)$/.exec(
     chainAccount.derivation.path
   )

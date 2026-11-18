@@ -4,11 +4,18 @@
  * these requests are validated here, at the first extension boundary they cross.
  */
 import type { MultisigGroupScope } from '@/lib/multisig-group-storage'
+import { parseMultisigGroupRecord } from '@/lib/multisig-group-storage'
+import type { MultisigGroupRecord, MultisigThreshold } from './types'
+import type { MultisigCreationOperation } from '@/lib/multisig-creation-storage'
+import { parseEnvelope } from './messages'
+import type { MultisigEnvelope } from './messages'
 import { isDkgSessionIdText, isDkgShape } from './dkg-protocol'
 import {
   isVaultGroupId,
   isVaultWalletId,
   parseSealedVaultRecord,
+  parseVaultRecordBinding,
+  type VaultRecordBinding,
   type SealedVaultRecord,
   type VaultRecordSummary
 } from './vault-record'
@@ -20,19 +27,71 @@ export type VaultGroupOpenRequest = {
   scope: MultisigGroupScope
   groupId: string
   sessionId?: string
+  operationId?: string
+  binding?: VaultRecordBinding
+  outerSessionId?: string
 }
 
 export type VaultGroupSaveRequest = {
   scope: MultisigGroupScope
   groupId: string
   record: SealedVaultRecord
+  operationId?: string
 }
 
 export type VaultGroupSummaryResponse =
   | { status: 'missing' }
   | ({ status: 'ok' } & VaultRecordSummary)
+export type VaultCreationEvidence = { sessionId: string; confirmations: MultisigEnvelope[] }
+export function parseVaultCreationEvidence(value: unknown): VaultCreationEvidence | null {
+  if (
+    !hasKeys(value, ['sessionId', 'confirmations']) ||
+    !isVaultWalletId(value.sessionId) ||
+    !Array.isArray(value.confirmations) ||
+    value.confirmations.length < 1 ||
+    value.confirmations.length > 2
+  )
+    return null
+  const confirmations = value.confirmations.map(parseEnvelope)
+  if (
+    confirmations.some(
+      item =>
+        !item ||
+        item.message_type !== 'DKG_FINAL' ||
+        item.encrypted_payload.length > 2048 ||
+        item.authentication_data.length > 512
+    )
+  )
+    return null
+  return { sessionId: value.sessionId, confirmations: confirmations as MultisigEnvelope[] }
+}
 
 export interface VaultGroupSchema {
+  'vault.group.pending': {
+    request: { scope: MultisigGroupScope }
+    response: MultisigCreationOperation[]
+  }
+  'vault.group.reserve': {
+    request: { scope: MultisigGroupScope; threshold: MultisigThreshold }
+    response: MultisigCreationOperation
+  }
+  'vault.group.commit': {
+    request: {
+      scope: MultisigGroupScope
+      operationId: string
+      group: MultisigGroupRecord
+      evidence: VaultCreationEvidence
+    }
+    response: { phase: 'ready'; scope: MultisigGroupScope }
+  }
+  'vault.group.status': {
+    request: { scope: MultisigGroupScope; operationId: string }
+    response: MultisigCreationOperation
+  }
+  'vault.group.cancel': {
+    request: { scope: MultisigGroupScope; operationId: string }
+    response: true
+  }
   'vault.group.open': { request: VaultGroupOpenRequest; response: { sessionId: string } }
   'vault.group.save': { request: VaultGroupSaveRequest; response: true }
   'vault.group.summary': {
@@ -44,6 +103,11 @@ export interface VaultGroupSchema {
 export type VaultGroupMethod = keyof VaultGroupSchema
 
 const METHODS: readonly VaultGroupMethod[] = [
+  'vault.group.pending',
+  'vault.group.reserve',
+  'vault.group.commit',
+  'vault.group.status',
+  'vault.group.cancel',
   'vault.group.open',
   'vault.group.save',
   'vault.group.summary'
@@ -68,7 +132,7 @@ function hasKeys(
   )
 }
 
-function parseScope(value: unknown): MultisigGroupScope {
+export function parseVaultGroupScope(value: unknown): MultisigGroupScope {
   if (
     !hasKeys(value, ['network', 'walletId', 'accountId']) ||
     (value.network !== 'mainnet' && value.network !== 'testnet') ||
@@ -82,7 +146,11 @@ function parseScope(value: unknown): MultisigGroupScope {
 
 export function parseVaultGroupOpenRequest(payload: unknown): VaultGroupOpenRequest {
   if (
-    !hasKeys(payload, ['participants', 'threshold', 'mainnet', 'scope', 'groupId'], ['sessionId'])
+    !hasKeys(
+      payload,
+      ['participants', 'threshold', 'mainnet', 'scope', 'groupId'],
+      ['sessionId', 'operationId', 'binding', 'outerSessionId']
+    )
   ) {
     throw new Error(INVALID_REQUEST)
   }
@@ -95,26 +163,83 @@ export function parseVaultGroupOpenRequest(payload: unknown): VaultGroupOpenRequ
   ) {
     throw new Error(INVALID_REQUEST)
   }
+  const binding =
+    payload.binding === undefined ? undefined : parseVaultRecordBinding(payload.binding)
+  if (
+    binding === null ||
+    (payload.outerSessionId !== undefined && !isVaultWalletId(payload.outerSessionId)) ||
+    (payload.operationId !== undefined && !isVaultWalletId(payload.operationId))
+  )
+    throw new Error(INVALID_REQUEST)
   return {
     participants: shape.participants,
     threshold: shape.threshold,
     mainnet: payload.mainnet,
-    scope: parseScope(payload.scope),
+    scope: parseVaultGroupScope(payload.scope),
     groupId: payload.groupId,
-    ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId })
+    ...(payload.sessionId === undefined ? {} : { sessionId: payload.sessionId }),
+    ...(payload.operationId === undefined ? {} : { operationId: payload.operationId }),
+    ...(binding ? { binding } : {}),
+    ...(payload.outerSessionId === undefined ? {} : { outerSessionId: payload.outerSessionId })
   }
 }
 
 export function parseVaultGroupSaveRequest(payload: unknown): VaultGroupSaveRequest {
-  if (!hasKeys(payload, ['scope', 'groupId', 'record']) || !isVaultGroupId(payload.groupId)) {
+  if (
+    !hasKeys(payload, ['scope', 'groupId', 'record'], ['operationId']) ||
+    !isVaultGroupId(payload.groupId) ||
+    (payload.operationId !== undefined && !isVaultWalletId(payload.operationId))
+  ) {
     throw new Error(INVALID_REQUEST)
   }
   const record = parseSealedVaultRecord(payload.record)
   if (!record) throw new Error(INVALID_REQUEST)
-  return { scope: parseScope(payload.scope), groupId: payload.groupId, record }
+  return {
+    scope: parseVaultGroupScope(payload.scope),
+    groupId: payload.groupId,
+    record,
+    ...(payload.operationId === undefined ? {} : { operationId: payload.operationId })
+  }
 }
 
 export function parseVaultGroupSummaryRequest(payload: unknown): { scope: MultisigGroupScope } {
   if (!hasKeys(payload, ['scope'])) throw new Error(INVALID_REQUEST)
-  return { scope: parseScope(payload.scope) }
+  return { scope: parseVaultGroupScope(payload.scope) }
+}
+
+export function parseCreationRequest(
+  method:
+    | 'vault.group.reserve'
+    | 'vault.group.commit'
+    | 'vault.group.status'
+    | 'vault.group.cancel',
+  payload: unknown
+): {
+  scope: MultisigGroupScope
+  operationId?: string
+  threshold?: MultisigThreshold
+  group?: MultisigGroupRecord
+  evidence?: VaultCreationEvidence
+} {
+  const keys =
+    method === 'vault.group.reserve'
+      ? ['scope', 'threshold']
+      : method === 'vault.group.commit'
+        ? ['scope', 'operationId', 'group', 'evidence']
+        : ['scope', 'operationId']
+  if (!hasKeys(payload, keys)) throw new Error(INVALID_REQUEST)
+  const scope = parseVaultGroupScope(payload.scope)
+  if (method === 'vault.group.reserve') {
+    if (!['2-of-2', '2-of-3', '3-of-3'].includes(payload.threshold as string))
+      throw new Error(INVALID_REQUEST)
+    return { scope, threshold: payload.threshold as MultisigThreshold }
+  }
+  if (!isVaultWalletId(payload.operationId)) throw new Error(INVALID_REQUEST)
+  if (method === 'vault.group.commit') {
+    const group = parseMultisigGroupRecord(payload.group)
+    const evidence = parseVaultCreationEvidence(payload.evidence)
+    if (!group || !evidence) throw new Error(INVALID_REQUEST)
+    return { scope, operationId: payload.operationId, group, evidence }
+  }
+  return { scope, operationId: payload.operationId }
 }

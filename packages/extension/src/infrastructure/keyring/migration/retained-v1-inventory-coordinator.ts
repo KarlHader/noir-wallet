@@ -196,7 +196,9 @@ export class RetainedV1InventoryCoordinator {
         ) {
           throw new Error('Retained V1 inventory mnemonic metadata mismatch')
         }
-        const sourceAccounts = source.accounts.filter(account => account.keyDomainId === wallet.id)
+        const sourceAccounts = source.accounts
+          .filter(isDerivedAccount)
+          .filter(account => account.keyDomainId === wallet.id)
         if (
           sourceAccounts.some(
             account =>
@@ -479,3 +481,4 @@ export class RetainedV1InventoryCoordinator {
     })
   }
 }
+import { isDerivedAccount } from '@/core/accounts/domain'

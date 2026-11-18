@@ -9,6 +9,10 @@ import {
 } from '../../../src/core/dapp/dapp-manager.ts'
 import { initializeEvmSiteNetworks } from '../../../src/background/wallet-dapp-evm-networks.ts'
 import { shouldAutoConnectDApp } from '../../../src/core/dapp/first-party-policy.ts'
+import {
+  isDerivedAccount,
+  isFrostAccount
+} from '../../../src/core/accounts/domain/account-source.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript')
@@ -206,6 +210,7 @@ function balanceHandlerFixture(manager) {
   })
   const module = { exports: {} }
   const dependencies = {
+    '@/core/accounts/domain/account-source': { isDerivedAccount, isFrostAccount },
     '@/core/wallet/hardware-wallet-data': {
       isZcashHardwareKeySource: keySource => keySource === 'keystone' || keySource === 'ledger'
     },

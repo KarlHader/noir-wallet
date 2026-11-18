@@ -1,7 +1,9 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { transactionBroadcasted } from '@/core/transactions/transaction-analytics'
 import { IndexedDbTransactionRepository } from '@/infrastructure/persistence/repositories'
 import { ANALYTICS_EVENTS } from '../lib/analytics/constants'
-import { emitDAppEvent, observeDAppRequest, type DAppAnalyticsSink } from './dapp-analytics'
+import { emitDAppEvent, observeDAppRequest } from './dapp-analytics'
+import type { DAppAnalyticsSink } from './dapp-analytics'
 import type { BitcoinNetworkConfig } from '@/config/networks'
 import type { AccountRef, DAppManager } from '@/core/dapp/dapp-manager'
 import {
@@ -14,9 +16,9 @@ import {
   parseBitcoinPsbtsRequest,
   parseBitcoinPushPsbtRequest,
   parseBitcoinPushTransactionRequest,
-  parseBitcoinSendRequest,
-  type BitcoinDAppRuntimeMethod
+  parseBitcoinSendRequest
 } from '@/core/dapp/bitcoin-provider'
+import type { BitcoinDAppRuntimeMethod } from '@/core/dapp/bitcoin-provider'
 import type { SigningResult } from '@/core/keyring/ports'
 import type {
   ActiveBitcoinDiscoveryContext,
@@ -43,11 +45,10 @@ import {
   verifyLedgerBitcoinPsbtResponse
 } from '@/lib/ledger/bitcoin-model'
 import type { DAppChainAccountDescriptor } from './dapp-chain-account-catalog'
-import {
-  activeDAppSessionAccountMatches,
-  selectDAppSessionAccounts,
-  type DAppSessionAccountProposal,
-  type DAppSessionAccountSelection
+import { activeDAppSessionAccountMatches, selectDAppSessionAccounts } from './dapp-session-accounts'
+import type {
+  DAppSessionAccountProposal,
+  DAppSessionAccountSelection
 } from './dapp-session-accounts'
 
 export interface BitcoinDAppApprovalPort {
@@ -354,6 +355,8 @@ export class BackgroundBitcoinDAppHandler {
 
   private async loadActiveAccount(): Promise<ActiveBitcoinDAppAccount> {
     const context = await this.options.loadActiveContext()
+    if (context && !isDerivedAccount(context.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (!context) {
       throw new BitcoinProviderError(4100, 'The active wallet has no Bitcoin account.')
     }

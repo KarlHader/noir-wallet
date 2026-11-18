@@ -32,6 +32,9 @@ import { Tooltip } from '../../components/ui/tooltip'
 import type { AddressType } from '@/types/wallet'
 import {
   accountNetworksClient,
+  resolveAccountReceiveNetworks,
+  resolveZcashReceivePrivacy,
+  resolveRetainedFrostReceiveNetwork,
   type AccountNetworkAddressView,
   type AccountNetworkView
 } from '../../services/account-networks-client'
@@ -42,6 +45,7 @@ import { useWalletStore } from '@/store/wallet-store'
 import { AccountAvatar } from '../../components/account/AccountAvatar'
 import { availableSoftwareAccountFamilies } from '@/popup/services/account-network-selection-client'
 import { useDAppExecutionMode } from '@/popup/hooks/useDAppExecutionMode'
+import { isDerivedAccount, isFrostAccount } from '@/core/accounts/domain'
 
 interface AddressQrTarget {
   readonly network: AccountNetworkView
@@ -375,7 +379,12 @@ function AddressNetworkGroup({
 export function AddressesList() {
   const { navigate } = useNavigate()
   const location = useLocation()
-  const { copyToClipboard, showToast, isCopied, copyFailed } = useCopyToClipboard()
+  const {
+    copyToClipboard: writeClipboard,
+    showToast,
+    isCopied: hasCopyFeedback,
+    copyFailed
+  } = useCopyToClipboard()
   const [searchParams] = useSearchParams()
   const walletId = searchParams.get('walletId')
   const accountId = searchParams.get('accountId')
@@ -396,6 +405,25 @@ export function AddressesList() {
   const account = useWalletStore(state =>
     walletId && accountId ? state.getAccount(walletId, accountId) : undefined
   )
+  const retainedReceiveNetwork = useMemo(
+    () => resolveRetainedFrostReceiveNetwork(account, DEFAULT_NETWORK),
+    [account]
+  )
+  const retainedNetworks = useMemo(
+    () => (retainedReceiveNetwork ? [retainedReceiveNetwork] : []),
+    [retainedReceiveNetwork]
+  )
+  const networkScope = JSON.stringify([
+    DEFAULT_NETWORK,
+    walletId,
+    accountId,
+    account?.source,
+    shieldedReceiveAddress,
+    location.key
+  ])
+  const copyToClipboard: typeof writeClipboard = (text, key = 'default', options) =>
+    writeClipboard(text, `${networkScope}:${key}`, options)
+  const isCopied = (key = 'default') => hasCopyFeedback(`${networkScope}:${key}`)
   const wallet = useWalletStore(state => state.wallets.find(item => item.id === walletId))
   const currentWalletId = useWalletStore(state => state.currentWalletId)
   const currentAccountId = useWalletStore(state => state.currentAccountId)
@@ -415,6 +443,7 @@ export function AddressesList() {
   const selectedFamilies = account?.networkSelections?.[DEFAULT_NETWORK] ?? availableFamilies
   const canManageNetworks =
     Boolean(wallet && account) &&
+    Boolean(account && isDerivedAccount(account)) &&
     (wallet?.keySource === undefined || wallet.keySource === 'software')
   const missingFamilies =
     !scopedReceive && !shieldedZcashOnly && !receiveView && canManageNetworks
@@ -432,30 +461,44 @@ export function AddressesList() {
   const mode = selectedMode ?? defaultMode
   const activeMode = scopedReceive ? requestedMode : mode
   const [evmExpanded, setEvmExpanded] = useState(false)
-  const [networks, setNetworks] = useState<readonly AccountNetworkView[]>([])
-  const [accountIdentity, setAccountIdentity] = useState<{ name: string } | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [canRetry, setCanRetry] = useState(false)
+  const [networkState, setNetworks] = useState<readonly AccountNetworkView[]>(retainedNetworks)
+  const [loadedNetworkScope, setLoadedNetworkScope] = useState(networkScope)
+  const isCurrentNetworkScope = loadedNetworkScope === networkScope
+  const networks = isCurrentNetworkScope ? networkState : retainedNetworks
+  const [accountIdentityState, setAccountIdentity] = useState<{ name: string } | null>(null)
+  const accountIdentity = isCurrentNetworkScope
+    ? accountIdentityState
+    : retainedReceiveNetwork && account
+      ? { name: account.name }
+      : null
+  const [loadingState, setLoading] = useState(true)
+  const loading = isCurrentNetworkScope ? loadingState : !retainedReceiveNetwork
+  const [errorState, setError] = useState<string | null>(null)
+  const error = isCurrentNetworkScope ? errorState : null
+  const [canRetryState, setCanRetry] = useState(false)
+  const canRetry = isCurrentNetworkScope && canRetryState
   const [loadAttempt, setLoadAttempt] = useState(0)
-  const [qrTarget, setQrTarget] = useState<AddressQrTarget | null>(null)
-  const [privateAddressAction, setPrivateAddressAction] = useState<{
+  const [qrTargetState, setQrTarget] = useState<AddressQrTarget | null>(null)
+  const qrTarget = isCurrentNetworkScope ? qrTargetState : null
+  const [privateAddressActionState, setPrivateAddressAction] = useState<{
     readonly address: string
     readonly qrTarget?: AddressQrTarget
     readonly copyKey?: string
   } | null>(null)
+  const privateAddressAction = isCurrentNetworkScope ? privateAddressActionState : null
 
   useEffect(() => setMode(null), [walletId, accountId])
 
   useEffect(() => {
     let cancelled = false
-    setNetworks([])
-    setAccountIdentity(null)
+    setLoadedNetworkScope(networkScope)
+    setNetworks(retainedNetworks)
+    setAccountIdentity(retainedReceiveNetwork && account ? { name: account.name } : null)
     setQrTarget(null)
     setPrivateAddressAction(null)
     setError(null)
     setCanRetry(false)
-    setLoading(Boolean(walletId && accountId))
+    setLoading(Boolean(walletId && accountId && !retainedReceiveNetwork))
 
     if (!walletId || !accountId) {
       return () => {
@@ -465,19 +508,28 @@ export function AddressesList() {
 
     void (async () => {
       try {
-        const catalog = await accountNetworksClient.getCatalog()
+        const catalog = await accountNetworksClient.getCatalog(
+          account && isFrostAccount(account) ? { deriveMissingAddresses: false } : undefined
+        )
         if (cancelled) return
         const entry = catalog?.accounts.find(
           candidate => candidate.walletId === walletId && candidate.accountId === accountId
         )
         if (!entry || entry.networks.length === 0) {
+          if (retainedReceiveNetwork) return
           setError('No enabled network addresses are available for this account.')
           return
         }
-        setNetworks(entry.networks)
+        const displayNetworks = resolveAccountReceiveNetworks(
+          entry,
+          account?.source,
+          DEFAULT_NETWORK
+        )
+        if (displayNetworks.length === 0 && retainedReceiveNetwork) return
+        setNetworks(displayNetworks)
         setAccountIdentity({ name: entry.accountDisplayName })
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !retainedReceiveNetwork) {
           setError('Unable to load addresses for this account.')
           setCanRetry(true)
         }
@@ -489,7 +541,16 @@ export function AddressesList() {
     return () => {
       cancelled = true
     }
-  }, [walletId, accountId, shieldedReceiveAddress, loadAttempt, location.key])
+  }, [
+    walletId,
+    accountId,
+    account,
+    retainedNetworks,
+    retainedReceiveNetwork,
+    networkScope,
+    loadAttempt,
+    location.key
+  ])
 
   const filteredNetworks = useMemo(() => {
     const query = networkQuery.trim().toLowerCase()
@@ -497,12 +558,11 @@ export function AddressesList() {
       if (scopedReceive) {
         if (network.chain.id !== scopedChainId) return []
         if (network.chain.family === 'zcash') {
-          const privacy =
-            requestedPrivacy === 'transparent' || requestedPrivacy === 'shielded'
-              ? requestedPrivacy
-              : requestedZcashMode === 'private'
-                ? 'shielded'
-                : 'transparent'
+          const privacy = resolveZcashReceivePrivacy(
+            account?.source,
+            requestedPrivacy,
+            requestedZcashMode
+          )
           const addresses = network.addresses.filter(address => address.privacy === privacy)
           return addresses.length > 0 ? [{ ...network, addresses }] : []
         }
@@ -541,7 +601,8 @@ export function AddressesList() {
     receiveView,
     scopedChainId,
     scopedReceive,
-    shieldedZcashOnly
+    shieldedZcashOnly,
+    account?.source
   ])
   const hasPrivateAddresses = networks.some(
     network => network.chain.family === 'evm' && Boolean(network.privateExecutionAddress)
@@ -643,7 +704,7 @@ export function AddressesList() {
           />
         )}
 
-        {loading ? (
+        {loading && !retainedReceiveNetwork ? (
           <ListSkeleton
             rows={scopedReceive ? 1 : 4}
             label="Loading addresses"

@@ -307,6 +307,7 @@ function lockHarness({
   zcashFails = false,
   workerFails = false,
   sessionFails = false,
+  signingFails = false,
   drain
 } = {}) {
   const state = {
@@ -317,10 +318,27 @@ function lockHarness({
     sessionLocked: false,
     workerRecreateAttempted: false,
     workerRecreated: false,
-    confidentialSessionsCleared: false
+    confidentialSessionsCleared: false,
+    signingCleanupAttempts: [],
+    signingWorkerClosed: false,
+    signingJournalInterrupted: false
   }
   const zcashError = new Error('Zcash cleanup failed')
+  const signingError = new Error('Signing cleanup was not acknowledged')
   const dependencies = {
+    multisigSend: {
+      async invalidate() {
+        state.signingCleanupAttempts.push({
+          workerRecreated: state.workerRecreated,
+          sessionLocked: state.sessionLocked
+        })
+        if (signingFails) throw signingError
+        // The owning handler tests prove the actual Worker close/readback boundary. This fixture
+        // records its acknowledgement so lock callers cannot treat failure as terminal cleanup.
+        state.signingWorkerClosed = true
+        state.signingJournalInterrupted = true
+      }
+    },
     async cancelAllLedgerSigning() {
       state.ledgerSigningCancelled = true
     },
@@ -360,6 +378,7 @@ function lockHarness({
       state.workerRecreateAttempted = true
       if (workerFails) throw new Error('Worker recreation failed')
       state.workerRecreated = true
+      return true
     },
     chrome: {
       offscreen: {
@@ -370,6 +389,7 @@ function lockHarness({
     },
     dappHandler: { async notifyAccountsChanged() {}, clearPermissions() {} },
     evmDAppHandler: { async notifyAccountsChanged() {} },
+    async notifyEvmAccountsChanged() {},
     bitcoinDAppHandler: { async notifyAccountsChanged() {} },
     solanaDAppHandler: null,
     nearDAppHandler: null,
@@ -379,7 +399,7 @@ function lockHarness({
     ...Object.keys(dependencies),
     `${compiledLockFunctions}\nreturn { ${lockFunctionNames.join(', ')} }`
   )(...Object.values(dependencies))
-  return { functions, state, zcashError }
+  return { functions, state, zcashError, signingError }
 }
 
 test('wallet lock drains active sync before recreating workers when Zcash cleanup fails', async () => {
@@ -398,6 +418,8 @@ test('wallet lock drains active sync before recreating workers when Zcash cleanu
   assert.equal(state.syncDrained, true)
   assert.equal(state.sessionLocked, true)
   assert.equal(state.workerRecreated, true)
+  assert.deepEqual(state.signingCleanupAttempts, [{ workerRecreated: true, sessionLocked: true }])
+  assert.equal(state.signingJournalInterrupted, true)
   assert.equal(state.syncPaused, false)
 })
 
@@ -407,6 +429,14 @@ for (const functionName of lockFunctionNames) {
     await assert.rejects(functions[functionName](), error => error === zcashError)
     assert.equal(state.sessionLocked, true)
     assert.equal(state.workerRecreated, true)
+    assert.deepEqual(state.signingCleanupAttempts, [
+      {
+        workerRecreated: functionName === 'performWalletLockState',
+        sessionLocked: functionName === 'performWalletLockState'
+      }
+    ])
+    assert.equal(state.signingWorkerClosed, true)
+    assert.equal(state.signingJournalInterrupted, true)
     if (functionName === 'performWalletLockState') {
       assert.equal(state.ledgerSigningCancelled, true)
       assert.equal(state.confidentialSessionsCleared, true)
@@ -420,6 +450,10 @@ for (const functionName of lockFunctionNames) {
     assert.equal(state.sessionLocked, true)
     assert.equal(state.workerRecreateAttempted, true)
     assert.equal(state.workerRecreated, false)
+    assert.equal(
+      state.signingCleanupAttempts.length,
+      functionName === 'performWalletLockState' ? 0 : 1
+    )
   })
 
   test(`${functionName} fails closed when session cleanup fails`, async () => {
@@ -428,5 +462,27 @@ for (const functionName of lockFunctionNames) {
     assert.equal(state.zcashLocked, true)
     assert.equal(state.sessionLocked, false)
     assert.equal(state.workerRecreated, true)
+    assert.equal(
+      state.signingCleanupAttempts.length,
+      functionName === 'performWalletLockState' ? 0 : 1
+    )
+  })
+
+  test(`${functionName} retains signing progress and fails closed without cleanup acknowledgement`, async () => {
+    const { functions, state, signingError } = lockHarness({ signingFails: true })
+    await assert.rejects(functions[functionName](), error => error === signingError)
+    assert.equal(state.sessionLocked, true)
+    assert.equal(state.workerRecreated, true)
+    assert.equal(state.signingWorkerClosed, false)
+    assert.equal(state.signingJournalInterrupted, false)
+    assert.deepEqual(state.signingCleanupAttempts.at(-1), {
+      workerRecreated: true,
+      sessionLocked: true
+    })
+    assert.equal(
+      state.signingCleanupAttempts.length,
+      functionName === 'performWalletLockState' ? 1 : 2
+    )
+    if (functionName === 'performWalletLockState') assert.equal(state.syncPaused, false)
   })
 }

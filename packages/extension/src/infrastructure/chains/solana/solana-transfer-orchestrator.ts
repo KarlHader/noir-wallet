@@ -1,6 +1,9 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import { KeyringError } from '@/core/keyring/ports'
-import { parseAccountId, type ChainAccount } from '@/core/accounts/domain'
-import { parseChainId, type AssetRegistry } from '@/core/chains/registry'
+import { parseAccountId } from '@/core/accounts/domain'
+import type { ChainAccount, DerivedChainAccount } from '@/core/accounts/domain'
+import { parseChainId } from '@/core/chains/registry'
+import type { AssetRegistry } from '@/core/chains/registry'
 import { parseKeyDomainId } from '@/core/keyring/domain'
 import type {
   PreparedSigningCommand,
@@ -9,15 +12,17 @@ import type {
   SigningResult
 } from '@/core/keyring/ports'
 import {
-  type NearIntentsTransactionBinding,
   parseTransactionEventId,
   parseTransactionId,
-  parseTransactionSegmentId,
-  type TransactionAccountScope,
-  type TransactionGraph,
-  type TransactionId,
-  type TransactionLifecycleStatus,
-  type TransactionSegmentEvent
+  parseTransactionSegmentId
+} from '@/core/transactions/domain'
+import type {
+  NearIntentsTransactionBinding,
+  TransactionAccountScope,
+  TransactionGraph,
+  TransactionId,
+  TransactionLifecycleStatus,
+  TransactionSegmentEvent
 } from '@/core/transactions/domain'
 import type { TransactionRepository } from '@/ports/repositories'
 import type { SolanaTransactionSigningPreparePayload } from '@/infrastructure/keyring/multichain/solana-signing-client'
@@ -27,11 +32,11 @@ import {
   persistSignedTransactionGraph,
   transitionPendingTransactionGraph
 } from '../pending-transaction-graph'
-import {
-  type AwaitingApprovalSolanaTransfer,
-  type PendingSolanaTransfer,
-  type SignedPendingSolanaTransfer,
-  type SolanaPendingTransferStore
+import type {
+  AwaitingApprovalSolanaTransfer,
+  PendingSolanaTransfer,
+  SignedPendingSolanaTransfer,
+  SolanaPendingTransferStore
 } from './solana-pending-transfer-store'
 import type { SolanaBroadcastRpc, SolanaReadRpc } from './solana-rpc-types'
 import {
@@ -81,7 +86,7 @@ export interface SolanaTransferOrchestratorOptions {
 }
 
 interface PrepareSolanaTransferBaseInput {
-  readonly chainAccount: ChainAccount
+  readonly chainAccount: DerivedChainAccount
   readonly accountIndex: number
   readonly recipient: string
   readonly signal?: AbortSignal
@@ -192,6 +197,8 @@ export class SolanaTransferOrchestrator {
   }
 
   async prepare(input: PrepareSolanaTransferInput): Promise<PreparedSolanaTransferApproval> {
+    if (!isDerivedAccount(input.chainAccount))
+      throw new Error('External accounts cannot use this chain')
     if (input.chainAccount.identity.kind !== 'account-identifier') {
       throw new Error('Solana transfer requires an account-identifier binding')
     }

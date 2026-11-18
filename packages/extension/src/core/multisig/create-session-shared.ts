@@ -1,25 +1,26 @@
-import { parseDkgEnvelopePayload, rosterSlotOf } from './dkg-protocol'
+import { parseDkgEnvelopePayload, rosterSlotOf, dkgShape } from './dkg-protocol'
+import { buildRoster } from './roster'
 import type {
   VaultDkgAcceptRequest,
   VaultDkgRound1Response,
   VaultDkgRound2Response
 } from './dkg-rpc'
 import type { InvalidReason } from './inbound-gate'
-import { deviceId, type MultisigEnvelope, type MultisigMessageType } from './messages'
+import { deviceId } from './messages'
+import type { MultisigEnvelope, MultisigMessageType } from './messages'
 import type { RosterManifest } from './roster'
 import type { SealedVaultRecord } from './vault-record'
-import {
-  thresholdDeviceCount,
-  thresholdRequiresManualR1Check,
-  type AbortReason,
-  type DeviceConnectionState,
-  type DeviceSlot,
-  type MultisigDevice,
-  type MultisigGroupRecord,
-  type MultisigThreshold,
-  type MultisigTransportKind,
-  type SessionPhase,
-  type VerifyStage
+import { thresholdDeviceCount, thresholdRequiresManualR1Check } from './types'
+import type {
+  AbortReason,
+  DeviceConnectionState,
+  DeviceSlot,
+  MultisigDevice,
+  MultisigGroupRecord,
+  MultisigThreshold,
+  MultisigTransportKind,
+  SessionPhase,
+  VerifyStage
 } from './types'
 
 export interface DeviceSessionState {
@@ -34,8 +35,11 @@ export interface DeviceSessionState {
   r1Echoed: boolean
   r2Received: boolean
   finalReceived: boolean
-  /** QR only: the phone's identity key (base64) from its pairing reply. */
+  finalEnvelope: MultisigEnvelope | null
+  /** The phone's identity key (base64): from its pairing reply over QR, from the handshake over Bluetooth. */
   identityPublicKey: string | null
+  /** Bluetooth only: the phone's Noise static key (base64), which the roster names as its transport key. */
+  transportPublicKey: string | null
   /** QR only: the user has matched the phone's identity on both screens. */
   identityConfirmed: boolean
   /** QR only: the phone's round-1 message, kept until the bundle is built. */
@@ -43,6 +47,7 @@ export interface DeviceSessionState {
 }
 
 export interface CreateSessionState {
+  authenticatedDkg: boolean
   groupId: string
   sessionId: string
   threshold: MultisigThreshold
@@ -67,8 +72,10 @@ export interface CreateSessionState {
   vaultRecord: SealedVaultRecord | null
   /** The record is on its way to storage and activation waits for the answer. */
   savingRecord: boolean
-  /** QR only: the extension's identity key (base64), null until the store has loaded it. */
+  /** The extension's identity key (base64), null until the store has loaded it. */
   ownerIdentityPublicKey: string | null
+  /** Bluetooth only: the extension's Noise static key (base64) for this session's channels. */
+  ownerTransportPublicKey: string | null
   /**
    * The DKG session id (base64 of 16 bytes) prepared before pairing. QR invites carry it, so the
    * Worker must open its session under this id; empty means none was prepared.
@@ -88,6 +95,20 @@ export type CreateSessionEvent =
   | { type: 'PAIR_CODE_EXPIRED'; slot: DeviceSlot }
   | { type: 'PAIR_CODE_RESEND'; slot: DeviceSlot }
   | { type: 'PAIR_CANCEL'; slot: DeviceSlot }
+  /**
+   * Bluetooth: the encrypted channel to the phone is up and its identity is bound to it. The SAS
+   * is shown on both screens for the user to compare before anything is sent over the channel.
+   */
+  | {
+      type: 'PAIR_SAS_READY'
+      slot: DeviceSlot
+      sas: string
+      identityPublicKey: string
+      transportPublicKey: string
+      ownerTransportPublicKey: string
+    }
+  /** Bluetooth: the user says the SAS on this screen matches the phone's. */
+  | { type: 'PAIR_SAS_CONFIRMED'; slot: DeviceSlot }
   | { type: 'QR_INVITE_SHOWN'; slot: DeviceSlot }
   | { type: 'QR_PHONE_SCANNED'; slot: DeviceSlot }
   | { type: 'MESSAGE_RECEIVED'; slot: DeviceSlot; envelope: MultisigEnvelope; at: number }
@@ -104,6 +125,7 @@ export type CreateSessionEvent =
   | { type: 'USER_ABORT' }
   | { type: 'DKG_OPENED'; sessionId: string }
   | { type: 'DKG_ROUND1_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound1Response }
+  | { type: 'DKG_ROUND1_CONFIRMED'; slot: DeviceSlot }
   | { type: 'DKG_ROUND2_ACCEPTED'; slot: DeviceSlot; result: VaultDkgRound2Response }
   | { type: 'DKG_FAILED' }
   | { type: 'VAULT_RECORD_SAVED' }
@@ -138,6 +160,11 @@ export type CreateSessionEffect =
       sessionId?: string
     }
   | { type: 'dkgAcceptRound1'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
+  | {
+      type: 'dkgConfirmRound1'
+      slot: DeviceSlot
+      request: { sessionId: string; signedEnvelope: MultisigEnvelope }
+    }
   | { type: 'dkgAcceptRound2'; slot: DeviceSlot; request: VaultDkgAcceptRequest }
   | { type: 'dkgClose'; sessionId: string }
   | { type: 'saveVaultRecord'; groupId: string; record: SealedVaultRecord }
@@ -150,6 +177,7 @@ export interface CreateSessionInput {
   owner: MultisigDevice
   mainnet: boolean
   qrDkgSessionId?: string
+  authenticatedDkg?: boolean
 }
 
 export interface ReduceResult {
@@ -176,7 +204,9 @@ export function emptyDevice(slot: DeviceSlot): DeviceSessionState {
     r1Echoed: false,
     r2Received: false,
     finalReceived: false,
+    finalEnvelope: null,
     identityPublicKey: null,
+    transportPublicKey: null,
     identityConfirmed: false,
     round1Envelope: null
   }
@@ -188,6 +218,31 @@ export function guardianSlotsOf(threshold: MultisigThreshold): readonly DeviceSl
 
 export function guardianSlots(state: CreateSessionState): readonly DeviceSlot[] {
   return guardianSlotsOf(state.threshold)
+}
+
+/** Freeze the complete identity roster before the Worker seals its account binding. */
+export function rosterBeforeDkg(state: CreateSessionState): RosterManifest | null {
+  if (!state.ownerIdentityPublicKey) return null
+  const identities = new Map<number, string>([[0, state.ownerIdentityPublicKey]])
+  const transports = new Map<number, string>()
+  if (state.transportKind === 'ble') {
+    if (!state.ownerTransportPublicKey) return null
+    transports.set(0, state.ownerTransportPublicKey)
+  }
+  for (const device of guardians(state)) {
+    if (!device.identityPublicKey) return null
+    identities.set(rosterSlotOf(device.slot), device.identityPublicKey)
+    if (state.transportKind === 'ble') {
+      if (!device.transportPublicKey) return null
+      transports.set(rosterSlotOf(device.slot), device.transportPublicKey)
+    }
+  }
+  return buildRoster({
+    groupId: state.groupId,
+    threshold: dkgShape(state.threshold).threshold,
+    identities,
+    ...(state.transportKind === 'ble' ? { transportPublicKeys: transports } : {})
+  })
 }
 
 export function guardians(state: CreateSessionState): readonly DeviceSessionState[] {
@@ -346,7 +401,8 @@ export function acceptRequest(
   return {
     sessionId: state.dkgSessionId,
     senderSlot: rosterSlotOf(slot),
-    envelope: payload.envelope
+    envelope: payload.envelope,
+    ...(state.authenticatedDkg ? { signedEnvelope: envelope } : {})
   }
 }
 

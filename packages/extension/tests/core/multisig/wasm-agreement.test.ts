@@ -31,7 +31,13 @@ const WASM_NAME: Record<MultisigMessageType, string> = {
   KEYSET_SETUP: 'keysetSetup',
   DKG_FINAL: 'dkgFinal',
   DKG_ACTIVATE: 'dkgActivate',
-  SESSION_ABORT: 'sessionAbort'
+  SESSION_ABORT: 'sessionAbort',
+  SIGN_INIT: 'signInit',
+  SIGN_COMMITMENTS: 'signCommitments',
+  SIGN_PAYLOAD: 'signPayload',
+  SIGN_SHARE: 'signShare',
+  SIGN_REJECT: 'signReject',
+  SIGN_RESULT: 'signResult'
 }
 
 type Roster = Parameters<typeof rosterHash>[0]
@@ -97,9 +103,7 @@ test.describe('multisig tables agree with the shared wasm', () => {
       ...wasm.EnvelopeCodec.defined_msg_types(),
       ...wasm.EnvelopeCodec.reserved_msg_types()
     ]
-    // Signing messages arrive with the signing round, which the extension does not speak yet.
-    const ceremony = names.filter(name => !name.startsWith('sign'))
-    expect(ceremony.sort()).toEqual(Object.values(WASM_NAME).sort())
+    expect(names.sort()).toEqual(Object.values(WASM_NAME).sort())
   })
 
   test('roster vector A (three devices, Bluetooth transport keys) encodes identically', () => {

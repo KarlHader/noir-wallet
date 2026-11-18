@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
-import {
-  allGuardiansConnected,
-  type CreateSessionState,
-  type DeviceSessionState
-} from '@/core/multisig/create-session'
+import { allGuardiansConnected } from '@/core/multisig/create-session'
+import type { CreateSessionState, DeviceSessionState } from '@/core/multisig/create-session'
 import type { DeviceSlot, MultisigTransportKind } from '@/core/multisig/types'
 import { DeviceCard } from '@/popup/components/multisig/DeviceCard'
 import { PairingCodeSheet } from '@/popup/components/multisig/PairingCodeSheet'
+import type { PairingCodeMode } from '@/popup/components/multisig/PairingCodeSheet'
 import { Pill } from '@/popup/components/multisig/Pill'
 import { SegmentedToggle } from '@/popup/components/multisig/SegmentedToggle'
 import { FlowButton } from '@/popup/components/multisig/FlowButton'
 import { useDialog } from '@/popup/hooks/useDialog'
 import { useCreateSessionStore } from '@/popup/multisig/create-session-store'
 import { MockDeviceChooser } from '@/popup/multisig/mock/MockDeviceChooser'
-import { MOCK_CHOOSER_DEVICES } from '@/popup/multisig/mock/mock-settings'
+import { MOCK_CHOOSER_DEVICES, readMockSettings } from '@/popup/multisig/mock/mock-settings'
 import { useNavigate } from '@/popup/provider/Router'
 import { multisigCreateRoute } from '@/lib/multisig-tab'
 import { MultisigTabLayout } from './MultisigTabLayout'
@@ -31,14 +29,28 @@ const TRANSPORT_OPTIONS: { value: MultisigTransportKind; label: string }[] = [
 ]
 
 const QR_ONLY: readonly MultisigTransportKind[] = ['qr']
+const BOTH_TRANSPORTS: readonly MultisigTransportKind[] = ['qr', 'ble']
 const NO_DISABLED_TRANSPORTS: readonly MultisigTransportKind[] = []
 
 function pairRoute(slot: DeviceSlot, step: 1 | 3 = 1): string {
   return `${CREATE_ROUTE}/pair/${slot}/${step}`
 }
 
-function isPairing(entry: DeviceSessionState): boolean {
-  return entry.connection === 'pending' || entry.connection === 'code_wait'
+// Over Bluetooth the sheet also covers the wait for the phone's answer to the invite; over QR that
+// state has its own pages.
+function isPairing(entry: DeviceSessionState, transport: MultisigTransportKind): boolean {
+  return (
+    entry.connection === 'pending' ||
+    entry.connection === 'code_wait' ||
+    (transport === 'ble' && entry.connection === 'invite_shown')
+  )
+}
+
+// A code with no expiry is the SAS the channel produced: the user compares it, nothing is typed.
+function sheetMode(entry: DeviceSessionState | null): PairingCodeMode {
+  if (entry?.connection === 'invite_shown') return 'waiting'
+  if (entry?.connection === 'code_wait' && entry.pairingCodeExpiresAt === null) return 'compare'
+  return 'enter'
 }
 
 interface PairingSheetView {
@@ -53,8 +65,11 @@ interface PairingSheetView {
  * connects, so the page remembers which slot it was pairing to keep the sheet up for a short
  * success state. Only view timing lives here; every pairing transition comes from the session.
  */
-function usePairingSheet(guardians: readonly DeviceSessionState[]): PairingSheetView {
-  const pairing = guardians.find(isPairing)
+function usePairingSheet(
+  guardians: readonly DeviceSessionState[],
+  transport: MultisigTransportKind
+): PairingSheetView {
+  const pairing = guardians.find(entry => isPairing(entry, transport))
   const pairingSlot = pairing?.slot ?? null
   const [activeSlot, setActiveSlot] = useState<DeviceSlot | null>(null)
   const [holdOver, setHoldOver] = useState(false)
@@ -87,9 +102,15 @@ function usePairingSheet(guardians: readonly DeviceSessionState[]): PairingSheet
   }
 }
 
-function GuardianPairingSheet({ guardians }: { guardians: readonly DeviceSessionState[] }) {
+function GuardianPairingSheet({
+  guardians,
+  transport
+}: {
+  guardians: readonly DeviceSessionState[]
+  transport: MultisigTransportKind
+}) {
   const dispatch = useCreateSessionStore(state => state.dispatch)
-  const { guardian, open, success } = usePairingSheet(guardians)
+  const { guardian, open, success } = usePairingSheet(guardians, transport)
 
   return (
     <PairingCodeSheet
@@ -99,6 +120,10 @@ function GuardianPairingSheet({ guardians }: { guardians: readonly DeviceSession
       expiresAt={guardian?.pairingCodeExpiresAt ?? null}
       error={guardian?.codeError ?? null}
       success={success}
+      mode={sheetMode(guardian)}
+      onConfirm={() => {
+        if (guardian) dispatch({ type: 'PAIR_SAS_CONFIRMED', slot: guardian.slot })
+      }}
       onResend={() => {
         if (guardian) dispatch({ type: 'PAIR_CODE_RESEND', slot: guardian.slot })
       }}
@@ -212,6 +237,7 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
 
   const handleConnect = (slot: DeviceSlot) => {
     if (session.transportKind === 'qr') navigate(pairRoute(slot))
+    else if (readMockSettings().blePhones === 'real' && identityStatus !== 'ready') return
     else dispatch({ type: 'PAIR_START', slot })
   }
 
@@ -249,30 +275,36 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
       }
     >
       <h2 className="text-lg font-semibold mt-1">Connect devices</h2>
-      <p className="mt-2 text-xs text-muted">
+      <div className="mt-2 text-xs text-muted">
         Open Noir Guardians on each phone and stay on its waiting screen.
-      </p>
+      </div>
 
       <div role="group" aria-label="Connection method" className="mt-4">
         <SegmentedToggle
           options={TRANSPORT_OPTIONS}
           value={session.transportKind}
           onChange={kind => void handleTransportChange(kind)}
-          disabledValues={identityStatus === 'ready' ? NO_DISABLED_TRANSPORTS : QR_ONLY}
+          disabledValues={
+            identityStatus === 'ready'
+              ? NO_DISABLED_TRANSPORTS
+              : readMockSettings().blePhones === 'real'
+                ? BOTH_TRANSPORTS
+                : QR_ONLY
+          }
         />
         {identityStatus === 'unsupported' && (
-          <p className="mt-2 text-xs text-muted">
+          <div className="mt-2 text-xs text-muted">
             QR code setup needs a newer Chrome. Update Chrome and try again, or use Bluetooth.
-          </p>
+          </div>
         )}
       </div>
 
       <div className="mt-7 flex items-center justify-between gap-2">
         <Pill tone="account">{ownerName}</Pill>
-        <p className="text-sm tabular-nums text-muted">
+        <div className="text-sm tabular-nums text-muted">
           <span className="sr-only">Connected devices: </span>
           <span className="text-primary">{connectedCount}</span>/{session.devices.length}
-        </p>
+        </div>
       </div>
 
       <div className="mt-3 space-y-3">
@@ -306,7 +338,7 @@ function ConnectDevices({ session }: { session: CreateSessionState }) {
           onCancel={() => resolveChooser({ status: 'cancelled' })}
         />
       )}
-      <GuardianPairingSheet guardians={guardians} />
+      <GuardianPairingSheet guardians={guardians} transport={session.transportKind} />
     </MultisigTabLayout>
   )
 }

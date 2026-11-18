@@ -31,9 +31,10 @@ import { ExtensionUpdateBanner } from '../components/common/ExtensionUpdateBanne
 import { MultisigBadge } from '../components/multisig/MultisigBadge'
 import { MultisigBanner } from '../components/multisig/MultisigBanner'
 import { isMultisigUiEnabled } from '@/core/multisig/multisig-runtime-policy'
+import { isFrostAccount } from '@/core/accounts/domain'
 import { isZcashHardwareKeySource } from '@/core/wallet/hardware-wallet-data'
 import { isSidePanelSurface } from '@/lib/extension-display-mode'
-import { openMultisigCreateTab } from '@/lib/multisig-tab'
+import { openMultisigCreateTab, openMultisigSendTab } from '@/lib/multisig-tab'
 import { useMultisigGroup, useMultisigGroupStore } from '../multisig/group-store'
 import { dismissMultisigBanner, isMultisigBannerDismissed } from '@/lib/multisig-group-storage'
 import { LegacyPoolPrivacyNotice } from '../components/common/LegacyPoolPrivacyNotice'
@@ -157,6 +158,7 @@ export function Home() {
   } = useActiveAccountNetworks()
 
   const currentAccount = getCurrentAccount()
+  const isIndependentMultisig = Boolean(currentAccount && isFrostAccount(currentAccount))
   const currentWallet = getCurrentWallet()
   const effectiveAccount = resolveEffectiveActiveAccountIdentity({
     currentWalletId,
@@ -273,6 +275,20 @@ export function Home() {
       ? privateMode && multichainPortfolioEnabled
       : (assetDomain === 'public' || assetDomain === 'private') && canMoveEvm
   const openSend = () => {
+    if (currentAccount && isFrostAccount(currentAccount)) {
+      if (
+        !isMultisigUiEnabled() ||
+        !multisigScope ||
+        currentAccount.source.network !== currentNetwork
+      ) {
+        toast.error('Multisig sending is unavailable for this account and network.')
+        return
+      }
+      void openMultisigSendTab(multisigScope).catch(() => {
+        toast.error('Unable to open multisig send', 'Please try again.')
+      })
+      return
+    }
     const sendPath =
       assetDomain === 'public' && publicSendSource
         ? publicSendSource.chain.chain.family === 'zcash'
@@ -382,8 +398,13 @@ export function Home() {
       })}`
     )
   }
-  const openShieldAction = (action: ShieldAction) =>
+  const openShieldAction = (action: ShieldAction) => {
+    if (action === 'send' && isIndependentMultisig) {
+      openSend()
+      return
+    }
     navigate.navigate(`/shield-funds?action=${action}&mode=${privateMode ? 'private' : 'public'}`)
+  }
   const storeBalance = getCurrentBalance()
   const { isSyncing, syncProgress, currentHeight, latestHeight, etaMs, syncReason } =
     getCurrentSyncState()
@@ -966,13 +987,13 @@ export function Home() {
           data-layout={isTestnet ? 'centered' : 'distributed'}
           className="mb-5 flex justify-evenly gap-[13px] px-4"
         >
-          {actionDomain === 'public' && (
+          {(actionDomain === 'public' || (isIndependentMultisig && actionDomain !== 'shield')) && (
             <>
               <WalletActionButton
                 icon={<WalletActionIcon action="send" />}
                 label="Send"
                 onClick={openSend}
-                disabled={assetDomain === 'public' && !publicSendSource}
+                disabled={!isIndependentMultisig && assetDomain === 'public' && !publicSendSource}
               />
               <WalletActionButton
                 icon={<WalletActionIcon action="receive" />}
@@ -997,7 +1018,10 @@ export function Home() {
                 icon={<WalletActionIcon action={action} />}
                 label={action[0].toUpperCase() + action.slice(1)}
                 onClick={() => openShieldAction(action)}
-                disabled={shieldActions.providersFor(action).length === 0}
+                disabled={
+                  !(action === 'send' && isIndependentMultisig) &&
+                  shieldActions.providersFor(action).length === 0
+                }
               />
             ))}
           {!isTestnet &&

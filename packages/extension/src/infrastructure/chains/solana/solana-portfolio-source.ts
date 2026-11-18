@@ -1,15 +1,12 @@
+import { isDerivedAccount } from '@/core/accounts/domain'
 import type { ChainAccount } from '@/core/accounts/domain'
 import type { AssetRegistry } from '@/core/chains/registry'
 import type { PortfolioReadErrorCode, PortfolioSourceSnapshot } from '@/core/portfolio'
 import { logger } from '@/lib/logger'
 
 import { readSolanaBalances } from './solana-balance-reader'
-import {
-  parseSolanaPublicKey,
-  SolanaRpcError,
-  type SolanaReadRpc,
-  type SolanaRpcErrorCode
-} from './solana-rpc-client'
+import { parseSolanaPublicKey, SolanaRpcError } from './solana-rpc-client'
+import type { SolanaReadRpc, SolanaRpcErrorCode } from './solana-rpc-client'
 
 export interface ReadSolanaPortfolioSourceInput {
   readonly chainAccount: ChainAccount
@@ -41,6 +38,7 @@ function mapErrorCode(code: SolanaRpcErrorCode): PortfolioReadErrorCode {
 }
 
 function parseAccountAddress(chainAccount: ChainAccount): string {
+  if (!isDerivedAccount(chainAccount)) throw new Error('Portfolio requires a derived ChainAccount')
   if (chainAccount.identity.kind !== 'account-identifier') {
     throw new Error('Solana Portfolio requires an account-identifier binding')
   }
