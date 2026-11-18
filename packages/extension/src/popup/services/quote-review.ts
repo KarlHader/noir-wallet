@@ -64,6 +64,7 @@ export function quoteReviewActionLabel(changes: readonly QuoteTermsChange[]): st
 
 export interface QuoteReviewCandidate {
   readonly id: string
+  readonly quoteHandle?: string
   readonly terms: QuoteTerms
   readonly expiresAt: number
 }
@@ -71,6 +72,7 @@ export interface QuoteReviewCandidate {
 export interface QuoteReviewSession {
   readonly scope: string
   readonly baseline: QuoteTerms
+  readonly indicativeQuoteHandle?: string
   readonly candidate: QuoteReviewCandidate | null
 }
 
@@ -80,8 +82,16 @@ export function stageQuoteReview(
   candidate: QuoteReviewCandidate
 ): QuoteReviewSession | null {
   if (session?.scope !== scope) return null
-  const unchanged = compareQuoteTerms(session.baseline, candidate.terms).length === 0
-  return { ...session, baseline: unchanged ? candidate.terms : session.baseline, candidate }
+  const firstBuildOfIndicativeQuote =
+    session.candidate === null &&
+    session.indicativeQuoteHandle !== undefined &&
+    session.indicativeQuoteHandle === candidate.quoteHandle
+  // The first build establishes the executable price, not a change from an earlier review.
+  const baseline = firstBuildOfIndicativeQuote
+    ? { ...session.baseline, expected: candidate.terms.expected, minimum: candidate.terms.minimum }
+    : session.baseline
+  const unchanged = compareQuoteTerms(baseline, candidate.terms).length === 0
+  return { ...session, baseline: unchanged ? candidate.terms : baseline, candidate }
 }
 
 export function canReviewQuote(

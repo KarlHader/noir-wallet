@@ -3607,12 +3607,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       const requestKey = liveQuoteRequest?.key
       const { tokenIn, tokenOut } = swap
       if (rheaReviewScope && liveQuoteRequest && resultToReview && liveQuoteKey === requestKey) {
-        beginQuoteReview(rheaReviewScope, {
-          sourceAmount: liveQuoteRequest.amount,
-          ...((publicPrivacySendRequested
-            ? takeQuotePreview(location.pathname + location.search)
-            : undefined) ?? rheaQuoteTerms(resultToReview))
-        })
+        const carriedPreview = publicPrivacySendRequested
+          ? takeQuotePreview(location.pathname + location.search)
+          : undefined
+        beginQuoteReview(
+          rheaReviewScope,
+          {
+            sourceAmount: liveQuoteRequest.amount,
+            ...(carriedPreview ?? rheaQuoteTerms(resultToReview))
+          },
+          carriedPreview ? undefined : resultToReview.quoteHandle
+        )
       }
       const refreshReviewQuote =
         viewStep === 'review' &&
@@ -3684,10 +3689,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
           }
         }
         const result = resultToReview
-        beginQuoteReview(rheaReviewScope, {
-          ...rheaQuoteTerms(result),
-          sourceAmount: liveQuoteRequest.amount
-        })
+        beginQuoteReview(
+          rheaReviewScope,
+          { ...rheaQuoteTerms(result), sourceAmount: liveQuoteRequest.amount },
+          result.quoteHandle
+        )
         if (
           isPrivateFunding &&
           privateFundingMinimumRaw &&
@@ -4171,6 +4177,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         swap.setAmountOut(formatBaseUnitDecimalAmount(review.estimatedOut, tokenOut.decimals))
         stageQuoteReview(rheaReviewScope, {
           id: JSON.stringify([review.quoteHandle, review.executionId]),
+          quoteHandle: review.quoteHandle,
           terms: { ...rheaQuoteTerms(review), sourceAmount: review.amountIn },
           expiresAt: getRheaSwapQuoteDeadline(result)
         })

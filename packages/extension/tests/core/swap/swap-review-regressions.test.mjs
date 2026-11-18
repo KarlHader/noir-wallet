@@ -248,7 +248,44 @@ it('reuses accepted terms on refresh but binds confirmation to the latest execut
   assert.equal(stageQuoteReview(refreshed, 'intent-b', replacement), null)
 })
 
-it('keeps the displayed preview baseline across replacement quotes with a lower minimum', () => {
+it('establishes the first executable price only when building the same indicative quote', () => {
+  const baseline = { expected: '3129340784451821', minimum: '3098047376607302', route: 'intents' }
+  const preview = { scope: 'intent', baseline, indicativeQuoteHandle: 'quote-a', candidate: null }
+  const candidate = {
+    id: 'execution-a',
+    quoteHandle: 'quote-a',
+    terms: { ...baseline, expected: '3128852208142304', minimum: '3097563686060888' },
+    expiresAt: 20_000
+  }
+  const initial = stageQuoteReview(preview, preview.scope, candidate)
+  assert.equal(isQuoteReviewAccepted(initial, preview.scope, candidate.id, 10_000), true)
+
+  const replacement = {
+    ...candidate,
+    id: 'execution-b',
+    quoteHandle: 'quote-b',
+    terms: { ...candidate.terms, minimum: '3097563686060887' }
+  }
+  const refreshed = stageQuoteReview(initial, preview.scope, replacement)
+  assert.equal(isQuoteReviewAccepted(refreshed, preview.scope, replacement.id, 10_000), false)
+  assert.deepEqual(compareQuoteTerms(refreshed.baseline, refreshed.candidate.terms), [
+    { field: 'minimum', previous: '3097563686060888', current: '3097563686060887' }
+  ])
+  const replacedBeforeReview = stageQuoteReview(preview, preview.scope, replacement)
+  assert.equal(
+    isQuoteReviewAccepted(replacedBeforeReview, preview.scope, replacement.id, 10_000),
+    false
+  )
+
+  const changedRoute = { ...candidate, terms: { ...candidate.terms, route: 'other' } }
+  const differentRoute = stageQuoteReview(preview, preview.scope, changedRoute)
+  assert.equal(
+    quoteReviewActionLabel(compareQuoteTerms(differentRoute.baseline, changedRoute.terms)),
+    'Accept new route'
+  )
+})
+
+it('keeps an explicit preview baseline across replacement quotes with a lower minimum', () => {
   const baseline = { expected: '100', minimum: '90', route: 'intents' }
   const preview = { scope: 'intent', baseline, candidate: null }
   const candidate = { id: 'execution-a', terms: { ...baseline, minimum: '89' }, expiresAt: 20_000 }

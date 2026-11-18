@@ -39,8 +39,9 @@ export function useQuoteReview() {
   }, [])
 
   const begin = useCallback(
-    (scope: string, baseline: QuoteTerms) => {
-      if (current.current?.scope !== scope) update({ scope, baseline, candidate: null })
+    (scope: string, baseline: QuoteTerms, indicativeQuoteHandle?: string) => {
+      if (current.current?.scope !== scope)
+        update({ scope, baseline, indicativeQuoteHandle, candidate: null })
     },
     [update]
   )
