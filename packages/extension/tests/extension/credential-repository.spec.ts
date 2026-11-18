@@ -916,6 +916,57 @@ test('atomically persists the 24-word direct BIP-39 credential policy and public
   )
 })
 
+test('recovers a missing V1 account selection during the first Storage V2 unlock', async ({
+  popup,
+  extensionId
+}) => {
+  test.setTimeout(180_000)
+  const password = 'production-v1-missing-selection-password'
+  await openIntegrationPage(popup, extensionId)
+  await popup.evaluate(async password => {
+    await window.credentialRepositoryIntegration!.prepareProductionV1Migration(password)
+    const { wallet_state: snapshot } = await chrome.storage.local.get('wallet_state')
+    await chrome.storage.local.set({
+      wallet_state: {
+        ...snapshot,
+        state: { ...snapshot.state, currentWalletId: null, currentAccountId: null }
+      }
+    })
+  }, password)
+
+  await popup.goto(`chrome-extension://${extensionId}/index.html`)
+  await waitForBackgroundWalletInitialization(popup)
+  await expect(
+    popup.evaluate(() =>
+      chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password: 'incorrect-test-password' })
+    )
+  ).resolves.toMatchObject({ success: false, failure: 'wrong_password', remainingAttempts: 4 })
+  expect(
+    await popup.evaluate(async () => {
+      const { wallet_state: snapshot } = await chrome.storage.local.get('wallet_state')
+      const databases = await indexedDB.databases()
+      return {
+        currentWalletId: snapshot.state.currentWalletId,
+        currentAccountId: snapshot.state.currentAccountId,
+        hasV2: databases.some(db => db.name === 'noir-wallet-storage-v2-db')
+      }
+    })
+  ).toEqual({ currentWalletId: null, currentAccountId: null, hasV2: false })
+
+  await expect(
+    popup.evaluate(
+      password => chrome.runtime.sendMessage({ type: 'WALLET_UNLOCK', password }),
+      password
+    )
+  ).resolves.toMatchObject({ success: true, credentialStatus: 'migrated' })
+  await openIntegrationPage(popup, extensionId)
+  await expect(
+    popup.evaluate(() => window.credentialRepositoryIntegration!.inspectProductionV2Provisioning())
+  ).resolves.toMatchObject({
+    activeAccount: { keyDomainId: 'wallet:retained-v1-e2e', accountId: 'account:retained-v1-e2e:0' }
+  })
+})
+
 test('silently migrates production V1 credentials into Storage V2 during unlock', async ({
   context,
   popup,
