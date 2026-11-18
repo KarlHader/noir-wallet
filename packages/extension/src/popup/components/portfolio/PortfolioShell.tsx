@@ -7,8 +7,7 @@ import { cn } from '@/lib/utils'
 import tokenViewIcon from '@/images/portfolio-token-view.svg'
 import chainViewIcon from '@/images/portfolio-chain-view.svg'
 import type { PortfolioChainView, PortfolioReadModel } from '@/core/portfolio'
-import { findAssetPrice, type AssetPriceReadModel } from '@/core/prices'
-import Big from '@/lib/big'
+import type { AssetPriceReadModel } from '@/core/prices'
 import type { Network } from '@/types'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { Skeleton } from '@/popup/components/ui/skeleton'
@@ -34,7 +33,7 @@ import {
 import { NearConfidentialHoldingRow } from './NearConfidentialHoldingRow'
 import {
   listStandaloneNearConfidentialHoldings,
-  resolveNearConfidentialZecHolding,
+  resolveNearConfidentialZecRow,
   sumNearConfidentialChainFiat
 } from '@/popup/services/near-confidential-holdings'
 import {
@@ -272,22 +271,25 @@ export function PortfolioShell({
     () => withConfidentialAssetPrices(sourceModel ?? model, sourcePrices),
     [model, sourceModel, sourcePrices]
   )
-  const confidentialZec = useMemo(() => {
-    if (domain !== 'all' || balancesHidden) return null
-    const holding = resolveNearConfidentialZecHolding({
-      model: sourceModel ?? model,
-      network,
-      walletId: model.scope.keyDomainId,
-      accountId: model.scope.accountId
-    })
-    if (!holding) return null
-    const price = findAssetPrice(prices, holding.assetId)?.priceUsd
-    return {
-      assetId: holding.assetId,
-      amount: holding.amount,
-      fiat: price ? new Big(holding.amount).times(price).toFixed() : null
-    }
-  }, [balancesHidden, domain, model, network, prices, sourceModel])
+  const standaloneConfidential = useMemo(
+    () =>
+      domain === 'all' || domain === 'shield'
+        ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
+        : [],
+    [domain, model, sourceModel, prices]
+  )
+  const confidentialZec = useMemo(
+    () =>
+      domain === 'all'
+        ? resolveNearConfidentialZecRow(
+            model,
+            sourceModel ?? model,
+            network,
+            standaloneConfidential
+          )
+        : null,
+    [domain, model, sourceModel, network, standaloneConfidential]
+  )
   const [localSelectedChainIds, setLocalSelectedChainIds] = useState<readonly string[]>(() =>
     displayModel.chains
       .filter(chain => isSelectableChainFamily(chain.chain.family, __ENABLED_CHAIN_FEATURE_FLAGS__))
@@ -309,14 +311,13 @@ export function PortfolioShell({
     availableChainIdSet.has(chainId)
   )
   const setSelectedChainIds = onSelectedChainIdsChange ?? setLocalSelectedChainIds
-  const standaloneConfidential =
-    domain === 'all' || domain === 'shield'
-      ? listStandaloneNearConfidentialHoldings(model, sourceModel ?? model, prices)
-      : []
   const visibleConfidential = standaloneConfidential.filter(
     item =>
       (item.chain && selectedChainIds.includes(item.chain.chain.id)) ||
       (!item.chain && selectedChainIds.length === availableChainIds.length)
+  )
+  const separateConfidential = visibleConfidential.filter(
+    item => item !== confidentialZec?.mergedHolding
   )
   const standaloneChainIds = new Set(
     visibleConfidential.flatMap(item => (item.chain ? [item.chain.chain.id] : []))
@@ -529,7 +530,7 @@ export function PortfolioShell({
         ) : view === 'assets' ? (
           <div className="pb-2">
             {primaryAssetGroups.map(group => renderAssetGroup(group, 'assets:all'))}
-            {visibleConfidential.map(({ entry, chain }) => (
+            {separateConfidential.map(({ entry, chain }) => (
               <NearConfidentialHoldingRow
                 key={entry.asset.tokenId}
                 entry={entry}
@@ -697,17 +698,19 @@ export function PortfolioShell({
                           swapCatalog={swapCatalog}
                         />
                       ))}
-                      {confidentialEntries.map(({ entry }) => (
-                        <NearConfidentialHoldingRow
-                          key={entry.asset.tokenId}
-                          entry={entry}
-                          chain={chain.chain}
-                          showProvider
-                          balancesHidden={balancesHidden}
-                          pricesLoading={pricesLoading}
-                          onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
-                        />
-                      ))}
+                      {confidentialEntries
+                        .filter(item => item !== confidentialZec?.mergedHolding)
+                        .map(({ entry }) => (
+                          <NearConfidentialHoldingRow
+                            key={entry.asset.tokenId}
+                            entry={entry}
+                            chain={chain.chain}
+                            showProvider
+                            balancesHidden={balancesHidden}
+                            pricesLoading={pricesLoading}
+                            onClick={() => onSelectConfidentialAsset?.(entry.asset.tokenId)}
+                          />
+                        ))}
                       {lowValueAssets.length > 0 && (
                         <>
                           <button
@@ -756,7 +759,7 @@ export function PortfolioShell({
                 </section>
               )
             })}
-            {visibleConfidential
+            {separateConfidential
               .filter(item => !item.chain)
               .map(({ entry }) => (
                 <NearConfidentialHoldingRow
