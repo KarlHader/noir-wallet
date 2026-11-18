@@ -427,6 +427,7 @@ test('only projects Confidential zero after a confirmed empty balance read', asy
     store: {
       getBalanceSnapshot: async () => snapshot,
       getSession: async () => session,
+      listPlans: async () => [],
       putBalances: async () => {}
     },
     api: {

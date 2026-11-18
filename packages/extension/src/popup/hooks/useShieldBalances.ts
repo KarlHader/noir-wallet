@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   confidentialFundingClient,
   type ConfidentialBalanceErrorCode
@@ -42,13 +42,24 @@ export function useShieldBalances({
   currentActive.current = active && enabled
 
   const confidential = model?.confidential
-  const balances: readonly Readonly<{ tokenId: string; available: string }>[] | null =
+  const freshAssets =
     confidential?.status === 'ready' && confidential.freshness === 'fresh'
-      ? confidential.assets.map(asset => ({
-          tokenId: asset.tokenId,
-          available: asset.availableRaw
-        }))
+      ? confidential.assets
       : null
+  const balances = useMemo(
+    () =>
+      freshAssets?.map(asset => ({ tokenId: asset.tokenId, available: asset.availableRaw })) ??
+      null,
+    [freshAssets]
+  )
+  const spendableBalances = useMemo(
+    () =>
+      freshAssets?.map(asset => ({
+        tokenId: asset.tokenId,
+        available: asset.spendableRaw ?? asset.availableRaw
+      })) ?? null,
+    [freshAssets]
+  )
   const autoRecovering = active && enabled && autoRecoveringKey === scopeKey && !balances
 
   useEffect(() => {
@@ -185,6 +196,7 @@ export function useShieldBalances({
 
   return {
     balances,
+    spendableBalances,
     settled,
     connecting: connecting || autoRecovering,
     error: autoRecovering ? null : error,

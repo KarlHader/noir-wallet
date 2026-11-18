@@ -409,6 +409,18 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     metadata: { symbol: 'ETH', decimals: 18 },
     verification: 'verified'
   }
+  const balances = [
+    {
+      tokenId: confidentialPrivateTokenId(protocolAssetId),
+      available: '100',
+      source: 'intents'
+    },
+    {
+      tokenId: confidentialPrivateTokenId(zcashProtocolId),
+      available: '140000',
+      source: 'intents'
+    }
+  ]
   const store = {
     getPlan: async id => structuredClone(plans.get(id) ?? null),
     listPlans: async () => [...plans.values()].map(value => structuredClone(value)),
@@ -420,6 +432,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
       plans.delete(id)
     },
     getSession: async () => state.session,
+    getBalanceSnapshot: async () => ({ balances, fresh: true, updatedAt: state.now }),
     putBalances: async () => {}
   }
   const signer = {
@@ -453,18 +466,7 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
   }
   const api = {
     getStatus: async () => ({ status: 'PROCESSING' }),
-    getBalances: async () => [
-      {
-        tokenId: confidentialPrivateTokenId(protocolAssetId),
-        available: '100',
-        source: 'intents'
-      },
-      {
-        tokenId: confidentialPrivateTokenId(zcashProtocolId),
-        available: '140000',
-        source: 'intents'
-      }
-    ],
+    getBalances: async () => balances,
     quote: async input => {
       state.lastQuoteRequest = input
       state.quoteCalls.push(input)
@@ -541,7 +543,9 @@ function directPreparationHarness(protocolTokens, getNativeZecActiveAccount) {
     repository,
     assets: {
       get: id =>
-        id === assetId ? nativeAsset : { metadata: { decimals: id === zcashAssetId ? 8 : 18 } },
+        id === assetId
+          ? nativeAsset
+          : { asset: { id, chainId: id.split('/')[0] }, metadata: { decimals: id === zcashAssetId ? 8 : 18 } },
       list: () => [nativeAsset]
     },
     evmNetworks: [],
@@ -1614,6 +1618,11 @@ test.describe('confidential funding persisted recovery', () => {
 
   test('reserves Shield funds across concurrent prepares and releases cancelled or expired reviews', async () => {
     const h = directPreparationHarness()
+    const model = { scope: { network: 'mainnet', ...scope }, chains: [], assets: [] }
+    const sourceAsset = async () =>
+      (await h.coordinator.enrichPortfolio(model, false)).confidential.assets.find(
+        asset => asset.protocolAssetId === h.request('1').source.protocolAssetId
+      )
     const attempts = await Promise.allSettled([
       h.coordinator.prepare(h.request('60')),
       h.coordinator.prepare(h.request('50'))
@@ -1621,10 +1630,16 @@ test.describe('confidential funding persisted recovery', () => {
     expect(attempts.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
     expect(attempts[1].reason.message).toContain('insufficient')
     const first = attempts[0].value
+    expect(await sourceAsset()).toMatchObject({ availableRaw: '100', spendableRaw: '40' })
+    const remaining = await h.coordinator.prepare(h.request((await sourceAsset()).spendableRaw))
+    expect(await sourceAsset()).toMatchObject({ availableRaw: '100', spendableRaw: '0' })
+    await h.coordinator.cancel(remaining.planId)
     await h.coordinator.cancel(first.planId)
+    expect(await sourceAsset()).toMatchObject({ availableRaw: '100', spendableRaw: '100' })
     const second = await h.coordinator.prepare(h.request('50'))
     expect(second.withdrawCount).toBe(1)
     h.state.now = second.expiresAt + 1
+    expect(await sourceAsset()).toMatchObject({ availableRaw: '100', spendableRaw: '100' })
     const third = await h.coordinator.prepare(h.request('60'))
     expect(third.withdrawCount).toBe(1)
     expect(h.plans.has(second.planId)).toBe(false)

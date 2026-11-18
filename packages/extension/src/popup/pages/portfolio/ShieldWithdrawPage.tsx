@@ -11,8 +11,7 @@ import type { ConfidentialFundingReview } from '@/core/services/confidential-fun
 import {
   formatBaseUnitAmount,
   formatBaseUnitDecimalAmount,
-  formatTokenQuantity,
-  parseDisplayUnitAmount
+  formatTokenQuantity
 } from '@/lib/number-format'
 import { resolveChainIconAlias } from '@/lib/chain-icon'
 import { formatSymbol } from '@/lib/format'
@@ -249,6 +248,7 @@ export function ShieldWithdrawForm({
   } | null>(null)
   const {
     balances: currentBalances,
+    spendableBalances,
     connecting,
     error: balanceError,
     refreshBalances: loadBalances
@@ -613,7 +613,7 @@ export function ShieldWithdrawForm({
     setDestinationNetworkId(fallback?.chain.chain.id ?? null)
     if (pending.previousFamily !== fallback?.chain.chain.family) setRecipient('')
   }, [catalogResolved, moveToOwnZcash, source, destinationNetworkId, destinations])
-  const availableRaw = shieldFundingAvailableRaw(source, displayBalances)
+  const availableRaw = shieldFundingAvailableRaw(source, spendableBalances ?? displayBalances)
   const displayedAsset = source?.asset ?? initialAsset
   const amountState = source
     ? resolvePrivateBalanceTransferAmount({
@@ -624,15 +624,7 @@ export function ShieldWithdrawForm({
       })
     : null
   const recipientValid = isShieldWithdrawRecipient(recipient.trim(), destination, network)
-  const previewAmountRaw = useMemo(() => {
-    if (!source || !amount.trim()) return null
-    try {
-      const raw = parseDisplayUnitAmount(amount, source.asset.metadata.decimals)
-      return BigInt(raw) > 0n ? raw : null
-    } catch {
-      return null
-    }
-  }, [amount, source])
+  const previewAmountRaw = amountState?.amountRaw
   const previewRequest = useMemo(() => {
     if (
       !account ||
@@ -1200,7 +1192,7 @@ export function ShieldWithdrawForm({
                 <button
                   type="button"
                   aria-label="Max"
-                  disabled={busy || !source || availableRaw === '0'}
+                  disabled={busy || !spendableBalances || !source || availableRaw === '0'}
                   onClick={() => {
                     if (source)
                       setAmount(
@@ -1391,7 +1383,7 @@ export function ShieldWithdrawForm({
           maxButton={
             <button
               type="button"
-              disabled={busy || !source || availableRaw === '0'}
+              disabled={busy || !spendableBalances || !source || availableRaw === '0'}
               title={availableRaw === '0' ? 'Shield balance unavailable' : 'Use maximum balance'}
               onClick={() => {
                 if (!source) return

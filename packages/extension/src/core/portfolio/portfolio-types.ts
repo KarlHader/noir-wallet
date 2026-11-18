@@ -90,6 +90,7 @@ export interface ConfidentialPortfolioAssetView {
   readonly tokenId: string
   readonly protocolAssetId: string
   readonly availableRaw: string
+  readonly spendableRaw?: string
   readonly assetId?: string
   readonly chainId?: string
   readonly blockchain?: string

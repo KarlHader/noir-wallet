@@ -2342,32 +2342,39 @@ export class ConfidentialFundingCoordinator {
     availableRaw: string,
     excludingPlanId?: string
   ): void {
-    const reserved = plans
-      .filter(
-        plan =>
-          plan.planId !== excludingPlanId &&
-          plan.source.protocolAssetId === protocolAssetId &&
-          (!plan.requiresDeposit ||
-            (plan.operation === 'cluster' &&
-              (['signing-withdraws', 'submitting', 'processing'].includes(plan.phase) ||
-                (plan.phase === 'needs-auth' &&
-                  ['signing-withdraws', 'submitting', 'processing'].includes(
-                    plan.resumePhase ?? ''
-                  ))))) &&
-          !(plan.phase === 'prepared' && plan.approvalExpiresAt <= this.now()) &&
-          !isTerminalPhase(plan.phase)
-      )
-      .reduce(
-        (sum, plan) =>
-          sum +
-          (plan.requiresDeposit
-            ? plan.splitSourceAmounts.reduce((childSum, amount) => childSum + BigInt(amount), 0n)
-            : BigInt(plan.source.amountRaw)),
-        0n
-      )
+    const reserved = this.reservedShieldBalances(plans, excludingPlanId).get(protocolAssetId) ?? 0n
     if (BigInt(amountRaw) + reserved > BigInt(availableRaw)) {
       throw new Error('Shield balance is insufficient for this transfer')
     }
+  }
+
+  private reservedShieldBalances(
+    plans: readonly ConfidentialFundingPlan[],
+    excludingPlanId?: string
+  ): ReadonlyMap<string, bigint> {
+    const reserved = new Map<string, bigint>()
+    const now = this.now()
+    for (const plan of plans) {
+      if (
+        plan.planId === excludingPlanId ||
+        isTerminalPhase(plan.phase) ||
+        (plan.phase === 'prepared' && plan.approvalExpiresAt <= now)
+      )
+        continue
+      const phase = plan.phase === 'needs-auth' ? plan.resumePhase : plan.phase
+      if (
+        plan.requiresDeposit &&
+        (plan.operation !== 'cluster' ||
+          (phase !== 'signing-withdraws' && phase !== 'submitting' && phase !== 'processing'))
+      )
+        continue
+      const assetId = plan.source.protocolAssetId
+      const amount = plan.requiresDeposit
+        ? plan.splitSourceAmounts.reduce((sum, amount) => sum + BigInt(amount), 0n)
+        : BigInt(plan.source.amountRaw)
+      reserved.set(assetId, (reserved.get(assetId) ?? 0n) + amount)
+    }
+    return reserved
   }
 
   async confirm(planId: string, approvalFingerprint: string): Promise<ConfidentialFundingPlan> {
@@ -2660,7 +2667,7 @@ export class ConfidentialFundingCoordinator {
       model.scope.keyDomainId,
       model.scope.accountId
     )
-    const project = (current: typeof snapshot): PortfolioReadModel => {
+    const project = async (current: typeof snapshot): Promise<PortfolioReadModel> => {
       const known = current.known ?? current.fresh ?? current.updatedAt > 0
       const balances = known ? current.balances : null
       const tokens = this.options.getProtocolTokens?.() ?? this.options.protocolTokens ?? []
@@ -2684,7 +2691,7 @@ export class ConfidentialFundingCoordinator {
               freshness: current.fresh ? 'fresh' : 'stale',
               updatedAt: current.updatedAt
             })
-      const confidential =
+      const holdings =
         balances === null
           ? Object.freeze({
               status: 'unavailable' as const,
@@ -2703,6 +2710,29 @@ export class ConfidentialFundingCoordinator {
               freshness: current.fresh ? ('fresh' as const) : ('stale' as const),
               updatedAt: current.updatedAt
             })
+      const reserved = holdings.assets.length
+        ? this.reservedShieldBalances(
+            (await this.options.store.listPlans()).filter(
+              plan =>
+                plan.network === this.options.network &&
+                plan.keyDomainId === model.scope.keyDomainId &&
+                plan.accountId === model.scope.accountId
+            )
+          )
+        : new Map<string, bigint>()
+      const confidential = Object.freeze({
+        ...holdings,
+        assets: Object.freeze(
+          holdings.assets.map(asset => {
+            const remaining =
+              BigInt(asset.availableRaw) - (reserved.get(asset.protocolAssetId) ?? 0n)
+            return Object.freeze({
+              ...asset,
+              spendableRaw: (remaining > 0n ? remaining : 0n).toString()
+            })
+          })
+        )
+      })
       const projected = projectConfidentialOnlyEvmAssets(
         merged,
         confidential,

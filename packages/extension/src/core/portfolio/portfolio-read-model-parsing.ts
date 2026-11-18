@@ -151,6 +151,7 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       item,
       ['tokenId', 'protocolAssetId', 'availableRaw'],
       [
+        'spendableRaw',
         'assetId',
         'chainId',
         'blockchain',
@@ -171,6 +172,13 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       512
     )
     const availableRaw = readRawAmount(item.availableRaw, 'Confidential available balance')
+    const spendableRaw =
+      item.spendableRaw === undefined
+        ? undefined
+        : readRawAmount(item.spendableRaw, 'Confidential spendable balance')
+    if (spendableRaw !== undefined && BigInt(spendableRaw) > BigInt(availableRaw)) {
+      throw new Error('Confidential spendable balance exceeds available balance')
+    }
     if (availableRaw === '0' || seen.has(protocolAssetId)) {
       throw new Error('Duplicate or empty Confidential portfolio asset')
     }
@@ -219,6 +227,7 @@ function parseConfidentialView(value: unknown): ConfidentialPortfolioView {
       tokenId,
       protocolAssetId,
       availableRaw,
+      ...(spendableRaw === undefined ? {} : { spendableRaw }),
       ...(assetId === undefined ? {} : { assetId }),
       ...(chainId === undefined ? {} : { chainId }),
       ...(item.blockchain === undefined
