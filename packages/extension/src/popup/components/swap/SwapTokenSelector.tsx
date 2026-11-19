@@ -12,6 +12,7 @@ import {
 import {
   findVerifiedRheaSwapToken,
   preferWalletEvmQuoteToken,
+  toManagedEvmSwapToken,
   toWalletEvmQuoteToken,
   toWalletEvmSwapToken
 } from '@/popup/services/token-address-discovery'
@@ -254,12 +255,7 @@ export function SwapTokenSelector({
       }
     }
     const managed = managedRows.flatMap(asset => {
-      const token = toWalletEvmSwapToken({
-        assetId: asset.assetId,
-        chainId: asset.chainId,
-        contractAddress: asset.reference,
-        metadata: asset.metadata
-      })
+      const token = toManagedEvmSwapToken(asset)
       if (!token || !configured.has(token.tokenListChainId)) return []
       const route = swapTokenAssetRoute(token)
       defaultRoutes.add(route)

@@ -204,6 +204,7 @@ import {
   type AdditionalReceiveTargetsView
 } from '@/popup/services/receive-targets-client'
 import { usePortfolioSnapshot } from '@/popup/hooks/usePortfolioSnapshot'
+import { useRestoreSwapPair } from '@/popup/hooks/useRestoreSwapPair'
 import { useCachedAssetPrices } from '@/popup/hooks/useCachedAssetPrices'
 import { findAssetPrice } from '@/core/prices'
 import { resolveRheaSwapCanonicalAssetId } from '@/core/services/rhea-swap/rhea-swap-asset-identity'
@@ -440,6 +441,13 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
   const isPrivateFunding = Boolean(
     privateDestinationRequested && /^\d+$/.test(privateFundingDestinationChain ?? '')
   )
+  const ordinarySwapRequested =
+    !crossChainSendRequested && !privateTransferRequested && !isPrivateFunding
+  const restoreSavedSwapPair =
+    ordinarySwapRequested &&
+    !shieldSwapSelected &&
+    !requestedSourceAssetId &&
+    !requestedDestinationAssetId
   const lockedAssetFlowRequested = isPrivateFunding || privateTransferRequested
   const privateBalanceTransferRequested = Boolean(
     searchParams.get('balanceTransfer') === '1' && lockedAssetFlowRequested
@@ -735,7 +743,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       )?.chain.id)
     : undefined
   const swap = useSwapState(
-    lockedAssetFlowRequested || crossChainSendRequested ? null : swapPreferenceScope,
+    lockedAssetFlowRequested ||
+      crossChainSendRequested ||
+      (restoreSavedSwapPair && !swapPreferencesHydrated)
+      ? null
+      : swapPreferenceScope,
     {
       catalogScope: walletSourcesScope,
       sourceAssetId: requestedSourceAssetId,
@@ -1491,11 +1503,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     !publicPrivacySendRequested &&
     !shieldSwapSelected &&
     sourceMode === 'private'
-  const ordinarySwapRequested =
-    !crossChainSendRequested &&
-    !privateTransferRequested &&
-    !isPrivateFunding &&
-    !publicPrivacySendRequested
   const legacyShieldSwapRequested =
     ordinarySwapRequested &&
     searchParams.get('balanceDomain') === 'shield' &&
@@ -2333,8 +2340,64 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             token => token.assetId === savedTokenSelection?.tokenOutId
           ))))
 
+  const isDestinationNetworkEnabled = useCallback(
+    (token: RheaSwapToken) =>
+      !ordinarySwapRequested ||
+      shieldNativeZecSwap ||
+      Boolean(
+        enabledSwapChains?.some(
+          chain => chain.id === resolveSwapRecipientChainId(token, currentNetwork)
+        )
+      ),
+    [ordinarySwapRequested, shieldNativeZecSwap, enabledSwapChains, currentNetwork]
+  )
+  const availableDestinationTokens = useMemo(
+    () =>
+      filterSwapDestinationTokens(
+        swap.destinationTokens,
+        privateDestinationSelectionRequested ? 'basic' : undefined
+      ).filter(isDestinationNetworkEnabled),
+    [swap.destinationTokens, privateDestinationSelectionRequested, isDestinationNetworkEnabled]
+  )
+  const isDestinationEligible = useCallback(
+    (token: RheaSwapToken, source: RheaSwapToken | null) =>
+      (!privateDestinationSelectionRequested || isConfidentialSwapDestinationSupported(token)) &&
+      (!privateSwapRequested ||
+        ((isZecToken(token) ? !isZecToken(source) : /^[1-9]\d*$/.test(token.rheaChainId)) &&
+          (supportsPrivateDestination(token, 'main') ||
+            supportsPrivateDestination(token, 'private')))),
+    [privateDestinationSelectionRequested, privateSwapRequested, supportsPrivateDestination]
+  )
+  const pairSourceTokens = privateSwapRequested ? privateSwapSourceTokens : swap.sourceTokens
+  const pairWalletSources = privateSwapRequested
+    ? privateWalletSwapSourceTokens
+    : walletSwapSourceTokens
+  const pairSameChainDestinations = privateSwapRequested
+    ? privateSwapDestinationCatalogs.sameChain
+    : availableDestinationTokens
+  const pairCrossChainDestinations = privateSwapRequested
+    ? privateSwapDestinationCatalogs.crossChain
+    : availableDestinationTokens
+  useRestoreSwapPair({
+    enabled: restoreSavedSwapPair && swapPreferencesHydrated && Boolean(swapPreferenceScope),
+    scope: { network: currentNetwork, walletId: effectiveWalletId, accountId: effectiveAccountId },
+    savedSelection: savedTokenSelection,
+    portfolio,
+    enabledChains: selectionSwapChains,
+    sourceTokens: pairSourceTokens,
+    walletSourceTokens: pairWalletSources,
+    sameChainDestinations: pairSameChainDestinations,
+    crossChainDestinations: pairCrossChainDestinations,
+    privateSwap: privateSwapRequested,
+    isSelectablePrivateSource,
+    isDestinationNetworkEnabled,
+    isDestinationEligible,
+    swap
+  })
+
   useEffect(() => {
     if (
+      restoreSavedSwapPair ||
       (shieldNativeZecSwap && swap.isZecSource) ||
       !swapPreferencesHydrated ||
       !swapPreferenceScope ||
@@ -2533,30 +2596,11 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       destinationScope && initializedDestinationScope.current !== destinationScope
         ? requestedDestinationToken?.assetId
         : null
-    const availableSourceTokens = privateSwapRequested ? privateSwapSourceTokens : swap.sourceTokens
-    const availableDestinationTokens = filterSwapDestinationTokens(
-      swap.destinationTokens,
-      privateDestinationSelectionRequested ? 'basic' : undefined
-    ).filter(
-      token =>
-        !ordinarySwapRequested ||
-        shieldNativeZecSwap ||
-        enabledSwapChains?.some(
-          chain => chain.id === resolveSwapRecipientChainId(token, currentNetwork)
-        )
-    )
     const resolved = resolveSwapTokenSelection({
-      tokens: swap.tokens,
-      sourceTokens: availableSourceTokens,
-      sameChainDestinationTokens: privateSwapRequested
-        ? privateSwapDestinationCatalogs.sameChain
-        : availableDestinationTokens,
-      crossChainDestinationTokens: privateSwapRequested
-        ? privateSwapDestinationCatalogs.crossChain
-        : availableDestinationTokens,
-      walletSourceTokens: privateSwapRequested
-        ? privateWalletSwapSourceTokens
-        : walletSwapSourceTokens,
+      tokens: pairSourceTokens,
+      sameChainDestinationTokens: pairSameChainDestinations,
+      crossChainDestinationTokens: pairCrossChainDestinations,
+      walletSourceTokens: pairWalletSources,
       savedSelection: savedTokenSelection,
       requestedSourceAssetId: requestedSourceToken?.assetId,
       requestedDestinationAssetId: destinationRequest,
@@ -2586,28 +2630,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       }
       return
     }
-    const tokenIn = resolved.tokenIn
-      ? swap.tokens.find(
-          token =>
-            token.assetId === resolved.tokenIn?.assetId &&
-            token.blockchain === resolved.tokenIn.blockchain
-        )
-      : null
-    const tokenOut = resolved.tokenOut
-      ? ((privateDestinationSelectionRequested ? swap.destinationTokens : swap.tokens).find(
-          token =>
-            token.assetId === resolved.tokenOut?.assetId &&
-            token.blockchain === resolved.tokenOut.blockchain &&
-            (!privateDestinationSelectionRequested ||
-              isConfidentialSwapDestinationSupported(token)) &&
-            (!privateSwapRequested ||
-              ((isZecToken(token)
-                ? !isZecToken(tokenIn ?? null)
-                : /^[1-9]\d*$/.test(token.rheaChainId)) &&
-                (supportsPrivateDestination(token, 'main') ||
-                  supportsPrivateDestination(token, 'private'))))
-        ) ?? null)
-      : null
+    const { tokenIn, tokenOut: destination } = resolved
+    const tokenOut = destination && isDestinationEligible(destination, tokenIn) ? destination : null
     if (
       shouldWaitForSwapDestination({
         loading: swap.destinationTokensLoading,
@@ -2624,7 +2648,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       }
       return
     }
-    if (!resolved.tokenIn) {
+    if (!tokenIn) {
       if (privateSwapRequested && swap.tokenIn && !isSelectablePrivateSource(swap.tokenIn)) {
         swap.clearTokenPairForFlow()
         return
@@ -2642,12 +2666,12 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     if (destinationRequest && tokenOut?.assetId === destinationRequest)
       initializedDestinationScope.current = destinationScope
     if (
-      swap.tokenIn?.assetId === resolved.tokenIn.assetId &&
+      swap.tokenIn?.assetId === tokenIn.assetId &&
       swap.tokenOut?.assetId === tokenOut?.assetId &&
       swap.tokenOut?.rheaAddress === tokenOut?.rheaAddress
     )
       return
-    if (tokenIn) swap.setTokenPair(tokenIn, tokenOut)
+    swap.setTokenPair(tokenIn, tokenOut)
   }, [
     enabledSwapChains,
     selectionSwapChains,
@@ -2687,17 +2711,17 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
     swap.areTokensLoading,
     swap.destinationTokensLoading,
     swap.sourceTokens,
-    swap.crossChainDestinationTokens,
     swap.destinationTokens,
-    privateDestinationSelectionRequested,
+    isDestinationEligible,
     privateSwapRequested,
     ordinarySwapRequested,
+    restoreSavedSwapPair,
     sourceMode,
     isSelectablePrivateSource,
-    privateSwapSourceTokens,
-    privateWalletSwapSourceTokens,
-    privateSwapDestinationCatalogs,
-    supportsPrivateDestination,
+    pairSourceTokens,
+    pairSameChainDestinations,
+    pairCrossChainDestinations,
+    pairWalletSources,
     swap.tokenIn?.assetId,
     swap.selectedSourceAssetId,
     swap.tokenIn?.decimals,
@@ -4144,12 +4168,6 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       zcashTransaction?: { accountKey: string; transactionId?: string }
     ) => {
       setIsPrivateFundingSubmitting(false)
-      if (ordinarySwapRequested && swapPreferenceScope && swap.tokenIn && swap.tokenOut) {
-        useSwapPreferences.getState().setSavedTokenSelection(swapPreferenceScope, {
-          tokenInId: swap.tokenIn.assetId,
-          tokenOutId: swap.tokenOut.assetId
-        })
-      }
       setResult(
         {
           type: 'swap',
@@ -4214,9 +4232,7 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       crossChainSendRequested,
       privateFundingRequestId,
       resultReturnPath,
-      executionSourceMode,
-      ordinarySwapRequested,
-      swapPreferenceScope
+      executionSourceMode
     ]
   )
 

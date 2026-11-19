@@ -3,6 +3,9 @@ import type { ChainDefinition } from '@/core/chains/registry'
 import type { SavedSwapTokenSelection } from '@/store/swap-store'
 import { getEnabledSwapChains } from './swap-catalog-loading'
 import { EVM_USDC_PROTOCOL_ASSET_BY_CHAIN_ID } from '@/config/asset-market-assets'
+import type { PortfolioReadModel } from '@/core/portfolio'
+import type { ManagedTokenRow } from './managed-token-list'
+import { toManagedEvmSwapToken, toWalletEvmQuoteToken } from './token-address-discovery'
 
 function isNativeToken(token: SwapToken): boolean {
   return (
@@ -22,9 +25,9 @@ export function getDefaultSwapSourceAssetId(tokens: readonly SwapToken[]): strin
   )?.assetId
 }
 
-export interface ResolvedSwapTokenSelection {
-  readonly tokenIn: SwapToken | null
-  readonly tokenOut: SwapToken | null
+export interface ResolvedSwapTokenSelection<T extends SwapToken = SwapToken> {
+  readonly tokenIn: T | null
+  readonly tokenOut: T | null
 }
 
 export function matchesSwapTokenSearch(token: SwapToken, search: string): boolean {
@@ -92,6 +95,38 @@ export function getSavedSwapDestinationAssetId(
     : undefined
 }
 
+function findSavedSwapToken<T extends SwapToken>(
+  tokens: readonly T[],
+  assetId?: string | null
+): T | undefined {
+  if (!assetId) return undefined
+  const exact = tokens.find(token => token.assetId === assetId)
+  if (exact) return exact
+
+  const evmAsset = /^eip155:([1-9]\d*)\/erc20:(0x[0-9a-f]{40})$/i.exec(assetId)
+  if (!evmAsset) return undefined
+  const [, chain, contract] = evmAsset
+  return tokens.find(
+    token =>
+      getSwapTokenEvmChainId(token) === `eip155:${chain}` &&
+      token.contractAddress?.toLowerCase() === contract.toLowerCase()
+  )
+}
+
+export function resolveSavedWalletSwapToken(
+  assetId: string | null | undefined,
+  portfolio: PortfolioReadModel | null,
+  managedAssets: readonly ManagedTokenRow[],
+  hiddenAssetIds: ReadonlySet<string>
+) {
+  if (!assetId?.startsWith('eip155:') || hiddenAssetIds.has(assetId)) return null
+  const managed = managedAssets.find(asset => asset.assetId === assetId)
+  const owned = portfolio?.assets.find(asset => asset.asset.id === assetId)
+  return (
+    (owned && toWalletEvmQuoteToken(owned)) ?? (managed ? toManagedEvmSwapToken(managed) : null)
+  )
+}
+
 export function shouldWaitForSwapDestination(input: {
   readonly loading: boolean
   readonly savedDestinationAssetId?: string | null
@@ -104,13 +139,13 @@ export function shouldWaitForSwapDestination(input: {
   )
 }
 
-function findDefaultDestination(
+function findDefaultDestination<T extends SwapToken>(
   tokenIn: SwapToken,
-  tokens: readonly SwapToken[],
+  tokens: readonly T[],
   walletSourceTokens: readonly SwapToken[],
   enabledBlockchains: readonly string[],
   preferStableDestination = false
-): SwapToken | null {
+): T | null {
   const destinations = tokens.filter(token => token.assetId !== tokenIn.assetId)
   if (tokenIn.blockchain === 'zec' && enabledBlockchains.includes('eth')) {
     const ethereum = destinations.find(token => token.blockchain === 'eth' && isNativeToken(token))
@@ -175,12 +210,12 @@ export function getSwapDestinationTokens<T extends SwapToken>(
   ]
 }
 
-export function resolveSwapTokenSelection(input: {
-  readonly tokens: readonly SwapToken[]
-  readonly walletSourceTokens: readonly SwapToken[]
-  readonly sourceTokens?: readonly SwapToken[]
-  readonly sameChainDestinationTokens?: readonly SwapToken[]
-  readonly crossChainDestinationTokens?: readonly SwapToken[]
+export function resolveSwapTokenSelection<T extends SwapToken>(input: {
+  readonly tokens: readonly T[]
+  readonly walletSourceTokens: readonly T[]
+  readonly sourceTokens?: readonly T[]
+  readonly sameChainDestinationTokens?: readonly T[]
+  readonly crossChainDestinationTokens?: readonly T[]
   readonly savedSelection?: SavedSwapTokenSelection
   readonly requestedSourceAssetId?: string | null
   readonly requestedDestinationAssetId?: string | null
@@ -189,8 +224,11 @@ export function resolveSwapTokenSelection(input: {
   readonly preferredDestinationAssetId?: string
   readonly allowUnownedDefaultSource?: boolean
   readonly preferStableDestination?: boolean
+  readonly preserveSavedSelection?: boolean
+  readonly savedWalletSource?: T | null
+  readonly savedWalletDestination?: T | null
   readonly enabledChains?: readonly ChainDefinition[]
-}): ResolvedSwapTokenSelection | null {
+}): ResolvedSwapTokenSelection<T> | null {
   const enabledBlockchains = getEnabledSwapChains(input.enabledChains).map(
     chain => chain.blockchain
   )
@@ -218,12 +256,22 @@ export function resolveSwapTokenSelection(input: {
       token.assetId !== destinationAssetId &&
       enabledBlockchains.includes(token.blockchain)
   )
-  const savedSource = (input.sourceTokens ?? input.tokens).find(
-    token =>
-      token.assetId === input.savedSelection?.tokenInId &&
-      token.assetId !== destinationAssetId &&
-      enabledBlockchains.includes(token.blockchain)
+  const savedSourceId = input.savedSelection?.tokenInId
+  const eligibleSavedSources = (input.sourceTokens ?? input.tokens).filter(
+    token => token.assetId !== destinationAssetId && enabledBlockchains.includes(token.blockchain)
   )
+  const savedSource = input.preserveSavedSelection
+    ? (findSavedSwapToken(eligibleSavedSources, savedSourceId) ??
+      (input.savedWalletSource?.assetId === savedSourceId ? input.savedWalletSource : undefined))
+    : eligibleSavedSources.find(token => token.assetId === savedSourceId)
+  if (
+    input.preserveSavedSelection &&
+    savedSourceId &&
+    !savedSource &&
+    !selectedSource &&
+    !requestedSource
+  )
+    return { tokenIn: null, tokenOut: null }
   if (!requestedSource && !selectedSource && !savedSource && defaultSourceTokens.length === 0) {
     return null
   }
@@ -240,6 +288,22 @@ export function resolveSwapTokenSelection(input: {
     input.sameChainDestinationTokens ?? input.sourceTokens ?? input.tokens,
     input.crossChainDestinationTokens ?? input.tokens
   )
+  const savedDestinationId =
+    tokenIn && (savedSource === tokenIn || !savedSourceId)
+      ? getSavedSwapDestinationAssetId(input.savedSelection, tokenIn.assetId)
+      : undefined
+  if (input.preserveSavedSelection && savedDestinationId && !destinationAssetId) {
+    const savedDestination =
+      findSavedSwapToken(destinations, savedDestinationId) ??
+      (input.savedWalletDestination?.assetId === savedDestinationId
+        ? input.savedWalletDestination
+        : undefined)
+    return Object.freeze({
+      tokenIn,
+      tokenOut:
+        savedDestination && savedDestination.assetId !== tokenIn?.assetId ? savedDestination : null
+    })
+  }
   const tokenOut =
     destinations.find(token => token.assetId === destinationAssetId) ??
     (tokenIn
