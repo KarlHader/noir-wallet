@@ -1096,10 +1096,10 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
       currentWallet?.keySource
     ]
   )
-  const pickerPrices = useCachedAssetPrices(currentNetwork, nativeZecShieldAvailable)
+  const cachedAssetPrices = useCachedAssetPrices(currentNetwork)
   const nativeZecAssetId = resolveRheaSwapCanonicalAssetId(ZEC_ZCASH_ASSET, currentNetwork)
   const walletZecPrice = nativeZecAssetId
-    ? findAssetPrice(pickerPrices, nativeZecAssetId)?.priceUsd
+    ? findAssetPrice(cachedAssetPrices, nativeZecAssetId)?.priceUsd
     : undefined
   const zecPickerPrice =
     walletZecPrice && Number(walletZecPrice) > 0
@@ -2815,7 +2815,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
         resolveNativeRouteMaximum({
           family: 'zcash',
           availableRaw: parseDisplayUnitAmount(zcashFundingBalance.available, ZEC_DECIMALS),
-          decimals: ZEC_DECIMALS
+          decimals: ZEC_DECIMALS,
+          priceUsd: walletZecPrice
         }),
         ZEC_DECIMALS
       )
@@ -2825,7 +2826,8 @@ export function Swap({ purpose = 'swap' }: { purpose?: 'swap' | 'cross-chain-sen
             family: walletOwnedSource.family,
             chainId: walletOwnedSource.chain.chain.id,
             availableRaw: walletOwnedSource.asset.balance.availableRaw,
-            decimals: walletOwnedSource.asset.metadata.decimals
+            decimals: walletOwnedSource.asset.metadata.decimals,
+            priceUsd: findAssetPrice(cachedAssetPrices, walletOwnedSource.asset.asset.id)?.priceUsd
           }),
           walletOwnedSource.asset.metadata.decimals
         )

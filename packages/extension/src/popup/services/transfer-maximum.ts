@@ -46,19 +46,39 @@ const nativeRouteReserves = {
   zcash: '0.0005'
 } as const
 
+const USD_PRICE_DECIMALS = 18
+const NATIVE_ROUTE_RESERVE_USD = 1n
+
+function resolvePricedNativeRouteReserve(priceUsd: string | null | undefined, decimals: number) {
+  if (!priceUsd) return null
+  let price: bigint
+  try {
+    price = BigInt(parseDisplayUnitAmount(priceUsd, USD_PRICE_DECIMALS))
+  } catch {
+    return null
+  }
+  if (price === 0n) return null
+  const budget = NATIVE_ROUTE_RESERVE_USD * 10n ** BigInt(decimals + USD_PRICE_DECIMALS)
+  // Round the reserve up to a whole base unit so Max never rounds it away.
+  return (budget + price - 1n) / price
+}
+
 export function resolveNativeRouteMaximum(input: {
   readonly family: keyof typeof nativeRouteReserves
   readonly chainId?: string
   readonly availableRaw: string
   readonly decimals: number
+  readonly priceUsd?: string | null
 }): string {
-  const reserve = BigInt(
-    parseDisplayUnitAmount(
-      (input.family === 'evm' && input.chainId && evmRouteReserves[input.chainId]) ||
-        nativeRouteReserves[input.family],
-      input.decimals
+  const reserve =
+    resolvePricedNativeRouteReserve(input.priceUsd, input.decimals) ??
+    BigInt(
+      parseDisplayUnitAmount(
+        (input.family === 'evm' && input.chainId && evmRouteReserves[input.chainId]) ||
+          nativeRouteReserves[input.family],
+        input.decimals
+      )
     )
-  )
   const available = BigInt(input.availableRaw)
   return available > reserve ? (available - reserve).toString() : '0'
 }

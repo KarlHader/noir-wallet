@@ -1113,7 +1113,8 @@ function TransferForm() {
           family: 'evm',
           chainId: selected.chain.chain.id,
           availableRaw: source.availableRaw,
-          decimals: selected.asset.metadata.decimals
+          decimals: selected.asset.metadata.decimals,
+          priceUsd: findAssetPrice(assetPrices, selected.asset.asset.id)?.priceUsd
         })
       : null
   const available =

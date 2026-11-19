@@ -99,7 +99,7 @@ test('uses one fee-adjusted amount for display, Max and validation without deduc
   expect(() => resolveTransferSpendableRaw('1000', '1001', true)).toThrow('Invalid')
 })
 
-test('routed Max holds a fixed native reserve and never spends a balance below it', () => {
+test('routed Max retains its chain-specific fallback without a usable USD price', () => {
   const cases = [
     { family: 'evm', chainId: 'eip155:1', decimals: 18, reserve: 3_000_000_000_000_000n },
     { family: 'evm', chainId: 'eip155:8453', decimals: 18, reserve: 300_000_000_000_000n },
@@ -113,6 +113,28 @@ test('routed Max holds a fixed native reserve and never spends a balance below i
       String(reserve * 99n)
     )
   }
+  expect(
+    resolveNativeRouteMaximum({
+      family: 'zcash',
+      decimals: 8,
+      availableRaw: '60000',
+      priceUsd: '0'
+    })
+  ).toBe('10000')
+})
+
+test('routed Max reserves about one dollar at the native asset price, rounded up in base units', () => {
+  const evm = {
+    family: 'evm',
+    chainId: 'eip155:1',
+    decimals: 18,
+    availableRaw: '10000000000000000'
+  }
+  expect(resolveNativeRouteMaximum({ ...evm, priceUsd: '2500' })).toBe('9600000000000000')
+  expect(resolveNativeRouteMaximum({ ...evm, priceUsd: '1250' })).toBe('9200000000000000')
+  const zcash = { family: 'zcash', decimals: 8, availableRaw: '250000', priceUsd: '900' }
+  expect(resolveNativeRouteMaximum(zcash)).toBe('138888')
+  expect(resolveNativeRouteMaximum({ ...zcash, availableRaw: '111111' })).toBe('0')
 })
 
 test('fee-estimate failure leaves a positive native proposal with a fee reserve on each family', () => {

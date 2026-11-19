@@ -414,7 +414,8 @@ export function useEvmSendTransfer({
           family: 'evm',
           chainId: chain.chain.id,
           availableRaw,
-          decimals: asset.metadata.decimals
+          decimals: asset.metadata.decimals,
+          priceUsd
         })
       : null
   const maximumRequestKey = `${accountContextKey}:${asset.asset.id}:${recipient}:${availableRaw}:${JSON.stringify(feeSelection)}:${route}`
